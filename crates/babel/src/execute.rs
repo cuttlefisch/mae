@@ -280,13 +280,43 @@ fn resolve_command(language: &str, args: &HeaderArgs) -> (String, Vec<String>) {
 /// unit-testable on the machines MAE is actually developed on -- principle #13:
 /// a Windows-only code path nobody can iterate against is exactly how this class
 /// of bug survives.
+/// Split a Windows path into its non-empty components, accepting *either*
+/// separator (Windows itself accepts both).
+///
+/// These rules are deliberately expressed over `&str` rather than
+/// `std::path::Path`: `Path` only understands `\` when it is compiled *for*
+/// Windows, so a `Path`-based implementation would silently degrade to
+/// "one giant component" everywhere else -- making every rule below
+/// unobservable on the Linux/macOS machines MAE is actually developed on.
+/// Principle #13: the fix has to be verifiable on the platform in front of you.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn is_under_windows_system_root(candidate: &Path, system_root: &Path) -> bool {
-    let norm = |p: &Path| p.to_string_lossy().to_lowercase().replace('/', "\\");
-    let candidate = norm(candidate);
-    let root = norm(system_root);
-    let root = root.trim_end_matches('\\');
-    !root.is_empty() && (candidate == root || candidate.starts_with(&format!("{root}\\")))
+fn win_components(path: &str) -> Vec<&str> {
+    path.split(['/', '\\']).filter(|c| !c.is_empty()).collect()
+}
+
+/// Join `parts` onto `base` with the Windows separator.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn win_join(base: &str, parts: &[&str]) -> String {
+    let mut out = base.trim_end_matches(['/', '\\']).to_string();
+    for part in parts {
+        out.push('\\');
+        out.push_str(part);
+    }
+    out
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn is_under_windows_system_root(candidate: &str, system_root: &str) -> bool {
+    let root = win_components(system_root);
+    let candidate = win_components(candidate);
+    // Compare component-wise, not by string prefix: a `starts_with` test would
+    // also swallow a sibling directory such as `C:\Windows-Tools\bin`.
+    !root.is_empty()
+        && candidate.len() >= root.len()
+        && root
+            .iter()
+            .zip(&candidate)
+            .all(|(r, c)| r.eq_ignore_ascii_case(c))
 }
 
 /// Derive a Git for Windows install root from the location of `git.exe`.
@@ -296,12 +326,15 @@ fn is_under_windows_system_root(candidate: &Path, system_root: &Path) -> bool {
 /// actually is covers custom install locations that a hardcoded
 /// `C:\Program Files\Git` list would miss.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn git_install_root(git_exe: &Path) -> Option<PathBuf> {
-    let parent = git_exe.parent()?;
-    let dir = parent.file_name()?.to_string_lossy().to_lowercase();
-    matches!(dir.as_str(), "cmd" | "bin" | "mingw64")
-        .then(|| parent.parent())?
-        .map(PathBuf::from)
+fn git_install_root(git_exe: &str) -> Option<String> {
+    let components = win_components(git_exe);
+    let dir_index = components.len().checked_sub(2)?;
+    let dir = components[dir_index];
+    if !matches!(dir.to_ascii_lowercase().as_str(), "cmd" | "bin" | "mingw64") {
+        return None;
+    }
+    let root = &components[..dir_index];
+    (!root.is_empty()).then(|| root.join("\\"))
 }
 
 /// Pick a real POSIX shell for `sh`/`bash` blocks on Windows.
@@ -317,14 +350,14 @@ fn git_install_root(git_exe: &Path) -> Option<PathBuf> {
 /// default even though it ships one.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn select_windows_posix_shell(
-    path_entries: &[PathBuf],
-    git_exe: Option<&Path>,
-    install_roots: &[PathBuf],
-    system_root: Option<&Path>,
-    exists: &dyn Fn(&Path) -> bool,
-) -> Option<PathBuf> {
+    path_entries: &[String],
+    git_exe: Option<&str>,
+    install_roots: &[String],
+    system_root: Option<&str>,
+    exists: &dyn Fn(&str) -> bool,
+) -> Option<String> {
     for dir in path_entries {
-        let candidate = dir.join("bash.exe");
+        let candidate = win_join(dir, &["bash.exe"]);
         if let Some(root) = system_root {
             if is_under_windows_system_root(&candidate, root) {
                 continue;
@@ -339,11 +372,11 @@ fn select_windows_posix_shell(
         .into_iter()
         .chain(install_roots.iter().cloned());
     for root in roots {
-        for sub in [["bin"].as_slice(), ["usr", "bin"].as_slice()] {
-            let candidate = sub
-                .iter()
-                .fold(root.clone(), |acc, part| acc.join(part))
-                .join("bash.exe");
+        for sub in [
+            ["bin", "bash.exe"].as_slice(),
+            ["usr", "bin", "bash.exe"].as_slice(),
+        ] {
+            let candidate = win_join(&root, sub);
             if exists(&candidate) {
                 return Some(candidate);
             }
@@ -368,31 +401,36 @@ fn select_windows_posix_shell(
 fn resolve_posix_shell() -> String {
     #[cfg(windows)]
     {
-        let path_entries: Vec<PathBuf> = std::env::var_os("PATH")
-            .map(|p| std::env::split_paths(&p).collect())
+        let path_entries: Vec<String> = std::env::var_os("PATH")
+            .map(|p| {
+                std::env::split_paths(&p)
+                    .map(|dir| dir.to_string_lossy().into_owned())
+                    .collect()
+            })
             .unwrap_or_default();
         let git_exe = path_entries
             .iter()
-            .map(|dir| dir.join("git.exe"))
-            .find(|p| p.is_file());
-        let install_roots: Vec<PathBuf> = ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"]
+            .map(|dir| win_join(dir, &["git.exe"]))
+            .find(|p| Path::new(p).is_file());
+        let install_roots: Vec<String> = ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"]
             .iter()
-            .filter_map(|key| std::env::var_os(key))
-            .map(|root| PathBuf::from(root).join("Git"))
+            .filter_map(|key| std::env::var(key).ok())
+            .map(|root| win_join(&root, &["Git"]))
             .chain(
-                std::env::var_os("LOCALAPPDATA")
-                    .map(|root| PathBuf::from(root).join("Programs").join("Git")),
+                std::env::var("LOCALAPPDATA")
+                    .ok()
+                    .map(|root| win_join(&root, &["Programs", "Git"])),
             )
             .collect();
-        let system_root = std::env::var_os("SystemRoot").map(PathBuf::from);
+        let system_root = std::env::var("SystemRoot").ok();
         if let Some(shell) = select_windows_posix_shell(
             &path_entries,
             git_exe.as_deref(),
             &install_roots,
             system_root.as_deref(),
-            &|p| p.is_file(),
+            &|p| Path::new(p).is_file(),
         ) {
-            return shell.to_string_lossy().into_owned();
+            return shell;
         }
     }
     "bash".to_string()
@@ -407,7 +445,7 @@ mod posix_shell_tests {
     /// only observable on a runner we cannot iterate against.
     #[test]
     fn the_wsl_launcher_is_recognized_under_the_system_root() {
-        let root = Path::new(r"C:\Windows");
+        let root = r"C:\Windows";
         for stub in [
             r"C:\Windows\System32\bash.exe",
             r"C:\WINDOWS\system32\bash.exe", // case-insensitive filesystem
@@ -415,7 +453,7 @@ mod posix_shell_tests {
             r"C:\Windows\bash.exe",
         ] {
             assert!(
-                is_under_windows_system_root(Path::new(stub), root),
+                is_under_windows_system_root(stub, root),
                 "{stub} must be refused as the WSL launcher"
             );
         }
@@ -427,7 +465,7 @@ mod posix_shell_tests {
             r"D:\Windows\System32\bash.exe",  // different volume
         ] {
             assert!(
-                !is_under_windows_system_root(Path::new(real), root),
+                !is_under_windows_system_root(real, root),
                 "{real} is a real shell and must not be refused"
             );
         }
@@ -436,15 +474,15 @@ mod posix_shell_tests {
     #[test]
     fn git_install_root_is_derived_from_where_git_actually_is() {
         assert_eq!(
-            git_install_root(Path::new(r"C:\Program Files\Git\cmd\git.exe")),
-            Some(PathBuf::from(r"C:\Program Files\Git"))
+            git_install_root(r"C:\Program Files\Git\cmd\git.exe").as_deref(),
+            Some(r"C:\Program Files\Git")
         );
         assert_eq!(
-            git_install_root(Path::new(r"D:\tools\Git\bin\git.exe")),
-            Some(PathBuf::from(r"D:\tools\Git"))
+            git_install_root(r"D:\tools\Git\bin\git.exe").as_deref(),
+            Some(r"D:\tools\Git")
         );
         // A `git.exe` somewhere unrecognized must not invent a root.
-        assert_eq!(git_install_root(Path::new(r"C:\odd\git.exe")), None);
+        assert_eq!(git_install_root(r"C:\odd\git.exe"), None);
     }
 
     /// The whole point of the fix: given a `PATH` whose first `bash.exe` is the
@@ -452,30 +490,33 @@ mod posix_shell_tests {
     /// exact shape of the GitHub Windows runner that produced the CI failure.
     #[test]
     fn path_resolution_skips_the_wsl_stub_and_finds_the_real_shell() {
-        let system32 = PathBuf::from(r"C:\Windows\System32");
-        let git_bin = PathBuf::from(r"C:\Program Files\Git\bin");
+        let system32 = r"C:\Windows\System32".to_string();
+        let git_bin = r"C:\Program Files\Git\bin".to_string();
         let present = [
-            PathBuf::from(r"C:\Windows\System32\bash.exe"), // the trap
-            git_bin.join("bash.exe"),
+            r"C:\Windows\System32\bash.exe", // the trap
+            r"C:\Program Files\Git\bin\bash.exe",
         ];
-        let exists = |p: &Path| present.iter().any(|q| q == p);
+        let exists = |p: &str| present.contains(&p);
 
         let picked = select_windows_posix_shell(
             &[system32.clone(), git_bin.clone()],
             None,
             &[],
-            Some(Path::new(r"C:\Windows")),
+            Some(r"C:\Windows"),
             &exists,
         );
-        assert_eq!(picked, Some(git_bin.join("bash.exe")));
+        assert_eq!(
+            picked.as_deref(),
+            Some(r"C:\Program Files\Git\bin\bash.exe")
+        );
 
         // Without the system-root exclusion the stub would win -- proving the
         // assertion above is actually testing the exclusion and not the
         // incidental ordering of the PATH entries.
         let unguarded = select_windows_posix_shell(&[system32, git_bin], None, &[], None, &exists);
         assert_eq!(
-            unguarded,
-            Some(PathBuf::from(r"C:\Windows\System32\bash.exe")),
+            unguarded.as_deref(),
+            Some(r"C:\Windows\System32\bash.exe"),
             "precondition: the stub is what a naive PATH scan picks"
         );
     }
@@ -485,31 +526,33 @@ mod posix_shell_tests {
     /// install root -- derived from `git.exe`, or from a well-known location.
     #[test]
     fn falls_back_to_install_roots_when_path_has_only_the_stub() {
-        let usr_bin_shell = PathBuf::from(r"C:\Program Files\Git\usr\bin\bash.exe");
-        let exists = |p: &Path| p == usr_bin_shell;
-        let path_entries = [PathBuf::from(r"C:\Windows\System32")];
-        let system_root = Some(Path::new(r"C:\Windows"));
+        let usr_bin_shell = r"C:\Program Files\Git\usr\bin\bash.exe";
+        let exists = |p: &str| p == usr_bin_shell;
+        let path_entries = [r"C:\Windows\System32".to_string()];
+        let system_root = Some(r"C:\Windows");
 
         // Derived from where git.exe lives.
         assert_eq!(
             select_windows_posix_shell(
                 &path_entries,
-                Some(Path::new(r"C:\Program Files\Git\cmd\git.exe")),
+                Some(r"C:\Program Files\Git\cmd\git.exe"),
                 &[],
                 system_root,
                 &exists,
-            ),
-            Some(usr_bin_shell.clone())
+            )
+            .as_deref(),
+            Some(usr_bin_shell)
         );
         // Or from a well-known install root when git.exe was not on PATH.
         assert_eq!(
             select_windows_posix_shell(
                 &path_entries,
                 None,
-                &[PathBuf::from(r"C:\Program Files\Git")],
+                &[r"C:\Program Files\Git".to_string()],
                 system_root,
                 &exists,
-            ),
+            )
+            .as_deref(),
             Some(usr_bin_shell)
         );
         // And nothing is invented when no shell is installed at all.
@@ -517,7 +560,7 @@ mod posix_shell_tests {
             select_windows_posix_shell(
                 &path_entries,
                 None,
-                &[PathBuf::from(r"C:\Program Files\Git")],
+                &[r"C:\Program Files\Git".to_string()],
                 system_root,
                 &|_| false,
             ),
