@@ -79,23 +79,15 @@ pub(super) fn execute_shell_exec_sync(args: &serde_json::Value) -> Result<String
         return Err("Missing 'command' argument".into());
     }
 
-    // Same blocklist as session's async version. Defense in depth, not a
-    // sandbox — substring-based and bypassable; see SECURITY.md.
-    let blocked_patterns = ["rm -rf /", "rm -fr /", "mkfs.", "dd if=", ":(){", ">(){ :"];
-    for pattern in &blocked_patterns {
-        if command.contains(pattern) {
-            return Err(format!(
-                "Command blocked: contains dangerous pattern '{}'",
-                pattern
-            ));
-        }
+    // Shared with the session's async version — see `crate::shell_policy`.
+    if let Some(pattern) = crate::shell_policy::blocked_pattern(command) {
+        return Err(format!(
+            "Command blocked: contains dangerous pattern '{}'",
+            pattern
+        ));
     }
 
-    let timeout_secs = args
-        .get("timeout_secs")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(30)
-        .min(120);
+    let timeout = crate::shell_policy::timeout_from_args(args);
 
     let mut child = std::process::Command::new("sh")
         .arg("-c")
@@ -105,7 +97,6 @@ pub(super) fn execute_shell_exec_sync(args: &serde_json::Value) -> Result<String
         .spawn()
         .map_err(|e| format!("Failed to execute: {}", e))?;
 
-    let timeout = std::time::Duration::from_secs(timeout_secs);
     let start = std::time::Instant::now();
     let output = loop {
         match child.try_wait() {
@@ -117,7 +108,10 @@ pub(super) fn execute_shell_exec_sync(args: &serde_json::Value) -> Result<String
             Ok(None) => {
                 if start.elapsed() >= timeout {
                     let _ = child.kill();
-                    return Err(format!("Command timed out after {}s", timeout_secs));
+                    return Err(format!(
+                        "Command timed out after {}",
+                        crate::shell_policy::describe_timeout(timeout)
+                    ));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
@@ -131,8 +125,12 @@ pub(super) fn execute_shell_exec_sync(args: &serde_json::Value) -> Result<String
 
     let mut out = format!("exit_code: {}\n", status);
     if !stdout.is_empty() {
+        // ADR-087 / audit #594: shell output is arbitrary UTF-8; a fixed byte
+        // cut can land mid-character. See `session/run_loop.rs`'s identical
+        // truncation for the same reasoning.
         let stdout_str = if stdout.len() > 10_000 {
-            format!("{}...[truncated]", &stdout[..10_000])
+            let cut = mae_core::grapheme::floor_char_boundary(&stdout, 10_000);
+            format!("{}...[truncated]", &stdout[..cut])
         } else {
             stdout.to_string()
         };
@@ -140,7 +138,8 @@ pub(super) fn execute_shell_exec_sync(args: &serde_json::Value) -> Result<String
     }
     if !stderr.is_empty() {
         let stderr_str = if stderr.len() > 5_000 {
-            format!("{}...[truncated]", &stderr[..5_000])
+            let cut = mae_core::grapheme::floor_char_boundary(&stderr, 5_000);
+            format!("{}...[truncated]", &stderr[..cut])
         } else {
             stderr.to_string()
         };

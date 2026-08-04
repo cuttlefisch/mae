@@ -1,10 +1,19 @@
 mod ai_tools;
+pub mod authorization;
 mod categories;
 mod collab_tools;
 mod core_tools;
 mod dap_tools;
+pub mod decision;
+#[cfg(test)]
+mod decision_tests;
+#[cfg(test)]
+mod dispatch_contract_tests;
+pub mod dispatchability;
 mod kb_tools;
 mod lsp_tools;
+#[cfg(test)]
+mod name_roundtrip_tests;
 mod shell_tools;
 mod tool_def;
 pub mod tool_search;
@@ -17,9 +26,21 @@ use mae_core::{CommandRegistry, OptionRegistry};
 use crate::types::*;
 
 // Re-export all public items from submodules.
+pub use authorization::{
+    effective_tier, is_authorization_change, is_permission_tier_option, AUTHORIZATION_CHANGE_OPS,
+    PERMISSION_TIER_OPTION,
+};
 pub use categories::{
     annotations_for_tier, classify_command_permission, classify_tool_category, classify_tool_tier,
     parse_categories, request_tools_definition, PermissionPolicy, ToolCategory, ToolTier,
+};
+pub use decision::{
+    ask_denied_message, ask_message, deny_message, Decision, DenyReason, HardCeiling,
+    HardCeilingSource,
+};
+pub use dispatchability::{
+    external_discovery_tools, is_embedded_session_only, EMBEDDED_SESSION_ONLY_TOOLS,
+    SESSION_SCOPED_DISPATCHABLE_TOOLS,
 };
 
 /// Valid AI prompt profiles. Used in tool definitions for ai_set_profile and delegate.
@@ -31,17 +52,53 @@ pub const AI_PROFILES: &[&str] = &[
     "verifier",
 ];
 
+/// Encode a `CommandRegistry` command name (kebab-case, occasionally with a
+/// trailing punctuation character, e.g. `ai-status!`) into the `[a-z0-9_]`
+/// alphabet required for an MCP/LLM tool name. Paired with
+/// `unsanitize_command_name` in `crate::executor::tool_dispatch`, which MUST
+/// invert this exactly — verified for every registered command name by
+/// `all_registered_command_names_round_trip` (a prior version of this
+/// function dropped `!` outright, which made `ai-status!` permanently
+/// unreachable through the `command_*` MCP tool: `unsanitize_command_name`
+/// had no way to recover the character that was never encoded).
+///
+/// Encoding: `-` -> `_` (kept as a single character for backward
+/// compatibility with already-shipped tool names like `command_move_down`
+/// — MCP tool names are part of MAE's API-stability surface, see CLAUDE.md's
+/// "API Stability" section). Any other byte outside `[a-z0-9-]` is escaped
+/// as `_{hex}_` (lowercase hex of its byte value) — a general escape
+/// mechanism, not a one-off substitution for `!` specifically, so it also
+/// covers any future non-hyphen punctuation in a command name. A bare `_`
+/// in the output is therefore always either a hyphen or part of an `_XX_`
+/// escape triplet: decoding scans for the triplet form first and only
+/// falls back to "this `_` was a hyphen" when the triplet doesn't match.
+pub fn sanitize_command_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c == '-' {
+            out.push('_');
+        } else if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            out.push(c);
+        } else {
+            out.push_str(&format!("_{:02x}_", c as u32));
+        }
+    }
+    out
+}
+
 /// Generate tool definitions from the CommandRegistry.
 /// Every command (builtin or Scheme) becomes a callable AI tool.
 ///
-/// Tool names are prefixed with `command_` and hyphens replaced with underscores
-/// to satisfy all LLM provider naming constraints (alphanumeric + underscore only).
+/// Tool names are prefixed with `command_` and sanitized via
+/// `sanitize_command_name` to satisfy all LLM provider naming constraints
+/// (alphanumeric + underscore only) — invertibly, so dispatch can recover
+/// the original command name (see `sanitize_command_name`'s doc comment).
 pub fn tools_from_registry(registry: &CommandRegistry) -> Vec<ToolDefinition> {
     registry
         .list_commands()
         .iter()
         .map(|cmd| {
-            let sanitized = cmd.name.replace('-', "_").replace('!', "");
+            let sanitized = sanitize_command_name(&cmd.name);
             let tool_name = format!("command_{}", sanitized);
             ToolDefinition {
                 name: tool_name,
@@ -362,6 +419,36 @@ mod tests {
         }
     }
 
+    /// Every registered tool must declare a `PermissionTier` explicitly.
+    ///
+    /// `execute_tool_dispatch_body` resolves an absent tier with
+    /// `.unwrap_or(PermissionTier::Write)` — so a tool added without
+    /// `.permission(...)` is not refused, it is silently granted write access.
+    /// That is the fail-open shape ADR-084 D4 removes elsewhere, and AOSP's
+    /// AIDL compiler is the precedent for the fix: an unannotated interface is
+    /// a build failure, and "no permission required" has to be *chosen* rather
+    /// than defaulted into. All 208 tools satisfy this today; this test is what
+    /// keeps the 209th from quietly not.
+    #[test]
+    fn every_registered_tool_declares_a_permission_tier() {
+        let tools = ai_specific_tools(&OptionRegistry::new());
+        assert!(
+            tools.len() > 100,
+            "sanity: expected hundreds of registered tools, got {}",
+            tools.len()
+        );
+        let undeclared: Vec<&str> = tools
+            .iter()
+            .filter(|t| t.permission.is_none())
+            .map(|t| t.name.as_str())
+            .collect();
+        assert!(
+            undeclared.is_empty(),
+            "these tools declare no PermissionTier and would default to Write at \
+             dispatch — declare one explicitly (ADR-084 D3): {undeclared:?}"
+        );
+    }
+
     #[test]
     fn kb_export_subgraph_html_requires_shell_tier() {
         // It shells out to `npx @mermaid-js/mermaid-cli` for #+begin_src
@@ -524,12 +611,27 @@ mod tests {
         assert!(AI_PROFILES.contains(&"verifier"));
     }
 
+    /// ADR-090 D5: the shipped default auto-approves reads and *asks* for
+    /// everything else. The load-bearing assertion is the second half --
+    /// nothing above the ceiling is silently denied, because a denial is what
+    /// used to force operators back to `auto_approve_tier = "shell"`.
     #[test]
-    fn default_policy_allows_up_to_shell() {
+    fn default_policy_allows_reads_and_asks_for_everything_above() {
         let policy = PermissionPolicy::default();
-        assert!(policy.is_allowed(PermissionTier::ReadOnly));
-        assert!(policy.is_allowed(PermissionTier::Write));
-        assert!(policy.is_allowed(PermissionTier::Shell));
-        assert!(!policy.is_allowed(PermissionTier::Privileged));
+        assert_eq!(
+            policy.decide("buffer_read", PermissionTier::ReadOnly),
+            Decision::Allow
+        );
+        for tier in [
+            PermissionTier::Write,
+            PermissionTier::Shell,
+            PermissionTier::Privileged,
+        ] {
+            assert_eq!(
+                policy.decide("buffer_write", tier),
+                Decision::Ask,
+                "{tier:?} must be askable under the default policy, never denied"
+            );
+        }
     }
 }

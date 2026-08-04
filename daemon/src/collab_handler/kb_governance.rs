@@ -231,7 +231,10 @@ pub(super) async fn handle_kb_set_governance(
             )
         }
     }
-    append_signed_membership(
+    // The signed append is this handler's ONLY effect — nothing else persists
+    // the new governance. Swallowing its failure (audit #589.4) meant the RPC
+    // reported success having changed nothing at all, so this one is fatal.
+    let appended = append_signed_membership(
         doc_store,
         broadcaster,
         session_id,
@@ -244,6 +247,12 @@ pub(super) async fn handle_kb_set_governance(
         None,
     )
     .await;
+    if let Some(e) = appended.failure() {
+        return JsonRpcResponse::error(
+            id,
+            McpError::internal_error(format!("governance for KB '{kb_id}' was NOT changed: {e}")),
+        );
+    }
     info!(session = session_id, kb_id = %kb_id, governance = %governance.to_spec(), "kb/set_governance");
     JsonRpcResponse::success(
         id,

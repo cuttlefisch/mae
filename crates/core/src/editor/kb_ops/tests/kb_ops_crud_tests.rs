@@ -20,7 +20,8 @@ fn kb_agenda_routes_through_query_layer() {
         .kb
         .query_layer()
         .unwrap()
-        .agenda(&mae_kb::AgendaFilter::Todo(None));
+        .agenda(&mae_kb::AgendaFilter::Todo(None))
+        .expect("agenda query must succeed against a healthy store");
     let direct_ids: Vec<String> = direct.iter().map(|n| n.id.clone()).collect();
     let ql_ids: Vec<String> = via_ql.iter().map(|n| n.id.clone()).collect();
     assert_eq!(
@@ -52,7 +53,12 @@ fn kb_history_routes_through_query_layer() {
     editor.kb.rebuild_query_layer();
 
     let direct = arc.node_history("user:h1", 50).unwrap();
-    let via_ql = editor.kb.query_layer().unwrap().history("user:h1", 50);
+    let via_ql = editor
+        .kb
+        .query_layer()
+        .unwrap()
+        .history("user:h1", 50)
+        .expect("history query must succeed against a healthy store");
     assert_eq!(
         via_ql.iter().map(|v| v.version).collect::<Vec<_>>(),
         direct.iter().map(|v| v.version).collect::<Vec<_>>(),

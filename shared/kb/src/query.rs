@@ -3,8 +3,36 @@
 //! All runtime KB reads go through `KbQueryLayer`. The trait has implementations
 //! for `CozoKbStore` (direct Datalog queries), `FederatedQuery` (multi-store
 //! fan-out), and `CachedQueryLayer` (LRU cache wrapper).
+//!
+//! ## Error contract (ADR-086 read-side twin)
+//!
+//! Every method whose data comes from a fallible backing store (Datalog query, daemon
+//! RPC, filesystem) returns `Result<_, KbStoreError>`. This is deliberate: a storage
+//! failure and a genuinely empty/healthy result MUST be distinguishable by callers,
+//! all the way up to the MCP tool boundary an AI agent reads from. Before this
+//! contract existed, `CozoQueryLayer` converted every `Err` from `CozoKbStore` into an
+//! empty `Vec`/`None` via `unwrap_or_default()`/`.ok()` — a caller (and the AI agent
+//! reading its output) could not tell "the KB has nothing matching this query" from
+//! "the KB failed to answer this query," and would confidently report the wrong thing
+//! ("there is nothing in the KB") when the truth was "the database errored." See
+//! `docs/adr/086-tool-outcome-contract.md` for the write-side analogue this closes the
+//! gap with.
+//!
+//! `get`/`contains` remain infallible (`Option`/`bool`): a single-node lookup already
+//! treats "not found" and "lookup failed" as the same caller-visible outcome elsewhere
+//! in this codebase (and `CozoQueryLayer::get` already logs failures via
+//! `tracing::warn!`), and threading `Result` through `contains`'s many purely-internal
+//! ownership-routing call sites (`FederatedQuery`'s `if inst.contains(id) { … }`
+//! pattern) would not improve caller-visible error surfacing.
+//!
+//! Layers with no failure mode of their own (`InMemoryQueryLayer`, `CachedQueryLayer`'s
+//! pass-through) simply return `Ok(...)`. `RemoteHubQueryLayer` keeps its existing,
+//! separately-designed and separately-tested "timeout-and-continue" graceful
+//! degradation contract (ADR-062 Phase E, surfaced via `degraded()`) rather than
+//! turning every network hiccup into an `Err` — that would regress an already-correct,
+//! deliberately different failure-handling strategy for an inherently flaky transport.
 
-use crate::store::{HealthReport, KbStore, Link, SearchHit, SubGraph};
+use crate::store::{HealthReport, KbStore, KbStoreError, Link, SearchHit, SubGraph};
 use crate::{CozoKbStore, Node};
 use std::sync::Arc;
 
@@ -20,19 +48,19 @@ pub trait KbQueryLayer: Send + Sync {
     fn contains(&self, id: &str) -> bool;
 
     /// Full-text search across node titles and bodies.
-    fn search(&self, query: &str, limit: usize) -> Vec<SearchHit>;
+    fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, KbStoreError>;
 
     /// Outgoing links from a node (typed, with rel_type).
-    fn links_from(&self, id: &str) -> Vec<Link>;
+    fn links_from(&self, id: &str) -> Result<Vec<Link>, KbStoreError>;
 
     /// Incoming links to a node (typed, with rel_type).
-    fn links_to(&self, id: &str) -> Vec<Link>;
+    fn links_to(&self, id: &str) -> Result<Vec<Link>, KbStoreError>;
 
     /// List all node IDs, optionally filtered by prefix.
-    fn list_ids(&self, prefix: Option<&str>) -> Vec<String>;
+    fn list_ids(&self, prefix: Option<&str>) -> Result<Vec<String>, KbStoreError>;
 
     /// Return (id, title) pairs for all nodes, optionally filtered by prefix.
-    fn id_title_pairs(&self, prefix: Option<&str>) -> Vec<(String, String)>;
+    fn id_title_pairs(&self, prefix: Option<&str>) -> Result<Vec<(String, String)>, KbStoreError>;
 
     /// Return (id, title, body) triples for all nodes.
     /// Body is truncated to `body_limit` chars (0 = no body).
@@ -41,8 +69,9 @@ pub trait KbQueryLayer: Send + Sync {
         &self,
         prefix: Option<&str>,
         body_limit: usize,
-    ) -> Vec<(String, String, String)> {
-        self.id_title_pairs(prefix)
+    ) -> Result<Vec<(String, String, String)>, KbStoreError> {
+        Ok(self
+            .id_title_pairs(prefix)?
             .into_iter()
             .map(|(id, title)| {
                 let body = if body_limit > 0 {
@@ -54,21 +83,24 @@ pub trait KbQueryLayer: Send + Sync {
                 };
                 (id, title, body)
             })
-            .collect()
+            .collect())
     }
 
-    /// Compute a structured health report.
-    fn health_report(&self) -> Option<HealthReport>;
+    /// Compute a structured health report. `Ok(None)` means this backend has no
+    /// concept of a health report (e.g. `InMemoryQueryLayer`); `Err` means the
+    /// backing store failed to produce one.
+    fn health_report(&self) -> Result<Option<HealthReport>, KbStoreError>;
 
-    /// BFS neighborhood subgraph around a node.
-    fn neighborhood(&self, id: &str, depth: u32) -> Option<SubGraph>;
+    /// BFS neighborhood subgraph around a node. `Ok(None)` means the root wasn't
+    /// found; `Err` means the backing store failed.
+    fn neighborhood(&self, id: &str, depth: u32) -> Result<Option<SubGraph>, KbStoreError>;
 
     /// Graph-relatedness: `(id, score)` for nodes structurally related to
     /// `id` (co-citation / bibliographic coupling / shared tags), distinct
     /// from lexical `search`. Default returns empty so RPC/daemon layers that
     /// don't implement it degrade gracefully; `CozoQueryLayer` overrides.
-    fn related(&self, _id: &str, _limit: usize) -> Vec<(String, f64)> {
-        Vec::new()
+    fn related(&self, _id: &str, _limit: usize) -> Result<Vec<(String, f64)>, KbStoreError> {
+        Ok(Vec::new())
     }
 
     /// Full per-instance node-id -> incoming-link-count map (NOT truncated to any top-N —
@@ -78,8 +110,8 @@ pub trait KbQueryLayer: Send + Sync {
     /// before truncating it away. Default empty, mirroring related()/neighborhood()'s
     /// existing graceful-degrade contract (e.g. RemoteHubQueryLayer, which already can't
     /// participate in health_report at all).
-    fn linked_in_degree(&self) -> std::collections::HashMap<String, usize> {
-        std::collections::HashMap::new()
+    fn linked_in_degree(&self) -> Result<std::collections::HashMap<String, usize>, KbStoreError> {
+        Ok(std::collections::HashMap::new())
     }
 
     /// Evict cached entries for node `id` (Phase D3b). A no-op for layers without a
@@ -99,23 +131,23 @@ pub trait KbQueryLayer: Send + Sync {
     /// All nodes carrying a TODO state, for the agenda buffer (Phase D thin-client:
     /// the agenda was mirror-only). Default empty (non-cozo layers); `CozoQueryLayer`
     /// + `LruQueryLayer` implement it. The editor applies state/priority/tag filters.
-    fn todo_nodes(&self) -> Vec<Node> {
-        Vec::new()
+    fn todo_nodes(&self) -> Result<Vec<Node>, KbStoreError> {
+        Ok(Vec::new())
     }
 
     /// Agenda query (todo/priority/tag/orphan/stale/dead-end/custom) resolved via the
     /// store's Datalog. Phase 3: routes `:kb-agenda` uniformly through the query layer
     /// instead of reaching into the primary store directly. Default empty so non-cozo
     /// layers degrade gracefully; `CozoQueryLayer` delegates to the store.
-    fn agenda(&self, _filter: &crate::AgendaFilter) -> Vec<Node> {
-        Vec::new()
+    fn agenda(&self, _filter: &crate::AgendaFilter) -> Result<Vec<Node>, KbStoreError> {
+        Ok(Vec::new())
     }
 
     /// Version history (snapshots) for a node, newest first. Phase 3: routes
     /// `:kb-history` through the query layer. Default empty; `CozoQueryLayer` delegates
     /// to the store.
-    fn history(&self, _id: &str, _limit: usize) -> Vec<crate::NodeVersion> {
-        Vec::new()
+    fn history(&self, _id: &str, _limit: usize) -> Result<Vec<crate::NodeVersion>, KbStoreError> {
+        Ok(Vec::new())
     }
 
     /// Whether the MOST RECENT call on this layer was degraded (e.g. a `RemoteHubQueryLayer`
@@ -130,16 +162,16 @@ pub trait KbQueryLayer: Send + Sync {
     }
 
     /// Return all known namespace prefixes (e.g., "cmd:", "concept:").
-    fn namespace_prefixes(&self) -> Vec<String> {
+    fn namespace_prefixes(&self) -> Result<Vec<String>, KbStoreError> {
         let mut prefixes = std::collections::HashSet::new();
-        for id in self.list_ids(None) {
+        for id in self.list_ids(None)? {
             if let Some(colon) = id.find(':') {
                 prefixes.insert(format!("{}:", &id[..colon]));
             }
         }
         let mut result: Vec<String> = prefixes.into_iter().collect();
         result.sort();
-        result
+        Ok(result)
     }
 }
 
@@ -169,64 +201,60 @@ impl KbQueryLayer for CozoQueryLayer {
         matches!(self.store.get_node(id), Ok(Some(_)))
     }
 
-    fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
-        self.store.fts_search(query, limit).unwrap_or_default()
+    fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, KbStoreError> {
+        self.store.fts_search(query, limit)
     }
 
-    fn links_from(&self, id: &str) -> Vec<Link> {
-        self.store.links_from(id).unwrap_or_default()
+    fn links_from(&self, id: &str) -> Result<Vec<Link>, KbStoreError> {
+        self.store.links_from(id)
     }
 
-    fn links_to(&self, id: &str) -> Vec<Link> {
-        self.store.links_to(id).unwrap_or_default()
+    fn links_to(&self, id: &str) -> Result<Vec<Link>, KbStoreError> {
+        self.store.links_to(id)
     }
 
-    fn list_ids(&self, prefix: Option<&str>) -> Vec<String> {
-        self.store.list_ids(prefix).unwrap_or_default()
+    fn list_ids(&self, prefix: Option<&str>) -> Result<Vec<String>, KbStoreError> {
+        self.store.list_ids(prefix)
     }
 
-    fn id_title_pairs(&self, prefix: Option<&str>) -> Vec<(String, String)> {
-        self.store.id_title_pairs(prefix).unwrap_or_default()
+    fn id_title_pairs(&self, prefix: Option<&str>) -> Result<Vec<(String, String)>, KbStoreError> {
+        self.store.id_title_pairs(prefix)
     }
 
     fn id_title_body_triples(
         &self,
         prefix: Option<&str>,
         body_limit: usize,
-    ) -> Vec<(String, String, String)> {
-        self.store
-            .id_title_body_triples(prefix, body_limit)
-            .unwrap_or_default()
+    ) -> Result<Vec<(String, String, String)>, KbStoreError> {
+        self.store.id_title_body_triples(prefix, body_limit)
     }
 
-    fn health_report(&self) -> Option<HealthReport> {
-        self.store.health_report().ok()
+    fn health_report(&self) -> Result<Option<HealthReport>, KbStoreError> {
+        self.store.health_report().map(Some)
     }
 
-    fn neighborhood(&self, id: &str, depth: u32) -> Option<SubGraph> {
-        self.store.neighborhood(id, depth).ok()
+    fn neighborhood(&self, id: &str, depth: u32) -> Result<Option<SubGraph>, KbStoreError> {
+        self.store.neighborhood(id, depth).map(Some)
     }
 
-    fn related(&self, id: &str, limit: usize) -> Vec<(String, f64)> {
-        self.store.related(id, limit).unwrap_or_default()
+    fn related(&self, id: &str, limit: usize) -> Result<Vec<(String, f64)>, KbStoreError> {
+        self.store.related(id, limit)
     }
 
-    fn linked_in_degree(&self) -> std::collections::HashMap<String, usize> {
-        self.store.compute_in_degree_map().unwrap_or_default()
+    fn linked_in_degree(&self) -> Result<std::collections::HashMap<String, usize>, KbStoreError> {
+        self.store.compute_in_degree_map()
     }
 
-    fn todo_nodes(&self) -> Vec<Node> {
-        self.store
-            .agenda_query(&crate::AgendaFilter::Todo(None))
-            .unwrap_or_default()
+    fn todo_nodes(&self) -> Result<Vec<Node>, KbStoreError> {
+        self.store.agenda_query(&crate::AgendaFilter::Todo(None))
     }
 
-    fn agenda(&self, filter: &crate::AgendaFilter) -> Vec<Node> {
-        self.store.agenda_query(filter).unwrap_or_default()
+    fn agenda(&self, filter: &crate::AgendaFilter) -> Result<Vec<Node>, KbStoreError> {
+        self.store.agenda_query(filter)
     }
 
-    fn history(&self, id: &str, limit: usize) -> Vec<crate::NodeVersion> {
-        self.store.node_history(id, limit).unwrap_or_default()
+    fn history(&self, id: &str, limit: usize) -> Result<Vec<crate::NodeVersion>, KbStoreError> {
+        self.store.node_history(id, limit)
     }
 }
 
@@ -335,7 +363,7 @@ impl KbQueryLayer for FederatedQuery {
         self.primary.contains(id) || self.instances.iter().any(|(_, _, i)| i.contains(id))
     }
 
-    fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
+    fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, KbStoreError> {
         // ADR-062 Phase E: every participating source (primary + each federated instance)
         // is queried on its OWN thread via `std::thread::scope`, not a sequential loop.
         // A sequential fan-out would let one slow/hung `RemoteHubQueryLayer` (bounded by
@@ -347,55 +375,87 @@ impl KbQueryLayer for FederatedQuery {
         // bounded by the SLOWEST single source, not the SUM of all of them — and that
         // slowest source is itself bounded by its own timeout, so the whole call has a
         // real, predictable worst case.
-        // (priority, hits, degraded) per participating instance.
-        type InstanceSearchResult = (u32, Vec<SearchHit>, bool);
+        // (priority, result, degraded) per participating instance.
+        type InstanceSearchResult = (u32, Result<Vec<SearchHit>, KbStoreError>, bool);
         let ordered = self.priority_ordered_instances();
-        let (primary_hits, instance_results): (Vec<SearchHit>, Vec<InstanceSearchResult>) =
-            std::thread::scope(|scope| {
-                let primary_handle = scope.spawn(|| self.primary.search(query, limit));
-                let instance_handles: Vec<_> = ordered
-                    .iter()
-                    .map(|(_, priority, inst)| {
-                        scope.spawn(move || {
-                            let hits = inst.search(query, limit);
-                            (*priority, hits, inst.degraded())
-                        })
+        let (primary_result, instance_results): (
+            Result<Vec<SearchHit>, KbStoreError>,
+            Vec<InstanceSearchResult>,
+        ) = std::thread::scope(|scope| {
+            let primary_handle = scope.spawn(|| self.primary.search(query, limit));
+            let instance_handles: Vec<_> = ordered
+                .iter()
+                .map(|(_, priority, inst)| {
+                    scope.spawn(move || {
+                        let result = inst.search(query, limit);
+                        let degraded = inst.degraded() || result.is_err();
+                        (*priority, result, degraded)
                     })
-                    .collect();
-                let primary_hits = primary_handle.join().unwrap_or_default();
-                let instance_results = instance_handles
-                    .into_iter()
-                    .map(|h| h.join().unwrap_or((0, Vec::new(), true)))
-                    .collect();
-                (primary_hits, instance_results)
+                })
+                .collect();
+            let primary_result = primary_handle.join().unwrap_or_else(|_| {
+                Err(KbStoreError::Storage(
+                    "primary search worker thread panicked".to_string(),
+                ))
             });
+            let instance_results = instance_handles
+                .into_iter()
+                .map(|h| {
+                    h.join().unwrap_or_else(|_| {
+                        (
+                            0,
+                            Err(KbStoreError::Storage(
+                                "federated instance search worker thread panicked".to_string(),
+                            )),
+                            true,
+                        )
+                    })
+                })
+                .collect();
+            (primary_result, instance_results)
+        });
 
-        let any_degraded = instance_results.iter().any(|(_, _, degraded)| *degraded);
-        self.last_query_partial
-            .store(any_degraded, std::sync::atomic::Ordering::Relaxed);
+        // A primary storage failure is not something a caller can safely fold into "no
+        // results" — propagate it (ADR-086 read-side twin: never let a real storage error
+        // render as an empty result set). A single federated *instance* failing, by
+        // contrast, degrades the merge (that instance's contribution is missing, logged
+        // below) rather than failing the whole call — the same "timeout-and-continue"
+        // contract this type already applies to a slow/unreachable `RemoteHubQueryLayer`
+        // (ADR-062 Phase E), just now also covering a local instance's genuine query error.
+        let primary_hits = primary_result?;
 
-        // Priority-aware dedup (ADR-062 Phase B): on an id collision, the highest-priority
-        // source's hit wins (primary is implicitly highest — never overridden by an
-        // instance's priority). `by_id` tracks the winning priority alongside the hit so a
-        // lower-priority instance can't clobber a higher-priority one regardless of thread
-        // completion order.
+        let mut any_degraded = false;
         let mut by_id: std::collections::HashMap<String, (i64, SearchHit)> =
             std::collections::HashMap::new();
         for hit in primary_hits {
             by_id.insert(hit.id.clone(), (i64::MAX, hit));
         }
-        for (priority, hits, _) in instance_results {
-            for hit in hits {
-                let candidate_priority = priority as i64;
-                let replace = match by_id.get(&hit.id) {
-                    Some((existing_priority, _)) => candidate_priority > *existing_priority,
-                    None => true,
-                };
-                if replace {
-                    by_id.insert(hit.id.clone(), (candidate_priority, hit));
+        for (priority, result, degraded) in instance_results {
+            any_degraded |= degraded;
+            match result {
+                Ok(hits) => {
+                    for hit in hits {
+                        let candidate_priority = priority as i64;
+                        let replace = match by_id.get(&hit.id) {
+                            Some((existing_priority, _)) => candidate_priority > *existing_priority,
+                            None => true,
+                        };
+                        if replace {
+                            by_id.insert(hit.id.clone(), (candidate_priority, hit));
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "federated search: instance query failed, excluded from merged results"
+                    );
                 }
             }
         }
+        self.last_query_partial
+            .store(any_degraded, std::sync::atomic::Ordering::Relaxed);
+
         let mut hits: Vec<SearchHit> = by_id.into_values().map(|(_, hit)| hit).collect();
         // Deterministic final order: score descending, id ascending as an explicit
         // tiebreak. `by_id` is a `HashMap`, whose iteration order is process-randomized —
@@ -413,10 +473,10 @@ impl KbQueryLayer for FederatedQuery {
                 .then_with(|| a.id.cmp(&b.id))
         });
         hits.truncate(limit);
-        hits
+        Ok(hits)
     }
 
-    fn links_from(&self, id: &str) -> Vec<Link> {
+    fn links_from(&self, id: &str) -> Result<Vec<Link>, KbStoreError> {
         // Return links from whichever store owns the node
         if self.primary.contains(id) {
             return self.primary.links_from(id);
@@ -426,39 +486,60 @@ impl KbQueryLayer for FederatedQuery {
                 return inst.links_from(id);
             }
         }
-        Vec::new()
+        Ok(Vec::new())
     }
 
-    fn links_to(&self, id: &str) -> Vec<Link> {
+    fn links_to(&self, id: &str) -> Result<Vec<Link>, KbStoreError> {
         // Merge incoming links from all stores — every instance's incoming edges are real,
         // distinct edges (not competing copies of the same fact), so there's nothing to
-        // dedup-by-priority here; this deliberately stays priority-agnostic.
-        let mut links = self.primary.links_to(id);
-        for (_, _, inst) in &self.instances {
-            links.extend(inst.links_to(id));
+        // dedup-by-priority here; this deliberately stays priority-agnostic. Primary
+        // failure propagates (it's the caller's authoritative baseline); a sibling
+        // instance's failure is logged and excluded from the merge, matching `search`'s
+        // graceful-degradation posture for non-primary sources.
+        let mut links = self.primary.links_to(id)?;
+        for (name, _, inst) in &self.instances {
+            match inst.links_to(id) {
+                Ok(more) => links.extend(more),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    instance = %name,
+                    id,
+                    "federated links_to: instance query failed, excluded from merged results"
+                ),
+            }
         }
-        links
+        Ok(links)
     }
 
-    fn agenda(&self, filter: &crate::AgendaFilter) -> Vec<Node> {
+    fn agenda(&self, filter: &crate::AgendaFilter) -> Result<Vec<Node>, KbStoreError> {
         // Merge agenda matches across primary + instances, de-duped by id. Priority
         // decides which instance's copy of a colliding node is kept — same rule as
         // `search`, without imposing `search`'s score-based reordering (agenda order is
-        // meaningful on its own and untouched here).
-        let mut nodes = self.primary.agenda(filter);
+        // meaningful on its own and untouched here). Primary failure propagates; a
+        // sibling instance's failure is logged and excluded.
+        let mut nodes = self.primary.agenda(filter)?;
         let mut seen: std::collections::HashSet<String> =
             nodes.iter().map(|n| n.id.clone()).collect();
-        for (_, _, inst) in self.priority_ordered_instances() {
-            for n in inst.agenda(filter) {
-                if seen.insert(n.id.clone()) {
-                    nodes.push(n);
+        for (name, _, inst) in self.priority_ordered_instances() {
+            match inst.agenda(filter) {
+                Ok(inst_nodes) => {
+                    for n in inst_nodes {
+                        if seen.insert(n.id.clone()) {
+                            nodes.push(n);
+                        }
+                    }
                 }
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    instance = %name,
+                    "federated agenda: instance query failed, excluded from merged results"
+                ),
             }
         }
-        nodes
+        Ok(nodes)
     }
 
-    fn history(&self, id: &str, limit: usize) -> Vec<crate::NodeVersion> {
+    fn history(&self, id: &str, limit: usize) -> Result<Vec<crate::NodeVersion>, KbStoreError> {
         // History lives in whichever store owns the node.
         if self.primary.contains(id) {
             return self.primary.history(id, limit);
@@ -468,55 +549,82 @@ impl KbQueryLayer for FederatedQuery {
                 return inst.history(id, limit);
             }
         }
-        Vec::new()
+        Ok(Vec::new())
     }
 
-    fn list_ids(&self, prefix: Option<&str>) -> Vec<String> {
-        let mut ids = self.primary.list_ids(prefix);
+    fn list_ids(&self, prefix: Option<&str>) -> Result<Vec<String>, KbStoreError> {
+        let mut ids = self.primary.list_ids(prefix)?;
         let mut seen: std::collections::HashSet<String> = ids.iter().cloned().collect();
-        for (_, _, inst) in self.priority_ordered_instances() {
-            for id in inst.list_ids(prefix) {
-                if seen.insert(id.clone()) {
-                    ids.push(id);
+        for (name, _, inst) in self.priority_ordered_instances() {
+            match inst.list_ids(prefix) {
+                Ok(inst_ids) => {
+                    for id in inst_ids {
+                        if seen.insert(id.clone()) {
+                            ids.push(id);
+                        }
+                    }
                 }
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    instance = %name,
+                    "federated list_ids: instance query failed, excluded from merged results"
+                ),
             }
         }
-        ids
+        Ok(ids)
     }
 
-    fn id_title_pairs(&self, prefix: Option<&str>) -> Vec<(String, String)> {
-        let mut pairs = self.primary.id_title_pairs(prefix);
+    fn id_title_pairs(&self, prefix: Option<&str>) -> Result<Vec<(String, String)>, KbStoreError> {
+        let mut pairs = self.primary.id_title_pairs(prefix)?;
         let mut seen: std::collections::HashSet<String> =
             pairs.iter().map(|(id, _)| id.clone()).collect();
-        for (_, _, inst) in self.priority_ordered_instances() {
-            for pair in inst.id_title_pairs(prefix) {
-                if seen.insert(pair.0.clone()) {
-                    pairs.push(pair);
+        for (name, _, inst) in self.priority_ordered_instances() {
+            match inst.id_title_pairs(prefix) {
+                Ok(inst_pairs) => {
+                    for pair in inst_pairs {
+                        if seen.insert(pair.0.clone()) {
+                            pairs.push(pair);
+                        }
+                    }
                 }
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    instance = %name,
+                    "federated id_title_pairs: instance query failed, excluded from merged results"
+                ),
             }
         }
-        pairs
+        Ok(pairs)
     }
 
     fn id_title_body_triples(
         &self,
         prefix: Option<&str>,
         body_limit: usize,
-    ) -> Vec<(String, String, String)> {
-        let mut triples = self.primary.id_title_body_triples(prefix, body_limit);
+    ) -> Result<Vec<(String, String, String)>, KbStoreError> {
+        let mut triples = self.primary.id_title_body_triples(prefix, body_limit)?;
         let mut seen: std::collections::HashSet<String> =
             triples.iter().map(|(id, _, _)| id.clone()).collect();
-        for (_, _, inst) in self.priority_ordered_instances() {
-            for triple in inst.id_title_body_triples(prefix, body_limit) {
-                if seen.insert(triple.0.clone()) {
-                    triples.push(triple);
+        for (name, _, inst) in self.priority_ordered_instances() {
+            match inst.id_title_body_triples(prefix, body_limit) {
+                Ok(inst_triples) => {
+                    for triple in inst_triples {
+                        if seen.insert(triple.0.clone()) {
+                            triples.push(triple);
+                        }
+                    }
                 }
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    instance = %name,
+                    "federated id_title_body_triples: instance query failed, excluded from merged results"
+                ),
             }
         }
-        triples
+        Ok(triples)
     }
 
-    fn health_report(&self) -> Option<HealthReport> {
+    fn health_report(&self) -> Result<Option<HealthReport>, KbStoreError> {
         // Mirrors `id_title_body_triples`'s aggregation pattern above: start from the
         // primary's report and merge every registered instance's report into it, rather
         // than silently returning only the primary (ADR-065 item 1). Unlike a plain
@@ -534,7 +642,9 @@ impl KbQueryLayer for FederatedQuery {
         // federation-wide in-degree map + `contains` check, without adding
         // O(candidates × instances × total_links) cost (principle #9) — see the comments
         // at each fix site.
-        let mut merged = self.primary.health_report()?;
+        let Some(mut merged) = self.primary.health_report()? else {
+            return Ok(None);
+        };
         let mut by_instance: std::collections::HashMap<String, crate::store::InstanceHealth> =
             std::collections::HashMap::new();
         by_instance.insert(
@@ -555,7 +665,7 @@ impl KbQueryLayer for FederatedQuery {
         // O(nodes-with-incoming-links) — not multiplied by candidate count.
         let mut global_in_degree: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
-        for (id, count) in self.primary.linked_in_degree() {
+        for (id, count) in self.primary.linked_in_degree()? {
             *global_in_degree.entry(id).or_default() += count;
         }
 
@@ -568,7 +678,7 @@ impl KbQueryLayer for FederatedQuery {
         // as a separate PR.
         for (name, _, inst) in self.priority_ordered_instances() {
             match inst.health_report() {
-                Some(report) => {
+                Ok(Some(report)) => {
                     by_instance.insert(
                         name.clone(),
                         crate::store::InstanceHealth {
@@ -594,10 +704,34 @@ impl KbQueryLayer for FederatedQuery {
                     // hub_nodes deliberately NOT extended here — see the fresh rebuild
                     // from `global_in_degree` below.
                 }
-                None => {
+                Ok(None) => {
+                    // This backend has no health-report concept (e.g. an in-memory
+                    // federated instance) — nothing to contribute, recorded the same way
+                    // a genuine failure is below (both mean "did not contribute", the
+                    // distinction between the two is now visible in the log for the
+                    // Err case, which the pre-fix code could never emit at all).
+                    by_instance.insert(
+                        name.clone(),
+                        crate::store::InstanceHealth {
+                            reachable: false,
+                            total_nodes: 0,
+                            orphan_count: 0,
+                            broken_link_count: 0,
+                        },
+                    );
+                }
+                Err(e) => {
                     // Instance failed to report — surface it as unreachable rather than
                     // silently dropping it from the aggregate (the exact bug this fix
-                    // closes: a corrupted non-primary instance must not vanish).
+                    // closes: a corrupted non-primary instance must not vanish), AND now
+                    // log the real cause instead of discarding it (pre-fix, `.ok()`
+                    // erased it entirely — there was no trace of *why* an instance was
+                    // unreachable).
+                    tracing::warn!(
+                        error = %e,
+                        instance = %name,
+                        "federated health_report: instance query failed"
+                    );
                     by_instance.insert(
                         name.clone(),
                         crate::store::InstanceHealth {
@@ -609,8 +743,17 @@ impl KbQueryLayer for FederatedQuery {
                     );
                 }
             }
-            for (id, count) in inst.linked_in_degree() {
-                *global_in_degree.entry(id).or_default() += count;
+            match inst.linked_in_degree() {
+                Ok(map) => {
+                    for (id, count) in map {
+                        *global_in_degree.entry(id).or_default() += count;
+                    }
+                }
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    instance = %name,
+                    "federated health_report: instance linked_in_degree failed"
+                ),
             }
         }
 
@@ -655,10 +798,10 @@ impl KbQueryLayer for FederatedQuery {
         merged.hub_nodes = hubs;
 
         merged.by_instance = by_instance;
-        Some(merged)
+        Ok(Some(merged))
     }
 
-    fn neighborhood(&self, id: &str, depth: u32) -> Option<SubGraph> {
+    fn neighborhood(&self, id: &str, depth: u32) -> Result<Option<SubGraph>, KbStoreError> {
         if self.primary.contains(id) {
             return self.primary.neighborhood(id, depth);
         }
@@ -667,10 +810,10 @@ impl KbQueryLayer for FederatedQuery {
                 return inst.neighborhood(id, depth);
             }
         }
-        None
+        Ok(None)
     }
 
-    fn related(&self, id: &str, limit: usize) -> Vec<(String, f64)> {
+    fn related(&self, id: &str, limit: usize) -> Result<Vec<(String, f64)>, KbStoreError> {
         // Per-instance, like `neighborhood`: relatedness is computed within the instance
         // that owns the node. KNOWN APPROXIMATION (issue #474 review): cross-instance links
         // ARE real — a node's true structural neighbors can live in a sibling federated
@@ -691,7 +834,7 @@ impl KbQueryLayer for FederatedQuery {
                 return inst.related(id, limit);
             }
         }
-        Vec::new()
+        Ok(Vec::new())
     }
 
     /// Scoped specifically to the last `search()` call — `last_query_partial` is only ever
@@ -702,18 +845,29 @@ impl KbQueryLayer for FederatedQuery {
         self.last_query_was_partial()
     }
 
-    fn todo_nodes(&self) -> Vec<Node> {
-        let mut out = self.primary.todo_nodes();
+    fn todo_nodes(&self) -> Result<Vec<Node>, KbStoreError> {
+        // Primary failure propagates; a sibling instance's failure is logged and
+        // excluded, matching every other aggregation method above.
+        let mut out = self.primary.todo_nodes()?;
         let mut seen: std::collections::HashSet<String> =
             out.iter().map(|n| n.id.clone()).collect();
-        for (_, _, inst) in self.priority_ordered_instances() {
-            for n in inst.todo_nodes() {
-                if seen.insert(n.id.clone()) {
-                    out.push(n);
+        for (name, _, inst) in self.priority_ordered_instances() {
+            match inst.todo_nodes() {
+                Ok(inst_nodes) => {
+                    for n in inst_nodes {
+                        if seen.insert(n.id.clone()) {
+                            out.push(n);
+                        }
+                    }
                 }
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    instance = %name,
+                    "federated todo_nodes: instance query failed, excluded from merged results"
+                ),
             }
         }
-        out
+        Ok(out)
     }
 }
 
@@ -745,18 +899,20 @@ impl KbQueryLayer for InMemoryQueryLayer {
         self.kb.lock().unwrap().contains(id)
     }
 
-    fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
+    fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, KbStoreError> {
         let kb = self.kb.lock().unwrap();
-        kb.search(query)
+        Ok(kb
+            .search(query)
             .into_iter()
             .take(limit)
             .map(|id| SearchHit { id, score: 1.0 })
-            .collect()
+            .collect())
     }
 
-    fn links_from(&self, id: &str) -> Vec<Link> {
+    fn links_from(&self, id: &str) -> Result<Vec<Link>, KbStoreError> {
         let kb = self.kb.lock().unwrap();
-        kb.links_from(id)
+        Ok(kb
+            .links_from(id)
             .into_iter()
             .map(|dst| Link {
                 src: id.to_string(),
@@ -766,12 +922,13 @@ impl KbQueryLayer for InMemoryQueryLayer {
                 weight: 1.0,
                 confidence: 1.0,
             })
-            .collect()
+            .collect())
     }
 
-    fn links_to(&self, id: &str) -> Vec<Link> {
+    fn links_to(&self, id: &str) -> Result<Vec<Link>, KbStoreError> {
         let kb = self.kb.lock().unwrap();
-        kb.links_to(id)
+        Ok(kb
+            .links_to(id)
             .into_iter()
             .map(|src| Link {
                 src,
@@ -781,32 +938,34 @@ impl KbQueryLayer for InMemoryQueryLayer {
                 weight: 1.0,
                 confidence: 1.0,
             })
-            .collect()
+            .collect())
     }
 
-    fn list_ids(&self, prefix: Option<&str>) -> Vec<String> {
+    fn list_ids(&self, prefix: Option<&str>) -> Result<Vec<String>, KbStoreError> {
         let kb = self.kb.lock().unwrap();
-        kb.list_ids(prefix)
+        Ok(kb.list_ids(prefix))
     }
 
-    fn id_title_pairs(&self, prefix: Option<&str>) -> Vec<(String, String)> {
+    fn id_title_pairs(&self, prefix: Option<&str>) -> Result<Vec<(String, String)>, KbStoreError> {
         let kb = self.kb.lock().unwrap();
-        kb.list_ids(prefix)
+        Ok(kb
+            .list_ids(prefix)
             .into_iter()
             .filter_map(|id| {
                 let title = kb.get(&id)?.title.clone();
                 Some((id, title))
             })
-            .collect()
+            .collect())
     }
 
     fn id_title_body_triples(
         &self,
         prefix: Option<&str>,
         body_limit: usize,
-    ) -> Vec<(String, String, String)> {
+    ) -> Result<Vec<(String, String, String)>, KbStoreError> {
         let kb = self.kb.lock().unwrap();
-        kb.list_ids(prefix)
+        Ok(kb
+            .list_ids(prefix)
             .into_iter()
             .filter_map(|id| {
                 let node = kb.get(&id)?;
@@ -817,37 +976,38 @@ impl KbQueryLayer for InMemoryQueryLayer {
                 };
                 Some((id, node.title.clone(), body))
             })
-            .collect()
+            .collect())
     }
 
-    fn health_report(&self) -> Option<HealthReport> {
-        None // In-memory KB uses KbHealthReport, not store::HealthReport
+    fn health_report(&self) -> Result<Option<HealthReport>, KbStoreError> {
+        Ok(None) // In-memory KB uses KbHealthReport, not store::HealthReport
     }
 
-    fn neighborhood(&self, _id: &str, _depth: u32) -> Option<SubGraph> {
-        None
+    fn neighborhood(&self, _id: &str, _depth: u32) -> Result<Option<SubGraph>, KbStoreError> {
+        Ok(None)
     }
 
-    fn related(&self, id: &str, limit: usize) -> Vec<(String, f64)> {
-        self.kb.lock().unwrap().related(id, limit)
+    fn related(&self, id: &str, limit: usize) -> Result<Vec<(String, f64)>, KbStoreError> {
+        Ok(self.kb.lock().unwrap().related(id, limit))
     }
 
-    fn linked_in_degree(&self) -> std::collections::HashMap<String, usize> {
+    fn linked_in_degree(&self) -> Result<std::collections::HashMap<String, usize>, KbStoreError> {
         // `KnowledgeBase` already maintains a `links_in` reverse index for `links_to` —
         // a real, correct implementation costs nothing beyond what's already tracked
         // (unlike `RemoteHubQueryLayer`, which has no such structure and falls through to
         // the trait default).
-        self.kb.lock().unwrap().linked_in_degree()
+        Ok(self.kb.lock().unwrap().linked_in_degree())
     }
 
-    fn todo_nodes(&self) -> Vec<Node> {
-        self.kb
+    fn todo_nodes(&self) -> Result<Vec<Node>, KbStoreError> {
+        Ok(self
+            .kb
             .lock()
             .unwrap()
             .todo_nodes()
             .into_iter()
             .cloned()
-            .collect()
+            .collect())
     }
 }
 
@@ -871,10 +1031,10 @@ mod tests {
         let node = layer.get("test:a").unwrap();
         assert_eq!(node.title, "Alpha");
 
-        let ids = layer.list_ids(Some("test:"));
+        let ids = layer.list_ids(Some("test:")).unwrap();
         assert!(ids.contains(&"test:a".to_string()));
 
-        let pairs = layer.id_title_pairs(None);
+        let pairs = layer.id_title_pairs(None).unwrap();
         assert!(pairs.iter().any(|(id, _)| id == "test:a"));
     }
 
@@ -1006,13 +1166,13 @@ mod tests {
             federated.add_instance(format!("inst-{i}"), 0, Arc::new(CozoQueryLayer::new(store)));
         }
 
-        let baseline = federated.search("widget", 10);
+        let baseline = federated.search("widget", 10).unwrap();
         assert!(
             baseline.len() >= 3,
             "fixture sanity: expected several tied-score hits, got {baseline:?}"
         );
         for _ in 0..20 {
-            let repeat = federated.search("widget", 10);
+            let repeat = federated.search("widget", 10).unwrap();
             assert_eq!(
                 repeat, baseline,
                 "search() must return byte-identical ordering across repeated identical \
@@ -1108,8 +1268,13 @@ mod tests {
         let primary = Arc::new(CozoQueryLayer::new(store1));
         let healthy_inst = Arc::new(CozoQueryLayer::new(store2));
         // A real `KbQueryLayer` implementor whose `health_report()` genuinely returns
-        // `None` (see `InMemoryQueryLayer::health_report` above) — stands in for a
-        // corrupted/unreadable federated instance without needing a mock.
+        // `Ok(None)` (see `InMemoryQueryLayer::health_report` above — it has no
+        // `store::HealthReport` concept at all) — stands in for an instance that
+        // contributes nothing to the aggregate without needing a mock. This is
+        // deliberately distinct from a genuine storage `Err`, covered separately by
+        // `federated_health_report_propagates_a_genuine_instance_storage_error` below
+        // (ADR-086 read-side twin: "no report available" and "report query failed"
+        // must not be conflated).
         let corrupted_inst = Arc::new(InMemoryQueryLayer::new(crate::KnowledgeBase::new()));
 
         let mut federated = FederatedQuery::new(primary);
@@ -1118,6 +1283,7 @@ mod tests {
 
         let report = federated
             .health_report()
+            .unwrap()
             .expect("primary must report health");
 
         // The actual bug: total_nodes must reflect primary + the healthy instance
@@ -1192,7 +1358,7 @@ mod tests {
         let mut federated = FederatedQuery::new(primary);
         federated.add_instance("inst".into(), 0, Arc::new(CozoQueryLayer::new(inst_store)));
 
-        let report = federated.health_report().unwrap();
+        let report = federated.health_report().unwrap().unwrap();
         assert!(
             !report
                 .orphan_ids
@@ -1240,7 +1406,7 @@ mod tests {
         federated.add_instance("a".into(), 0, Arc::new(CozoQueryLayer::new(store_a)));
         federated.add_instance("b".into(), 0, Arc::new(CozoQueryLayer::new(store_b)));
 
-        let report = federated.health_report().unwrap();
+        let report = federated.health_report().unwrap().unwrap();
         assert!(
             !report.broken_links.iter().any(|l| l.target == "b:target"),
             "a link whose target exists in a sibling federated instance must not be \
@@ -1292,7 +1458,7 @@ mod tests {
         federated.add_instance("b1".into(), 0, Arc::new(CozoQueryLayer::new(store_b1)));
         federated.add_instance("b2".into(), 0, Arc::new(CozoQueryLayer::new(store_b2)));
 
-        let report = federated.health_report().unwrap();
+        let report = federated.health_report().unwrap().unwrap();
         assert!(
             report
                 .orphan_ids
@@ -1328,7 +1494,7 @@ mod tests {
         federated.add_instance("b1".into(), 0, Arc::new(CozoQueryLayer::new(store_b1)));
         federated.add_instance("b2".into(), 0, Arc::new(CozoQueryLayer::new(store_b2)));
 
-        let report = federated.health_report().unwrap();
+        let report = federated.health_report().unwrap().unwrap();
         assert!(
             report
                 .broken_links
@@ -1375,7 +1541,7 @@ mod tests {
         federated.add_instance("b".into(), 0, Arc::new(CozoQueryLayer::new(store_b)));
         federated.add_instance("c".into(), 0, Arc::new(CozoQueryLayer::new(store_c)));
 
-        let report = federated.health_report().unwrap();
+        let report = federated.health_report().unwrap().unwrap();
         assert!(
             !report.broken_links.iter().any(|l| l.target == "c:target"),
             "a link resolving against the THIRD instance checked must still be recognized \
@@ -1424,7 +1590,7 @@ mod tests {
         federated.add_instance("a".into(), 0, Arc::new(CozoQueryLayer::new(store_a)));
         federated.add_instance("b".into(), 0, Arc::new(CozoQueryLayer::new(store_b)));
 
-        let report = federated.health_report().unwrap();
+        let report = federated.health_report().unwrap().unwrap();
         let hub_count = report
             .hub_nodes
             .iter()
@@ -1517,7 +1683,7 @@ mod tests {
         federated.add_instance("a".into(), 0, Arc::new(CozoQueryLayer::new(store_a)));
         federated.add_instance("b".into(), 0, Arc::new(CozoQueryLayer::new(store_b)));
 
-        let report = federated.health_report().unwrap();
+        let report = federated.health_report().unwrap().unwrap();
         let hub_count = report
             .hub_nodes
             .iter()
@@ -1558,7 +1724,7 @@ mod tests {
 
         let primary = Arc::new(CozoQueryLayer::new(store));
         let federated = FederatedQuery::new(primary);
-        let fed_report = federated.health_report().unwrap();
+        let fed_report = federated.health_report().unwrap().unwrap();
 
         assert_eq!(
             fed_report.hub_nodes, direct_report.hub_nodes,
@@ -1581,26 +1747,29 @@ mod tests {
         fn contains(&self, _id: &str) -> bool {
             false
         }
-        fn search(&self, _query: &str, _limit: usize) -> Vec<SearchHit> {
-            Vec::new()
+        fn search(&self, _query: &str, _limit: usize) -> Result<Vec<SearchHit>, KbStoreError> {
+            Ok(Vec::new())
         }
-        fn links_from(&self, _id: &str) -> Vec<Link> {
-            Vec::new()
+        fn links_from(&self, _id: &str) -> Result<Vec<Link>, KbStoreError> {
+            Ok(Vec::new())
         }
-        fn links_to(&self, _id: &str) -> Vec<Link> {
-            Vec::new()
+        fn links_to(&self, _id: &str) -> Result<Vec<Link>, KbStoreError> {
+            Ok(Vec::new())
         }
-        fn list_ids(&self, _prefix: Option<&str>) -> Vec<String> {
-            Vec::new()
+        fn list_ids(&self, _prefix: Option<&str>) -> Result<Vec<String>, KbStoreError> {
+            Ok(Vec::new())
         }
-        fn id_title_pairs(&self, _prefix: Option<&str>) -> Vec<(String, String)> {
-            Vec::new()
+        fn id_title_pairs(
+            &self,
+            _prefix: Option<&str>,
+        ) -> Result<Vec<(String, String)>, KbStoreError> {
+            Ok(Vec::new())
         }
-        fn health_report(&self) -> Option<HealthReport> {
-            None
+        fn health_report(&self) -> Result<Option<HealthReport>, KbStoreError> {
+            Ok(None)
         }
-        fn neighborhood(&self, _id: &str, _depth: u32) -> Option<SubGraph> {
-            None
+        fn neighborhood(&self, _id: &str, _depth: u32) -> Result<Option<SubGraph>, KbStoreError> {
+            Ok(None)
         }
         fn degraded(&self) -> bool {
             true
@@ -1643,7 +1812,7 @@ mod tests {
             .unwrap();
 
         let cozo = Arc::new(CozoQueryLayer::new(store));
-        let todos = cozo.todo_nodes();
+        let todos = cozo.todo_nodes().unwrap();
         let ids: Vec<_> = todos.iter().map(|n| n.id.as_str()).collect();
         assert!(ids.contains(&"task:a"));
         assert!(ids.contains(&"task:b"));
@@ -1654,7 +1823,7 @@ mod tests {
         kb.insert(Node::new("task:x", "X", NodeKind::Task, "").with_todo_state("TODO"));
         kb.insert(Node::new("note:y", "Y", NodeKind::Note, ""));
         let mem = InMemoryQueryLayer::new(kb);
-        let mem_todos = mem.todo_nodes();
+        let mem_todos = mem.todo_nodes().unwrap();
         assert_eq!(mem_todos.len(), 1);
         assert_eq!(mem_todos[0].id, "task:x");
 
@@ -1673,6 +1842,7 @@ mod tests {
         federated.add_instance("inst".into(), 0, Arc::new(CozoQueryLayer::new(store2)));
         let fed_ids: Vec<_> = federated
             .todo_nodes()
+            .unwrap()
             .into_iter()
             .map(|n| n.id)
             .collect::<std::collections::BTreeSet<_>>()
@@ -1684,6 +1854,7 @@ mod tests {
         assert_eq!(
             federated
                 .todo_nodes()
+                .unwrap()
                 .iter()
                 .filter(|n| n.id == "task:a")
                 .count(),
@@ -1706,11 +1877,11 @@ mod tests {
         assert!(layer.contains("note:a"));
         assert!(!layer.contains("note:c"));
 
-        let links = layer.links_from("note:a");
+        let links = layer.links_from("note:a").unwrap();
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].dst, "note:b");
 
-        let backlinks = layer.links_to("note:b");
+        let backlinks = layer.links_to("note:b").unwrap();
         assert_eq!(backlinks.len(), 1);
         assert_eq!(backlinks[0].src, "note:a");
     }

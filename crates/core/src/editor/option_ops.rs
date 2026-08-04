@@ -67,6 +67,14 @@ impl super::Editor {
             "relative_line_numbers" => self.relative_line_numbers.to_string(),
             "word_wrap" => self.word_wrap.to_string(),
             "tab_width" => self.tab_width.to_string(),
+            "ambiguous_width" => {
+                if self.ambiguous_width_wide {
+                    "wide".to_string()
+                } else {
+                    "narrow".to_string()
+                }
+            }
+            "control_char_width" => self.control_char_width.to_string(),
             "break_indent" => self.break_indent.to_string(),
             "show_break" => self.show_break.clone(),
             "org_hide_emphasis_markers" => self.org_hide_emphasis_markers.to_string(),
@@ -151,6 +159,7 @@ impl super::Editor {
             "babel_confirm" => self.babel_confirm.to_string(),
             "org_export_allow_raw_html_blocks" => self.org_export_allow_raw_html_blocks.to_string(),
             "babel_timeout" => self.babel_timeout.to_string(),
+            "babel_trust_paths" => self.babel_trust_paths.join(","),
             "babel_inherit_shell_env" => self.babel_inherit_shell_env.to_string(),
             "babel_cxx_compiler" => self.babel_cxx_compiler.clone(),
             "babel_c_compiler" => self.babel_c_compiler.clone(),
@@ -821,6 +830,19 @@ impl super::Editor {
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.syntax_reparse_debounce_ms = v.clamp(0, 5000);
             }
+            "ambiguous_width" => {
+                self.ambiguous_width_wide = match value {
+                    "narrow" => false,
+                    "wide" => true,
+                    _ => return Err(format!("Invalid ambiguous_width: '{}' (expected narrow or wide)", value)),
+                };
+            }
+            "control_char_width" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.control_char_width = v.clamp(0, 16);
+            }
             // Babel options were registered + persisted but never applied to
             // their editor fields (dead config); wire them here so `:set` works.
             "babel_confirm" => {
@@ -834,6 +856,16 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.babel_timeout = v.clamp(1, 3600);
+            }
+            "babel_trust_paths" => {
+                // Comma-separated patterns; blank entries dropped so a trailing
+                // comma can't become an empty pattern that matches by accident.
+                self.babel_trust_paths = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                    .map(str::to_string)
+                    .collect();
             }
             "babel_inherit_shell_env" => {
                 self.babel_inherit_shell_env = parse_option_bool(value)?;
@@ -1742,14 +1774,27 @@ impl super::Editor {
         // Escape backslashes and quotes so a value containing either (e.g. a
         // shell command in ai_api_key_command) still writes a valid Scheme
         // string literal instead of corrupting init.scm on next load.
-        let escaped_value = value.replace('\\', "\\\\").replace('"', "\\\"");
+        let escaped_value = crate::options::scheme_string_literal(&value);
         let set_line = format!("(set-option! \"{}\" \"{}\")", def.name, escaped_value);
         let pattern = format!("(set-option! \"{}\"", def.name);
 
         const MARKER_START: &str = ";; --- MAE managed options ---";
         const MARKER_END: &str = ";; --- end managed options ---";
 
-        let new_content = if content.contains(&pattern) {
+        // Audit #599.1: the branch predicate MUST be the same predicate the
+        // rewrite below uses. It was `content.contains(&pattern)` — a
+        // substring test — while the rewrite only replaces lines that *start*
+        // with the pattern. Any commented-out (`;; (set-option! "x" ...)`) or
+        // nested (`(begin (set-option! "x" ...))`) occurrence therefore
+        // selected the replace branch, replaced nothing, wrote the file back
+        // unchanged, and still reported "Saved". A commented-out example line
+        // is exactly what MAE's own init.scm template is full of, so this fired
+        // on the most ordinary config there is.
+        let has_settable_line = |c: &str| {
+            c.lines()
+                .any(|line| line.trim_start().starts_with(&pattern))
+        };
+        let new_content = if has_settable_line(&content) {
             // Replace existing line containing this option
             content
                 .lines()
@@ -2006,11 +2051,31 @@ impl super::Editor {
         // else the local cozo via FederatedQuery), then the local store, then the
         // in-memory mirror. Under a thin primary the local store/mirror are empty, so
         // routing through the query layer is what makes the report accurate.
-        let store_report = self
-            .kb
-            .query_layer()
-            .and_then(|q| q.health_report())
-            .or_else(|| self.kb.store.as_ref().and_then(|s| s.health_report().ok()));
+        // No error channel on this display path; log and fall back to the local
+        // store rather than silently showing an empty/missing report (ADR-086).
+        let local_store_report =
+            || {
+                self.kb.store.as_ref().and_then(|s| match s.health_report() {
+                Ok(report) => Some(report),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Local KB store failed computing health report");
+                    None
+                }
+            })
+            };
+        let store_report = match self.kb.query_layer() {
+            Some(q) => match q.health_report() {
+                Ok(report) => report.or_else(local_store_report),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "KB query layer failed computing health report; falling back to the local store"
+                    );
+                    local_store_report()
+                }
+            },
+            None => local_store_report(),
+        };
 
         if let Some(ref report) = store_report {
             lines.push(format!(
@@ -2753,7 +2818,7 @@ impl super::Editor {
             if self.vi.visual_anchor_row > max_row {
                 self.vi.visual_anchor_row = max_row;
             }
-            let max_col = self.buffers[idx].line_len(self.vi.visual_anchor_row);
+            let max_col = self.buffers[idx].line_byte_len(self.vi.visual_anchor_row);
             if self.vi.visual_anchor_col > max_col {
                 self.vi.visual_anchor_col = max_col;
             }
@@ -2771,11 +2836,11 @@ impl super::Editor {
                 if *ar > max_row {
                     *ar = max_row;
                 }
-                *ac = (*ac).min(self.buffers[idx].line_len(*ar));
+                *ac = (*ac).min(self.buffers[idx].line_byte_len(*ar));
                 if *cr > max_row {
                     *cr = max_row;
                 }
-                *cc = (*cc).min(self.buffers[idx].line_len(*cr));
+                *cc = (*cc).min(self.buffers[idx].line_byte_len(*cr));
             }
         }
     }

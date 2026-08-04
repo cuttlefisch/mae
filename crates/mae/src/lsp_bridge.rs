@@ -239,6 +239,13 @@ pub(crate) fn handle_lsp_event(
     lsp_tx: &tokio::sync::mpsc::Sender<LspCommand>,
     event: LspTaskEvent,
 ) -> bool {
+    // Answer any Scheme-initiated request this event resolves BEFORE the
+    // editor-state handling below consumes the event. Placed here rather than
+    // at each of the three event-loop call sites (terminal, GUI, headless)
+    // because this function is the single chokepoint all three share — a
+    // fourth loop gets the behaviour for free.
+    complete_scheme_async_requests(editor, &event);
+
     match event {
         LspTaskEvent::ServerStarted { language_id } => {
             info!(language = %language_id, "LSP server started (indexing)");
@@ -647,6 +654,50 @@ pub(crate) fn handle_lsp_event(
     }
 }
 
+/// Fill in the result slot of any Scheme-initiated LSP request this event
+/// answers — the `(lsp-definition …)` → `(lsp-result ID)` half of
+/// `docs/CROSS_SURFACE_PARITY.md` gap #1.
+///
+/// Reuses `try_complete_deferred`, which already converts an `LspTaskEvent`
+/// into the exact JSON payload the equivalent MCP tool returns, so the Scheme
+/// caller and the AI peer see byte-identical data (CLAUDE.md principles #3 +
+/// #15). The `tool_call_id` it wants is a no-op here — Scheme correlates by
+/// request id, not by tool-call id — so a fixed `"scheme"` marker is passed.
+pub(crate) fn complete_scheme_async_requests(editor: &mut Editor, event: &LspTaskEvent) {
+    if editor.scheme_async.is_empty() {
+        return;
+    }
+    // An `Error` event carries no position or URI, so it cannot be attributed
+    // to one request. Failing every pending one is the fail-closed choice:
+    // leaving them pending would make `(lsp-result ID)` answer `'pending` for
+    // the rest of the session, which reads as "still working" when the server
+    // has in fact given up. See `mae_core::scheme_async`'s own note.
+    if let LspTaskEvent::Error { message } = event {
+        let failed = editor
+            .scheme_async
+            .fail_all_pending(&format!("LSP error: {message}"));
+        if failed > 0 {
+            debug!(failed, "failed pending scheme LSP requests on server error");
+        }
+        return;
+    }
+    for kind_name in editor.scheme_async.pending_kinds() {
+        let Some(kind) = DeferredKind::from_tool_name(&kind_name) else {
+            continue;
+        };
+        if let Some(result) = try_complete_deferred(event, kind, "scheme") {
+            let outcome = if result.success {
+                Ok(result.output)
+            } else {
+                Err(result.output)
+            };
+            editor.scheme_async.complete_oldest(&kind_name, outcome);
+            // One event resolves one request, matching `try_resolve_deferred_mcp`.
+            break;
+        }
+    }
+}
+
 /// Check if an incoming LSP event matches a pending deferred AI tool call.
 /// If so, format a structured JSON result and return it. The caller is
 /// responsible for sending it via the held oneshot reply channel.
@@ -858,7 +909,11 @@ fn open_location(
     let idx = editor.active_buffer_idx();
     let line_count = editor.buffers[idx].display_line_count();
     let target_row = (loc.range.start_line as usize).min(line_count.saturating_sub(1));
-    let target_col = loc.range.start_character as usize;
+    // ADR-087 Rule 1: an inbound LSP `character` is not a byte column.
+    let target_col = mae_core::lsp_position::lsp_character_to_byte_col(
+        &editor.buffers[idx].line_text_no_newline(target_row),
+        loc.range.start_character,
+    );
     let vh = editor.viewport_height;
     let win = editor.window_mgr.focused_window_mut();
     win.cursor_row = target_row;

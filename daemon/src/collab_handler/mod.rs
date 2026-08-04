@@ -322,9 +322,17 @@ async fn run_session<R, W>(
                 // WU6: Log message classification for dispatch diagnostics.
                 let is_doc = is_doc_method(&msg);
                 let is_notif = is_notification(&msg);
+                // ADR-087 / audit #594: JSON-RPC message content can carry
+                // arbitrary UTF-8 (e.g. synced document text); a fixed byte
+                // cut can land mid-character and panic. `daemon` is a
+                // separate workspace (ADR-014) that doesn't depend on
+                // `mae-core`, so this uses the stable stdlib equivalent
+                // directly rather than pull in a cross-workspace dependency
+                // for one debug-log preview.
+                let preview_end = msg.floor_char_boundary(msg.len().min(120));
                 debug!(session = session_id, msg_len = msg.len(),
                     is_doc, is_notif,
-                    preview = &msg[..msg.len().min(120)],
+                    preview = &msg[..preview_end],
                     "dispatch: message classified");
 
                 // Check if this is a sync/* method we handle differently.
@@ -901,9 +909,19 @@ fn now_unix() -> u64 {
 /// broadcasting each. The `epoch` is read back from the legacy `member_roles`
 /// mutation the caller already applied, so derived and legacy epochs agree.
 ///
-/// Best-effort: a signing/persist failure is logged, never fatal — the legacy
-/// `member_roles` map remains authoritative until `kb_access` switches to derived
-/// membership (slice 2b-6c).
+/// Returns [`SignedAppend`] describing what actually happened. A signing/persist
+/// failure is still non-fatal *here* — the legacy `member_roles` map remains
+/// authoritative until `kb_access` switches to derived membership (slice 2b-6c)
+/// — but the outcome is no longer swallowed.
+///
+/// @ai-caution: [architecture-debt] Callers MUST act on the return value (audit
+/// #589.4). Every caller previously discarded it and reported unconditional
+/// success, which meant a peer-verifiable membership op could silently fail to
+/// reach the signed log while the RPC said it landed. For a caller whose *only*
+/// effect is this append (`kb/set_governance`), a swallowed failure is a
+/// completely fabricated success; for callers that already persisted a legacy
+/// mutation, the honest report is success plus an explicit divergence warning.
+#[must_use]
 #[allow(clippy::too_many_arguments)]
 async fn append_signed_membership(
     doc_store: &DocStore,
@@ -916,13 +934,14 @@ async fn append_signed_membership(
     role: Option<SyncRole>,
     can_invite: bool,
     expires_at: Option<u64>,
-) {
+) -> SignedAppend {
     let Some(signer) = doc_store.signer() else {
-        return;
+        return SignedAppend::NotOwned;
     };
     let owner = coll.owner();
     if owner.is_empty() || signer.fingerprint() != owner {
-        return; // not an owned KB — the relay/hub path stays unsigned
+        // not an owned KB — the relay/hub path stays unsigned
+        return SignedAppend::NotOwned;
     }
     let secret = signer.secret_bytes();
     let pubkey = signer.public().to_bytes();
@@ -948,7 +967,7 @@ async fn append_signed_membership(
                 .await
         {
             warn!(kb_id = %kb_id, error = %e, "failed to persist membership genesis op");
-            return;
+            return SignedAppend::Failed(format!("membership genesis op not persisted: {e}"));
         }
     }
 
@@ -964,6 +983,31 @@ async fn append_signed_membership(
         persist_and_broadcast_collection(doc_store, broadcaster, session_id, kb_id, &update).await
     {
         warn!(kb_id = %kb_id, error = %e, "failed to persist signed membership op");
+        return SignedAppend::Failed(format!("signed membership op not persisted: {e}"));
+    }
+    SignedAppend::Appended
+}
+
+/// Outcome of [`append_signed_membership`] — see its `@ai-caution`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SignedAppend {
+    /// The op was signed, persisted, and broadcast.
+    Appended,
+    /// This daemon is not the KB's genesis owner (relay/hub path) — there is no
+    /// signed log to append to and nothing failed.
+    NotOwned,
+    /// Signing or persistence failed; the signed op-log now diverges from the
+    /// legacy `member_roles` map.
+    Failed(String),
+}
+
+impl SignedAppend {
+    /// The failure message, if this append was supposed to happen and didn't.
+    fn failure(&self) -> Option<&str> {
+        match self {
+            Self::Failed(e) => Some(e),
+            Self::Appended | Self::NotOwned => None,
+        }
     }
 }
 

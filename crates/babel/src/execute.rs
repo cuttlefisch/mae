@@ -9,6 +9,7 @@ use super::backend::compiled::CompiledBackend;
 use super::backend::LanguageBackend;
 use super::session::SessionManager;
 use super::{expand_tilde, EvalPolicy, HeaderArgs, SrcBlock};
+use crate::posix_shell::resolve_posix_shell;
 
 /// Result of executing a source block.
 #[derive(Debug, Clone)]
@@ -242,7 +243,10 @@ impl BabelExecutor {
 }
 
 /// Resolve the command and arguments for a language.
-fn resolve_command(language: &str, args: &HeaderArgs) -> (String, Vec<String>) {
+///
+/// `pub(crate)` so `posix_shell`'s test module can exercise the `sh`/`bash`
+/// resolution path end-to-end (`unix_shell_resolution_is_unchanged`).
+pub(crate) fn resolve_command(language: &str, args: &HeaderArgs) -> (String, Vec<String>) {
     if let Some(cmd) = &args.cmd {
         return (cmd.clone(), Vec::new());
     }
@@ -252,7 +256,7 @@ fn resolve_command(language: &str, args: &HeaderArgs) -> (String, Vec<String>) {
         "python2" => ("python2".to_string(), Vec::new()),
         "ruby" => ("ruby".to_string(), Vec::new()),
         "perl" => ("perl".to_string(), Vec::new()),
-        "bash" | "sh" => ("bash".to_string(), Vec::new()),
+        "bash" | "sh" => (resolve_posix_shell(), Vec::new()),
         "zsh" => ("zsh".to_string(), Vec::new()),
         "fish" => ("fish".to_string(), Vec::new()),
         "node" | "javascript" | "js" => ("node".to_string(), Vec::new()),

@@ -12,6 +12,10 @@
 //! `apply_keymap_and_context`). The methods below are called from
 //! `apply_to_editor` in EXACTLY the original order; do not reorder them
 //! without re-verifying the ordering comments inline.
+//!
+//! @ai-caution: [architecture-debt] 814 lines, 14 over the 800-line ceiling, accepted in
+//! `docs/AUDIT_BASELINE.json`. It crossed the line mechanically — ADR-084 D3 added a required
+//! tier argument to every `register_fn` call — not by accreting logic. See ROADMAP.md.
 
 use mae_core::parse_key_seq_spaced;
 use mae_core::{CommandSource, Editor};
@@ -70,6 +74,7 @@ impl SchemeRuntime {
         Self::apply_hooks(&mut state, editor);
         Self::apply_display_policy(&mut state, editor);
         Self::apply_kb_mutations(&mut state, editor);
+        Self::apply_async_tool_requests(&mut state, editor);
         Self::apply_options_status_theme(&mut state, editor);
         Self::apply_live_editing(&mut state, editor);
         Self::apply_round2_buffer_editing(&mut state, editor);
@@ -378,6 +383,46 @@ impl SchemeRuntime {
             }
         }
 
+        // Apply KB node CRUD from `(kb-create)`/`(kb-update)`/`(kb-delete)` —
+        // the SAME `Editor::kb_*_node` methods `execute_kb_create`/`_update`/
+        // `_delete` call for the AI, so seed protection, KB write policy
+        // (ADR-048 residency, epoch fencing) and federated-instance routing
+        // are decided in exactly one place (CLAUDE.md principles #3 + #15).
+        for op in state.pending_kb_node_ops.drain(..) {
+            let (label, result) = match op {
+                crate::runtime::kb_crud::KbNodeOp::Create {
+                    id,
+                    title,
+                    body,
+                    kind,
+                } => {
+                    let kind = mae_core::KbNodeKind::from_str_lossy(&kind);
+                    let r = editor.kb_create_node(&id, &title, &body, kind);
+                    (format!("kb-create {id}"), r)
+                }
+                crate::runtime::kb_crud::KbNodeOp::Update {
+                    id,
+                    title,
+                    body,
+                    tags,
+                } => {
+                    let r = editor.kb_update_node(&id, title.as_deref(), body.as_deref(), tags);
+                    (format!("kb-update {id}"), r)
+                }
+                crate::runtime::kb_crud::KbNodeOp::Delete { id } => {
+                    let r = editor.kb_delete_node(&id);
+                    (format!("kb-delete {id}"), r)
+                }
+            };
+            match result {
+                Ok(()) => debug!(op = %label, "kb node op applied from scheme"),
+                Err(e) => {
+                    warn!(op = %label, "kb node op error: {}", e);
+                    editor.set_status(format!("{label}: {e}"));
+                }
+            }
+        }
+
         // Apply typed link additions from (kb-add-link! SRC DST REL_TYPE)
         if let Some(ref store) = editor.kb.store {
             for (src, dst, rel_type) in state.pending_kb_links.drain(..) {
@@ -431,6 +476,27 @@ impl SchemeRuntime {
             }
         }
 
+        // Apply `(set-option-save! KEY VALUE)` — set THEN persist, the same
+        // order and the same two `Editor` methods `:set-save` and the
+        // `set_option` MCP tool's `persist` flag use. A failed set must not
+        // be followed by a persist: writing a value into `init.scm` that the
+        // registry just rejected would make the next startup fail too.
+        for (key, value) in state.pending_option_saves.drain(..) {
+            match editor.set_option(&key, &value) {
+                Ok(_) => match editor.save_option_to_init(&key) {
+                    Ok(msg) => editor.set_status(msg),
+                    Err(e) => {
+                        warn!(key = key.as_str(), "set-option-save! persist error: {}", e);
+                        editor.set_status(format!("set-option-save! {key}: {e}"));
+                    }
+                },
+                Err(e) => {
+                    warn!(key = key.as_str(), "set-option-save! error: {}", e);
+                    editor.set_status(format!("set-option-save! {key}: {e}"));
+                }
+            }
+        }
+
         // Apply status message
         if let Some(msg) = state.status_message.take() {
             editor.set_status(msg);
@@ -458,10 +524,11 @@ impl SchemeRuntime {
             let end = offset + text.chars().count();
             let rope = editor.buffers[idx].rope();
             let new_row = rope.char_to_line(end.min(rope.len_chars()));
-            let line_start = rope.line_to_char(new_row);
+            // ADR-087 Rule 4: char offset -> BYTE column, via the one helper.
+            let new_col = editor.buffers[idx].byte_col_of_char_offset(new_row, end);
             let win = editor.window_mgr.focused_window_mut();
             win.cursor_row = new_row;
-            win.cursor_col = end.saturating_sub(line_start);
+            win.cursor_col = new_col;
             editor.fire_hook("after-insert");
         }
 
@@ -474,12 +541,14 @@ impl SchemeRuntime {
                 let offset = col.min(editor.buffers[idx].rope().len_chars());
                 let rope = editor.buffers[idx].rope();
                 let new_row = rope.char_to_line(offset);
-                let line_start = rope.line_to_char(new_row);
+                let line_start_byte = rope.line_to_byte(new_row);
                 win.cursor_row = new_row;
-                win.cursor_col = offset.saturating_sub(line_start);
+                win.cursor_col = rope.char_to_byte(offset).saturating_sub(line_start_byte);
             } else {
+                // (cursor-goto ROW COL): COL is a CHARACTER column on the
+                // Scheme surface (see `*cursor-col*` in state_sync_inject.rs).
                 win.cursor_row = row;
-                win.cursor_col = col;
+                win.cursor_col = editor.buffers[idx].char_col_to_byte_col(row, col);
             }
             win.clamp_cursor(&editor.buffers[idx]);
         }

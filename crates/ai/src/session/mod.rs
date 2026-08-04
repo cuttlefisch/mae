@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use tokio::sync::mpsc;
 
 mod context_mgmt;
-mod handle_prompt;
+pub(crate) mod handle_prompt;
 pub(crate) mod progress;
 mod run_loop;
 pub(crate) mod workflow;
@@ -22,6 +22,8 @@ pub(super) enum DegradationLevel {
     Minimal,
 }
 
+#[cfg(test)]
+mod permission_gate_tests;
 #[cfg(test)]
 mod tests;
 
@@ -123,6 +125,16 @@ pub struct AgentSession {
     pub(super) transcript_path_str: Option<String>,
     /// Latency of the most recent provider call in milliseconds.
     pub(super) last_latency_ms: u64,
+    /// ADR-084 D2 + ADR-090: the policy this session runs under. Until this
+    /// existed the embedded `:ai` surface and `delegate()` sub-agents carried
+    /// no policy at all and therefore never consulted one — the session is now
+    /// an enforcement point like every other, asking the same PDP
+    /// (`PermissionPolicy::decide`) the MCP path asks.
+    ///
+    /// The session does not *decide* anything itself; it presents `Ask` to the
+    /// human and forwards the answer. `Deny` it refuses outright, without ever
+    /// reaching the main thread.
+    pub(super) policy: crate::tools::PermissionPolicy,
 }
 
 impl AgentSession {
@@ -225,7 +237,18 @@ impl AgentSession {
                 .map(|p| p.to_string_lossy().to_string()),
             transcript_path,
             last_latency_ms: 0,
+            policy: crate::tools::PermissionPolicy::default(),
         }
+    }
+
+    /// ADR-084 D2: give this session the editor's resolved permission policy.
+    /// Called by the editor bootstrap alongside `with_budget`. Without it the
+    /// session falls back to `PermissionPolicy::default()`, which since
+    /// ADR-090 is the restrictive read-only-auto-approve posture — a session
+    /// that forgets to call this is *more* restricted, never less.
+    pub fn with_permission_policy(mut self, policy: crate::tools::PermissionPolicy) -> Self {
+        self.policy = policy;
+        self
     }
 
     pub fn with_target_buffer(mut self, name: String) -> Self {

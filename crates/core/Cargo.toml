@@ -25,7 +25,15 @@ mae-snippets = { path = "../snippets" }
 mae-spell = { path = "../spell" }
 mae-sync = { path = "../../shared/sync" }
 ropey = "1"
-unicode-width = "0.2"
+# ADR-087 Rule 7: exact-pinned, not a semver range. unicode-width's own docs:
+# "Relying on any character producing a stable width in this crate is likely
+# the sign of a bug" -- an unpinned minor bump can silently change every
+# width computation in the editor (ratatui deliberately does NOT pin this,
+# which is why mae-core must). mae-core is the only crate in the workspace
+# that may depend on unicode-width/unicode-segmentation directly (Rule 7);
+# mae-renderer/mae-gui go through mae_core::display_width /
+# mae_core::grapheme.
+unicode-width = "=0.2.2"
 unicode-segmentation = "1.12"
 regex = "1"
 tracing = { workspace = true }
@@ -62,6 +70,14 @@ parking_lot = "0.12"
 [dev-dependencies]
 tempfile = "3"
 criterion = { version = "0.8", features = ["html_reports"] }
+# ADR-087 enforcement item 5: proptest invariants (never panics, output
+# width <= N, grapheme-boundary prefix, idempotence) for the width/
+# truncation helpers. Caveat (measured, see the ADR): proptest's default
+# `String` generator cannot produce ZWJ sequences (category Cf is
+# excluded), so the named nasty-string corpus in `grapheme.rs`'s test
+# module covers ZWJ/combining-mark/flag/skin-tone cases proptest can't
+# reach on its own.
+proptest = "1"
 # ADR-067 Phase E test fixtures: constructing a real signed membership op-log
 # needs a real Ed25519 identity, same as the daemon crate's own test suite.
 mae-mcp = { path = "../../shared/mcp" }

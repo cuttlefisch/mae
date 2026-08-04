@@ -205,8 +205,17 @@ fn render_kb_node_for_query(
     render_kb_body(&filtered_body, &mut out, &mut links);
 
     // Neighborhood — query layer returns typed links directly
-    let outgoing = query.links_from(node_id);
-    let incoming = query.links_to(node_id);
+    // Help rendering has no error channel: log and degrade to an empty
+    // neighborhood rather than failing the whole page (ADR-086 — the log is
+    // what keeps "query failed" distinguishable from "no links").
+    let outgoing = query.links_from(node_id).unwrap_or_else(|e| {
+        tracing::warn!(node = %node_id, error = %e, "KB query failed reading outgoing links for help page");
+        Vec::new()
+    });
+    let incoming = query.links_to(node_id).unwrap_or_else(|e| {
+        tracing::warn!(node = %node_id, error = %e, "KB query failed reading incoming links for help page");
+        Vec::new()
+    });
 
     // Graph-related nodes that aren't already direct links (Phase 4).
     let shown: std::collections::HashSet<String> = outgoing
@@ -214,7 +223,10 @@ fn render_kb_node_for_query(
         .map(|l| l.dst.clone())
         .chain(incoming.iter().map(|l| l.src.clone()))
         .collect();
-    let related = query.related(node_id, 24);
+    let related = query.related(node_id, 24).unwrap_or_else(|e| {
+        tracing::warn!(node = %node_id, error = %e, "KB query failed computing related nodes for help page");
+        Vec::new()
+    });
     let has_related = related.iter().any(|(id, _)| !shown.contains(id));
 
     if !outgoing.is_empty() || !incoming.is_empty() || has_related {
@@ -760,7 +772,16 @@ impl Editor {
             // Try namespace prefix expansion: "buffer" → "concept:buffer", "save" → "cmd:save"
             let mut found = None;
             let ns_prefixes = if let Some(q) = self.kb.query_layer() {
-                q.namespace_prefixes()
+                q.namespace_prefixes().unwrap_or_else(|e| {
+                    // No error channel on this navigation path; degrade to the
+                    // in-memory KB's prefixes rather than silently trying zero
+                    // expansions, which would read as "no such node" (ADR-086).
+                    tracing::warn!(
+                        error = %e,
+                        "KB query layer failed listing namespace prefixes; falling back to the in-memory KB"
+                    );
+                    self.kb.primary.namespace_prefixes()
+                })
             } else {
                 self.kb.primary.namespace_prefixes()
             };
@@ -828,40 +849,56 @@ impl Editor {
                 // render_kb_body — so a link whose display text spans a
                 // line break is still recognized).
                 render_kb_body(live_text.as_str(), &mut out, &mut links);
-                // Add neighborhood from KB (federation-aware, typed links)
+                // Add neighborhood from KB (federation-aware, typed links).
+                // `links_from`/`links_to` on the in-memory KB are untyped (return
+                // bare dst/src ids), so the in-memory fallback path is wrapped
+                // into the same typed `Link` shape the query layer returns.
+                let outgoing_from_primary =
+                    |kb: &mae_kb::KnowledgeBase| -> Vec<mae_kb::store::Link> {
+                        kb.links_from(&node_id)
+                            .into_iter()
+                            .map(|dst| mae_kb::store::Link {
+                                src: node_id.clone(),
+                                dst,
+                                rel_type: "references".into(),
+                                display: None,
+                                weight: 1.0,
+                                confidence: 1.0,
+                            })
+                            .collect()
+                    };
+                let incoming_from_primary =
+                    |kb: &mae_kb::KnowledgeBase| -> Vec<mae_kb::store::Link> {
+                        kb.links_to(&node_id)
+                            .into_iter()
+                            .map(|src| mae_kb::store::Link {
+                                src,
+                                dst: node_id.clone(),
+                                rel_type: "references".into(),
+                                display: None,
+                                weight: 1.0,
+                                confidence: 1.0,
+                            })
+                            .collect()
+                    };
+                // No error channel on this rendering path; log and fall back to
+                // the in-memory KB (rather than an empty neighborhood) so a
+                // query-layer failure doesn't read as "this node has no links" (ADR-086).
                 let outgoing_links = if let Some(q) = self.kb.query_layer() {
-                    q.links_from(&node_id)
+                    q.links_from(&node_id).unwrap_or_else(|e| {
+                        tracing::warn!(node = %node_id, error = %e, "KB query layer failed reading outgoing links; falling back to the in-memory KB");
+                        outgoing_from_primary(&self.kb.primary)
+                    })
                 } else {
-                    self.kb
-                        .primary
-                        .links_from(&node_id)
-                        .into_iter()
-                        .map(|dst| mae_kb::store::Link {
-                            src: node_id.clone(),
-                            dst,
-                            rel_type: "references".into(),
-                            display: None,
-                            weight: 1.0,
-                            confidence: 1.0,
-                        })
-                        .collect()
+                    outgoing_from_primary(&self.kb.primary)
                 };
                 let incoming_links = if let Some(q) = self.kb.query_layer() {
-                    q.links_to(&node_id)
+                    q.links_to(&node_id).unwrap_or_else(|e| {
+                        tracing::warn!(node = %node_id, error = %e, "KB query layer failed reading incoming links; falling back to the in-memory KB");
+                        incoming_from_primary(&self.kb.primary)
+                    })
                 } else {
-                    self.kb
-                        .primary
-                        .links_to(&node_id)
-                        .into_iter()
-                        .map(|src| mae_kb::store::Link {
-                            src,
-                            dst: node_id.clone(),
-                            rel_type: "references".into(),
-                            display: None,
-                            weight: 1.0,
-                            confidence: 1.0,
-                        })
-                        .collect()
+                    incoming_from_primary(&self.kb.primary)
                 };
                 // Graph-related nodes that aren't already direct links (Phase 4).
                 let shown: std::collections::HashSet<String> = outgoing_links
@@ -870,7 +907,10 @@ impl Editor {
                     .chain(incoming_links.iter().map(|l| l.src.clone()))
                     .collect();
                 let related = if let Some(q) = self.kb.query_layer() {
-                    q.related(&node_id, 24)
+                    q.related(&node_id, 24).unwrap_or_else(|e| {
+                        tracing::warn!(node = %node_id, error = %e, "KB query layer failed computing related nodes; falling back to the in-memory KB");
+                        self.kb.primary.related(&node_id, 24)
+                    })
                 } else {
                     self.kb.primary.related(&node_id, 24)
                 };
@@ -1413,9 +1453,17 @@ impl Editor {
             }
         }
 
-        // Search KB nodes by source_file metadata
+        // Search KB nodes by source_file metadata. No error channel on this
+        // inference path; log and fall back to the in-memory KB's ids rather
+        // than silently searching zero nodes (ADR-086).
         let primary_ids = if let Some(q) = self.kb.query_layer() {
-            q.list_ids(None)
+            q.list_ids(None).unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    "KB query layer failed listing node ids while inferring buffer's KB node; falling back to the in-memory KB"
+                );
+                self.kb.primary.list_ids(None)
+            })
         } else {
             self.kb.primary.list_ids(None)
         };

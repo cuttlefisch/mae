@@ -692,26 +692,70 @@ pub fn resolve_ai_config(file_config: &Config) -> Option<ProviderConfig> {
     resolve_ai_config_with_scheme(file_config, &empty)
 }
 
-/// Resolve AI permission policy with precedence: env > file > default (trusted).
-pub fn resolve_permission_policy(config: &Config) -> PermissionPolicy {
-    let tier_str = std::env::var("MAE_AI_PERMISSIONS")
-        .ok()
-        .or_else(|| config.ai.auto_approve_tier.clone())
-        .unwrap_or_else(|| "trusted".into());
-    let tier = match tier_str.as_str() {
-        "readonly" => PermissionTier::ReadOnly,
-        "write" | "standard" => PermissionTier::Write,
-        "shell" | "trusted" => PermissionTier::Shell,
-        "privileged" | "full" => PermissionTier::Privileged,
-        _ => {
-            warn!(tier = %tier_str, "unknown AI permission tier, defaulting to 'shell'");
-            PermissionTier::Shell
-        }
+/// The permission-tier spellings MAE accepts, for error messages and validation.
+///
+/// ADR-090 D4: an alias of `PermissionTier::VALID_SPELLINGS`, not a second
+/// list. The two used to drift (this one never accepted `read-only`, which
+/// `mae-agent`'s own parser did).
+pub const VALID_PERMISSION_TIERS: &[&str] = PermissionTier::VALID_SPELLINGS;
+
+/// Parse a permission-tier string, or `None` if it is not a recognised spelling.
+///
+/// Thin alias of [`PermissionTier::parse`], the single tier vocabulary
+/// (ADR-090 D4). Kept as a free function because a dozen call sites and tests
+/// name it; it must never grow a match arm of its own.
+pub fn parse_permission_tier(s: &str) -> Option<PermissionTier> {
+    PermissionTier::parse(s)
+}
+
+/// Resolve AI permission policy with precedence: env > file > built-in default.
+///
+/// **ADR-090 D5 — breaking change.** The built-in default was `"trusted"`
+/// (Shell); it is now [`PermissionPolicy::default()`]'s tier, which
+/// auto-approves reads and *asks* for writes and shell. That was only
+/// affordable once `decide` gained the `Ask` state: with the old
+/// allow-or-deny check, a stricter default hard-denied `run_build`/`run_test`
+/// outright instead of prompting, which is why the permissive default was
+/// there in the first place (ADR-084 D4's finding).
+///
+/// The default is not spelled out here — it is taken from
+/// `PermissionPolicy::default()`, so `mae`, `mae-agent`, and the embedded
+/// session cannot disagree about what "unconfigured" means.
+///
+/// Returns `Err` with a user-facing message when the configured tier is not a
+/// recognised value, so startup can refuse rather than guess. `make check-config`
+/// surfaces this before launch.
+pub fn resolve_permission_policy(config: &Config) -> Result<PermissionPolicy, String> {
+    let (tier_str, source) = match std::env::var("MAE_AI_PERMISSIONS").ok() {
+        Some(v) => (v, "MAE_AI_PERMISSIONS"),
+        None => match config.ai.auto_approve_tier.clone() {
+            Some(v) => (v, "[ai] auto_approve_tier in config.toml"),
+            None => (
+                PermissionPolicy::default()
+                    .auto_approve_up_to
+                    .config_name()
+                    .to_string(),
+                "built-in default",
+            ),
+        },
     };
-    PermissionPolicy {
+    let tier = parse_permission_tier(&tier_str).ok_or_else(|| {
+        format!(
+            "unknown AI permission tier {tier_str:?} (from {source}).\n\
+             Valid values: {}.\n\
+             Refusing to start rather than guess — an unrecognised tier previously \
+             resolved to 'shell', so a typo silently granted shell access.",
+            VALID_PERMISSION_TIERS.join(", ")
+        )
+    })?;
+    Ok(PermissionPolicy {
         auto_approve_up_to: tier,
+        // ADR-090 D2: a config-file/env ceiling is the AUTO-APPROVAL ceiling,
+        // so everything above it is askable. Only a *session's own* declared
+        // ceiling (ADR-051) and an unparseable declaration are hard.
+        hard_ceiling: None,
         allowed_categories: None,
-    }
+    })
 }
 
 /// Update a single editor preference in the config file (load → modify → save).
@@ -1063,9 +1107,18 @@ fn write_managed_init_options(options: &[(String, String)]) -> io::Result<PathBu
     const MARKER_START: &str = ";; --- MAE managed options ---";
     const MARKER_END: &str = ";; --- end managed options ---";
 
+    // Audit #599.2 — values reach here unescaped from config/wizard input; an
+    // embedded `"` or `\` used to emit a malformed Scheme literal and corrupt
+    // the very file MAE reads at startup. Shared with `save_option_to_init`.
     let managed_block: String = options
         .iter()
-        .map(|(k, v)| format!("(set-option! \"{}\" \"{}\")", k, v))
+        .map(|(k, v)| {
+            format!(
+                "(set-option! \"{}\" \"{}\")",
+                k,
+                mae_core::options::scheme_string_literal(v)
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -1334,6 +1387,79 @@ mod tests {
     /// to avoid races when cargo runs tests in parallel.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    /// Audit #599.2 — the first-run/wizard writer emitted values raw while
+    /// `Editor::save_option_to_init` escaped them, so the two writers of the
+    /// SAME file disagreed. A value containing `"` or `\` (an
+    /// `ai_api_key_command` with a quoted shell argument is the everyday case)
+    /// produced a malformed Scheme literal in the one file MAE reads at
+    /// startup — breaking the user's entire config, not just that option.
+    /// Both writers now share `mae_core::options::scheme_string_literal`.
+    #[test]
+    fn wizard_written_options_are_escaped_like_set_save_writes_them() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let prev = std::env::var("XDG_CONFIG_HOME").ok();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+
+        // Varied real shapes, not one cherry-picked value: an embedded quote,
+        // a backslash, both, and a Windows-style path.
+        let cases = [
+            r#"pass show api | head -1"#,
+            r#"sh -c "echo hi""#,
+            r#"C:\Users\me\key.txt"#,
+            r#"echo "a\b" && echo 'c'"#,
+        ];
+
+        for value in cases {
+            let opts = vec![("ai_api_key_command".to_string(), value.to_string())];
+            let path = write_managed_init_options(&opts).expect("write");
+            let content = std::fs::read_to_string(&path).expect("read");
+
+            let expected = format!(
+                "(set-option! \"ai_api_key_command\" \"{}\")",
+                mae_core::options::scheme_string_literal(value)
+            );
+            assert!(
+                content.contains(&expected),
+                "value {value:?} written unescaped; init.scm is:\n{content}"
+            );
+
+            // Selective oracle: the emitted literal must be *balanced* — an
+            // unescaped inner quote closes the string early, which is exactly
+            // the corruption this guards against. Count the unescaped `"` on
+            // the setter line; a well-formed one has exactly four.
+            let line = content
+                .lines()
+                .find(|l| {
+                    l.trim_start()
+                        .starts_with("(set-option! \"ai_api_key_command\"")
+                })
+                .unwrap_or_else(|| panic!("no setter line in:\n{content}"));
+            let mut unescaped_quotes = 0;
+            let mut chars = line.chars();
+            while let Some(c) = chars.next() {
+                match c {
+                    '\\' => {
+                        chars.next();
+                    }
+                    '"' => unescaped_quotes += 1,
+                    _ => {}
+                }
+            }
+            assert_eq!(
+                unescaped_quotes, 4,
+                "unbalanced string literal for {value:?}: {line}"
+            );
+
+            std::fs::remove_file(&path).ok();
+        }
+
+        match prev {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+    }
+
     /// Every `(set-option! "name" ...)` referenced in the default init.scm
     /// template (commented-out examples included) must resolve against the
     /// real `OptionRegistry` -- a doc/reality drift guard for exactly the
@@ -1574,13 +1700,33 @@ mod tests {
 
     // --- Permission policy resolution tests ---
 
+    /// ADR-090 D5 (breaking change): unconfigured MAE auto-approves reads and
+    /// *asks* for everything else. The second assertion is the one that
+    /// matters — it pins the resolver to `PermissionPolicy::default()` rather
+    /// than to a literal, so `mae`, `mae-agent`, and the embedded session
+    /// cannot drift apart on what "unconfigured" means.
     #[test]
-    fn resolve_permission_default_is_trusted() {
+    fn resolve_permission_default_auto_approves_reads_and_asks_above() {
         let _lock = ENV_LOCK.lock().unwrap();
         std::env::remove_var("MAE_AI_PERMISSIONS");
         let cfg = Config::default();
-        let policy = resolve_permission_policy(&cfg);
-        assert_eq!(policy.auto_approve_up_to, PermissionTier::Shell);
+        let policy = resolve_permission_policy(&cfg).expect("default tier must parse");
+        assert_eq!(policy.auto_approve_up_to, PermissionTier::ReadOnly);
+        assert_eq!(
+            policy.auto_approve_up_to,
+            PermissionPolicy::default().auto_approve_up_to,
+            "the resolver's built-in default must BE PermissionPolicy::default(), not a copy of it"
+        );
+        // ...and the change is only safe because the excess is askable, not
+        // denied. A `Deny` here is the regression that pushes users back to
+        // `auto_approve_tier = \"shell\"`.
+        assert_eq!(
+            policy.decide("run_build", PermissionTier::Shell),
+            mae_ai::Decision::Ask
+        );
+        // The resolver must never hand back a hard ceiling: a config-file value
+        // is an auto-approval line, not a prohibition.
+        assert!(policy.hard_ceiling.is_none());
     }
 
     #[test]
@@ -1594,7 +1740,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let policy = resolve_permission_policy(&cfg);
+        let policy = resolve_permission_policy(&cfg).expect("'full' must parse");
         assert_eq!(policy.auto_approve_up_to, PermissionTier::Privileged);
     }
 
@@ -1609,7 +1755,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let policy = resolve_permission_policy(&cfg);
+        let policy = resolve_permission_policy(&cfg).expect("'readonly' must parse");
         assert_eq!(policy.auto_approve_up_to, PermissionTier::ReadOnly);
         std::env::remove_var("MAE_AI_PERMISSIONS");
     }
@@ -1632,7 +1778,8 @@ mod tests {
                 },
                 ..Default::default()
             };
-            let policy = resolve_permission_policy(&cfg);
+            let policy = resolve_permission_policy(&cfg)
+                .unwrap_or_else(|e| panic!("tier '{name}' must parse: {e}"));
             assert_eq!(
                 policy.auto_approve_up_to, expected,
                 "tier '{}' mismatch",
@@ -1641,8 +1788,11 @@ mod tests {
         }
     }
 
+    /// ADR-084 D4. This test previously asserted the opposite — that an
+    /// unrecognised tier resolved to Shell — which pinned CWE-636 in place as
+    /// intended behaviour. A typo must refuse to start, not silently widen access.
     #[test]
-    fn resolve_permission_unknown_tier_defaults_to_trusted() {
+    fn resolve_permission_unknown_tier_from_config_is_rejected() {
         let _lock = ENV_LOCK.lock().unwrap();
         std::env::remove_var("MAE_AI_PERMISSIONS");
         let cfg = Config {
@@ -1652,8 +1802,92 @@ mod tests {
             },
             ..Default::default()
         };
-        let policy = resolve_permission_policy(&cfg);
-        assert_eq!(policy.auto_approve_up_to, PermissionTier::Shell);
+        let err = resolve_permission_policy(&cfg)
+            .expect_err("an unknown tier must be rejected, never resolved");
+        assert!(
+            err.contains("bogus"),
+            "error must name the bad value: {err}"
+        );
+        assert!(
+            err.contains("readonly") && err.contains("privileged"),
+            "error must list the valid values: {err}"
+        );
+    }
+
+    /// The env var is the higher-precedence source, so it needs its own case —
+    /// a typo there must not fall through to the config value or to a default.
+    #[test]
+    fn resolve_permission_unknown_tier_from_env_is_rejected() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::set_var("MAE_AI_PERMISSIONS", "shel");
+        let cfg = Config {
+            ai: AiSection {
+                auto_approve_tier: Some("readonly".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let result = resolve_permission_policy(&cfg);
+        std::env::remove_var("MAE_AI_PERMISSIONS");
+        let err = result.expect_err("a typo'd env tier must be rejected");
+        assert!(
+            err.contains("MAE_AI_PERMISSIONS"),
+            "error must name the source: {err}"
+        );
+    }
+
+    /// Near-miss spellings are exactly what a fail-open default swallows, and
+    /// each one previously became Shell.
+    #[test]
+    fn near_miss_tier_spellings_are_all_rejected() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MAE_AI_PERMISSIONS");
+        // ADR-090 D4 narrowed this list: `parse_permission_tier` is now an
+        // alias of `PermissionTier::parse`, the ONE tier vocabulary, which is
+        // case-insensitive, trims, and accepts the `read-only`/`read_only`
+        // spellings `mae-agent` has always taken. Those are documented
+        // aliases (asserted by `every_advertised_tier_spelling_parses`), not
+        // near-misses. What must still be rejected is anything that is not a
+        // spelling of a real tier — the genuine typos and the values a
+        // fail-open default used to swallow into Shell.
+        for bad in [
+            "shel",
+            "sheell",
+            "read only",
+            "readonlyy",
+            "privelaged",
+            "none",
+            "off",
+            "",
+            "   ",
+            "no-shell",
+            "write-only",
+            "trust",
+        ] {
+            let cfg = Config {
+                ai: AiSection {
+                    auto_approve_tier: Some(bad.into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            assert!(
+                resolve_permission_policy(&cfg).is_err(),
+                "{bad:?} must be rejected, not silently resolved"
+            );
+        }
+    }
+
+    /// Every advertised spelling must actually parse — otherwise the strict
+    /// parser turns a documented value into a startup failure.
+    #[test]
+    fn every_advertised_tier_spelling_parses() {
+        for name in VALID_PERMISSION_TIERS {
+            assert!(
+                parse_permission_tier(name).is_some(),
+                "advertised spelling {name:?} must parse"
+            );
+        }
     }
 
     #[test]

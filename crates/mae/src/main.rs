@@ -716,9 +716,28 @@ fn main() -> io::Result<()> {
             let mut tools = tools_from_registry(&editor.commands);
             tools.extend(ai_specific_tools(&editor.option_registry));
             tools.extend(mae_ai::scheme_tools_to_definitions(&editor.ai.scheme_tools));
+            // `request_tools` is dispatchable (`tool_dispatch.rs` step 4d2
+            // handles it by name), so it belongs in the DISPATCH list, not
+            // only in the advertised one. It was previously appended solely
+            // to `mcp_tool_defs` below, which meant `tool_def` was `None` at
+            // dispatch and its tier fell back to the unknown-tool default of
+            // `Write` — silently ignoring the `ReadOnly` its own definition
+            // declares. Harmless while the shipped policy auto-approved
+            // Write; under ADR-090's readonly default it made pure discovery
+            // require approval, which is precisely backwards.
+            if !tools.iter().any(|t| t.name == "request_tools") {
+                tools.push(mae_ai::request_tools_definition());
+            }
             tools
         };
-        let mut permission_policy = config::resolve_permission_policy(&app_config);
+        let mut permission_policy = match config::resolve_permission_policy(&app_config) {
+            Ok(p) => p,
+            Err(e) => {
+                error!("{e}");
+                eprintln!("mae: {e}");
+                std::process::exit(2);
+            }
+        };
         // ADR-056: seed the server's global tool-category restriction from
         // config/init.scm before any MCP session connects, same pattern as
         // `mcp_tools_tiered` below. Empty (default) leaves the policy
@@ -802,18 +821,33 @@ fn main() -> io::Result<()> {
                 .get_option("mcp_tools_tiered_by_default")
                 .map(|(v, _)| v == "true")
                 .unwrap_or(true);
+            // ADR-091 (decision #9): withhold the inherently-interactive
+            // tools from EVERY external discovery surface. `ask_user` sat at
+            // Core tier, so it was in the very first list a paired external
+            // agent saw, while an external `tools/call` for it fell through
+            // to `Unknown tool` — it pauses the embedded session's task on a
+            // oneshot awaiting a human reply, which has no meaning
+            // mid-`tools/call`. Applied BEFORE the Core/Extended split so it
+            // holds for both branches; `search_tools`/`request_tools` apply
+            // the same filter in `tool_dispatch.rs`.
+            let advertisable = mae_ai::external_discovery_tools(&all_tools);
             let mcp_tool_defs: Vec<mae_ai::ToolDefinition> = if mcp_tools_tiered {
-                let mut core: Vec<mae_ai::ToolDefinition> = all_tools
+                let mut core: Vec<mae_ai::ToolDefinition> = advertisable
                     .iter()
                     .filter(|t| mae_ai::classify_tool_tier(&t.name) == mae_ai::ToolTier::Core)
                     .cloned()
                     .collect();
+                // Belt-and-braces: `request_tools` is now in `all_tools`
+                // (see above) and `classify_tool_tier` calls it Core, so this
+                // normally finds it already present. Kept so the advertised
+                // list cannot lose the escalation path if either of those
+                // changes.
                 if !core.iter().any(|t| t.name == "request_tools") {
                     core.push(mae_ai::request_tools_definition());
                 }
                 core
             } else {
-                all_tools.clone()
+                advertisable
             };
             let mcp_tools: Vec<mae_mcp::protocol::ToolInfo> = mcp_tool_defs
                 .iter()

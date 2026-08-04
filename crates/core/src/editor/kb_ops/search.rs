@@ -34,7 +34,10 @@ impl Editor {
     /// Collect all KB node (id, title) pairs from local + federated instances.
     pub fn kb_all_node_pairs(&self) -> Vec<(String, String)> {
         if let Some(q) = self.kb.query_layer() {
-            let mut pairs = q.id_title_pairs(None);
+            let mut pairs = q.id_title_pairs(None).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "kb id_title_pairs failed");
+                Vec::new()
+            });
             pairs.sort_by(|a, b| a.0.cmp(&b.0));
             return pairs;
         }
@@ -60,7 +63,10 @@ impl Editor {
     pub fn kb_all_node_triples(&self) -> Vec<(String, String, String)> {
         // Body truncated to 500 chars — only used for fuzzy search, not display.
         let mut triples: Vec<(String, String, String)> = if let Some(q) = self.kb.query_layer() {
-            q.id_title_body_triples(None, 500)
+            q.id_title_body_triples(None, 500).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "kb id_title_body_triples failed");
+                Vec::new()
+            })
         } else {
             self.kb.primary.all_id_title_body_triples()
         };
@@ -148,7 +154,11 @@ impl Editor {
 
         if self.kb.primary_thin() {
             if let Some(ql) = self.kb.query_layer() {
-                for hit in ql.search(query, limit) {
+                let hits = ql.search(query, limit).unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, query, "kb search failed in kb_find_candidates");
+                    Vec::new()
+                });
+                for hit in hits {
                     if let Some(n) = ql.get(&hit.id) {
                         if seen.insert(n.id.clone()) {
                             let body: String = n.body.chars().take(500).collect();
@@ -463,7 +473,11 @@ impl Editor {
                 // scoring, so it degrades to relevance here (honest, not silent: the
                 // daemon-hosted primary has no local activity log).
                 if let Some(ql) = self.kb.query_layer() {
-                    for hit in ql.search(query, self.kb.search_max_results) {
+                    let hits = ql.search(query, self.kb.search_max_results).unwrap_or_else(|e| {
+                        tracing::warn!(error = %e, query, "kb search failed in kb_federated_search");
+                        Vec::new()
+                    });
+                    for hit in hits {
                         if let Some(node) = ql.get(&hit.id) {
                             if seen_ids.insert(node.id.clone()) {
                                 results.push((None, node));

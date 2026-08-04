@@ -5,7 +5,7 @@
 //! link resolution).
 
 use crate::query::KbQueryLayer;
-use crate::store::{HealthReport, Link, SearchHit, SubGraph};
+use crate::store::{HealthReport, KbStoreError, Link, SearchHit, SubGraph};
 use crate::Node;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -152,23 +152,23 @@ impl KbQueryLayer for CachedQueryLayer {
         self.inner.contains(id)
     }
 
-    fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
+    fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, KbStoreError> {
         self.inner.search(query, limit)
     }
 
-    fn links_from(&self, id: &str) -> Vec<Link> {
+    fn links_from(&self, id: &str) -> Result<Vec<Link>, KbStoreError> {
         self.inner.links_from(id)
     }
 
-    fn links_to(&self, id: &str) -> Vec<Link> {
+    fn links_to(&self, id: &str) -> Result<Vec<Link>, KbStoreError> {
         self.inner.links_to(id)
     }
 
-    fn list_ids(&self, prefix: Option<&str>) -> Vec<String> {
+    fn list_ids(&self, prefix: Option<&str>) -> Result<Vec<String>, KbStoreError> {
         self.inner.list_ids(prefix)
     }
 
-    fn id_title_pairs(&self, prefix: Option<&str>) -> Vec<(String, String)> {
+    fn id_title_pairs(&self, prefix: Option<&str>) -> Result<Vec<(String, String)>, KbStoreError> {
         self.inner.id_title_pairs(prefix)
     }
 
@@ -176,23 +176,23 @@ impl KbQueryLayer for CachedQueryLayer {
         &self,
         prefix: Option<&str>,
         body_limit: usize,
-    ) -> Vec<(String, String, String)> {
+    ) -> Result<Vec<(String, String, String)>, KbStoreError> {
         self.inner.id_title_body_triples(prefix, body_limit)
     }
 
-    fn health_report(&self) -> Option<HealthReport> {
+    fn health_report(&self) -> Result<Option<HealthReport>, KbStoreError> {
         self.inner.health_report()
     }
 
-    fn neighborhood(&self, id: &str, depth: u32) -> Option<SubGraph> {
+    fn neighborhood(&self, id: &str, depth: u32) -> Result<Option<SubGraph>, KbStoreError> {
         self.inner.neighborhood(id, depth)
     }
 
-    fn agenda(&self, filter: &crate::AgendaFilter) -> Vec<Node> {
+    fn agenda(&self, filter: &crate::AgendaFilter) -> Result<Vec<Node>, KbStoreError> {
         self.inner.agenda(filter)
     }
 
-    fn history(&self, id: &str, limit: usize) -> Vec<crate::NodeVersion> {
+    fn history(&self, id: &str, limit: usize) -> Result<Vec<crate::NodeVersion>, KbStoreError> {
         self.inner.history(id, limit)
     }
 }

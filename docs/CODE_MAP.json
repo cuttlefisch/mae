@@ -92,6 +92,10 @@
           "kind": "mod"
         },
         {
+          "name": "shell_policy",
+          "kind": "mod"
+        },
+        {
           "name": "token_estimate",
           "kind": "mod"
         },
@@ -101,6 +105,10 @@
         },
         {
           "name": "types",
+          "kind": "mod"
+        },
+        {
+          "name": "web",
           "kind": "mod"
         }
       ]
@@ -414,6 +422,10 @@
           "kind": "mod"
         },
         {
+          "name": "lsp_position",
+          "kind": "mod"
+        },
+        {
           "name": "messages",
           "kind": "mod"
         },
@@ -435,6 +447,10 @@
         },
         {
           "name": "render_common",
+          "kind": "mod"
+        },
+        {
+          "name": "scheme_async",
           "kind": "mod"
         },
         {
@@ -479,6 +495,10 @@
         },
         {
           "name": "word",
+          "kind": "mod"
+        },
+        {
+          "name": "workspace_trust",
           "kind": "mod"
         },
         {
@@ -575,6 +595,10 @@
         },
         {
           "name": "parse_org_document",
+          "kind": "fn"
+        },
+        {
+          "name": "parse_org_document_with_lines",
           "kind": "fn"
         },
         {
@@ -1056,6 +1080,10 @@
           "kind": "mod"
         },
         {
+          "name": "permission",
+          "kind": "mod"
+        },
+        {
           "name": "reader",
           "kind": "mod"
         },
@@ -1448,6 +1476,22 @@
       "source": "scheme/src/runtime/state_sync_inject_kb.rs"
     },
     {
+      "name": "dap-inspect-variable",
+      "source": "scheme/src/runtime/lsp_dap.rs"
+    },
+    {
+      "name": "dap-set-breakpoint",
+      "source": "scheme/src/runtime/lsp_dap.rs"
+    },
+    {
+      "name": "dap-start",
+      "source": "scheme/src/runtime/lsp_dap.rs"
+    },
+    {
+      "name": "debug-state",
+      "source": "scheme/src/runtime/lsp_dap.rs"
+    },
+    {
       "name": "define-command",
       "source": "scheme/src/runtime/keybindings.rs"
     },
@@ -1556,8 +1600,20 @@
       "source": "scheme/src/runtime/kb_primitives.rs"
     },
     {
+      "name": "kb-create",
+      "source": "scheme/src/runtime/kb_crud.rs"
+    },
+    {
+      "name": "kb-delete",
+      "source": "scheme/src/runtime/kb_crud.rs"
+    },
+    {
       "name": "kb-export-subgraph-html",
       "source": "scheme/src/runtime/kb_export.rs"
+    },
+    {
+      "name": "kb-get",
+      "source": "scheme/src/runtime/kb_crud.rs"
     },
     {
       "name": "kb-get-block",
@@ -1696,6 +1752,10 @@
       "source": "scheme/src/runtime/io_packages.rs"
     },
     {
+      "name": "kb-search",
+      "source": "scheme/src/runtime/kb_crud.rs"
+    },
+    {
       "name": "kb-set-ai-residency",
       "source": "scheme/src/runtime/kb_primitives.rs"
     },
@@ -1732,6 +1792,10 @@
       "source": "scheme/src/runtime/kb_primitives.rs"
     },
     {
+      "name": "kb-update",
+      "source": "scheme/src/runtime/kb_crud.rs"
+    },
+    {
       "name": "keymap-bindings",
       "source": "scheme/src/runtime/state_sync_inject_kb.rs"
     },
@@ -1754,6 +1818,22 @@
     {
       "name": "load-path",
       "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "lsp-diagnostics",
+      "source": "scheme/src/runtime/lsp_dap.rs"
+    },
+    {
+      "name": "lsp-document-symbols",
+      "source": "scheme/src/runtime/lsp_dap.rs"
+    },
+    {
+      "name": "lsp-result",
+      "source": "scheme/src/runtime/lsp_dap.rs"
+    },
+    {
+      "name": "lsp-workspace-symbol",
+      "source": "scheme/src/runtime/lsp_dap.rs"
     },
     {
       "name": "mae-declare-module!",
@@ -1885,6 +1965,10 @@
     },
     {
       "name": "set-option!",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "set-option-save!",
       "source": "scheme/src/runtime/editor_ops.rs"
     },
     {

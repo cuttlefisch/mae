@@ -31,7 +31,8 @@ pub struct AiNetworkCheck {
 }
 
 /// Maximum number of distinct MCP sessions' companion-window state
-/// (`AiState::mcp_session_windows`) tracked at once (ADR-051). This is a
+/// (`AiState::mcp_sessions`) tracked at once (ADR-051, extended by ADR-091
+/// to bound the per-session agent state stored in the same record). This is a
 /// coarse size bound, not an LRU: once exceeded, an arbitrary entry is
 /// evicted to make room. Eviction is always safe -- `DrivenWindow::get_valid`
 /// treats a missing/stale entry the same as "no window yet" and simply
@@ -57,6 +58,78 @@ pub const MAX_TRACKED_MCP_SESSION_WINDOWS: usize = 256;
 pub struct McpSessionWindowState {
     pub work_window: DrivenWindow,
     pub target_window_id: Option<WindowId>,
+}
+
+/// Session-scoped agent state (ADR-091): the state the six session-scoped AI
+/// tools — `ai_set_mode`, `ai_set_profile`, `ai_set_budget`, `log_activity`,
+/// `read_transcript` (and `web_fetch`, which needs none of it) — read and
+/// mutate.
+///
+/// Before ADR-091 these fields existed only as `AgentSession`'s own private
+/// fields (`self.current_mode`, `self.budget`, `self.transcript_path`, …) on
+/// the embedded agent's tokio task, which `dispatch_tool` structurally cannot
+/// see. That is *why* the tools were advertised over MCP and yet fell through
+/// to `Unknown tool`. Lifting them here — reachable from the dispatch path,
+/// resolved per MCP session — is what makes them genuinely dispatchable.
+///
+/// Two instances exist per resolution (see `Editor::agent_session`):
+/// - one per connected MCP session, in [`McpSessionState`], so two external
+///   agents never observe or clobber each other's mode/budget/activity, and
+/// - one process-wide, on [`AiState::agent_session`], used when no MCP
+///   session is in scope. That one is the *embedded* agent's, so the
+///   mode/profile accessors additionally write through to the editor's
+///   `ai_mode`/`ai_profile` options — the same effect
+///   `AiEvent::UpdateMode`/`UpdateProfile` already produce for the embedded
+///   session. An MCP call must not be a weaker version of the same tool.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AgentSessionState {
+    /// Operating mode: standard / plan / auto-accept. Empty until set, in
+    /// which case readers fall back to the editor-global `ai.mode`.
+    pub mode: Option<String>,
+    /// Prompt profile (pair-programmer / explorer / …). Empty until set.
+    pub profile: Option<String>,
+    /// Soft budget warning threshold, USD. `None` = no warning.
+    pub budget_warn_usd: Option<f64>,
+    /// Hard budget cap, USD. `None` = uncapped.
+    pub budget_cap_usd: Option<f64>,
+    /// Path to this session's transcript log, when one is being written.
+    pub transcript_path: Option<std::path::PathBuf>,
+    /// Reasoning steps the agent has narrated via `log_activity`, most recent
+    /// last. Bounded by [`MAX_SESSION_ACTIVITY_ENTRIES`] — an agent that
+    /// narrates every round would otherwise grow this without bound on a
+    /// long-lived headless instance (ADR-055).
+    pub activity: Vec<String>,
+}
+
+/// Upper bound on [`AgentSessionState::activity`]. Oldest entries are dropped
+/// first. 200 is display-shaped, not protocol-shaped: it is far more than any
+/// human reads back and small enough that 256 tracked sessions at their cap
+/// stay well under a megabyte of narration.
+pub const MAX_SESSION_ACTIVITY_ENTRIES: usize = 200;
+
+impl AgentSessionState {
+    /// Append a narrated reasoning step, dropping the oldest when at capacity.
+    pub fn push_activity(&mut self, entry: impl Into<String>) {
+        if self.activity.len() >= MAX_SESSION_ACTIVITY_ENTRIES {
+            self.activity.remove(0);
+        }
+        self.activity.push(entry.into());
+    }
+}
+
+/// Everything MAE tracks for one connected MCP session, keyed by
+/// `shared::mcp::session::ClientSession::id`.
+///
+/// One record per session rather than one map per concern: the eviction bound
+/// ([`MAX_TRACKED_MCP_SESSION_WINDOWS`]), the lazy-population rule, and the
+/// lifetime are all identical, so splitting them would be two things to keep
+/// in sync (principle #8).
+#[derive(Debug, Clone, Default)]
+pub struct McpSessionState {
+    /// ADR-051's companion-window isolation.
+    pub windows: McpSessionWindowState,
+    /// ADR-091's session-scoped agent state.
+    pub agent: AgentSessionState,
 }
 
 /// AI session state: provider config, token counters, streaming flags,
@@ -108,7 +181,44 @@ pub struct AiState {
     /// per-session dispatch) -- their single-session behavior is completely
     /// unaffected by this map. See `MAX_TRACKED_MCP_SESSION_WINDOWS` for the
     /// growth bound.
-    pub mcp_session_windows: std::collections::HashMap<u64, McpSessionWindowState>,
+    pub mcp_sessions: std::collections::HashMap<u64, McpSessionState>,
+    /// The MCP session id in scope for the dispatch currently running, or
+    /// `None` when the running dispatch has no MCP session (the embedded
+    /// human AI path, `--self-test`, a human keybinding).
+    ///
+    /// Maintained by `Editor::with_ai_dispatch_scope_for_session` the same way
+    /// `ai_dispatch_depth` is — saved before the body, restored after — so a
+    /// tool implementation reached from that scope can resolve *whose* session
+    /// state it is acting on without every dispatcher in the chain threading a
+    /// parameter it does not otherwise care about (ADR-091).
+    ///
+    /// @ai-caution: [dispatch] This is identity/routing, not authority. It
+    /// answers "which session is calling", never "may it do this" — the tier
+    /// and category gates in `execute_tool_dispatch_body` answer that, and
+    /// nothing here may be used to widen them.
+    pub dispatch_session_id: Option<u64>,
+    /// Process-wide agent session state — the record used when
+    /// `dispatch_session_id` is `None`. See [`AgentSessionState`].
+    pub agent_session: AgentSessionState,
+    /// Nesting depth of the current AI-originated dispatch, or 0 when the
+    /// running operation originated from a human.
+    ///
+    /// This is the minimum viable form of ADR-088's carried authority: rather
+    /// than asking "what tier is this session?" (ambient), effects can ask
+    /// "did a human ask for this?" — the question the confused-deputy problem
+    /// actually turns on. Maintained by
+    /// `Editor::with_ai_dispatch_scope_for_session`, which already wraps every
+    /// MCP-originated dispatch, and read via `Editor::is_ai_originated_dispatch`.
+    ///
+    /// A depth counter rather than a bool because dispatch nests (a tool that
+    /// runs a command that dispatches another); a bool would be cleared by the
+    /// inner scope's exit while the outer one is still running.
+    ///
+    /// @ai-caution: [security] Load-bearing for ADR-089 D4 — it is what lets
+    /// `save_buffer_*` refuse to write MAE's own config for an agent while
+    /// leaving the human's `:w` and `:set-save` untouched. Anything that sets
+    /// this to 0 inside an AI dispatch re-opens that path.
+    pub ai_dispatch_depth: u32,
     /// AI editor/agent command (e.g. "claude", "aider").
     pub editor_name: String,
     /// Whether `open-ai-agent`'s shell wraps `editor_name` through the
@@ -191,7 +301,10 @@ impl AiState {
             last_network_check: None,
             last_output_scroll: None,
             work_window: DrivenWindow::none(),
-            mcp_session_windows: std::collections::HashMap::new(),
+            mcp_sessions: std::collections::HashMap::new(),
+            dispatch_session_id: None,
+            agent_session: AgentSessionState::default(),
+            ai_dispatch_depth: 0,
             editor_name: "mae-agent".to_string(),
             agent_login_shell: true,
             provider: String::new(),

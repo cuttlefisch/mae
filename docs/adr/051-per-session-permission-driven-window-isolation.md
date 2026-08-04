@@ -1,6 +1,19 @@
 # ADR-051: Per-session permission policy & per-session `DrivenWindow` isolation
 
-**Status:** Proposed.
+**Status:** Accepted, implemented (phase issue #378 closed). Both halves ship:
+`ClientSession.declared_permission_ceiling` (`shared/mcp/src/session.rs`) propagating into
+`RequesterContext`, and per-session `AiState.mcp_session_windows` with LRU eviction
+(`crates/core/src/editor/window_ops.rs`, `MAX_TRACKED_MCP_SESSION_WINDOWS`).
+
+> **Erratum (2026-08, pre-v0.15 audit).** The tighten-only session ceiling did not bound what it
+> appeared to: a session capped below the shell tier could still reach process execution, because the
+> tier was enforced against tool *names* at one gate while the effect was reachable through other
+> doors. **ADR-084** moves enforcement to the effect and is a precondition for this ADR's guarantee
+> being real. Separately, **ADR-085** corrects the `ToolCategory` taxonomy that ADR-056 layers onto
+> this same session-declaration mechanism. Two defects were also found in this ADR's own shipped
+> implementation — companion-window protection inverting on the split-failure path, and a placement
+> failure reported as success — tracked in #580 rather than re-scoped here.
+
 **Extends:** ADR-001 (server-client protocol), CLAUDE.md principle #10 (multi-client
 safety by design).
 **Closes acknowledged drift:** CLAUDE.md's own "Architecture Debt" language already flags

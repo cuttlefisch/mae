@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Refuse to push anywhere that is not this project's remote.
+#
+# This is a DETECTOR, not a preventer, and it is deliberately kept as one.
+#
+# Background: skia's `git-sync-deps` (run by skia-bindings' build script) does
+# `git remote set-url origin <skia mirror>` inside each dependency directory.
+# It guards that with `is_git_toplevel()`, which is normally sufficient — its
+# dependency trees live in the cargo registry, where no enclosing repo exists.
+# The guard is defeated only by a leaked GIT_DIR: git exports one into hooks
+# when a command runs from a linked worktree, every child inherits it, and git
+# then treats *cwd* as the worktree top, so the guard passes for a directory it
+# does not own and the rewrite lands on the SHARED main .git/config.
+#
+# The real fix is the environment scrub in .githooks/pre-commit (which see) —
+# that is what stops the rewrite happening. Two backstops in `make setup-hooks`
+# limit the damage if one ever slips through: `sync-deps.disable`, and
+# `remote.origin.pushurl`, which is what actually prevents the credential
+# prompt (`set-url` writes only remote.origin.url, while push prefers pushurl).
+#
+# Why this hook cannot prevent the prompt itself: pre-push runs *after* git has
+# contacted the remote to list its refs, i.e. after authentication — which is
+# where the skia.googlesource.com prompt comes from. By the time this hook sees
+# anything, the prompt has already happened. It is still worth keeping: it stops
+# a wrong-remote push from proceeding, and it surfaces a rewrite loudly instead
+# of letting it sit unnoticed. Do not mistake it for the fix.
+set -euo pipefail
+
+remote_url="${2:-}"
+case "$remote_url" in
+    *github.com[:/]cuttlefisch/mae*) exit 0 ;;
+    "") exit 0 ;;   # no URL supplied (e.g. some porcelain paths) — don't block
+esac
+
+cat >&2 <<MSG
+✋ push refused: '$remote_url' is not this project's remote.
+
+   Expected: git@github.com:cuttlefisch/mae.git
+
+   This almost certainly means a Skia build rewrote 'origin'. Restore it with:
+
+       git remote set-url origin git@github.com:cuttlefisch/mae.git
+
+   and re-run your push. (Pushing as-is would prompt for credentials on a host
+   that will never accept them.)
+MSG
+exit 1

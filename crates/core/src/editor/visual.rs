@@ -49,23 +49,41 @@ impl Editor {
                 // use block_selection_rect() directly.
                 let (min_row, max_row, min_col, max_col) = self.block_selection_rect();
                 let start = buf.char_offset_at(min_row, min_col);
-                let end_row_col = (max_col + 1).min(
-                    buf.line_text(max_row)
-                        .trim_end_matches('\n')
-                        .chars()
-                        .count(),
-                );
+                // ADR-087 Rule 4: cols are BYTE columns, so the inclusive end
+                // is the next grapheme boundary, not `+ 1`.
+                let end_row_col = buf
+                    .next_grapheme_col(max_row, max_col)
+                    .min(buf.line_byte_len(max_row));
                 let end = buf.char_offset_at(max_row, end_row_col);
                 (start, end.max(start))
             }
             _ => {
                 // Charwise
+                // ADR-087 Rule 4: charwise visual is *inclusive of the
+                // cluster under the cursor*. `+ 1` char included only the base
+                // of a combining/ZWJ cluster, cutting the selection mid-glyph;
+                // extend to the next grapheme boundary on whichever side is
+                // the max, then cross back into the char domain.
                 let anchor =
                     buf.char_offset_at(self.vi.visual_anchor_row, self.vi.visual_anchor_col);
                 let cursor = buf.char_offset_at(win.cursor_row, win.cursor_col);
+                let (max_row, max_col) = if cursor >= anchor {
+                    (win.cursor_row, win.cursor_col)
+                } else {
+                    (self.vi.visual_anchor_row, self.vi.visual_anchor_col)
+                };
                 let start = anchor.min(cursor);
-                let end = (anchor.max(cursor) + 1).min(buf.rope().len_chars());
-                (start, end)
+                let end_col = buf
+                    .next_grapheme_col(max_row, max_col)
+                    .min(buf.line_byte_len(max_row));
+                let end = if end_col > max_col {
+                    buf.char_offset_at(max_row, end_col)
+                } else {
+                    // Cursor sits at end-of-line: keep vi's inclusive `+ 1`,
+                    // which picks up the newline.
+                    (anchor.max(cursor) + 1).min(buf.rope().len_chars())
+                };
+                (start, end.max(start))
             }
         }
     }
@@ -152,8 +170,8 @@ impl Editor {
             self.buffers[idx].delete_range(*start, *end);
             let rope = self.buffers[idx].rope();
             let new_row = rope.char_to_line((*start).min(rope.len_chars().saturating_sub(1)));
-            let line_start = rope.line_to_char(new_row);
-            new_positions.push((new_row, start.saturating_sub(line_start)));
+            let new_col = self.buffers[idx].byte_col_of_char_offset(new_row, *start);
+            new_positions.push((new_row, new_col));
         }
         // Each position was clamped against the rope state immediately
         // after ITS OWN deletion -- but earlier (higher-offset) entries can
@@ -164,7 +182,7 @@ impl Editor {
         let final_line_count = self.buffers[idx].line_count();
         for (row, col) in &mut new_positions {
             *row = (*row).min(final_line_count.saturating_sub(1));
-            *col = (*col).min(self.buffers[idx].line_len(*row));
+            *col = (*col).min(self.buffers[idx].line_byte_len(*row));
         }
         new_positions.sort();
         // Collapsed ranges (e.g. deleting the entire buffer) can leave
@@ -227,10 +245,10 @@ impl Editor {
             let (start, _) = ranges[0];
             let rope = self.buffers[idx].rope();
             let new_row = rope.char_to_line(start);
-            let line_start = rope.line_to_char(new_row);
+            let new_col = self.buffers[idx].byte_col_of_char_offset(new_row, start);
             let win = self.window_mgr.focused_window_mut();
             win.cursor_row = new_row;
-            win.cursor_col = start - line_start;
+            win.cursor_col = new_col;
         }
         self.set_mode(Mode::Normal);
     }
@@ -501,8 +519,8 @@ impl Editor {
                     .saturating_sub(1);
             let rope = self.buffers[idx].rope();
             let new_row = rope.char_to_line(end_pos.min(rope.len_chars().saturating_sub(1)));
-            let line_start = rope.line_to_char(new_row);
-            new_positions.push((new_row, end_pos.saturating_sub(line_start)));
+            let new_col = self.buffers[idx].byte_col_of_char_offset(new_row, end_pos);
+            new_positions.push((new_row, new_col));
         }
         // Re-clamp every position against the FINAL buffer state before
         // dedup, same rationale as visual_delete: earlier (higher-offset)
@@ -511,7 +529,7 @@ impl Editor {
         let final_line_count = self.buffers[idx].line_count();
         for (row, col) in &mut new_positions {
             *row = (*row).min(final_line_count.saturating_sub(1));
-            *col = (*col).min(self.buffers[idx].line_len(*row));
+            *col = (*col).min(self.buffers[idx].line_byte_len(*row));
         }
         new_positions.sort();
         new_positions.dedup();

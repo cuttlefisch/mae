@@ -1652,9 +1652,18 @@ impl Editor {
         self.buffers.remove(idx);
         self.notify_buffer_removed(idx);
 
+        // `target` was chosen against the PRE-removal `buffers`, so anything
+        // after `idx` has since shifted down one. Audit #591.1: the
+        // `win.buffer_idx == idx` arm below assigned the un-decremented value,
+        // so closing a graph view that sat before the return buffer left the
+        // window showing the buffer *after* the one the user came from — or,
+        // at the end of the list, silently clamped to a different buffer again.
+        let target = if target > idx { target - 1 } else { target };
+        let target = target.min(self.buffers.len().saturating_sub(1));
+
         for win in self.window_mgr.iter_windows_mut() {
             if win.buffer_idx == idx {
-                win.buffer_idx = target.min(self.buffers.len().saturating_sub(1));
+                win.buffer_idx = target;
             } else if win.buffer_idx > idx {
                 win.buffer_idx -= 1;
             }
@@ -3358,6 +3367,74 @@ mod tests {
 
         editor.kb_graph_view_close();
         assert!(!editor.buffers.iter().any(|b| b.kind == BufferKind::Graph));
+    }
+
+    /// Audit #591.1 — `target` (the buffer to return to) was computed against
+    /// the PRE-removal buffer list, then used verbatim in the window fixup
+    /// AFTER `buffers.remove(idx)` had shifted every later index down one.
+    ///
+    /// The fixture is the ordinary sequence that produces `target > idx`: open
+    /// the graph view, then open more buffers, then close the graph. The
+    /// alternate buffer now sits *after* the graph, so the un-decremented index
+    /// lands on its neighbour. Buffers carry distinct names because the
+    /// existing `.min(len - 1)` clamp accidentally rescues the case where the
+    /// target happens to be the LAST buffer — an index-only assertion, or a
+    /// fixture with the target at the end, would pass on the broken code.
+    #[test]
+    fn closing_a_graph_view_returns_to_the_right_buffer_after_the_index_shift() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+
+        // The graph goes in early, so later buffers sit after it.
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .expect("graph buffer opened");
+
+        for n in 0..3 {
+            let mut b = crate::Buffer::new();
+            b.name = format!("scratch-{n}");
+            editor.buffers.push(b);
+        }
+
+        // The user's alternate buffer is one of the ones opened AFTER the
+        // graph, and deliberately NOT the last (see the doc comment).
+        let alt_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.name == "scratch-0")
+            .unwrap();
+        assert!(alt_idx > graph_idx, "fixture must produce target > idx");
+        assert!(
+            alt_idx < editor.buffers.len() - 1,
+            "the target must not be the last buffer, or the clamp hides the bug"
+        );
+        editor.vi.alternate_buffer_idx = Some(alt_idx);
+        for win in editor.window_mgr.iter_windows_mut() {
+            win.buffer_idx = graph_idx;
+        }
+
+        editor.kb_graph_view_close();
+
+        assert!(
+            !editor.buffers.iter().any(|b| b.kind == BufferKind::Graph),
+            "the graph buffer must be gone"
+        );
+        for win in editor.window_mgr.iter_windows() {
+            assert!(
+                win.buffer_idx < editor.buffers.len(),
+                "window index {} dangles past {} buffers",
+                win.buffer_idx,
+                editor.buffers.len()
+            );
+            // By NAME: the point is that the index shifted underneath us.
+            assert_eq!(
+                editor.buffers[win.buffer_idx].name, "scratch-0",
+                "a window showing the closed graph must land on the alternate \
+                 buffer, not the one after it"
+            );
+        }
     }
 
     #[test]

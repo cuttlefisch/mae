@@ -10,6 +10,7 @@ Conventions for recording decisions, structuring changes, tracking debt, and kee
 issues and roadmap items connected to the decisions that justify them.
 
 * Architecture decision records
+- [[id:practice:prior-art-review][Prior-Art Review Before Deciding]]
 - [[id:practice:adr-format][ADR Format]]
 - [[id:template:adr][ADR Template]]
 - [[id:practice:adr-node-crosslinking][ADR / Node Crosslinking]]

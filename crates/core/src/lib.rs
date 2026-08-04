@@ -45,12 +45,14 @@ pub mod keymap_registry;
 pub mod link_detect;
 pub mod lock_stats;
 pub mod lsp_intent;
+pub mod lsp_position;
 pub mod messages;
 pub mod notifications;
 pub mod notifications_view;
 pub mod options;
 pub mod project;
 pub mod render_common;
+pub mod scheme_async;
 pub mod search;
 pub mod session;
 pub mod swap;
@@ -62,6 +64,7 @@ pub mod tween;
 pub mod visual_buffer;
 pub mod window;
 pub mod word;
+pub mod workspace_trust;
 pub mod wrap;
 
 pub use buffer::{BabelEditContext, Buffer, BufferKind, BufferLocalOptions};
@@ -106,6 +109,11 @@ pub use graph_view::{
     GraphMultiKbScope, GraphNavDirection, GraphStyleOptions, GraphView, GraphViewIntent,
     GraphViewMode,
 };
+// ADR-087 Rule 7: `mae-core` is the sole owner of the width/segmentation call
+// (`unicode_width`/`unicode_segmentation`). `mae-renderer` and `mae-gui` reach
+// display width exclusively through this re-export, never by importing those
+// crates directly.
+pub use grapheme::display_width;
 pub use hooks::HookRegistry;
 pub use input::{InputEvent, MouseButton};
 pub use kb_view::{KbLinkSpan, KbPreviewIntent, KbPreviewPopup, KbView};
@@ -120,6 +128,9 @@ pub use messages::{LogEntry, MessageLevel, MessageLog, MessageLogHandle};
 pub use options::{OptionDef, OptionKind, OptionRegistry};
 pub use project::{
     detect_project_root, Project, ProjectConfig, ProjectList, RecentFiles, RecentProjects,
+};
+pub use scheme_async::{
+    SchemeAsyncRegistry, SchemeAsyncRequest, SchemeAsyncSlot, SCHEME_ASYNC_RETAINED,
 };
 pub use search::{SearchDirection, SearchMatch, SearchState};
 pub mod redraw;

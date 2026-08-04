@@ -6,7 +6,79 @@ use crate::types::*;
 
 use super::AgentSession;
 
+/// Outcome of the session's ADR-090 gate for one tool call.
+pub(super) enum ToolCallGate {
+    /// Dispatch it. `Some(tier)` when a human answered `Ask` with yes.
+    Proceed(Option<PermissionTier>),
+    /// Do not dispatch. The string is the tool result the model sees.
+    Refused(String),
+}
+
 impl AgentSession {
+    /// Apply the ADR-090 three-state decision to one tool call, presenting
+    /// `Ask` to the human via [`AiEvent::ConfirmToolCall`].
+    ///
+    /// @ai-caution: [security] `Ask` here means *park and ask*, never
+    /// *proceed*. If the confirm channel closes (no UI attached, editor
+    /// shutting down), the answer is a refusal — a dropped prompt must not
+    /// become an approval.
+    pub(super) async fn decide_and_present(&mut self, call: &ToolCall) -> ToolCallGate {
+        let declared = self
+            .all_tools
+            .iter()
+            .find(|t| t.name == call.name)
+            .and_then(|t| t.permission)
+            // An untiered tool is not a trusted tool. Same fail-closed
+            // default `mae-agent`'s executors use.
+            .unwrap_or(PermissionTier::Privileged);
+        // `effective_tier` only ever raises (decision #6: `set_option` on the
+        // permission-tier option, `execute_command`'s real blast radius), and
+        // it is the same function the dispatch enforcement point applies, so
+        // the human is shown the tier that will actually be enforced.
+        let tier = crate::tools::effective_tier(&call.name, &call.arguments, declared);
+
+        match self.policy.decide(&call.name, tier) {
+            crate::tools::Decision::Allow => ToolCallGate::Proceed(None),
+            crate::tools::Decision::Deny(reason) => {
+                ToolCallGate::Refused(crate::tools::deny_message(&call.name, tier, reason))
+            }
+            crate::tools::Decision::Ask => {
+                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                let sent = self
+                    .event_tx
+                    .send(AiEvent::ConfirmToolCall {
+                        tool_name: call.name.clone(),
+                        arguments: call.arguments.clone(),
+                        tier,
+                        auto_approve_up_to: self.policy.auto_approve_up_to,
+                        reply: reply_tx,
+                    })
+                    .await;
+                if sent.is_err() {
+                    return ToolCallGate::Refused(crate::tools::ask_denied_message(
+                        &call.name,
+                        tier,
+                        self.policy.auto_approve_up_to,
+                        "this session (its event channel is closed)",
+                    ));
+                }
+                match reply_rx.await {
+                    Ok(true) => ToolCallGate::Proceed(Some(tier)),
+                    Ok(false) => ToolCallGate::Refused(format!(
+                        "Denied by user: {} ({:?} tier) was not approved.",
+                        call.name, tier
+                    )),
+                    Err(_) => ToolCallGate::Refused(crate::tools::ask_denied_message(
+                        &call.name,
+                        tier,
+                        self.policy.auto_approve_up_to,
+                        "this session (the approval prompt was dropped unanswered)",
+                    )),
+                }
+            }
+        }
+    }
+
     pub(super) async fn handle_prompt(&mut self, prompt: String) {
         // Session initialization: emit context info on first prompt
         if !self.initialized {
@@ -734,8 +806,13 @@ impl AgentSession {
                         .event_tx
                         .send(AiEvent::ToolCallFinished {
                             success: result.success,
+                            // ADR-087 / audit #594: fetched page text is
+                            // arbitrary UTF-8; a fixed byte cut can land
+                            // mid-character and panic.
                             output: if result.output.len() > 200 {
-                                format!("{}...", &result.output[..200])
+                                let cut =
+                                    mae_core::grapheme::floor_char_boundary(&result.output, 200);
+                                format!("{}...", &result.output[..cut])
                             } else {
                                 result.output.clone()
                             },
@@ -1034,6 +1111,34 @@ impl AgentSession {
                     continue;
                 }
 
+                // ADR-084 D2 + ADR-090: the embedded session is an enforcement
+                // point too. Ask the same PDP the MCP path asks, and present
+                // its answer -- refuse a `Deny` here (it never reaches the
+                // main thread), and for an `Ask`, park the turn on a human
+                // exactly as `ask_user`/`propose_changes` already do.
+                let approved_tier = match self.decide_and_present(call).await {
+                    ToolCallGate::Proceed(tier) => tier,
+                    ToolCallGate::Refused(output) => {
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::ToolCallFinished {
+                                success: false,
+                                output: output.clone(),
+                            })
+                            .await;
+                        self.messages.push(Message {
+                            role: Role::Tool,
+                            content: MessageContent::ToolResult(ToolResult {
+                                tool_call_id: call.id.clone(),
+                                tool_name: call.name.clone(),
+                                success: false,
+                                output,
+                            }),
+                        });
+                        continue;
+                    }
+                };
+
                 debug!(tool = %call.name, call_id = %call.id, "requesting tool execution from main thread");
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
                 let send_result = self
@@ -1041,6 +1146,7 @@ impl AgentSession {
                     .send(AiEvent::ToolCallRequest {
                         call: call.clone(),
                         reply: reply_tx,
+                        approved_tier,
                     })
                     .await;
 

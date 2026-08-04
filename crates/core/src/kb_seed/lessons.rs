@@ -119,8 +119,9 @@ Use `:set` or `(set-option! ...)` to configure the provider:\n\
 ### Tool Architecture\n\
 The AI has access to 100+ tools split into two tiers:\n\
 - **Core** (51 tools): always sent with every request (buffer ops, navigation, project, git basics).\n\
-- **Extended** (on demand): requested via the `request_tools` meta-tool. 10 categories: \
-`lsp`, `dap`, `knowledge`, `shell`, `commands`, `git`, `web`, `ai`, `visual`, `debug`.\n\n\
+- **Extended** (on demand): requested via the `request_tools` meta-tool. 12 categories: \
+`lsp`, `dap`, `knowledge`, `execution`, `shell`, `commands`, `git`, `web`, `ai`, `visual`, `debug`, \
+`mcp`.\n\n\
 Key tools:\n\
 - `request_tools` — load a category of extended tools into the conversation.\n\
 - `editor_save_state` / `editor_restore_state` — deterministic session state capture.\n\

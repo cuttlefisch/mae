@@ -9,11 +9,12 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::ffi::{arg_bool, arg_float, arg_int, arg_opt_string, arg_string};
-use crate::lisp_error::Arity;
+use crate::lisp_error::{Arity, LispError};
 use crate::value::Value;
 use crate::vm::Vm;
 
 use super::{SharedState, VisualOp};
+use crate::permission::tier;
 
 /// Register live-editing, editor-option, visual-buffer, buffer-list/keymap
 /// introspection, and buffer creation/kill primitives.
@@ -26,6 +27,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "buffer-insert",
         "Insert text at cursor",
         Arity::Fixed(1),
+        tier::WRITE,
         move |args: &[Value]| {
             let text = arg_string(args, 0, "buffer-insert")?;
             s.lock().pending_insert = Some(text);
@@ -39,6 +41,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "cursor-goto",
         "Move cursor to absolute position (0-indexed)",
         Arity::Fixed(2),
+        tier::WRITE,
         move |args: &[Value]| {
             let row = arg_int(args, 0, "cursor-goto")?;
             let col = arg_int(args, 1, "cursor-goto")?;
@@ -53,6 +56,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "open-file",
         "Open a file in a new buffer",
         Arity::Fixed(1),
+        tier::WRITE,
         move |args: &[Value]| {
             let path = arg_string(args, 0, "open-file")?;
             s.lock().pending_open_file = Some(path);
@@ -66,6 +70,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "run-command",
         "Dispatch a registered command by name",
         Arity::Fixed(1),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "run-command")?;
             s.lock().pending_commands.push(name);
@@ -79,6 +84,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "execute-ex",
         "Route through ex-command parser",
         Arity::Fixed(1),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let cmd = arg_string(args, 0, "execute-ex")?;
             s.lock().pending_ex_commands.push(cmd);
@@ -92,6 +98,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "message",
         "Append to the *Messages* log",
         Arity::Fixed(1),
+        tier::WRITE,
         move |args: &[Value]| {
             let text = arg_string(args, 0, "message")?;
             s.lock().pending_messages.push(text);
@@ -107,11 +114,72 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "set-option!",
         "Set an editor option",
         Arity::Fixed(2),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let key = arg_string(args, 0, "set-option!")?;
             let value = arg_string(args, 1, "set-option!")?;
             s.lock().pending_options.push((key, value));
             Ok(Value::Void)
+        },
+    );
+
+    // (set-option-save! KEY VALUE) — set + persist to init.scm.
+    //
+    // Closes `docs/CROSS_SURFACE_PARITY.md` gap #3: persisting an option was
+    // a Command-surface (`:set-save`) + MCP-surface (`set_option` with
+    // `persist: true`) capability with no Scheme counterpart. Both of those
+    // route through `Editor::set_option` followed by
+    // `Editor::save_option_to_init`; so does this, drained in
+    // `state_sync_apply.rs`.
+    //
+    // @ai-caution: [permission] Classified `PRIVILEGED`, matching
+    // `set-option!` — but the reason is stronger here than there. This
+    // primitive writes the user's `init.scm`, which is *code the editor
+    // evaluates at next startup*, so it is a persistence primitive as much as
+    // a configuration one. Once ADR-084 D7 makes `ai_tier` a genuinely
+    // enforced option, any primitive that can set an arbitrary option is a
+    // self-escalation path; `Privileged` is the ceiling of the current
+    // lattice, so nothing weaker is available, but do NOT relax this to
+    // `WRITE` on the grounds that "it's just an option". See
+    // `docs/DECISIONS_FOR_REVIEW.md` items 6 and 8: whatever fix lands for
+    // `set_option`'s own tier must cover this primitive and `set-option!`
+    // too, or the Scheme surface stays open after the MCP one is closed.
+    let s = shared.clone();
+    vm.register_fn(
+        "set-option-save!",
+        "Set an editor option AND persist it to ~/.config/mae/init.scm, so the value survives a \
+         restart. Equivalent to the `:set-save KEY VALUE` command and to the set_option MCP tool \
+         with persist: true — all three call Editor::set_option then \
+         Editor::save_option_to_init. Signals an error for an unknown option name; the write \
+         itself is applied on the next editor tick.",
+        Arity::Fixed(2),
+        tier::PRIVILEGED,
+        move |args: &[Value]| {
+            let key = arg_string(args, 0, "set-option-save!")?;
+            let value = arg_string(args, 1, "set-option-save!")?;
+            let mut state = s.lock();
+            // Fail fast on an unknown option so a config script gets a real,
+            // catchable Scheme error instead of a status-line message it
+            // cannot see. `option_values` is the same registry snapshot
+            // `(get-option)` reads; the authoritative validation (type
+            // coercion, allowed values, persistability) stays in
+            // `Editor::set_option`/`save_option_to_init`.
+            //
+            // Names are matched with `-`/`_` normalized, matching how the
+            // option registry itself accepts both spellings.
+            let norm = |n: &str| n.replace('-', "_");
+            let wanted = norm(&key);
+            if !state
+                .option_values
+                .iter()
+                .any(|(name, _)| norm(name) == wanted)
+            {
+                return Err(LispError::internal(format!(
+                    "set-option-save!: Unknown option: {key}"
+                )));
+            }
+            state.pending_option_saves.push((key, value));
+            Ok(Value::Bool(true))
         },
     );
 
@@ -121,6 +189,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "set-local-option!",
         "Set a buffer-local option",
         Arity::Fixed(2),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let key = arg_string(args, 0, "set-local-option!")?;
             let value = arg_string(args, 1, "set-local-option!")?;
@@ -134,6 +203,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "display-buffer-policy",
         "Query active display rule for a BufferKind",
         Arity::Fixed(1),
+        tier::READ,
         move |args: &[Value]| {
             let kind = arg_string(args, 0, "display-buffer-policy")?;
             use mae_core::display_policy::{action_to_string, parse_buffer_kind, DisplayPolicy};
@@ -153,6 +223,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "set-display-rule!",
         "Override display policy",
         Arity::Fixed(2),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let kind = arg_string(args, 0, "set-display-rule!")?;
             let action = arg_string(args, 1, "set-display-rule!")?;
@@ -167,6 +238,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "set-buffer-kind-replaceable!",
         "Mark a buffer kind as replaceable",
         Arity::Fixed(2),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let kind = arg_string(args, 0, "set-buffer-kind-replaceable!")?;
             let enable = arg_bool(args, 1, "set-buffer-kind-replaceable!")?;
@@ -182,6 +254,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "visual-buffer-add-rect!",
         "Add a rectangle to visual buffer",
         Arity::Variadic(4),
+        tier::WRITE,
         move |args: &[Value]| {
             let x = arg_float(args, 0, "visual-buffer-add-rect!")? as f32;
             let y = arg_float(args, 1, "visual-buffer-add-rect!")? as f32;
@@ -206,6 +279,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "visual-buffer-clear!",
         "Clear all visual elements",
         Arity::Fixed(0),
+        tier::WRITE,
         move |_args: &[Value]| {
             s.lock().pending_visual_ops.push(VisualOp::Clear);
             Ok(Value::Void)
@@ -217,6 +291,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "visual-buffer-add-line!",
         "Add a line to visual buffer",
         Arity::Fixed(6),
+        tier::WRITE,
         move |args: &[Value]| {
             let x1 = arg_float(args, 0, "visual-buffer-add-line!")? as f32;
             let y1 = arg_float(args, 1, "visual-buffer-add-line!")? as f32;
@@ -241,6 +316,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "visual-buffer-add-circle!",
         "Add a circle to visual buffer",
         Arity::Variadic(3),
+        tier::WRITE,
         move |args: &[Value]| {
             let cx = arg_float(args, 0, "visual-buffer-add-circle!")? as f32;
             let cy = arg_float(args, 1, "visual-buffer-add-circle!")? as f32;
@@ -263,6 +339,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "visual-buffer-add-text!",
         "Add text to visual buffer",
         Arity::Fixed(5),
+        tier::WRITE,
         move |args: &[Value]| {
             let x = arg_float(args, 0, "visual-buffer-add-text!")? as f32;
             let y = arg_float(args, 1, "visual-buffer-add-text!")? as f32;
@@ -288,6 +365,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "buffer-delete-range",
         "Delete text in range",
         Arity::Fixed(2),
+        tier::WRITE,
         move |args: &[Value]| {
             let start = arg_int(args, 0, "buffer-delete-range")?;
             let end = arg_int(args, 1, "buffer-delete-range")?;
@@ -302,6 +380,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "buffer-replace-range",
         "Replace text in range",
         Arity::Fixed(3),
+        tier::WRITE,
         move |args: &[Value]| {
             let start = arg_int(args, 0, "buffer-replace-range")?;
             let end = arg_int(args, 1, "buffer-replace-range")?;
@@ -318,6 +397,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "buffer-undo",
         "Undo the last edit",
         Arity::Fixed(0),
+        tier::WRITE,
         move |_args: &[Value]| {
             s.lock().pending_undo = true;
             Ok(Value::Void)
@@ -330,6 +410,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "buffer-redo",
         "Redo the last undone edit",
         Arity::Fixed(0),
+        tier::WRITE,
         move |_args: &[Value]| {
             s.lock().pending_redo = true;
             Ok(Value::Void)
@@ -342,6 +423,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "buffer-undo-boundary",
         "Mark an undo boundary",
         Arity::Fixed(0),
+        tier::WRITE,
         move |_args: &[Value]| {
             s.lock().pending_undo_boundary = true;
             Ok(Value::Void)
@@ -354,6 +436,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "switch-to-buffer",
         "Switch to buffer by index",
         Arity::Fixed(1),
+        tier::WRITE,
         move |args: &[Value]| {
             let idx = arg_int(args, 0, "switch-to-buffer")?;
             s.lock().pending_switch_buffer = Some(idx.max(0) as usize);
@@ -367,6 +450,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "undefine-key!",
         "Remove a keybinding",
         Arity::Fixed(2),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let map = arg_string(args, 0, "undefine-key!")?;
             let key = arg_string(args, 1, "undefine-key!")?;
@@ -381,6 +465,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "set-group-name",
         "Set which-key group label",
         Arity::Fixed(3),
+        tier::WRITE,
         move |args: &[Value]| {
             let map = arg_string(args, 0, "set-group-name")?;
             let prefix = arg_string(args, 1, "set-group-name")?;
@@ -397,6 +482,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "create-buffer",
         "Create a new buffer",
         Arity::Fixed(1),
+        tier::WRITE,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "create-buffer")?;
             s.lock().pending_create_buffer = Some(name);
@@ -409,6 +495,7 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "kill-buffer-by-name",
         "Kill a buffer by name",
         Arity::Fixed(1),
+        tier::WRITE,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "kill-buffer-by-name")?;
             s.lock().pending_kill_buffer = Some(name);

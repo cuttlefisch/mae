@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use crate::buffer_render;
 use crate::gutter;
+use mae_core::grapheme::WidthPolicy;
 use mae_core::wrap::{char_width, content_indent_len, find_wrap_break};
 use mae_core::{Buffer, Editor, HighlightSpan, Window};
 
@@ -159,16 +160,25 @@ impl FrameLayout {
     /// This is THE single implementation of column offset computation.
     /// Both the renderer's `draw_styled_at` col_offsets and the cursor
     /// positioning call this function, eliminating divergence.
-    pub fn scaled_col(line_text: &str, target_col: usize, scale: f32) -> usize {
+    pub fn scaled_col(
+        line_text: &str,
+        target_col: usize,
+        scale: f32,
+        policy: WidthPolicy,
+    ) -> usize {
         if scale == 1.0 {
-            line_text.chars().take(target_col).map(char_width).sum()
+            line_text
+                .chars()
+                .take(target_col)
+                .map(|c| char_width(c, policy))
+                .sum()
         } else {
             let mut acc = 0.0f32;
             for (i, ch) in line_text.chars().enumerate() {
                 if i >= target_col {
                     break;
                 }
-                acc += char_width(ch) as f32 * scale;
+                acc += char_width(ch, policy) as f32 * scale;
             }
             acc.round() as usize
         }
@@ -177,18 +187,23 @@ impl FrameLayout {
     /// Exact fractional scaled column offset (no rounding).
     /// Returns value in cell-width units (multiply by cell_width for pixels).
     /// Used by cursor rendering to avoid column-grid quantization on scaled lines.
-    pub fn scaled_col_precise(line_text: &str, target_col: usize, scale: f32) -> f32 {
+    pub fn scaled_col_precise(
+        line_text: &str,
+        target_col: usize,
+        scale: f32,
+        policy: WidthPolicy,
+    ) -> f32 {
         if scale == 1.0 {
             line_text
                 .chars()
                 .take(target_col)
-                .map(|ch| char_width(ch) as f32)
+                .map(|ch| char_width(ch, policy) as f32)
                 .sum()
         } else {
             line_text
                 .chars()
                 .take(target_col)
-                .map(|ch| char_width(ch) as f32 * scale)
+                .map(|ch| char_width(ch, policy) as f32 * scale)
                 .sum()
         }
     }
@@ -199,11 +214,16 @@ impl FrameLayout {
     /// This is the CORRECT way to compute cursor position for scaled lines.
     /// Font engines grid-fit advances to integer pixels at each size, so
     /// `char_width * scale * cell_width` diverges from Skia's actual layout.
-    pub fn pixel_x_for_col(line_text: &str, target_col: usize, glyph_advance: f32) -> f32 {
+    pub fn pixel_x_for_col(
+        line_text: &str,
+        target_col: usize,
+        glyph_advance: f32,
+        policy: WidthPolicy,
+    ) -> f32 {
         line_text
             .chars()
             .take(target_col)
-            .map(|ch| char_width(ch) as f32 * glyph_advance)
+            .map(|ch| char_width(ch, policy) as f32 * glyph_advance)
             .sum()
     }
 
@@ -290,7 +310,7 @@ pub fn compute_layout(
 
     let wrap = buf.local_options.word_wrap.unwrap_or(editor.word_wrap) && text_width > 0;
     let show_break_width = if wrap {
-        unicode_width::UnicodeWidthStr::width(editor.show_break.as_str())
+        mae_core::grapheme::display_width_with(editor.show_break.as_str(), editor.width_policy())
     } else {
         0
     };
@@ -534,7 +554,7 @@ pub fn compute_layout(
             // `full_chars` is already `&[char]`; all consumers below take a
             // slice, so avoid a per-wrapped-line heap copy.
             let indent_len = if editor.break_indent {
-                content_indent_len(full_chars)
+                content_indent_len(full_chars, editor.width_policy())
             } else {
                 0
             };
@@ -565,7 +585,7 @@ pub fn compute_layout(
                 } else {
                     base_avail
                 };
-                let end = find_wrap_break(full_chars, pos, avail);
+                let end = find_wrap_break(full_chars, pos, avail, editor.width_policy());
 
                 let seg_glyph_advance = if seg_scale != 1.0 {
                     glyph_advance_fn
@@ -611,8 +631,14 @@ pub fn compute_layout(
                 break;
             }
 
-            let col_offset = win.col_offset;
-            let visible_start = col_offset.min(full_count);
+            // ADR-087 Rule 4: `win.col_offset` is a BYTE column; `full_chars`
+            // is indexed by CHAR. Convert rather than reusing the number.
+            let line_prefix: String = full_chars.iter().collect();
+            let visible_start = mae_core::grapheme::floor_char_boundary(
+                &line_prefix,
+                win.col_offset.min(line_prefix.len()),
+            );
+            let visible_start = line_prefix[..visible_start].chars().count().min(full_count);
 
             // Compute visible char count (matching renderer's effective_width logic).
             let effective_width = if org_heading_scale > 1.0 {
@@ -623,7 +649,7 @@ pub fn compute_layout(
             let mut vis_width = 0;
             let mut visible_end = visible_start;
             for &ch in &full_chars[visible_start..] {
-                let w = char_width(ch);
+                let w = char_width(ch, editor.width_policy());
                 if vis_width + w > effective_width {
                     break;
                 }
@@ -803,40 +829,74 @@ mod tests {
     #[test]
     fn scaled_col_ascii() {
         // "## Hello" at scale 1.3, cursor at char 5
-        let result = FrameLayout::scaled_col("## Hello", 5, 1.3);
+        let result = FrameLayout::scaled_col(
+            "## Hello",
+            5,
+            1.3,
+            mae_core::grapheme::WidthPolicy::default(),
+        );
         // Accumulated: 1.3 + 1.3 + 1.3 + 1.3 + 1.3 = 6.5 → round = 7
         assert_eq!(result, 7);
     }
 
     #[test]
     fn scaled_col_identity() {
-        let result = FrameLayout::scaled_col("hello world", 5, 1.0);
+        let result = FrameLayout::scaled_col(
+            "hello world",
+            5,
+            1.0,
+            mae_core::grapheme::WidthPolicy::default(),
+        );
         assert_eq!(result, 5);
     }
 
     #[test]
     fn scaled_col_empty() {
-        assert_eq!(FrameLayout::scaled_col("", 0, 1.3), 0);
-        assert_eq!(FrameLayout::scaled_col("abc", 0, 1.3), 0);
+        assert_eq!(
+            FrameLayout::scaled_col("", 0, 1.3, mae_core::grapheme::WidthPolicy::default()),
+            0
+        );
+        assert_eq!(
+            FrameLayout::scaled_col("abc", 0, 1.3, mae_core::grapheme::WidthPolicy::default()),
+            0
+        );
     }
 
     #[test]
     fn scaled_col_precise_no_rounding() {
         // "## Hello" at scale 1.3, cursor at char 5:
         // 5 * 1.3 = 6.5 exactly (no rounding).
-        let result = FrameLayout::scaled_col_precise("## Hello", 5, 1.3);
+        let result = FrameLayout::scaled_col_precise(
+            "## Hello",
+            5,
+            1.3,
+            mae_core::grapheme::WidthPolicy::default(),
+        );
         assert!((result - 6.5).abs() < 1e-6);
     }
 
     #[test]
     fn scaled_col_precise_identity() {
-        let result = FrameLayout::scaled_col_precise("hello", 5, 1.0);
+        let result = FrameLayout::scaled_col_precise(
+            "hello",
+            5,
+            1.0,
+            mae_core::grapheme::WidthPolicy::default(),
+        );
         assert!((result - 5.0).abs() < 1e-6);
     }
 
     #[test]
     fn scaled_col_precise_zero() {
-        assert_eq!(FrameLayout::scaled_col_precise("abc", 0, 1.5), 0.0);
+        assert_eq!(
+            FrameLayout::scaled_col_precise(
+                "abc",
+                0,
+                1.5,
+                mae_core::grapheme::WidthPolicy::default()
+            ),
+            0.0
+        );
     }
 
     #[test]

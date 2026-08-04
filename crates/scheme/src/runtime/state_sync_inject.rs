@@ -16,6 +16,7 @@ use crate::lisp_error::Arity;
 use crate::value::Value;
 
 use super::SchemeRuntime;
+use crate::permission::tier;
 
 impl SchemeRuntime {
     pub fn inject_editor_state(&mut self, editor: &Editor) {
@@ -50,8 +51,15 @@ impl SchemeRuntime {
             .define_global("*buffer-line-count*", Value::Int(buf.line_count() as i64));
         self.vm
             .define_global("*cursor-row*", Value::Int(win.cursor_row as i64));
-        self.vm
-            .define_global("*cursor-col*", Value::Int(win.cursor_col as i64));
+        // ADR-087 Rule 4: `Window::cursor_col` is a BYTE column, but the
+        // Scheme surface (`*cursor-col*`, `current-column`, `cursor-goto`) is
+        // and stays a CHARACTER column -- it is a documented stable API, and
+        // silently switching a user script's units is precisely the defect
+        // class this ADR exists to close. One named conversion, here.
+        self.vm.define_global(
+            "*cursor-col*",
+            Value::Int(buf.byte_col_to_char_col(win.cursor_row, win.cursor_col) as i64),
+        );
 
         // Full buffer text
         let text = buf.text();
@@ -104,6 +112,7 @@ impl SchemeRuntime {
             "buffer-line",
             "Read a specific line (0-indexed)",
             Arity::Fixed(1),
+            tier::READ,
             move |args: &[Value]| {
                 let n = arg_int(args, 0, "buffer-line")?;
                 Ok(Value::string(
@@ -129,6 +138,7 @@ impl SchemeRuntime {
             "shell-cwd",
             "Return cached CWD for a shell buffer",
             Arity::Fixed(1),
+            tier::READ,
             move |args: &[Value]| {
                 let idx = arg_int(args, 0, "shell-cwd")?;
                 Ok(Value::string(
@@ -145,6 +155,7 @@ impl SchemeRuntime {
             "shell-read-output",
             "Read viewport snapshot",
             Arity::Fixed(2),
+            tier::READ,
             move |args: &[Value]| {
                 let idx = arg_int(args, 0, "shell-read-output")?.max(0) as usize;
                 let max = arg_int(args, 1, "shell-read-output")?.max(1) as usize;
@@ -182,6 +193,7 @@ impl SchemeRuntime {
             "current-buffer-name",
             "Name of current buffer",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::string(buf_name.clone())),
         );
 
@@ -190,6 +202,7 @@ impl SchemeRuntime {
             "current-buffer-file",
             "File path of current buffer",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| match &file_path {
                 Some(p) => Ok(Value::string(p.clone())),
                 None => Ok(Value::Bool(false)),
@@ -201,14 +214,17 @@ impl SchemeRuntime {
             "current-line-number",
             "Current line number (1-indexed)",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Int(line_num)),
         );
 
-        let col = win.cursor_col as i64;
+        // Character column -- see the `*cursor-col*` note above.
+        let col = buf.byte_col_to_char_col(win.cursor_row, win.cursor_col) as i64;
         self.vm.register_fn(
             "current-column",
             "Current column",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Int(col)),
         );
 
@@ -217,6 +233,7 @@ impl SchemeRuntime {
             "point",
             "Cursor character offset",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Int(cursor_offset)),
         );
 
@@ -224,6 +241,7 @@ impl SchemeRuntime {
             "point-min",
             "Minimum point",
             Arity::Fixed(0),
+            tier::READ,
             |_args: &[Value]| Ok(Value::Int(0)),
         );
 
@@ -232,6 +250,7 @@ impl SchemeRuntime {
             "point-max",
             "Maximum point",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Int(max_chars)),
         );
 
@@ -241,6 +260,7 @@ impl SchemeRuntime {
             "line-beginning-position",
             "Start of current line",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Int(line_begin)),
         );
 
@@ -253,6 +273,7 @@ impl SchemeRuntime {
             "line-end-position",
             "End of current line",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Int(line_end)),
         );
     }
@@ -271,6 +292,7 @@ impl SchemeRuntime {
             "region-active?",
             "Whether visual selection is active",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Bool(s.lock().region_active)),
         );
 
@@ -279,6 +301,7 @@ impl SchemeRuntime {
             "region-beginning",
             "Start of region",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Int(s.lock().region_start as i64)),
         );
         let s = self.shared.clone();
@@ -286,6 +309,7 @@ impl SchemeRuntime {
             "region-end",
             "End of region",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Int(s.lock().region_end as i64)),
         );
 
@@ -306,6 +330,7 @@ impl SchemeRuntime {
             "get-selection",
             "Get selected text",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::string(st.clone())),
         );
 
@@ -321,6 +346,7 @@ impl SchemeRuntime {
             "buffer-text-range",
             "Substring of buffer text",
             Arity::Fixed(2),
+            tier::READ,
             move |args: &[Value]| {
                 let start = arg_int(args, 0, "buffer-text-range")?.max(0) as usize;
                 let end = arg_int(args, 1, "buffer-text-range")?.max(0) as usize;
@@ -352,7 +378,9 @@ impl SchemeRuntime {
             state.leader_active = editor.leader_active;
             state.which_key_count = editor.which_key_entries_for_current_keymap().len();
             state.cursor_row = win.cursor_row;
-            state.cursor_col = win.cursor_col;
+            // SharedState feeds the Scheme test primitives, which are on the
+            // character-column surface (see `*cursor-col*`).
+            state.cursor_col = buf.byte_col_to_char_col(win.cursor_row, win.cursor_col);
             state.last_status_message = editor.status_msg.clone();
             state.buffer_names = editor
                 .buffers
@@ -376,6 +404,42 @@ impl SchemeRuntime {
                         .map(|s| s.clone() as std::sync::Arc<dyn mae_kb::KbStore>),
                 )
                 .collect();
+            // --- LSP/DAP snapshots (docs/CROSS_SURFACE_PARITY.md gap #1) ---
+            //
+            // Both are gated on the subsystem actually being live, so a
+            // session with no language server and no debug session pays
+            // nothing per eval. When one IS live, the payload is produced by
+            // the SAME `mae-ai` function the equivalent MCP tool calls, so
+            // `(lsp-diagnostics)`/`(debug-state)` and `lsp_diagnostics`/
+            // `debug_state` return identical data (CLAUDE.md principle #3),
+            // not two shapes that can drift.
+            state.lsp_diagnostics_json = if editor.lsp.diagnostics.iter().next().is_none() {
+                None
+            } else {
+                mae_ai::execute_lsp_diagnostics(editor, &serde_json::json!({"scope": "all"})).ok()
+            };
+            // The payload's `path` field is derived from the diagnostic's URI
+            // (`uri.strip_prefix("file://")`), which `path_to_uri` has already
+            // made absolute. Deriving the comparison key the same way — rather
+            // than stringifying `file_path()` directly — is what makes
+            // `(lsp-diagnostics "buffer")` work for a buffer opened by a
+            // RELATIVE path, where the two spellings would otherwise never
+            // compare equal and the scope would silently return nothing.
+            state.diagnostics_buffer_path = buf
+                .file_path()
+                .map(|p| {
+                    let uri = mae_core::path_to_uri(p);
+                    uri.strip_prefix("file://").unwrap_or(&uri).to_string()
+                })
+                .filter(|_| state.lsp_diagnostics_json.is_some());
+            state.dap_state_json = if editor.dap.state.is_some() {
+                mae_ai::execute_debug_state(editor).ok()
+            } else {
+                None
+            };
+            state.dap_debug_state = editor.dap.state.clone();
+            state.async_results = editor.scheme_async.snapshot();
+
             state.sync_content = buf.sync_doc.as_ref().map(|s| s.content());
             state.encoded_state = buf.sync_doc.as_ref().map(|s| {
                 use base64::Engine as _;

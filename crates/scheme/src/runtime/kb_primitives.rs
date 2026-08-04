@@ -14,6 +14,7 @@ use crate::value::Value;
 use crate::vm::Vm;
 
 use super::SharedState;
+use crate::permission::tier;
 
 /// Register typed-link, KB collaboration lifecycle, collab/identity ACTION,
 /// meta-node, and relationship-type-management primitives.
@@ -26,6 +27,7 @@ pub(super) fn register_kb_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedSt
         "kb-add-link!",
         "Add a typed link between KB nodes",
         Arity::Fixed(3),
+        tier::WRITE,
         move |args: &[Value]| {
             let src = arg_string(args, 0, "kb-add-link!")?;
             let dst = arg_string(args, 1, "kb-add-link!")?;
@@ -46,6 +48,7 @@ pub(super) fn register_kb_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedSt
         "kb-register",
         "Register an external org directory NAME at DIR as a federated KB instance",
         Arity::Fixed(2),
+        tier::SHELL,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "kb-register")?;
             let dir = arg_string(args, 1, "kb-register")?;
@@ -62,6 +65,7 @@ pub(super) fn register_kb_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedSt
         "kb-share",
         "Share a knowledge base for collaborative editing (default: primary KB)",
         Arity::Variadic(0),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let kb_name = if args.is_empty() {
                 mae_core::KB_DEFAULT_NAME.to_string()
@@ -84,7 +88,7 @@ pub(super) fn register_kb_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedSt
     vm.register_fn(
             "kb-share-p2p",
             "Mint a P2P join ticket (magnet link) for a KB and return the mae://join/… string (default: primary KB).",
-            Arity::Variadic(0),
+            Arity::Variadic(0), tier::PRIVILEGED,
             move |args: &[Value]| {
                 let kb_id = if args.is_empty() {
                     mae_core::KB_DEFAULT_NAME.to_string()
@@ -118,7 +122,7 @@ pub(super) fn register_kb_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedSt
     vm.register_fn(
             "kb-join-ticket",
             "Queue a P2P join from a mae://join/… ticket; the dialer pulls the KB after the owner approves.",
-            Arity::Fixed(1),
+            Arity::Fixed(1), tier::PRIVILEGED,
             move |args: &[Value]| {
                 let ticket = arg_string(args, 0, "kb-join-ticket")?;
                 let control = s.lock().daemon_control.clone();
@@ -143,6 +147,7 @@ pub(super) fn register_kb_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedSt
         "kb-join",
         "Join a shared knowledge base from the daemon",
         Arity::Fixed(1),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let kb_id = arg_string(args, 0, "kb-join")?;
             s.lock()
@@ -158,6 +163,7 @@ pub(super) fn register_kb_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedSt
         "kb-leave",
         "Leave a shared knowledge base (local copy preserved)",
         Arity::Fixed(1),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let kb_id = arg_string(args, 0, "kb-leave")?;
             s.lock()
@@ -173,6 +179,7 @@ pub(super) fn register_kb_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedSt
         "kb-add-member",
         "Add a peer to a shared KB by fingerprint with a role (default editor; owner-only)",
         Arity::Variadic(2),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let kb_id = arg_string(args, 0, "kb-add-member")?;
             let member = arg_string(args, 1, "kb-add-member")?;
@@ -198,6 +205,7 @@ pub(super) fn register_kb_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedSt
         "kb-remove-member",
         "Remove a peer from a shared KB by fingerprint (owner-only)",
         Arity::Fixed(2),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let kb_id = arg_string(args, 0, "kb-remove-member")?;
             let member = arg_string(args, 1, "kb-remove-member")?;
@@ -214,6 +222,7 @@ pub(super) fn register_kb_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedSt
         "kb-approve",
         "Approve a pending join request by fingerprint at a role (default editor; owner-only)",
         Arity::Variadic(2),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let kb_id = arg_string(args, 0, "kb-approve")?;
             let principal = arg_string(args, 1, "kb-approve")?;
@@ -239,6 +248,7 @@ pub(super) fn register_kb_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedSt
         "kb-set-policy",
         "Set a shared KB's join policy: restrictive | invite | permissive (owner-only)",
         Arity::Fixed(2),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let kb_id = arg_string(args, 0, "kb-set-policy")?;
             let policy = arg_string(args, 1, "kb-set-policy")?;
@@ -256,7 +266,7 @@ pub(super) fn register_kb_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedSt
     vm.register_fn(
             "kb-block-member",
             "Locally block a principal on a KB by fingerprint (self-protection deny-list; local-only, not propagated)",
-            Arity::Fixed(2),
+            Arity::Fixed(2), tier::PRIVILEGED,
             move |args: &[Value]| {
                 let kb_id = arg_string(args, 0, "kb-block-member")?;
                 let member = arg_string(args, 1, "kb-block-member")?;
@@ -277,7 +287,7 @@ pub(super) fn register_kb_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedSt
     vm.register_fn(
             "kb-unblock-member",
             "Locally unblock a principal on a KB by fingerprint (removes the local self-protection block)",
-            Arity::Fixed(2),
+            Arity::Fixed(2), tier::PRIVILEGED,
             move |args: &[Value]| {
                 let kb_id = arg_string(args, 0, "kb-unblock-member")?;
                 let member = arg_string(args, 1, "kb-unblock-member")?;
@@ -302,6 +312,7 @@ Protects node CONTENT from non-members/relay; does NOT provide forward secrecy, 
 (who/when/which-node/size), or retroactively protect already-shared plaintext — enable before \
 sharing. Lost identity key = permanent loss. See :help concept:kb-encryption.",
         Arity::Fixed(2),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let kb_id = arg_string(args, 0, "kb-set-encryption")?;
             let mode = arg_string(args, 1, "kb-set-encryption")?;
@@ -321,6 +332,7 @@ sharing. Lost identity key = permanent loss. See :help concept:kb-encryption.",
         "kb-join-p2p",
         "Queue a P2P join from a mae://join/… ticket (alias of kb-join-ticket).",
         Arity::Fixed(1),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let ticket = arg_string(args, 0, "kb-join-p2p")?;
             let control = s.lock().daemon_control.clone();
@@ -347,52 +359,75 @@ sharing. Lost identity key = permanent loss. See :help concept:kb-encryption.",
     // command surface uses (no-arg → pending_commands; arg-taking →
     // pending_ex_commands / the ex parser). The action runs on the next
     // editor-loop drain.
+    //
+    // @ai-caution: [permission] The macro takes `$tier` per invocation rather
+    // than hardcoding one in its body: a macro that supplied the tier for all
+    // its uses would be exactly the defaulting wrapper ADR-084 D3 forbids —
+    // adding a tenth collab prim would inherit a classification nobody chose.
+    // Every one of these reaches the daemon (network egress, identity, or
+    // membership), so they are all Privileged today; the parameter is what
+    // keeps that a per-primitive statement.
     macro_rules! register_collab_command_prim {
-        ($name:literal, $doc:literal) => {{
+        ($name:literal, $doc:literal, $tier:expr) => {{
             let s = shared.clone();
-            vm.register_fn($name, $doc, Arity::Fixed(0), move |_args: &[Value]| {
-                s.lock().pending_commands.push($name.to_string());
-                Ok(Value::Void)
-            });
+            vm.register_fn(
+                $name,
+                $doc,
+                Arity::Fixed(0),
+                $tier,
+                move |_args: &[Value]| {
+                    s.lock().pending_commands.push($name.to_string());
+                    Ok(Value::Void)
+                },
+            );
         }};
     }
     register_collab_command_prim!(
         "collab-rotate-identity",
         "Rotate this peer's collab identity key across every KB it owns/belongs to (ADR-040). \
-Authorize the new key on the daemon out-of-band, then reconnect."
+Authorize the new key on the daemon out-of-band, then reconnect.",
+        tier::PRIVILEGED
     );
     register_collab_command_prim!(
         "collab-register-recovery-key",
         "Register an offline recovery key across your KBs (ADR-040 §Recovery-key). Back up the \
-saved recovery key OFFLINE — it can later authorize a rebind if the primary is lost."
+saved recovery key OFFLINE — it can later authorize a rebind if the primary is lost.",
+        tier::PRIVILEGED
     );
     register_collab_command_prim!(
         "collab-disconnect",
-        "Disconnect from the collaboration daemon."
+        "Disconnect from the collaboration daemon.",
+        tier::PRIVILEGED
     );
     register_collab_command_prim!(
         "collab-doctor",
-        "Run collaboration connectivity diagnostics and report the results."
+        "Run collaboration connectivity diagnostics and report the results.",
+        tier::PRIVILEGED
     );
     register_collab_command_prim!(
         "collab-list",
-        "List shared documents advertised by the connected daemon."
+        "List shared documents advertised by the connected daemon.",
+        tier::PRIVILEGED
     );
     register_collab_command_prim!(
         "collab-discover",
-        "Discover MAE collaboration peers on the local network via mDNS."
+        "Discover MAE collaboration peers on the local network via mDNS.",
+        tier::PRIVILEGED
     );
     register_collab_command_prim!(
-            "collab-share",
-            "Share the active buffer for collaborative editing (parity with the command + collab_share MCP tool)."
-        );
+        "collab-share",
+        "Share the active buffer for collaborative editing (parity with the command + collab_share MCP tool).",
+        tier::PRIVILEGED
+    );
     register_collab_command_prim!(
         "collab-sync",
-        "Force a sync of shared buffers with the daemon now."
+        "Force a sync of shared buffers with the daemon now.",
+        tier::PRIVILEGED
     );
     register_collab_command_prim!(
         "kb-list-remote",
-        "List shared KBs advertised by the connected daemon."
+        "List shared KBs advertised by the connected daemon.",
+        tier::PRIVILEGED
     );
 
     // (kb-pending KB-ID) — list pending join requests for a shared KB you own
@@ -402,6 +437,7 @@ saved recovery key OFFLINE — it can later authorize a rebind if the primary is
         "kb-pending",
         "List pending join requests for a shared KB by id (owner-only view).",
         Arity::Fixed(1),
+        tier::READ,
         move |args: &[Value]| {
             let kb_id = arg_string(args, 0, "kb-pending")?;
             s.lock()
@@ -421,7 +457,7 @@ saved recovery key OFFLINE — it can later authorize a rebind if the primary is
     vm.register_fn(
             "kb-set-ai-residency",
             "Set a KB's AI-residency policy: open | local_models_only (ADR-048). Use \"primary\" for the primary/local KB.",
-            Arity::Fixed(2),
+            Arity::Fixed(2), tier::PRIVILEGED,
             move |args: &[Value]| {
                 let kb_id = arg_string(args, 0, "kb-set-ai-residency")?;
                 let policy = arg_string(args, 1, "kb-set-ai-residency")?;
@@ -440,6 +476,7 @@ saved recovery key OFFLINE — it can later authorize a rebind if the primary is
         "kb-set-role",
         "Set a KB node's molecular-note role: source | atom | molecule | hub.",
         Arity::Fixed(2),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-set-role")?;
             let role = arg_string(args, 1, "kb-set-role")?;
@@ -456,7 +493,7 @@ saved recovery key OFFLINE — it can later authorize a rebind if the primary is
     vm.register_fn(
             "collab-connect",
             "Connect to a collaboration daemon. Optional ADDR (host:port) overrides the configured server.",
-            Arity::Variadic(0),
+            Arity::Variadic(0), tier::PRIVILEGED,
             move |args: &[Value]| {
                 let cmd = if args.is_empty() {
                     "collab-connect".to_string()
@@ -478,7 +515,7 @@ saved recovery key OFFLINE — it can later authorize a rebind if the primary is
             "Recover a lost identity via an offline recovery key: RECOVERY-KEY-PATH (dir holding the \
 restored recovery id_ed25519) + OLD-FINGERPRINT (the lost key's SHA256:…). Authors a recovery-signed \
 rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key).",
-            Arity::Fixed(2),
+            Arity::Fixed(2), tier::PRIVILEGED,
             move |args: &[Value]| {
                 let path = arg_string(args, 0, "collab-recover-identity")?;
                 let old_fp = arg_string(args, 1, "collab-recover-identity")?;
@@ -495,6 +532,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
         "kb-remove-link!",
         "Remove a link between KB nodes",
         Arity::Fixed(2),
+        tier::WRITE,
         move |args: &[Value]| {
             let src = arg_string(args, 0, "kb-remove-link!")?;
             let dst = arg_string(args, 1, "kb-remove-link!")?;
@@ -511,6 +549,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
         "kb-add-meta-member!",
         "Add a member to a meta-node",
         Arity::Fixed(3),
+        tier::WRITE,
         move |args: &[Value]| {
             let meta = arg_string(args, 0, "kb-add-meta-member!")?;
             let member = arg_string(args, 1, "kb-add-meta-member!")?;
@@ -526,6 +565,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
         "kb-remove-meta-member!",
         "Remove a member from a meta-node",
         Arity::Fixed(2),
+        tier::WRITE,
         move |args: &[Value]| {
             let meta = arg_string(args, 0, "kb-remove-meta-member!")?;
             let member = arg_string(args, 1, "kb-remove-meta-member!")?;
@@ -540,6 +580,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
         "kb-compose-meta",
         "Recompose a meta-node body from its members",
         Arity::Fixed(1),
+        tier::WRITE,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-compose-meta")?;
             s.lock()
@@ -557,6 +598,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
         "kb-add-rel-type!",
         "Add a custom relationship type to the KB",
         Arity::Fixed(5),
+        tier::WRITE,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "kb-add-rel-type!")?;
             let label = arg_string(args, 1, "kb-add-rel-type!")?;

@@ -39,7 +39,20 @@ pub(super) fn handle_kb_shared_event(
     // Get node IDs from the primary KB (or the named instance).
     let node_ids: HashSet<String> = if kb_id == mae_core::KB_DEFAULT_NAME || kb_id == "primary" {
         if let Some(q) = editor.kb.query_layer() {
-            q.list_ids(None).into_iter().collect()
+            // Must NOT collapse to an empty set: the comment below spells out why —
+            // an empty `shared_kbs` entry means later edits never match and no
+            // `kb/node_update` is broadcast, so sync silently stops (ADR-086).
+            match q.list_ids(None) {
+                Ok(ids) => ids.into_iter().collect(),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "KB query layer failed listing node ids for collab sync; \
+                         falling back to the in-memory primary KB"
+                    );
+                    editor.kb.primary.list_ids(None).into_iter().collect()
+                }
+            }
         } else {
             editor.kb.primary.list_ids(None).into_iter().collect()
         }

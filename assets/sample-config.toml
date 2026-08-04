@@ -73,9 +73,17 @@ provider = "claude"
 #   DeepSeek: https://platform.deepseek.com/api_keys
 
 # AI permission tier: readonly, write, shell, privileged
-# Controls what AI tools can do without explicit approval.
-# Default: shell (AI can read, write, and run commands)
-auto_approve_tier = "shell"
+# The AUTO-APPROVAL ceiling, not a wall (ADR-090). At or below it, tools run
+# with no prompt. Above it, an interactive surface (mae-agent's TUI, the
+# embedded :ai session) ASKS a human; a non-interactive one (external MCP,
+# mae-agent --prompt, --self-test) denies, because there is nobody to ask.
+# Only a session-declared ceiling, a tool-category restriction, or an
+# unparseable value is a hard denial that no prompt can raise.
+#
+# Default: readonly -- reads run, writes and shell are asked. Uncomment and
+# raise this if you drive MAE from an external editor's agent over MCP, since
+# that path cannot prompt.
+# auto_approve_tier = "shell"
 
 # Command to launch for AI agent shell sessions (SPC a a)
 editor = "claude"

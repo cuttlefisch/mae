@@ -1,3 +1,6 @@
+# Standalone for the same reason as `tools/code-map` — see the note there.
+[workspace]
+
 [package]
 name = "mae-audit-metrics"
 version = "0.1.0"
@@ -12,3 +15,6 @@ syn = { version = "2", features = ["full", "parsing", "visit"] }
 # parsing a string (rather than running as a real proc macro) -- that is how
 # every length/nesting metric here gets real line numbers instead of guesses.
 proc-macro2 = { version = "1", features = ["span-locations"] }
+
+[dev-dependencies]
+tempfile = "3"

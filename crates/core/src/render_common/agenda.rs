@@ -7,6 +7,24 @@ use crate::syntax::HighlightSpan;
 
 /// Compute highlight spans for an agenda buffer by mapping `AgendaLineKind`
 /// to theme keys. TODO states and priorities get distinct colors.
+///
+/// ADR-087 domain note: unlike `compute_git_status_spans` /
+/// `compute_notif_spans` / `compute_kb_sharing_spans` (which now share
+/// `line_kind_spans::compute_line_kind_spans`), this function is NOT routed
+/// through that helper — it produces *multiple sub-line spans per line*
+/// (the TODO-state keyword and the priority marker highlighted separately
+/// within a line), not one whole-line span, so it isn't a fourth copy of
+/// the same shape.
+///
+/// It also works in a pure **byte** domain throughout: `byte_offset`
+/// accumulates via `rope.line(i).len_bytes()`, and keyword positions come
+/// from `str::find` (byte offsets) on the rope's own line content — not on
+/// `AgendaLine::text` (a separately-held `String` the view keeps for
+/// display), which a prior version of this function searched instead. That
+/// was byte-correct only because `render_agenda_text` happens to join
+/// those exact `text` fields into the buffer, so the two strings currently
+/// agree; searching the rope directly instead makes that agreement a
+/// non-issue rather than an assumption.
 pub fn compute_agenda_spans(buf: &Buffer) -> Vec<HighlightSpan> {
     let view = match &buf.view {
         BufferView::Agenda(v) => v,
@@ -18,23 +36,29 @@ pub fn compute_agenda_spans(buf: &Buffer) -> Vec<HighlightSpan> {
     let mut byte_offset = 0usize;
 
     for (i, line) in view.lines.iter().enumerate() {
-        let line_len = if i < rope.len_lines() {
-            rope.line(i).len_bytes()
-        } else {
-            0
-        };
+        if i >= rope.len_lines() {
+            break;
+        }
+        let rope_line = rope.line(i);
+        let line_len = rope_line.len_bytes();
+
+        // Content without the trailing newline, straight from the rope.
+        let mut content = rope_line.to_string();
+        if i + 1 < rope.len_lines() && content.ends_with('\n') {
+            content.pop();
+        }
 
         match &line.kind {
             AgendaLineKind::Header => {
                 spans.push(HighlightSpan {
                     byte_start: byte_offset,
-                    byte_end: byte_offset + line.text.len(),
+                    byte_end: byte_offset + content.len(),
                     theme_key: "markup.heading",
                 });
             }
             AgendaLineKind::TodoItem { state, priority } => {
                 // Color the TODO state keyword.
-                if let Some(state_start) = line.text.find(state.as_str()) {
+                if let Some(state_start) = content.find(state.as_str()) {
                     let theme = match state.as_str() {
                         "TODO" => "markup.todo.todo",
                         "DONE" => "markup.todo.done",
@@ -51,7 +75,7 @@ pub fn compute_agenda_spans(buf: &Buffer) -> Vec<HighlightSpan> {
                 // Color priority marker.
                 if let Some(pri) = priority {
                     let marker = format!("[#{}]", pri);
-                    if let Some(pos) = line.text.find(&marker) {
+                    if let Some(pos) = content.find(&marker) {
                         let theme = match pri {
                             'A' => "markup.priority.a",
                             'B' => "markup.priority.b",

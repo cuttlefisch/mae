@@ -34,6 +34,22 @@ use tokio::net::UnixStream;
 mod collab_tcp_e2e_support;
 use collab_tcp_e2e_support::find_daemon_binary;
 
+mod headless_test_support;
+use headless_test_support::{
+    grant_permission_tier, isolated_env, send_sigterm, wait_for_exit, wait_for_socket_live,
+    HeadlessGuard,
+};
+
+/// The auto-approval tier the two headless instances are spawned with.
+///
+/// `Privileged`, not `write`, because `kb_share` is a `Privileged`-tier tool
+/// (it changes KB authorization) -- see `crates/ai/src/tools/kb_tools.rs`.
+/// The other mutations this test drives (`collab_connect`, `kb_create`,
+/// `kb_join`) are `Write`; the reads (`collab_status`, `kb_get`) would be
+/// fine at any tier. Granting the lowest tier that covers the whole flow
+/// keeps this honest about what the flow actually needs.
+const REQUIRED_TIER: &str = "privileged";
+
 /// Spawn a real `mae-daemon` fully isolated from any daemon already running
 /// on this machine -- unlike `collab_tcp_e2e_support::spawn_server`, this
 /// ALSO isolates `XDG_RUNTIME_DIR` (so the daemon's KB control socket,
@@ -85,48 +101,6 @@ async fn spawn_isolated_daemon() -> (tokio::process::Child, String, tempfile::Te
     panic!("mae-daemon did not start within 5s on {addr}");
 }
 
-fn isolated_env(cmd: &mut Command, xdg_config: &Path, xdg_data: &Path, home: &Path) {
-    cmd.env("XDG_CONFIG_HOME", xdg_config)
-        .env("XDG_DATA_HOME", xdg_data)
-        .env("HOME", home)
-        .env("SHELL", "/bin/sh")
-        .env("MAE_SKIP_WIZARD", "1");
-}
-
-fn send_sigterm(child: &Child) {
-    unsafe {
-        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
-    }
-}
-
-fn wait_for_exit(child: &mut Child, timeout: Duration) -> Option<std::process::ExitStatus> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Ok(Some(status)) = child.try_wait() {
-            return Some(status);
-        }
-        if Instant::now() >= deadline {
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-fn socket_is_live(path: &Path) -> bool {
-    std::os::unix::net::UnixStream::connect(path).is_ok()
-}
-
-fn wait_for_socket_live(path: &Path, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if socket_is_live(path) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
-}
-
 struct HeadlessInstance {
     child: Child,
     stream: tokio::io::BufReader<UnixStream>,
@@ -169,7 +143,19 @@ impl HeadlessInstance {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         isolated_env(&mut spawn_cmd, xdg_config, xdg_data, home);
+        // Only the long-lived instance needs this -- `--print-socket-path`
+        // above resolves a path and exits without ever serving a tool call.
+        grant_permission_tier(&mut spawn_cmd, REQUIRED_TIER);
         let child = spawn_cmd.spawn().expect("failed to spawn mae --headless");
+        // Guard constructed the instant spawn() returns, before ANY fallible
+        // operation -- previously `child` stayed a bare, unguarded local
+        // through the socket-live wait AND the full MCP handshake below (all
+        // `.unwrap()`/`assert!` calls), so a panic anywhere in that window
+        // leaked the process. `guard.into_child()` at the bottom hands
+        // ownership to the final `HeadlessInstance`, which has its own
+        // combined child+stream `Drop` -- there is no gap where the child is
+        // unowned by something with a `Drop` impl.
+        let guard = HeadlessGuard::new(child);
 
         assert!(
             wait_for_socket_live(&socket_path, Duration::from_secs(30)),
@@ -210,7 +196,7 @@ impl HeadlessInstance {
         .unwrap();
 
         HeadlessInstance {
-            child,
+            child: guard.into_child(),
             stream,
             next_id: 2,
         }
@@ -239,6 +225,35 @@ impl HeadlessInstance {
             value.get("error").is_none(),
             "tools/call({name}) returned a JSON-RPC error: {value}"
         );
+        // @ai-caution: [permission] A permission denial is NOT a JSON-RPC
+        // error -- it comes back as a well-formed tool result carrying
+        // `isError: true` and a "Permission denied: ..." body (see
+        // `ai_event_handler.rs`'s `MCP_SURFACE` path and
+        // `crates/ai/src/tools/decision.rs::deny_message`). The assertion
+        // above therefore sails straight past it, and the denial only ever
+        // surfaces as whatever downstream poll later times out blaming
+        // something else. That is precisely how ADR-090 D5's readonly default
+        // presented here: a 20-second wait ending in "instance A never
+        // reached collab_status=connected", which names convergence and says
+        // nothing about permissions.
+        //
+        // Matched on the denial text specifically rather than on `isError`
+        // alone: `kb_get` legitimately reports an error for a node that has
+        // not converged yet, which is the normal state on every poll
+        // iteration but the last.
+        let body = value["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default();
+        for marker in ["Permission denied:", "Category denied:"] {
+            assert!(
+                !body.contains(marker),
+                "tools/call({name}) was refused by the permission policy, so this test \
+                 can never converge: {body}\n\
+                 The instances are spawned with MAE_AI_PERMISSIONS={REQUIRED_TIER}; if a \
+                 tool this test drives moved above that tier, raise it deliberately \
+                 rather than widening the policy in `ai_event_handler.rs`."
+            );
+        }
         value
     }
 

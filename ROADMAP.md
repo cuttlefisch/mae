@@ -454,6 +454,19 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 
 ### Architecture Debt (v0.9.1+)
 
+- [ ] **Files accepted over ceiling by the pre-v0.15 security/audit branch** (2026-08). Each carries an
+  `@ai-caution: [architecture-debt]` marker naming its reason; all are recorded in
+  `docs/AUDIT_BASELINE.json`, so `make audit-metrics-check` fails if any grows further:
+  - `crates/scheme/src/parity_tests.rs` (896) and `crates/scheme/src/permission_tests.rs` (571) —
+    over the 500-line *test* ceiling. **Genuine split candidates**: independent test groups sharing
+    fixtures. The most likely of these five to be worth acting on.
+  - `crates/core/src/kb_seed/scheme_api.rs` (1616 → 2391) — a data table with one entry per Scheme
+    primitive, machine-checked against the VM's real registrations. Growing with the API is correct.
+  - `crates/scheme/src/stdlib/base.rs` (2283 → 2607) and
+    `crates/scheme/src/runtime/state_sync_apply.rs` (814) — crossed mechanically when ADR-084 D3 added
+    a required tier argument to every `register_fn` call, plus rustfmt reflow. Not new complexity.
+
+
 - [ ] **Editor struct field extraction** (**reopened 2026-08** — was marked complete at "~69 fields",
   which was never accurate and is now badly wrong): the six extractions did happen and still stand
   (`CollabState`, `ShellIntents`, `ViState`, `AiState`, `KbContext`, `DapContext` all exist), and they

@@ -27,7 +27,7 @@ Use ~:set~ or ~(set-option! ...)~ to configure the provider:
 *** Tool Architecture
 The AI has access to 100+ tools split into two tiers:
 - *Core* (51 tools): always sent with every request (buffer ops, navigation, project, git basics).
-- *Extended* (on demand): requested via the ~request_tools~ meta-tool. 10 categories: ~lsp~, ~dap~, ~knowledge~, ~shell~, ~commands~, ~git~, ~web~, ~ai~, ~visual~, ~debug~.
+- *Extended* (on demand): requested via the ~request_tools~ meta-tool. 12 categories: ~lsp~, ~dap~, ~knowledge~, ~execution~, ~shell~, ~commands~, ~git~, ~web~, ~ai~, ~visual~, ~debug~, ~mcp~.
 
 Key tools:
 - ~request_tools~ — load a category of extended tools into the conversation.

@@ -97,6 +97,16 @@ pub type DeferredMcpReply = Vec<(
 pub enum PendingInteractiveEvent {
     AskUser(tokio::sync::oneshot::Sender<String>),
     ProposeChanges(tokio::sync::oneshot::Sender<bool>),
+    /// ADR-090 D3: the embedded editor's implementation of `Ask`. Resolved by
+    /// `:ai-accept` / `:ai-reject`, the same two commands that already resolve
+    /// `ProposeChanges` — a new permission prompt would have been a fourth
+    /// vocabulary (principle #15), so this reuses the one that exists.
+    ///
+    /// @ai-caution: [security] Every path that *drops* this without answering
+    /// must leave the sender un-signalled, not send `true`. The session treats
+    /// a closed channel as a refusal (`decide_and_present`), so dropping is
+    /// safe; sending `true` on a cancel would not be.
+    ConfirmToolCall(tokio::sync::oneshot::Sender<bool>),
 }
 
 /// Shared reference to the MCP client manager for external tool dispatch.
@@ -120,7 +130,11 @@ pub struct AiEventContext<'a> {
 /// Handle a single AI event. Shared between terminal and GUI loops.
 pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventContext) {
     match ai_event {
-        AiEvent::ToolCallRequest { call, reply } => {
+        AiEvent::ToolCallRequest {
+            call,
+            reply,
+            approved_tier,
+        } => {
             editor.ai.streaming = true;
             info!(tool = %call.name, call_id = %call.id, "executing AI tool call");
             // Update the existing Pending entry (created by ToolCallStarted) to Running,
@@ -183,26 +197,44 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                         output: reason,
                     })
                 }
-                crate::ai_residency::ResidencyDecision::Allow => execute_tool_with_requester(
-                    editor,
-                    &call,
-                    ctx.all_tools,
-                    ctx.permission_policy,
-                    Some(provider.as_str()),
-                    // No MCP session -- this is the embedded human/delegate
-                    // AI path (ADR-051 scopes per-session dispatch to real
-                    // external MCP clients only).
-                    None,
-                ),
+                crate::ai_residency::ResidencyDecision::Allow => {
+                    // ADR-090: `approved_tier` is set only when the session
+                    // already showed this exact call to a human at this exact
+                    // tier and got a yes. `with_one_time_approval` raises the
+                    // auto-approval ceiling and NOTHING else, so the hard
+                    // ceiling and the category allowlist re-decide here
+                    // regardless -- an approval cannot promote a `Deny`.
+                    let policy = match approved_tier {
+                        Some(tier) => ctx.permission_policy.with_one_time_approval(tier),
+                        None => ctx.permission_policy.clone(),
+                    };
+                    execute_tool_with_requester(
+                        editor,
+                        &call,
+                        ctx.all_tools,
+                        &policy,
+                        Some(provider.as_str()),
+                        // No MCP session -- this is the embedded human/delegate
+                        // AI path (ADR-051 scopes per-session dispatch to real
+                        // external MCP clients only).
+                        None,
+                    )
+                }
             };
             // Drain any pending Scheme evals queued by the tool (e.g. eval_scheme).
-            let scheme_output = drain_pending_scheme_evals(editor, ctx.scheme);
+            let scheme_output = drain_pending_scheme_evals(
+                editor,
+                ctx.scheme,
+                ctx.permission_policy.ambient_scheme_tier(),
+            );
             match exec_result {
                 ExecuteResult::Immediate(mut result) => {
-                    // If the tool queued a Scheme eval, replace the output with the result.
-                    if let Some(output) = scheme_output {
+                    // If the tool queued a Scheme eval, replace the output with the
+                    // result. ADR-086/#590.2: a queued eval that errored must not
+                    // clobber a prior refusal/failure with success:true.
+                    if let Some((output, all_ok)) = scheme_output {
                         result.output = output;
-                        result.success = true;
+                        result.success = all_ok;
                     }
                     let elapsed = tool_start.elapsed().as_millis() as u64;
                     info!(
@@ -221,6 +253,22 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                     // so they take effect immediately rather than batching with the next deferred.
                     if editor.has_pending_dap_intents() {
                         crate::dap_bridge::drain_dap_intents(editor, ctx.dap_command_tx);
+                    }
+                }
+                // ADR-090: the session pre-asks (see `decide_and_present`),
+                // so reaching here means the session's own gate said `Allow`
+                // while dispatch said `Ask` -- the two disagree only if a
+                // policy changed mid-turn, or if a caller bypassed the
+                // session. Either way nothing ran; deny explicitly rather
+                // than re-entering an async prompt from the main thread.
+                ExecuteResult::NeedsApproval(req) => {
+                    let result = req.into_denied(EMBEDDED_RACE_SURFACE);
+                    warn!(tool = %result.tool_name, "embedded AI tool call needed approval at dispatch time");
+                    if let Some(conv) = find_conversation_buffer_mut(editor) {
+                        conv.complete_last_tool_call(false, &result.output, None);
+                    }
+                    if reply.send(result).is_err() {
+                        warn!("AI tool result channel closed before reply");
                     }
                 }
                 ExecuteResult::Deferred { kind, .. } => {
@@ -261,8 +309,11 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             {
                 conv_buf.push_assistant(&text);
             } else {
+                // ADR-087 / audit #594: AI model output is arbitrary UTF-8; a
+                // fixed byte cut can land mid-character and panic.
                 let display = if text.len() > 120 {
-                    format!("[AI] {}...", &text[..117])
+                    let cut = mae_core::grapheme::floor_char_boundary(&text, 117);
+                    format!("[AI] {}...", &text[..cut])
                 } else {
                     format!("[AI] {}", text)
                 };
@@ -449,6 +500,39 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             editor.ai.input_lock = InputLock::None;
             *ctx.pending_interactive_event = Some(PendingInteractiveEvent::AskUser(reply));
         }
+        AiEvent::ConfirmToolCall {
+            tool_name,
+            arguments,
+            tier,
+            auto_approve_up_to,
+            reply,
+        } => {
+            let prompt = mae_ai::ask_message(&tool_name, tier, auto_approve_up_to);
+            info!(tool = %tool_name, ?tier, "AI tool call awaiting approval");
+            // `auto-accept` mode is the human having pre-answered every
+            // prompt for this session -- the same opt-in `ProposeChanges`
+            // already honours. It is NOT a policy override: a `Deny` never
+            // reaches here (the session refuses it outright), so auto-accept
+            // can only ever auto-answer an `Ask`.
+            if editor.ai.mode == "auto-accept" {
+                if let Some(conv) = find_conversation_buffer_mut(editor) {
+                    conv.push_system(format!("{prompt} Auto-accepted (ai-mode=auto-accept)."));
+                }
+                let _ = reply.send(true);
+                return;
+            }
+            let args_preview = serde_json::to_string(&arguments).unwrap_or_default();
+            if let Some(conv) = find_conversation_buffer_mut(editor) {
+                conv.push_system(format!(
+                    "{prompt}\n  args: {args_preview}\n  Approve with :ai-accept, refuse with :ai-reject."
+                ));
+                conv.end_streaming();
+            }
+            editor.set_status(format!("{prompt} :ai-accept / :ai-reject"));
+            editor.ai.streaming = false;
+            editor.ai.input_lock = InputLock::None;
+            *ctx.pending_interactive_event = Some(PendingInteractiveEvent::ConfirmToolCall(reply));
+        }
         AiEvent::ProposeChanges { changes, reply } => {
             let count = if let Some(arr) = changes.as_array() {
                 arr.len()
@@ -625,8 +709,13 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 sub_prompt.push_str(hints);
             }
 
+            // ADR-084 D2: a `delegate()` sub-agent inherits the parent's
+            // policy verbatim. It is not a fresh principal -- it exists only
+            // because the parent asked for it, so it must not be able to
+            // reach an effect the parent could not.
             let sub_session = AgentSession::new(provider, tools, sub_prompt, proxy_tx, sub_cmd_rx)
                 .with_budget(config.model, config.budget)
+                .with_permission_policy(ctx.permission_policy.clone())
                 .with_target_buffer(target_buf_name.clone());
 
             // Spawn the sub-agent session.
@@ -813,6 +902,36 @@ fn parse_permission_tier(s: &str) -> Option<PermissionTier> {
     }
 }
 
+/// How the external-MCP dispatch path identifies itself when it maps
+/// ADR-090's `Ask` to a denial.
+///
+/// @ai-caution: [security] This path is **non-interactive by construction**
+/// (ADR-090 D3). An MCP tool request arrives on a reply channel the client is
+/// blocking on, from a client MAE cannot prompt — MAE implements no MCP
+/// elicitation, and the local human is not the principal making the request.
+/// So `Ask` becomes a denial that names the ceiling, never an allow. Wiring a
+/// real prompt here means parking the MCP reply (the `deferred_mcp_reply`
+/// machinery already supports parking) and resolving it from the event loop;
+/// until that exists, do not "temporarily" widen the policy here instead.
+const MCP_SURFACE: &str = "external MCP dispatch";
+
+/// The embedded path's `Ask` is implemented in `AgentSession::decide_and_present`
+/// (an `AiEvent::ConfirmToolCall` the human answers with `:ai-accept` /
+/// `:ai-reject`), *before* dispatch. Dispatch answering `Ask` therefore means
+/// the two saw different policies — a race, not a normal outcome — and the
+/// main thread cannot block on a prompt, so it denies.
+const EMBEDDED_RACE_SURFACE: &str =
+    "the embedded dispatch path (the policy changed after the call passed its prompt)";
+
+/// The ambient Scheme tier for evaluation driven by a *human* keypress.
+///
+/// @ai-caution: [permission] The human is not the principal ADR-084's tiers
+/// bound — they already have a shell, and `:` + `(shell-command …)` was never
+/// gated. `Privileged` here is not a bypass; it is the statement that a
+/// keystroke-driven eval carries the user's own authority. Only the AI/MCP
+/// drains lower it, and they lower it from their own resolved policy.
+pub const HUMAN_AMBIENT_TIER: PermissionTier = PermissionTier::Privileged;
+
 /// Compute a session's effective permission policy (ADR-051 tier +
 /// ADR-056 category): the minimum tier and the intersected category set of
 /// the server's global policy and the session's own self-declared values
@@ -830,23 +949,70 @@ fn effective_permission_policy(
     declared_ceiling: Option<&str>,
     declared_categories: Option<&str>,
 ) -> PermissionPolicy {
-    let auto_approve_up_to = match declared_ceiling.and_then(parse_permission_tier) {
-        Some(declared) => global.auto_approve_up_to.min(declared),
-        None => global.auto_approve_up_to,
+    // @ai-caution: [security] Distinguish "declared nothing" from "declared
+    // something unparseable" (ADR-084 D4). Both used to fall through to the
+    // global policy, so a session that *meant* to restrict itself but sent a
+    // value this build doesn't recognise got no tightening at all — the typo
+    // silently removed the restriction. An unparseable declaration now resolves
+    // to the most restrictive value on its axis. It still cannot escalate: the
+    // tier axis is a `min` against the global, and the category axis only ever
+    // narrows.
+    //
+    // ADR-090 D2: a session-declared ceiling is a HARD ceiling, not an
+    // auto-approval ceiling. Exceeding the global auto-approval ceiling is
+    // askable; exceeding what the session asked to be limited to is not —
+    // prompting a human to undo the session's own declaration would make the
+    // declaration meaningless, and the same goes for a declaration that failed
+    // to parse.
+    let hard = match declared_ceiling {
+        None => None,
+        Some(raw) => match parse_permission_tier(raw) {
+            Some(declared) => Some(mae_ai::HardCeiling {
+                tier: declared,
+                source: mae_ai::HardCeilingSource::SessionDeclared,
+            }),
+            None => {
+                warn!(
+                    declared = %raw,
+                    "unparseable session permission ceiling — falling back to the most \
+                     restrictive tier, not to the global policy"
+                );
+                Some(mae_ai::HardCeiling {
+                    tier: PermissionTier::ReadOnly,
+                    source: mae_ai::HardCeilingSource::UnparseableDeclaration,
+                })
+            }
+        },
     };
-    let allowed_categories = match declared_categories.map(mae_ai::parse_categories) {
-        Some(declared) if !declared.is_empty() => {
-            let declared: std::collections::HashSet<_> = declared.into_iter().collect();
+    let allowed_categories = match declared_categories {
+        None => global.allowed_categories.clone(),
+        Some(raw) => {
+            let declared: std::collections::HashSet<_> =
+                mae_ai::parse_categories(raw).into_iter().collect();
+            if declared.is_empty() {
+                warn!(
+                    declared = %raw,
+                    "session tool-category allowlist parsed to nothing — denying all \
+                     categories rather than falling back to unrestricted"
+                );
+            }
             match &global.allowed_categories {
                 Some(global_set) => Some(global_set.intersection(&declared).copied().collect()),
                 None => Some(declared),
             }
         }
-        _ => global.allowed_categories.clone(),
     };
-    PermissionPolicy {
-        auto_approve_up_to,
+    let base = PermissionPolicy {
+        auto_approve_up_to: global.auto_approve_up_to,
+        hard_ceiling: global.hard_ceiling,
         allowed_categories,
+    };
+    match hard {
+        // `with_hard_ceiling` only ever lowers, on both axes, so a session
+        // declaring a ceiling ABOVE the global one changes nothing — the
+        // never-escalate property this function has always had.
+        Some(hc) => base.with_hard_ceiling(hc),
+        None => base,
     }
 }
 
@@ -959,25 +1125,34 @@ pub fn handle_mcp_request(
                     // exactly like the tier check already is. Check it here
                     // too, same fail-closed semantics (`execute_command` is
                     // itself uncategorized).
-                    if !effective_policy.is_allowed(PermissionTier::Write) {
+                    //
+                    // ADR-090: this bridge asks the same PDP, and gets the
+                    // same three answers. It is a non-interactive surface
+                    // (see the `Ask` arm below), so it maps `Ask` to a denial
+                    // explicitly rather than treating it as an allow.
+                    let bridge_decision =
+                        effective_policy.decide(&fake_call.name, PermissionTier::Write);
+                    if let mae_ai::Decision::Deny(reason) = bridge_decision {
                         ExecuteResult::Immediate(ToolResult {
                             tool_call_id: fake_call.id.clone(),
                             tool_name: fake_call.name.clone(),
                             success: false,
-                            output: format!(
-                                "Permission denied: {} requires {:?} tier",
-                                fake_call.name,
-                                PermissionTier::Write
+                            output: mae_ai::deny_message(
+                                &fake_call.name,
+                                PermissionTier::Write,
+                                reason,
                             ),
                         })
-                    } else if !effective_policy.is_category_allowed(&fake_call.name) {
+                    } else if bridge_decision.is_ask() {
                         ExecuteResult::Immediate(ToolResult {
                             tool_call_id: fake_call.id.clone(),
                             tool_name: fake_call.name.clone(),
                             success: false,
-                            output: format!(
-                                "Category denied: {} is not in this session's allowed tool categories",
-                                fake_call.name
+                            output: mae_ai::ask_denied_message(
+                                &fake_call.name,
+                                PermissionTier::Write,
+                                effective_policy.auto_approve_up_to,
+                                MCP_SURFACE,
                             ),
                         })
                     } else {
@@ -1027,16 +1202,29 @@ pub fn handle_mcp_request(
         }
     };
     // Drain any pending Scheme evals queued by the tool (e.g. eval_scheme).
-    let scheme_output = drain_pending_scheme_evals(editor, scheme);
+    let scheme_output =
+        drain_pending_scheme_evals(editor, scheme, effective_policy.ambient_scheme_tier());
     match exec_result {
         ExecuteResult::Immediate(mut result) => {
-            // If the tool queued a Scheme eval, replace the output with the result.
-            if let Some(output) = scheme_output {
+            // If the tool queued a Scheme eval, replace the output with the
+            // result. ADR-086/#590.2: an errored eval must report failure,
+            // not clobber it with success:true.
+            if let Some((output, all_ok)) = scheme_output {
                 result.output = output;
-                result.success = true;
+                result.success = all_ok;
             }
             let _ = mcp_req.reply.send(mae_mcp::McpToolResult {
                 success: result.success,
+                output: result.output,
+            });
+            true
+        }
+        // ADR-090 D3: the explicit non-interactive mapping for this surface.
+        ExecuteResult::NeedsApproval(req) => {
+            let result = req.into_denied(MCP_SURFACE);
+            warn!(tool = %result.tool_name, "MCP tool call denied — above the auto-approval ceiling and this surface cannot ask");
+            let _ = mcp_req.reply.send(mae_mcp::McpToolResult {
+                success: false,
                 output: result.output,
             });
             true
@@ -1467,50 +1655,82 @@ pub fn timeout_deferred_dap_reply(editor: &mut Editor, deferred_dap_reply: &mut 
 /// - `yield-tick`: drains hooks and side effects, then resumes
 /// - `await-hook`: drains hooks each tick until the target fires or timeout
 /// - `flush!`: same as tick (apply + inject)
+///
+/// Returns `(joined transcript, whether every eval succeeded)`. The bool is
+/// the ADR-086 signal: callers must only force `success = true` on the tool
+/// result when it is `true`. It comes from `eval_with_yield_handling`'s own
+/// `Result`, never from sniffing the formatted string for an "error" prefix
+/// (that prose is for the human-facing REPL transcript, not control flow).
+///
+/// `ambient_tier` is ADR-084 D2/D7's missing wire: it is passed straight to
+/// [`mae_scheme::SchemeRuntime::with_ambient_tier`], which is what makes
+/// D3's per-primitive tier declarations do anything at all. Without a caller
+/// lowering it, the VM's ambient tier stays at its `Privileged` default and
+/// every classified primitive passes its check trivially.
+///
+/// @ai-caution: [permission] `ambient_tier` MUST come from the caller's
+/// resolved `PermissionPolicy` (`PermissionPolicy::ambient_scheme_tier`), or
+/// from [`HUMAN_AMBIENT_TIER`] on a keypress-driven path — never from
+/// anything the evaluated program or the tool arguments supplied. A
+/// caller-derived tier turns the check into the confused deputy it exists to
+/// prevent.
 pub fn drain_pending_scheme_evals(
     editor: &mut Editor,
     scheme: &mut mae_scheme::SchemeRuntime,
-) -> Option<String> {
+    ambient_tier: PermissionTier,
+) -> Option<(String, bool)> {
     if editor.pending_scheme_eval.is_empty() {
         return None;
     }
     let exprs: Vec<String> = std::mem::take(&mut editor.pending_scheme_eval);
     let mut results = Vec::new();
+    let mut all_ok = true;
     for code in &exprs {
         scheme.inject_editor_state(editor);
-        let output = eval_with_yield_handling(editor, scheme, code);
+        let (ok, output) = scheme.with_ambient_tier(ambient_tier, |scheme| {
+            eval_with_yield_handling(editor, scheme, code)
+        });
+        all_ok = all_ok && ok;
         let formatted = format!("> {}\n{}\n", code.trim(), output);
         editor.append_to_scheme_repl(&formatted);
         results.push(formatted);
     }
-    Some(results.join("\n"))
+    Some((results.join("\n"), all_ok))
 }
 
 /// Evaluate scheme code with inline yield handling for synchronous contexts
 /// (MCP, AI tools). Handles yield-tick and await-hook by draining hooks
 /// and side effects without returning to the event loop.
+///
+/// Returns `(succeeded, formatted transcript line)`. `succeeded` is `false`
+/// for every path that previously formatted an `"; error: ..."` string —
+/// per ADR-086/audit #590.2, a tool-result caller must use this bool to
+/// decide `success`, not re-parse the formatted text for the word "error".
 fn eval_with_yield_handling(
     editor: &mut Editor,
     scheme: &mut mae_scheme::SchemeRuntime,
     code: &str,
-) -> String {
+) -> (bool, String) {
     use mae_scheme::vm::YieldRequest;
     use mae_scheme::SchemeEvalResult;
 
     let mut eval_result = match scheme.eval_yielding(code) {
         Ok(r) => r,
-        Err(e) => return format!("; error: {}", e.message),
+        Err(e) => return (false, format!("; error: {}", e.message)),
     };
 
     loop {
         match eval_result {
             SchemeEvalResult::Done(s) => {
                 scheme.apply_to_editor(editor);
-                return if s.is_empty() {
-                    "; => (void)".to_string()
-                } else {
-                    format!("; => {}", s)
-                };
+                return (
+                    true,
+                    if s.is_empty() {
+                        "; => (void)".to_string()
+                    } else {
+                        format!("; => {}", s)
+                    },
+                );
             }
             SchemeEvalResult::Yield(ref req) => {
                 match req {
@@ -1534,7 +1754,7 @@ fn eval_with_yield_handling(
                         eval_result =
                             match scheme.resume_yield(mae_scheme::value::Value::Bool(fired)) {
                                 Ok(r) => r,
-                                Err(e) => return format!("; error: {}", e.message),
+                                Err(e) => return (false, format!("; error: {}", e.message)),
                             };
                         continue;
                     }
@@ -1553,7 +1773,7 @@ fn eval_with_yield_handling(
                 }
                 eval_result = match scheme.resume_yield(mae_scheme::value::Value::Bool(true)) {
                     Ok(r) => r,
-                    Err(e) => return format!("; error: {}", e.message),
+                    Err(e) => return (false, format!("; error: {}", e.message)),
                 };
             }
         }
@@ -1561,950 +1781,5 @@ fn eval_with_yield_handling(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
-
-    /// A minimal fake provider whose `send()` is never actually invoked by
-    /// the `Verified` test below — it only needs a distinctive `name()` so
-    /// the test can prove the returned provider is functional and unwrapped
-    /// by identity of behavior, not by downcasting (`AgentProvider` isn't
-    /// `Any`).
-    struct FakeProvider(&'static str);
-
-    #[async_trait::async_trait]
-    impl mae_ai::AgentProvider for FakeProvider {
-        async fn send(
-            &self,
-            _: &[mae_ai::Message],
-            _: &[mae_ai::ToolDefinition],
-            _: &str,
-        ) -> Result<mae_ai::ProviderResponse, mae_ai::ProviderError> {
-            unimplemented!("not exercised by this test")
-        }
-        fn name(&self) -> &str {
-            self.0
-        }
-    }
-
-    /// A fake provider that always returns a completely empty response (no
-    /// text, no tool calls) and counts how many times `send()` actually ran
-    /// on this concrete instance.
-    ///
-    /// This is the vehicle for the "prove wrapping actually happened" test.
-    /// `GuardrailProvider` cannot be distinguished from a bare provider via
-    /// `AgentProvider`'s public surface by identity alone — `.name()` just
-    /// forwards transparently to the inner provider's name, and the trait
-    /// isn't `Any`, so downcasting is not an option. What *is* observable is
-    /// behavior: `GuardrailProvider::send` treats a completely empty
-    /// response as "the model produced nothing usable" and issues exactly
-    /// one corrective retry nudge — a *second* call into the inner provider
-    /// (see `crates/ai/src/guardrail.rs`'s "targeted retry nudge" pillar).
-    /// So one call through a *wrapped* provider drives 2 calls into this
-    /// counter, while one call through the *unwrapped* provider drives
-    /// exactly 1. That difference is the only honest, non-cherry-picked way
-    /// to prove `guardrail_wrap_if_needed`'s `matches!` polarity is correct.
-    struct CountingEmptyProvider {
-        calls: Arc<AtomicUsize>,
-    }
-
-    #[async_trait::async_trait]
-    impl mae_ai::AgentProvider for CountingEmptyProvider {
-        async fn send(
-            &self,
-            _: &[mae_ai::Message],
-            _: &[mae_ai::ToolDefinition],
-            _: &str,
-        ) -> Result<mae_ai::ProviderResponse, mae_ai::ProviderError> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok(mae_ai::ProviderResponse {
-                text: None,
-                tool_calls: vec![],
-                stop_reason: mae_ai::StopReason::EndTurn,
-                usage: None,
-            })
-        }
-        fn name(&self) -> &str {
-            "counting-empty"
-        }
-    }
-
-    #[test]
-    fn verified_model_is_returned_unwrapped() {
-        let provider: Box<dyn mae_ai::AgentProvider> = Box::new(FakeProvider("distinctive-name"));
-        let result = guardrail_wrap_if_needed(mae_ai::ModelVerification::Verified, provider);
-
-        // NOTE on what this test can and can't prove: `.name()` alone can't
-        // distinguish "unwrapped" from "wrapped" because `GuardrailProvider`
-        // forwards `name()` straight to its inner provider. So this test
-        // only proves the `Verified` branch returns a working provider that
-        // preserves identity via its name, without panicking or swapping in
-        // something else. The actual behavioral proof that non-`Verified`
-        // models get wrapped (and `Verified` models are NOT subjected to
-        // guardrail behavior) lives in
-        // `unverified_model_is_wrapped_and_retries_on_empty_response` below,
-        // which can observe wrapping through a real behavioral difference.
-        assert_eq!(result.name(), "distinctive-name");
-    }
-
-    #[tokio::test]
-    async fn unverified_model_is_wrapped_and_retries_on_empty_response() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let inner = CountingEmptyProvider {
-            calls: calls.clone(),
-        };
-        let provider: Box<dyn mae_ai::AgentProvider> = Box::new(inner);
-
-        // `Testing`/`Untested` are the two non-`Verified` variants this
-        // function must wrap.
-        let wrapped = guardrail_wrap_if_needed(mae_ai::ModelVerification::Untested, provider);
-        let _ = wrapped.send(&[], &[], "system prompt").await.unwrap();
-
-        // A wrapped provider's empty response triggers exactly one retry
-        // nudge, so the inner `CountingEmptyProvider` sees 2 calls for our
-        // single `send()` call. If `guardrail_wrap_if_needed` had (wrongly)
-        // NOT wrapped for `Untested`, this would be 1 instead.
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            2,
-            "expected the guardrail's empty-response retry nudge to fire a second send()"
-        );
-    }
-
-    // --- #363: execute_command MCP tool must dispatch Scheme-sourced commands ---
-
-    fn mcp_request(
-        tool_name: &str,
-        arguments: serde_json::Value,
-    ) -> (
-        mae_mcp::McpToolRequest,
-        tokio::sync::oneshot::Receiver<mae_mcp::McpToolResult>,
-    ) {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        (
-            mae_mcp::McpToolRequest {
-                tool_name: tool_name.to_string(),
-                arguments,
-                reply: tx,
-                requester: mae_mcp::RequesterContext::default(),
-            },
-            rx,
-        )
-    }
-
-    #[tokio::test]
-    async fn execute_command_dispatches_a_scheme_sourced_command() {
-        let mut editor = Editor::new();
-        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
-        scheme
-            .eval(r#"(define (my-greet) (buffer-insert "hi")) (define-command "my-greet" "test" "my-greet")"#)
-            .unwrap();
-        scheme.apply_to_editor(&mut editor);
-        assert_eq!(
-            editor.commands.get("my-greet").map(|c| &c.source),
-            Some(&mae_core::CommandSource::Scheme("my-greet".into())),
-            "sanity: registration must have landed before dispatch is exercised"
-        );
-
-        let (req, mut rx) = mcp_request(
-            "execute_command",
-            serde_json::json!({"command": "my-greet"}),
-        );
-        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
-        let mut deferred = Vec::new();
-        let resolved = handle_mcp_request(
-            &mut editor,
-            req,
-            &[],
-            &mae_ai::PermissionPolicy::default(),
-            &lsp_tx,
-            &mut deferred,
-            &mut scheme,
-        );
-
-        assert!(resolved, "execute_command must resolve immediately");
-        let result = rx.try_recv().expect("reply must have been sent");
-        assert!(result.success, "expected success: {}", result.output);
-        let idx = editor.active_buffer_idx();
-        assert_eq!(
-            editor.buffers[idx].rope().to_string(),
-            "hi",
-            "the scheme command's body must have actually run, not just been looked up"
-        );
-    }
-
-    /// Adversarial regression test (found via an independent security
-    /// review of this branch, not by a happy-path pass): before this fix,
-    /// the Scheme-sourced-command bridge above dispatched with NO
-    /// permission check at all — it never reached
-    /// `execute_tool_dispatch_body`'s `policy.is_allowed(...)` gate, the
-    /// only enforcement point in the parallel builtins-only path. A session
-    /// that declared a ReadOnly ceiling at `initialize` (ADR-051's own
-    /// headline feature, and the exact mechanism
-    /// `session_declared_ceiling_denies_a_call_the_global_policy_alone_
-    /// would_allow` above already proves for a Rust builtin command) could
-    /// still execute ANY Scheme-sourced command with full effect via
-    /// `execute_command`. Proves both properties: the call is denied, AND
-    /// the command's body never actually ran (buffer unchanged) — a test
-    /// that only checked `result.success == false` without also checking
-    /// for a real side effect would pass even if denial were reported but
-    /// dispatch happened anyway.
-    #[tokio::test]
-    async fn execute_command_denies_a_scheme_sourced_command_above_the_declared_ceiling() {
-        let mut editor = Editor::new();
-        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
-        scheme
-            .eval(r#"(define (my-greet) (buffer-insert "hi")) (define-command "my-greet" "test" "my-greet")"#)
-            .unwrap();
-        scheme.apply_to_editor(&mut editor);
-        assert_eq!(
-            editor.commands.get("my-greet").map(|c| &c.source),
-            Some(&mae_core::CommandSource::Scheme("my-greet".into())),
-            "sanity: registration must have landed before dispatch is exercised"
-        );
-
-        let global_policy = PermissionPolicy {
-            auto_approve_up_to: PermissionTier::Shell,
-            allowed_categories: None,
-        };
-        let (req, mut rx) = mcp_request_with_ceiling(
-            "execute_command",
-            serde_json::json!({"command": "my-greet"}),
-            1,
-            Some("ReadOnly"),
-        );
-        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
-        let mut deferred = Vec::new();
-        handle_mcp_request(
-            &mut editor,
-            req,
-            &[],
-            &global_policy,
-            &lsp_tx,
-            &mut deferred,
-            &mut scheme,
-        );
-
-        let result = rx.try_recv().expect("reply must have been sent");
-        assert!(
-            !result.success,
-            "a session with a declared ReadOnly ceiling must be denied a Scheme-sourced \
-             command dispatched via execute_command, got success: {}",
-            result.output
-        );
-        assert!(
-            result.output.contains("Permission denied"),
-            "denial reason should be a permission error, got: {}",
-            result.output
-        );
-        let idx = editor.active_buffer_idx();
-        assert_eq!(
-            editor.buffers[idx].rope().to_string(),
-            "",
-            "the Scheme command's body must NOT have run -- denial that still executes the \
-             command would be a strictly worse bug than reporting no error at all"
-        );
-    }
-
-    #[tokio::test]
-    async fn execute_command_unknown_name_still_errors() {
-        let mut editor = Editor::new();
-        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
-
-        let (req, mut rx) = mcp_request(
-            "execute_command",
-            serde_json::json!({"command": "totally-unregistered-command"}),
-        );
-        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
-        let mut deferred = Vec::new();
-        handle_mcp_request(
-            &mut editor,
-            req,
-            &[],
-            &mae_ai::PermissionPolicy::default(),
-            &lsp_tx,
-            &mut deferred,
-            &mut scheme,
-        );
-
-        let result = rx.try_recv().expect("reply must have been sent");
-        assert!(
-            !result.success,
-            "an unregistered command must still error, not silently succeed: {}",
-            result.output
-        );
-    }
-
-    #[tokio::test]
-    async fn execute_command_builtin_still_dispatches_via_the_original_path() {
-        // Regression guard: the #363 bridge must not break the pre-existing
-        // builtins path it falls through to.
-        let mut editor = Editor::new();
-        editor.buffers[0].insert_text_at(0, "line one\nline two\n");
-        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
-
-        let (req, mut rx) = mcp_request(
-            "execute_command",
-            serde_json::json!({"command": "move-down"}),
-        );
-        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
-        let mut deferred = Vec::new();
-        handle_mcp_request(
-            &mut editor,
-            req,
-            &[],
-            &mae_ai::PermissionPolicy::default(),
-            &lsp_tx,
-            &mut deferred,
-            &mut scheme,
-        );
-
-        let result = rx.try_recv().expect("reply must have been sent");
-        assert!(result.success, "expected success: {}", result.output);
-        assert_eq!(editor.window_mgr.focused_window().cursor_row, 1);
-    }
-
-    // --- Issue #372: the Scheme-command bridge must also get companion-window protection ---
-
-    #[tokio::test]
-    async fn execute_command_scheme_sourced_gets_companion_window_protection() {
-        // This is the one MCP dispatch path that bypasses
-        // `execute_tool_with_requester` (and thus its `with_ai_dispatch_scope`
-        // wrap) entirely, since `crates/ai` has no `SchemeRuntime` in scope.
-        // Prove the bridge branch at line ~864 wraps itself the same way.
-        let mut editor = Editor::new();
-        editor.buffers[0].name = "*AI:claude*".to_string();
-        editor.buffers[0].agent_shell = true;
-        let original_id = editor.window_mgr.focused_id();
-        assert_eq!(editor.window_mgr.iter_windows().count(), 1);
-
-        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
-        scheme
-            .eval(r#"(define (my-greet) (buffer-insert "hi")) (define-command "my-greet" "test" "my-greet")"#)
-            .unwrap();
-        scheme.apply_to_editor(&mut editor);
-
-        let (req, mut rx) = mcp_request(
-            "execute_command",
-            serde_json::json!({"command": "my-greet"}),
-        );
-        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
-        let mut deferred = Vec::new();
-        handle_mcp_request(
-            &mut editor,
-            req,
-            &[],
-            &mae_ai::PermissionPolicy::default(),
-            &lsp_tx,
-            &mut deferred,
-            &mut scheme,
-        );
-
-        let result = rx.try_recv().expect("reply must have been sent");
-        assert!(result.success, "expected success: {}", result.output);
-
-        // A companion window must have been established, and the original
-        // agent-shell window/buffer must be untouched and still visible.
-        assert_eq!(
-            editor.window_mgr.iter_windows().count(),
-            2,
-            "Scheme-command dispatch must establish a companion window, same as the builtins path"
-        );
-        let orig_win = editor.window_mgr.window(original_id).unwrap();
-        assert_eq!(orig_win.buffer_idx, 0);
-        assert!(editor.buffers[orig_win.buffer_idx].agent_shell);
-        // ADR-051: the bridge is now session-scoped (`mcp_request`'s
-        // `RequesterContext::default()` -> session_id 0), so the companion
-        // window lands in the per-session map, not the process-global
-        // `target_window_id` field -- that field must in fact stay
-        // untouched by MCP-session dispatch now (see
-        // `with_ai_dispatch_scope_for_session_isolates_three_concurrent_sessions`
-        // in `crates/core`'s test suite for the multi-session isolation proof).
-        assert!(
-            editor
-                .ai
-                .mcp_session_windows
-                .get(&0)
-                .and_then(|s| s.target_window_id)
-                .is_some(),
-            "companion window must be recorded under the requesting session's own id"
-        );
-        assert!(
-            editor.ai.target_window_id.is_none(),
-            "session-scoped dispatch must not leak into the global no-session target"
-        );
-        assert_eq!(
-            editor.window_mgr.focused_id(),
-            original_id,
-            "focus must be restored to the agent-shell window after the scope exits"
-        );
-    }
-
-    // --- ADR-051: per-session permission-ceiling tightening ---
-
-    #[test]
-    fn effective_permission_policy_with_no_declared_ceiling_is_unchanged() {
-        let global = PermissionPolicy {
-            auto_approve_up_to: PermissionTier::Shell,
-            allowed_categories: None,
-        };
-        let effective = effective_permission_policy(&global, None, None);
-        assert_eq!(effective.auto_approve_up_to, PermissionTier::Shell);
-    }
-
-    #[test]
-    fn effective_permission_policy_tightens_when_declared_ceiling_is_lower() {
-        let global = PermissionPolicy {
-            auto_approve_up_to: PermissionTier::Shell,
-            allowed_categories: None,
-        };
-        let effective = effective_permission_policy(&global, Some("ReadOnly"), None);
-        assert_eq!(effective.auto_approve_up_to, PermissionTier::ReadOnly);
-    }
-
-    #[test]
-    fn effective_permission_policy_never_loosens_beyond_global() {
-        // A session declaring a HIGHER ceiling than the server's own global
-        // policy must never escalate -- this is the core safety property
-        // ADR-051 requires: a self-declared ceiling can only ever tighten.
-        let global = PermissionPolicy {
-            auto_approve_up_to: PermissionTier::Write,
-            allowed_categories: None,
-        };
-        let effective = effective_permission_policy(&global, Some("Privileged"), None);
-        assert_eq!(
-            effective.auto_approve_up_to,
-            PermissionTier::Write,
-            "declaring a higher ceiling than the global policy must not escalate"
-        );
-    }
-
-    #[test]
-    fn effective_permission_policy_ignores_unrecognized_declared_value() {
-        let global = PermissionPolicy {
-            auto_approve_up_to: PermissionTier::Shell,
-            allowed_categories: None,
-        };
-        let effective = effective_permission_policy(&global, Some("not-a-real-tier"), None);
-        assert_eq!(
-            effective.auto_approve_up_to,
-            PermissionTier::Shell,
-            "an unparseable declared ceiling must fall back to the global policy, not deny/allow arbitrarily"
-        );
-    }
-
-    fn mcp_request_with_ceiling(
-        tool_name: &str,
-        arguments: serde_json::Value,
-        session_id: u64,
-        declared_permission_ceiling: Option<&str>,
-    ) -> (
-        mae_mcp::McpToolRequest,
-        tokio::sync::oneshot::Receiver<mae_mcp::McpToolResult>,
-    ) {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        (
-            mae_mcp::McpToolRequest {
-                tool_name: tool_name.to_string(),
-                arguments,
-                reply: tx,
-                requester: mae_mcp::RequesterContext {
-                    session_id,
-                    declared_permission_ceiling: declared_permission_ceiling.map(|s| s.to_string()),
-                    ..Default::default()
-                },
-            },
-            rx,
-        )
-    }
-
-    /// ADR-056 analogue of `mcp_request_with_ceiling` above, for a
-    /// session-declared tool-category allowlist.
-    fn mcp_request_with_categories(
-        tool_name: &str,
-        arguments: serde_json::Value,
-        session_id: u64,
-        declared_tool_categories: Option<&str>,
-    ) -> (
-        mae_mcp::McpToolRequest,
-        tokio::sync::oneshot::Receiver<mae_mcp::McpToolResult>,
-    ) {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        (
-            mae_mcp::McpToolRequest {
-                tool_name: tool_name.to_string(),
-                arguments,
-                reply: tx,
-                requester: mae_mcp::RequesterContext {
-                    session_id,
-                    declared_tool_categories: declared_tool_categories.map(|s| s.to_string()),
-                    ..Default::default()
-                },
-            },
-            rx,
-        )
-    }
-
-    /// ADR-056, primary adversarial target: `execute_command` is itself
-    /// uncategorized (`classify_tool_category` returns `None` for it), so a
-    /// Knowledge-only session must be denied calling it -- the highest-value
-    /// bypass a restricted session would try first, since it can indirectly
-    /// reach almost anything else via a registered command.
-    #[tokio::test]
-    async fn knowledge_only_session_denies_execute_command() {
-        let global_policy = PermissionPolicy {
-            auto_approve_up_to: PermissionTier::Shell,
-            allowed_categories: None,
-        };
-        let mut editor = Editor::new();
-        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
-        let (req, mut rx) = mcp_request_with_categories(
-            "execute_command",
-            serde_json::json!({"command": "move-down"}),
-            1,
-            Some("knowledge"),
-        );
-        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
-        let mut deferred = Vec::new();
-        handle_mcp_request(
-            &mut editor,
-            req,
-            &[],
-            &global_policy,
-            &lsp_tx,
-            &mut deferred,
-            &mut scheme,
-        );
-        let result = rx.try_recv().expect("reply must have been sent");
-        assert!(
-            !result.success,
-            "a Knowledge-only session must be denied execute_command (uncategorized, fail-closed)"
-        );
-        assert!(
-            result.output.contains("Category denied"),
-            "expected a category-denial message, got: {}",
-            result.output
-        );
-    }
-
-    /// A Knowledge-only session must also be denied real mutating tools in
-    /// OTHER wrong categories -- proves the restriction isn't scoped just to
-    /// `execute_command`.
-    #[tokio::test]
-    async fn knowledge_only_session_denies_shell_exec_git_push_buffer_write() {
-        let global_policy = PermissionPolicy {
-            auto_approve_up_to: PermissionTier::Shell,
-            allowed_categories: None,
-        };
-        for tool in ["shell_exec", "git_push", "buffer_write"] {
-            let mut editor = Editor::new();
-            let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
-            let (req, mut rx) =
-                mcp_request_with_categories(tool, serde_json::json!({}), 1, Some("knowledge"));
-            let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
-            let mut deferred = Vec::new();
-            handle_mcp_request(
-                &mut editor,
-                req,
-                &[],
-                &global_policy,
-                &lsp_tx,
-                &mut deferred,
-                &mut scheme,
-            );
-            let result = rx.try_recv().expect("reply must have been sent");
-            assert!(
-                !result.success,
-                "a Knowledge-only session must be denied {tool}, got success: {}",
-                result.output
-            );
-            assert!(
-                result.output.contains("Category denied"),
-                "expected a category-denial message for {tool}, got: {}",
-                result.output
-            );
-        }
-    }
-
-    /// The allowlist must not be accidentally denying everything: real
-    /// Knowledge-category tools must still be reachable (not blocked by the
-    /// category gate -- functional success/failure on a fresh, unconfigured
-    /// `Editor` is a separate concern from whether the PERMISSION gate let
-    /// the call through, which is what this test verifies).
-    #[tokio::test]
-    async fn knowledge_only_session_allows_knowledge_tools_through_the_gate() {
-        let global_policy = PermissionPolicy {
-            auto_approve_up_to: PermissionTier::Shell,
-            allowed_categories: None,
-        };
-        for tool in ["kb_search", "kb_export_guidance", "help_open"] {
-            let mut editor = Editor::new();
-            let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
-            let (req, mut rx) = mcp_request_with_categories(
-                tool,
-                serde_json::json!({"query": "x", "topic": "x"}),
-                1,
-                Some("knowledge"),
-            );
-            let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
-            let mut deferred = Vec::new();
-            handle_mcp_request(
-                &mut editor,
-                req,
-                &[],
-                &global_policy,
-                &lsp_tx,
-                &mut deferred,
-                &mut scheme,
-            );
-            let result = rx.try_recv().expect("reply must have been sent");
-            assert!(
-                !result.output.contains("Category denied"),
-                "a Knowledge-only session must NOT be denied {tool} by the category gate, got: {}",
-                result.output
-            );
-            assert!(
-                !result.output.contains("Permission denied"),
-                "unexpected permission denial for {tool} (tier, not category): {}",
-                result.output
-            );
-        }
-    }
-
-    /// Global-instance restriction composes with a looser (or absent)
-    /// per-session declaration as an INTERSECTION, never an override -- a
-    /// session cannot escalate past what the instance-wide config already
-    /// restricts just by declaring (or not declaring) something looser.
-    #[tokio::test]
-    async fn global_category_restriction_is_not_widened_by_a_looser_session_declaration() {
-        let global_policy = PermissionPolicy {
-            auto_approve_up_to: PermissionTier::Shell,
-            allowed_categories: Some([mae_ai::ToolCategory::Knowledge].into_iter().collect()),
-        };
-        let mut editor = Editor::new();
-        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
-        // Session declares NO restriction of its own -- the instance-wide
-        // Knowledge-only restriction must still apply.
-        let (req, mut rx) =
-            mcp_request_with_categories("shell_exec", serde_json::json!({}), 1, None);
-        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
-        let mut deferred = Vec::new();
-        handle_mcp_request(
-            &mut editor,
-            req,
-            &[],
-            &global_policy,
-            &lsp_tx,
-            &mut deferred,
-            &mut scheme,
-        );
-        let result = rx.try_recv().expect("reply must have been sent");
-        assert!(
-            !result.success,
-            "a session with no declared restriction must still be bound by the instance-wide \
-             Knowledge-only config, not escalate past it"
-        );
-        assert!(result.output.contains("Category denied"));
-    }
-
-    /// ADR-056 correction, discovered writing this test (principle #15): the
-    /// Scheme-sourced-command bridge below matches BEFORE ever reaching
-    /// `execute_tool_dispatch_body`'s category check, so it needs (and now
-    /// has) its own independent category check -- this proves that fix, not
-    /// the generic-tool-dispatch path.
-    #[tokio::test]
-    async fn knowledge_only_session_denies_execute_command_naming_a_scheme_sourced_command() {
-        let mut editor = Editor::new();
-        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
-        scheme
-            .eval(r#"(define (my-greet) (buffer-insert "hi")) (define-command "my-greet" "test" "my-greet")"#)
-            .unwrap();
-        scheme.apply_to_editor(&mut editor);
-        assert_eq!(
-            editor.commands.get("my-greet").map(|c| &c.source),
-            Some(&mae_core::CommandSource::Scheme("my-greet".into())),
-            "sanity: registration must have landed before dispatch is exercised"
-        );
-
-        let global_policy = PermissionPolicy {
-            auto_approve_up_to: PermissionTier::Shell,
-            allowed_categories: None,
-        };
-        let (req, mut rx) = mcp_request_with_categories(
-            "execute_command",
-            serde_json::json!({"command": "my-greet"}),
-            1,
-            Some("knowledge"),
-        );
-        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
-        let mut deferred = Vec::new();
-        handle_mcp_request(
-            &mut editor,
-            req,
-            &[],
-            &global_policy,
-            &lsp_tx,
-            &mut deferred,
-            &mut scheme,
-        );
-        let result = rx.try_recv().expect("reply must have been sent");
-        assert!(
-            !result.success,
-            "a Knowledge-only session must be denied a Scheme-sourced command via execute_command"
-        );
-        assert!(
-            result.output.contains("Category denied"),
-            "expected a category-denial message, got: {}",
-            result.output
-        );
-        let idx = editor.active_buffer_idx();
-        assert_eq!(
-            editor.buffers[idx].rope().to_string(),
-            "",
-            "the Scheme command's body must NOT have run -- a denied call must have zero side effects"
-        );
-    }
-
-    /// Adversarial end-to-end proof (ADR-051's own required test): simulate
-    /// two sessions against the SAME global policy and the SAME (untiered,
-    /// so it defaults to `Write`) tool -- one with no declared ceiling
-    /// (allowed, matching today's behavior exactly) and one that declared a
-    /// stricter `ReadOnly` ceiling (must be DENIED). This is not testing
-    /// client-side UI; it calls `handle_mcp_request` directly, exactly as if
-    /// a client skipped its own confirmation dialog and called `tools/call`
-    /// straight through -- proving the server-side gate is the real
-    /// boundary regardless of client behavior.
-    #[tokio::test]
-    async fn session_declared_ceiling_denies_a_call_the_global_policy_alone_would_allow() {
-        let global_policy = PermissionPolicy {
-            auto_approve_up_to: PermissionTier::Write,
-            allowed_categories: None,
-        };
-
-        // Session 1: no declared ceiling -- Write-tier (untiered default)
-        // call is allowed, unchanged from pre-ADR-051 behavior.
-        let mut editor = Editor::new();
-        editor.buffers[0].insert_text_at(0, "line one\nline two\n");
-        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
-        let (req1, mut rx1) = mcp_request_with_ceiling(
-            "execute_command",
-            serde_json::json!({"command": "move-down"}),
-            1,
-            None,
-        );
-        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
-        let mut deferred = Vec::new();
-        handle_mcp_request(
-            &mut editor,
-            req1,
-            &[],
-            &global_policy,
-            &lsp_tx,
-            &mut deferred,
-            &mut scheme,
-        );
-        let result1 = rx1.try_recv().expect("reply must have been sent");
-        assert!(
-            result1.success,
-            "session with no declared ceiling must be unaffected: {}",
-            result1.output
-        );
-
-        // Session 2: declared a stricter ReadOnly ceiling -- the identical
-        // Write-tier call must now be denied, even though the global policy
-        // alone would have allowed it.
-        let (req2, mut rx2) = mcp_request_with_ceiling(
-            "execute_command",
-            serde_json::json!({"command": "move-down"}),
-            2,
-            Some("ReadOnly"),
-        );
-        let mut deferred2 = Vec::new();
-        handle_mcp_request(
-            &mut editor,
-            req2,
-            &[],
-            &global_policy,
-            &lsp_tx,
-            &mut deferred2,
-            &mut scheme,
-        );
-        let result2 = rx2.try_recv().expect("reply must have been sent");
-        assert!(
-            !result2.success,
-            "session with a declared ReadOnly ceiling must have its Write-tier call denied"
-        );
-        assert!(
-            result2.output.contains("Permission denied"),
-            "denial reason should be a permission error, got: {}",
-            result2.output
-        );
-    }
-
-    /// Combined adversarial proof for ADR-051's literal DoD wording (#378):
-    /// N>=3 real MCP sessions, at least 2 with *differing* declared
-    /// permission ceilings, asserted to have BOTH properties hold
-    /// simultaneously -- not just window isolation (already proven at N=3
-    /// with a single shared tier by `with_ai_dispatch_scope_for_session_
-    /// isolates_three_concurrent_sessions`) and not just ceiling enforcement
-    /// (already proven, but only at N=2, by the test just above). A real
-    /// confused-deputy bug could plausibly only reproduce when a permission
-    /// *denial* and a window-isolation dispatch interleave across 3+
-    /// sessions -- this is the literal scenario neither existing test alone
-    /// could catch.
-    #[tokio::test]
-    async fn three_plus_sessions_with_differing_ceilings_stay_isolated_on_both_axes() {
-        let global_policy = PermissionPolicy {
-            auto_approve_up_to: PermissionTier::Write,
-            allowed_categories: None,
-        };
-        let mut editor = Editor::new();
-        editor.buffers[0].name = "*AI:claude*".to_string();
-        editor.buffers[0].agent_shell = true;
-        editor.buffers[0].insert_text_at(0, "line one\nline two\n");
-        let original_id = editor.window_mgr.focused_id();
-        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
-        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
-
-        // Session 1: no declared ceiling -- a Write-tier call is allowed.
-        let (req1, mut rx1) = mcp_request_with_ceiling(
-            "execute_command",
-            serde_json::json!({"command": "move-down"}),
-            101,
-            None,
-        );
-        let mut deferred1 = Vec::new();
-        handle_mcp_request(
-            &mut editor,
-            req1,
-            &[],
-            &global_policy,
-            &lsp_tx,
-            &mut deferred1,
-            &mut scheme,
-        );
-        let result1 = rx1.try_recv().expect("reply must have been sent");
-        assert!(result1.success, "session 101 (no ceiling) must be allowed");
-
-        // Session 2: a stricter ReadOnly ceiling -- the identical Write-tier
-        // call must be denied, even mid-way through other sessions' activity.
-        let (req2, mut rx2) = mcp_request_with_ceiling(
-            "execute_command",
-            serde_json::json!({"command": "move-down"}),
-            102,
-            Some("ReadOnly"),
-        );
-        let mut deferred2 = Vec::new();
-        handle_mcp_request(
-            &mut editor,
-            req2,
-            &[],
-            &global_policy,
-            &lsp_tx,
-            &mut deferred2,
-            &mut scheme,
-        );
-        let result2 = rx2.try_recv().expect("reply must have been sent");
-        assert!(
-            !result2.success,
-            "session 102 (ReadOnly ceiling) must be denied a Write-tier call"
-        );
-
-        // Session 3: no declared ceiling again -- must be allowed exactly
-        // like session 101, unaffected by session 102's denial.
-        let (req3, mut rx3) = mcp_request_with_ceiling(
-            "execute_command",
-            serde_json::json!({"command": "git-status"}),
-            103,
-            None,
-        );
-        let mut deferred3 = Vec::new();
-        handle_mcp_request(
-            &mut editor,
-            req3,
-            &[],
-            &global_policy,
-            &lsp_tx,
-            &mut deferred3,
-            &mut scheme,
-        );
-        let result3 = rx3.try_recv().expect("reply must have been sent");
-        assert!(
-            result3.success,
-            "session 103 (no ceiling) must be unaffected by session 102's denial: {}",
-            result3.output
-        );
-
-        // Window isolation: all three sessions -- including the DENIED
-        // one -- must each have established their own distinct companion
-        // window (window setup wraps the dispatch body, so it happens
-        // before the permission check runs inside it).
-        let target_101 = editor
-            .ai
-            .mcp_session_windows
-            .get(&101)
-            .and_then(|s| s.target_window_id)
-            .expect("session 101 should have an established target");
-        let target_102 = editor
-            .ai
-            .mcp_session_windows
-            .get(&102)
-            .and_then(|s| s.target_window_id)
-            .expect("session 102 (denied) must still have its own established target");
-        let target_103 = editor
-            .ai
-            .mcp_session_windows
-            .get(&103)
-            .and_then(|s| s.target_window_id)
-            .expect("session 103 should have an established target");
-
-        assert_ne!(
-            target_101, target_102,
-            "sessions 101 and 102 must not share a window"
-        );
-        assert_ne!(
-            target_102, target_103,
-            "sessions 102 and 103 must not share a window"
-        );
-        assert_ne!(
-            target_101, target_103,
-            "sessions 101 and 103 must not share a window"
-        );
-        assert_ne!(target_101, original_id);
-        assert_ne!(target_102, original_id);
-        assert_ne!(target_103, original_id);
-
-        // Confused-deputy check: re-dispatching for session 101 must reuse
-        // ITS OWN window, never session 102's or 103's, even after a denial
-        // happened in between.
-        let (req1b, mut rx1b) = mcp_request_with_ceiling(
-            "execute_command",
-            serde_json::json!({"command": "move-down"}),
-            101,
-            None,
-        );
-        let mut deferred1b = Vec::new();
-        handle_mcp_request(
-            &mut editor,
-            req1b,
-            &[],
-            &global_policy,
-            &lsp_tx,
-            &mut deferred1b,
-            &mut scheme,
-        );
-        let result1b = rx1b.try_recv().expect("reply must have been sent");
-        assert!(result1b.success);
-        let target_101_again = editor
-            .ai
-            .mcp_session_windows
-            .get(&101)
-            .and_then(|s| s.target_window_id)
-            .expect("session 101 should still have a target");
-        assert_eq!(
-            target_101_again, target_101,
-            "session 101 must reuse its own window on a second dispatch, not session 102's or 103's"
-        );
-    }
-}
+#[path = "ai_event_handler_tests.rs"]
+mod ai_event_handler_tests;

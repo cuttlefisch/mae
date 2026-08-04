@@ -594,8 +594,7 @@ impl Editor {
         {
             let char_pos = self.buffers[buf_idx].rope().byte_to_char(byte_start);
             let row = self.buffers[buf_idx].rope().char_to_line(char_pos);
-            let line_start = self.buffers[buf_idx].rope().line_to_char(row);
-            let col = char_pos - line_start;
+            let col = self.buffers[buf_idx].byte_col_of_char_offset(row, char_pos);
             let win = self.window_mgr.focused_window_mut();
             win.cursor_row = row;
             win.cursor_col = col;
@@ -616,8 +615,7 @@ impl Editor {
         {
             let char_pos = self.buffers[buf_idx].rope().byte_to_char(byte_start);
             let row = self.buffers[buf_idx].rope().char_to_line(char_pos);
-            let line_start = self.buffers[buf_idx].rope().line_to_char(row);
-            let col = char_pos - line_start;
+            let col = self.buffers[buf_idx].byte_col_of_char_offset(row, char_pos);
             let win = self.window_mgr.focused_window_mut();
             win.cursor_row = row;
             win.cursor_col = col;
@@ -714,8 +712,7 @@ impl Editor {
         // Move cursor to end of inserted text
         let new_pos = pos + text.chars().count();
         let new_row = self.buffers[buf_idx].rope().char_to_line(new_pos);
-        let line_start = self.buffers[buf_idx].rope().line_to_char(new_row);
-        let new_col = new_pos - line_start;
+        let new_col = self.buffers[buf_idx].byte_col_of_char_offset(new_row, new_pos);
         let win = self.window_mgr.focused_window_mut();
         win.cursor_row = new_row;
         win.cursor_col = new_col;

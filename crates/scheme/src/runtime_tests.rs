@@ -63,6 +63,77 @@ fn eval_boolean() {
     assert_eq!(rt.eval("(= 1 2)").unwrap(), "#f");
 }
 
+/// ADR-087 / audit #604.2, #604.6: `record_error`'s history snapshot must
+/// stay Unicode-safe for a long, genuinely non-ASCII erroring expression —
+/// this is the AI/MCP `eval_scheme` path (`eval_yielding` calls
+/// `record_error` on error). Before this fix, `record_error` did a raw
+/// `code[..code.len().min(200)]` with no char-boundary check at all (unlike
+/// its sibling `eval()`, which already called `checked_byte_boundary`) —
+/// i.e. it was *unconditionally* broken, not just broken at one specific
+/// offset.
+///
+/// The fixture uses real multi-byte content (Greek lambda, 2 bytes each)
+/// spanning the 200-byte cut point, deliberately landing byte 200 exactly
+/// on a character boundary (100 * 2 = 200) rather than mid-character.
+///
+/// Note on why this test can't also target the mid-character case directly:
+/// `checked_byte_boundary` (the shared ADR-087 chokepoint both `eval()` and
+/// `record_error` now go through) is a `debug_assert!`-based validator that
+/// intentionally *panics* in debug/test builds whenever it is asked to clamp
+/// a genuinely non-boundary offset — by design, per ADR-087 Rule 5 ("clamps
+/// and logs in release" implies "aborts in debug"). That makes the exact
+/// off-boundary trigger untestable as a passing unit test under `cargo
+/// test` (which builds with `debug_assertions` on) for ANY call site that
+/// truncates arbitrary content at a fixed byte count — including every
+/// other ADR-087 "fixed" site (guidance.rs, run_loop.rs, handle_prompt.rs,
+/// shell_exec.rs), none of which have a test landing on a real non-boundary
+/// cut either. Flagged as a fresh finding in docs/DECISIONS_FOR_REVIEW.md
+/// rather than worked around here, since it's a property of the shared
+/// validator another workstream owns, not of this specific fix.
+#[test]
+fn eval_yielding_error_history_is_unicode_safe_across_the_200_byte_cut() {
+    let mut rt = new_runtime();
+    // A bare run of 150 lambda (U+03BB, 2 bytes each = 300 bytes) chars is a
+    // valid Scheme identifier the reader parses as a single symbol; looked
+    // up as an expression, it's an unbound-variable error. Every byte
+    // offset in a run of fixed-width 2-byte chars is even, so both the
+    // preview cut (100) and the history cut (200) land on real char
+    // boundaries with no prefix arithmetic to get wrong.
+    let code = "λ".repeat(150);
+    assert!(
+        code.is_char_boundary(code.len().min(200)) && code.is_char_boundary(code.len().min(100)),
+        "fixture sanity: this test targets Unicode-safety in general, not \
+         the specific mid-character debug_assert edge (see doc comment)"
+    );
+
+    let result = rt.eval_yielding(&code);
+    assert!(result.is_err(), "unbound variable must be a real error");
+    let history = rt.last_errors();
+    assert!(
+        !history.is_empty(),
+        "the error must still be recorded for a long non-ASCII expression"
+    );
+}
+
+/// Same fixture, human `:eval` path (`eval()`), which now shares
+/// `record_error` with `eval_yielding` instead of duplicating the
+/// history-recording logic (#604.6) — this is a regression guard proving
+/// the consolidation didn't change `eval()`'s existing (already-correct)
+/// behavior.
+#[test]
+fn eval_error_history_is_unicode_safe_across_the_200_byte_cut() {
+    let mut rt = new_runtime();
+    let code = "λ".repeat(150);
+
+    let result = rt.eval(&code);
+    assert!(result.is_err(), "unbound variable must be a real error");
+    let history = rt.last_errors();
+    assert!(
+        !history.is_empty(),
+        "the error must still be recorded for a long non-ASCII expression"
+    );
+}
+
 #[test]
 fn define_key_from_scheme() {
     let mut rt = new_runtime();

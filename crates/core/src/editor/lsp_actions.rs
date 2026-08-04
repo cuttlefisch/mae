@@ -30,13 +30,18 @@ impl Editor {
         };
         let suffix = self.lsp_starting_suffix(&lang_id);
         let win = self.window_mgr.focused_window();
+        // ADR-087 Rule 1: byte col -> LSP `character` via the named conversion.
+        let character = crate::lsp_position::byte_col_to_lsp_character(
+            &self.active_buffer().line_text_no_newline(win.cursor_row),
+            win.cursor_col,
+        );
         self.lsp
             .pending_requests
             .push(crate::LspIntent::CodeAction {
                 uri,
                 language_id: lang_id,
                 line: win.cursor_row as u32,
-                character: win.cursor_col as u32,
+                character,
             });
         self.set_status(format!(
             "LSP code-action: awaiting server response{}",
@@ -86,18 +91,44 @@ impl Editor {
             None => return,
         };
         let item = &menu.items[menu.selected];
-        if let Some(ref edit_json) = item.edit_json {
-            self.apply_workspace_edit_json(edit_json);
-        }
-        self.set_status(format!("[LSP] applied: {}", item.title));
+        let (applied, skipped) = match item.edit_json {
+            Some(ref edit_json) => self.apply_workspace_edit_json(edit_json),
+            None => (0, 0),
+        };
+        // ADR-086 (this is the "LSP workspace edit silently drops edits for
+        // files that are not open" case named in the ADR's own Context):
+        // report what actually happened rather than an unconditional
+        // "applied" — a code action touching files not open in any buffer
+        // previously reported success while doing nothing to those files.
+        self.set_status(if skipped == 0 {
+            format!("[LSP] applied: {}", item.title)
+        } else if applied == 0 {
+            format!(
+                "[LSP] '{}' affects {} file(s) not open in a buffer — no edits applied. \
+                 Open the file(s) first.",
+                item.title, skipped
+            )
+        } else {
+            format!(
+                "[LSP] applied: {} ({} file(s) skipped — not open)",
+                item.title, skipped
+            )
+        });
     }
 
-    /// Apply a workspace edit from JSON (TextEdits per URI).
-    pub(super) fn apply_workspace_edit_json(&mut self, json: &str) {
+    /// Apply a workspace edit from JSON (TextEdits per URI). Returns
+    /// `(files_edited, files_skipped_not_open)` so callers can report an
+    /// honest outcome instead of an unconditional success (ADR-086) — a
+    /// URI with no matching open buffer is silently skipped here (MAE does
+    /// not write to disk behind the user's back for an LSP-originated
+    /// edit), but the caller must not describe that as "applied".
+    pub(super) fn apply_workspace_edit_json(&mut self, json: &str) -> (usize, usize) {
         let Ok(edits) = serde_json::from_str::<Vec<(String, Vec<TextEditJson>)>>(json) else {
             self.set_status("[LSP] failed to parse workspace edit");
-            return;
+            return (0, 0);
         };
+        let mut files_edited = 0usize;
+        let mut files_skipped = 0usize;
         for (uri, text_edits) in edits {
             let path = uri.strip_prefix("file://").unwrap_or(&uri);
             let buf_idx = self
@@ -105,6 +136,7 @@ impl Editor {
                 .iter()
                 .position(|b| b.file_path().map(|p| p.to_string_lossy()) == Some(path.into()));
             let Some(idx) = buf_idx else {
+                files_skipped += 1;
                 continue; // buffer not open — skip
             };
             // Apply edits in reverse order to preserve offsets.
@@ -115,10 +147,20 @@ impl Editor {
                     .then(b.start_character.cmp(&a.start_character))
             });
             for edit in sorted_edits {
-                let start = self.buffers[idx]
-                    .char_offset_at(edit.start_line as usize, edit.start_character as usize);
-                let end = self.buffers[idx]
-                    .char_offset_at(edit.end_line as usize, edit.end_character as usize);
+                // ADR-087 Rule 1: an INBOUND LSP `character` is not a byte
+                // column — convert (and clamp; the server is untrusted).
+                let start_row = edit.start_line as usize;
+                let end_row = edit.end_line as usize;
+                let start_col = crate::lsp_position::lsp_character_to_byte_col(
+                    &self.buffers[idx].line_text_no_newline(start_row),
+                    edit.start_character,
+                );
+                let end_col = crate::lsp_position::lsp_character_to_byte_col(
+                    &self.buffers[idx].line_text_no_newline(end_row),
+                    edit.end_character,
+                );
+                let start = self.buffers[idx].char_offset_at(start_row, start_col);
+                let end = self.buffers[idx].char_offset_at(end_row, end_col);
                 if start < end {
                     self.buffers[idx].delete_range(start, end);
                 }
@@ -126,7 +168,9 @@ impl Editor {
                     self.buffers[idx].insert_text_at(start, &edit.new_text);
                 }
             }
+            files_edited += 1;
         }
+        (files_edited, files_skipped)
     }
 
     /// Queue a `textDocument/formatting` request for the active buffer.
@@ -184,9 +228,15 @@ impl Editor {
                     uri,
                     language_id: lang_id,
                     start_line: start_row as u32,
-                    start_char: start_col as u32,
+                    start_char: crate::lsp_position::byte_col_to_lsp_character(
+                        &self.buffers[idx].line_text_no_newline(start_row),
+                        start_col,
+                    ),
                     end_line: end_row as u32,
-                    end_char: end_col as u32,
+                    end_char: crate::lsp_position::byte_col_to_lsp_character(
+                        &self.buffers[idx].line_text_no_newline(end_row),
+                        end_col,
+                    ),
                 });
             self.set_status("LSP range format: awaiting server response");
         } else {
@@ -203,8 +253,16 @@ impl Editor {
     /// JSON-serialized `Vec<(uri, Vec<TextEditJson>)>` — same format as
     /// `apply_workspace_edit_json` uses internally.
     pub fn apply_format_edits_json(&mut self, edits_json: &str, count: usize) {
-        self.apply_workspace_edit_json(edits_json);
-        self.set_status(format!("[LSP] formatted: {} edit(s) applied", count));
+        let (applied, skipped) = self.apply_workspace_edit_json(edits_json);
+        // ADR-086: format targets the buffer that requested it, so `skipped`
+        // should be impossible in practice — but if the buffer somehow closed
+        // out from under an in-flight LSP formatting response, say so rather
+        // than reporting edits that were never applied.
+        if applied == 0 && skipped > 0 {
+            self.set_status("[LSP] format: target buffer is no longer open — no edits applied");
+        } else {
+            self.set_status(format!("[LSP] formatted: {} edit(s) applied", count));
+        }
     }
 
     /// Open a *Rename Preview* buffer showing the unified diff of all
@@ -312,7 +370,7 @@ impl Editor {
             Some(j) => j,
             None => return,
         };
-        self.apply_workspace_edit_json(&edits_json);
+        let (applied, skipped) = self.apply_workspace_edit_json(&edits_json);
         // Remove the preview buffer
         if let Some(idx) = self
             .buffers
@@ -321,7 +379,25 @@ impl Editor {
         {
             self.kill_buffer_at(idx);
         }
-        self.set_status("[LSP] Rename applied");
+        // ADR-086: a rename's whole point is that it touches references across
+        // many files, most of which are typically NOT already open — this was
+        // the case most likely to trip the "reports success, silently dropped
+        // an unopened file's edits" bug the ADR names explicitly.
+        self.set_status(if skipped == 0 {
+            "[LSP] Rename applied".to_string()
+        } else if applied == 0 {
+            format!(
+                "[LSP] Rename NOT applied — all {} affected file(s) are not open in a buffer. \
+                 Open them first, then retry.",
+                skipped
+            )
+        } else {
+            format!(
+                "[LSP] Rename applied to {} file(s); {} affected file(s) were not open and \
+                 were skipped — open them and retry to complete the rename.",
+                applied, skipped
+            )
+        });
     }
 
     /// Abort a pending rename and close the preview buffer.
@@ -425,6 +501,47 @@ mod tests {
         assert!(editor.lsp.code_action_menu.is_none());
     }
 
+    /// ADR-086 (the LSP workspace-edit case named in the ADR's own Context
+    /// section): a code action targeting a file that is NOT open in any
+    /// buffer must not report success. Before this fix, `apply_workspace_edit_json`
+    /// silently `continue`d past the unmatched URI and `code_action_select`
+    /// unconditionally reported `"[LSP] applied: <title>"` regardless.
+    #[test]
+    fn code_action_select_on_unopened_file_reports_it_was_not_applied() {
+        use crate::editor::CodeActionItem;
+        // The active buffer has NO file path at all, so it can never match
+        // the edit's target URI — every edit target is "not open".
+        let mut editor = Editor::new();
+        let edit_json = serde_json::json!([
+            ["file:///tmp/never-opened.rs", [{
+                "start_line": 0,
+                "start_character": 0,
+                "end_line": 0,
+                "end_character": 0,
+                "new_text": "should not silently vanish"
+            }]]
+        ])
+        .to_string();
+        editor.apply_code_action_result_items(vec![CodeActionItem {
+            title: "Fix never-opened.rs".into(),
+            kind: Some("quickfix".into()),
+            edit_json: Some(edit_json),
+        }]);
+        editor.code_action_select();
+        assert!(
+            !editor
+                .status_msg
+                .contains("[LSP] applied: Fix never-opened.rs"),
+            "an edit that touched zero open buffers must not be reported as applied: {}",
+            editor.status_msg
+        );
+        assert!(
+            editor.status_msg.contains("not open"),
+            "the status must say WHY nothing happened: {}",
+            editor.status_msg
+        );
+    }
+
     #[test]
     fn code_action_menu_auto_dismiss_on_motion() {
         use crate::editor::CodeActionItem;
@@ -474,5 +591,74 @@ mod tests {
         }]);
         assert!(editor.status_msg.contains("j/k navigate"));
         assert!(editor.status_msg.contains("Esc dismiss"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Rename (workspace edit) tests
+    // -----------------------------------------------------------------------
+
+    /// ADR-086: a rename's whole point is touching references across many
+    /// files, most of which are typically not already open — exactly the
+    /// scenario where the old unconditional `"[LSP] Rename applied"` lied.
+    /// This asserts the SELECTIVE oracle (CLAUDE.md #14): the open file's
+    /// edit really does land, AND the unopened file's is skipped AND
+    /// reported, on the SAME call — not just an absence check that a dead
+    /// no-op path would also pass.
+    #[test]
+    fn apply_pending_rename_applies_to_open_files_and_reports_unopened_ones_skipped() {
+        let mut editor = editor_with_file("/tmp/rename_open.rs", "old_name\n");
+        let edit_json = serde_json::json!([
+            ["file:///tmp/rename_open.rs", [{
+                "start_line": 0, "start_character": 0,
+                "end_line": 0, "end_character": 8,
+                "new_text": "new_name"
+            }]],
+            ["file:///tmp/rename_not_open.rs", [{
+                "start_line": 0, "start_character": 0,
+                "end_line": 0, "end_character": 8,
+                "new_text": "new_name"
+            }]]
+        ])
+        .to_string();
+        editor.pending_rename_edit = Some(edit_json);
+
+        editor.apply_pending_rename();
+
+        // The open file's edit really landed.
+        assert!(
+            editor.buffers[0].text().starts_with("new_name"),
+            "the open file's edit must be applied: {:?}",
+            editor.buffers[0].text()
+        );
+        // The unopened file's skip is disclosed, not silently dropped.
+        assert!(
+            editor.status_msg.contains('1') && editor.status_msg.contains("not open"),
+            "a partial rename must name how many files were skipped and why: {}",
+            editor.status_msg
+        );
+    }
+
+    /// The "all skipped" edge of the same fix: if NOTHING was open, the
+    /// status must say the rename was NOT applied, not a bare "applied".
+    #[test]
+    fn apply_pending_rename_with_no_files_open_reports_nothing_applied() {
+        let mut editor = Editor::new();
+        let edit_json = serde_json::json!([
+            ["file:///tmp/rename_not_open.rs", [{
+                "start_line": 0, "start_character": 0,
+                "end_line": 0, "end_character": 8,
+                "new_text": "new_name"
+            }]]
+        ])
+        .to_string();
+        editor.pending_rename_edit = Some(edit_json);
+
+        editor.apply_pending_rename();
+
+        assert!(
+            editor.status_msg.contains("NOT applied"),
+            "a rename that touched zero open buffers must say so plainly: {}",
+            editor.status_msg
+        );
     }
 }

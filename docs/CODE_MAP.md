@@ -96,9 +96,11 @@ Source: `crates/ai/src/lib.rs`
 | `pricing` | mod |
 | `provider` | mod |
 | `session` | mod |
+| `shell_policy` | mod |
 | `token_estimate` | mod |
 | `tools` | mod |
 | `types` | mod |
+| `web` | mod |
 
 ## mae-babel
 
@@ -190,12 +192,14 @@ Source: `crates/core/src/lib.rs`
 | `link_detect` | mod |
 | `lock_stats` | mod |
 | `lsp_intent` | mod |
+| `lsp_position` | mod |
 | `messages` | mod |
 | `notifications` | mod |
 | `notifications_view` | mod |
 | `options` | mod |
 | `project` | mod |
 | `render_common` | mod |
+| `scheme_async` | mod |
 | `search` | mod |
 | `session` | mod |
 | `swap` | mod |
@@ -207,6 +211,7 @@ Source: `crates/core/src/lib.rs`
 | `visual_buffer` | mod |
 | `window` | mod |
 | `word` | mod |
+| `workspace_trust` | mod |
 | `wrap` | mod |
 | `SchemeToolDef` | struct |
 | `redraw` | mod |
@@ -241,6 +246,7 @@ Source: `crates/export/src/lib.rs`
 | `ListItem` | struct |
 | `Exporter` | trait |
 | `parse_org_document` | fn |
+| `parse_org_document_with_lines` | fn |
 | `InlineTarget` | enum |
 | `convert_inline_markup_str` | fn |
 | `CheckboxState` | enum |
@@ -406,6 +412,7 @@ Source: `crates/scheme/src/lib.rs`
 | `lisp_error` | mod |
 | `lsp` | mod |
 | `macros` | mod |
+| `permission` | mod |
 | `reader` | mod |
 | `stdlib` | mod |
 | `value` | mod |
@@ -537,6 +544,10 @@ Source: `shared/sync/src/lib.rs`
 | `cursor-goto` | `scheme/src/runtime/editor_ops.rs` |
 | `daemon-available?` | `scheme/src/runtime/state_sync_inject_kb.rs` |
 | `daemon-status` | `scheme/src/runtime/state_sync_inject_kb.rs` |
+| `dap-inspect-variable` | `scheme/src/runtime/lsp_dap.rs` |
+| `dap-set-breakpoint` | `scheme/src/runtime/lsp_dap.rs` |
+| `dap-start` | `scheme/src/runtime/lsp_dap.rs` |
+| `debug-state` | `scheme/src/runtime/lsp_dap.rs` |
 | `define-command` | `scheme/src/runtime/keybindings.rs` |
 | `define-kb-node!` | `scheme/src/runtime/io_packages.rs` |
 | `define-key` | `scheme/src/runtime/keybindings.rs` |
@@ -564,7 +575,10 @@ Source: `shared/sync/src/lib.rs`
 | `kb-block-count` | `scheme/src/runtime/kb_queries.rs` |
 | `kb-block-member` | `scheme/src/runtime/kb_primitives.rs` |
 | `kb-compose-meta` | `scheme/src/runtime/kb_primitives.rs` |
+| `kb-create` | `scheme/src/runtime/kb_crud.rs` |
+| `kb-delete` | `scheme/src/runtime/kb_crud.rs` |
 | `kb-export-subgraph-html` | `scheme/src/runtime/kb_export.rs` |
+| `kb-get` | `scheme/src/runtime/kb_crud.rs` |
 | `kb-get-block` | `scheme/src/runtime/kb_queries.rs` |
 | `kb-graph` | `scheme/src/runtime/kb_queries.rs` |
 | `kb-graph-view-close` | `scheme/src/runtime/kb_graph_view.rs` |
@@ -599,6 +613,7 @@ Source: `shared/sync/src/lib.rs`
 | `kb-remove-member` | `scheme/src/runtime/kb_primitives.rs` |
 | `kb-remove-meta-member!` | `scheme/src/runtime/kb_primitives.rs` |
 | `kb-restore` | `scheme/src/runtime/io_packages.rs` |
+| `kb-search` | `scheme/src/runtime/kb_crud.rs` |
 | `kb-set-ai-residency` | `scheme/src/runtime/kb_primitives.rs` |
 | `kb-set-encryption` | `scheme/src/runtime/kb_primitives.rs` |
 | `kb-set-policy` | `scheme/src/runtime/kb_primitives.rs` |
@@ -608,12 +623,17 @@ Source: `shared/sync/src/lib.rs`
 | `kb-sharing-status` | `scheme/src/runtime/state_sync_inject_kb.rs` |
 | `kb-shortest-path` | `scheme/src/runtime/kb_queries.rs` |
 | `kb-unblock-member` | `scheme/src/runtime/kb_primitives.rs` |
+| `kb-update` | `scheme/src/runtime/kb_crud.rs` |
 | `keymap-bindings` | `scheme/src/runtime/state_sync_inject_kb.rs` |
 | `kill-buffer-by-name` | `scheme/src/runtime/editor_ops.rs` |
 | `line-beginning-position` | `scheme/src/runtime/state_sync_inject.rs` |
 | `line-end-position` | `scheme/src/runtime/state_sync_inject.rs` |
 | `list-directory` | `scheme/src/runtime/io_packages.rs` |
 | `load-path` | `scheme/src/runtime/io_packages.rs` |
+| `lsp-diagnostics` | `scheme/src/runtime/lsp_dap.rs` |
+| `lsp-document-symbols` | `scheme/src/runtime/lsp_dap.rs` |
+| `lsp-result` | `scheme/src/runtime/lsp_dap.rs` |
+| `lsp-workspace-symbol` | `scheme/src/runtime/lsp_dap.rs` |
 | `mae-declare-module!` | `scheme/src/runtime/io_packages.rs` |
 | `mae-declare-package!` | `scheme/src/runtime/io_packages.rs` |
 | `mae-declared-modules` | `scheme/src/runtime/io_packages.rs` |
@@ -647,6 +667,7 @@ Source: `shared/sync/src/lib.rs`
 | `set-group-name` | `scheme/src/runtime/editor_ops.rs` |
 | `set-local-option!` | `scheme/src/runtime/editor_ops.rs` |
 | `set-option!` | `scheme/src/runtime/editor_ops.rs` |
+| `set-option-save!` | `scheme/src/runtime/editor_ops.rs` |
 | `set-status` | `scheme/src/runtime/keybindings.rs` |
 | `set-theme` | `scheme/src/runtime/keybindings.rs` |
 | `shell-command` | `scheme/src/runtime/misc_primitives.rs` |

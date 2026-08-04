@@ -3,8 +3,16 @@
 //! @ai-caution: [which-key] All string truncation MUST use truncate_end() / truncate_start() —
 //! never raw &s[..n] which panics on multi-byte chars. All position calculations MUST use
 //! display_width() not .len() which counts bytes.
-
-use unicode_width::UnicodeWidthChar;
+//!
+//! ADR-087 Rule 2: `display_width` here is a re-export of `grapheme::display_width` (the
+//! grapheme-cluster-aware implementation), not a second parallel one. A prior version of this
+//! file defined its own `s.chars().map(|c| c.width().unwrap_or(0)).sum()`, which is wrong for
+//! ZWJ sequences, emoji modifier sequences, presentation sequences, and several scripts'
+//! ligatures — `unicode-width`'s own docs list these as cases where a string's width differs
+//! from the sum of its characters' widths. `truncate_end`/`truncate_start` are rewritten over
+//! `grapheme_indices(true)` for the same reason: cutting on `char_indices()` can land between a
+//! ZWJ and its base character, or (for `truncate_start`, walking in reverse) accumulate a
+//! combining mark's width before its base.
 
 // ---------------------------------------------------------------------------
 // Which-key layout constants (shared between TUI and GUI renderers)
@@ -82,14 +90,12 @@ pub fn which_key_column_layout(
     available_width: usize,
     separator_width: usize,
     max_desc: usize,
+    policy: crate::grapheme::WidthPolicy,
 ) -> (usize, usize) {
+    let dw = |s: &str| crate::grapheme::display_width_with(s, policy);
     let max_entry_w = entries
         .iter()
-        .map(|e| {
-            display_width(&format_keypress(&e.key))
-                + separator_width
-                + display_width(&e.label).min(max_desc)
-        })
+        .map(|e| dw(&format_keypress(&e.key)) + separator_width + dw(&e.label).min(max_desc))
         .max()
         .unwrap_or(WK_COL_WIDTH_FALLBACK);
     let col_width = (max_entry_w + WK_COL_PADDING).clamp(WK_COL_WIDTH_MIN, WK_COL_WIDTH_MAX);
@@ -101,62 +107,83 @@ pub fn which_key_column_layout(
 // Display width helpers
 // ---------------------------------------------------------------------------
 
-/// Return the display width (terminal columns) of a string.
-/// Multi-byte characters like `—` (em dash) are 1 column,
-/// CJK characters are 2 columns, control chars are 0.
-pub fn display_width(s: &str) -> usize {
-    s.chars().map(|c| c.width().unwrap_or(0)).sum()
-}
+/// Return the display width (terminal columns) of a string, under the
+/// default width policy (narrow ambiguous width, 0-width control chars).
+/// Multi-byte characters like `—` (em dash) are 1 column, CJK characters
+/// are 2 columns, control chars are 0.
+///
+/// Re-exported from `grapheme::display_width` (ADR-087 Rule 2 / Rule 7) --
+/// this module does not define its own width computation. Callers that need
+/// a non-default policy (e.g. wide ambiguous width) should use
+/// `crate::grapheme::display_width_with` directly.
+pub use crate::grapheme::display_width;
 
 /// Truncate `s` from the end, keeping at most `max_cols` display columns.
 /// If truncation is needed, the last column is replaced with `…` (1 column),
 /// so at most `max_cols` display columns are used.
-/// Safe for multi-byte / wide characters — never slices mid-character.
+/// Safe for multi-byte / wide characters — never slices mid-grapheme-cluster.
+///
+/// Cut points accumulate per-grapheme-cluster width (ADR-087 Rule 2), so a
+/// family ZWJ emoji or a base+combining-mark pair is never split.
 pub fn truncate_end(s: &str, max_cols: usize) -> String {
-    if max_cols == 0 {
-        return String::new();
-    }
-    let total = display_width(s);
+    truncate_end_with(s, max_cols, crate::grapheme::WidthPolicy::default())
+}
+
+/// `truncate_end` under an explicit [`WidthPolicy`] (ADR-087 Rule 3).
+///
+/// Renderer entry points must call *this* one with `editor.width_policy()`,
+/// so `ambiguous_width` / `control_char_width` reach every truncation site
+/// rather than only the status bar.
+///
+/// [`WidthPolicy`]: crate::grapheme::WidthPolicy
+pub fn truncate_end_with(s: &str, max_cols: usize, policy: crate::grapheme::WidthPolicy) -> String {
+    // Width-fits check FIRST, before the max_cols==0 special case: a
+    // zero-width string (e.g. a lone ZWSP, or "") already fits any budget
+    // including 0, and must round-trip unchanged -- `truncate_end(s, n) ==
+    // s` whenever `display_width(s) <= n` is an invariant this function is
+    // tested against (ADR-087), and checking max_cols==0 first would
+    // violate it for zero-width content.
+    let total = crate::grapheme::display_width_with(s, policy);
     if total <= max_cols {
         return s.to_string();
     }
-    let target = max_cols.saturating_sub(1); // reserve 1 col for '…'
-    let mut cols = 0;
-    for (byte_idx, ch) in s.char_indices() {
-        let w = ch.width().unwrap_or(0);
-        if cols + w > target {
-            let mut result = s[..byte_idx].to_string();
-            result.push('…');
-            return result;
-        }
-        cols += w;
+    if max_cols == 0 {
+        // Truncation is needed but there's no room even for the ellipsis.
+        return String::new();
     }
-    // Shouldn't reach here given total > max_cols, but be safe
-    s.to_string()
+    let target = max_cols.saturating_sub(1); // reserve 1 col for '…'
+    let byte_idx = crate::grapheme::byte_offset_for_max_width_with(s, target, policy);
+    let mut result = s[..byte_idx].to_string();
+    result.push('…');
+    result
 }
 
 /// Truncate `s` from the start, keeping the last `max_cols` display columns.
 /// Prepends `…` if truncation occurs.
-/// Safe for multi-byte / wide characters.
+/// Safe for multi-byte / wide characters — never slices mid-grapheme-cluster.
 pub fn truncate_start(s: &str, max_cols: usize) -> String {
-    if max_cols == 0 {
-        return String::new();
-    }
-    let total = display_width(s);
+    truncate_start_with(s, max_cols, crate::grapheme::WidthPolicy::default())
+}
+
+/// `truncate_start` under an explicit [`WidthPolicy`] (ADR-087 Rule 3).
+///
+/// [`WidthPolicy`]: crate::grapheme::WidthPolicy
+pub fn truncate_start_with(
+    s: &str,
+    max_cols: usize,
+    policy: crate::grapheme::WidthPolicy,
+) -> String {
+    // See `truncate_end`'s identical reordering: width-fits check first, so
+    // zero-width content round-trips through a budget of 0 unchanged.
+    let total = crate::grapheme::display_width_with(s, policy);
     if total <= max_cols {
         return s.to_string();
     }
-    let target = max_cols.saturating_sub(1); // reserve 1 col for '…'
-    let mut cols = 0;
-    let mut start = s.len();
-    for (i, ch) in s.char_indices().rev() {
-        let w = ch.width().unwrap_or(0);
-        if cols + w > target {
-            break;
-        }
-        cols += w;
-        start = i;
+    if max_cols == 0 {
+        return String::new();
     }
+    let target = max_cols.saturating_sub(1); // reserve 1 col for '…'
+    let start = crate::grapheme::byte_offset_for_max_width_from_end_with(s, target, policy);
     format!("…{}", &s[start..])
 }
 
@@ -341,7 +368,8 @@ mod tests {
                 doc: None,
             },
         ];
-        let (col_w, num_cols) = which_key_column_layout(&entries, 80, 1, 40);
+        let (col_w, num_cols) =
+            which_key_column_layout(&entries, 80, 1, 40, crate::grapheme::WidthPolicy::default());
         assert!(col_w >= WK_COL_WIDTH_MIN);
         assert!(col_w <= WK_COL_WIDTH_MAX);
         assert!(num_cols >= 1);
@@ -360,7 +388,8 @@ mod tests {
             is_group: false,
             doc: None,
         }];
-        let (col_w, num_cols) = which_key_column_layout(&entries, 30, 1, 40);
+        let (col_w, num_cols) =
+            which_key_column_layout(&entries, 30, 1, 40, crate::grapheme::WidthPolicy::default());
         assert_eq!(num_cols, 1); // narrow width forces single column
         assert!(col_w <= 30);
     }
@@ -368,7 +397,8 @@ mod tests {
     #[test]
     fn which_key_column_layout_empty() {
         let entries: Vec<crate::WhichKeyEntry> = vec![];
-        let (col_w, num_cols) = which_key_column_layout(&entries, 80, 1, 40);
+        let (col_w, num_cols) =
+            which_key_column_layout(&entries, 80, 1, 40, crate::grapheme::WidthPolicy::default());
         assert_eq!(col_w, WK_COL_WIDTH_MIN); // fallback clamped to min
         assert!(num_cols >= 1);
     }

@@ -631,7 +631,7 @@ is the authoritative source for the Scheme and command surfaces. Do not hand-mai
   specified by the language, not by MAE.
 - **Hooks:** 26 hook points (see `:help concept:hooks`)
 - **MCP tools:** ~770 tools (~210 hand-authored + one generated per registered command), categorized
-  (core/lsp/dap/kb/shell/ai/commands/git/web/visual/debug/collab) — most are 1:1 command mirrors; see
+  (core/lsp/dap/kb/execution/shell/ai/commands/git/web/visual/debug/collab) — most are 1:1 command mirrors; see
   `docs/MODEL_SUPPORT.md` for the exam methodology this scale is validated against
 - **Commands:** ~560 registered builtins
 - **Config options:** ~230 registered, persistable via `:set-save`

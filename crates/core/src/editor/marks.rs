@@ -93,7 +93,7 @@ impl Editor {
         // since the mark was set).
         let line_count = self.buffers[target_idx].display_line_count();
         let row = mark.row.min(line_count.saturating_sub(1));
-        let col_max = self.buffers[target_idx].line_len(row);
+        let col_max = self.buffers[target_idx].line_byte_len(row);
         let col = mark.col.min(col_max);
 
         let vh = self.focused_viewport_height();

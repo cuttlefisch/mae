@@ -92,7 +92,9 @@ impl Editor {
                 self.kb.primary =
                     crate::kb_seed::seed_kb(&self.commands, &self.keymaps, &self.hooks);
                 let count = if let Some(q) = self.kb.query_layer() {
-                    q.list_ids(None).len()
+                    q.list_ids(None)
+                        .map(|ids| ids.len())
+                        .unwrap_or_else(|_| self.kb.primary.list_ids(None).len())
                 } else {
                     self.kb.primary.list_ids(None).len()
                 };
@@ -212,6 +214,10 @@ impl Editor {
                         .position(|b| b.kb_view().is_some_and(|hv| hv.current == cap.node_id))
                     {
                         self.buffers.remove(hi);
+                        // Audit #605.2 — pairs with every `buffers.remove()`;
+                        // without it the Editor's index-keyed maps (syntax, AI
+                        // target, shell viewports) keep stale indices.
+                        self.notify_buffer_removed(hi);
                         for win in self.window_mgr.iter_windows_mut() {
                             if win.buffer_idx > hi {
                                 win.buffer_idx = win.buffer_idx.saturating_sub(1);
@@ -238,6 +244,10 @@ impl Editor {
                         .position(|b| b.kb_view().is_some_and(|hv| hv.current == cap.node_id))
                     {
                         self.buffers.remove(hi);
+                        // Audit #605.2 — pairs with every `buffers.remove()`;
+                        // without it the Editor's index-keyed maps (syntax, AI
+                        // target, shell viewports) keep stale indices.
+                        self.notify_buffer_removed(hi);
                         for win in self.window_mgr.iter_windows_mut() {
                             if win.buffer_idx > hi {
                                 win.buffer_idx = win.buffer_idx.saturating_sub(1);

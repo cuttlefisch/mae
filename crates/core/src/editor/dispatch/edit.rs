@@ -65,7 +65,7 @@ impl Editor {
                 let win = self.window_mgr.focused_window_mut();
                 let start = self.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
                 let line_start = self.buffers[idx].rope().line_to_char(win.cursor_row);
-                let line_len = self.buffers[idx].line_len(win.cursor_row);
+                let line_len = self.buffers[idx].line_byte_len(win.cursor_row);
                 let end = line_start + line_len;
                 if end > start {
                     let text = self.buffers[idx].text_range(start, end);
@@ -147,7 +147,7 @@ impl Editor {
                 let win = self.window_mgr.focused_window();
                 let start = self.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
                 let line_start = self.buffers[idx].rope().line_to_char(win.cursor_row);
-                let line_len = self.buffers[idx].line_len(win.cursor_row);
+                let line_len = self.buffers[idx].line_byte_len(win.cursor_row);
                 let end = line_start + line_len;
                 if end > start {
                     let text = self.buffers[idx].text_range(start, end);
@@ -432,7 +432,7 @@ impl Editor {
                 let win = self.window_mgr.focused_window();
                 let row = win.cursor_row;
                 let line_start = self.buffers[idx].rope().line_to_char(row);
-                let line_len = self.buffers[idx].line_len(row);
+                let line_len = self.buffers[idx].line_byte_len(row);
                 if line_len > 0 {
                     let text = self.buffers[idx].text_range(line_start, line_start + line_len);
                     self.buffers[idx].delete_range(line_start, line_start + line_len);
@@ -461,7 +461,7 @@ impl Editor {
                 let win = self.window_mgr.focused_window();
                 let start = self.buffers[idx].char_offset_at(win.cursor_row, win.cursor_col);
                 let line_start = self.buffers[idx].rope().line_to_char(win.cursor_row);
-                let line_len = self.buffers[idx].line_len(win.cursor_row);
+                let line_len = self.buffers[idx].line_byte_len(win.cursor_row);
                 let end = line_start + line_len;
                 if end > start {
                     let text = self.buffers[idx].text_range(start, end);
@@ -498,7 +498,7 @@ impl Editor {
                 let win = self.window_mgr.focused_window();
                 let line_start = self.buffers[idx].rope().line_to_char(win.cursor_row);
                 let start = line_start + win.cursor_col;
-                let line_end = line_start + self.buffers[idx].line_len(win.cursor_row);
+                let line_end = line_start + self.buffers[idx].line_byte_len(win.cursor_row);
                 let end = (start + n).min(line_end);
                 if end > start {
                     let text = self.buffers[idx].text_range(start, end);

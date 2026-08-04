@@ -17,6 +17,7 @@ use crate::value::Value;
 use crate::vm::Vm;
 
 use super::{DeclaredPackage, SharedState};
+use crate::permission::tier;
 
 /// Register file I/O, package infrastructure, module system, and
 /// declarative package management (`mae!`/`package!`) primitives.
@@ -28,6 +29,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "read-file",
         "Read a file (capped at 1MB)",
         Arity::Fixed(1),
+        tier::READ,
         move |args: &[Value]| {
             let path = arg_string(args, 0, "read-file")?;
             match std::fs::read_to_string(&path) {
@@ -43,6 +45,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "file-exists?",
         "Check if a file exists",
         Arity::Fixed(1),
+        tier::READ,
         move |args: &[Value]| {
             let path = arg_string(args, 0, "file-exists?")?;
             Ok(Value::Bool(std::path::Path::new(&path).exists()))
@@ -54,6 +57,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "list-directory",
         "List directory entries",
         Arity::Fixed(1),
+        tier::READ,
         move |args: &[Value]| {
             let path = arg_string(args, 0, "list-directory")?;
             match std::fs::read_dir(&path) {
@@ -81,6 +85,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "provide-feature",
         "Mark feature as loaded",
         Arity::Fixed(1),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let feature = arg_string(args, 0, "provide-feature")?;
             s.lock().loaded_features.insert(feature);
@@ -94,6 +99,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "featurep",
         "Check if feature is loaded",
         Arity::Fixed(1),
+        tier::READ,
         move |args: &[Value]| {
             let feature = arg_string(args, 0, "featurep")?;
             Ok(Value::Bool(s.lock().loaded_features.contains(&feature)))
@@ -106,6 +112,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "require-feature",
         "Request loading a feature",
         Arity::Fixed(1),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let feature = arg_string(args, 0, "require-feature")?;
             let mut state = s.lock();
@@ -122,6 +129,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "load-path",
         "Return current load-path",
         Arity::Fixed(0),
+        tier::READ,
         move |_args: &[Value]| {
             let state = s.lock();
             let items: Vec<Value> = state
@@ -139,6 +147,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "add-to-load-path!",
         "Prepend directory to load-path",
         Arity::Fixed(1),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let dir = arg_string(args, 0, "add-to-load-path!")?;
             s.lock().load_path.insert(0, PathBuf::from(dir));
@@ -152,6 +161,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "autoload",
         "Register a command backed by autoload",
         Arity::Fixed(3),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let cmd_name = arg_string(args, 0, "autoload")?;
             let feature = arg_string(args, 1, "autoload")?;
@@ -179,6 +189,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "define-option!",
         "Register a runtime option",
         Arity::Fixed(4),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "define-option!")?;
             let kind = arg_string(args, 1, "define-option!")?;
@@ -197,6 +208,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "module-loaded?",
         "Check if a module is active",
         Arity::Fixed(1),
+        tier::READ,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "module-loaded?")?;
             Ok(Value::Bool(s.lock().active_modules.contains_key(&name)))
@@ -209,6 +221,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "module-version",
         "Get version of active module",
         Arity::Fixed(1),
+        tier::READ,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "module-version")?;
             match s.lock().active_modules.get(&name) {
@@ -224,6 +237,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "module-list",
         "List all active module names",
         Arity::Fixed(0),
+        tier::READ,
         move |_args: &[Value]| {
             let state = s.lock();
             Ok(Value::list(
@@ -242,6 +256,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "register-module!",
         "Register a loaded module",
         Arity::Fixed(2),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "register-module!")?;
             let version = arg_string(args, 1, "register-module!")?;
@@ -266,6 +281,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "module-flags",
         "Get enabled flags for a module",
         Arity::Fixed(1),
+        tier::READ,
         move |_args: &[Value]| Ok(Value::Null),
     );
 
@@ -277,6 +293,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "mae-declare-module!",
         "Declare a module with flags",
         Arity::Fixed(2),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "mae-declare-module!")?;
             let flags = if args.len() > 1 {
@@ -295,6 +312,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "mae-declared-modules",
         "List declared module names",
         Arity::Fixed(0),
+        tier::READ,
         move |_args: &[Value]| {
             let state = s.lock();
             Ok(Value::list(
@@ -313,6 +331,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "mae-declare-package!",
         "Declare a third-party package",
         Arity::Fixed(4),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "mae-declare-package!")?;
             let source = arg_string(args, 1, "mae-declare-package!")?;
@@ -393,6 +412,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "undefine-command!",
         "Remove a command",
         Arity::Fixed(1),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "undefine-command!")?;
             s.lock().pending_command_unregisters.push(name);
@@ -406,6 +426,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "undefine-option!",
         "Remove an option",
         Arity::Fixed(1),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "undefine-option!")?;
             s.lock().pending_option_unregisters.push(name);
@@ -419,6 +440,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "unload-feature",
         "Remove from loaded_features",
         Arity::Fixed(1),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "unload-feature")?;
             let removed = s.lock().loaded_features.remove(&name);
@@ -432,6 +454,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "define-kb-node!",
         "Register a KB node from Scheme",
         Arity::Fixed(3),
+        tier::WRITE,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "define-kb-node!")?;
             let title = arg_string(args, 1, "define-kb-node!")?;
@@ -447,6 +470,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "kb-agenda",
         "Query KB graph: (kb-agenda \"orphan\"), (kb-agenda \"todo\" \"TODO\")",
         Arity::Variadic(1),
+        tier::READ,
         move |args: &[Value]| {
             let filter = arg_string(args, 0, "kb-agenda")?;
             let extra = args.get(1).map(|v| format!("{}", v)).unwrap_or_default();
@@ -466,6 +490,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "kb-history",
         "Show version history for a KB node",
         Arity::Fixed(1),
+        tier::READ,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-history")?;
             s.lock()
@@ -481,6 +506,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "kb-restore",
         "Restore a KB node to a previous version",
         Arity::Fixed(2),
+        tier::WRITE,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-restore")?;
             let version = match &args[1] {
@@ -500,6 +526,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "kb-raw-query",
         "Execute raw CozoDB Datalog query against the KB",
         Arity::Fixed(1),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let query = arg_string(args, 0, "kb-raw-query")?;
             s.lock()

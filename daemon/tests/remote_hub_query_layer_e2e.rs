@@ -193,6 +193,18 @@ max_connections = 0
         .spawn()
         .expect("failed to spawn mae-daemon");
 
+    // Guard constructed the instant spawn() returns, BEFORE the polling loop
+    // and its `assert!` below -- previously the bare `child` lived through
+    // both, so a daemon that never accepted a connection (the exact case the
+    // assert exists to catch) panicked with the process still unguarded and
+    // leaked it. `DaemonGuard`'s `Drop` now covers this whole function from
+    // here on, regardless of how it returns.
+    let guard = DaemonGuard {
+        child,
+        _tmp: tmp,
+        oauth_addr,
+    };
+
     let mut connected = false;
     for _ in 0..100 {
         if TcpStream::connect(oauth_addr).is_ok() {
@@ -206,11 +218,7 @@ max_connections = 0
         "mae-daemon's OAuth listener never accepted a connection on {oauth_addr} within 10s"
     );
 
-    DaemonGuard {
-        child,
-        _tmp: tmp,
-        oauth_addr,
-    }
+    guard
 }
 
 fn remote_hub_config(base_url: String, auth: RemoteHubAuth) -> RemoteHubConfig {
@@ -258,7 +266,7 @@ fn expired_token_produces_a_clean_observable_auth_failure_not_a_silent_empty_res
         layer.last_outcome()
     );
 
-    let hits = layer.search("anything", 10);
+    let hits = layer.search("anything", 10).unwrap();
     assert!(hits.is_empty());
     assert!(matches!(layer.last_outcome(), LastOutcome::AuthFailed(_)));
 }

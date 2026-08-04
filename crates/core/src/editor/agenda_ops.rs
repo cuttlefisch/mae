@@ -57,7 +57,13 @@ impl Editor {
         // TODO set); the in-memory KB is the fallback when there's no query layer.
         // State filtering is applied here (the query layer returns the full TODO set).
         let all_todo: Vec<mae_kb::Node> = match self.kb.query_layer() {
-            Some(q) => q.todo_nodes(),
+            Some(q) => q.todo_nodes().unwrap_or_else(|e| {
+                // No error channel on the agenda render path; degrade to the
+                // in-memory KB and say so, rather than silently showing an
+                // empty agenda that looks like "no TODOs" (ADR-086).
+                tracing::warn!(error = %e, "KB query layer failed listing TODO nodes; falling back to the in-memory KB");
+                self.kb.primary.todo_nodes().into_iter().cloned().collect()
+            }),
             None => self.kb.primary.todo_nodes().into_iter().cloned().collect(),
         };
         let nodes: Vec<mae_kb::Node> = all_todo

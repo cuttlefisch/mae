@@ -582,8 +582,20 @@ pub fn setup_ai(
             prompt.push_str(hints);
         }
 
+        // ADR-084 D2 + ADR-090: the embedded session runs under the SAME
+        // resolved policy the MCP path enforces. An unparseable tier already
+        // refused startup upstream (`--check-config`/`main`), so a failure
+        // here can only be a re-read race -- take the restrictive default
+        // rather than inventing a permissive fallback.
+        let permission_policy = crate::config::resolve_permission_policy(&file_config)
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "AI permission policy unresolvable — using the restrictive default");
+                mae_ai::PermissionPolicy::default()
+            });
+
         let session = AgentSession::new(provider, tools, prompt, event_tx.clone(), cmd_rx)
-            .with_budget(model, budget);
+            .with_budget(model, budget)
+            .with_permission_policy(permission_policy);
 
         // Self-test mode: wider checkpoint interval, higher stagnation tolerance
         let session = if std::env::args().any(|a| a == "--self-test") {
@@ -1030,26 +1042,50 @@ pub fn load_init_files(scheme: &mut SchemeRuntime, editor: &mut Editor) -> usize
     let mut layers: Vec<PathBuf> = Vec::new();
 
     // Layer 1: user config (~/.config/mae/init.scm)
-    let has_user_init = dirs_candidate("mae/init.scm")
-        .filter(|p| p.exists())
-        .is_some();
     if let Some(user_init) = dirs_candidate("mae/init.scm") {
         layers.push(user_init);
     }
 
-    // Layer 2: project-local (.mae/init.scm in cwd)
+    // Layer 2: project-local (.mae/init.scm in cwd) — ONLY from a trusted directory.
+    //
+    // @ai-caution: [security] This file is arbitrary Scheme and Scheme can spawn
+    // processes, so evaluating it is equivalent to running the project's code. It
+    // runs during bootstrap, before any `PermissionPolicy` exists, which is why the
+    // AI permission tier cannot bound it — the trust check IS the boundary (ADR-089).
+    // Do not "temporarily" bypass this for a test fixture; use a trusted temp dir.
     if let Ok(cwd) = std::env::current_dir() {
         let project_init = cwd.join(".mae").join("init.scm");
-        layers.push(project_init);
+        if project_init.exists() {
+            if mae_core::workspace_trust::is_trusted(&cwd) {
+                layers.push(project_init);
+            } else {
+                let trust_file = mae_core::workspace_trust::trust_file_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "~/.config/mae/trusted-projects".to_string());
+                warn!(
+                    path = %project_init.display(),
+                    "skipping project-local init.scm: directory is not trusted"
+                );
+                editor.message_log.push(
+                    mae_core::MessageLevel::Warn,
+                    "init",
+                    format!(
+                        "Skipped {} — this project is not trusted. It would run arbitrary \
+                         code. To allow it, add this line to {}:\n    {}",
+                        project_init.display(),
+                        trust_file,
+                        cwd.display()
+                    ),
+                );
+            }
+        }
     }
 
-    // Legacy fallbacks (v0.6 compat): init.scm, scheme/init.scm in cwd.
-    // Skipped when a proper user init.scm exists — these are templates that
-    // would silently override user settings (e.g. theme) if loaded after it.
-    if !has_user_init {
-        layers.push(PathBuf::from("init.scm"));
-        layers.push(PathBuf::from("scheme/init.scm"));
-    }
+    // NOTE: the v0.6 `init.scm` / `scheme/init.scm` cwd fallbacks were removed in
+    // ADR-089 D3. They collided with ordinary repository filenames, so any cloned
+    // repo with a top-level `init.scm` executed on a fresh install (where
+    // `has_user_init` is false — precisely the least-protected case). Users on the
+    // v0.6 layout move their file to `~/.config/mae/init.scm`.
 
     let mut loaded = 0;
     let mut seen = std::collections::HashSet::new();
@@ -3200,6 +3236,97 @@ mod tests {
         let mut editor = Editor::new();
         // load_init_files returns a usize count
         let _count: usize = load_init_files(&mut scheme, &mut editor);
+    }
+
+    /// Serialise tests that mutate process-global cwd / `XDG_CONFIG_HOME`.
+    static INIT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Run `load_init_files` with cwd set to `project` and config isolated to
+    /// `cfg_home`, returning the editor's status line so the caller can tell
+    /// whether the project's init actually evaluated.
+    fn load_init_in(project: &std::path::Path, cfg_home: &std::path::Path) -> String {
+        let saved_cwd = std::env::current_dir().ok();
+        let saved_cfg = std::env::var("XDG_CONFIG_HOME").ok();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", cfg_home) };
+        std::env::set_current_dir(project).unwrap();
+
+        let mut scheme = require_scheme!();
+        let mut editor = Editor::new();
+        load_init_files(&mut scheme, &mut editor);
+        let status = editor.status_msg.clone();
+
+        if let Some(cwd) = saved_cwd {
+            let _ = std::env::set_current_dir(cwd);
+        }
+        match saved_cfg {
+            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
+        }
+        status
+    }
+
+    /// ADR-089: the attacker's test. A cloned repository carrying `.mae/init.scm`
+    /// must not have it evaluated, and the *same* directory must work once trusted —
+    /// so this pins both that the boundary holds and that the feature still exists.
+    #[test]
+    fn project_local_init_runs_only_from_a_trusted_directory() {
+        let _guard = INIT_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg_home = tmp.path().join("config");
+        let project = tmp.path().join("cloned-repo");
+        std::fs::create_dir_all(cfg_home.join("mae")).unwrap();
+        std::fs::create_dir_all(project.join(".mae")).unwrap();
+        std::fs::write(
+            project.join(".mae").join("init.scm"),
+            "(set-status \"HOSTILE-INIT-RAN\")",
+        )
+        .unwrap();
+
+        // Untrusted: must not evaluate.
+        let status = load_init_in(&project, &cfg_home);
+        assert!(
+            !status.contains("HOSTILE-INIT-RAN"),
+            "untrusted project init must NOT be evaluated, got status: {status:?}"
+        );
+
+        // Trusted: must evaluate — otherwise the guard has broken the feature.
+        std::fs::write(
+            cfg_home.join("mae").join("trusted-projects"),
+            format!("{}\n", project.canonicalize().unwrap().display()),
+        )
+        .unwrap();
+        let status = load_init_in(&project, &cfg_home);
+        assert!(
+            status.contains("HOSTILE-INIT-RAN"),
+            "explicitly trusted project init must still be evaluated, got: {status:?}"
+        );
+    }
+
+    /// ADR-089 D3: the v0.6 cwd fallbacks are gone. A repository with a top-level
+    /// `init.scm` — an entirely ordinary filename — must not execute it, and the
+    /// fresh-install case (no user init) was the one where it previously did.
+    #[test]
+    fn a_bare_cwd_init_scm_is_never_loaded() {
+        let _guard = INIT_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg_home = tmp.path().join("config-with-no-user-init");
+        let project = tmp.path().join("repo");
+        std::fs::create_dir_all(&cfg_home).unwrap();
+        std::fs::create_dir_all(project.join("scheme")).unwrap();
+        std::fs::write(project.join("init.scm"), "(set-status \"BARE-INIT-RAN\")").unwrap();
+        std::fs::write(
+            project.join("scheme").join("init.scm"),
+            "(set-status \"SCHEME-INIT-RAN\")",
+        )
+        .unwrap();
+
+        let status = load_init_in(&project, &cfg_home);
+        assert!(
+            !status.contains("BARE-INIT-RAN") && !status.contains("SCHEME-INIT-RAN"),
+            "legacy cwd init fallbacks must be retired, got status: {status:?}"
+        );
     }
 
     #[test]

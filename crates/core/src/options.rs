@@ -126,6 +126,20 @@ impl OptionRegistry {
                 opt!("tab_width", &["tab-width"],
                     "Display width of a tab character, in columns to the next tab-stop",
                     OptionKind::Int, "8", Some("editor.tab_width"), &[]),
+                opt!("ambiguous_width", &["ambiguous-width"],
+                    "Resolution for Unicode East_Asian_Width=Ambiguous characters (box-drawing, \
+                     Greek/Cyrillic subsets, etc): narrow (1 column, default -- correct for most \
+                     terminals/fonts) or wide (2 columns -- for CJK-locale terminals that render \
+                     these wide). See ADR-087 Rule 3 -- there is no universally correct answer; \
+                     this is Vim's 'ambiwidth' / WezTerm's/Ghostty's equivalent option.",
+                    OptionKind::String, "narrow", Some("editor.ambiguous_width"),
+                    &["narrow", "wide"]),
+                opt!("control_char_width", &["control-char-width"],
+                    "Display width (in columns) assigned to a raw control character (U+0000..=U+001F, \
+                     U+007F..=U+009F) when one appears in buffer/UI text. Unicode leaves this \
+                     undefined (unicode-width returns None); MAE previously collapsed it to a \
+                     silent 0. Does not affect tab (see tab_width) or newline handling.",
+                    OptionKind::Int, "0", Some("editor.control_char_width"), &[]),
                 opt!("org_hide_emphasis_markers", &["org-hide-emphasis-markers"],
                     "Hide *bold* and /italic/ markers in Org-mode",
                     OptionKind::Bool, "false", Some("editor.org_hide_emphasis_markers"), &[]),
@@ -410,6 +424,16 @@ impl OptionRegistry {
                 opt!("babel_timeout", &["babel-timeout"],
                     "Execution timeout in seconds for babel source blocks",
                     OptionKind::Int, "30", Some("babel.timeout"), &[]),
+                opt!("babel_trust_paths", &["babel-trust-paths"],
+                    "Comma-separated path patterns whose org files may execute `:eval yes` \
+                     source blocks WITHOUT a confirmation prompt, even when babel-confirm is \
+                     on. Patterns support `*` (trust everything — strongly discouraged), a \
+                     `dir/*` prefix, a `*/suffix`, a `*.ext` extension, and a bare directory \
+                     prefix. Empty (default) = nothing is pre-trusted, so every `:eval yes` \
+                     block in a file you open still asks. Set this only for directories whose \
+                     org files you author yourself: a trusted path is a standing grant to run \
+                     arbitrary code on open-and-execute.",
+                    OptionKind::String, "", Some("babel.trust_paths"), &[]),
                 opt!("babel_inherit_shell_env", &["babel-inherit-shell-env"],
                     "Merge the user's resolved interactive login shell environment (sourcing \
                      .bashrc/.zshrc/.profile via `$SHELL -i -l -c env`, resolved once and \
@@ -541,9 +565,9 @@ impl OptionRegistry {
                      unfiltered, e.g. for a deployment already tuned around the full flat list.",
                     OptionKind::Bool, "true", Some("mcp.tools_tiered_by_default"), &[]),
                 opt!("mcp_tool_category_allowlist", &["mcp-tool-category-allowlist"],
-                    "Comma-separated ToolCategory names (knowledge, lsp, dap, shell, commands, \
-                     git, web, ai, visual, debug, mcp — same taxonomy as request_tools) that \
-                     this MAE instance restricts MCP tool DISPATCH to, not just advertisement \
+                    "Comma-separated ToolCategory names (knowledge, execution, lsp, dap, shell, \
+                     commands, git, web, ai, visual, debug, mcp — same taxonomy as request_tools) \
+                     that this MAE instance restricts MCP tool DISPATCH to, not just advertisement \
                      (ADR-056). Empty (default) = unrestricted. Composes with (never overrides) \
                      any per-session declaration a client makes at initialize (permissionCeiling's \
                      toolCategoryAllowlist analogue) — the effective policy is always the \
@@ -1284,6 +1308,21 @@ impl OptionRegistry {
             *slot = value;
         }
     }
+}
+
+/// Escape `value` for embedding inside a double-quoted Scheme string literal.
+///
+/// @ai-caution: [config-corruption] The ONE place this escaping lives. Every
+/// writer of `(set-option! "name" "value")` into `init.scm` must call it —
+/// `Editor::save_option_to_init` (the `:set-save` path) and
+/// `config::write_managed_init_options` (the first-run/wizard path). An
+/// unescaped `"` or `\` in a value produces a malformed literal, and init.scm
+/// is the file MAE reads at startup: corrupting it breaks the user's entire
+/// config, not just the one option. The second writer was missing the escaping
+/// entirely (audit #599.2) — values like an `ai_api_key_command` containing a
+/// quoted shell argument reach both paths.
+pub fn scheme_string_literal(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// Parse a string as an integer value.

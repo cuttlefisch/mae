@@ -20,27 +20,62 @@ MAE has several security-relevant subsystems. This section documents the current
 ### Strong Protections
 
 **Permission tiers** — The AI agent operates under a configurable permission tier:
-- **readonly** — AI can read buffers and navigate, but cannot modify files
+- **readonly** — AI can read buffers and navigate, but cannot modify files (**default**)
 - **write** — AI can edit buffers and create files
-- **shell** — AI can execute shell commands (default)
+- **shell** — AI can execute shell commands
 - **privileged** — Full access including configuration changes
 
-> [!WARNING]
-> **The tier is not currently enforced on every path.** A pre-v0.15 audit found that the embedded
-> AI session does not consult the permission policy at all, and that the `write` tier reaches shell
-> effects through the Scheme-eval queue. This section previously claimed tiers were "enforced before
-> every tool execution with no bypass vectors" — that claim was wrong and has been removed. Tracked
-> privately as a security advisory; treat the tier as a guard-rail against accident, **not** as a
-> boundary against a prompt-injected or adversarial model, until that advisory is resolved.
+The tier is an **auto-approval ceiling**, not a wall. Since ADR-090 a permission check answers one
+of three things:
 
-**Setting the tier.** Only two surfaces actually reach the enforced policy:
+| Answer | When | What happens |
+|---|---|---|
+| **allow** | at or below `auto_approve_tier` | runs, no prompt |
+| **ask** | above `auto_approve_tier` | an interactive surface prompts a human; a non-interactive one **denies** |
+| **deny** | a session-declared ceiling (ADR-051), a tool-category restriction (ADR-085), or a configuration that would not parse | refused outright; no prompt can raise it |
+
+**The default changed in v0.15 and this is a breaking change.** MAE used to ship
+`auto_approve_tier = "trusted"` (= shell), which auto-approved essentially everything. It now ships
+**readonly**: reads run, writes and shell are *asked*. Nothing is silently denied, so the stricter
+default does not break `run_build`/`run_test` — it asks about them. If you want the old behaviour,
+set `auto_approve_tier = "shell"` explicitly and understand what you are granting.
+
+Which surfaces can ask:
+
+| Surface | `ask` |
+|---|---|
+| `mae-agent` TUI (the default AI surface, ADR-049) | prompts inline (`y` / `a` / `n`) |
+| Embedded editor session (`:ai`, `delegate()`) | prompts in the conversation buffer; answer with `:ai-accept` / `:ai-reject`. `ai-mode = auto-accept` pre-answers **ask** only — it can never turn a **deny** into an allow |
+| `mae-agent --prompt` | **denies** — no human attached, and it says so |
+| External MCP dispatch (VS Code/Copilot, Claude Code via the shim) | **denies** — MAE implements no MCP elicitation, and the requesting client is not the local human |
+| `mae --self-test` | **denies** — headless by definition |
+
+If you drive MAE from an external editor's agent, raise `auto_approve_tier` deliberately for that
+deployment; that path cannot prompt, so `ask` and `deny` look the same from the client's side.
+
+> [!WARNING]
+> **Tiers bound; they do not prevent.** A prompt is a usability mechanism that makes a restrictive
+> default affordable — it is **not** a security control. Anthropic reports users approve ~93% of
+> permission prompts. Symlink escapes, path-canonicalisation bypasses, and exfiltration through an
+> allowlisted binary all stay *within* a granted tier, and composition is unbounded: a write-tier
+> agent can edit a `Makefile` and then ask you to build. For genuinely untrusted input, run MAE in a
+> container. See ADR-084's "What this does *not* fix" for the full, deliberately unflattering list.
+
+**Setting the tier.** Only two surfaces reach the enforced policy:
 - `MAE_AI_PERMISSIONS=readonly|write|shell|privileged` (environment variable), or
-- `auto_approve_tier` in `config.toml`'s `[ai]` section — **lowercase values only**; an unrecognised
-  value currently falls back to `shell`, i.e. it fails *open*.
+- `auto_approve_tier` in `config.toml`'s `[ai]` section. Parsing is case-insensitive and accepts the
+  documented aliases (`standard`, `trusted`, `full`, `read-only`); an unrecognised value is a startup
+  error naming the bad value and the valid ones, rather than failing open.
 
 The `ai_tier` editor option (`(set-option! "ai_tier" …)` / `:set ai-tier …`) currently changes only the
-status-bar badge and does **not** alter the enforced policy. Earlier revisions of this document referred
-to an option named `permission_tier`; no such option exists.
+status-bar badge and does **not** alter the enforced policy (ADR-084 D7, still open). Earlier revisions
+of this document referred to an option named `permission_tier`; no such option exists.
+
+**Workspace trust** — A project-local `.mae/init.scm` is arbitrary Scheme, and Scheme can spawn processes, so evaluating one is equivalent to running the project's code. MAE evaluates it **only** from a directory listed in `~/.config/mae/trusted-projects` (one absolute path per line; `#` comments allowed). Untrusted directories are skipped with a message naming the file and the line to add. Trust is exact-match: it is deliberately **not** inherited by subdirectories, so trusting a project does not trust a vendored dependency cloned inside it. A missing, unreadable, or malformed trust list trusts nothing.
+
+Trust can only be granted by editing that file. There is no command, Scheme primitive, or MCP tool that grants it — an agent able to grant trust could then write `.mae/init.scm` and escalate across a restart. For the same reason, AI-originated writes to MAE's own configuration (`~/.config/mae/**` and any `.mae/**`) are refused across `create_file`, `rename_file`, and buffer saves; a human editing their own config, including `:set-save`, is unaffected.
+
+The legacy v0.6 fallbacks that loaded a bare `init.scm` or `scheme/init.scm` from the working directory have been removed — those filenames are too ordinary to be safe. Move such a file to `~/.config/mae/init.scm`.
 
 **Watchdog thread** — A background thread monitors AI operations for stalls. If an AI operation exceeds 10 seconds without progress, the watchdog captures a backtrace and triggers auto-recovery. The user can also cancel via Esc or Ctrl-C (input lock).
 
@@ -85,7 +120,7 @@ to an option named `permission_tier`; no such option exists.
 - **Secrets are never plaintext in config.toml.** `config.toml` is a legacy bootstrap; do not store API keys or the collab PSK in it directly.
 - **API keys:** Use `api_key_command` with a password manager (e.g., `api_key_command = "pass show anthropic/api-key"`), not plaintext `api_key`.
 - **Collab secrets:** Never put `collab_psk` plaintext in config.toml — use `collab_psk_command` (shell to pass/keychain), or preferably `collab_auth_mode = "key"` (Ed25519 trusted-peer mTLS) with the keystore at `$XDG_DATA_HOME/mae/collab/trusted_keys`.
-- **Permission tier:** Set it via the `MAE_AI_PERMISSIONS` environment variable (e.g. `MAE_AI_PERMISSIONS=write`), or lowercase `auto_approve_tier` under `[ai]` in `config.toml`. The `ai_tier` editor option does not affect enforcement — see the warning above. Until the tracked advisory is resolved, do not rely on any tier as a boundary against an adversarial or prompt-injected model; run MAE in a container for genuinely untrusted input.
+- **Permission tier:** The shipped default is now `readonly` (reads auto-approved, writes and shell *asked*). Raise it deliberately via `MAE_AI_PERMISSIONS` (e.g. `MAE_AI_PERMISSIONS=write`) or `auto_approve_tier` under `[ai]` in `config.toml` — and remember that a non-interactive surface (external MCP, `--prompt`, `--self-test`) denies rather than asks, so those deployments need an explicit tier. The `ai_tier` editor option does not affect enforcement — see the warning above. Do not rely on any tier as a boundary against an adversarial or prompt-injected model; run MAE in a container for genuinely untrusted input.
 - **Untrusted files:** Run MAE in a container when opening untrusted org files or working with untrusted AI prompts (see below).
 - **Transcripts:** Review files in `~/.local/share/mae/transcripts/` before sharing or committing them.
 - **MCP access:** The MCP socket is ephemeral (per-process PID). Only grant `mae-mcp-shim` access to tools appropriate for your trust level.

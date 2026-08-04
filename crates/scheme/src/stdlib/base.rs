@@ -49,11 +49,17 @@
 //! - **Full call/cc**: Captures entire VM state (stack + frames). One-shot
 //!   and multi-shot invocation supported. `dynamic-wind` is implemented
 //!   in Scheme (bootstrap) using `guard` for exception safety.
+//!
+//! @ai-caution: [architecture-debt] 2607 lines, long-standing accepted debt in
+//! `docs/AUDIT_BASELINE.json`. The +14% step came from ADR-084 D3's required tier argument on
+//! 268 registrations plus rustfmt reflowing the calls that gained it — mechanical, not new
+//! complexity. See ROADMAP.md, "Architecture Debt".
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::lisp_error::{Arity, LispError};
+use crate::permission::tier;
 use crate::value::Value;
 use crate::vm::Vm;
 
@@ -130,7 +136,7 @@ fn register_cxr_accessors(vm: &mut Vm) {
             name.push('r');
 
             let doc = format!("Composition of {depth} car/cdr operations");
-            vm.register_fn(&name, &doc, Arity::Fixed(1), move |args| {
+            vm.register_fn(&name, &doc, Arity::Fixed(1), tier::PURE, move |args| {
                 apply_cxr_path(&path, &args[0])
             });
         }
@@ -153,14 +159,19 @@ pub fn register(vm: &mut Vm) {
 // -- §6.1 Equivalence predicates --
 
 fn register_equivalence(vm: &mut Vm) {
-    vm.register_fn("eq?", "Identity equality", Arity::Fixed(2), |args| {
-        Ok(Value::Bool(args[0].is_eq(&args[1])))
-    });
+    vm.register_fn(
+        "eq?",
+        "Identity equality",
+        Arity::Fixed(2),
+        tier::PURE,
+        |args| Ok(Value::Bool(args[0].is_eq(&args[1]))),
+    );
 
     vm.register_fn(
         "eqv?",
         "Equivalent values (same as eq? for atoms)",
         Arity::Fixed(2),
+        tier::PURE,
         |args| Ok(Value::Bool(args[0].is_eqv(&args[1]))),
     );
 
@@ -168,6 +179,7 @@ fn register_equivalence(vm: &mut Vm) {
         "equal?",
         "Recursive structural equality",
         Arity::Fixed(2),
+        tier::PURE,
         |args| Ok(Value::Bool(args[0].is_equal(&args[1]))),
     );
 }
@@ -175,7 +187,7 @@ fn register_equivalence(vm: &mut Vm) {
 // -- §6.2 Numbers --
 
 fn register_arithmetic(vm: &mut Vm) {
-    vm.register_fn("+", "Add numbers", Arity::Variadic(0), |args| {
+    vm.register_fn("+", "Add numbers", Arity::Variadic(0), tier::PURE, |args| {
         let mut int_sum: i64 = 0;
         let mut is_float = false;
         let mut float_sum: f64 = 0.0;
@@ -211,152 +223,205 @@ fn register_arithmetic(vm: &mut Vm) {
         }
     });
 
-    vm.register_fn("-", "Subtract numbers", Arity::Variadic(1), |args| {
-        if args.len() == 1 {
-            return match &args[0] {
-                Value::Int(n) => Ok(Value::Int(-n)),
-                Value::Float(f) => Ok(Value::Float(-f)),
-                _ => Err(LispError::type_error("number", format!("{}", args[0]))),
-            };
-        }
-        let mut result = require_f64(&args[0])?;
-        let first_is_int = matches!(args[0], Value::Int(_));
-        let mut all_int = first_is_int;
-        for a in &args[1..] {
-            match a {
-                Value::Int(n) => result -= *n as f64,
-                Value::Float(f) => {
-                    all_int = false;
-                    result -= f;
-                }
-                _ => return Err(LispError::type_error("number", format!("{a}"))),
+    vm.register_fn(
+        "-",
+        "Subtract numbers",
+        Arity::Variadic(1),
+        tier::PURE,
+        |args| {
+            if args.len() == 1 {
+                return match &args[0] {
+                    Value::Int(n) => Ok(Value::Int(-n)),
+                    Value::Float(f) => Ok(Value::Float(-f)),
+                    _ => Err(LispError::type_error("number", format!("{}", args[0]))),
+                };
             }
-        }
-        if all_int && result.fract() == 0.0 {
-            Ok(Value::Int(result as i64))
-        } else {
-            Ok(Value::Float(result))
-        }
-    });
+            let mut result = require_f64(&args[0])?;
+            let first_is_int = matches!(args[0], Value::Int(_));
+            let mut all_int = first_is_int;
+            for a in &args[1..] {
+                match a {
+                    Value::Int(n) => result -= *n as f64,
+                    Value::Float(f) => {
+                        all_int = false;
+                        result -= f;
+                    }
+                    _ => return Err(LispError::type_error("number", format!("{a}"))),
+                }
+            }
+            if all_int && result.fract() == 0.0 {
+                Ok(Value::Int(result as i64))
+            } else {
+                Ok(Value::Float(result))
+            }
+        },
+    );
 
-    vm.register_fn("*", "Multiply numbers", Arity::Variadic(0), |args| {
-        let mut int_prod: i64 = 1;
-        let mut is_float = false;
-        let mut float_prod: f64 = 1.0;
-        for a in args {
-            match a {
-                Value::Int(n) => {
-                    if is_float {
-                        float_prod *= *n as f64;
-                    } else {
-                        match int_prod.checked_mul(*n) {
-                            Some(v) => int_prod = v,
-                            None => {
-                                float_prod = int_prod as f64 * *n as f64;
-                                is_float = true;
+    vm.register_fn(
+        "*",
+        "Multiply numbers",
+        Arity::Variadic(0),
+        tier::PURE,
+        |args| {
+            let mut int_prod: i64 = 1;
+            let mut is_float = false;
+            let mut float_prod: f64 = 1.0;
+            for a in args {
+                match a {
+                    Value::Int(n) => {
+                        if is_float {
+                            float_prod *= *n as f64;
+                        } else {
+                            match int_prod.checked_mul(*n) {
+                                Some(v) => int_prod = v,
+                                None => {
+                                    float_prod = int_prod as f64 * *n as f64;
+                                    is_float = true;
+                                }
                             }
                         }
                     }
-                }
-                Value::Float(f) => {
-                    if !is_float {
-                        float_prod = int_prod as f64;
-                        is_float = true;
+                    Value::Float(f) => {
+                        if !is_float {
+                            float_prod = int_prod as f64;
+                            is_float = true;
+                        }
+                        float_prod *= f;
                     }
-                    float_prod *= f;
+                    _ => return Err(LispError::type_error("number", format!("{a}"))),
                 }
-                _ => return Err(LispError::type_error("number", format!("{a}"))),
             }
-        }
-        if is_float {
-            Ok(Value::Float(float_prod))
-        } else {
-            Ok(Value::Int(int_prod))
-        }
-    });
+            if is_float {
+                Ok(Value::Float(float_prod))
+            } else {
+                Ok(Value::Int(int_prod))
+            }
+        },
+    );
 
-    vm.register_fn("/", "Divide numbers", Arity::Variadic(1), |args| {
-        if args.len() == 1 {
-            let d = require_f64(&args[0])?;
-            if d == 0.0 {
-                return Err(LispError::division_by_zero());
+    vm.register_fn(
+        "/",
+        "Divide numbers",
+        Arity::Variadic(1),
+        tier::PURE,
+        |args| {
+            if args.len() == 1 {
+                let d = require_f64(&args[0])?;
+                if d == 0.0 {
+                    return Err(LispError::division_by_zero());
+                }
+                let r = 1.0 / d;
+                if r.fract() == 0.0 && r.abs() < i64::MAX as f64 {
+                    return Ok(Value::Int(r as i64));
+                }
+                return Ok(Value::Float(r));
             }
-            let r = 1.0 / d;
-            if r.fract() == 0.0 && r.abs() < i64::MAX as f64 {
-                return Ok(Value::Int(r as i64));
+            let mut result = require_f64(&args[0])?;
+            for a in &args[1..] {
+                let d = require_f64(a)?;
+                if d == 0.0 {
+                    return Err(LispError::division_by_zero());
+                }
+                result /= d;
             }
-            return Ok(Value::Float(r));
-        }
-        let mut result = require_f64(&args[0])?;
-        for a in &args[1..] {
-            let d = require_f64(a)?;
-            if d == 0.0 {
-                return Err(LispError::division_by_zero());
+            if result.fract() == 0.0 && result.abs() < i64::MAX as f64 {
+                Ok(Value::Int(result as i64))
+            } else {
+                Ok(Value::Float(result))
             }
-            result /= d;
-        }
-        if result.fract() == 0.0 && result.abs() < i64::MAX as f64 {
-            Ok(Value::Int(result as i64))
-        } else {
-            Ok(Value::Float(result))
-        }
-    });
+        },
+    );
 
     // Comparison operators
-    vm.register_fn("=", "Numeric equality", Arity::Variadic(2), |args| {
-        Ok(Value::Bool(numeric_compare(args, |a, b| a == b)?))
-    });
-    vm.register_fn("<", "Less than", Arity::Variadic(2), |args| {
+    vm.register_fn(
+        "=",
+        "Numeric equality",
+        Arity::Variadic(2),
+        tier::PURE,
+        |args| Ok(Value::Bool(numeric_compare(args, |a, b| a == b)?)),
+    );
+    vm.register_fn("<", "Less than", Arity::Variadic(2), tier::PURE, |args| {
         Ok(Value::Bool(numeric_compare(args, |a, b| a < b)?))
     });
-    vm.register_fn(">", "Greater than", Arity::Variadic(2), |args| {
-        Ok(Value::Bool(numeric_compare(args, |a, b| a > b)?))
-    });
-    vm.register_fn("<=", "Less or equal", Arity::Variadic(2), |args| {
-        Ok(Value::Bool(numeric_compare(args, |a, b| a <= b)?))
-    });
-    vm.register_fn(">=", "Greater or equal", Arity::Variadic(2), |args| {
-        Ok(Value::Bool(numeric_compare(args, |a, b| a >= b)?))
-    });
+    vm.register_fn(
+        ">",
+        "Greater than",
+        Arity::Variadic(2),
+        tier::PURE,
+        |args| Ok(Value::Bool(numeric_compare(args, |a, b| a > b)?)),
+    );
+    vm.register_fn(
+        "<=",
+        "Less or equal",
+        Arity::Variadic(2),
+        tier::PURE,
+        |args| Ok(Value::Bool(numeric_compare(args, |a, b| a <= b)?)),
+    );
+    vm.register_fn(
+        ">=",
+        "Greater or equal",
+        Arity::Variadic(2),
+        tier::PURE,
+        |args| Ok(Value::Bool(numeric_compare(args, |a, b| a >= b)?)),
+    );
 
     // Integer arithmetic
-    vm.register_fn("quotient", "Integer division", Arity::Fixed(2), |args| {
-        let a = args[0].as_int()?;
-        let b = args[1].as_int()?;
-        if b == 0 {
-            return Err(LispError::division_by_zero());
-        }
-        Ok(Value::Int(a / b))
-    });
+    vm.register_fn(
+        "quotient",
+        "Integer division",
+        Arity::Fixed(2),
+        tier::PURE,
+        |args| {
+            let a = args[0].as_int()?;
+            let b = args[1].as_int()?;
+            if b == 0 {
+                return Err(LispError::division_by_zero());
+            }
+            Ok(Value::Int(a / b))
+        },
+    );
 
-    vm.register_fn("remainder", "Integer remainder", Arity::Fixed(2), |args| {
-        let a = args[0].as_int()?;
-        let b = args[1].as_int()?;
-        if b == 0 {
-            return Err(LispError::division_by_zero());
-        }
-        Ok(Value::Int(a % b))
-    });
+    vm.register_fn(
+        "remainder",
+        "Integer remainder",
+        Arity::Fixed(2),
+        tier::PURE,
+        |args| {
+            let a = args[0].as_int()?;
+            let b = args[1].as_int()?;
+            if b == 0 {
+                return Err(LispError::division_by_zero());
+            }
+            Ok(Value::Int(a % b))
+        },
+    );
 
-    vm.register_fn("modulo", "Integer modulo", Arity::Fixed(2), |args| {
-        let a = args[0].as_int()?;
-        let b = args[1].as_int()?;
-        if b == 0 {
-            return Err(LispError::division_by_zero());
-        }
-        // Use wrapping arithmetic to avoid overflow with i64::MIN
-        let r = a.wrapping_rem(b);
-        if r == 0 || (r > 0) == (b > 0) {
-            Ok(Value::Int(r))
-        } else {
-            Ok(Value::Int(r.wrapping_add(b)))
-        }
-    });
+    vm.register_fn(
+        "modulo",
+        "Integer modulo",
+        Arity::Fixed(2),
+        tier::PURE,
+        |args| {
+            let a = args[0].as_int()?;
+            let b = args[1].as_int()?;
+            if b == 0 {
+                return Err(LispError::division_by_zero());
+            }
+            // Use wrapping arithmetic to avoid overflow with i64::MIN
+            let r = a.wrapping_rem(b);
+            if r == 0 || (r > 0) == (b > 0) {
+                Ok(Value::Int(r))
+            } else {
+                Ok(Value::Int(r.wrapping_add(b)))
+            }
+        },
+    );
 
     vm.register_fn(
         "abs",
         "Absolute value",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Int(n) => Ok(Value::Int(n.checked_abs().unwrap_or(i64::MAX))),
             Value::Float(f) => Ok(Value::Float(f.abs())),
@@ -364,51 +429,64 @@ fn register_arithmetic(vm: &mut Vm) {
         },
     );
 
-    vm.register_fn("min", "Minimum of numbers", Arity::Variadic(1), |args| {
-        let mut result = args[0].clone();
-        let mut has_inexact = matches!(&args[0], Value::Float(_));
-        for a in &args[1..] {
-            if matches!(a, Value::Float(_)) {
-                has_inexact = true;
+    vm.register_fn(
+        "min",
+        "Minimum of numbers",
+        Arity::Variadic(1),
+        tier::PURE,
+        |args| {
+            let mut result = args[0].clone();
+            let mut has_inexact = matches!(&args[0], Value::Float(_));
+            for a in &args[1..] {
+                if matches!(a, Value::Float(_)) {
+                    has_inexact = true;
+                }
+                if numeric_lt(a, &result)? {
+                    result = a.clone();
+                }
             }
-            if numeric_lt(a, &result)? {
-                result = a.clone();
+            // R7RS §6.2.6: if any argument is inexact, result is inexact
+            if has_inexact {
+                if let Value::Int(n) = result {
+                    return Ok(Value::Float(n as f64));
+                }
             }
-        }
-        // R7RS §6.2.6: if any argument is inexact, result is inexact
-        if has_inexact {
-            if let Value::Int(n) = result {
-                return Ok(Value::Float(n as f64));
-            }
-        }
-        Ok(result)
-    });
+            Ok(result)
+        },
+    );
 
-    vm.register_fn("max", "Maximum of numbers", Arity::Variadic(1), |args| {
-        let mut result = args[0].clone();
-        let mut has_inexact = matches!(&args[0], Value::Float(_));
-        for a in &args[1..] {
-            if matches!(a, Value::Float(_)) {
-                has_inexact = true;
+    vm.register_fn(
+        "max",
+        "Maximum of numbers",
+        Arity::Variadic(1),
+        tier::PURE,
+        |args| {
+            let mut result = args[0].clone();
+            let mut has_inexact = matches!(&args[0], Value::Float(_));
+            for a in &args[1..] {
+                if matches!(a, Value::Float(_)) {
+                    has_inexact = true;
+                }
+                if numeric_lt(&result, a)? {
+                    result = a.clone();
+                }
             }
-            if numeric_lt(&result, a)? {
-                result = a.clone();
+            // R7RS §6.2.6: if any argument is inexact, result is inexact
+            if has_inexact {
+                if let Value::Int(n) = result {
+                    return Ok(Value::Float(n as f64));
+                }
             }
-        }
-        // R7RS §6.2.6: if any argument is inexact, result is inexact
-        if has_inexact {
-            if let Value::Int(n) = result {
-                return Ok(Value::Float(n as f64));
-            }
-        }
-        Ok(result)
-    });
+            Ok(result)
+        },
+    );
 
     vm.register_fn(
         // R7RS §6.2.6: floor/ceiling/round/truncate return inexact when given inexact.
         "floor",
         "Largest integer not greater than x",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Int(n) => Ok(Value::Int(*n)),
             Value::Float(f) => Ok(Value::Float(f.floor())),
@@ -420,6 +498,7 @@ fn register_arithmetic(vm: &mut Vm) {
         "ceiling",
         "Smallest integer not less than x",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Int(n) => Ok(Value::Int(*n)),
             Value::Float(f) => Ok(Value::Float(f.ceil())),
@@ -431,6 +510,7 @@ fn register_arithmetic(vm: &mut Vm) {
         "round",
         "Round to nearest integer (banker's rounding: half to even)",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Int(n) => Ok(Value::Int(*n)),
             Value::Float(f) => {
@@ -459,6 +539,7 @@ fn register_arithmetic(vm: &mut Vm) {
         "truncate",
         "Truncate toward zero",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Int(n) => Ok(Value::Int(*n)),
             Value::Float(f) => Ok(Value::Float(f.trunc())),
@@ -470,6 +551,7 @@ fn register_arithmetic(vm: &mut Vm) {
         "exact->inexact",
         "Convert to inexact",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Int(n) => Ok(Value::Float(*n as f64)),
             Value::Float(f) => Ok(Value::Float(*f)),
@@ -481,6 +563,7 @@ fn register_arithmetic(vm: &mut Vm) {
         "inexact->exact",
         "Convert to exact",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Int(n) => Ok(Value::Int(*n)),
             Value::Float(f) => Ok(Value::Int(*f as i64)),
@@ -492,6 +575,7 @@ fn register_arithmetic(vm: &mut Vm) {
         "number->string",
         "Convert number to string",
         Arity::Variadic(1),
+        tier::PURE,
         |args| {
             let radix = if args.len() > 1 {
                 args[1].as_int()? as u32
@@ -519,6 +603,7 @@ fn register_arithmetic(vm: &mut Vm) {
         "string->number",
         "Parse string to number",
         Arity::Variadic(1),
+        tier::PURE,
         |args| {
             let s = args[0].as_str()?;
             let radix = if args.len() > 1 {
@@ -541,18 +626,23 @@ fn register_arithmetic(vm: &mut Vm) {
     );
 
     // Numeric predicates
-    vm.register_fn("zero?", "Is zero?", Arity::Fixed(1), |args| {
-        match &args[0] {
+    vm.register_fn(
+        "zero?",
+        "Is zero?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| match &args[0] {
             Value::Int(n) => Ok(Value::Bool(*n == 0)),
             Value::Float(f) => Ok(Value::Bool(*f == 0.0)),
             _ => Err(LispError::type_error("number", format!("{}", args[0]))),
-        }
-    });
+        },
+    );
 
     vm.register_fn(
         "positive?",
         "Is positive?",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Int(n) => Ok(Value::Bool(*n > 0)),
             Value::Float(f) => Ok(Value::Bool(*f > 0.0)),
@@ -564,6 +654,7 @@ fn register_arithmetic(vm: &mut Vm) {
         "negative?",
         "Is negative?",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Int(n) => Ok(Value::Bool(*n < 0)),
             Value::Float(f) => Ok(Value::Bool(*f < 0.0)),
@@ -571,18 +662,27 @@ fn register_arithmetic(vm: &mut Vm) {
         },
     );
 
-    vm.register_fn("odd?", "Is odd integer?", Arity::Fixed(1), |args| {
-        Ok(Value::Bool(args[0].as_int()? % 2 != 0))
-    });
+    vm.register_fn(
+        "odd?",
+        "Is odd integer?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| Ok(Value::Bool(args[0].as_int()? % 2 != 0)),
+    );
 
-    vm.register_fn("even?", "Is even integer?", Arity::Fixed(1), |args| {
-        Ok(Value::Bool(args[0].as_int()? % 2 == 0))
-    });
+    vm.register_fn(
+        "even?",
+        "Is even integer?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| Ok(Value::Bool(args[0].as_int()? % 2 == 0)),
+    );
 
     vm.register_fn(
         "exact?",
         "Is exact number?",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Int(_) => Ok(Value::Bool(true)),
             Value::Float(_) => Ok(Value::Bool(false)),
@@ -594,6 +694,7 @@ fn register_arithmetic(vm: &mut Vm) {
         "inexact?",
         "Is inexact number?",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Int(_) => Ok(Value::Bool(false)),
             Value::Float(_) => Ok(Value::Bool(true)),
@@ -605,6 +706,7 @@ fn register_arithmetic(vm: &mut Vm) {
         "integer?",
         "Is integer?",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Int(_) => Ok(Value::Bool(true)),
             Value::Float(f) => Ok(Value::Bool(f.fract() == 0.0)),
@@ -616,6 +718,7 @@ fn register_arithmetic(vm: &mut Vm) {
         "exact",
         "Convert to exact",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Int(n) => Ok(Value::Int(*n)),
             Value::Float(f) => Ok(Value::Int(*f as i64)),
@@ -627,6 +730,7 @@ fn register_arithmetic(vm: &mut Vm) {
         "inexact",
         "Convert to inexact",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Int(n) => Ok(Value::Float(*n as f64)),
             Value::Float(f) => Ok(Value::Float(*f)),
@@ -638,6 +742,7 @@ fn register_arithmetic(vm: &mut Vm) {
         "infinite?",
         "Is infinite?",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Float(f) => Ok(Value::Bool(f.is_infinite())),
             Value::Int(_) => Ok(Value::Bool(false)),
@@ -645,17 +750,23 @@ fn register_arithmetic(vm: &mut Vm) {
         },
     );
 
-    vm.register_fn("nan?", "Is NaN?", Arity::Fixed(1), |args| match &args[0] {
-        Value::Float(f) => Ok(Value::Bool(f.is_nan())),
-        Value::Int(_) => Ok(Value::Bool(false)),
-        _ => Err(LispError::type_error("number", format!("{}", args[0]))),
-    });
+    vm.register_fn(
+        "nan?",
+        "Is NaN?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| match &args[0] {
+            Value::Float(f) => Ok(Value::Bool(f.is_nan())),
+            Value::Int(_) => Ok(Value::Bool(false)),
+            _ => Err(LispError::type_error("number", format!("{}", args[0]))),
+        },
+    );
 }
 
 // -- §6.3 Booleans --
 
 fn register_booleans(vm: &mut Vm) {
-    vm.register_fn("not", "Boolean not", Arity::Fixed(1), |args| {
+    vm.register_fn("not", "Boolean not", Arity::Fixed(1), tier::PURE, |args| {
         Ok(Value::Bool(args[0].is_false()))
     });
 
@@ -663,6 +774,7 @@ fn register_booleans(vm: &mut Vm) {
         "boolean=?",
         "Boolean equality",
         Arity::Variadic(2),
+        tier::PURE,
         |args| {
             let first = args[0].is_true();
             Ok(Value::Bool(args[1..].iter().all(|a| a.is_true() == first)))
@@ -673,103 +785,148 @@ fn register_booleans(vm: &mut Vm) {
 // -- §6.4 Pairs and lists --
 
 fn register_pairs_lists(vm: &mut Vm) {
-    vm.register_fn("cons", "Construct pair", Arity::Fixed(2), |args| {
-        Ok(Value::cons(args[0].clone(), args[1].clone()))
+    vm.register_fn(
+        "cons",
+        "Construct pair",
+        Arity::Fixed(2),
+        tier::PURE,
+        |args| Ok(Value::cons(args[0].clone(), args[1].clone())),
+    );
+
+    vm.register_fn(
+        "car",
+        "First of pair",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| args[0].car(),
+    );
+
+    vm.register_fn("cdr", "Rest of pair", Arity::Fixed(1), tier::PURE, |args| {
+        args[0].cdr()
     });
 
-    vm.register_fn("car", "First of pair", Arity::Fixed(1), |args| {
-        args[0].car()
-    });
+    vm.register_fn(
+        "set-car!",
+        "Set car of pair",
+        Arity::Fixed(2),
+        tier::PURE,
+        |args| {
+            if matches!(&args[0], Value::Pair(_)) {
+                Err(LispError::immutable("pair (set-car!)"))
+            } else {
+                Err(LispError::type_error("pair", format!("{}", args[0])))
+            }
+        },
+    );
 
-    vm.register_fn("cdr", "Rest of pair", Arity::Fixed(1), |args| args[0].cdr());
-
-    vm.register_fn("set-car!", "Set car of pair", Arity::Fixed(2), |args| {
-        if matches!(&args[0], Value::Pair(_)) {
-            Err(LispError::immutable("pair (set-car!)"))
-        } else {
-            Err(LispError::type_error("pair", format!("{}", args[0])))
-        }
-    });
-
-    vm.register_fn("set-cdr!", "Set cdr of pair", Arity::Fixed(2), |args| {
-        if matches!(&args[0], Value::Pair(_)) {
-            Err(LispError::immutable("pair (set-cdr!)"))
-        } else {
-            Err(LispError::type_error("pair", format!("{}", args[0])))
-        }
-    });
+    vm.register_fn(
+        "set-cdr!",
+        "Set cdr of pair",
+        Arity::Fixed(2),
+        tier::PURE,
+        |args| {
+            if matches!(&args[0], Value::Pair(_)) {
+                Err(LispError::immutable("pair (set-cdr!)"))
+            } else {
+                Err(LispError::type_error("pair", format!("{}", args[0])))
+            }
+        },
+    );
 
     // mae-scheme: pairs are immutable (Rc-based). list-set! is registered
     // with a helpful error message rather than being absent.
     vm.register_fn(
         "list-set!",
         "Set element of list. Error: mae-scheme pairs are immutable. Build new lists with cons/append.",
-        Arity::Fixed(3),
+        Arity::Fixed(3), tier::PURE,
         |_args| Err(LispError::user(
             "list-set!: mae-scheme pairs are immutable. Use (append (list-head lst k) (cons new-val (list-tail lst (+ k 1)))) to construct a modified list.",
             vec![],
         )),
     );
 
-    vm.register_fn("list", "Construct list", Arity::Variadic(0), |args| {
-        Ok(Value::list(args.to_vec()))
-    });
+    vm.register_fn(
+        "list",
+        "Construct list",
+        Arity::Variadic(0),
+        tier::PURE,
+        |args| Ok(Value::list(args.to_vec())),
+    );
 
-    vm.register_fn("length", "Length of list", Arity::Fixed(1), |args| {
-        let mut len = 0i64;
-        let mut current = args[0].clone();
-        loop {
-            match current {
-                Value::Null => return Ok(Value::Int(len)),
-                Value::Pair(p) => {
-                    len += 1;
-                    current = p.1.clone();
-                }
-                _ => return Err(LispError::type_error("proper list", format!("{}", args[0]))),
-            }
-        }
-    });
-
-    vm.register_fn("append", "Append lists", Arity::Variadic(0), |args| {
-        if args.is_empty() {
-            return Ok(Value::Null);
-        }
-        if args.len() == 1 {
-            return Ok(args[0].clone());
-        }
-        let mut elems = Vec::new();
-        for a in &args[..args.len() - 1] {
-            let mut cur = a.clone();
+    vm.register_fn(
+        "length",
+        "Length of list",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| {
+            let mut len = 0i64;
+            let mut current = args[0].clone();
             loop {
-                match cur {
-                    Value::Null => break,
+                match current {
+                    Value::Null => return Ok(Value::Int(len)),
                     Value::Pair(p) => {
-                        elems.push(p.0.clone());
-                        cur = p.1.clone();
+                        len += 1;
+                        current = p.1.clone();
                     }
-                    _ => return Err(LispError::type_error("list", format!("{a}"))),
+                    _ => return Err(LispError::type_error("proper list", format!("{}", args[0]))),
                 }
             }
-        }
-        let mut result = args.last().unwrap().clone();
-        for elem in elems.into_iter().rev() {
-            result = Value::cons(elem, result);
-        }
-        Ok(result)
-    });
+        },
+    );
 
-    vm.register_fn("reverse", "Reverse a list", Arity::Fixed(1), |args| {
-        let v = args[0]
-            .to_vec()
-            .map_err(|_| LispError::type_error("list", format!("{}", args[0])))?;
-        let reversed: Vec<Value> = v.into_iter().rev().collect();
-        Ok(Value::list(reversed))
-    });
+    vm.register_fn(
+        "append",
+        "Append lists",
+        Arity::Variadic(0),
+        tier::PURE,
+        |args| {
+            if args.is_empty() {
+                return Ok(Value::Null);
+            }
+            if args.len() == 1 {
+                return Ok(args[0].clone());
+            }
+            let mut elems = Vec::new();
+            for a in &args[..args.len() - 1] {
+                let mut cur = a.clone();
+                loop {
+                    match cur {
+                        Value::Null => break,
+                        Value::Pair(p) => {
+                            elems.push(p.0.clone());
+                            cur = p.1.clone();
+                        }
+                        _ => return Err(LispError::type_error("list", format!("{a}"))),
+                    }
+                }
+            }
+            let mut result = args.last().unwrap().clone();
+            for elem in elems.into_iter().rev() {
+                result = Value::cons(elem, result);
+            }
+            Ok(result)
+        },
+    );
+
+    vm.register_fn(
+        "reverse",
+        "Reverse a list",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| {
+            let v = args[0]
+                .to_vec()
+                .map_err(|_| LispError::type_error("list", format!("{}", args[0])))?;
+            let reversed: Vec<Value> = v.into_iter().rev().collect();
+            Ok(Value::list(reversed))
+        },
+    );
 
     vm.register_fn(
         "list-tail",
         "Return sublist after k elements",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let k = args[1].as_int()? as usize;
             let mut cur = args[0].clone();
@@ -783,21 +940,31 @@ fn register_pairs_lists(vm: &mut Vm) {
         },
     );
 
-    vm.register_fn("list-ref", "Return k-th element", Arity::Fixed(2), |args| {
-        let k = args[1].as_int()? as usize;
-        let mut cur = args[0].clone();
-        for _ in 0..k {
-            cur = match cur {
-                Value::Pair(p) => p.1.clone(),
-                _ => return Err(LispError::user("list-ref: index out of range", vec![])),
-            };
-        }
-        cur.car()
-    });
+    vm.register_fn(
+        "list-ref",
+        "Return k-th element",
+        Arity::Fixed(2),
+        tier::PURE,
+        |args| {
+            let k = args[1].as_int()? as usize;
+            let mut cur = args[0].clone();
+            for _ in 0..k {
+                cur = match cur {
+                    Value::Pair(p) => p.1.clone(),
+                    _ => return Err(LispError::user("list-ref: index out of range", vec![])),
+                };
+            }
+            cur.car()
+        },
+    );
 
-    vm.register_fn("list?", "Is a proper list?", Arity::Fixed(1), |args| {
-        Ok(Value::Bool(args[0].is_list()))
-    });
+    vm.register_fn(
+        "list?",
+        "Is a proper list?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| Ok(Value::Bool(args[0].is_list())),
+    );
 
     // R7RS §6.4 + (scheme cxr): generic cXr accessor registration.
     // Parses the a/d path from the name and applies car/cdr right-to-left.
@@ -807,85 +974,110 @@ fn register_pairs_lists(vm: &mut Vm) {
     // Association lists
     // assoc is defined in Scheme bootstrap (supports optional comparator)
 
-    vm.register_fn("assv", "Find in alist by eqv?", Arity::Fixed(2), |args| {
-        let key = &args[0];
-        let mut cur = args[1].clone();
-        loop {
-            match cur {
-                Value::Null => return Ok(Value::Bool(false)),
-                Value::Pair(p) => {
-                    if let Value::Pair(entry) = &p.0 {
-                        if entry.0.is_eqv(key) {
-                            return Ok(p.0.clone());
+    vm.register_fn(
+        "assv",
+        "Find in alist by eqv?",
+        Arity::Fixed(2),
+        tier::PURE,
+        |args| {
+            let key = &args[0];
+            let mut cur = args[1].clone();
+            loop {
+                match cur {
+                    Value::Null => return Ok(Value::Bool(false)),
+                    Value::Pair(p) => {
+                        if let Value::Pair(entry) = &p.0 {
+                            if entry.0.is_eqv(key) {
+                                return Ok(p.0.clone());
+                            }
                         }
+                        cur = p.1.clone();
                     }
-                    cur = p.1.clone();
+                    _ => return Err(LispError::type_error("list", format!("{}", args[1]))),
                 }
-                _ => return Err(LispError::type_error("list", format!("{}", args[1]))),
             }
-        }
-    });
+        },
+    );
 
-    vm.register_fn("assq", "Find in alist by eq?", Arity::Fixed(2), |args| {
-        let key = &args[0];
-        let mut cur = args[1].clone();
-        loop {
-            match cur {
-                Value::Null => return Ok(Value::Bool(false)),
-                Value::Pair(p) => {
-                    if let Value::Pair(entry) = &p.0 {
-                        if entry.0.is_eq(key) {
-                            return Ok(p.0.clone());
+    vm.register_fn(
+        "assq",
+        "Find in alist by eq?",
+        Arity::Fixed(2),
+        tier::PURE,
+        |args| {
+            let key = &args[0];
+            let mut cur = args[1].clone();
+            loop {
+                match cur {
+                    Value::Null => return Ok(Value::Bool(false)),
+                    Value::Pair(p) => {
+                        if let Value::Pair(entry) = &p.0 {
+                            if entry.0.is_eq(key) {
+                                return Ok(p.0.clone());
+                            }
                         }
+                        cur = p.1.clone();
                     }
-                    cur = p.1.clone();
+                    _ => return Err(LispError::type_error("list", format!("{}", args[1]))),
                 }
-                _ => return Err(LispError::type_error("list", format!("{}", args[1]))),
             }
-        }
-    });
+        },
+    );
 
     // member is defined in Scheme bootstrap (supports optional comparator)
 
-    vm.register_fn("memv", "Find in list by eqv?", Arity::Fixed(2), |args| {
-        let key = &args[0];
-        let mut cur = args[1].clone();
-        loop {
-            match cur {
-                Value::Null => return Ok(Value::Bool(false)),
-                Value::Pair(ref p) => {
-                    if p.0.is_eqv(key) {
-                        return Ok(cur);
+    vm.register_fn(
+        "memv",
+        "Find in list by eqv?",
+        Arity::Fixed(2),
+        tier::PURE,
+        |args| {
+            let key = &args[0];
+            let mut cur = args[1].clone();
+            loop {
+                match cur {
+                    Value::Null => return Ok(Value::Bool(false)),
+                    Value::Pair(ref p) => {
+                        if p.0.is_eqv(key) {
+                            return Ok(cur);
+                        }
+                        cur = p.1.clone();
                     }
-                    cur = p.1.clone();
+                    _ => return Err(LispError::type_error("list", format!("{}", args[1]))),
                 }
-                _ => return Err(LispError::type_error("list", format!("{}", args[1]))),
             }
-        }
-    });
+        },
+    );
 
-    vm.register_fn("memq", "Find in list by eq?", Arity::Fixed(2), |args| {
-        let key = &args[0];
-        let mut cur = args[1].clone();
-        loop {
-            match cur {
-                Value::Null => return Ok(Value::Bool(false)),
-                Value::Pair(ref p) => {
-                    if p.0.is_eq(key) {
-                        return Ok(cur);
+    vm.register_fn(
+        "memq",
+        "Find in list by eq?",
+        Arity::Fixed(2),
+        tier::PURE,
+        |args| {
+            let key = &args[0];
+            let mut cur = args[1].clone();
+            loop {
+                match cur {
+                    Value::Null => return Ok(Value::Bool(false)),
+                    Value::Pair(ref p) => {
+                        if p.0.is_eq(key) {
+                            return Ok(cur);
+                        }
+                        cur = p.1.clone();
                     }
-                    cur = p.1.clone();
+                    _ => return Err(LispError::type_error("list", format!("{}", args[1]))),
                 }
-                _ => return Err(LispError::type_error("list", format!("{}", args[1]))),
             }
-        }
-    });
+        },
+    );
 
     // make-list, list-set!, list-copy
     vm.register_fn(
         "make-list",
         "Create list of k elements",
         Arity::Variadic(1),
+        tier::PURE,
         |args| {
             let k = args[0].as_int()? as usize;
             let fill = if args.len() > 1 {
@@ -901,6 +1093,7 @@ fn register_pairs_lists(vm: &mut Vm) {
         "list-copy",
         "Shallow copy a list",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             let elems = args[0]
                 .to_vec()
@@ -909,19 +1102,25 @@ fn register_pairs_lists(vm: &mut Vm) {
         },
     );
 
-    vm.register_fn("symbol=?", "Compare symbols", Arity::Variadic(2), |args| {
-        for arg in args {
-            if !matches!(arg, Value::Symbol(_)) {
-                return Err(LispError::type_error("symbol", format!("{arg}")));
+    vm.register_fn(
+        "symbol=?",
+        "Compare symbols",
+        Arity::Variadic(2),
+        tier::PURE,
+        |args| {
+            for arg in args {
+                if !matches!(arg, Value::Symbol(_)) {
+                    return Err(LispError::type_error("symbol", format!("{arg}")));
+                }
             }
-        }
-        for i in 0..args.len() - 1 {
-            if !args[i].is_eq(&args[i + 1]) {
-                return Ok(Value::Bool(false));
+            for i in 0..args.len() - 1 {
+                if !args[i].is_eq(&args[i + 1]) {
+                    return Ok(Value::Bool(false));
+                }
             }
-        }
-        Ok(Value::Bool(true))
-    });
+            Ok(Value::Bool(true))
+        },
+    );
 }
 
 // -- §6.5 Symbols --
@@ -931,6 +1130,7 @@ fn register_symbols(vm: &mut Vm) {
         "symbol->string",
         "Convert symbol to string",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Symbol(s) => Ok(Value::String(Rc::from(s.name()))),
             _ => Err(LispError::type_error("symbol", format!("{}", args[0]))),
@@ -941,6 +1141,7 @@ fn register_symbols(vm: &mut Vm) {
         "string->symbol",
         "Convert string to symbol",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             let s = args[0].as_str()?;
             Ok(Value::symbol(s))
@@ -958,6 +1159,7 @@ fn register_control(vm: &mut Vm) {
         "apply",
         "Apply procedure to list of arguments",
         Arity::Variadic(2),
+        tier::PURE,
         |_args| {
             Err(LispError::internal(
                 "apply must be compiled as a special form (use Op::Apply)",
@@ -969,6 +1171,7 @@ fn register_control(vm: &mut Vm) {
         "call-with-current-continuation",
         "Capture current continuation",
         Arity::Fixed(1),
+        tier::PURE,
         |_args| {
             Err(LispError::internal(
                 "call/cc must be compiled as a special form",
@@ -980,6 +1183,7 @@ fn register_control(vm: &mut Vm) {
         "call/cc",
         "Capture current continuation (alias)",
         Arity::Fixed(1),
+        tier::PURE,
         |_args| {
             Err(LispError::internal(
                 "call/cc must be compiled as a special form",
@@ -991,6 +1195,7 @@ fn register_control(vm: &mut Vm) {
         "values",
         "Return multiple values",
         Arity::Variadic(0),
+        tier::PURE,
         |args| {
             if args.len() == 1 {
                 Ok(args[0].clone())
@@ -1006,6 +1211,7 @@ fn register_control(vm: &mut Vm) {
         "call-with-values",
         "Call consumer with values from producer",
         Arity::Fixed(2),
+        tier::PURE,
         |_args| {
             Err(LispError::internal(
                 "call-with-values requires VM-level implementation",
@@ -1018,6 +1224,7 @@ fn register_control(vm: &mut Vm) {
         "eval",
         "Evaluate expression in environment (stub)",
         Arity::Variadic(1),
+        tier::PURE,
         |_args| {
             Err(LispError::user(
                 "eval: not yet implemented (requires VM access at runtime)",
@@ -1030,6 +1237,7 @@ fn register_control(vm: &mut Vm) {
         "interaction-environment",
         "Return the interaction environment",
         Arity::Fixed(0),
+        tier::PURE,
         |_args| Ok(Value::symbol("interaction")),
     );
 
@@ -1037,6 +1245,7 @@ fn register_control(vm: &mut Vm) {
         "scheme-report-environment",
         "Return the R7RS environment",
         Arity::Fixed(1),
+        tier::PURE,
         |_args| Ok(Value::symbol("r7rs")),
     );
 }
@@ -1259,6 +1468,7 @@ fn register_extra_numeric(vm: &mut Vm) {
         "gcd",
         "Greatest common divisor",
         Arity::Variadic(0),
+        tier::PURE,
         |args| {
             if args.is_empty() {
                 return Ok(Value::Int(0));
@@ -1272,66 +1482,78 @@ fn register_extra_numeric(vm: &mut Vm) {
         },
     );
 
-    vm.register_fn("lcm", "Least common multiple", Arity::Variadic(0), |args| {
-        if args.is_empty() {
-            return Ok(Value::Int(1));
-        }
-        let mut result = args[0].as_int()?.unsigned_abs();
-        for arg in &args[1..] {
-            let b = arg.as_int()?.unsigned_abs();
-            if result == 0 || b == 0 {
-                result = 0;
-            } else {
-                result = result / gcd_u64(result, b) * b;
+    vm.register_fn(
+        "lcm",
+        "Least common multiple",
+        Arity::Variadic(0),
+        tier::PURE,
+        |args| {
+            if args.is_empty() {
+                return Ok(Value::Int(1));
             }
-        }
-        Ok(Value::Int(result as i64))
-    });
-
-    vm.register_fn("expt", "Raise to power", Arity::Fixed(2), |args| {
-        // Exact integer exponentiation when both args are exact and exp is non-negative integer
-        if args[0].is_exact() && args[1].is_exact() {
-            if let (Ok(b), Ok(e)) = (args[0].as_int(), args[1].as_int()) {
-                if e >= 0 {
-                    let mut result: i64 = 1;
-                    let mut base = b;
-                    let mut exp = e as u64;
-                    let mut overflow = false;
-                    while exp > 0 {
-                        if exp & 1 == 1 {
-                            match result.checked_mul(base) {
-                                Some(r) => result = r,
-                                None => {
-                                    overflow = true;
-                                    break;
-                                }
-                            }
-                        }
-                        exp >>= 1;
-                        if exp > 0 {
-                            match base.checked_mul(base) {
-                                Some(r) => base = r,
-                                None => {
-                                    overflow = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    if !overflow {
-                        return Ok(Value::Int(result));
-                    }
-                    // Overflow: fall through to f64
+            let mut result = args[0].as_int()?.unsigned_abs();
+            for arg in &args[1..] {
+                let b = arg.as_int()?.unsigned_abs();
+                if result == 0 || b == 0 {
+                    result = 0;
+                } else {
+                    result = result / gcd_u64(result, b) * b;
                 }
             }
-        }
-        let base = require_f64(&args[0])?;
-        let exp = require_f64(&args[1])?;
-        let result = base.powf(exp);
-        Ok(Value::Float(result))
-    });
+            Ok(Value::Int(result as i64))
+        },
+    );
 
-    vm.register_fn("sqrt", "Square root", Arity::Fixed(1), |args| {
+    vm.register_fn(
+        "expt",
+        "Raise to power",
+        Arity::Fixed(2),
+        tier::PURE,
+        |args| {
+            // Exact integer exponentiation when both args are exact and exp is non-negative integer
+            if args[0].is_exact() && args[1].is_exact() {
+                if let (Ok(b), Ok(e)) = (args[0].as_int(), args[1].as_int()) {
+                    if e >= 0 {
+                        let mut result: i64 = 1;
+                        let mut base = b;
+                        let mut exp = e as u64;
+                        let mut overflow = false;
+                        while exp > 0 {
+                            if exp & 1 == 1 {
+                                match result.checked_mul(base) {
+                                    Some(r) => result = r,
+                                    None => {
+                                        overflow = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            exp >>= 1;
+                            if exp > 0 {
+                                match base.checked_mul(base) {
+                                    Some(r) => base = r,
+                                    None => {
+                                        overflow = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if !overflow {
+                            return Ok(Value::Int(result));
+                        }
+                        // Overflow: fall through to f64
+                    }
+                }
+            }
+            let base = require_f64(&args[0])?;
+            let exp = require_f64(&args[1])?;
+            let result = base.powf(exp);
+            Ok(Value::Float(result))
+        },
+    );
+
+    vm.register_fn("sqrt", "Square root", Arity::Fixed(1), tier::PURE, |args| {
         let n = require_f64(&args[0])?;
         let result = n.sqrt();
         if args[0].is_exact() && result == result.floor() && result >= 0.0 {
@@ -1342,25 +1564,38 @@ fn register_extra_numeric(vm: &mut Vm) {
     });
 
     // R7RS numeric predicates
-    vm.register_fn("complex?", "Is complex number?", Arity::Fixed(1), |args| {
-        // All numbers are complex in R7RS (no separate complex type)
-        Ok(Value::Bool(matches!(
-            args[0],
-            Value::Int(_) | Value::Float(_)
-        )))
-    });
+    vm.register_fn(
+        "complex?",
+        "Is complex number?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| {
+            // All numbers are complex in R7RS (no separate complex type)
+            Ok(Value::Bool(matches!(
+                args[0],
+                Value::Int(_) | Value::Float(_)
+            )))
+        },
+    );
 
-    vm.register_fn("real?", "Is real number?", Arity::Fixed(1), |args| {
-        Ok(Value::Bool(matches!(
-            args[0],
-            Value::Int(_) | Value::Float(_)
-        )))
-    });
+    vm.register_fn(
+        "real?",
+        "Is real number?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| {
+            Ok(Value::Bool(matches!(
+                args[0],
+                Value::Int(_) | Value::Float(_)
+            )))
+        },
+    );
 
     vm.register_fn(
         "rational?",
         "Is rational number?",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Int(_) => Ok(Value::Bool(true)),
             Value::Float(f) => Ok(Value::Bool(f.is_finite())),
@@ -1372,6 +1607,7 @@ fn register_extra_numeric(vm: &mut Vm) {
         "exact-integer?",
         "Is exact integer?",
         Arity::Fixed(1),
+        tier::PURE,
         |args| Ok(Value::Bool(matches!(args[0], Value::Int(_)))),
     );
 
@@ -1379,6 +1615,7 @@ fn register_extra_numeric(vm: &mut Vm) {
         "square",
         "Square a number",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Int(n) => match n.checked_mul(*n) {
                 Some(v) => Ok(Value::Int(v)),
@@ -1393,6 +1630,7 @@ fn register_extra_numeric(vm: &mut Vm) {
         "exact-integer-sqrt",
         "Integer square root",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             let n = args[0].as_int()?;
             if n < 0 {
@@ -1426,6 +1664,7 @@ fn register_extra_numeric(vm: &mut Vm) {
         "floor-quotient",
         "Floor division quotient",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let a = args[0].as_int()?;
             let b = args[1].as_int()?;
@@ -1449,6 +1688,7 @@ fn register_extra_numeric(vm: &mut Vm) {
         "floor-remainder",
         "Floor division remainder",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let a = args[0].as_int()?;
             let b = args[1].as_int()?;
@@ -1469,6 +1709,7 @@ fn register_extra_numeric(vm: &mut Vm) {
         "truncate-quotient",
         "Truncated division quotient",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let a = args[0].as_int()?;
             let b = args[1].as_int()?;
@@ -1483,6 +1724,7 @@ fn register_extra_numeric(vm: &mut Vm) {
         "truncate-remainder",
         "Truncated division remainder",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let a = args[0].as_int()?;
             let b = args[1].as_int()?;
@@ -1501,6 +1743,7 @@ fn register_extra_numeric(vm: &mut Vm) {
         "floor/",
         "Floor division returning two values: quotient and remainder",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let a = args[0].as_int()?;
             let b = args[1].as_int()?;
@@ -1523,6 +1766,7 @@ fn register_extra_numeric(vm: &mut Vm) {
         "truncate/",
         "Truncated division returning two values: quotient and remainder",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let a = args[0].as_int()?;
             let b = args[1].as_int()?;
@@ -1541,6 +1785,7 @@ fn register_extra_numeric(vm: &mut Vm) {
         "rationalize",
         "Simplest rational within tolerance",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let x = args[0].as_float()?;
             let diff = args[1].as_float()?;
@@ -1685,25 +1930,26 @@ fn stern_brocot_simplest(lo: f64, hi: f64) -> (i64, i64) {
 }
 
 pub fn register_inexact(vm: &mut Vm) {
-    vm.register_fn("sin", "Sine", Arity::Fixed(1), |args| {
+    vm.register_fn("sin", "Sine", Arity::Fixed(1), tier::PURE, |args| {
         Ok(Value::Float(args[0].as_float()?.sin()))
     });
-    vm.register_fn("cos", "Cosine", Arity::Fixed(1), |args| {
+    vm.register_fn("cos", "Cosine", Arity::Fixed(1), tier::PURE, |args| {
         Ok(Value::Float(args[0].as_float()?.cos()))
     });
-    vm.register_fn("tan", "Tangent", Arity::Fixed(1), |args| {
+    vm.register_fn("tan", "Tangent", Arity::Fixed(1), tier::PURE, |args| {
         Ok(Value::Float(args[0].as_float()?.tan()))
     });
-    vm.register_fn("asin", "Arc sine", Arity::Fixed(1), |args| {
+    vm.register_fn("asin", "Arc sine", Arity::Fixed(1), tier::PURE, |args| {
         Ok(Value::Float(args[0].as_float()?.asin()))
     });
-    vm.register_fn("acos", "Arc cosine", Arity::Fixed(1), |args| {
+    vm.register_fn("acos", "Arc cosine", Arity::Fixed(1), tier::PURE, |args| {
         Ok(Value::Float(args[0].as_float()?.acos()))
     });
     vm.register_fn(
         "atan",
         "Arc tangent (1 or 2 args)",
         Arity::Variadic(1),
+        tier::PURE,
         |args| {
             if args.len() == 1 {
                 Ok(Value::Float(args[0].as_float()?.atan()))
@@ -1712,13 +1958,18 @@ pub fn register_inexact(vm: &mut Vm) {
             }
         },
     );
-    vm.register_fn("exp", "Exponential (e^x)", Arity::Fixed(1), |args| {
-        Ok(Value::Float(args[0].as_float()?.exp()))
-    });
+    vm.register_fn(
+        "exp",
+        "Exponential (e^x)",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| Ok(Value::Float(args[0].as_float()?.exp())),
+    );
     vm.register_fn(
         "log",
         "Natural logarithm (1 arg) or log base (2 args)",
         Arity::Variadic(1),
+        tier::PURE,
         |args| {
             if args.len() == 1 {
                 Ok(Value::Float(args[0].as_float()?.ln()))
@@ -1729,11 +1980,17 @@ pub fn register_inexact(vm: &mut Vm) {
             }
         },
     );
-    vm.register_fn("finite?", "Is number finite?", Arity::Fixed(1), |args| {
-        Ok(Value::Bool(
-            args[0].as_float().map_or(true, |f| f.is_finite()),
-        ))
-    });
+    vm.register_fn(
+        "finite?",
+        "Is number finite?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| {
+            Ok(Value::Bool(
+                args[0].as_float().map_or(true, |f| f.is_finite()),
+            ))
+        },
+    );
 }
 
 fn gcd_u64(mut a: u64, mut b: u64) -> u64 {
@@ -1750,35 +2007,42 @@ fn gcd_u64(mut a: u64, mut b: u64) -> u64 {
 fn register_exceptions(vm: &mut Vm) {
     // error: Creates a tagged error object vector and raises it.
     // The error object is #(error-object message type irritants-list)
-    vm.register_fn("error", "Raise an error", Arity::Variadic(1), |args| {
-        let msg = match &args[0] {
-            Value::String(s) => Value::String(s.clone()),
-            other => Value::string(format!("{other}")),
-        };
-        let irritants = Value::list(args[1..].to_vec());
-        // Build error object as tagged vector: #(error-object msg "error" irritants)
-        let err_obj = Value::Vector(Rc::new(RefCell::new(vec![
-            Value::symbol("error-object"),
-            msg.clone(),
-            Value::string("error"),
-            irritants,
-        ])));
-        // Store display form in LispError for Rust-side reporting
-        let display_msg = match &args[0] {
-            Value::String(s) => s.to_string(),
-            other => format!("{other}"),
-        };
-        let irritant_strs: Vec<String> = args[1..].iter().map(|v| format!("{v}")).collect();
-        let mut err = LispError::user(display_msg, irritant_strs);
-        // Stash the error object value so handle_exception can use it
-        err.error_value = Some(Box::new(err_obj));
-        Err(err)
-    });
+    vm.register_fn(
+        "error",
+        "Raise an error",
+        Arity::Variadic(1),
+        tier::PURE,
+        |args| {
+            let msg = match &args[0] {
+                Value::String(s) => Value::String(s.clone()),
+                other => Value::string(format!("{other}")),
+            };
+            let irritants = Value::list(args[1..].to_vec());
+            // Build error object as tagged vector: #(error-object msg "error" irritants)
+            let err_obj = Value::Vector(Rc::new(RefCell::new(vec![
+                Value::symbol("error-object"),
+                msg.clone(),
+                Value::string("error"),
+                irritants,
+            ])));
+            // Store display form in LispError for Rust-side reporting
+            let display_msg = match &args[0] {
+                Value::String(s) => s.to_string(),
+                other => format!("{other}"),
+            };
+            let irritant_strs: Vec<String> = args[1..].iter().map(|v| format!("{v}")).collect();
+            let mut err = LispError::user(display_msg, irritant_strs);
+            // Stash the error object value so handle_exception can use it
+            err.error_value = Some(Box::new(err_obj));
+            Err(err)
+        },
+    );
 
     vm.register_fn(
         "error-object?",
         "Is error object?",
         Arity::Fixed(1),
+        tier::PURE,
         |args| Ok(Value::Bool(is_error_object(&args[0]))),
     );
 
@@ -1786,6 +2050,7 @@ fn register_exceptions(vm: &mut Vm) {
         "error-object-message",
         "Get error message",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             if let Some(fields) = get_error_object_fields(&args[0]) {
                 Ok(fields[1].clone()) // message field
@@ -1802,11 +2067,17 @@ fn register_exceptions(vm: &mut Vm) {
         },
     );
 
-    vm.register_fn("raise", "Raise exception value", Arity::Fixed(1), |args| {
-        let mut err = LispError::user(format!("{}", args[0]), vec![]);
-        err.error_value = Some(Box::new(args[0].clone()));
-        Err(err)
-    });
+    vm.register_fn(
+        "raise",
+        "Raise exception value",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| {
+            let mut err = LispError::user(format!("{}", args[0]), vec![]);
+            err.error_value = Some(Box::new(args[0].clone()));
+            Err(err)
+        },
+    );
 
     // raise-continuable is compiled as a special form in the compiler.
     // It wraps the exception as #(continuable <exn>) and raises it.
@@ -1815,6 +2086,7 @@ fn register_exceptions(vm: &mut Vm) {
         "error-object-irritants",
         "Get error irritants",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             if let Some(fields) = get_error_object_fields(&args[0]) {
                 Ok(fields[3].clone()) // irritants field
@@ -1828,6 +2100,7 @@ fn register_exceptions(vm: &mut Vm) {
         "error-object-type",
         "Get error type",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             if let Some(fields) = get_error_object_fields(&args[0]) {
                 Ok(fields[2].clone()) // type field
@@ -1837,89 +2110,145 @@ fn register_exceptions(vm: &mut Vm) {
         },
     );
 
-    vm.register_fn("file-error?", "Is file error?", Arity::Fixed(1), |args| {
-        if let Some(fields) = get_error_object_fields(&args[0]) {
-            if let Value::String(s) = &fields[2] {
-                return Ok(Value::Bool(s.as_ref() == "file-error"));
+    vm.register_fn(
+        "file-error?",
+        "Is file error?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| {
+            if let Some(fields) = get_error_object_fields(&args[0]) {
+                if let Value::String(s) = &fields[2] {
+                    return Ok(Value::Bool(s.as_ref() == "file-error"));
+                }
             }
-        }
-        Ok(Value::Bool(false))
-    });
+            Ok(Value::Bool(false))
+        },
+    );
 
-    vm.register_fn("read-error?", "Is read error?", Arity::Fixed(1), |args| {
-        if let Some(fields) = get_error_object_fields(&args[0]) {
-            if let Value::String(s) = &fields[2] {
-                return Ok(Value::Bool(s.as_ref() == "read-error"));
+    vm.register_fn(
+        "read-error?",
+        "Is read error?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| {
+            if let Some(fields) = get_error_object_fields(&args[0]) {
+                if let Value::String(s) = &fields[2] {
+                    return Ok(Value::Bool(s.as_ref() == "read-error"));
+                }
             }
-        }
-        Ok(Value::Bool(false))
-    });
+            Ok(Value::Bool(false))
+        },
+    );
 }
 
 // -- Type predicates --
 
 fn register_type_predicates(vm: &mut Vm) {
-    vm.register_fn("number?", "Is number?", Arity::Fixed(1), |args| {
-        Ok(Value::Bool(matches!(
-            args[0],
-            Value::Int(_) | Value::Float(_)
-        )))
-    });
+    vm.register_fn(
+        "number?",
+        "Is number?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| {
+            Ok(Value::Bool(matches!(
+                args[0],
+                Value::Int(_) | Value::Float(_)
+            )))
+        },
+    );
 
-    vm.register_fn("string?", "Is string?", Arity::Fixed(1), |args| {
-        Ok(Value::Bool(matches!(args[0], Value::String(_))))
-    });
+    vm.register_fn(
+        "string?",
+        "Is string?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| Ok(Value::Bool(matches!(args[0], Value::String(_)))),
+    );
 
-    vm.register_fn("symbol?", "Is symbol?", Arity::Fixed(1), |args| {
-        Ok(Value::Bool(matches!(args[0], Value::Symbol(_))))
-    });
+    vm.register_fn(
+        "symbol?",
+        "Is symbol?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| Ok(Value::Bool(matches!(args[0], Value::Symbol(_)))),
+    );
 
-    vm.register_fn("char?", "Is character?", Arity::Fixed(1), |args| {
-        Ok(Value::Bool(matches!(args[0], Value::Char(_))))
-    });
+    vm.register_fn(
+        "char?",
+        "Is character?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| Ok(Value::Bool(matches!(args[0], Value::Char(_)))),
+    );
 
-    vm.register_fn("procedure?", "Is procedure?", Arity::Fixed(1), |args| {
-        Ok(Value::Bool(matches!(
-            args[0],
-            Value::Closure(_) | Value::Foreign(_) | Value::Continuation(_)
-        )))
-    });
+    vm.register_fn(
+        "procedure?",
+        "Is procedure?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| {
+            Ok(Value::Bool(matches!(
+                args[0],
+                Value::Closure(_) | Value::Foreign(_) | Value::Continuation(_)
+            )))
+        },
+    );
 
-    vm.register_fn("boolean?", "Is boolean?", Arity::Fixed(1), |args| {
-        Ok(Value::Bool(matches!(args[0], Value::Bool(_))))
-    });
+    vm.register_fn(
+        "boolean?",
+        "Is boolean?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| Ok(Value::Bool(matches!(args[0], Value::Bool(_)))),
+    );
 
-    vm.register_fn("pair?", "Is pair?", Arity::Fixed(1), |args| {
+    vm.register_fn("pair?", "Is pair?", Arity::Fixed(1), tier::PURE, |args| {
         Ok(Value::Bool(matches!(args[0], Value::Pair(_))))
     });
 
-    vm.register_fn("null?", "Is null?", Arity::Fixed(1), |args| {
+    vm.register_fn("null?", "Is null?", Arity::Fixed(1), tier::PURE, |args| {
         Ok(Value::Bool(matches!(args[0], Value::Null)))
     });
 
-    vm.register_fn("vector?", "Is vector?", Arity::Fixed(1), |args| {
-        Ok(Value::Bool(matches!(args[0], Value::Vector(_))))
-    });
+    vm.register_fn(
+        "vector?",
+        "Is vector?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| Ok(Value::Bool(matches!(args[0], Value::Vector(_)))),
+    );
 
-    vm.register_fn("bytevector?", "Is bytevector?", Arity::Fixed(1), |args| {
-        Ok(Value::Bool(matches!(args[0], Value::Bytevector(_))))
-    });
+    vm.register_fn(
+        "bytevector?",
+        "Is bytevector?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| Ok(Value::Bool(matches!(args[0], Value::Bytevector(_)))),
+    );
 
-    vm.register_fn("port?", "Is port?", Arity::Fixed(1), |args| {
+    vm.register_fn("port?", "Is port?", Arity::Fixed(1), tier::PURE, |args| {
         Ok(Value::Bool(matches!(args[0], Value::Port(_))))
     });
 
-    vm.register_fn("eof-object?", "Is EOF?", Arity::Fixed(1), |args| {
-        Ok(Value::Bool(matches!(args[0], Value::Eof)))
-    });
+    vm.register_fn(
+        "eof-object?",
+        "Is EOF?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| Ok(Value::Bool(matches!(args[0], Value::Eof))),
+    );
 
-    vm.register_fn("void?", "Is void?", Arity::Fixed(1), |args| {
+    vm.register_fn("void?", "Is void?", Arity::Fixed(1), tier::PURE, |args| {
         Ok(Value::Bool(matches!(args[0], Value::Void)))
     });
 
-    vm.register_fn("void", "Return void", Arity::Fixed(0), |_args| {
-        Ok(Value::Void)
-    });
+    vm.register_fn(
+        "void",
+        "Return void",
+        Arity::Fixed(0),
+        tier::PURE,
+        |_args| Ok(Value::Void),
+    );
 }
 
 // -- Helpers --

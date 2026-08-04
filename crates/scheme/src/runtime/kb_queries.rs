@@ -15,6 +15,7 @@ use crate::value::Value;
 use crate::vm::Vm;
 
 use super::SharedState;
+use crate::permission::tier;
 
 /// Register read-only KB query primitives.
 pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>) {
@@ -26,6 +27,7 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
         "kb-links-from",
         "Return outgoing typed links from a KB node",
         Arity::Fixed(1),
+        tier::READ,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-links-from")?;
             let state = s.lock();
@@ -57,6 +59,7 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
         "kb-links-to",
         "Return incoming typed links to a KB node",
         Arity::Fixed(1),
+        tier::READ,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-links-to")?;
             let state = s.lock();
@@ -88,6 +91,7 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
         "kb-links-typed",
         "Return links of a specific relationship type from a node",
         Arity::Fixed(2),
+        tier::READ,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-links-typed")?;
             let rel_type = arg_string(args, 1, "kb-links-typed")?;
@@ -119,6 +123,7 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
         "kb-meta-members",
         "Return members of a meta-node",
         Arity::Fixed(1),
+        tier::READ,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-meta-members")?;
             let state = s.lock();
@@ -150,6 +155,7 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
         "kb-rel-types",
         "Return all known relationship type names",
         Arity::Fixed(0),
+        tier::READ,
         move |_args: &[Value]| {
             let state = s.lock();
             if let Some(ref store) = state.kb_store {
@@ -171,6 +177,7 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
         "kb-get-block",
         "Get a specific block from a KB node by index",
         Arity::Fixed(2),
+        tier::READ,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-get-block")?;
             let index = arg_int(args, 1, "kb-get-block")? as usize;
@@ -193,6 +200,7 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
         "kb-block-count",
         "Return the number of blocks in a KB node",
         Arity::Fixed(1),
+        tier::READ,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-block-count")?;
             let state = s.lock();
@@ -232,7 +240,7 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
     vm.register_fn(
         "kb-graph",
         "BFS neighborhood around a seed node (primary KB only), up to DEPTH hops (default 1, max 3). Returns (root depth nodes edges): each node is (id title kind hop missing?) — title/kind are #f when missing? is #t (a dangling link target); each edge is (src . dst).",
-        Arity::Variadic(1),
+        Arity::Variadic(1), tier::READ,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-graph")?;
             let depth = if args.len() > 1 {
@@ -292,7 +300,7 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
     vm.register_fn(
         "kb-neighborhood",
         "Graph neighborhood around a seed node from the persistent store, up to DEPTH hops (default 2, max 5). Returns (root depth nodes edges): each node is (id . title), each edge is (src dst rel-type). Requires CozoDB backend.",
-        Arity::Variadic(1),
+        Arity::Variadic(1), tier::READ,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-neighborhood")?;
             let depth = if args.len() > 1 {
@@ -346,7 +354,7 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
     vm.register_fn(
         "kb-related",
         "Nodes structurally related to ID (primary KB only) — co-citation / bibliographic coupling / shared tags, distinct from lexical search (kb-search). Returns a list of (id title kind score) sorted by relatedness, capped to LIMIT (default 10).",
-        Arity::Variadic(1),
+        Arity::Variadic(1), tier::READ,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-related")?;
             let limit = if args.len() > 1 {
@@ -357,7 +365,9 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
             let state = s.lock();
             if let Some(ref store) = state.kb_store {
                 let backend = mae_kb::graph_query::KbStoreRelatedBackend(store.as_ref());
-                let items = mae_kb::graph_query::related_enriched(&backend, &id, limit);
+                // A store failure surfaces as a Scheme error, not an empty list.
+                let items = mae_kb::graph_query::related_enriched(&backend, &id, limit)
+                    .map_err(|e| LispError::internal(format!("kb-related: {}", e)))?;
                 Ok(Value::list(
                     items
                         .into_iter()
@@ -390,7 +400,7 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
     vm.register_fn(
         "kb-shortest-path",
         "Reachability check between FROM and TO — NOT a real shortest path. A Datalog BFS capped at depth 10; returns (FROM TO) if a path of that length or shorter exists, else '() (empty list). Does not reconstruct intermediate hops. Requires CozoDB backend.",
-        Arity::Fixed(2),
+        Arity::Fixed(2), tier::READ,
         move |args: &[Value]| {
             let from = arg_string(args, 0, "kb-shortest-path")?;
             let to = arg_string(args, 1, "kb-shortest-path")?;
@@ -414,6 +424,7 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
         "deprecate-function!",
         "Register a deprecation warning",
         Arity::Fixed(3),
+        tier::WRITE,
         move |args: &[Value]| {
             let old_name = arg_string(args, 0, "deprecate-function!")?;
             let new_name = arg_string(args, 1, "deprecate-function!")?;
@@ -430,7 +441,7 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
     vm.register_fn(
         "register-ai-tool!",
         "Register an AI tool from Scheme",
-        Arity::Fixed(4),
+        Arity::Fixed(4), tier::PRIVILEGED,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "register-ai-tool!")?;
             let desc = arg_string(args, 1, "register-ai-tool!")?;
@@ -475,6 +486,7 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
         "ai-tool-param!",
         "Add a parameter to an AI tool",
         Arity::Fixed(4),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let tool = arg_string(args, 0, "ai-tool-param!")?;
             let pname = arg_string(args, 1, "ai-tool-param!")?;
@@ -495,6 +507,7 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
         "ai-tool-require!",
         "Mark an AI tool parameter as required",
         Arity::Fixed(2),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let tool = arg_string(args, 0, "ai-tool-require!")?;
             let pname = arg_string(args, 1, "ai-tool-require!")?;
@@ -513,6 +526,7 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
         "register-splash-art!",
         "Register custom splash art",
         Arity::Fixed(2),
+        tier::WRITE,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "register-splash-art!")?;
             let art = arg_string(args, 1, "register-splash-art!")?;
@@ -527,6 +541,7 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
         "register-splash-art-image!",
         "Register splash art image",
         Arity::Fixed(2),
+        tier::WRITE,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "register-splash-art-image!")?;
             let path = arg_string(args, 1, "register-splash-art-image!")?;

@@ -138,13 +138,14 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Scan,
             )
             .await?;
-            spawn_query(move || {
+            spawn_query_result(move || {
                 let hits: Vec<Value> = ql
                     .search(&query, limit)
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?
                     .into_iter()
                     .map(|h: SearchHit| json!({ "id": h.id, "score": h.score }))
                     .collect();
-                json!(hits)
+                Ok(json!(hits))
             })
             .await
         }
@@ -160,9 +161,10 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Read,
             )
             .await?;
-            spawn_query(move || {
+            spawn_query_result(move || {
                 let links: Vec<Value> = ql
                     .links_from(&id)
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?
                     .into_iter()
                     .map(|l| {
                         json!({
@@ -172,7 +174,7 @@ pub async fn dispatch(
                         })
                     })
                     .collect();
-                json!(links)
+                Ok(json!(links))
             })
             .await
         }
@@ -188,9 +190,10 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Read,
             )
             .await?;
-            spawn_query(move || {
+            spawn_query_result(move || {
                 let links: Vec<Value> = ql
                     .links_to(&id)
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?
                     .into_iter()
                     .map(|l| {
                         json!({
@@ -200,7 +203,7 @@ pub async fn dispatch(
                         })
                     })
                     .collect();
-                json!(links)
+                Ok(json!(links))
             })
             .await
         }
@@ -213,7 +216,12 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Read,
             )
             .await?;
-            spawn_query(move || json!(ql.list_ids(prefix.as_deref()))).await
+            spawn_query_result(move || {
+                ql.list_ids(prefix.as_deref())
+                    .map(|ids| json!(ids))
+                    .map_err(|e| DaemonError::Internal(e.to_string()))
+            })
+            .await
         }
 
         "kb/health" => {
@@ -223,14 +231,19 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Read,
             )
             .await?;
-            spawn_query(move || match ql.health_report() {
-                Some(report) => json!({
-                    "total_nodes": report.total_nodes,
-                    "total_links": report.total_links,
-                    "orphan_count": report.orphan_ids.len(),
-                    "broken_link_count": report.broken_links.len(),
-                }),
-                None => json!({"error": "health report unavailable"}),
+            spawn_query_result(move || {
+                let report = ql
+                    .health_report()
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?;
+                Ok(match report {
+                    Some(report) => json!({
+                        "total_nodes": report.total_nodes,
+                        "total_links": report.total_links,
+                        "orphan_count": report.orphan_ids.len(),
+                        "broken_link_count": report.broken_links.len(),
+                    }),
+                    None => json!({"error": "health report unavailable"}),
+                })
             })
             .await
         }
@@ -247,12 +260,17 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Scan,
             )
             .await?;
-            spawn_query(move || match ql.neighborhood(&id, depth) {
-                Some(sg) => json!({
-                    "nodes": sg.nodes.iter().map(|(id, t)| json!([id, t])).collect::<Vec<_>>(),
-                    "edges": sg.edges.iter().map(|(s, d, r)| json!([s, d, r])).collect::<Vec<_>>(),
-                }),
-                None => json!({"nodes": [], "edges": []}),
+            spawn_query_result(move || {
+                let sg = ql
+                    .neighborhood(&id, depth)
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?;
+                Ok(match sg {
+                    Some(sg) => json!({
+                        "nodes": sg.nodes.iter().map(|(id, t)| json!([id, t])).collect::<Vec<_>>(),
+                        "edges": sg.edges.iter().map(|(s, d, r)| json!([s, d, r])).collect::<Vec<_>>(),
+                    }),
+                    None => json!({"nodes": [], "edges": []}),
+                })
             })
             .await
         }
@@ -269,13 +287,14 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Scan,
             )
             .await?;
-            spawn_query(move || {
+            spawn_query_result(move || {
                 let related: Vec<Value> = ql
                     .related(&id, limit)
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?
                     .into_iter()
                     .map(|(id, score)| json!([id, score]))
                     .collect();
-                json!(related)
+                Ok(json!(related))
             })
             .await
         }
@@ -314,16 +333,17 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Read,
             )
             .await?;
-            spawn_query(move || {
+            spawn_query_result(move || {
                 let nodes: Vec<Value> = ql
                     .todo_nodes()
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?
                     .into_iter()
                     .map(|mut n| {
                         n.crdt_doc = None;
                         serde_json::to_value(&n).unwrap_or(Value::Null)
                     })
                     .collect();
-                json!(nodes)
+                Ok(json!(nodes))
             })
             .await
         }
@@ -336,13 +356,14 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Read,
             )
             .await?;
-            spawn_query(move || {
+            spawn_query_result(move || {
                 let pairs: Vec<Value> = ql
                     .id_title_pairs(prefix.as_deref())
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?
                     .into_iter()
                     .map(|(id, title)| json!([id, title]))
                     .collect();
-                json!(pairs)
+                Ok(json!(pairs))
             })
             .await
         }
@@ -357,13 +378,14 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Read,
             )
             .await?;
-            spawn_query(move || {
+            spawn_query_result(move || {
                 let triples: Vec<Value> = ql
                     .id_title_body_triples(prefix.as_deref(), body_limit)
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?
                     .into_iter()
                     .map(|(id, title, body)| json!([id, title, body]))
                     .collect();
-                json!(triples)
+                Ok(json!(triples))
             })
             .await
         }
@@ -567,6 +589,15 @@ pub async fn dispatch(
                 .unwrap_or_else(|| "unknown".to_string());
             {
                 let mut st = state.lock().await;
+                // ADR-086: `run_dialer` (the ONLY consumer of `pending_p2p_joins`) is
+                // spawned exclusively alongside a bound P2P endpoint (main.rs) -- with
+                // no mesh running there is no dialer to ever service this queue, so
+                // the "recorded, will connect" reply below would describe a join that
+                // can never actually happen. Refuse before queuing rather than return
+                // a success the daemon cannot make good on.
+                if st.p2p_endpoint.is_none() {
+                    return Err(DaemonError::NotReady);
+                }
                 // Idempotent: don't queue the same (peer, KB) twice.
                 if !st
                     .pending_p2p_joins
@@ -1279,15 +1310,26 @@ mod tests {
 
     #[tokio::test]
     async fn join_ticket_records_a_pending_target_idempotently() {
-        // A real minted ticket round-trips through the join method.
+        // A real minted ticket round-trips through the join method. This daemon's
+        // OWN mesh must be running to accept the join (ADR-086 below is the
+        // no-mesh counterpart) -- `run_dialer`, the only consumer of
+        // `pending_p2p_joins`, is spawned alongside a bound endpoint, so the join
+        // target used here is a SEPARATE peer's ticket, not this daemon's own.
         let id = mae_mcp::identity::Identity::generate("owner");
-        let endpoint = crate::p2p::bind_endpoint(&id, iroh::RelayMode::Disabled)
+        let remote_endpoint = crate::p2p::bind_endpoint(&id, iroh::RelayMode::Disabled)
             .await
             .unwrap();
-        let ticket = crate::p2p::mint_ticket(&endpoint, "concept:x").to_string();
-        endpoint.close().await;
+        let ticket = crate::p2p::mint_ticket(&remote_endpoint, "concept:x").to_string();
+        remote_endpoint.close().await;
 
-        let state = Arc::new(Mutex::new(DaemonState::new()));
+        let local_id = mae_mcp::identity::Identity::generate("local");
+        let local_endpoint = crate::p2p::bind_endpoint(&local_id, iroh::RelayMode::Disabled)
+            .await
+            .unwrap();
+        let mut st = DaemonState::new();
+        st.p2p_endpoint = Some(local_endpoint.clone());
+        let state = Arc::new(Mutex::new(st));
+
         let result = dispatch("p2p/join_ticket", json!({ "ticket": ticket }), &state)
             .await
             .unwrap();
@@ -1296,11 +1338,42 @@ mod tests {
         assert!(result["peer"].as_str().unwrap().starts_with("SHA256:"));
         assert_eq!(state.lock().await.pending_p2p_joins.len(), 1);
 
-        // Re-accepting the same ticket does not double-queue.
+        // Re-accepting the same ticket does not double-queue (ADR-086 D2: a
+        // repeat request against an already-satisfied/queued state is not an
+        // error).
         dispatch("p2p/join_ticket", json!({ "ticket": ticket }), &state)
             .await
             .unwrap();
         assert_eq!(state.lock().await.pending_p2p_joins.len(), 1);
+
+        local_endpoint.close().await;
+    }
+
+    /// ADR-086: with no P2P endpoint bound, `run_dialer` (the only consumer of
+    /// `pending_p2p_joins`) never gets spawned (see `main.rs`), so queuing a
+    /// join here would sit forever and the "recorded, will connect" reply
+    /// would describe a join that can never happen. The requested
+    /// postcondition (a join actually in flight to be dialed) does not hold,
+    /// so this must be `Err`, and the ticket must NOT be queued.
+    #[tokio::test]
+    async fn join_ticket_without_mesh_is_not_ready() {
+        let id = mae_mcp::identity::Identity::generate("owner");
+        let endpoint = crate::p2p::bind_endpoint(&id, iroh::RelayMode::Disabled)
+            .await
+            .unwrap();
+        let ticket = crate::p2p::mint_ticket(&endpoint, "concept:x").to_string();
+        endpoint.close().await;
+
+        let state = Arc::new(Mutex::new(DaemonState::new()));
+        let result = dispatch("p2p/join_ticket", json!({ "ticket": ticket }), &state).await;
+        assert!(
+            matches!(result, Err(DaemonError::NotReady)),
+            "expected NotReady with no mesh running, got {result:?}"
+        );
+        assert!(
+            state.lock().await.pending_p2p_joins.is_empty(),
+            "a refused join must not be queued as if it would be serviced"
+        );
     }
 
     #[tokio::test]

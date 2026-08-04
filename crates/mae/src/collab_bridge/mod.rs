@@ -3484,8 +3484,12 @@ async fn run_collab_task(
                     match msg {
                         Some(Ok(text)) => {
                             messages_received += 1;
+                            // ADR-087 / audit #594: JSON-RPC message content can
+                            // carry arbitrary UTF-8 (e.g. synced document text);
+                            // a fixed byte cut can land mid-character and panic.
+                            let preview_end = text.floor_char_boundary(text.len().min(120));
                             debug!(msg_len = text.len(),
-                                preview = &text[..text.len().min(120)],
+                                preview = &text[..preview_end],
                                 "bridge: incoming server message");
                             handle_incoming_message(
                                 &text,

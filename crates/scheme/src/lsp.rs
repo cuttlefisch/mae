@@ -554,6 +554,7 @@ pub fn extract_word_at(line_text: &str, col: u32) -> (String, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::permission::tier;
 
     #[test]
     fn test_word_at_position() {
@@ -585,9 +586,13 @@ mod tests {
     #[test]
     fn test_completions_globals() {
         let mut vm = Vm::new();
-        vm.register_fn("buffer-insert", "Insert text", Arity::Fixed(1), |_| {
-            Ok(Value::Void)
-        });
+        vm.register_fn(
+            "buffer-insert",
+            "Insert text",
+            Arity::Fixed(1),
+            tier::WRITE,
+            |_| Ok(Value::Void),
+        );
         let results = completions(&vm, "buffer");
         assert!(results.iter().any(|c| c.label == "buffer-insert"));
     }
@@ -599,6 +604,7 @@ mod tests {
             "buffer-insert",
             "Insert text at point",
             Arity::Fixed(1),
+            tier::WRITE,
             |_| Ok(Value::Void),
         );
         let h = hover(&vm, "buffer-insert").unwrap();
@@ -650,9 +656,13 @@ mod tests {
     #[test]
     fn test_signature_help() {
         let mut vm = Vm::new();
-        vm.register_fn("map", "Apply proc to list", Arity::Variadic(2), |_| {
-            Ok(Value::Void)
-        });
+        vm.register_fn(
+            "map",
+            "Apply proc to list",
+            Arity::Variadic(2),
+            tier::PURE,
+            |_| Ok(Value::Void),
+        );
         let sig = signature_help(&vm, "map").unwrap();
         assert!(sig.label.contains("map"));
         assert_eq!(sig.parameters.len(), 3); // arg1, arg2, ...
@@ -673,9 +683,13 @@ mod tests {
     #[test]
     fn test_goto_definition_foreign() {
         let mut vm = Vm::new();
-        vm.register_fn("buffer-insert", "Insert", Arity::Fixed(1), |_| {
-            Ok(Value::Void)
-        });
+        vm.register_fn(
+            "buffer-insert",
+            "Insert",
+            Arity::Fixed(1),
+            tier::WRITE,
+            |_| Ok(Value::Void),
+        );
         // Foreign functions have no source location
         assert!(goto_definition(&vm, "buffer-insert").is_none());
     }

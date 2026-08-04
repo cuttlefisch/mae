@@ -467,6 +467,60 @@ impl Editor {
             _ => {}
         }
 
+        // Registered builtins whose implementation lives in `execute_command`'s
+        // colon-command match arms (arg-parsing commands: `:kb-update <id> <body>`,
+        // `:debug-attach <adapter> <pid>`, etc.) but that had no arm here, making
+        // them unreachable through `dispatch_builtin` — the path the AI's
+        // `execute_command` MCP tool and Scheme's `(execute-command NAME)` both use
+        // with a bare name and no argument string. That's a "registered but
+        // unreachable" defect (CLAUDE.md principle #3: same API surface for human
+        // and AI) found by the #521-era permission-enforcement audit and closed by
+        // `commands::tests::all_builtin_commands_dispatch`.
+        //
+        // Each of these names is caught by an explicit, non-recursive arm in
+        // `execute_command`'s match (verified by inspection — none of them fall
+        // through to that function's own `_ =>` arm, which would call back into
+        // `dispatch_builtin` and recurse). With no argument string, they surface a
+        // "Usage: ..." status and return true — the same pattern already
+        // established for argument-requiring commands dispatched directly here
+        // (e.g. `git-branch-create`). Delegating instead of duplicating the match
+        // arm bodies keeps a single source of truth (principle #8).
+        if matches!(
+            name,
+            "add-project"
+                | "agent-list"
+                | "agent-setup"
+                | "collab-recover-identity"
+                | "debug-attach"
+                | "debug-eval"
+                | "help-edit"
+                | "kb-update"
+                | "record-save"
+                | "remove-project"
+                | "session-load"
+                | "session-save"
+                | "set-save"
+        ) {
+            return self.execute_command(name);
+        }
+
+        // `shell-command` is registered (doc: "Run a shell command (:!cmd)")
+        // but its actual implementation is the `:!<cmd>` ex-syntax special
+        // case in `execute_command`'s final fallback, which strips a literal
+        // `!` prefix off the whole command string -- there is no code path
+        // that ever matches the *name* "shell-command" itself, so it was
+        // permanently unreachable through `dispatch_builtin`. No dedicated
+        // impl to delegate to (unlike the block above), so recognize the
+        // name and point at the real invocation forms, matching the
+        // "recognized, not silently unknown" precedent established by
+        // `git-branch-create` for other argument-requiring commands.
+        if name == "shell-command" {
+            self.set_status(
+                "Usage: :!<command>  (the AI peer can also use the shell_exec MCP tool)",
+            );
+            return true;
+        }
+
         false
     }
 
@@ -643,7 +697,7 @@ impl Editor {
         let idx = self.active_buffer_idx();
         let row = self.window_mgr.focused_window().cursor_row;
         let line_start = self.buffers[idx].rope().line_to_char(row);
-        let line_len = self.buffers[idx].line_len(row);
+        let line_len = self.buffers[idx].line_byte_len(row);
         if line_len > 0 {
             let text = self.buffers[idx].text_range(line_start, line_start + line_len);
             let transformed = f(&text);

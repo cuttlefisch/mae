@@ -5,6 +5,22 @@ edition = "2021"
 license = "GPL-3.0-or-later"
 description = "MAE daemon — background KB persistence, maintenance, collaboration, and services"
 
+# ADR-014: the daemon is its own workspace, deliberately separate from the
+# editor workspace (own Cargo.lock -- cozo+sqlite, no rusqlite). An explicit,
+# empty `[workspace]` table here (rather than relying on the editor
+# workspace's root `Cargo.toml` `exclude = [..., "daemon"]` alone) makes
+# Cargo's ancestor-directory workspace search terminate at this manifest
+# unconditionally, instead of continuing to walk upward past it. Without
+# this, a checkout nested inside another mae checkout at a path Cargo's
+# search reaches before hitting the filesystem root (e.g. this repo's own
+# `.claude/worktrees/<id>/` agent-worktree convention) can have `cargo check`
+# from inside `daemon/` wrongly resolve to a workspace root several
+# directories further up whose own `exclude` list doesn't recognize the
+# nested path -- "current package believes it's in a workspace when it's
+# not". This has no effect on the common case (a normal top-level clone),
+# where the search already terminated here.
+[workspace]
+
 [lib]
 name = "mae_daemon"
 path = "src/lib.rs"

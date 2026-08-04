@@ -10,7 +10,11 @@ pub(super) fn shell_tool_definitions() -> Vec<ToolDefinition> {
             "Execute a shell command and return stdout/stderr. Anti-Looping: If a command fails, do not blindly retry the exact same command. Analyze the error, use diagnostics, or try a different approach. Workflow Hint: Use this for `git status`, running tests, or building the project. Always use this to verify bug fixes before reporting success. For PR status, follow up with `github_pr_status`.",
         )
         .prop("command", "string", "Shell command to execute")
-        .prop("timeout_ms", "integer", "Timeout in milliseconds (default: 30000)")
+        // The name here IS the contract with the model — both implementations
+        // read it via `shell_policy::timeout_from_args` (audit #590.3: they
+        // used to read an unadvertised `timeout_secs`, so this argument was
+        // silently ignored). Keep the two in sync.
+        .prop("timeout_ms", "integer", "Timeout in milliseconds (default: 30000, maximum: 120000)")
         .required(["command"])
         .permission(PermissionTier::Shell)
         .build(),

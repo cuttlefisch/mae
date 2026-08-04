@@ -1,5 +1,19 @@
 use super::*;
 
+/// The policy these pre-ADR-090 tests run under. They exercise the tool loop
+/// (rounds, compaction, workflow tracking), not permissions, so they declare a
+/// permissive ceiling explicitly rather than inheriting whatever the shipped
+/// default happens to be -- otherwise lowering the default (ADR-090 D5) would
+/// silently turn every one of them into an approval-prompt test.
+/// ADR-090's own tests are in `permission_gate_tests.rs` and build their
+/// policies deliberately.
+fn permissive_policy() -> crate::tools::PermissionPolicy {
+    crate::tools::PermissionPolicy {
+        auto_approve_up_to: PermissionTier::Privileged,
+        ..crate::tools::PermissionPolicy::default()
+    }
+}
+
 /// Mock provider that returns pre-configured responses.
 struct MockProvider {
     responses: std::sync::Mutex<Vec<ProviderResponse>>,
@@ -64,7 +78,8 @@ async fn text_only_response() {
         usage: None,
     }]));
 
-    let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy());
 
     tokio::spawn(session.run());
 
@@ -109,7 +124,8 @@ async fn single_tool_call_round_trip() {
         },
     ]));
 
-    let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy());
 
     tokio::spawn(session.run());
 
@@ -126,7 +142,7 @@ async fn single_tool_call_round_trip() {
 
     // ToolCallRequest
     match recv_filtered(&mut event_rx).await {
-        AiEvent::ToolCallRequest { call, reply } => {
+        AiEvent::ToolCallRequest { call, reply, .. } => {
             assert_eq!(call.name, "cursor_info");
             reply
                 .send(ToolResult {
@@ -162,7 +178,8 @@ async fn provider_error_sends_error_event() {
 
     // Empty responses = will return error
     let provider = Box::new(MockProvider::new(vec![]));
-    let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy());
 
     tokio::spawn(session.run());
 
@@ -250,7 +267,8 @@ async fn shell_exec_handled_in_session() {
         },
     ]));
 
-    let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy());
     tokio::spawn(session.run());
 
     cmd_tx
@@ -278,7 +296,8 @@ async fn shutdown_exits_loop() {
     let (cmd_tx, cmd_rx) = mpsc::channel(8);
 
     let provider = Box::new(MockProvider::new(vec![]));
-    let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy());
 
     let handle = tokio::spawn(session.run());
 
@@ -334,7 +353,8 @@ fn message_trimming() {
     let (event_tx, _rx) = mpsc::channel(32);
     let (_tx, cmd_rx) = mpsc::channel(8);
     let provider = Box::new(MockProvider::new(vec![]));
-    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy());
     session.max_messages = 5;
 
     // Add 10 messages
@@ -402,7 +422,8 @@ async fn circuit_breaker_retries_on_retryable_error() {
     let provider = Box::new(RetryProvider {
         call_count: std::sync::Mutex::new(0),
     });
-    let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy());
     tokio::spawn(session.run());
 
     cmd_tx.send(AiCommand::Prompt("hi".into())).await.unwrap();
@@ -462,6 +483,7 @@ async fn cost_update_emitted_when_usage_present() {
     }]));
 
     let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy())
         .with_budget("claude-sonnet-4-5", crate::BudgetConfig::default());
     tokio::spawn(session.run());
     cmd_tx.send(AiCommand::Prompt("hi".into())).await.unwrap();
@@ -505,6 +527,7 @@ async fn cost_update_zero_for_unpriced_model() {
     }]));
 
     let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy())
         .with_budget("llama3:latest", crate::BudgetConfig::default());
     tokio::spawn(session.run());
     cmd_tx.send(AiCommand::Prompt("hi".into())).await.unwrap();
@@ -560,6 +583,7 @@ async fn budget_warning_fires_once_on_crossing() {
         session_hard_cap_usd: None,
     };
     let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy())
         .with_budget("claude-sonnet-4-5", budget);
     tokio::spawn(session.run());
     cmd_tx.send(AiCommand::Prompt("go".into())).await.unwrap();
@@ -626,6 +650,7 @@ async fn hard_cap_aborts_before_provider_call() {
         session_hard_cap_usd: Some(0.02),
     };
     let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy())
         .with_budget("claude-sonnet-4-5", budget);
     tokio::spawn(session.run());
     cmd_tx.send(AiCommand::Prompt("go".into())).await.unwrap();
@@ -641,7 +666,7 @@ async fn hard_cap_aborts_before_provider_call() {
             break;
         }
         match tokio::time::timeout(remaining, event_rx.recv()).await {
-            Ok(Some(AiEvent::ToolCallRequest { call, reply })) => {
+            Ok(Some(AiEvent::ToolCallRequest { call, reply, .. })) => {
                 let _ = reply.send(ToolResult {
                     tool_call_id: call.id.clone(),
                     tool_name: call.name.clone(),
@@ -649,6 +674,7 @@ async fn hard_cap_aborts_before_provider_call() {
                     output: "ok".into(),
                 });
                 events.push(AiEvent::ToolCallRequest {
+                    approved_tier: None,
                     call,
                     reply: tokio::sync::oneshot::channel().0,
                 });
@@ -690,7 +716,8 @@ async fn test_tool_loop_circuit_breaker() {
     }
 
     let provider = Box::new(MockProvider::new(responses));
-    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy());
     session.max_rounds = 20;
 
     tokio::spawn(session.run());
@@ -705,7 +732,7 @@ async fn test_tool_loop_circuit_breaker() {
                     break;
                 }
             }
-            Some(AiEvent::ToolCallRequest { call, reply }) => {
+            Some(AiEvent::ToolCallRequest { call, reply, .. }) => {
                 let _ = reply.send(ToolResult {
                     tool_call_id: call.id.clone(),
                     tool_name: call.name.clone(),
@@ -728,7 +755,8 @@ fn test_trim_preserves_tool_call_pairs() {
     let (event_tx, _) = mpsc::channel(32);
     let (_, cmd_rx) = mpsc::channel(8);
     let provider = Box::new(MockProvider::new(vec![]));
-    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy());
 
     // Setup messages:
     // 0: User (kept)
@@ -788,7 +816,8 @@ fn test_trim_messages_protects_active_transaction() {
     let (event_tx, _) = mpsc::channel(32);
     let (_, cmd_rx) = mpsc::channel(8);
     let provider = Box::new(MockProvider::new(vec![]));
-    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy());
 
     // System prompt is ~3 tokens
     // Each message is ~10 tokens
@@ -866,7 +895,8 @@ async fn test_session_cancel_emits_session_complete() {
     }];
 
     let provider = Box::new(MockProvider::new(responses));
-    let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy());
 
     // Start session in background
     let session_task = tokio::spawn(session.run());
@@ -941,7 +971,8 @@ async fn test_mid_flight_compaction() {
     });
 
     let provider = Box::new(MockProvider::new(responses));
-    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy());
     session.context_window = 10000;
 
     tokio::spawn(session.run());
@@ -992,7 +1023,8 @@ async fn test_ui_events_for_internal_tools() {
         },
     ]));
 
-    let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy());
     tokio::spawn(session.run());
 
     cmd_tx
@@ -1039,7 +1071,8 @@ async fn test_log_activity_tool() {
         },
     ]));
 
-    let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    let session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy());
     tokio::spawn(session.run());
 
     cmd_tx
@@ -1100,7 +1133,8 @@ async fn test_max_rounds_enforcement() {
     let provider = Box::new(InfiniteProvider {
         call_count: std::sync::Mutex::new(0),
     });
-    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy());
     session.max_rounds = 3;
 
     tokio::spawn(session.run());
@@ -1118,7 +1152,7 @@ async fn test_max_rounds_enforcement() {
                 found_max_rounds_error = true;
                 break;
             }
-            Ok(Some(AiEvent::ToolCallRequest { call, reply })) => {
+            Ok(Some(AiEvent::ToolCallRequest { call, reply, .. })) => {
                 let _ = reply.send(ToolResult {
                     tool_call_id: call.id.clone(),
                     tool_name: call.name.clone(),
@@ -1179,7 +1213,8 @@ async fn test_oscillation_ab_pattern_detected() {
     let provider = Box::new(OscillatingProvider {
         call_count: std::sync::Mutex::new(0),
     });
-    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy());
     session.max_rounds = 20; // High enough that only oscillation detection should fire
 
     tokio::spawn(session.run());
@@ -1197,7 +1232,7 @@ async fn test_oscillation_ab_pattern_detected() {
                 found_loop_error = true;
                 break;
             }
-            Ok(Some(AiEvent::ToolCallRequest { call, reply })) => {
+            Ok(Some(AiEvent::ToolCallRequest { call, reply, .. })) => {
                 let _ = reply.send(ToolResult {
                     tool_call_id: call.id.clone(),
                     tool_name: call.name.clone(),
@@ -1220,7 +1255,8 @@ fn test_aggressive_prune_removes_ten_percent() {
     let (event_tx, _) = mpsc::channel(32);
     let (_, cmd_rx) = mpsc::channel(8);
     let provider = Box::new(MockProvider::new(vec![]));
-    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy());
 
     // Add 21 messages (1 system + 20 content = 10% of 20 = 2 removed)
     for i in 0..21 {
@@ -1248,7 +1284,8 @@ fn trim_preserves_tool_history_without_pruning() {
     let (event_tx, _rx) = mpsc::channel(32);
     let (_tx, cmd_rx) = mpsc::channel(8);
     let provider = Box::new(MockProvider::new(vec![]));
-    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy());
     // Large budget — no pruning needed
     session.max_messages = 100;
 
@@ -1351,7 +1388,7 @@ async fn test_checkpoint_aborts_stagnant_session() {
     let mut saw_error = false;
     while let Some(evt) = event_rx.recv().await {
         match evt {
-            AiEvent::ToolCallRequest { call, reply } => {
+            AiEvent::ToolCallRequest { call, reply, .. } => {
                 let _ = reply.send(ToolResult {
                     tool_call_id: call.id,
                     tool_name: call.name,
@@ -1420,7 +1457,7 @@ async fn test_checkpoint_allows_long_varied_session() {
     let mut completed = false;
     while let Some(evt) = event_rx.recv().await {
         match evt {
-            AiEvent::ToolCallRequest { call, reply } => {
+            AiEvent::ToolCallRequest { call, reply, .. } => {
                 let _ = reply.send(ToolResult {
                     tool_call_id: call.id,
                     tool_name: call.name,
@@ -1488,7 +1525,7 @@ async fn test_oscillation_warn_then_abort() {
     let mut aborted = false;
     while let Some(evt) = event_rx.recv().await {
         match evt {
-            AiEvent::ToolCallRequest { call, reply } => {
+            AiEvent::ToolCallRequest { call, reply, .. } => {
                 let _ = reply.send(ToolResult {
                     tool_call_id: call.id,
                     tool_name: call.name,
@@ -1525,7 +1562,8 @@ fn make_test_session_with_messages(messages: Vec<Message>) -> AgentSession {
     let (event_tx, _rx) = mpsc::channel(32);
     let (_tx, cmd_rx) = mpsc::channel(8);
     let provider = Box::new(MockProvider::new(vec![]));
-    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx);
+    let mut session = AgentSession::new(provider, vec![], "sys".into(), event_tx, cmd_rx)
+        .with_permission_policy(permissive_policy());
     session.messages = messages;
     session
 }
@@ -1964,7 +2002,7 @@ fn degradation_is_one_way() {
 #[test]
 fn strip_html_basic() {
     let html = "<html><body><h1>Hello</h1><p>World &amp; friends</p></body></html>";
-    let text = AgentSession::strip_html(html);
+    let text = crate::web::strip_html(html);
     assert!(text.contains("Hello"), "should contain text");
     assert!(text.contains("World & friends"), "entities decoded");
     assert!(!text.contains('<'), "no HTML tags");
@@ -1974,7 +2012,7 @@ fn strip_html_basic() {
 fn strip_html_script_style_removed() {
     let html = r#"<html><head><style>body { color: red }</style></head>
     <body><script>alert('xss')</script><p>Content</p></body></html>"#;
-    let text = AgentSession::strip_html(html);
+    let text = crate::web::strip_html(html);
     assert!(text.contains("Content"), "content preserved");
     assert!(!text.contains("alert"), "script removed");
     assert!(!text.contains("color"), "style removed");
@@ -1983,14 +2021,14 @@ fn strip_html_script_style_removed() {
 #[test]
 fn strip_html_plain_text_passthrough() {
     let plain = "This is just plain text with no tags.";
-    let text = AgentSession::strip_html(plain);
+    let text = crate::web::strip_html(plain);
     assert_eq!(text, plain);
 }
 
 #[test]
 fn strip_html_collapses_whitespace() {
     let html = "<p>Line 1</p>\n\n\n\n\n<p>Line 2</p>";
-    let text = AgentSession::strip_html(html);
+    let text = crate::web::strip_html(html);
     // Should not have more than one consecutive blank line
     assert!(!text.contains("\n\n\n"), "excessive blank lines collapsed");
 }
@@ -1998,7 +2036,7 @@ fn strip_html_collapses_whitespace() {
 #[test]
 fn strip_html_entities() {
     let html = "&lt;tag&gt; &quot;quoted&quot; &nbsp; &#39;apos&#39;";
-    let text = AgentSession::strip_html(html);
+    let text = crate::web::strip_html(html);
     assert!(text.contains("<tag>"), "lt/gt decoded");
     assert!(text.contains("\"quoted\""), "quot decoded");
     assert!(text.contains("'apos'"), "apos decoded");

@@ -23,75 +23,19 @@
 #![cfg(target_os = "linux")]
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tokio::net::UnixStream;
 
-fn isolated_env(cmd: &mut Command, xdg_config: &Path, xdg_data: &Path, home: &Path) {
-    cmd.env("XDG_CONFIG_HOME", xdg_config)
-        .env("XDG_DATA_HOME", xdg_data)
-        .env("HOME", home)
-        .env("SHELL", "/bin/sh")
-        .env("MAE_SKIP_WIZARD", "1");
-}
-
-fn send_sigterm(child: &Child) {
-    unsafe {
-        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
-    }
-}
-
-fn wait_for_exit(child: &mut Child, timeout: Duration) -> Option<std::process::ExitStatus> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Ok(Some(status)) = child.try_wait() {
-            return Some(status);
-        }
-        if Instant::now() >= deadline {
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-fn socket_is_live(path: &Path) -> bool {
-    std::os::unix::net::UnixStream::connect(path).is_ok()
-}
-
-fn wait_for_socket_live(path: &Path, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if socket_is_live(path) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
-}
-
-struct HeadlessGuard {
-    child: Option<Child>,
-}
-
-impl Drop for HeadlessGuard {
-    fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            if child.try_wait().ok().flatten().is_none() {
-                send_sigterm(&child);
-                if wait_for_exit(&mut child, Duration::from_secs(3)).is_none() {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
-            }
-        }
-    }
-}
+mod headless_test_support;
+use headless_test_support::{spawn_isolated_headless, HeadlessGuard};
 
 /// Boots a real isolated `mae --headless` instance, optionally with a
 /// pre-seeded `init.scm` (e.g. to flip `mcp_tools_tiered_by_default` off),
 /// and returns the live socket path + a guard that SIGTERMs it on drop.
-fn spawn_isolated_headless(init_scm: Option<&str>) -> (PathBuf, HeadlessGuard, tempfile::TempDir) {
+fn spawn_isolated_headless_with_init(
+    init_scm: Option<&str>,
+) -> (PathBuf, HeadlessGuard, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
     let project_root = tmp.path().join("project");
     std::fs::create_dir_all(project_root.join(".git")).unwrap();
@@ -106,50 +50,13 @@ fn spawn_isolated_headless(init_scm: Option<&str>) -> (PathBuf, HeadlessGuard, t
         std::fs::write(mae_config_dir.join("init.scm"), content).unwrap();
     }
 
-    let mae = env!("CARGO_BIN_EXE_mae");
-
-    let mut print_cmd = Command::new(mae);
-    print_cmd
-        .args(["--headless", "--print-socket-path"])
-        .current_dir(&project_root);
-    isolated_env(&mut print_cmd, &xdg_config, &xdg_data, tmp.path());
-    let print_output = print_cmd
-        .output()
-        .expect("failed to run `mae --headless --print-socket-path`");
-    assert!(print_output.status.success());
-    let socket_path = PathBuf::from(
-        String::from_utf8_lossy(&print_output.stdout)
-            .trim()
-            .to_string(),
-    );
-
-    let stderr_log = std::fs::File::create(tmp.path().join("headless-stderr.log")).unwrap();
-    let mut spawn_cmd = Command::new(mae);
-    spawn_cmd
-        .args(["--headless"])
-        .current_dir(&project_root)
-        .stdout(Stdio::null())
-        .stderr(stderr_log);
-    isolated_env(&mut spawn_cmd, &xdg_config, &xdg_data, tmp.path());
-    let child = spawn_cmd.spawn().expect("failed to spawn `mae --headless`");
-    let guard = HeadlessGuard { child: Some(child) };
-
-    // 30s, not 15s: three real subprocess boots in this file plus
-    // whatever else the machine is doing can push a cold headless boot
-    // uncomfortably close to a tight budget (observed: 14.7s used out of a
-    // 15s budget even in isolation) -- same class of fix as this session's
-    // VS Code extension timeout bump (c2edc5f0), applied here too rather
-    // than leaving a flaky-under-load test.
-    let bound = wait_for_socket_live(&socket_path, Duration::from_secs(30));
-    if !bound {
-        let log = std::fs::read_to_string(tmp.path().join("headless-stderr.log"))
-            .unwrap_or_else(|e| format!("<failed to read stderr log: {e}>"));
-        eprintln!("=== headless stderr ===\n{log}\n=== end ===");
-    }
-    assert!(
-        bound,
-        "headless instance never bound its stable socket at {}",
-        socket_path.display()
+    let stderr_log = tmp.path().join("headless-stderr.log");
+    let (socket_path, guard) = spawn_isolated_headless(
+        &project_root,
+        &xdg_config,
+        &xdg_data,
+        tmp.path(),
+        Some(&stderr_log),
     );
 
     (socket_path, guard, tmp)
@@ -201,7 +108,7 @@ async fn mcp_handshake(socket_path: &Path) -> tokio::io::BufReader<UnixStream> {
 
 #[tokio::test]
 async fn fresh_client_gets_core_tier_tools_list_by_default() {
-    let (socket_path, mut guard, _tmp) = spawn_isolated_headless(None);
+    let (socket_path, mut guard, _tmp) = spawn_isolated_headless_with_init(None);
     let mut stream = mcp_handshake(&socket_path).await;
 
     let tools_resp = mcp_roundtrip(&mut stream, 2, "tools/list", serde_json::Value::Null).await;
@@ -231,14 +138,12 @@ async fn fresh_client_gets_core_tier_tools_list_by_default() {
     );
 
     drop(stream);
-    let mut child = guard.child.take().unwrap();
-    send_sigterm(&child);
-    wait_for_exit(&mut child, Duration::from_secs(10));
+    guard.shutdown(Duration::from_secs(10));
 }
 
 #[tokio::test]
 async fn extended_tier_tool_is_discoverable_via_request_tools_and_directly_callable() {
-    let (socket_path, mut guard, _tmp) = spawn_isolated_headless(None);
+    let (socket_path, mut guard, _tmp) = spawn_isolated_headless_with_init(None);
     let mut stream = mcp_handshake(&socket_path).await;
 
     // 1. Confirm the target Extended-tier tool is absent from tools/list.
@@ -305,14 +210,12 @@ async fn extended_tier_tool_is_discoverable_via_request_tools_and_directly_calla
     );
 
     drop(stream);
-    let mut child = guard.child.take().unwrap();
-    send_sigterm(&child);
-    wait_for_exit(&mut child, Duration::from_secs(10));
+    guard.shutdown(Duration::from_secs(10));
 }
 
 #[tokio::test]
 async fn tiering_can_be_disabled_via_option_for_a_deployment_tuned_around_the_full_list() {
-    let (socket_path, mut guard, _tmp) = spawn_isolated_headless(Some(
+    let (socket_path, mut guard, _tmp) = spawn_isolated_headless_with_init(Some(
         "(set-option! \"mcp_tools_tiered_by_default\" \"false\")\n",
     ));
     let mut stream = mcp_handshake(&socket_path).await;
@@ -332,7 +235,5 @@ async fn tiering_can_be_disabled_via_option_for_a_deployment_tuned_around_the_fu
     );
 
     drop(stream);
-    let mut child = guard.child.take().unwrap();
-    send_sigterm(&child);
-    wait_for_exit(&mut child, Duration::from_secs(10));
+    guard.shutdown(Duration::from_secs(10));
 }

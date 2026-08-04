@@ -10,9 +10,8 @@
 //! share the same `left_pad` so they are left-aligned to each other, while
 //! the block as a whole is centered in `area_width`.
 
-use mae_core::render_common::splash::{ALL_ARTS, MAE_LOGO, QUICK_ACTIONS};
+use mae_core::render_common::splash::{resolve_active_splash_art, MAE_LOGO, QUICK_ACTIONS};
 use mae_core::Editor;
-use unicode_width::UnicodeWidthStr;
 
 use crate::canvas::SkiaCanvas;
 use crate::theme;
@@ -43,8 +42,12 @@ impl SplashSection {
         });
     }
 
-    fn max_width(&self) -> usize {
-        self.lines.iter().map(|l| l.text.width()).max().unwrap_or(0)
+    fn max_width(&self, policy: mae_core::grapheme::WidthPolicy) -> usize {
+        self.lines
+            .iter()
+            .map(|l| mae_core::grapheme::display_width_with(&l.text, policy))
+            .max()
+            .unwrap_or(0)
     }
 
     fn height(&self) -> usize {
@@ -65,25 +68,12 @@ pub fn render_splash(
     area_width: usize,
     area_height: usize,
 ) {
-    let selected = editor.splash_art.as_deref().unwrap_or("bat");
-
-    // Check for custom art with image path (GUI-only feature).
-    let custom = editor
-        .custom_splash_arts
-        .iter()
-        .find(|a| a.name == selected);
-    let image_path = custom.and_then(|c| c.image_path.as_ref());
-
-    // Resolve art text: custom or built-in.
-    let (art_str, accent_lines): (&str, &[usize]) = if let Some(c) = custom {
-        (c.art.as_str(), &c.accent_lines)
-    } else {
-        let splash = ALL_ARTS
-            .iter()
-            .find(|a| a.name == selected)
-            .unwrap_or(&ALL_ARTS[0]);
-        (splash.art, splash.accent_lines)
-    };
+    // Art lookup (custom vs. built-in) is shared with the TUI backend — see
+    // `resolve_active_splash_art`'s doc comment for why the rest of the
+    // layout below isn't (the two backends' centering models have
+    // genuinely diverged: this one supports per-section centering and
+    // inline images, the TUI doesn't).
+    let (art_str, accent_lines, image_path) = resolve_active_splash_art(editor);
 
     let art_fg = theme::ts_fg(editor, "keyword");
     let art_accent = theme::ts_fg(editor, "string");
@@ -241,7 +231,7 @@ pub fn render_splash(
         if section.is_empty() {
             continue;
         }
-        let section_width = section.max_width();
+        let section_width = section.max_width(editor.width_policy());
         let section_left = area_width.saturating_sub(section_width) / 2;
 
         for line in &section.lines {

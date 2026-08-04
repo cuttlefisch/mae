@@ -78,9 +78,18 @@ fn execute_tool_dispatch_body(
 ) -> ExecuteResult {
     // 1. Find the tool definition
     let tool_def = all_tools.iter().find(|t| t.name == call.name);
-    let permission = tool_def
-        .and_then(|t| t.permission)
-        .unwrap_or(PermissionTier::Write);
+    // Decision #6: a tool's declared tier is a floor, not the whole answer.
+    // `set_option` is ordinary configuration for every option except the one
+    // that carries the permission tier, and `execute_command` is a Write-tier
+    // passthrough to `dispatch_builtin` whose real blast radius is the tier of
+    // the command it was handed. `effective_tier` only ever raises.
+    let permission = crate::tools::effective_tier(
+        &call.name,
+        &call.arguments,
+        tool_def
+            .and_then(|t| t.permission)
+            .unwrap_or(PermissionTier::Write),
+    );
 
     // 1b. Validate arguments against schema
     if let Some(def) = tool_def {
@@ -94,33 +103,30 @@ fn execute_tool_dispatch_body(
         }
     }
 
-    // 2. Check permission
-    if !policy.is_allowed(permission) {
-        return ExecuteResult::Immediate(ToolResult {
-            tool_call_id: call.id.clone(),
-            tool_name: call.name.clone(),
-            success: false,
-            output: format!(
-                "Permission denied: {} requires {:?} tier",
-                call.name, permission
-            ),
-        });
-    }
-
-    // 2b. Check tool-category restriction (ADR-056) -- orthogonal to the
-    // tier check above: tier answers "how mutating," category answers
-    // "which subsystem." An engine instance/session scoped to e.g.
-    // Knowledge-only tools is enforced here, not just at advertisement time.
-    if !policy.is_category_allowed(&call.name) {
-        return ExecuteResult::Immediate(ToolResult {
-            tool_call_id: call.id.clone(),
-            tool_name: call.name.clone(),
-            success: false,
-            output: format!(
-                "Category denied: {} is not in this session's allowed tool categories",
-                call.name
-            ),
-        });
+    // 2. Ask the policy (ADR-090). This is the enforcement point; the
+    // decision itself lives in `PermissionPolicy::decide` and covers BOTH the
+    // tier axis and the tool-category axis (ADR-056) -- tier answers "how
+    // mutating," category answers "which subsystem," and `decide` evaluates
+    // deny-first so neither can be softened into an `Ask`.
+    match policy.decide(&call.name, permission) {
+        crate::tools::Decision::Allow => {}
+        crate::tools::Decision::Deny(reason) => {
+            return ExecuteResult::Immediate(ToolResult {
+                tool_call_id: call.id.clone(),
+                tool_name: call.name.clone(),
+                success: false,
+                output: crate::tools::deny_message(&call.name, permission, reason),
+            });
+        }
+        crate::tools::Decision::Ask => {
+            // Nothing has run. The caller decides: prompt, or deny explicitly.
+            return ExecuteResult::NeedsApproval(super::ApprovalRequest {
+                tool_call_id: call.id.clone(),
+                tool_name: call.name.clone(),
+                tier: permission,
+                auto_approve_up_to: policy.auto_approve_up_to,
+            });
+        }
     }
 
     // 3. Check for deferred (async) tools first -- LSP and DAP
@@ -191,7 +197,11 @@ fn execute_tool_dispatch_body(
             .and_then(|v| v.as_str())
             .unwrap_or("plan");
 
-        let output = match action {
+        // ADR-086: an unrecognised `action` or a `grade` call missing its
+        // `results` array is a refusal — the requested postcondition (a
+        // plan or a grade report) does not hold — and must report
+        // `success: false`, not `true`. See audit #590.2.
+        let (success, output) = match action {
             "plan" => {
                 if !editor.self_test_active {
                     editor.save_state();
@@ -235,7 +245,14 @@ fn execute_tool_dispatch_body(
                     .active_project_root()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default();
-                super::self_test::build_self_test_plan(filter, &sandbox_path, &project_root_str)
+                (
+                    true,
+                    super::self_test::build_self_test_plan(
+                        filter,
+                        &sandbox_path,
+                        &project_root_str,
+                    ),
+                )
             }
             "grade" => {
                 let model = call
@@ -316,17 +333,23 @@ fn execute_tool_dispatch_body(
                                 ));
                             }
                         }
-                        output
+                        (true, output)
                     }
-                    None => "Missing 'results' array for grade action".to_string(),
+                    None => (
+                        false,
+                        "Missing 'results' array for grade action".to_string(),
+                    ),
                 }
             }
-            _ => "Invalid action: use 'plan' or 'grade'".to_string(),
+            _ => (
+                false,
+                format!("Invalid action: use 'plan' or 'grade' (got {action:?})"),
+            ),
         };
         return ExecuteResult::Immediate(ToolResult {
             tool_call_id: call.id.clone(),
             tool_name: call.name.clone(),
-            success: true,
+            success,
             output,
         });
     }
@@ -363,12 +386,17 @@ fn execute_tool_dispatch_body(
             .get("action")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let output = match action {
+        // ADR-086: see the identical comment on self_test_suite above — an
+        // unrecognised action or a missing `results` array is a refusal.
+        let (success, output) = match action {
             "plan" => {
                 // Delegate to self_test_suite with exam-only categories.
                 let exam_cats =
                     "tool_selection,parameter_accuracy,output_interpretation,multi_step,pushback";
-                super::self_test::build_self_test_plan(exam_cats, "", "")
+                (
+                    true,
+                    super::self_test::build_self_test_plan(exam_cats, "", ""),
+                )
             }
             "grade" => {
                 // Legacy grading path — use original exam grading.
@@ -440,17 +468,23 @@ fn execute_tool_dispatch_body(
                                 ));
                             }
                         }
-                        output
+                        (true, output)
                     }
-                    None => "Missing 'results' array for grade action".to_string(),
+                    None => (
+                        false,
+                        "Missing 'results' array for grade action".to_string(),
+                    ),
                 }
             }
-            _ => "Invalid action: use 'plan' or 'grade'".to_string(),
+            _ => (
+                false,
+                format!("Invalid action: use 'plan' or 'grade' (got {action:?})"),
+            ),
         };
         return ExecuteResult::Immediate(ToolResult {
             tool_call_id: call.id.clone(),
             tool_name: call.name.clone(),
-            success: true,
+            success,
             output,
         });
     }
@@ -485,8 +519,16 @@ fn execute_tool_dispatch_body(
                     .collect()
             })
             .unwrap_or_default();
+        // ADR-091: `request_tools` is a discovery surface, so the
+        // embedded-session-only tools must not be reachable through it for an
+        // external client — offering them and then failing the `tools/call`
+        // is precisely the shape ADR-085 rejects. The embedded `AgentSession`
+        // dispatches with no session id and is unaffected: it is the one
+        // context where `ask_user` actually works.
+        let external = editor.is_external_mcp_dispatch();
         let matched: Vec<&ToolDefinition> = all_tools
             .iter()
+            .filter(|t| !(external && crate::tools::is_embedded_session_only(&t.name)))
             .filter(|t| {
                 categories
                     .iter()
@@ -530,7 +572,17 @@ fn execute_tool_dispatch_body(
             .get("limit")
             .and_then(|v| v.as_u64())
             .unwrap_or(10) as usize;
-        let results = crate::tools::tool_search::search_tools(all_tools, query, limit);
+        // ADR-091: same exclusion as `request_tools` above — `search_tools` is
+        // the surface an external client is explicitly told to use when the
+        // Core `tools/list` doesn't have what it wants, so leaving the
+        // interactive three findable here would defeat withholding them from
+        // `tools/list`. Only allocates the filtered copy for external callers.
+        let results = if editor.is_external_mcp_dispatch() {
+            let visible = crate::tools::external_discovery_tools(all_tools);
+            crate::tools::tool_search::search_tools(&visible, query, limit)
+        } else {
+            crate::tools::tool_search::search_tools(all_tools, query, limit)
+        };
         let json_results: Vec<serde_json::Value> = results
             .iter()
             .map(|r| {
@@ -655,6 +707,13 @@ fn dispatch_tool(
     if let Some(result) = super::core_exec::dispatch(editor, call) {
         return result;
     }
+    // ADR-091: the six session-scoped tools. Placed here rather than in
+    // `ai_exec` because what makes them dispatchable is the session handle,
+    // not their subject matter — keeping them together is what makes
+    // "which tools need a session?" answerable by looking at one file.
+    if let Some(result) = super::session_exec::dispatch(editor, call) {
+        return result;
+    }
     if let Some(result) = super::ai_exec::dispatch(editor, call) {
         return result;
     }
@@ -703,13 +762,50 @@ fn dispatch_tool(
     Err(format!("Unknown tool: {}", call.name))
 }
 
+/// Inverse of `crate::tools::sanitize_command_name` — decodes a `command_*`
+/// MCP tool-name suffix back into the original `CommandRegistry` command
+/// name. MUST stay exactly paired with that function; see its doc comment
+/// for the encoding and `all_registered_command_names_round_trip` for the
+/// property test that holds the pairing accountable.
+///
+/// Scans left to right: a bare `_` decodes to `-`, but first checks for the
+/// 4-character `_XX_` hex-escape triplet (two lowercase hex digits) used to
+/// recover any non-hyphen character `sanitize_command_name` had to escape.
+pub(crate) fn unsanitize_command_name(tool_suffix: &str) -> String {
+    let chars: Vec<char> = tool_suffix.chars().collect();
+    let mut out = String::with_capacity(chars.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '_'
+            && i + 3 < chars.len()
+            && chars[i + 1].is_ascii_hexdigit()
+            && chars[i + 2].is_ascii_hexdigit()
+            && chars[i + 3] == '_'
+        {
+            let hex: String = [chars[i + 1], chars[i + 2]].iter().collect();
+            if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                out.push(ch);
+                i += 4;
+                continue;
+            }
+        }
+        if chars[i] == '_' {
+            out.push('-');
+        } else {
+            out.push(chars[i]);
+        }
+        i += 1;
+    }
+    out
+}
+
 /// Execute a registered editor command by name (MCP `command_*` tool
 /// handler). Plain `dispatch_builtin` is correct here (no target-window
 /// redirection needed locally) -- the enclosing `with_ai_dispatch_scope`
 /// call in `execute_tool_with_requester` has already focused the companion
 /// window, if one was needed, before this ever runs (issue #372).
 fn execute_registry_command(editor: &mut Editor, tool_suffix: &str) -> Result<String, String> {
-    let cmd_name = tool_suffix.replace('_', "-");
+    let cmd_name = unsanitize_command_name(tool_suffix);
     if editor.dispatch_builtin(&cmd_name) {
         Ok(format!("Executed: {}", cmd_name))
     } else {
@@ -1062,7 +1158,13 @@ mod tests {
             name: "definitely_not_a_real_tool_name".into(),
             arguments: serde_json::json!({}),
         };
-        let policy = PermissionPolicy::default();
+        // An unknown tool has no registered tier, so dispatch falls back to
+        // `Write` — above the shipped default. State the ceiling explicitly so
+        // this stays a routing test, not a permission one.
+        let policy = PermissionPolicy {
+            auto_approve_up_to: PermissionTier::Privileged,
+            ..PermissionPolicy::default()
+        };
         let result = execute_tool(&mut editor, &call, &[], &policy);
         match result {
             ExecuteResult::Immediate(r) => {
@@ -1071,6 +1173,9 @@ mod tests {
             }
             ExecuteResult::Deferred { .. } => {
                 panic!("unknown tool must not be treated as deferred")
+            }
+            ExecuteResult::NeedsApproval(_) => {
+                panic!("a ReadOnly-tier probe must not need approval")
             }
         }
     }

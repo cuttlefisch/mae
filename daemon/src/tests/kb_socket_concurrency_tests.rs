@@ -8,7 +8,7 @@
 
 use super::*;
 use mae_kb::query::KbQueryLayer;
-use mae_kb::store::{HealthReport, Link, SearchHit, SubGraph};
+use mae_kb::store::{HealthReport, KbStoreError, Link, SearchHit, SubGraph};
 use std::time::Instant;
 
 /// A deliberately slow decorator around a real query layer — delegates every
@@ -29,26 +29,26 @@ impl KbQueryLayer for SleepyQueryLayer {
     fn contains(&self, id: &str) -> bool {
         self.inner.contains(id)
     }
-    fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
+    fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, KbStoreError> {
         std::thread::sleep(self.delay);
         self.inner.search(query, limit)
     }
-    fn links_from(&self, id: &str) -> Vec<Link> {
+    fn links_from(&self, id: &str) -> Result<Vec<Link>, KbStoreError> {
         self.inner.links_from(id)
     }
-    fn links_to(&self, id: &str) -> Vec<Link> {
+    fn links_to(&self, id: &str) -> Result<Vec<Link>, KbStoreError> {
         self.inner.links_to(id)
     }
-    fn list_ids(&self, prefix: Option<&str>) -> Vec<String> {
+    fn list_ids(&self, prefix: Option<&str>) -> Result<Vec<String>, KbStoreError> {
         self.inner.list_ids(prefix)
     }
-    fn id_title_pairs(&self, prefix: Option<&str>) -> Vec<(String, String)> {
+    fn id_title_pairs(&self, prefix: Option<&str>) -> Result<Vec<(String, String)>, KbStoreError> {
         self.inner.id_title_pairs(prefix)
     }
-    fn health_report(&self) -> Option<HealthReport> {
+    fn health_report(&self) -> Result<Option<HealthReport>, KbStoreError> {
         self.inner.health_report()
     }
-    fn neighborhood(&self, id: &str, depth: u32) -> Option<SubGraph> {
+    fn neighborhood(&self, id: &str, depth: u32) -> Result<Option<SubGraph>, KbStoreError> {
         self.inner.neighborhood(id, depth)
     }
 }

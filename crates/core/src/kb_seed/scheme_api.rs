@@ -1,3 +1,9 @@
+//! @ai-caution: [architecture-debt] Over the 800-line ceiling (2391) and accepted in
+//! `docs/AUDIT_BASELINE.json`. This is a *data table* — one entry per registered Scheme
+//! primitive — not logic, and it is machine-checked against the VM's real registrations by
+//! `every_registered_scheme_fn_has_a_scheme_api_doc`. It grows when the API grows, which is
+//! correct. Split it only if the table itself becomes hard to navigate. See ROADMAP.md,
+//! "Architecture Debt".
 use mae_kb::{KnowledgeBase, Node, NodeKind};
 
 /// Every documented Scheme API function: (name, signature, doc, example, category).
@@ -1406,6 +1412,430 @@ pub(crate) const SCHEME_API_FUNCTIONS: &[(&str, &str, &str, &str, &str)] = &[
             "(buffer-encode-state)",
             "testing",
         ),
+
+        // --- WS6 cross-surface-parity gap-closing pass: registered but ---
+        // --- previously undocumented (found by the new source-text-driven ---
+        // --- `every_registered_scheme_fn_has_a_scheme_api_doc` guard, ---
+        // --- crates/core/src/kb_seed/scheme_api_registration_tests.rs) ---
+
+        // KB graph queries
+        (
+            "kb-graph",
+            "(kb-graph ID [DEPTH])",
+            "BFS neighborhood around a seed node (primary KB only), up to DEPTH hops (default 1, max 3). Returns (root depth nodes edges): each node is (id title kind hop missing?) — title/kind are #f when missing? is #t (a dangling link target); each edge is (src . dst).",
+            "(kb-graph \"concept:buffer\" 2)",
+            "kb-graph",
+        ),
+        (
+            "kb-neighborhood",
+            "(kb-neighborhood ID [DEPTH])",
+            "Graph neighborhood around a seed node from the persistent store, up to DEPTH hops (default 2, max 5). Returns (root depth nodes edges): each node is (id . title), each edge is (src dst rel-type). Requires CozoDB backend.",
+            "(kb-neighborhood \"concept:buffer\" 2)",
+            "kb-graph",
+        ),
+        (
+            "kb-related",
+            "(kb-related ID [LIMIT])",
+            "Nodes structurally related to ID (primary KB only) — co-citation / bibliographic coupling / shared tags, distinct from lexical KB search. Returns a list of (id title kind score) sorted by relatedness, capped to LIMIT (default 10).",
+            "(kb-related \"concept:buffer\" 5)",
+            "kb-graph",
+        ),
+        (
+            "kb-shortest-path",
+            "(kb-shortest-path FROM TO)",
+            "Reachability check between FROM and TO — NOT a real shortest path. A Datalog BFS capped at depth 10; returns (FROM TO) if a path of that length or shorter exists, else '() (empty list). Does not reconstruct intermediate hops. Requires CozoDB backend.",
+            "(kb-shortest-path \"concept:buffer\" \"concept:window\")",
+            "kb-graph",
+        ),
+
+        // KB instance registration
+        (
+            "kb-register",
+            "(kb-register NAME DIR)",
+            "Register an external org directory NAME at DIR as a federated KB instance.",
+            "(kb-register \"MyDocs\" \"/home/user/docs\")",
+            "kb-authoring",
+        ),
+
+        // KB export
+        (
+            "kb-export-subgraph-html",
+            "(kb-export-subgraph-html ID PATH [DEPTH] [TRANSLATIONS] [TITLE] [NODE-CAP] [GUIDANCE-IDS] [CHORD-CONFIG] [REQUIRED-TAG])",
+            "Export a KB subgraph rooted at ID to a standalone, bilingual (EN/ES) interactive HTML file at PATH — chord-diagram nav, language toggle, theme toggle, browser-history navigation. Queues the request; applied on the next editor tick. The same underlying export the kb_export_subgraph_html MCP tool and :kb-export-html colon-command use.",
+            "(kb-export-subgraph-html \"index\" \"/tmp/kb.html\" 2)",
+            "kb-export",
+        ),
+
+        // Native KB graph view (buffer-driven, mirrors kb_graph_view_* MCP tools)
+        (
+            "kb-graph-view-open",
+            "(kb-graph-view-open [ID] [DEPTH])",
+            "Open the native KB graph view, centered on ID (default: whichever KB node the *KB* buffer is currently showing, else the active project's own registered KB instance's default node if one is registered for it, else \"index\"), at DEPTH hops (default: kb_graph_default_depth option). Reuses the existing graph window if already open.",
+            "(kb-graph-view-open \"index\" 2)",
+            "kb-graph-view",
+        ),
+        (
+            "kb-graph-view-close",
+            "(kb-graph-view-close)",
+            "Close the native KB graph view, if open.",
+            "(kb-graph-view-close)",
+            "kb-graph-view",
+        ),
+        (
+            "kb-graph-view-refresh",
+            "(kb-graph-view-refresh)",
+            "Refresh the native KB graph view in place (same center node/depth, freshly re-extracted data) if it's open. Never re-splits or steals focus.",
+            "(kb-graph-view-refresh)",
+            "kb-graph-view",
+        ),
+        (
+            "kb-graph-view-set-depth",
+            "(kb-graph-view-set-depth N)",
+            "Change the native KB graph view's hop radius to N and refresh in place.",
+            "(kb-graph-view-set-depth 3)",
+            "kb-graph-view",
+        ),
+        (
+            "kb-graph-view-navigate",
+            "(kb-graph-view-navigate DIR)",
+            "Move the native KB graph view's node selection toward DIR (\"up\"/\"down\"/\"left\"/\"right\").",
+            "(kb-graph-view-navigate \"down\")",
+            "kb-graph-view",
+        ),
+        (
+            "kb-graph-view-select-current",
+            "(kb-graph-view-select-current)",
+            "Navigate the graph view's captured companion window (the last non-graph window focused) to the currently-selected node's KB buffer.",
+            "(kb-graph-view-select-current)",
+            "kb-graph-view",
+        ),
+        (
+            "kb-graph-view-zoom-to",
+            "(kb-graph-view-zoom-to LEVEL)",
+            "Set the native KB graph view's zoom to an explicit level (0.1-10.0, clamped) — the AI-appropriate equivalent of the mouse wheel's pixel-focus-based zoom, which has no meaningful non-pointer input.",
+            "(kb-graph-view-zoom-to 1.5)",
+            "kb-graph-view",
+        ),
+        (
+            "kb-graph-view-set-pinned",
+            "(kb-graph-view-set-pinned ID PINNED? [X Y])",
+            "Pin or unpin a graph node by KB ID — the AI-appropriate equivalent of drag-to-pin, no drag gesture needed. Optionally repositions it to (X Y) in scene coordinates; omit both to leave it wherever it currently is.",
+            "(kb-graph-view-set-pinned \"index\" #t 100.0 200.0)",
+            "kb-graph-view",
+        ),
+        (
+            "kb-graph-view-toggle-overlay",
+            "(kb-graph-view-toggle-overlay)",
+            "Toggle the native KB graph view between its normal tiled split-window pane and a full-frame modal overlay with a dimmed background. No-op if no graph view is open.",
+            "(kb-graph-view-toggle-overlay)",
+            "kb-graph-view",
+        ),
+        (
+            "kb-graph-view-state",
+            "(kb-graph-view-state)",
+            "Structured introspection snapshot of the open native KB graph view: which node is hovered, which is selected, every node currently rendered (the ego-network), and every edge/link shown between them. Returns #f if no graph view is open.",
+            "(kb-graph-view-state)",
+            "kb-graph-view",
+        ),
+
+        // Introspection (procedures, GC)
+        (
+            "procedure-arity",
+            "(procedure-arity PROC)",
+            "Return the arity of a procedure as a string.",
+            "(procedure-arity car)",
+            "introspection",
+        ),
+        (
+            "procedure-documentation",
+            "(procedure-documentation PROC)",
+            "Return the documentation string of a procedure, or #f if none.",
+            "(procedure-documentation car)",
+            "introspection",
+        ),
+        (
+            "procedure-name",
+            "(procedure-name PROC)",
+            "Return the name of a procedure, or #f if anonymous.",
+            "(procedure-name car)",
+            "introspection",
+        ),
+        (
+            "gc-collect!",
+            "(gc-collect!)",
+            "Trigger garbage collection (currently increments a counter in the Rc-based Stage 1 GC).",
+            "(gc-collect!)",
+            "introspection",
+        ),
+
+        // Test-runner SharedState introspection (crates/scheme/src/runtime/test_primitives.rs) —
+        // used by the Scheme testing framework (scheme/lib/mae-test.scm) and e2e feed-keys tests,
+        // not typical AI/user-facing calls, but still part of the same register_fn API surface
+        // principle #3 requires every entry to be discoverable from (same registry-driven guard
+        // that already covers `should`/`it-test`/etc., which ARE documented here despite being
+        // pure-Scheme, not register_fn — see the guard's allowlist for that distinction).
+        (
+            "test-buffer-string",
+            "(test-buffer-string)",
+            "Test harness: read the active buffer's text from SharedState.",
+            "(should-equal (test-buffer-string) \"hello\")",
+            "testing",
+        ),
+        (
+            "test-buffer-text",
+            "(test-buffer-text NAME)",
+            "Test harness: read the text of buffer NAME (exact or suffix match) from SharedState, or #f if not found.",
+            "(test-buffer-text \"*scratch*\")",
+            "testing",
+        ),
+        (
+            "test-sync-enabled?",
+            "(test-sync-enabled?)",
+            "Test harness: whether CRDT sync is enabled on the active buffer, per SharedState.",
+            "(should (test-sync-enabled?))",
+            "testing",
+        ),
+        (
+            "test-pending-updates",
+            "(test-pending-updates)",
+            "Test harness: number of pending sync updates recorded in SharedState.",
+            "(should (> (test-pending-updates) 0))",
+            "testing",
+        ),
+        (
+            "test-sync-content",
+            "(test-sync-content)",
+            "Test harness: the sync doc's mirrored content from SharedState, or #f if unset.",
+            "(test-sync-content)",
+            "testing",
+        ),
+        (
+            "test-encode-state",
+            "(test-encode-state)",
+            "Test harness: the last encoded sync state recorded in SharedState, or #f if unset.",
+            "(test-encode-state)",
+            "testing",
+        ),
+        (
+            "test-get-buffer-by-name",
+            "(test-get-buffer-by-name NAME)",
+            "Test harness: look up a buffer's index by exact name from SharedState, or #f if not found.",
+            "(test-get-buffer-by-name \"*scratch*\")",
+            "testing",
+        ),
+        (
+            "test-get-option",
+            "(test-get-option NAME)",
+            "Test harness: read an option's current value from SharedState's injected option snapshot, or #f if not found.",
+            "(test-get-option \"tab_width\")",
+            "testing",
+        ),
+        (
+            "test-region-active?",
+            "(test-region-active?)",
+            "Test harness: whether a visual-mode selection is active, per SharedState.",
+            "(should-not (test-region-active?))",
+            "testing",
+        ),
+        (
+            "test-region-start",
+            "(test-region-start)",
+            "Test harness: the start offset of the active visual selection, per SharedState.",
+            "(test-region-start)",
+            "testing",
+        ),
+        (
+            "test-region-end",
+            "(test-region-end)",
+            "Test harness: the end offset of the active visual selection, per SharedState.",
+            "(test-region-end)",
+            "testing",
+        ),
+        (
+            "test-search-forward",
+            "(test-search-forward PATTERN)",
+            "Test harness: the character offset of the first match of PATTERN in the active buffer's text, or #f if not found.",
+            "(test-search-forward \"hello\")",
+            "testing",
+        ),
+        (
+            "test-cursor-row",
+            "(test-cursor-row)",
+            "Test harness: the active cursor's row (0-indexed), per SharedState.",
+            "(should-equal (test-cursor-row) 0)",
+            "testing",
+        ),
+        (
+            "test-cursor-col",
+            "(test-cursor-col)",
+            "Test harness: the active cursor's column (0-indexed), per SharedState.",
+            "(should-equal (test-cursor-col) 0)",
+            "testing",
+        ),
+        (
+            "test-status-message",
+            "(test-status-message)",
+            "Test harness: the last status-bar message recorded in SharedState.",
+            "(should-contain (test-status-message) \"Saved\")",
+            "testing",
+        ),
+
+        // --- Principle #3 parity pass: KB CRUD + option persistence ---
+        // Closes docs/CROSS_SURFACE_PARITY.md gaps #2 and #3 — capabilities
+        // that had Command + MCP surfaces but no Scheme counterpart.
+        (
+            "kb-search",
+            "(kb-search QUERY [SCOPE] [LIMIT])",
+            "Search the knowledge base. SCOPE is \"primary\" (default) or \"all\" (primary plus every registered federated instance); LIMIT caps the hits (default 20). Returns a list of (id title kind instance) — instance is #f for a primary-KB hit. Matching and ranking use the same KnowledgeBase::search_ranked the kb_search MCP tool uses: a case-insensitive term/substring search over title and body, with no query-operator syntax, so \"concept:buffer\" and \"kb-sharing\" search for themselves. An empty QUERY lists everything, capped by LIMIT.",
+            "(kb-search \"window group\" \"all\" 5)",
+            "kb-graph",
+        ),
+        (
+            "kb-get",
+            "(kb-get ID)",
+            "Fetch one KB node by ID from the primary KB or any registered federated instance. Returns (id title kind body tags), or #f when no node with that id exists. Signals an error if the store itself fails, so a storage failure never reads as \"node absent\". Scheme counterpart of the kb_get MCP tool.",
+            "(kb-get \"concept:buffer\")",
+            "kb-graph",
+        ),
+        (
+            "kb-create",
+            "(kb-create ID TITLE BODY [KIND])",
+            "Create a KB node. Signals an error for an empty or already-taken ID. KIND defaults to \"note\". Returns #t once queued; applied on the next editor tick via Editor::kb_create_node — the same method the kb_create MCP tool uses, which enforces seed protection and KB write policy.",
+            "(kb-create \"note:standup\" \"Standup\" \"* Notes\" \"note\")",
+            "kb-graph",
+        ),
+        (
+            "kb-update",
+            "(kb-update ID [TITLE] [BODY] [TAGS])",
+            "Update an existing KB node. Omit a field or pass #f to leave it unchanged; TAGS, when given, is a list of strings that replaces the node's tag set. Signals an error if the node does not exist, or if no field was given. Returns #t once queued; applied via Editor::kb_update_node — the same method the kb_update MCP tool uses.",
+            "(kb-update \"note:standup\" #f \"* Notes\\n- shipped\" '(\"work\"))",
+            "kb-graph",
+        ),
+        (
+            "kb-delete",
+            "(kb-delete ID)",
+            "Delete a KB node by ID. Signals an error if the node does not exist. Returns #t once queued; applied via Editor::kb_delete_node — the same method the kb_delete MCP tool uses, which refuses to delete a protected seed node.",
+            "(kb-delete \"note:standup\")",
+            "kb-graph",
+        ),
+        (
+            "set-option-save!",
+            "(set-option-save! KEY VALUE)",
+            "Set a global editor option AND persist it to ~/.config/mae/init.scm so it survives a restart — the Scheme counterpart of the `:set-save` command and of the set_option MCP tool's persist flag; all three call Editor::set_option then Editor::save_option_to_init. Signals an error for an unknown option name.",
+            "(set-option-save! \"theme\" \"dracula\")",
+            "options",
+        ),
+
+        // --- Principle #3 parity pass: LSP + DAP ---
+        // Closes docs/CROSS_SURFACE_PARITY.md headline gap #1. LSP and DAP are
+        // asynchronous in MAE, so each primitive takes the shape its backing
+        // mae-ai implementation can honestly support — see
+        // crates/scheme/src/runtime/lsp_dap.rs's header for the full table.
+        (
+            "lsp-definition",
+            "(lsp-definition [BUFFER-NAME] [LINE] [COL])",
+            "Request textDocument/definition (defaults: active buffer, cursor position; LINE/COL 1-indexed). QUEUES the request and returns a request id — a Scheme primitive cannot block for an LSP reply without deadlocking the event loop that delivers it. Read the answer with (lsp-result ID).",
+            "(define id (lsp-definition))",
+            "lsp",
+        ),
+        (
+            "lsp-references",
+            "(lsp-references [BUFFER-NAME] [LINE] [COL])",
+            "Request textDocument/references (defaults: active buffer, cursor position). Queues the request and returns a request id; read the answer with (lsp-result ID). CLAUDE.md principle #3's own example.",
+            "(define id (lsp-references))",
+            "lsp",
+        ),
+        (
+            "lsp-hover",
+            "(lsp-hover [BUFFER-NAME] [LINE] [COL])",
+            "Request textDocument/hover (defaults: active buffer, cursor position). Queues the request and returns a request id; read the answer with (lsp-result ID).",
+            "(define id (lsp-hover \"main.rs\" 42 9))",
+            "lsp",
+        ),
+        (
+            "lsp-workspace-symbol",
+            "(lsp-workspace-symbol QUERY LANGUAGE-ID)",
+            "Request workspace/symbol for QUERY from the LANGUAGE-ID server (both required — a workspace search is not scoped to a buffer, so it cannot infer its server). Queues the request and returns a request id; read the answer with (lsp-result ID).",
+            "(define id (lsp-workspace-symbol \"Editor\" \"rust\"))",
+            "lsp",
+        ),
+        (
+            "lsp-document-symbols",
+            "(lsp-document-symbols [BUFFER-NAME])",
+            "Request textDocument/documentSymbol for BUFFER-NAME (default: the active buffer). Queues the request and returns a request id; read the answer with (lsp-result ID).",
+            "(define id (lsp-document-symbols))",
+            "lsp",
+        ),
+        (
+            "lsp-result",
+            "(lsp-result ID)",
+            "Read the result of a queued LSP request. Returns the symbol 'pending until the language server replies — poll across editor ticks (a hook, a test step, the REPL), since one eval never returns to the event loop that delivers the reply. Signals an error for an unknown ID and for a request the server failed. The resolved value is the same payload the equivalent MCP tool returns.",
+            "(let loop () (let ((r (lsp-result id))) (if (eq? r 'pending) #f r)))",
+            "lsp",
+        ),
+        (
+            "lsp-diagnostics",
+            "(lsp-diagnostics [SCOPE])",
+            "Current LSP diagnostics as structured data — the same payload the lsp_diagnostics MCP tool returns (\"scope\", \"counts\", \"files\"). SCOPE is \"buffer\" (default) or \"all\". Answers synchronously: diagnostics are pushed by the server and already held in editor state, so unlike the other lsp-* primitives there is nothing to wait for.",
+            "(lsp-diagnostics \"all\")",
+            "lsp",
+        ),
+        (
+            "dap-start",
+            "(dap-start ADAPTER PROGRAM [ARGS] [STOP-ON-ENTRY])",
+            "Launch a debug session. ADAPTER is \"lldb\", \"debugpy\" or \"codelldb\"; ARGS is an optional list of program arguments. Queues the launch (the adapter starts asynchronously) and returns #t — poll (debug-state) on a later tick to see the session come up.",
+            "(dap-start \"lldb\" \"./target/debug/mae\" '(\"--headless\"))",
+            "dap",
+        ),
+        (
+            "dap-set-breakpoint",
+            "(dap-set-breakpoint SOURCE LINE [CONDITION])",
+            "Set a breakpoint at SOURCE:LINE (1-indexed), optionally guarded by an adapter-evaluated CONDITION. Idempotent. Returns #t once queued; read the resulting breakpoint set back from (debug-state)'s \"breakpoints\" field.",
+            "(dap-set-breakpoint \"src/main.rs\" 42)",
+            "dap",
+        ),
+        (
+            "dap-continue",
+            "(dap-continue)",
+            "Resume execution on the active thread. Signals an error if no debug session is active. Returns #t once queued; poll (debug-state) for the next stop — the debuggee runs asynchronously.",
+            "(dap-continue)",
+            "dap",
+        ),
+        (
+            "dap-step-over",
+            "(dap-step-over)",
+            "Step over the current line. Signals an error if no debug session is active. Returns #t once queued; poll (debug-state) for the new stop.",
+            "(dap-step-over)",
+            "dap",
+        ),
+        (
+            "dap-step-into",
+            "(dap-step-into)",
+            "Step into the call on the current line. Signals an error if no debug session is active. Returns #t once queued; poll (debug-state) for the new stop.",
+            "(dap-step-into)",
+            "dap",
+        ),
+        (
+            "dap-step-out",
+            "(dap-step-out)",
+            "Step out of the current frame. Signals an error if no debug session is active. Returns #t once queued; poll (debug-state) for the new stop.",
+            "(dap-step-out)",
+            "dap",
+        ),
+        (
+            "dap-inspect-variable",
+            "(dap-inspect-variable NAME [SCOPE])",
+            "Look up debug variable NAME across the active stop's scopes, optionally restricted to SCOPE (\"Locals\", \"Globals\", …). Returns an alist with \"name\", \"value\", \"type\", \"scope\" and \"variables_reference\" — the same payload the dap_inspect_variable MCP tool returns. Signals an error if no session is active or nothing matches. CLAUDE.md principle #3's own example.",
+            "(dap-inspect-variable \"count\")",
+            "dap",
+        ),
+        (
+            "debug-state",
+            "(debug-state)",
+            "Structured snapshot of the active debug session — the same payload the debug_state MCP tool returns (\"threads\", \"frames\", \"breakpoints\", \"variables\" by scope), or #f when no session is active. This is the reader for every dap-* action primitive.",
+            "(debug-state)",
+            "dap",
+        ),
     ];
 
 /// Discoverability aliases for a handful of `scheme:<name>` nodes whose
@@ -1612,5 +2042,356 @@ mod tests {
             assert!(!example.is_empty(), "empty example for {name}");
             assert!(!category.is_empty(), "empty category for {name}");
         }
+    }
+
+    // === Registration-parity guard (WS6 cross-surface-parity) ===
+    //
+    // Registry-driven guard tying `SCHEME_API_FUNCTIONS` to the actual Scheme
+    // primitives `mae-scheme` registers via `Vm::register_fn` (+ the one
+    // `register_collab_command_prim!` macro wrapper) — CLAUDE.md principle #3
+    // ("The AI is a peer... same API surface for human and AI"). Before this
+    // guard landed, the doc table could (and did — WS6 cross-surface-parity
+    // audit, confirmed 35 undocumented primitives, since closed by the
+    // "gap-closing pass" block above in `SCHEME_API_FUNCTIONS` itself) drift
+    // silently behind what actually ships: nothing enforced that a new
+    // `register_fn` call site also got a `scheme:<name>` KB node, so
+    // `:help scheme:*` / `kb_search`/`kb_get` (the discovery surface both the
+    // human and the AI peer use) could simply never mention it. Mirrors
+    // `option_tests.rs`'s `every_registered_option_is_reachable_via_get_option`
+    // and `dispatch_contract_tests.rs`'s `schema_impl_params_agree` pattern.
+    //
+    // Approach (static, source-text based — like `dispatch_contract_tests.rs`):
+    // `mae-core` cannot depend on `mae-scheme` (the reverse dependency already
+    // exists: `mae-scheme` depends on `mae-core`), so this reads the actual
+    // `crates/scheme/src/runtime/*.rs` + `crates/scheme/src/introspect.rs`
+    // source text at compile time via `include_str!` and extracts every
+    // `register_fn("name", ...)` / `register_collab_command_prim!("name", ...)`
+    // call site — deliberately NOT pinned to `register_fn`'s exact argument
+    // list, since that signature is under active change in a concurrent
+    // worktree. This only reads source text; it adds no crate dependency edge.
+    //
+    // What this does NOT cover:
+    // - `crates/scheme/src/stdlib/*.rs`, `crates/scheme/src/vm.rs`, and
+    //   `crates/scheme-extra` are deliberately excluded. The stdlib/vm files
+    //   are R7RS-small language-core builtins (`car`, `+`, string/char/vector
+    //   procedures) — the host language, not MAE's editor API; they get R7RS's
+    //   own reference docs, not `scheme:*` KB nodes. `scheme-extra` is a
+    //   separate, opt-in extension-point crate (#521) whose only current
+    //   primitive (`extra-kernel-crate-test-primitive`) is a validation-only
+    //   proof that the extension point works, not user-facing editor API.
+    // - A handful of `SCHEME_API_FUNCTIONS` entries document pure-Scheme
+    //   library functions defined in `scheme/lib/mae-test.scm` (the BDD test
+    //   framework: `describe-group`, `it-test`, `should`, etc.) — never
+    //   `register_fn`-registered, so they're expected to be "documented but no
+    //   matching call site"; see `PURE_SCHEME_LIBRARY_FNS`.
+    // - Source-text heuristic, not a real parser: a stray unbalanced quote in a
+    //   string/comment near a registration call site could misparse. None do
+    //   today; a false result here is a prompt to look at the offending file,
+    //   not to loosen the check.
+
+    /// Editor-facing Scheme runtime source files that register primitives
+    /// meant for `SCHEME_API_FUNCTIONS` documentation. See the module-level
+    /// comment above for what's deliberately excluded and why.
+    const RUNTIME_SOURCES: &[(&str, &str)] = &[
+        (
+            "scheme/runtime/editor_ops.rs",
+            include_str!("../../../scheme/src/runtime/editor_ops.rs"),
+        ),
+        (
+            "scheme/runtime/io_packages.rs",
+            include_str!("../../../scheme/src/runtime/io_packages.rs"),
+        ),
+        (
+            "scheme/runtime/kb_crud.rs",
+            include_str!("../../../scheme/src/runtime/kb_crud.rs"),
+        ),
+        (
+            "scheme/runtime/kb_export.rs",
+            include_str!("../../../scheme/src/runtime/kb_export.rs"),
+        ),
+        (
+            "scheme/runtime/kb_graph_view.rs",
+            include_str!("../../../scheme/src/runtime/kb_graph_view.rs"),
+        ),
+        (
+            "scheme/runtime/kb_preview.rs",
+            include_str!("../../../scheme/src/runtime/kb_preview.rs"),
+        ),
+        (
+            "scheme/runtime/kb_primitives.rs",
+            include_str!("../../../scheme/src/runtime/kb_primitives.rs"),
+        ),
+        (
+            "scheme/runtime/kb_queries.rs",
+            include_str!("../../../scheme/src/runtime/kb_queries.rs"),
+        ),
+        (
+            "scheme/runtime/keybindings.rs",
+            include_str!("../../../scheme/src/runtime/keybindings.rs"),
+        ),
+        (
+            "scheme/runtime/lsp_dap.rs",
+            include_str!("../../../scheme/src/runtime/lsp_dap.rs"),
+        ),
+        (
+            "scheme/runtime/misc_primitives.rs",
+            include_str!("../../../scheme/src/runtime/misc_primitives.rs"),
+        ),
+        (
+            "scheme/runtime/shell_agenda.rs",
+            include_str!("../../../scheme/src/runtime/shell_agenda.rs"),
+        ),
+        (
+            "scheme/runtime/state_sync_apply.rs",
+            include_str!("../../../scheme/src/runtime/state_sync_apply.rs"),
+        ),
+        (
+            "scheme/runtime/state_sync_apply2.rs",
+            include_str!("../../../scheme/src/runtime/state_sync_apply2.rs"),
+        ),
+        (
+            "scheme/runtime/state_sync_apply2.rs",
+            include_str!("../../../scheme/src/runtime/state_sync_apply2.rs"),
+        ),
+        (
+            "scheme/runtime/state_sync_inject.rs",
+            include_str!("../../../scheme/src/runtime/state_sync_inject.rs"),
+        ),
+        (
+            "scheme/runtime/state_sync_inject_kb.rs",
+            include_str!("../../../scheme/src/runtime/state_sync_inject_kb.rs"),
+        ),
+        (
+            "scheme/runtime/test_primitives.rs",
+            include_str!("../../../scheme/src/runtime/test_primitives.rs"),
+        ),
+        (
+            "scheme/introspect.rs",
+            include_str!("../../../scheme/src/introspect.rs"),
+        ),
+    ];
+
+    /// Call-site prefixes that register a Scheme-callable primitive by name.
+    /// `register_fn(` is the real `Vm` method (signature deliberately not
+    /// pinned here — see module doc above). `register_collab_command_prim!(`
+    /// is the one local macro wrapper in `kb_primitives.rs` that also ends in
+    /// a `vm.register_fn($name, ...)` call, but with `$name` (a macro
+    /// variable, not a string literal) at its own *definition* site — so
+    /// `extract_registered_names` naturally skips that definition (no leading
+    /// `"`) and only picks up names at the macro's *invocation* sites, which
+    /// do start with a literal.
+    /// `lsp_positional_prim!(` / `dap_step_prim!(` are the two local macro
+    /// wrappers in `runtime/lsp_dap.rs`, shaped exactly like
+    /// `register_collab_command_prim!` and listed here for the same reason:
+    /// their *definition* passes `$name` (no leading `"`) so it is skipped,
+    /// while their invocation sites carry the literal primitive name.
+    ///
+    /// @ai-caution: [architecture-debt] A macro that wraps `register_fn` and
+    /// is NOT listed here makes every primitive it registers invisible to the
+    /// doc-parity guard below. If you add one, add its `name!(` prefix here.
+    const REGISTRATION_PREFIXES: &[&str] = &[
+        "register_fn(",
+        "register_collab_command_prim!(",
+        "lsp_positional_prim!(",
+        "dap_step_prim!(",
+    ];
+
+    /// Extract every `<prefix>"name"` call site's `name` from `src`, for each
+    /// prefix in `REGISTRATION_PREFIXES`. Loose by design: this only requires
+    /// the first non-whitespace token after the call-site prefix to be a
+    /// string literal, then reads up to the next `"` — no assumption about
+    /// how many further arguments follow or in what form.
+    fn extract_registered_names(src: &str) -> Vec<String> {
+        let mut names = Vec::new();
+        for prefix in REGISTRATION_PREFIXES {
+            let mut search_from = 0usize;
+            while let Some(rel) = src[search_from..].find(prefix) {
+                let after_prefix = search_from + rel + prefix.len();
+                let rest = &src[after_prefix..];
+                let trimmed = rest.trim_start();
+                if let Some(quoted) = trimmed.strip_prefix('"') {
+                    if let Some(end) = quoted.find('"') {
+                        names.push(quoted[..end].to_string());
+                    }
+                }
+                search_from = after_prefix;
+            }
+        }
+        names
+    }
+
+    /// `SCHEME_API_FUNCTIONS` entries that document a pure-Scheme library
+    /// function (defined in `scheme/lib/mae-test.scm`, the BDD test
+    /// framework) rather than a native `register_fn`/
+    /// `register_collab_command_prim!` primitive. These are correctly
+    /// documented and correctly absent from `RUNTIME_SOURCES` — a narrow,
+    /// named allowlist (not a wildcard skip), so a genuinely new
+    /// undocumented-registration gap can't hide behind it.
+    const PURE_SCHEME_LIBRARY_FNS: &[&str] = &[
+        "describe-group",
+        "it-test",
+        "should",
+        "should-not",
+        "should-equal",
+        "should-contain",
+        "should-error",
+        "should-match",
+        "before-each",
+        "after-each",
+        "wait-until",
+    ];
+
+    /// Ratchet for confirmed doc gaps not yet closed. MUST be empty on this
+    /// branch — the WS6 pass that added this guard also closed the real gap
+    /// it found (35 registered-but-undocumented primitives, see the
+    /// "gap-closing pass" block in `SCHEME_API_FUNCTIONS` above) rather than
+    /// allowlisting it. Kept as a named ratchet (not deleted outright) so a
+    /// *future* regression has a documented place to land instead of
+    /// silently weakening the assertion below; per `docs/AUDIT_BASELINE.json`
+    /// convention, any future addition here must cite the count and a
+    /// tracking issue, and must only shrink over time.
+    const KNOWN_UNDOCUMENTED_REGISTRATIONS: &[&str] = &[];
+
+    /// `RUNTIME_SOURCES` is hand-maintained, because `include_str!` cannot
+    /// glob a directory. That makes "add a new `crates/scheme/src/runtime/`
+    /// module" a silent way *around* the guard below: its registrations would
+    /// never be scanned, so its primitives could ship undocumented and the
+    /// doc-gap assertion would still read zero. This closes that door by
+    /// listing the directory at test time and requiring every `.rs` file in
+    /// it to appear in `RUNTIME_SOURCES` — including files that register
+    /// nothing today, since "registers nothing" is a property that changes
+    /// without anyone revisiting this list.
+    ///
+    /// @ai-caution: [architecture-debt] If you add a file under
+    /// `crates/scheme/src/runtime/`, add it to `RUNTIME_SOURCES` too. This
+    /// test will tell you; do not satisfy it by skipping the file.
+    #[test]
+    fn runtime_sources_covers_every_runtime_module() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../scheme/src/runtime");
+        let listed: std::collections::BTreeSet<String> = RUNTIME_SOURCES
+            .iter()
+            .filter_map(|(p, _)| p.strip_prefix("scheme/runtime/"))
+            .map(|p| p.to_string())
+            .collect();
+
+        let mut on_disk: Vec<String> = Vec::new();
+        for entry in
+            std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("cannot list {}: {e}", dir.display()))
+        {
+            let entry = entry.expect("readable dir entry");
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.ends_with(".rs") {
+                on_disk.push(name);
+            }
+        }
+        on_disk.sort();
+        assert!(
+            !on_disk.is_empty(),
+            "sanity check: {} yielded no .rs files",
+            dir.display()
+        );
+
+        let missing: Vec<&String> = on_disk.iter().filter(|n| !listed.contains(*n)).collect();
+        assert!(
+            missing.is_empty(),
+            "{} Scheme runtime module(s) exist on disk but are absent from RUNTIME_SOURCES, so \
+             any primitive they register escapes the doc-parity guard entirely: {:?}",
+            missing.len(),
+            missing
+        );
+
+        let stale: Vec<&String> = listed.iter().filter(|n| !on_disk.contains(n)).collect();
+        assert!(
+            stale.is_empty(),
+            "RUNTIME_SOURCES lists module(s) that no longer exist: {stale:?}"
+        );
+    }
+
+    /// The primary guard (the WS6 deliverable): every Scheme-callable editor
+    /// primitive `mae-scheme` actually registers must have a `scheme:<name>`
+    /// doc entry in `SCHEME_API_FUNCTIONS`. Run with `cargo test -p mae-core
+    /// every_registered_scheme_fn_has_a_scheme_api_doc -- --nocapture` to see
+    /// the current gap (expect 0 on this branch; delete an entry from
+    /// `SCHEME_API_FUNCTIONS` above to see this test catch it).
+    #[test]
+    fn every_registered_scheme_fn_has_a_scheme_api_doc() {
+        let documented: std::collections::BTreeSet<&str> =
+            SCHEME_API_FUNCTIONS.iter().map(|e| e.0).collect();
+
+        let mut registered: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for (_path, src) in RUNTIME_SOURCES {
+            for name in extract_registered_names(src) {
+                registered.insert(name);
+            }
+        }
+
+        assert!(
+            registered.len() > 150,
+            "sanity check: expected RUNTIME_SOURCES to yield >150 registered primitives, got {} \
+             — the source-text scan or RUNTIME_SOURCES file list likely drifted",
+            registered.len()
+        );
+
+        let mut undocumented: Vec<String> = registered
+            .iter()
+            .filter(|name| {
+                !documented.contains(name.as_str())
+                    && !KNOWN_UNDOCUMENTED_REGISTRATIONS.contains(&name.as_str())
+            })
+            .cloned()
+            .collect();
+        undocumented.sort();
+
+        assert!(
+            undocumented.is_empty(),
+            "{} Scheme primitive(s) are registered via register_fn/register_collab_command_prim! \
+             but have no `scheme:<name>` KB doc entry in SCHEME_API_FUNCTIONS (principle #3 — the \
+             AI/human discovery surface must match what's actually callable): {:?}",
+            undocumented.len(),
+            undocumented
+        );
+
+        // A ratchet should only ever shrink. If an allowlisted name is now
+        // documented, the entry is stale and must be removed so the ratchet
+        // keeps tracking the *real*, current gap.
+        let stale_allowlist: Vec<&str> = KNOWN_UNDOCUMENTED_REGISTRATIONS
+            .iter()
+            .filter(|n| documented.contains(*n))
+            .copied()
+            .collect();
+        assert!(
+            stale_allowlist.is_empty(),
+            "KNOWN_UNDOCUMENTED_REGISTRATIONS lists name(s) that are now documented — remove \
+             them from the ratchet: {stale_allowlist:?}"
+        );
+    }
+
+    /// The complementary direction: every `SCHEME_API_FUNCTIONS` entry should
+    /// correspond to a real `register_fn`/`register_collab_command_prim!`
+    /// call site — a doc entry for a primitive that was renamed or removed is
+    /// a stale doc, not a harmless extra. `PURE_SCHEME_LIBRARY_FNS` is the
+    /// sole, named exception (see its doc comment above).
+    #[test]
+    fn every_scheme_api_doc_corresponds_to_a_real_registration_or_library_fn() {
+        let mut registered: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for (_path, src) in RUNTIME_SOURCES {
+            for name in extract_registered_names(src) {
+                registered.insert(name);
+            }
+        }
+
+        let stale: Vec<&str> = SCHEME_API_FUNCTIONS
+            .iter()
+            .map(|e| e.0)
+            .filter(|name| !registered.contains(*name) && !PURE_SCHEME_LIBRARY_FNS.contains(name))
+            .collect();
+
+        assert!(
+            stale.is_empty(),
+            "scheme:<name> doc entries with no matching register_fn/register_collab_command_prim! \
+             call site AND not in PURE_SCHEME_LIBRARY_FNS — either the primitive was \
+             renamed/removed (update or delete the doc entry) or it's a genuine pure-Scheme \
+             library function that belongs in PURE_SCHEME_LIBRARY_FNS: {stale:?}"
+        );
     }
 }

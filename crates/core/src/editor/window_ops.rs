@@ -158,7 +158,7 @@ impl Editor {
         if win.cursor_row >= line_count {
             win.cursor_row = line_count.saturating_sub(1);
         }
-        let line_len = self.buffers[idx].line_len(win.cursor_row);
+        let line_len = self.buffers[idx].line_byte_len(win.cursor_row);
         if win.cursor_col > line_len {
             win.cursor_col = line_len;
         }
@@ -250,9 +250,9 @@ impl Editor {
         // ever runs.
         if self
             .ai
-            .mcp_session_windows
+            .mcp_sessions
             .values()
-            .any(|s| s.target_window_id == Some(win_id))
+            .any(|s| s.windows.target_window_id == Some(win_id))
         {
             return true;
         }
@@ -544,6 +544,48 @@ impl Editor {
         session_id: Option<u64>,
         f: impl FnOnce(&mut Editor) -> R,
     ) -> R {
+        // Mark this dispatch as AI-originated for its whole extent, so effects
+        // can ask "did a human ask for this?" rather than only "what tier is
+        // this session?" (ADR-088's minimum viable carried authority; ADR-089 D4
+        // is its first consumer).
+        //
+        // If `f` unwinds, the decrement is skipped and the depth stays elevated.
+        // That direction is deliberate: a leaked increment makes the editor treat
+        // subsequent work as AI-originated, which is *more* restrictive, not less.
+        self.ai.ai_dispatch_depth = self.ai.ai_dispatch_depth.saturating_add(1);
+        // ADR-091: record *whose* dispatch this is for the same extent, so a
+        // tool implementation can resolve its own session's state
+        // (`Editor::agent_session_mut`) without every dispatcher in the chain
+        // threading a session-id parameter. Saved/restored rather than
+        // cleared, so a nested dispatch (a tool that runs a command that
+        // dispatches again) restores the OUTER session's id rather than
+        // leaking `None` — which would silently redirect the outer session's
+        // remaining work at the process-wide fallback record.
+        let saved_session = self.ai.dispatch_session_id;
+        self.ai.dispatch_session_id = session_id;
+        let result = self.with_ai_dispatch_scope_windows(session_id, f);
+        self.ai.dispatch_session_id = saved_session;
+        self.ai.ai_dispatch_depth = self.ai.ai_dispatch_depth.saturating_sub(1);
+        result
+    }
+
+    /// Is the currently-running operation AI-originated?
+    ///
+    /// True inside any [`Self::with_ai_dispatch_scope_for_session`] extent — which
+    /// wraps every MCP-originated tool dispatch and Scheme-command bridge call —
+    /// and false for work a human drove from a keybinding or the ex-line.
+    pub fn is_ai_originated_dispatch(&self) -> bool {
+        self.ai.ai_dispatch_depth > 0
+    }
+
+    /// Window-targeting half of [`Self::with_ai_dispatch_scope_for_session`], split
+    /// out so the AI-origin marking above wraps every exit path including the
+    /// early return below.
+    fn with_ai_dispatch_scope_windows<R>(
+        &mut self,
+        session_id: Option<u64>,
+        f: impl FnOnce(&mut Editor) -> R,
+    ) -> R {
         let Some(sid) = session_id else {
             self.ensure_ai_dispatch_target();
             let target = self.ai.target_window_id;
@@ -592,9 +634,9 @@ impl Editor {
         // global fields to whatever they held before this call -- never
         // leaking `sid`'s state into the global/no-session view or a
         // different session's subsequent call.
-        let entry = self.ai.mcp_session_windows.entry(sid).or_default();
-        entry.target_window_id = self.ai.target_window_id;
-        entry.work_window = self.ai.work_window;
+        let entry = self.ai.mcp_sessions.entry(sid).or_default();
+        entry.windows.target_window_id = self.ai.target_window_id;
+        entry.windows.work_window = self.ai.work_window;
 
         self.ai.target_window_id = saved_global_target;
         self.ai.work_window = saved_global_work_window;
@@ -614,8 +656,8 @@ impl Editor {
     /// ensures the window-scan branches inside `find_or_create_companion_window`
     /// can't repurpose a window already tracked as another live session's.
     fn resolve_session_target(&mut self, sid: u64) -> Option<crate::window::WindowId> {
-        if let Some(state) = self.ai.mcp_session_windows.get(&sid) {
-            if let Some(id) = state.target_window_id {
+        if let Some(state) = self.ai.mcp_sessions.get(&sid) {
+            if let Some(id) = state.windows.target_window_id {
                 if self.window_mgr.window(id).is_some() {
                     return Some(id);
                 }
@@ -631,20 +673,20 @@ impl Editor {
         self.ai.target_window_id = saved_target;
         self.ai.work_window = saved_work_window;
 
-        if !self.ai.mcp_session_windows.contains_key(&sid)
-            && self.ai.mcp_session_windows.len() >= super::ai_state::MAX_TRACKED_MCP_SESSION_WINDOWS
+        if !self.ai.mcp_sessions.contains_key(&sid)
+            && self.ai.mcp_sessions.len() >= super::ai_state::MAX_TRACKED_MCP_SESSION_WINDOWS
         {
             // Coarse size bound, not LRU -- see MAX_TRACKED_MCP_SESSION_WINDOWS'
             // doc comment. Evicting is always safe: a session that gets
             // evicted here just re-creates a companion window on its next
             // dispatch, same as any other stale/never-set entry.
-            if let Some(&evict) = self.ai.mcp_session_windows.keys().next() {
-                self.ai.mcp_session_windows.remove(&evict);
+            if let Some(&evict) = self.ai.mcp_sessions.keys().next() {
+                self.ai.mcp_sessions.remove(&evict);
             }
         }
-        let entry = self.ai.mcp_session_windows.entry(sid).or_default();
-        entry.target_window_id = result;
-        entry.work_window.set(result);
+        let entry = self.ai.mcp_sessions.entry(sid).or_default();
+        entry.windows.target_window_id = result;
+        entry.windows.work_window.set(result);
 
         result
     }
@@ -1007,10 +1049,18 @@ impl Editor {
     ///
     /// The file is opened "hidden" (not assigned to focused window), then
     /// routed via `display_buffer_for_agent`.
-    pub fn open_file_non_conversation(&mut self, path: impl AsRef<std::path::Path>) {
-        if let Some(new_idx) = self.open_file_hidden(path) {
-            self.display_buffer_for_agent(new_idx);
-        }
+    ///
+    /// Returns the new buffer index on success, or the real open failure
+    /// (propagated from [`Editor::open_file_hidden`]) on error — callers
+    /// (notably the AI `open_file`/`create_file` tools, ADR-086) must not
+    /// decide success by re-inspecting `status_msg` afterward.
+    pub fn open_file_non_conversation(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<usize, String> {
+        let new_idx = self.open_file_hidden(path)?;
+        self.display_buffer_for_agent(new_idx);
+        Ok(new_idx)
     }
 
     /// Save current mode to the active buffer before switching away.

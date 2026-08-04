@@ -226,10 +226,15 @@ impl PskAuth {
     }
 
     /// Constant-time verification of a hex proof against `secret`.
+    ///
+    /// @ai-caution: [security] `proof_hex` is attacker-controlled, pre-auth, and
+    /// arbitrary UTF-8 off the wire. Decoding MUST go through the `hex` crate,
+    /// which operates on bytes. A hand-rolled `&s[i..i + 2]` decoder (removed —
+    /// audit #608.1/#608.2) panicked on any multi-byte codepoint straddling an
+    /// odd byte offset, turning a malformed handshake proof into a remote DoS.
     fn verify_with(secret: &[u8], nonce_a: &str, nonce_b: &str, proof_hex: &str) -> bool {
-        let proof = match hex::decode(proof_hex) {
-            Some(p) => p,
-            None => return false,
+        let Ok(proof) = hex::decode(proof_hex) else {
+            return false;
         };
         let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
         mac.update(nonce_a.as_bytes());
@@ -757,24 +762,6 @@ struct AuthFail {
     reason: String,
 }
 
-/// Hex encoding/decoding helpers (avoids adding `hex` crate).
-mod hex {
-    pub fn encode(bytes: impl AsRef<[u8]>) -> String {
-        bytes.as_ref().iter().map(|b| format!("{b:02x}")).collect()
-    }
-
-    /// Decode a hex string to bytes. Returns `None` on odd length or non-hex.
-    pub fn decode(s: &str) -> Option<Vec<u8>> {
-        if !s.len().is_multiple_of(2) {
-            return None;
-        }
-        (0..s.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
-            .collect()
-    }
-}
-
 /// Generate a fresh random pre-shared key (32 bytes, hex-encoded — 64 hex chars).
 /// Used by MAE at startup (ADR-048) to mint a per-process secret for its
 /// first-party local-agent tool socket; not derived from anything persistent, so
@@ -942,7 +929,7 @@ mod tests {
         let k2 = generate_psk();
         assert_ne!(k1, k2, "each call must mint a fresh, unpredictable secret");
         assert_eq!(k1.len(), 64); // 32 bytes = 64 hex chars
-        assert!(hex::decode(&k1).is_some(), "must be valid hex");
+        assert!(hex::decode(&k1).is_ok(), "must be valid hex");
     }
 
     #[tokio::test]
@@ -1037,10 +1024,75 @@ mod tests {
     #[test]
     fn hex_roundtrip() {
         assert_eq!(hex::decode("00ff10").unwrap(), vec![0x00, 0xff, 0x10]);
-        assert!(hex::decode("xyz").is_none());
-        assert!(hex::decode("abc").is_none(), "odd length rejected");
+        assert!(hex::decode("xyz").is_err());
+        assert!(hex::decode("abc").is_err(), "odd length rejected");
         let bytes = [1u8, 2, 250, 3];
-        assert_eq!(hex::decode(&hex::encode(bytes)).unwrap(), bytes);
+        assert_eq!(hex::decode(hex::encode(bytes)).unwrap(), bytes);
+    }
+
+    /// Audit #608.1 — the attacker's test. A hostile client that never knows the
+    /// PSK still fully controls the `proof` string it sends in step 3, and JSON
+    /// carries arbitrary UTF-8. The removed hand-rolled decoder sliced
+    /// `&s[i..i + 2]` on a `&str`, so any multi-byte codepoint straddling an odd
+    /// byte offset panicked the *server task*, pre-auth — a remote DoS reachable
+    /// by an unauthenticated peer. Every case below must be REJECTED, not panic.
+    #[tokio::test]
+    async fn hostile_client_proof_is_rejected_never_panics() {
+        // Real multi-byte inputs at every alignment that a naive 2-byte slicer
+        // splits mid-codepoint, plus boundary cases. Not one cherry-picked value.
+        let hostile_proofs = [
+            "aé",                  // 3 bytes: [0..2] cuts 'é' in half
+            "aébc",                // 5 bytes, odd — rejected before slicing
+            "aébcd",               // 6 bytes: [0..2] cuts 'é'
+            "ééééééé",             // all multi-byte, every slice mid-codepoint
+            "\u{1F600}\u{1F600}",  // 4-byte emoji, 8 bytes total
+            "00ff\u{1F600}",       // valid prefix then a 4-byte codepoint
+            "\u{0}\u{0}",          // NULs (valid boundaries, invalid hex)
+            "",                    // empty
+            "zz",                  // well-formed length, non-hex
+            &"ff".repeat(100_000), // oversized but valid hex — wrong length MAC
+        ];
+
+        for proof in hostile_proofs {
+            let server = PskAuth::new("correct-horse-battery-staple");
+            let (client_stream, server_stream) = duplex(4096);
+            let (cr, cw) = tokio::io::split(client_stream);
+            let (sr, sw) = tokio::io::split(server_stream);
+            let mut cr = BufReader::new(cr);
+            let mut cw = tokio::io::BufWriter::new(cw);
+            let mut sr = BufReader::new(sr);
+            let mut sw = tokio::io::BufWriter::new(sw);
+
+            let hostile = async {
+                // Step 1: a well-formed hello (attacker needs no secret for this).
+                cw.write_all(
+                    br#"{"auth":"hello","version":1,"nonce":"00112233445566778899aabbccddeeff"}"#,
+                )
+                .await
+                .unwrap();
+                cw.write_all(b"\n").await.unwrap();
+                cw.flush().await.unwrap();
+                // Step 2: consume the server's challenge.
+                let mut challenge = String::new();
+                cr.read_line(&mut challenge).await.unwrap();
+                // Step 3: the payload under test.
+                let response = serde_json::json!({"auth": "response", "proof": proof});
+                cw.write_all(response.to_string().as_bytes()).await.unwrap();
+                cw.write_all(b"\n").await.unwrap();
+                cw.flush().await.unwrap();
+            };
+
+            let (server_result, ()) =
+                tokio::join!(server.server_handshake(&mut sr, &mut sw), hostile);
+
+            // Selective oracle: not merely "didn't succeed" — it must be a clean
+            // authentication *rejection*, so the caller closes the connection
+            // normally rather than the task dying or the peer being let in.
+            match server_result {
+                Err(AuthError::Rejected(_)) => {}
+                other => panic!("proof {proof:?} must be rejected, got {other:?}"),
+            }
+        }
     }
 
     // --- KeyAuth (asymmetric) ---

@@ -70,9 +70,15 @@ pub trait GraphNeighbors {
     fn contains(&self, id: &str) -> bool;
     /// Union of outgoing + incoming neighbor ids (the walk itself is
     /// undirected — it discovers nodes reachable in either direction).
-    fn neighbor_ids(&self, id: &str) -> Vec<String>;
-    /// Outgoing target ids only (edges in the result are directional).
-    fn outgoing_ids(&self, id: &str) -> Vec<String>;
+    ///
+    /// `Result`-returning (ADR-086 read-side twin): `bfs_neighborhood` feeds this
+    /// straight to the `kb_graph` MCP tool, so a genuine storage failure partway
+    /// through the walk must reach the agent as an error, not silently truncate the
+    /// neighborhood as if the remaining nodes simply have no neighbors.
+    fn neighbor_ids(&self, id: &str) -> Result<Vec<String>, crate::store::KbStoreError>;
+    /// Outgoing target ids only (edges in the result are directional). Same
+    /// `Result` rationale as [`Self::neighbor_ids`].
+    fn outgoing_ids(&self, id: &str) -> Result<Vec<String>, crate::store::KbStoreError>;
     /// `(title, kind_str, owning_instance_name, is_seed_content)` for
     /// display, if `id` exists. `is_seed_content` mirrors
     /// `mae_core::ai_residency::is_residency_exempt` (`Node::source ==
@@ -101,7 +107,9 @@ pub fn bfs_neighborhood(
         if h >= depth {
             continue;
         }
-        for n in backend.neighbor_ids(&cur) {
+        // A storage failure partway through the walk propagates as a real error
+        // (ADR-086 read-side twin) rather than silently truncating the neighborhood.
+        for n in backend.neighbor_ids(&cur).map_err(|e| e.to_string())? {
             if !hops.contains_key(&n) {
                 hops.insert(n.clone(), h + 1);
                 queue.push_back((n, h + 1));
@@ -143,7 +151,7 @@ pub fn bfs_neighborhood(
     let mut edges: Vec<(String, String)> = Vec::new();
     let mut seen: HashSet<(String, String)> = HashSet::new();
     for src in &ids {
-        for dst in backend.outgoing_ids(src) {
+        for dst in backend.outgoing_ids(src).map_err(|e| e.to_string())? {
             if in_set.contains(&dst) && seen.insert((src.clone(), dst.clone())) {
                 edges.push((src.clone(), dst));
             }
@@ -170,19 +178,22 @@ impl GraphNeighbors for QueryLayerBackend<'_> {
         self.0.contains(id)
     }
 
-    fn neighbor_ids(&self, id: &str) -> Vec<String> {
-        let mut out: Vec<String> = self.0.links_from(id).into_iter().map(|l| l.dst).collect();
+    fn neighbor_ids(&self, id: &str) -> Result<Vec<String>, crate::store::KbStoreError> {
+        // A genuine query-layer storage failure propagates all the way to the
+        // `kb_graph` MCP tool as an `Err` (ADR-086 read-side twin) rather than being
+        // silently treated as "no neighbors."
+        let mut out: Vec<String> = self.0.links_from(id)?.into_iter().map(|l| l.dst).collect();
         let mut seen: HashSet<String> = out.iter().cloned().collect();
-        for l in self.0.links_to(id) {
+        for l in self.0.links_to(id)? {
             if seen.insert(l.src.clone()) {
                 out.push(l.src);
             }
         }
-        out
+        Ok(out)
     }
 
-    fn outgoing_ids(&self, id: &str) -> Vec<String> {
-        self.0.links_from(id).into_iter().map(|l| l.dst).collect()
+    fn outgoing_ids(&self, id: &str) -> Result<Vec<String>, crate::store::KbStoreError> {
+        Ok(self.0.links_from(id)?.into_iter().map(|l| l.dst).collect())
     }
 
     fn describe(&self, id: &str) -> Option<(String, String, Option<String>, bool)> {
@@ -207,7 +218,8 @@ impl GraphNeighbors for InMemoryFederatedBackend<'_> {
         self.primary.contains(id) || self.instances.values().any(|kb| kb.contains(id))
     }
 
-    fn neighbor_ids(&self, id: &str) -> Vec<String> {
+    fn neighbor_ids(&self, id: &str) -> Result<Vec<String>, crate::store::KbStoreError> {
+        // In-memory `KnowledgeBase` reads have no failure mode (no I/O) — always `Ok`.
         let mut out = self.primary.neighbors(id);
         let mut seen: HashSet<String> = out.iter().cloned().collect();
         for kb in self.instances.values() {
@@ -217,10 +229,10 @@ impl GraphNeighbors for InMemoryFederatedBackend<'_> {
                 }
             }
         }
-        out
+        Ok(out)
     }
 
-    fn outgoing_ids(&self, id: &str) -> Vec<String> {
+    fn outgoing_ids(&self, id: &str) -> Result<Vec<String>, crate::store::KbStoreError> {
         let mut out = self.primary.links_from(id);
         let mut seen: HashSet<String> = out.iter().cloned().collect();
         for kb in self.instances.values() {
@@ -230,7 +242,7 @@ impl GraphNeighbors for InMemoryFederatedBackend<'_> {
                 }
             }
         }
-        out
+        Ok(out)
     }
 
     fn describe(&self, id: &str) -> Option<(String, String, Option<String>, bool)> {
@@ -268,30 +280,21 @@ impl GraphNeighbors for KbStoreBackend<'_> {
         matches!(self.0.get_node(id), Ok(Some(_)))
     }
 
-    fn neighbor_ids(&self, id: &str) -> Vec<String> {
-        let mut out: Vec<String> = self
-            .0
-            .links_from(id)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|l| l.dst)
-            .collect();
+    fn neighbor_ids(&self, id: &str) -> Result<Vec<String>, crate::store::KbStoreError> {
+        // Propagate the real `KbStore` error instead of `unwrap_or_default()`-ing it
+        // away (ADR-086 read-side twin) — this feeds the `(kb-graph)` Scheme primitive.
+        let mut out: Vec<String> = self.0.links_from(id)?.into_iter().map(|l| l.dst).collect();
         let mut seen: HashSet<String> = out.iter().cloned().collect();
-        for l in self.0.links_to(id).unwrap_or_default() {
+        for l in self.0.links_to(id)? {
             if seen.insert(l.src.clone()) {
                 out.push(l.src);
             }
         }
-        out
+        Ok(out)
     }
 
-    fn outgoing_ids(&self, id: &str) -> Vec<String> {
-        self.0
-            .links_from(id)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|l| l.dst)
-            .collect()
+    fn outgoing_ids(&self, id: &str) -> Result<Vec<String>, crate::store::KbStoreError> {
+        Ok(self.0.links_from(id)?.into_iter().map(|l| l.dst).collect())
     }
 
     fn describe(&self, id: &str) -> Option<(String, String, Option<String>, bool)> {
@@ -330,7 +333,15 @@ pub struct RelatedItem {
 pub trait RelatedSource {
     /// Scored related-node ids for `id`, already ranked/limited by the
     /// backend's own algorithm.
-    fn scored(&self, id: &str, limit: usize) -> Vec<(String, f64)>;
+    ///
+    /// `Result`-returning (ADR-086 read-side twin): `related_enriched` feeds this
+    /// straight to the `kb_related` MCP tool, so a genuine storage failure must reach
+    /// the agent as an error, not silently render as "no related nodes."
+    fn scored(
+        &self,
+        id: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, f64)>, crate::store::KbStoreError>;
     /// `(title, kind_str, owning_instance_name, is_seed_content)` for
     /// display — see [`GraphNeighbors::describe`]'s doc for the last two
     /// fields' rationale (#361).
@@ -338,9 +349,13 @@ pub trait RelatedSource {
 }
 
 /// Rank-then-enrich shared by every `kb_related`-shaped surface.
-pub fn related_enriched(backend: &dyn RelatedSource, id: &str, limit: usize) -> Vec<RelatedItem> {
-    backend
-        .scored(id, limit)
+pub fn related_enriched(
+    backend: &dyn RelatedSource,
+    id: &str,
+    limit: usize,
+) -> Result<Vec<RelatedItem>, crate::store::KbStoreError> {
+    Ok(backend
+        .scored(id, limit)?
         .into_iter()
         .map(|(rid, score)| {
             let (title, kind, instance, is_seed) = backend.describe(&rid).unwrap_or_default();
@@ -353,7 +368,7 @@ pub fn related_enriched(backend: &dyn RelatedSource, id: &str, limit: usize) -> 
                 is_seed,
             }
         })
-        .collect()
+        .collect())
 }
 
 /// [`RelatedSource`] mirroring `execute_kb_related`'s original logic exactly:
@@ -370,21 +385,27 @@ pub struct FederatedRelatedBackend<'a> {
 }
 
 impl RelatedSource for FederatedRelatedBackend<'_> {
-    fn scored(&self, id: &str, limit: usize) -> Vec<(String, f64)> {
+    fn scored(
+        &self,
+        id: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, f64)>, crate::store::KbStoreError> {
+        // A genuine query-layer storage failure propagates to the `kb_related` MCP
+        // tool as an `Err` (ADR-086 read-side twin) rather than "no related nodes".
         if let Some(q) = self.query {
             if q.contains(id) {
                 return q.related(id, limit);
             }
         }
         if self.primary.contains(id) {
-            return self.primary.related(id, limit);
+            return Ok(self.primary.related(id, limit));
         }
         for kb in self.instances.values() {
             if kb.contains(id) {
-                return kb.related(id, limit);
+                return Ok(kb.related(id, limit));
             }
         }
-        Vec::new()
+        Ok(Vec::new())
     }
 
     fn describe(&self, id: &str) -> Option<(String, String, Option<String>, bool)> {
@@ -417,8 +438,12 @@ impl RelatedSource for FederatedRelatedBackend<'_> {
 pub struct KbStoreRelatedBackend<'a>(pub &'a dyn KbStore);
 
 impl RelatedSource for KbStoreRelatedBackend<'_> {
-    fn scored(&self, id: &str, limit: usize) -> Vec<(String, f64)> {
-        self.0.related(id, limit).unwrap_or_default()
+    fn scored(
+        &self,
+        id: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, f64)>, crate::store::KbStoreError> {
+        self.0.related(id, limit)
     }
 
     fn describe(&self, id: &str) -> Option<(String, String, Option<String>, bool)> {
@@ -518,14 +543,18 @@ mod tests {
     fn related_enriched_empty_when_backend_scores_nothing() {
         struct EmptyBackend;
         impl RelatedSource for EmptyBackend {
-            fn scored(&self, _id: &str, _limit: usize) -> Vec<(String, f64)> {
-                Vec::new()
+            fn scored(
+                &self,
+                _id: &str,
+                _limit: usize,
+            ) -> Result<Vec<(String, f64)>, crate::store::KbStoreError> {
+                Ok(Vec::new())
             }
             fn describe(&self, _id: &str) -> Option<(String, String, Option<String>, bool)> {
                 None
             }
         }
-        let items = related_enriched(&EmptyBackend, "a", 10);
+        let items = related_enriched(&EmptyBackend, "a", 10).unwrap();
         assert!(items.is_empty());
     }
 
@@ -533,18 +562,47 @@ mod tests {
     fn related_enriched_carries_score_through_to_output() {
         struct FixedBackend;
         impl RelatedSource for FixedBackend {
-            fn scored(&self, _id: &str, _limit: usize) -> Vec<(String, f64)> {
-                vec![("b".to_string(), 2.5), ("c".to_string(), 1.0)]
+            fn scored(
+                &self,
+                _id: &str,
+                _limit: usize,
+            ) -> Result<Vec<(String, f64)>, crate::store::KbStoreError> {
+                Ok(vec![("b".to_string(), 2.5), ("c".to_string(), 1.0)])
             }
             fn describe(&self, id: &str) -> Option<(String, String, Option<String>, bool)> {
                 Some((format!("Title-{id}"), "note".to_string(), None, false))
             }
         }
-        let items = related_enriched(&FixedBackend, "a", 10);
+        let items = related_enriched(&FixedBackend, "a", 10).unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].id, "b");
         assert_eq!(items[0].score, 2.5);
         assert_eq!(items[0].title, "Title-b");
         assert_eq!(items[1].score, 1.0);
+    }
+
+    /// Adversarial (ADR-086 read-side twin): a `RelatedSource` whose `scored()`
+    /// genuinely fails must surface as `Err` from `related_enriched`, not silently
+    /// render as an empty related-nodes list — the read-side twin of the MCP
+    /// `kb_related` tool boundary fix in `crates/ai/src/tool_impls/kb.rs`.
+    #[test]
+    fn related_enriched_propagates_a_genuine_backend_error_instead_of_rendering_empty() {
+        struct FailingBackend;
+        impl RelatedSource for FailingBackend {
+            fn scored(
+                &self,
+                _id: &str,
+                _limit: usize,
+            ) -> Result<Vec<(String, f64)>, crate::store::KbStoreError> {
+                Err(crate::store::KbStoreError::Storage(
+                    "simulated related() failure".to_string(),
+                ))
+            }
+            fn describe(&self, _id: &str) -> Option<(String, String, Option<String>, bool)> {
+                None
+            }
+        }
+        let err = related_enriched(&FailingBackend, "a", 10).unwrap_err();
+        assert!(err.to_string().contains("simulated related() failure"));
     }
 }

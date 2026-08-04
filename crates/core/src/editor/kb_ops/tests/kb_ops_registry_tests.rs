@@ -391,7 +391,8 @@ fn kb_reimport_refreshes_query_layer() {
         .kb
         .query_layer()
         .unwrap()
-        .id_title_body_triples(None, 500);
+        .id_title_body_triples(None, 500)
+        .expect("triples query must succeed against a healthy store");
     assert!(
         triples.iter().any(|(id, _, _)| id == "test-note-3"),
         "reimported node must be visible through the query layer (kb-find's read path), got: {:?}",

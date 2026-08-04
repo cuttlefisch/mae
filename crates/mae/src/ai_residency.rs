@@ -1624,7 +1624,7 @@ mod tests {
         };
         let global_policy = mae_ai::PermissionPolicy {
             auto_approve_up_to: mae_ai::PermissionTier::Shell,
-            allowed_categories: None,
+            ..mae_ai::PermissionPolicy::default()
         };
         let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
         let mut deferred = Vec::new();

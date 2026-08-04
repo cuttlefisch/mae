@@ -75,12 +75,41 @@ impl Editor {
         (saved, errors)
     }
 
+    /// Refuse an AI-originated save that targets MAE's own configuration (ADR-089 D4).
+    ///
+    /// Both save entry points funnel through here, which is what makes `open_file` +
+    /// `buffer_write` + `execute_command save` not a way around the `create_file`
+    /// guard — the same escalation, assembled from three individually-permitted steps.
+    ///
+    /// @ai-caution: [security] The condition is deliberately AI-origin, not tier:
+    /// a human editing their own `init.scm` in MAE, and `:set-save` writing it, must
+    /// keep working. Gating on tier alone would break both; gating on nothing leaves
+    /// the config self-writable by an agent.
+    fn refuse_ai_save_of_protected_config(&self, idx: usize) -> Result<(), String> {
+        if !self.is_ai_originated_dispatch() {
+            return Ok(());
+        }
+        let Some(path) = self.buffers[idx].file_path() else {
+            return Ok(());
+        };
+        if crate::workspace_trust::is_protected_config_path(path) {
+            return Err(format!(
+                "Refused: '{}' is MAE configuration, which governs what tools are \
+                 permitted. An AI session may not save it — ask the user to make this \
+                 change.",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
     /// Save a single buffer with content-hash verification.
     ///
     /// If the file on disk has been externally modified (hash mismatch) AND
     /// the buffer has unsaved changes, returns an error telling the user to
     /// use `:w!` to force. Otherwise proceeds with `buffer.save()`.
     pub fn save_buffer_with_hash_check(&mut self, idx: usize) -> Result<(), String> {
+        self.refuse_ai_save_of_protected_config(idx)?;
         if let Some(path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) {
             if self.buffers[idx].check_disk_changed_by_hash() && self.buffers[idx].modified {
                 warn!(
@@ -100,6 +129,7 @@ impl Editor {
     /// Force-save a buffer, skipping the content-hash check.
     /// Used by `:w!` when the user explicitly wants to overwrite.
     pub fn save_buffer_force(&mut self, idx: usize) -> Result<(), String> {
+        self.refuse_ai_save_of_protected_config(idx)?;
         self.buffers[idx].save().map_err(|e| e.to_string())?;
         if let Some(path) = self.buffers[idx].file_path() {
             debug!(path = %path.display(), "buffer force-saved (hash check skipped)");
@@ -1146,7 +1176,10 @@ impl Editor {
             "help" => {
                 // Complete from all KB node IDs + bare names (without namespace prefix)
                 let all_ids: Vec<String> = if let Some(q) = self.kb.query_layer() {
-                    q.list_ids(None)
+                    q.list_ids(None).unwrap_or_else(|e| {
+                        tracing::warn!(error = %e, "kb list_ids failed during :help completion");
+                        Vec::new()
+                    })
                 } else {
                     self.kb.primary.list_ids(None)
                 };
@@ -1270,7 +1303,7 @@ impl Editor {
     }
 
     pub fn open_file(&mut self, path: impl AsRef<Path>) {
-        if let Some(new_idx) = self.open_file_hidden(path) {
+        if let Ok(new_idx) = self.open_file_hidden(path) {
             let prev_idx = self.active_buffer_idx();
             self.vi.alternate_buffer_idx = Some(prev_idx);
             self.display_buffer(new_idx);
@@ -1279,7 +1312,12 @@ impl Editor {
 
     /// Opens a file and returns its buffer index without modifying the window manager focus.
     /// If the file is already open, it just returns that buffer's index.
-    pub fn open_file_hidden(&mut self, path: impl AsRef<Path>) -> Option<usize> {
+    ///
+    /// Returns `Err` with the real failure reason (from [`Buffer::from_file`]) when the
+    /// file cannot be opened, rather than swallowing the failure into `status_msg` for a
+    /// caller to sniff later (ADR-086) — `status_msg` is still set for the UI, but it is
+    /// no longer the only signal a caller has to decide success.
+    pub fn open_file_hidden(&mut self, path: impl AsRef<Path>) -> Result<usize, String> {
         let path = path.as_ref();
 
         // Check if file is already open
@@ -1287,7 +1325,7 @@ impl Editor {
             if let Some((idx, _)) = self.buffers.iter().enumerate().find(|(_, b)| {
                 b.file_path().and_then(|p| p.canonicalize().ok()).as_ref() == Some(&canonical)
             }) {
-                return Some(idx);
+                return Ok(idx);
             }
         }
 
@@ -1388,11 +1426,12 @@ impl Editor {
                 if let Some(lang) = detected_lang {
                     self.fire_hook(&format!("buffer-open:{}", lang.id()));
                 }
-                Some(new_idx)
+                Ok(new_idx)
             }
             Err(e) => {
-                self.set_status(format!("Error opening: {}", e));
-                None
+                let msg = format!("Error opening: {}", e);
+                self.set_status(msg.clone());
+                Err(msg)
             }
         }
     }
@@ -1748,6 +1787,103 @@ mod tests {
         // Force save should succeed despite mismatch
         let result = editor.save_buffer_force(idx);
         assert!(result.is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // ADR-089 D4: config self-write protection
+    // -----------------------------------------------------------------------
+
+    /// Build an editor holding a buffer backed by `.mae/init.scm` under a temp root.
+    fn editor_with_project_config_buffer(root: &std::path::Path) -> (Editor, usize) {
+        let cfg = root.join(".mae");
+        std::fs::create_dir_all(&cfg).unwrap();
+        let file = cfg.join("init.scm");
+        std::fs::write(&file, ";; original\n").unwrap();
+
+        let mut editor = Editor::new();
+        let buf = crate::buffer::Buffer::from_file(&file).unwrap();
+        editor.buffers.push(buf);
+        let idx = editor.buffers.len() - 1;
+        editor.buffers[idx].modified = true;
+        (editor, idx)
+    }
+
+    /// The escalation this guard exists to stop: an agent opens MAE's own config,
+    /// rewrites it in the buffer, and saves — reaching through three individually
+    /// permitted steps what `create_file` refuses in one.
+    #[test]
+    fn an_ai_originated_save_of_project_config_is_refused() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (mut editor, idx) = editor_with_project_config_buffer(tmp.path());
+
+        editor.ai.ai_dispatch_depth = 1; // inside an AI dispatch scope
+        let hash_checked = editor.save_buffer_with_hash_check(idx);
+        let forced = editor.save_buffer_force(idx);
+
+        assert!(
+            hash_checked.is_err(),
+            "AI save of .mae/init.scm must be refused"
+        );
+        assert!(
+            forced.is_err(),
+            "force-save must not be an escape hatch around the same guard"
+        );
+    }
+
+    /// The other half, and the one that keeps the guard honest: a human editing
+    /// their own config in MAE — and `:set-save`, which writes `init.scm` — must be
+    /// entirely unaffected. A guard that blocked this would be reverted in a week.
+    #[test]
+    fn a_human_save_of_project_config_is_allowed() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (mut editor, idx) = editor_with_project_config_buffer(tmp.path());
+
+        assert_eq!(editor.ai.ai_dispatch_depth, 0, "sanity: not an AI dispatch");
+        assert!(
+            editor.save_buffer_with_hash_check(idx).is_ok(),
+            "a human must still be able to save their own config"
+        );
+    }
+
+    /// An ordinary source file stays writable by the AI — the guard is scoped to
+    /// configuration, not a blanket read-only mode.
+    #[test]
+    fn an_ai_originated_save_of_an_ordinary_file_is_allowed() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+
+        let mut editor = Editor::new();
+        let buf = crate::buffer::Buffer::from_file(&file).unwrap();
+        editor.buffers.push(buf);
+        let idx = editor.buffers.len() - 1;
+        editor.buffers[idx].modified = true;
+
+        editor.ai.ai_dispatch_depth = 1;
+        assert!(editor.save_buffer_with_hash_check(idx).is_ok());
+    }
+
+    /// The depth counter must survive nesting: an inner dispatch scope completing
+    /// must not clear the outer one's marking, or a nested tool call would be
+    /// treated as human-originated.
+    #[test]
+    fn nested_ai_dispatch_scopes_keep_the_origin_marked() {
+        let mut editor = Editor::new();
+        assert!(!editor.is_ai_originated_dispatch());
+        editor.with_ai_dispatch_scope(|e| {
+            assert!(e.is_ai_originated_dispatch());
+            e.with_ai_dispatch_scope(|inner| {
+                assert!(inner.is_ai_originated_dispatch());
+            });
+            assert!(
+                e.is_ai_originated_dispatch(),
+                "the outer scope must still be marked after the inner one exits"
+            );
+        });
+        assert!(
+            !editor.is_ai_originated_dispatch(),
+            "leaving all scopes must restore human origin"
+        );
     }
 
     // -----------------------------------------------------------------------

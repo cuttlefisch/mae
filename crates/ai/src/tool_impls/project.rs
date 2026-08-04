@@ -120,14 +120,27 @@ pub fn execute_switch_project(
         .get("path")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'path' argument")?;
-    let root = std::path::PathBuf::from(path_str);
+    let root = std::path::PathBuf::from(mae_core::file_picker::expand_tilde(path_str));
     if !root.is_dir() {
         return Err(format!("Not a directory: {}", path_str));
     }
-    editor.recent_projects.push(root.clone());
-    editor.project = Some(mae_core::project::Project::from_root(root));
-    let name = editor.project.as_ref().unwrap().name.clone();
-    editor.set_status(format!("Switched to project: {}", name));
+
+    // Delegate to the human path rather than reimplementing a subset of it
+    // (principles #3 and #8). Audit #600.5: this used to do only
+    // `recent_projects.push` + `editor.project = ...`, skipping the three
+    // things `add_project` also does — `update_project_list` (so the AI's
+    // switch was never persisted and vanished on restart), `refresh_git_branch`
+    // (so the status line kept showing the OLD project's branch), and
+    // `lsp.pending_root_change` (so the language server kept the old workspace
+    // root, leaving every subsequent `lsp_definition`/`lsp_diagnostics` the AI
+    // made scoped to the project it thought it had left).
+    editor.add_project(&root.to_string_lossy());
+
+    let name = editor
+        .project
+        .as_ref()
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| path_str.to_string());
     Ok(format!("Switched to project '{}' at {}", name, path_str))
 }
 
@@ -226,4 +239,92 @@ fn which_exists(cmd: &str) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod switch_project_tests {
+    use super::*;
+
+    /// Audit #600.5 — the AI's `switch_project` did only
+    /// `recent_projects.push` + `editor.project = ...`. The human `add-project`
+    /// path additionally persists the project list, refreshes the git branch,
+    /// and arms `lsp.pending_root_change`. So after the AI switched projects,
+    /// its own subsequent `lsp_definition`/`lsp_diagnostics` calls were still
+    /// answered by a language server rooted in the PREVIOUS project — the AI
+    /// peer silently operating on stale semantic data, which is exactly the
+    /// asymmetry principle #3 exists to prevent.
+    ///
+    /// Asserts on the observable side effects, not on "it returned Ok".
+    #[test]
+    fn switching_projects_arms_everything_the_human_path_does() {
+        let a = tempfile::tempdir().expect("project a");
+        let b = tempfile::tempdir().expect("project b");
+
+        let mut editor = Editor::new();
+        // Start in project A via the human path, so the "before" state is a
+        // realistic mid-session one rather than a blank editor.
+        editor.add_project(&a.path().to_string_lossy());
+        editor.lsp.pending_root_change = None; // consumed by the bridge
+
+        let result = execute_switch_project(
+            &mut editor,
+            &serde_json::json!({ "path": b.path().to_string_lossy() }),
+        )
+        .expect("switch should succeed");
+        assert!(result.contains("Switched to project"), "{result}");
+
+        assert_eq!(
+            editor.project.as_ref().map(|p| p.root.clone()),
+            Some(b.path().to_path_buf()),
+            "the active project must be B"
+        );
+        // The effects that were missing.
+        assert_eq!(
+            editor.lsp.pending_root_change.as_deref(),
+            Some(format!("file://{}", b.path().display()).as_str()),
+            "the LSP workspace root must be re-armed, or every later lsp_* call \
+             the AI makes answers from the OLD project"
+        );
+        // NB: `recent_projects` is deliberately NOT asserted here —
+        // `RecentProjects::push` silently rejects paths under the system temp
+        // dir, so a tempdir fixture can never observe it. The LSP root above is
+        // the effect that actually mattered for the AI peer.
+    }
+
+    /// The negative case: a path that is not a directory must be refused
+    /// outright, leaving the current project untouched — not partially applied.
+    #[test]
+    fn a_non_directory_is_refused_without_disturbing_the_current_project() {
+        let a = tempfile::tempdir().expect("project a");
+        let file = a.path().join("not-a-dir.txt");
+        std::fs::write(&file, "x").unwrap();
+
+        let mut editor = Editor::new();
+        editor.add_project(&a.path().to_string_lossy());
+        let before_root = editor.project.as_ref().map(|p| p.root.clone());
+        editor.lsp.pending_root_change = None;
+
+        for bad in [
+            file.to_string_lossy().to_string(),
+            a.path()
+                .join("does-not-exist")
+                .to_string_lossy()
+                .to_string(),
+            String::new(),
+        ] {
+            let err = execute_switch_project(&mut editor, &serde_json::json!({ "path": bad }))
+                .expect_err("must refuse");
+            assert!(err.contains("Not a directory"), "{err}");
+        }
+
+        assert_eq!(
+            editor.project.as_ref().map(|p| p.root.clone()),
+            before_root,
+            "a refused switch must leave the active project alone"
+        );
+        assert!(
+            editor.lsp.pending_root_change.is_none(),
+            "a refused switch must not re-root the language server"
+        );
+    }
 }

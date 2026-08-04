@@ -166,6 +166,17 @@ impl Editor {
 
     /// Execute all source blocks in the current buffer.
     /// Uses AI-aware buffer targeting.
+    ///
+    /// @ai-caution: [security] Every block MUST clear
+    /// `babel::safety::effective_eval_policy`, exactly as the single-block
+    /// `babel_execute` does. Testing only `header_args.eval == Never` (as this
+    /// did before audit #596.1) silently ignored the two gates that actually
+    /// protect a *file you did not write*: `:eval query` blocks, and `:eval yes`
+    /// blocks in a file outside `babel_trust_paths` while `babel_confirm` is on.
+    /// "Execute all" is precisely the operation a hostile org file wants you to
+    /// run, so it must be the *stricter* path, never the looser one. Blocks that
+    /// need a human answer are skipped and counted rather than executed — one
+    /// command cannot open N sequential confirm dialogs.
     pub fn babel_execute_all(&mut self) {
         let buf_idx = self.ai_active_buffer_idx();
         let source = self.buffers[buf_idx].rope().to_string();
@@ -177,6 +188,9 @@ impl Editor {
         }
 
         let count = blocks.len();
+        let mut executed = 0usize;
+        let mut blocked = 0usize;
+        let mut needs_confirm = 0usize;
         // Execute blocks in reverse order to preserve line offsets
         for i in (0..count).rev() {
             // Re-read source after each edit
@@ -186,11 +200,25 @@ impl Editor {
                 continue;
             }
             let block = &current_blocks[i];
-            if block.header_args.eval == babel::EvalPolicy::Never {
-                continue;
-            }
 
             let file_path = self.buffers[buf_idx].file_path().map(PathBuf::from);
+            match babel::safety::effective_eval_policy(
+                &block.header_args.eval,
+                file_path.as_deref(),
+                &self.babel_trust_paths,
+                self.babel_confirm,
+            ) {
+                babel::safety::EffectivePolicy::Allow => {}
+                babel::safety::EffectivePolicy::Blocked => {
+                    blocked += 1;
+                    continue;
+                }
+                babel::safety::EffectivePolicy::NeedsConfirmation => {
+                    needs_confirm += 1;
+                    continue;
+                }
+            }
+
             let buf_dir = file_path
                 .as_ref()
                 .and_then(|p| p.parent())
@@ -225,11 +253,24 @@ impl Editor {
             }
             buf.insert_text_at(del_start, &insert_text);
             buf.end_undo_group();
+            executed += 1;
         }
 
         self.clamp_all_cursors();
         self.mark_full_redraw();
-        self.set_status(format!("Executed {} block(s)", count));
+        // Report what actually ran, not the block count (ADR-086: a skipped
+        // block must not be indistinguishable from an executed one).
+        let mut msg = format!("Executed {executed} of {count} block(s)");
+        if blocked > 0 {
+            msg.push_str(&format!("; {blocked} blocked by :eval never"));
+        }
+        if needs_confirm > 0 {
+            msg.push_str(&format!(
+                "; {needs_confirm} need confirmation (run babel-execute on each, \
+                 or add this file to babel-trust-paths)"
+            ));
+        }
+        self.set_status(msg);
     }
 
     /// Tangle all source blocks in the current buffer.
@@ -419,19 +460,23 @@ impl Editor {
         let source = self.buffers[buf_idx].rope().to_string();
         let cursor_line = self.ai_cursor_row();
 
-        let (mut meta, elements) = export::parse_org_document(&source);
+        let (mut meta, elements, element_lines) = export::parse_org_document_with_lines(&source);
         meta.options.allow_raw_html_export_blocks = self.org_export_allow_raw_html_blocks;
 
-        // Find the heading at or before cursor
-        let mut heading_idx = None;
-        for (current_line, (i, _el)) in elements.iter().enumerate().enumerate() {
-            if current_line > cursor_line {
-                break;
-            }
-            if matches!(&elements[i], export::OrgElement::Heading { .. }) {
-                heading_idx = Some(i);
-            }
-        }
+        // The last heading starting at or before the cursor's line.
+        //
+        // Audit #596.2: this read `elements.iter().enumerate().enumerate()`,
+        // which yields the SAME index twice — so `current_line` was an element
+        // ordinal, not a line. Any cursor past the element count therefore fell
+        // through the whole document and exported its last subtree instead of
+        // the one under the cursor.
+        let heading_idx = elements
+            .iter()
+            .enumerate()
+            .take_while(|(i, _)| element_lines[*i] <= cursor_line)
+            .filter(|(_, el)| matches!(el, export::OrgElement::Heading { .. }))
+            .map(|(i, _)| i)
+            .last();
 
         let subtree = match heading_idx {
             Some(idx) => export::extract_subtree(&elements, idx),
@@ -566,167 +611,5 @@ impl Editor {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn editor_with_block(src: &str) -> Editor {
-        let mut editor = Editor::new();
-        editor.buffers[0].insert_text_at(0, src);
-        editor.window_mgr.focused_window_mut().cursor_row = 0;
-        editor
-    }
-
-    // "scheme" blocks resolve to `ExecResult::PendingSchemeEval` (no process
-    // spawn, no compiler) — the fastest, most hermetic way to exercise the
-    // confirm-gate's *decision* logic without depending on an execution
-    // backend. `#269`.
-    const NEEDS_CONFIRM_BLOCK: &str =
-        "#+begin_src scheme :eval query\n(display \"hi\")\n#+end_src\n";
-    const BLOCKED_BLOCK: &str = "#+begin_src scheme :eval never\n(display \"hi\")\n#+end_src\n";
-    const ALLOWED_BLOCK: &str = "#+begin_src scheme\n(display \"hi\")\n#+end_src\n";
-
-    #[test]
-    fn babel_execute_interactive_needs_confirmation_opens_dialog_without_executing() {
-        let mut editor = editor_with_block(NEEDS_CONFIRM_BLOCK);
-        let result = editor.babel_execute(true);
-        assert!(
-            result.is_ok(),
-            "should return Ok (pending), not Err: {:?}",
-            result
-        );
-        assert!(
-            editor.pending_scheme_eval.is_empty(),
-            "the block must NOT execute while awaiting confirmation"
-        );
-        match &editor.mini_dialog {
-            Some(dialog) => match &dialog.context {
-                crate::command_palette::MiniDialogContext::BabelConfirm { .. } => {}
-                other => panic!("expected BabelConfirm context, got {:?}", other),
-            },
-            None => panic!("expected a mini_dialog to be opened"),
-        }
-    }
-
-    #[test]
-    fn babel_execute_ai_needs_confirmation_refuses() {
-        let mut editor = editor_with_block(NEEDS_CONFIRM_BLOCK);
-        let result = editor.babel_execute(false);
-        assert!(
-            result.is_err(),
-            "AI/MCP path must refuse, not silently allow"
-        );
-        assert!(
-            editor.pending_scheme_eval.is_empty(),
-            "a refused block must not execute"
-        );
-        assert!(
-            editor.mini_dialog.is_none(),
-            "the AI path has no human to answer a dialog — none should open"
-        );
-    }
-
-    #[test]
-    fn babel_execute_blocked_refuses_both_paths() {
-        for interactive in [true, false] {
-            let mut editor = editor_with_block(BLOCKED_BLOCK);
-            let result = editor.babel_execute(interactive);
-            assert!(
-                result.is_err(),
-                ":eval never must refuse regardless of interactive={}",
-                interactive
-            );
-            assert!(editor.pending_scheme_eval.is_empty());
-            assert!(
-                editor.mini_dialog.is_none(),
-                "a hard block never needs a confirm dialog"
-            );
-        }
-    }
-
-    #[test]
-    fn babel_execute_allow_executes_immediately_both_paths() {
-        for interactive in [true, false] {
-            let mut editor = editor_with_block(ALLOWED_BLOCK);
-            // `babel_confirm` (global) defaults to true, which would push
-            // even a default-policy block to NeedsConfirmation for an
-            // untrusted/pathless test buffer — set it false to construct a
-            // genuine Allow case, matching a user who has disabled the
-            // global confirm gate.
-            editor.babel_confirm = false;
-            let result = editor.babel_execute(interactive);
-            assert!(
-                result.is_ok(),
-                "an allowed block must execute: {:?}",
-                result
-            );
-            assert_eq!(
-                editor.pending_scheme_eval.len(),
-                1,
-                "an allowed block executes immediately, unchanged from before #269"
-            );
-        }
-    }
-
-    #[test]
-    fn babel_confirm_apply_executes_the_deferred_block() {
-        // Mirrors the resume path `apply_mini_dialog` drives on confirm —
-        // exercised here at the `babel_run_block` level (the shared
-        // execution helper both the Allow path and the confirm-dialog path
-        // call), since `apply_mini_dialog` itself lives in the `mae` binary
-        // crate and is covered by its own test alongside `FileDelete`'s.
-        let mut editor = editor_with_block(NEEDS_CONFIRM_BLOCK);
-        editor.babel_execute(true).unwrap();
-        let block = match editor.mini_dialog.take().unwrap().context {
-            crate::command_palette::MiniDialogContext::BabelConfirm { block, .. } => block,
-            other => panic!("expected BabelConfirm, got {:?}", other),
-        };
-        assert!(editor.pending_scheme_eval.is_empty(), "not yet executed");
-        editor.babel_run_block(0, &block);
-        assert_eq!(
-            editor.pending_scheme_eval.len(),
-            1,
-            "confirming must actually run the deferred block"
-        );
-    }
-
-    #[test]
-    fn babel_run_block_results_land_after_end_src_with_multibyte_content_earlier() {
-        // End-to-end regression guard (through a real `Buffer`, not just the
-        // string-level compute_results_edit unit tests) for the reported bug:
-        // output landing mid-word in a heading that follows the block,
-        // caused by a byte/char offset mismatch anywhere multi-byte content
-        // (em dash, checkmark, accented letters) preceded the block.
-        let src = "* Café \u{2014} Notes\nSome text: \u{2192} \u{2713}\n\n\
-                   #+begin_src sh\necho hi\n#+end_src\n\n** Downstream Section\n";
-        let mut editor = editor_with_block(src);
-        let blocks = babel::parse_src_blocks(&editor.buffers[0].rope().to_string());
-        editor.babel_run_block(0, &blocks[0]);
-
-        let result = editor.buffers[0].rope().to_string();
-        assert!(
-            result.contains("#+end_src\n\n#+RESULTS:\n: hi\n\n** Downstream Section"),
-            "results must land directly after #+end_src and the following heading \
-             must survive intact — got:\n{result}"
-        );
-    }
-
-    #[test]
-    fn babel_run_block_replaces_rather_than_stacks_results_on_second_run() {
-        let src = "* Café notes\n\n#+begin_src sh\necho hi\n#+end_src\n";
-        let mut editor = editor_with_block(src);
-
-        let blocks = babel::parse_src_blocks(&editor.buffers[0].rope().to_string());
-        editor.babel_run_block(0, &blocks[0]);
-        let after_first = editor.buffers[0].rope().to_string();
-        assert_eq!(after_first.matches("#+RESULTS:").count(), 1);
-
-        let blocks = babel::parse_src_blocks(&after_first);
-        editor.babel_run_block(0, &blocks[0]);
-        let after_second = editor.buffers[0].rope().to_string();
-        assert_eq!(
-            after_second.matches("#+RESULTS:").count(),
-            1,
-            "re-running the same block must replace, not stack, the results block — got:\n{after_second}"
-        );
-    }
-}
+#[path = "babel_ops_tests.rs"]
+mod babel_ops_tests;

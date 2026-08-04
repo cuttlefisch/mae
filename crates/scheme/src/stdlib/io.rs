@@ -26,6 +26,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::lisp_error::{Arity, LispError};
+use crate::permission::tier;
 use crate::reader::Reader;
 use crate::value::{display_value, Port, Value};
 use crate::vm::Vm;
@@ -217,6 +218,7 @@ pub fn register(vm: &mut Vm) {
         "display",
         "Display value (human-readable, no quotes on strings)",
         Arity::Variadic(1),
+        tier::PURE,
         move |args| {
             let text = display_value(&args[0]);
             if args.len() > 1 {
@@ -233,6 +235,7 @@ pub fn register(vm: &mut Vm) {
         "write",
         "Write value (machine-readable, with quotes)",
         Arity::Variadic(1),
+        tier::PURE,
         move |args| {
             let text = format!("{}", args[0]);
             if args.len() > 1 {
@@ -250,6 +253,7 @@ pub fn register(vm: &mut Vm) {
         "read",
         "Read one S-expression from port",
         Arity::Variadic(0),
+        tier::PURE,
         move |args| {
             let port_val = if args.is_empty() {
                 ci.borrow().clone()
@@ -357,6 +361,7 @@ pub fn register(vm: &mut Vm) {
         "newline",
         "Print newline",
         Arity::Variadic(0),
+        tier::PURE,
         move |args| {
             if !args.is_empty() {
                 write_to_port(&args[0], "\n")?;
@@ -372,6 +377,7 @@ pub fn register(vm: &mut Vm) {
         "display-string",
         "Display a string (no quotes)",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             print!("{}", args[0].as_str()?);
             Ok(Value::Void)
@@ -383,6 +389,7 @@ pub fn register(vm: &mut Vm) {
         "open-input-string",
         "Create input port from string",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             let s = args[0].as_str()?;
             Ok(Value::Port(Rc::new(std::cell::RefCell::new(
@@ -398,6 +405,7 @@ pub fn register(vm: &mut Vm) {
         "open-output-string",
         "Create output string port",
         Arity::Fixed(0),
+        tier::PURE,
         |_args| {
             Ok(Value::Port(Rc::new(std::cell::RefCell::new(
                 crate::value::Port::StringOutput { buf: String::new() },
@@ -409,6 +417,7 @@ pub fn register(vm: &mut Vm) {
         "get-output-string",
         "Get accumulated string from output port",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Port(p) => {
                 let port = p.borrow();
@@ -432,6 +441,7 @@ pub fn register(vm: &mut Vm) {
         "read-char",
         "Read a character from port",
         Arity::Variadic(0),
+        tier::PURE,
         move |args| {
             let port_val = if args.is_empty() {
                 ci.borrow().clone()
@@ -519,6 +529,7 @@ pub fn register(vm: &mut Vm) {
         "peek-char",
         "Peek at next character from port",
         Arity::Variadic(0),
+        tier::PURE,
         move |args| {
             let port_val = if args.is_empty() {
                 ci.borrow().clone()
@@ -590,6 +601,7 @@ pub fn register(vm: &mut Vm) {
         "write-string",
         "Write string (or substring) to port",
         Arity::Variadic(1),
+        tier::PURE,
         move |args| {
             let s = args[0].as_str()?;
             let port = if args.len() > 1 {
@@ -620,6 +632,7 @@ pub fn register(vm: &mut Vm) {
         "input-port?",
         "Is input port? (returns #t even when closed)",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Port(p) => Ok(Value::Bool(p.borrow().is_input())),
             _ => Ok(Value::Bool(false)),
@@ -630,6 +643,7 @@ pub fn register(vm: &mut Vm) {
         "output-port?",
         "Is output port? (returns #t even when closed)",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Port(p) => Ok(Value::Bool(p.borrow().is_output())),
             _ => Ok(Value::Bool(false)),
@@ -641,6 +655,7 @@ pub fn register(vm: &mut Vm) {
         "eof-object",
         "Return the EOF object",
         Arity::Fixed(0),
+        tier::PURE,
         |_args| Ok(Value::Eof),
     );
 
@@ -649,6 +664,7 @@ pub fn register(vm: &mut Vm) {
         "format",
         "Simple string formatting: (format \"~a is ~a\" x y)",
         Arity::Variadic(1),
+        tier::PURE,
         |args| {
             let template = args[0].as_str()?;
             let mut result = String::new();
@@ -692,6 +708,7 @@ pub fn register(vm: &mut Vm) {
         "textual-port?",
         "Is textual port?",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Port(p) => Ok(Value::Bool(!p.borrow().is_binary())),
             _ => Ok(Value::Bool(false)),
@@ -702,6 +719,7 @@ pub fn register(vm: &mut Vm) {
         "binary-port?",
         "Is binary port?",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Port(p) => Ok(Value::Bool(p.borrow().is_binary())),
             _ => Ok(Value::Bool(false)),
@@ -712,6 +730,7 @@ pub fn register(vm: &mut Vm) {
         "input-port-open?",
         "Is input port open?",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Port(p) => {
                 let port = p.borrow();
@@ -725,6 +744,7 @@ pub fn register(vm: &mut Vm) {
         "output-port-open?",
         "Is output port open?",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Port(p) => {
                 let port = p.borrow();
@@ -734,18 +754,25 @@ pub fn register(vm: &mut Vm) {
         },
     );
 
-    vm.register_fn("close-port", "Close a port", Arity::Fixed(1), |args| {
-        if let Value::Port(p) = &args[0] {
-            let kind = p.borrow().kind();
-            *p.borrow_mut() = Port::Closed(kind);
-        }
-        Ok(Value::Void)
-    });
+    vm.register_fn(
+        "close-port",
+        "Close a port",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| {
+            if let Value::Port(p) = &args[0] {
+                let kind = p.borrow().kind();
+                *p.borrow_mut() = Port::Closed(kind);
+            }
+            Ok(Value::Void)
+        },
+    );
 
     vm.register_fn(
         "close-input-port",
         "Close input port",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             if let Value::Port(p) = &args[0] {
                 let kind = p.borrow().kind();
@@ -759,6 +786,7 @@ pub fn register(vm: &mut Vm) {
         "close-output-port",
         "Close output port",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             if let Value::Port(p) = &args[0] {
                 let kind = p.borrow().kind();
@@ -773,6 +801,7 @@ pub fn register(vm: &mut Vm) {
         "flush-output-port",
         "Flush output port",
         Arity::Variadic(0),
+        tier::PURE,
         move |args| {
             let port_val = if args.is_empty() {
                 co.borrow().clone()
@@ -813,6 +842,7 @@ pub fn register(vm: &mut Vm) {
         "read-line",
         "Read a line from input port",
         Arity::Variadic(0),
+        tier::PURE,
         move |args| {
             let port_val = if args.is_empty() {
                 ci.borrow().clone()
@@ -929,6 +959,7 @@ pub fn register(vm: &mut Vm) {
         "features",
         "Implementation features",
         Arity::Fixed(0),
+        tier::PURE,
         |_| {
             Ok(Value::list(vec![
                 Value::symbol("r7rs"),
@@ -947,6 +978,7 @@ pub fn register(vm: &mut Vm) {
         "current-input-port",
         "Current default input port",
         Arity::Fixed(0),
+        tier::PURE,
         move |_args| Ok(ci.borrow().clone()),
     );
 
@@ -955,6 +987,7 @@ pub fn register(vm: &mut Vm) {
         "current-output-port",
         "Current default output port",
         Arity::Fixed(0),
+        tier::PURE,
         move |_args| Ok(co.borrow().clone()),
     );
 
@@ -963,6 +996,7 @@ pub fn register(vm: &mut Vm) {
         "current-error-port",
         "Current default error port",
         Arity::Fixed(0),
+        tier::PURE,
         move |_args| Ok(ce.borrow().clone()),
     );
 
@@ -972,6 +1006,7 @@ pub fn register(vm: &mut Vm) {
         "%current-input-port",
         "Get current input port (internal)",
         Arity::Fixed(0),
+        tier::PURE,
         move |_args| Ok(ci.borrow().clone()),
     );
 
@@ -980,6 +1015,7 @@ pub fn register(vm: &mut Vm) {
         "%current-output-port",
         "Get current output port (internal)",
         Arity::Fixed(0),
+        tier::PURE,
         move |_args| Ok(co.borrow().clone()),
     );
 
@@ -988,6 +1024,7 @@ pub fn register(vm: &mut Vm) {
         "%set-current-input-port!",
         "Set current input port (internal)",
         Arity::Fixed(1),
+        tier::PURE,
         move |args| {
             *ci.borrow_mut() = args[0].clone();
             Ok(Value::Void)
@@ -999,6 +1036,7 @@ pub fn register(vm: &mut Vm) {
         "%set-current-output-port!",
         "Set current output port (internal)",
         Arity::Fixed(1),
+        tier::PURE,
         move |args| {
             *co.borrow_mut() = args[0].clone();
             Ok(Value::Void)
@@ -1010,6 +1048,7 @@ pub fn register(vm: &mut Vm) {
         "open-input-bytevector",
         "Create input port from bytevector",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Bytevector(bv) => {
                 let data = bv.borrow().clone();
@@ -1025,6 +1064,7 @@ pub fn register(vm: &mut Vm) {
         "open-output-bytevector",
         "Create output bytevector port",
         Arity::Fixed(0),
+        tier::PURE,
         |_args| {
             Ok(Value::Port(Rc::new(std::cell::RefCell::new(
                 Port::BytevectorOutput { buf: Vec::new() },
@@ -1036,6 +1076,7 @@ pub fn register(vm: &mut Vm) {
         "get-output-bytevector",
         "Get accumulated bytes from output bytevector port",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Port(p) => {
                 let port = p.borrow();
@@ -1061,6 +1102,7 @@ pub fn register(vm: &mut Vm) {
         "read-u8",
         "Read a byte from port",
         Arity::Variadic(0),
+        tier::PURE,
         move |args| {
             let port_val = if args.is_empty() {
                 ci.borrow().clone()
@@ -1121,6 +1163,7 @@ pub fn register(vm: &mut Vm) {
         "peek-u8",
         "Peek at next byte from port",
         Arity::Variadic(0),
+        tier::PURE,
         move |args| {
             let port_val = if args.is_empty() {
                 ci.borrow().clone()
@@ -1157,6 +1200,7 @@ pub fn register(vm: &mut Vm) {
         "write-u8",
         "Write a byte to port",
         Arity::Variadic(1),
+        tier::PURE,
         move |args| {
             let byte = args[0].as_int()? as u8;
             if args.len() > 1 {
@@ -1177,6 +1221,7 @@ pub fn register(vm: &mut Vm) {
         "read-bytevector",
         "Read k bytes from port",
         Arity::Variadic(1),
+        tier::PURE,
         move |args| {
             let k = args[0].as_int()? as usize;
             let port_val = if args.len() > 1 {
@@ -1237,6 +1282,7 @@ pub fn register(vm: &mut Vm) {
         "read-bytevector!",
         "Read bytes into bytevector, return count or eof",
         Arity::Variadic(2),
+        tier::PURE,
         move |args| {
             let bv = match &args[0] {
                 Value::Bytevector(bv) => bv.clone(),
@@ -1328,6 +1374,7 @@ pub fn register(vm: &mut Vm) {
         "write-bytevector",
         "Write bytevector to port. Optional start/end select a range.",
         Arity::Variadic(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Bytevector(bv) => {
                 let bytes = bv.borrow();
@@ -1363,6 +1410,7 @@ pub fn register(vm: &mut Vm) {
         "char-ready?",
         "Returns #t if a character is ready on the input port",
         Arity::Variadic(0),
+        tier::PURE,
         move |args| {
             let port_val = if args.is_empty() {
                 ci.borrow().clone()
@@ -1410,6 +1458,7 @@ pub fn register(vm: &mut Vm) {
         "u8-ready?",
         "Returns #t if a byte is ready on the input port",
         Arity::Variadic(0),
+        tier::PURE,
         move |args| {
             let port_val = if args.is_empty() {
                 ci.borrow().clone()
@@ -1450,6 +1499,7 @@ pub fn register(vm: &mut Vm) {
         "write-char",
         "Write a character to port",
         Arity::Variadic(1),
+        tier::PURE,
         move |args| {
             let ch = args[0].as_char()?;
             if args.len() > 1 {
@@ -1466,6 +1516,7 @@ pub fn register(vm: &mut Vm) {
         "exact",
         "Convert to exact",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Float(f) => Ok(Value::Int(*f as i64)),
             Value::Int(_) => Ok(args[0].clone()),
@@ -1477,6 +1528,7 @@ pub fn register(vm: &mut Vm) {
         "inexact",
         "Convert to inexact",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Int(n) => Ok(Value::Float(*n as f64)),
             Value::Float(_) => Ok(args[0].clone()),
@@ -1489,6 +1541,7 @@ pub fn register(vm: &mut Vm) {
         "open-input-file",
         "Open file for reading",
         Arity::Fixed(1),
+        tier::READ,
         |args| {
             let path = args[0].as_str()?;
             let file = std::fs::File::open(path)
@@ -1509,6 +1562,7 @@ pub fn register(vm: &mut Vm) {
         "open-output-file",
         "Open file for writing",
         Arity::Fixed(1),
+        tier::WRITE,
         |args| {
             let path = args[0].as_str()?;
             let file = std::fs::File::create(path)
@@ -1528,6 +1582,7 @@ pub fn register(vm: &mut Vm) {
         "get-environment-variable",
         "Get environment variable value",
         Arity::Fixed(1),
+        tier::PRIVILEGED,
         |args| {
             let name = args[0].as_str()?;
             match std::env::var(name) {
@@ -1541,6 +1596,7 @@ pub fn register(vm: &mut Vm) {
         "get-environment-variables",
         "Get all environment variables as alist",
         Arity::Fixed(0),
+        tier::PRIVILEGED,
         |_args| {
             let pairs: Vec<Value> = std::env::vars()
                 .map(|(k, v)| {
@@ -1558,6 +1614,7 @@ pub fn register(vm: &mut Vm) {
         "command-line",
         "Return command-line arguments",
         Arity::Fixed(0),
+        tier::READ,
         |_args| {
             let args: Vec<Value> = std::env::args()
                 .map(|a| Value::String(Rc::from(a.as_str())))
@@ -1571,6 +1628,7 @@ pub fn register(vm: &mut Vm) {
         "current-second",
         "Current time in seconds since epoch",
         Arity::Fixed(0),
+        tier::PURE,
         |_args| {
             use std::time::SystemTime;
             let secs = SystemTime::now()
@@ -1585,6 +1643,7 @@ pub fn register(vm: &mut Vm) {
         "current-jiffy",
         "Current time in jiffies (nanoseconds)",
         Arity::Fixed(0),
+        tier::PURE,
         |_args| {
             use std::time::SystemTime;
             let nanos = SystemTime::now()
@@ -1599,6 +1658,7 @@ pub fn register(vm: &mut Vm) {
         "jiffies-per-second",
         "Number of jiffies per second",
         Arity::Fixed(0),
+        tier::PURE,
         |_args| Ok(Value::Int(1_000_000_000)),
     );
 
@@ -1607,6 +1667,7 @@ pub fn register(vm: &mut Vm) {
         "write-simple",
         "Write value without shared structure notation",
         Arity::Variadic(1),
+        tier::PURE,
         |args| {
             let text = format!("{}", args[0]);
             if args.len() > 1 {
@@ -1623,6 +1684,7 @@ pub fn register(vm: &mut Vm) {
         "write-shared",
         "Write value with shared structure notation",
         Arity::Variadic(1),
+        tier::PURE,
         |args| {
             let text = format!("{}", args[0]);
             if args.len() > 1 {
@@ -1640,6 +1702,7 @@ pub fn register(vm: &mut Vm) {
         "read-string",
         "Read k characters from port",
         Arity::Variadic(1),
+        tier::PURE,
         move |args| {
             let k = args[0].as_int()? as usize;
             let port_val = if args.len() > 1 {
@@ -1728,24 +1791,31 @@ pub fn register(vm: &mut Vm) {
     );
 
     // R7RS §6.14 exit / emergency-exit
-    vm.register_fn("exit", "Exit the program", Arity::Variadic(0), |args| {
-        let code = if args.is_empty() {
-            0
-        } else {
-            match &args[0] {
-                Value::Bool(true) => 0,
-                Value::Bool(false) => 1,
-                Value::Int(n) => *n as i32,
-                _ => 0,
-            }
-        };
-        Err(LispError::user(format!("exit: {code}"), vec![]))
-    });
+    vm.register_fn(
+        "exit",
+        "Exit the program",
+        Arity::Variadic(0),
+        tier::PRIVILEGED,
+        |args| {
+            let code = if args.is_empty() {
+                0
+            } else {
+                match &args[0] {
+                    Value::Bool(true) => 0,
+                    Value::Bool(false) => 1,
+                    Value::Int(n) => *n as i32,
+                    _ => 0,
+                }
+            };
+            Err(LispError::user(format!("exit: {code}"), vec![]))
+        },
+    );
 
     vm.register_fn(
         "emergency-exit",
         "Emergency exit (immediate)",
         Arity::Variadic(0),
+        tier::PRIVILEGED,
         |args| {
             let code = if args.is_empty() {
                 0
@@ -1767,22 +1837,31 @@ pub fn register(vm: &mut Vm) {
         "file-exists?",
         "Does file exist?",
         Arity::Fixed(1),
+        tier::READ,
         |args| {
             let path = args[0].as_str()?;
             Ok(Value::Bool(std::path::Path::new(path).exists()))
         },
     );
 
-    vm.register_fn("delete-file", "Delete a file", Arity::Fixed(1), |args| {
-        let path = args[0].as_str()?;
-        std::fs::remove_file(path).map_err(|e| file_error(format!("delete-file: {e}"), path))?;
-        Ok(Value::Void)
-    });
+    vm.register_fn(
+        "delete-file",
+        "Delete a file",
+        Arity::Fixed(1),
+        tier::WRITE,
+        |args| {
+            let path = args[0].as_str()?;
+            std::fs::remove_file(path)
+                .map_err(|e| file_error(format!("delete-file: {e}"), path))?;
+            Ok(Value::Void)
+        },
+    );
 
     vm.register_fn(
         "open-binary-input-file",
         "Open binary input file",
         Arity::Fixed(1),
+        tier::READ,
         |args| {
             let path = args[0].as_str()?;
             let file = std::fs::File::open(path)
@@ -1803,6 +1882,7 @@ pub fn register(vm: &mut Vm) {
         "open-binary-output-file",
         "Open binary output file",
         Arity::Fixed(1),
+        tier::WRITE,
         |args| {
             let path = args[0].as_str()?;
             let file = std::fs::File::create(path)
@@ -1823,6 +1903,7 @@ pub fn register(vm: &mut Vm) {
         "sleep-ms",
         "Sleep for N milliseconds (yields to event loop)",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             let ms = args[0].as_int()?.max(0) as u64;
             Err(LispError::yield_sleep(std::time::Duration::from_millis(ms)))
@@ -1833,6 +1914,7 @@ pub fn register(vm: &mut Vm) {
         "wait-for-file",
         "Wait until file exists (yields to event loop)",
         Arity::Fixed(2),
+        tier::READ,
         |args| {
             let path = args[0]
                 .as_str()
@@ -1849,6 +1931,7 @@ pub fn register(vm: &mut Vm) {
         "current-milliseconds",
         "Return the current time in milliseconds since the Unix epoch",
         Arity::Fixed(0),
+        tier::PURE,
         |_args| {
             let ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1863,6 +1946,7 @@ pub fn register(vm: &mut Vm) {
         "flush!",
         "Flush pending ops and refresh editor state mid-eval (yields to host)",
         Arity::Fixed(0),
+        tier::PURE,
         |_args| Err(LispError::yield_flush()),
     );
 
@@ -1870,7 +1954,7 @@ pub fn register(vm: &mut Vm) {
     vm.register_fn(
         "yield-tick",
         "Yield to the event loop for one iteration, letting hooks and side effects drain. Returns #t.",
-        Arity::Fixed(0),
+        Arity::Fixed(0), tier::PURE,
         |_args| Err(LispError::yield_tick()),
     );
 
@@ -1878,7 +1962,7 @@ pub fn register(vm: &mut Vm) {
     vm.register_fn(
         "await-hook",
         "Suspend until the named hook fires or timeout (ms) expires. Returns #t if hook fired, #f on timeout.",
-        Arity::Fixed(2),
+        Arity::Fixed(2), tier::PURE,
         |args| {
             let name = args[0]
                 .as_str()

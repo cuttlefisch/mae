@@ -15,13 +15,15 @@ use mae_core::Editor;
 /// without an extra round-trip.  `NodeKind` is serialized via its serde
 /// `#[serde(rename_all = "lowercase")]` so the wire shape matches
 /// what `kb_search` / `kb_list` would produce on the same node.
-fn node_json(editor: &Editor, id: &str) -> Option<serde_json::Value> {
+fn node_json(editor: &Editor, id: &str) -> Result<Option<serde_json::Value>, String> {
     // `kb_resolve_anywhere` is the single source of truth for the
     // query-layer-then-in-memory(-then-federated-instance) fallback order —
     // see its doc comment for why this must not be reimplemented locally
     // (it already had been, three times, before that consolidation, and a
     // fourth divergent copy lived right here until this fix).
-    let (node, resolution) = editor.kb_resolve_anywhere(id)?;
+    let Some((node, resolution)) = editor.kb_resolve_anywhere(id) else {
+        return Ok(None);
+    };
 
     let (links_from, links_to): (Vec<String>, Vec<String>) = match &resolution {
         mae_core::KbResolution::Query => {
@@ -29,9 +31,19 @@ fn node_json(editor: &Editor, id: &str) -> Option<serde_json::Value> {
                 .kb
                 .query_layer()
                 .expect("KbResolution::Query implies a query layer is available");
+            // A storage failure here must reach the agent as an error, not silently
+            // render as "this node has no links" (ADR-086 read-side twin).
             (
-                q.links_from(id).into_iter().map(|l| l.dst).collect(),
-                q.links_to(id).into_iter().map(|l| l.src).collect(),
+                q.links_from(id)
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .map(|l| l.dst)
+                    .collect(),
+                q.links_to(id)
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .map(|l| l.src)
+                    .collect(),
             )
         }
         mae_core::KbResolution::Primary => (
@@ -66,7 +78,7 @@ fn node_json(editor: &Editor, id: &str) -> Option<serde_json::Value> {
             .unwrap_or("unknown");
         val["instance"] = serde_json::json!(inst_name);
     }
-    Some(val)
+    Ok(Some(val))
 }
 
 pub fn execute_kb_get(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
@@ -74,7 +86,7 @@ pub fn execute_kb_get(editor: &Editor, args: &serde_json::Value) -> Result<Strin
         .get("id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required argument: id".to_string())?;
-    match node_json(editor, id) {
+    match node_json(editor, id)? {
         Some(v) => {
             let mut result = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
             if editor.kb.ai_visited_ids.contains(id) {
@@ -158,7 +170,9 @@ fn kb_excerpt(body: &str, max: usize) -> String {
 pub fn execute_kb_list(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
     let prefix = args.get("prefix").and_then(|v| v.as_str());
     let ids = if let Some(q) = editor.kb.query_layer() {
-        q.list_ids(prefix)
+        // A storage failure must reach the agent as an error, not silently render as
+        // an empty node list (ADR-086 read-side twin).
+        q.list_ids(prefix).map_err(|e| e.to_string())?
     } else {
         editor.kb.primary.list_ids(prefix)
     };
@@ -242,6 +256,9 @@ pub fn execute_kb_links_from(
                 .query_layer()
                 .expect("KbResolution::Query implies a query layer is available");
             q.links_from(id)
+                // A store failure must reach the caller as an error, not an empty
+                // link list — "query failed" and "no links" differ (ADR-086).
+                .map_err(|e| format!("KB query failed reading links from {id}: {e}"))?
                 .into_iter()
                 .map(|l| (l.dst, Some(l.rel_type)))
                 .collect()
@@ -317,6 +334,7 @@ pub fn execute_kb_links_to(
     }
     let raw: Vec<(String, Option<String>)> = if let Some(q) = editor.kb.query_layer() {
         q.links_to(id)
+            .map_err(|e| format!("KB query failed reading links to {id}: {e}"))?
             .into_iter()
             .map(|l| (l.src, Some(l.rel_type)))
             .collect()
@@ -398,7 +416,8 @@ pub fn execute_kb_related(
         instances: &editor.kb.instances,
         registry: &editor.kb.registry,
     };
-    let items = mae_kb::graph_query::related_enriched(&backend, id, limit);
+    let items = mae_kb::graph_query::related_enriched(&backend, id, limit)
+        .map_err(|e| format!("KB query failed computing nodes related to {id}: {e}"))?;
     let items = mae_core::ai_residency::filter_residency_exempt_by(
         editor,
         requester_provider,
@@ -975,12 +994,29 @@ pub fn execute_kb_enrich(editor: &Editor, args: &serde_json::Value) -> Result<St
     let mut errors = embed_errors;
     errors.extend(apply_errors);
 
+    // ADR-086 D5: no partial success. The requested postcondition is "every
+    // targeted node is embedded" -- if any target failed (whether the embed
+    // call itself failed, or the embed succeeded but the cache write failed),
+    // that postcondition does not hold, so this is an error naming exactly
+    // what did and did not happen, never a `"status": "complete"` success
+    // with the failures buried in an `errors` array the caller has to think
+    // to read. This also covers "every embedding failed" (`newly_embedded ==
+    // 0`) as a special case of the same rule, not a separate check.
+    if !errors.is_empty() {
+        return Err(format!(
+            "kb_enrich: {} of {} target(s) failed, {} succeeded: {}",
+            errors.len(),
+            targets.len(),
+            newly_embedded,
+            errors.join("; ")
+        ));
+    }
+
     Ok(serde_json::json!({
         "status": "complete",
         "nodes_scanned": plan.nodes_scanned,
         "cache_hits": plan.cache_hits,
         "newly_embedded": newly_embedded,
-        "errors": errors,
     })
     .to_string())
 }
@@ -1046,10 +1082,17 @@ pub fn execute_kb_create(editor: &mut Editor, args: &serde_json::Value) -> Resul
 
     editor.kb_create_node(id, title, body, kind)?;
 
-    // Return the created node
+    // Return the created node. The create itself already succeeded (the postcondition
+    // holds) by this point, so a failure fetching the display JSON degrades to the
+    // plain-text confirmation rather than turning an already-successful create into a
+    // tool error — but it's logged, not silently swallowed (ADR-086 read-side twin).
     match node_json(editor, id) {
-        Some(v) => serde_json::to_string_pretty(&v).map_err(|e| e.to_string()),
-        None => Ok(format!("Created node: {}", id)),
+        Ok(Some(v)) => serde_json::to_string_pretty(&v).map_err(|e| e.to_string()),
+        Ok(None) => Ok(format!("Created node: {}", id)),
+        Err(e) => {
+            tracing::warn!(error = %e, id, "kb_create: node_json fetch failed after successful create");
+            Ok(format!("Created node: {}", id))
+        }
     }
 }
 
@@ -1070,9 +1113,16 @@ pub fn execute_kb_update(editor: &mut Editor, args: &serde_json::Value) -> Resul
 
     editor.kb_update_node(id, title, body, tags)?;
 
+    // Same rationale as `execute_kb_create` above: the update already succeeded, so a
+    // display-JSON fetch failure degrades to the plain-text confirmation instead of
+    // turning the already-successful update into a tool error — logged, not swallowed.
     match node_json(editor, id) {
-        Some(v) => serde_json::to_string_pretty(&v).map_err(|e| e.to_string()),
-        None => Ok(format!("Updated node: {}", id)),
+        Ok(Some(v)) => serde_json::to_string_pretty(&v).map_err(|e| e.to_string()),
+        Ok(None) => Ok(format!("Updated node: {}", id)),
+        Err(e) => {
+            tracing::warn!(error = %e, id, "kb_update: node_json fetch failed after successful update");
+            Ok(format!("Updated node: {}", id))
+        }
     }
 }
 
@@ -1413,7 +1463,13 @@ pub fn execute_kb_promote(editor: &mut Editor, args: &serde_json::Value) -> Resu
         mae_core::editor::PromoteDedup::Removed => "removed",
         mae_core::editor::PromoteDedup::KeptDiverged => "kept_diverged",
     };
-    let node = node_json(editor, id);
+    // The promote already succeeded (postcondition holds) above, so a display-JSON
+    // fetch failure degrades the echoed "node" field to `null` rather than turning an
+    // already-successful promote into a tool error — logged, not swallowed.
+    let node = node_json(editor, id).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, id, "kb_promote: node_json fetch failed after successful promote");
+        None
+    });
     serde_json::to_string_pretty(&serde_json::json!({
         "status": "promoted",
         "id": result.node_id,
@@ -1936,7 +1992,11 @@ pub fn execute_kb_add_link(
     // kb_update_node means this now round-trips through the same
     // parse_typed_links + replace_node_links projection every other write path
     // uses (fixed for the single-user case in the same change that added this).
-    let current_body = node_json(editor, src)
+    // A storage failure reading the current body must abort the add-link (proceeding
+    // with a wrong/empty body would corrupt the node), not be conflated with the
+    // distinct "no such node" case (ADR-086 read-side twin: `?` propagates the real
+    // error; only a genuine `Ok(None)`/missing-body falls through to "No KB node").
+    let current_body = node_json(editor, src)?
         .and_then(|v| v.get("body").and_then(|b| b.as_str()).map(str::to_string))
         .ok_or_else(|| format!("No KB node: {}", src))?;
     let link_line = format!("\n[[{dst}?rel={rel_type}&w={weight}][{dst}]]");
@@ -6136,6 +6196,12 @@ mod tests {
 
     #[test]
     fn kb_enrich_a_provider_failure_is_reported_not_a_panic_and_leaves_the_node_uncached() {
+        // ADR-086: when every targeted embedding fails, the requested
+        // postcondition ("this node is embedded") does not hold for ANY
+        // target, so the whole call is `Err` -- never a `"status":
+        // "complete"` success with the sole failure buried in an `errors`
+        // array (CLAUDE.md #14: assert the failing path, not a disguised
+        // happy path).
         use mae_kb::KbStore;
         let store = mae_kb::CozoKbStore::open_mem().unwrap();
         store
@@ -6146,6 +6212,7 @@ mod tests {
                 "content whose embed call will fail",
             ))
             .unwrap();
+        let content_hash = mae_kb::activity::body_hash("content whose embed call will fail");
 
         let mut editor = Editor::new();
         editor.kb.store = Some(std::sync::Arc::new(store));
@@ -6154,13 +6221,70 @@ mod tests {
             .set_option("ai_embedding_base_url", "http://127.0.0.1:1")
             .unwrap();
 
-        let result = execute_kb_enrich(&editor, &serde_json::json!({})).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(v["status"], "complete");
-        assert_eq!(v["newly_embedded"], 0);
+        let result = execute_kb_enrich(&editor, &serde_json::json!({}));
+        let err = result.expect_err(
+            "a KB where every embed call fails must report Err, not a prose-qualified success",
+        );
         assert!(
-            !v["errors"].as_array().unwrap().is_empty(),
-            "a failed embed call must be reported as an error, not silently dropped: {v}"
+            err.contains("note:enrich-unreachable"),
+            "the error must name the failing node, not just say 'failed': {err}"
+        );
+        assert!(
+            err.contains("1 of 1"),
+            "the error must state the failure count, not just that something failed: {err}"
+        );
+
+        // The node must genuinely be left uncached -- not just reported as
+        // such in prose. Re-open the same store handle via the editor and
+        // confirm no cached embedding exists for this content hash.
+        let store = editor.kb.store.as_ref().unwrap();
+        let cached = store
+            .get_cached_embedding(&content_hash, "nomic-embed-text", 1)
+            .unwrap();
+        assert!(
+            cached.is_none(),
+            "a failed embed call must not leave a cached embedding behind: {cached:?}"
+        );
+    }
+
+    #[test]
+    fn kb_enrich_partial_failure_across_multiple_targets_is_an_error_naming_both_outcomes() {
+        // ADR-086 D5 (no partial success): 2 targets, only 1 of which can
+        // ever succeed here (both are unreachable, so realistically both
+        // fail) -- the point of this test is that ANY non-empty error set,
+        // even with `newly_embedded > 0`, must still be `Err`, never a
+        // `"complete"` success qualified by an `errors` array the caller
+        // has to remember to check.
+        use mae_kb::KbStore;
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store
+            .insert_node(&mae_core::KbNode::new(
+                "note:enrich-partial-a",
+                "A",
+                mae_core::KbNodeKind::Note,
+                "partial failure target a",
+            ))
+            .unwrap();
+        store
+            .insert_node(&mae_core::KbNode::new(
+                "note:enrich-partial-b",
+                "B",
+                mae_core::KbNodeKind::Note,
+                "partial failure target b",
+            ))
+            .unwrap();
+
+        let mut editor = Editor::new();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+        editor
+            .set_option("ai_embedding_base_url", "http://127.0.0.1:1")
+            .unwrap();
+
+        let result = execute_kb_enrich(&editor, &serde_json::json!({}));
+        let err = result.expect_err("any non-empty failure set must be Err, not a qualified Ok");
+        assert!(
+            err.contains("2 of 2"),
+            "the error must enumerate how many of the total targets failed: {err}"
         );
     }
 
@@ -6315,15 +6439,15 @@ mod tests {
             .set_option("ai_embedding_base_url", "http://127.0.0.1:1")
             .unwrap();
 
-        let result = execute_kb_enrich(&editor, &serde_json::json!({"limit": 2})).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(v["status"], "complete");
-        // All attempted (failed) embeds are reported as errors -- exactly
-        // `limit` of the 5 available targets, not all 5.
-        assert_eq!(
-            v["errors"].as_array().unwrap().len(),
-            2,
-            "the 'limit' argument must cap how many nodes are attempted: {v}"
+        let result = execute_kb_enrich(&editor, &serde_json::json!({"limit": 2}));
+        // All targets fail (unreachable endpoint) => Err (ADR-086). The
+        // count in the error must reflect the LIMITED target set (2), not
+        // all 5 available nodes -- proving `limit` was applied before the
+        // attempt, not just before reporting.
+        let err = result.expect_err("every attempted embed fails, so the call must be Err");
+        assert!(
+            err.contains("2 of 2"),
+            "the 'limit' argument must cap how many nodes are attempted: {err}"
         );
     }
 }

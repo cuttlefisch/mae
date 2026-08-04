@@ -13,6 +13,7 @@ use crate::lisp_error::Arity;
 use crate::value::Value;
 
 use super::SchemeRuntime;
+use crate::permission::tier;
 
 impl SchemeRuntime {
     /// Buffer-list, window-list, option-list/get-option, command-list,
@@ -42,6 +43,7 @@ impl SchemeRuntime {
             "get-buffer-by-name",
             "Get buffer index by name",
             Arity::Fixed(1),
+            tier::READ,
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "get-buffer-by-name")?;
                 let state = s.lock();
@@ -112,6 +114,7 @@ impl SchemeRuntime {
             "get-option",
             "Get current option value",
             Arity::Fixed(1),
+            tier::READ,
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "get-option")?;
                 let state = s.lock();
@@ -149,6 +152,7 @@ impl SchemeRuntime {
             "command-exists?",
             "Check if command exists",
             Arity::Fixed(1),
+            tier::READ,
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "command-exists?")?;
                 Ok(Value::Bool(cmd_names.iter().any(|n| n == &name)))
@@ -180,6 +184,7 @@ impl SchemeRuntime {
             "keymap-bindings",
             "List bindings for a keymap",
             Arity::Fixed(1),
+            tier::READ,
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "keymap-bindings")?;
                 Ok(keymaps_snapshot
@@ -207,6 +212,7 @@ impl SchemeRuntime {
             "buffer-string",
             "Full text of active buffer",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::string(s.lock().current_buffer_text.clone())),
         );
 
@@ -224,6 +230,7 @@ impl SchemeRuntime {
             "buffer-text",
             "Full text of named buffer",
             Arity::Fixed(1),
+            tier::READ,
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "buffer-text")?;
                 let state = s.lock();
@@ -246,6 +253,7 @@ impl SchemeRuntime {
             "collab-status",
             "Current collaboration state",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| {
                 Ok(Value::list(vec![
                     Value::list(vec![
@@ -275,7 +283,7 @@ impl SchemeRuntime {
         self.vm.register_fn(
             "kb-sharing-status",
             "JSON snapshot of this peer's KB-sharing state (members, roles, policy, pending, my role/epoch).",
-            Arity::Fixed(0),
+            Arity::Fixed(0), tier::READ,
             move |_args: &[Value]| Ok(Value::string(kb_sharing_json.clone())),
         );
     }
@@ -296,6 +304,7 @@ impl SchemeRuntime {
             "daemon-available?",
             "Whether a daemon is present (control or read layer) right now.",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Bool(daemon_present)),
         );
 
@@ -305,6 +314,7 @@ impl SchemeRuntime {
             "daemon-status",
             "JSON snapshot of daemon state + per-feature availability (ADR-035 capability model).",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::string(daemon_status_json.clone())),
         );
 
@@ -324,6 +334,7 @@ impl SchemeRuntime {
             "feature-available?",
             "JSON availability of a daemon-dependent feature by id (ADR-035 capability model).",
             Arity::Fixed(1),
+            tier::READ,
             move |args: &[Value]| {
                 let id = arg_string(args, 0, "feature-available?")?;
                 let norm = id.trim().to_ascii_lowercase().replace('_', "-");
@@ -345,6 +356,7 @@ impl SchemeRuntime {
             "collab-synced-buffers",
             "List synced buffer names",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| {
                 Ok(Value::list(
                     synced_names
@@ -363,6 +375,7 @@ impl SchemeRuntime {
             "collab-confirmed-shares",
             "List doc IDs confirmed by the server",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| {
                 Ok(Value::list(
                     confirmed
@@ -390,6 +403,7 @@ impl SchemeRuntime {
             "buffer-sync-enabled?",
             "Whether sync is enabled",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Bool(s.lock().sync_enabled)),
         );
 
@@ -398,6 +412,7 @@ impl SchemeRuntime {
             "buffer-pending-updates",
             "Number of pending sync updates",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Int(s.lock().pending_update_count as i64)),
         );
 
@@ -406,6 +421,7 @@ impl SchemeRuntime {
             "buffer-sync-content",
             "Sync doc content",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| match &s.lock().sync_content {
                 Some(c) => Ok(Value::string(c.clone())),
                 None => Ok(Value::Bool(false)),
@@ -417,6 +433,7 @@ impl SchemeRuntime {
             "buffer-drain-updates",
             "Take accumulated sync updates",
             Arity::Fixed(0),
+            tier::WRITE,
             move |_args: &[Value]| {
                 let mut state = s.lock();
                 let updates = std::mem::take(&mut state.accumulated_sync_updates);
@@ -431,6 +448,7 @@ impl SchemeRuntime {
             "buffer-encode-state",
             "Full yrs document state as base64",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| match &s.lock().encoded_state {
                 Some(st) => Ok(Value::string(st.clone())),
                 None => Ok(Value::Bool(false)),
@@ -442,6 +460,7 @@ impl SchemeRuntime {
             "undo-available?",
             "Whether undo stack is non-empty",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Bool(has_undo)),
         );
 
@@ -450,6 +469,7 @@ impl SchemeRuntime {
             "redo-available?",
             "Whether redo stack is non-empty",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Bool(has_redo)),
         );
     }

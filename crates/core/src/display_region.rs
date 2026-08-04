@@ -337,12 +337,19 @@ fn dirs_next_path(path_str: &str) -> PathBuf {
 /// Given the chars of a rope line, the line's byte offset in the rope, and
 /// the buffer's display regions, returns:
 /// - `display_chars`: the characters to render on screen
-/// - `rope_col_map`: for each display char index, the corresponding rope
-///   char index (used for cursor positioning and click mapping)
+/// - `rope_col_map`: for each display **char** index, the corresponding rope
+///   **byte** column within the line (used for cursor positioning and click
+///   mapping)
 ///
 /// Characters inside a region are replaced with the region's replacement
 /// text. The rope_col_map maps replacement chars back to the region's
 /// start position in the rope.
+///
+/// ADR-087 Rule 4: the *values* are byte columns, matching
+/// `Window::cursor_col`; the *index* is a display char index, which is a
+/// different domain from both and belongs only to the rendered display
+/// string. Do not use one as the other without
+/// [`rope_col_to_display_col`]/[`display_col_to_rope_col`].
 pub fn apply_display_regions_to_line(
     line_chars: &[char],
     line_byte_start: usize,
@@ -357,19 +364,23 @@ pub fn apply_display_regions_to_line(
         .take_while(|r| r.byte_start < line_byte_end)
         .collect();
 
-    if overlapping.is_empty() {
-        let map: Vec<usize> = (0..line_chars.len()).collect();
-        return (line_chars.to_vec(), map);
-    }
+    // Byte column (within the line) of each char in `line_chars`.
+    let byte_positions: Vec<usize> = {
+        let mut acc = 0usize;
+        line_chars
+            .iter()
+            .map(|c| {
+                let at = acc;
+                acc += c.len_utf8();
+                at
+            })
+            .collect()
+    };
+    let line_byte_len: usize = line_chars.iter().map(|c| c.len_utf8()).sum();
 
-    // Build a byte-to-char map for the line so we can convert region byte
-    // offsets to char offsets within the line.
-    let line_str: String = line_chars.iter().collect();
-    let byte_positions: Vec<usize> = line_str
-        .char_indices()
-        .map(|(byte_idx, _)| byte_idx)
-        .collect();
-    let line_byte_len = line_str.len();
+    if overlapping.is_empty() {
+        return (line_chars.to_vec(), byte_positions);
+    }
 
     // Convert byte offset (relative to rope) to char index (relative to line).
     let byte_to_char_idx = |rope_byte: usize| -> usize {
@@ -379,6 +390,12 @@ pub fn apply_display_regions_to_line(
             .iter()
             .position(|&b| b >= clamped)
             .unwrap_or(line_chars.len())
+    };
+    let char_idx_to_byte_col = |char_idx: usize| -> usize {
+        byte_positions
+            .get(char_idx)
+            .copied()
+            .unwrap_or(line_byte_len)
     };
 
     let mut display_chars = Vec::new();
@@ -392,15 +409,16 @@ pub fn apply_display_regions_to_line(
         // Emit chars before this region.
         while char_pos < region_char_start && char_pos < line_chars.len() {
             display_chars.push(line_chars[char_pos]);
-            rope_col_map.push(char_pos);
+            rope_col_map.push(char_idx_to_byte_col(char_pos));
             char_pos += 1;
         }
 
         // Emit replacement text (if any), mapping back to region start.
         if let Some(ref replacement) = region.replacement {
+            let region_byte_col = char_idx_to_byte_col(region_char_start);
             for ch in replacement.chars() {
                 display_chars.push(ch);
-                rope_col_map.push(region_char_start);
+                rope_col_map.push(region_byte_col);
             }
         }
         // else: invisible (hide entirely) — emit nothing.
@@ -412,34 +430,43 @@ pub fn apply_display_regions_to_line(
     // Emit remaining chars after the last region.
     while char_pos < line_chars.len() {
         display_chars.push(line_chars[char_pos]);
-        rope_col_map.push(char_pos);
+        rope_col_map.push(char_idx_to_byte_col(char_pos));
         char_pos += 1;
     }
 
     (display_chars, rope_col_map)
 }
 
-/// Map a rope char column to a display char column.
+/// Map a rope **byte** column to a display **char** column.
 ///
 /// Given the `rope_col_map` from `apply_display_regions_to_line`, find
 /// the display column that corresponds to a rope column. If the rope
 /// column falls inside a hidden region, snaps to the nearest visible edge.
-pub fn rope_col_to_display_col(rope_col: usize, rope_col_map: &[usize]) -> usize {
-    // Find the first display col that maps to rope_col or later.
+pub fn rope_col_to_display_col(rope_byte_col: usize, rope_col_map: &[usize]) -> usize {
+    // Find the first display col that maps to rope_byte_col or later.
     for (display_col, &mapped_rope_col) in rope_col_map.iter().enumerate() {
-        if mapped_rope_col >= rope_col {
+        if mapped_rope_col >= rope_byte_col {
             return display_col;
         }
     }
     rope_col_map.len()
 }
 
-/// Map a display char column to a rope char column.
-pub fn display_col_to_rope_col(display_col: usize, rope_col_map: &[usize]) -> usize {
+/// Map a display **char** column to a rope **byte** column.
+///
+/// `line_byte_len` is the byte length of the underlying rope line (excluding
+/// the newline); it is the answer for a display column past the end, which
+/// the map alone cannot supply now that its values are byte offsets of
+/// varying stride.
+pub fn display_col_to_rope_col(
+    display_col: usize,
+    rope_col_map: &[usize],
+    line_byte_len: usize,
+) -> usize {
     rope_col_map
         .get(display_col)
         .copied()
-        .unwrap_or_else(|| rope_col_map.last().map(|&c| c + 1).unwrap_or(0))
+        .unwrap_or(line_byte_len)
 }
 
 /// Find the display region containing `cursor_byte`, if any.
@@ -516,58 +543,41 @@ pub fn prev_link_region(regions: &[DisplayRegion], cursor_byte: usize) -> Option
 /// - `forward=true`: snap to the end of the region (for move-right)
 /// - `forward=false`: snap to the start of the region (for move-left)
 ///
-/// Returns the adjusted rope char column.
+/// Returns the adjusted rope **byte** column (ADR-087 Rule 4).
 pub fn snap_past_regions(
-    rope_col: usize,
+    rope_byte_col: usize,
     line_byte_start: usize,
     line_chars: &[char],
     regions: &[DisplayRegion],
     forward: bool,
 ) -> usize {
     let line_str: String = line_chars.iter().collect();
-    let byte_positions: Vec<usize> = line_str
-        .char_indices()
-        .map(|(byte_idx, _)| byte_idx)
-        .collect();
     let line_byte_len = line_str.len();
-
-    let char_to_byte = |char_idx: usize| -> usize {
-        if char_idx >= byte_positions.len() {
-            line_byte_start + line_byte_len
-        } else {
-            line_byte_start + byte_positions[char_idx]
-        }
-    };
-
-    let cursor_byte = char_to_byte(rope_col);
+    let col = crate::grapheme::floor_char_boundary(&line_str, rope_byte_col.min(line_byte_len));
+    let cursor_byte = line_byte_start + col;
 
     for region in regions {
         if cursor_byte >= region.byte_start && cursor_byte < region.byte_end {
             // Cursor is inside this region — snap to an edge.
             if forward {
-                // Snap to end: find char index at region.byte_end
                 let end_relative = region
                     .byte_end
                     .saturating_sub(line_byte_start)
                     .min(line_byte_len);
-                let end_col = byte_positions
-                    .iter()
-                    .position(|&b| b >= end_relative)
-                    .unwrap_or(line_chars.len());
-                return end_col;
+                return crate::grapheme::snap_to_grapheme_boundary(&line_str, end_relative);
             } else {
-                // Snap to start: find char index at region.byte_start
-                let start_relative = region.byte_start.saturating_sub(line_byte_start);
-                let start_col = byte_positions
-                    .iter()
-                    .position(|&b| b >= start_relative)
-                    .unwrap_or(0);
-                return if start_col > 0 { start_col - 1 } else { 0 };
+                let start_relative = region
+                    .byte_start
+                    .saturating_sub(line_byte_start)
+                    .min(line_byte_len);
+                let start_col =
+                    crate::grapheme::snap_to_grapheme_boundary(&line_str, start_relative);
+                return crate::grapheme::prev_grapheme_boundary(&line_str, start_col);
             }
         }
     }
 
-    rope_col
+    rope_byte_col
 }
 
 /// Find a display region at a given display column on a line.
@@ -586,16 +596,8 @@ pub fn region_at_display_col<'a>(
         return None;
     }
 
-    let rope_col = rope_col_map[display_col];
-
-    // Build byte offset for the rope_col.
-    let line_str: String = line_chars.iter().collect();
-    let char_byte: usize = line_str
-        .char_indices()
-        .nth(rope_col)
-        .map(|(b, _)| b)
-        .unwrap_or(line_str.len());
-    let rope_byte = line_byte_start + char_byte;
+    // `rope_col_map` values are byte columns within the line (ADR-087 Rule 4).
+    let rope_byte = line_byte_start + rope_col_map[display_col];
 
     regions
         .iter()
@@ -770,9 +772,9 @@ mod tests {
         let regions = compute_link_regions(text, true, Some("md"));
         let (_, map) = apply_display_regions_to_line(&chars, 0, text.len(), &regions);
         // Display col 0 → rope col 0 (S)
-        assert_eq!(display_col_to_rope_col(0, &map), 0);
+        assert_eq!(display_col_to_rope_col(0, &map, text.len()), 0);
         // Display col 4 → rope col 4 (start of region, maps to 'd' in replacement)
-        assert_eq!(display_col_to_rope_col(4, &map), 4);
+        assert_eq!(display_col_to_rope_col(4, &map, text.len()), 4);
     }
 
     // --- snap_past_regions ---

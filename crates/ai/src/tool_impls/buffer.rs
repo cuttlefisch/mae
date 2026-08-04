@@ -46,6 +46,20 @@ pub fn execute_buffer_write(
         .ok_or("Missing 'content' argument")?;
 
     let buf_idx = resolve_buffer_idx(editor, args)?;
+
+    // ADR-086: `insert_text_at`/`delete_range` silently no-op on a
+    // read-only buffer (`Buffer::read_only`), so without this check the
+    // call below would do nothing and this function would still report a
+    // success describing a write that never happened. The requested
+    // postcondition ("this buffer now has this content") cannot hold for a
+    // read-only buffer, so refuse before attempting rather than after.
+    if editor.buffers[buf_idx].read_only {
+        return Err(format!(
+            "Buffer '{}' is read-only; buffer_write refused.",
+            editor.buffers[buf_idx].name
+        ));
+    }
+
     let buf = &mut editor.buffers[buf_idx];
     let total_lines = buf.line_count();
 
@@ -229,5 +243,68 @@ mod buffer_write_tests {
              mutation, got {:?}",
             editor.redraw_level
         );
+    }
+
+    /// ADR-086: a read-only buffer's requested postcondition ("this buffer
+    /// now has this content") can never hold -- `insert_text_at`/
+    /// `delete_range` silently no-op on `read_only` buffers, so without the
+    /// guard this returned `Ok("Replaced lines...")` describing a write
+    /// that never happened. Per CLAUDE.md #14 this asserts the FAILING
+    /// path, and verifies the buffer is byte-for-byte unchanged afterward
+    /// -- not just that an `Err` string was returned.
+    #[test]
+    fn execute_buffer_write_on_read_only_buffer_is_refused_and_buffer_unchanged() {
+        let mut editor = Editor::new();
+        editor.buffers[0].insert_text_at(0, "original line one\noriginal line two\n");
+        editor.buffers[0].read_only = true;
+        let before = editor.buffers[0].text();
+
+        let result = execute_buffer_write(
+            &mut editor,
+            &serde_json::json!({"start_line": 1, "end_line": 2, "content": "clobbered\n"}),
+        );
+
+        assert!(
+            result.is_err(),
+            "buffer_write on a read-only buffer must return Err, not a success \
+             describing a write that didn't happen: {result:?}"
+        );
+        assert_eq!(
+            editor.buffers[0].text(),
+            before,
+            "a refused write must leave the read-only buffer's content untouched"
+        );
+    }
+
+    #[test]
+    fn execute_buffer_write_on_read_only_buffer_names_the_buffer_in_the_error() {
+        let mut editor = Editor::new();
+        editor.buffers[0].name = "*readonly-target*".to_string();
+        editor.buffers[0].read_only = true;
+
+        let err = execute_buffer_write(
+            &mut editor,
+            &serde_json::json!({"start_line": 1, "content": "x"}),
+        )
+        .expect_err("must refuse writing a read-only buffer");
+        assert!(
+            err.contains("*readonly-target*"),
+            "the refusal must name which buffer was refused, not a generic message: {err}"
+        );
+    }
+
+    /// ADR-086 D2 guard: fixing the read-only refusal above must not
+    /// over-correct into treating a normal, writable buffer's repeat write
+    /// as an error. Two identical writes in a row against a writable buffer
+    /// must both succeed.
+    #[test]
+    fn execute_buffer_write_second_identical_write_still_succeeds() {
+        let mut editor = Editor::new();
+        editor.buffers[0].insert_text_at(0, "line one\nline two\n");
+        let args = serde_json::json!({"start_line": 1, "end_line": 2, "content": "same\n"});
+
+        execute_buffer_write(&mut editor, &args).expect("first write must succeed");
+        execute_buffer_write(&mut editor, &args)
+            .expect("an identical second write to a writable buffer must still succeed");
     }
 }

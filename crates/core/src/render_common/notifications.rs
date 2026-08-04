@@ -19,48 +19,20 @@ pub fn notif_line_theme_key(kind: &NotifLineKind) -> &'static str {
     }
 }
 
-/// Compute highlight spans for a `*Notifications*` buffer by iterating `lines`.
+/// Compute highlight spans for a `*Notifications*` buffer by iterating
+/// `lines`. Delegates to the shared
+/// `line_kind_spans::compute_line_kind_spans` (see that module's doc for
+/// why `*Agenda*` is not a fourth caller of the same helper).
 pub fn compute_notif_spans(buf: &Buffer) -> Vec<HighlightSpan> {
-    let view = match buf.notif_view() {
-        Some(v) => v,
-        None => return Vec::new(),
+    let Some(view) = buf.notif_view() else {
+        return Vec::new();
     };
-
-    let rope = buf.rope();
-    let mut spans = Vec::new();
-
-    for (line_idx, line) in view.lines.iter().enumerate() {
-        if matches!(line.kind, NotifLineKind::Blank) {
-            continue;
-        }
-        let theme_key = notif_line_theme_key(&line.kind);
-        if theme_key == "ui.text" {
-            continue;
-        }
-        if line_idx >= rope.len_lines() {
-            break;
-        }
-        let line_start_char = rope.line_to_char(line_idx);
-        let rope_line = rope.line(line_idx);
-        let line_len = rope_line.len_chars();
-        let text_len = if line_idx + 1 < rope.len_lines() {
-            line_len.saturating_sub(1)
-        } else {
-            line_len
-        };
-        if text_len == 0 {
-            continue;
-        }
-        let byte_start = rope.char_to_byte(line_start_char);
-        let byte_end = rope.char_to_byte(line_start_char + text_len);
-        spans.push(HighlightSpan {
-            byte_start,
-            byte_end,
-            theme_key,
-        });
-    }
-
-    spans
+    crate::render_common::line_kind_spans::compute_line_kind_spans(
+        view.lines.iter().map(|l| &l.kind),
+        buf.rope(),
+        |k| matches!(k, NotifLineKind::Blank),
+        notif_line_theme_key,
+    )
 }
 
 #[cfg(test)]

@@ -1180,6 +1180,78 @@ mod set_save_tests {
         });
     }
 
+    /// Audit #599.1 — the branch predicate (`content.contains(pattern)`, a
+    /// substring test) disagreed with the rewrite (`line.starts_with(pattern)`).
+    /// So a COMMENTED-OUT or nested occurrence of the same `(set-option! "x"`
+    /// text selected the replace branch, replaced nothing, and still reported
+    /// "Saved" — the option silently never persisted. MAE's own shipped
+    /// init.scm template is full of commented-out example lines, so this fired
+    /// on the most ordinary config there is.
+    #[test]
+    fn a_commented_out_set_option_does_not_swallow_the_real_save() {
+        // Several genuinely different shapes of "the pattern is present but
+        // not as a settable line", not one hand-picked string.
+        let decoys = [
+            r#";; (set-option! "ai_chat_enabled" "false")"#,
+            r#";  (set-option! "ai_chat_enabled" "false")"#,
+            r#"; example: (set-option! "ai_chat_enabled" "false")"#,
+            r#"(begin (set-option! "ai_chat_enabled" "false"))"#,
+        ];
+
+        for decoy in decoys {
+            with_isolated_config_home(|config_home| {
+                let init = config_home.join("mae").join("init.scm");
+                std::fs::create_dir_all(init.parent().unwrap()).unwrap();
+                std::fs::write(&init, format!("{decoy}\n")).unwrap();
+
+                let mut editor = Editor::new();
+                editor.set_option("ai_chat_enabled", "true").unwrap();
+                let msg = editor.save_option_to_init("ai_chat_enabled").unwrap();
+                assert!(msg.contains("Saved"), "{msg}");
+
+                let content = init_scm_contents(config_home);
+                // Selective oracle: a REAL, line-initial setter now exists with
+                // the new value. Merely asserting the file changed would pass on
+                // a write that only reformatted the decoy.
+                assert!(
+                    content
+                        .lines()
+                        .any(|l| l.trim_start() == r#"(set-option! "ai_chat_enabled" "true")"#),
+                    "decoy {decoy:?} swallowed the save; init.scm is:\n{content}"
+                );
+                // And the user's own line is left exactly as they wrote it.
+                assert!(
+                    content.contains(decoy),
+                    "the user's own line must not be rewritten:\n{content}"
+                );
+            });
+        }
+    }
+
+    /// The counter-case: a genuine line-initial setter must still be REPLACED,
+    /// not duplicated — the predicate change must not have turned every save
+    /// into an append.
+    #[test]
+    fn a_real_line_initial_setter_is_still_replaced_not_appended() {
+        with_isolated_config_home(|config_home| {
+            let init = config_home.join("mae").join("init.scm");
+            std::fs::create_dir_all(init.parent().unwrap()).unwrap();
+            std::fs::write(&init, "(set-option! \"ai_chat_enabled\" \"false\")\n").unwrap();
+
+            let mut editor = Editor::new();
+            editor.set_option("ai_chat_enabled", "true").unwrap();
+            editor.save_option_to_init("ai_chat_enabled").unwrap();
+
+            let content = init_scm_contents(config_home);
+            assert_eq!(
+                content.matches(r#"(set-option! "ai_chat_enabled""#).count(),
+                1,
+                "exactly one setter must remain:\n{content}"
+            );
+            assert!(content.contains(r#"(set-option! "ai_chat_enabled" "true")"#));
+        });
+    }
+
     #[test]
     fn set_save_command_applies_value_then_persists() {
         with_isolated_config_home(|config_home| {
@@ -1348,4 +1420,93 @@ fn tab_width_change_forces_display_regions_to_recompute() {
 
     editor.set_option("tab_width", "4").unwrap();
     assert_eq!(editor.buffers[idx].display_regions_gen, u64::MAX);
+}
+
+// --- ADR-087 Rule 3: ambiguous_width / control_char_width options ---
+
+#[test]
+fn ambiguous_width_set_get_and_alias_round_trip() {
+    let mut editor = Editor::new();
+    assert!(!editor.ambiguous_width_wide, "default is narrow");
+    assert_eq!(
+        editor
+            .get_option("ambiguous_width")
+            .map(|(v, _)| v)
+            .as_deref(),
+        Some("narrow")
+    );
+
+    editor.set_option("ambiguous_width", "wide").unwrap();
+    assert!(editor.ambiguous_width_wide);
+    assert_eq!(
+        editor
+            .get_option("ambiguous_width")
+            .map(|(v, _)| v)
+            .as_deref(),
+        Some("wide")
+    );
+
+    // Kebab-case alias, as used by `:set` at the command line.
+    editor.set_option("ambiguous-width", "narrow").unwrap();
+    assert!(!editor.ambiguous_width_wide);
+}
+
+#[test]
+fn ambiguous_width_rejects_invalid_value() {
+    let mut editor = Editor::new();
+    assert!(editor.set_option("ambiguous_width", "extra-wide").is_err());
+    assert!(
+        !editor.ambiguous_width_wide,
+        "invalid value must not mutate state"
+    );
+}
+
+#[test]
+fn ambiguous_width_actually_changes_computed_width() {
+    // Not a dead option: U+2014 (EM DASH) is EAW=Ambiguous. Flipping the
+    // policy must change what `Editor::width_policy()` produces.
+    let mut editor = Editor::new();
+    let s = "\u{2014}"; // em dash
+    let narrow = crate::grapheme::display_width_with(s, editor.width_policy());
+    editor.set_option("ambiguous_width", "wide").unwrap();
+    let wide = crate::grapheme::display_width_with(s, editor.width_policy());
+    assert_eq!(narrow, 1);
+    assert_eq!(wide, 2);
+}
+
+#[test]
+fn control_char_width_set_get_round_trip() {
+    let mut editor = Editor::new();
+    assert_eq!(editor.control_char_width, 0);
+    assert_eq!(
+        editor
+            .get_option("control_char_width")
+            .map(|(v, _)| v)
+            .as_deref(),
+        Some("0")
+    );
+
+    editor.set_option("control_char_width", "1").unwrap();
+    assert_eq!(editor.control_char_width, 1);
+
+    editor.set_option("control-char-width", "3").unwrap();
+    assert_eq!(editor.control_char_width, 3);
+}
+
+#[test]
+fn control_char_width_out_of_range_values_are_clamped_not_rejected() {
+    let mut editor = Editor::new();
+    editor.set_option("control_char_width", "9999").unwrap();
+    assert_eq!(editor.control_char_width, 16, "clamped to the maximum");
+}
+
+#[test]
+fn control_char_width_actually_changes_computed_width() {
+    let mut editor = Editor::new();
+    let s = "\u{0001}"; // control char, undefined width upstream
+    let default_w = crate::grapheme::display_width_with(s, editor.width_policy());
+    editor.set_option("control_char_width", "5").unwrap();
+    let configured_w = crate::grapheme::display_width_with(s, editor.width_policy());
+    assert_eq!(default_w, 0);
+    assert_eq!(configured_w, 5);
 }

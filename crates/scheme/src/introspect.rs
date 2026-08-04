@@ -8,6 +8,7 @@
 //! @since: 0.12.0
 
 use crate::lisp_error::{Arity, LispError};
+use crate::permission::tier;
 use crate::value::Value;
 use crate::vm::Vm;
 
@@ -194,6 +195,7 @@ pub fn register_introspection(vm: &mut Vm) {
         "procedure-arity",
         "Return the arity of a procedure as a string.",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Foreign(ff) => Ok(Value::string(ff.arity.to_string())),
             Value::Closure(c) => Ok(Value::string(c.arity.to_string())),
@@ -206,6 +208,7 @@ pub fn register_introspection(vm: &mut Vm) {
         "procedure-documentation",
         "Return the documentation string of a procedure, or #f if none.",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Foreign(ff) => {
                 if ff.doc.is_empty() {
@@ -227,6 +230,7 @@ pub fn register_introspection(vm: &mut Vm) {
         "procedure-name",
         "Return the name of a procedure, or #f if anonymous.",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Foreign(ff) => Ok(Value::string(&ff.name)),
             Value::Closure(c) => match &c.name {
@@ -242,6 +246,7 @@ pub fn register_introspection(vm: &mut Vm) {
         "gc-collect!",
         "Trigger garbage collection (currently increments counter in Rc stage).",
         Arity::Fixed(0),
+        tier::PURE,
         |_args| {
             // In Stage 1 (Rc), there's no real GC to trigger.
             // The VM increments gc_stats.collections_count when this runs.

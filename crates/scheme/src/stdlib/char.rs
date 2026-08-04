@@ -3,22 +3,32 @@
 use std::rc::Rc;
 
 use crate::lisp_error::{Arity, LispError};
+use crate::permission::tier;
 use crate::value::Value;
 use crate::vm::Vm;
 
 pub fn register(vm: &mut Vm) {
-    vm.register_fn("char=?", "Character equality", Arity::Fixed(2), |args| {
-        Ok(Value::Bool(args[0].as_char()? == args[1].as_char()?))
-    });
+    vm.register_fn(
+        "char=?",
+        "Character equality",
+        Arity::Fixed(2),
+        tier::PURE,
+        |args| Ok(Value::Bool(args[0].as_char()? == args[1].as_char()?)),
+    );
 
-    vm.register_fn("char<?", "Character less than", Arity::Fixed(2), |args| {
-        Ok(Value::Bool(args[0].as_char()? < args[1].as_char()?))
-    });
+    vm.register_fn(
+        "char<?",
+        "Character less than",
+        Arity::Fixed(2),
+        tier::PURE,
+        |args| Ok(Value::Bool(args[0].as_char()? < args[1].as_char()?)),
+    );
 
     vm.register_fn(
         "char>?",
         "Character greater than",
         Arity::Fixed(2),
+        tier::PURE,
         |args| Ok(Value::Bool(args[0].as_char()? > args[1].as_char()?)),
     );
 
@@ -26,6 +36,7 @@ pub fn register(vm: &mut Vm) {
         "char<=?",
         "Character less or equal",
         Arity::Fixed(2),
+        tier::PURE,
         |args| Ok(Value::Bool(args[0].as_char()? <= args[1].as_char()?)),
     );
 
@@ -33,6 +44,7 @@ pub fn register(vm: &mut Vm) {
         "char>=?",
         "Character greater or equal",
         Arity::Fixed(2),
+        tier::PURE,
         |args| Ok(Value::Bool(args[0].as_char()? >= args[1].as_char()?)),
     );
 
@@ -41,6 +53,7 @@ pub fn register(vm: &mut Vm) {
         "char-ci=?",
         "Case-insensitive char equality",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let a = args[0].as_char()?.to_lowercase().next().unwrap();
             let b = args[1].as_char()?.to_lowercase().next().unwrap();
@@ -52,6 +65,7 @@ pub fn register(vm: &mut Vm) {
         "char-ci<?",
         "Case-insensitive char less than",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let a = args[0].as_char()?.to_lowercase().next().unwrap();
             let b = args[1].as_char()?.to_lowercase().next().unwrap();
@@ -63,6 +77,7 @@ pub fn register(vm: &mut Vm) {
         "char-ci>?",
         "Case-insensitive char greater than",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let a = args[0].as_char()?.to_lowercase().next().unwrap();
             let b = args[1].as_char()?.to_lowercase().next().unwrap();
@@ -74,6 +89,7 @@ pub fn register(vm: &mut Vm) {
         "char-ci<=?",
         "Case-insensitive char less or equal",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let a = args[0].as_char()?.to_lowercase().next().unwrap();
             let b = args[1].as_char()?.to_lowercase().next().unwrap();
@@ -85,6 +101,7 @@ pub fn register(vm: &mut Vm) {
         "char-ci>=?",
         "Case-insensitive char greater or equal",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let a = args[0].as_char()?.to_lowercase().next().unwrap();
             let b = args[1].as_char()?.to_lowercase().next().unwrap();
@@ -97,17 +114,23 @@ pub fn register(vm: &mut Vm) {
         "char-alphabetic?",
         "Is alphabetic?",
         Arity::Fixed(1),
+        tier::PURE,
         |args| Ok(Value::Bool(args[0].as_char()?.is_alphabetic())),
     );
 
-    vm.register_fn("char-numeric?", "Is numeric?", Arity::Fixed(1), |args| {
-        Ok(Value::Bool(args[0].as_char()?.is_numeric()))
-    });
+    vm.register_fn(
+        "char-numeric?",
+        "Is numeric?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| Ok(Value::Bool(args[0].as_char()?.is_numeric())),
+    );
 
     vm.register_fn(
         "char-whitespace?",
         "Is whitespace?",
         Arity::Fixed(1),
+        tier::PURE,
         |args| Ok(Value::Bool(args[0].as_char()?.is_whitespace())),
     );
 
@@ -115,6 +138,7 @@ pub fn register(vm: &mut Vm) {
         "char-upper-case?",
         "Is uppercase?",
         Arity::Fixed(1),
+        tier::PURE,
         |args| Ok(Value::Bool(args[0].as_char()?.is_uppercase())),
     );
 
@@ -122,6 +146,7 @@ pub fn register(vm: &mut Vm) {
         "char-lower-case?",
         "Is lowercase?",
         Arity::Fixed(1),
+        tier::PURE,
         |args| Ok(Value::Bool(args[0].as_char()?.is_lowercase())),
     );
 
@@ -130,6 +155,7 @@ pub fn register(vm: &mut Vm) {
         "char-upcase",
         "Uppercase character",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             let c = args[0].as_char()?;
             Ok(Value::Char(c.to_uppercase().next().unwrap_or(c)))
@@ -140,6 +166,7 @@ pub fn register(vm: &mut Vm) {
         "char-downcase",
         "Lowercase character",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             let c = args[0].as_char()?;
             Ok(Value::Char(c.to_lowercase().next().unwrap_or(c)))
@@ -150,6 +177,7 @@ pub fn register(vm: &mut Vm) {
         "char-foldcase",
         "Case-fold character",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             let c = args[0].as_char()?;
             Ok(Value::Char(c.to_lowercase().next().unwrap_or(c)))
@@ -160,6 +188,7 @@ pub fn register(vm: &mut Vm) {
         "char->integer",
         "Character to integer",
         Arity::Fixed(1),
+        tier::PURE,
         |args| Ok(Value::Int(args[0].as_char()? as i64)),
     );
 
@@ -167,6 +196,7 @@ pub fn register(vm: &mut Vm) {
         "integer->char",
         "Integer to character",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             let n = args[0].as_int()? as u32;
             char::from_u32(n)
@@ -179,6 +209,7 @@ pub fn register(vm: &mut Vm) {
         "digit-value",
         "Numeric value of digit character",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             let c = args[0].as_char()?;
             match c.to_digit(10) {
@@ -193,6 +224,7 @@ pub fn register(vm: &mut Vm) {
         "char->string",
         "Character to string",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             let c = args[0].as_char()?;
             Ok(Value::String(Rc::from(c.to_string().as_str())))

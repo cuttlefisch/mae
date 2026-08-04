@@ -84,8 +84,7 @@ impl Editor {
         if let Some(m) = search::find_next(buf.rope(), &re, char_offset, direction, true) {
             let rope = buf.rope();
             let new_row = rope.char_to_line(m.start);
-            let line_start = rope.line_to_char(new_row);
-            let new_col = m.start - line_start;
+            let new_col = buf.byte_col_of_char_offset(new_row, m.start);
 
             let win = self.window_mgr.focused_window_mut();
             win.cursor_row = new_row;

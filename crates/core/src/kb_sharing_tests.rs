@@ -65,6 +65,43 @@ fn short_fingerprint_truncates_head_and_tail() {
     assert_eq!(short_fingerprint("psk:x"), "psk:x");
 }
 
+/// Audit #589.1 — the attacker's test. A remote peer's join request carries a
+/// self-declared `fingerprint` string that reaches `short_fingerprint` verbatim
+/// via the owner's pending-request notification. The former byte slicing
+/// (`&digest[..4]` / `&digest[len - 4..]`) panicked the *editor* on any
+/// multi-byte codepoint at those offsets — a remote DoS triggered by merely
+/// receiving a join request. Every case here must return, not panic.
+#[test]
+fn short_fingerprint_survives_hostile_non_ascii_input() {
+    // Cut points chosen to land mid-codepoint at the head, at the tail, at both,
+    // and at the length threshold — not one hand-picked value that dodges the edge.
+    let hostile = [
+        "SHA256:aécdefghij",         // 'é' straddles the head cut
+        "SHA256:abcdefghié",         // 'é' straddles the tail cut
+        "SHA256:aébcdefghié",        // both
+        "SHA256:ééééééééé",          // every offset mid-codepoint
+        "SHA256:\u{1F600}bcdefghij", // 4-byte emoji at the head
+        "SHA256:abcdefghi\u{1F600}", // 4-byte emoji at the tail
+        "SHA256:ééééé",              // 10 bytes but only 5 chars — under the threshold
+        "SHA256:ééééé\u{1F600}",     // 14 bytes, 6 chars — still under
+        "SHA256:",                   // empty digest
+        "SHA256:é",                  // single multi-byte digest
+        "\u{1F600}",                 // no prefix at all
+    ];
+    for fp in hostile {
+        let out = short_fingerprint(fp);
+        assert!(!out.is_empty() || fp.is_empty(), "{fp:?} produced nothing");
+    }
+
+    // Selective oracle: the truncation is in CHARACTERS, so a multi-byte digest
+    // yields exactly 4 head + 4 tail characters — not a byte-count coincidence.
+    assert_eq!(short_fingerprint("SHA256:ééééééééé"), "SHA256:éééé…éééé");
+    // A 5-char digest is under the >8 threshold and must pass through intact
+    // even though its BYTE length (10) is over it — the old code compared the
+    // byte length against a character-count cut.
+    assert_eq!(short_fingerprint("SHA256:ééééé"), "SHA256:ééééé");
+}
+
 #[test]
 fn format_peer_label_plus_short_fp() {
     assert_eq!(

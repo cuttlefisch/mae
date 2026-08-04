@@ -177,6 +177,45 @@ fn watcher_error_count_exposed() {
     assert_eq!(watcher.error_count(), 0);
 }
 
+/// `docs/INOTIFY_INSTANCE_EXHAUSTION.md`, asserted end-to-end through the real
+/// `kb_register` path rather than at the `mae-kb` API: registering N KBs must
+/// not cost N inotify instances. `max_user_instances` is 128 per USER (not per
+/// process), so an editor that spends one per registered KB starves every other
+/// application on the machine — the reported symptom.
+///
+/// Measured as a delta (other tests in this process hold watchers of their own)
+/// and skipped where instances aren't a concept (macOS/FSEvents), per
+/// `mae_kb::watch::inotify_instance_count`'s contract.
+#[test]
+fn registering_many_kbs_does_not_multiply_inotify_instances() {
+    let Some(before) = mae_kb::watch::inotify_instance_count() else {
+        return; // not Linux
+    };
+    let dirs: Vec<TempDir> = (0..5).map(|_| create_test_org_dir()).collect();
+    let mut editor = Editor::new();
+    let _test_dirs = with_test_dirs(&mut editor);
+    for (i, d) in dirs.iter().enumerate() {
+        assert!(
+            editor.kb_register(&format!("Notes{i}"), d.path()).is_some(),
+            "registration {i} must succeed"
+        );
+    }
+    assert_eq!(
+        editor.kb.watchers.len(),
+        dirs.len(),
+        "all watchers attached"
+    );
+    let after = mae_kb::watch::inotify_instance_count().unwrap();
+    let spent = after.saturating_sub(before);
+    // The design bound is 1 (see the mae-kb twin of this test); 2 only absorbs
+    // a concurrent test in this binary re-creating the shared watcher mid-measure.
+    assert!(
+        spent <= 2,
+        "5 registered KBs must cost ~1 inotify instance, not one each \
+         (before={before}, after={after}, spent={spent})"
+    );
+}
+
 #[test]
 fn kb_federated_search_deduplicates() {
     let mut editor = Editor::new();

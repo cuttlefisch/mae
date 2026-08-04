@@ -13,4 +13,5 @@ winit = "0.30"
 skia-safe = { version = "0.99", features = ["svg"] }
 softbuffer = "0.4"
 tracing = { workspace = true }
-unicode-width = "0.2"
+# ADR-087 Rule 7: no direct unicode-width dependency -- width goes through
+# mae_core::display_width / mae_core::grapheme, mae-core's sole call.
