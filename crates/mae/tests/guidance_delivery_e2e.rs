@@ -65,6 +65,31 @@ fn spawn_isolated_headless_with_guidance(
     guidance_index_body: &str,
     inline_budget_chars: Option<usize>,
 ) -> (std::path::PathBuf, HeadlessGuard, tempfile::TempDir) {
+    spawn_isolated_headless_with_guidance_opts(
+        guidance_kb_name,
+        guidance_index_body,
+        inline_budget_chars,
+        true,
+    )
+}
+
+/// As above, but `configure_option` controls whether an `init.scm` setting
+/// `ai_guidance_kb` is written at all.
+///
+/// The distinction matters because it is exactly the one that hid a live defect:
+/// every existing test passes `Some(name)`, which BOTH seeds the KB and writes
+/// the option. That configuration does not occur in the field. The real shipped
+/// state was an install with the KB registered and the option **never set** —
+/// where `"DevPractices"` lived only in the `init.scm` *template*, which is
+/// written only when no `~/.config/mae/init.scm` already exists. Fresh installs
+/// got guidance; every pre-existing install silently got none, and no test could
+/// see it because none of them exercised the unconfigured path.
+fn spawn_isolated_headless_with_guidance_opts(
+    guidance_kb_name: Option<&str>,
+    guidance_index_body: &str,
+    inline_budget_chars: Option<usize>,
+    configure_option: bool,
+) -> (std::path::PathBuf, HeadlessGuard, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
     let project_root = tmp.path().join("project");
     std::fs::create_dir_all(project_root.join(".git")).unwrap();
@@ -82,7 +107,9 @@ fn spawn_isolated_headless_with_guidance(
     let mut init_scm = String::new();
     if let Some(name) = guidance_kb_name {
         seed_guidance_kb(&mae_data_dir, name, guidance_index_body);
-        init_scm.push_str(&format!("(set-option! \"ai_guidance_kb\" \"{name}\")\n"));
+        if configure_option {
+            init_scm.push_str(&format!("(set-option! \"ai_guidance_kb\" \"{name}\")\n"));
+        }
     }
     if let Some(budget) = inline_budget_chars {
         init_scm.push_str(&format!(
@@ -171,6 +198,49 @@ async fn guidance_content_within_budget_is_inlined_byte_identical_over_the_real_
     assert!(
         !instructions.contains("consult KB 'MaeTestGuidance' for required practices"),
         "must not ALSO show the bare pointer once content is inlined: {instructions}"
+    );
+
+    guard.shutdown(Duration::from_secs(10));
+}
+
+/// REGRESSION (2026-08-04): guidance must reach an install that never configured it.
+///
+/// This is the defect the whole existing suite could not see. `ai_guidance_kb`'s
+/// registry default was `""`; `"DevPractices"` existed only in the `init.scm`
+/// template, which `mae --init-config` writes **only when no `init.scm` already
+/// exists**. So the "shipped default" reached fresh installs and nobody else —
+/// verified live against a running editor before the fix:
+///
+/// ```text
+/// get_option ai_guidance_kb -> {"value": "", "default": ""}
+/// ```
+///
+/// while DevPractices sat registered and visible in the same session's KB list.
+///
+/// Every other test here writes its own `init.scm` setting the option, so all of
+/// them passed throughout. A test that only exercises the configured path cannot
+/// detect a broken default — that is what makes this one the regression guard
+/// rather than another confirmation.
+///
+/// Seeds the KB under the **default** name and writes NO `init.scm` at all.
+#[tokio::test]
+async fn guidance_reaches_an_install_that_never_configured_it() {
+    let (socket_path, mut guard, _tmp) = spawn_isolated_headless_with_guidance_opts(
+        Some("DevPractices"),
+        DISTINCTIVE_PRACTICE,
+        None,
+        false, // <- no init.scm: the option must come from the registry default
+    );
+    let init = mcp_initialize(&socket_path).await;
+    let instructions = init["result"]["instructions"]
+        .as_str()
+        .expect("instructions field present");
+
+    assert!(
+        instructions.contains(DISTINCTIVE_PRACTICE),
+        "an install that never set ai_guidance_kb must still receive guidance from \
+         the REGISTRY default -- a template is not a default, it only reaches fresh \
+         installs. Got: {instructions}"
     );
 
     guard.shutdown(Duration::from_secs(10));
