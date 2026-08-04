@@ -1,6 +1,8 @@
 # ADR-089: Project-local init files require explicit workspace trust
 
-**Status:** Proposed. Security-blocking for v0.15.
+**Status:** Accepted and implemented (v0.15). `crates/core/src/workspace_trust.rs`, enforced at
+`crates/mae/src/bootstrap.rs` (the project-local layer is gated on `is_trusted`), with adversarial
+tests covering the untrusted, fails-closed and legacy-cwd-fallback paths.
 **Relates to:** ADR-084 (permission enforcement — the tier does not and cannot bound this path, since
 init files are evaluated before any policy exists), ADR-088 (carried authority — the same provenance
 question asked of tool arguments rather than of files).
