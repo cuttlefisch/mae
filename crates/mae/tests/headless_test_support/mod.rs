@@ -62,6 +62,31 @@ pub fn isolated_env(cmd: &mut Command, xdg_config: &Path, xdg_data: &Path, home:
     arm_pdeathsig(cmd);
 }
 
+/// Grant a spawned headless instance an explicit AI auto-approval tier
+/// (`MAE_AI_PERMISSIONS`, the highest-precedence input to
+/// `crates/mae/src/config.rs::resolve_permission_policy`).
+///
+/// @ai-caution: [permission] ADR-090 D5 lowered the *built-in* default to
+/// `readonly`, and ADR-090 D3 makes the external-MCP dispatch surface
+/// non-interactive by construction (`ai_event_handler.rs::MCP_SURFACE`): on
+/// that surface an `Ask` becomes a denial, never a prompt, because there is
+/// nobody to ask. An `isolated_env` instance is by definition unconfigured,
+/// so a test that drives write- or privileged-tier tools over MCP against one
+/// gets *every* mutation denied. ADR-090's own breaking-change note names
+/// this case -- "non-interactive surfaces deny and say so; those deployments
+/// need an explicit auto_approve_tier" -- and a test harness driving MCP
+/// writes is exactly such a deployment.
+///
+/// Deliberately opt-in per test rather than folded into `isolated_env`:
+/// blanket-granting every headless test the tier it happens to need would
+/// silently un-gate the ones whose subject IS the permission surface
+/// (`mcp_tool_tiering_e2e.rs` today, and any ADR-090 e2e added later). The
+/// `MCP_SURFACE` @ai-caution says not to widen the policy to make a caller
+/// work; this widens one test's *environment*, at the call site, in the open.
+pub fn grant_permission_tier(cmd: &mut Command, tier: &str) {
+    cmd.env("MAE_AI_PERMISSIONS", tier);
+}
+
 /// Belt-and-braces backstop for the case that actually bit us: a leaked
 /// child that outlives the TEST BINARY itself, not just the test function --
 /// e.g. the harness running `cargo test` is hard-killed or OOM-killed, or a
