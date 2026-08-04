@@ -212,7 +212,10 @@ jobs:
         # addition came from an exhaustive sweep, not another one-off
         # reaction -- see .config/nextest.toml for the full methodology.
         run: |
-          HEAVY_FILTER='binary(headless_e2e) + binary(guidance_delivery_e2e) + binary(headless_kb_convergence_e2e) + binary(headless_soak_shaped_e2e) + binary(headless_idle_cpu_e2e) + binary(mcp_tool_tiering_e2e) + binary(tool_schema_nested_e2e)'
+          # Duplicated in .config/nextest.toml (heavy-subprocess-e2e group) and
+          # badges.yml. A new heavy binary must be added to all three; verified
+          # by `make heavy-e2e-check`.
+          HEAVY_FILTER='binary(headless_e2e) + binary(guidance_delivery_e2e) + binary(headless_kb_convergence_e2e) + binary(headless_soak_shaped_e2e) + binary(headless_idle_cpu_e2e) + binary(mcp_tool_tiering_e2e) + binary(tool_schema_nested_e2e) + binary(headless_guard_leak_regression_e2e)'
           cargo nextest run --workspace --release --features gui -E "$HEAVY_FILTER"
           cargo nextest run --workspace --release --features gui -E "not ($HEAVY_FILTER)"
           cargo test --doc --workspace --release --features gui
@@ -1210,6 +1213,15 @@ jobs:
       # counts change on nearly every commit, so that would churn every PR.
       - name: Check structural ceilings
         run: make audit-metrics-check
+      # A test binary that spawns a real `mae --headless` must appear in all
+      # three heavy-subprocess filters (.config/nextest.toml, ci.yml,
+      # badges.yml). Omitting one does not fail loudly here -- it surfaces
+      # later as an intermittent 30s socket-bind timeout in a DIFFERENT test,
+      # which is how headless_guard_leak_regression_e2e slipped through in
+      # #613 and broke the badges job twice. Pure shell + grep, so it needs
+      # no build and adds a couple of seconds to an already-cheap job.
+      - name: Check heavy-e2e filter lists agree
+        run: make heavy-e2e-check
 
   adr-kb-sync:
     name: ADR KB staleness gate (ADR-059 Phase E)
