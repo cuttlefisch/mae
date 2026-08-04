@@ -53,7 +53,6 @@
     "crates/core/src/editor/window_ops.rs": 1114,
     "crates/core/src/file_picker.rs": 1200,
     "crates/core/src/graph_view.rs": 6589,
-    "crates/core/src/grapheme.rs": 900,
     "crates/core/src/kb_seed/concepts.rs": 1826,
     "crates/core/src/kb_seed/lessons.rs": 862,
     "crates/core/src/kb_seed/mod.rs": 1721,

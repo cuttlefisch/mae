@@ -9,6 +9,7 @@
 pub mod backend;
 pub mod execute;
 pub mod noweb;
+pub(crate) mod posix_shell;
 pub mod results;
 pub mod safety;
 pub mod session;
