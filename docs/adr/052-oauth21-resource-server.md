@@ -1,6 +1,7 @@
 # ADR-052: OAuth 2.1 resource-server design for MAE
 
-**Status:** Proposed.
+**Status:** Accepted and implemented. Shipped as issue #375 Phase F (#381, closed 2026-07-24);
+`daemon/src/oauth.rs` is the resource server, with its own adversarial test suite.
 **Extends:** ADR-017 (asymmetric peer auth — adds OAuth as a peer-identity mechanism
 alongside PSK and Ed25519 mTLS, not a replacement for either), ADR-018 (identity-anchored
 KB access control — feeds, never duplicates, the `kb_access(kb_id, principal, op)`
