@@ -7,7 +7,8 @@ taxonomy that ADR's enforcement operates on; the enforcement mechanism itself is
 **Relates to:** ADR-050 D2 (the mechanically-derived `ToolCategory` taxonomy), ADR-055 (headless MAE as
 an engine instance — the motivating use case), ADR-084 (permission enforcement at the effect — the
 sibling axis this ADR keeps distinct, and the owner of the fail-safe-default decision).
-**Tracking:** private security advisory `GHSA-qwh8-m8j6-563h`.
+**Tracking:** issue #592 (pre-v0.15 audit epic). Fixed in v0.15; see ADR-084 on why this was
+never disclosed as an advisory.
 
 ## Revision note
 

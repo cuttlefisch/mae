@@ -4,7 +4,9 @@
 **Relates to:** ADR-084 (permission enforcement — the tier does not and cannot bound this path, since
 init files are evaluated before any policy exists), ADR-088 (carried authority — the same provenance
 question asked of tool arguments rather than of files).
-**Tracking:** private security advisory `GHSA-qwh8-m8j6-563h` §5.
+**Tracking:** issue #592 (pre-v0.15 audit epic). Fixed in v0.15; see ADR-084 on why this was
+never disclosed as an advisory. Note this defect needed no AI agent, no MCP client and no prompt
+injection — it is grouped with the AI-permission work only because that audit is where it surfaced.
 
 ## Context
 

@@ -8,7 +8,9 @@ consulted, without changing how a session declares one).
 under the policy), ADR-085 (`ToolCategory` describes subject matter, not blast radius — the sibling
 axis), ADR-056 (session-scoped category dispatch, whose guarantees depend on this one holding),
 ADR-088 (carried authority — the successor this ADR defers to).
-**Tracking:** private security advisory `GHSA-qwh8-m8j6-563h`.
+**Tracking:** issue #592 (pre-v0.15 audit epic). Found during that audit and fixed in v0.15
+before any release shipped the defect to users; the draft advisory opened while the fix was
+in progress was closed unpublished rather than disclosed, as no released version was affected.
 
 ## Revision note
 

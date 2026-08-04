@@ -7,7 +7,8 @@ that enforcement returns), ADR-049 (`mae-agent` as the default AI surface — wh
 half of this and is the model for the rest).
 **Relates to:** ADR-085 (the category axis), ADR-051 (per-session ceilings), ADR-088 (carried
 authority).
-**Tracking:** private security advisory `GHSA-qwh8-m8j6-563h`.
+**Tracking:** issue #592 (pre-v0.15 audit epic). Fixed in v0.15; see ADR-084 on why this was
+never disclosed as an advisory.
 
 ## Context
 

@@ -115,19 +115,24 @@ schedule decision rather than a technical one.
 
 ## 2. Whether the workspace-trust RCE gets its own advisory and CVE
 
-**Status:** fixed in code; disclosure structure undecided.
+**Status:** RESOLVED 2026-08-04 — no advisory, no CVE, no backport. Fixed in v0.15.
 
-The project-local `.mae/init.scm` execution issue is filed as §5 of the AI-permission advisory
-`GHSA-qwh8-m8j6-563h`, because that is where I found it. It does not belong there: it needs no AI
-agent, no MCP client, and no prompt injection, and its fix (workspace trust) is unrelated to the
-other four findings. Cloning a repository and opening MAE in it was arbitrary code execution.
+The project-local `.mae/init.scm` execution issue was originally filed as §5 of the AI-permission
+advisory, because that is where it surfaced. It never belonged there: it needs no AI agent, no MCP
+client, and no prompt injection, and its fix (workspace trust) is unrelated to the other four
+findings. Cloning a repository and opening MAE in it was arbitrary code execution.
 
-**The call:** split it into its own advisory with its own identifier, and decide whether to request
-a CVE. Also whether the fix warrants a backported patch release on the v0.14 line rather than
-waiting for v0.15, given every 0.14.x is affected.
+**Decision (Hayden):** MAE is pre-1.0 alpha with no install base. Disclosure exists to tell users
+to upgrade; with no users to tell, an advisory and CVE buy nothing, and nobody is running an old
+alpha on purpose. The draft advisory was closed unpublished and its references removed from the
+tracked docs. The change is instead surfaced in the release notes, which now carry a Breaking
+Changes section and a Security section (see `cliff.toml`).
 
-**My recommendation:** separate advisory, request a CVE, and backport. The affected-version range
-is "all released versions", and the exploit is a one-line file in a repository.
+**Recorded for honesty, since this rests on an assumption:** the affected range genuinely is *all
+released 0.14.x*, and the exploit is a one-line file in a repository. The decision is sound while
+the "no users" premise holds. If that premise ever turns out to have been wrong — an unknown
+downstream packager, a fork, someone who pinned an old tag — this section is the record that the
+exposure was known and consciously accepted, not overlooked.
 
 ---
 
