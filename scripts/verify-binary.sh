@@ -6,7 +6,9 @@
 #
 # Cross-OS: resolves a process's on-disk image via /proc on Linux, `lsof` on macOS.
 # Exits non-zero if any running process's image != the build (so it can gate a
-# Makefile target). No running process ⇒ pass (nothing to be stale).
+# Makefile target), and also if freshness cannot be determined for a RUNNING
+# process — a check that could not be performed is a failure, not a pass.
+# No running process ⇒ pass (nothing to be stale).
 
 set -u
 
@@ -31,22 +33,41 @@ exe_of() {
 
 status=0
 
+# A check that cannot be performed must FAIL, not pass quietly. This script's
+# entire job is to stop you testing a stale binary, so "I couldn't tell" is the
+# one outcome that must never be reported as OK.
 check() {
     name="$1"
     built="$2"
+    pids="$(pgrep -x "$name" 2>/dev/null || pgrep "$name" 2>/dev/null || true)"
+
     if [ ! -f "$built" ]; then
-        echo "  - $name: no built binary at $built (run the build first) — skipping"
+        if [ -n "$pids" ]; then
+            # The dangerous case: something is running and there is nothing to
+            # compare it against, so staleness is unknowable.
+            echo "  ⚠ $name: RUNNING (pids: $pids) but no built binary at $built"
+            echo "      → cannot verify freshness; run the build first"
+            status=1
+        else
+            # Benign: not built and not running (e.g. a TUI-only checkout that
+            # never builds the daemon). Nothing can be stale.
+            echo "  - $name: not built, not running (nothing to be stale)"
+        fi
         return
     fi
+
     built_hash="$(hash_of "$built")"
-    pids="$(pgrep -x "$name" 2>/dev/null || pgrep "$name" 2>/dev/null || true)"
     if [ -z "$pids" ]; then
         echo "  - $name: not running (nothing to be stale)"
         return
     fi
     for pid in $pids; do
         exe="$(exe_of "$pid")"
-        [ -n "${exe:-}" ] && [ -f "$exe" ] || { echo "  ? $name pid $pid: cannot resolve image"; continue; }
+        if [ -z "${exe:-}" ] || [ ! -f "$exe" ]; then
+            echo "  ⚠ $name pid $pid: cannot resolve on-disk image — freshness unverifiable"
+            status=1
+            continue
+        fi
         run_hash="$(hash_of "$exe")"
         if [ "$run_hash" = "$built_hash" ]; then
             echo "  ✓ $name pid $pid matches the fresh build"

@@ -33,6 +33,19 @@
 #   make install PREFIX=$$HOME/.cargo/bin
 #   ANTHROPIC_API_KEY=sk-... make run ARGS=myfile.rs
 
+# @ai-caution: [build-env] Never let a git-supplied environment reach a build.
+# Git exports an absolute GIT_DIR into hooks when the command runs from a
+# linked worktree, and every child inherits it. A build under that environment
+# makes skia's `git-sync-deps` bypass its own `is_git_toplevel()` guard and
+# `git remote set-url origin <skia mirror>` against the SHARED main .git/config.
+# See the long note in .githooks/pre-commit for the full mechanism.
+unexport GIT_DIR
+unexport GIT_WORK_TREE
+unexport GIT_INDEX_FILE
+unexport GIT_OBJECT_DIRECTORY
+unexport GIT_NAMESPACE
+unexport GIT_COMMON_DIR
+
 PREFIX       ?= $(HOME)/.local/bin
 DATADIR      ?= $(HOME)/.local/share
 CARGO        ?= cargo
@@ -336,26 +349,40 @@ audit:
 
 ## setup-hooks: configure git to use version-controlled hooks
 setup-hooks:
-	git config core.hooksPath .githooks
-	@echo "Git hooks configured to use .githooks/"
-# skia-bindings' build script runs skia's `git-sync-deps` without setting a
-# working directory, so the `git remote set-url origin` / `git fetch` it runs
-# inside non-repository dependency directories walk UP and land on THIS repo.
-# Observed repeatedly: `origin` silently rewritten to a skia DEPS mirror
-# (wuffs), after which `git push` prompts for Google credentials and
-# `origin/main` points at an unrelated project's history.
+# Only claim core.hooksPath if it is unset or already ours. A contributor may
+# point it at a machine-local hook directory that chains to .githooks (e.g. a
+# confidentiality/secret-scanning pre-commit that must run FIRST, then delegate).
+# Overwriting that silently disables their guard while still reporting success —
+# the failure mode is invisible, which is exactly why this is a check, not a set.
+	@current="$$(git config --get core.hooksPath || true)"; \
+	if [ -z "$$current" ] || [ "$$current" = ".githooks" ]; then \
+		git config core.hooksPath .githooks; \
+		echo "Git hooks configured to use .githooks/"; \
+	else \
+		echo "core.hooksPath is already set to '$$current' — leaving it alone."; \
+		echo "  Ensure that hook chains to .githooks/pre-commit, or unset it and re-run."; \
+	fi
+# Defence in depth for the skia `git-sync-deps` remote clobber (root cause and
+# the real fix are documented in .githooks/pre-commit; the leak happens when a
+# build inherits a git-supplied GIT_DIR, NOT via upward directory discovery —
+# skia's sources live in the cargo registry, where no enclosing repo exists).
 #
-# skia's script has an opt-out it checks before touching anything —
-# `git_repository_sync_is_disabled()` reads `sync-deps.disable` from the repo
-# it is about to modify and returns early. Setting it here is the targeted fix:
-# it uses the upstream guard rather than fighting it, and it cannot be defeated
-# by a build running from a worktree (unlike a path-based ceiling, which only
-# covers the directories you thought to list).
+# These two settings are per-clone (.git/config cannot be committed) and are a
+# backstop for the case where a build is launched outside the scrubbed paths:
 #
-# It lives in .git/config, which is per-clone and cannot be committed — hence
-# this target. Re-run `make setup-hooks` in any fresh clone or worktree.
+#   sync-deps.disable — skia's own opt-out. Under a leaked GIT_DIR its lookup
+#     resolves to THIS repo's config, so setting it here makes the script
+#     return before it reaches `git remote set-url`.
+#   remote.origin.pushurl — `set-url` writes only remote.origin.url, while push
+#     prefers pushurl. If the URL is ever rewritten again, push still goes to
+#     the right place instead of prompting for Google credentials.
 	git config sync-deps.disable true
-	@echo "skia git-sync-deps opt-out set (protects this repo's git remote)"
+	@url="$$(git config --get remote.origin.url || true)"; \
+	if [ -n "$$url" ] && [ -z "$$(git config --get remote.origin.pushurl || true)" ]; then \
+		git config remote.origin.pushurl "$$url"; \
+		echo "remote.origin.pushurl pinned to $$url"; \
+	fi
+	@echo "skia git-sync-deps backstops set (protects this repo's git remote)"
 
 ## setup-dev: install dev dependencies (rustfmt/clippy + DAP/LSP tools) + git hooks
 setup-dev:

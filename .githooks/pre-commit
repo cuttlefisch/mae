@@ -2,6 +2,26 @@
 # Pre-commit hook: catch formatting and linting issues before they reach CI.
 # Install with: make setup-hooks
 
+# @ai-caution: [build-env] Do NOT remove this scrub, and do not run a build
+# before it. When a commit is made from a linked worktree, git exports an
+# absolute GIT_DIR (=.git/worktrees/<id>) into this hook, and every child
+# process inherits it -- including `cargo clippy`, which builds skia-bindings,
+# whose build script runs skia's `git-sync-deps`. That script guards itself
+# with `is_git_toplevel()`, but a leaked GIT_DIR makes git treat *cwd* as the
+# worktree top, so the guard passes for a directory it does not own and the
+# subsequent `git remote set-url origin <skia mirror>` rewrites whichever
+# config GIT_DIR names -- for a worktree gitdir, the SHARED main .git/config.
+# Observed 4x on 2026-08-03/04: `origin` silently repointed at a skia DEPS
+# mirror (wuffs), `git push` then prompting for Google credentials and
+# origin/main pointing at an unrelated project's history.
+#
+# Verified: committing from the main checkout leaves GIT_DIR unset (which is
+# why this never happened before agent worktrees existed); committing from a
+# linked worktree exports it. Unsetting it here is the fix at the source, and
+# unlike a per-clone `git config` setting it survives a fresh clone.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+      GIT_NAMESPACE GIT_COMMON_DIR GIT_PREFIX
+
 echo "Running pre-commit checks..."
 
 # 1. Format check
