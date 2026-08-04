@@ -36,8 +36,19 @@ use collab_tcp_e2e_support::find_daemon_binary;
 
 mod headless_test_support;
 use headless_test_support::{
-    isolated_env, send_sigterm, wait_for_exit, wait_for_socket_live, HeadlessGuard,
+    grant_permission_tier, isolated_env, send_sigterm, wait_for_exit, wait_for_socket_live,
+    HeadlessGuard,
 };
+
+/// The auto-approval tier the two headless instances are spawned with.
+///
+/// `Privileged`, not `write`, because `kb_share` is a `Privileged`-tier tool
+/// (it changes KB authorization) -- see `crates/ai/src/tools/kb_tools.rs`.
+/// The other mutations this test drives (`collab_connect`, `kb_create`,
+/// `kb_join`) are `Write`; the reads (`collab_status`, `kb_get`) would be
+/// fine at any tier. Granting the lowest tier that covers the whole flow
+/// keeps this honest about what the flow actually needs.
+const REQUIRED_TIER: &str = "privileged";
 
 /// Spawn a real `mae-daemon` fully isolated from any daemon already running
 /// on this machine -- unlike `collab_tcp_e2e_support::spawn_server`, this
@@ -132,6 +143,9 @@ impl HeadlessInstance {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         isolated_env(&mut spawn_cmd, xdg_config, xdg_data, home);
+        // Only the long-lived instance needs this -- `--print-socket-path`
+        // above resolves a path and exits without ever serving a tool call.
+        grant_permission_tier(&mut spawn_cmd, REQUIRED_TIER);
         let child = spawn_cmd.spawn().expect("failed to spawn mae --headless");
         // Guard constructed the instant spawn() returns, before ANY fallible
         // operation -- previously `child` stayed a bare, unguarded local
@@ -211,6 +225,35 @@ impl HeadlessInstance {
             value.get("error").is_none(),
             "tools/call({name}) returned a JSON-RPC error: {value}"
         );
+        // @ai-caution: [permission] A permission denial is NOT a JSON-RPC
+        // error -- it comes back as a well-formed tool result carrying
+        // `isError: true` and a "Permission denied: ..." body (see
+        // `ai_event_handler.rs`'s `MCP_SURFACE` path and
+        // `crates/ai/src/tools/decision.rs::deny_message`). The assertion
+        // above therefore sails straight past it, and the denial only ever
+        // surfaces as whatever downstream poll later times out blaming
+        // something else. That is precisely how ADR-090 D5's readonly default
+        // presented here: a 20-second wait ending in "instance A never
+        // reached collab_status=connected", which names convergence and says
+        // nothing about permissions.
+        //
+        // Matched on the denial text specifically rather than on `isError`
+        // alone: `kb_get` legitimately reports an error for a node that has
+        // not converged yet, which is the normal state on every poll
+        // iteration but the last.
+        let body = value["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default();
+        for marker in ["Permission denied:", "Category denied:"] {
+            assert!(
+                !body.contains(marker),
+                "tools/call({name}) was refused by the permission policy, so this test \
+                 can never converge: {body}\n\
+                 The instances are spawned with MAE_AI_PERMISSIONS={REQUIRED_TIER}; if a \
+                 tool this test drives moved above that tier, raise it deliberately \
+                 rather than widening the policy in `ai_event_handler.rs`."
+            );
+        }
         value
     }
 
