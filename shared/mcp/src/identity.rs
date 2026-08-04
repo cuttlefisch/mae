@@ -1045,21 +1045,40 @@ mod tests {
             .map(|i| Identity::generate(&format!("client-{i}")).public())
             .collect();
 
-        // Barrier so all threads load their (stale, empty) snapshot at
-        // roughly the same instant, maximizing the chance of the race --
-        // without this, fast/slow thread scheduling could accidentally
-        // serialize them and hide the bug this control is verifying exists.
-        let barrier = std::sync::Arc::new(std::sync::Barrier::new(clients.len()));
+        // TWO barriers, and the second one is what makes this deterministic.
+        //
+        // The original version had only the pre-load barrier and relied on
+        // threads *happening* to interleave. That is a coin flip: on a runner
+        // where the eight threads serialize, every key survives, the
+        // `len() < 8` assertion fails, and a green build turns red for a
+        // reason that has nothing to do with the code under test. It flaked
+        // exactly that way in CI (the MSRV leg, 2026-08-04) while passing 5/5
+        // locally, and was invisible because that leg is `continue-on-error`.
+        //
+        // A negative control that only *probably* reproduces the fault is not
+        // a control -- it is a flake with a good rationale. The fix is to stop
+        // hoping for the interleave and force it: every thread loads the
+        // (empty) snapshot, then all of them wait until every load has
+        // finished, and only then does anyone write. Last-writer-wins is now
+        // guaranteed, so the data loss this control exists to demonstrate is
+        // guaranteed too -- on any scheduler, any core count.
+        let loaded = std::sync::Arc::new(std::sync::Barrier::new(clients.len()));
+        let ready_to_write = std::sync::Arc::new(std::sync::Barrier::new(clients.len()));
         let handles: Vec<_> = clients
             .iter()
             .cloned()
             .map(|pk| {
                 let path = path.clone();
-                let barrier = std::sync::Arc::clone(&barrier);
+                let loaded = std::sync::Arc::clone(&loaded);
+                let ready_to_write = std::sync::Arc::clone(&ready_to_write);
                 std::thread::spawn(move || {
-                    barrier.wait();
+                    loaded.wait();
                     // The OLD pattern: load, mutate in-memory, save -- no lock.
                     let mut ak = AuthorizedKeys::load(&path);
+                    // Every thread now holds the same stale (empty) snapshot.
+                    // Releasing them together makes the lost update certain
+                    // rather than likely.
+                    ready_to_write.wait();
                     let _ = ak.add(pk);
                 })
             })
