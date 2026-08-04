@@ -696,3 +696,48 @@ complaint in hand rather than speculatively. Worth noting that `babel_trust_path
 until this same pass registered it (#596.5) — is the intended escape hatch: a user who trusts their
 own org directory adds it once and never sees the skip. That may make the no-op case rare enough
 that nothing further is needed.
+
+---
+
+## 15. External MCP clients get denials, not prompts — and the new default makes that bite
+
+**Status:** working as designed (ADR-090 D3). Surfaced by a real failure. Needs a product call
+before v0.15 ships, because it affects the release's headline use case.
+
+Lowering the default tier to `ReadOnly` (ADR-090 D5) broke
+`two_headless_instances_converge_via_shared_kb` — and the way it broke is the point.
+
+The test drives a headless MAE over MCP with a deliberately unconfigured environment. Every
+mutation it performs is above `ReadOnly`: `collab_connect` and `kb_create` are `Write`,
+`kb_share` is `Privileged`. External-MCP dispatch is non-interactive by construction, so ADR-090
+D3 maps `Ask` to `Deny`. `collab_connect` was denied and nothing converged.
+
+**That is exactly what a paired VS Code / Copilot client will experience out of the box.** An
+external agent against a default-configured MAE can read and nothing else — no buffer writes, no
+KB creation, no shell. There is no prompt, because there is no surface to prompt on.
+
+This is not a bug in the three-state model. `Deny` is the correct answer when nobody can be asked.
+But it means v0.15's headline deployment shape — MAE as a headless MCP backend for another
+editor's agent — **requires explicit configuration to do anything**, and a user who does not know
+that will experience it as "the tools are all broken".
+
+**The call:**
+
+1. **Ship as-is, document loudly.** The pairing docs (`docs/EXTERNAL_EDITOR_MCP_PAIRING.md`) tell
+   users to set `auto_approve_tier` before pairing. Safe by default; a bad first-run experience for
+   anyone who skips the docs.
+2. **A distinct default for external MCP sessions.** e.g. `Write` for a session that authenticated,
+   keeping `ReadOnly` elsewhere. Better ergonomics, but it is a second default to reason about, and
+   it weakens the posture on precisely the surface ADR-051/056 argue is the only real boundary.
+3. **Make the denial self-explaining.** Keep the default, but have the denial text name the option
+   to set and where. Does not fix the ergonomics, but converts a confusing failure into an
+   actionable one — and is worth doing regardless of 1 vs 2.
+
+**Recommendation:** 3 unconditionally, plus 1. A first-run experience that says *"denied:
+collab_connect requires Write; set `auto_approve_tier` in config.toml"* is a very different thing
+from a silent wall, and it costs a string. Option 2 trades away the security property that
+motivated the whole workstream.
+
+Note the diagnostic half of this is already fixed in the test harness: a denial is a well-formed
+result with `isError`, not a JSON-RPC error, so it slipped past the harness's error check and
+surfaced 20 seconds later as a bogus convergence timeout. Real clients will hit the same shape.
