@@ -324,10 +324,36 @@ mae-daemon --bind 0.0.0.0:9473   # all interfaces — ONLY with key mode + a fir
 ## 6. Monitoring
 
 ```bash
-mae-daemon doctor                 # diagnostics (config, socket, port, store)
+mae-daemon doctor                 # diagnostics (config, resources, port, store, auth)
 journalctl --user -u mae-daemon   # logs (or the file you redirect to)
 ss -tln | grep 9473               # is the collab port listening?  (lsof/netstat fallback)
 ```
+
+### How many clients are connected?
+
+`daemon/status` (on the KB Unix socket) reports live connection counts per
+listener under `connections`:
+
+```json
+"connections": {
+  "kb_socket": {"active": 1, "max": 256},
+  "collab":    {"active": 3, "max": 256, "sessions": 3}
+}
+```
+
+- **`active`** — accepted, still-open connections on that listener.
+- **`max`** — the configured cap (`0` = unlimited), so `3` reads as `3 of 256`.
+- **`sessions`** (collab only) — clients that got *past authentication* and
+  subscribed. A persistent gap between `sessions` and `active` across successive
+  polls means clients are connecting and failing to authenticate: the first
+  thing to check when a spoke can't reach the hub.
+
+A listener that is not running is **absent**, not zero — a disabled collab
+server and an idle one are different facts.
+
+> `sessions` is currently reported only under `[collab.auth] mode = "key"`
+> (issue #647): the broadcaster it is derived from is installed into daemon state
+> only in that mode. `active` has no such gap.
 
 From the editor: `collab-status` / `collab-doctor`, and `kb_health` for KB-level counts.
 

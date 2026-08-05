@@ -19,6 +19,7 @@ use std::time::Duration;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Mutex;
 
+mod connection_observability_tests;
 mod kb_query_cross_kb_isolation_tests;
 mod kb_query_tests;
 mod kb_socket_concurrency_tests;
@@ -112,6 +113,11 @@ pub(crate) async fn spawn_kb_socket(
     let listener = UnixListener::bind(&path).expect("bind kb socket");
     let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
     let limiter = ConnLimiter::new(max_connections);
+    // Mirror `main.rs`: share the counter with `DaemonState` so `daemon/status`
+    // can report it. Doing this in the harness rather than per-test keeps the
+    // harness a faithful stand-in for the real accept path — a test that had to
+    // wire this itself would be testing its own setup.
+    state.lock().await.kb_conn = Some(limiter.clone());
     let accept_task = tokio::spawn(crate::accept_loop(
         listener,
         state,

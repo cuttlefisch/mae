@@ -392,6 +392,10 @@ async fn main() {
     let accept_state = Arc::clone(&state);
     let accept_shutdown = shutdown_tx.subscribe();
     let kb_socket_limiter = conn_limit::ConnLimiter::new(config.kb_socket.max_connections);
+    // Share the counter with `daemon/status` (Arc-backed clone, no new state to
+    // keep in sync). Deliberately NOT sourced from the broadcaster, which is
+    // only installed under key-mode auth — see `handler::connection_report`.
+    state.lock().await.kb_conn = Some(kb_socket_limiter.clone());
     let kb_socket_idle_timeout = std::time::Duration::from_secs(config.kb_socket.idle_timeout_secs);
     let accept_handle = tokio::spawn(async move {
         accept_loop(
@@ -920,6 +924,7 @@ async fn spawn_collab_server(
     // 0-means-unlimited semantics, same panic-safe RAII decrement).
     let max_connections = collab.max_connections;
     let limiter = conn_limit::ConnLimiter::new(max_connections);
+    state.lock().await.collab_conn = Some(limiter.clone());
     // ADR-061 Phase D3: one shared handle, cloned per connection below (same
     // pattern as `doc_store`/`broadcaster`) -- bridges `kb/fetch_artifact` to
     // this daemon's local KB content store.
@@ -1549,8 +1554,12 @@ async fn accept_loop(
                 match result {
                     Ok((stream, _addr)) => {
                         let Some(guard) = limiter.try_acquire() else {
+                            // `current()` is the ACTIVE count, not the cap — the
+                            // field was named `max_connections`, so this log line
+                            // reported the wrong quantity under the right label.
                             tracing::warn!(
-                                max_connections = limiter.current(),
+                                active = limiter.current(),
+                                max_connections = limiter.max(),
                                 "KB socket: connection cap reached, rejecting new connection"
                             );
                             drop(stream);

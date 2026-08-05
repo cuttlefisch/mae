@@ -54,6 +54,63 @@ pub struct DaemonState {
     /// behavior change) until `main()` replaces it with the real one built
     /// from loaded config.
     pub tenants: Arc<crate::tenant::TenantRegistry>,
+    /// Live-connection counters for the two listeners a client can arrive on,
+    /// so `daemon/status` can answer "how many clients are connected right now".
+    ///
+    /// @ai-caution: [observability] These are `ConnLimiter` clones (Arc-backed
+    /// atomics), NOT the broadcaster's session map. The broadcaster is only
+    /// installed into `DaemonState` under `collab.auth.mode = "key"`
+    /// (`main.rs`'s auth match), so a count sourced from it silently reports
+    /// zero under `psk`/`none` — exactly the modes a quick hub deployment is
+    /// most likely to be running. The limiters are wired unconditionally at
+    /// listener creation and do not have that hole.
+    pub kb_conn: Option<crate::conn_limit::ConnLimiter>,
+    pub collab_conn: Option<crate::conn_limit::ConnLimiter>,
+}
+
+/// How many clients are attached to this daemon right now, per listener.
+///
+/// Reported by `daemon/status`. Before this existed there was no way to observe
+/// that a hub had any clients at all: `daemon/status` reported uptime, stores,
+/// instances and live tenants, and the only connection counts anywhere were
+/// per-document (`docs/metadata`) or broadcast to subscribers of one document.
+/// "Three editors are connected to the hub" was not a checkable claim.
+///
+/// Each listener reports `active` (accepted, not yet closed) and `max` (0 =
+/// unlimited). A listener that isn't running is absent rather than zero — zero
+/// connections and no listener are different facts, and conflating them is how
+/// a disabled collab server reads as a healthy idle one.
+///
+/// `collab.sessions` is a *different* number from `collab.active`: `active`
+/// counts accepted TCP connections, `sessions` counts sync sessions that got
+/// past authentication and subscribed. A gap between them across successive
+/// polls means clients are connecting and failing to authenticate — the single
+/// most useful thing to see while bringing a hub up.
+fn connection_report(state: &DaemonState) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    for (name, limiter) in [
+        ("kb_socket", &state.kb_conn),
+        ("collab", &state.collab_conn),
+    ] {
+        if let Some(l) = limiter {
+            out.insert(
+                name.to_string(),
+                json!({"active": l.current(), "max": l.max()}),
+            );
+        }
+    }
+    // Authenticated collab sync sessions. `client_count` reaps dead channels
+    // only during a broadcast, so between broadcasts it can over-report a
+    // client whose socket already closed without unsubscribing — it is a
+    // liveness signal, not an exact figure, and `collab.active` is the
+    // authoritative connection count.
+    if let Some(bc) = &state.broadcaster {
+        let n = bc.lock().unwrap_or_else(|e| e.into_inner()).client_count();
+        if let Some(collab) = out.get_mut("collab").and_then(|v| v.as_object_mut()) {
+            collab.insert("sessions".to_string(), json!(n));
+        }
+    }
+    serde_json::Value::Object(out)
 }
 
 impl DaemonState {
@@ -70,6 +127,8 @@ impl DaemonState {
             broadcaster: None,
             owner: None,
             tenants: Arc::new(crate::tenant::TenantRegistry::empty()),
+            kb_conn: None,
+            collab_conn: None,
         }
     }
 
@@ -492,7 +551,7 @@ pub async fn dispatch(
         "daemon/status" => {
             // Snapshot the fields, then drop the lock before the async doc_store scan
             // (don't hold the state mutex across an await).
-            let (uptime, store_count, has_ql, reg_count, doc_store, live_tenants) = {
+            let (uptime, store_count, has_ql, reg_count, doc_store, live_tenants, connections) = {
                 let state = state.lock().await;
                 (
                     state.started_at.elapsed(),
@@ -501,6 +560,7 @@ pub async fn dispatch(
                     state.registry.instances.len(),
                     state.doc_store.clone(),
                     state.tenants.live_tenant_count(),
+                    connection_report(&state),
                 )
             };
             // Phase D introspection: which KB collections does the daemon host, and
@@ -527,6 +587,7 @@ pub async fn dispatch(
                 "kb_collections": kb_collections,
                 "primary_exists": primary_exists,
                 "live_tenants": live_tenants,
+                "connections": connections,
             }))
         }
 
