@@ -121,13 +121,23 @@ pub struct AiSection {
     pub timeout_secs: Option<u64>,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f64>,
-    /// Permission tier for AI/MCP tool execution:
-    ///   "readonly"    — buffer reads only
+    /// Permission tier AUTO-APPROVED for AI/MCP tool execution:
+    ///   "readonly"    — buffer reads only (the shipped default, ADR-090 D5)
     ///   "write"       — reads + edits
-    ///   "shell"       — reads + edits + shell (default, container-first)
+    ///   "shell"       — reads + edits + shell
     ///   "privileged"  — everything including quit/force-quit
     /// Legacy aliases: "standard" → write, "trusted" → shell, "full" → privileged
     /// Env override: MAE_AI_PERMISSIONS (highest precedence).
+    ///
+    /// @ai-caution: [security] This is the auto-approval LINE, not a ceiling — above
+    /// it `decide` returns `Ask`, not a denial. Do not describe any tier above
+    /// `readonly` as the default anywhere: `PermissionPolicy::default()`
+    /// (`crates/ai/src/tools/categories.rs`) ships `ReadOnly`, and the comment beside
+    /// it warns that raising it re-creates the fail-open default ADR-084 D4 found.
+    /// The generated config template said `shell` was the default and offered the
+    /// line to set it (#639) — producing exactly the outcome ADR-090 rejected, in the
+    /// one artifact a new user (or an agent asked "how do I configure permissions?")
+    /// reads first.
     pub auto_approve_tier: Option<String>,
     /// Override the prompt tier for this model: "full" or "compact".
     /// If unset, auto-detected from the model name via the built-in table.
@@ -1306,10 +1316,16 @@ pub fn default_config_template() -> String {
 # Stdout is trimmed and used as the key. Takes precedence over api_key but not env vars.\n\
 # api_key_command = \"pass show deepseek/api-key\"\n\
 \n\
-# Permission tier for AI/MCP tool execution.\n\
-# Tiers: \"readonly\", \"write\", \"shell\" (default), \"privileged\"\n\
-# Env override: MAE_AI_PERMISSIONS=full\n\
-# auto_approve_tier = \"shell\"\n\
+# Permission tier auto-approved for AI/MCP tool execution.\n\
+# Tiers: \"readonly\" (default), \"write\", \"shell\", \"privileged\"\n\
+#\n\
+# This is the AUTO-APPROVAL line, not a ceiling: a call above it is ASKED, not\n\
+# refused, wherever a human is present to answer. Raising it does not unlock\n\
+# anything new -- it only stops MAE asking first.\n\
+#\n\
+# Leaving this commented out is the recommended posture.\n\
+# Env override: MAE_AI_PERMISSIONS\n\
+# auto_approve_tier = \"readonly\"\n\
 \n\
 # Override auto-detected prompt tier: \"full\" or \"compact\".\n\
 # Full: concise prompts for frontier models (Claude Opus/Sonnet, GPT-4o).\n\
@@ -2099,5 +2115,87 @@ mod tests {
         );
         assert_eq!(back.collaboration.psk.as_deref(), Some("fallback"));
         assert_eq!(back.collaboration.kb_sync_mode.as_deref(), Some("on_save"));
+    }
+}
+
+#[cfg(test)]
+mod template_truth_tests {
+    use super::*;
+    use mae_ai::PermissionPolicy;
+
+    /// The tier line from the generated template, if any.
+    fn tier_lines(t: &str) -> Vec<String> {
+        t.lines()
+            .filter(|l| l.contains("auto_approve_tier") || l.contains("Tiers:"))
+            .map(|l| l.trim().to_string())
+            .collect()
+    }
+
+    /// #639 Gate. The template must name the tier MAE actually ships as the default.
+    ///
+    /// The expected value is derived from `PermissionPolicy::default()` rather than
+    /// written here as a literal. That is the whole point: a test asserting the string
+    /// `"readonly"` would pass forever while the shipped default moved underneath it,
+    /// which is precisely how the template came to advertise `shell` as the default
+    /// after ADR-090 D5 changed it to `ReadOnly`.
+    #[test]
+    fn generated_template_states_the_shipped_default() {
+        let shipped = PermissionPolicy::default().auto_approve_up_to.config_name();
+        let template = default_config_template();
+        let lines = tier_lines(&template);
+        assert!(
+            !lines.is_empty(),
+            "template mentions no permission tier at all"
+        );
+
+        let joined = lines.join("\n");
+        assert!(
+            joined.contains(&format!("\"{shipped}\" (default)")),
+            "the template must mark the SHIPPED default ({shipped}) as the default.\n\
+             Found:\n{joined}"
+        );
+
+        // And it must not mark anything else as the default.
+        for tier in ["readonly", "write", "shell", "privileged"] {
+            if tier != shipped {
+                assert!(
+                    !joined.contains(&format!("\"{tier}\" (default)")),
+                    "template calls {tier} the default, but the shipped default is \
+                     {shipped}:\n{joined}"
+                );
+            }
+        }
+    }
+
+    /// #639 Gate. The template must not hand the user a line that raises the tier.
+    ///
+    /// ADR-090 rejected dropping the default without an Ask state precisely because
+    /// *"the predictable result is that users set `auto_approve_tier = \"shell\"` in
+    /// config — restoring the same posture while adding the false comfort of a
+    /// configured value."* Shipping a generator that pre-writes that line produces the
+    /// rejected outcome by default.
+    #[test]
+    fn template_offers_no_tier_above_the_default() {
+        let shipped = PermissionPolicy::default().auto_approve_up_to;
+        let template = default_config_template();
+
+        for line in template.lines() {
+            let Some(rest) = line.split_once("auto_approve_tier").map(|(_, r)| r) else {
+                continue;
+            };
+            let Some(quoted) = rest.split('"').nth(1) else {
+                continue;
+            };
+            let offered = mae_ai::PermissionTier::parse(quoted)
+                .unwrap_or_else(|| panic!("template offers an unparseable tier: {line}"));
+            assert!(
+                offered <= shipped,
+                "the generated template offers `auto_approve_tier = \"{quoted}\"`, above \
+                 the shipped default ({}). A config generator must not pre-write an \
+                 escalation for the user — ADR-090 named that exact outcome as the \
+                 reason the default could not simply be lowered.",
+                shipped.config_name()
+            );
+        }
     }
 }
