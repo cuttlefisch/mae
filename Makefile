@@ -285,21 +285,44 @@ verify:
 	@echo "=== Test ==="
 	$(CARGO) test --workspace 2>&1 | tee /dev/stderr | grep "^test result:" | awk -F'[; ]' 'BEGIN{p=0;f=0} {p+=$$4;f+=$$7} END{printf "\n=== %d passed, %d failed ===\n",p,f}'
 
-## fmt: format all Rust sources in place
+# @ai-caution: [two-workspaces] `daemon/` is a SEPARATE cargo workspace (ADR-014,
+# its own Cargo.lock). A bare `cargo fmt` / `cargo clippy` at the repo root does
+# NOT see it. Every quality target below must therefore run twice, or it reports
+# clean while leaving half the tree unchecked — which is exactly what happened on
+# 2026-08-04: `cargo fmt --all --check` at the root said "clean", and CI's
+# `daemon / check + test` then failed on formatting. There was no `fmt-daemon`
+# target at all, so no local invocation could have caught it.
+
+## fmt: format all Rust sources in place (BOTH workspaces)
 fmt:
-	$(CARGO) fmt
+	$(CARGO) fmt --all
+	cd daemon && $(CARGO) fmt --all
 
-## fmt-check: check formatting without writing (useful in CI)
+## fmt-check: check formatting without writing (BOTH workspaces)
 fmt-check:
-	$(CARGO) fmt -- --check
+	$(CARGO) fmt --all -- --check
+	cd daemon && $(CARGO) fmt --all -- --check
 
-## clippy: run linter across the whole workspace (matches CI + pre-commit hook)
+## fmt-daemon: format the daemon workspace only
+fmt-daemon:
+	cd daemon && $(CARGO) fmt --all
+
+## clippy: run linter across the editor workspace
 clippy:
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
 
 ## clippy-daemon: run linter on daemon workspace
 clippy-daemon:
 	cd daemon && $(CARGO) clippy --all-targets -- -D warnings
+
+## pre-commit: the local quality gate, in ONE place.
+## `.githooks/pre-commit` calls this rather than restating the command list --
+## the hook, the Makefile and CI had drifted into three disagreeing definitions
+## of "what must pass", and the daemon workspace fell through the gap between
+## them. Anything added here is picked up by the hook automatically.
+pre-commit: fmt-check clippy clippy-daemon code-map-check heavy-e2e-check
+	@$(MAKE) --no-print-directory verify-adr-kb-sync
+	@echo "✅ pre-commit gate passed"
 
 ## ci: run the full CI pipeline locally (fmt + clippy + check + test + scheme tests)
 ci: fmt-check
