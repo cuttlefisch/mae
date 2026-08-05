@@ -60,6 +60,7 @@ done
 source "$ROOT/scripts/lib/e2e-daemon-harness.sh"
 harness_sweep_stale "mae-member-e2e.*" "mae-mtls-e2e.*" "mae-enc-e2e.*" "mae-mesh-e2e.*"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/mae-mtls-e2e.XXXXXX")"
+# shellcheck disable=SC2034  # assigned indirectly: harness_spawn_daemon takes the VAR NAME
 DAEMON_PID=""
 harness_trap_install
 

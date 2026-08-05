@@ -1,0 +1,6 @@
+---
+# No external collections are required: the role uses only ansible.builtin.
+# Pinned here explicitly so `ansible-galaxy install -r requirements.yml` is a
+# valid no-op rather than a missing file.
+collections: []
+roles: []

@@ -1,0 +1,24 @@
+---
+# Staging inventory. Copy to inventory/staging.yml (gitignored) and fill in.
+#
+#   cp inventory/staging.yml.example inventory/staging.yml
+#   ansible-playbook -i inventory/staging.yml site.yml --check --diff
+all:
+  children:
+    mae_daemon:
+      hosts:
+        mae-staging.example.internal:
+          ansible_user: deploy
+      vars:
+        # Pin the release. No "latest" — see the role defaults for why.
+        mae_daemon_version: "0.14.93"
+
+        mae_daemon_instances:
+          - name: staging
+            # Loopback here; a reverse proxy or WireGuard fronts it. Binding a
+            # routable address requires collab_auth_mode: key (preflight
+            # enforces this) AND a firewall, which this role does not manage.
+            collab_bind: "127.0.0.1:9473"
+            collab_auth_mode: key
+            log_level: "mae_daemon=debug,info"
+            memory_max: "2G"

@@ -1,0 +1,161 @@
+---
+# Verify — the post-deploy gate.
+#
+# A deploy is not proven by `systemctl start` returning 0. It is proven by the
+# running process reporting the version we deployed, on the config we wrote,
+# with its listeners actually up and no two instances contending for anything.
+# Every check here fails the play, because a gate that only warns is a report.
+
+- name: Verify | Collect service state
+  ansible.builtin.service_facts:
+
+- name: Verify | Assert each unit is running
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services['mae-daemon@' + item.name + '.service'] is defined
+      - ansible_facts.services['mae-daemon@' + item.name + '.service'].state == 'running'
+    fail_msg: >-
+      mae-daemon@{{ item.name }} is not running (state:
+      {{ ansible_facts.services['mae-daemon@' + item.name + '.service'].state
+         | default('unit not found') }}).
+      See `journalctl -u mae-daemon@{{ item.name }} -n 50`.
+    success_msg: "mae-daemon@{{ item.name }} is running"
+  loop: "{{ _mae_daemon_resolved_instances }}"
+  loop_control:
+    label: "mae-daemon@{{ item.name }}"
+
+- name: Verify | Assert each unit is enabled for boot
+  # Started but not enabled is the classic deploy that survives right up until
+  # the first reboot. Separate assertion, separate failure message.
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.services['mae-daemon@' + item.name + '.service'].status
+        in ['enabled', 'enabled-runtime']
+    fail_msg: >-
+      mae-daemon@{{ item.name }} is running but NOT enabled — it will not come
+      back after a reboot.
+    success_msg: "mae-daemon@{{ item.name }} is enabled"
+  loop: "{{ _mae_daemon_resolved_instances }}"
+  loop_control:
+    label: "mae-daemon@{{ item.name }}"
+
+- name: Verify | Query the running binary's version
+  ansible.builtin.command:
+    cmd: "{{ _mae_daemon_current_bin }} --version"
+  register: _mae_daemon_running_version
+  changed_when: false
+  check_mode: false
+
+- name: Verify | Assert the deployed version is what we asked for
+  # The single most valuable post-deploy assertion: it catches a symlink that
+  # didn't move, a unit still holding the old binary open, and a rollback that
+  # silently didn't take. Exit code 0 from systemctl proves none of those.
+  ansible.builtin.assert:
+    that:
+      - mae_daemon_version in _mae_daemon_running_version.stdout
+    fail_msg: >-
+      Deployed {{ mae_daemon_version }} but {{ _mae_daemon_current_bin }} reports
+      '{{ _mae_daemon_running_version.stdout | trim }}'. The `current` symlink did not
+      move, or points at the wrong release.
+    success_msg: "Running {{ _mae_daemon_running_version.stdout | trim }}"
+
+- name: Verify | Run doctor against each instance
+  # `doctor --config` reports the instance the path names, and lists every
+  # resource that instance claims. Running it per instance is what proves
+  # --config is being honoured at all.
+  ansible.builtin.command:
+    cmd: >-
+      {{ _mae_daemon_current_bin }} doctor
+      --config {{ mae_daemon_config_dir }}/daemon-{{ item.name }}.toml
+  become: true
+  become_user: "{{ mae_daemon_user }}"
+  loop: "{{ _mae_daemon_resolved_instances }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _mae_daemon_doctor
+  changed_when: false
+  check_mode: false
+
+- name: Verify | Assert doctor reported this instance's own socket
+  # Guards against the pre-v0.15 bug where every subcommand read the DEFAULT
+  # config regardless of --config: on that code all instances report identical
+  # paths, so this assertion fails rather than silently passing.
+  ansible.builtin.assert:
+    that:
+      - (mae_daemon_run_dir + '/' + item.item.name + '.sock') in item.stdout
+    fail_msg: >-
+      `doctor --config daemon-{{ item.item.name }}.toml` did not report
+      {{ mae_daemon_run_dir }}/{{ item.item.name }}.sock. Either --config is
+      being ignored (mae < 0.15) or the config on disk is not the one this role
+      wrote.
+    success_msg: "doctor resolved instance '{{ item.item.name }}' correctly"
+  loop: "{{ _mae_daemon_doctor.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Verify | Assert the collab port is bound, not merely configured
+  ansible.builtin.assert:
+    that:
+      - "'available' not in (item.stdout | regex_search('collab port [0-9]+: .*') | default(''))"
+    fail_msg: >-
+      doctor reports the collab port for '{{ item.item.name }}' as AVAILABLE,
+      meaning nothing is listening on it — the instance is running but its
+      collab listener is not up.
+    success_msg: >-
+      collab port for '{{ item.item.name }}' is bound
+  loop: "{{ _mae_daemon_doctor.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: item.item.collab_enabled | bool
+
+# The pairwise side-by-side check. `doctor --compare-with` exits non-zero if two
+# instances share ANY of the eight per-instance resources — including the three
+# (identity_dir, authorized_keys, keystore) that do not follow data_dir and
+# would otherwise let a peer authorised for staging reach production.
+- name: Verify | Check instances cannot collide with each other
+  ansible.builtin.command:
+    cmd: >-
+      {{ _mae_daemon_current_bin }} doctor
+      --config {{ mae_daemon_config_dir }}/daemon-{{ item.0.name }}.toml
+      --compare-with {{ mae_daemon_config_dir }}/daemon-{{ item.1.name }}.toml
+  become: true
+  become_user: "{{ mae_daemon_user }}"
+  loop: "{{ _mae_daemon_resolved_instances | product(_mae_daemon_resolved_instances) | list }}"
+  loop_control:
+    label: "{{ item.0.name }} vs {{ item.1.name }}"
+  when: item.0.name < item.1.name   # each unordered pair once
+  register: _mae_daemon_compare
+  changed_when: false
+  failed_when: _mae_daemon_compare.rc != 0
+  check_mode: false
+
+- name: Verify | Confirm the KB socket exists for each instance
+  ansible.builtin.stat:
+    path: "{{ mae_daemon_run_dir }}/{{ item.name }}.sock"
+  loop: "{{ _mae_daemon_resolved_instances }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _mae_daemon_sockets
+
+- name: Verify | Assert each KB socket was actually bound
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.issock | default(false)
+    fail_msg: >-
+      {{ mae_daemon_run_dir }}/{{ item.item.name }}.sock is missing or is not a
+      socket. The instance started but did not bind its KB socket — check
+      `journalctl -u mae-daemon@{{ item.item.name }}` for a SUN_LEN error if the
+      data path is deeply nested.
+    success_msg: "KB socket bound for '{{ item.item.name }}'"
+  loop: "{{ _mae_daemon_sockets.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Verify | Summarise the deployment
+  ansible.builtin.debug:
+    msg: >-
+      mae-daemon {{ mae_daemon_version }} verified on
+      {{ inventory_hostname }}: {{ _mae_daemon_resolved_instances | length }}
+      instance(s) [{{ _mae_daemon_resolved_instances | map(attribute='name') | join(', ') }}]
+      active, enabled, listening, and mutually non-colliding.
