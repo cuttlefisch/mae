@@ -1,0 +1,10 @@
+{
+  "name": "mae-sync-browser-interop",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Phase 0 spike (ADR-097 follow-on): proves browser-side Yjs converges with a real Rust KbNodeDoc.",
+  "dependencies": {
+    "yjs": "^13.6.32"
+  }
+}
