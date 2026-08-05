@@ -623,8 +623,11 @@ subject matter, not blast radius / a tool result states whether the caller's req
 postcondition holds / four text-index domains with one owner each / agent effects authorised by
 carried provenance rather than ambient session tier — *design only* / project-local init files
 require explicit workspace trust / permission decisions are three-state allow-ask-deny / MCP tool
-dispatch carries a session handle). The holistic sharing story + security audits live in
-`docs/KB_SHARING.md`, `docs/E2E_ENCRYPTION.md`, and `docs/SECURITY_REVIEW.md`.
+dispatch carries a session handle), and **ADR-092** (one write path for a KB node — `kb_update_node_with`
+is the sole content mutator, CRDT text is updated by character-level diff rather than wholesale
+replace, and the human edit surface is the node's normalized org source text rather than its rendered
+view or a file; ADR-029's **write** side, *proposed, phased*). The holistic sharing story + security
+audits live in `docs/KB_SHARING.md`, `docs/E2E_ENCRYPTION.md`, and `docs/SECURITY_REVIEW.md`.
 
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
 > from it entirely until 2026-08-04, i.e. every ADR from the KB-visualization arc and the whole
