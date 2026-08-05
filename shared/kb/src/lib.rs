@@ -414,24 +414,57 @@ impl Node {
     #[cfg(feature = "crdt")]
     pub fn to_crdt_doc(&self) -> Result<mae_sync::kb::KbNodeDoc, mae_sync::SyncError> {
         if let Some(ref bytes) = self.crdt_doc {
+            // Restoring an EXISTING lineage. This is a read — callers diff against
+            // it (`encode_diff`, `state_vector`) on the reconcile path.
+            //
+            // @ai-caution: [crdt] Do NOT write the v2 fields here. Authoring ops in
+            // what every caller treats as an accessor advances this replica's state
+            // vector, so a peer that is actually caught up reports `local_ahead` and
+            // pushes redundant updates forever. Metadata reaches an existing lineage
+            // through `upsert_with_crdt`, which is the real write path.
             mae_sync::kb::KbNodeDoc::from_bytes(bytes)
         } else {
-            Ok(mae_sync::kb::KbNodeDoc::new(
-                &self.id,
-                &self.title,
-                &self.body,
-                &self.tags,
-            ))
+            // Minting a FRESH lineage from this node's own fields — construction,
+            // not mutation of shared state, so the full v2 payload belongs here.
+            let mut doc =
+                mae_sync::kb::KbNodeDoc::new(&self.id, &self.title, &self.body, &self.tags);
+            self.write_v2_fields(&mut doc);
+            Ok(doc)
         }
     }
 
-    /// Update this node's text fields from a `KbNodeDoc`, and store the
-    /// encoded CRDT bytes for persistence.
+    /// ADR-093: push every non-text `Node` field into a `KbNodeDoc`.
+    #[cfg(feature = "crdt")]
+    fn write_v2_fields(&self, doc: &mut mae_sync::kb::KbNodeDoc) {
+        let _ = doc.set_kind(Some(self.kind.as_str()));
+        let _ = doc.set_todo_state(self.todo_state.as_deref());
+        let _ = doc.set_priority(self.priority.map(|c| c.to_string()).as_deref());
+        let _ = doc.set_source_version(self.source_version);
+        let _ = doc.set_aliases(&self.aliases);
+        let _ = doc.set_properties(&self.properties);
+    }
+
+    /// Update this node's fields from a `KbNodeDoc`, and store the encoded CRDT
+    /// bytes for persistence.
+    ///
+    /// ADR-093: a v1 document carries none of the non-text keys, so each is
+    /// applied only when the doc actually has it — reading an old document must
+    /// never blank a field the local `Node` still holds.
     #[cfg(feature = "crdt")]
     pub fn apply_crdt_doc(&mut self, doc: &mae_sync::kb::KbNodeDoc) {
         self.title = doc.title();
         self.body = doc.body();
         self.tags = doc.tags();
+        if let Some(k) = doc.kind() {
+            self.kind = NodeKind::from_str_lossy(&k);
+        }
+        if doc.schema_version() >= 2 {
+            self.todo_state = doc.todo_state();
+            self.priority = doc.priority().and_then(|p| p.chars().next());
+            self.source_version = doc.source_version();
+            self.aliases = doc.aliases();
+            self.properties = doc.properties();
+        }
         self.crdt_doc = Some(doc.encode());
     }
 
@@ -439,6 +472,10 @@ impl Node {
     ///
     /// Used when joining a shared KB: the CRDT doc is the source of truth,
     /// and we create a local Node from it for FTS5 indexing and display.
+    ///
+    /// ADR-093: `kind` and `source` are **fallbacks**, used only when the document
+    /// does not carry them (a v1 doc). A v2 doc's own values win — otherwise this
+    /// is not a round-trip at all, it just echoes the caller's arguments back.
     #[cfg(feature = "crdt")]
     pub fn from_crdt_doc(
         doc: &mae_sync::kb::KbNodeDoc,
@@ -446,9 +483,19 @@ impl Node {
         source: NodeSource,
     ) -> Self {
         let mat = doc.materialize();
-        let mut node = Node::new(mat.id, mat.title, kind, mat.body);
+        let resolved_kind = mat
+            .kind
+            .as_deref()
+            .map(NodeKind::from_str_lossy)
+            .unwrap_or(kind);
+        let mut node = Node::new(mat.id, mat.title, resolved_kind, mat.body);
         node.tags = mat.tags;
         node.source = Some(source);
+        node.todo_state = mat.todo_state;
+        node.priority = mat.priority.and_then(|p| p.chars().next());
+        node.source_version = mat.source_version;
+        node.aliases = mat.aliases;
+        node.properties = mat.properties;
         node.crdt_doc = Some(doc.encode());
         // Populate links from materialized links array.
         // (links are also parseable from body, but CRDT links array is authoritative)
@@ -1046,6 +1093,12 @@ impl KnowledgeBase {
                     if doc.tags() != node.tags {
                         doc.set_tags(&node.tags);
                     }
+                    // ADR-093: the same treatment for every non-text field. This is
+                    // the write path, so an existing lineage picks up metadata here
+                    // (never in `to_crdt_doc`, which callers use as an accessor).
+                    // Each setter is a no-op when the value already matches, so an
+                    // unchanged node still produces no ops.
+                    node.write_v2_fields(&mut doc);
                     doc
                 }
                 Err(_) => mae_sync::kb::KbNodeDoc::new_with_client_id(
