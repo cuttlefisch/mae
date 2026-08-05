@@ -810,10 +810,39 @@ impl DaemonConfig {
         }
     }
 
+    /// Whether a bind address is loopback-only, i.e. unreachable from another
+    /// host. `0.0.0.0`/`::` are explicitly NOT loopback — they are the wildcard
+    /// binds, which is exactly the case this exists to catch.
+    fn bind_is_loopback(addr: &SocketAddr) -> bool {
+        addr.ip().is_loopback()
+    }
+
     /// Validate collab configuration and return issues.
     pub fn check_collab(&self) -> Vec<String> {
         let mut issues = Vec::new();
         let c = &self.collab;
+
+        // @ai-caution: [security] Fail closed on an unauthenticated bind that
+        // is reachable off-host. `AuthConfig::default().mode` is "none", and
+        // an unauthenticated session reaches `kb_access_with_coll` with
+        // `principal == None`, which returns `AccessDecision::Allow` — so
+        // `--bind 0.0.0.0` on a stock config grants Manage on every KB to every
+        // host that can reach the port, while `doctor` printed "collab config:
+        // OK". `psk` is plaintext on the wire and no better off-host.
+        //
+        // This is a config ERROR, not a warning: `spawn_collab_server` refuses
+        // to start the listener on it. A warning would be read past, and the
+        // shipped `assets/daemon-config.toml` had no [collab.auth] block at all
+        // while DAEMON_ADMIN told operators to start from it.
+        if c.enabled && !Self::bind_is_loopback(&c.bind) && c.auth.mode != "key" {
+            issues.push(format!(
+                "collab.bind is {} (reachable off-host) but collab.auth.mode is \
+                 '{}' — that accepts any client that can reach the port. Set \
+                 [collab.auth] mode = \"key\" (Ed25519 mTLS), or bind to loopback \
+                 and put a reverse proxy or VPN in front.",
+                c.bind, c.auth.mode
+            ));
+        }
 
         if c.storage.compact_threshold == 0 {
             issues.push("collab.storage.compact_threshold must be > 0".to_string());
@@ -1148,5 +1177,75 @@ idle_evict_secs = 1800
         assert_eq!(t.quota.max_result_bytes, 4_194_304);
         assert_eq!(t.quota.idle_evict_secs, 1800);
         assert!(config.check_tenants().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod unauthenticated_bind_tests {
+    use super::*;
+
+    fn cfg(bind: &str, mode: &str) -> DaemonConfig {
+        let mut c = DaemonConfig::default();
+        c.collab.enabled = true;
+        c.collab.bind = bind.parse().unwrap();
+        c.collab.auth.mode = mode.to_string();
+        c
+    }
+
+    /// An unauthenticated session reaches `kb_access_with_coll` with
+    /// `principal == None`, which returns `Allow`. So a non-loopback bind under
+    /// `mode = "none"` grants Manage on every KB to every host that can reach
+    /// the port — and `mode` DEFAULTS to "none".
+    ///
+    /// The oracle is that the config is rejected, and that the message names
+    /// both halves: an operator who sees only "bad config" will re-read the
+    /// wrong line.
+    #[test]
+    fn an_unauthenticated_off_host_bind_is_refused() {
+        for (bind, mode) in [
+            ("0.0.0.0:9473", "none"),
+            ("0.0.0.0:9473", "psk"),
+            ("[::]:9473", "none"),
+            ("10.0.0.5:9473", "none"),
+            ("10.0.0.5:9473", "psk"),
+        ] {
+            let issues = cfg(bind, mode).check_collab();
+            assert!(
+                issues.iter().any(|i| i.contains("reachable off-host")),
+                "bind={bind} mode={mode} must be refused, got: {issues:?}"
+            );
+        }
+    }
+
+    /// The three configurations that must NOT be refused. Without these the
+    /// check above would be satisfied by a function that rejects everything,
+    /// and loopback development would be broken.
+    #[test]
+    fn loopback_and_key_mode_are_accepted() {
+        for (bind, mode) in [
+            ("127.0.0.1:9473", "none"),
+            ("127.0.0.1:9473", "psk"),
+            ("[::1]:9473", "none"),
+            ("0.0.0.0:9473", "key"),
+            ("10.0.0.5:9473", "key"),
+        ] {
+            let issues = cfg(bind, mode).check_collab();
+            assert!(
+                !issues.iter().any(|i| i.contains("reachable off-host")),
+                "bind={bind} mode={mode} must be accepted, got: {issues:?}"
+            );
+        }
+    }
+
+    /// Disabling collab must not produce a bind complaint about a listener that
+    /// never starts.
+    #[test]
+    fn a_disabled_collab_listener_is_not_flagged() {
+        let mut c = cfg("0.0.0.0:9473", "none");
+        c.collab.enabled = false;
+        assert!(!c
+            .check_collab()
+            .iter()
+            .any(|i| i.contains("reachable off-host")));
     }
 }
