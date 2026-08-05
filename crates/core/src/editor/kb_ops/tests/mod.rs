@@ -9,6 +9,7 @@ mod kb_ops_concurrency_tests;
 mod kb_ops_crud_tests;
 mod kb_ops_daemon_tests;
 mod kb_ops_durability_tests;
+mod kb_ops_instance_matching_tests;
 mod kb_ops_registry_tests;
 mod kb_ops_search_federation_tests;
 mod kb_ops_vector_blend_tests;
