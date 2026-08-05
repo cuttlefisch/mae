@@ -12,6 +12,41 @@ use super::*;
 // KbStore trait implementation
 // ---------------------------------------------------------------------------
 
+impl CozoKbStore {
+    /// Per-id fallback for [`KbStore::load_all`] when the bulk 13-column bind
+    /// fails. Queries only `id` — a 1-column bind, which cannot hit the
+    /// short-tuple error — then materialises each node individually via
+    /// `get_node`, skipping ids that no longer resolve (the tombstones).
+    fn load_all_per_id(&self) -> Result<Vec<Node>, KbStoreError> {
+        let (_cols, rows) = self.raw_query(r#"?[id] := *nodes{id}"#)?;
+        let mut nodes = Vec::with_capacity(rows.len());
+        let mut skipped = 0usize;
+        for row in rows {
+            let Some(raw) = row.into_iter().next() else {
+                continue;
+            };
+            let id = raw.trim_matches('"');
+            match self.get_node(id) {
+                Ok(Some(node)) => nodes.push(node),
+                Ok(None) => skipped += 1,
+                Err(e) => {
+                    tracing::warn!(id = %id, error = %e, "KB store: skipping unreadable node during per-id load");
+                    skipped += 1;
+                }
+            }
+        }
+        if skipped > 0 {
+            tracing::warn!(
+                skipped,
+                loaded = nodes.len(),
+                "KB store: per-id load skipped tombstoned/unreadable rows"
+            );
+        }
+        nodes.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(nodes)
+    }
+}
+
 impl KbStore for CozoKbStore {
     fn insert_node(&self, node: &Node) -> Result<(), KbStoreError> {
         self.run_mut_params(Self::NODE_PUT_SCRIPT, self.node_put_params(node)?)
@@ -347,8 +382,22 @@ impl KbStore for CozoKbStore {
         let result = match self.run_immut(query) {
             Ok(r) => r,
             Err(e) => {
-                tracing::error!(error = %e, "KB store: node load query failed — returning empty load (store may need repair); editor continues without stalling");
-                return Ok(Vec::new());
+                // @ai-caution: [data-loss] Do NOT restore the old behaviour of
+                // returning `Ok(Vec::new())` here. This branch is not rare and
+                // it is not "a store that needs repair": `:rm nodes {id}` leaves
+                // a 1-length tombstone tuple on the sled backend, so the
+                // 13-column bind above fails with "tuple bound by variable
+                // 'title' is too short" after ANY node deletion. Returning empty
+                // meant the entire KB read as gone — every node, not just the
+                // deleted one — while `get_node` still resolved each of them
+                // individually. `kb_build.rs` already worked around the same
+                // tombstone locally ("`:rm` leaves partial tuples that break
+                // load_all()") without fixing it here.
+                //
+                // Fall back to a per-id load instead. Slower, but it returns the
+                // nodes that are actually there, and skips only the tombstones.
+                tracing::warn!(error = %e, "KB store: bulk node load failed (likely deletion tombstones) — falling back to per-id load");
+                return self.load_all_per_id();
             }
         };
 
@@ -385,22 +434,32 @@ impl KbStore for CozoKbStore {
         Ok(nodes)
     }
 
-    fn save_all(&self, nodes: &[&Node]) -> Result<(), KbStoreError> {
-        // Clear existing data
-        self.run_mut(
-            r#"
-            ?[id] := *nodes{id}
-            :rm nodes {id}
-            "#,
-        )
-        .map_err(cozo_err)?;
-        self.run_mut(
-            r#"
-            ?[src, dst, rel_type] := *links{src, dst, rel_type}
-            :rm links {src, dst, rel_type}
-            "#,
-        )
-        .map_err(cozo_err)?;
+    fn replace_all_nodes(&self, nodes: &[&Node]) -> Result<(), KbStoreError> {
+        // Clear existing data by delegating to `delete_node`, which is the one
+        // deletion path in this file that is known-correct.
+        //
+        // @ai-caution: [data-loss] Do NOT re-inline a bulk `:rm` here. The
+        // previous form was `?[id] := *nodes{id}` + `:rm nodes {id}` — a
+        // self-referential read-write in one transaction. It did not remove the
+        // rows; it truncated each to its key, leaving `["n1"]`-shaped
+        // short-arity remnants with every non-key column destroyed in place.
+        // `load_all` then could not read the relation and degraded to an empty
+        // result (its B-5 tolerance), so the store reported EMPTY while the ids
+        // were still on disk. `delete_node` materialises the row set first
+        // (`?[id] <- [[$id]]`), which is why it has always been correct — and
+        // reusing it means there is one deletion implementation, not three
+        // (principle #8). The legitimate caller (`migrate.rs`) targets a fresh
+        // store, so this loop is a no-op there.
+        let existing_ids: Vec<String> = {
+            let (_cols, rows) = self.raw_query(r#"?[id] := *nodes{id}"#)?;
+            rows.into_iter()
+                .filter_map(|r| r.into_iter().next())
+                .map(|id| id.trim_matches('"').to_string())
+                .collect()
+        };
+        for id in &existing_ids {
+            self.delete_node(id)?;
+        }
 
         // Insert all nodes
         for node in nodes {

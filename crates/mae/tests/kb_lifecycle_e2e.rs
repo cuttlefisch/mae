@@ -314,7 +314,7 @@ fn test_save_all_and_load_all() {
         .collect();
 
     let refs: Vec<&Node> = nodes.iter().collect();
-    store.save_all(&refs).unwrap();
+    store.replace_all_nodes(&refs).unwrap();
 
     let loaded = store.load_all().unwrap();
     assert_eq!(loaded.len(), 10);
@@ -379,7 +379,7 @@ fn test_startup_1000_nodes_under_500ms() {
         .collect();
 
     let refs: Vec<&Node> = nodes.iter().collect();
-    store.save_all(&refs).unwrap();
+    store.replace_all_nodes(&refs).unwrap();
 
     // Time the load
     let start = Instant::now();
@@ -414,7 +414,7 @@ fn test_fts_search_1000_nodes_under_10ms() {
         .collect();
 
     let refs: Vec<&Node> = nodes.iter().collect();
-    store.save_all(&refs).unwrap();
+    store.replace_all_nodes(&refs).unwrap();
 
     let start = Instant::now();
     let hits = store.fts_search("knowledge management", 20).unwrap();
