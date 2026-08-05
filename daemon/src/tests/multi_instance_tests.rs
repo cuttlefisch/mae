@@ -221,6 +221,84 @@ fn identity_and_authorized_keys_do_not_follow_data_dir() {
 }
 
 #[test]
+fn the_shipped_instance_template_produces_two_non_colliding_instances() {
+    // `assets/daemon-instance-config.toml` is what an operator copies to stand
+    // up a second daemon, and it is the ONLY place the "set all eight, not four"
+    // rule is expressed as something executable rather than prose. If it stops
+    // parsing, or stops setting one of the three paths that don't follow
+    // data_dir, the documented procedure silently produces two instances
+    // sharing an authorized_keys — the exact failure the template exists to
+    // prevent. So exercise it the way the docs say to use it.
+    let template = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../assets/daemon-instance-config.toml"
+    ))
+    .expect(
+        "assets/daemon-instance-config.toml must exist — it is referenced by \
+             docs/DAEMON_ADMIN.md, assets/mae-daemon@.service and install.sh",
+    );
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut resolved = Vec::new();
+    for (name, collab_port, oauth_port) in [("staging", 19473, 18443), ("prod", 19475, 18445)] {
+        // Exactly the substitutions the template's own header instructs.
+        let filled = template
+            .replace("INSTANCE", name)
+            .replace("/home/USER", &tmp.path().display().to_string())
+            .replace("/run/user/1000", &tmp.path().display().to_string())
+            .replace("127.0.0.1:9473", &format!("127.0.0.1:{collab_port}"))
+            .replace("127.0.0.1:8443", &format!("127.0.0.1:{oauth_port}"));
+        let path = tmp.path().join(format!("daemon-{name}.toml"));
+        std::fs::write(&path, filled).expect("write filled template");
+        resolved.push(resolve(&path));
+    }
+
+    let (staging, prod) = (&resolved[0], &resolved[1]);
+    let conflicts = staging
+        .instance_paths()
+        .conflicts_with(&prod.instance_paths());
+    assert!(
+        conflicts.is_empty(),
+        "two instances made from the SHIPPED template still share: {conflicts:?}"
+    );
+
+    // Specifically the three that don't follow data_dir — an empty conflict list
+    // would also result from the template failing to set them at all (both
+    // sides `None`, nothing to compare), so assert they are set and distinct.
+    for (label, a, b) in [
+        (
+            "identity_dir",
+            staging.collab.auth.identity_dir(),
+            prod.collab.auth.identity_dir(),
+        ),
+        (
+            "authorized_keys",
+            staging.collab.auth.authorized_keys_path(),
+            prod.collab.auth.authorized_keys_path(),
+        ),
+        (
+            "keystore",
+            staging.collab.auth.keystore_path(),
+            prod.collab.auth.keystore_path(),
+        ),
+    ] {
+        let (a, b) = (a.expect(label), b.expect(label));
+        assert!(
+            a.starts_with(tmp.path()) && b.starts_with(tmp.path()),
+            "{label} must be inside the instance tree, not the shared XDG \
+             default — got {a:?} / {b:?}"
+        );
+        assert_ne!(a, b, "{label} must differ between instances");
+    }
+
+    // The template must not ship the unauthenticated default it warns about.
+    assert_eq!(
+        staging.collab.auth.mode, "key",
+        "the template sets mode explicitly because the code default is \"none\""
+    );
+}
+
+#[test]
 fn an_override_flag_beats_the_config_file() {
     // `mae-daemon@.service` passes BOTH `--config daemon-%i.toml` and
     // `--data-dir …/tenants/%i`; if the file also sets data_dir, the flag has to

@@ -76,8 +76,11 @@ tenant actually needs:
   instantiation gets its own PID, its own `daemon.toml`, its own data directory:
 
   ```bash
-  # One-time per instance: a distinct config — see "What must be unique" below.
-  cp assets/daemon-config.toml ~/.config/mae/daemon-acme-corp.toml
+  # One-time per instance. `daemon-instance-config.toml` is the MULTI-instance
+  # template — it already sets every path that must be unique (see "What must
+  # be unique per instance" below). `daemon-config.toml` is the single-daemon one.
+  cp assets/daemon-instance-config.toml ~/.config/mae/daemon-acme-corp.toml
+  # replace INSTANCE with the name; pick ports no other instance uses
 
   cp assets/mae-daemon@.service ~/.config/systemd/user/
   systemctl --user daemon-reload

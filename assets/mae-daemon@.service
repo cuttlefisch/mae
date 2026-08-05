@@ -16,13 +16,24 @@
 # Phase E) — mae-daemon is confirmed never expected to run on macOS or
 # Windows as a deployed service.
 #
-# Prerequisite: create a per-tenant config file BEFORE starting the unit —
-# each tenant needs its own socket path / collab.bind port so instances never
-# collide:
-#   cp ~/.config/mae/daemon.toml ~/.config/mae/daemon-<tenant>.toml
-#   # edit daemon-<tenant>.toml: set a unique `socket` and `collab.bind` port,
-#   # and (recommended) [[tenant]] entries scoping this instance to just its
-#   # own KB instances/principals (ADR-060 Phase C)
+# Prerequisite: create a per-tenant config file BEFORE starting the unit.
+# Start from the per-instance template, which already sets every path that
+# needs to be unique:
+#   cp daemon-instance-config.toml ~/.config/mae/daemon-<tenant>.toml
+#   # replace INSTANCE with the tenant name; pick unused ports
+#
+# EIGHT resources must be unique per instance and --data-dir below scopes only
+# four. In particular identity_dir / authorized_keys / keystore default to the
+# SHARED ~/.local/share/mae/collab/ regardless of --data-dir, which under this
+# unit is doubly wrong: ProtectHome=read-only plus the ReadWritePaths below
+# make that directory unwritable here, so a key-mode instance relying on the
+# default cannot create its identity at all. The template sets all three inside
+# the tenant's own tree. See docs/DAEMON_ADMIN.md §1.
+#
+# Verify before starting a second instance (exits non-zero on any shared
+# resource, so it works in a deploy gate):
+#   mae-daemon doctor --config ~/.config/mae/daemon-<tenant>.toml \
+#                     --compare-with ~/.config/mae/daemon-<other>.toml
 #
 # Installation:
 #   cp mae-daemon@.service ~/.config/systemd/user/
