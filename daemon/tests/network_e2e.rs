@@ -9,66 +9,16 @@
 //! (Was gated on `MAE_STATE_SERVER=host:port`, which pointed at the retired
 //! state-server and required an externally-running daemon — so it never ran in
 //! CI. These tests are the only e2e coverage of `sync/resync`.)
+//!
+//! The spawn/framing harness lives in `tests/common/mod.rs`, shared with
+//! `hub_observability_e2e.rs`.
 
-use std::net::SocketAddr;
-use std::time::Duration;
+mod common;
 
-use mae_mcp::protocol::JsonRpcResponse;
+use common::{read_framed, send_recv, spawn_server, spawn_server_with_config};
 use mae_sync::encoding::update_to_base64;
 use mae_sync::text::TextSync;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-/// Holds a spawned `mae-daemon` (+ its temp data dir) for a test's lifetime.
-/// Dropping it kills the daemon (`kill_on_drop`) and removes the temp dir.
-struct ServerGuard {
-    _child: tokio::process::Child,
-    _tmp: tempfile::TempDir,
-    addr: SocketAddr,
-}
-
-/// Spawn a `mae-daemon` on a free TCP port for this test. Returns `None` (the
-/// caller returns early, skipping) unless `MAE_TCP_E2E` is set.
-async fn spawn_server() -> Option<ServerGuard> {
-    if std::env::var("MAE_TCP_E2E").is_err() {
-        eprintln!("skipping: MAE_TCP_E2E not set");
-        return None;
-    }
-    // Reserve a free port, then hand it to the daemon.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr: SocketAddr = listener.local_addr().unwrap();
-    drop(listener);
-    let tmp = tempfile::tempdir().unwrap();
-    // Isolate this daemon fully so tests run in parallel and alongside any other
-    // daemon (incl. a developer's live one): a per-test XDG_RUNTIME_DIR gives it a
-    // unique Unix socket (the daemon also binds `$XDG_RUNTIME_DIR/mae-daemon.sock`,
-    // not just TCP), and a per-test XDG_CONFIG_HOME means it finds no daemon.toml →
-    // runs with default (no-auth) config.
-    let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"))
-        .args([
-            "--bind",
-            &addr.to_string(),
-            "--data-dir",
-            tmp.path().to_str().unwrap(),
-        ])
-        .env("XDG_RUNTIME_DIR", tmp.path())
-        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("failed to spawn mae-daemon");
-    for _ in 0..50 {
-        if tokio::net::TcpStream::connect(addr).await.is_ok() {
-            return Some(ServerGuard {
-                _child: child,
-                _tmp: tmp,
-                addr,
-            });
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    panic!("mae-daemon did not start within 5s on {addr}");
-}
+use tokio::io::AsyncWriteExt;
 
 /// Compute SHA-256 of content (matching the server's content hash).
 fn sha256(content: &str) -> String {
@@ -76,43 +26,6 @@ fn sha256(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     hex::encode(hasher.finalize())
-}
-
-/// Read a Content-Length framed message from a TCP stream.
-async fn read_framed(
-    stream: &mut tokio::net::TcpStream,
-    timeout_ms: u64,
-) -> Option<serde_json::Value> {
-    let result = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async {
-        let mut header_buf = Vec::new();
-        let mut byte = [0u8; 1];
-        loop {
-            stream.read_exact(&mut byte).await.ok()?;
-            header_buf.push(byte[0]);
-            if header_buf.len() >= 4 && &header_buf[header_buf.len() - 4..] == b"\r\n\r\n" {
-                break;
-            }
-        }
-        let header = String::from_utf8(header_buf).ok()?;
-        let content_length: usize = header
-            .lines()
-            .find_map(|line| line.strip_prefix("Content-Length: "))
-            .and_then(|v| v.trim().parse().ok())?;
-        let mut body = vec![0u8; content_length];
-        stream.read_exact(&mut body).await.ok()?;
-        serde_json::from_slice(&body).ok()
-    })
-    .await;
-    result.unwrap_or_default()
-}
-
-/// Send a JSON-RPC message and read the response.
-async fn send_recv(stream: &mut tokio::net::TcpStream, msg: &serde_json::Value) -> JsonRpcResponse {
-    let payload = format!("{}\n", serde_json::to_string(msg).unwrap());
-    stream.write_all(payload.as_bytes()).await.unwrap();
-    stream.flush().await.unwrap();
-    let value = read_framed(stream, 5000).await.expect("expected response");
-    serde_json::from_value(value).unwrap()
 }
 
 // Each test spawns its own mae-daemon via spawn_server() (gated on MAE_TCP_E2E).
@@ -558,55 +471,10 @@ async fn tcp_debug_endpoint() {
     );
 }
 
-/// Same as `spawn_server`, but writes a `daemon.toml` setting `collab.max_connections`
-/// before spawning — #342's connection-cap needs a non-default (small) value to test
-/// deterministically without opening hundreds of sockets.
-async fn spawn_server_with_max_connections(max_connections: usize) -> Option<ServerGuard> {
-    if std::env::var("MAE_TCP_E2E").is_err() {
-        eprintln!("skipping: MAE_TCP_E2E not set");
-        return None;
-    }
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr: SocketAddr = listener.local_addr().unwrap();
-    drop(listener);
-    let tmp = tempfile::tempdir().unwrap();
-    let config_dir = tmp.path().join("config").join("mae");
-    std::fs::create_dir_all(&config_dir).unwrap();
-    std::fs::write(
-        config_dir.join("daemon.toml"),
-        format!("[collab]\nmax_connections = {max_connections}\n"),
-    )
-    .unwrap();
-    let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"))
-        .args([
-            "--bind",
-            &addr.to_string(),
-            "--data-dir",
-            tmp.path().to_str().unwrap(),
-        ])
-        .env("XDG_RUNTIME_DIR", tmp.path())
-        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("failed to spawn mae-daemon");
-    for _ in 0..50 {
-        if tokio::net::TcpStream::connect(addr).await.is_ok() {
-            return Some(ServerGuard {
-                _child: child,
-                _tmp: tmp,
-                addr,
-            });
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    panic!("mae-daemon did not start within 5s on {addr}");
-}
-
 #[tokio::test]
 async fn connection_cap_rejects_the_nplus1th_client() {
-    let Some(server) = spawn_server_with_max_connections(2).await else {
+    let Some(server) = spawn_server_with_config(Some("[collab]\nmax_connections = 2\n")).await
+    else {
         return;
     };
     let addr = server.addr;
