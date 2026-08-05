@@ -912,6 +912,22 @@ pub fn rewrite_links_with_types(body: &str) -> String {
 
 /// Known KB node ID namespace prefixes. A link target matching one of these
 /// is an internal KB link and should be preserved as `[[target|display]]`.
+///
+/// @ai-caution: [kb-links] This list is a hand-maintained MIRROR of every place
+/// the codebase mints a node id, and it silently drifts: a namespace missing here
+/// is not a link that renders oddly, it is a link **destroyed at ingest** — the
+/// `else` branch of `rewrite_links_with_types` flattens it to `display (target)`
+/// plain text, so it vanishes from `kb_links_from`/`kb_links_to`, backlinks and
+/// the graph view, with no error anywhere. `user:` and `project:` were both
+/// missing (#627). When you add a new minted namespace, add it here and to
+/// `every_minted_namespace_is_a_recognised_kb_link`, which pins the two together.
+///
+/// Minting sites, for the cross-check:
+/// - `user:`    — `kb_create_note_from_title` (`crates/core/src/editor/kb_ops/nodes.rs`)
+/// - `project:` — `KnowledgeBase::ingest_project` (`shared/kb/src/lib.rs`)
+/// - `scheme:`  — `crates/scheme/src/runtime.rs`
+/// - `daily:`   — `crates/core/src/editor/kb_ops/daily.rs`
+/// - the rest are seeded by `crates/core/src/kb_seed/` or authored in org files.
 const KB_NAMESPACES: &[&str] = &[
     "concept:",
     "cmd:",
@@ -931,6 +947,10 @@ const KB_NAMESPACES: &[&str] = &[
     "index",
     "daily:",
     "practice:",
+    // #627: minted by MAE itself but absent until now, so every link to a
+    // captured note or an ingested project was flattened to plain text.
+    "user:",
+    "project:",
 ];
 
 /// Check if a link target looks like an internal KB node ID.
@@ -2413,5 +2433,86 @@ Also see [[concept:window][windows]].
             .collect();
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].1.target, "concept:window");
+    }
+}
+
+#[cfg(test)]
+mod link_namespace_tests {
+    use super::*;
+
+    /// #627 / ADR-094 Gate B. Every link form that occurs in the real corpus,
+    /// pinned to whether ingest keeps it a link.
+    ///
+    /// Census of the four registered file-backed KBs at the time of writing:
+    /// `id:` 13,238 · `https:`/`http:` ~659 · bare 276 · `file:` 169 · `pdf:` 16 ·
+    /// `practice:` 13 · `mailto:` 2 · `user:` 1. The `id:` majority was never at
+    /// risk — it is stripped to the bare UUID, which IS the org-roam node id — so
+    /// the defect was narrow but total for the namespaces it hit.
+    #[test]
+    fn every_real_corpus_link_form_is_classified_correctly() {
+        let still_link = |s: &str| rewrite_links(s).starts_with("[[");
+
+        // Internal — must survive as links.
+        for s in [
+            "[[id:1F0A-BEEF][Some Note]]",
+            "[[concept:buffer][Buffer]]",
+            "[[practice:adr-format][ADR]]",
+            "[[daily:2026-08-05][Today]]",
+            "[[user:20260805-foo][Foo]]",
+            "[[project:mae][MAE]]",
+            "[[index]]",
+        ] {
+            assert!(still_link(s), "internal link destroyed at ingest: {s}");
+        }
+
+        // Genuinely external — correctly flattened; a KB has no node for these.
+        for s in [
+            "[[https://example.com][Ext]]",
+            "[[mailto:a@b.c][Mail]]",
+            "[[file:~/docs/a.pdf][A doc]]",
+            "[[pdf:paper.pdf][Paper]]",
+            "[[../rel/path.org][Rel]]",
+        ] {
+            assert!(!still_link(s), "external target treated as a KB node: {s}");
+        }
+    }
+
+    /// The drift guard. `KB_NAMESPACES` mirrors the id-minting sites by hand, and
+    /// that mirror is what broke: a namespace missing from it destroys links
+    /// silently rather than failing anywhere.
+    ///
+    /// Each entry below is a namespace the codebase actually mints. Adding a new
+    /// minted namespace without adding it to `KB_NAMESPACES` fails here.
+    #[test]
+    fn every_minted_namespace_is_a_recognised_kb_link() {
+        for (ns, minted_by) in [
+            ("user:", "kb_create_note_from_title (kb_ops/nodes.rs)"),
+            ("project:", "KnowledgeBase::ingest_project (kb/src/lib.rs)"),
+            ("scheme:", "scheme runtime (crates/scheme/src/runtime.rs)"),
+            ("daily:", "kb_create_daily_stub (kb_ops/daily.rs)"),
+            ("concept:", "kb_seed"),
+            ("cmd:", "kb_seed"),
+            ("practice:", "bundled practices KBs"),
+        ] {
+            let target = format!("{ns}whatever");
+            assert!(
+                is_kb_node_id(&target),
+                "{ns} is minted by {minted_by} but is not in KB_NAMESPACES — every \
+                 link to such a node is flattened to plain text at ingest"
+            );
+        }
+    }
+
+    /// A link whose display text is absent must still survive, and one inside a
+    /// code block must be left alone entirely.
+    #[test]
+    fn bare_internal_links_and_code_blocks_are_handled() {
+        assert!(rewrite_links("[[concept:buffer]]").starts_with("[["));
+        let src = "#+begin_src rust\nlet x = \"[[user:not-a-link][X]]\";\n#+end_src\n";
+        assert_eq!(
+            rewrite_links(src),
+            src,
+            "code block content must not be rewritten"
+        );
     }
 }
