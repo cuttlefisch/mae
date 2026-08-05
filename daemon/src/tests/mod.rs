@@ -25,6 +25,7 @@ mod kb_socket_concurrency_tests;
 mod kb_socket_connection_limit_tests;
 mod kb_socket_malformed_and_disconnect_tests;
 mod kb_write_concurrency_tests;
+mod multi_instance_tests;
 mod webview_tests;
 
 /// Build a `DaemonState` with a real primary store + one named instance

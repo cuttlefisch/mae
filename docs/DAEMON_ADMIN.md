@@ -21,13 +21,30 @@ cd daemon && cargo build --release        # → daemon/target/release/mae-daemon
 # Run (reads ~/.config/mae/daemon.toml; XDG-respecting)
 mae-daemon                                # KB socket + collab TCP (default 127.0.0.1:9473)
 
-# Overrides
+# Overrides — these select WHICH instance every command below operates on.
 mae-daemon --config /path/daemon.toml
 mae-daemon --bind 0.0.0.0:9473            # bind all interfaces (firewall/VPN first — §5)
+mae-daemon --oauth-bind 0.0.0.0:8443      # the OAuth HTTPS listener's port (§2)
 mae-daemon --data-dir /srv/mae-data
+mae-daemon --socket /run/mae/prod.sock    # KB query socket
 mae-daemon --check-config                 # validate config + exit (no listen)
 mae-daemon --version
 ```
+
+`--config` applies to **every** subcommand, not just to starting the daemon —
+`doctor`, `--check-config`, `keygen`, `keys`, `identity`, `authorized`,
+`authorize` and `revoke` all operate on the instance it names:
+
+```bash
+mae-daemon doctor      --config ~/.config/mae/daemon-prod.toml
+mae-daemon authorize   --config ~/.config/mae/daemon-staging.toml "$(cat peer.pub)" laptop
+```
+
+> Before v0.15 those subcommands silently read the default
+> `~/.config/mae/daemon.toml` no matter what `--config` said. If you have scripts
+> written against that behaviour, they were operating on the default instance —
+> re-check especially any `authorize` calls, which would have trusted the peer on
+> the wrong instance.
 
 ### Systemd (user unit)
 
@@ -59,11 +76,8 @@ tenant actually needs:
   instantiation gets its own PID, its own `daemon.toml`, its own data directory:
 
   ```bash
-  # One-time per tenant: a distinct config with its own socket/collab.bind port
-  # (instances must never collide) and, recommended, [[tenant]] entries scoping
-  # this instance to just its own KB instances/principals (Phase C).
+  # One-time per instance: a distinct config — see "What must be unique" below.
   cp assets/daemon-config.toml ~/.config/mae/daemon-acme-corp.toml
-  # edit: unique `socket`, unique `collab.bind` port
 
   cp assets/mae-daemon@.service ~/.config/systemd/user/
   systemctl --user daemon-reload
@@ -77,6 +91,44 @@ tenant actually needs:
 Both shapes can run simultaneously: e.g. most tenants sharing one `mae-daemon.service`
 process, with one tenant that has stricter isolation requirements split out to its own
 `mae-daemon@acme-corp.service` instance.
+
+#### What must be unique per instance
+
+**Eight** resources, not four. Setting `data_dir` scopes the first four and
+**does not** scope the last three:
+
+| Setting | Scoped by `data_dir`? |
+|---|---|
+| `socket` | no — set it explicitly (also `--socket`) |
+| `data_dir` | — (also `--data-dir`) |
+| `collab.storage.data_dir` | **yes**, defaults to `<data_dir>/collab` |
+| `collab.bind` | no — set it explicitly (also `--bind`) |
+| `oauth.bind` | no — set it explicitly (also `--oauth-bind`) |
+| `collab.auth.identity_dir` | **no** — shared `$XDG_DATA_HOME/mae/collab/` |
+| `collab.auth.authorized_keys` | **no** — shared `$XDG_DATA_HOME/mae/collab/authorized_keys` |
+| `collab.auth.keystore` | **no** — shared `$XDG_DATA_HOME/mae/collab/trusted_keys` |
+
+> **The one that bites.** Identity, `authorized_keys` and the keystore default to
+> a *shared* location regardless of `data_dir`. Two instances distinguished only
+> by data dir and ports therefore read **one** `authorized_keys` — so
+> `mae-daemon authorize --config daemon-staging.toml <key>` also grants that peer
+> access to **production**. Set all three explicitly per instance.
+>
+> The shared default is deliberate for the ordinary one-host-one-identity case
+> and is not changed: relocating an existing operator's identity key would lose
+> access to every shared KB, with no recovery (§3).
+
+Check it rather than trusting the table — `--compare-with` exits non-zero if the
+two instances share anything, so it works in a deploy gate:
+
+```bash
+mae-daemon doctor --config ~/.config/mae/daemon-staging.toml \
+                  --compare-with ~/.config/mae/daemon-prod.toml
+#   side-by-side: OK — shares no resource with the compared instance
+```
+
+Each instance's own resources are listed by `mae-daemon doctor` and
+`mae-daemon --check-config`, so two reports can also just be diffed.
 
 ---
 
@@ -138,9 +190,15 @@ max_document_size_bytes = 10485760              # 10 MB — WARN-only (CRDT conv
 
 | Mode | Mechanism | Use |
 |------|-----------|-----|
-| `none` | No auth | Trusted loopback only |
+| `none` | No auth | Trusted loopback only — **this is the default** |
 | `psk` | Pre-shared key, HMAC-SHA256 mutual handshake | Quick shared-secret setups |
 | `key` | **Ed25519 mTLS** + per-KB membership + TOFU pinning | **Recommended** (multi-user) |
+
+> **The default is `none`, not `key`.** A `daemon.toml` that says nothing about
+> `[collab.auth]` accepts any client that can reach the port. Combined with
+> `--bind 0.0.0.0` (§5) that is an open server. `mae-daemon doctor` and
+> `--check-config` both call this out explicitly; set `mode = "key"` before
+> binding anywhere but loopback.
 
 `none`/`psk` are **plaintext on the wire** — keep them on a trusted LAN or behind a VPN. Never put a
 secret in `daemon.toml`; use `psk_command` / a keystore.
