@@ -2,6 +2,63 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.93] - 2026-08-05
+
+
+
+
+### Security
+
+- *(security)* Route :w through the AI config-save guard ([58ba7ef](https://github.com/cuttlefisch/mae/commit/58ba7efb33722b00b4b00d80c776808d3656d89e))
+
+### Features
+
+- *(kb)* ADR-093 node CRDT schema v2 — carry every Node field ([33763f1](https://github.com/cuttlefisch/mae/commit/33763f1b05b1e196102d4f2957f96f089f6f56a1))
+- *(daemon)* Wire the CRDT->Cozo projector (ADR-029 B2/B3) ([2c419e4](https://github.com/cuttlefisch/mae/commit/2c419e4883d75671e4466666753cf2f539602526))
+- *(daemon)* Reconciliation + Gate C adversarial tests ([4df9024](https://github.com/cuttlefisch/mae/commit/4df902427e03c7bcedbd4a0c9d61c9d1742e10de))
+
+### Bug Fixes
+
+- *(guidance)* The guidance KB delivered nothing to anyone ([2950f9c](https://github.com/cuttlefisch/mae/commit/2950f9c298eb2916eb8d4f0660037158bf3593c8))
+- *(guidance)* The guidance KB delivered nothing to anyone ([e835b8e](https://github.com/cuttlefisch/mae/commit/e835b8e55f6382d11a947e0c78b430b30aac816e))
+- *(test)* Make the authorized_keys negative control deterministic ([c4aa82a](https://github.com/cuttlefisch/mae/commit/c4aa82a2e8f58ec1551ca074c7a9efa54401da34))
+- *(cli)* --ensure-guidance-config lost its "already chosen" signal ([6c7ace0](https://github.com/cuttlefisch/mae/commit/6c7ace0fffd01ab518be81c6f909b42a15481fb9))
+- *(daemon)* Scope kb/query.get + kb/node_fetch to the KB's own nodes (#571) ([091a65d](https://github.com/cuttlefisch/mae/commit/091a65d09aa9cb681486edbc2ce60182783e6bf1))
+- *(dev)* The local quality gate never covered the daemon workspace ([ac377a0](https://github.com/cuttlefisch/mae/commit/ac377a02bfef361c22d7f3f8b285b0047a736a96))
+- *(kb)* An empty org_dir instance claimed every path on the filesystem ([128e9a2](https://github.com/cuttlefisch/mae/commit/128e9a2355fc51b863dc25c14ed07b8f46d46749))
+- *(kb)* Character-level CRDT updates for node title/body/tags ([5dea7e2](https://github.com/cuttlefisch/mae/commit/5dea7e202b8aa9337740af2e02fcbd85a6a9fa62))
+- *(sync)* Materialize an op-set from the op SET, not from op order ([82f4c37](https://github.com/cuttlefisch/mae/commit/82f4c37d96068b2c4a812c747e1493eb69c4d9a3))
+- *(sync)* Diff by word, and emit contiguous runs ([418b455](https://github.com/cuttlefisch/mae/commit/418b4557d06089e3e28e0abc85e2199c60eb1a0c))
+- *(kb)* User: and project: links were destroyed at ingest (#627) ([ddf02ef](https://github.com/cuttlefisch/mae/commit/ddf02efa3b1af2b58ae4a1c0f9d9814453c5ddd7))
+
+### Refactor
+
+- *(daemon)* Split Gate C tests out of projector.rs (ratchet) ([1297b20](https://github.com/cuttlefisch/mae/commit/1297b2039596e2e8ccda2f0c5361fa3f28f4b117))
+
+### Documentation
+
+- *(adr)* ADR-092 — one write path for a KB node ([22cfe48](https://github.com/cuttlefisch/mae/commit/22cfe48bfef5e62be867c1c9f0a52ee252075679))
+- *(adr)* ADR-093 — the node CRDT carries the whole node ([a46ecee](https://github.com/cuttlefisch/mae/commit/a46ecee6ae23ddfb6bcf67edc6eac7527e39f980))
+- Audit AI-agent friction in config surfaces and the Ask state ([ff28916](https://github.com/cuttlefisch/mae/commit/ff28916245ebe0799d877c195aa7c8bc5e7e733f))
+- *(adr)* ADR-095 — MCP elicitation carries the Ask state ([13c93c0](https://github.com/cuttlefisch/mae/commit/13c93c0d5f40b2bc4a76224e8353114c2a164565))
+- *(adr)* ADR-096 — Scheme is the only editor config surface ([b6c29ee](https://github.com/cuttlefisch/mae/commit/b6c29eeea7298fec85188b40f2dd31cacecc9457))
+
+### Testing
+
+- *(kb)* Split instance path-matching into its own module ([a5e2957](https://github.com/cuttlefisch/mae/commit/a5e29572be584e09ef83ed22390c3a506d5eee85))
+- *(kb)* Correct the n-peer oracle for character-level merge; split tests ([7514cfe](https://github.com/cuttlefisch/mae/commit/7514cfe8876c290426488c8e291e50fc48b2030d))
+- *(kb)* ADR-093 Gate A.1 baseline — full-field CRDT round-trip (RED) ([c95bfe4](https://github.com/cuttlefisch/mae/commit/c95bfe470debaed2e37b683fd3356dfb1e7c3fe9))
+- *(kb)* ADR-093 Gate A — schema v2 adversarial suite ([c03bc17](https://github.com/cuttlefisch/mae/commit/c03bc171ae7471fd3f8d62dc85c7afa73da88ecb))
+
+### Styling
+
+- *(daemon)* Rustfmt the new cross-KB isolation test ([dfbcdd4](https://github.com/cuttlefisch/mae/commit/dfbcdd431ebde69006e7582b0c1a410211538fc2))
+
+### Miscellaneous
+
+- *(deps)* Bump clap 4.6.4 -> 4.6.5 (supersedes #626) ([f0b35ed](https://github.com/cuttlefisch/mae/commit/f0b35ed37db4ea55ca29155daa4b8b39176d54ab))
+- *(adr)* Regenerate the ADR KB for ADR-095/096 ([edd667f](https://github.com/cuttlefisch/mae/commit/edd667fe306a1f808041128f7e76324d0c1c9729))
+
 ## [0.14.92] - 2026-08-04
 
 
@@ -10,6 +67,11 @@ All notable changes to this project will be documented in this file.
 ### Documentation
 
 - Correct security claims and ADR statuses that contradicted reality ([6768645](https://github.com/cuttlefisch/mae/commit/676864599d43fc2890463346758dda38efc59373))
+
+### Miscellaneous
+
+- *(dev)* Add scripts/new-workspace.sh — isolated clones for parallel work ([b996dca](https://github.com/cuttlefisch/mae/commit/b996dca3bc41253ee6797b089806cfeb1994cf89))
+- Bump version to 0.14.92 ([0e06f4c](https://github.com/cuttlefisch/mae/commit/0e06f4cb3ed55d45f17ad4f0a73ba44c86f4f010))
 
 ## [0.14.91] - 2026-08-04
 
