@@ -1,7 +1,7 @@
 # ADR-100: The browser KB edit surface — structured chrome plus source-backed live preview
 
-**Status:** Proposed. D4 was decided by spike (`docs/research/100-org-parser-in-the-browser-spike.md`);
-its bundle-size condition remains open.
+**Status:** Proposed. D4 was decided by spike
+(`docs/research/100-org-parser-in-the-browser-spike.md`); both of its conditions are now measured.
 **Depends on:** ADR-097 (Browser MAE is a KB surface), ADR-099 (the transport this edits over),
 ADR-093 (the node CRDT carries the whole node — this ADR's structured chrome is bound directly to
 its schema v2 types).
@@ -132,7 +132,7 @@ scanning core into one place both native code and the browser consume.
 **Two conditions bind this decision:**
 
 1. **A conformance gate before any call site switches.** The extracted crate and the current implementations must produce identical output over the full bundled corpus. Extracting from two shipped, heavily-tested parsers is the real risk here, not the WASM build.
-2. **Bundle size is still unmeasured**, and is a prerequisite rather than a formality — `wasm32-unknown-unknown` std is not installed on the development machine and CI would need the target added to `.github/actions/setup-rust`. If the compiled crate turns out large enough to hurt initial page load, the trade reopens **for the cosmetic inline layer only**; the semantic layer's argument does not depend on size.
+2. **Bundle size is measured and does not constrain this** — the scanning core compiles to 35.7 KB of wasm, **16.3 KB gzipped**, against a 115-byte empty-crate control proving the figure is real code rather than toolchain floor. The full extracted crate will be larger (it omits `parse_org_multi_result`, drawer scanning and `parse_typed_links`) but the margin is wide enough that the conclusion is insensitive to that. CI still needs the `wasm32-unknown-unknown` target added to `.github/actions/setup-rust`, and that should land with the extraction.
 
 Recording the correction rather than quietly rewriting the option list is deliberate. The earlier
 planning pass proposed reusing a `tree-sitter-org` grammar that does not exist (#657), and this

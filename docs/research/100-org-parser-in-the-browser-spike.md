@@ -1,20 +1,22 @@
 # Where the browser gets org structure: ADR-100 D4 spike
 
-**Status:** Run, 2026-08-05, against `main` at `e4a6f77d`. **Partial** — bundle size is
-unmeasured, see Blocked below.
+**Status:** Run, 2026-08-05, against `main` at `e4a6f77d`. Complete — both open conditions
+(latency, bundle size) are now measured.
 **Gates:** ADR-100 D4.
 **Artifacts:** `shared/kb/examples/org_parse_latency.rs` (the latency measurement, reproducible).
 
 **Bottom line up front.** D4 posed a three-way choice — JS `uniorg`, daemon-served decoration
 ranges, or MAE's parser compiled to WASM. Measuring changed the question:
 
-1. **Latency is a non-issue.** Native parse is **microseconds**, not milliseconds. Even at 3× WASM
-   overhead the worst real node parses in well under 0.15 ms. This eliminates option (b) outright:
-   a network round-trip is three orders of magnitude worse than the parse it would replace.
-2. **The "reuse the existing parser" premise was half wrong.** `shared/kb/src/org.rs` has **no
+1. **Neither latency nor bundle size constrains the choice.** Parse is microseconds; the scanning
+   core is ~16 KB gzipped against a 115-byte empty-crate control.
+2. **Latency specifically eliminates option (b).** Native parse is **microseconds** — even at 3× WASM overhead the
+   worst real node parses in well under 0.15 ms, while a network round-trip is three orders of
+   magnitude worse than the parse it would replace.
+3. **The "reuse the existing parser" premise was half wrong.** `shared/kb/src/org.rs` has **no
    inline-emphasis scanner at all**, so it cannot produce most of ADR-100 D3's decoration set on
    its own.
-3. **But the missing half already exists elsewhere, as offsets.** `mae-export`'s
+4. **But the missing half already exists elsewhere, as offsets.** `mae-export`'s
    `find_markup_end_str` returns `Option<(usize, &str)>` — the inline logic is already
    offset-based; only its public wrapper formats to HTML.
 
@@ -84,22 +86,42 @@ risk, and it must be gated by a conformance test running the extracted crate and
 implementations over the full bundled corpus and asserting identical output — before either call
 site switches.
 
-## Blocked: bundle size is unmeasured
+## Bundle size: measured, and not a constraint
 
-`wasm32-unknown-unknown` std is **not installed** on this machine, and the toolchain is Fedora's
-distro `rustc` (1.96.1) rather than rustup — so there is no `rustup target add`. The matching
-package exists (`rust-std-static-wasm32-unknown-unknown 1.96.1-1.fc44`) but installing it needs
-root, which this spike did not assume.
+The `wasm32-unknown-unknown` target was installed after the first pass of this spike, so the size
+question is now answered rather than deferred.
 
-So the size question is **open, and deliberately not estimated here**. A pure byte-scanner with no
-heavy dependencies should be small, but "should be" is not a measurement, and this arc has already
-had one design premise (a `tree-sitter-org` dependency, #657) fail because it was plausible rather
-than checked.
+**Method.** A probe crate containing the **real** scanner sources — extracted verbatim from
+`shared/kb/src/{lib,org}.rs` and `crates/export/src/lib.rs`, not retyped or approximated — built as
+a `cdylib` for `wasm32-unknown-unknown` with `opt-level="z"`, LTO, `codegen-units=1`,
+`panic="abort"` and `strip=true`. A `#[no_mangle]` entry point calls every extracted function so
+the optimiser cannot delete the code being measured.
 
-**Two consequences to carry forward:**
+**Control first.** An otherwise-identical crate whose entry point only returns a string length
+compiles to **115 bytes**. So the figures below are essentially all real code rather than
+toolchain floor — without this control the measurement would be worthless.
 
-- CI would need a `wasm32-unknown-unknown` target added to `.github/actions/setup-rust` for any build or size gate. That is a real CI change, and it should land with the extraction rather than after it.
-- The size measurement is a prerequisite for adopting the recommendation, not a formality. If the extracted crate plus `wasm-bindgen` glue turns out to be large enough to hurt initial page load, the trade against a JS inline scanner reopens — for the *cosmetic* layer only; the semantic layer's argument does not depend on size.
+| Build | Size |
+|---|---|
+| Empty baseline (control) | **115 B** |
+| Org scanning core | **35,687 B** (34.8 KiB) |
+| Org scanning core, gzipped | **16,294 B** (15.9 KiB) |
+
+Roughly 16 KB over the wire. For comparison, that is a fraction of a typical web font. **Bundle
+size does not constrain this decision.**
+
+**What the figure does and does not cover — stated so it is not over-read:**
+
+- **Covered:** `compute_code_block_ranges`, `heading_level`, `next_link_span` + `LinkSpanMatch`, `rewrite_links_with_types`, `is_kb_node_id`, `split_link_target`, and `mae-export`'s `is_markup_start` / `find_markup_end_str`. That is the decoration core.
+- **Not covered:** `parse_org_multi_result` (full structure — needs `Node`/`NodeKind`), drawer scanning, and `parse_typed_links` (needs `ParsedLink`). The real extracted crate will be larger, plausibly by a factor of two or three — which still lands well under 50 KB gzipped.
+- **Not included:** `wasm-bindgen` glue (a JS shim plus some wasm), and `wasm-opt -Oz`, which was unavailable (`binaryen` not installed) and would *reduce* these numbers. The two effects push in opposite directions.
+
+So this is a well-founded estimate of the right order of magnitude, not a final artifact size —
+and the margin is large enough that the conclusion is not sensitive to the uncertainty.
+
+**One consequence still to carry forward:** CI needs a `wasm32-unknown-unknown` target added to
+`.github/actions/setup-rust` for any build or size gate, and that should land with the extraction
+rather than after it.
 
 ## Reproducing
 
