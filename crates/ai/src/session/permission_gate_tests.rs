@@ -305,3 +305,48 @@ fn describe(g: &ToolCallGate) -> String {
         ToolCallGate::Refused(m) => format!("Refused({m})"),
     }
 }
+
+/// The bug this file could not catch, and why it is tested this way.
+///
+/// Every other test here calls `decide_and_present` directly. That proves the
+/// gate DECIDES correctly — and it passed throughout the period when the tool
+/// loop never reached the gate at all. `handle_prompt`'s loop opened at ~line
+/// 659 and the gate sat at ~1119, with ten `if call.name == ...` intercepts in
+/// between, each of which `continue`d first. `shell_exec` (Shell tier),
+/// `web_fetch` (Shell) and `ai_set_mode`/`ai_set_profile`/`ai_set_budget` (all
+/// Privileged) therefore executed with no permission check whatsoever, from the
+/// shipped `readonly` default.
+///
+/// The defect was positional, so the invariant is positional: within the tool
+/// loop, the gate must come before the first name intercept. A behavioural test
+/// would need a provider, an event loop and a human answering — and would still
+/// only cover whichever tool it happened to name. This covers all ten, and any
+/// eleventh someone adds later.
+#[test]
+fn the_permission_gate_precedes_every_tool_name_intercept() {
+    let src = include_str!("handle_prompt.rs");
+
+    let loop_head = src
+        .find("for call in &deduplicated_calls {")
+        .expect("the tool-execution loop should still exist");
+    let body = &src[loop_head..];
+
+    let gate = body
+        .find("self.decide_and_present(call)")
+        .expect("the tool loop must call decide_and_present");
+
+    // The first per-tool intercept inside the loop.
+    let first_intercept = body
+        .find("if call.name == \"")
+        .expect("the loop should still contain name-based intercepts");
+
+    assert!(
+        gate < first_intercept,
+        "the permission gate must be the FIRST thing in the tool loop.\n\
+         Found decide_and_present at +{gate} but a `if call.name == \"...\"` \
+         intercept at +{first_intercept} (offsets from the loop head).\n\
+         An intercept placed above the gate `continue`s past it, so that tool \
+         executes with no permission check at all — which is exactly how \
+         shell_exec became reachable at the readonly default."
+    );
+}
