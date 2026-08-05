@@ -6,7 +6,7 @@
 use sha2::{Digest, Sha256};
 use yrs::{
     updates::decoder::Decode, updates::encoder::Encode, Array, ArrayPrelim, Doc, GetString, Map,
-    MapPrelim, Out, ReadTxn, Text, TextPrelim, Transact,
+    MapPrelim, Out, ReadTxn, TextPrelim, Transact,
 };
 
 use crate::text::{new_doc, new_doc_with_client_id};
@@ -166,11 +166,8 @@ impl KbNodeDoc {
         let root = self.doc.get_or_insert_map("node");
         let mut txn = self.doc.transact_mut();
         if let Some(Out::YText(text)) = root.get(&txn, TITLE_KEY) {
-            let len = text.get_string(&txn).encode_utf16().count() as u32;
-            if len > 0 {
-                text.remove_range(&mut txn, 0, len);
-            }
-            text.insert(&mut txn, 0, title);
+            let current = text.get_string(&txn);
+            crate::text::reconcile_text_ref(&mut txn, &text, &current, title);
         }
         txn.encode_update_v1()
     }
@@ -191,11 +188,8 @@ impl KbNodeDoc {
         let root = self.doc.get_or_insert_map("node");
         let mut txn = self.doc.transact_mut();
         if let Some(Out::YText(text)) = root.get(&txn, BODY_KEY) {
-            let len = text.get_string(&txn).encode_utf16().count() as u32;
-            if len > 0 {
-                text.remove_range(&mut txn, 0, len);
-            }
-            text.insert(&mut txn, 0, body);
+            let current = text.get_string(&txn);
+            crate::text::reconcile_text_ref(&mut txn, &text, &current, body);
         }
         txn.encode_update_v1()
     }
@@ -234,22 +228,42 @@ impl KbNodeDoc {
         txn.encode_update_v1()
     }
 
-    /// Replace ALL tags with `tags` (clear + re-insert the `YArray`). Returns the
-    /// encoded update. This is the setter `upsert_with_crdt` needs for a wholesale
-    /// tag edit (e.g. `kb_update` with a new tags list) to enter the CRDT and
-    /// broadcast a delta — B-18: previously only `set_title`/`set_body` were wired,
-    /// so tag changes after node creation never synced (peer apply was a no-op).
-    /// Mirrors `set_title`'s clear-then-insert so the change chains on the lineage.
+    /// Set the tag list to `tags`, emitting only the removals and additions that
+    /// actually differ. Returns the encoded update. This is the setter
+    /// `upsert_with_crdt` needs for a wholesale tag edit (e.g. `kb_update` with a
+    /// new tags list) to enter the CRDT and broadcast a delta — B-18: previously
+    /// only `set_title`/`set_body` were wired, so tag changes after node creation
+    /// never synced (peer apply was a no-op).
+    ///
+    /// @ai-caution: [crdt] Do NOT restore the old `remove_range(0, len)` +
+    /// re-append. It is the `YArray` form of the `set_body` bug (ADR-092 D2): two
+    /// peers each adding one tag both wipe the array and re-append their own full
+    /// list, so every tag they had in common returns once per peer
+    /// (`["rust","kb","from-a","rust","kb","from-b"]`). Tags are a set, so the
+    /// diff is by value, not by position. Guarded by
+    /// `concurrent_tag_edits_do_not_duplicate_shared_tags`.
     pub fn set_tags(&mut self, tags: &[String]) -> Vec<u8> {
         let root = self.doc.get_or_insert_map("node");
         let mut txn = self.doc.transact_mut();
         if let Some(Out::YArray(arr)) = root.get(&txn, TAGS_KEY) {
-            let len = arr.len(&txn);
-            if len > 0 {
-                arr.remove_range(&mut txn, 0, len);
+            let current: Vec<String> = arr.iter(&txn).map(|v| v.to_string(&txn)).collect();
+            // Drop what is no longer wanted, highest index first so the remaining
+            // indices stay valid. A duplicate already in the array is dropped too —
+            // only its first occurrence is retained.
+            let mut kept: Vec<&String> = Vec::new();
+            for (i, existing) in current.iter().enumerate().rev() {
+                if tags.contains(existing) && !kept.contains(&existing) {
+                    kept.push(existing);
+                } else {
+                    arr.remove(&mut txn, i as u32);
+                }
             }
+            // Append the ones that are wanted but absent, in the caller's order.
             for tag in tags {
-                arr.push_back(&mut txn, tag.as_str());
+                if !kept.contains(&tag) {
+                    arr.push_back(&mut txn, tag.as_str());
+                    kept.push(tag);
+                }
             }
         }
         txn.encode_update_v1()
