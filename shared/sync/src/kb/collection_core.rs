@@ -157,6 +157,30 @@ impl KbCollectionDoc {
         }
     }
 
+    /// Does `node_id` belong to this collection?
+    ///
+    /// The authoritative "node N belongs to collection C" predicate. The
+    /// `DocStore` doc namespace is FLAT (`kb:{node_id}`, with no `kb_id`
+    /// component), so a caller-supplied `node_id` is globally addressed and
+    /// authorizing a *KB* is not the same as authorizing a *document* — this
+    /// manifest is the only thing that ties the two together. See #571.
+    ///
+    /// O(1): the manifest is a `YMap` keyed by node id, so this is a single
+    /// tombstone-aware key lookup. Deliberately NOT
+    /// `list_nodes().iter().any(...)`, which would materialize every entry and
+    /// allocate a `String` per title — turning an O(1) probe into an O(n)
+    /// allocation on a per-request authorization path.
+    ///
+    /// Fails CLOSED: a collection with no manifest map contains nothing.
+    pub fn has_node(&self, node_id: &str) -> bool {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        match root.get(&txn, COLL_NODES_KEY) {
+            Some(Out::YMap(nodes)) => nodes.contains_key(&txn, node_id),
+            _ => false,
+        }
+    }
+
     /// Get number of nodes in the collection.
     pub fn node_count(&self) -> u32 {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);

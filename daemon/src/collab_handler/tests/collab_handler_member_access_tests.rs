@@ -15,6 +15,34 @@ async fn kb_node_fetch_serves_members_denies_nonmembers() {
         &mut docs,
     )
     .await;
+
+    // #571: put the node in the KB's manifest before fetching it.
+    //
+    // This used to be absent, and the test still passed — because
+    // `encode_state_and_sv` materializes any caller-supplied name via
+    // `get_or_create`, so the "owner fetch ok" assertion below was really
+    // asserting that the daemon conjures an empty doc for a node belonging to
+    // no KB. That is exactly the hole #571 closes, so this test's positive
+    // half was passing on the defect. It now exercises the real case: a member
+    // fetching a node that genuinely belongs to their own KB.
+    let add = serde_json::json!({
+        "jsonrpc":"2.0","id":99,"method":"kb/collection_node_add",
+        "params":{"kb_id":"kbnf","node_id":"concept:n","title":"N"}});
+    let added = dispatch_as(
+        &store,
+        &bc,
+        Some("alice"),
+        Some(&fp("alice")),
+        add,
+        &mut docs,
+    )
+    .await;
+    assert!(
+        added.error.is_none(),
+        "manifest add failed: {:?}",
+        added.error
+    );
+
     let fetch = serde_json::json!({
             "jsonrpc":"2.0","id":1,"method":"kb/node_fetch",
             "params":{"kb_id":"kbnf","node_id":"concept:n"}});
