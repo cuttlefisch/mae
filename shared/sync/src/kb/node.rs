@@ -91,6 +91,13 @@ impl KbNodeDoc {
 
             root.insert(&mut txn, LINKS_KEY, ArrayPrelim::default());
             root.insert(&mut txn, META_KEY, MapPrelim::default());
+            // ADR-093 + ADR-033: seed the v2 containers EAGERLY. Creating a nested
+            // container lazily on first write is unsafe under concurrency — two
+            // peers each insert their own fresh map/array at the same key, one
+            // wins, and the loser's entries are silently dropped. Same reasoning as
+            // COLL_LEASE_KEY in collection_core.rs.
+            root.insert(&mut txn, ALIASES_KEY, ArrayPrelim::default());
+            root.insert(&mut txn, PROPS_KEY, MapPrelim::default());
         }
         Self { doc }
     }
@@ -119,6 +126,13 @@ impl KbNodeDoc {
 
             root.insert(&mut txn, LINKS_KEY, ArrayPrelim::default());
             root.insert(&mut txn, META_KEY, MapPrelim::default());
+            // ADR-093 + ADR-033: seed the v2 containers EAGERLY. Creating a nested
+            // container lazily on first write is unsafe under concurrency — two
+            // peers each insert their own fresh map/array at the same key, one
+            // wins, and the loser's entries are silently dropped. Same reasoning as
+            // COLL_LEASE_KEY in collection_core.rs.
+            root.insert(&mut txn, ALIASES_KEY, ArrayPrelim::default());
+            root.insert(&mut txn, PROPS_KEY, MapPrelim::default());
         }
         Self { doc }
     }
@@ -343,7 +357,11 @@ impl KbNodeDoc {
                     root.remove(&mut txn, key);
                 }
             }
-            root.insert(&mut txn, SCHEMA_VERSION_KEY, NODE_SCHEMA_VERSION.to_string());
+            root.insert(
+                &mut txn,
+                SCHEMA_VERSION_KEY,
+                NODE_SCHEMA_VERSION.to_string(),
+            );
         }
         txn.encode_update_v1()
     }
@@ -419,20 +437,31 @@ impl KbNodeDoc {
         };
         let current: Vec<String> = arr.iter(&txn).map(|v| v.to_string(&txn)).collect();
         let mut kept: Vec<&String> = Vec::new();
+        let mut changed = false;
         for (i, existing) in current.iter().enumerate().rev() {
             if aliases.contains(existing) && !kept.contains(&existing) {
                 kept.push(existing);
             } else {
                 arr.remove(&mut txn, i as u32);
+                changed = true;
             }
         }
         for a in aliases {
             if !kept.contains(&a) {
                 arr.push_back(&mut txn, a.as_str());
                 kept.push(a);
+                changed = true;
             }
         }
-        root.insert(&mut txn, SCHEMA_VERSION_KEY, NODE_SCHEMA_VERSION.to_string());
+        // Stamp the version only on a real change — an unchanged save must not
+        // author an op (ADR-092 D2's no-churn rule).
+        if changed {
+            root.insert(
+                &mut txn,
+                SCHEMA_VERSION_KEY,
+                NODE_SCHEMA_VERSION.to_string(),
+            );
+        }
         txn.encode_update_v1()
     }
 
@@ -469,16 +498,27 @@ impl KbNodeDoc {
             .iter(&txn)
             .map(|(k, v)| (k.to_string(), v.to_string(&txn)))
             .collect();
+        let mut changed = false;
         for (k, _) in current.iter().filter(|(k, _)| !props.contains_key(k)) {
             map.remove(&mut txn, k.as_str());
+            changed = true;
         }
         for (k, v) in props {
             let unchanged = current.iter().any(|(ck, cv)| ck == k && cv == v);
             if !unchanged {
                 map.insert(&mut txn, k.as_str(), v.as_str());
+                changed = true;
             }
         }
-        root.insert(&mut txn, SCHEMA_VERSION_KEY, NODE_SCHEMA_VERSION.to_string());
+        // Stamp the version only on a real change — an unchanged save must not
+        // author an op (ADR-092 D2's no-churn rule).
+        if changed {
+            root.insert(
+                &mut txn,
+                SCHEMA_VERSION_KEY,
+                NODE_SCHEMA_VERSION.to_string(),
+            );
+        }
         txn.encode_update_v1()
     }
 
