@@ -644,7 +644,12 @@ opens unchanged and two peers can never author clashing migration ops; supersede
 possible at all), **ADR-095** (MCP elicitation carries the ask state), **ADR-096** (Scheme is the
 only editor config surface — deprecating `config.toml`, *proposed, phased*), and **ADR-097**
 (Browser MAE is a KB surface, not a browser editor — scopes the web frontend to KB work and
-narrowly amends principle #12 for it, *proposed*). The holistic sharing story + security audits live in `docs/KB_SHARING.md`,
+narrowly amends principle #12 for it, *proposed*), and **ADR-098** (durable identity for network
+clients — the membership subject is a stable *member* key, not a device key; devices obtain it from
+recovery-key-sealed secret storage; the OIDC-principal↔fingerprint binding lives in daemon state
+*outside* the CRDT so an IdP migration rewrites a mutable table rather than an unrewritable signed
+log; AD groups gate the session while CRDT membership stays owner-authored. *Proposed, phased,
+blocked on #176*; evidence in `docs/research/098-*.md`). The holistic sharing story + security audits live in `docs/KB_SHARING.md`,
 `docs/E2E_ENCRYPTION.md`, and `docs/SECURITY_REVIEW.md`.
 
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
