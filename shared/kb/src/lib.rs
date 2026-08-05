@@ -414,24 +414,57 @@ impl Node {
     #[cfg(feature = "crdt")]
     pub fn to_crdt_doc(&self) -> Result<mae_sync::kb::KbNodeDoc, mae_sync::SyncError> {
         if let Some(ref bytes) = self.crdt_doc {
+            // Restoring an EXISTING lineage. This is a read — callers diff against
+            // it (`encode_diff`, `state_vector`) on the reconcile path.
+            //
+            // @ai-caution: [crdt] Do NOT write the v2 fields here. Authoring ops in
+            // what every caller treats as an accessor advances this replica's state
+            // vector, so a peer that is actually caught up reports `local_ahead` and
+            // pushes redundant updates forever. Metadata reaches an existing lineage
+            // through `upsert_with_crdt`, which is the real write path.
             mae_sync::kb::KbNodeDoc::from_bytes(bytes)
         } else {
-            Ok(mae_sync::kb::KbNodeDoc::new(
-                &self.id,
-                &self.title,
-                &self.body,
-                &self.tags,
-            ))
+            // Minting a FRESH lineage from this node's own fields — construction,
+            // not mutation of shared state, so the full v2 payload belongs here.
+            let mut doc =
+                mae_sync::kb::KbNodeDoc::new(&self.id, &self.title, &self.body, &self.tags);
+            self.write_v2_fields(&mut doc);
+            Ok(doc)
         }
     }
 
-    /// Update this node's text fields from a `KbNodeDoc`, and store the
-    /// encoded CRDT bytes for persistence.
+    /// ADR-093: push every non-text `Node` field into a `KbNodeDoc`.
+    #[cfg(feature = "crdt")]
+    fn write_v2_fields(&self, doc: &mut mae_sync::kb::KbNodeDoc) {
+        let _ = doc.set_kind(Some(self.kind.as_str()));
+        let _ = doc.set_todo_state(self.todo_state.as_deref());
+        let _ = doc.set_priority(self.priority.map(|c| c.to_string()).as_deref());
+        let _ = doc.set_source_version(self.source_version);
+        let _ = doc.set_aliases(&self.aliases);
+        let _ = doc.set_properties(&self.properties);
+    }
+
+    /// Update this node's fields from a `KbNodeDoc`, and store the encoded CRDT
+    /// bytes for persistence.
+    ///
+    /// ADR-093: a v1 document carries none of the non-text keys, so each is
+    /// applied only when the doc actually has it — reading an old document must
+    /// never blank a field the local `Node` still holds.
     #[cfg(feature = "crdt")]
     pub fn apply_crdt_doc(&mut self, doc: &mae_sync::kb::KbNodeDoc) {
         self.title = doc.title();
         self.body = doc.body();
         self.tags = doc.tags();
+        if let Some(k) = doc.kind() {
+            self.kind = NodeKind::from_str_lossy(&k);
+        }
+        if doc.schema_version() >= 2 {
+            self.todo_state = doc.todo_state();
+            self.priority = doc.priority().and_then(|p| p.chars().next());
+            self.source_version = doc.source_version();
+            self.aliases = doc.aliases();
+            self.properties = doc.properties();
+        }
         self.crdt_doc = Some(doc.encode());
     }
 
@@ -439,6 +472,10 @@ impl Node {
     ///
     /// Used when joining a shared KB: the CRDT doc is the source of truth,
     /// and we create a local Node from it for FTS5 indexing and display.
+    ///
+    /// ADR-093: `kind` and `source` are **fallbacks**, used only when the document
+    /// does not carry them (a v1 doc). A v2 doc's own values win — otherwise this
+    /// is not a round-trip at all, it just echoes the caller's arguments back.
     #[cfg(feature = "crdt")]
     pub fn from_crdt_doc(
         doc: &mae_sync::kb::KbNodeDoc,
@@ -446,9 +483,19 @@ impl Node {
         source: NodeSource,
     ) -> Self {
         let mat = doc.materialize();
-        let mut node = Node::new(mat.id, mat.title, kind, mat.body);
+        let resolved_kind = mat
+            .kind
+            .as_deref()
+            .map(NodeKind::from_str_lossy)
+            .unwrap_or(kind);
+        let mut node = Node::new(mat.id, mat.title, resolved_kind, mat.body);
         node.tags = mat.tags;
         node.source = Some(source);
+        node.todo_state = mat.todo_state;
+        node.priority = mat.priority.and_then(|p| p.chars().next());
+        node.source_version = mat.source_version;
+        node.aliases = mat.aliases;
+        node.properties = mat.properties;
         node.crdt_doc = Some(doc.encode());
         // Populate links from materialized links array.
         // (links are also parseable from body, but CRDT links array is authoritative)
@@ -1046,6 +1093,12 @@ impl KnowledgeBase {
                     if doc.tags() != node.tags {
                         doc.set_tags(&node.tags);
                     }
+                    // ADR-093: the same treatment for every non-text field. This is
+                    // the write path, so an existing lineage picks up metadata here
+                    // (never in `to_crdt_doc`, which callers use as an accessor).
+                    // Each setter is a no-op when the value already matches, so an
+                    // unchanged node still produces no ops.
+                    node.write_v2_fields(&mut doc);
                     doc
                 }
                 Err(_) => mae_sync::kb::KbNodeDoc::new_with_client_id(
@@ -3672,9 +3725,18 @@ mod tests {
          #+begin_src rust\nfn main() { println!(\"hello\"); }\n#+end_src\n"
     }
 
+    /// Covers the TEXT fields only — `id`/`title`/`body`/`tags`.
+    ///
+    /// Renamed from `crdt_bridge_roundtrip_preserves_all_fields`, which it never
+    /// did: the node it builds sets no `properties`, `todo_state`, `priority` or
+    /// `aliases`, so it cannot fail on the five fields the CRDT actually drops.
+    /// Its one non-text assertion, `source`, is a *parameter* passed into
+    /// `from_crdt_doc` — asserting the argument equals itself. `kind` is likewise
+    /// a parameter and was never asserted at all. See
+    /// `crdt_roundtrip_preserves_every_node_field` below for the real contract.
     #[cfg(feature = "crdt")]
     #[test]
-    fn crdt_bridge_roundtrip_preserves_all_fields() {
+    fn crdt_bridge_roundtrip_preserves_text_fields() {
         let body = realistic_org_body();
         let node = Node::new("concept:test", "Test Node — CRDT", NodeKind::Concept, body)
             .with_tags(vec!["research", "crdt"]);
@@ -3693,8 +3755,68 @@ mod tests {
             vec!["research", "crdt"],
             "tags should round-trip"
         );
-        assert_eq!(restored.source, Some(NodeSource::Federation));
         assert!(restored.crdt_doc.is_some(), "CRDT bytes should be stored");
+    }
+
+    /// ADR-093 Gate A.1 — the contract a CRDT-as-truth migration depends on.
+    ///
+    /// Every `Node` field must survive `Node → KbNodeDoc → Node`. Today five do
+    /// not: `properties`, `todo_state`, `priority`, `aliases` and `source_version`
+    /// are absent from `KbNodeDoc`'s schema entirely, and `kind`/`source` are
+    /// supplied as arguments to `from_crdt_doc` rather than read back from the doc.
+    ///
+    /// This is latent while a KB is unshared — `kb_update_node_with` persists
+    /// straight to Cozo, which stores every field, and `crdt_doc` stays `None`. It
+    /// stops being latent the moment a migration mints CRDT lineage for every node,
+    /// which is exactly what a hosted, CRDT-as-truth deployment requires. For 2,457
+    /// org-roam notes, `properties` is where `:ID:` and `:ROLE:` live.
+    ///
+    /// `from_crdt_doc` is deliberately called with DELIBERATELY WRONG `kind` and
+    /// `source` arguments: if the restored node still reports the original values,
+    /// the doc carried them. If it reports the wrong ones, the caller did — which
+    /// is a round-trip in name only.
+    #[cfg(feature = "crdt")]
+    #[test]
+    fn crdt_roundtrip_preserves_every_node_field() {
+        let mut node = Node::new(
+            "concept:full",
+            "Every Field — 日本語 café 🎉",
+            NodeKind::Concept,
+            realistic_org_body(),
+        )
+        .with_tags(vec!["research", "crdt"]);
+        node.todo_state = Some("NEXT".to_string());
+        node.priority = Some('A');
+        node.aliases = vec!["alias one".to_string(), "エイリアス".to_string()];
+        node.properties
+            .insert("ID".to_string(), "1F0A-BEEF".to_string());
+        node.properties
+            .insert("ROLE".to_string(), "hub".to_string());
+        node.source_version = Some(7);
+
+        let doc = node.to_crdt_doc().expect("to_crdt_doc");
+        // Wrong on purpose — see the doc comment.
+        let restored = Node::from_crdt_doc(&doc, NodeKind::Note, NodeSource::Manual);
+
+        assert_eq!(restored.id, node.id, "id");
+        assert_eq!(restored.title, node.title, "title");
+        assert_eq!(restored.body, node.body, "body");
+        assert_eq!(restored.tags, node.tags, "tags");
+        assert_eq!(
+            restored.kind, node.kind,
+            "kind must come from the doc, not the caller's argument"
+        );
+        assert_eq!(restored.todo_state, node.todo_state, "todo_state");
+        assert_eq!(restored.priority, node.priority, "priority");
+        assert_eq!(restored.aliases, node.aliases, "aliases");
+        assert_eq!(
+            restored.properties, node.properties,
+            "properties — where org-roam :ID:/:ROLE: live"
+        );
+        assert_eq!(
+            restored.source_version, node.source_version,
+            "source_version"
+        );
     }
 
     #[cfg(feature = "crdt")]

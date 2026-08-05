@@ -21,6 +21,29 @@ const TAGS_KEY: &str = "tags";
 const LINKS_KEY: &str = "links";
 const META_KEY: &str = "meta";
 
+// --- schema v2 (ADR-093) ---
+//
+// @ai-caution: [crdt] These keys are OPTIONAL by design and readers must tolerate
+// their absence — a v1 document simply has none of them. Do NOT add an
+// "upcast on read" that writes them when a v1 doc is opened. In a CRDT that is a
+// live hazard, not a convenience: two peers opening the same v1 document would each
+// author their own migration ops, and Automerge's own docs name this as the thing
+// that makes CRDT schema migration harder than a centralized one ("two users
+// independently perform the same migration… you need to ensure the two migrations
+// don't clash"). Writing these fields only when the application writes the node
+// anyway means there is no migration op to clash. The one-time bulk backfill is a
+// deliberate single-writer pass (ADR-094), not a read-triggered side effect.
+const SCHEMA_VERSION_KEY: &str = "schema_v";
+const KIND_KEY: &str = "kind";
+const TODO_KEY: &str = "todo";
+const PRIORITY_KEY: &str = "prio";
+const ALIASES_KEY: &str = "aliases";
+const PROPS_KEY: &str = "props";
+const SOURCE_VERSION_KEY: &str = "src_v";
+
+/// Current node schema version. Absent ⇒ v1 (text fields only).
+pub const NODE_SCHEMA_VERSION: i64 = 2;
+
 /// Materialized content from a KbNodeDoc — all fields extracted for FTS rebuild.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaterializedNode {
@@ -29,6 +52,13 @@ pub struct MaterializedNode {
     pub body: String,
     pub tags: Vec<String>,
     pub links: Vec<String>,
+    /// v2 fields — defaults when reading a v1 document.
+    pub kind: Option<String>,
+    pub todo_state: Option<String>,
+    pub priority: Option<String>,
+    pub aliases: Vec<String>,
+    pub properties: std::collections::HashMap<String, String>,
+    pub source_version: Option<u32>,
 }
 
 /// A KB node represented as a yrs document.
@@ -61,6 +91,13 @@ impl KbNodeDoc {
 
             root.insert(&mut txn, LINKS_KEY, ArrayPrelim::default());
             root.insert(&mut txn, META_KEY, MapPrelim::default());
+            // ADR-093 + ADR-033: seed the v2 containers EAGERLY. Creating a nested
+            // container lazily on first write is unsafe under concurrency — two
+            // peers each insert their own fresh map/array at the same key, one
+            // wins, and the loser's entries are silently dropped. Same reasoning as
+            // COLL_LEASE_KEY in collection_core.rs.
+            root.insert(&mut txn, ALIASES_KEY, ArrayPrelim::default());
+            root.insert(&mut txn, PROPS_KEY, MapPrelim::default());
         }
         Self { doc }
     }
@@ -89,6 +126,13 @@ impl KbNodeDoc {
 
             root.insert(&mut txn, LINKS_KEY, ArrayPrelim::default());
             root.insert(&mut txn, META_KEY, MapPrelim::default());
+            // ADR-093 + ADR-033: seed the v2 containers EAGERLY. Creating a nested
+            // container lazily on first write is unsafe under concurrency — two
+            // peers each insert their own fresh map/array at the same key, one
+            // wins, and the loser's entries are silently dropped. Same reasoning as
+            // COLL_LEASE_KEY in collection_core.rs.
+            root.insert(&mut txn, ALIASES_KEY, ArrayPrelim::default());
+            root.insert(&mut txn, PROPS_KEY, MapPrelim::default());
         }
         Self { doc }
     }
@@ -269,6 +313,215 @@ impl KbNodeDoc {
         txn.encode_update_v1()
     }
 
+    // ------------------------------------------------------------------
+    // Schema v2 (ADR-093) — every remaining `mae_kb::Node` field.
+    //
+    // Readers below all tolerate an absent key, which is what makes a v1
+    // document readable under v2 without any migration write. See the
+    // `@ai-caution` on the key constants for why that matters.
+    // ------------------------------------------------------------------
+
+    /// Schema version of this document. **1** when the key is absent — i.e. a
+    /// document authored before ADR-093, carrying text fields only.
+    pub fn schema_version(&self) -> i64 {
+        let root = self.doc.get_or_insert_map("node");
+        let txn = self.doc.transact();
+        root.get(&txn, SCHEMA_VERSION_KEY)
+            .and_then(|v| v.to_string(&txn).parse::<i64>().ok())
+            .unwrap_or(1)
+    }
+
+    /// Read an optional scalar string field. Absent ⇒ `None`.
+    fn scalar(&self, key: &str) -> Option<String> {
+        let root = self.doc.get_or_insert_map("node");
+        let txn = self.doc.transact();
+        root.get(&txn, key)
+            .map(|v| v.to_string(&txn))
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Set (or clear) an optional scalar string field, stamping the schema
+    /// version. Writes nothing when the value is already correct — an unchanged
+    /// save must not churn tombstones into a replicated document.
+    fn set_scalar(&mut self, key: &str, value: Option<&str>) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map("node");
+        let mut txn = self.doc.transact_mut();
+        let current = root.get(&txn, key).map(|v| v.to_string(&txn));
+        let target = value.map(|s| s.to_string());
+        if current.as_deref().filter(|s| !s.is_empty()) != target.as_deref() {
+            match &target {
+                Some(v) => {
+                    root.insert(&mut txn, key, v.as_str());
+                }
+                None => {
+                    root.remove(&mut txn, key);
+                }
+            }
+            root.insert(
+                &mut txn,
+                SCHEMA_VERSION_KEY,
+                NODE_SCHEMA_VERSION.to_string(),
+            );
+        }
+        txn.encode_update_v1()
+    }
+
+    /// Node kind (`mae_kb::NodeKind`, as its serialized string). Absent ⇒ `None`.
+    pub fn kind(&self) -> Option<String> {
+        self.scalar(KIND_KEY)
+    }
+
+    /// Set the node kind. Returns the encoded update.
+    #[must_use = "dropping this update silently prevents the kind change from syncing to peers"]
+    pub fn set_kind(&mut self, kind: Option<&str>) -> Vec<u8> {
+        self.set_scalar(KIND_KEY, kind)
+    }
+
+    /// Org todo state (`TODO`, `NEXT`, `DONE`, …). Absent ⇒ `None`.
+    pub fn todo_state(&self) -> Option<String> {
+        self.scalar(TODO_KEY)
+    }
+
+    /// Set the todo state. Returns the encoded update.
+    #[must_use = "dropping this update silently prevents the todo change from syncing to peers"]
+    pub fn set_todo_state(&mut self, todo: Option<&str>) -> Vec<u8> {
+        self.set_scalar(TODO_KEY, todo)
+    }
+
+    /// Org priority cookie (`A`/`B`/`C`). Absent ⇒ `None`.
+    pub fn priority(&self) -> Option<String> {
+        self.scalar(PRIORITY_KEY)
+    }
+
+    /// Set the priority. Returns the encoded update.
+    #[must_use = "dropping this update silently prevents the priority change from syncing to peers"]
+    pub fn set_priority(&mut self, priority: Option<&str>) -> Vec<u8> {
+        self.set_scalar(PRIORITY_KEY, priority)
+    }
+
+    /// Seed-content version stamp. Absent ⇒ `None`.
+    pub fn source_version(&self) -> Option<u32> {
+        self.scalar(SOURCE_VERSION_KEY)
+            .and_then(|s| s.parse::<u32>().ok())
+    }
+
+    /// Set the source version. Returns the encoded update.
+    #[must_use = "dropping this update silently prevents the version change from syncing to peers"]
+    pub fn set_source_version(&mut self, v: Option<u32>) -> Vec<u8> {
+        self.set_scalar(SOURCE_VERSION_KEY, v.map(|n| n.to_string()).as_deref())
+    }
+
+    /// Aliases. Absent ⇒ empty.
+    pub fn aliases(&self) -> Vec<String> {
+        let root = self.doc.get_or_insert_map("node");
+        let txn = self.doc.transact();
+        match root.get(&txn, ALIASES_KEY) {
+            Some(Out::YArray(arr)) => arr.iter(&txn).map(|v| v.to_string(&txn)).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Set the alias list, diffing **by value** exactly as `set_tags` does.
+    ///
+    /// @ai-caution: [crdt] Not a clear-and-refill. Two peers each adding one alias
+    /// would otherwise both wipe the array and re-append their own full list, so
+    /// every alias they had in common returns once per peer — the `YArray` form of
+    /// the ADR-092 D2 bug.
+    #[must_use = "dropping this update silently prevents the alias change from syncing to peers"]
+    pub fn set_aliases(&mut self, aliases: &[String]) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map("node");
+        let mut txn = self.doc.transact_mut();
+        let arr = match root.get(&txn, ALIASES_KEY) {
+            Some(Out::YArray(a)) => a,
+            _ => root.insert(&mut txn, ALIASES_KEY, ArrayPrelim::default()),
+        };
+        let current: Vec<String> = arr.iter(&txn).map(|v| v.to_string(&txn)).collect();
+        let mut kept: Vec<&String> = Vec::new();
+        let mut changed = false;
+        for (i, existing) in current.iter().enumerate().rev() {
+            if aliases.contains(existing) && !kept.contains(&existing) {
+                kept.push(existing);
+            } else {
+                arr.remove(&mut txn, i as u32);
+                changed = true;
+            }
+        }
+        for a in aliases {
+            if !kept.contains(&a) {
+                arr.push_back(&mut txn, a.as_str());
+                kept.push(a);
+                changed = true;
+            }
+        }
+        // Stamp the version only on a real change — an unchanged save must not
+        // author an op (ADR-092 D2's no-churn rule).
+        if changed {
+            root.insert(
+                &mut txn,
+                SCHEMA_VERSION_KEY,
+                NODE_SCHEMA_VERSION.to_string(),
+            );
+        }
+        txn.encode_update_v1()
+    }
+
+    /// Properties (the org `:PROPERTIES:` drawer — where org-roam's `:ID:` and
+    /// `:ROLE:` live). Absent ⇒ empty.
+    pub fn properties(&self) -> std::collections::HashMap<String, String> {
+        let root = self.doc.get_or_insert_map("node");
+        let txn = self.doc.transact();
+        match root.get(&txn, PROPS_KEY) {
+            Some(Out::YMap(m)) => m
+                .iter(&txn)
+                .map(|(k, v)| (k.to_string(), v.to_string(&txn)))
+                .collect(),
+            _ => std::collections::HashMap::new(),
+        }
+    }
+
+    /// Set properties, **per key**.
+    ///
+    /// @ai-caution: [crdt] A `YMap` is used, and updated key-by-key, precisely so
+    /// that two peers editing DIFFERENT properties merge instead of clobbering.
+    /// Never reduce this to "clear the map, re-insert everything" — that is the
+    /// same defect as the old `set_tags`/`set_body`, and here it would silently
+    /// discard a concurrent peer's unrelated property edit.
+    #[must_use = "dropping this update silently prevents the property change from syncing to peers"]
+    pub fn set_properties(&mut self, props: &std::collections::HashMap<String, String>) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map("node");
+        let mut txn = self.doc.transact_mut();
+        let map = match root.get(&txn, PROPS_KEY) {
+            Some(Out::YMap(m)) => m,
+            _ => root.insert(&mut txn, PROPS_KEY, MapPrelim::default()),
+        };
+        let current: Vec<(String, String)> = map
+            .iter(&txn)
+            .map(|(k, v)| (k.to_string(), v.to_string(&txn)))
+            .collect();
+        let mut changed = false;
+        for (k, _) in current.iter().filter(|(k, _)| !props.contains_key(k)) {
+            map.remove(&mut txn, k.as_str());
+            changed = true;
+        }
+        for (k, v) in props {
+            let unchanged = current.iter().any(|(ck, cv)| ck == k && cv == v);
+            if !unchanged {
+                map.insert(&mut txn, k.as_str(), v.as_str());
+                changed = true;
+            }
+        }
+        // Stamp the version only on a real change — an unchanged save must not
+        // author an op (ADR-092 D2's no-churn rule).
+        if changed {
+            root.insert(
+                &mut txn,
+                SCHEMA_VERSION_KEY,
+                NODE_SCHEMA_VERSION.to_string(),
+            );
+        }
+        txn.encode_update_v1()
+    }
+
     /// Get links.
     pub fn links(&self) -> Vec<String> {
         let root = self.doc.get_or_insert_map("node");
@@ -365,6 +618,12 @@ impl KbNodeDoc {
             body: self.body(),
             tags: self.tags(),
             links: self.links(),
+            kind: self.kind(),
+            todo_state: self.todo_state(),
+            priority: self.priority(),
+            aliases: self.aliases(),
+            properties: self.properties(),
+            source_version: self.source_version(),
         }
     }
 
