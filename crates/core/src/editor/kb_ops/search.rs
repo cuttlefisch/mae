@@ -277,6 +277,14 @@ impl Editor {
             .registry
             .instances
             .iter()
+            // A dir-less instance (the bundled guidance KBs, and any joined
+            // collab KB) has NO org directory, so no path is "inside" it.
+            // Without this filter `path.starts_with("")` is true -- an empty
+            // component iterator is a prefix of everything -- and since this
+            // loop returns on first match, a dir-less instance ordered ahead of
+            // a real one SHADOWS it: saves under the real KB's directory get
+            // attributed to, and written into, the dir-less one's store.
+            .filter(|i| !i.org_dir.as_os_str().is_empty())
             .map(|i| (i.uuid.clone(), i.org_dir.clone()))
         {
             if path.starts_with(&inst) {
@@ -338,6 +346,7 @@ impl Editor {
             .registry
             .instances
             .iter()
+            .filter(|i| !i.org_dir.as_os_str().is_empty())
             .any(|i| canonical.starts_with(&i.org_dir))
     }
 
