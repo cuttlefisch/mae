@@ -24,7 +24,9 @@ use crate::text::new_doc_with_client_id;
 use base64::Engine;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
-use yrs::{updates::decoder::Decode, Map, ReadTxn, StateVector, Transact, Update};
+use yrs::{
+    updates::decoder::Decode, updates::encoder::Encode, Map, ReadTxn, StateVector, Transact, Update,
+};
 
 /// The op-set's YMap name within its yrs doc.
 const OPS_MAP: &str = "ops";
@@ -165,7 +167,18 @@ pub fn open_new_ops(
         match decrypt(content_key, &blob) {
             Ok(plaintext) => {
                 // Causal rank = total of the update's covered clocks (history depth).
-                let rank = Update::decode_v1(&plaintext)
+                //
+                // @ai-caution: [crdt] `Update::state_vector()` is NON-EMPTY only for a
+                // self-contained full-state op (`encode_state`); an incremental delta
+                // from `encode_update_v1` reports an EMPTY state vector, hence rank 0.
+                // Measured, not assumed: a root op ranks {client: 6} = 6 while both of
+                // its child deltas rank 0. So this rank does NOT order deltas among
+                // themselves — the `op_id` tiebreak does, and that is fine, because
+                // deltas converge in any order. What is NOT fine is letting a root sort
+                // *after* a delta: `materialize` seeds its document from the first op,
+                // and a delta cannot seed the structure the others attach to. Hence the
+                // explicit root-first key below rather than rank alone.
+                let rank: u64 = Update::decode_v1(&plaintext)
                     .map(|u| u.state_vector().iter().map(|(_, &c)| c as u64).sum())
                     .unwrap_or(0);
                 out.push((op_id.to_string(), plaintext, rank));
@@ -173,7 +186,15 @@ pub fn open_new_ops(
             Err(_) => undecryptable += 1,
         }
     }
-    out.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| a.0.cmp(&b.0)));
+    // Roots (rank > 0) first, then deltas. Within each group: rank, then op_id — a
+    // total order, so every peer opening the same op-set replays it identically.
+    out.sort_by(|a, b| {
+        let root = |r: u64| if r > 0 { 0u8 } else { 1u8 };
+        root(a.2)
+            .cmp(&root(b.2))
+            .then_with(|| a.2.cmp(&b.2))
+            .then_with(|| a.0.cmp(&b.0))
+    });
     OpenedOps {
         ops: out.into_iter().map(|(id, pt, _)| (id, pt)).collect(),
         undecryptable,
@@ -188,15 +209,39 @@ pub fn open_new_ops(
 /// daemon never calls this (it never holds `key`); a thin client does, after fetching
 /// `kb/query.get`'s raw `ciphertext_b64` for an `Encryption::E2e` KB.
 pub fn materialize(op_set_state: &[u8], key: &ContentKey) -> crate::kb::KbNodeDoc {
+    let empty = || crate::kb::KbNodeDoc::new_with_client_id("n1", "", "", &[], 99);
     let opened = open_new_ops(op_set_state, key, &BTreeSet::new());
-    if opened.ops.is_empty() {
-        return crate::kb::KbNodeDoc::new_with_client_id("n1", "", "", &[], 99);
+
+    // Combine every op into ONE update, then apply that once.
+    //
+    // @ai-caution: [crdt] Do NOT go back to "seed from ops[0], then apply the rest in
+    // sequence". Op order here is not causal and cannot be made so: every incremental
+    // delta reports an EMPTY state vector, so `open_new_ops` breaks ties on `op_id` —
+    // a ciphertext hash, i.e. effectively random and different for every author. Two
+    // deltas that genuinely depend on each other (successive edits to one field) can
+    // arrive reversed, leaving the later one pending forever and silently yielding
+    // stale content (the v1 title where the author wrote v2). Sequential application
+    // only ever appeared to work because `set_body`/`set_title` emitted a single bulk
+    // insert per edit; character-level updates (ADR-092 D2) emit many items and do
+    // not reconstruct that way. `merge_updates` resolves the dependency graph
+    // internally, which is precisely the job — and re-applying updates in a loop to
+    // force convergence is NOT a substitute: it panics inside yrs's block store.
+    let updates: Vec<Update> = opened
+        .ops
+        .iter()
+        .filter_map(|(_, pt)| Update::decode_v1(pt).ok())
+        .collect();
+    if updates.is_empty() {
+        return empty();
     }
-    let mut node = crate::kb::KbNodeDoc::from_bytes(&opened.ops[0].1).unwrap();
-    for (_id, plaintext) in &opened.ops[1..] {
-        node.apply_update(plaintext).unwrap();
+
+    // Never `unwrap` on this path: an op-set is attacker-supplied ciphertext, so a
+    // forged or truncated op that nonetheless decrypts must degrade to an empty node
+    // rather than panic the client.
+    match crate::kb::KbNodeDoc::from_bytes(&Update::merge_updates(updates).encode_v1()) {
+        Ok(node) => node,
+        Err(_) => empty(),
     }
-    node
 }
 
 #[cfg(test)]
@@ -237,6 +282,115 @@ mod tests {
             assert_eq!(m.title(), title, "title converges from any storage order");
             assert_eq!(m.body(), body, "body converges from any storage order");
         }
+    }
+
+    /// ADR-092. The ordering invariant `materialize` depends on, asserted directly on
+    /// `open_new_ops` rather than inferred from a materialized result.
+    ///
+    /// A delta cannot seed a document — it carries no type for the other ops to attach
+    /// to. So whatever else the sort does, an op that CAN stand alone has to come
+    /// first. This is not automatic: the sort's rank is the update's state-vector
+    /// total, which is 0 for every incremental delta and non-zero only for a
+    /// self-contained op, so a plain ascending sort puts the root LAST.
+    ///
+    /// Loops over fresh keys because the tiebreak is `op_id` = a ciphertext hash: the
+    /// order genuinely differs per key, and a single iteration can pass by luck. That
+    /// is the same technique `seal_open_round_trips_and_converges_out_of_order` uses,
+    /// and the reason a storage-order permutation test would prove nothing here —
+    /// `merge` re-encodes the op-set, so every permutation re-sorts identically.
+    #[test]
+    fn open_new_ops_returns_a_self_contained_op_before_any_delta() {
+        let is_root = |pt: &[u8]| {
+            Update::decode_v1(pt)
+                .map(|u| u.state_vector().iter().next().is_some())
+                .unwrap_or(false)
+        };
+        for _ in 0..50 {
+            let key = ContentKey::generate();
+            let (state, _, _) = author_session(&key, 7);
+            let opened = open_new_ops(&state, &key, &BTreeSet::new());
+            assert_eq!(opened.ops.len(), 4, "all four ops opened");
+
+            // Precondition: this op-set really does mix one root with several deltas,
+            // so "root first" is a claim about ordering and not a tautology.
+            let roots = opened.ops.iter().filter(|(_, pt)| is_root(pt)).count();
+            assert_eq!(roots, 1, "exactly one op can stand alone");
+            assert!(
+                is_root(&opened.ops[0].1),
+                "the first op must be able to seed a document; a delta cannot"
+            );
+        }
+    }
+
+    /// A relay that DROPS the structure op leaves only deltas, which carry no type
+    /// to attach to. That must degrade to an empty node — never a panic, and never
+    /// partial content that a caller might treat as authoritative.
+    #[test]
+    fn an_op_set_missing_its_root_materializes_empty_without_panicking() {
+        let key = ContentKey::generate();
+        let mut node = KbNodeDoc::new_with_client_id("n1", "", "", &[], 7);
+        let plaintexts = vec![
+            node.encode_state(), // the op the relay will withhold
+            node.set_title("Secret Title"),
+            node.set_body("private body text"),
+        ];
+        // Precondition: with the root present this DOES materialize — otherwise the
+        // assertion below would pass vacuously.
+        let mut full: Vec<u8> = Vec::new();
+        let mut chain: Vec<u8> = Vec::new();
+        let mut sealed = Vec::new();
+        for pt in &plaintexts {
+            let (_id, outer) = seal_op(&chain, &key, pt, 7).unwrap();
+            chain = merge(&chain, &outer).unwrap();
+            full = merge(&full, &outer).unwrap();
+            sealed.push(outer);
+        }
+        assert_eq!(
+            materialize(&full, &key).title(),
+            "Secret Title",
+            "precondition: the complete op-set materializes"
+        );
+
+        let mut without_root: Vec<u8> = Vec::new();
+        for outer in &sealed[1..] {
+            without_root = merge(&without_root, outer).unwrap();
+        }
+        let m = materialize(&without_root, &key);
+        assert_eq!(m.title(), "", "no root ⇒ no content");
+        assert_eq!(m.body(), "", "no root ⇒ no content");
+    }
+
+    /// Ciphertext is attacker-controlled. An op that decrypts to bytes which are NOT a
+    /// valid yrs update must be skipped, leaving the honest ops intact — and must not
+    /// panic, since this runs client-side on data a hostile relay supplied.
+    #[test]
+    fn a_forged_op_that_decrypts_to_garbage_is_skipped_not_fatal() {
+        let key = ContentKey::generate();
+        let mut node = KbNodeDoc::new_with_client_id("n1", "", "", &[], 7);
+        let plaintexts = vec![
+            node.encode_state(),
+            node.set_title("Secret Title"),
+            node.set_body("private body text"),
+        ];
+        let mut state: Vec<u8> = Vec::new();
+        let mut chain: Vec<u8> = Vec::new();
+        for pt in &plaintexts {
+            let (_id, outer) = seal_op(&chain, &key, pt, 7).unwrap();
+            chain = merge(&chain, &outer).unwrap();
+            state = merge(&state, &outer).unwrap();
+        }
+
+        // Sealed under the REAL key (so it decrypts) but the plaintext is not an update.
+        let (_id, poison) = seal_op(&chain, &key, b"not a yrs update at all", 7).unwrap();
+        let poisoned = merge(&state, &poison).unwrap();
+
+        let m = materialize(&poisoned, &key);
+        assert_eq!(
+            m.title(),
+            "Secret Title",
+            "honest content survives a forged op"
+        );
+        assert_eq!(m.body(), "private body text");
     }
 
     #[test]
