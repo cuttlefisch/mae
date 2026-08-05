@@ -1,6 +1,7 @@
 # ADR-100: The browser KB edit surface — structured chrome plus source-backed live preview
 
-**Status:** Proposed. D4 is gated on a spike that has not run.
+**Status:** Proposed. D4 was decided by spike (`docs/research/100-org-parser-in-the-browser-spike.md`);
+its bundle-size condition remains open.
 **Depends on:** ADR-097 (Browser MAE is a KB surface), ADR-099 (the transport this edits over),
 ADR-093 (the node CRDT carries the whole node — this ADR's structured chrome is bound directly to
 its schema v2 types).
@@ -8,7 +9,8 @@ its schema v2 types).
 evidence, see Context), ADR-030 (in-text typed-link grammar), ADR-072 (KB read mode — the
 native-editor sibling of this surface), ADR-064 (a second native frontend — a different question,
 see ADR-097 D4).
-**Evidence:** `docs/research/097-browser-crdt-interop-spike.md`.
+**Evidence:** `docs/research/097-browser-crdt-interop-spike.md`,
+`docs/research/100-org-parser-in-the-browser-spike.md`.
 **Blocked on (partially):** issue #655 (properties stored twice).
 **Tracking:** issue TBD.
 
@@ -98,26 +100,44 @@ Shipping the honest subset beats shipping a richer editor that corrupts a table 
 edit. The UI must make the distinction visible rather than leaving a user to discover that some
 constructs behave differently.
 
-### D4 — How the browser obtains org structure: three options, decided by spike, not preference
+### D4 — The browser gets org structure from an extracted, WASM-compiled scanner crate
 
-Decorations need a parse. There are exactly three viable sources and each has a real cost:
+*Decided by spike (`docs/research/100-org-parser-in-the-browser-spike.md`), which changed the
+question this decision was originally framed around.*
 
-| Option | Cost |
-|---|---|
-| **(a) `uniorg` in JS** — accurate, org-element-faithful, unified ecosystem | A **third** org parser in the project, which will drift from the two Rust ones. Direct principle #8 violation. |
-| **(b) Daemon serves decoration ranges** from its own parser | One parser, one truth — but a network round-trip per keystroke, which is exactly the latency live preview cannot afford. |
-| **(c) Compile `shared/kb/src/org.rs` to WASM** | One parser, no round-trip, no drift. `org.rs` is pure Rust with no I/O, so this is plausible — but **unvalidated**. |
+The original three options were JS `uniorg` (a), daemon-served ranges (b), and compiling
+`shared/kb/src/org.rs` to WASM (c). Measurement disposed of two and corrected the third:
 
-**(c) is the only option consistent with principle #8 and is the recommended target — but this ADR
-does not decide it.** A spike must first establish that `org.rs` compiles to WASM cleanly, that
-bundle size is acceptable, and that parse latency on a realistic node body fits an interactive
-budget. If it fails, (a) is the fallback, and the drift it introduces must then be managed
-explicitly — a conformance test running both parsers over the same corpus and asserting identical
-output.
+- **(b) is rejected on latency.** Native parse of the real corpus is **microseconds** — full
+  structure p50 8.6 µs, max 39.3 µs over 98 bundled org files. A network round-trip is three orders
+  of magnitude worse than the parse it would replace. (Latency is therefore *not* a constraint on
+  any local option, which is worth stating because it was (b)'s only rationale.)
+- **(c) as written was based on a half-wrong premise.** `org.rs` has **no inline-emphasis scanner
+  at all** — its only contact with `*`/`=`/`~` is heading stars and skipping links inside verbatim
+  spans. It cannot produce most of D3's decoration set.
+- **But the missing half already exists as offsets.** `mae-export`'s `find_markup_end_str` returns
+  `Option<(usize, &str)>`; the inline logic is already range-based and only its public wrapper
+  formats to HTML.
 
-Recording this as undecided is deliberate. The earlier planning pass proposed reusing a
-`tree-sitter-org` grammar that does not exist (#657); the lesson is to gate a parser decision on a
-spike rather than on a plausible-sounding reuse story.
+**The decision: extract the pure scanners from both parsers into a leaf crate (provisionally
+`shared/org-scan`) and compile that to WASM.** The browser consumes it for block structure, links,
+drawers, properties *and* inline emphasis.
+
+This is chosen over (a) because drift in the *semantic* layer — typed links, drawers, headings —
+produces a wrong graph rather than wrong-looking text, and a third independent implementation is
+most dangerous exactly there. It is also a principle #8 win rather than a cost: MAE currently has
+two hand-written org parsers with overlapping responsibilities, and this consolidates their
+scanning core into one place both native code and the browser consume.
+
+**Two conditions bind this decision:**
+
+1. **A conformance gate before any call site switches.** The extracted crate and the current implementations must produce identical output over the full bundled corpus. Extracting from two shipped, heavily-tested parsers is the real risk here, not the WASM build.
+2. **Bundle size is still unmeasured**, and is a prerequisite rather than a formality — `wasm32-unknown-unknown` std is not installed on the development machine and CI would need the target added to `.github/actions/setup-rust`. If the compiled crate turns out large enough to hurt initial page load, the trade reopens **for the cosmetic inline layer only**; the semantic layer's argument does not depend on size.
+
+Recording the correction rather than quietly rewriting the option list is deliberate. The earlier
+planning pass proposed reusing a `tree-sitter-org` grammar that does not exist (#657), and this
+ADR's own first draft proposed reusing an emphasis scanner that does not exist either. Both were
+plausible; both were wrong; both were caught by checking rather than by reasoning.
 
 ### D5 — Block WYSIWYG is permitted only as a projection, never as a source of truth
 
