@@ -24,34 +24,27 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
 
 echo "Running pre-commit checks..."
 
-# 1. Format check
-if ! cargo fmt --check --quiet 2>/dev/null; then
-    echo "❌ cargo fmt check failed. Run 'make fmt' to fix."
+# The gate itself lives in ONE place: `make pre-commit`. This hook used to
+# restate the command list, and the restatement drifted -- it ran `cargo fmt`
+# and `cargo clippy` at the repo root, which do NOT cover the separate `daemon/`
+# workspace (ADR-014). On 2026-08-04 a daemon formatting error passed this hook,
+# passed a manual `cargo fmt --all --check`, and failed in CI. There was no
+# `fmt-daemon` target at all, so no local command could have caught it.
+#
+# Anything added to `make pre-commit` is picked up here automatically. Do not
+# re-inline the individual commands: three disagreeing definitions of "what must
+# pass" (hook / Makefile / CI) is what produced the gap.
+#
+# Output is NOT swallowed. The previous version sent failures to /dev/null and
+# printed a generic message, so a developer saw "clippy check failed" with no
+# indication of which lint, in which crate.
+if ! make pre-commit; then
+    echo ""
+    echo "❌ Pre-commit gate failed -- see the output above."
+    echo "   Formatting:  make fmt        (formats BOTH workspaces)"
+    echo "   Code map:    make code-map"
+    echo "   ADR KB:      make adr-kb     (then commit the regenerated assets)"
     exit 1
 fi
 
-# 2. Clippy lint check (must match `make clippy` and CI)
-if ! cargo clippy --workspace --all-targets -- -D warnings >/dev/null 2>&1; then
-    echo "❌ cargo clippy check failed. Run 'make clippy' to see errors."
-    exit 1
-fi
-
-# 3. Code-map freshness check
-echo "Checking code-map freshness..."
-if ! make code-map-check 2>/dev/null; then
-    echo "❌ Code-map is stale. Run 'make code-map' to regenerate."
-    exit 1
-fi
-
-# 4. ADR KB staleness check (ADR-059 Phase E) -- same check CI's "ADR KB staleness
-# gate" runs, just moved earlier: catches an ADR header field (Status/Extends/
-# Relates to/Depends on/Supersedes) changing without assets/mae-adr.cozo(.sha256)
-# being regenerated in the same range, before it costs a full CI cycle.
-echo "Checking ADR KB staleness..."
-if ! make verify-adr-kb-sync >/dev/null 2>&1; then
-    echo "❌ ADR KB is stale relative to a header-field change. Run 'make adr-kb' and commit the regenerated assets/mae-adr.cozo + assets/mae-adr.cozo.sha256."
-    exit 1
-fi
-
-echo "✅ Pre-commit checks passed."
 exit 0
