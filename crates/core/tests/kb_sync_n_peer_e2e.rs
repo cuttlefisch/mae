@@ -447,12 +447,30 @@ fn run_concurrent_edits_converge(n: usize) {
     }
 
     let (title, body) = mesh.assert_all_agree(node);
-    // The merge must reflect every peer's contribution survived in SOME form
-    // (no silent last-writer-wins drop): each peer's id fragment is present.
-    for name in &refs {
+
+    // The merge must reflect every peer's contribution surviving in SOME form — no
+    // silent last-writer-wins drop.
+    //
+    // The oracle is each peer's UNIQUE INDEX DIGIT, not its whole `from-{name}`
+    // fragment. Under character-level CRDT text (ADR-092 D2), concurrent edits to the
+    // same text region interleave; they do not each survive as an intact substring.
+    // Demanding `title.contains("from-peer1")` would be demanding the old wholesale
+    // `remove_range(0,len)` + `insert(0,new)`, where each peer re-inserted its full
+    // string at origin 0 — which is exactly the behaviour that duplicated every
+    // character neither peer had touched, and which ADR-092 removed. The two cannot
+    // both hold.
+    //
+    // What CRDT does guarantee, and what "no silent drop" actually means, is that no
+    // INSERTED character is lost. Each peer's index digit appears in nothing but its
+    // own edit, so its presence proves that peer's edit reached the merge.
+    for (k, name) in refs.iter().enumerate() {
         assert!(
-            title.contains(&format!("from-{name}")),
-            "converged title {title:?} dropped {name}'s concurrent edit"
+            title.contains(&k.to_string()),
+            "converged title {title:?} dropped {name}'s concurrent edit entirely"
+        );
+        assert!(
+            body.contains(&k.to_string()),
+            "converged body {body:?} dropped {name}'s concurrent edit entirely"
         );
     }
     assert!(!body.is_empty());
