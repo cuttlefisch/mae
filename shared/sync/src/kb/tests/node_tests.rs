@@ -76,7 +76,6 @@ fn two_clients_merge_body() {
     let mut node_b = KbNodeDoc::from_bytes(&state).unwrap();
     assert_eq!(node_b.body(), "hello");
 
-    // Both edit body (set_body replaces, so last-write-wins semantics)
     let update_a = node_a.set_body("from A");
     let update_b = node_b.set_body("from B");
 

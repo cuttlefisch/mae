@@ -23,4 +23,5 @@ mod collection_crypto_tests;
 mod collection_lease_tests;
 mod collection_oplog_tests;
 mod collection_roles_tests;
+mod node_convergence_tests;
 mod node_tests;

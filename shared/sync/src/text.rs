@@ -38,6 +38,103 @@ pub(crate) fn new_doc() -> Doc {
     })
 }
 
+/// Bring `ytext` from `current` to `target` with a **word-level** LCS diff,
+/// emitting only the insert/delete ops that actually differ. Returns whether any
+/// op was applied.
+///
+/// Offsets are **UTF-16 code units**, matching [`new_doc`]'s `OffsetKind::Utf16`
+/// — an emoji counts as 2, a CJK character as 1. A byte- or char-offset diff
+/// would corrupt non-ASCII text.
+///
+/// ## Why words and not characters
+///
+/// A character-level LCS matches individual letters that happen to be shared, so
+/// replacing a body with unrelated text emits many small inserts interleaved with
+/// spurious `Equal` runs. Two consequences, the second serious:
+///
+/// 1. Every edit multiplies the yrs item count and the encoded size.
+/// 2. Inserted text is never stored as a contiguous byte run — which silently
+///    defeats any check that greps stored bytes for a known string. In particular
+///    `scripts/collab-p2p-mesh-e2e.sh` greps the daemon store for canary plaintext
+///    to prove an E2E KB is key-blind. Fragmented plaintext makes that assertion
+///    pass whether or not the content was ever sealed, converting a real security
+///    check into a vacuous one.
+///
+/// Word granularity keeps the property that actually matters — text neither peer
+/// touched is left alone, so concurrent edits never duplicate the untouched base —
+/// while emitting contiguous runs. The trade-off is that two peers editing *the
+/// same word* concurrently replace it rather than merging inside it; that is the
+/// standard granularity trade and is guarded by
+/// `an_edited_body_is_stored_as_a_contiguous_run` plus the no-duplication oracles.
+///
+/// @ai-caution: [crdt] Never replace this with `remove_range(0, len)` +
+/// `insert(0, new)`. A wholesale replace makes two peers editing the same field
+/// CONVERGE while DUPLICATING the text neither of them touched: each peer
+/// tombstones the shared base once and re-inserts its own full copy at origin 0,
+/// so the base survives once per peer. It is not caught by asserting
+/// `a.body() == b.body()` — a CRDT gives convergence for free, and that assertion
+/// is exactly what let this ship (see
+/// `kb::tests::node_tests::concurrent_same_field_edits_do_not_duplicate_the_untouched_base`).
+/// The oracle that matters is that the untouched base appears exactly once.
+pub(crate) fn reconcile_text_ref(
+    txn: &mut yrs::TransactionMut<'_>,
+    ytext: &yrs::TextRef,
+    current: &str,
+    target: &str,
+) -> bool {
+    use similar::{ChangeTag, TextDiff};
+
+    if current == target {
+        return false;
+    }
+
+    let diff = TextDiff::from_words(current, target);
+    let mut utf16_offset: u32 = 0;
+    let mut changed = false;
+
+    // `from_chars` + `iter_all_changes` yields ONE change per character. Coalesce
+    // consecutive changes that share a tag so each contiguous run becomes a single
+    // yrs op.
+    //
+    // This is not just an optimization. Emitting a separate insert per character
+    // means an inserted string is never stored as a contiguous byte run, which
+    // (a) multiplies the yrs item count and the encoded size for every edit, and
+    // (b) silently defeats any check that greps stored bytes for a known string —
+    // including `scripts/collab-p2p-mesh-e2e.sh`'s key-blindness assertion, which
+    // greps the daemon store for canary PLAINTEXT. A fragmented plaintext would
+    // make that assertion pass whether or not the content was actually sealed,
+    // turning a real security check into a vacuous one.
+    //
+    // The merge semantics are unchanged: the diff is still computed per character,
+    // so concurrent edits still interleave at character granularity. Only the
+    // application is batched.
+    let mut it = diff.iter_all_changes().peekable();
+    while let Some(change) = it.next() {
+        let tag = change.tag();
+        let mut run = String::from(change.value());
+        while it.peek().map(|n| n.tag()) == Some(tag) {
+            run.push_str(it.next().expect("peeked").value());
+        }
+        let utf16_len: u32 = run.chars().map(|c| c.len_utf16() as u32).sum();
+        match tag {
+            ChangeTag::Equal => {
+                utf16_offset += utf16_len;
+            }
+            ChangeTag::Delete => {
+                ytext.remove_range(txn, utf16_offset, utf16_len);
+                changed = true;
+            }
+            ChangeTag::Insert => {
+                ytext.insert(txn, utf16_offset, run.as_str());
+                utf16_offset += utf16_len;
+                changed = true;
+            }
+        }
+    }
+
+    changed
+}
+
 /// Clamp an arbitrary `u64` to the range yrs accepts for a `ClientID`.
 ///
 /// yrs packs the top 11 bits of a `ClientID` as an internal tag, so only the
@@ -528,41 +625,18 @@ impl TextSync {
     /// then applies insert/delete operations through yrs transactions. Returns
     /// the encoded update bytes for broadcast (empty if no change).
     ///
-    /// Note: yrs uses byte offsets (`OffsetKind::Bytes`), so we track byte
-    /// offsets alongside char offsets throughout the diff application.
+    /// The diff itself lives in [`reconcile_text_ref`] so the KB-node path shares
+    /// one implementation with this one (ADR-092 D2).
     pub fn reconcile_to(&mut self, target: &str) -> Vec<u8> {
-        use similar::{ChangeTag, TextDiff};
-
         let current = self.content();
         if current == target {
             return Vec::new();
         }
 
-        let target_str = target.to_string();
-        let diff = TextDiff::from_chars(&current, &target_str);
         let ytext = self.doc.get_or_insert_text(TEXT_NAME);
-
         let update = {
             let mut txn = self.doc.transact_mut();
-            let mut utf16_offset: u32 = 0;
-
-            for change in diff.iter_all_changes() {
-                let utf16_len: u32 = change.value().chars().map(|c| c.len_utf16() as u32).sum();
-                match change.tag() {
-                    ChangeTag::Equal => {
-                        utf16_offset += utf16_len;
-                    }
-                    ChangeTag::Delete => {
-                        ytext.remove_range(&mut txn, utf16_offset, utf16_len);
-                    }
-                    ChangeTag::Insert => {
-                        let text = change.value();
-                        ytext.insert(&mut txn, utf16_offset, text);
-                        utf16_offset += utf16_len;
-                    }
-                }
-            }
-
+            reconcile_text_ref(&mut txn, &ytext, &current, target);
             txn.encode_update_v1()
         };
 
