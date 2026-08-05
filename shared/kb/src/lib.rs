@@ -3672,9 +3672,18 @@ mod tests {
          #+begin_src rust\nfn main() { println!(\"hello\"); }\n#+end_src\n"
     }
 
+    /// Covers the TEXT fields only — `id`/`title`/`body`/`tags`.
+    ///
+    /// Renamed from `crdt_bridge_roundtrip_preserves_all_fields`, which it never
+    /// did: the node it builds sets no `properties`, `todo_state`, `priority` or
+    /// `aliases`, so it cannot fail on the five fields the CRDT actually drops.
+    /// Its one non-text assertion, `source`, is a *parameter* passed into
+    /// `from_crdt_doc` — asserting the argument equals itself. `kind` is likewise
+    /// a parameter and was never asserted at all. See
+    /// `crdt_roundtrip_preserves_every_node_field` below for the real contract.
     #[cfg(feature = "crdt")]
     #[test]
-    fn crdt_bridge_roundtrip_preserves_all_fields() {
+    fn crdt_bridge_roundtrip_preserves_text_fields() {
         let body = realistic_org_body();
         let node = Node::new("concept:test", "Test Node — CRDT", NodeKind::Concept, body)
             .with_tags(vec!["research", "crdt"]);
@@ -3693,8 +3702,68 @@ mod tests {
             vec!["research", "crdt"],
             "tags should round-trip"
         );
-        assert_eq!(restored.source, Some(NodeSource::Federation));
         assert!(restored.crdt_doc.is_some(), "CRDT bytes should be stored");
+    }
+
+    /// ADR-093 Gate A.1 — the contract a CRDT-as-truth migration depends on.
+    ///
+    /// Every `Node` field must survive `Node → KbNodeDoc → Node`. Today five do
+    /// not: `properties`, `todo_state`, `priority`, `aliases` and `source_version`
+    /// are absent from `KbNodeDoc`'s schema entirely, and `kind`/`source` are
+    /// supplied as arguments to `from_crdt_doc` rather than read back from the doc.
+    ///
+    /// This is latent while a KB is unshared — `kb_update_node_with` persists
+    /// straight to Cozo, which stores every field, and `crdt_doc` stays `None`. It
+    /// stops being latent the moment a migration mints CRDT lineage for every node,
+    /// which is exactly what a hosted, CRDT-as-truth deployment requires. For 2,457
+    /// org-roam notes, `properties` is where `:ID:` and `:ROLE:` live.
+    ///
+    /// `from_crdt_doc` is deliberately called with DELIBERATELY WRONG `kind` and
+    /// `source` arguments: if the restored node still reports the original values,
+    /// the doc carried them. If it reports the wrong ones, the caller did — which
+    /// is a round-trip in name only.
+    #[cfg(feature = "crdt")]
+    #[test]
+    fn crdt_roundtrip_preserves_every_node_field() {
+        let mut node = Node::new(
+            "concept:full",
+            "Every Field — 日本語 café 🎉",
+            NodeKind::Concept,
+            realistic_org_body(),
+        )
+        .with_tags(vec!["research", "crdt"]);
+        node.todo_state = Some("NEXT".to_string());
+        node.priority = Some('A');
+        node.aliases = vec!["alias one".to_string(), "エイリアス".to_string()];
+        node.properties
+            .insert("ID".to_string(), "1F0A-BEEF".to_string());
+        node.properties
+            .insert("ROLE".to_string(), "hub".to_string());
+        node.source_version = Some(7);
+
+        let doc = node.to_crdt_doc().expect("to_crdt_doc");
+        // Wrong on purpose — see the doc comment.
+        let restored = Node::from_crdt_doc(&doc, NodeKind::Note, NodeSource::Manual);
+
+        assert_eq!(restored.id, node.id, "id");
+        assert_eq!(restored.title, node.title, "title");
+        assert_eq!(restored.body, node.body, "body");
+        assert_eq!(restored.tags, node.tags, "tags");
+        assert_eq!(
+            restored.kind, node.kind,
+            "kind must come from the doc, not the caller's argument"
+        );
+        assert_eq!(restored.todo_state, node.todo_state, "todo_state");
+        assert_eq!(restored.priority, node.priority, "priority");
+        assert_eq!(restored.aliases, node.aliases, "aliases");
+        assert_eq!(
+            restored.properties, node.properties,
+            "properties — where org-roam :ID:/:ROLE: live"
+        );
+        assert_eq!(
+            restored.source_version, node.source_version,
+            "source_version"
+        );
     }
 
     #[cfg(feature = "crdt")]
