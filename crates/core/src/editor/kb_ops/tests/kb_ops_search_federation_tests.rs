@@ -140,8 +140,9 @@ fn kb_register_allows_a_second_concurrent_frontend_to_open_the_same_instance() {
     // opened the instance as sled and kept the handle open for the process
     // lifetime; a SECOND frontend's attempt to open the same instance store hit
     // sled's exclusive dir lock and failed (silently falling back to a
-    // non-persistent in-memory import — the exact bug reported against the
-    // "arisnova" KB). With sqlite as the engine, a second handle must succeed
+    // non-persistent in-memory import — the exact bug originally reported
+    // against a registered KB). With sqlite as the engine, a second handle
+    // must succeed
     // while the first is still open — the same topology that already lets N
     // daemon-less processes share the primary store.
     let dir = create_test_org_dir();
