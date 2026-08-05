@@ -649,7 +649,13 @@ clients — the membership subject is a stable *member* key, not a device key; d
 recovery-key-sealed secret storage; the OIDC-principal↔fingerprint binding lives in daemon state
 *outside* the CRDT so an IdP migration rewrites a mutable table rather than an unrewritable signed
 log; AD groups gate the session while CRDT membership stays owner-authored. *Proposed, phased,
-blocked on #176*; evidence in `docs/research/098-*.md`). The holistic sharing story + security audits live in `docs/KB_SHARING.md`,
+blocked on #176*; evidence in `docs/research/098-*.md`), **ADR-099** (bidirectional sync transport
+for browser clients — WebSocket on the existing OAuth listener, re-framing MAE's own already
+doc-scoped envelope rather than speaking y-protocols, so one session multiplexes N documents;
+*proposed*, supersedes ADR-074 D1 for the write path only), and **ADR-100** (the browser KB edit
+surface — structured chrome bound to ADR-093's schema v2 with zero round-trip, plus source-backed
+live preview over the body `Y.Text`; block WYSIWYG permitted only as a projection, never a second
+source of truth; *proposed*, D4's org-parser choice gated on a WASM spike). The holistic sharing story + security audits live in `docs/KB_SHARING.md`,
 `docs/E2E_ENCRYPTION.md`, and `docs/SECURITY_REVIEW.md`.
 
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
