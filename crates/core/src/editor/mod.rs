@@ -1179,8 +1179,15 @@ pub struct Editor {
     pub ai_chat_enabled: bool,
     /// Name of a registered KB instance (or "primary") whose content is
     /// actively surfaced to AI agents at session start as standing
-    /// practices/guidance. Empty (default) disables this. See
-    /// `mae_ai::guidance`.
+    /// practices/guidance. Defaults to `"DevPractices"` (ADR-076); set to
+    /// empty to disable. See `mae_ai::guidance`.
+    ///
+    /// @ai-caution: [guidance-delivery] This field's initializer in
+    /// `Editor::new` is the value `get_option` actually returns — the
+    /// `OptionRegistry` entry in `options.rs` is NOT independently consulted.
+    /// The two must agree. They did not: the registry said `"DevPractices"`
+    /// while this said `String::new()`, so the registry default was
+    /// documentation only and guidance stayed off. Change both together.
     pub ai_guidance_kb: String,
     /// When true, re-export the guidance KB to AGENTS.md automatically each
     /// session start (ADR-050 D4). Default false — one-time/on-demand export
@@ -1685,7 +1692,8 @@ impl Editor {
             format_on_save: false,
             spell_enabled: false,
             ai_chat_enabled: false,
-            ai_guidance_kb: String::new(),
+            // Must match options.rs's registry default -- see the field's doc.
+            ai_guidance_kb: "DevPractices".to_string(),
             ai_guidance_export_live_sync: false,
             ai_guidance_inline_budget_chars: 8000,
             explicitly_set_options: std::collections::HashSet::new(),

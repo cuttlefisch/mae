@@ -525,15 +525,28 @@ impl OptionRegistry {
                     "Name of a registered KB instance whose content is actively surfaced to AI \
                      agents at session start as standing practices/guidance that should be \
                      followed — both mae-agent-cli's system prompt and, for any MCP-connected \
-                     client, the initialize response's instructions field. Empty (default) \
-                     disables this — no behavior change from today. Not validated against the \
+                     client, the initialize response's instructions field. Defaults to \
+                     \"DevPractices\", the bundled vendor-neutral practices KB (ADR-076); set to \
+                     empty to disable, or to another registered instance name (e.g. \
+                     \"MaePractices\" when working on MAE itself). Not validated against the \
                      KB registry at set time (init.scm evaluates before KB federation loads, so \
-                     the shipped default \"DevPractices\" must still be settable before it's \
-                     registered) — an unresolvable name is a silent no-op at read time instead, \
-                     never a startup error. \"primary\" (the built-in help KB) is accepted here \
-                     but not yet wired in `crates/ai/src/guidance.rs`'s reader — setting it \
-                     currently surfaces no content; use a registered instance name instead.",
-                    OptionKind::String, "", Some("ai.guidance_kb"), &[]),
+                     the default must be settable before it's registered) — an unresolvable name \
+                     is a silent no-op at read time instead, never a startup error. \"primary\" \
+                     (the built-in help KB) is accepted here but not yet wired in \
+                     `crates/ai/src/guidance.rs`'s reader — setting it currently surfaces no \
+                     content; use a registered instance name instead.",
+                    // @ai-caution: [guidance-delivery] This default was `""` until 2026-08-04,
+                    // while `"DevPractices"` lived ONLY in the init.scm template
+                    // (`crates/mae/src/config.rs`'s default_init_template), which is written only
+                    // when no `~/.config/mae/init.scm` exists. So the "shipped default" reached
+                    // fresh installs only — every pre-existing install, including this repo's own
+                    // author's, silently received NO guidance despite DevPractices being
+                    // registered and visible in `kb_instances`. Verified live before the change:
+                    // `get_option ai_guidance_kb` returned `{"value": "", "default": ""}`.
+                    // A registry default is the only place that reaches an existing install;
+                    // a template is not a default. Safe because the reader is best-effort — an
+                    // unregistered name is already a documented silent no-op.
+                    OptionKind::String, "DevPractices", Some("ai.guidance_kb"), &[]),
                 opt!("ai_guidance_inline_budget_chars", &["ai-guidance-inline-budget-chars"],
                     "Max characters of ai_guidance_kb's rendered content (mae_ai::guidance::build_guidance_context \
                      — the same content mae-agent-cli inlines into its system prompt) to inline \
