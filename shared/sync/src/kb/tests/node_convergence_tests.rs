@@ -225,3 +225,33 @@ fn setting_a_field_to_its_current_value_produces_no_ops() {
         );
     }
 }
+
+/// An edited body must be stored as a CONTIGUOUS byte run, not one yrs item per
+/// character.
+///
+/// `scripts/collab-p2p-mesh-e2e.sh` greps the daemon store for canary plaintext —
+/// once to prove content reached the owner (non-vacuity), and once to prove an
+/// E2E KB's plaintext is ABSENT (key-blindness). A per-character diff fragments
+/// the text so neither grep can find it, which breaks the first check and, far
+/// worse, makes the second pass whether or not anything was actually sealed.
+///
+/// The replacing case is the one that regressed: inserting into an EMPTY text
+/// always produced a single run, so a test that only covered creation missed it.
+#[test]
+fn an_edited_body_is_stored_as_a_contiguous_run() {
+    let canary = "MESH-CANARY-abc123";
+    for (label, initial) in [
+        ("empty", ""),
+        ("replacing an existing body", "old body here"),
+    ] {
+        let mut node = KbNodeDoc::new_with_client_id("n1", "T", initial, &[], 1);
+        let _ = node.set_body(canary);
+        let bytes = node.encode();
+        assert!(
+            bytes.windows(canary.len()).any(|w| w == canary.as_bytes()),
+            "body set over {label} must appear as one contiguous run in the \
+             encoded document, else a grep-based store assertion silently \
+             stops meaning anything"
+        );
+    }
+}
