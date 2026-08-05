@@ -626,8 +626,13 @@ require explicit workspace trust / permission decisions are three-state allow-as
 dispatch carries a session handle), and **ADR-092** (one write path for a KB node — `kb_update_node_with`
 is the sole content mutator, CRDT text is updated by character-level diff rather than wholesale
 replace, and the human edit surface is the node's normalized org source text rather than its rendered
-view or a file; ADR-029's **write** side, *proposed, phased*). The holistic sharing story + security
-audits live in `docs/KB_SHARING.md`, `docs/E2E_ENCRYPTION.md`, and `docs/SECURITY_REVIEW.md`.
+view or a file; ADR-029's **write** side, *proposed, phased*), and **ADR-093** (the node CRDT carries
+the whole node — `kind`/`todo_state`/`priority`/`aliases`/`properties`/`source_version` join the
+schema behind a `schema_v` key, with tolerant readers and **no upcast-on-read**, so a v1 document
+opens unchanged and two peers can never author clashing migration ops; supersedes ADR-092 D4's
+"editable is bounded by what syncs", and is the prerequisite that makes a lossless text-KB migration
+possible at all). The holistic sharing story + security audits live in `docs/KB_SHARING.md`,
+`docs/E2E_ENCRYPTION.md`, and `docs/SECURITY_REVIEW.md`.
 
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
 > from it entirely until 2026-08-04, i.e. every ADR from the KB-visualization arc and the whole
