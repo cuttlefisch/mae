@@ -77,9 +77,19 @@ impl Editor {
 
     /// Refuse an AI-originated save that targets MAE's own configuration (ADR-089 D4).
     ///
-    /// Both save entry points funnel through here, which is what makes `open_file` +
-    /// `buffer_write` + `execute_command save` not a way around the `create_file`
-    /// guard — the same escalation, assembled from three individually-permitted steps.
+    /// This is what makes `open_file` + `buffer_write` + `execute_command save` not a
+    /// way around the `create_file` guard — the same escalation, assembled from three
+    /// individually-permitted steps.
+    ///
+    /// @ai-caution: [security] Every save entry point must call this, and the one that
+    /// matters most is `save_current_buffer` — `:w`, `:w!`, `:wq`, `:wa` and
+    /// `execute_command("save")` all funnel there, while `save_buffer_with_hash_check`
+    /// and `save_buffer_force` have no production caller at all. This comment
+    /// previously claimed "both save entry points funnel through here" while
+    /// `save_current_buffer` called `Buffer::save()` directly, so the guard was
+    /// unreachable in production and the false claim is what kept it that way. Do not
+    /// restate reachability here — assert it with a test on the live path
+    /// (`an_ai_originated_write_command_cannot_reach_project_config`).
     ///
     /// @ai-caution: [security] The condition is deliberately AI-origin, not tier:
     /// a human editing their own `init.scm` in MAE, and `:set-save` writing it, must
@@ -294,6 +304,18 @@ impl Editor {
         let idx = self.active_buffer_idx();
         if self.buffers[idx].kind == crate::BufferKind::Demo {
             self.set_status("Demo buffer — changes are not saved");
+            return;
+        }
+        // Refuse BEFORE `before-save` fires: a refused save must have no side
+        // effects at all, and before-save advice (format-on-save and friends)
+        // mutates the buffer.
+        if let Err(e) = self.refuse_ai_save_of_protected_config(idx) {
+            self.notify(
+                crate::notifications::Notification::error("security", "Save refused")
+                    .body(e.clone())
+                    .key(format!("ai-config-save-refused:{idx}")),
+            );
+            self.set_status(e);
             return;
         }
         self.fire_hook("before-save");
@@ -1827,6 +1849,58 @@ mod tests {
         assert!(
             forced.is_err(),
             "force-save must not be an escape hatch around the same guard"
+        );
+    }
+
+    /// The live path — and the one the guard was NOT on.
+    ///
+    /// `save_buffer_with_hash_check` / `save_buffer_force` both carry the guard, but
+    /// neither is reachable from any command: `:w`, `:w!`, `:wq`, `:wa` and
+    /// `execute_command("save")` all funnel into `save_current_buffer`, which called
+    /// `Buffer::save()` directly. So the three-step escalation the guard's own doc
+    /// comment claims to stop was reachable through the only entry point that runs.
+    ///
+    /// The oracle is the bytes on disk, not the status line: the question is whether
+    /// the agent's text actually landed in MAE's configuration.
+    #[test]
+    fn an_ai_originated_write_command_cannot_reach_project_config() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join(".mae").join("init.scm");
+        let (mut editor, idx) = editor_with_project_config_buffer(tmp.path());
+        editor.window_mgr.focused_window_mut().buffer_idx = idx;
+
+        // What an escalation actually looks like: grant the agent's own tier.
+        editor.buffers[idx].replace_contents("(set-option! \"ai_permission_tier\" \"full\")\n");
+        editor.ai.ai_dispatch_depth = 1; // inside an AI dispatch scope
+
+        editor.save_current_buffer();
+
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            ";; original\n",
+            "an AI-originated :w must not write MAE's own configuration"
+        );
+    }
+
+    /// Positive control for the test above — without it, that assertion would also
+    /// pass if `save_current_buffer` simply never wrote anything. A human's `:w` on
+    /// the same buffer must still reach disk.
+    #[test]
+    fn a_human_write_command_still_saves_project_config() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join(".mae").join("init.scm");
+        let (mut editor, idx) = editor_with_project_config_buffer(tmp.path());
+        editor.window_mgr.focused_window_mut().buffer_idx = idx;
+
+        editor.buffers[idx].replace_contents(";; edited by the human\n");
+        assert_eq!(editor.ai.ai_dispatch_depth, 0, "sanity: not an AI dispatch");
+
+        editor.save_current_buffer();
+
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            ";; edited by the human\n",
+            "a human editing their own config must be entirely unaffected"
         );
     }
 
