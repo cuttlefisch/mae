@@ -25,7 +25,7 @@ use serde_json::json;
 
 use mae_daemon::kb_query::{self, KbQueryLimits};
 
-fn generous_limits() -> KbQueryLimits {
+pub(super) fn generous_limits() -> KbQueryLimits {
     KbQueryLimits {
         max_body_bytes: 65_536,
         max_scan_nodes: 500,
@@ -83,7 +83,7 @@ pub(super) async fn seed_unencrypted_kb(
 /// `KbNodeDoc`. Returns the `ContentKey` so a test can decrypt as the member
 /// would.
 #[allow(clippy::too_many_arguments)]
-async fn seed_e2e_kb(
+pub(super) async fn seed_e2e_kb(
     doc_store: &DocStore,
     owner: &Arc<Identity>,
     kb_id: &str,

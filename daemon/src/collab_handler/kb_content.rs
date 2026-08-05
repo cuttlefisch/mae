@@ -276,6 +276,19 @@ pub(super) async fn handle_kb_node_fetch(
         }
     }
 
+    // #571: the gate above authorized the KB; this authorizes the DOCUMENT.
+    // Placed here deliberately -- ABOVE both `encode_state_and_sv` (which
+    // materializes any name via `get_or_create`, so a later check would still
+    // permit pre-squatting a node id another KB will create) and the
+    // subscribe below (a successful cross-KB fetch would otherwise grant a
+    // STANDING live feed of that node's future updates, long outliving the
+    // one response).
+    if let Err(msg) = super::require_node_in_kb(doc_store, &kb_id, &node_id, None).await {
+        warn!(session = session_id, kb_id = %kb_id, node_id = %node_id,
+              "kb/node_fetch denied: node is not in this KB");
+        return JsonRpcResponse::error(id, McpError::internal_error(msg));
+    }
+
     let node_doc = format!("kb:{node_id}");
     match doc_store.encode_state_and_sv(&node_doc).await {
         Ok((state, sv)) => {
@@ -304,6 +317,16 @@ pub(super) async fn handle_kb_node_fetch(
     }
 }
 
+// @ai-caution: [kb-scoping] This path has the SAME unscoped-`node_id` shape #571
+// fixed for `kb/node_fetch` above: it gates `KbOp::Edit` on `kb_id`, then writes
+// `kb:{node_id}` from the flat, KB-unscoped doc namespace. The epoch fence does
+// not close it — the author writes under their own KB's epoch, which the fence
+// accepts. Do NOT simply add `require_node_in_kb` here: the editor drains node
+// updates BEFORE manifest adds (`collab_bridge/events_kb.rs`, `pending_kb_updates`
+// then `pending_kb_manifest`), so a brand-new node's update legitimately arrives
+// before its `kb/collection_node_add` and an unconditional check would break node
+// creation outright. Needs a create-carve-out or a drain reorder — a design call,
+// not a one-liner. Tracked separately; see #571's PR for the analysis.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_kb_node_update(
     doc_store: &DocStore,
