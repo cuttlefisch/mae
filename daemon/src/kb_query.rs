@@ -204,7 +204,21 @@ async fn get(
     principal: Option<&str>,
     max_body_bytes: usize,
 ) -> Result<Value, McpError> {
-    let (_coll, encryption) = load_gated(doc_store, kb_id, principal).await?;
+    let (coll, encryption) = load_gated(doc_store, kb_id, principal).await?;
+
+    // #571: `load_gated` authorized the KB; this authorizes the DOCUMENT. The
+    // doc namespace is flat (`kb:{node_id}`), so without this a member of any
+    // KB could read any node of any other KB co-hosted here. Uses the
+    // collection `load_gated` already loaded, so it costs no extra I/O — and
+    // runs before `encode_state_and_sv`, which would otherwise materialize the
+    // doc via `get_or_create`.
+    //
+    // Only `get` and `node_fetch` need this: `search`/`graph` iterate the
+    // manifest itself and `my_wrapped_key` takes no node_id, so all three are
+    // scoped by construction.
+    collab_handler::require_node_in_kb(doc_store, kb_id, node_id, Some(&coll))
+        .await
+        .map_err(McpError::internal_error)?;
 
     let node_doc = format!("kb:{node_id}");
     let (state, _sv) = doc_store
