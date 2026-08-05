@@ -24,6 +24,7 @@ mod lazy_fetch_client;
 pub mod maintenance;
 mod oauth;
 mod p2p;
+mod projection_stores;
 mod scheduler;
 mod tenant;
 #[cfg(test)]
@@ -327,6 +328,7 @@ async fn main() {
             init_doc_store(&config).await
         {
             doc_store_for_query = Some(Arc::clone(&doc_store));
+            spawn_projector(&config, Arc::clone(&state), Arc::clone(&doc_store)).await;
             daemon_identity_for_oauth = spawn_collab_server(
                 &config,
                 Arc::clone(&state),
@@ -583,6 +585,77 @@ async fn init_doc_store(
     }
 
     Some((doc_store, broadcaster, server_start_time))
+}
+
+/// Wire the CRDT→Cozo projector (ADR-029 B2/B3).
+///
+/// Until this existed, `Projector` and `DocStore::set_change_feed` had **zero**
+/// production callers: `change_tx` was never set, so `emit_change` dropped every
+/// event and nothing kept the Cozo projection in step with CRDT writes. A collaborative
+/// edit propagated live to connected editors and was simultaneously invisible to
+/// `kb/search`, `kb/health`, the webview, and every `kb/query.*` caller — all of which
+/// read Cozo.
+///
+/// Two things are wired here, in this order:
+///
+/// 1. **`rebuild_kb` per registered KB**, so a daemon that starts with a cold or stale
+///    projection heals from CRDT truth immediately rather than serving an empty graph
+///    until the first live write happens to arrive.
+/// 2. **The change feed**, so subsequent mutations project incrementally.
+///
+/// A projection failure is logged, never fatal: Cozo is a derived view (ADR-029), so a
+/// daemon that cannot project must still serve sync. That is also why this is
+/// best-effort per KB — one unreadable collection must not stop the others.
+async fn spawn_projector(
+    config: &DaemonConfig,
+    state: Arc<Mutex<DaemonState>>,
+    doc_store: Arc<doc_store::DocStore>,
+) {
+    if !config.collab.projector_enabled {
+        info!("projector disabled in config — cozo projection will not track CRDT writes");
+        return;
+    }
+
+    let stores = Arc::new(projection_stores::DaemonProjectionStores::new(Arc::clone(
+        &state,
+    )));
+    let projector = Arc::new(mae_daemon::projector::Projector::new(
+        Arc::clone(&doc_store),
+        stores,
+    ));
+
+    // Startup self-heal. Collect the KB ids first so `DaemonState`'s lock is not held
+    // across the projection work (ADR-054).
+    let kb_ids: Vec<String> = {
+        let st = state.lock().await;
+        st.registry
+            .instances
+            .iter()
+            .filter(|i| i.enabled)
+            .map(|i| i.name.clone())
+            .collect()
+    };
+    for kb_id in kb_ids {
+        match projector.rebuild_kb(&kb_id).await {
+            Ok(n) => info!(kb = %kb_id, nodes = n, "projector: rebuilt cozo projection from CRDT"),
+            Err(e) => {
+                // Expected for a KB this daemon holds no `kbc:` doc for (never shared
+                // here) — that is not an error, just nothing to project.
+                tracing::debug!(kb = %kb_id, error = %e, "projector: no rebuild")
+            }
+        }
+    }
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    doc_store.set_change_feed(tx);
+    tokio::spawn(async move {
+        // `run` consumes the projector; unwrap the Arc now that setup is done.
+        match Arc::try_unwrap(projector) {
+            Ok(p) => p.run(rx).await,
+            Err(_) => tracing::error!("projector still shared at spawn — change feed not drained"),
+        }
+    });
+    info!("projector wired: cozo projection now tracks CRDT writes");
 }
 
 /// ADR-067 Phase D3: returns the daemon's own key-mode identity (`None` for

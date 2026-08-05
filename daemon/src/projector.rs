@@ -17,10 +17,19 @@ use tokio::sync::mpsc;
 use crate::doc_store::DocStore;
 
 /// Provides the per-KB cozo projection instance for a `kb_id` (ADR-029, per-KB stores).
-/// The daemon implements this over its federation instance stores; tests use an
-/// in-memory provider. `store_for` may create the instance on first use.
+/// The daemon implements this over its federation instance stores
+/// ([`crate::projection_stores::DaemonProjectionStores`]); tests use an in-memory
+/// provider. `store_for` may create the instance on first use.
+///
+/// Async because the production implementation resolves through `DaemonState`, which
+/// lives behind a `tokio::sync::Mutex`. It follows ADR-054's snapshot-then-drop idiom —
+/// take the lock only long enough to clone the `Arc`, never across the Cozo call — so
+/// this must be awaited rather than blocking a runtime thread. The alternative, keeping
+/// a second registry snapshot beside `DaemonState` purely to make this sync, would
+/// duplicate state that can then go stale (principle #8).
+#[async_trait::async_trait]
 pub trait ProjectionStores: Send + Sync {
-    fn store_for(&self, kb_id: &str) -> Result<Arc<CozoKbStore>, String>;
+    async fn store_for(&self, kb_id: &str) -> Result<Arc<CozoKbStore>, String>;
 }
 
 /// Routing state the projector maintains from collection manifests (ADR-029 B3), so a
@@ -86,7 +95,7 @@ impl Projector {
             .await
             .map_err(|e| format!("read 'kb:{node_id}': {e}"))?;
         for kb_id in kbs {
-            let store = self.stores.store_for(&kb_id)?;
+            let store = self.stores.store_for(&kb_id).await?;
             project_node(&store, node_id, &state)?;
         }
         Ok(())
@@ -111,7 +120,7 @@ impl Projector {
         let removed: Vec<String> = prev.difference(&current).cloned().collect();
         let added: Vec<String> = current.difference(&prev).cloned().collect();
 
-        let store = self.stores.store_for(kb_id)?;
+        let store = self.stores.store_for(kb_id).await?;
         for node_id in &removed {
             if let Err(e) = store.delete_node(node_id) {
                 tracing::debug!(kb = %kb_id, node = %node_id, error = %e, "project: delete failed");
@@ -245,8 +254,9 @@ mod tests {
             Arc::new(Self(Mutex::new(HashMap::new())))
         }
     }
-    impl ProjectionStores for MemStores {
-        fn store_for(&self, kb_id: &str) -> Result<Arc<CozoKbStore>, String> {
+    #[async_trait::async_trait]
+impl ProjectionStores for MemStores {
+        async fn store_for(&self, kb_id: &str) -> Result<Arc<CozoKbStore>, String> {
             let mut m = self.0.lock().unwrap();
             Ok(Arc::clone(m.entry(kb_id.to_string()).or_insert_with(
                 || Arc::new(CozoKbStore::open_mem().unwrap()),
@@ -384,7 +394,7 @@ mod tests {
 
         // Project the collection → both nodes land in kb1's store; routing registered.
         projector.project_doc("kbc:kb1").await.unwrap();
-        let store = stores.store_for("kb1").unwrap();
+        let store = stores.store_for("kb1").await.unwrap();
         assert_eq!(store.get_node("concept:a").unwrap().unwrap().title, "A");
         assert_eq!(store.get_node("concept:b").unwrap().unwrap().title, "B");
 
@@ -444,7 +454,7 @@ mod tests {
 
         let n = projector.rebuild_kb("kb1").await.unwrap();
         assert_eq!(n, 1, "one node projected");
-        let store = stores.store_for("kb1").unwrap();
+        let store = stores.store_for("kb1").await.unwrap();
         assert_eq!(store.get_node("concept:a").unwrap().unwrap().title, "A");
     }
 
