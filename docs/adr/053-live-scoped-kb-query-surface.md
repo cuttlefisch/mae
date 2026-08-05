@@ -115,6 +115,34 @@ is, by definition, talking about the collaborative/hub model. The actual reusabl
 precedent is `kb_content.rs::handle_kb_node_fetch`, which already does exactly "load
 `kbc:{kb_id}`, gate `kb_access(Read)`, load+decode `kb:{node_id}`."
 
+> **ERRATUM (2026-08-04, issue #571) — the three-step flow above is incomplete, and
+> naming `handle_kb_node_fetch` as the precedent propagated the gap.**
+>
+> The flow must be **four** steps: load `kbc:{kb_id}`, gate `kb_access(Read)`,
+> **verify `node_id` is in that collection's manifest**, then load+decode
+> `kb:{node_id}`.
+>
+> The missing step matters because the `DocStore` doc namespace is **flat** —
+> `kb:{node_id}` carries no `kb_id` component — so step 2 authorizes a *KB* while step
+> 4 reads a *globally addressed document*. Without step 3 the two are never tied
+> together, and any principal with Read on any one KB could read nodes of any other KB
+> co-hosted on the daemon (full plaintext disclosure when the target KB is
+> unencrypted; existence, ciphertext and CRDT metadata when it is E2E).
+>
+> `kb_query::get` was implemented exactly as this ADR prescribed and inherited the
+> defect. The correct precedent is **`kb/join`'s manifest scoping**
+> (`kb_membership.rs`, *"Fetch only the nodes listed in the collection"*), which has
+> always consulted the manifest; the single-node read paths simply never did.
+>
+> Enforced by `collab_handler::require_node_in_kb`, which both `kb/query.get` and
+> `kb/node_fetch` now call **before** touching the doc store — reading a node also
+> `get_or_create`s it, and on `kb/node_fetch` also subscribes the session to its future
+> updates, so a check placed after the fetch would leak both.
+>
+> Related: ADR-018 (identity-anchored access control — authorizing a KB is not
+> authorizing a document in a global namespace) and ADR-067 (the QueryOnly persona is
+> the one this surface most directly exposes).
+
 **Correction 2 — `daemon_mode=shared` cannot be the daemon-side gate.** `daemon_mode`
 (`crates/core/src/editor/kb_state.rs`) has zero presence in `daemon/src` — it is a pure
 editor-side attach-policy concept (whether *this editor* spawns/owns a daemon), not
