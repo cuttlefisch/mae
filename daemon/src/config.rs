@@ -627,6 +627,66 @@ impl Default for KbSocketConfig {
     }
 }
 
+/// The resources a single daemon instance owns exclusively — see
+/// [`DaemonConfig::instance_paths`].
+#[derive(Debug, Clone)]
+pub struct InstancePaths {
+    pub socket: PathBuf,
+    pub data_dir: PathBuf,
+    pub collab_data_dir: PathBuf,
+    /// `None` when collab is disabled (no port is claimed at all).
+    pub collab_bind: Option<SocketAddr>,
+    /// `None` when the OAuth listener is disabled.
+    pub oauth_bind: Option<SocketAddr>,
+    pub identity_dir: Option<PathBuf>,
+    pub authorized_keys: Option<PathBuf>,
+    pub keystore: Option<PathBuf>,
+}
+
+impl InstancePaths {
+    /// `(label, value)` for every resource, in reporting order. Resources that
+    /// are not claimed at all are omitted.
+    pub fn labelled(&self) -> Vec<(&'static str, String)> {
+        let mut out = vec![
+            ("socket", self.socket.display().to_string()),
+            ("data_dir", self.data_dir.display().to_string()),
+            (
+                "collab data_dir",
+                self.collab_data_dir.display().to_string(),
+            ),
+        ];
+        if let Some(a) = self.collab_bind {
+            out.push(("collab.bind", a.to_string()));
+        }
+        if let Some(a) = self.oauth_bind {
+            out.push(("oauth.bind", a.to_string()));
+        }
+        for (label, p) in [
+            ("identity_dir", &self.identity_dir),
+            ("authorized_keys", &self.authorized_keys),
+            ("keystore", &self.keystore),
+        ] {
+            if let Some(p) = p {
+                out.push((label, p.display().to_string()));
+            }
+        }
+        out
+    }
+
+    /// Resources this instance shares with `other` — empty iff the two can run
+    /// side by side without interfering.
+    pub fn conflicts_with(&self, other: &InstancePaths) -> Vec<String> {
+        let (a, b) = (self.labelled(), other.labelled());
+        a.iter()
+            .filter_map(|(label, value)| {
+                b.iter()
+                    .find(|(l, v)| l == label && v == value)
+                    .map(|_| format!("{label} = {value}"))
+            })
+            .collect()
+    }
+}
+
 impl DaemonConfig {
     /// Load config from the given path, falling back to defaults.
     pub fn load_from(path: &std::path::Path) -> Self {
@@ -703,18 +763,51 @@ impl DaemonConfig {
         self.data_dir.clone().unwrap_or_else(xdg_data_base)
     }
 
-    /// Resolve the collab data directory, creating it if needed.
-    pub fn resolve_collab_data_dir(&self) -> PathBuf {
-        let dir = self
-            .collab
+    /// The collab data directory, WITHOUT creating it. Use this for reporting
+    /// and validation; `resolve_collab_data_dir` is the one that creates.
+    pub fn collab_data_dir(&self) -> PathBuf {
+        self.collab
             .storage
             .data_dir
             .clone()
-            .unwrap_or_else(|| self.effective_data_dir().join("collab"));
+            .unwrap_or_else(|| self.effective_data_dir().join("collab"))
+    }
+
+    /// Resolve the collab data directory, creating it if needed.
+    pub fn resolve_collab_data_dir(&self) -> PathBuf {
+        let dir = self.collab_data_dir();
         if !dir.exists() {
             let _ = std::fs::create_dir_all(&dir);
         }
         dir
+    }
+
+    /// Every resource this daemon instance holds EXCLUSIVELY. Two instances on
+    /// one host must not share any of them.
+    ///
+    /// @ai-caution: [multi-instance] The identity, authorized-keys and keystore
+    /// paths do NOT derive from `data_dir` — they default to the shared
+    /// `$XDG_DATA_HOME/mae/collab/` regardless of it. So a staging and a
+    /// production instance distinguished only by `data_dir` + ports still share
+    /// one `authorized_keys` file, and authorising a peer for staging silently
+    /// authorises it for production too. That default is deliberate for the
+    /// single-instance case (one host, one identity) and is NOT changed here —
+    /// moving it would relocate existing operators' identity keys, and losing an
+    /// identity key loses access to every shared KB with no recovery
+    /// (`IDENTITY_BACKUP_ADVISORY`). Instead it is made VISIBLE: reported by
+    /// `--check-config` and `doctor`, and asserted distinct by
+    /// `two_instances_do_not_share_any_path`.
+    pub fn instance_paths(&self) -> InstancePaths {
+        InstancePaths {
+            socket: self.socket.clone(),
+            data_dir: self.effective_data_dir(),
+            collab_data_dir: self.collab_data_dir(),
+            collab_bind: self.collab.enabled.then_some(self.collab.bind),
+            oauth_bind: self.oauth.enabled.then_some(self.oauth.bind),
+            identity_dir: self.collab.auth.identity_dir(),
+            authorized_keys: self.collab.auth.authorized_keys_path(),
+            keystore: self.collab.auth.keystore_path(),
+        }
     }
 
     /// Validate collab configuration and return issues.

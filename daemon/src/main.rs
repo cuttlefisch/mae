@@ -13,6 +13,7 @@
 //! CozoDB. The daemon is an upgrade that provides persistent SQLite KB,
 //! collaboration, and services that outlive the editor session.
 
+mod cli;
 mod config;
 mod conn_limit;
 mod dialer;
@@ -72,76 +73,60 @@ enum CollabAuth {
 
 #[tokio::main]
 async fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    // @ai-caution: [multi-instance] Global flags are parsed ONCE, up front, and
+    // every subcommand below resolves its config from `cli` — never by calling
+    // `DaemonConfig::load()` itself. See `cli.rs` for what that regression cost.
+    let cli = cli::Cli::parse(std::env::args());
 
-    if args.iter().any(|a| a == "--version" || a == "-V") {
+    if cli.version {
         println!("mae-daemon {VERSION} ({BUILD_SHA})");
         return;
     }
 
-    if args.iter().any(|a| a == "--check-config") {
-        run_check_config();
-        return;
-    }
-
-    if args.get(1).map(|s| s.as_str()) == Some("doctor") {
-        run_doctor();
-        return;
-    }
-
-    // Symmetric keystore (psk mode): `keygen [name]`, `keys`.
-    if args.get(1).map(|s| s.as_str()) == Some("keygen") {
-        std::process::exit(run_keygen(args.get(2).map(|s| s.as_str())));
-    }
-    if args.get(1).map(|s| s.as_str()) == Some("keys") {
-        std::process::exit(run_keys_list());
-    }
-
-    // Asymmetric key mode (ADR-017/018): `identity`, `authorized`,
-    // `authorize <pubkey-line>` (labels must be unique), `revoke <label|SHA256:fp>`.
-    match args.get(1).map(|s| s.as_str()) {
-        Some("identity") => std::process::exit(run_identity()),
-        Some("authorized") => std::process::exit(run_authorized_list()),
-        Some("authorize") => std::process::exit(run_authorize(&args[2..])),
-        Some("revoke") => std::process::exit(run_revoke(args.get(2).map(|s| s.as_str()))),
-        _ => {}
-    }
-
-    // Parse optional CLI overrides: --config, --bind, --data-dir
-    let mut config_path: Option<String> = None;
-    let mut bind_override: Option<String> = None;
-    let mut data_dir_override: Option<String> = None;
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--config" if i + 1 < args.len() => {
-                config_path = Some(args[i + 1].clone());
-                i += 2;
-            }
-            "--bind" if i + 1 < args.len() => {
-                bind_override = Some(args[i + 1].clone());
-                i += 2;
-            }
-            "--data-dir" if i + 1 < args.len() => {
-                data_dir_override = Some(args[i + 1].clone());
-                i += 2;
-            }
-            _ => i += 1,
+    let config = match cli.resolve_config() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::exit(2);
         }
-    }
-
-    let mut config = if let Some(ref path) = config_path {
-        DaemonConfig::load_from(std::path::Path::new(path))
-    } else {
-        DaemonConfig::load()
     };
-    if let Some(ref addr) = bind_override {
-        if let Ok(parsed) = addr.parse() {
-            config.collab.bind = parsed;
-        }
+
+    if cli.check_config {
+        run_check_config(&config);
+        return;
     }
-    if let Some(ref dir) = data_dir_override {
-        config.data_dir = Some(std::path::PathBuf::from(dir));
+
+    match cli.subcommand.as_deref() {
+        Some("doctor") => {
+            let other = match &cli.compare_with {
+                Some(path) => {
+                    if !path.exists() {
+                        eprintln!(
+                            "Error: --compare-with: config not found: {}",
+                            path.display()
+                        );
+                        std::process::exit(2);
+                    }
+                    Some(DaemonConfig::load_from(path))
+                }
+                None => None,
+            };
+            std::process::exit(run_doctor(&config, other.as_ref()));
+        }
+        // Symmetric keystore (psk mode): `keygen [name]`, `keys`.
+        Some("keygen") => {
+            std::process::exit(run_keygen(&config, cli.rest.first().map(|s| s.as_str())))
+        }
+        Some("keys") => std::process::exit(run_keys_list(&config)),
+        // Asymmetric key mode (ADR-017/018): `identity`, `authorized`,
+        // `authorize <pubkey-line>` (labels must be unique), `revoke <label|SHA256:fp>`.
+        Some("identity") => std::process::exit(run_identity(&config)),
+        Some("authorized") => std::process::exit(run_authorized_list(&config)),
+        Some("authorize") => std::process::exit(run_authorize(&config, &cli.rest)),
+        Some("revoke") => {
+            std::process::exit(run_revoke(&config, cli.rest.first().map(|s| s.as_str())))
+        }
+        _ => {}
     }
 
     // Initialize tracing
@@ -407,6 +392,10 @@ async fn main() {
     let accept_state = Arc::clone(&state);
     let accept_shutdown = shutdown_tx.subscribe();
     let kb_socket_limiter = conn_limit::ConnLimiter::new(config.kb_socket.max_connections);
+    // Share the counter with `daemon/status` (Arc-backed clone, no new state to
+    // keep in sync). Deliberately NOT sourced from the broadcaster, which is
+    // only installed under key-mode auth — see `handler::connection_report`.
+    state.lock().await.kb_conn = Some(kb_socket_limiter.clone());
     let kb_socket_idle_timeout = std::time::Duration::from_secs(config.kb_socket.idle_timeout_secs);
     let accept_handle = tokio::spawn(async move {
         accept_loop(
@@ -935,6 +924,7 @@ async fn spawn_collab_server(
     // 0-means-unlimited semantics, same panic-safe RAII decrement).
     let max_connections = collab.max_connections;
     let limiter = conn_limit::ConnLimiter::new(max_connections);
+    state.lock().await.collab_conn = Some(limiter.clone());
     // ADR-061 Phase D3: one shared handle, cloned per connection below (same
     // pattern as `doc_store`/`broadcaster`) -- bridges `kb/fetch_artifact` to
     // this daemon's local KB content store.
@@ -1093,16 +1083,22 @@ async fn spawn_collab_server(
     identity_for_oauth
 }
 
-fn run_check_config() {
-    let config = DaemonConfig::load();
-    println!("Socket: {}", config.socket.display());
-    println!("Data dir: {}", config.effective_data_dir().display());
+fn run_check_config(config: &DaemonConfig) {
+    // Every resource this instance claims, in one block, so an operator running
+    // two instances can diff the two reports and see any collision — including
+    // identity/authorized_keys/keystore, which default to a SHARED location
+    // regardless of `data_dir` (see `DaemonConfig::instance_paths`).
+    println!("Instance resources (must be unique per instance):");
+    for (label, value) in config.instance_paths().labelled() {
+        println!("  {label:<16} {value}");
+    }
     println!("Log level: {}", config.log_level);
 
     // Collab config
     println!("Collab enabled: {}", config.collab.enabled);
     if config.collab.enabled {
-        println!("  bind: {}", config.collab.bind);
+        // bind / collab data_dir / keystore / authorized_keys / identity are
+        // reported once above, in the instance-resources block.
         println!("  storage.backend: {}", config.collab.storage.backend);
         println!(
             "  storage.compact_threshold: {}",
@@ -1113,19 +1109,15 @@ fn run_check_config() {
             config.collab.sync.heartbeat_interval_secs
         );
         println!("  sync.max_documents: {}", config.collab.sync.max_documents);
-        println!(
-            "  collab data_dir: {}",
-            config.resolve_collab_data_dir().display()
-        );
         println!("  auth.mode: {}", config.collab.auth.mode);
+        if config.collab.auth.mode == "none" {
+            // The default is "none", and DAEMON_ADMIN recommends "key" — so the
+            // config that says nothing about auth is the UNAUTHENTICATED one.
+            // Say so here rather than letting an operator infer it from silence.
+            println!("    ! anyone who can reach this port can sync; set auth.mode = \"key\"");
+        }
         if config.collab.auth.mode == "psk" {
-            if let Some(p) = config.collab.auth.keystore_path() {
-                println!(
-                    "  auth.keystore: {} ({} key(s))",
-                    p.display(),
-                    config.collab.auth.keystore_key_count()
-                );
-            }
+            println!("    keys: {}", config.collab.auth.keystore_key_count());
         }
         if config.collab.auth.mode == "key" {
             println!(
@@ -1143,13 +1135,10 @@ fn run_check_config() {
                     Err(e) => println!("  auth.identity: <error: {e}>"),
                 }
             }
-            if let Some(p) = config.collab.auth.authorized_keys_path() {
-                println!(
-                    "  auth.authorized_keys: {} ({} key(s))",
-                    p.display(),
-                    config.collab.auth.authorized_key_count()
-                );
-            }
+            println!(
+                "  auth.authorized_keys: {} key(s)",
+                config.collab.auth.authorized_key_count()
+            );
         }
 
         // [collab.p2p] — the iroh mesh transport (ADR-025).
@@ -1188,8 +1177,7 @@ fn run_check_config() {
 
 /// `mae-daemon keygen [name]` — generate a random key, append it to the
 /// keystore (creating it 0600), and print it so it can be copied to peers.
-fn run_keygen(name: Option<&str>) -> i32 {
-    let config = DaemonConfig::load();
+fn run_keygen(config: &DaemonConfig, name: Option<&str>) -> i32 {
     let path = match config.collab.auth.keystore_path() {
         Some(p) => p,
         None => {
@@ -1225,8 +1213,7 @@ fn run_keygen(name: Option<&str>) -> i32 {
 }
 
 /// `mae-daemon keys` — list the names (and fingerprints) of trusted keys.
-fn run_keys_list() -> i32 {
-    let config = DaemonConfig::load();
+fn run_keys_list(config: &DaemonConfig) -> i32 {
     let path = match config.collab.auth.keystore_path() {
         Some(p) => p,
         None => {
@@ -1261,8 +1248,7 @@ fn run_keys_list() -> i32 {
 /// `mae-daemon identity` — print this daemon's Ed25519 public key + fingerprint
 /// (generating the keypair if absent). Share the fingerprint out-of-band so
 /// clients can verify the TOFU prompt.
-fn run_identity() -> i32 {
-    let config = DaemonConfig::load();
+fn run_identity(config: &DaemonConfig) -> i32 {
     let dir = match config.collab.auth.identity_dir() {
         Some(d) => d,
         None => {
@@ -1291,8 +1277,7 @@ fn run_identity() -> i32 {
 }
 
 /// `mae-daemon authorized` — list trusted client public keys.
-fn run_authorized_list() -> i32 {
-    let config = DaemonConfig::load();
+fn run_authorized_list(config: &DaemonConfig) -> i32 {
     let path = match config.collab.auth.authorized_keys_path() {
         Some(p) => p,
         None => {
@@ -1318,7 +1303,7 @@ fn run_authorized_list() -> i32 {
 
 /// `mae-daemon authorize <pubkey-line>` — add a client public key line
 /// (`mae-ed25519 <b64> <label>`) to authorized_keys.
-fn run_authorize(rest: &[String]) -> i32 {
+fn run_authorize(config: &DaemonConfig, rest: &[String]) -> i32 {
     if rest.is_empty() {
         eprintln!("usage: mae-daemon authorize <mae-ed25519 <b64> [label]>");
         eprintln!("   or: mae-daemon authorize --from-ssh-pub <path/to/id_ed25519.pub> [label]");
@@ -1359,7 +1344,6 @@ fn run_authorize(rest: &[String]) -> i32 {
             }
         }
     };
-    let config = DaemonConfig::load();
     let path = match config.collab.auth.authorized_keys_path() {
         Some(p) => p,
         None => {
@@ -1396,7 +1380,7 @@ fn run_authorize(rest: &[String]) -> i32 {
 }
 
 /// `mae-daemon revoke <label>` — remove authorized client key(s) by label.
-fn run_revoke(target: Option<&str>) -> i32 {
+fn run_revoke(config: &DaemonConfig, target: Option<&str>) -> i32 {
     let target = match target {
         Some(l) => l,
         None => {
@@ -1404,7 +1388,6 @@ fn run_revoke(target: Option<&str>) -> i32 {
             return 2;
         }
     };
-    let config = DaemonConfig::load();
     let path = match config.collab.auth.authorized_keys_path() {
         Some(p) => p,
         None => {
@@ -1438,19 +1421,25 @@ fn run_revoke(target: Option<&str>) -> i32 {
     }
 }
 
-fn run_doctor() {
+/// Returns a process exit code: non-zero iff `--compare-with` found a resource
+/// the two instances share. Everything else `doctor` reports is advisory — this
+/// one is a hard "these two cannot both run", so it must be scriptable in a
+/// deploy gate rather than something an operator has to eyeball.
+fn run_doctor(config: &DaemonConfig, compare_with: Option<&DaemonConfig>) -> i32 {
     println!("mae-daemon doctor");
-    println!("  version: {VERSION}");
+    println!("  version: {VERSION} ({BUILD_SHA})");
 
-    // Check config
-    let config = DaemonConfig::load();
+    // Which instance is this? Print it first — every line below describes THIS
+    // instance's resources, and on a host running staging + production the only
+    // way to know which one you just diagnosed is to see the paths.
+    println!("  instance resources:");
+    for (label, value) in config.instance_paths().labelled() {
+        println!("    {label:<16} {value}");
+    }
 
-    // Check KB data directory
     let data_dir = config.effective_data_dir();
-    if data_dir.exists() {
-        println!("  kb data_dir: {} (exists)", data_dir.display());
-    } else {
-        println!("  kb data_dir: {} (will be created)", data_dir.display());
+    if !data_dir.exists() {
+        println!("    (kb data_dir does not exist yet — it will be created)");
     }
 
     // Check collab
@@ -1489,6 +1478,13 @@ fn run_doctor() {
             Err(e) => println!("  collab sqlite: FAILED ({e})"),
         }
 
+        if config.collab.auth.mode == "none" {
+            println!("  collab auth: none — the port is UNAUTHENTICATED");
+            println!("    ! set [collab.auth] mode = \"key\" before exposing it off-host");
+        } else {
+            println!("  collab auth: {}", config.collab.auth.mode);
+        }
+
         // Check port
         match std::net::TcpListener::bind(config.collab.bind) {
             Ok(_) => println!("  collab port {}: available", config.collab.bind.port()),
@@ -1503,7 +1499,39 @@ fn run_doctor() {
         println!("  collab: disabled");
     }
 
+    // The OAuth listener claims a second port; on a two-instance host it
+    // collides just as readily as the collab one, so check it the same way.
+    if config.oauth.enabled {
+        match std::net::TcpListener::bind(config.oauth.bind) {
+            Ok(_) => println!("  oauth port {}: available", config.oauth.bind.port()),
+            Err(e) => println!("  oauth port {}: {e}", config.oauth.bind.port()),
+        }
+    } else {
+        println!("  oauth: disabled");
+    }
+
     println!("  yrs version: 0.22");
+
+    let Some(other) = compare_with else {
+        return 0;
+    };
+    let conflicts = config
+        .instance_paths()
+        .conflicts_with(&other.instance_paths());
+    if conflicts.is_empty() {
+        println!("  side-by-side: OK — shares no resource with the compared instance");
+        return 0;
+    }
+    println!("  side-by-side: {} SHARED resource(s):", conflicts.len());
+    for c in &conflicts {
+        println!("    ! {c}");
+    }
+    println!(
+        "    These two instances cannot both run as configured. Note that \
+         identity_dir/authorized_keys/keystore do NOT follow data_dir — set them \
+         explicitly per instance (see docs/DAEMON_ADMIN.md §1)."
+    );
+    1
 }
 
 /// Accept loop: spawn a task per KB client connection.
@@ -1526,8 +1554,12 @@ async fn accept_loop(
                 match result {
                     Ok((stream, _addr)) => {
                         let Some(guard) = limiter.try_acquire() else {
+                            // `current()` is the ACTIVE count, not the cap — the
+                            // field was named `max_connections`, so this log line
+                            // reported the wrong quantity under the right label.
                             tracing::warn!(
-                                max_connections = limiter.current(),
+                                active = limiter.current(),
+                                max_connections = limiter.max(),
                                 "KB socket: connection cap reached, rejecting new connection"
                             );
                             drop(stream);

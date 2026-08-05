@@ -574,6 +574,16 @@ else
     skip "daemon-config.toml not in package"
 fi
 
+# The MULTI-instance template (staging + production, or process-per-tenant via
+# mae-daemon@.service). Copied as a template to edit, NOT as a live config —
+# it names no instance and would be wrong for every one of them.
+if [ -f "$SCRIPT_DIR/daemon-instance-config.toml" ]; then
+    cp "$SCRIPT_DIR/daemon-instance-config.toml" "$CONFIGDIR/mae/daemon-instance-config.toml"
+    verify "$CONFIGDIR/mae/daemon-instance-config.toml" "daemon-instance-config.toml (template)"
+else
+    skip "daemon-instance-config.toml not in package"
+fi
+
 # ========================================================================
 # 6. Service management (systemd on Linux, launchd on macOS)
 # ========================================================================
@@ -588,6 +598,17 @@ if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
         verify "$SYSTEMD_DIR/mae-daemon.service" "mae-daemon.service"
     else
         skip "mae-daemon.service not in package"
+    fi
+
+    if [ -f "$SCRIPT_DIR/mae-daemon@.service" ]; then
+        # The per-instance template unit (ADR-060 Phase E). Installed but never
+        # enabled: each instantiation needs its own daemon-<name>.toml first
+        # (see daemon-instance-config.toml), so enabling it here would start an
+        # instance with no config.
+        sed "s|%h/.local/bin/|$BINDIR/|g" "$SCRIPT_DIR/mae-daemon@.service" > "$SYSTEMD_DIR/mae-daemon@.service"
+        verify "$SYSTEMD_DIR/mae-daemon@.service" "mae-daemon@.service"
+    else
+        skip "mae-daemon@.service not in package"
     fi
 
     if [ -f "$SCRIPT_DIR/mae-headless@.service" ]; then
