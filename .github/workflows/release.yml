@@ -466,8 +466,44 @@ jobs:
 
           **Learn more:** `:help tutorial:getting-started`, `:help tutorial:ai-setup`, `:help tutorial:collab-setup`
 
-          **Verify:** `:ai-ping` (AI connectivity) and `:collab-doctor` (collaboration diagnostics)
+          **Verify the download:** every asset ships a `.sha256` sidecar, and `SHA256SUMS`
+          covers them all. From the directory you downloaded into:
+
+          ```bash
+          # One asset
+          curl -LO <asset-url>.sha256 && sha256sum -c mae-linux-x86_64.tar.gz.sha256
+
+          # Or everything you downloaded
+          curl -LO <SHA256SUMS-url> && sha256sum -c --ignore-missing SHA256SUMS
+          ```
+
+          **Verify the install:** `:ai-ping` (AI connectivity) and `:collab-doctor` (collaboration diagnostics)
           FOOTER
+
+      # Publish the digests. SHA-256 was already computed further down, but
+      # only transiently, to fill in the Homebrew formula's `sha256` field --
+      # so Homebrew users got integrity checking and everyone downloading an
+      # asset directly (which is what an automated server deploy does) had
+      # nothing to verify against. The AppImage was never hashed at all.
+      #
+      # `sha256sum -c SHA256SUMS` works directly against the downloaded files;
+      # the per-asset sidecars exist so a deploy can fetch ONE asset and its
+      # digest without pulling the whole manifest.
+      - name: Generate checksums
+        run: |
+          cd dist
+          for f in mae-linux-x86_64.tar.gz mae-linux-x86_64-gui.AppImage \
+                   MAE-macos-aarch64.zip mae-macos-aarch64.tar.gz; do
+            # Bare filenames, no `dist/` prefix: the manifest must verify
+            # against files as they land in a user's download directory.
+            sha256sum "$f" | tee "$f.sha256"
+          done
+          cat -- *.sha256 > SHA256SUMS
+          echo "--- SHA256SUMS ---"
+          cat SHA256SUMS
+          # Prove the manifest verifies here, so a malformed one can never be
+          # published as if it were checkable.
+          sha256sum -c SHA256SUMS
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3
@@ -478,6 +514,11 @@ jobs:
             dist/mae-linux-x86_64-gui.AppImage
             dist/MAE-macos-aarch64.zip
             dist/mae-macos-aarch64.tar.gz
+            dist/SHA256SUMS
+            dist/mae-linux-x86_64.tar.gz.sha256
+            dist/mae-linux-x86_64-gui.AppImage.sha256
+            dist/MAE-macos-aarch64.zip.sha256
+            dist/mae-macos-aarch64.tar.gz.sha256
           fail_on_unmatched_files: true
           token: ${{ secrets.RELEASE_PAT }}
 
