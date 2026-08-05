@@ -11,6 +11,7 @@ use std::collections::HashMap;
 
 use crate::lisp_error::{LispError, SourceLocation};
 use crate::macros::{self, SyntaxRules};
+use crate::permission::PermissionTier;
 use crate::value::{InternedSymbol, Value};
 
 /// A single bytecode instruction.
@@ -239,6 +240,23 @@ pub struct Compiler {
     current_loc: Option<SourceLocation>,
     /// When true, emit `Op::BreakpointCheck` at source line boundaries.
     pub debug_mode: bool,
+    /// The ambient permission tier macro expansion runs at.
+    ///
+    /// @ai-caution: [permission] Macro bodies are EVALUATED at compile time, in
+    /// a VM this file constructs (`expand_macro`). Until 2026-08 that VM was a
+    /// bare `Vm::new()`, whose constructor sets `PermissionTier::Privileged` —
+    /// so a macro body ran at full authority no matter what tier the caller
+    /// had, and `Compiler` carried no tier at all. From the shipped `readonly`
+    /// default, one `eval_scheme` defining a macro whose body called
+    /// `open-output-file`/`delete-file` (neither path-guarded) on
+    /// `~/.config/mae/init.scm` was arbitrary code execution on next launch —
+    /// around all three surfaces where that refusal IS implemented.
+    ///
+    /// ADR-084's invariant ("the compiler enumerates the sites") holds for
+    /// `register_fn`. It does not hold for the three ways to reach an effect
+    /// that are not a `register_fn` call: a VM opcode, a special form, and a
+    /// nested `Vm`. This field closes the third.
+    pub ambient_tier: PermissionTier,
 }
 
 impl Compiler {
@@ -251,6 +269,10 @@ impl Compiler {
             load_paths: Vec::new(),
             current_loc: None,
             debug_mode: false,
+            // Least authority by default. `Vm::compile_*` raises it to the VM's
+            // own ambient tier; anything constructing a Compiler directly gets
+            // the safe end, not the privileged one.
+            ambient_tier: PermissionTier::ReadOnly,
         }
     }
 
@@ -2150,10 +2172,18 @@ impl Compiler {
                     Value::list(bindings_list),
                     body.clone(),
                 ]);
-                // Evaluate using a temporary VM with stdlib
+                // Evaluate using a temporary VM with stdlib.
+                //
+                // @ai-caution: [permission] `Vm::new()` starts at `Privileged`
+                // (see its constructor). The macro body must run at the tier
+                // the COMPILER was given, not at the fresh VM's default —
+                // otherwise compile-time evaluation is an unconditional
+                // privilege escalation from any tier. `with_ambient_tier` only
+                // ever lowers, so this cannot raise authority either.
                 let mut vm = crate::vm::Vm::new();
                 crate::stdlib::register_stdlib(&mut vm);
-                vm.eval(&format!("{let_expr}"))
+                let tier = self.ambient_tier;
+                vm.with_ambient_tier(tier, |vm| vm.eval(&format!("{let_expr}")))
             }
             MacroDef::SyntaxRules(rules) => macros::expand_syntax_rules(rules, items),
         }
