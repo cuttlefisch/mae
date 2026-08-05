@@ -351,14 +351,14 @@ pub fn migrate_between_stores(
     let node_refs: Vec<&Node> = nodes.iter().collect();
 
     // Save all to destination (clears first)
-    dst.save_all(&node_refs)?;
+    dst.replace_all_nodes(&node_refs)?;
     report.nodes_migrated = nodes.len();
 
-    // Migrate links (already handled by save_all which parses bodies,
+    // Migrate links (already handled by replace_all_nodes, which parses bodies,
     // but we also need any manually-added links)
     for node in &nodes {
         for link in src.links_from(&node.id)? {
-            // Links are already created by save_all's body parsing,
+            // Links are already created by replace_all_nodes' body parsing,
             // but add_link is idempotent so this catches any extras
             if let Err(e) = dst.add_link(&link.src, &link.dst, link.display.as_deref()) {
                 report

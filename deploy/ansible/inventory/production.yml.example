@@ -1,0 +1,26 @@
+---
+# Production inventory. Copy to inventory/production.yml (gitignored).
+#
+# Deliberately a SEPARATE file from staging rather than one inventory with two
+# groups: the cost of a wrong `-i` should be "playbook can't find the host", not
+# "deployed to production".
+all:
+  children:
+    mae_daemon:
+      hosts:
+        mae-prod.example.internal:
+          ansible_user: deploy
+      vars:
+        mae_daemon_version: "0.14.93"
+
+        # Production restarts are deliberate, not a side effect of a config
+        # edit. Leave false and restart in a maintenance window, or set true
+        # once you are confident in the verification gate.
+        mae_daemon_restart_on_change: false
+
+        mae_daemon_instances:
+          - name: prod
+            collab_bind: "127.0.0.1:9475"
+            collab_auth_mode: key
+            collab_max_connections: 512
+            memory_max: "8G"

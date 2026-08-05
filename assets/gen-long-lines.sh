@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 OUT="long_lines_test.txt"
-> "$OUT"
+: > "$OUT"   # truncate (SC2188: a redirection needs a command)
 
 # Helper: repeat a string N times
 repeat_str() {

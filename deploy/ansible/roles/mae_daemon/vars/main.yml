@@ -1,0 +1,13 @@
+---
+# Derived values. These are role-internal (vars/ beats defaults/ and inventory,
+# deliberately) — an operator overriding the layout should change the
+# `mae_daemon_*_dir` defaults, not these, so the derivations stay consistent.
+
+_mae_daemon_release_dir: "{{ mae_daemon_releases_dir }}/{{ mae_daemon_version }}"
+_mae_daemon_current_bin: "{{ mae_daemon_prefix }}/current/bin/mae-daemon"
+
+# Loopback addresses, for the "is this port reachable off-host" preflight check.
+_mae_daemon_loopback_hosts:
+  - "127.0.0.1"
+  - "::1"
+  - "localhost"

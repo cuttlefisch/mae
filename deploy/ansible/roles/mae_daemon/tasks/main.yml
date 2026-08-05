@@ -1,0 +1,40 @@
+---
+# mae_daemon — install and run one or more mae-daemon instances on a host.
+#
+# Phases, in order, each in its own file:
+#   preflight  — refuse bad configurations before touching anything
+#   install    — fetch, verify and unpack the release; switch the symlink
+#   configure  — per-instance directories, config, identity
+#   service    — systemd units, enable/start
+#   verify     — post-deploy gate; failing it fails the play
+#
+# Tags let an operator run one phase: `--tags mae_verify` re-runs only the gate,
+# `--tags mae_config` re-renders config without touching the binary.
+
+- name: Preflight checks
+  ansible.builtin.include_tasks: preflight.yml
+  tags: [mae_preflight, always]
+
+- name: Install the release
+  ansible.builtin.include_tasks: install.yml
+  tags: [mae_install]
+
+- name: Configure instances
+  ansible.builtin.include_tasks: configure.yml
+  tags: [mae_config]
+
+- name: Install and manage services
+  ansible.builtin.include_tasks: service.yml
+  tags: [mae_service]
+
+# Flush handlers before verifying: a restart queued by a config change must have
+# happened before the gate reads the running state, or the gate checks the old
+# process and reports success for a deploy that has not taken effect.
+- name: Apply pending restarts before verification
+  ansible.builtin.meta: flush_handlers
+  tags: [mae_verify]
+
+- name: Verify the deployment
+  ansible.builtin.include_tasks: verify.yml
+  when: mae_daemon_verify | bool
+  tags: [mae_verify]

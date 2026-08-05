@@ -1,0 +1,15 @@
+{#
+  Per-instance resource limits, as a systemd drop-in.
+
+  The unit itself is a template shared by every instance, so anything that
+  differs between instances has to live here rather than in the unit.
+#}
+# mae-daemon instance {{ instance.name }} — resource limits
+# MANAGED BY ANSIBLE (role: mae_daemon). Manual edits will be overwritten.
+
+[Service]
+TasksMax={{ instance.tasks_max }}
+{% if instance.memory_max | length > 0 %}
+# One instance's runaway KB must not OOM the host and take the others with it.
+MemoryMax={{ instance.memory_max }}
+{% endif %}

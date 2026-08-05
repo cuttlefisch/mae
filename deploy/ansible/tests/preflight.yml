@@ -1,0 +1,17 @@
+---
+# Runs ONLY the mae_daemon role's preflight phase against localhost, with no
+# privilege escalation and no changes of any kind.
+#
+# Used by tests/run-tests.sh to prove each safety check refuses the
+# configuration it exists to refuse. Not part of a deployment.
+
+- name: Preflight-only harness
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  become: false
+  tasks:
+    - name: Run preflight
+      ansible.builtin.include_role:
+        name: mae_daemon
+        tasks_from: preflight.yml

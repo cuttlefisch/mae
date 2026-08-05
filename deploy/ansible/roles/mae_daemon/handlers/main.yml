@@ -1,0 +1,13 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+- name: Restart mae-daemon instances
+  ansible.builtin.systemd_service:
+    name: "mae-daemon@{{ item.name }}"
+    state: restarted
+  loop: "{{ _mae_daemon_resolved_instances }}"
+  loop_control:
+    label: "mae-daemon@{{ item.name }}"
+  when: mae_daemon_restart_on_change | bool

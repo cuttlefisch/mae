@@ -302,7 +302,16 @@ pub trait KbStore: Send + Sync {
     // --- Bulk operations ---
 
     fn load_all(&self) -> Result<Vec<Node>, KbStoreError>;
-    fn save_all(&self, nodes: &[&Node]) -> Result<(), KbStoreError>;
+    /// Replace the ENTIRE store with `nodes`: every existing node and every
+    /// existing link is removed first, then these are inserted.
+    ///
+    /// @ai-caution: [data-loss] This is a whole-store replace, not a bulk
+    /// upsert. Passing a subset DELETES everything else. It was called
+    /// `save_all` and had no doc comment, which is exactly how
+    /// `kb_widen_meta` came to call it with a single node and destroy the
+    /// rest of the corpus. Use `update_node`/`insert_node` to persist one
+    /// node; this is for building a fresh store (see `migrate.rs`).
+    fn replace_all_nodes(&self, nodes: &[&Node]) -> Result<(), KbStoreError>;
 
     // --- Graph queries (optional, default NotSupported) ---
 
