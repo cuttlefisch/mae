@@ -1,0 +1,77 @@
+# MAE Daemon — per-instance configuration template
+#
+# For running MORE THAN ONE mae-daemon on a host: staging + production, or
+# process-per-tenant via the `mae-daemon@.service` template unit (ADR-060
+# Phase E). For a single daemon, use `daemon-config.toml` instead.
+#
+#   cp daemon-instance-config.toml ~/.config/mae/daemon-staging.toml
+#   # replace every INSTANCE below with: staging
+#   # pick ports no other instance uses
+#   systemctl --user enable --now mae-daemon@staging
+#
+# Verify BEFORE starting the second instance — this exits non-zero if the two
+# share anything, so it works in a deploy gate:
+#
+#   mae-daemon doctor --config ~/.config/mae/daemon-staging.toml \
+#                     --compare-with ~/.config/mae/daemon-prod.toml
+#
+# ---------------------------------------------------------------------------
+# Why every path below is set explicitly
+# ---------------------------------------------------------------------------
+#
+# EIGHT resources must be unique per instance, and `data_dir` scopes only four
+# of them. `identity_dir`, `authorized_keys` and `keystore` default to the
+# SHARED `$XDG_DATA_HOME/mae/collab/` no matter what `data_dir` says — so two
+# instances distinguished only by data dir and ports still read one
+# `authorized_keys`, and `mae-daemon authorize --config daemon-staging.toml`
+# would grant that peer access to production too.
+#
+# There is a second, independent reason under systemd: `mae-daemon@.service`
+# sets `ProtectHome=read-only` with `ReadWritePaths` covering only this
+# instance's tenant directory and `~/.config/mae`. The shared collab directory
+# is outside both, so a key-mode instance that relies on the default cannot
+# write its identity there at all.
+#
+# Setting all three inside the instance's own tree fixes both at once.
+# See docs/DAEMON_ADMIN.md §1 "What must be unique per instance".
+
+# --- The four scoped by data_dir (still set `socket` — it is not) ------------
+
+socket = "/run/user/1000/mae-INSTANCE.sock"
+data_dir = "/home/USER/.local/share/mae/tenants/INSTANCE"
+
+log_level = "info"
+
+[collab]
+enabled = true
+# Unique per instance. 9473 is the single-daemon default; give each instance
+# its own port and firewall/VPN it before binding anything but loopback
+# (docs/DAEMON_ADMIN.md §5).
+bind = "127.0.0.1:9473"
+
+# `collab.storage.data_dir` defaults to <data_dir>/collab — already scoped, so
+# it is deliberately not set here.
+
+# --- The three that do NOT follow data_dir ----------------------------------
+
+[collab.auth]
+# The code default is "none" — an UNAUTHENTICATED port. Set it.
+mode = "key"
+identity_dir = "/home/USER/.local/share/mae/tenants/INSTANCE/collab"
+authorized_keys = "/home/USER/.local/share/mae/tenants/INSTANCE/collab/authorized_keys"
+keystore = "/home/USER/.local/share/mae/tenants/INSTANCE/collab/trusted_keys"
+
+# --- The OAuth listener's port also collides --------------------------------
+
+[oauth]
+# Disabled by default. If you enable it, `bind` is per-instance like
+# `collab.bind` and has the same collision consequences.
+enabled = false
+bind = "127.0.0.1:8443"
+
+# --- Recommended: scope this instance to its own tenants (ADR-060 Phase C) ---
+#
+# [[tenant]]
+# name = "acme-corp"
+# instances = ["..."]
+# principals = ["SHA256:..."]

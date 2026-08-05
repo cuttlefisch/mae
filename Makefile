@@ -524,6 +524,31 @@ clean-cache:
 	rm -rf target/*/incremental daemon/target/*/incremental
 	@echo "Reclaimed incremental caches (both workspaces)."
 
+## prune-artifacts: delete cargo build artifacts older than DAYS (default 7) across
+## every target dir in the repo. The complement to clean-cache: that target reclaims
+## INCREMENTAL sessions (now off by default), this one reclaims the stale TEST
+## BINARIES cargo never garbage-collects — a new hash-suffixed binary per changed
+## rebuild, with the previous one left behind forever. That is what kept growing
+## after incremental was disabled. Measured 2026-08-05: 101 GB total, 52 GB of it
+## older than a week, 38 GB in daemon/target/debug/deps alone (the daemon is a
+## separate workspace per ADR-014, so it builds its own full-debuginfo copy of every
+## dependency). Safe by construction: cargo rebuilds whatever is missing, so
+## over-pruning costs time, never correctness. Use DRY=1 to preview.
+prune-artifacts:
+	@./scripts/prune-build-artifacts.sh $(if $(DRY),-n,) -d $(or $(DAYS),7)
+
+## disk-report: what the build tree currently costs, per target dir, newest first.
+## Run this before reaching for `make clean` — prune-artifacts usually reclaims most
+## of it without forcing a full rebuild.
+disk-report:
+	@printf '%-40s %10s\n' "TARGET DIR" "SIZE"
+	@for t in $$(find . -name CACHEDIR.TAG -type f 2>/dev/null | sort); do \
+		d=$$(dirname "$$t"); \
+		printf '%-40s %10s\n' "$${d#./}" "$$(du -sh "$$d" 2>/dev/null | cut -f1)"; \
+	done
+	@echo
+	@./scripts/prune-build-artifacts.sh -n -q -d $(or $(DAYS),7)
+
 ## manual-kb: build the pre-built manual KB (CozoDB file + SHA-256 checksum)
 manual-kb:
 	@mkdir -p assets

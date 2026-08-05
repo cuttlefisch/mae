@@ -50,6 +50,13 @@ impl ConnLimiter {
     pub fn current(&self) -> usize {
         self.active.load(Ordering::Relaxed)
     }
+
+    /// The configured cap (0 = unlimited). Reported alongside `current` so an
+    /// operator reading `daemon/status` can tell "3 clients" from "3 clients and
+    /// one slot left" without cross-referencing the config file.
+    pub fn max(&self) -> usize {
+        self.max
+    }
 }
 
 /// RAII handle for one admitted connection. Decrements the shared counter on

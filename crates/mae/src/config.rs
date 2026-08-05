@@ -121,13 +121,23 @@ pub struct AiSection {
     pub timeout_secs: Option<u64>,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f64>,
-    /// Permission tier for AI/MCP tool execution:
-    ///   "readonly"    — buffer reads only
+    /// Permission tier AUTO-APPROVED for AI/MCP tool execution:
+    ///   "readonly"    — buffer reads only (the shipped default, ADR-090 D5)
     ///   "write"       — reads + edits
-    ///   "shell"       — reads + edits + shell (default, container-first)
+    ///   "shell"       — reads + edits + shell
     ///   "privileged"  — everything including quit/force-quit
     /// Legacy aliases: "standard" → write, "trusted" → shell, "full" → privileged
     /// Env override: MAE_AI_PERMISSIONS (highest precedence).
+    ///
+    /// @ai-caution: [security] This is the auto-approval LINE, not a ceiling — above
+    /// it `decide` returns `Ask`, not a denial. Do not describe any tier above
+    /// `readonly` as the default anywhere: `PermissionPolicy::default()`
+    /// (`crates/ai/src/tools/categories.rs`) ships `ReadOnly`, and the comment beside
+    /// it warns that raising it re-creates the fail-open default ADR-084 D4 found.
+    /// The generated config template said `shell` was the default and offered the
+    /// line to set it (#639) — producing exactly the outcome ADR-090 rejected, in the
+    /// one artifact a new user (or an agent asked "how do I configure permissions?")
+    /// reads first.
     pub auto_approve_tier: Option<String>,
     /// Override the prompt tier for this model: "full" or "compact".
     /// If unset, auto-detected from the model name via the built-in table.
@@ -1306,10 +1316,16 @@ pub fn default_config_template() -> String {
 # Stdout is trimmed and used as the key. Takes precedence over api_key but not env vars.\n\
 # api_key_command = \"pass show deepseek/api-key\"\n\
 \n\
-# Permission tier for AI/MCP tool execution.\n\
-# Tiers: \"readonly\", \"write\", \"shell\" (default), \"privileged\"\n\
-# Env override: MAE_AI_PERMISSIONS=full\n\
-# auto_approve_tier = \"shell\"\n\
+# Permission tier auto-approved for AI/MCP tool execution.\n\
+# Tiers: \"readonly\" (default), \"write\", \"shell\", \"privileged\"\n\
+#\n\
+# This is the AUTO-APPROVAL line, not a ceiling: a call above it is ASKED, not\n\
+# refused, wherever a human is present to answer. Raising it does not unlock\n\
+# anything new -- it only stops MAE asking first.\n\
+#\n\
+# Leaving this commented out is the recommended posture.\n\
+# Env override: MAE_AI_PERMISSIONS\n\
+# auto_approve_tier = \"readonly\"\n\
 \n\
 # Override auto-detected prompt tier: \"full\" or \"compact\".\n\
 # Full: concise prompts for frontier models (Claude Opus/Sonnet, GPT-4o).\n\
@@ -2101,3 +2117,7 @@ mod tests {
         assert_eq!(back.collaboration.kb_sync_mode.as_deref(), Some("on_save"));
     }
 }
+
+#[cfg(test)]
+#[path = "config_template_tests.rs"]
+mod template_truth_tests;
