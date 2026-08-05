@@ -21,6 +21,29 @@ const TAGS_KEY: &str = "tags";
 const LINKS_KEY: &str = "links";
 const META_KEY: &str = "meta";
 
+// --- schema v2 (ADR-093) ---
+//
+// @ai-caution: [crdt] These keys are OPTIONAL by design and readers must tolerate
+// their absence — a v1 document simply has none of them. Do NOT add an
+// "upcast on read" that writes them when a v1 doc is opened. In a CRDT that is a
+// live hazard, not a convenience: two peers opening the same v1 document would each
+// author their own migration ops, and Automerge's own docs name this as the thing
+// that makes CRDT schema migration harder than a centralized one ("two users
+// independently perform the same migration… you need to ensure the two migrations
+// don't clash"). Writing these fields only when the application writes the node
+// anyway means there is no migration op to clash. The one-time bulk backfill is a
+// deliberate single-writer pass (ADR-094), not a read-triggered side effect.
+const SCHEMA_VERSION_KEY: &str = "schema_v";
+const KIND_KEY: &str = "kind";
+const TODO_KEY: &str = "todo";
+const PRIORITY_KEY: &str = "prio";
+const ALIASES_KEY: &str = "aliases";
+const PROPS_KEY: &str = "props";
+const SOURCE_VERSION_KEY: &str = "src_v";
+
+/// Current node schema version. Absent ⇒ v1 (text fields only).
+pub const NODE_SCHEMA_VERSION: i64 = 2;
+
 /// Materialized content from a KbNodeDoc — all fields extracted for FTS rebuild.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaterializedNode {
@@ -29,6 +52,13 @@ pub struct MaterializedNode {
     pub body: String,
     pub tags: Vec<String>,
     pub links: Vec<String>,
+    /// v2 fields — defaults when reading a v1 document.
+    pub kind: Option<String>,
+    pub todo_state: Option<String>,
+    pub priority: Option<String>,
+    pub aliases: Vec<String>,
+    pub properties: std::collections::HashMap<String, String>,
+    pub source_version: Option<u32>,
 }
 
 /// A KB node represented as a yrs document.
