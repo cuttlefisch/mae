@@ -1,0 +1,142 @@
+---
+# Configure — per-instance directories, config file, and identity.
+#
+# This phase never removes or rewrites an instance's data directory or its
+# Ed25519 identity. Losing an identity key loses access to every KB that
+# instance shares or has joined, with no recovery in this version, so the role
+# creates one if absent and otherwise leaves it strictly alone.
+
+- name: Configure | Create the per-instance data directory
+  ansible.builtin.file:
+    path: "{{ mae_daemon_data_root }}/{{ item.name }}"
+    state: directory
+    owner: "{{ mae_daemon_user }}"
+    group: "{{ mae_daemon_group }}"
+    mode: "0750"
+  loop: "{{ _mae_daemon_resolved_instances }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Configure | Create the per-instance collab directory
+  ansible.builtin.file:
+    path: "{{ mae_daemon_data_root }}/{{ item.name }}/collab"
+    state: directory
+    owner: "{{ mae_daemon_user }}"
+    group: "{{ mae_daemon_group }}"
+    # 0700, not 0750: this directory holds the Ed25519 PRIVATE key. Anything
+    # else running as this group must not be able to read the identity.
+    mode: "0700"
+  loop: "{{ _mae_daemon_resolved_instances }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Configure | Create the runtime directory for KB sockets
+  ansible.builtin.file:
+    path: "{{ mae_daemon_run_dir }}"
+    state: directory
+    owner: "{{ mae_daemon_user }}"
+    group: "{{ mae_daemon_group }}"
+    # The KB socket has NO authentication of its own — trust is filesystem
+    # permissions only (SECURITY.md). 0750 keeps it off-limits to other users
+    # on the host; it must never be exposed beyond the host at all.
+    mode: "0750"
+
+- name: Configure | Look for existing configs
+  ansible.builtin.stat:
+    path: "{{ mae_daemon_config_dir }}/daemon-{{ item.name }}.toml"
+  loop: "{{ _mae_daemon_resolved_instances }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _mae_daemon_existing_configs
+
+- name: Configure | Back up the existing config before overwriting
+  ansible.builtin.copy:
+    src: "{{ item.stat.path }}"
+    dest: "{{ item.stat.path }}.{{ ansible_date_time.epoch }}.bak"
+    remote_src: true
+    owner: root
+    group: "{{ mae_daemon_group }}"
+    mode: "0640"
+  loop: "{{ _mae_daemon_existing_configs.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when:
+    - mae_daemon_backup_config | bool
+    - item.stat.exists
+
+- name: Configure | Render the per-instance config
+  ansible.builtin.template:
+    src: daemon.toml.j2
+    dest: "{{ mae_daemon_config_dir }}/daemon-{{ item.name }}.toml"
+    owner: root
+    # Readable by the service account, writable only by root: mae-daemon reads
+    # its config, and nothing running as the daemon may rewrite it.
+    group: "{{ mae_daemon_group }}"
+    mode: "0640"
+    # Validate through the SAME code path the daemon uses at startup, so a
+    # config that would refuse to boot never replaces one that works.
+    #
+    # @ai-caution: [deploy] `--check-config` CREATES the Ed25519 identity as a
+    # side effect when it is absent (issue #652), and this hook runs as root —
+    # so on a first deploy it can leave a root-owned id_ed25519 that the
+    # unprivileged service account cannot read. The ownership repair below is
+    # load-bearing, not tidiness. Remove it only once #652 is fixed.
+    validate: "{{ _mae_daemon_current_bin }} --check-config --config %s"
+  loop: "{{ _mae_daemon_resolved_instances }}"
+  loop_control:
+    label: "daemon-{{ item.name }}.toml"
+  vars:
+    instance: "{{ item }}"
+  notify: Restart mae-daemon instances
+
+- name: Configure | Repair ownership of the collab directory
+  # See the @ai-caution above: the validate hook may have created the identity
+  # as root. Idempotent, and a no-op once #652 lands.
+  ansible.builtin.file:
+    path: "{{ mae_daemon_data_root }}/{{ item.name }}/collab"
+    state: directory
+    owner: "{{ mae_daemon_user }}"
+    group: "{{ mae_daemon_group }}"
+    mode: "0700"
+    recurse: true
+  loop: "{{ _mae_daemon_resolved_instances }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Configure | Generate this instance's identity if absent
+  # `mae-daemon identity` creates the keypair on first call and is a no-op
+  # afterwards. Run as the service account so the key is owned by the user that
+  # must read it; `creates:` keeps `changed` truthful and makes this free on
+  # every subsequent run.
+  ansible.builtin.command:
+    cmd: >-
+      {{ _mae_daemon_current_bin }} identity
+      --config {{ mae_daemon_config_dir }}/daemon-{{ item.name }}.toml
+    creates: "{{ mae_daemon_data_root }}/{{ item.name }}/collab/id_ed25519"
+  become: true
+  become_user: "{{ mae_daemon_user }}"
+  loop: "{{ _mae_daemon_resolved_instances }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.collab_auth_mode == 'key'
+  register: _mae_daemon_identity
+
+- name: Configure | Report each instance's collaboration identity
+  # Printed on EVERY run, not only when newly created: the fingerprint is what
+  # an operator hands to `mae-daemon authorize` on the peer side, so having it
+  # in the deploy output is the common case, and a newly-generated key gets the
+  # backup advisory appended rather than a separate conditional task.
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.name }}:
+      {{ item.stdout_lines | default([]) | select('search', 'fingerprint')
+         | first | default('(existing identity — run `mae-daemon identity
+         --config ' + mae_daemon_config_dir + '/daemon-' + item.item.name
+         + '.toml` to print it)') | trim }}
+      {{ '*** NEWLY GENERATED — BACK UP ' + mae_daemon_data_root + '/'
+         + item.item.name + '/collab/id_ed25519 NOW. Losing it loses access to
+         every KB this instance shares or joins, with no recovery. ***'
+         if (item.changed | default(false)) else '' }}
+  loop: "{{ _mae_daemon_identity.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name | default('?') }}"

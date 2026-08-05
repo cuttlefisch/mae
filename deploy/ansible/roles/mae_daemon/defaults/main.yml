@@ -1,0 +1,105 @@
+---
+# mae_daemon role — defaults.
+#
+# Every value here is overridable per host or per group. Nothing in this file
+# is secret; secrets belong in Ansible Vault (see deploy/ansible/README.md).
+
+# --------------------------------------------------------------------------
+# What to install
+# --------------------------------------------------------------------------
+
+# Release to deploy, e.g. "0.14.93". REQUIRED — there is deliberately no
+# default and no "latest": a deploy that silently follows the newest release is
+# not reproducible, and rolling back means knowing what you rolled back FROM.
+# Preflight fails if this is unset.
+mae_daemon_version: ""
+
+mae_daemon_repo: "cuttlefisch/mae"
+mae_daemon_asset: "mae-linux-x86_64.tar.gz"
+mae_daemon_release_base: >-
+  https://github.com/{{ mae_daemon_repo }}/releases/download/v{{ mae_daemon_version }}
+
+# Where the release tarball and its digest come from. The `.sha256` sidecar is
+# published alongside every asset; `mae_daemon_verify_checksum: false` skips
+# verification and is refused outright unless `mae_daemon_allow_unverified` is
+# also set, so it cannot be disabled by accident.
+mae_daemon_url: "{{ mae_daemon_release_base }}/{{ mae_daemon_asset }}"
+mae_daemon_checksum_url: "{{ mae_daemon_url }}.sha256"
+mae_daemon_verify_checksum: true
+mae_daemon_allow_unverified: false
+
+# --------------------------------------------------------------------------
+# Where it lives
+# --------------------------------------------------------------------------
+
+mae_daemon_user: mae
+mae_daemon_group: mae
+# A system account: no login shell, no password, not a person.
+mae_daemon_user_shell: /usr/sbin/nologin
+
+mae_daemon_prefix: /opt/mae
+mae_daemon_bin_dir: "{{ mae_daemon_prefix }}/bin"
+mae_daemon_releases_dir: "{{ mae_daemon_prefix }}/releases"
+mae_daemon_config_dir: /etc/mae
+mae_daemon_data_root: /var/lib/mae
+mae_daemon_run_dir: /run/mae
+mae_daemon_log_dir: /var/log/mae
+
+# How many unpacked releases to retain for rollback. Never 0 — the currently
+# running one must always remain on disk.
+mae_daemon_keep_releases: 3
+
+# --------------------------------------------------------------------------
+# Instances
+# --------------------------------------------------------------------------
+#
+# Each entry becomes one systemd unit `mae-daemon@<name>` with its own config,
+# data directory, identity and ports. `name` must be a valid systemd instance
+# name; preflight enforces that and that no two instances collide on any
+# resource.
+#
+# collab_bind / oauth_bind are full "host:port" strings. Binding collab to
+# anything other than a loopback address requires `collab_auth_mode: key`;
+# preflight refuses the combination otherwise (an unauthenticated port reachable
+# off-host).
+#
+# mae_daemon_instances:
+#   - name: staging
+#     collab_bind: "127.0.0.1:9473"
+#     collab_auth_mode: key
+#   - name: prod
+#     collab_bind: "0.0.0.0:9475"
+#     collab_auth_mode: key
+mae_daemon_instances: []
+
+# Per-instance defaults, merged under each entry's own keys.
+mae_daemon_instance_defaults:
+  collab_enabled: true
+  collab_auth_mode: key
+  collab_auth_tls: true
+  collab_max_connections: 256
+  oauth_enabled: false
+  log_level: info
+  # Applied to the unit, not the config: a per-instance memory ceiling means one
+  # tenant's runaway KB cannot OOM the host and take the others with it.
+  memory_max: ""
+  tasks_max: 4096
+
+# --------------------------------------------------------------------------
+# Behaviour
+# --------------------------------------------------------------------------
+
+# Restart instances when their config or the binary changes. Set false for a
+# maintenance-window deploy where the operator restarts by hand.
+mae_daemon_restart_on_change: true
+
+# Run the post-deploy verification gate (`mae-daemon doctor` per instance, plus
+# a pairwise `--compare-with` collision check). Failing it fails the play.
+mae_daemon_verify: true
+
+# Take a copy of each instance's config before overwriting it.
+mae_daemon_backup_config: true
+
+# Firewall: this role does NOT manage firewall rules. Binding a collab port to a
+# routable address without a firewall/VPN in front is an operator decision made
+# outside this role; see deploy/ansible/README.md "Network exposure".

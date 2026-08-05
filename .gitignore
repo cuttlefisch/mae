@@ -52,3 +52,10 @@ tools/*/Cargo.lock
 # committing it would churn every PR. docs/AUDIT_BASELINE.json IS committed.
 docs/AUDIT_METRICS.json
 .audit-wip/
+
+# Ansible deployment: real inventories and run artifacts (examples are tracked)
+deploy/ansible/inventory/*.yml
+!deploy/ansible/inventory/*.yml.example
+deploy/ansible/ansible-deploy.log
+deploy/ansible/.ansible_facts/
+deploy/ansible/tests/preflight-tests.log

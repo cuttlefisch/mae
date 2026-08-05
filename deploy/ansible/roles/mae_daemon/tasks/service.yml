@@ -1,0 +1,69 @@
+---
+# Service — install the systemd template unit, per-instance drop-ins, and
+# enable/start each instance.
+
+- name: Service | Install the systemd template unit
+  ansible.builtin.template:
+    src: mae-daemon@.service.j2
+    dest: /etc/systemd/system/mae-daemon@.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart mae-daemon instances
+
+- name: Service | Create per-instance drop-in directories
+  ansible.builtin.file:
+    path: "/etc/systemd/system/mae-daemon@{{ item.name }}.service.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ _mae_daemon_resolved_instances }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Service | Install per-instance resource limits
+  ansible.builtin.template:
+    src: limits.conf.j2
+    dest: "/etc/systemd/system/mae-daemon@{{ item.name }}.service.d/10-limits.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ _mae_daemon_resolved_instances }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    instance: "{{ item }}"
+  notify:
+    - Reload systemd
+    - Restart mae-daemon instances
+
+# systemd must see the new unit before anything tries to enable it.
+- name: Service | Apply unit changes now
+  ansible.builtin.meta: flush_handlers
+
+- name: Service | Enable and start each instance
+  ansible.builtin.systemd_service:
+    name: "mae-daemon@{{ item.name }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop: "{{ _mae_daemon_resolved_instances }}"
+  loop_control:
+    label: "mae-daemon@{{ item.name }}"
+
+- name: Service | Record the instances this role manages
+  # Lets a later run — or an operator — tell a managed instance from one someone
+  # created by hand, which matters before anything is ever removed.
+  ansible.builtin.copy:
+    content: |
+      # Written by the mae_daemon Ansible role. Do not edit.
+      {% for i in _mae_daemon_resolved_instances %}
+      {{ i.name }} {{ i.collab_bind }} auth={{ i.collab_auth_mode }}
+      {% endfor %}
+    dest: "{{ mae_daemon_prefix }}/INSTANCES"
+    owner: root
+    group: "{{ mae_daemon_group }}"
+    mode: "0644"

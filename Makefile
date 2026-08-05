@@ -62,7 +62,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean clean-cache ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check heavy-e2e-check audit-metrics audit-metrics-check audit-metrics-bless gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual practices-kb install-practices adr-kb install-adr devpractices-kb install-devpractices verify-adr-kb-sync install-vscode
+.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean clean-cache ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check heavy-e2e-check audit-metrics audit-metrics-check audit-metrics-bless lint-shell lint-yaml lint-deploy lint-all test-deploy gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual practices-kb install-practices adr-kb install-adr devpractices-kb install-devpractices verify-adr-kb-sync install-vscode
 
 # Default target: release build
 all: build
@@ -494,7 +494,27 @@ clean:
 	$(CARGO) clean
 	cd daemon && $(CARGO) clean
 
-## clean-cache: reclaim regenerable compilation caches (both workspaces) WITHOUT
+## # --- Lint / static analysis for everything that is not Rust -----------------
+#
+# Rust is covered by `make clippy` + the pre-commit gate. These cover the shell
+# scripts, the CI/release workflows, and the deployment role — none of which had
+# any linting at all before 2026-08.
+
+lint-shell:  ## shellcheck every tracked shell script (fails at warning+)
+	./scripts/lint-shell.sh
+
+lint-yaml:  ## yamllint the workflows and the deployment role
+	yamllint -c .yamllint.yml .github/workflows/ deploy/
+
+lint-deploy:  ## ansible-lint the deployment role at the production profile
+	cd deploy/ansible && ansible-lint .
+
+lint-all: lint-shell lint-yaml lint-deploy  ## every non-Rust linter
+
+test-deploy:  ## prove the deployment role's safety checks refuse bad configs
+	./deploy/ansible/tests/run-tests.sh
+
+clean-cache: reclaim regenerable compilation caches (both workspaces) WITHOUT
 ## a full rebuild. Cargo never garbage-collects incremental session dirs from past
 ## code states, so on a heavily-branched workspace they grow without bound (we hit
 ## ~370 GB). Incremental is now off by default (.cargo/config.toml), but this stays

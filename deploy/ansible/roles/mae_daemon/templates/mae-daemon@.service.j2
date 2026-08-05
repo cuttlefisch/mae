@@ -1,0 +1,99 @@
+{#
+  System-level systemd template unit, one instance per mae-daemon instance.
+
+  Distinct from assets/mae-daemon@.service, which is a USER unit (%h paths,
+  `systemctl --user`) for a developer running instances under their own login.
+  A server deployment runs as a dedicated system account with absolute paths and
+  stricter sandboxing, so the role templates its own rather than rewriting that
+  one — the two have genuinely different threat models.
+#}
+# mae-daemon — instance %i
+# MANAGED BY ANSIBLE (role: mae_daemon). Manual edits will be overwritten.
+# Deployed version: {{ mae_daemon_version }}
+
+[Unit]
+Description=MAE Daemon (instance: %i)
+Documentation=https://github.com/{{ mae_daemon_repo }}/blob/main/docs/DAEMON_ADMIN.md
+After=network-online.target
+Wants=network-online.target
+# A missing config is a configuration error, not a crashloop: fail fast and
+# stay failed rather than restarting every 5s against a file that isn't there.
+AssertPathExists={{ mae_daemon_config_dir }}/daemon-%i.toml
+
+[Service]
+Type=simple
+User={{ mae_daemon_user }}
+Group={{ mae_daemon_group }}
+
+# Resolved through the `current` symlink at START time, so a rollback is
+# repointing the symlink plus a restart — no reinstall.
+ExecStart={{ mae_daemon_prefix }}/current/bin/mae-daemon --config {{ mae_daemon_config_dir }}/daemon-%i.toml
+
+# Validate the config before the daemon starts. systemd reports a failed
+# ExecStartPre distinctly from a crashed service, so "bad config" and "crashed
+# at runtime" are different signals in `systemctl status` rather than one
+# indistinguishable restart loop.
+ExecStartPre={{ mae_daemon_prefix }}/current/bin/mae-daemon --check-config --config {{ mae_daemon_config_dir }}/daemon-%i.toml
+
+Restart=on-failure
+RestartSec=5
+# Stop restarting after 5 failures in 60s. Without this a config the validator
+# accepts but the daemon rejects at runtime restarts forever, burning CPU and
+# filling the journal instead of showing up as a failed unit.
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+TimeoutStartSec=60
+# The store is WAL-backed; give it room to finish a checkpoint rather than
+# SIGKILLing mid-write.
+TimeoutStopSec=90
+KillSignal=SIGTERM
+
+# --- Logging ---
+# Journal, tagged per instance, so `journalctl -t mae-daemon@prod` isolates one
+# instance on a host running several.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mae-daemon@%i
+
+# --- Sandboxing ---
+# The daemon needs: its own data dir, its runtime dir, and read access to its
+# config. Nothing else. Each line below is a capability it does not need.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+# AF_UNIX for the KB socket, AF_INET/AF_INET6 for collab + OAuth. No others.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# ProtectSystem=strict makes everything read-only except these. Note the config
+# directory is deliberately NOT here: the daemon reads its config and must not
+# be able to rewrite it (the same asymmetry CLAUDE.md principle #16 applies to
+# the AI agent — a control the service can change is not a control).
+ReadWritePaths={{ mae_daemon_data_root }}/%i {{ mae_daemon_run_dir }} {{ mae_daemon_log_dir }}
+
+# --- Resource limits ---
+LimitNOFILE=65536
+# Per-instance TasksMax/MemoryMax are NOT set here. This is a systemd TEMPLATE
+# unit shared by every instance, so a value baked in here would apply to all of
+# them. They come from a per-instance drop-in at
+# /etc/systemd/system/mae-daemon@<name>.service.d/10-limits.conf, which is the
+# idiomatic way to vary one unit's settings per instantiation.
+
+[Install]
+WantedBy=multi-user.target

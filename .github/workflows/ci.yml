@@ -652,6 +652,54 @@ jobs:
       - uses: actions/checkout@v7
       - run: node --check crates/export/assets/graph.js
 
+  lint-nonrust:
+    name: shell + yaml + ansible lint
+    runs-on: ubuntu-latest
+    # Everything in this repo that is executed but is not Rust: 18 shell
+    # scripts (including the installer every user runs), the CI/release
+    # workflows, and the deployment role. None of it had ANY linting until
+    # 2026-08 -- the shellcheck baseline at that point was 53 findings across 9
+    # files, 6 of them real warnings including three `local` uses in a
+    # `#!/bin/sh` script (a principle #13 portability violation).
+    #
+    # Cheap and fast, so it is deliberately NOT path-filtered: a change that
+    # touches a script must be linted regardless of what else it touched.
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install linters
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          python3 -m pip install --quiet yamllint ansible-core ansible-lint
+
+      - name: shellcheck (fails at warning+)
+        run: ./scripts/lint-shell.sh
+
+      - name: yamllint (workflows + deployment role)
+        run: yamllint -c .yamllint.yml .github/workflows/ deploy/
+
+      - name: ansible-lint (production profile)
+        run: cd deploy/ansible && ansible-lint .
+
+      - name: Deployment playbooks parse
+        run: |
+          cd deploy/ansible
+          cp inventory/staging.yml.example /tmp/inv-staging.yml
+          cp inventory/production.yml.example /tmp/inv-prod.yml
+          ansible-playbook -i /tmp/inv-staging.yml site.yml --syntax-check
+          ansible-playbook -i /tmp/inv-prod.yml site.yml --syntax-check
+          ansible-playbook -i /tmp/inv-staging.yml verify.yml --syntax-check
+
+      # The one that matters. A deployment role's safety checks only run on the
+      # day someone makes the mistake, so a check that quietly stopped matching
+      # looks identical to one that works. Every case here is a config that MUST
+      # be refused, paired with the reason it must be refused with -- plus
+      # positive controls, without which a preflight that rejects everything
+      # would score 100%.
+      - name: Deployment safety checks refuse bad configs
+        run: ./deploy/ansible/tests/run-tests.sh
+
   msrv:
     name: MSRV / 1.95 build + test
     runs-on: ubuntu-latest

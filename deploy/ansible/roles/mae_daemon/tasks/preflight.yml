@@ -1,0 +1,201 @@
+---
+# Preflight — refuse to proceed on any configuration that would produce a
+# broken, insecure, or unreproducible deployment.
+#
+# Every check here runs BEFORE anything is written, downloaded or restarted, and
+# every one is safe in --check mode. The ordering is deliberate: cheap local
+# assertions first, host facts second, network last, so an operator with a typo
+# finds out in two seconds rather than after a 40 MB download.
+#
+# The rule for adding a check: it belongs here if the failure it prevents is
+# either irreversible (data loss), silent (wrong instance, unauthenticated
+# port), or expensive to diagnose after the fact. Style preferences do not.
+
+- name: Preflight | Start with an empty resolved-instance list
+  ansible.builtin.set_fact:
+    _mae_daemon_resolved_instances: []
+
+- name: Preflight | Resolve per-instance settings against the role defaults
+  # First tasks in the role that run, so every later phase can rely on the
+  # result. They live here rather than in main.yml so preflight is
+  # self-contained: the test harness includes ONLY this file, and a resolve step
+  # outside it would run before the role's defaults were loaded.
+  #
+  # @ai-caution: [deploy] Direction matters and is easy to get backwards.
+  # `a | combine(b)` gives b precedence, so this must be
+  # `defaults | combine(instance)` — the instance overriding the default. Written
+  # the other way round (`instances | map('combine', [defaults])`) the DEFAULTS
+  # win and every per-instance setting is silently discarded, which is exactly
+  # how the "unauthenticated bind must be refused" check was rendered inert:
+  # `collab_auth_mode: none` was being overwritten with the default `key` before
+  # the assertion ever saw it. Covered by tests/run-tests.sh.
+  ansible.builtin.set_fact:
+    _mae_daemon_resolved_instances: >-
+      {{ _mae_daemon_resolved_instances
+         + [mae_daemon_instance_defaults | combine(item, recursive=True)] }}
+  loop: "{{ mae_daemon_instances }}"
+  loop_control:
+    label: "{{ item.name | default('<unnamed>') }}"
+
+- name: Preflight | Assert a target OS this role actually supports
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['system'] | lower == 'linux'
+    fail_msg: >-
+      mae-daemon is Linux-only as a deployed service (ADR-060 Phase E); this
+      host reports system={{ ansible_facts['system'] | default('unknown') }}.
+      There is no launchd or Windows-service equivalent of the unit this role
+      installs.
+    success_msg: "Target OS is Linux"
+
+- name: Preflight | Assert systemd is the init system
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['service_mgr'] == 'systemd'
+    fail_msg: >-
+      This role installs a systemd template unit, but this host's service
+      manager is '{{ ansible_facts['service_mgr'] | default('unknown') }}'.
+    success_msg: "systemd present"
+
+- name: Preflight | Assert an explicit version was pinned
+  ansible.builtin.assert:
+    that:
+      - mae_daemon_version | length > 0
+      - mae_daemon_version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+    fail_msg: >-
+      mae_daemon_version must be an explicit x.y.z release (got
+      '{{ mae_daemon_version }}'). There is deliberately no "latest": a deploy
+      that follows the newest release is not reproducible, and a rollback needs
+      to know which version it is rolling back from.
+    success_msg: "Deploying pinned version {{ mae_daemon_version }}"
+
+- name: Preflight | Assert at least one instance is defined
+  ansible.builtin.assert:
+    that:
+      - mae_daemon_instances | length > 0
+    fail_msg: >-
+      mae_daemon_instances is empty — this play would install a binary and start
+      nothing. Define at least one instance (see the role defaults for the shape).
+    success_msg: "{{ mae_daemon_instances | length }} instance(s) defined"
+
+- name: Preflight | Assert instance names are valid systemd instance names
+  ansible.builtin.assert:
+    that:
+      - item.name is defined
+      - item.name is string
+      - item.name is match('^[a-z0-9][a-z0-9-]{0,31}$')
+    fail_msg: >-
+      Instance name {{ item.name | default('<missing>') }} is not usable. It
+      becomes a systemd unit instance (mae-daemon@NAME), a directory name and a
+      config filename, so it must be 1-32 chars of [a-z0-9-] starting
+      alphanumeric. This also forecloses path traversal via the instance name,
+      which is otherwise interpolated straight into several paths below.
+    success_msg: "Instance name '{{ item.name }}' is valid"
+  loop: "{{ mae_daemon_instances }}"
+  loop_control:
+    label: "{{ item.name | default('<missing>') }}"
+
+- name: Preflight | Assert instance names are unique
+  ansible.builtin.assert:
+    that:
+      - (mae_daemon_instances | map(attribute='name') | list | unique | length)
+        == (mae_daemon_instances | length)
+    fail_msg: >-
+      Duplicate instance names in mae_daemon_instances. Two entries with one
+      name would silently overwrite each other's config and data directory.
+    success_msg: "Instance names are unique"
+
+# The eight-resource collision rule (docs/DAEMON_ADMIN.md §1). This role derives
+# socket/data_dir/identity/authorized_keys/keystore from the instance name, so
+# those cannot collide by construction. Ports are operator-supplied and CAN.
+- name: Preflight | Assert no two instances share a collab port
+  ansible.builtin.assert:
+    that:
+      - (_mae_daemon_collab_binds | unique | length) == (_mae_daemon_collab_binds | length)
+    fail_msg: >-
+      Two instances share a collab bind address: {{ _mae_daemon_collab_binds }}.
+      Only the first to start would bind; the rest would fail at runtime.
+    success_msg: "collab binds are distinct: {{ _mae_daemon_collab_binds }}"
+  vars:
+    _mae_daemon_collab_binds: >-
+      {{ _mae_daemon_resolved_instances | map(attribute='collab_bind') | list }}
+  when: mae_daemon_instances | length > 1
+
+- name: Preflight | Assert no two instances share an OAuth port
+  ansible.builtin.assert:
+    that:
+      - (_mae_daemon_oauth_binds | unique | length) == (_mae_daemon_oauth_binds | length)
+    fail_msg: >-
+      Two OAuth-enabled instances share a bind address: {{ _mae_daemon_oauth_binds }}.
+    success_msg: "OAuth binds are distinct"
+  vars:
+    _mae_daemon_oauth_binds: >-
+      {{ _mae_daemon_resolved_instances
+         | selectattr('oauth_enabled') | map(attribute='oauth_bind') | list }}
+
+- name: Preflight | Assert a collab port reachable off-host is authenticated
+  ansible.builtin.assert:
+    that:
+      - (item.collab_bind | split(':') | first) in ['127.0.0.1', '::1', 'localhost']
+        or item.collab_auth_mode == 'key'
+    fail_msg: >-
+      Instance '{{ item.name }}' binds collab to {{ item.collab_bind }} — an
+      address reachable from off-host — with auth.mode='{{ item.collab_auth_mode }}'.
+      mae-daemon's own default is "none", which accepts ANY client that can reach
+      the port, and 'psk' is plaintext on the wire. Set collab_auth_mode: key, or
+      bind to loopback.
+    success_msg: >-
+      Instance '{{ item.name }}': {{ item.collab_bind }} with
+      auth.mode={{ item.collab_auth_mode }}
+  loop: "{{ _mae_daemon_resolved_instances }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Preflight | Assert checksum verification has not been silently disabled
+  ansible.builtin.assert:
+    that:
+      - mae_daemon_verify_checksum | bool or mae_daemon_allow_unverified | bool
+    fail_msg: >-
+      mae_daemon_verify_checksum is false but mae_daemon_allow_unverified is not
+      set. Installing an unverified binary needs both, so it cannot happen by
+      typo or by an inherited group_var.
+    success_msg: >-
+      Checksum verification: {{ 'enabled' if mae_daemon_verify_checksum | bool
+      else 'DISABLED (explicitly allowed)' }}
+
+- name: Preflight | Warn loudly when running unverified
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: installing {{ mae_daemon_asset }} WITHOUT checksum verification.
+      The binary this host will run is whatever the network returned.
+  when: not (mae_daemon_verify_checksum | bool)
+
+- name: Preflight | Assert retention keeps at least the running release
+  ansible.builtin.assert:
+    that:
+      - mae_daemon_keep_releases | int >= 1
+    fail_msg: >-
+      mae_daemon_keep_releases must be >= 1; 0 would prune the release that is
+      currently running.
+    success_msg: "Retaining {{ mae_daemon_keep_releases }} release(s)"
+
+- name: Preflight | Check free space in the install prefix
+  ansible.builtin.command:
+    cmd: df -Pk {{ mae_daemon_prefix | dirname | quote }}
+  register: _mae_daemon_df
+  changed_when: false
+  check_mode: false
+  failed_when: false
+
+- name: Preflight | Assert enough free space for a new release
+  ansible.builtin.assert:
+    that:
+      - (_mae_daemon_df.stdout_lines[1].split()[3] | int) > 512000
+    fail_msg: >-
+      Less than 500 MB free on the filesystem holding {{ mae_daemon_prefix }}.
+      Unpacking a release here would risk filling the disk, and a full disk on a
+      host running a WAL-backed store is how a corrupted store happens.
+    success_msg: >-
+      {{ ((_mae_daemon_df.stdout_lines[1].split()[3] | int) / 1048576) | round(1) }} GB
+      free on the install filesystem
+  when: _mae_daemon_df.rc == 0 and (_mae_daemon_df.stdout_lines | length) > 1
