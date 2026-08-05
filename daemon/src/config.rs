@@ -155,6 +155,14 @@ pub struct CollabConfig {
     /// how many could accumulate; combined with the handshake timeout below, this
     /// closes the one genuinely open-ended resource on the whole hub-model surface.
     pub max_connections: usize,
+    /// Drive the CRDT→Cozo projection from the doc-store change feed (ADR-029 B2/B3).
+    ///
+    /// Default **on**: without it, Cozo never learns about CRDT writes, so `kb/search`,
+    /// `kb/health`, the webview and every `kb/query.*` caller serve stale or empty
+    /// results while sync itself works perfectly — a silent split-brain between what
+    /// peers see and what queries return. The switch exists for a pure relay, which
+    /// carries no Cozo projection worth maintaining.
+    pub projector_enabled: bool,
 }
 
 impl Default for CollabConfig {
@@ -169,6 +177,7 @@ impl Default for CollabConfig {
             // Generous default for a small/self-hosted team daemon; raise for a
             // larger deployment, or set 0 to disable the cap entirely.
             max_connections: 256,
+            projector_enabled: true,
         }
     }
 }

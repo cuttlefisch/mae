@@ -17,10 +17,45 @@ use tokio::sync::mpsc;
 use crate::doc_store::DocStore;
 
 /// Provides the per-KB cozo projection instance for a `kb_id` (ADR-029, per-KB stores).
-/// The daemon implements this over its federation instance stores; tests use an
-/// in-memory provider. `store_for` may create the instance on first use.
+/// The daemon implements this over its federation instance stores
+/// ([`crate::projection_stores::DaemonProjectionStores`]); tests use an in-memory
+/// provider. `store_for` may create the instance on first use.
+///
+/// Async because the production implementation resolves through `DaemonState`, which
+/// lives behind a `tokio::sync::Mutex`. It follows ADR-054's snapshot-then-drop idiom —
+/// take the lock only long enough to clone the `Arc`, never across the Cozo call — so
+/// this must be awaited rather than blocking a runtime thread. The alternative, keeping
+/// a second registry snapshot beside `DaemonState` purely to make this sync, would
+/// duplicate state that can then go stale (principle #8).
+#[async_trait::async_trait]
 pub trait ProjectionStores: Send + Sync {
-    fn store_for(&self, kb_id: &str) -> Result<Arc<CozoKbStore>, String>;
+    async fn store_for(&self, kb_id: &str) -> Result<Arc<CozoKbStore>, String>;
+}
+
+/// What a reconciliation pass found between CRDT truth and the Cozo projection.
+///
+/// Empty means the projection is exactly what CRDT truth derives — the only outcome a
+/// healthy daemon should ever report.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct DriftReport {
+    /// In CRDT truth, absent from the projection.
+    pub missing: Vec<String>,
+    /// In both, but the projected content does not match what the CRDT derives.
+    pub differing: Vec<String>,
+    /// In the projection, no longer in CRDT truth.
+    pub extra: Vec<String>,
+}
+
+impl DriftReport {
+    /// No drift at all.
+    pub fn is_clean(&self) -> bool {
+        self.missing.is_empty() && self.differing.is_empty() && self.extra.is_empty()
+    }
+
+    /// Total number of nodes affected.
+    pub fn total(&self) -> usize {
+        self.missing.len() + self.differing.len() + self.extra.len()
+    }
 }
 
 /// Routing state the projector maintains from collection manifests (ADR-029 B3), so a
@@ -86,7 +121,7 @@ impl Projector {
             .await
             .map_err(|e| format!("read 'kb:{node_id}': {e}"))?;
         for kb_id in kbs {
-            let store = self.stores.store_for(&kb_id)?;
+            let store = self.stores.store_for(&kb_id).await?;
             project_node(&store, node_id, &state)?;
         }
         Ok(())
@@ -111,7 +146,7 @@ impl Projector {
         let removed: Vec<String> = prev.difference(&current).cloned().collect();
         let added: Vec<String> = current.difference(&prev).cloned().collect();
 
-        let store = self.stores.store_for(kb_id)?;
+        let store = self.stores.store_for(kb_id).await?;
         for node_id in &removed {
             if let Err(e) = store.delete_node(node_id) {
                 tracing::debug!(kb = %kb_id, node = %node_id, error = %e, "project: delete failed");
@@ -180,6 +215,89 @@ impl Projector {
             .map_or(0, |s| s.len()))
     }
 
+    /// Compare a KB's live Cozo projection against CRDT truth, and optionally heal it.
+    ///
+    /// The **offline bulk verification** tier. A projection maintained incrementally from
+    /// a change feed can drift for reasons the feed cannot see — a dropped emit, a failed
+    /// write, a direct edit to the store, a crash between the CRDT write and the
+    /// projection. ADR-029 makes the projection a pure deterministic function of CRDT
+    /// state, so drift is always detectable by re-deriving and comparing; this is that
+    /// check made routine rather than theoretical.
+    ///
+    /// Returns a [`DriftReport`]. With `heal` set, differing and missing nodes are
+    /// re-projected and extra ones deleted, so the call is **idempotent**: running it
+    /// twice in a row must report zero drift the second time. That idempotency is what
+    /// makes it safe to run repeatedly, which is the property LinkedIn's migration work
+    /// identifies as the enabler for a self-healing verification loop.
+    ///
+    /// Deliberately compares **materialized content**, not encoded bytes: two stores can
+    /// hold the same node with different internal representation, and a byte comparison
+    /// would report drift that does not exist.
+    pub async fn reconcile_kb(&self, kb_id: &str, heal: bool) -> Result<DriftReport, String> {
+        let (coll_state, _sv) = self
+            .doc_store
+            .encode_state_and_sv(&format!("kbc:{kb_id}"))
+            .await
+            .map_err(|e| format!("read 'kbc:{kb_id}': {e}"))?;
+        let coll = mae_sync::kb::KbCollectionDoc::from_bytes(&coll_state)
+            .map_err(|e| format!("parse 'kbc:{kb_id}': {e}"))?;
+        let truth: HashSet<String> = coll.list_nodes().into_iter().map(|(id, _)| id).collect();
+
+        let store = self.stores.store_for(kb_id).await?;
+        let mut report = DriftReport::default();
+
+        // Nodes the projection is missing, or holds with the wrong content.
+        for node_id in &truth {
+            let Ok((state, _sv)) = self
+                .doc_store
+                .encode_state_and_sv(&format!("kb:{node_id}"))
+                .await
+            else {
+                // No node doc yet — the manifest lists it but content has not synced.
+                // Not drift: there is nothing to project.
+                continue;
+            };
+            let expected = mae_sync::kb::KbNodeDoc::from_bytes(&state)
+                .map_err(|e| format!("parse 'kb:{node_id}': {e}"))?;
+            match store.get_node(node_id) {
+                Ok(Some(actual)) => {
+                    if actual.title != expected.title()
+                        || actual.body != expected.body()
+                        || actual.tags != expected.tags()
+                    {
+                        report.differing.push(node_id.clone());
+                        if heal {
+                            project_node(&store, node_id, &state)?;
+                        }
+                    }
+                }
+                _ => {
+                    report.missing.push(node_id.clone());
+                    if heal {
+                        project_node(&store, node_id, &state)?;
+                    }
+                }
+            }
+        }
+
+        // Nodes the projection holds that CRDT truth no longer lists.
+        if let Ok(ids) = store.list_ids(None) {
+            for id in ids {
+                if !truth.contains(&id) {
+                    report.extra.push(id.clone());
+                    if heal {
+                        let _ = store.delete_node(&id);
+                    }
+                }
+            }
+        }
+
+        report.missing.sort();
+        report.differing.sort();
+        report.extra.sort();
+        Ok(report)
+    }
+
     /// Drain the change feed, projecting each changed doc until the channel closes.
     pub async fn run(self, mut rx: mpsc::UnboundedReceiver<String>) {
         while let Some(doc_name) = rx.recv().await {
@@ -245,8 +363,9 @@ mod tests {
             Arc::new(Self(Mutex::new(HashMap::new())))
         }
     }
+    #[async_trait::async_trait]
     impl ProjectionStores for MemStores {
-        fn store_for(&self, kb_id: &str) -> Result<Arc<CozoKbStore>, String> {
+        async fn store_for(&self, kb_id: &str) -> Result<Arc<CozoKbStore>, String> {
             let mut m = self.0.lock().unwrap();
             Ok(Arc::clone(m.entry(kb_id.to_string()).or_insert_with(
                 || Arc::new(CozoKbStore::open_mem().unwrap()),
@@ -384,7 +503,7 @@ mod tests {
 
         // Project the collection → both nodes land in kb1's store; routing registered.
         projector.project_doc("kbc:kb1").await.unwrap();
-        let store = stores.store_for("kb1").unwrap();
+        let store = stores.store_for("kb1").await.unwrap();
         assert_eq!(store.get_node("concept:a").unwrap().unwrap().title, "A");
         assert_eq!(store.get_node("concept:b").unwrap().unwrap().title, "B");
 
@@ -444,7 +563,7 @@ mod tests {
 
         let n = projector.rebuild_kb("kb1").await.unwrap();
         assert_eq!(n, 1, "one node projected");
-        let store = stores.store_for("kb1").unwrap();
+        let store = stores.store_for("kb1").await.unwrap();
         assert_eq!(store.get_node("concept:a").unwrap().unwrap().title, "A");
     }
 
@@ -483,3 +602,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "projector_gate_c_tests.rs"]
+mod gate_c_tests;
