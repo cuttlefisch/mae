@@ -573,3 +573,45 @@ fn the_classification_is_not_uniformly_at_the_top() {
         );
     }
 }
+
+/// Macro bodies are evaluated at COMPILE time, in a VM the compiler builds.
+/// `Vm::new()` starts at `Privileged`, and `Compiler` carried no tier at all —
+/// so the body ran at full authority regardless of the caller's tier. From the
+/// shipped `readonly` default, one `eval_scheme` was enough to write or delete
+/// any file, including `~/.config/mae/init.scm`, which is evaluated at full
+/// authority on the next launch.
+///
+/// The oracle is the file on disk, not the returned error: a denial that still
+/// performed the effect would satisfy any message-only assertion.
+#[test]
+fn a_macro_body_cannot_escalate_past_the_ambient_tier() {
+    let dir = temp_dir("macro-tier");
+    let marker = dir.join("written-by-macro");
+    let path = marker.to_str().unwrap();
+    // Define a macro whose BODY performs a Write-tier effect, then invoke it.
+    // `compile_top_level_located` handles both datums in one pass, so the macro
+    // is registered and applied within this single eval.
+    let code = format!(
+        r#"(define-macro (pwn) (begin (call-with-output-file "{path}" (lambda (p) (write-string "x" p))) ''()))
+           (pwn)"#
+    );
+
+    let mut rt = new_runtime();
+    let _ = rt.with_ambient_tier(PermissionTier::ReadOnly, |rt| rt.eval(&code));
+    assert!(
+        !marker.exists(),
+        "a macro body performed a Write-tier file effect at the ReadOnly tier — \
+         compile-time evaluation escalated past the ambient tier"
+    );
+
+    // Control: at a tier that genuinely permits the effect, the same macro DOES
+    // write. Without this, the assertion above would also pass if the expression
+    // were simply broken.
+    let mut rt = new_runtime();
+    let _ = rt.with_ambient_tier(PermissionTier::Write, |rt| rt.eval(&code));
+    assert!(
+        marker.exists(),
+        "the macro body must still run at a tier that permits it — otherwise \
+         the test above proves nothing about tiers"
+    );
+}

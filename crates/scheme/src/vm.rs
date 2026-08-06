@@ -451,6 +451,11 @@ impl Vm {
         }
 
         let mut compiler = Compiler::new();
+        // @ai-caution: [permission] Macro bodies are evaluated at COMPILE time
+        // in a VM the compiler constructs. Hand it this VM's ambient tier, or
+        // that evaluation silently runs at `Vm::new()`'s `Privileged` default
+        // regardless of the caller's authority.
+        compiler.ambient_tier = self.ambient_tier;
         // Seed compiler with macros, load paths, and debug mode from VM
         compiler.macros = self.macros.clone();
         compiler.load_paths = self.load_paths.clone();
@@ -513,6 +518,11 @@ impl Vm {
         }
 
         let mut compiler = Compiler::new();
+        // @ai-caution: [permission] Macro bodies are evaluated at COMPILE time
+        // in a VM the compiler constructs. Hand it this VM's ambient tier, or
+        // that evaluation silently runs at `Vm::new()`'s `Privileged` default
+        // regardless of the caller's authority.
+        compiler.ambient_tier = self.ambient_tier;
         compiler.macros = self.macros.clone();
         compiler.load_paths = self.load_paths.clone();
         compiler.debug_mode = self.debug_mode;
@@ -571,6 +581,11 @@ impl Vm {
         }
 
         let mut compiler = Compiler::new();
+        // @ai-caution: [permission] Macro bodies are evaluated at COMPILE time
+        // in a VM the compiler constructs. Hand it this VM's ambient tier, or
+        // that evaluation silently runs at `Vm::new()`'s `Privileged` default
+        // regardless of the caller's authority.
+        compiler.ambient_tier = self.ambient_tier;
         compiler.macros = self.macros.clone();
         compiler.load_paths = self.load_paths.clone();
         compiler.debug_mode = self.debug_mode;
@@ -752,6 +767,11 @@ impl Vm {
         // Evaluate the library body in the isolated environment.
         if !lib_def.body.is_empty() {
             let mut compiler = Compiler::new();
+            // @ai-caution: [permission] Macro bodies are evaluated at COMPILE time
+            // in a VM the compiler constructs. Hand it this VM's ambient tier, or
+            // that evaluation silently runs at `Vm::new()`'s `Privileged` default
+            // regardless of the caller's authority.
+            compiler.ambient_tier = self.ambient_tier;
             compiler.macros = self.macros.clone();
             compiler.load_paths = self.load_paths.clone();
             compiler.debug_mode = self.debug_mode;
