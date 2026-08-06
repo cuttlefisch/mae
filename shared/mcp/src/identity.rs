@@ -38,7 +38,19 @@ const TRANSCRIPT_DOMAIN: &[u8] = b"mae-collab-key-auth-v1";
 
 /// The default collab directory: `$XDG_DATA_HOME/mae/collab`
 /// (fallback `~/.local/share/mae/collab`).
+///
+/// @ai-caution: [test-safety] This resolves ambiently from
+/// `$XDG_DATA_HOME`/`$HOME`, and it is the parent of the collab **identity
+/// key**, the collection files and the per-KB **content keys**. A test that
+/// reaches it without isolation writes real key material into the
+/// contributor's own data directory — `cargo test --workspace` was observed
+/// leaving `collab/content_keys/*.key` behind. Callers that legitimately need
+/// a real directory in a test must pass one explicitly or opt in via
+/// [`mae_effect_sandbox::with_external_effects`].
 pub fn default_collab_dir() -> Option<PathBuf> {
+    if mae_effect_sandbox::external_effects_blocked!() {
+        return None;
+    }
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .filter(|p| !p.as_os_str().is_empty())

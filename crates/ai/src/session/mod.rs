@@ -159,7 +159,16 @@ impl AgentSession {
         // Setup transcript logging — XDG-compliant path:
         //   $XDG_DATA_HOME/mae/transcripts/ (default: ~/.local/share/mae/transcripts/)
         // Falls back to $HOME/.local/share/mae/transcripts/ if XDG is unset.
-        let transcript_path = {
+        // @ai-caution: [test-safety] Ambient `$XDG_DATA_HOME`/`$HOME`, so
+        // constructing an `AgentSession` in a test drops a real transcript into
+        // the contributor's own `~/.local/share/mae/transcripts/`. Observed:
+        // `cargo test -p mae-ai --lib` left one behind on every run. Transcripts
+        // also carry raw tool output, which SECURITY.md notes is not scrubbed —
+        // so this was writing unreviewed content into a real user directory from
+        // a test. See `mae_core::effect_sandbox`.
+        let transcript_path = if mae_core::external_effects_blocked!() {
+            None
+        } else {
             let base = std::env::var("XDG_DATA_HOME")
                 .map(PathBuf::from)
                 .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".local/share")))

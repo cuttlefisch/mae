@@ -2880,6 +2880,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "mae-effect-sandbox"
+version = "0.14.94"
+
+[[package]]
 name = "mae-kb"
 version = "0.14.96"
 dependencies = [
@@ -2910,6 +2914,7 @@ dependencies = [
  "hmac 0.13.0",
  "hostname",
  "libc",
+ "mae-effect-sandbox",
  "rand 0.10.1",
  "rcgen",
  "rustls",

@@ -3018,6 +3018,7 @@ dependencies = [
  "libc",
  "mae-babel",
  "mae-canvas",
+ "mae-effect-sandbox",
  "mae-export",
  "mae-format",
  "mae-kb",
@@ -3070,6 +3071,10 @@ dependencies = [
  "tokio",
  "tracing",
 ]
+
+[[package]]
+name = "mae-effect-sandbox"
+version = "0.14.94"
 
 [[package]]
 name = "mae-export"
@@ -3154,6 +3159,7 @@ dependencies = [
  "hmac 0.13.0",
  "hostname",
  "libc",
+ "mae-effect-sandbox",
  "rand 0.10.2",
  "rcgen",
  "rustls",

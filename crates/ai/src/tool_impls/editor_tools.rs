@@ -1418,11 +1418,19 @@ mod tests {
         static ENV_LOCK: Mutex<()> = Mutex::new(());
 
         fn with_isolated_config_home<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
-            let _lock = ENV_LOCK.lock().unwrap();
+            // Poison-tolerant: propagating it turns one real failure in this
+            // module into a cascade of `PoisonError`s that hides which test
+            // actually broke. The guarded data is `()`.
+            let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let tmp = tempfile::tempdir().expect("tmpdir");
             let prev = std::env::var("XDG_CONFIG_HOME").ok();
             std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(tmp.path())));
+            // Redirecting XDG_CONFIG_HOME above is what licenses the opt-in:
+            // the init.scm write lands in `tmp`, not the contributor's real
+            // config. See `mae_core::effect_sandbox`.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                mae_core::effect_sandbox::with_external_effects(|| f(tmp.path()))
+            }));
             match prev {
                 Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
                 None => std::env::remove_var("XDG_CONFIG_HOME"),

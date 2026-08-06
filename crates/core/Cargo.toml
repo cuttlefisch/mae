@@ -14,6 +14,7 @@ license.workspace = true
 remote-hub = ["mae-kb/remote-hub"]
 
 [dependencies]
+mae-effect-sandbox = { path = "../../shared/effect-sandbox" }
 mae-babel = { path = "../babel" }
 mae-canvas = { path = "../canvas" }
 mae-export = { path = "../export" }

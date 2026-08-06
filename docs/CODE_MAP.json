@@ -250,6 +250,7 @@
       "dependencies": [
         "mae-babel",
         "mae-canvas",
+        "mae-effect-sandbox",
         "mae-export",
         "mae-format",
         "mae-kb",
@@ -548,6 +549,24 @@
         {
           "name": "transport",
           "kind": "mod"
+        }
+      ]
+    },
+    "mae-effect-sandbox": {
+      "path": "shared/effect-sandbox/src/lib.rs",
+      "dependencies": [],
+      "public_items": [
+        {
+          "name": "external_effects_blocked_for",
+          "kind": "fn"
+        },
+        {
+          "name": "with_external_effects",
+          "kind": "fn"
+        },
+        {
+          "name": "blocked_git_root",
+          "kind": "fn"
         }
       ]
     },
@@ -921,7 +940,9 @@
     },
     "mae-mcp": {
       "path": "shared/mcp/src/lib.rs",
-      "dependencies": [],
+      "dependencies": [
+        "mae-effect-sandbox"
+      ],
       "public_items": [
         {
           "name": "auth",

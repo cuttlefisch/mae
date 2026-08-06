@@ -15,9 +15,27 @@ impl Editor {
 
     /// Resolve the MAE data directory (~/.local/share/mae).
     /// Checks `data_dir_override` first (for test isolation).
+    ///
+    /// @ai-caution: [test-safety] This is the sole resolver for everything
+    /// under `~/.local/share/mae` — the KB registry, the project list, collab
+    /// collections and content keys. The `$XDG_DATA_HOME`/`$HOME` fallback is
+    /// *ambient*, so a test that forgets `data_dir_override` silently reads and
+    /// rewrites the contributor's real data: `cargo test -p mae-ai --lib` was
+    /// observed overwriting `kb-registry.toml` (their registered KB list),
+    /// `projects.toml`, and writing real `transcripts/`, while a full workspace
+    /// run also wrote a `collab/content_keys/*.key`.
+    ///
+    /// The override existed and worked — it was just opt-in, and forgetting it
+    /// failed *silently toward the real directory*. Under the effect sandbox
+    /// the fallback is refused instead, so forgetting now fails toward `None`,
+    /// which every caller already handles (`let Some(dir) = … else { return }`).
+    /// See [`crate::effect_sandbox`].
     pub fn mae_data_dir(&self) -> Option<PathBuf> {
         if let Some(ref dir) = self.data_dir_override {
             return Some(dir.clone());
+        }
+        if crate::external_effects_blocked!() {
+            return None;
         }
         if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
             Some(PathBuf::from(xdg).join("mae"))

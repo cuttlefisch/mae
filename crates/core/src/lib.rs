@@ -23,6 +23,8 @@ pub mod display_region;
 pub mod driven_window;
 pub mod editor;
 pub mod effect_sandbox;
+#[doc(inline)]
+pub use mae_effect_sandbox::external_effects_blocked;
 pub mod event_record;
 pub use mae_export as export;
 pub mod file_browser;
