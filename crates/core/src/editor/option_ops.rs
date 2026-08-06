@@ -1747,7 +1747,30 @@ impl super::Editor {
     /// Writes a `(set-option! "name" "value")` call between sentinel markers.
     /// User's own `(set-option!)` calls outside the markers take precedence
     /// (evaluated after, since Scheme is sequential).
+    /// @ai-caution: [security] Principle #16's **fourth** config-write path.
+    /// CLAUDE.md named three surfaces that refuse `~/.config/mae/**` for an
+    /// agent (`create_file`, `rename_file`, AI-originated buffer saves); this
+    /// writes the same file and was in none of them. Four surfaces funnel
+    /// here — the `set_option` MCP tool's `persist` flag, `(set-option-save!)`
+    /// through `eval_scheme`, the `:set-save` command mirror, and the
+    /// `--set-save` CLI flag — so the check belongs at this chokepoint, not
+    /// replicated at each of them (principle #15: one owner, not N copies).
+    ///
+    /// The condition is AI-origin, not tier, matching
+    /// `Editor::refuse_ai_save_of_protected_config`: a human's `:set-save`
+    /// must keep working, since init.scm is *their* primary config surface.
+    /// Gating on tier instead would break the human path and still leave a
+    /// Privileged agent able to make its own authority permanent.
     pub fn save_option_to_init(&self, name: &str) -> Result<String, String> {
+        if self.is_ai_originated_dispatch() {
+            return Err(format!(
+                "Refused: persisting '{name}' would write MAE's own configuration \
+                 (init.scm), which governs what tools are permitted and is evaluated \
+                 at full authority on the next launch. An AI session may not write it \
+                 — ask the user to make this change. The runtime value was still set \
+                 for this session.",
+            ));
+        }
         let (value, def) = self
             .get_option(name)
             .ok_or_else(|| format!("Unknown option: {}", name))?;

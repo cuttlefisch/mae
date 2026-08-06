@@ -1011,7 +1011,13 @@ mod set_save_tests {
     /// Run `f` with XDG_CONFIG_HOME pointed at a fresh tmp dir, restoring
     /// the previous value afterwards even if `f` panics.
     fn with_isolated_config_home<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
-        let _lock = ENV_LOCK.lock().unwrap();
+        // Recover from poisoning rather than propagating it. `f`'s panic is
+        // caught below and re-raised *after* the env is restored, which
+        // unwinds through this guard and poisons the mutex — so without this,
+        // one genuinely-failing test turns every other test in the module into
+        // a `PoisonError` and buries the real failure among a dozen fakes.
+        // The data the lock guards is `()`; there is no invariant to protect.
+        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().expect("tmpdir");
         let prev = std::env::var("XDG_CONFIG_HOME").ok();
         std::env::set_var("XDG_CONFIG_HOME", tmp.path());
@@ -1040,6 +1046,77 @@ mod set_save_tests {
             assert!(content.contains(";; --- MAE managed options ---"));
             assert!(content.contains(";; --- end managed options ---"));
             assert!(content.contains("(set-option! \"ai_chat_enabled\" \"true\")"));
+        });
+    }
+
+    /// Principle #16's fourth path. CLAUDE.md names three surfaces that refuse
+    /// to write `~/.config/mae/**` for an agent — `create_file`, `rename_file`,
+    /// and AI-originated buffer saves — and `save_option_to_init` was none of
+    /// them, while writing exactly that file. The `set_option` tool's
+    /// `persist: true` flag, `(set-option-save! …)` through `eval_scheme`, and
+    /// the `:set-save` command mirror all funnel here, so this is the one place
+    /// the check belongs.
+    ///
+    /// The oracle is the **file on disk**, not the returned message: a refusal
+    /// that still wrote init.scm would pass a message assertion, and init.scm
+    /// is evaluated at full authority on the next launch.
+    #[test]
+    fn an_ai_originated_persist_cannot_write_init_scm() {
+        with_isolated_config_home(|config_home| {
+            let mut editor = Editor::new();
+            editor.set_option("ai_chat_enabled", "true").unwrap();
+
+            let result =
+                editor.with_ai_dispatch_scope(|e| e.save_option_to_init("ai_chat_enabled"));
+
+            assert!(
+                result.is_err(),
+                "an AI-originated :set-save wrote MAE's own config: {result:?}"
+            );
+            assert!(
+                !config_home.join("mae").join("init.scm").exists(),
+                "init.scm was created despite the refusal — the file is what matters, \
+                 not the message"
+            );
+        });
+    }
+
+    /// The other half, so the fix above cannot be "satisfied" by breaking
+    /// `:set-save` for everyone. A human's own persistence must still work —
+    /// the asymmetry between human and AI *is* the control (principle #16).
+    #[test]
+    fn a_human_persist_still_writes_init_scm() {
+        with_isolated_config_home(|config_home| {
+            let mut editor = Editor::new();
+            editor.set_option("ai_chat_enabled", "true").unwrap();
+            editor.save_option_to_init("ai_chat_enabled").unwrap();
+
+            assert!(init_scm_contents(config_home)
+                .contains("(set-option! \"ai_chat_enabled\" \"true\")"));
+        });
+    }
+
+    /// An AI-originated persist that is refused must not leave a *previously
+    /// written* init.scm modified either — the refusal has to come before any
+    /// read-modify-write, not after a partial one.
+    #[test]
+    fn an_ai_originated_persist_leaves_an_existing_init_scm_untouched() {
+        with_isolated_config_home(|config_home| {
+            let mut editor = Editor::new();
+            editor.set_option("ai_chat_enabled", "true").unwrap();
+            editor.save_option_to_init("ai_chat_enabled").unwrap();
+            let before = init_scm_contents(config_home);
+
+            editor.set_option("ai_chat_enabled", "false").unwrap();
+            let result =
+                editor.with_ai_dispatch_scope(|e| e.save_option_to_init("ai_chat_enabled"));
+
+            assert!(result.is_err(), "AI-originated persist was not refused");
+            assert_eq!(
+                init_scm_contents(config_home),
+                before,
+                "init.scm changed under a refused AI-originated persist"
+            );
         });
     }
 
