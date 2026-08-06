@@ -334,6 +334,10 @@
           "kind": "mod"
         },
         {
+          "name": "effect_sandbox",
+          "kind": "mod"
+        },
+        {
           "name": "event_record",
           "kind": "mod"
         },

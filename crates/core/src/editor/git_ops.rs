@@ -934,7 +934,24 @@ impl Editor {
         }
     }
 
+    /// The directory every git subprocess in this module runs in.
+    ///
+    /// @ai-caution: [test-safety] This is the chokepoint that decides which
+    /// repository MAE mutates, and the `current_dir()` fallback makes that
+    /// *ambient*: an `Editor::new()` constructed in a test inherits whatever
+    /// repo the test binary happens to be running inside — which is the
+    /// contributor's own checkout of MAE. `all_builtin_commands_dispatch`
+    /// dispatches every builtin, so `cargo test -p mae-core` used to run
+    /// `git stash push`, `git reset HEAD -- .`, `git add .` and `git push`
+    /// against real, uncommitted work. See [`crate::effect_sandbox`].
+    ///
+    /// A test that genuinely needs git must set an explicit project root (or
+    /// wrap the call in `effect_sandbox::with_external_effects`); it does not
+    /// get to inherit one by accident.
     fn git_root(&self) -> std::path::PathBuf {
+        if crate::external_effects_blocked!() {
+            return crate::effect_sandbox::blocked_git_root();
+        }
         self.active_project_root()
             .map(|p| p.to_path_buf())
             .or_else(|| std::env::current_dir().ok())

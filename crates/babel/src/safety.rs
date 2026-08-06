@@ -268,10 +268,7 @@ mod tests {
     #[test]
     fn traversal_out_of_a_trusted_directory_is_not_trusted() {
         let trusted = ["/tmp/*".to_string()];
-        assert!(!is_trusted_path(
-            Path::new("/tmp/../etc/x.org"),
-            &trusted
-        ));
+        assert!(!is_trusted_path(Path::new("/tmp/../etc/x.org"), &trusted));
         assert!(!is_trusted_path(
             Path::new("/tmp/sub/../../etc/x.org"),
             &trusted

@@ -170,6 +170,7 @@ Source: `crates/core/src/lib.rs`
 | `display_region` | mod |
 | `driven_window` | mod |
 | `editor` | mod |
+| `effect_sandbox` | mod |
 | `event_record` | mod |
 | `file_browser` | mod |
 | `file_lock` | mod |

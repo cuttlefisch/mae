@@ -1762,6 +1762,19 @@ impl super::Editor {
     /// Gating on tier instead would break the human path and still leave a
     /// Privileged agent able to make its own authority permanent.
     pub fn save_option_to_init(&self, name: &str) -> Result<String, String> {
+        // @ai-caution: [test-safety] This writes the *developer's own*
+        // `~/.config/mae/init.scm` when a test reaches it, because the path
+        // comes from ambient `$XDG_CONFIG_HOME`/`$HOME`. Dispatching every
+        // builtin in a test did exactly that. A test that means to exercise
+        // persistence must point XDG at scratch space and say so via
+        // `effect_sandbox::with_external_effects`. See [`crate::effect_sandbox`].
+        if crate::external_effects_blocked!() {
+            return Err(format!(
+                "Refused: persisting '{name}' would write the real user config \
+                 directory from a test. Point XDG_CONFIG_HOME at a temp dir and wrap \
+                 the call in effect_sandbox::with_external_effects.",
+            ));
+        }
         if self.is_ai_originated_dispatch() {
             return Err(format!(
                 "Refused: persisting '{name}' would write MAE's own configuration \

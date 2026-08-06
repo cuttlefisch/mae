@@ -1021,7 +1021,12 @@ mod set_save_tests {
         let tmp = tempfile::tempdir().expect("tmpdir");
         let prev = std::env::var("XDG_CONFIG_HOME").ok();
         std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(tmp.path())));
+        // The isolation above is precisely what licenses the opt-in: config
+        // writes inside this closure land in `tmp`, not in the developer's
+        // real `~/.config/mae`. See `crate::effect_sandbox`.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::effect_sandbox::with_external_effects(|| f(tmp.path()))
+        }));
         match prev {
             Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
             None => std::env::remove_var("XDG_CONFIG_HOME"),

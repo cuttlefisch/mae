@@ -22,6 +22,7 @@ pub mod display_policy;
 pub mod display_region;
 pub mod driven_window;
 pub mod editor;
+pub mod effect_sandbox;
 pub mod event_record;
 pub use mae_export as export;
 pub mod file_browser;

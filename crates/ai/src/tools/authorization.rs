@@ -404,7 +404,10 @@ mod tests {
             "sanity: only {authority} authority-bounding options found; \
              did the registry stop registering ai_* options?"
         );
-        assert!(ordinary > 100, "sanity: only {ordinary} ordinary options checked");
+        assert!(
+            ordinary > 100,
+            "sanity: only {ordinary} ordinary options checked"
+        );
     }
 
     /// Every name in the ordinary-exception list must be a real registered
@@ -414,11 +417,7 @@ mod tests {
     #[test]
     fn ordinary_ai_options_all_exist_in_the_registry() {
         let registry = OptionRegistry::new();
-        let names: Vec<String> = registry
-            .list()
-            .iter()
-            .map(|o| o.name.to_string())
-            .collect();
+        let names: Vec<String> = registry.list().iter().map(|o| o.name.to_string()).collect();
         for exempt in ORDINARY_AI_OPTIONS {
             assert!(
                 names.iter().any(|n| n == exempt),
