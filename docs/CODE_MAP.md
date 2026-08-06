@@ -10,6 +10,7 @@ graph TD
     mae --> mae_canvas
     mae --> mae_core
     mae --> mae_dap
+    mae --> mae_effect_sandbox
     mae --> mae_gui
     mae --> mae_kb
     mae --> mae_lsp
@@ -23,6 +24,7 @@ graph TD
     mae_agent_cli --> mae_mcp
     mae_ai --> mae_canvas
     mae_ai --> mae_core
+    mae_ai --> mae_effect_sandbox
     mae_ai --> mae_export
     mae_ai --> mae_kb
     mae_ai --> mae_shell
@@ -241,6 +243,7 @@ Source: `shared/effect-sandbox/src/lib.rs`
 | `external_effects_blocked_for` | fn |
 | `with_external_effects` | fn |
 | `blocked_git_root` | fn |
+| `lock_env` | fn |
 
 ## mae-export
 

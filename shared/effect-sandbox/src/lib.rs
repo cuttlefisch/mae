@@ -163,6 +163,34 @@ pub fn blocked_git_root() -> std::path::PathBuf {
     std::env::temp_dir().join("mae-effect-sandbox-no-such-git-root")
 }
 
+/// The one lock serialising tests that mutate process-global environment.
+///
+/// `std::env::set_var` is process-wide, so a test that redirects `HOME`,
+/// `XDG_CONFIG_HOME` or `PATH` changes it for every other test running
+/// concurrently in the same binary. Serialising is the usual mitigation, but
+/// it only works if everyone takes the **same** lock — and this workspace had
+/// grown twelve independent `static ENV_LOCK`s plus several tests taking none
+/// at all, so a test holding one lock ran happily alongside a test holding
+/// another while both rewrote the environment out from under each other and
+/// under the ~3,000 tests taking no lock at all.
+///
+/// A single static here gives exactly one lock per process, shared by every
+/// crate linked into that test binary.
+///
+/// Poison-tolerant: the guarded data is `()`, and propagating poisoning turns
+/// one genuine failure into a cascade of `PoisonError`s that hides which test
+/// actually broke.
+///
+/// @ai-caution: [test-safety] A lock only orders the tests that *take* it. The
+/// rest of the binary still runs against the mutated global, so this makes env
+/// mutation less bad, never safe. Prefer an injected path (`data_dir_override`,
+/// an explicit argument) over mutating the environment at all; reach for this
+/// only when the ambient resolution itself is the thing under test.
+pub fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

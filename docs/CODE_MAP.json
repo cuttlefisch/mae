@@ -7,6 +7,7 @@
         "mae-canvas",
         "mae-core",
         "mae-dap",
+        "mae-effect-sandbox",
         "mae-gui",
         "mae-kb",
         "mae-lsp",
@@ -37,6 +38,7 @@
       "dependencies": [
         "mae-canvas",
         "mae-core",
+        "mae-effect-sandbox",
         "mae-export",
         "mae-kb",
         "mae-shell",
@@ -566,6 +568,10 @@
         },
         {
           "name": "blocked_git_root",
+          "kind": "fn"
+        },
+        {
+          "name": "lock_env",
           "kind": "fn"
         }
       ]

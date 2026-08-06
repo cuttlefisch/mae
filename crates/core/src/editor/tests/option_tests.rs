@@ -159,8 +159,7 @@ fn open_link_at_cursor_detects_url() {
     // MAE_BROWSER (env-var-global, so serialize + restore per principle #14
     // test isolation) is set to a harmless no-op so this exercises the real
     // Command::new(...).spawn() path without popping a real browser window.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _lock = ENV_LOCK.lock().unwrap();
+    let _lock = mae_effect_sandbox::lock_env();
     let prev = std::env::var("MAE_BROWSER").ok();
     std::env::set_var("MAE_BROWSER", "true");
 
@@ -1004,9 +1003,6 @@ fn collab_psk_option_registered_with_config_key() {
 
 mod set_save_tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// Run `f` with XDG_CONFIG_HOME pointed at a fresh tmp dir, restoring
     /// the previous value afterwards even if `f` panics.
@@ -1017,7 +1013,7 @@ mod set_save_tests {
         // one genuinely-failing test turns every other test in the module into
         // a `PoisonError` and buries the real failure among a dozen fakes.
         // The data the lock guards is `()`; there is no invariant to protect.
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _lock = mae_effect_sandbox::lock_env();
         let tmp = tempfile::tempdir().expect("tmpdir");
         let prev = std::env::var("XDG_CONFIG_HOME").ok();
         std::env::set_var("XDG_CONFIG_HOME", tmp.path());

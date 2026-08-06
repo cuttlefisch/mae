@@ -49,7 +49,6 @@ pub fn ensure_registered(data_dir: &std::path::Path) {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use std::sync::Mutex;
 
     // `MAE_PRACTICES_KB_PATH` is process-global; without serializing this
     // one env-var-touching test against itself across parallel runs, a
@@ -57,11 +56,10 @@ mod tests {
     // of it (same hazard, same fix, as `guidance.rs`'s `ENV_LOCK`). The
     // other tests below exercise `guidance_kb_engine::ensure_registered_with_path`
     // directly and don't touch the environment at all.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn locate_returns_env_override_when_set() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         let prev = std::env::var("MAE_PRACTICES_KB_PATH").ok();
         let tmp = tempfile::tempdir().unwrap();
         let kb_path = tmp.path().join("fake-practices.cozo");

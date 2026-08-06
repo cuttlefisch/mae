@@ -120,13 +120,10 @@ pub fn build_guidance_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn default_data_dir_prefers_xdg_data_home() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         let prev = std::env::var("XDG_DATA_HOME").ok();
         std::env::set_var("XDG_DATA_HOME", "/tmp/mae-test-xdg-data");
         assert_eq!(

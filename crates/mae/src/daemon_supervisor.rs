@@ -368,8 +368,6 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     /// A leak-proof, fully-isolated environment for real-daemon tests: temp XDG (a
     /// unique socket, collab disabled so no 9473 collision), `MAE_DAEMON_BIN` set,
     /// and a `/proc` reaper that kills every daemon under this temp XDG on Drop —
@@ -389,7 +387,7 @@ mod tests {
         fn new() -> Option<Self> {
             let bin = find_daemon_binary()?;
             // Tolerate a poisoned lock (a prior test panicked) — we still serialize.
-            let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let lock = mae_effect_sandbox::lock_env();
             let tmp = tempfile::tempdir().unwrap();
             let runtime = tmp.path().join("run");
             let config = tmp.path().join("config");

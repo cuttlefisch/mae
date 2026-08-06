@@ -814,6 +814,8 @@ link = "FOO.org"
 
         // Temporarily override HOME
         let orig = std::env::var_os("HOME");
+        // Was unlocked — same process-global HOME hazard as above.
+        let _env = mae_effect_sandbox::lock_env();
         std::env::set_var("HOME", &fake_home);
 
         let result = detect_project_root(&fake_home);

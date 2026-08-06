@@ -15,13 +15,12 @@ use super::*;
 /// global. Env mutation in a test is never fully safe, only less bad, so keep
 /// the mutated window as short as possible and prefer `data_dir_override`
 /// wherever the env resolution itself is not what is under test.
-static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 fn mae_data_dir_is_xdg_first_not_platform_native() {
     // Previously took no lock at all while setting `HOME` process-wide, so a
     // concurrent test could observe — or restore — the wrong value.
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = mae_effect_sandbox::lock_env();
 
     let mut editor = Editor::new();
     editor.data_dir_override = None; // exercise the real env-based resolution

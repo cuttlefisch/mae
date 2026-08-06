@@ -1413,15 +1413,12 @@ mod tests {
     // isolation), mirroring `option_tests.rs`'s `set_save_tests` module.
     mod set_option_persist_tests {
         use super::*;
-        use std::sync::Mutex;
-
-        static ENV_LOCK: Mutex<()> = Mutex::new(());
 
         fn with_isolated_config_home<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
             // Poison-tolerant: propagating it turns one real failure in this
             // module into a cascade of `PoisonError`s that hides which test
             // actually broke. The guarded data is `()`.
-            let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let _lock = mae_effect_sandbox::lock_env();
             let tmp = tempfile::tempdir().expect("tmpdir");
             let prev = std::env::var("XDG_CONFIG_HOME").ok();
             std::env::set_var("XDG_CONFIG_HOME", tmp.path());

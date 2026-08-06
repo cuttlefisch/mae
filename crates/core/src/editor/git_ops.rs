@@ -949,13 +949,19 @@ impl Editor {
     /// wrap the call in `effect_sandbox::with_external_effects`); it does not
     /// get to inherit one by accident.
     fn git_root(&self) -> std::path::PathBuf {
+        // An explicit project root is a deliberate choice by the caller — a
+        // test that points one at a scratch repo has taken responsibility for
+        // where git runs, exactly like `Editor::data_dir_override`. Only the
+        // *ambient* `current_dir()` fallback below is refused, because that is
+        // the part nobody chose and the part that silently resolved to the
+        // contributor's own checkout.
+        if let Some(root) = self.active_project_root() {
+            return root.to_path_buf();
+        }
         if crate::external_effects_blocked!() {
             return crate::effect_sandbox::blocked_git_root();
         }
-        self.active_project_root()
-            .map(|p| p.to_path_buf())
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_default()
+        std::env::current_dir().ok().unwrap_or_default()
     }
 
     /// Amend the previous commit.
