@@ -60,8 +60,6 @@ jobs:
           cp assets/mae-practices.cozo.sha256 dist/mae-pkg/mae-practices.cozo.sha256
           cp -r assets/mae-devpractices.cozo dist/mae-pkg/mae-devpractices.cozo
           cp assets/mae-devpractices.cozo.sha256 dist/mae-pkg/mae-devpractices.cozo.sha256
-          cp -r assets/mae-adr.cozo dist/mae-pkg/mae-adr.cozo
-          cp assets/mae-adr.cozo.sha256 dist/mae-pkg/mae-adr.cozo.sha256
           cp -r modules dist/mae-pkg/modules
           cp assets/sample-config.toml dist/mae-pkg/sample-config.toml
           cp assets/daemon-config.toml dist/mae-pkg/daemon-config.toml
@@ -75,10 +73,35 @@ jobs:
           chmod +x dist/mae-pkg/install.sh
           tar czf dist/mae-linux-x86_64.tar.gz -C dist/mae-pkg .
 
+      # The ADR KB ships as its OWN asset, not inside the user packages. It is
+      # ~57 MB of MAE's own decision history — useful to contributors querying
+      # why the architecture is the way it is (ADR-059), useless to someone who
+      # just wants an editor, and deliberately opt-in (nothing auto-registers
+      # it). Bundling it made every user download carry it.
+      #
+      # Integrity comes from the TARBALL's hash in SHA256SUMS (generated in the
+      # publish job alongside every other asset), NOT from
+      # `assets/mae-adr.cozo.sha256`. That distinction is load-bearing and was
+      # got wrong once: a sled store is rewritten in place the first time it is
+      # opened, and is not byte-reproducible across builds, so the committed
+      # sidecar hash does NOT match a freshly built or once-opened store. It is
+      # a "was `make adr-kb` re-run?" marker for the ADR-059 staleness gate, and
+      # cannot serve as a download oracle. Verified empirically 2026-08: a local
+      # build hashed d1ab9b… against a committed ec30dd….
+      - name: Package the ADR KB as a standalone contributor asset
+        run: |
+          set -euo pipefail
+          tar czf dist/mae-adr.cozo.tar.gz -C assets mae-adr.cozo
+
       - uses: actions/upload-artifact@v7
         with:
           name: mae-linux-x86_64
           path: dist/mae-linux-x86_64.tar.gz
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mae-adr-kb
+          path: dist/mae-adr.cozo.tar.gz
 
   build-linux-gui:
     name: Build linux-x86_64-gui
@@ -95,13 +118,12 @@ jobs:
       - name: Build GUI binary + bundled KBs
         run: |
           cargo build --release --features gui --package mae
-          cargo build --release --bin build-manual-kb --bin build-practices-kb --bin build-devpractices-kb --bin build-adr-kb
+          cargo build --release --bin build-manual-kb --bin build-practices-kb --bin build-devpractices-kb
           ./target/release/build-manual-kb assets/mae-manual.cozo
           ./target/release/build-practices-kb assets/mae-practices.cozo
           ./target/release/build-devpractices-kb assets/mae-devpractices.cozo
-          ./target/release/build-adr-kb assets/mae-adr.cozo
           # Strip sled lock files from bundled KBs
-          find assets/mae-manual.cozo assets/mae-practices.cozo assets/mae-devpractices.cozo assets/mae-adr.cozo -name "*.lock" -delete 2>/dev/null || true
+          find assets/mae-manual.cozo assets/mae-practices.cozo assets/mae-devpractices.cozo -name "*.lock" -delete 2>/dev/null || true
 
       - name: Build AppImage
         run: |
@@ -116,21 +138,23 @@ jobs:
           cp assets/mae.desktop dist/MAE.AppDir/mae.desktop
           cp assets/mae.svg dist/MAE.AppDir/usr/share/icons/hicolor/scalable/apps/mae.svg
           cp assets/mae.svg dist/MAE.AppDir/mae.svg
-          # Bundle manual/practices/devpractices/ADR KBs, modules, and the
+          # Bundle manual/practices/devpractices KBs, modules, and the
           # patched JetBrains Mono Nerd Font (license-clean — see
-          # assets/fonts/LICENSES.md) inside AppImage
+          # assets/fonts/LICENSES.md) inside AppImage. The ADR KB is NOT
+          # bundled — it ships as its own release asset for contributors.
           cp -r assets/mae-manual.cozo dist/MAE.AppDir/usr/share/mae/mae-manual.cozo
           cp -r assets/mae-practices.cozo dist/MAE.AppDir/usr/share/mae/mae-practices.cozo
           cp -r assets/mae-devpractices.cozo dist/MAE.AppDir/usr/share/mae/mae-devpractices.cozo
-          cp -r assets/mae-adr.cozo dist/MAE.AppDir/usr/share/mae/mae-adr.cozo
           cp -r modules dist/MAE.AppDir/usr/share/mae/modules
           cp -r assets/fonts dist/MAE.AppDir/usr/share/mae/fonts
           cp assets/sample-config.toml dist/MAE.AppDir/usr/share/mae/sample-config.toml
 
           # AppRun entry point — sets env vars so bundled assets are found.
-          # ADR KB has no env-var override (ADR-059: deliberately opt-in, never
-          # auto-located) — it's bundled here purely so a user can
-          # `kb_register` it manually from a running AppImage-launched instance.
+          # The ADR KB is deliberately absent: it has no env-var override
+          # (ADR-059 — opt-in, never auto-located), it is contributor-only, and
+          # bundling ~57 MB of MAE's own decision history in every user's
+          # AppImage bought nothing. Get it with `make fetch-adr-kb` or build it
+          # with `make adr-kb`, then `kb_register` it by path.
           cat > dist/MAE.AppDir/AppRun << 'APPRUN'
           #!/bin/bash
           SELF="$(readlink -f "$0")"
@@ -169,13 +193,12 @@ jobs:
       - name: Build shim + daemon + bundled KBs
         run: |
           cargo build --release --package mae-mcp
-          cargo build --release --bin build-manual-kb --bin build-practices-kb --bin build-devpractices-kb --bin build-adr-kb
+          cargo build --release --bin build-manual-kb --bin build-practices-kb --bin build-devpractices-kb
           ./target/release/build-manual-kb assets/mae-manual.cozo
           ./target/release/build-practices-kb assets/mae-practices.cozo
           ./target/release/build-devpractices-kb assets/mae-devpractices.cozo
-          ./target/release/build-adr-kb assets/mae-adr.cozo
           # Strip sled lock files — quarantine on macOS prevents reopening
-          find assets/mae-manual.cozo assets/mae-practices.cozo assets/mae-devpractices.cozo assets/mae-adr.cozo -name "*.lock" -delete 2>/dev/null || true
+          find assets/mae-manual.cozo assets/mae-practices.cozo assets/mae-devpractices.cozo -name "*.lock" -delete 2>/dev/null || true
           cd daemon && cargo build --release
 
       - name: Build GUI binary
@@ -200,7 +223,6 @@ jobs:
           cp -r assets/mae-manual.cozo "$RES/mae-manual.cozo"
           cp -r assets/mae-practices.cozo "$RES/mae-practices.cozo"
           cp -r assets/mae-devpractices.cozo "$RES/mae-devpractices.cozo"
-          cp -r assets/mae-adr.cozo "$RES/mae-adr.cozo"
           cp -r modules "$RES/modules"
           cp -r assets/fonts "$RES/fonts"
           cp assets/sample-config.toml "$RES/sample-config.toml"
@@ -298,8 +320,6 @@ jobs:
           cp assets/mae-practices.cozo.sha256 dist/mae-cli-pkg/mae-practices.cozo.sha256
           cp -r assets/mae-devpractices.cozo dist/mae-cli-pkg/mae-devpractices.cozo
           cp assets/mae-devpractices.cozo.sha256 dist/mae-cli-pkg/mae-devpractices.cozo.sha256
-          cp -r assets/mae-adr.cozo dist/mae-cli-pkg/mae-adr.cozo
-          cp assets/mae-adr.cozo.sha256 dist/mae-cli-pkg/mae-adr.cozo.sha256
           cp -r modules dist/mae-cli-pkg/modules
           cp assets/sample-config.toml dist/mae-cli-pkg/sample-config.toml
           cp assets/daemon-config.toml dist/mae-cli-pkg/daemon-config.toml
@@ -327,8 +347,6 @@ jobs:
           cp assets/mae-practices.cozo.sha256 dist/mae-gui-pkg/mae-practices.cozo.sha256
           cp -r assets/mae-devpractices.cozo dist/mae-gui-pkg/mae-devpractices.cozo
           cp assets/mae-devpractices.cozo.sha256 dist/mae-gui-pkg/mae-devpractices.cozo.sha256
-          cp -r assets/mae-adr.cozo dist/mae-gui-pkg/mae-adr.cozo
-          cp assets/mae-adr.cozo.sha256 dist/mae-gui-pkg/mae-adr.cozo.sha256
           cp -r modules dist/mae-gui-pkg/modules
           cp assets/sample-config.toml dist/mae-gui-pkg/sample-config.toml
           cp assets/daemon-config.toml dist/mae-gui-pkg/daemon-config.toml
@@ -498,7 +516,8 @@ jobs:
         run: |
           cd dist
           for f in mae-linux-x86_64.tar.gz mae-linux-x86_64-gui.AppImage \
-                   MAE-macos-aarch64.zip mae-macos-aarch64.tar.gz; do
+                   MAE-macos-aarch64.zip mae-macos-aarch64.tar.gz \
+                   mae-adr.cozo.tar.gz; do
             # Bare filenames, no `dist/` prefix: the manifest must verify
             # against files as they land in a user's download directory.
             sha256sum "$f" | tee "$f.sha256"
@@ -519,11 +538,13 @@ jobs:
             dist/mae-linux-x86_64-gui.AppImage
             dist/MAE-macos-aarch64.zip
             dist/mae-macos-aarch64.tar.gz
+            dist/mae-adr.cozo.tar.gz
             dist/SHA256SUMS
             dist/mae-linux-x86_64.tar.gz.sha256
             dist/mae-linux-x86_64-gui.AppImage.sha256
             dist/MAE-macos-aarch64.zip.sha256
             dist/mae-macos-aarch64.tar.gz.sha256
+            dist/mae-adr.cozo.tar.gz.sha256
           fail_on_unmatched_files: true
           token: ${{ secrets.RELEASE_PAT }}
 

@@ -62,7 +62,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean clean-cache ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check heavy-e2e-check audit-metrics audit-metrics-check audit-metrics-bless lint-shell lint-yaml lint-deploy lint-all test-deploy gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual practices-kb install-practices adr-kb install-adr devpractices-kb install-devpractices verify-adr-kb-sync install-vscode
+.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean clean-cache ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check heavy-e2e-check audit-metrics audit-metrics-check audit-metrics-bless lint-shell lint-yaml lint-deploy lint-all test-deploy gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual practices-kb install-practices adr-kb fetch-adr-kb install-adr devpractices-kb install-devpractices verify-adr-kb-sync install-vscode
 
 # Default target: release build
 all: build
@@ -592,6 +592,50 @@ install-devpractices: devpractices-kb
 adr-kb:
 	@mkdir -p assets
 	$(CARGO) run --release --bin build-adr-kb -- assets/mae-adr.cozo
+
+## fetch-adr-kb: download the ADR KB from a release instead of building it
+##
+## assets/mae-adr.cozo is NOT tracked in git -- it is a ~57 MB build artifact
+## derived from docs/adr/*.md, and committing each regeneration was the repo's
+## largest source of history growth. `make adr-kb` builds it from this
+## checkout's ADRs and is the authoritative path; this target exists for
+## contributors who want it without a release build.
+##
+## Fetches the tag in MAE_ADR_KB_VERSION (default: the latest release) and
+## verifies the tarball against that release's published .sha256 BEFORE
+## unpacking. Note the store then reflects the ADRs at that tag, not
+## necessarily this working tree's -- run `make adr-kb` if you need it current.
+MAE_ADR_KB_VERSION ?= latest
+fetch-adr-kb:
+	@set -eu; \
+	base="https://github.com/cuttlefisch/mae/releases"; \
+	if [ "$(MAE_ADR_KB_VERSION)" = "latest" ]; then \
+	  url="$$base/latest/download"; \
+	else \
+	  url="$$base/download/$(MAE_ADR_KB_VERSION)"; \
+	fi; \
+	tmp="$$(mktemp -d)"; \
+	trap 'rm -rf "$$tmp"' EXIT INT TERM; \
+	echo "Fetching ADR KB from $$url ..."; \
+	curl -fsSL -o "$$tmp/mae-adr.cozo.tar.gz" "$$url/mae-adr.cozo.tar.gz"; \
+	curl -fsSL -o "$$tmp/mae-adr.cozo.tar.gz.sha256" "$$url/mae-adr.cozo.tar.gz.sha256"; \
+	echo "Verifying checksum ..."; \
+	if command -v sha256sum >/dev/null 2>&1; then \
+	  sumcheck="sha256sum -c"; \
+	elif command -v shasum >/dev/null 2>&1; then \
+	  sumcheck="shasum -a 256 -c"; \
+	else \
+	  echo "neither sha256sum nor shasum found -- cannot verify, refusing" >&2; \
+	  exit 1; \
+	fi; \
+	( cd "$$tmp" && $$sumcheck mae-adr.cozo.tar.gz.sha256 ) || { \
+	  echo "CHECKSUM MISMATCH -- refusing to unpack. Build it instead: make adr-kb" >&2; \
+	  exit 1; \
+	}; \
+	mkdir -p assets; \
+	rm -rf assets/mae-adr.cozo; \
+	tar xzf "$$tmp/mae-adr.cozo.tar.gz" -C assets; \
+	echo "ADR KB -> assets/mae-adr.cozo (register it manually; ADR-059 keeps it opt-in)"
 
 ## install-adr: install pre-built ADR KB to XDG data dir
 install-adr: adr-kb

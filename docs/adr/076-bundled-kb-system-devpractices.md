@@ -46,7 +46,29 @@ than a fourth divergent one-off pipeline.
 | **Manual** (`mae-manual.cozo`) | code-gen + `assets/manual/*.org` | N/A — loaded read-only in-memory, not a federation instance | Yes | `:help` system, SHA-validated | MAE's own built-in help |
 | **MaePractices** (`mae-practices.cozo`) | `assets/practices/*.org`, MAE-specific | Yes, additive/idempotent | Yes (this work) | `ai_guidance_kb` → `read_guidance_kb_context` | Guidance for contributors working *on MAE itself* |
 | **DevPractices** (`mae-devpractices.cozo`) | forked from `~/Projects/dev-practices-kb`, generic | Yes, same mechanism | Yes (this work) | `ai_guidance_kb` (new fresh-install default) → `read_guidance_kb_context` | Guidance for anyone using MAE to build *other* software |
-| **ADR** (`mae-adr.cozo`) | `docs/adr/*.md`, generated | No — deliberately opt-in (ADR-059) | Yes (this work) | manual `kb_register`, then normal `kb_*` tools | Queryable MAE decision history, not injected into every AI session |
+| **ADR** (`mae-adr.cozo`) | `docs/adr/*.md`, generated | No — deliberately opt-in (ADR-059) | **No — its own release asset** (see below) | `make adr-kb` / `make fetch-adr-kb`, then manual `kb_register` | Queryable MAE decision history, not injected into every AI session |
+
+**Amended 2026-08 — the ADR KB left the bundle.** It was tracked in git and copied
+into every user package. Two things were wrong with that. It is ~57 MB of MAE's own
+decision history, useful only to people working *on MAE*, so every end user
+downloaded it to never register it. And because it is a build artifact regenerated
+from `docs/adr/*.md`, each regeneration wrote a fresh ~57 MB object into history —
+GitHub had begun warning on the push. Nothing read the committed copy: `make install`
+depends on the `adr-kb` target and the release workflow runs `build-adr-kb` before
+packaging, so both rebuilt it first, and `verify-adr-kb-sync` only diffs the checksum
+sidecar.
+
+It is now untracked (`.gitignore`), built with `make adr-kb`, or downloaded with
+`make fetch-adr-kb` from a standalone `mae-adr.cozo.tar.gz` release asset covered by
+the release's `SHA256SUMS`. `assets/mae-adr.cozo.sha256` stays tracked for ADR-059's
+Phase E staleness gate — but note it is **not** a verification oracle: a sled store is
+rewritten in place on first open and is not byte-reproducible, so a rebuilt or
+once-opened store hashes differently from the committed value. The tarball's hash in
+`SHA256SUMS` is what a download is checked against.
+
+The three remaining bundled KBs are unaffected: unlike the ADR KB, `mae-manual.cozo`
+and the two guidance KBs are read out of `assets/` at runtime by source builds, so
+untracking them would need a fallback path first.
 
 The axis that matters: **auto-registered guidance KBs** (MaePractices/DevPractices —
 `ai_guidance_kb` needs *something* to point at automatically) vs. **opt-in reference**
