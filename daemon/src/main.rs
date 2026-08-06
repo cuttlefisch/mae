@@ -15,6 +15,9 @@
 
 mod cli;
 mod config;
+#[cfg(test)]
+mod config_bind_tests;
+mod config_guards;
 mod conn_limit;
 mod dialer;
 pub mod enrichment;
