@@ -9,24 +9,27 @@ set -e
 PASS=0
 FAIL=0
 
+# POSIX sh has no `local` (SC3043) — this script declares #!/bin/sh and
+# CLAUDE.md principle #13 requires identical behaviour on macOS and Linux, so
+# use distinctly-named globals rather than a bash-only extension.
 check_file() {
-    local path="$1"
-    local expected="$2"
-    local desc="$3"
+    cf_path="$1"
+    cf_expected="$2"
+    cf_desc="$3"
 
-    if [ ! -f "$path" ]; then
-        echo "FAIL: $desc — file not found: $path"
+    if [ ! -f "$cf_path" ]; then
+        echo "FAIL: $cf_desc — file not found: $cf_path"
         FAIL=$((FAIL + 1))
         return
     fi
 
-    if grep -q "$expected" "$path"; then
-        echo "PASS: $desc"
+    if grep -q "$cf_expected" "$cf_path"; then
+        echo "PASS: $cf_desc"
         PASS=$((PASS + 1))
     else
-        echo "FAIL: $desc — expected '$expected' in $path"
+        echo "FAIL: $cf_desc — expected '$cf_expected' in $cf_path"
         echo "  actual content:"
-        cat "$path" | sed 's/^/    /'
+        sed 's/^/    /' "$cf_path"
         FAIL=$((FAIL + 1))
     fi
 }

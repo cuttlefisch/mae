@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.94] - 2026-08-05
+
+
+
+
+### Features
+
+- *(daemon)* Report connected clients on daemon/status ([c8fd08e](https://github.com/cuttlefisch/mae/commit/c8fd08e9bbe50acc5caab301b4a72285473d5323))
+- *(deploy)* Ship the multi-instance template unit + a per-instance config ([dab65d2](https://github.com/cuttlefisch/mae/commit/dab65d2afbffa4b75ffe0d4f82249f48b53dd26a))
+
+### Bug Fixes
+
+- *(daemon)* Subcommands ignored --config and operated on the default instance (#645) ([79cb332](https://github.com/cuttlefisch/mae/commit/79cb332c7a556efa1587f894dd5e523955e0c715))
+- *(config)* The generated template contradicted the shipped default (#639) ([a8cd97a](https://github.com/cuttlefisch/mae/commit/a8cd97ad3ad6293e3157c06b135f8cd8f37ddcce))
+
+### Refactor
+
+- *(config)* Split the #639 template gates out (ratchet) ([5a6ce80](https://github.com/cuttlefisch/mae/commit/5a6ce80cd02ead22a13c4f5e6c0ac740df248aa0))
+
+### Build System
+
+- Prune stale cargo test binaries (reclaimed 52 GB) ([8954c35](https://github.com/cuttlefisch/mae/commit/8954c3559f72d02296ae71b5f77c949bec78efe3))
+
+### Miscellaneous
+
+- Sync Cargo.lock versions to 0.14.93 (#61) ([969ebd9](https://github.com/cuttlefisch/mae/commit/969ebd90a52302623bbdb771775b287f80c42a92))
+- Remove a real KB name from a test comment ([7bb55c7](https://github.com/cuttlefisch/mae/commit/7bb55c703df074c8104bbf148dba1ff375e34c5b))
+
 ## [0.14.93] - 2026-08-05
 
 
@@ -58,6 +86,7 @@ All notable changes to this project will be documented in this file.
 
 - *(deps)* Bump clap 4.6.4 -> 4.6.5 (supersedes #626) ([f0b35ed](https://github.com/cuttlefisch/mae/commit/f0b35ed37db4ea55ca29155daa4b8b39176d54ab))
 - *(adr)* Regenerate the ADR KB for ADR-095/096 ([edd667f](https://github.com/cuttlefisch/mae/commit/edd667fe306a1f808041128f7e76324d0c1c9729))
+- Bump version to 0.14.93 ([8146b87](https://github.com/cuttlefisch/mae/commit/8146b8728a045107c8c4fdfae7f5eb4224e9f360))
 
 ## [0.14.92] - 2026-08-04
 

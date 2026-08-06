@@ -1,0 +1,217 @@
+---
+# Install — fetch, verify, unpack, and atomically switch the current release.
+#
+# Releases are unpacked to {{ mae_daemon_releases_dir }}/<version> and exposed
+# through a `current` symlink. Switching the symlink is the deploy; rolling back
+# is repointing it, with no re-download. The systemd unit's ExecStart resolves
+# through the symlink at start time, so a rollback needs only a restart.
+
+- name: Install | Create the service group
+  ansible.builtin.group:
+    name: "{{ mae_daemon_group }}"
+    system: true
+    state: present
+
+- name: Install | Create the service account
+  ansible.builtin.user:
+    name: "{{ mae_daemon_user }}"
+    group: "{{ mae_daemon_group }}"
+    system: true
+    shell: "{{ mae_daemon_user_shell }}"
+    home: "{{ mae_daemon_data_root }}"
+    create_home: false
+    # A service account, not a person: no interactive login, no password.
+    password: '!'
+    state: present
+
+- name: Install | Create directory layout
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default(mae_daemon_group) }}"
+    mode: "{{ item.mode }}"
+  loop:
+    # Binaries are root-owned and group-readable: the service account runs them
+    # but must never be able to REPLACE them. A compromised daemon that can
+    # rewrite its own binary survives a restart.
+    - path: "{{ mae_daemon_prefix }}"
+      mode: "0755"
+    - path: "{{ mae_daemon_releases_dir }}"
+      mode: "0755"
+    # Config is readable by the service account and writable only by root —
+    # the daemon reads it, nothing it runs may edit it.
+    - path: "{{ mae_daemon_config_dir }}"
+      mode: "0750"
+    # Data and logs are the service account's own.
+    - path: "{{ mae_daemon_data_root }}"
+      owner: "{{ mae_daemon_user }}"
+      mode: "0750"
+    - path: "{{ mae_daemon_log_dir }}"
+      owner: "{{ mae_daemon_user }}"
+      mode: "0750"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Install | Check whether this release is already unpacked
+  ansible.builtin.stat:
+    path: "{{ _mae_daemon_release_dir }}/bin/mae-daemon"
+  register: _mae_daemon_release_stat
+
+- name: Install | Fetch and unpack the release
+  when: not _mae_daemon_release_stat.stat.exists
+  block:
+    - name: Install | Read the published SHA-256 digest
+      ansible.builtin.uri:
+        url: "{{ mae_daemon_checksum_url }}"
+        return_content: true
+      register: _mae_daemon_checksum
+      when: mae_daemon_verify_checksum | bool
+      # The digest is the whole basis for trusting the artifact; a transient
+      # 5xx must not silently degrade into an unverified install.
+      retries: 3
+      delay: 5
+      until: _mae_daemon_checksum is succeeded
+
+    - name: Install | Extract the digest from the sidecar
+      ansible.builtin.set_fact:
+        # Sidecar format is `<64 hex>  <filename>` (sha256sum output).
+        _mae_daemon_sha256: "{{ _mae_daemon_checksum.content.split()[0] | trim }}"
+      when: mae_daemon_verify_checksum | bool
+
+    - name: Install | Assert the digest is well-formed
+      ansible.builtin.assert:
+        that:
+          - _mae_daemon_sha256 is match('^[0-9a-f]{64}$')
+        fail_msg: >-
+          {{ mae_daemon_checksum_url }} did not return a SHA-256 digest (got
+          '{{ _mae_daemon_sha256 | default("") | truncate(80) }}'). Refusing to install:
+          a checksum file that is actually an HTML error page would otherwise be
+          "verified" against nothing.
+        success_msg: "Digest {{ _mae_daemon_sha256 | truncate(20) }} looks well-formed"
+      when: mae_daemon_verify_checksum | bool
+
+    - name: Install | Download the release tarball
+      ansible.builtin.get_url:
+        url: "{{ mae_daemon_url }}"
+        dest: "/tmp/{{ mae_daemon_asset }}.{{ mae_daemon_version }}"
+        # get_url verifies before it moves the file into place, so a mismatch
+        # never lands on disk as a usable artifact.
+        checksum: "{{ ('sha256:' + _mae_daemon_sha256) if (mae_daemon_verify_checksum | bool) else omit }}"
+        mode: "0644"
+        owner: root
+        group: root
+      register: _mae_daemon_download
+      retries: 3
+      delay: 5
+      until: _mae_daemon_download is succeeded
+
+    - name: Install | Create the release directory
+      ansible.builtin.file:
+        path: "{{ _mae_daemon_release_dir }}"
+        state: directory
+        owner: root
+        group: "{{ mae_daemon_group }}"
+        mode: "0755"
+
+    - name: Install | Unpack the release
+      ansible.builtin.unarchive:
+        src: "/tmp/{{ mae_daemon_asset }}.{{ mae_daemon_version }}"
+        dest: "{{ _mae_daemon_release_dir }}"
+        remote_src: true
+        owner: root
+        group: "{{ mae_daemon_group }}"
+
+    - name: Install | Assert the unpacked release contains mae-daemon
+      ansible.builtin.stat:
+        path: "{{ _mae_daemon_release_dir }}/mae-daemon"
+      register: _mae_daemon_unpacked
+
+    - name: Install | Fail if the archive did not contain the daemon
+      ansible.builtin.assert:
+        that:
+          - _mae_daemon_unpacked.stat.exists
+        fail_msg: >-
+          {{ mae_daemon_asset }} unpacked without a mae-daemon binary at its
+          root. The asset layout changed, or the wrong asset was fetched.
+        success_msg: "mae-daemon present in the unpacked release"
+
+    - name: Install | Place the binaries
+      ansible.builtin.file:
+        path: "{{ _mae_daemon_release_dir }}/bin"
+        state: directory
+        owner: root
+        group: "{{ mae_daemon_group }}"
+        mode: "0755"
+
+    - name: Install | Move binaries into the release's bin directory
+      ansible.builtin.copy:
+        src: "{{ _mae_daemon_release_dir }}/{{ item }}"
+        dest: "{{ _mae_daemon_release_dir }}/bin/{{ item }}"
+        remote_src: true
+        owner: root
+        group: "{{ mae_daemon_group }}"
+        # root-owned, 0755: executable by the service account, writable by
+        # nobody but root.
+        mode: "0755"
+      loop:
+        - mae-daemon
+      when: _mae_daemon_unpacked.stat.exists
+
+  always:
+    - name: Install | Remove the downloaded tarball
+      ansible.builtin.file:
+        path: "/tmp/{{ mae_daemon_asset }}.{{ mae_daemon_version }}"
+        state: absent
+
+- name: Install | Point `current` at this release
+  ansible.builtin.file:
+    src: "{{ _mae_daemon_release_dir }}"
+    dest: "{{ mae_daemon_prefix }}/current"
+    state: link
+    owner: root
+    group: "{{ mae_daemon_group }}"
+  register: _mae_daemon_symlink
+  notify: Restart mae-daemon instances
+
+- name: Install | Record what was deployed and when
+  ansible.builtin.copy:
+    # A deployment record on the host itself: the single question asked during
+    # an incident is "what is actually running here", and the answer should not
+    # depend on CI logs being reachable.
+    content: |
+      # Written by the mae_daemon Ansible role. Do not edit.
+      version={{ mae_daemon_version }}
+      deployed_at={{ ansible_date_time.iso8601 }}
+      deployed_by={{ lookup('env', 'USER') | default('unknown', true) }}
+      deployed_from={{ ansible_facts['fqdn'] | default('unknown') }}
+      release_dir={{ _mae_daemon_release_dir }}
+      checksum_verified={{ mae_daemon_verify_checksum | bool }}
+      instances={{ _mae_daemon_resolved_instances | map(attribute='name') | join(',') }}
+    dest: "{{ mae_daemon_prefix }}/DEPLOYED"
+    owner: root
+    group: "{{ mae_daemon_group }}"
+    mode: "0644"
+
+- name: Install | Find retained releases
+  ansible.builtin.find:
+    paths: "{{ mae_daemon_releases_dir }}"
+    file_type: directory
+    depth: 1
+  register: _mae_daemon_releases
+
+- name: Install | Prune old releases beyond the retention limit
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  # Never prune the release being deployed, whatever the sort order says.
+  # Newest first, minus the one being deployed; keep (limit - 1) of the rest,
+  # since the current release always counts toward the retention budget.
+  loop: >-
+    {{ (_mae_daemon_releases.files
+        | rejectattr('path', 'equalto', _mae_daemon_release_dir)
+        | sort(attribute='mtime', reverse=True)
+        | list)[(mae_daemon_keep_releases | int - 1):] }}
+  loop_control:
+    label: "{{ item.path }}"
+  when: _mae_daemon_releases.files | length > (mae_daemon_keep_releases | int)

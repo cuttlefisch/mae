@@ -336,7 +336,12 @@ impl Editor {
         let mut save_error: Option<String> = None;
         if let Some(ref store) = self.kb.store {
             if let Some(node) = self.kb.primary.get(&member_id) {
-                if let Err(e) = store.save_all(&[node]) {
+                // @ai-caution: [data-loss] `update_node`, NOT `replace_all_nodes`
+                // (formerly `save_all`). This line called the whole-store replace
+                // with a single node, which destroyed every other node's content
+                // in place and left the store reading as EMPTY. One narrowed
+                // edit + `:kb-widen` was enough to lose the corpus.
+                if let Err(e) = store.update_node(node) {
                     save_error = Some(e.to_string());
                 }
             }

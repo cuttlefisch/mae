@@ -1,0 +1,30 @@
+---
+# yamllint policy for MAE.
+#
+# Scoped to deploy/ and .github/ — the YAML that is executed. Data YAML
+# elsewhere (fixtures, test data) is not held to line-length or comment rules.
+extends: default
+
+rules:
+  # GitHub Actions and Ansible both produce long, unbreakable expressions.
+  line-length:
+    max: 120
+    level: warning
+    allow-non-breakable-words: true
+  # `on:` in a GitHub workflow is the truthy-key false positive; Ansible's
+  # yes/no are normalised by ansible-lint separately.
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: disable
+  # A document start marker is required in Ansible files; ansible-lint enforces
+  # it too, so keep them consistent rather than fighting.
+  document-start:
+    present: true
+  braces:
+    max-spaces-inside: 1
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: false

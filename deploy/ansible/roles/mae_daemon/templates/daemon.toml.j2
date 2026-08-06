@@ -1,0 +1,66 @@
+{#
+  Per-instance mae-daemon config.
+
+  MANAGED BY ANSIBLE — edits here are overwritten on the next deploy. Change
+  the inventory instead (see deploy/ansible/README.md).
+
+  Every one of the eight per-instance resources (docs/DAEMON_ADMIN.md §1) is set
+  explicitly. Three of them — identity_dir, authorized_keys, keystore — do NOT
+  follow data_dir in mae-daemon's own defaults, so leaving them unset would give
+  two instances on this host one shared authorized_keys, and authorising a peer
+  for staging would authorise it for production.
+#}
+# mae-daemon — instance: {{ instance.name }}
+# Managed by Ansible (role: mae_daemon). Manual edits will be overwritten.
+# Deployed version: {{ mae_daemon_version }}
+
+socket = "{{ mae_daemon_run_dir }}/{{ instance.name }}.sock"
+data_dir = "{{ mae_daemon_data_root }}/{{ instance.name }}"
+log_level = "{{ instance.log_level }}"
+
+[collab]
+enabled = {{ instance.collab_enabled | lower }}
+bind = "{{ instance.collab_bind }}"
+max_connections = {{ instance.collab_max_connections }}
+
+[collab.auth]
+{# The code default is "none" — an unauthenticated port. Preflight refuses
+   "none" on a non-loopback bind, but set it explicitly regardless so the file
+   states the intent rather than relying on a default. #}
+mode = "{{ instance.collab_auth_mode }}"
+{% if instance.collab_auth_mode == 'key' %}
+tls = {{ instance.collab_auth_tls | lower }}
+{% endif %}
+identity_dir = "{{ mae_daemon_data_root }}/{{ instance.name }}/collab"
+authorized_keys = "{{ mae_daemon_data_root }}/{{ instance.name }}/collab/authorized_keys"
+keystore = "{{ mae_daemon_data_root }}/{{ instance.name }}/collab/trusted_keys"
+
+[oauth]
+enabled = {{ instance.oauth_enabled | lower }}
+{% if instance.oauth_enabled %}
+bind = "{{ instance.oauth_bind }}"
+canonical_resource_uri = "{{ instance.oauth_canonical_resource_uri }}"
+jwks_url = "{{ instance.oauth_jwks_url }}"
+{% if instance.oauth_issuer is defined %}
+issuer = "{{ instance.oauth_issuer }}"
+{% endif %}
+{% if instance.oauth_principal_claim is defined %}
+principal_claim = "{{ instance.oauth_principal_claim }}"
+{% endif %}
+cert_path = "{{ instance.oauth_cert_path }}"
+key_path = "{{ instance.oauth_key_path }}"
+{% if instance.oauth_kb_query_enabled is defined %}
+kb_query_enabled = {{ instance.oauth_kb_query_enabled | lower }}
+{% endif %}
+{% endif %}
+{% for tenant in instance.tenants | default([]) %}
+
+[[tenant]]
+name = "{{ tenant.name }}"
+{% if tenant.instances is defined %}
+instances = {{ tenant.instances | to_json }}
+{% endif %}
+{% if tenant.principals is defined %}
+principals = {{ tenant.principals | to_json }}
+{% endif %}
+{% endfor %}

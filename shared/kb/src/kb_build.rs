@@ -131,7 +131,7 @@ pub fn ingest_org_dir(store: &CozoKbStore, dir: &Path) -> OrgIngestStats {
     let transclusion_count = all_transclusions.len();
 
     // Insert org-parsed nodes into the store (upsert, no delete). We use
-    // insert_node rather than save_all to avoid the CozoDB sled tombstone
+    // insert_node rather than replace_all_nodes to avoid the CozoDB sled tombstone
     // issue: :rm leaves partial tuples that break load_all().
     for node in &all_nodes {
         if let Err(e) = store.insert_node(node) {

@@ -1,0 +1,20 @@
+---
+# Deploy mae-daemon to every host in the `mae_daemon` group.
+#
+#   ansible-playbook -i inventory/staging.yml site.yml --check --diff   # dry run
+#   ansible-playbook -i inventory/staging.yml site.yml                  # apply
+#
+# See README.md for the full runbook, including the production gate.
+
+- name: Deploy mae-daemon
+  hosts: mae_daemon
+  become: true
+  # One host at a time. On a multi-host hub this is what keeps a bad release
+  # from taking down every node before the verification gate on the first one
+  # has a chance to fail.
+  serial: 1
+  # Any host failing the verification gate stops the run rather than continuing
+  # to the next host with a known-bad release.
+  any_errors_fatal: true
+  roles:
+    - role: mae_daemon

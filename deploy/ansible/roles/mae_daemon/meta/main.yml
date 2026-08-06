@@ -1,0 +1,23 @@
+---
+galaxy_info:
+  role_name: mae_daemon
+  namespace: mae
+  author: MAE contributors
+  description: >-
+    Install and operate one or more mae-daemon instances (KB persistence +
+    collaborative editing hub) on a Linux host, from published release
+    artifacts with checksum verification.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.15"
+  platforms:
+    - name: EL
+      versions: ["9"]
+    - name: Ubuntu
+      versions: ["jammy", "noble"]
+    - name: Debian
+      versions: ["bookworm"]
+  galaxy_tags:
+    - mae
+    - daemon
+    - systemd
+dependencies: []

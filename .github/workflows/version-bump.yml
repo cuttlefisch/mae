@@ -101,6 +101,49 @@ jobs:
           sed -i "s/^VERSION=\".*\"/VERSION=\"$VERSION\"/" assets/install.sh
           echo "Updated assets/install.sh to $VERSION"
 
+          # Regenerate BOTH lockfiles so they agree with the manifests just
+          # edited. Without this every release tagged a tree whose committed
+          # Cargo.lock still named the PREVIOUS version, so the lock did not
+          # match the version it was tagged as and the next `cargo build`
+          # anywhere dirtied the tree (#61).
+          #
+          # `-w` (--workspace) re-resolves ONLY the local workspace members --
+          # exactly the crates whose versions changed -- so no external
+          # dependency is silently bumped as a side effect of a version bump.
+          #
+          # `--offline` first, then a normal retry. This job never builds, so on
+          # a fresh runner `~/.cargo/registry` is EMPTY and `--offline` fails to
+          # resolve even untouched dependencies:
+          #
+          #   error: no matching package named `serde` found
+          #   note: offline mode (via `--offline`) can sometimes cause
+          #         surprising resolution failures
+          #
+          # which is exactly how this broke on its first real run (v0.14.95).
+          # It passed local testing because a developer machine has a populated
+          # cache. Keep the offline attempt -- it is free and it is what runs
+          # when a cache does exist -- but do not let it be the only path.
+          #
+          # Safety does not depend on --offline: the guard below is what
+          # actually prevents an unintended dependency bump, and it runs
+          # whichever branch was taken.
+          cargo update -w --offline || cargo update -w
+          (cd daemon && { cargo update -w --offline || cargo update -w; })
+          echo "Regenerated Cargo.lock + daemon/Cargo.lock at $VERSION"
+
+          # The locks must now be clean against the manifests. If anything
+          # other than the local version strings moved, stop rather than tag a
+          # release whose dependency graph changed unnoticed.
+          if ! git diff --quiet --exit-code -- Cargo.lock daemon/Cargo.lock; then
+            CHANGED=$(git diff -U0 -- Cargo.lock daemon/Cargo.lock \
+              | grep -E "^[+-]" | grep -vE "^[+-][+-]" | grep -vE "^[+-]version = " || true)
+            if [ -n "$CHANGED" ]; then
+              echo "::error::cargo update -w changed more than version strings:"
+              echo "$CHANGED"
+              exit 1
+            fi
+          fi
+
       # Prebuilt binary from GitHub Releases, not `cargo install git-cliff`,
       # which compiled it from source on every single release: 4m13s of the
       # v0.14.90 bump job. Same action the repo already uses for nextest.
@@ -127,9 +170,9 @@ jobs:
           VERSION="v${{ steps.version.outputs.version }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add VERSION CHANGELOG.md Cargo.toml \
+          git add VERSION CHANGELOG.md Cargo.toml Cargo.lock \
             shared/kb/Cargo.toml shared/sync/Cargo.toml shared/mcp/Cargo.toml \
-            daemon/Cargo.toml assets/install.sh
+            daemon/Cargo.toml daemon/Cargo.lock assets/install.sh
           git commit -m "chore: bump version to ${{ steps.version.outputs.version }}"
           git push origin main
 

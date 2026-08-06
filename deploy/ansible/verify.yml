@@ -1,0 +1,18 @@
+---
+# Run ONLY the post-deploy verification gate against already-deployed hosts.
+# Changes nothing; safe to run at any time, and the right thing to run when
+# someone asks "is the hub healthy?".
+#
+#   ansible-playbook -i inventory/production.yml verify.yml
+
+- name: Verify mae-daemon deployment
+  hosts: mae_daemon
+  become: true
+  tasks:
+    - name: Run the mae_daemon role's verification phase only
+      ansible.builtin.include_role:
+        name: mae_daemon
+        tasks_from: main.yml
+        apply:
+          tags: [mae_verify]
+      tags: [always]

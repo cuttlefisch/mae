@@ -665,6 +665,46 @@ impl AgentSession {
                     })
                     .await;
 
+                // @ai-caution: [permission] This gate MUST stay the first
+                // thing in the loop body, before every `if call.name == ...`
+                // intercept below. Until 2026-08 it sat ~450 lines further
+                // down, and the ten intercepts between the loop head and it
+                // each `continue`d first — so `shell_exec` (Shell tier),
+                // `web_fetch` (Shell) and `ai_set_mode`/`ai_set_profile`/
+                // `ai_set_budget` (all Privileged) executed with no
+                // permission check at all, from the shipped `readonly`
+                // default. `permission_gate_tests.rs` passed throughout
+                // because it calls `decide_and_present` directly: the gate
+                // was correct, the path just never reached it. Adding a new
+                // intercept above this line re-opens the hole.
+                // ADR-084 D2 + ADR-090: the embedded session is an enforcement
+                // point too. Ask the same PDP the MCP path asks, and present
+                // its answer -- refuse a `Deny` here (it never reaches the
+                // main thread), and for an `Ask`, park the turn on a human
+                // exactly as `ask_user`/`propose_changes` already do.
+                let approved_tier = match self.decide_and_present(call).await {
+                    ToolCallGate::Proceed(tier) => tier,
+                    ToolCallGate::Refused(output) => {
+                        let _ = self
+                            .event_tx
+                            .send(AiEvent::ToolCallFinished {
+                                success: false,
+                                output: output.clone(),
+                            })
+                            .await;
+                        self.messages.push(Message {
+                            role: Role::Tool,
+                            content: MessageContent::ToolResult(ToolResult {
+                                tool_call_id: call.id.clone(),
+                                tool_name: call.name.clone(),
+                                success: false,
+                                output,
+                            }),
+                        });
+                        continue;
+                    }
+                };
+
                 // request_tools meta-tool: extend the active tool set
                 if call.name == "request_tools" {
                     let categories_str = call
@@ -1110,34 +1150,6 @@ impl AgentSession {
                     }
                     continue;
                 }
-
-                // ADR-084 D2 + ADR-090: the embedded session is an enforcement
-                // point too. Ask the same PDP the MCP path asks, and present
-                // its answer -- refuse a `Deny` here (it never reaches the
-                // main thread), and for an `Ask`, park the turn on a human
-                // exactly as `ask_user`/`propose_changes` already do.
-                let approved_tier = match self.decide_and_present(call).await {
-                    ToolCallGate::Proceed(tier) => tier,
-                    ToolCallGate::Refused(output) => {
-                        let _ = self
-                            .event_tx
-                            .send(AiEvent::ToolCallFinished {
-                                success: false,
-                                output: output.clone(),
-                            })
-                            .await;
-                        self.messages.push(Message {
-                            role: Role::Tool,
-                            content: MessageContent::ToolResult(ToolResult {
-                                tool_call_id: call.id.clone(),
-                                tool_name: call.name.clone(),
-                                success: false,
-                                output,
-                            }),
-                        });
-                        continue;
-                    }
-                };
 
                 debug!(tool = %call.name, call_id = %call.id, "requesting tool execution from main thread");
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();

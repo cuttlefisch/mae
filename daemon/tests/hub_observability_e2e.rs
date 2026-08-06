@@ -63,19 +63,27 @@ async fn tcp_daemon_status_reports_connected_collab_clients() {
         );
     }
 
-    // `sessions` (authenticated sync sessions, as distinct from accepted TCP
-    // connections) is deliberately ABSENT here, and that absence is asserted
-    // rather than skipped past: this daemon runs `auth.mode = "none"` (no
-    // daemon.toml), and `DaemonState.broadcaster` — the only source of that
-    // number — is installed by `main.rs` solely under key-mode auth. A test
-    // that merely tolerated a missing field would silently stop covering
-    // `sessions` if that wiring changed; this one fails and points at #647.
+    // `sessions` counts authenticated sync sessions, as distinct from accepted
+    // TCP connections. Until #647 this assertion read the other way round — it
+    // asserted `sessions` was ABSENT, because `DaemonState.broadcaster` was
+    // installed only under key-mode auth and this daemon runs `auth.mode =
+    // "none"` (no daemon.toml). Its own comment said: "If this now reports a
+    // number, the wiring changed — extend this test to assert it equals
+    // `active` instead of removing it." That is exactly what happened, and this
+    // is that extension.
     let s = daemon_status(&server.socket).await;
-    assert!(
-        s["connections"]["collab"]["sessions"].is_null(),
-        "auth.mode=none installs no broadcaster, so `sessions` must be absent \
-         (see #647). If this now reports a number, the wiring changed — extend \
-         this test to assert it equals `active` instead of removing it: {s:?}"
+    assert_eq!(
+        s["connections"]["collab"]["sessions"].as_u64(),
+        Some(3),
+        "all three clients completed `initialize` on a daemon with no auth, so \
+         every accepted connection is also a session: {s:?}"
+    );
+    assert_eq!(
+        s["connections"]["collab"]["active"].as_u64(),
+        s["connections"]["collab"]["sessions"].as_u64(),
+        "with auth.mode=none nothing can fail authentication, so active and \
+         sessions must agree — a gap here would mean one of the two counters is \
+         wrong rather than that clients are failing to authenticate: {s:?}"
     );
 
     // …and it comes back down. A gauge that only rises reads "at capacity" on an

@@ -47,8 +47,16 @@ pub fn effective_eval_policy(
 ) -> EffectivePolicy {
     match block_policy {
         EvalPolicy::Never => EffectivePolicy::Blocked,
-        EvalPolicy::NoExport => EffectivePolicy::Allow, // allowed interactively
-        EvalPolicy::Yes => {
+        // @ai-caution: [security] `no-export` means "evaluate normally, just
+        // not during export" — it is NOT an exemption from confirmation. This
+        // arm used to return `Allow` directly, short-circuiting BOTH
+        // `global_confirm` and `trust_patterns` below, so a block marked
+        // `:eval no-export` in a peer's shared-KB node or a cloned repo's .org
+        // ran with no prompt at stock settings (`babel_confirm = true`, no
+        // trust paths). Falling through to the `Yes` arm restores the real org
+        // semantics and puts it back behind the same two gates as every other
+        // executable block.
+        EvalPolicy::NoExport | EvalPolicy::Yes => {
             if !global_confirm {
                 return EffectivePolicy::Allow;
             }
@@ -130,9 +138,24 @@ mod tests {
         assert_eq!(policy, EffectivePolicy::NeedsConfirmation);
     }
 
+    /// Renamed and corrected from `no_export_allows_interactive`, which asserted
+    /// `Allow` here and so encoded the bypass as a requirement: it locked in the
+    /// behaviour that let a peer-authored `:eval no-export` block run with no
+    /// prompt at stock settings. `no-export` is about EXPORT, not about
+    /// confirmation, so with `babel_confirm = true` it must ask like any other
+    /// executable block.
     #[test]
-    fn no_export_allows_interactive() {
+    fn no_export_still_asks_when_confirmation_is_on() {
         let policy = effective_eval_policy(&EvalPolicy::NoExport, None, &[], true);
+        assert_eq!(policy, EffectivePolicy::NeedsConfirmation);
+    }
+
+    /// The other half: with confirmation turned off, `no-export` runs — same as
+    /// `:eval yes`. Without this, the change above could be "satisfied" by
+    /// blocking `no-export` outright, which would break every legitimate use.
+    #[test]
+    fn no_export_runs_when_confirmation_is_off() {
+        let policy = effective_eval_policy(&EvalPolicy::NoExport, None, &[], false);
         assert_eq!(policy, EffectivePolicy::Allow);
     }
 
@@ -151,5 +174,58 @@ mod tests {
     fn trust_pattern_extension() {
         assert!(matches_trust_pattern("/any/file.org", "*.org"));
         assert!(!matches_trust_pattern("/any/file.txt", "*.org"));
+    }
+}
+
+#[cfg(test)]
+mod no_export_gate_tests {
+    use super::*;
+    use std::path::Path;
+
+    /// `:eval no-export` used to return `Allow` before `global_confirm` or
+    /// `trust_patterns` were consulted — the only `EvalPolicy` variant that
+    /// skipped both. A `#+begin_src bash :eval no-export` block in a peer's
+    /// shared-KB node, or a cloned repo's `.org`, therefore ran with no prompt
+    /// at stock settings.
+    ///
+    /// Real org semantics are "evaluate normally, but not during export", so it
+    /// must behave exactly like `Yes`. The oracle is that the two variants agree
+    /// across the whole input space, not that `no-export` returns one specific
+    /// value — that way a future change to `Yes`'s gating cannot silently
+    /// re-open the gap.
+    #[test]
+    fn no_export_is_gated_exactly_like_yes() {
+        let trusted = ["/trusted/*".to_string()];
+        let cases = [
+            (None, &[][..], true),
+            (None, &[][..], false),
+            (Some(Path::new("/untrusted/a.org")), &trusted[..], true),
+            (Some(Path::new("/trusted/a.org")), &trusted[..], false),
+            (Some(Path::new("/trusted/a.org")), &trusted[..], true),
+            (Some(Path::new("/untrusted/a.org")), &[][..], true),
+        ];
+        for (path, patterns, confirm) in cases {
+            assert_eq!(
+                effective_eval_policy(&EvalPolicy::NoExport, path, patterns, confirm),
+                effective_eval_policy(&EvalPolicy::Yes, path, patterns, confirm),
+                "no-export must be gated identically to :eval yes \
+                 (path={path:?}, confirm={confirm})"
+            );
+        }
+    }
+
+    /// The specific case that was exploitable: stock settings, untrusted file.
+    #[test]
+    fn no_export_needs_confirmation_at_stock_settings() {
+        assert_eq!(
+            effective_eval_policy(
+                &EvalPolicy::NoExport,
+                Some(Path::new("/somebody-elses/notes.org")),
+                &[],
+                true, // babel_confirm defaults to true
+            ),
+            EffectivePolicy::NeedsConfirmation,
+            "a peer-authored no-export block must prompt, not run silently"
+        );
     }
 }

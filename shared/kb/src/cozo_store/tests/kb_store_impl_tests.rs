@@ -115,12 +115,12 @@ fn crdt_doc_persistence() {
 }
 
 #[test]
-fn load_all_and_save_all() {
+fn load_all_and_replace_all_nodes() {
     let (_tmp, store) = make_store();
     let n1 = Node::new("n1", "One", NodeKind::Note, "body1");
     let n2 = Node::new("n2", "Two", NodeKind::Note, "body2");
 
-    store.save_all(&[&n1, &n2]).unwrap();
+    store.replace_all_nodes(&[&n1, &n2]).unwrap();
     let loaded = store.load_all().unwrap();
     assert_eq!(loaded.len(), 2);
 }
@@ -187,4 +187,93 @@ fn list_ids_with_prefix() {
     assert_eq!(cmd_ids.len(), 2);
     let all_ids = store.list_ids(None).unwrap();
     assert_eq!(all_ids.len(), 3);
+}
+
+/// `replace_all_nodes` REPLACES the whole store — it removes every node and
+/// every link, then inserts what it was given. `load_all_and_replace_all_nodes` above
+/// cannot observe that, because it writes into an *empty* store: the removals
+/// have nothing to remove, so the destructive half is invisible and that test
+/// passes either way.
+///
+/// This is the version that sees it, and it also pins the half that was broken:
+/// the removal must take rows OUT, not truncate them to key-only tuples. The
+/// old formulation queried the relation while removing from it
+/// (`?[id] := *nodes{id}` + `:rm nodes {id}`), which left short-arity rows —
+/// precisely the "malformed row" shape `load_all`'s B-5 tolerance was written
+/// to survive, produced by the very method that was supposed to be replacing
+/// them cleanly.
+#[test]
+fn replace_all_nodes_removes_rows_entirely_rather_than_truncating_them() {
+    let (_tmp, store) = make_store();
+    let n1 = Node::new("n1", "One", NodeKind::Note, "body1");
+    let n2 = Node::new("n2", "Two", NodeKind::Note, "body2");
+    let n3 = Node::new("n3", "Three", NodeKind::Note, "body3");
+    store.insert_node(&n1).unwrap();
+    store.insert_node(&n2).unwrap();
+    store.insert_node(&n3).unwrap();
+    store.add_link("n1", "n2", Some("references")).unwrap();
+    assert_eq!(store.load_all().unwrap().len(), 3, "precondition: 3 nodes");
+
+    store.replace_all_nodes(&[&n2]).unwrap();
+
+    // The whole-store replace semantics: only what was passed in survives.
+    let after = store.load_all().unwrap();
+    assert_eq!(
+        after.len(),
+        1,
+        "replace_all_nodes keeps exactly the nodes it was given. Returning 0 \
+         means the removal left malformed rows and load_all degraded to empty; \
+         returning 3 means it became an upsert and migrate.rs's caller, which \
+         relies on replace semantics, must be re-checked."
+    );
+    assert_eq!(after[0].id, "n2");
+
+    // The removed nodes must be genuinely unresolvable, not merely filtered
+    // out of the bulk load. (Physical 1-length tombstones DO remain in the
+    // relation — that is a cozo/sled `:rm` artifact, handled by `load_all`'s
+    // per-id fallback and covered by `load_all_survives_deletion_tombstones`.
+    // Asserting on the raw relation here would be asserting on cozo's storage
+    // internals rather than on this method's contract.)
+    assert!(store.get_node("n1").unwrap().is_none());
+    assert!(store.get_node("n3").unwrap().is_none());
+    assert!(store.get_node("n2").unwrap().is_some());
+    assert!(
+        store.links_from("n1").unwrap().is_empty(),
+        "links are dropped along with their nodes"
+    );
+}
+
+/// The tombstone regression, pinned at the level that actually bit.
+///
+/// `:rm nodes {id}` leaves a 1-length tuple on the sled backend, so `load_all`'s
+/// 13-column bind fails with "tuple bound by variable 'title' is too short"
+/// after ANY deletion. The old code caught that and returned `Ok(vec![])`,
+/// which meant deleting one node made the WHOLE KB read as empty while
+/// `get_node` still resolved every survivor individually.
+///
+/// The oracle is deliberately "the survivors are all still there", not "the
+/// call succeeded" — the broken version also succeeded.
+#[test]
+fn load_all_survives_deletion_tombstones() {
+    let (_tmp, store) = make_store();
+    for (id, title) in [("n1", "One"), ("n2", "Two"), ("n3", "Three")] {
+        store
+            .insert_node(&Node::new(id, title, NodeKind::Note, "body"))
+            .unwrap();
+    }
+    assert_eq!(store.load_all().unwrap().len(), 3, "precondition");
+
+    store.delete_node("n2").unwrap();
+
+    let after = store.load_all().unwrap();
+    let ids: Vec<&str> = after.iter().map(|n| n.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["n1", "n3"],
+        "deleting one node must leave the other two loadable. Returning [] is \
+         the tombstone bug: the bulk bind fails and the whole KB reads as empty."
+    );
+    // The delete itself must still be real, not merely hidden from load_all.
+    assert!(store.get_node("n2").unwrap().is_none());
+    assert!(store.get_node("n1").unwrap().is_some());
 }
