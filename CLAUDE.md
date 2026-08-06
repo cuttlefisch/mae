@@ -27,7 +27,7 @@ The project README (`README.md`) contains the architecture spec and stack ration
     - `make docker-clean` — remove Docker images and cache
   - Dockerfile: multi-stage (base -> builder -> ci -> runtime), TUI-only (no Skia in container)
   - `docker compose run --rm --build <service>` is the canonical invocation
-- **Self-test:** Call the `self_test_suite` MCP tool to get the structured JSON test plan, then execute each test by calling the listed MCP tools and checking assertions. If MCP is unavailable, fall back to `make self-test` (headless). Categories: `introspection`, `editing`, `git`, `help`, `project`, `lsp`, `dap`, `babel`, `guidance`, `performance`, `scrolling`.
+- **Self-test:** Call the `self_test_suite` MCP tool to get the structured JSON test plan, then execute each test by calling the listed MCP tools and checking assertions. If MCP is unavailable, fall back to `make self-test` (headless). Categories (20, authoritative source `crates/ai/src/executor/self_test.rs` — grep its `include("…")` calls; this list drifted nine categories behind before 2026-08): `babel`, `collab`, `dap`, `editing`, `federation`, `git`, `graph_kb`, `guidance`, `help`, `introspection`, `lsp`, `modules`, `multi_step`, `output_interpretation`, `parameter_accuracy`, `performance`, `project`, `pushback`, `scrolling`, `tool_selection`.
 
 ## Repository Layout
 
@@ -449,7 +449,7 @@ make test-scheme-all                # All local tests
 
 ## Developing MAE Inside MAE (MCP Tools)
 
-All 135+ MAE editor tools are exposed via MCP with full parity — the same tools the built-in AI agent uses. When developing MAE with Claude Code connected via the MCP shim (`mae-mcp-shim`), prefer these tools over raw file reads for structured editor operations.
+All MAE editor tools are exposed via MCP with full parity (~770 — see the API Stability section; `docs/CODE_MAP.json` is authoritative, this file must not carry a second count) — the same tools the built-in AI agent uses. When developing MAE with Claude Code connected via the MCP shim (`mae-mcp-shim`), prefer these tools over raw file reads for structured editor operations.
 
 ### Connection
 
@@ -538,7 +538,7 @@ the Scheme primitive, and the MCP tool all read the same introspection snapshot.
 
 ### Validation
 
-`self_test_suite` returns the structured JSON test plan. Execute each test by calling the listed tools and checking assertions. Categories: `introspection`, `editing`, `git`, `help`, `project`, `lsp`, `dap`, `babel`, `guidance`, `performance`, `scrolling`.
+`self_test_suite` returns the structured JSON test plan. Execute each test by calling the listed tools and checking assertions. Categories (20, authoritative source `crates/ai/src/executor/self_test.rs` — grep its `include("…")` calls; this list drifted nine categories behind before 2026-08): `babel`, `collab`, `dap`, `editing`, `federation`, `git`, `graph_kb`, `guidance`, `help`, `introspection`, `lsp`, `modules`, `multi_step`, `output_interpretation`, `parameter_accuracy`, `performance`, `project`, `pushback`, `scrolling`, `tool_selection`.
 
 `model_exam` provides a 12-test deterministic exam (6 categories) for validating model tool-calling capabilities. Results auto-save to `~/.local/share/mae/exam-results/`. See [MODEL_SUPPORT.md](docs/MODEL_SUPPORT.md).
 
