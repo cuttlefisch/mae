@@ -708,18 +708,27 @@ pub async fn dispatch(
                 .and_then(mae_sync::kb::JoinPolicy::parse);
             let (doc_store, broadcaster, owner, kb_store) = {
                 let st = state.lock().await;
-                let doc_store = st.doc_store.clone().ok_or_else(|| {
+                // @ai-caution: [daemon-state] The actionable diagnostic hangs off
+                // `owner`, NOT off `doc_store`. Before #647, doc_store was only
+                // populated under key-mode auth, so a psk/none daemon failed on
+                // the doc_store check and that check carried the good message.
+                // doc_store and broadcaster are now populated for every auth
+                // mode, so `owner` is the one that is still None in psk/none —
+                // move the message and this stays a useful error instead of
+                // "daemon owner identity unavailable".
+                let doc_store = st
+                    .doc_store
+                    .clone()
+                    .ok_or_else(|| DaemonError::Internal("collab doc store unavailable".into()))?;
+                let broadcaster = st.broadcaster.clone().ok_or_else(|| {
+                    DaemonError::Internal("collab broadcaster unavailable".into())
+                })?;
+                let owner = st.owner.clone().ok_or_else(|| {
                     DaemonError::Internal(
                         "P2P sharing is unavailable — enable collab key mode + the mesh \
                          (`mae setup-collab --p2p`) and restart the daemon"
                             .to_string(),
                     )
-                })?;
-                let broadcaster = st.broadcaster.clone().ok_or_else(|| {
-                    DaemonError::Internal("collab broadcaster unavailable".into())
-                })?;
-                let owner = st.owner.clone().ok_or_else(|| {
-                    DaemonError::Internal("daemon owner identity unavailable".into())
                 })?;
                 // The CozoDB store backing this KB (primary or a named instance), so
                 // a fresh share can SEED node content — not just the collection.
