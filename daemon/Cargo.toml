@@ -30,6 +30,7 @@ name = "mae-daemon"
 path = "src/main.rs"
 
 [dependencies]
+mae-effect-sandbox = { path = "../shared/effect-sandbox" }
 # storage-sqlite is required explicitly here (not left to Cargo's feature
 # unification with a separate direct `cozo` dep) -- the daemon never calls
 # `cozo::` directly, it only uses mae-kb's CozoKbStore, so mae-kb's own

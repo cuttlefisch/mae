@@ -174,50 +174,68 @@ fn identity_and_authorized_keys_do_not_follow_data_dir() {
     // access to every shared KB, irrecoverably) — it is asserted, so the
     // asymmetry is a documented property rather than a production surprise.
     let tmp = tempfile::tempdir().expect("tempdir");
+    // This test's subject IS the ambient `default_collab_dir()` fallback, which
+    // the effect sandbox otherwise refuses in a test build. Opting in is safe
+    // and necessary here: the test only *resolves* paths and never writes to
+    // them. Without the opt-in both sides resolve to `None` and the three
+    // `assert_eq!`s below pass **vacuously** — None == None — which is exactly
+    // the failure mode the explicit is-Some assertion guards against.
     let staging = resolve(&write_instance_config(tmp.path(), "staging", 19473, true));
     let prod = resolve(&write_instance_config(tmp.path(), "prod", 19475, true));
 
-    assert_ne!(
-        staging.effective_data_dir(),
-        prod.effective_data_dir(),
-        "precondition: the two configs really do differ in data_dir"
-    );
-    assert_eq!(
-        staging.collab.auth.identity_dir(),
-        prod.collab.auth.identity_dir(),
-        "identity_dir is shared despite differing data_dir — if this ever \
-         becomes false, the trap is gone and DAEMON_ADMIN's warning should go too"
-    );
-    assert_eq!(
-        staging.collab.auth.authorized_keys_path(),
-        prod.collab.auth.authorized_keys_path(),
-        "authorized_keys is shared despite differing data_dir"
-    );
-    assert_eq!(
-        staging.collab.auth.keystore_path(),
-        prod.collab.auth.keystore_path(),
-        "keystore is shared despite differing data_dir"
-    );
+    // `identity_dir()` / `authorized_keys_path()` resolve the ambient
+    // `default_collab_dir()` fallback lazily on EVERY call, so the opt-in has
+    // to cover the assertions, not just construction. Safe here: the test only
+    // resolves paths and never writes to them.
+    mae_effect_sandbox::with_external_effects(|| {
+        assert!(
+            staging.collab.auth.identity_dir().is_some(),
+            "identity_dir must actually resolve — otherwise the equality assertions \
+         below compare None to None and prove nothing about the shared-path trap"
+        );
 
-    // …and the collision report SAYS SO, which is the whole mitigation: an
-    // operator who diffs two `--check-config` outputs sees it.
-    let conflicts = staging
-        .instance_paths()
-        .conflicts_with(&prod.instance_paths());
-    for expected in ["identity_dir", "authorized_keys", "keystore"] {
-        assert!(
-            conflicts.iter().any(|c| c.starts_with(expected)),
-            "{expected} collision must be reported, got {conflicts:?}"
+        assert_ne!(
+            staging.effective_data_dir(),
+            prod.effective_data_dir(),
+            "precondition: the two configs really do differ in data_dir"
         );
-    }
-    // Everything genuinely scoped by data_dir must NOT be reported — otherwise
-    // the report is noise and an operator learns to ignore it.
-    for scoped in ["socket", "data_dir", "collab.bind", "oauth.bind"] {
-        assert!(
-            !conflicts.iter().any(|c| c.starts_with(scoped)),
-            "{scoped} is per-instance and must not appear in {conflicts:?}"
+        assert_eq!(
+            staging.collab.auth.identity_dir(),
+            prod.collab.auth.identity_dir(),
+            "identity_dir is shared despite differing data_dir — if this ever \
+         becomes false, the trap is gone and DAEMON_ADMIN's warning should go too"
         );
-    }
+        assert_eq!(
+            staging.collab.auth.authorized_keys_path(),
+            prod.collab.auth.authorized_keys_path(),
+            "authorized_keys is shared despite differing data_dir"
+        );
+        assert_eq!(
+            staging.collab.auth.keystore_path(),
+            prod.collab.auth.keystore_path(),
+            "keystore is shared despite differing data_dir"
+        );
+
+        // …and the collision report SAYS SO, which is the whole mitigation: an
+        // operator who diffs two `--check-config` outputs sees it.
+        let conflicts = staging
+            .instance_paths()
+            .conflicts_with(&prod.instance_paths());
+        for expected in ["identity_dir", "authorized_keys", "keystore"] {
+            assert!(
+                conflicts.iter().any(|c| c.starts_with(expected)),
+                "{expected} collision must be reported, got {conflicts:?}"
+            );
+        }
+        // Everything genuinely scoped by data_dir must NOT be reported — otherwise
+        // the report is noise and an operator learns to ignore it.
+        for scoped in ["socket", "data_dir", "collab.bind", "oauth.bind"] {
+            assert!(
+                !conflicts.iter().any(|c| c.starts_with(scoped)),
+                "{scoped} is per-instance and must not appear in {conflicts:?}"
+            );
+        }
+    });
 }
 
 #[test]

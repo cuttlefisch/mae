@@ -2858,6 +2858,7 @@ dependencies = [
  "hyper-util",
  "iroh",
  "jsonwebtoken",
+ "mae-effect-sandbox",
  "mae-kb",
  "mae-mcp",
  "mae-sync",
