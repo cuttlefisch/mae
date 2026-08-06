@@ -313,6 +313,29 @@ async fn main() {
             init_doc_store(&config).await
         {
             doc_store_for_query = Some(Arc::clone(&doc_store));
+            // @ai-caution: [daemon-state] These two go into `DaemonState` HERE,
+            // outside `spawn_collab_server`'s auth match — not inside its
+            // `"key"` arm, where they lived until #647. They are properties of
+            // "the collab server is running", not of how it authenticates.
+            //
+            // Under psk/none they were left `None` while the collab server ran
+            // normally, so `daemon/status` reported `kb_collections: []` and
+            // `primary_exists: false` for a daemon that genuinely hosted the
+            // primary — and an editor reading those decided never to route KB
+            // reads through it (`should_attach_daemon_reads`). `kb/node_crdt`
+            // returned `NotReady` for the same reason.
+            //
+            // ADR-053 hit this and routed around it rather than fixing it:
+            // `doc_store_for_query` above exists precisely so the OAuth query
+            // surface works "independent of whether the TCP listener's own auth
+            // setup succeeds". That was the third such workaround. `owner`
+            // stays key-mode-only, correctly — it is a signing identity that
+            // only exists in key mode.
+            {
+                let mut st = state.lock().await;
+                st.doc_store = Some(Arc::clone(&doc_store));
+                st.broadcaster = Some(broadcaster.clone());
+            }
             spawn_projector(&config, Arc::clone(&state), Arc::clone(&doc_store)).await;
             daemon_identity_for_oauth = spawn_collab_server(
                 &config,
@@ -782,15 +805,17 @@ async fn spawn_collab_server(
             // v2 automatically on load, preserving v1 access without a re-share.
             doc_store.set_authorized_keys_path(ak_path.clone());
 
-            // ADR-025 §"Driving surfaces": expose the collab doc_store + broadcaster
-            // + owner identity to the local control socket, so `p2p/share_kb` can
-            // ESTABLISH a mesh share (create/widen the collection doc to P2p) without
-            // a collab session — the CLI/editor self-sufficient `kb-share-p2p` path.
-            // Key mode only: a P2P share needs the owner-signing identity.
+            // ADR-025 §"Driving surfaces": expose the owner identity to the local
+            // control socket, so `p2p/share_kb` can ESTABLISH a mesh share
+            // (create/widen the collection doc to P2p) without a collab session
+            // — the CLI/editor self-sufficient `kb-share-p2p` path. Key mode
+            // only, and genuinely so: a P2P share needs the owner-SIGNING
+            // identity, and `config.rs` already rejects `p2p.enabled` unless
+            // `auth.mode == "key"`, so P2P cannot work in psk/none regardless.
             {
+                // doc_store + broadcaster are installed by the caller, for every
+                // auth mode (#647). Only the owner identity is key-mode-specific.
                 let mut st = state.lock().await;
-                st.doc_store = Some(Arc::clone(&doc_store));
-                st.broadcaster = Some(broadcaster.clone());
                 st.owner = Some(Arc::clone(&identity));
             }
 

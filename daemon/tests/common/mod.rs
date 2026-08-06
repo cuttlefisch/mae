@@ -41,6 +41,28 @@ pub async fn spawn_server() -> Option<ServerGuard> {
 /// `daemon.toml` — e.g. a small `collab.max_connections` so a connection-cap
 /// test is deterministic without opening hundreds of sockets (#342).
 pub async fn spawn_server_with_config(daemon_toml: Option<&str>) -> Option<ServerGuard> {
+    spawn_server_opts(daemon_toml, true).await
+}
+
+/// As `spawn_server_with_config`, for a config that DISABLES collab. Readiness
+/// cannot wait on the TCP port in that case — there is no listener — so this
+/// waits only for the KB socket.
+pub async fn spawn_server_without_collab(daemon_toml: &str) -> Option<ServerGuard> {
+    spawn_server_opts(Some(daemon_toml), false).await
+}
+
+/// `wait_for_collab`: whether readiness requires the collab listener to be up.
+///
+/// Readiness is established by asking `daemon/status` on the KB socket, NOT by
+/// opening a TCP connection to the collab port. A probe connection is a real
+/// client: it shows up in `connections.collab.active` and races any test that
+/// asserts a baseline of zero — which is exactly what happened when the
+/// hub-observability test asserted `active == 0` immediately after spawn and
+/// passed once, then failed on the next run.
+async fn spawn_server_opts(
+    daemon_toml: Option<&str>,
+    wait_for_collab: bool,
+) -> Option<ServerGuard> {
     if std::env::var("MAE_TCP_E2E").is_err() {
         eprintln!("skipping: MAE_TCP_E2E not set");
         return None;
@@ -74,19 +96,27 @@ pub async fn spawn_server_with_config(daemon_toml: Option<&str>) -> Option<Serve
         .kill_on_drop(true)
         .spawn()
         .expect("failed to spawn mae-daemon");
+    let socket = tmp.path().join("mae-daemon.sock");
     for _ in 0..50 {
-        if tokio::net::TcpStream::connect(addr).await.is_ok() {
-            let socket = tmp.path().join("mae-daemon.sock");
-            return Some(ServerGuard {
-                _child: child,
-                _tmp: tmp,
-                addr,
-                socket,
-            });
+        if let Some(status) = try_daemon_status(&socket).await {
+            let collab_up = status["connections"]["collab"].is_object();
+            if collab_up == wait_for_collab {
+                return Some(ServerGuard {
+                    _child: child,
+                    _tmp: tmp,
+                    addr,
+                    socket,
+                });
+            }
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    panic!("mae-daemon did not start within 5s on {addr}");
+    panic!(
+        "mae-daemon did not become ready within 5s (addr {addr}, socket {}, \
+         expecting collab {})",
+        socket.display(),
+        if wait_for_collab { "up" } else { "disabled" }
+    );
 }
 
 /// Read a Content-Length framed message from a TCP stream.
@@ -169,4 +199,23 @@ pub async fn await_collab_active(socket: &Path, want: u64) -> Option<u64> {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     last
+}
+
+/// `daemon_status`, but returning `None` instead of panicking while the daemon
+/// is still coming up. Used only by the readiness loop.
+async fn try_daemon_status(socket: &Path) -> Option<serde_json::Value> {
+    use tokio::io::BufReader;
+    let mut stream = tokio::net::UnixStream::connect(socket).await.ok()?;
+    let (r, mut w) = stream.split();
+    let mut reader = BufReader::new(r);
+    let body = serde_json::to_vec(
+        &serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "daemon/status", "params": {}}),
+    )
+    .ok()?;
+    mae_mcp::write_framed(&mut w, &body, Duration::from_secs(2))
+        .await
+        .ok()?;
+    let msg = mae_mcp::read_message(&mut reader).await.ok()??;
+    let v: serde_json::Value = serde_json::from_str(&msg).ok()?;
+    v.get("result").cloned()
 }
