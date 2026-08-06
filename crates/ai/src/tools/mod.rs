@@ -13,6 +13,8 @@ pub mod dispatchability;
 mod kb_tools;
 mod lsp_tools;
 #[cfg(test)]
+mod mirror_tier_parity_tests;
+#[cfg(test)]
 mod name_roundtrip_tests;
 mod shell_tools;
 mod tool_def;

@@ -324,6 +324,17 @@ pub fn classify_command_permission(name: &str) -> PermissionTier {
         "undo" | "redo" => PermissionTier::Write,
         "save" | "save-and-quit" => PermissionTier::Write,
 
+        // @ai-caution: [permission] Effects that are shell execution. Each has
+        // a hand-authored twin already at `Shell`; without these arms they hit
+        // `_ => Write` and become a weaker route to it. Generated mirrors are
+        // not read-flavoured, so ADR-085's registry-wide audit skips them —
+        // `mirror_tier_parity_tests` holds this list to account instead.
+        "terminal" | "terminal-here" => PermissionTier::Shell,
+        "send-to-shell" | "send-region-to-shell" => PermissionTier::Shell,
+        "babel-execute" | "babel-execute-all" | "babel-tangle" => PermissionTier::Shell,
+        "kb-register" | "kb-reimport" => PermissionTier::Shell,
+        n if n.starts_with("org-export") => PermissionTier::Shell,
+
         // Dangerous operations
         "quit" | "force-quit" => PermissionTier::Privileged,
 
