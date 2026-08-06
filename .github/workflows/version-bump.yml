@@ -110,12 +110,25 @@ jobs:
           # `-w` (--workspace) re-resolves ONLY the local workspace members --
           # exactly the crates whose versions changed -- so no external
           # dependency is silently bumped as a side effect of a version bump.
-          # `--offline` because nothing new needs fetching: the only edits are
-          # to path dependencies already in the lock. It also means a registry
-          # outage cannot fail a release, and makes an accidental external
-          # bump impossible rather than merely unlikely.
-          cargo update -w --offline
-          (cd daemon && cargo update -w --offline)
+          #
+          # `--offline` first, then a normal retry. This job never builds, so on
+          # a fresh runner `~/.cargo/registry` is EMPTY and `--offline` fails to
+          # resolve even untouched dependencies:
+          #
+          #   error: no matching package named `serde` found
+          #   note: offline mode (via `--offline`) can sometimes cause
+          #         surprising resolution failures
+          #
+          # which is exactly how this broke on its first real run (v0.14.95).
+          # It passed local testing because a developer machine has a populated
+          # cache. Keep the offline attempt -- it is free and it is what runs
+          # when a cache does exist -- but do not let it be the only path.
+          #
+          # Safety does not depend on --offline: the guard below is what
+          # actually prevents an unintended dependency bump, and it runs
+          # whichever branch was taken.
+          cargo update -w --offline || cargo update -w
+          (cd daemon && { cargo update -w --offline || cargo update -w; })
           echo "Regenerated Cargo.lock + daemon/Cargo.lock at $VERSION"
 
           # The locks must now be clean against the manifests. If anything
