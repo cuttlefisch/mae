@@ -1,0 +1,167 @@
+name: Auto-update PR branches
+
+# Keep open PR branches merged up to date with main, automatically.
+#
+# WHY THIS EXISTS
+#
+# `main`'s protection has `required_status_checks.strict = true` — a PR must be
+# up to date with the base before it can merge. That is the right setting (it is
+# what stops two independently-green PRs from combining into a broken main), but
+# it has a cost: every merge to `main` invalidates every other open PR, and each
+# one then needs a back-merge plus a full CI re-run before it can land.
+#
+# Done by hand, that cost is paid twice — once in CI minutes, and once in the
+# latency between "CI went green" and "somebody noticed and pushed the
+# back-merge". With several PRs open at once the second cost dominates, and PRs
+# discover they are stale only at merge time, which is the worst moment to find
+# out.
+#
+# So: when `main` moves, every open PR is brought forward immediately. Combined
+# with auto-merge (enabled repo-wide), a PR that is green and approved lands
+# without anyone watching it.
+#
+# WHAT IT DELIBERATELY DOES NOT DO
+#
+#   * It does not force-push. `gh pr update-branch` performs a merge commit, so
+#     a contributor's local clone never has history rewritten under it.
+#   * It does not touch draft PRs. A draft is not racing to merge, and updating
+#     it would burn a full CI run per push to main for no benefit.
+#   * It does not fail the workflow when one PR cannot be updated. A merge
+#     conflict is the author's to resolve, and one conflicted PR must not hide
+#     the result for the others — each outcome is logged individually and the
+#     summary reports them all.
+
+on:
+  push:
+    branches: [main]
+  # Manual trigger for the case where main did not move but branches are stale
+  # anyway — e.g. after protection settings change, or to recover from a run
+  # that was cancelled by the concurrency group below.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Several merges to main in quick succession would otherwise start overlapping
+# runs that each try to update the same branches, racing each other and
+# doubling the CI they trigger. Cancel the older run: its work is strictly
+# subsumed by the newer one, which sees a later main.
+concurrency:
+  group: auto-update-prs
+  cancel-in-progress: true
+
+jobs:
+  update:
+    name: Bring open PRs up to date with main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update every open, non-draft PR that is behind main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          # Passed as env rather than interpolated into the script body: keeps
+          # workflow-expression substitution out of shell source entirely.
+          MAIN_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # `--json` rather than parsing human output: the field names are a
+          # contract, the table layout is not.
+          prs="$(gh pr list --repo "$REPO" --state open --limit 100 \
+                   --json number,isDraft,headRefName)"
+
+          total="$(printf '%s' "$prs" | jq 'length')"
+          echo "Open PRs: $total"
+
+          if [ "$total" -eq 0 ]; then
+            echo "Nothing to do."
+            echo "No open PRs." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          updated=0; skipped=0; failed=0
+          {
+            echo "## Auto-update PR branches"
+            echo ""
+            echo "| PR | Branch | Result |"
+            echo "|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Read one compact record per PR. A while-read over jq output rather
+          # than a for-loop over a word-split string: PR titles contain spaces.
+          #
+          # Fed by process substitution, NOT a pipe: a piped `while` runs in a
+          # subshell, and the counters incremented inside it would be discarded
+          # at the loop's end — the summary would then report 0 of everything
+          # however much work was done.
+          while IFS="$(printf '\t')" read -r num draft branch; do
+
+              if [ "$draft" = "true" ]; then
+                echo "  #$num ($branch): draft, skipping"
+                echo "| #$num | \`$branch\` | skipped (draft) |" >> "$GITHUB_STEP_SUMMARY"
+                skipped=$((skipped + 1))
+                continue
+              fi
+
+              # Ask the compare API how many commits main has that this branch
+              # does not, rather than trusting `mergeStateStatus`.
+              #
+              # `mergeStateStatus`/`mergeable` are computed LAZILY: the first
+              # query for a given PR kicks off the computation and returns
+              # UNKNOWN, and only a later query sees the real value. A workflow
+              # keyed on it would silently skip exactly the PRs it was written
+              # to fix, on precisely the run where main just moved and nothing
+              # has been recomputed yet — the worst possible time. Observed on
+              # this repo (2026-08): two PRs reported `mergeable: UNKNOWN` with
+              # a fully-populated check list.
+              #
+              # `behind_by` is derived from the commit graph, so it is correct
+              # on first read and needs no retry loop.
+              behind="$(gh api "repos/$REPO/compare/main...$branch" --jq '.behind_by' 2>/dev/null || true)"
+
+              # Require an actual integer before using it as one. `gh api`
+              # writes its error body to STDOUT, so on a 404 (deleted branch,
+              # fork-side head) `$behind` holds `{"message":"Not Found",...}`
+              # rather than being empty — an emptiness check alone passes it
+              # straight through to `[ "$behind" -eq 0 ]`, which errors out and,
+              # being false, silently falls through to attempting an update on a
+              # branch that does not exist. Verified against the live API.
+              case "$behind" in
+                ''|*[!0-9]*)
+                  echo "  #$num ($branch): cannot compare — skipping"
+                  echo "| #$num | \`$branch\` | skipped (branch not comparable) |" >> "$GITHUB_STEP_SUMMARY"
+                  skipped=$((skipped + 1))
+                  continue
+                  ;;
+              esac
+
+              if [ "$behind" -eq 0 ]; then
+                echo "  #$num ($branch): already current"
+                echo "| #$num | \`$branch\` | already up to date |" >> "$GITHUB_STEP_SUMMARY"
+                skipped=$((skipped + 1))
+                continue
+              fi
+
+              echo "  #$num ($branch): behind main by $behind — updating"
+              if gh pr update-branch "$num" --repo "$REPO" 2>&1; then
+                echo "| #$num | \`$branch\` | **updated** |" >> "$GITHUB_STEP_SUMMARY"
+                updated=$((updated + 1))
+              else
+                # Almost always a merge conflict, which only the author can
+                # resolve. Report it; do not fail the run.
+                echo "  #$num: update failed (likely a conflict) — author action needed"
+                echo "| #$num | \`$branch\` | ⚠️ conflict — needs manual merge |" >> "$GITHUB_STEP_SUMMARY"
+                failed=$((failed + 1))
+              fi
+            done < <(printf '%s' "$prs" \
+                       | jq -r '.[] | [.number, .isDraft, .headRefName] | @tsv')
+
+          echo ""
+          echo "updated: $updated   skipped: $skipped   conflicted: $failed"
+          {
+            echo ""
+            echo "**updated: $updated · skipped: $skipped · conflicted: $failed**"
+            echo ""
+            echo "_Triggered by \`$MAIN_SHA\` on main._"
+          } >> "$GITHUB_STEP_SUMMARY"
