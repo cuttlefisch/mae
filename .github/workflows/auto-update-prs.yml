@@ -58,13 +58,42 @@ jobs:
     steps:
       - name: Update every open, non-draft PR that is behind main
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # RELEASE_PAT, not GITHUB_TOKEN — and this is load-bearing, not a
+          # preference. A branch update made with GITHUB_TOKEN raises its
+          # `pull_request` event with `actor = github-actions[bot]`, and GitHub
+          # gates bot-actored runs at `action_required`, awaiting a human
+          # approval that nobody is watching for.
+          #
+          # The failure mode is worse than "it didn't work": the branch IS
+          # brought up to date, so the workflow reports success, but the PR's
+          # checks never run. It can therefore never go green, auto-merge never
+          # fires, and the PR sits looking healthy and up to date while being
+          # permanently unmergeable. Measured on the first live run (2026-08-06):
+          # all three updated PRs sat at `action_required` for an hour with an
+          # empty check list, while the same branches' earlier
+          # `actor = cuttlefisch` runs had executed normally.
+          #
+          # `version-bump.yml` and `release.yml` already use RELEASE_PAT for the
+          # same underlying reason — a token whose pushes must trigger downstream
+          # workflows.
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
           REPO: ${{ github.repository }}
           # Passed as env rather than interpolated into the script body: keeps
           # workflow-expression substitution out of shell source entirely.
           MAIN_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+
+          # Fail loudly if the PAT is absent. Without this the job would fall
+          # back to unauthenticated `gh`, report "0 updated" and exit green —
+          # a silent no-op that looks identical to "nothing needed updating",
+          # which is the one outcome this workflow must never fake.
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::RELEASE_PAT is not set. This workflow cannot use" \
+                 "GITHUB_TOKEN — bot-actored runs are gated at action_required" \
+                 "and the updated PRs would never re-run their checks."
+            exit 1
+          fi
 
           # `--json` rather than parsing human output: the field names are a
           # contract, the table layout is not.
