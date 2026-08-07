@@ -95,7 +95,14 @@ direction **backwards** for five leaf crates.
 
 These are derived from analysis of 35 years of Emacs git history. They are non-negotiable design constraints:
 
-1. **Concurrency from day one.** Emacs spent 23,901 commits across 3 branches trying to retrofit a concurrent GC and still hasn't merged it. We use Rust's ownership model for the core and a purpose-designed concurrent GC for the Scheme runtime. No Global Interpreter Lock, ever.
+1. **Concurrency from day one — and honestly about where that is today.** Emacs spent 23,901 commits across 3 branches trying to retrofit a concurrent GC and still hasn't merged it. The core uses Rust's ownership model, and the design intent is that the Scheme runtime never needs a global interpreter lock.
+
+   **What is actually built (verified 2026-08, amended per principle #17):** the Scheme heap is **`Rc<T>` refcounted with no tracing collector at all** (`crates/scheme/src/value.rs` — "Stage 1"). There is a `Trace` trait as groundwork, but nothing walks it. Consequences a reader must not be misled about:
+   - `(gc-collect!)` is a **no-op**, and `(gc-stats)`'s `collections` is **always 0** — `collections_count` is declared, copied and reported, but never incremented anywhere.
+   - `Rc` is `!Send`, so the runtime is **single-threaded by construction**. "No GIL, ever" is therefore true but *vacuous* at Stage 1: there is no shared multi-threaded interpreter for a lock to guard.
+   - Refcounting **leaks reference cycles** (a closure capturing its own environment). Nothing reclaims them, and `code_pool` is append-only and never cleared.
+
+   This entry claimed a "purpose-designed concurrent GC" until 2026-08. It was aspiration written in the present tense, in the file that primes every AI session — the exact drift principle #17 exists to catch. State the Stage-2 plan as a plan; do not restore a present-tense claim until a collector exists and its counter moves.
 
 2. **Modular display layer.** Emacs's `xdisp.c` is 38,605 lines and the most bug-prone file in the codebase. Our renderer is a separate crate with a clean trait-based HAL. Platform-specific code lives in the rendering backend library (crossterm/Skia), not in our codebase.
 
