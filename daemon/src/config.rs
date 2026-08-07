@@ -815,6 +815,8 @@ impl DaemonConfig {
         let mut issues = Vec::new();
         let c = &self.collab;
 
+        issues.extend(crate::config_guards::unauthenticated_bind_issues(c));
+
         if c.storage.compact_threshold == 0 {
             issues.push("collab.storage.compact_threshold must be > 0".to_string());
         }

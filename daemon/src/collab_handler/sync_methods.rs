@@ -305,11 +305,23 @@ pub(super) async fn handle_sync_full_state(
 }
 
 pub(super) async fn handle_sync_diff(
+    auth_principal: Option<&str>,
+    transport: Transport,
     doc_store: &DocStore,
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
     let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+    // @ai-caution: [security] `sync/diff` returns the same KB CRDT bytes
+    // `sync/state_vector` and `sync/full_state` are gated for. It was ungated,
+    // so a peer could read any other peer's KB node state by asking for a diff
+    // instead of a read — while `kb/node_fetch` on the same node correctly
+    // refused. `deny_kb_doc_read` only denies `kb:`/`kbc:` docs, so plain file
+    // collaboration is unaffected.
+    if let Err(msg) = deny_kb_doc_read(doc_store, &doc_name, auth_principal, transport).await {
+        warn!(doc = %doc_name, reason = %msg, "sync/diff denied");
+        return JsonRpcResponse::error(id, McpError::internal_error(msg));
+    }
     let sv_b64 = match params["sv"].as_str() {
         Some(s) => s,
         None => {
@@ -346,7 +358,14 @@ pub(super) async fn handle_sync_diff(
     }
 }
 
+// `deny_kb_doc_read` needs the principal and the transport, which pushes this
+// past the 7-argument lint. Splitting the signature into a params struct here
+// would obscure the call site for one lint, and the alternative — leaving the
+// gate off — is what this function is being fixed for.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_sync_resync(
+    auth_principal: Option<&str>,
+    transport: Transport,
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
     session_id: u64,
@@ -358,15 +377,34 @@ pub(super) async fn handle_sync_resync(
     // BUG C fix: atomic state + sv under single lock (INV-2).
     let raw_name = params["doc"].as_str().unwrap_or("default").to_string();
     info!(session = session_id, doc = %raw_name, "sync/resync: processing");
+    // @ai-caution: [security] `sync/resync` returns FULL document state and
+    // additionally SUBSCRIBES the session to that doc's live broadcast. It was
+    // ungated, which made it both a read of any peer's KB node and a way to
+    // self-subscribe to every subsequent update to it. Gate before either.
+    // Checked on the raw name as well as the resolved one so suffix resolution
+    // cannot be used to reach a `kb:` doc by another spelling.
+    if let Err(msg) = deny_kb_doc_read(doc_store, &raw_name, auth_principal, transport).await {
+        warn!(session = session_id, doc = %raw_name, reason = %msg, "sync/resync denied");
+        return JsonRpcResponse::error(id, McpError::internal_error(msg));
+    }
     // Resolve bare filenames via suffix matching (e.g. "test.txt" finds "file:no-project/test.txt").
     let doc_name = if doc_store.has_doc(&raw_name).await {
-        raw_name
+        raw_name.clone()
     } else if let Some(found) = doc_store.find_doc_by_suffix(&raw_name).await {
         info!(requested = %raw_name, resolved = %found, "resolved doc by suffix match");
         found
     } else {
-        raw_name // fall through — will create new empty doc
+        raw_name.clone() // fall through — will create new empty doc
     };
+    // Suffix resolution can map a bare name onto a `kb:`/`kbc:` doc, so the
+    // RESOLVED name has to be checked too — otherwise the gate above is
+    // bypassable by asking for "notes.org" instead of "kb:notes.org".
+    if doc_name != raw_name {
+        if let Err(msg) = deny_kb_doc_read(doc_store, &doc_name, auth_principal, transport).await {
+            warn!(session = session_id, doc = %doc_name, reason = %msg, "sync/resync denied (resolved)");
+            return JsonRpcResponse::error(id, McpError::internal_error(msg));
+        }
+    }
     // Track this doc for disconnect cleanup and doc-scoped broadcast filtering.
     if session_docs.insert(doc_name.clone()) {
         let _ = doc_store.track_client_connect(&doc_name).await;

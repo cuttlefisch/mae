@@ -1822,7 +1822,9 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "sync/diff" => sync_methods::handle_sync_diff(doc_store, id, &params).await,
+        "sync/diff" => {
+            sync_methods::handle_sync_diff(auth_principal, transport, doc_store, id, &params).await
+        }
 
         "docs/list" => docs_methods::handle_docs_list(doc_store, id).await,
 
@@ -1830,6 +1832,8 @@ async fn handle_doc_request_inner(
 
         "sync/resync" => {
             sync_methods::handle_sync_resync(
+                auth_principal,
+                transport,
                 doc_store,
                 broadcaster,
                 session_id,
