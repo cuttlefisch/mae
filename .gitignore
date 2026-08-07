@@ -59,3 +59,27 @@ deploy/ansible/inventory/*.yml
 deploy/ansible/ansible-deploy.log
 deploy/ansible/.ansible_facts/
 deploy/ansible/tests/preflight-tests.log
+
+# The ADR KB blob is a BUILD ARTIFACT, not a source. `docs/adr/*.md` is the
+# source of truth; `build-adr-kb` derives this from it. It was tracked until
+# 2026-08, at ~57 MB per regeneration — every ADR edit wrote a fresh copy into
+# history, and GitHub had started warning on the push.
+#
+# Nothing ever read the committed copy. `make install` depends on the `adr-kb`
+# target and `release.yml` runs `build-adr-kb` before packaging, so both
+# rebuild it first; `verify-adr-kb-sync` only diffs the .sha256 below and never
+# opens the store. It was 57 MB of history for a file with no consumer.
+#
+# `assets/mae-adr.cozo.sha256` STAYS TRACKED and is deliberately not covered by
+# this rule: the ADR-059 Phase E staleness gate fires on that checksum moving,
+# so it must remain diffable.
+#
+# It is NOT a verification oracle, and must not be used as one. A sled store is
+# rewritten in place the first time it is opened and is not byte-reproducible
+# across builds, so a legitimately rebuilt — or merely once-opened — store
+# hashes differently from the committed value (measured 2026-08: local d1ab9b…
+# vs committed ec30dd…). It records "`make adr-kb` was re-run", nothing more.
+# A downloaded artifact is verified against the release's SHA256SUMS instead.
+#
+# Build it with `make adr-kb`, or fetch it with `make fetch-adr-kb`.
+assets/mae-adr.cozo/

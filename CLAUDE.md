@@ -140,6 +140,16 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 
 12. **Local-first by design.** MAE satisfies 5 of 7 Ink & Switch local-first ideals today (no spinners, multi-device, network optional, collaboration without conflict, user ownership). P2P collaboration and E2E encryption will complete the remaining two. The daemon is an optimization for persistence and discovery, not a requirement for collaboration. **The daemon is configurable (`daemon_mode` = `off` / `on-demand` / `shared`) with the in-process embedded KB as the *floor* (the default, not a fallback); it earns placement only by an objective value category — SHARED across frontends, OUTLIVES editor sessions, COORDINATES peers, or DURABILITY. Features that genuinely require it (P2P sharing, continuous shared-KB sync) are gated + surfaced as such. See ADR-035 for the editor↔daemon boundary.**
 
+    **Amendment — the browser surface (ADR-097 D2).** One surface cannot satisfy this and is
+    carved out explicitly rather than quietly excepted: a browser client has no in-process MAE
+    core to fall back to and reaches MAE only over the network, so **for Browser MAE the daemon
+    is a hard requirement, not an optimization.** The carve-out is deliberately narrow — it binds
+    only to the browser surface, leaves native MAE's `daemon_mode = off` default and embedded-KB
+    floor untouched, and does not concede online-only operation (a browser holding CRDT state in
+    IndexedDB still edits offline and converges later). What is genuinely given up, and only
+    here, is the "no server needed at all" property. Recorded per principle #17 rather than
+    violated silently.
+
 13. **Cross-platform parity (macOS + Linux) is a development constraint, not an afterthought.** MAE is developed and run across macOS and Linux *simultaneously* (often on the same branch, same day). Every script, path-resolution, and tool invocation MUST behave identically on both — or fail loudly with a portable fallback, never silently no-op on one platform. A "fix" that only works on one developer's machine is not a fix; it manufactures the stop-and-go cross-machine debugging this principle exists to prevent. Concretely:
     - **Directory resolution is XDG-first on ALL platforms.** Honor `XDG_CONFIG_HOME` / `XDG_DATA_HOME` when set, then fall back to the platform default. The bare `dirs` / `directories` crate follows Apple conventions on macOS (`~/Library/Application Support`) and *ignores* XDG — so calling `dirs::config_dir()` / `dirs::data_dir()` directly breaks env-var test isolation and contradicts the documented `~/.config/mae` + `~/.local/share/mae` contract. Use the XDG-first helpers (`mae-mcp::identity::default_collab_dir`, `mae-mcp::keystore`, editor `pkg/paths.rs::{dirs_candidate,data_dir_candidate}`), never raw `dirs::*` for primary config/data paths.
     - **Shell scripts use portable tooling.** No Linux-only commands without a fallback: `ss` → `lsof` → `netstat`; `timeout` → `gtimeout` → optional/omitted; avoid GNU-only behavior (`sed -i` arg differences, `readlink -f`, `mktemp` templates, `date` flags). Prefer POSIX; gate platform branches on capability (`command -v`), not `uname`. Keep the Linux path first so CI/driver behavior is unchanged.
@@ -638,7 +648,21 @@ the whole node — `kind`/`todo_state`/`priority`/`aliases`/`properties`/`source
 schema behind a `schema_v` key, with tolerant readers and **no upcast-on-read**, so a v1 document
 opens unchanged and two peers can never author clashing migration ops; supersedes ADR-092 D4's
 "editable is bounded by what syncs", and is the prerequisite that makes a lossless text-KB migration
-possible at all). The holistic sharing story + security audits live in `docs/KB_SHARING.md`,
+possible at all), **ADR-095** (MCP elicitation carries the ask state), **ADR-096** (Scheme is the
+only editor config surface — deprecating `config.toml`, *proposed, phased*), and **ADR-097**
+(Browser MAE is a KB surface, not a browser editor — scopes the web frontend to KB work and
+narrowly amends principle #12 for it, *proposed*), and **ADR-098** (durable identity for network
+clients — the membership subject is a stable *member* key, not a device key; devices obtain it from
+recovery-key-sealed secret storage; the OIDC-principal↔fingerprint binding lives in daemon state
+*outside* the CRDT so an IdP migration rewrites a mutable table rather than an unrewritable signed
+log; AD groups gate the session while CRDT membership stays owner-authored. *Proposed, phased,
+blocked on #176*; evidence in `docs/research/098-*.md`), **ADR-099** (bidirectional sync transport
+for browser clients — WebSocket on the existing OAuth listener, re-framing MAE's own already
+doc-scoped envelope rather than speaking y-protocols, so one session multiplexes N documents;
+*proposed*, supersedes ADR-074 D1 for the write path only), and **ADR-100** (the browser KB edit
+surface — structured chrome bound to ADR-093's schema v2 with zero round-trip, plus source-backed
+live preview over the body `Y.Text`; block WYSIWYG permitted only as a projection, never a second
+source of truth; *proposed*, D4's org-parser choice gated on a WASM spike). The holistic sharing story + security audits live in `docs/KB_SHARING.md`,
 `docs/E2E_ENCRYPTION.md`, and `docs/SECURITY_REVIEW.md`. Finally, the **KB-enrichment initiative set
 ADR-101–103** (*all proposed, design-only*): **ADR-101** (links become first-class structured CRDT
 edges carrying provenance/status/confidence — reviving the dead `links` field; the projector consumes
