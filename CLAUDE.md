@@ -639,7 +639,19 @@ schema behind a `schema_v` key, with tolerant readers and **no upcast-on-read**,
 opens unchanged and two peers can never author clashing migration ops; supersedes ADR-092 D4's
 "editable is bounded by what syncs", and is the prerequisite that makes a lossless text-KB migration
 possible at all). The holistic sharing story + security audits live in `docs/KB_SHARING.md`,
-`docs/E2E_ENCRYPTION.md`, and `docs/SECURITY_REVIEW.md`.
+`docs/E2E_ENCRYPTION.md`, and `docs/SECURITY_REVIEW.md`. Finally, the **KB-enrichment initiative set
+ADR-101–103** (*all proposed, design-only*): **ADR-101** (links become first-class structured CRDT
+edges carrying provenance/status/confidence — reviving the dead `links` field; the projector consumes
+the *union* of human inline links (ADR-030) and machine structured edges, so the CRDT stays truth and
+the graph a dynamic projection, and a machine link no longer has to be encoded into human prose),
+**ADR-102** (KB engine maturity & performance for the hosted daemon — evidence-gated: benchmark
+Cozo-on-RocksDB against a ~50-concurrent-user / 100K-node bar and *escalate to a replace-Cozo
+evaluation only on a missed bar*; sled is deprecated, the daemon-less editor keeps sqlite; extends
+ADR-004/012, supersedes ADR-054's figure with new evidence), and **ADR-103** (autonomous local-LLM
+KB link enrichment — the *link* half ADR-061 deferred: a 24/7 Ollama sweep that judges candidate
+pairs over a fixed relation vocabulary, gates them through a conservative empirically-calibrated
+three-band confidence policy the agent cannot loosen, and materializes only reviewed/high-confidence
+edges as ADR-101 status flips; grounded in `docs/research/103-kb-link-enrichment-prior-art.md`).
 
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
 > from it entirely until 2026-08-04, i.e. every ADR from the KB-visualization arc and the whole
