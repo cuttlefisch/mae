@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.96] - 2026-08-07
+
+
+
+
+### Bug Fixes
+
+- *(daemon)* The hub's raw sync surface was ungated, and an off-host bind was unauthenticated ([8518749](https://github.com/cuttlefisch/mae/commit/85187499a9e6e8833bc6752313a40128874abfb9))
+
+### Refactor
+
+- *(daemon)* Split the bind guard and its tests out of config.rs ([4ec291f](https://github.com/cuttlefisch/mae/commit/4ec291f111cafc61c9ad4d7e7f2ec69a7b24220b))
+
+### Documentation
+
+- *(adr)* ADR-101/102/103 — autonomous KB link enrichment design + prerequisites ([76f4c36](https://github.com/cuttlefisch/mae/commit/76f4c36905eb0ad0578d34644058bbf17accfc47))
+- *(adr)* ADR-097 — Browser MAE is a KB surface, not a browser editor ([3d52920](https://github.com/cuttlefisch/mae/commit/3d52920a0dcb587eae2426b43749df286400b1a2))
+- *(adr)* ADR-098 — durable identity for network clients ([eccddad](https://github.com/cuttlefisch/mae/commit/eccddad59ab7397a6230517c1f2dbbad36b0d85d))
+- *(adr)* ADR-099 (browser sync transport) + ADR-100 (browser edit surface) ([ddfbfa2](https://github.com/cuttlefisch/mae/commit/ddfbfa2cb8f99a9609defcd657fcdf54d04441a7))
+
+### Testing
+
+- *(sync)* Phase 0 spike — browser Yjs converges with a real KbNodeDoc ([747a6c7](https://github.com/cuttlefisch/mae/commit/747a6c7e45f5dad09bbaca880c0992dc09459f5d))
+- *(sync)* Multi-device identity spike — Rebind cannot express multi-device ([30516cf](https://github.com/cuttlefisch/mae/commit/30516cf83bfa391941f64269265eb97819b0d20e))
+- *(sync)* Device secret-storage + revocation spike — devices are not members ([18ddc88](https://github.com/cuttlefisch/mae/commit/18ddc883e0363fc188f5ec877bc6429a40b7f839))
+- *(sync)* Forward-secrecy spike — rotate-per-revocation is blocked on #176 ([03799bb](https://github.com/cuttlefisch/mae/commit/03799bba0698b2e2940e6cba559ab6450bd6d1ce))
+- *(daemon)* Write-fencing spike — revocation is rotation-free but owner-bound ([0e037b1](https://github.com/cuttlefisch/mae/commit/0e037b172a190b6cf0648fcccc902f35057304b9))
+
+### Build System
+
+- Untrack the ADR KB blob, ship it as its own release asset ([a8c2e87](https://github.com/cuttlefisch/mae/commit/a8c2e878c8cfba7f362518f878a69f4d2b7cb71e))
+
+### Miscellaneous
+
+- *(adr-kb)* Regenerate for ADRs 097-100 ([edbab2d](https://github.com/cuttlefisch/mae/commit/edbab2da3bec0a848b2277c8695ba7414f6ae7fd))
+
+### Spike
+
+- *(kb)* ADR-100 D4 — measure the org parser, and correct the question ([1f4d3c4](https://github.com/cuttlefisch/mae/commit/1f4d3c47b86d518b834981bcb41d8246b335602c))
+- *(kb)* Measure the wasm bundle size — D4's last open condition closed ([6935546](https://github.com/cuttlefisch/mae/commit/693554685822a2033c823f549792461bf854e17a))
+
 ## [0.14.95] - 2026-08-07
 
 
@@ -39,6 +80,10 @@ All notable changes to this project will be documented in this file.
 - Keep open PR branches up to date with main automatically ([4764c71](https://github.com/cuttlefisch/mae/commit/4764c714abad0c2367cb9856809ddb611c00a678))
 - Auto-update-prs must use RELEASE_PAT, not GITHUB_TOKEN ([72e2f8a](https://github.com/cuttlefisch/mae/commit/72e2f8a5c1683e1751e4322d0c0cc912cf737f45))
 - *(auto-update-prs)* A denied token was reported as six merge conflicts ([cf8744c](https://github.com/cuttlefisch/mae/commit/cf8744c55fd7354055bfac6d62435b9955947e5e))
+
+### Miscellaneous
+
+- Bump version to 0.14.95 ([c21d9df](https://github.com/cuttlefisch/mae/commit/c21d9df87ebd76d920c56b2943ee9990df4b1fa1))
 
 ## [0.14.94] - 2026-08-05
 
