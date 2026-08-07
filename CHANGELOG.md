@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.95] - 2026-08-07
+
+
+
+
+### Security
+
+- *(security)* Command mirrors laundered Shell-tier effects down to Write ([91f3012](https://github.com/cuttlefisch/mae/commit/91f3012eaf0fb1dc90f5ccdd458274dae27a817c))
+- *(security)* Two permission bypasses reachable from the default tier ([d85dbc2](https://github.com/cuttlefisch/mae/commit/d85dbc2e6b8799da1fcb79912376dbba27ab0375))
+- *(security)* Macro bodies escalated to Privileged at compile time ([be443d0](https://github.com/cuttlefisch/mae/commit/be443d0f7a22c5ff423be73dd31a86396b8dbd15))
+
+### Features
+
+- *(deploy)* Ansible role for mae-daemon, with enforced lint + safety-check tests ([9650bee](https://github.com/cuttlefisch/mae/commit/9650bee8a8c2280d3529bd05172be9424dd31bee))
+
+### Bug Fixes
+
+- *(release)* Publish checksums (#648) and sync lockfiles on version bump (#61) ([7c2cadb](https://github.com/cuttlefisch/mae/commit/7c2cadb402ff59175e9fedf64712cde0e537d95f))
+- *(kb)* Deleting any node made the whole KB read as empty ([5946fce](https://github.com/cuttlefisch/mae/commit/5946fce5cf5bad00b044f349108441347869d2a6))
+- *(ci)* Version-bump's `cargo update --offline` fails on a fresh runner ([10e35c0](https://github.com/cuttlefisch/mae/commit/10e35c05c3b9272f98e71d015864d1b6de19e5f3))
+- *(daemon)* Collab handles were installed only under key-mode auth (#647) ([e9c288c](https://github.com/cuttlefisch/mae/commit/e9c288c6b6f98faf0d201b023bfc829c37a2e32b))
+- *(kb)* Term:tier told every AI session a typo grants shell ([5dab30e](https://github.com/cuttlefisch/mae/commit/5dab30e2d5bd09812e27790c673095689ed7d76f))
+
+### Refactor
+
+- *(ai)* Split the mirror-tier parity suite out of categories.rs ([e6b5b6a](https://github.com/cuttlefisch/mae/commit/e6b5b6a5465187407aa72ab9c7af22fd5e7b24bc))
+
+### Documentation
+
+- MAE has no garbage collector — stop claiming one in three places ([ad49488](https://github.com/cuttlefisch/mae/commit/ad49488be27bd2bb1ad4c8fe30a0f50e83cab5d1))
+- CLAUDE.md contradicted itself on tool count, and listed 11 of 20 self-test categories ([f945ded](https://github.com/cuttlefisch/mae/commit/f945dedd798a3ce572b4f3e7acfe4541d222b629))
+
+### CI
+
+- Keep open PR branches up to date with main automatically ([4764c71](https://github.com/cuttlefisch/mae/commit/4764c714abad0c2367cb9856809ddb611c00a678))
+- Auto-update-prs must use RELEASE_PAT, not GITHUB_TOKEN ([72e2f8a](https://github.com/cuttlefisch/mae/commit/72e2f8a5c1683e1751e4322d0c0cc912cf737f45))
+- *(auto-update-prs)* A denied token was reported as six merge conflicts ([cf8744c](https://github.com/cuttlefisch/mae/commit/cf8744c55fd7354055bfac6d62435b9955947e5e))
+
 ## [0.14.94] - 2026-08-05
 
 
@@ -29,6 +67,7 @@ All notable changes to this project will be documented in this file.
 
 - Sync Cargo.lock versions to 0.14.93 (#61) ([969ebd9](https://github.com/cuttlefisch/mae/commit/969ebd90a52302623bbdb771775b287f80c42a92))
 - Remove a real KB name from a test comment ([7bb55c7](https://github.com/cuttlefisch/mae/commit/7bb55c703df074c8104bbf148dba1ff375e34c5b))
+- Bump version to 0.14.94 ([aa7206f](https://github.com/cuttlefisch/mae/commit/aa7206fbc836dba1744c09ee6889b7d7b92ffdd3))
 
 ## [0.14.93] - 2026-08-05
 
