@@ -148,3 +148,85 @@ async fn kb_node_fetch_cannot_read_a_node_belonging_to_another_kb() {
     );
     assert!(!victim_docs.contains("kb:concept:a-own"));
 }
+
+/// The same attack via the raw sync surface, which was ungated entirely.
+///
+/// `deny_kb_doc_read` existed and was correct — it was called from exactly TWO
+/// of the paths that needed it (`sync/state_vector`, `sync/full_state`).
+/// `sync/resync` returns the same bytes under a different method name, and
+/// `sync/diff` returns them as a delta. Its own doc comment says KB content
+/// "must be fetched via the access-gated `kb/node_fetch`"; these two were what
+/// made that false.
+///
+/// `sync/resync` is the worse of the pair, for the reason this file's header
+/// gives about `kb/node_fetch`: it also `subscribe_doc`s the session, so an
+/// ungated call grants a STANDING feed of every future edit, not just one read.
+#[tokio::test]
+async fn raw_sync_methods_cannot_read_a_node_belonging_to_another_kb() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let mut mallory_docs = HashSet::new();
+    kb_share_as(
+        &store,
+        &bc,
+        Some("mallory"),
+        Some(&fp("mallory")),
+        "kb-a",
+        "mallory",
+        &mut mallory_docs,
+    )
+    .await;
+
+    let mut victim_docs = HashSet::new();
+    kb_share_as(
+        &store,
+        &bc,
+        Some("victim"),
+        Some(&fp("victim")),
+        "kb-b",
+        "victim",
+        &mut victim_docs,
+    )
+    .await;
+    let added = dispatch_as(
+        &store,
+        &bc,
+        Some("victim"),
+        Some(&fp("victim")),
+        serde_json::json!({
+            "jsonrpc":"2.0","id":1,"method":"kb/collection_node_add",
+            "params":{"kb_id":"kb-b","node_id":"concept:b-secret","title":"B"}}),
+        &mut victim_docs,
+    )
+    .await;
+    assert!(added.error.is_none(), "seed failed: {:?}", added.error);
+
+    for method in ["sync/resync", "sync/diff"] {
+        let before = mallory_docs.len();
+        let attack = dispatch_as(
+            &store,
+            &bc,
+            Some("mallory"),
+            Some(&fp("mallory")),
+            serde_json::json!({
+                "jsonrpc":"2.0","id":9,"method": method,
+                "params":{"doc":"kb:concept:b-secret","sv":""}}),
+            &mut mallory_docs,
+        )
+        .await;
+
+        assert!(
+            attack.error.is_some(),
+            "{method} returned kb-b's node to an outsider: {:?}",
+            attack.result
+        );
+        // The load-bearing half: a refusal that still subscribed would pass the
+        // assertion above and keep leaking every subsequent edit.
+        assert_eq!(
+            mallory_docs.len(),
+            before,
+            "{method} subscribed the session to another KB's node despite refusing the read"
+        );
+    }
+}
