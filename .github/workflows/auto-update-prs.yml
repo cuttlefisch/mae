@@ -109,7 +109,7 @@ jobs:
             exit 0
           fi
 
-          updated=0; skipped=0; failed=0
+          updated=0; skipped=0; failed=0; denied=0
           {
             echo "## Auto-update PR branches"
             echo ""
@@ -173,24 +173,68 @@ jobs:
               fi
 
               echo "  #$num ($branch): behind main by $behind — updating"
-              if gh pr update-branch "$num" --repo "$REPO" 2>&1; then
+              if out="$(gh pr update-branch "$num" --repo "$REPO" 2>&1)"; then
+                [ -n "$out" ] && echo "$out"
                 echo "| #$num | \`$branch\` | **updated** |" >> "$GITHUB_STEP_SUMMARY"
                 updated=$((updated + 1))
               else
-                # Almost always a merge conflict, which only the author can
-                # resolve. Report it; do not fail the run.
-                echo "  #$num: update failed (likely a conflict) — author action needed"
-                echo "| #$num | \`$branch\` | ⚠️ conflict — needs manual merge |" >> "$GITHUB_STEP_SUMMARY"
-                failed=$((failed + 1))
+                echo "$out"
+
+                # A failure here is one of two completely different things, and
+                # calling both "conflict" is how this workflow spent its first
+                # live run reporting `conflicted: 6` on six PRs that had no
+                # conflict at all (2026-08-07, run 31136847506).
+                #
+                #   * A merge conflict is per-PR and the author's to resolve.
+                #     One conflicted PR must not fail the run or hide the others.
+                #   * A 403 from `updatePullRequestBranch` is not per-PR at all —
+                #     it is the token lacking the scope, so it fails EVERY PR
+                #     identically. Reported as a conflict it is actively
+                #     misleading: it sends N authors to resolve conflicts that do
+                #     not exist, while the one real defect (a misconfigured
+                #     secret) goes unmentioned.
+                #
+                # Match on the API's own wording. `gh` surfaces the GraphQL error
+                # verbatim, so this is the string the server sends, not a
+                # `gh`-formatted paraphrase.
+                case "$out" in
+                  *"Resource not accessible"*|*"not accessible by"*|*"HTTP 403"*|*"Bad credentials"*|*"HTTP 401"*)
+                    echo "  #$num: update DENIED — token lacks permission (not a conflict)"
+                    echo "| #$num | \`$branch\` | 🔒 denied — token scope |" >> "$GITHUB_STEP_SUMMARY"
+                    denied=$((denied + 1))
+                    ;;
+                  *)
+                    echo "  #$num: update failed (likely a conflict) — author action needed"
+                    echo "| #$num | \`$branch\` | ⚠️ conflict — needs manual merge |" >> "$GITHUB_STEP_SUMMARY"
+                    failed=$((failed + 1))
+                    ;;
+                esac
               fi
             done < <(printf '%s' "$prs" \
                        | jq -r '.[] | [.number, .isDraft, .headRefName] | @tsv')
 
           echo ""
-          echo "updated: $updated   skipped: $skipped   conflicted: $failed"
+          echo "updated: $updated   skipped: $skipped   conflicted: $failed   denied: $denied"
           {
             echo ""
-            echo "**updated: $updated · skipped: $skipped · conflicted: $failed**"
+            echo "**updated: $updated · skipped: $skipped · conflicted: $failed · denied: $denied**"
             echo ""
             echo "_Triggered by \`$MAIN_SHA\` on main._"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          # Conflicts are expected and stay non-fatal (see the loop above).
+          # A denial is not: the token cannot update ANY branch, so every open
+          # PR silently stops being kept current — and because the symptom is
+          # an absence (no back-merge, no new CI run) rather than an error,
+          # nothing surfaces it. That is the same silent-green failure the
+          # empty-token guard above was added to prevent, arriving one step
+          # later; guarding the token's presence but not its permission left
+          # exactly half the hole open. Fail the run so it is visible.
+          if [ "$denied" -gt 0 ]; then
+            echo "::error::$denied PR(s) could not be updated: the token was" \
+                 "refused by updatePullRequestBranch. RELEASE_PAT needs" \
+                 "'pull_requests: write' (fine-grained) or the 'repo' scope" \
+                 "(classic). These are NOT merge conflicts — no author action" \
+                 "will fix them."
+            exit 1
+          fi
