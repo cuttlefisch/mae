@@ -161,8 +161,10 @@ pub fn install_terminology_nodes(kb: &mut KnowledgeBase) {
             "AI permission level controlling what actions the agent can take. Tiers: \
              ReadOnly (read buffers, navigate), Write (edit buffers, create files), \
              Shell (execute shell commands), Privileged (all operations). Set it with the \
-             `MAE_AI_PERMISSIONS` env var, or the `[ai] auto_approve_tier` config.toml key \
-             (lowercase values only — an unrecognised value currently falls back to shell). \
+             `MAE_AI_PERMISSIONS` env var, or the `[ai] auto_approve_tier` config.toml key. \
+             Values are case-insensitive (`PermissionTier::parse` lowercases its input), and \
+             an unrecognised value is REFUSED — MAE fails to start rather than resolving it \
+             to any tier. \
              NOTE: the `ai_tier` OptionRegistry option currently updates only the status-bar \
              badge and does NOT change the enforced policy, and the tier is not enforced on \
              every path — see SECURITY.md. Treat it as a guardrail against accident, not as \
@@ -173,5 +175,73 @@ pub fn install_terminology_nodes(kb: &mut KnowledgeBase) {
     for (id, title, body) in terms {
         let node = Node::new(*id, *title, NodeKind::Concept, *body).with_tags(["terminology"]);
         kb.insert(node);
+    }
+}
+
+#[cfg(test)]
+mod tier_terminology_accuracy_tests {
+    use super::*;
+
+    /// Find a seeded node's body by id, so these tests read the shipped text
+    /// rather than a copy of it.
+    fn body_of(id: &str) -> String {
+        let mut kb = KnowledgeBase::new();
+        install_terminology_nodes(&mut kb);
+        kb.get(id)
+            .unwrap_or_else(|| panic!("{id} must be seeded"))
+            .body
+            .clone()
+    }
+
+    /// `term:tier` is delivered to AI sessions as authoritative guidance about a
+    /// SECURITY control, so a false claim in it is worse than no claim: it primes
+    /// every session with a wrong mental model of what the tier gate does.
+    ///
+    /// Until 2026-08 this node stated that "an unrecognised value currently falls
+    /// back to shell". That was true of an older build and was fixed in
+    /// `config.rs` — which now errors with "unknown AI permission tier" and has a
+    /// test asserting an unknown tier "must be rejected, never resolved". The
+    /// prose kept describing the former BUG as current behaviour, telling agents
+    /// that a typo in `auto_approve_tier` silently grants shell. Exactly
+    /// backwards, and in the least safe direction.
+    ///
+    /// The assertion is on the dangerous CLAIM, not on the current wording, so
+    /// rephrasing the node freely is fine and only reintroducing the falsehood
+    /// fails.
+    #[test]
+    fn tier_node_does_not_claim_an_unknown_value_falls_back_to_a_tier() {
+        let body = body_of("term:tier").to_ascii_lowercase();
+        assert!(
+            !body.contains("falls back to shell") && !body.contains("fall back to shell"),
+            "term:tier must not claim an unrecognised tier falls back to shell — \
+             config.rs refuses to start on an unknown tier. Body: {body}"
+        );
+    }
+
+    /// The other half, and the reason the first assertion is not enough on its
+    /// own: a node could satisfy it by saying nothing at all about unknown
+    /// values, leaving the reader to assume a silent default. The refusal is the
+    /// safety-relevant fact and must be stated.
+    #[test]
+    fn tier_node_states_that_an_unknown_value_is_refused() {
+        let body = body_of("term:tier").to_ascii_lowercase();
+        assert!(
+            body.contains("refused") || body.contains("fails to start"),
+            "term:tier must state that an unrecognised tier is refused, not merely \
+             omit the question — silence reads as 'there is some default'. Body: {body}"
+        );
+    }
+
+    /// `PermissionTier::parse` lowercases its input (`crates/ai/src/types.rs`), so
+    /// the old "lowercase values only" instruction was wrong too. Harmless next to
+    /// the fallback claim, but it is the same drift and would have someone
+    /// "fixing" a working config.
+    #[test]
+    fn tier_node_does_not_claim_lowercase_only() {
+        let body = body_of("term:tier").to_ascii_lowercase();
+        assert!(
+            !body.contains("lowercase values only"),
+            "tier parsing is case-insensitive; do not tell users otherwise. Body: {body}"
+        );
     }
 }
