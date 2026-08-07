@@ -241,15 +241,31 @@ pub fn register_introspection(vm: &mut Vm) {
         },
     );
 
-    // (gc-collect!) → void (triggers Rc cleanup / future GC cycle)
+    // (gc-collect!) → void — a NO-OP in the current Rc stage.
     vm.register_fn(
         "gc-collect!",
-        "Trigger garbage collection (currently increments counter in Rc stage).",
+        "No-op. MAE's Scheme heap is Rc-refcounted with no tracing collector, so \
+         there is nothing to trigger; reclamation happens when the last Rc drops. \
+         Retained so code written against it keeps working when a real collector lands.",
         Arity::Fixed(0),
         tier::PURE,
         |_args| {
-            // In Stage 1 (Rc), there's no real GC to trigger.
-            // The VM increments gc_stats.collections_count when this runs.
+            // @ai-caution: [docs-drift] This really is a no-op, and `(gc-stats)`'s
+            // `collections` really is always 0.
+            //
+            // Both the doc string above and the comment here previously said the
+            // VM "increments gc_stats.collections_count when this runs". It does
+            // not, and never did: `collections_count` is declared
+            // (`vm.rs:214`), copied to the editor (`runtime.rs:944`) and
+            // reported by `(gc-stats)`, `gc_stats_alist` and the `introspect`
+            // MCP tool — but nothing anywhere increments it. Verified 2026-08 by
+            // grepping every write to the field.
+            //
+            // If you add a real collector, increment it there and delete this
+            // note. Do NOT "fix" the discrepancy by incrementing the counter
+            // here: a counter that rises without a collection is a worse lie
+            // than one that stays at zero, because it reads as evidence that
+            // collection is happening.
             Ok(Value::Void)
         },
     );
