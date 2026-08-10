@@ -479,6 +479,10 @@ pub(crate) fn retry_on_transient_sqlite_busy<T, E: std::fmt::Display>(
 /// 5) — kept in sync here.
 const DEFAULT_BUSY_RETRY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(45);
 
+/// sled's exclusive-lock retry budget — deliberately much shorter than the
+/// sqlite one above. See `transient_retry_budget` for why the two differ.
+const SLED_LOCK_RETRY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Test-only seam: the "gives up eventually" tests need a SHORT deadline to
 /// stay fast (a persistent-contention closure genuinely runs for the entire
 /// budget by construction — that's the property being tested), so the real
@@ -498,9 +502,48 @@ fn retry_on_transient_sqlite_busy_with_deadline<T, E: std::fmt::Display>(
     f: impl Fn() -> Result<T, E>,
     deadline: std::time::Duration,
 ) -> Result<T, E> {
-    fn is_transient_busy_message(s: &str) -> bool {
+    /// How long a given transient error is worth retrying for.
+    ///
+    /// `None` = not transient, fail immediately.
+    ///
+    /// @ai-caution: [store-contention] sled was previously absent here, and the
+    /// asymmetry was invisible: sqlite contention got the full 45s budget while
+    /// sled's `could not acquire lock … WouldBlock … Resource temporarily
+    /// unavailable` matched none of the sqlite wording, so it was classified
+    /// permanent and failed on the FIRST attempt. That surfaced as a flaky
+    /// test rather than a bug report — sled releases its exclusive directory
+    /// lock during drop, and that release is not synchronous, so every
+    /// sled->sqlite migration path (seed a store, drop it, reopen the same
+    /// path: `migrate.rs`'s `seed_sled`, `migrate_sled_to_sqlite`,
+    /// `kb_open_instance_store`, ~14 sites) loses the race on a loaded runner.
+    /// `migrate_sled_to_sqlite` does the same reopen in PRODUCTION, so this was
+    /// never test-only.
+    ///
+    /// sled gets a deliberately SHORTER budget than sqlite. sqlite's is a
+    /// many-writer busy signal worth waiting out; sled's lock is *exclusive*,
+    /// so a lock still held after a few seconds means another live handle
+    /// exists — a real error the caller needs to see, not something to block on
+    /// for 45s. Long enough to absorb a drop-release race, short enough that a
+    /// genuinely-held lock still fails fast with its own clear message.
+    fn transient_retry_budget(
+        s: &str,
+        deadline: std::time::Duration,
+    ) -> Option<std::time::Duration> {
         let s = s.to_ascii_lowercase();
-        s.contains("database is locked") || s.contains("sqlite_busy") || s.contains("busy")
+        if s.contains("database is locked") || s.contains("sqlite_busy") || s.contains("busy") {
+            return Some(deadline);
+        }
+        // sled 0.34's exclusive-dir-lock contention, in the spellings it
+        // actually produces (the io::Error kind, its message, and the errno
+        // text) plus sled's own wording.
+        if s.contains("wouldblock")
+            || s.contains("would block")
+            || s.contains("resource temporarily unavailable")
+            || s.contains("could not acquire lock")
+        {
+            return Some(std::cmp::min(deadline, SLED_LOCK_RETRY_DEADLINE));
+        }
+        None
     }
     // Poor-man's per-call entropy (a stack address, like `run_with_busy_retry`'s
     // `self as *const Self as u64`) -- no need for a real RNG crate just to
@@ -510,17 +553,21 @@ fn retry_on_transient_sqlite_busy_with_deadline<T, E: std::fmt::Display>(
     let mut attempt: u32 = 0;
     loop {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&f));
-        let is_retryable = match &outcome {
-            Ok(Err(e)) => is_transient_busy_message(&e.to_string()),
+        // The budget is per-ERROR, not per-call: sqlite contention is worth the
+        // full deadline, sled's exclusive lock is not (see
+        // `transient_retry_budget`). Recomputed each attempt because a retry can
+        // legitimately surface a different error than the one that started it.
+        let retry_budget = match &outcome {
+            Ok(Err(e)) => transient_retry_budget(&e.to_string(), deadline),
             Err(payload) => payload
                 .downcast_ref::<String>()
                 .map(|s| s.as_str())
                 .or_else(|| payload.downcast_ref::<&str>().copied())
-                .map(is_transient_busy_message)
-                .unwrap_or(false),
-            Ok(Ok(_)) => false,
+                .and_then(|m| transient_retry_budget(m, deadline)),
+            Ok(Ok(_)) => None,
         };
-        if !is_retryable || start.elapsed() >= deadline {
+        let expired = retry_budget.is_none_or(|budget| start.elapsed() >= budget);
+        if expired {
             return match outcome {
                 Ok(result) => result,
                 Err(payload) => std::panic::resume_unwind(payload),

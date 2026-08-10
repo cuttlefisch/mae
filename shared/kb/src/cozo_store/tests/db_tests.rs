@@ -78,6 +78,67 @@ mod retry_on_transient_sqlite_busy_tests {
         );
     }
 
+    /// sled's contention error, in the spelling sled 0.34 actually produces.
+    /// Before the classifier was widened this matched none of the sqlite
+    /// wording, so it was treated as permanent and failed on the FIRST
+    /// attempt while sqlite got a 45s budget for contention identical in kind.
+    /// That is the flake behind every sled->sqlite migration test: sled's
+    /// exclusive dir lock is released during drop, not synchronously, so a
+    /// seed-drop-reopen sequence loses the race on a loaded runner.
+    #[test]
+    fn a_sled_lock_contention_error_is_retried_not_treated_as_permanent() {
+        for message in [
+            "could not acquire lock on \"/tmp/x/db\": WouldBlock",
+            "Os { code: 11, kind: WouldBlock, message: \"Resource temporarily unavailable\" }",
+            "resource temporarily unavailable",
+        ] {
+            let attempts = AtomicU32::new(0);
+            let result: Result<&str, String> = retry_on_transient_sqlite_busy(|| {
+                let n = attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                if n < 4 {
+                    return Err(message.to_string());
+                }
+                Ok("ok")
+            });
+            assert_eq!(
+                result.unwrap(),
+                "ok",
+                "sled contention must be retried, not classified permanent: {message}"
+            );
+            assert_eq!(attempts.load(Ordering::SeqCst), 4, "for: {message}");
+        }
+    }
+
+    /// The negative case, and the one that constrains the fix: a lock that is
+    /// GENUINELY held must still fail — and fail fast. sled's lock is
+    /// exclusive, so persistent contention means another live handle exists,
+    /// which the caller needs to be told about rather than blocked on for the
+    /// full sqlite budget. Asserts the *bound*, not just the failure: the whole
+    /// point of giving sled its own budget is that it does not inherit 45s.
+    #[test]
+    fn a_persistently_held_sled_lock_still_fails_and_does_not_wait_out_the_sqlite_budget() {
+        let attempts = AtomicU32::new(0);
+        let started = std::time::Instant::now();
+        let result: Result<&str, String> = retry_on_transient_sqlite_busy(|| {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            Err("could not acquire lock: WouldBlock".to_string())
+        });
+        let elapsed = started.elapsed();
+        assert!(
+            result.is_err(),
+            "a genuinely held lock must not report success"
+        );
+        assert!(
+            attempts.load(Ordering::SeqCst) > 1,
+            "it should have retried at least once before giving up"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(20),
+            "sled contention waited {elapsed:?} — it is inheriting sqlite's 45s budget \
+             instead of its own much shorter one"
+        );
+    }
+
     /// The NEW shape this fix specifically closes: the busy condition
     /// surfacing as a normal `Err`, not a panic (cozo's `initialize()` /
     /// `load_last_ids()` internal step, which propagates via `?` rather
