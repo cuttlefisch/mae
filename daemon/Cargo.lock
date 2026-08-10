@@ -2882,7 +2882,7 @@ dependencies = [
 
 [[package]]
 name = "mae-effect-sandbox"
-version = "0.14.94"
+version = "0.14.96"
 
 [[package]]
 name = "mae-kb"
