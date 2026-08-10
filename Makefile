@@ -59,6 +59,22 @@ RELEASE_BIN  := $(TARGET_DIR)/release/$(BINARY)
 RELEASE_SHIM := $(TARGET_DIR)/release/$(SHIM_BINARY)
 DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 
+# @ai-caution: [build-variants] The GUI and TUI builds are the SAME cargo target
+# and so land on the same `$(RELEASE_BIN)` name. `target/release/mae` was
+# therefore whichever variant was built last, silently — `make build` then
+# `make test-scheme-crdt` (which depends on `build-tui`) left a TUI binary where
+# the GUI one had been, with nothing to say so. That is the precise staleness
+# `scripts/verify-binary.sh` exists to catch, arriving through the build system
+# itself.
+#
+# Fixed by giving the TUI variant its own stable name, NOT a second target dir:
+# cargo already keeps both feature-keyed artifact sets in one `target/` (measured:
+# alternating `--features gui` costs ~0.3s once each has been built, not a
+# rebuild), so a second dir would duplicate every dependency artifact to solve a
+# problem cargo has already solved — and target-dir bloat is a recurring cost in
+# this repo. Only the final binary name ever collided.
+TUI_RELEASE_BIN := $(TARGET_DIR)/release/$(BINARY)-tui
+
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
@@ -100,9 +116,19 @@ all: build
 build:
 	$(CARGO) build --release $(FEAT_FLAG)
 
-## build-tui: terminal-only release build (no skia dependency)
+## build-tui: terminal-only release build (no skia) -> $(TUI_RELEASE_BIN)
+## Cargo writes every variant to the same $(RELEASE_BIN) name, so the TUI build
+## is renamed immediately. Dependency artifacts stay shared, so a later
+## `make build` re-links the GUI binary in ~0.4s rather than rebuilding it.
+## Note the `mv`: cargo writes this build to $(RELEASE_BIN), so afterwards that
+## path is ABSENT rather than holding a TUI binary under the GUI name. Absent is
+## the point — it is honest, where the old behaviour was silently wrong. `make
+## build` restores it in ~0.4s (measured: a re-link, not a rebuild, because the
+## feature-keyed artifacts are still cached).
 build-tui:
 	$(CARGO) build --release
+	@mv $(RELEASE_BIN) $(TUI_RELEASE_BIN)
+	@echo "TUI binary -> $(TUI_RELEASE_BIN)  ($(RELEASE_BIN) now absent; 'make build' re-links it)"
 
 ## build-daemon: build the daemon binary (CozoDB+SQLite)
 build-daemon:
@@ -172,7 +198,7 @@ install: build manual-kb practices-kb devpractices-kb adr-kb
 ## install-tui: terminal-only install (no skia dependency)
 install-tui: build-tui
 	@mkdir -p $(PREFIX)
-	@install -m 755 $(RELEASE_BIN) $(PREFIX)/$(BINARY)
+	@install -m 755 $(TUI_RELEASE_BIN) $(PREFIX)/$(BINARY)
 	@install -m 755 $(RELEASE_SHIM) $(PREFIX)/$(SHIM_BINARY)
 	@echo "Installed $(BINARY) -> $(PREFIX)/$(BINARY) (terminal-only)"
 	@echo "Installed $(SHIM_BINARY) -> $(PREFIX)/$(SHIM_BINARY)"
@@ -231,6 +257,15 @@ install-all: install install-daemon-service
 
 ## uninstall: remove installed binaries, desktop entries, icon, and services
 uninstall:
+	@# The KB stores go FIRST, and only via the archive-verify-then-remove path.
+	@# `install` copies four CozoDB stores into $(DATADIR)/mae; uninstall used to
+	@# remove binaries, desktop entry, icon and modules and silently orphan all
+	@# four. Deleting them outright would be the wrong correction — a KB is user
+	@# data and a customised one may exist nowhere else — so they are archived and
+	@# the archive is verified before anything is removed. A failure there leaves
+	@# every original in place and aborts the uninstall, deliberately: losing the
+	@# binaries is recoverable, losing the KBs is not.
+	@./scripts/backup-kbs.sh
 	@rm -f $(PREFIX)/$(BINARY)
 	@rm -f $(PREFIX)/$(SHIM_BINARY)
 	@rm -f $(PREFIX)/mae-daemon
@@ -265,7 +300,7 @@ run:
 
 ## test: run all workspace tests (including GUI)
 test:
-	$(CARGO) test --workspace
+	$(CARGO) test --workspace $(FEAT_FLAG)
 
 ## test-effects: run the suite and FAIL if it modified the working tree.
 ## The effect sandbox (shared/effect-sandbox) is deny-by-default, but only for
@@ -299,7 +334,7 @@ test-tui:
 ## not a logic bug. Requires `cargo install cargo-nextest`. Prefer
 ## `test-nextest-release` if you hit contention locally.
 test-nextest:
-	$(CARGO) nextest run --workspace
+	$(CARGO) nextest run --workspace $(FEAT_FLAG)
 
 ## test-nextest-release: as test-nextest, but --release --features gui --
 ## the exact configuration CI's `stable / test` leg uses, and the one
@@ -358,7 +393,7 @@ verify:
 	@echo "=== Check (both workspaces) ==="
 	@$(MAKE) --no-print-directory check
 	@echo "=== Test ==="
-	$(CARGO) test --workspace 2>&1 | tee /dev/stderr | grep "^test result:" | awk -F'[; ]' 'BEGIN{p=0;f=0} {p+=$$4;f+=$$7} END{printf "\n=== %d passed, %d failed ===\n",p,f}'
+	$(CARGO) test --workspace $(FEAT_FLAG) 2>&1 | tee /dev/stderr | grep "^test result:" | awk -F'[; ]' 'BEGIN{p=0;f=0} {p+=$$4;f+=$$7} END{printf "\n=== %d passed, %d failed ===\n",p,f}'
 
 ## fmt: format all Rust sources in place (BOTH workspaces)
 fmt:
@@ -376,7 +411,7 @@ fmt-daemon:
 
 ## clippy: run linter (BOTH workspaces)
 clippy:
-	$(CARGO) clippy --workspace --all-targets -- -D warnings
+	$(CARGO) clippy --workspace --all-targets $(FEAT_FLAG) -- -D warnings
 	cd daemon && $(CARGO) clippy --all-targets -- -D warnings
 
 ## clippy-daemon: run linter on daemon workspace only
@@ -400,13 +435,13 @@ pre-commit: fmt-check clippy clippy-daemon code-map-check heavy-e2e-check
 
 ## ci: run the full CI pipeline locally (fmt + clippy + check + test + scheme tests)
 ci: fmt-check
-	$(CARGO) clippy --workspace --all-targets -- -D warnings
-	$(CARGO) check --workspace --all-targets
+	$(CARGO) clippy --workspace --all-targets $(FEAT_FLAG) -- -D warnings
+	$(CARGO) check --workspace --all-targets $(FEAT_FLAG)
 	$(MAKE) test
 	@echo "==> Scheme editor tests..."
-	./target/debug/mae --test tests/editor/
+	$(DEBUG_BIN) --test tests/editor/
 	@echo "==> Config validation..."
-	./target/debug/mae --check-config
+	$(DEBUG_BIN) --check-config
 	@echo "==> Code-map freshness..."
 	cd tools/code-map && $(CARGO) run --release -- --workspace-root ../.. --check
 	@echo "CI passed ✓"
@@ -418,7 +453,7 @@ ci-all: ci test-daemon clippy-daemon
 ## ci-extended: thorough CI — run before opening a PR (ci + CRDT tests + docker smoke)
 ci-extended: ci
 	@echo "==> Scheme CRDT tests..."
-	./target/debug/mae --test tests/crdt/
+	$(DEBUG_BIN) --test tests/crdt/
 	@echo "==> Docker smoke test..."
 	$(MAKE) docker-smoke
 	@echo "==> Docker new-user test..."
@@ -488,7 +523,7 @@ setup-dev:
 
 ## check-config: validate init.scm + config.toml without launching the editor
 check-config: build-tui
-	$(RELEASE_BIN) --check-config
+	$(TUI_RELEASE_BIN) --check-config
 
 ## self-test: run AI-driven e2e self-test headless (requires AI provider)
 self-test: build
@@ -784,19 +819,19 @@ install-daemon-service: install-daemon
 
 ## test-scheme: run Scheme test files locally (pass TEST_PATH=path)
 test-scheme: build-tui
-	$(RELEASE_BIN) --test $(or $(TEST_PATH),tests/collab-e2e/)
+	$(TUI_RELEASE_BIN) --test $(or $(TEST_PATH),tests/collab-e2e/)
 
 ## test-scheme-crdt: run CRDT/sync Scheme tests
 test-scheme-crdt: build-tui
-	$(RELEASE_BIN) --test tests/crdt/
+	$(TUI_RELEASE_BIN) --test tests/crdt/
 
 ## test-scheme-editor: run editor feature Scheme tests
 test-scheme-editor: build-tui
-	$(RELEASE_BIN) --test tests/editor/
+	$(TUI_RELEASE_BIN) --test tests/editor/
 
 ## test-scheme-collab-local: run collab state transition tests (no server needed)
 test-scheme-collab-local: build-tui
-	$(RELEASE_BIN) --test tests/collab-local/
+	$(TUI_RELEASE_BIN) --test tests/collab-local/
 
 # ADR-044: independent, looser backstop for the *script* hanging before it ever
 # reaches the daemon-TTL protection inside scripts/lib/e2e-daemon-harness.sh
@@ -804,34 +839,47 @@ test-scheme-collab-local: build-tui
 # belt-and-suspenders cap on a `make test-collab-*-e2e` invocation itself.
 E2E_SCRIPT_TIMEOUT := 750
 
+# principle #13: coreutils `timeout` does not exist on stock macOS, so a bare
+# `timeout` makes these targets fail on one of the two platforms MAE is
+# developed on daily. Every script these targets wrap ALREADY resolves it
+# correctly (`scripts/lib/e2e-daemon-harness.sh:37` and each collab-*-e2e.sh:
+# `command -v timeout || command -v gtimeout || true`) — only the Makefile
+# never did. Same resolution here, one place, rather than a third spelling.
+#
+# Degrading to no outer cap when neither exists is deliberate and safe: this
+# wrapper is explicitly the belt-and-suspenders layer described above, and each
+# script still enforces its own daemon TTL internally.
+TIMEOUT_BIN := $(shell command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)
+E2E_TIMEOUT := $(if $(TIMEOUT_BIN),$(TIMEOUT_BIN) -k 30 $(E2E_SCRIPT_TIMEOUT),)
+
 ## test-collab-mtls-e2e: single-host trusted-peer mTLS e2e (real daemon + editor)
 test-collab-mtls-e2e: build-tui build-daemon
-	MAE_BIN=$(RELEASE_BIN) MAE_DAEMON_BIN=$(CURDIR)/daemon/target/release/mae-daemon \
-		timeout -k 30 $(E2E_SCRIPT_TIMEOUT) scripts/collab-mtls-e2e.sh
+	MAE_BIN=$(TUI_RELEASE_BIN) MAE_DAEMON_BIN=$(CURDIR)/daemon/target/release/mae-daemon \
+		$(E2E_TIMEOUT) scripts/collab-mtls-e2e.sh
 
 ## test-collab-membership-e2e: two-editor per-KB membership enforcement e2e
 test-collab-membership-e2e: build-tui build-daemon
-	MAE_BIN=$(RELEASE_BIN) MAE_DAEMON_BIN=$(CURDIR)/daemon/target/release/mae-daemon \
-		timeout -k 30 $(E2E_SCRIPT_TIMEOUT) scripts/collab-membership-e2e.sh
+	MAE_BIN=$(TUI_RELEASE_BIN) MAE_DAEMON_BIN=$(CURDIR)/daemon/target/release/mae-daemon \
+		$(E2E_TIMEOUT) scripts/collab-membership-e2e.sh
 
 ## test-collab-encrypted-e2e: ADR-037 E2E content-encryption lifecycle e2e
 test-collab-encrypted-e2e: build-tui build-daemon
-	MAE_BIN=$(RELEASE_BIN) MAE_DAEMON_BIN=$(CURDIR)/daemon/target/release/mae-daemon \
-		timeout -k 30 $(E2E_SCRIPT_TIMEOUT) scripts/collab-encrypted-e2e.sh
+	MAE_BIN=$(TUI_RELEASE_BIN) MAE_DAEMON_BIN=$(CURDIR)/daemon/target/release/mae-daemon \
+		$(E2E_TIMEOUT) scripts/collab-encrypted-e2e.sh
 
 ## test-collab-p2p-mesh-e2e: ADR-025 two-daemon P2P mesh e2e (no central hub)
 test-collab-p2p-mesh-e2e: build-tui build-daemon
-	MAE_BIN=$(RELEASE_BIN) MAE_DAEMON_BIN=$(CURDIR)/daemon/target/release/mae-daemon \
-		timeout -k 30 $(E2E_SCRIPT_TIMEOUT) scripts/collab-p2p-mesh-e2e.sh
+	MAE_BIN=$(TUI_RELEASE_BIN) MAE_DAEMON_BIN=$(CURDIR)/daemon/target/release/mae-daemon \
+		$(E2E_TIMEOUT) scripts/collab-p2p-mesh-e2e.sh
 
 ## test-collab-e2e-all: all trusted-peer e2e tests (mTLS + membership + encrypted + mesh)
 test-collab-e2e-all: test-collab-mtls-e2e test-collab-membership-e2e test-collab-encrypted-e2e test-collab-p2p-mesh-e2e
 
 ## test-scheme-all: run all local Scheme tests (crdt + editor + collab-local)
 test-scheme-all: build-tui
-	$(RELEASE_BIN) --test tests/crdt/
-	$(RELEASE_BIN) --test tests/editor/
-	$(RELEASE_BIN) --test tests/collab-local/
+	$(TUI_RELEASE_BIN) --test tests/crdt/
+	$(TUI_RELEASE_BIN) --test tests/editor/
+	$(TUI_RELEASE_BIN) --test tests/collab-local/
 
 ## test-scheme-ci: same as test-scheme-all (CI entry point)
 test-scheme-ci: test-scheme-all

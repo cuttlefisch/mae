@@ -36,12 +36,26 @@ status=0
 # A check that cannot be performed must FAIL, not pass quietly. This script's
 # entire job is to stop you testing a stale binary, so "I couldn't tell" is the
 # one outcome that must never be reported as OK.
+# `$2...` are CANDIDATE build paths — a running process matching ANY of them is
+# fresh. `mae` has two variants that are the same cargo target under different
+# feature sets (GUI -> target/release/mae, TUI -> target/release/mae-tui), and a
+# contributor may legitimately be running either. Comparing against only one
+# would report the other as stale and send them to rebuild something that is
+# already current — a false alarm here trains people to ignore this script,
+# which costs more than the staleness it exists to catch.
 check() {
     name="$1"
-    built="$2"
+    shift
+    candidates="$*"
+    built=""
+    for c in $candidates; do
+        [ -f "$c" ] && { built="$c"; break; }
+    done
+
     pids="$(pgrep -x "$name" 2>/dev/null || pgrep "$name" 2>/dev/null || true)"
 
-    if [ ! -f "$built" ]; then
+    if [ -z "$built" ]; then
+        built="$candidates"
         if [ -n "$pids" ]; then
             # The dangerous case: something is running and there is nothing to
             # compare it against, so staleness is unknowable.
@@ -56,7 +70,6 @@ check() {
         return
     fi
 
-    built_hash="$(hash_of "$built")"
     if [ -z "$pids" ]; then
         echo "  - $name: not running (nothing to be stale)"
         return
@@ -69,10 +82,15 @@ check() {
             continue
         fi
         run_hash="$(hash_of "$exe")"
-        if [ "$run_hash" = "$built_hash" ]; then
-            echo "  ✓ $name pid $pid matches the fresh build"
+        matched=""
+        for c in $candidates; do
+            [ -f "$c" ] || continue
+            [ "$run_hash" = "$(hash_of "$c")" ] && { matched="$c"; break; }
+        done
+        if [ -n "$matched" ]; then
+            echo "  ✓ $name pid $pid matches the fresh build ($matched)"
         else
-            echo "  ⚠ $name pid $pid ($exe) != fresh build ($built)"
+            echo "  ⚠ $name pid $pid ($exe) != any fresh build ($candidates)"
             echo "      → run 'make install' and RESTART $name before retesting"
             status=1
         fi
@@ -80,7 +98,7 @@ check() {
 }
 
 echo "verify-binary: comparing running processes to target/release builds…"
-check mae        "target/release/mae"
+check mae        "target/release/mae" "target/release/mae-tui"
 check mae-daemon "daemon/target/release/mae-daemon"
 
 if [ "$status" -ne 0 ]; then

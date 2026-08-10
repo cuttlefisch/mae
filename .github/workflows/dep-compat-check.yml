@@ -36,7 +36,15 @@ jobs:
 
       - name: Check compilation
         id: check
-        run: cargo check --workspace 2>&1 | tee /tmp/sha2-check.log; echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+        # `--features gui`: this gate decides whether a sha2/hmac bump is safe to
+        # take, and without the feature the `mae` crate's gui-gated code is never
+        # compiled — a bump that broke it would be reported as compatible.
+        # No `install-gui-deps` step is added: `--workspace` ALREADY compiles the
+        # mae-gui crate (and therefore skia) on this runner today and passes, so
+        # the deps are evidently satisfiable here. If this leg ever starts failing
+        # on missing system libraries, add `- uses: ./.github/actions/install-gui-deps`
+        # as every other GUI-compiling job does, rather than dropping the feature.
+        run: cargo check --workspace --features gui 2>&1 | tee /tmp/sha2-check.log; echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Report success
         if: steps.check.outputs.exit_code == '0'
