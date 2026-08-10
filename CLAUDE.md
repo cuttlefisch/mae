@@ -81,7 +81,7 @@ direction **backwards** for five leaf crates.
 
 | Crate | Purpose | Key Dependencies |
 |---|---|---|
-| `mae-kb` | Knowledge base — CozoDB graph store, typed relationships, org parser, federation | `cozo`, `tree-sitter`, `tree-sitter-org` |
+| `mae-kb` | Knowledge base — CozoDB graph store, typed relationships, org parser, federation | `cozo`, `ndarray`, `notify`; intra-repo `mae-sync`, `mae-mcp` |
 | `mae-sync` | Collaborative state — yrs CRDT, ropey bridge, encoding helpers | `yrs`, `serde`, `base64` |
 | `mae-mcp` | MCP server — Unix/TCP, JSON-RPC, multi-client, stdio shim, transport-generic I/O | `tokio`, `serde_json` |
 
@@ -264,8 +264,11 @@ the previously-orphaned `mae-canvas` crate — background-threaded force layout
 (`crates/mae/src/graph_layout_bridge.rs`), click-to-navigate via `DrivenWindow`'s companion-window
 strategy, follow-current-node, opt-in physics animation, full Scheme+MCP parity
 (`kb-graph-view-*`). A shared idle-dispatch mechanism (`Editor::on_idle_tick`,
-`crates/core/src/editor/idle_ops.rs`) closes ROADMAP #83 (which-key idle delay) and now also
-drives a new KB-link hover preview popup. A freshly opened graph window now computes an initial
+`crates/core/src/editor/idle_ops.rs`) closes the **first half** of issue #83 — `which_key_idle_delay`
+now reaches an event-loop timer instead of being a registered option with no consumer — and now also
+drives a new KB-link hover preview popup. #83's **second half is not started**: there is no
+`which-key-display` option and no floating/centered popup mode (`grep which_key_display` → nothing).
+Do not read this paragraph as closing #83. A freshly opened graph window now computes an initial
 zoom-to-fit level (`graph_view::zoom_to_fit`, applied once in `Editor::graph_view_reflatten_window`
 only when a window's `Viewport` is first created) instead of always defaulting to a fixed `zoom:
 1.0` regardless of diagram size — previously a dense chord/force diagram opened way too zoomed in
@@ -745,4 +748,7 @@ is the authoritative source for the Scheme and command surfaces. Do not hand-mai
 - **Declarative project config:** `.project` in repo root (for declarative-project-mode in Emacs)
 - **ropey:** https://github.com/cessen/ropey — rope data structure for buffer management
 - **ratatui:** https://github.com/ratatui/ratatui — terminal UI framework
-- **tree-sitter-org:** org-mode grammar for tree-sitter
+- **tree-sitter-org:** org-mode grammar for tree-sitter — a *reference*, NOT a dependency.
+  MAE's org parser (`shared/kb/src/org.rs`) is hand-rolled; that file's header notes the API
+  is shaped so this grammar could be swapped in later. `tree-sitter-org` appears in no
+  `Cargo.toml` in this repo, and `mae-kb` depends on neither it nor `tree-sitter` (#657).
