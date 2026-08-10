@@ -232,6 +232,32 @@ jobs:
           cargo nextest run --workspace --release --features gui -E "not ($HEAVY_FILTER)"
           cargo test --doc --workspace --release --features gui
 
+      # The suite must not write into the checkout. The effect sandbox
+      # (shared/effect-sandbox) is deny-by-default but only for operations that
+      # were taught to consult it, and that enumeration has leaked twice: git
+      # mutations via `Editor::git_root()`'s `current_dir()` fallback, and
+      # `crates/core/export.html` via `org_export_to`'s bare relative path.
+      #
+      # Both were invisible here for the same reason — CI never looked. A
+      # disposable checkout hides the damage, `git push` fails without
+      # credentials, and the dispatch test asserts only that a dispatch arm
+      # exists, never that a command succeeded. So CI stayed green while a
+      # contributor's uncommitted work was being destroyed locally.
+      #
+      # A dirty tree after the suite means a test performed a real effect on
+      # the repository. Fix the write, not this gate.
+      - name: Test suite must leave the working tree clean
+        if: matrix.step == 'test' && needs.changes.outputs.version-bump-only != 'true'
+        run: |
+          dirty="$(git status --porcelain)"
+          if [ -n "$dirty" ]; then
+            echo "::error::The test suite modified the working tree — a test performed a real effect on the repo."
+            echo "$dirty"
+            git diff --stat || true
+            exit 1
+          fi
+          echo "working tree clean after the suite"
+
       # Also gated on version-bump-only. Every OTHER gate in this matrix job is
       # scoped to `matrix.step == 'test'`, so the clippy leg used to run a full
       # workspace lint on a commit that changed only version strings: 13m53s on

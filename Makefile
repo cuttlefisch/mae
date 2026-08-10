@@ -73,7 +73,7 @@ ICON_FILE    := assets/mae.svg
 	all build build-tui build-daemon dev run \
 	install install-tui install-all install-upgrade install-vscode uninstall \
 	install-daemon install-daemon-service \
-	test test-tui test-daemon test-nextest test-nextest-release test-daemon-nextest \
+	test test-tui test-daemon test-effects test-nextest test-nextest-release test-daemon-nextest \
 	test-scheme test-scheme-all test-scheme-ci test-scheme-crdt test-scheme-editor \
 	test-scheme-collab-local test-scheme-r7rs \
 	test-collab-e2e-all test-collab-mtls-e2e test-collab-membership-e2e \
@@ -266,6 +266,17 @@ run:
 ## test: run all workspace tests (including GUI)
 test:
 	$(CARGO) test --workspace
+
+## test-effects: run the suite and FAIL if it modified the working tree.
+## The effect sandbox (shared/effect-sandbox) is deny-by-default, but only for
+## operations that were taught to consult it — an enumeration, and enumerations
+## leak. Two did: `Editor::git_root()`'s `current_dir()` fallback (which ran
+## `git stash`/`reset`/`push` on the contributor's own tree) and
+## `org_export_to`'s bare relative path (which wrote crates/core/export.html on
+## every run). Neither was caught by a guard; both would have been caught by
+## looking at `git status` afterwards, which nothing did. This is that look.
+test-effects:
+	@./scripts/check-test-effects.sh $(MAKE) --no-print-directory test
 
 ## test-daemon: run daemon workspace tests
 test-daemon:

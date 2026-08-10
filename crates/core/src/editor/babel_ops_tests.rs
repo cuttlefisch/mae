@@ -378,4 +378,77 @@ gamma body two
             "re-running the same block must replace, not stack, the results block — got:\n{after_second}"
         );
     }
+
+    const ORG_DOC: &str = "#+title: T\n* Heading\nbody\n";
+
+    /// The attacker here is the *test suite itself*. Exporting a buffer with no
+    /// file path used to fall back to a bare relative `export.html`, which
+    /// resolves against the process cwd — the crate root under `cargo test`. So
+    /// `all_builtin_commands_dispatch`, which dispatches every builtin against a
+    /// fresh `Editor`, wrote `crates/core/export.html` into the contributor's
+    /// own checkout on every run. The effect sandbox never saw it: this is a
+    /// plain `fs::write`, not an operation that consults the guard.
+    ///
+    /// The oracle is the **effect** — that no file appeared — not the returned
+    /// message, because the message was never the thing doing damage.
+    #[test]
+    fn export_without_a_file_path_writes_nothing_to_the_cwd() {
+        for (ext, exercise) in [
+            ("export.html", 0usize),    // org_export_html
+            ("export.md", 1),           // org_export_markdown
+            ("export-subtree.html", 2), // org_export_subtree
+        ] {
+            let victim = std::path::Path::new(ext);
+            let existed_before = victim.exists();
+
+            let mut editor = editor_with_block(ORG_DOC);
+            assert!(
+                editor.buffers[0].file_path().is_none(),
+                "precondition: the buffer must have no path"
+            );
+            match exercise {
+                0 => {
+                    let msg = editor.org_export_html();
+                    assert!(
+                        msg.to_lowercase().contains("no path"),
+                        "refusal must say why; got: {msg}"
+                    );
+                }
+                1 => {
+                    editor.org_export_markdown();
+                }
+                _ => {
+                    editor.org_export_subtree();
+                }
+            }
+
+            assert_eq!(
+                victim.exists(),
+                existed_before,
+                "exporting a pathless buffer created `{ext}` relative to the cwd — the \
+                 bare-path fallback is back. See Editor::export_output_path."
+            );
+        }
+    }
+
+    /// The other half of the round trip: a buffer that *does* have a path must
+    /// still export next to it. A refusal that also broke the working case
+    /// would trade one bug for another.
+    #[test]
+    fn export_with_a_file_path_still_writes_next_to_that_file() {
+        let (mut editor, dir) = editor_in_temp_dir(ORG_DOC, "export-path-roundtrip");
+        let msg = editor.org_export_html();
+        let expected = dir.join("notes.html");
+        assert!(
+            expected.is_file(),
+            "expected an export at {} — got status: {msg}",
+            expected.display()
+        );
+        let written = std::fs::read_to_string(&expected).expect("read export");
+        assert!(
+            written.contains("Heading"),
+            "the export must carry the document's own content, not an empty shell"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
