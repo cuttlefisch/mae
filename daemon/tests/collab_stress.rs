@@ -12,6 +12,9 @@ use mae_sync::encoding::update_to_base64;
 use mae_sync::text::TextSync;
 use tokio::io::BufReader;
 
+mod wait_helper;
+use wait_helper::WAIT;
+
 // --- Env gate ---
 
 fn should_run() -> bool {
@@ -266,8 +269,12 @@ async fn stress_sustained_session_3_peers() {
         c3.send_update("stress-3peer.txt", &update3).await;
     }
 
-    // Give the server a moment to process all updates.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    wait_until!("all three peers to converge", WAIT, {
+        let a = c1.content("stress-3peer.txt").await;
+        let b = c2.content("stress-3peer.txt").await;
+        let c = c3.content("stress-3peer.txt").await;
+        a == b && b == c
+    });
 
     // Drain notifications from all clients.
     c1.drain_notifications().await;
@@ -344,8 +351,13 @@ async fn stress_large_document_concurrent_edits() {
         c2.send_update("stress-large.txt", &update).await;
     }
 
-    // Wait for processing.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // Both halves of the oracle: agreement AND the full expected length. Two
+    // clients can agree trivially while the server is still mid-apply.
+    wait_until!("clients to agree on the full large doc", WAIT, {
+        let a = c1.content("stress-large.txt").await;
+        let b = c2.content("stress-large.txt").await;
+        a == b && a.chars().count() == initial_len + 2 * EDITS
+    });
     c1.drain_notifications().await;
     c2.drain_notifications().await;
 
@@ -415,16 +427,31 @@ async fn stress_rapid_connect_disconnect() {
                 transient.send_update("stress-churn.txt", &update).await;
             }
 
-            // Small delay to let the server process before disconnect.
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            // The point is that the server has APPLIED this client's edits before
+            // it goes away — so wait for its last marker to be visible, not for
+            // 50ms to pass.
+            let last_marker = format!("[c{}r{}e{}]", client_idx, cycle, EDITS_PER_CYCLE - 1);
+            wait_until!(
+                "the server to apply this transient client's edits before it disconnects",
+                WAIT,
+                transient
+                    .content("stress-churn.txt")
+                    .await
+                    .contains(&last_marker)
+            );
 
             // Disconnect by dropping.
             transient.disconnect().await;
         }
     }
 
-    // Wait for all server processing to complete.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    wait_until!("every transient client's edits to be present", WAIT, {
+        let c = stable.content("stress-churn.txt").await;
+        (0..CYCLES).all(|cy| {
+            (0..TRANSIENT_CLIENTS)
+                .all(|ci| c.contains(&format!("[c{}r{}e{}]", ci, cy, EDITS_PER_CYCLE - 1)))
+        })
+    });
     stable.drain_notifications().await;
 
     let final_content = stable.content("stress-churn.txt").await;
@@ -496,8 +523,11 @@ async fn stress_undo_under_concurrent_load() {
         cb.send_update("stress-undo.txt", &update).await;
     }
 
-    // Wait for server to process all updates.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    wait_until!("both clients' edits to reach the server", WAIT, {
+        let c = ca.content("stress-undo.txt").await;
+        c.chars().filter(|&ch| ch == 'A').count() == EDITS
+            && c.chars().filter(|&ch| ch == 'B').count() == EDITS
+    });
 
     // Sync client A with server state before undoing.
     let server_state = ca.full_state("stress-undo.txt").await;
@@ -523,8 +553,16 @@ async fn stress_undo_under_concurrent_load() {
         }
     }
 
-    // Wait for undo updates to propagate.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // Wait for exactly what the undos actually did — `EDITS - undo_successes`
+    // A's left — rather than assuming every undo succeeded. An oracle stronger
+    // than the code guarantees would hang here instead of failing, which is the
+    // failure mode this whole issue is about.
+    let expected_a = EDITS - undo_successes;
+    wait_until!("A's undos to propagate while B's edits survive", WAIT, {
+        let c = ca.content("stress-undo.txt").await;
+        c.chars().filter(|&ch| ch == 'B').count() == EDITS
+            && c.chars().filter(|&ch| ch == 'A').count() == expected_a
+    });
     ca.drain_notifications().await;
     cb.drain_notifications().await;
 
