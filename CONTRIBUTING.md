@@ -47,7 +47,7 @@ make build-tui       # TUI-only build (no Skia deps)
 ### Verify Your Setup
 
 ```sh
-make ci              # fmt check + clippy + cargo check + tests (excludes GUI)
+make ci              # fmt check + clippy + cargo check + tests (WITH GUI; `make ci FEATURES=` to opt out)
 make build && mae --self-test    # AI-driven E2E self-test (requires API key)
 ```
 
@@ -155,14 +155,14 @@ Branch naming:
 git checkout -b feature/my-thing main
 # ... make changes ...
 make ci                   # must pass before opening a PR
-cargo test --workspace    # full coverage including GUI tests
+cargo test --workspace --features gui    # full coverage INCLUDING the gui-gated code
 git push origin feature/my-thing
 # open PR on GitHub
 ```
 
-`make ci` runs: `cargo fmt --check` + `cargo clippy -D warnings` + `cargo check` + `cargo test` (excludes `mae-gui` due to Skia system deps).
+`make ci` runs: `cargo fmt --check` + `cargo clippy -D warnings` + `cargo check` + `cargo test`, all with `--features gui`. It does NOT exclude `mae-gui`: that crate is an unconditional workspace member, so `--workspace` has always compiled skia. Use `make ci FEATURES=` to drop the gui feature, or `make test-tui` to skip the `mae-gui` crate (and skia) entirely.
 
-`cargo test --workspace` includes GUI tests. Run this locally before marking a PR ready if your change touches rendering.
+`cargo test --workspace` compiles the `mae-gui` crate but does NOT enable the `mae` crate's `gui` feature, so `gui_app.rs` and the gui arms of `key_handling` go untested. Add `--features gui` (or just run `make test`, which now does) before marking a PR ready if your change touches rendering.
 
 ### Pre-Commit Hook
 
@@ -317,7 +317,7 @@ make test-scheme-all                # All local Scheme tests
 |---------|-------------|
 | `make ci` | fmt + clippy + check + test (excludes GUI) |
 | `make verify` | `make ci` + GUI check with summary line |
-| `cargo test --workspace` | All tests including GUI |
+| `cargo test --workspace --features gui` | All tests including the gui-gated code |
 | `cargo test -p mae-core` | Single crate |
 | `cargo test -p mae-core test_name` | Single test by name |
 | `make audit` | `cargo-deny` security scan |

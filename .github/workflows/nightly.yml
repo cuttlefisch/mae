@@ -49,15 +49,18 @@ jobs:
           # chunk detected" (SIGABRT) on nightly Rust. Exclude CozoDB-heavy
           # integration test binaries that crash the process. These tests
           # pass on stable (see ci.yml's `check` job).
+          # NOT `--features gui` here: `gui` is a feature OF the `mae` package,
+          # which this line excludes — cargo errors when the owning package is
+          # not selected. The gui-gated code is covered by the `-p mae` line below.
           cargo test --workspace --exclude mae
-          cargo test -p mae --bins
+          cargo test -p mae --bins --features gui
           cargo test -p mae --test mcp_event_loop_integration
           # Skipped on nightly: kb_graph_validation_{embeddings,queries,schema},
           # kb_lifecycle_e2e, collab_tcp_e2e_{psk_auth,kb_protocol,kb_stress,tests}
           # (all CozoDB or #[ignore])
           # collab_bridge_integration and collab_stress moved to daemon workspace
-          cargo test --doc --workspace
+          cargo test --doc --workspace --features gui
 
       - name: cargo clippy
         if: matrix.step == 'clippy'
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --features gui -- -D warnings

@@ -267,9 +267,15 @@ jobs:
       # safety net was slower still -- fix that alone and this becomes the floor.
       # A lint cannot newly fail on a version-string change, and the test leg's
       # `cargo check` already proves the tree compiles.
+      # `--features gui` matters: `--workspace` compiles the mae-gui CRATE, but
+      # the `mae` crate's own `#[cfg(feature = "gui")]` code (gui_app.rs and the
+      # gui arms of key_handling) is only compiled when the feature is on. Without
+      # it this leg paid the full skia build cost and still never linted ~2.2k
+      # lines. `install-gui-deps` already runs on this leg (see above), so this
+      # needs no extra setup. Matches `cargo check` at :197 and the Makefile.
       - name: cargo clippy
         if: matrix.step == 'clippy' && needs.changes.outputs.version-bump-only != 'true'
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --features gui -- -D warnings
 
       - name: cargo fmt
         if: matrix.step == 'fmt'

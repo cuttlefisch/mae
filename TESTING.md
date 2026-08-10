@@ -4,13 +4,25 @@
 
 ### Rust (workspace)
 ```bash
-cargo test --workspace          # All Rust tests (3,639+ tests)
+cargo test --workspace --features gui   # All Rust tests (count: run it — see note below)
 cargo test -p mae-core          # Core editor tests only
 cargo test -p mae-dap           # DAP client mock tests
 cargo test -p mae-mcp           # MCP server tests
 cargo test -p mae-sync          # CRDT sync tests
 make verify                     # check + test with summary
 ```
+
+> **No test count is written here on purpose.** This line said "3,639+ tests" while the
+> real figure was more than twice that, and a number in prose cannot stay true — the same
+> failure CLAUDE.md documents for its size-ceiling debt, which is why those numbers live in
+> `docs/AUDIT_BASELINE.json` and are machine-checked. To get the current count, run the
+> suite: `make verify` prints a `=== N passed, M failed ===` summary.
+>
+> `--features gui` matters. `--workspace` compiles the `mae-gui` crate either way (it is an
+> unconditional workspace member), but the `mae` crate's own `#[cfg(feature = "gui")]` code
+> is compiled only with the feature on. Without it you pay the full skia build cost and
+> still do not test that code. `make test` now passes it by default; `FEATURES=` opts out,
+> and `make test-tui` skips the `mae-gui` crate (and skia) entirely.
 
 ### Scheme (headless editor)
 ```bash

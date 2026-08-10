@@ -16,7 +16,12 @@ The project README (`README.md`) contains the architecture spec and stack ration
 - **Build:** `make check` / `make build` / `make test` / `make ci` from workspace root
   - `make build` now builds with GUI by default (`--features gui`)
   - `make build-tui` for terminal-only build
-  - `make ci` still excludes GUI (skia system deps)
+  - `make ci` builds WITH GUI, like every other quality target. `crates/gui` is an
+    unconditional workspace member with a non-optional `skia-safe`, so `--workspace`
+    always built skia; what was missing was `--features gui`, which is what compiles
+    the `mae` crate's own gui-gated code. Opt out on any target with `FEATURES=`
+    (e.g. `make ci FEATURES=`); `make test-tui` additionally excludes `mae-gui`, so
+    it is the only path that skips skia entirely.
   - `make check-config` validates init.scm + config.toml without launching the editor
   - **Daemon** (separate workspace): `cd daemon && cargo build`, `cd daemon && cargo test`, `cd daemon && cargo clippy -- -D warnings`
   - **Container workflow** (no local toolchain required):
