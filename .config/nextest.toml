@@ -141,14 +141,18 @@ test-group = "kb-ops-filesystem-watchers"
 # for any environment (including local `cargo test`, which doesn't get the CI
 # sysctl bump) that still has a low OS default.
 
-# Issue #487: `rotate_identity_write_failure_reports_error_not_success` is a
-# deliberately-tuned, self-documented hard TCP SO_LINGER/RST timing race (see
-# the test's own doc comment in
-# crates/mae/src/collab_bridge/tests/collab_bridge_write_failure_tests.rs) --
-# not something to paper over by rewriting the test, but a genuine candidate
-# for a narrow, explicitly cross-linked retry so it stops intermittently
-# blocking merges via manual `gh run rerun --failed` while the real fix stays
-# tracked and open. Scoped to exactly this one test -- not a blanket policy.
-[[profile.default.overrides]]
-filter = "test(=collab_bridge::tests::collab_bridge_write_failure_tests::rotate_identity_write_failure_reports_error_not_success)"
-retries = 2
+# Issue #487's retry override lived here and is deliberately GONE.
+#
+# `rotate_identity_write_failure_reports_error_not_success` used to provoke its
+# write failure by racing a real TCP SO_LINGER/RST against a real write(), which
+# made it non-deterministic in both directions -- it failed on correct code often
+# enough to need `retries = 2`, and its own doc comment recorded that 30% of runs
+# against a REVERTED fix failed to catch the regression. The retry hid the first
+# problem and made the second worse: a regression that reproduces 70% of the time
+# passes outright on the second attempt.
+#
+# The write failure is now injected deterministically at the writer
+# (`collab_bridge::write_fault`), so the test fails 100/100 with the fix reverted
+# and passes 200/200 with it in place (measured). There is nothing left to retry.
+# Do not re-add a retry here without first showing the test is non-deterministic
+# again -- a retry on this test buys a green run, not a working guard.
