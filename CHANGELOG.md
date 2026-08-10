@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.97] - 2026-08-10
+
+
+
+
+### Security
+
+- *(security)* Two principle-#16 bypasses — babel trust-prefix escape and write-tier auto-accept ([e705619](https://github.com/cuttlefisch/mae/commit/e70561908255154096545dff2851ff3d06f56509))
+
+### Bug Fixes
+
+- *(test-safety)* The test suite was mutating the contributor's own repository ([4aa6859](https://github.com/cuttlefisch/mae/commit/4aa68594e4699f08f1a5f8fa1cfa07708651d8c4))
+- *(test-safety)* Stop the suite writing the contributor's real data directory ([bbf15f1](https://github.com/cuttlefisch/mae/commit/bbf15f195c7562563fa41f1a73a4aa12518e5092))
+- *(test-safety)* Extend the effect sandbox to the daemon workspace ([bd27731](https://github.com/cuttlefisch/mae/commit/bd27731ef473428438bb6a07d693dfac1042a6ae))
+- *(test-safety)* One env lock for the whole process, and drop two more ambient dependencies ([c29424d](https://github.com/cuttlefisch/mae/commit/c29424dafa865a59c91b99867df75906ef055484))
+- *(babel)* The trust-prefix fix was POSIX-only and broke matching on Windows ([5d76cd4](https://github.com/cuttlefisch/mae/commit/5d76cd4858bdb1dc587b74250083af702241c35a))
+- *(test-safety)* Close the sandbox's cwd gap, and start actually looking ([d0311b7](https://github.com/cuttlefisch/mae/commit/d0311b7cf03982cf5179361855419bed10a384a9))
+- *(kb)* Sled lock contention was classified permanent while sqlite got 45s ([5c161a6](https://github.com/cuttlefisch/mae/commit/5c161a642a56403fe5b4f14768d4ce60c21bfe2c))
+
+### Refactor
+
+- *(tests)* Split set_save_tests out of option_tests (ceiling ratchet) ([0ca13c1](https://github.com/cuttlefisch/mae/commit/0ca13c155d1d204369edbe41a9714ecb7629ecc9))
+
+### Documentation
+
+- Three claims that told readers work was done when it was not ([98469b3](https://github.com/cuttlefisch/mae/commit/98469b3aad49c6383e630ec72d29a44bbaf7c096))
+
+### Build System
+
+- *(make)* `make check` was type-checking half the tree ([7868523](https://github.com/cuttlefisch/mae/commit/7868523e799a0085208d2ed2dc9daf785e41bf8a))
+- *(make)* A broken disk-reclaim target, an unreadable help, and a drifted .PHONY ([72d100b](https://github.com/cuttlefisch/mae/commit/72d100b169f0cfabde4ef9fc1ee9183cf2b8cce3))
+- GUI is the default everywhere, TUI gets its own binary, timeout is portable ([1d62297](https://github.com/cuttlefisch/mae/commit/1d62297c9e95a4c3578d224084cb56ea38c66cf8))
+
+### Miscellaneous
+
+- Sync both Cargo.locks after the rebase onto 0.14.96 ([2225aa4](https://github.com/cuttlefisch/mae/commit/2225aa4aa72d36bf18a841b70cd1bb01a677eae1))
+
 ## [0.14.96] - 2026-08-07
 
 
@@ -37,6 +74,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - *(adr-kb)* Regenerate for ADRs 097-100 ([edbab2d](https://github.com/cuttlefisch/mae/commit/edbab2da3bec0a848b2277c8695ba7414f6ae7fd))
+- Bump version to 0.14.96 ([4023f3e](https://github.com/cuttlefisch/mae/commit/4023f3ec10d5257329dd524082559ba1898eec7a))
 
 ### Spike
 
