@@ -489,12 +489,13 @@ impl Editor {
         let exporter = HtmlExporter;
         let output = exporter.export(&meta, &subtree);
 
-        // Write to file
-        let file_path = self.buffers[buf_idx].file_path().map(PathBuf::from);
-        let output_path = file_path
-            .as_ref()
-            .map(|p| p.with_extension("subtree.html"))
-            .unwrap_or_else(|| PathBuf::from("export-subtree.html"));
+        let output_path = match self.export_output_path(buf_idx, "subtree.html") {
+            Ok(p) => p,
+            Err(msg) => {
+                self.set_status(msg);
+                return;
+            }
+        };
 
         match std::fs::write(&output_path, &output) {
             Ok(()) => {
@@ -503,6 +504,34 @@ impl Editor {
             Err(e) => {
                 self.set_status(format!("Export failed: {}", e));
             }
+        }
+    }
+
+    /// Where an org export writes: alongside the buffer's own file, extension
+    /// swapped. Returns `Err` with a user-facing message when the buffer has no
+    /// path, rather than inventing one.
+    ///
+    /// @ai-caution: [test-safety] Do NOT restore a fallback here. Both callers
+    /// previously defaulted to a BARE RELATIVE path (`export.html` /
+    /// `export-subtree.html`), which resolves against the process cwd: for a
+    /// user, whatever directory MAE happened to be launched from; under `cargo
+    /// test`, the crate root. That is how
+    /// `commands::tests::all_builtin_commands_dispatch` wrote
+    /// `crates/core/export.html` into the contributor's own checkout on every
+    /// single run — the same ambient-path class as `Editor::git_root()`'s
+    /// `current_dir()` fallback, and invisible to the effect sandbox because
+    /// this is a plain `fs::write`, not an operation that consults it.
+    /// An unsaved buffer has no natural output location, so guessing one *is*
+    /// the defect; reporting that is the fix (ADR-086: say whether the
+    /// postcondition holds).
+    fn export_output_path(&self, buf_idx: usize, ext: &str) -> Result<PathBuf, String> {
+        match self.buffers[buf_idx].file_path() {
+            Some(path) => Ok(PathBuf::from(path).with_extension(ext)),
+            None => Err(
+                "Export needs a saved file — this buffer has no path. Save it first, \
+                 then export."
+                    .to_string(),
+            ),
         }
     }
 
@@ -537,12 +566,13 @@ impl Editor {
             }
         };
 
-        // Write to file alongside the org file
-        let file_path = self.buffers[buf_idx].file_path().map(PathBuf::from);
-        let output_path = file_path
-            .as_ref()
-            .map(|p| p.with_extension(ext))
-            .unwrap_or_else(|| PathBuf::from(format!("export.{}", ext)));
+        let output_path = match self.export_output_path(buf_idx, ext) {
+            Ok(p) => p,
+            Err(msg) => {
+                self.set_status(msg.clone());
+                return msg;
+            }
+        };
 
         let msg = match std::fs::write(&output_path, &output) {
             Ok(()) => format!("Exported to {}", output_path.display()),
