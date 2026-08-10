@@ -13,6 +13,7 @@ mod misc_tests;
 mod mouse_tests;
 mod navigation_tests;
 mod operator_tests;
+mod option_set_save_tests;
 mod option_tests;
 mod org_checkbox_tests;
 mod org_rendering_tests;
