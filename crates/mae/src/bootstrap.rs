@@ -2947,8 +2947,7 @@ mod tests {
         // Isolate from any ambient env override so this test's own
         // `MAE_PRACTICES_KB_PATH` is authoritative regardless of what else
         // might be running in this process.
-        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         let prev = std::env::var("MAE_PRACTICES_KB_PATH").ok();
 
         let real_asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -3009,8 +3008,7 @@ mod tests {
         // Isolate from any ambient env override so this test's own
         // `MAE_DEVPRACTICES_KB_PATH` is authoritative regardless of what
         // else might be running in this process.
-        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         let prev = std::env::var("MAE_DEVPRACTICES_KB_PATH").ok();
 
         let real_asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -3238,9 +3236,6 @@ mod tests {
         let _count: usize = load_init_files(&mut scheme, &mut editor);
     }
 
-    /// Serialise tests that mutate process-global cwd / `XDG_CONFIG_HOME`.
-    static INIT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     /// Run `load_init_files` with cwd set to `project` and config isolated to
     /// `cfg_home`, returning the editor's status line so the caller can tell
     /// whether the project's init actually evaluated.
@@ -3270,7 +3265,7 @@ mod tests {
     /// so this pins both that the boundary holds and that the feature still exists.
     #[test]
     fn project_local_init_runs_only_from_a_trusted_directory() {
-        let _guard = INIT_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = mae_effect_sandbox::lock_env();
 
         let tmp = tempfile::tempdir().unwrap();
         let cfg_home = tmp.path().join("config");
@@ -3308,7 +3303,7 @@ mod tests {
     /// fresh-install case (no user init) was the one where it previously did.
     #[test]
     fn a_bare_cwd_init_scm_is_never_loaded() {
-        let _guard = INIT_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = mae_effect_sandbox::lock_env();
 
         let tmp = tempfile::tempdir().unwrap();
         let cfg_home = tmp.path().join("config-with-no-user-init");
@@ -3329,18 +3324,52 @@ mod tests {
         );
     }
 
+    /// Rewritten: the previous version had two defects that made it both
+    /// unsafe and incapable of failing.
+    ///
+    /// 1. `let _guard = std::env::set_current_dir(tmp.path())` reads as an RAII
+    ///    guard but `set_current_dir` returns `io::Result<()>` — there is no
+    ///    guard and no restoration. It changed the **process-wide** cwd for
+    ///    every remaining test in this binary, then dropped `tmp`, leaving them
+    ///    running in a *deleted* directory. It also took no lock, so it raced
+    ///    every other test rather than only those using `INIT_ENV_LOCK`.
+    /// 2. Its own comment conceded it "may still load `~/.config/mae/init.scm`"
+    ///    — reading the contributor's real config — and then asserted nothing
+    ///    at all, so no outcome could fail it.
+    ///
+    /// Now: cwd and `XDG_CONFIG_HOME` are both isolated under the shared lock,
+    /// and the assertion is the one the name promises.
     #[test]
     fn load_init_files_returns_zero_when_no_files() {
+        let _lock = mae_effect_sandbox::lock_env();
         let mut scheme = require_scheme!();
-        // In a temp dir with no init.scm, should return 0
-        let tmp = tempfile::tempdir().unwrap();
-        let _guard = std::env::set_current_dir(tmp.path());
-        // Note: this test may still load ~/.config/mae/init.scm if it exists,
-        // but that's fine — we're testing that the function completes without error.
+        let project = tempfile::tempdir().unwrap();
+        let cfg_home = tempfile::tempdir().unwrap();
+
+        let saved_cwd = std::env::current_dir().ok();
+        let saved_cfg = std::env::var("XDG_CONFIG_HOME").ok();
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", cfg_home.path()) };
+        std::env::set_current_dir(project.path()).unwrap();
+
         let mut editor = Editor::new();
         let count = load_init_files(&mut scheme, &mut editor);
-        // Count depends on whether user has an init.scm, so just verify no panic
-        let _ = count;
+
+        // Restore before asserting, so a failure cannot strand the process in
+        // a directory that is about to be deleted.
+        if let Some(cwd) = saved_cwd {
+            let _ = std::env::set_current_dir(cwd);
+        }
+        match saved_cfg {
+            Some(v) => unsafe { std::env::set_var("XDG_CONFIG_HOME", v) },
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
+        }
+
+        assert_eq!(
+            count, 0,
+            "no init file exists in either the isolated project or config dir, \
+             so nothing should have loaded — a non-zero count means the loader \
+             reached outside its isolation"
+        );
     }
 
     #[test]

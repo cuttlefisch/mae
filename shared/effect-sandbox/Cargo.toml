@@ -1,0 +1,12 @@
+[package]
+name = "mae-effect-sandbox"
+description = "Test-time guard for real external effects (git, config, data dirs)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Deliberately dependency-free. This crate sits below everything precisely so
+# that `mae-core` and `mae-mcp` — which are siblings, not stacked — can share
+# ONE implementation of the test-binary detection rather than each keeping a
+# copy that can drift (CLAUDE.md principle #15).
+[dependencies]

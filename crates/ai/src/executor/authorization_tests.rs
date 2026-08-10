@@ -235,6 +235,63 @@ fn a_write_tier_session_cannot_raise_its_own_tier_through_set_option() {
     );
 }
 
+/// The `ai_mode` half of the same bypass, asserted on the **effect** rather
+/// than on `set_option`'s return value.
+///
+/// `editor.ai.mode == "auto-accept"` is the field
+/// `ai_event_handler::handle_confirm_tool_call` reads to auto-answer a pending
+/// confirmation, so "the next prompt still appears" is exactly "this field was
+/// not written". Checking the returned message instead would pass for a
+/// refusal that printed "denied" and mutated the editor anyway — the failure
+/// mode ADR-086 exists for, and the reason the previous audit's tests could not
+/// falsify anything.
+///
+/// The initial-state assertion is not ceremony: without it, a build where
+/// `ai.mode` defaulted to `auto-accept` would make the real assertion vacuous.
+#[test]
+fn a_write_tier_session_cannot_reach_auto_accept_through_set_option() {
+    for spelling in ["ai_mode", "ai-mode"] {
+        for persist in [false, true] {
+            let mut editor = Editor::new();
+            assert_ne!(
+                editor.ai.mode, "auto-accept",
+                "fixture is already in the state under test — the oracle below proves nothing"
+            );
+            let before = editor.ai.mode.clone();
+
+            let result = execute_tool(
+                &mut editor,
+                &call(
+                    "set_option",
+                    serde_json::json!({
+                        "option": spelling,
+                        "value": "auto-accept",
+                        "persist": persist,
+                    }),
+                ),
+                &all_tools(),
+                &policy(PermissionTier::Write),
+            );
+            let refused = match result {
+                ExecuteResult::Immediate(r) => !r.success,
+                ExecuteResult::NeedsApproval(_) => true,
+                ExecuteResult::Deferred { .. } => false,
+            };
+
+            assert!(
+                refused,
+                "set_option {spelling}=auto-accept (persist={persist}) was not refused \
+                 at Write tier"
+            );
+            assert_eq!(
+                editor.ai.mode, before,
+                "set_option {spelling}=auto-accept (persist={persist}) still changed \
+                 ai.mode — every subsequent confirmation would auto-answer"
+            );
+        }
+    }
+}
+
 /// ...while ordinary option setting is untouched. Sampled over the real
 /// registry rather than one hand-picked option: the failure mode being guarded
 /// against is "raise `set_option` wholesale", which would show up here as a
@@ -244,7 +301,7 @@ fn ordinary_options_are_still_settable_at_write_tier() {
     let registry = OptionRegistry::new();
     let mut checked = 0usize;
     for opt in registry.list() {
-        if crate::tools::is_permission_tier_option(&opt.name) {
+        if crate::tools::is_agent_authority_option(&opt.name) {
             continue;
         }
         let (_success, output) = run(

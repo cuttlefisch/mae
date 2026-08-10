@@ -1446,6 +1446,10 @@ mod tests {
         .unwrap();
 
         let orig_home = std::env::var_os("HOME");
+        // Was unlocked: this rewrites process-global HOME while every other
+        // test in the binary runs, several of which resolve config/data dirs
+        // from it. See `mae_effect_sandbox::lock_env`.
+        let _env = mae_effect_sandbox::lock_env();
         std::env::set_var("HOME", home.path());
 
         let mut editor = Editor::new();

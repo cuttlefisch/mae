@@ -8,7 +8,22 @@ use serde_json::json;
 use std::process::Command;
 
 /// Run a git command in the project root and return (success, stdout, stderr).
+///
+/// @ai-caution: [test-safety] The `current_dir()` fallback makes the target
+/// repository *ambient*, so a test constructing `Editor::new()` and calling a
+/// git tool acts on the contributor's own checkout — the same defect that made
+/// `mae-core`'s `all_builtin_commands_dispatch` run `git push` against real
+/// work. `mae_core::external_effects_blocked!()` must be used (not
+/// `external_effects_blocked_for(cfg!(test))` spelled out in `mae-core`),
+/// because the macro expands here and so reads *this* crate's `cfg!(test)`.
 fn run_git(editor: &Editor, args: &[&str]) -> (bool, String, String) {
+    if mae_core::external_effects_blocked!() {
+        return (
+            false,
+            String::new(),
+            "refused: git is sandboxed in tests (mae_core::effect_sandbox)".to_string(),
+        );
+    }
     let root = editor
         .git_or_project_root()
         .or_else(|| std::env::current_dir().ok())

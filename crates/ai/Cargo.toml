@@ -6,6 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+mae-effect-sandbox = { path = "../../shared/effect-sandbox" }
 mae-core = { path = "../core" }
 # `remote-hub` is unconditional here (not forwarded via mae-ai's own opt-in
 # feature) -- ADR-061 Phase E's `daemon_mode=off` enrich-now path needs the

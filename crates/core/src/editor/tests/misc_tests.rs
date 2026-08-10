@@ -561,6 +561,14 @@ fn is_conversation_buffer_recognizes_agent_shell() {
     );
 }
 
+/// @ai-caution: [test-safety] These window-isolation tests dispatch
+/// `dashboard`, NOT `git-status`. The dispatched command is incidental —
+/// it only has to open a companion buffer — but `git-status` shells out, so it
+/// made every test here depend on the test binary happening to run inside a
+/// working git repository (it would fail from a tarball checkout, and it ran
+/// real git against the contributor's own repo). That is the ambient-authority
+/// assumption `mae_effect_sandbox` exists to remove. Pick an effect-free
+/// command if this list ever grows.
 #[test]
 fn with_ai_dispatch_scope_isolates_conversation_window() {
     let mut editor = Editor::new();
@@ -570,7 +578,7 @@ fn with_ai_dispatch_scope_isolates_conversation_window() {
     assert_eq!(editor.window_mgr.iter_windows().count(), 1);
     assert!(editor.ai.target_window_id.is_none());
 
-    editor.with_ai_dispatch_scope(|e| e.dispatch_builtin("git-status"));
+    editor.with_ai_dispatch_scope(|e| e.dispatch_builtin("dashboard"));
 
     // A companion window was created; the original still shows the agent shell.
     assert_eq!(editor.window_mgr.iter_windows().count(), 2);
@@ -587,7 +595,10 @@ fn with_ai_dispatch_scope_isolates_conversation_window() {
         .expect("target window should be established");
     assert_ne!(target_id, original_id);
     let companion_buf = editor.window_mgr.window(target_id).unwrap().buffer_idx;
-    assert_eq!(editor.buffers[companion_buf].name, "*git-status*");
+    assert_eq!(
+        editor.buffers[companion_buf].kind,
+        crate::BufferKind::Dashboard
+    );
 
     // Focus restored to the original (agent-shell) window after the scope.
     assert_eq!(editor.window_mgr.focused_id(), original_id);
@@ -599,7 +610,7 @@ fn with_ai_dispatch_scope_noop_when_nothing_to_protect() {
     // Buffer 0 is a plain Text buffer by default — nothing worth protecting.
     assert!(!editor.is_conversation_buffer(0));
 
-    editor.with_ai_dispatch_scope(|e| e.dispatch_builtin("git-status"));
+    editor.with_ai_dispatch_scope(|e| e.dispatch_builtin("dashboard"));
 
     assert!(editor.ai.target_window_id.is_none());
     assert_eq!(editor.window_mgr.iter_windows().count(), 1);
@@ -611,7 +622,7 @@ fn with_ai_dispatch_scope_reuses_established_target() {
     editor.buffers[0].name = "*AI:claude*".to_string();
     editor.buffers[0].agent_shell = true;
 
-    editor.with_ai_dispatch_scope(|e| e.dispatch_builtin("git-status"));
+    editor.with_ai_dispatch_scope(|e| e.dispatch_builtin("dashboard"));
     assert_eq!(editor.window_mgr.iter_windows().count(), 2);
     let first_target = editor
         .ai
@@ -638,7 +649,7 @@ fn with_ai_dispatch_scope_handles_split_failure_gracefully() {
     editor.agent_display_split_ratio = 0.01;
 
     // Must not panic.
-    editor.with_ai_dispatch_scope(|e| e.dispatch_builtin("git-status"));
+    editor.with_ai_dispatch_scope(|e| e.dispatch_builtin("dashboard"));
 }
 
 // --- ADR-051: per-session DrivenWindow isolation ---
@@ -654,7 +665,7 @@ fn with_ai_dispatch_scope_for_session_isolates_three_concurrent_sessions() {
     editor.buffers[0].agent_shell = true;
     let original_id = editor.window_mgr.focused_id();
 
-    editor.with_ai_dispatch_scope_for_session(Some(1), |e| e.dispatch_builtin("git-status"));
+    editor.with_ai_dispatch_scope_for_session(Some(1), |e| e.dispatch_builtin("dashboard"));
     let target_1 = editor
         .ai
         .mcp_sessions
@@ -697,7 +708,7 @@ fn with_ai_dispatch_scope_for_session_isolates_three_concurrent_sessions() {
     // Re-dispatching for session 1 must reuse its OWN window, not session 2's
     // or 3's most-recently-established one (the confused-deputy case this
     // test exists to rule out).
-    editor.with_ai_dispatch_scope_for_session(Some(1), |e| e.dispatch_builtin("git-status"));
+    editor.with_ai_dispatch_scope_for_session(Some(1), |e| e.dispatch_builtin("dashboard"));
     assert_eq!(
         editor
             .ai
@@ -725,7 +736,7 @@ fn with_ai_dispatch_scope_for_session_none_matches_unscoped_behavior() {
     editor.buffers[0].name = "*AI:claude*".to_string();
     editor.buffers[0].agent_shell = true;
 
-    editor.with_ai_dispatch_scope_for_session(None, |e| e.dispatch_builtin("git-status"));
+    editor.with_ai_dispatch_scope_for_session(None, |e| e.dispatch_builtin("dashboard"));
 
     assert_eq!(editor.window_mgr.iter_windows().count(), 2);
     assert!(editor.ai.target_window_id.is_some());
@@ -747,7 +758,7 @@ fn evicted_session_self_heals_on_next_dispatch() {
 
     // Simulate session 1 having a window, then being evicted (as the size
     // bound would do to some session under real long-running load).
-    editor.with_ai_dispatch_scope_for_session(Some(1), |e| e.dispatch_builtin("git-status"));
+    editor.with_ai_dispatch_scope_for_session(Some(1), |e| e.dispatch_builtin("dashboard"));
     assert!(editor.ai.mcp_sessions.contains_key(&1));
     editor.ai.mcp_sessions.remove(&1);
 

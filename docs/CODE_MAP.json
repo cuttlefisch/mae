@@ -7,6 +7,7 @@
         "mae-canvas",
         "mae-core",
         "mae-dap",
+        "mae-effect-sandbox",
         "mae-gui",
         "mae-kb",
         "mae-lsp",
@@ -37,6 +38,7 @@
       "dependencies": [
         "mae-canvas",
         "mae-core",
+        "mae-effect-sandbox",
         "mae-export",
         "mae-kb",
         "mae-shell",
@@ -250,6 +252,7 @@
       "dependencies": [
         "mae-babel",
         "mae-canvas",
+        "mae-effect-sandbox",
         "mae-export",
         "mae-format",
         "mae-kb",
@@ -331,6 +334,10 @@
         },
         {
           "name": "editor",
+          "kind": "mod"
+        },
+        {
+          "name": "effect_sandbox",
           "kind": "mod"
         },
         {
@@ -544,6 +551,28 @@
         {
           "name": "transport",
           "kind": "mod"
+        }
+      ]
+    },
+    "mae-effect-sandbox": {
+      "path": "shared/effect-sandbox/src/lib.rs",
+      "dependencies": [],
+      "public_items": [
+        {
+          "name": "external_effects_blocked_for",
+          "kind": "fn"
+        },
+        {
+          "name": "with_external_effects",
+          "kind": "fn"
+        },
+        {
+          "name": "blocked_git_root",
+          "kind": "fn"
+        },
+        {
+          "name": "lock_env",
+          "kind": "fn"
         }
       ]
     },
@@ -917,7 +946,9 @@
     },
     "mae-mcp": {
       "path": "shared/mcp/src/lib.rs",
-      "dependencies": [],
+      "dependencies": [
+        "mae-effect-sandbox"
+      ],
       "public_items": [
         {
           "name": "auth",

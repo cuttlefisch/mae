@@ -2858,6 +2858,7 @@ dependencies = [
  "hyper-util",
  "iroh",
  "jsonwebtoken",
+ "mae-effect-sandbox",
  "mae-kb",
  "mae-mcp",
  "mae-sync",
@@ -2878,6 +2879,10 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
 ]
+
+[[package]]
+name = "mae-effect-sandbox"
+version = "0.14.96"
 
 [[package]]
 name = "mae-kb"
@@ -2910,6 +2915,7 @@ dependencies = [
  "hmac 0.13.0",
  "hostname",
  "libc",
+ "mae-effect-sandbox",
  "rand 0.10.1",
  "rcgen",
  "rustls",

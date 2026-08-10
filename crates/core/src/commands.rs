@@ -1894,6 +1894,73 @@ mod tests {
         );
     }
 
+    /// Count entries in the *real* repository's stash, bypassing every MAE
+    /// abstraction so this cannot be fooled by the guard it is testing.
+    ///
+    /// Read-only, and `None` when git or a repository is unavailable so the
+    /// test degrades to a skip rather than a false pass.
+    #[cfg(test)]
+    fn real_repository_stash_count() -> Option<usize> {
+        let out = std::process::Command::new("git")
+            .args(["stash", "list"])
+            .current_dir(std::env::current_dir().ok()?)
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).lines().count())
+    }
+
+    /// The regression guard for the defect that made `all_builtin_commands_dispatch`
+    /// destructive: dispatching a builtin in a test must not reach the
+    /// contributor's own repository.
+    ///
+    /// `Editor::git_root()` fell back to `std::env::current_dir()`, so every
+    /// git command dispatched here ran inside the MAE checkout the test binary
+    /// was executing in. `git-stash-push` silently stashed uncommitted work
+    /// mid-session; `git-unstage-all` cleared the index; `git-push` pushed.
+    ///
+    /// The oracle is the repository's actual stash depth, read through raw
+    /// `git` — not `git_stash_push`'s return value, which was discarded, and
+    /// not a status message, which said "Changes stashed" whether or not the
+    /// sandbox held.
+    ///
+    /// The sandbox assertion comes *first* on purpose: if the guard is off,
+    /// this test must fail before dispatching rather than by stashing the work
+    /// it is meant to protect.
+    #[test]
+    fn dispatching_builtins_cannot_reach_the_real_repository() {
+        assert!(
+            crate::external_effects_blocked!(),
+            "external effects are not blocked in this test build — refusing to dispatch \
+             git commands, since doing so would mutate the real repository"
+        );
+
+        let Some(before) = real_repository_stash_count() else {
+            return; // no git / not a repo — nothing to protect
+        };
+
+        let mut editor = crate::Editor::new();
+        for cmd in [
+            "git-stash-push",
+            "git-unstage-all",
+            "git-add-all",
+            "git-stash-pop",
+            "git-stash-drop",
+        ] {
+            // Not every name is guaranteed to be registered forever; the point
+            // is that dispatching whatever *is* registered changes nothing.
+            editor.dispatch_builtin(cmd);
+        }
+
+        assert_eq!(
+            real_repository_stash_count(),
+            Some(before),
+            "dispatching git builtins in a test changed the real repository's stash — \
+             the effect sandbox is not holding, and contributors will lose uncommitted work"
+        );
+    }
+
     /// Pins the allowlist itself: every allowlisted name must still be a
     /// real registered command (otherwise the entry is stale — the command
     /// was renamed/removed and the allowlist should shrink), and the

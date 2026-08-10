@@ -62,7 +62,36 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean clean-cache ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check heavy-e2e-check audit-metrics audit-metrics-check audit-metrics-bless lint-shell lint-yaml lint-deploy lint-all test-deploy gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual practices-kb install-practices adr-kb fetch-adr-kb install-adr devpractices-kb install-devpractices verify-adr-kb-sync install-vscode
+# Every target in this file is phony — none of them produces a file of its own
+# name. Kept grouped and one-per-line so a new target is a one-line diff in the
+# right group; the previous single 800-character line had silently drifted to
+# omit 28 targets, including `pre-commit`, `verify`, `build-daemon`,
+# `test-daemon`, `ci-all`, and every `test-scheme-*` / `test-collab-*-e2e`.
+# Regenerate the full set with:
+#   grep -oE '^[a-z][a-z0-9_-]*:' Makefile | tr -d ':' | sort -u
+.PHONY: \
+	all build build-tui build-daemon dev run \
+	install install-tui install-all install-upgrade install-vscode uninstall \
+	install-daemon install-daemon-service \
+	test test-tui test-daemon test-nextest test-nextest-release test-daemon-nextest \
+	test-scheme test-scheme-all test-scheme-ci test-scheme-crdt test-scheme-editor \
+	test-scheme-collab-local test-scheme-r7rs \
+	test-collab-e2e-all test-collab-mtls-e2e test-collab-membership-e2e \
+	test-collab-encrypted-e2e test-collab-p2p-mesh-e2e test-deploy \
+	check check-daemon check-config verify verify-binary verify-adr-kb-sync \
+	fmt fmt-check fmt-daemon clippy clippy-daemon pre-commit \
+	ci ci-all ci-extended ci-docker-e2e ci-complete audit \
+	lint-shell lint-yaml lint-deploy lint-all \
+	clean clean-cache prune-artifacts disk-report \
+	code-map code-map-check heavy-e2e-check \
+	audit-metrics audit-metrics-check audit-metrics-bless \
+	manual-kb install-manual practices-kb install-practices \
+	devpractices-kb install-devpractices adr-kb fetch-adr-kb install-adr \
+	docker-ci docker-new-user docker-smoke docker-dev docker-clean \
+	docker-collab-test docker-headless-e2e \
+	bench bench-save bench-compare \
+	docs-tangle docs-tangle-check gen-fixtures setup-hooks setup-dev \
+	self-test doctor help
 
 # Default target: release build
 all: build
@@ -274,24 +303,51 @@ test-nextest-release:
 test-daemon-nextest:
 	cd daemon && $(CARGO) nextest run
 
-## check: fast type-check without producing a binary
+# @ai-caution: [two-workspaces] `daemon/` is a SEPARATE cargo workspace (ADR-014,
+# its own Cargo.lock). A bare `cargo check` / `cargo fmt` / `cargo clippy` at the
+# repo root does NOT see it. Every quality target here must therefore run twice,
+# or it reports clean while leaving half the tree unchecked.
+#
+# This has now bitten twice, the same way both times:
+#   2026-08-04 — `cargo fmt --all --check` at the root said "clean", and CI's
+#     `daemon / check + test` then failed on formatting. There was no
+#     `fmt-daemon` target at all, so no local invocation could have caught it.
+#   2026-08-10 — `make check` type-checked the editor workspace only, while the
+#     branch under test modified `daemon/Cargo.toml`, `daemon/Cargo.lock` and
+#     `daemon/src/tests/multi_instance_tests.rs`. Same shape: a locally green
+#     check covering half the tree.
+#
+# Naming convention, so the next target added here inherits the fix instead of
+# reproducing the bug: a BARE target name covers BOTH workspaces; a `-daemon`
+# suffix is the daemon-only variant, kept for iteration speed. There is
+# deliberately no `-editor` variant — "editor only" is the state that keeps
+# shipping false green, so it does not get a convenient name to reach for.
+#
+# The convention holds for the fast gates — `check`, `fmt`, `fmt-check`,
+# `clippy` — and for `pre-commit`, which composes them. It does NOT yet hold
+# for the expensive ones: `test` and `ci` remain editor-only, because making
+# them cover both workspaces roughly doubles their runtime and that is a
+# deliberate call, not an oversight. Use `test-daemon` / `ci-all` for those.
+# Do not "fix" this by quietly widening `test` or `ci` — either change them
+# knowingly and update this paragraph, or leave them and leave it accurate.
+
+## check: fast type-check without producing a binary (BOTH workspaces)
 check:
 	$(CARGO) check $(FEAT_FLAG)
+	cd daemon && $(CARGO) check
+
+## check-daemon: type-check the daemon workspace only
+check-daemon:
+	cd daemon && $(CARGO) check
 
 ## verify: check + test — single command for development validation
+## Delegates to `check` rather than restating it: a second inline copy of the
+## check command is how the daemon fell out of coverage in the first place.
 verify:
-	@echo "=== Check (workspace + GUI) ==="
-	$(CARGO) check $(FEAT_FLAG)
+	@echo "=== Check (both workspaces) ==="
+	@$(MAKE) --no-print-directory check
 	@echo "=== Test ==="
 	$(CARGO) test --workspace 2>&1 | tee /dev/stderr | grep "^test result:" | awk -F'[; ]' 'BEGIN{p=0;f=0} {p+=$$4;f+=$$7} END{printf "\n=== %d passed, %d failed ===\n",p,f}'
-
-# @ai-caution: [two-workspaces] `daemon/` is a SEPARATE cargo workspace (ADR-014,
-# its own Cargo.lock). A bare `cargo fmt` / `cargo clippy` at the repo root does
-# NOT see it. Every quality target below must therefore run twice, or it reports
-# clean while leaving half the tree unchecked — which is exactly what happened on
-# 2026-08-04: `cargo fmt --all --check` at the root said "clean", and CI's
-# `daemon / check + test` then failed on formatting. There was no `fmt-daemon`
-# target at all, so no local invocation could have caught it.
 
 ## fmt: format all Rust sources in place (BOTH workspaces)
 fmt:
@@ -307,11 +363,18 @@ fmt-check:
 fmt-daemon:
 	cd daemon && $(CARGO) fmt --all
 
-## clippy: run linter across the editor workspace
+## clippy: run linter (BOTH workspaces)
 clippy:
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
+	cd daemon && $(CARGO) clippy --all-targets -- -D warnings
 
-## clippy-daemon: run linter on daemon workspace
+## clippy-daemon: run linter on daemon workspace only
+## `pre-commit` depends on this AND on `clippy`, which already covers the
+## daemon. The redundancy is deliberate: cargo caches it to ~nothing, and it
+## means the gate keeps its daemon coverage even if someone later narrows
+## `clippy` back to the editor workspace. This section exists because the
+## daemon fell through a gap twice; belt and braces is the cheap side of that
+## trade.
 clippy-daemon:
 	cd daemon && $(CARGO) clippy --all-targets -- -D warnings
 
@@ -488,33 +551,43 @@ doctor:
 		printf "    export PATH=\"$$HOME/.local/bin:\$$PATH\"\n";; esac; \
 	printf "\nTUI-only (make build-tui) needs only rustc + cargo.\n"
 
-## clean: remove all build artefacts
 ## clean: remove ALL build artifacts (both workspaces) — forces a full rebuild
 clean:
 	$(CARGO) clean
 	cd daemon && $(CARGO) clean
 
-## # --- Lint / static analysis for everything that is not Rust -----------------
+# --- Lint / static analysis for everything that is not Rust -----------------
 #
 # Rust is covered by `make clippy` + the pre-commit gate. These cover the shell
 # scripts, the CI/release workflows, and the deployment role — none of which had
 # any linting at all before 2026-08.
+#
+# These five used a TRAILING `target:  ## desc` doc style while every other
+# target in this file uses a LEADING `## target: desc` line. `make help` only
+# ever read the leading form, so this entire non-Rust lint suite was invisible
+# in the one place a contributor looks for it. Converted to the majority style
+# rather than teaching help two grammars — one convention, one matcher.
 
-lint-shell:  ## shellcheck every tracked shell script (fails at warning+)
+## lint-shell: shellcheck every tracked shell script (fails at warning+)
+lint-shell:
 	./scripts/lint-shell.sh
 
-lint-yaml:  ## yamllint the workflows and the deployment role
+## lint-yaml: yamllint the workflows and the deployment role
+lint-yaml:
 	yamllint -c .yamllint.yml .github/workflows/ deploy/
 
-lint-deploy:  ## ansible-lint the deployment role at the production profile
+## lint-deploy: ansible-lint the deployment role at the production profile
+lint-deploy:
 	cd deploy/ansible && ansible-lint .
 
-lint-all: lint-shell lint-yaml lint-deploy  ## every non-Rust linter
+## lint-all: every non-Rust linter (shell + yaml + ansible)
+lint-all: lint-shell lint-yaml lint-deploy
 
-test-deploy:  ## prove the deployment role's safety checks refuse bad configs
+## test-deploy: prove the deployment role's safety checks refuse bad configs
+test-deploy:
 	./deploy/ansible/tests/run-tests.sh
 
-clean-cache: reclaim regenerable compilation caches (both workspaces) WITHOUT
+## clean-cache: reclaim regenerable compilation caches (both workspaces) WITHOUT
 ## a full rebuild. Cargo never garbage-collects incremental session dirs from past
 ## code states, so on a heavily-branched workspace they grow without bound (we hit
 ## ~370 GB). Incremental is now off by default (.cargo/config.toml), but this stays
@@ -832,4 +905,11 @@ bench-compare:
 ## help: print this help
 help:
 	@echo "MAE build targets:"
-	@grep -E '^##' Makefile | sed 's/## /  /'
+# Match ONLY a doc header — `## <target>: <description>` — not every `##` line.
+# The old pattern was a bare `^##`, so every continuation line of a multi-line
+# doc block printed as though it were its own target ("a full rebuild. Cargo
+# never garbage-collects...", "~370 GB). Incremental is now off by default..."),
+# and the section banner `## # --- Lint ...` printed as a target too. Multi-line
+# `##` prose is a deliberate convention here (see `pre-commit`, `test-nextest`),
+# so the fix belongs in the matcher, not in the prose.
+	@grep -hE '^## [a-z0-9_-]+:' Makefile | sed 's/^## /  /'

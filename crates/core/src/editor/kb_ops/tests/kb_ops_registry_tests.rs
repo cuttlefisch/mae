@@ -7,8 +7,21 @@ use super::*;
 /// would (a) break `XDG_DATA_HOME` test isolation and (b) split data from the
 /// ADR-019 registry markers, breaking restart survival). This locks the
 /// cf673b7c fix so a future change can't silently reintroduce `dirs::data_dir`.
+/// Serialises the tests in this file that mutate process-global `HOME` /
+/// `XDG_DATA_HOME`.
+///
+/// @ai-caution: [test-safety] A lock only orders the tests that *take* it —
+/// the other ~3100 tests in this binary keep running against the mutated
+/// global. Env mutation in a test is never fully safe, only less bad, so keep
+/// the mutated window as short as possible and prefer `data_dir_override`
+/// wherever the env resolution itself is not what is under test.
+
 #[test]
 fn mae_data_dir_is_xdg_first_not_platform_native() {
+    // Previously took no lock at all while setting `HOME` process-wide, so a
+    // concurrent test could observe — or restore — the wrong value.
+    let _lock = mae_effect_sandbox::lock_env();
+
     let mut editor = Editor::new();
     editor.data_dir_override = None; // exercise the real env-based resolution
 
@@ -16,18 +29,39 @@ fn mae_data_dir_is_xdg_first_not_platform_native() {
     let orig_home = std::env::var_os("HOME");
     let tmp = TempDir::new().unwrap();
 
-    // 1) XDG_DATA_HOME set → honored verbatim (joined with "mae").
-    std::env::set_var("XDG_DATA_HOME", tmp.path());
+    // This test's subject IS the ambient env resolution, so it must opt out of
+    // the effect sandbox — and it has earned that by pointing both variables at
+    // `tmp` first, so nothing can reach the contributor's real data dir. See
+    // `crate::effect_sandbox`.
+    let (xdg_resolved, home_resolved) = crate::effect_sandbox::with_external_effects(|| {
+        // 1) XDG_DATA_HOME set → honored verbatim (joined with "mae").
+        std::env::set_var("XDG_DATA_HOME", tmp.path());
+        let xdg_resolved = editor.mae_data_dir();
+
+        // 2) No XDG_DATA_HOME → ~/.local/share/mae (NOT a platform-native dir).
+        std::env::remove_var("XDG_DATA_HOME");
+        std::env::set_var("HOME", tmp.path());
+        let home_resolved = editor.mae_data_dir();
+        (xdg_resolved, home_resolved)
+    });
+
+    // Restore env BEFORE asserting, so a failure cannot leave `HOME` pointing
+    // at a temp dir that is about to be deleted for every later test.
+    match orig_xdg {
+        Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+        None => std::env::remove_var("XDG_DATA_HOME"),
+    }
+    match orig_home {
+        Some(v) => std::env::set_var("HOME", v),
+        None => std::env::remove_var("HOME"),
+    }
+
     assert_eq!(
-        editor.mae_data_dir(),
+        xdg_resolved,
         Some(tmp.path().join("mae")),
         "XDG_DATA_HOME must be honored on all platforms"
     );
-
-    // 2) No XDG_DATA_HOME → ~/.local/share/mae (NOT a platform-native dir).
-    std::env::remove_var("XDG_DATA_HOME");
-    std::env::set_var("HOME", tmp.path());
-    let resolved = editor.mae_data_dir().expect("HOME-based path");
+    let resolved = home_resolved.expect("HOME-based path");
     assert_eq!(
         resolved,
         tmp.path().join(".local").join("share").join("mae"),
@@ -39,16 +73,27 @@ fn mae_data_dir_is_xdg_first_not_platform_native() {
             .contains("Library/Application Support"),
         "must never resolve to the macOS platform-native data dir"
     );
+}
 
-    // Restore env so sibling tests are unaffected.
-    match orig_xdg {
-        Some(v) => std::env::set_var("XDG_DATA_HOME", v),
-        None => std::env::remove_var("XDG_DATA_HOME"),
-    }
-    match orig_home {
-        Some(v) => std::env::set_var("HOME", v),
-        None => std::env::remove_var("HOME"),
-    }
+/// The sandbox's own guarantee for this resolver, asserted directly: without an
+/// explicit `data_dir_override`, a test must NOT be handed the contributor's
+/// real data directory. This is what stopped `cargo test -p mae-ai --lib`
+/// rewriting their `kb-registry.toml`.
+#[test]
+fn mae_data_dir_refuses_ambient_resolution_in_a_test() {
+    let mut editor = Editor::new();
+    editor.data_dir_override = None;
+    assert_eq!(
+        editor.mae_data_dir(),
+        None,
+        "a test with no data_dir_override was handed a real data directory"
+    );
+
+    // ...and the override still works, so the refusal has not simply broken
+    // every KB test that legitimately isolates itself.
+    let tmp = TempDir::new().unwrap();
+    editor.data_dir_override = Some(tmp.path().to_path_buf());
+    assert_eq!(editor.mae_data_dir(), Some(tmp.path().to_path_buf()));
 }
 
 #[test]

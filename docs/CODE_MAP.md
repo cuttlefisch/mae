@@ -10,6 +10,7 @@ graph TD
     mae --> mae_canvas
     mae --> mae_core
     mae --> mae_dap
+    mae --> mae_effect_sandbox
     mae --> mae_gui
     mae --> mae_kb
     mae --> mae_lsp
@@ -23,6 +24,7 @@ graph TD
     mae_agent_cli --> mae_mcp
     mae_ai --> mae_canvas
     mae_ai --> mae_core
+    mae_ai --> mae_effect_sandbox
     mae_ai --> mae_export
     mae_ai --> mae_kb
     mae_ai --> mae_shell
@@ -31,6 +33,7 @@ graph TD
     mae_canvas[mae-canvas]
     mae_core --> mae_babel
     mae_core --> mae_canvas
+    mae_core --> mae_effect_sandbox
     mae_core --> mae_export
     mae_core --> mae_format
     mae_core --> mae_kb
@@ -41,6 +44,7 @@ graph TD
     mae_core --> mae_sync
     mae_core --> mae_mcp
     mae_dap --> mae_core
+    mae_effect_sandbox[mae-effect-sandbox]
     mae_export --> mae_babel
     mae_format[mae-format]
     mae_gui --> mae_core
@@ -52,7 +56,7 @@ graph TD
     mae_lookup[mae-lookup]
     mae_lsp[mae-lsp]
     mae_make[mae-make]
-    mae_mcp[mae-mcp]
+    mae_mcp --> mae_effect_sandbox
     mae_renderer --> mae_core
     mae_renderer --> mae_shell
     mae_scheme --> mae_ai
@@ -170,6 +174,7 @@ Source: `crates/core/src/lib.rs`
 | `display_region` | mod |
 | `driven_window` | mod |
 | `editor` | mod |
+| `effect_sandbox` | mod |
 | `event_record` | mod |
 | `file_browser` | mod |
 | `file_lock` | mod |
@@ -228,6 +233,17 @@ Source: `crates/dap/src/lib.rs`
 | `manager` | mod |
 | `protocol` | mod |
 | `transport` | mod |
+
+## mae-effect-sandbox
+
+Source: `shared/effect-sandbox/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `external_effects_blocked_for` | fn |
+| `with_external_effects` | fn |
+| `blocked_git_root` | fn |
+| `lock_env` | fn |
 
 ## mae-export
 

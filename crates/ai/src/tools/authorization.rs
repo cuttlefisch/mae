@@ -103,10 +103,43 @@ pub const DELIBERATELY_NOT_AUTHORIZATION_CHANGES: &[&str] = &[
 ///
 /// ADR-084 D7 makes `ai_tier` reach the enforced policy rather than only a
 /// status-bar string. From that point on, "set an option" and "raise my own
-/// tier" are the same operation for this one name — so it is gated
-/// specifically, rather than raising `set_option` wholesale (which would put
-/// ordinary configuration behind `Privileged` for no security gain).
+/// tier" are the same operation for this one name.
 pub const PERMISSION_TIER_OPTION: &str = "ai_tier";
+
+/// Options outside the `ai_*` namespace that nonetheless bound what the agent
+/// may do, and so are tier changes wearing a configuration hat.
+///
+/// `babel_confirm = false` and a wide `babel_trust_paths` each turn "every
+/// `:eval yes` block in a file you open asks first" into "runs silently" —
+/// arbitrary code execution from any org file the agent can arrange to open.
+const NON_AI_AUTHORITY_OPTIONS: &[&str] = &["babel_confirm", "babel_trust_paths"];
+
+/// `ai_*` options that are ordinary configuration — the *exceptions* to the
+/// default-escalate rule below.
+///
+/// @ai-caution: [permission] Adding a name here removes a Privileged
+/// requirement. The bar is: could a hostile value change what the agent is
+/// permitted to do, where its prompts go, or what code runs on the user's
+/// behalf? If the answer is "not obviously", it does not belong here.
+/// Deliberately absent, with reasons: `ai_api_key_command` and
+/// `ai_embedding_api_key_command` run a shell command; `ai_base_url` and
+/// `ai_embedding_base_url` redirect every prompt (and its context) to an
+/// attacker-chosen host; `ai_mode` auto-answers confirmations; `ai_tier` *is*
+/// the policy; `ai_editor` and `ai_agent_login_shell` decide what process the
+/// agent surface launches; `ai_chat_enabled` switches the surface itself.
+const ORDINARY_AI_OPTIONS: &[&str] = &[
+    "ai_conversation_split_ratio",
+    "ai_embedding_chunk_version",
+    "ai_embedding_model",
+    "ai_embedding_provider",
+    "ai_guidance_export_live_sync",
+    "ai_guidance_inline_budget_chars",
+    "ai_guidance_kb",
+    "ai_model",
+    "ai_profile",
+    "ai_provider",
+    "ai_thinking",
+];
 
 /// Normalize an operation name to the canonical underscore spelling:
 /// strips a `command_` MCP-tool prefix, maps `-` to `_`, and lowercases.
@@ -133,14 +166,38 @@ pub fn is_permission_tier_option(name: &str) -> bool {
     normalize_op(name) == PERMISSION_TIER_OPTION
 }
 
+/// Does setting `name` change what the agent is allowed to do?
+///
+/// **The rule is inverted on purpose.** Every `ai_*` option escalates unless
+/// it appears in [`ORDINARY_AI_OPTIONS`], rather than escalating a list of
+/// known-dangerous names. Enumerating the dangerous ones is safe only for as
+/// long as everyone adding an option remembers to update the list, and that
+/// memory has already failed once: `ai_tier` was gated and `ai_mode` — which
+/// auto-answers every confirmation prompt — was not, leaving a `Write`-tier
+/// session able to grant itself unprompted writes and shell in one
+/// `set_option` call. Inverted, the next agent-bounding option added is
+/// escalated the moment it is registered, and the mistake a forgetful author
+/// can make is over-restriction rather than a bypass.
+///
+/// @ai-caution: [permission] Principle #16: this is a control that bounds the
+/// agent, so it is deliberately not symmetric between human and AI. The human
+/// keeps setting these through `:set`; only the agent surface is gated.
+pub fn is_agent_authority_option(name: &str) -> bool {
+    let normalized = normalize_op(name);
+    if NON_AI_AUTHORITY_OPTIONS.contains(&normalized.as_str()) {
+        return true;
+    }
+    normalized.starts_with("ai_") && !ORDINARY_AI_OPTIONS.contains(&normalized.as_str())
+}
+
 /// The tier a call actually requires, given the tier its tool *declares* and
 /// the arguments it was called with.
 ///
 /// Two tools' blast radius depends on their arguments rather than their
 /// identity, and for both the honest answer is a per-call decision:
 ///
-/// - `set_option` is ordinary configuration for every option except
-///   [`PERMISSION_TIER_OPTION`], for which it is a tier change.
+/// - `set_option` is ordinary configuration for every option except those
+///   [`is_agent_authority_option`] identifies, for which it is a tier change.
 /// - `execute_command` is a `Write`-tier passthrough to
 ///   `Editor::dispatch_builtin`, so its real tier is the tier of the command
 ///   named in its argument.
@@ -161,7 +218,7 @@ pub fn effective_tier(
         "set_option" => args
             .get("option")
             .and_then(|v| v.as_str())
-            .is_some_and(is_permission_tier_option),
+            .is_some_and(is_agent_authority_option),
         "execute_command" => args
             .get("command")
             .and_then(|v| v.as_str())
@@ -274,7 +331,7 @@ mod tests {
     /// name would leave `ai-tier` open, which is exactly the kind of
     /// half-closed gate the option registry's dual spelling invites.
     #[test]
-    fn set_option_escalates_only_for_the_permission_tier_option() {
+    fn set_option_escalates_for_the_permission_tier_option() {
         for spelling in ["ai_tier", "ai-tier", "AI_TIER"] {
             assert_eq!(
                 effective_tier(
@@ -286,29 +343,119 @@ mod tests {
                 "set_option {spelling} must require Privileged"
             );
         }
-        // ...and nothing else moves. Sampled across the whole registry rather
-        // than one hand-picked "unicorn" option (principle #14): every other
-        // registered option must still be settable at the declared tier, or
-        // this guard has quietly become "raise set_option wholesale".
-        let registry = OptionRegistry::new();
-        let mut others = 0usize;
-        for opt in registry.list() {
-            if is_permission_tier_option(&opt.name) {
-                continue;
-            }
+    }
+
+    /// The bug this rule was inverted for. `ai_mode = auto-accept`
+    /// auto-answers every `ConfirmToolCall`, so at the shipped `readonly`
+    /// default — where writes and shell are precisely the *Ask* cases — a
+    /// `Write`-tier session reaching it grants itself unprompted write and
+    /// shell. It escalated for `ai_tier` and not for this, one enum away.
+    #[test]
+    fn set_option_escalates_for_ai_mode() {
+        for spelling in ["ai_mode", "ai-mode", "AI_MODE"] {
             assert_eq!(
                 effective_tier(
                     "set_option",
-                    &json!({ "option": opt.name, "value": "x" }),
+                    &json!({ "option": spelling, "value": "auto-accept" }),
                     PermissionTier::Write
                 ),
-                PermissionTier::Write,
-                "setting '{}' must not have been escalated",
-                opt.name
+                PermissionTier::Privileged,
+                "set_option {spelling} must require Privileged"
             );
-            others += 1;
         }
-        assert!(others > 100, "sanity: only {others} other options checked");
+    }
+
+    /// The generalisation, stated as the property rather than as a list:
+    /// **every** registered option that bounds agent authority escalates, and
+    /// the ordinary ones do not. Driven off the live `OptionRegistry`, so a
+    /// newly-registered `ai_*` option is covered the day it is added — which
+    /// is the entire point of inverting the rule.
+    #[test]
+    fn every_agent_authority_option_escalates_and_ordinary_ones_do_not() {
+        let registry = OptionRegistry::new();
+        let (mut authority, mut ordinary) = (0usize, 0usize);
+        for opt in registry.list() {
+            let tier = effective_tier(
+                "set_option",
+                &json!({ "option": opt.name, "value": "x" }),
+                PermissionTier::Write,
+            );
+            if is_agent_authority_option(&opt.name) {
+                assert_eq!(
+                    tier,
+                    PermissionTier::Privileged,
+                    "'{}' bounds agent authority but stayed at {tier:?}",
+                    opt.name
+                );
+                authority += 1;
+            } else {
+                assert_eq!(
+                    tier,
+                    PermissionTier::Write,
+                    "setting ordinary option '{}' must not have been escalated — \
+                     this guard is not licence to raise set_option wholesale",
+                    opt.name
+                );
+                ordinary += 1;
+            }
+        }
+        assert!(
+            authority >= 9,
+            "sanity: only {authority} authority-bounding options found; \
+             did the registry stop registering ai_* options?"
+        );
+        assert!(
+            ordinary > 100,
+            "sanity: only {ordinary} ordinary options checked"
+        );
+    }
+
+    /// Every name in the ordinary-exception list must be a real registered
+    /// option. A typo there silently does nothing today, but reads as though
+    /// that option were deliberately exempted — and the next author extends
+    /// the list by imitation.
+    #[test]
+    fn ordinary_ai_options_all_exist_in_the_registry() {
+        let registry = OptionRegistry::new();
+        let names: Vec<String> = registry.list().iter().map(|o| o.name.to_string()).collect();
+        for exempt in ORDINARY_AI_OPTIONS {
+            assert!(
+                names.iter().any(|n| n == exempt),
+                "'{exempt}' is listed as an ordinary ai_* option but is not registered"
+            );
+        }
+        for authority in NON_AI_AUTHORITY_OPTIONS {
+            assert!(
+                names.iter().any(|n| n == authority),
+                "'{authority}' is listed as authority-bounding but is not registered"
+            );
+        }
+    }
+
+    /// The inversion itself, tested where it matters: an `ai_*` name that
+    /// nobody has thought about must escalate by default. If this fails, the
+    /// rule has been flipped back to enumerate-the-dangerous-ones and the
+    /// next `ai_mode` will ship open.
+    #[test]
+    fn an_unknown_ai_option_escalates_by_default() {
+        for invented in [
+            "ai_future_auto_approve_everything",
+            "ai-some-new-gate",
+            "ai_sandbox_disabled",
+        ] {
+            assert!(
+                is_agent_authority_option(invented),
+                "'{invented}' was not escalated — the default-escalate rule is gone"
+            );
+        }
+        // The prefix must be the namespace, not a substring: an option that
+        // merely *contains* "ai" is ordinary.
+        for unrelated in ["tab_width", "chain_indent", "airy_margins"] {
+            assert!(
+                !is_agent_authority_option(unrelated),
+                "'{unrelated}' was escalated by a sloppy prefix match"
+            );
+        }
     }
 
     /// `:set ai-tier privileged` routed through `execute_command` is the same

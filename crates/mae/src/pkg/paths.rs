@@ -107,6 +107,7 @@ mod tests {
     fn builtin_module_dirs_honors_env_override_first() {
         // MAE_MODULES_PATH must take precedence so AppImage/custom installs win.
         let prev = std::env::var("MAE_MODULES_PATH").ok();
+        let _env = mae_effect_sandbox::lock_env();
         std::env::set_var("MAE_MODULES_PATH", "/custom/mae/modules");
         let dirs = builtin_module_dirs();
         assert_eq!(

@@ -1397,11 +1397,6 @@ pub fn default_config_template() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// Tests that manipulate environment variables must hold this lock
-    /// to avoid races when cargo runs tests in parallel.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// Audit #599.2 — the first-run/wizard writer emitted values raw while
     /// `Editor::save_option_to_init` escaped them, so the two writers of the
@@ -1412,7 +1407,7 @@ mod tests {
     /// Both writers now share `mae_core::options::scheme_string_literal`.
     #[test]
     fn wizard_written_options_are_escaped_like_set_save_writes_them() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         let tmp = tempfile::tempdir().expect("tmpdir");
         let prev = std::env::var("XDG_CONFIG_HOME").ok();
         std::env::set_var("XDG_CONFIG_HOME", tmp.path());
@@ -1571,7 +1566,7 @@ mod tests {
 
     #[test]
     fn resolve_ollama_sets_base_url() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         let cfg = Config {
             ai: AiSection {
                 provider: Some("ollama".into()),
@@ -1600,7 +1595,7 @@ mod tests {
 
     #[test]
     fn resolve_gemini_config() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         std::env::set_var("GEMINI_API_KEY", "gemini-key");
         std::env::remove_var("MAE_AI_PROVIDER");
         let cfg = Config {
@@ -1619,7 +1614,7 @@ mod tests {
 
     #[test]
     fn resolve_deepseek_config() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         std::env::set_var("DEEPSEEK_API_KEY", "ds-key");
         std::env::remove_var("MAE_AI_PROVIDER");
         std::env::remove_var("MAE_AI_BASE_URL");
@@ -1645,7 +1640,7 @@ mod tests {
 
     #[test]
     fn resolve_api_key_command() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         std::env::remove_var("ANTHROPIC_API_KEY");
         std::env::remove_var("MAE_AI_PROVIDER");
         std::env::remove_var("MAE_AI_BASE_URL");
@@ -1664,7 +1659,7 @@ mod tests {
 
     #[test]
     fn resolve_env_overrides_api_key_command() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         std::env::set_var("ANTHROPIC_API_KEY", "env-key");
         std::env::remove_var("MAE_AI_PROVIDER");
         std::env::remove_var("MAE_AI_BASE_URL");
@@ -1684,7 +1679,7 @@ mod tests {
 
     #[test]
     fn resolve_no_credentials_returns_none() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         std::env::remove_var("ANTHROPIC_API_KEY");
         std::env::remove_var("OPENAI_API_KEY");
         std::env::remove_var("MAE_AI_BASE_URL");
@@ -1695,7 +1690,7 @@ mod tests {
 
     #[test]
     fn resolve_file_model_overridden_by_env() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         std::env::set_var("MAE_AI_MODEL", "env-model");
         std::env::set_var("ANTHROPIC_API_KEY", "test-key");
         std::env::remove_var("MAE_AI_PROVIDER");
@@ -1723,7 +1718,7 @@ mod tests {
     /// cannot drift apart on what "unconfigured" means.
     #[test]
     fn resolve_permission_default_auto_approves_reads_and_asks_above() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         std::env::remove_var("MAE_AI_PERMISSIONS");
         let cfg = Config::default();
         let policy = resolve_permission_policy(&cfg).expect("default tier must parse");
@@ -1747,7 +1742,7 @@ mod tests {
 
     #[test]
     fn resolve_permission_from_config() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         std::env::remove_var("MAE_AI_PERMISSIONS");
         let cfg = Config {
             ai: AiSection {
@@ -1762,7 +1757,7 @@ mod tests {
 
     #[test]
     fn resolve_permission_env_overrides_config() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         std::env::set_var("MAE_AI_PERMISSIONS", "readonly");
         let cfg = Config {
             ai: AiSection {
@@ -1778,7 +1773,7 @@ mod tests {
 
     #[test]
     fn resolve_permission_all_tiers() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         std::env::remove_var("MAE_AI_PERMISSIONS");
         let tiers = [
             ("readonly", PermissionTier::ReadOnly),
@@ -1809,7 +1804,7 @@ mod tests {
     /// intended behaviour. A typo must refuse to start, not silently widen access.
     #[test]
     fn resolve_permission_unknown_tier_from_config_is_rejected() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         std::env::remove_var("MAE_AI_PERMISSIONS");
         let cfg = Config {
             ai: AiSection {
@@ -1834,7 +1829,7 @@ mod tests {
     /// a typo there must not fall through to the config value or to a default.
     #[test]
     fn resolve_permission_unknown_tier_from_env_is_rejected() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         std::env::set_var("MAE_AI_PERMISSIONS", "shel");
         let cfg = Config {
             ai: AiSection {
@@ -1856,7 +1851,7 @@ mod tests {
     /// each one previously became Shell.
     #[test]
     fn near_miss_tier_spellings_are_all_rejected() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         std::env::remove_var("MAE_AI_PERMISSIONS");
         // ADR-090 D4 narrowed this list: `parse_permission_tier` is now an
         // alias of `PermissionTier::parse`, the ONE tier vocabulary, which is
@@ -1930,7 +1925,7 @@ mod tests {
 
     #[test]
     fn auto_approve_tools_env_override() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         std::env::set_var("MAE_AGENTS_AUTO_APPROVE", "0");
         let cfg = Config::default();
         assert!(!cfg.agents.auto_approve_tools_effective());
@@ -1939,7 +1934,7 @@ mod tests {
 
     #[test]
     fn auto_approve_tools_config_false() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = mae_effect_sandbox::lock_env();
         std::env::remove_var("MAE_AGENTS_AUTO_APPROVE");
         let s = r#"
             [agents]

@@ -52,7 +52,19 @@ impl Editor {
             })
     }
 
-    /// Closes ROADMAP #83: force exactly one redraw once `which_key_idle_delay`
+    /// Closes the FIRST half of issue #83 only — the idle-delay half. Setting
+    /// `which_key_idle_delay` now changes observable behavior instead of being
+    /// a registered option with no consumer.
+    ///
+    /// @ai-caution: [docs-drift] #83's second half — a `which-key-display`
+    /// option (`docked | floating`) rendering which-key as a centered popup —
+    /// is NOT started; no such option exists. This comment previously read
+    /// "Closes ROADMAP #83", which told every reader (human and AI) that a
+    /// half-built item was finished. Do not restore that wording, and do not
+    /// close #83 on the strength of this function. Despite the name, this
+    /// forces a *redraw*; it does not implement a floating popup.
+    ///
+    /// Force exactly one redraw once `which_key_idle_delay`
     /// has elapsed while the leader keypad is open, so the which-key popup
     /// (gated by `leader_popup_ready`) actually paints. During a pure idle
     /// pause nothing else marks the editor dirty, so without this hook a
