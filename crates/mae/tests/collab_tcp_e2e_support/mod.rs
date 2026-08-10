@@ -245,12 +245,43 @@ pub fn find_daemon_binary() -> Option<std::path::PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
+/// Per-test isolation for everything the daemon resolves from the AMBIENT
+/// environment, not just what it takes on the command line.
+///
+/// Issue #693: these tests passed `--bind <tcp addr>` and `--data-dir <tmp>` and
+/// looked isolated, but the daemon ALSO claims a Unix socket derived from
+/// `XDG_RUNTIME_DIR`. On any machine already running a real `mae-daemon` — i.e.
+/// every developer actually using MAE — the test daemon exited immediately with
+/// `another daemon is already listening on /run/user/<uid>/mae-daemon.sock`, and
+/// the whole file could only ever pass in CI. The old startup wait reported this
+/// as "did not start within 5s", which is why it went unexplained.
+///
+/// Keyed by the `--bind` port so the directory is unique per test but STABLE
+/// across a kill/restart within one test (`tcp_reconnect_after_server_restart`
+/// restarts on the same port and must reach the same socket path).
+fn isolated_env(args: &[&str]) -> std::path::PathBuf {
+    let port = args
+        .windows(2)
+        .find(|w| w[0] == "--bind")
+        .and_then(|w| w[1].rsplit(':').next())
+        .unwrap_or("noport")
+        .to_string();
+    let dir = std::env::temp_dir().join(format!("mae-e2e-env-{port}"));
+    std::fs::create_dir_all(&dir).expect("create isolated env dir");
+    dir
+}
+
 /// Spawn mae-daemon with given args. Uses pre-built binary or falls back to cargo run.
 #[allow(dead_code)]
 pub fn spawn_daemon(args: &[&str]) -> tokio::process::Child {
+    let env_dir = isolated_env(args);
     if let Some(bin) = find_daemon_binary() {
         Command::new(bin)
             .args(args)
+            .env("XDG_RUNTIME_DIR", &env_dir)
+            .env("HOME", &env_dir)
+            .env("XDG_CONFIG_HOME", env_dir.join("config"))
+            .env("XDG_DATA_HOME", env_dir.join("data"))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -265,6 +296,10 @@ pub fn spawn_daemon(args: &[&str]) -> tokio::process::Child {
                     .chain(args.iter().copied()),
             )
             .current_dir(workspace_root.join("daemon"))
+            .env("XDG_RUNTIME_DIR", &env_dir)
+            .env("HOME", &env_dir)
+            .env("XDG_CONFIG_HOME", env_dir.join("config"))
+            .env("XDG_DATA_HOME", env_dir.join("data"))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -294,14 +329,125 @@ pub async fn spawn_server() -> (tokio::process::Child, String, tempfile::TempDir
 
     let child = spawn_daemon(&["--bind", &addr, "--data-dir", &data_dir]);
 
-    // Wait for server to accept connections.
-    for _ in 0..50 {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+    // Wait for the server to accept connections.
+    //
+    // Issue #693: the poll loop is the right shape — what was wrong was that it
+    // could only ever say "did not start within 5s", which is the least useful
+    // thing it knows. It could not distinguish a daemon that was merely SLOW on
+    // a loaded runner from one that EXITED immediately (port already in use, bad
+    // data dir, a panic during boot), and it discarded the daemon's own stderr,
+    // which says exactly which of those happened. That is how this surfaced: a
+    // CI failure reading "did not start within 5s" with nothing to act on.
+    //
+    // Now it checks liveness each round and fails FAST with the process's own
+    // output when the daemon is dead, rather than waiting out the full budget to
+    // report a timeout for something that was never going to succeed. The budget
+    // is also raised, because a cold CI runner starting a release binary under
+    // parallel test load genuinely can take longer than 5s — but the budget is
+    // the backstop, not the diagnosis.
+    let deadline = std::time::Duration::from_secs(30);
+    let started = std::time::Instant::now();
+    let mut child = child;
+    while started.elapsed() < deadline {
         if TcpStream::connect(&addr).await.is_ok() {
             return (child, addr, tmp);
         }
+        // Dead is a different failure from slow. Say which.
+        if let Ok(Some(status)) = child.try_wait() {
+            let out = child.wait_with_output().await.ok();
+            let (stdout, stderr) = out
+                .map(|o| {
+                    (
+                        String::from_utf8_lossy(&o.stdout).into_owned(),
+                        String::from_utf8_lossy(&o.stderr).into_owned(),
+                    )
+                })
+                .unwrap_or_default();
+            panic!(
+                "mae-daemon EXITED before accepting connections on {addr} \
+                 (status: {status}) after {:?}\n--- stdout ---\n{stdout}\n\
+                 --- stderr ---\n{stderr}",
+                started.elapsed()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    panic!("mae-daemon did not start within 5s on {}", addr);
+    panic!(
+        "mae-daemon was still alive but never accepted a connection on {addr} \
+         within {deadline:?} — the process is up, so this is a bind/listen problem \
+         or genuine startup slowness, NOT a crash"
+    );
+}
+
+/// Poll a condition until it holds, or fail with a message after a budget.
+///
+/// Issue #693: the replacement for `sleep(n)`-as-synchronization. A fixed sleep
+/// is a bet that the machine is fast enough — simultaneously too slow (every run
+/// pays the full duration) and too fast (a loaded runner loses). A condition wait
+/// returns the moment the thing actually happened, and only spends the budget
+/// when something is genuinely wrong.
+///
+/// A macro rather than a function taking a closure, deliberately: the conditions
+/// worth waiting on here call `&mut self` methods on live clients
+/// (`ca.content(..).await`), and an `FnMut` returning a future cannot hold that
+/// borrow across the call — `captured variable cannot escape FnMut closure body`.
+/// A macro expands in place, so the borrow never crosses a closure boundary.
+///
+/// The message is required, not optional: the failure this replaces could only
+/// say "did not happen within Xms", which is the least actionable thing the test
+/// knows.
+#[macro_export]
+macro_rules! wait_until {
+    ($what:expr, $budget:expr, $cond:expr) => {{
+        // The budget wraps the WHOLE wait, not just the gaps between attempts.
+        // An earlier version checked `elapsed()` only after evaluating the
+        // condition, so a condition that itself blocked forever — here,
+        // `client.content(..).await` on a peer that never answers — never reached
+        // the deadline and the test hung indefinitely instead of failing. A
+        // timeout you can starve is not a timeout.
+        let __r = tokio::time::timeout($budget, async {
+            loop {
+                if $cond {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await;
+        if __r.is_err() {
+            panic!("timed out after {:?} waiting for: {}", $budget, $what);
+        }
+    }};
+}
+
+/// Wait for a listener to accept on `addr` — the "is it up yet" case, which
+/// several tests hand-rolled with a `for 0..50 { sleep(100ms) }` loop.
+#[allow(dead_code)]
+pub async fn wait_for_listener(addr: &str, budget: Duration) {
+    let started = std::time::Instant::now();
+    while started.elapsed() < budget {
+        if TcpStream::connect(addr).await.is_ok() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("timed out after {budget:?} waiting for a listener accepting on {addr}");
+}
+
+/// Wait for a port to stop accepting — i.e. the previous server is really gone.
+/// `Child::kill()` reaps the process, but the listening socket is not
+/// necessarily released by the time the next `bind` happens, which is what the
+/// `sleep(500ms)` after each kill was actually (and unreliably) waiting for.
+#[allow(dead_code)]
+pub async fn wait_for_port_released(addr: &str, budget: Duration) {
+    let started = std::time::Instant::now();
+    while started.elapsed() < budget {
+        if TcpStream::connect(addr).await.is_err() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("timed out after {budget:?} waiting for {addr} to stop accepting connections");
 }
 
 #[allow(dead_code)]
