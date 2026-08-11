@@ -143,6 +143,20 @@ fn drain_debounce_skips_recent() {
         ":PROPERTIES:\n:ID: debounce-second\n:END:\n#+title: Second\n\ntest\n",
     )
     .unwrap();
+    // #693 triage — KEPT, but this one is weaker than it looks and is called out
+    // rather than quietly converted.
+    //
+    // The assertion below is NEGATIVE (the node must NOT appear), and this sleep
+    // is giving `notify` time to deliver the event so the debounce has something
+    // to suppress. If delivery takes longer than 200ms the test still passes —
+    // for the WRONG reason: nothing was there to debounce. A negative assertion
+    // whose precondition may not have happened cannot distinguish "the debounce
+    // worked" from "the event never arrived".
+    //
+    // Fixing it needs an observable for "the watcher received an event but chose
+    // not to drain" (a counter, or `last_event_at`). Filed as part of #693 rather
+    // than papered over with a longer sleep, which would only widen the window in
+    // which it can pass for the wrong reason.
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     // This drain should be debounced — second node should NOT appear

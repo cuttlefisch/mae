@@ -81,6 +81,11 @@ fn resync_after_external_write_does_not_mask_unrelated_files() {
     let other_idx = editor.buffers.len() - 1;
 
     // A real external edit to the unrelated file, independent of any KB write.
+    //
+    // #693 triage — KEEP. Not synchronization: this exists so the rewrite lands
+    // on a DIFFERENT mtime than the original write. Filesystem timestamp
+    // granularity is the constraint, and no condition on editor state can
+    // substitute for it.
     std::thread::sleep(std::time::Duration::from_millis(10));
     std::fs::write(&other_path, "changed externally\n").unwrap();
 

@@ -239,6 +239,12 @@ fn store_watch_reload_suppressed_within_local_write_cooldown() {
             editor.kb.pending_preload.is_none(),
             "reload must be suppressed within the local-write cooldown"
         );
+        // #693 triage — KEEP. This is not synchronization: the cooldown WINDOW is
+        // the subject, and the sleep is the sampling interval across it. Twenty
+        // samples over ~300ms is what makes "suppressed for the whole window" a
+        // claim rather than a single lucky observation. A condition wait would
+        // invert the test into "wait until it fires", which is the opposite
+        // assertion.
         std::thread::sleep(std::time::Duration::from_millis(15));
     }
 }
