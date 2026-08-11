@@ -60,7 +60,11 @@ pub(crate) fn format_permissions_info(policy: &PermissionPolicy) -> String {
     }
 
     out.push_str(
-        "\nConfigure via MAE_AI_PERMISSIONS env var or [ai] auto_approve_tier in config.toml.\n\
+        "\nConfigure it, highest precedence first:\n\
+         \u{20} 1. MAE_AI_PERMISSIONS=shell mae      (one launch, overrides everything)\n\
+         \u{20} 2. init.scm: (set-option! \"ai-tier\" \"shell\")   — the primary surface\n\
+         \u{20} 3. config.toml: [ai] auto_approve_tier      — legacy bootstrap (ADR-096)\n\
+         Resolved at startup, so a change needs a relaunch.\n\
          Agent tool approval (MCP) is separate — see [agents] auto_approve_tools in config.toml.",
     );
     out

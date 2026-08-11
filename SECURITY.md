@@ -38,7 +38,21 @@ of three things:
 `auto_approve_tier = "trusted"` (= shell), which auto-approved essentially everything. It now ships
 **readonly**: reads run, writes and shell are *asked*. Nothing is silently denied, so the stricter
 default does not break `run_build`/`run_test` — it asks about them. If you want the old behaviour,
-set `auto_approve_tier = "shell"` explicitly and understand what you are granting.
+set the tier to `shell` explicitly and understand what you are granting.
+
+**Where to set it**, highest precedence first — resolved once at startup, so a change needs a
+relaunch:
+
+| Surface | Form |
+|---|---|
+| Environment | `MAE_AI_PERMISSIONS=shell mae` — one launch, overrides everything |
+| `init.scm` (primary) | `(set-option! "ai-tier" "shell")` |
+| `config.toml` (legacy bootstrap, ADR-096) | `[ai] auto_approve_tier = "shell"` |
+
+Values are case-insensitive and an unrecognised one is **refused** — MAE fails to start rather
+than resolving a typo to some tier (CWE-636). Note that before #640 the `init.scm` form was
+registered and persisted but reached only the status-bar badge, so on older builds it silently did
+nothing.
 
 Which surfaces can ask:
 
