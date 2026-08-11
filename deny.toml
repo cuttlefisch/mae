@@ -39,6 +39,17 @@ ignore = [
     # upgrade is available. Tracked in #374 — revisit if yrs drops the
     # dependency upstream (check `cargo tree -i smallstr`).
     { id = "RUSTSEC-2026-0215", reason = "yrs transitive dep, no upstream fix available; tracked in #374" },
+    # smartstring unmaintained (cozo -> smartstring) — repo archived upstream
+    # 2026-05-03, all versions affected. NO UPGRADE EXISTS: cozo 0.7.6 is the
+    # latest published release and we are already on it, so this is not a
+    # version bump away. Risk is maintenance, not exploitability — a string
+    # type, not attacker-facing parsing.
+    #
+    # This is the SECOND unmaintained advisory arriving through cozo, which is
+    # a data point ADR-102's evidence-gated engine evaluation should weigh
+    # rather than a reason to act on its own. Tracked in #700 — revisit on any
+    # cozo bump (`cargo tree -i smartstring`).
+    { id = "RUSTSEC-2026-0249", reason = "cozo transitive dep, no upstream release available; tracked in #700" },
 ]
 
 [licenses]
