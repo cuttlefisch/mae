@@ -21,13 +21,29 @@
 //! was NOT advanced and a clear failure surfaces — never a false "shipped"/"approved"
 //! success.
 //!
-//! The hangup is triggered and awaited BEFORE the command is sent (empirically:
-//! command-then-close let the write slip through the socket before the close
-//! propagated). This means the reader task's own independent EOF detection may beat
-//! the command to tearing down `writer` first, which routes the command through the
-//! pre-existing "no active connection writer" branch instead of the new fix's
-//! mid-loop write-failure branch — both are real, valid negative-path outcomes for
-//! the property under test (state is never advanced on any kind of write failure).
+//! Steps (3)/(4) above describe the ORIGINAL hangup-based harness, still used by
+//! three of the four tests here. It triggers and awaits the hangup before sending
+//! the command (empirically: command-then-close let the write slip through the
+//! socket before the close propagated). The cost is that the reader task's own
+//! independent EOF detection may beat the command to tearing down `writer`, so the
+//! command can land on the pre-existing "no active connection writer" branch
+//! instead of the mid-loop write-failure branch. Both are valid negative-path
+//! outcomes for the property under test, which is why those assertions accept more
+//! than one message — but it also means those three tests cannot tell you WHICH
+//! branch ran.
+//!
+//! `rotate_identity_write_failure_reports_error_not_success` no longer works that
+//! way (issue #487). It keeps the daemon alive and injects the failure at the
+//! writer via `collab_bridge::write_fault`, so `writer` is always still `Some` and
+//! the mid-loop branch is the only one reachable — letting it assert the exact
+//! message, and making it fail 100/100 with the fix reverted rather than ~70/100.
+//! It carried a `retries = 2` nextest override until that change; see the note left
+//! in `.config/nextest.toml` where the override used to be.
+//!
+//! The remaining three are candidates for the same treatment. They are left alone
+//! here deliberately: each would need its own verification that the injected
+//! failure reaches the same branch the real close does, and bundling four
+//! rewrites into one change would make that impossible to check individually.
 //! Each test's assertion accepts every message the connection's actual state at
 //! processing time can legitimately produce, rather than pinning one exact branch.
 
@@ -273,6 +289,23 @@ fn owned_e2e_collection_state_with_pending(
     coll.encode_state()
 }
 
+/// The regression guard, made deterministic.
+///
+/// The write failure is now INJECTED (`write_fault::fail_writes_to`) instead of
+/// raced against a real `SO_LINGER(0)` RST. The previous version was
+/// probabilistic in both directions: its own comment recorded that 30% of runs
+/// against a reverted fix failed to catch the regression, and it failed often
+/// enough on correct code to need a `retries = 2` override in
+/// `.config/nextest.toml`. A guard that only sometimes guards is not a guard,
+/// and a retry that hides it is worse — it converts a real regression into a
+/// green run on the second attempt.
+///
+/// Because the failure is now deterministic, the oracle is exact: the daemon
+/// stays alive and `writer` is still `Some`, so this MUST take the mid-loop
+/// write-failure branch every time. The old test had to accept any of three
+/// messages depending on how far the reader task's independent EOF detection
+/// had got — an assertion that broad cannot tell "the fix works" from "a
+/// different branch ran".
 #[tokio::test]
 async fn rotate_identity_write_failure_reports_error_not_success() {
     let client_id = Identity::from_seed(&[51u8; 32], "client");
@@ -280,7 +313,7 @@ async fn rotate_identity_write_failure_reports_error_not_success() {
     let client_pub = client_id.public();
     let server_pub = server_id.public();
 
-    let (addr, hangup_tx, daemon_handle) = spawn_fake_daemon(server_id, client_pub).await;
+    let (addr, _hangup_tx, _daemon_handle) = spawn_fake_daemon(server_id, client_pub).await;
     let connect_id = Identity::from_seed(&[51u8; 32], "client");
     let (cmd_tx, mut evt_rx) = connect_client(addr, connect_id, server_pub).await;
 
@@ -294,23 +327,27 @@ async fn rotate_identity_write_failure_reports_error_not_success() {
         })
         .await
         .unwrap();
-    // KbSetEncryption emits no success event; give the task a moment to process it
-    // (it's a single, non-yielding local computation plus one fire-and-forget write).
-    tokio::time::sleep(Duration::from_millis(150)).await;
 
-    // Kill the daemon connection, THEN immediately enqueue RotateIdentity — NOT
-    // awaiting the fake daemon's task to fully exit first. Empirically: awaiting
-    // the full join gives the reader task enough time to also notice the EOF and
-    // unwind the whole connection state before the command is even sent, which
-    // routes most runs through the pre-existing "already disconnected" branch
-    // instead of the new fix's mid-loop write-failure branch (30% of runs on a
-    // reverted fix failed to catch the regression). Firing the command right after
-    // triggering (not waiting out) the hangup keeps the odds heavily in favor of
-    // `writer` still being `Some` when RotateIdentity starts, while SO_LINGER(0)
-    // above still makes the write itself fail once the RST lands moments later.
-    let _ = hangup_tx.send(());
+    // Barrier, not a sleep. `KbSetEncryption` emits no event of its own, and the
+    // seeded collection is a PRECONDITION: with no rotation plans the code takes
+    // the `total_plans == 0` path and legitimately reports success, so arming the
+    // fault too early would fail this test for the wrong reason. `ShowStatus` is
+    // handled by the same single command loop, in FIFO order, and answers with a
+    // `StatusReport` without touching the wire — so receiving it proves the
+    // encryption command has already been processed. The old `sleep(150ms)` only
+    // made that likely.
+    cmd_tx.send(CollabCommand::ShowStatus).await.unwrap();
+    let _ = recv_until(&mut evt_rx, |e| {
+        matches!(e, CollabEvent::StatusReport { .. })
+    })
+    .await;
+
+    // Arm the fault. From here every write on this connection fails with
+    // BrokenPipe — the same error the kernel would return, at the same call
+    // site, without waiting on an RST.
+    crate::collab_bridge::write_fault::fail_writes_to(&addr.to_string());
+
     cmd_tx.send(CollabCommand::RotateIdentity).await.unwrap();
-    let _ = daemon_handle.await;
 
     let ev = recv_until(&mut evt_rx, |e| {
         matches!(
@@ -321,20 +358,10 @@ async fn rotate_identity_write_failure_reports_error_not_success() {
     .await;
     match ev {
         CollabEvent::Error { message } => {
-            // Any of these is a legitimate negative-path outcome for "the write can't
-            // be confirmed sent" — which specific one depends on how far the reader
-            // task's own independent EOF detection got before this command was
-            // processed: still inside the connected loop with `writer` present (new
-            // fix's branch — "Identity rotation failed"), `writer` already torn down
-            // by `tear_down` ("no active connection writer"), or the whole task
-            // already fell through to the disconnected-state dispatcher ("Not
-            // connected"). All three refuse to advance `signing_identity` /
-            // `kb_collections` and never report success — the property under test.
             assert!(
-                message.contains("Identity rotation failed")
-                    || message.contains("no active connection writer")
-                    || message.contains("Not connected"),
-                "unexpected rotation failure message: {message}"
+                message.contains("Identity rotation failed"),
+                "expected the mid-loop write-failure branch (the one the fix added), \
+                 got: {message}"
             );
         }
         CollabEvent::StatusReport { lines } => {
@@ -343,7 +370,7 @@ async fn rotate_identity_write_failure_reports_error_not_success() {
                  is back: {lines:?}"
             );
         }
-        other => panic!("unexpected event: {other:?}"),
+        other => panic!("recv_until yielded an unexpected event: {other:?}"),
     }
 }
 

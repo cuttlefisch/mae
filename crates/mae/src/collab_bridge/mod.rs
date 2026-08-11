@@ -1313,6 +1313,112 @@ type BoxReader = Box<dyn tokio::io::AsyncBufRead + Unpin + Send>;
 /// A type-erased write half — TCP or TLS.
 type BoxWriter = Box<dyn tokio::io::AsyncWrite + Unpin + Send>;
 
+/// Test-only deterministic write-failure injection.
+///
+/// The regression this exists for — a mid-loop wire-write failure being
+/// reported as a successful identity rotation — could previously only be
+/// provoked by racing a real TCP RST (`SO_LINGER(0)`) against a real `write()`.
+/// That test was probabilistic in BOTH directions: its own comment recorded
+/// that 30% of runs against a reverted fix failed to catch the regression, and
+/// it intermittently failed on correct code, to the point of carrying a
+/// `retries = 2` override in `.config/nextest.toml`. A guard that only
+/// sometimes guards is not a guard.
+///
+/// Faults are keyed by daemon ADDRESS rather than a global flag so tests stay
+/// parallel-safe: every test binds its own ephemeral port, so arming one
+/// connection cannot affect another running concurrently in the same process.
+///
+/// Consulted on every write (not at connect time) because the test must
+/// connect and exchange traffic successfully FIRST, then arm the fault, then
+/// issue the command under test — which is exactly the state the real bug
+/// occurs in: `writer` still `Some`, the wire no longer usable.
+#[cfg(test)]
+pub(crate) mod write_fault {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+
+    fn faulted() -> &'static Mutex<HashSet<String>> {
+        static FAULTED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+        FAULTED.get_or_init(|| Mutex::new(HashSet::new()))
+    }
+
+    /// Every subsequent write on a connection to `addr` fails with
+    /// `BrokenPipe`, immediately and forever.
+    pub(crate) fn fail_writes_to(addr: &str) {
+        // Poison-tolerant: the guarded data is a plain set, and propagating a
+        // panic from an unrelated failing test would turn one failure into a
+        // cascade that hides which test actually broke.
+        let mut set = faulted().lock().unwrap_or_else(|e| e.into_inner());
+        set.insert(addr.to_string());
+    }
+
+    pub(crate) fn is_faulted(addr: &str) -> bool {
+        let set = faulted().lock().unwrap_or_else(|e| e.into_inner());
+        set.contains(addr)
+    }
+}
+
+/// Wraps a real write half so an armed fault surfaces as a genuine I/O error
+/// on the next write — the same `Err` the kernel would return, arriving at the
+/// same call site, without depending on when an RST lands.
+#[cfg(test)]
+struct FaultyWriter {
+    inner: BoxWriter,
+    addr: String,
+}
+
+#[cfg(test)]
+impl tokio::io::AsyncWrite for FaultyWriter {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        if write_fault::is_faulted(&self.addr) {
+            return std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "injected write failure (test)",
+            )));
+        }
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        if write_fault::is_faulted(&self.addr) {
+            return std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "injected write failure (test)",
+            )));
+        }
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+/// Identity in production; the fault-injection wrapper in test builds.
+#[cfg(test)]
+fn instrument_writer(addr: &str, w: BoxWriter) -> BoxWriter {
+    Box::new(FaultyWriter {
+        inner: w,
+        addr: addr.to_string(),
+    })
+}
+
+#[cfg(not(test))]
+#[inline]
+fn instrument_writer(_addr: &str, w: BoxWriter) -> BoxWriter {
+    w
+}
+
 /// How the editor authenticates to the daemon. Resolved once from options.
 enum ClientTransport {
     /// Plaintext TCP. `psk` empty = no auth; otherwise PSK handshake (may be a
@@ -1469,7 +1575,7 @@ async fn establish_connection(
             let (r, w) = tokio::io::split(tls);
             Ok((
                 Box::new(BufReader::new(r)) as BoxReader,
-                Box::new(w) as BoxWriter,
+                instrument_writer(addr, Box::new(w) as BoxWriter),
             ))
         }
         ClientTransport::KeyJson { identity, verifier } => {
@@ -1481,14 +1587,20 @@ async fn establish_connection(
             auth.client_handshake(&mut br, &mut w)
                 .await
                 .map_err(|e| format!("key auth failed: {e}"))?;
-            Ok((Box::new(br) as BoxReader, Box::new(w) as BoxWriter))
+            Ok((
+                Box::new(br) as BoxReader,
+                instrument_writer(addr, Box::new(w) as BoxWriter),
+            ))
         }
         ClientTransport::Plain { psk, key_id } => {
             let stream = TcpStream::connect(addr).await.map_err(|e| e.to_string())?;
             let (r, mut w) = stream.into_split();
             let mut br = BufReader::new(r);
             perform_psk_auth(&mut br, &mut w, psk, key_id.as_deref()).await?;
-            Ok((Box::new(br) as BoxReader, Box::new(w) as BoxWriter))
+            Ok((
+                Box::new(br) as BoxReader,
+                instrument_writer(addr, Box::new(w) as BoxWriter),
+            ))
         }
     }
 }
