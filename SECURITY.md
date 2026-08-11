@@ -40,8 +40,8 @@ of three things:
 default does not break `run_build`/`run_test` — it asks about them. If you want the old behaviour,
 set the tier to `shell` explicitly and understand what you are granting.
 
-**Where to set it**, highest precedence first — resolved once at startup, so a change needs a
-relaunch:
+**Where to set it**, highest precedence first. Startup resolves the initial value; `:set ai-tier
+<tier>` then changes it live, taking effect on the next tool call:
 
 | Surface | Form |
 |---|---|

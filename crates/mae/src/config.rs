@@ -808,6 +808,9 @@ pub fn resolve_permission_policy_with_scheme(
         // ceiling (ADR-051) and an unparseable declaration are hard.
         hard_ceiling: None,
         allowed_categories: None,
+        // Attached by the caller once the editor's shared cell exists; a policy
+        // resolved here is a startup snapshot, not yet live.
+        live: None,
     })
 }
 

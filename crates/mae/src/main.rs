@@ -777,6 +777,12 @@ fn main() -> io::Result<()> {
                 std::process::exit(2);
             }
         };
+        // ADR-084 D7: seed the shared cell with what startup resolved, then hand
+        // the policy that same cell. From here `:set ai-tier` moves the enforced
+        // line without a relaunch, and every clone of this policy — including the
+        // one the spawned AgentSession owns — sees it.
+        editor.ai.tier_live.set(permission_policy.auto_approve_up_to);
+        permission_policy.live = Some(editor.ai.tier_live.clone());
         // ADR-056: seed the server's global tool-category restriction from
         // config/init.scm before any MCP session connects, same pattern as
         // `mcp_tools_tiered` below. Empty (default) leaves the policy

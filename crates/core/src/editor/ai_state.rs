@@ -270,6 +270,12 @@ pub struct AiState {
     pub target_window_id: Option<WindowId>,
     /// Current AI permission tier label.
     pub permission_tier: String,
+    /// The same tier, in the shared cell the enforced policy reads (ADR-084 D7).
+    ///
+    /// `permission_tier` above is the display/persistence string; this is what
+    /// actually gates tool calls. They are kept in step by `set_option`, the one
+    /// place either is written.
+    pub tier_live: crate::LiveTier,
     /// Whether an AI provider was successfully configured at startup.
     pub configured: bool,
     /// Linked output+input buffer pair for split-view conversation UI.
@@ -330,6 +336,7 @@ impl AiState {
             // output, or `get_option` and the status bar disagree with what the
             // resolver reads (#640).
             permission_tier: crate::PermissionTier::ReadOnly.config_name().to_string(),
+            tier_live: crate::LiveTier::new(crate::PermissionTier::ReadOnly),
             configured: false,
             conversation_pair: None,
             input_lock: InputLock::None,

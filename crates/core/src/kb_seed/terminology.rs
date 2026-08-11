@@ -166,7 +166,8 @@ pub fn install_terminology_nodes(kb: &mut KnowledgeBase) {
              `[ai] auto_approve_tier` config.toml key, which is legacy bootstrap (ADR-096). \
              Values are case-insensitive (`PermissionTier::parse` lowercases its input), and \
              an unrecognised value is REFUSED — MAE fails to start rather than resolving it \
-             to any tier. Resolved once at startup, so a change takes effect on relaunch. \
+             to any tier. Startup resolves the initial value; `:set ai-tier <tier>` changes it live, \
+             taking effect on the next tool call. \
              NOTE: the tier is not enforced on every path — see SECURITY.md. Treat it as a \
              guardrail against accident, not as a boundary against an adversarial or \
              prompt-injected model.",

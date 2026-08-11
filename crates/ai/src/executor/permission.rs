@@ -64,7 +64,8 @@ pub(crate) fn format_permissions_info(policy: &PermissionPolicy) -> String {
          \u{20} 1. MAE_AI_PERMISSIONS=shell mae      (one launch, overrides everything)\n\
          \u{20} 2. init.scm: (set-option! \"ai-tier\" \"shell\")   — the primary surface\n\
          \u{20} 3. config.toml: [ai] auto_approve_tier      — legacy bootstrap (ADR-096)\n\
-         Resolved at startup, so a change needs a relaunch.\n\
+         Startup resolves the initial value; `:set ai-tier <tier>` changes it live,\n\
+         taking effect on the next tool call without a relaunch.\n\
          Agent tool approval (MCP) is separate — see [agents] auto_approve_tools in config.toml.",
     );
     out
@@ -139,6 +140,7 @@ mod tests {
             auto_approve_up_to: PermissionTier::Privileged,
             hard_ceiling: None,
             allowed_categories: Some(cats),
+            live: None,
         };
         let out = format_permissions_info(&policy);
         assert!(out.contains("Knowledge"), "{out}");

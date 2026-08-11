@@ -178,7 +178,7 @@ impl OptionRegistry {
                     OptionKind::String, "unnamed", Some("editor.clipboard"),
                     &["unnamedplus", "unnamed", "internal"]),
                 opt!("ai_tier", &["ai-tier"],
-                    "AI permission tier auto-approved without asking: readonly, write, shell, privileged (aliases accepted, case-insensitive). Set in init.scm — (set-option! \"ai-tier\" \"shell\") — or config.toml; MAE_AI_PERMISSIONS overrides both. Takes effect at startup.",
+                    "AI permission tier auto-approved without asking: readonly, write, shell, privileged (aliases accepted, case-insensitive). Set in init.scm — (set-option! \"ai-tier\" \"shell\") — or config.toml; MAE_AI_PERMISSIONS overrides both. Changing it at runtime takes effect on the next tool call.",
                     OptionKind::String, "readonly", Some("ai.auto_approve_tier"), crate::PermissionTier::VALID_SPELLINGS),
                 opt!("ai_editor", &["ai-editor"],
                     "Command to launch for AI agent shell sessions (e.g. mae-agent, claude, aider)",

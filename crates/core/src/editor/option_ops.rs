@@ -507,6 +507,11 @@ impl super::Editor {
             "ai_tier" => match crate::PermissionTier::parse(value) {
                 Some(tier) => {
                     self.ai.permission_tier = tier.config_name().to_string();
+                    // ADR-084 D7: push to the shared cell so the change reaches
+                    // the ENFORCED policy — including the already-spawned
+                    // AgentSession, which holds a clone of it. Without this line
+                    // the option is back to painting the status bar (#640).
+                    self.ai.tier_live.set(tier);
                 }
                 None => {
                     return Err(format!(

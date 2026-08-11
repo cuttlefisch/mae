@@ -401,6 +401,15 @@ pub struct PermissionPolicy {
     /// `auto_approve_up_to` — tier answers "how mutating," category answers
     /// "which subsystem"; both gates must pass.
     pub allowed_categories: Option<std::collections::HashSet<ToolCategory>>,
+    /// ADR-084 D7: when present, the auto-approval line follows this shared cell
+    /// instead of `auto_approve_up_to`, so `:set ai-tier` takes effect without a
+    /// relaunch — including inside the already-spawned `AgentSession`, which
+    /// holds a clone of this policy.
+    ///
+    /// `None` means "fixed policy": used by one-time approvals, and by every
+    /// construction that must not move under the caller (see
+    /// [`PermissionPolicy::with_one_time_approval`]).
+    pub live: Option<mae_core::LiveTier>,
 }
 
 impl Default for PermissionPolicy {
@@ -416,6 +425,7 @@ impl Default for PermissionPolicy {
             auto_approve_up_to: PermissionTier::ReadOnly,
             hard_ceiling: None,
             allowed_categories: None,
+            live: None,
         }
     }
 }
@@ -438,13 +448,26 @@ impl PermissionPolicy {
     /// The tier half of [`PermissionPolicy::decide`], for enforcement points
     /// that have a tier but no tool name (the Scheme VM's ambient tier, the
     /// `execute_command` Scheme bridge's blanket `Write` bar).
+    /// The auto-approval line actually in force: the live cell when one is
+    /// attached, otherwise the fixed `auto_approve_up_to`.
+    ///
+    /// @ai-caution: [permission] Every read of the auto-approval line must go
+    /// through here. Reading `auto_approve_up_to` directly re-creates the bug
+    /// this replaced — a policy that reports one tier and enforces another.
+    pub fn effective_auto_approve(&self) -> PermissionTier {
+        match &self.live {
+            Some(cell) => cell.get(),
+            None => self.auto_approve_up_to,
+        }
+    }
+
     pub fn decide_tier(&self, tier: PermissionTier) -> Decision {
         if let Some(hc) = self.hard_ceiling {
             if tier > hc.tier {
                 return Decision::Deny(DenyReason::HardCeiling(hc));
             }
         }
-        if tier <= self.auto_approve_up_to {
+        if tier <= self.effective_auto_approve() {
             Decision::Allow
         } else {
             Decision::Ask
@@ -463,8 +486,8 @@ impl PermissionPolicy {
     /// the silent `Ask`-as-`Allow` promotion ADR-090 D3 forbids.
     pub fn ambient_scheme_tier(&self) -> PermissionTier {
         match self.hard_ceiling {
-            Some(hc) => self.auto_approve_up_to.min(hc.tier),
-            None => self.auto_approve_up_to,
+            Some(hc) => self.effective_auto_approve().min(hc.tier),
+            None => self.effective_auto_approve(),
         }
     }
 
@@ -476,9 +499,15 @@ impl PermissionPolicy {
     /// untouched, so an approval can never convert a `Deny` into an `Allow` —
     /// asserted by `approval_can_never_promote_a_deny`. Do not "simplify" this
     /// into setting `auto_approve_up_to = Privileged` and clearing the rest.
+    /// @ai-caution: [permission] The result is a FIXED policy — `live` is
+    /// dropped deliberately. A human approved one specific call after being
+    /// shown it; that decision must not keep following a setting that can change
+    /// underneath it, in either direction. Re-attaching `live` here would make
+    /// an approval either evaporate or silently widen on the next `:set`.
     pub fn with_one_time_approval(&self, tier: PermissionTier) -> Self {
         PermissionPolicy {
-            auto_approve_up_to: self.auto_approve_up_to.max(tier),
+            auto_approve_up_to: self.effective_auto_approve().max(tier),
+            live: None,
             ..self.clone()
         }
     }
@@ -497,7 +526,7 @@ impl PermissionPolicy {
             _ => ceiling.source,
         };
         PermissionPolicy {
-            auto_approve_up_to: self.auto_approve_up_to.min(tier),
+            auto_approve_up_to: self.effective_auto_approve().min(tier),
             hard_ceiling: Some(HardCeiling { tier, source }),
             ..self.clone()
         }

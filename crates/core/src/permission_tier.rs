@@ -105,6 +105,32 @@ impl PermissionTier {
         }
     }
 
+    /// Position in the privilege ordering, for [`LiveTier`]'s atomic cell.
+    ///
+    /// @ai-caution: [permission] Must agree with the `Ord` derive — the variant
+    /// order IS the privilege order. Exhaustive by construction so a new tier
+    /// breaks the build rather than silently taking some ordinal.
+    pub fn ordinal(self) -> u8 {
+        match self {
+            PermissionTier::ReadOnly => 0,
+            PermissionTier::Write => 1,
+            PermissionTier::Shell => 2,
+            PermissionTier::Privileged => 3,
+        }
+    }
+
+    /// Inverse of [`PermissionTier::ordinal`]. An unknown ordinal resolves to
+    /// the most restrictive tier rather than panicking or guessing upward — the
+    /// same fail-closed rule `parse` follows for unknown spellings.
+    pub fn from_ordinal(n: u8) -> Self {
+        match n {
+            1 => PermissionTier::Write,
+            2 => PermissionTier::Shell,
+            3 => PermissionTier::Privileged,
+            _ => PermissionTier::ReadOnly,
+        }
+    }
+
     /// Every spelling [`PermissionTier::parse`] accepts, for error messages
     /// and validation. Kept next to the parser so the two cannot drift —
     /// asserted by `every_advertised_spelling_parses`.
@@ -123,6 +149,57 @@ impl PermissionTier {
         "yolo",
         "auto",
     ];
+}
+
+/// A permission tier that can be changed while MAE is running, shared by every
+/// holder of a clone.
+///
+/// # Why this exists
+///
+/// ADR-090 deferred ADR-084 D7 because making `:set ai-tier` take effect needed
+/// "a live-mutable policy shared between the main thread and the spawned
+/// `AgentSession` task". The session receives the policy **by value**
+/// (`AgentSession::with_permission_policy`) and then runs on its own task, so a
+/// later change on the main thread could never reach it.
+///
+/// Putting the mutable part behind an `Arc` inside the policy dissolves that:
+/// every clone — including the one the spawned session already owns, and the
+/// per-session policies `effective_permission_policy` derives — observes the
+/// same cell. No channel, no re-plumbing, no changes at any call site.
+///
+/// @ai-caution: [permission] This is a security control, so the failure modes
+/// are chosen deliberately:
+/// * `Relaxed` ordering is sufficient — this is a single value with no other
+///   state depending on it, and a tool call racing an in-flight `:set` may
+///   legitimately observe either side of it. What must never happen is
+///   observing a value that was never set, which `AtomicU8` guarantees.
+/// * An unrecognised ordinal resolves to the MOST RESTRICTIVE tier, never a
+///   permissive one — the same rule `PermissionTier::parse` follows for
+///   unrecognised spellings (CWE-636).
+#[derive(Clone, Debug)]
+pub struct LiveTier(std::sync::Arc<std::sync::atomic::AtomicU8>);
+
+impl LiveTier {
+    pub fn new(tier: PermissionTier) -> Self {
+        Self(std::sync::Arc::new(std::sync::atomic::AtomicU8::new(
+            tier.ordinal(),
+        )))
+    }
+
+    pub fn get(&self) -> PermissionTier {
+        PermissionTier::from_ordinal(self.0.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    pub fn set(&self, tier: PermissionTier) {
+        self.0
+            .store(tier.ordinal(), std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl Default for LiveTier {
+    fn default() -> Self {
+        Self::new(PermissionTier::ReadOnly)
+    }
 }
 
 #[cfg(test)]
