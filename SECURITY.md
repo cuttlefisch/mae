@@ -58,7 +58,7 @@ Which surfaces can ask:
 
 | Surface | `ask` |
 |---|---|
-| `mae-agent` TUI (the default AI surface, ADR-049) | prompts inline (`y` / `a` / `n`) |
+| `mae-agent` TUI (the default AI surface, ADR-049) | prompts inline (`y` / `a` / `n`). Spawned from the editor it inherits the resolved tier; launched standalone it takes `--permission-mode` (default `shell`) |
 | Embedded editor session (`:ai`, `delegate()`) | prompts in the conversation buffer; answer with `:ai-accept` / `:ai-reject`. `ai-mode = auto-accept` pre-answers **ask** only — it can never turn a **deny** into an allow |
 | `mae-agent --prompt` | **denies** — no human attached, and it says so |
 | External MCP dispatch (VS Code/Copilot, Claude Code via the shim) | **denies** — MAE implements no MCP elicitation, and the requesting client is not the local human |
