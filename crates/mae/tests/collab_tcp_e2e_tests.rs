@@ -58,7 +58,14 @@ async fn tcp_two_editors_convergence() {
     ca.send_update("tcp-conv.txt", &ua).await;
     cb.send_update("tcp-conv.txt", &ub).await;
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // #693: wait for the property, not for a duration. Convergence is the thing
+    // under test, so polling for it is not "hiding" a race — it IS the assertion,
+    // and it returns the moment it holds instead of always paying 200ms.
+    wait_until!(
+        "both editors to converge",
+        Duration::from_secs(10),
+        ca.content("tcp-conv.txt").await == cb.content("tcp-conv.txt").await
+    );
     let content_a = ca.content("tcp-conv.txt").await;
     let content_b = cb.content("tcp-conv.txt").await;
     assert_eq!(content_a, content_b);
@@ -149,19 +156,14 @@ async fn tcp_reconnect_after_server_restart() {
     // Kill the server.
     server.kill().await.expect("failed to kill server");
 
-    // Wait for it to die.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // The old `sleep(500ms)` was waiting for the LISTENING SOCKET to be released,
+    // not for the process to die (`kill().await` already reaps it) — so wait for
+    // the thing that actually blocks the rebind below.
+    wait_for_port_released(&addr, Duration::from_secs(10)).await;
 
     // Restart on the same port.
     let _server2 = spawn_daemon(&["--bind", &addr]);
-
-    // Wait for new server.
-    for _ in 0..50 {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        if TcpStream::connect(&addr).await.is_ok() {
-            break;
-        }
-    }
+    wait_for_listener(&addr, Duration::from_secs(30)).await;
 
     // Reconnect — new server won't have the old data (in-memory only).
     let mut client2 = TcpClient::connect(&addr).await;
@@ -194,17 +196,11 @@ async fn tcp_offline_edit_reconnect_resync() {
 
     // Kill server.
     server.kill().await.expect("failed to kill server");
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    wait_for_port_released(&addr, Duration::from_secs(10)).await;
 
     // Restart server on same port.
     let _server2 = spawn_daemon(&["--bind", &addr]);
-
-    for _ in 0..50 {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        if TcpStream::connect(&addr).await.is_ok() {
-            break;
-        }
-    }
+    wait_for_listener(&addr, Duration::from_secs(30)).await;
 
     // Client A reconnects and re-shares with preserved CRDT state.
     let mut client_a2 = TcpClient::connect(&addr).await;
@@ -267,8 +263,19 @@ async fn tcp_concurrent_three_editors() {
         cc.send_update("3way.txt", &uc).await;
     }
 
-    // Wait for propagation.
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+    // #693: wait for the property. The oracle is all three agreeing AND carrying
+    // all 300 characters — polling on convergence alone could pass on a moment
+    // when three peers agree only because none of them has received anything yet.
+    wait_until!(
+        "all three peers to converge on the full 300 characters",
+        Duration::from_secs(30),
+        {
+            let a = ca.content("3way.txt").await;
+            let b = cb.content("3way.txt").await;
+            let c = cc.content("3way.txt").await;
+            a == b && b == c && a.len() == 300
+        }
+    );
 
     let content_a = ca.content("3way.txt").await;
     let content_b = cb.content("3way.txt").await;
