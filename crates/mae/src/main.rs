@@ -763,7 +763,13 @@ fn main() -> io::Result<()> {
             }
             tools
         };
-        let mut permission_policy = match config::resolve_permission_policy(&app_config) {
+        // ADR-096 Phase 1: init.scm has already executed by here
+        // (`load_init_file` runs well before this), so Scheme can participate in
+        // tier resolution without any live-mutable machinery. Precedence is
+        // env > scheme > config.toml > default.
+        let scheme_overrides = config::SchemeAiOverrides::from_editor(&editor);
+        let mut permission_policy =
+            match config::resolve_permission_policy_with_scheme(&app_config, &scheme_overrides) {
             Ok(p) => p,
             Err(e) => {
                 error!("{e}");

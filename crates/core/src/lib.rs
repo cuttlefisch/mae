@@ -6,6 +6,7 @@
 pub mod agenda_view;
 pub mod ai_residency;
 pub use mae_babel as babel;
+pub use permission_tier::PermissionTier;
 pub mod buffer;
 pub mod buffer_mode;
 pub mod buffer_view;
@@ -23,6 +24,7 @@ pub mod display_region;
 pub mod driven_window;
 pub mod editor;
 pub mod effect_sandbox;
+pub mod permission_tier;
 #[doc(inline)]
 pub use mae_effect_sandbox::external_effects_blocked;
 pub mod event_record;

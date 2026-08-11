@@ -179,7 +179,7 @@ impl OptionRegistry {
                     &["unnamedplus", "unnamed", "internal"]),
                 opt!("ai_tier", &["ai-tier"],
                     "Current AI permission tier (ReadOnly, Write, Shell, Privileged)",
-                    OptionKind::String, "ReadOnly", Some("ai.auto_approve_tier"), &["ReadOnly", "Write", "Shell", "Privileged"]),
+                    OptionKind::String, "readonly", Some("ai.auto_approve_tier"), crate::PermissionTier::VALID_SPELLINGS),
                 opt!("ai_editor", &["ai-editor"],
                     "Command to launch for AI agent shell sessions (e.g. mae-agent, claude, aider)",
                     OptionKind::String, "mae-agent", Some("ai.editor"), &[]),

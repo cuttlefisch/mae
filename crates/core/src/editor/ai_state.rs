@@ -325,7 +325,11 @@ impl AiState {
             transaction_start_idx: None,
             target_buffer_idx: None,
             target_window_id: None,
-            permission_tier: "ReadOnly".to_string(),
+            // Canonical lowercase, derived rather than typed: this must equal
+            // the `ai_tier` option's registered default and `config_name()`'s
+            // output, or `get_option` and the status bar disagree with what the
+            // resolver reads (#640).
+            permission_tier: crate::PermissionTier::ReadOnly.config_name().to_string(),
             configured: false,
             conversation_pair: None,
             input_lock: InputLock::None,
