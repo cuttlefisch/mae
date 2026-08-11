@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.98] - 2026-08-11
+
+
+
+
+### Bug Fixes
+
+- *(#487)* Make the write-failure guard deterministic, and drop the retry mask ([be67d04](https://github.com/cuttlefisch/mae/commit/be67d0470a0086f6cc73010bdee9b19c62a149a4))
+
 ## [0.14.97] - 2026-08-10
 
 
@@ -38,6 +47,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - Sync both Cargo.locks after the rebase onto 0.14.96 ([2225aa4](https://github.com/cuttlefisch/mae/commit/2225aa4aa72d36bf18a841b70cd1bb01a677eae1))
+- Bump version to 0.14.97 ([276c78e](https://github.com/cuttlefisch/mae/commit/276c78e67c2870759ef683eae7b9ad58aebabe45))
 
 ## [0.14.96] - 2026-08-07
 
