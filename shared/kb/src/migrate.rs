@@ -696,7 +696,22 @@ mod tests {
         }
     }
 
+    // The three tests below exercise the sled->sqlite migration itself, so
+    // they need BOTH engines compiled in. This crate's own default features
+    // are sled-only (`Cargo.toml`), and cozo resolves the engine by *runtime*
+    // string match — so under a bare `cargo test -p mae-kb` they did not skip,
+    // they FAILED, with cozo's opaque "engine 'sqlite' not supported (maybe
+    // not compiled in)". They passed in CI only because `cargo test
+    // --workspace` unifies `storage-sqlite` in via `mae-core`.
+    //
+    // Gating on the feature makes the standalone run honest. Note the same
+    // asymmetry is why `kb_build`'s round-trip test selects its engine rather
+    // than hardcoding one.
     #[test]
+    #[cfg_attr(
+        not(feature = "storage-sqlite"),
+        ignore = "needs storage-sqlite; run via the workspace or -F storage-sqlite"
+    )]
     fn sled_to_sqlite_preserves_nodes_links_and_backs_up() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("primary.cozo");
@@ -740,7 +755,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // slow fixture (3k inserts) — run explicitly with --ignored
+    // slow fixture (3k inserts) — run explicitly with --ignored; also needs
+    // storage-sqlite, same as its two siblings above.
+    #[ignore]
     fn bulk_migration_is_fast_not_per_commit() {
         // Regression guard: the bulk `$rows` path must migrate thousands of nodes in
         // ~a second. A per-node (per-commit-fsync) migration took ~13s for 3k here,
@@ -772,6 +789,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "storage-sqlite"),
+        ignore = "needs storage-sqlite; run via the workspace or -F storage-sqlite"
+    )]
     fn sled_to_sqlite_is_idempotent_and_noop_when_not_sled() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("primary.cozo");

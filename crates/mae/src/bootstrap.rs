@@ -2899,49 +2899,49 @@ mod tests {
         );
     }
 
-    /// Recursively copy a directory tree (mirrors `manual_kb.rs::copy_dir_all` —
-    /// duplicated rather than shared since that one is private to its module
-    /// and this is test-only code). Used to stage a throwaway copy of a
-    /// pre-built KB asset before opening it live: CozoDB (sled in
-    /// particular) always opens read-write and may migrate/compact/write
-    /// recovery snapshots on open, which would dirty a git-tracked asset —
-    /// see `manual_kb.rs::load_nodes_readonly`'s doc comment for the same
-    /// hazard, hit for real once already while writing this test (a sled
-    /// directory got silently migrated to sqlite, with `.sled.bak-*` debris
-    /// left alongside, the moment `init_kb_federation`'s normal federated-
-    /// instance import path opened it in place).
-    fn copy_kb_asset_to_tempdir(src: &std::path::Path) -> tempfile::TempDir {
-        fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
-            std::fs::create_dir_all(dst)?;
-            for entry in std::fs::read_dir(src)? {
-                let entry = entry?;
-                let to = dst.join(entry.file_name());
-                if entry.file_type()?.is_dir() {
-                    copy_dir_all(&entry.path(), &to)?;
-                } else {
-                    std::fs::copy(entry.path(), &to)?;
-                }
-            }
-            Ok(())
-        }
+    /// Build a guidance KB from its REAL tracked org corpus (`assets/practices`
+    /// or `assets/devpractices`) into a throwaway tempdir, and return that dir
+    /// plus the store path inside it.
+    ///
+    /// Replaces a helper that copied the pre-built `assets/mae-*.cozo`
+    /// artifact. That helper existed only to dodge a hazard: CozoDB (sled in
+    /// particular) always opens read-write and would migrate/compact a
+    /// git-tracked asset in place — hit for real once while writing this very
+    /// test, `.sled.bak-*` debris and all, the moment `init_kb_federation`'s
+    /// normal import path opened it. Building a fresh sqlite store from the
+    /// tracked `.org` source removes the hazard instead of tiptoeing around
+    /// it, works on a clone where the artifact was never built (it is
+    /// gitignored, and CI's test leg does not build it), and cannot validate a
+    /// stale artifact from whenever `make practices-kb` last ran.
+    ///
+    /// Still the REAL shipped content: `assets/practices/*.org` is the tracked
+    /// source of truth, and this is the same `build_org_kb` the shipped
+    /// `build-practices-kb` binary calls.
+    fn build_real_guidance_kb(corpus: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets")
+            .join(corpus);
         let tmp = tempfile::tempdir().unwrap();
-        let dst = tmp.path().join(src.file_name().unwrap());
-        if src.is_dir() {
-            copy_dir_all(src, &dst).expect("failed to stage KB asset copy");
-        } else {
-            std::fs::copy(src, &dst).expect("failed to stage KB asset copy");
-        }
-        tmp
+        let db_path = tmp.path().join(format!("mae-{corpus}.cozo"));
+        mae_kb::kb_build::build_org_kb(
+            &src,
+            &db_path,
+            &mae_kb::kb_build::OrgKbBuildOptions {
+                engine: "sqlite",
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("failed to build {corpus} KB from {}: {e}", src.display()));
+        (tmp, db_path)
     }
 
     /// Issue #370, end-to-end: `init_kb_federation` must auto-register the
     /// shipped practices KB and load it into `editor.kb.registry`/
-    /// `editor.kb.instances`, using the REAL built `assets/mae-practices.cozo`
-    /// (not a synthetic fixture) so this proves the whole chain — locate,
-    /// register, import — against the actual asset that ships, not a stand-in
-    /// that might not reflect its real shape. Operates on a throwaway COPY
-    /// (see `copy_kb_asset_to_tempdir`) — the committed asset itself is
-    /// never opened directly.
+    /// `editor.kb.instances`, proving the whole chain — locate, register,
+    /// import — against MAE's REAL practices content rather than a synthetic
+    /// fixture that might not reflect its shape. The content comes from the
+    /// tracked `assets/practices/*.org` corpus via `build_real_guidance_kb`,
+    /// which is what the shipped asset is built from.
     #[test]
     fn init_kb_federation_auto_registers_and_loads_the_practices_kb() {
         // Isolate from any ambient env override so this test's own
@@ -2950,15 +2950,7 @@ mod tests {
         let _lock = mae_effect_sandbox::lock_env();
         let prev = std::env::var("MAE_PRACTICES_KB_PATH").ok();
 
-        let real_asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/mae-practices.cozo");
-        assert!(
-            real_asset.exists(),
-            "expected the real built practices KB at {} -- run `make practices-kb` first",
-            real_asset.display()
-        );
-        let staged = copy_kb_asset_to_tempdir(&real_asset);
-        let staged_asset = staged.path().join(real_asset.file_name().unwrap());
+        let (_built, staged_asset) = build_real_guidance_kb("practices");
         std::env::set_var("MAE_PRACTICES_KB_PATH", &staged_asset);
 
         let tmp = tempfile::tempdir().unwrap();
@@ -2997,12 +2989,8 @@ mod tests {
 
     /// Issue #514 / ADR-076, end-to-end: same proof as
     /// `init_kb_federation_auto_registers_and_loads_the_practices_kb`, for
-    /// the DevPractices sibling. Requires the REAL built
-    /// `assets/mae-devpractices.cozo` (`make devpractices-kb` /
-    /// `build_devpractices_kb`) — if that asset hasn't been built yet (e.g.
-    /// this lands ahead of the parallel content-fork/build-binary work), this
-    /// test fails loudly with a clear message rather than silently skipping,
-    /// same as the MaePractices test above does for its own asset.
+    /// the DevPractices sibling, built from the tracked
+    /// `assets/devpractices/*.org` corpus.
     #[test]
     fn init_kb_federation_auto_registers_and_loads_the_devpractices_kb() {
         // Isolate from any ambient env override so this test's own
@@ -3011,15 +2999,7 @@ mod tests {
         let _lock = mae_effect_sandbox::lock_env();
         let prev = std::env::var("MAE_DEVPRACTICES_KB_PATH").ok();
 
-        let real_asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/mae-devpractices.cozo");
-        assert!(
-            real_asset.exists(),
-            "expected the real built DevPractices KB at {} -- run `make devpractices-kb` first",
-            real_asset.display()
-        );
-        let staged = copy_kb_asset_to_tempdir(&real_asset);
-        let staged_asset = staged.path().join(real_asset.file_name().unwrap());
+        let (_built, staged_asset) = build_real_guidance_kb("devpractices");
         std::env::set_var("MAE_DEVPRACTICES_KB_PATH", &staged_asset);
 
         let tmp = tempfile::tempdir().unwrap();

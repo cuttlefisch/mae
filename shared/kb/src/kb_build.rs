@@ -11,20 +11,129 @@
 //! free functions, matching the free-function style the build binaries
 //! already use (no struct/builder wrapper).
 //!
-//! Deliberately **not** a parameterized "one binary, many modes" tool — the
-//! manual KB (code-gen, no index-node requirement) and the ADR KB
-//! (cross-reference/cycle validation, `.md` corpus, no raw org-dir
-//! ingestion) have genuinely different input shapes. See ADR-076 D3's
-//! "Alternatives considered" for the full rationale.
+//! Still **not** a parameterized "one binary, many modes" tool — the manual KB
+//! (code-gen, no index-node requirement) and the ADR KB (cross-reference/cycle
+//! validation, `.md` corpus, no raw org-dir ingestion) have genuinely
+//! different input shapes, exactly as ADR-076 D3's "Alternatives considered"
+//! argued. [`build_org_kb`] composes the shared org-corpus pipeline that the
+//! practices and devpractices binaries had duplicated; the other two still
+//! drive the pieces themselves.
 //!
-//! These are build-time tools, not runtime code: every function here
-//! panics (with a clear, actionable message) on failure rather than
-//! returning `Result`, matching the existing `.expect(...)`-heavy style of
-//! the binaries this module was extracted from.
+//! ## These are no longer build-time-only
+//!
+//! This module used to panic on every failure, justified by "build-time tools,
+//! not runtime code". That justification does not survive two new callers:
+//!
+//! - **Tests.** `guidance.rs` and `bootstrap.rs` build a real KB from the
+//!   tracked `assets/*.org` corpora instead of depending on a `make` target
+//!   having been run. A `panic!` there is merely a bad failure message; a
+//!   `Result` names which corpus and why.
+//! - **Runtime provisioning.** Building a system KB on the user's machine is
+//!   the direction this is headed, and there a malformed corpus becoming a
+//!   startup panic would be a genuinely worse failure mode than a warning and
+//!   a degraded-but-running editor.
+//!
+//! So the fallible functions return [`KbBuildError`]. The build binaries keep
+//! `.expect(...)` at `main()`, which preserves their loud, actionable
+//! build-time failure exactly as before.
+//!
+//! ## One write boundary
+//!
+//! [`insert_nodes`] is the single place a build-time generator writes nodes
+//! into a store, and it stamps [`NodeSource`] itself. That is deliberate:
+//! provenance was previously stamped at each generator's own discretion
+//! (`kb_seed::stamp_source`, `ingest_org_dir`'s `with_source`) and the ADR-KB
+//! generator simply forgot, leaving its nodes with `source == None`. Since the
+//! `NodeSource::Seed` guard in `kb_update_node_with` only refuses
+//! `Some(NodeSource::Seed)`, an edit to an installed ADR node succeeded and was
+//! then silently destroyed by the next build. Stamping at the write boundary
+//! means a future fifth generator cannot reintroduce that class of bug by
+//! omission.
 
-use crate::{CozoKbStore, KbStore, NodeSource};
+use crate::{CozoKbStore, KbStore, Node, NodeSource};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+
+/// Storage engine used for KB assets built by the shipped `build-*-kb`
+/// binaries.
+///
+/// Kept at sled so this refactor does not silently change the format of a
+/// release artifact; the delivery cutover is a separate, deliberate change.
+/// Callers that do not ship their output — tests, and eventually runtime
+/// provisioning — should pass `"sqlite"`, which is a single file, needs no
+/// lock-file stripping, and is what `kb_storage_engine` defaults to anyway.
+pub const RELEASE_ASSET_ENGINE: &str = "sled";
+
+/// A build step failed. Carries enough context to name the corpus and the
+/// reason without the caller reconstructing either.
+#[derive(Debug)]
+pub enum KbBuildError {
+    /// The source corpus directory does not exist.
+    MissingSourceDir(PathBuf),
+    /// The corpus parsed to zero nodes — refusing to produce an empty KB.
+    EmptyCorpus(PathBuf),
+    /// A guidance corpus produced no node with the literal id `index`.
+    MissingIndexNode(PathBuf),
+    /// Filesystem error preparing or removing the output location.
+    Io(PathBuf, std::io::Error),
+    /// The underlying store rejected an open or a write.
+    Store(String),
+}
+
+impl std::fmt::Display for KbBuildError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingSourceDir(p) => write!(
+                f,
+                "{} not found -- expected to run from the workspace root with the seed \
+                 .org files checked in",
+                p.display()
+            ),
+            Self::EmptyCorpus(p) => write!(
+                f,
+                "no nodes parsed from {} -- refusing to ship an empty KB",
+                p.display()
+            ),
+            Self::MissingIndexNode(p) => write!(
+                f,
+                "{}/index.org must define node id \"index\" (literal, not namespaced) -- \
+                 guidance.rs::read_guidance_kb_context() looks up exactly that id for \
+                 whichever KB instance ai_guidance_kb names",
+                p.display()
+            ),
+            Self::Io(p, e) => write!(f, "{}: {e}", p.display()),
+            Self::Store(e) => write!(f, "KB store error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for KbBuildError {}
+
+/// How to build an org-corpus KB. See [`build_org_kb`].
+#[derive(Debug, Clone)]
+pub struct OrgKbBuildOptions {
+    /// Storage engine, e.g. [`RELEASE_ASSET_ENGINE`] or `"sqlite"`.
+    pub engine: &'static str,
+    /// Provenance stamped on every node written. [`NodeSource::Seed`] for
+    /// anything MAE ships — it is what makes the content read-only.
+    pub source: NodeSource,
+    /// Require a literal `index` node, as guidance KBs must have one.
+    pub require_index: bool,
+    /// Seed the stored Datalog views (kanban/backlog/sprint/agenda).
+    pub seed_views: bool,
+}
+
+impl Default for OrgKbBuildOptions {
+    /// The shape every shipped guidance corpus uses.
+    fn default() -> Self {
+        Self {
+            engine: RELEASE_ASSET_ENGINE,
+            source: NodeSource::Seed,
+            require_index: true,
+            seed_views: true,
+        }
+    }
+}
 
 /// Counts from a single [`ingest_org_dir`] call, for the caller's own
 /// `println!`/`eprintln!` summary reporting.
@@ -45,34 +154,91 @@ pub struct OrgIngestStats {
 }
 
 /// Remove any existing DB at `output_path`, ensure its parent directory
-/// exists, open a fresh [`CozoKbStore`], and seed the relationship-type
-/// system. This is the shared prologue of every build binary's `main()`.
+/// exists, open a fresh [`CozoKbStore`] on `engine`, and seed the
+/// relationship-type system. This is the shared prologue of every build
+/// binary's `main()`.
 ///
-/// Panics with a clear message on any failure — build-time tooling, not
-/// runtime code (see module doc comment).
-pub fn open_fresh_store(output_path: &Path) -> CozoKbStore {
+/// `engine` is a parameter rather than the hardcoded sled that
+/// `CozoKbStore::open` implies: the daemon is compiled sqlite-only and cannot
+/// open a sled store at all (the failure is a runtime `bail!`, not a compile
+/// error), and `kb_storage_engine` defaults to sqlite, so a sled asset is
+/// migrated in place the first time it is registered. Pass
+/// [`RELEASE_ASSET_ENGINE`] to keep producing today's release format.
+pub fn open_fresh_store(output_path: &Path, engine: &str) -> Result<CozoKbStore, KbBuildError> {
     if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent).expect("failed to create output directory");
+        std::fs::create_dir_all(parent).map_err(|e| KbBuildError::Io(parent.to_path_buf(), e))?;
     }
 
-    // Remove existing DB so we start fresh (sled uses a directory).
+    // Remove existing DB so we start fresh (sled uses a directory, sqlite a file).
     if output_path.exists() {
-        if output_path.is_dir() {
-            std::fs::remove_dir_all(output_path).expect("failed to remove existing DB directory");
+        let removed = if output_path.is_dir() {
+            std::fs::remove_dir_all(output_path)
         } else {
-            std::fs::remove_file(output_path).expect("failed to remove existing DB file");
-        }
+            std::fs::remove_file(output_path)
+        };
+        removed.map_err(|e| KbBuildError::Io(output_path.to_path_buf(), e))?;
     }
 
-    let store = CozoKbStore::open(output_path).expect("failed to open CozoDB for KB build output");
+    let store = CozoKbStore::open_with_engine(output_path, engine)
+        .map_err(|e| KbBuildError::Store(e.to_string()))?;
 
     // Seed the relationship-type system (registry for type validation +
     // introspection; ADR-030 link parsing reads rel from each link's `?query`).
     store
         .seed_type_system()
-        .expect("failed to seed type system");
+        .map_err(|e| KbBuildError::Store(e.to_string()))?;
 
-    store
+    Ok(store)
+}
+
+/// Write `nodes` into `store`, stamping every one with `source`.
+///
+/// **The single node-write boundary for build-time generators.** Stamping here
+/// rather than at each generator is what makes provenance un-forgettable — see
+/// this module's doc comment for the ADR-KB bug that omission caused.
+///
+/// Per-node write errors are warned and skipped rather than fatal, matching
+/// the generators' existing "get as much content in as possible" behavior. The
+/// returned count is how many actually landed, so the caller can still refuse
+/// to ship an empty KB.
+pub fn insert_nodes(store: &CozoKbStore, nodes: &[Node], source: NodeSource) -> usize {
+    let mut inserted = 0;
+    for node in nodes {
+        let stamped = node.clone().with_source(source, 1);
+        match store.insert_node(&stamped) {
+            Ok(()) => inserted += 1,
+            Err(e) => eprintln!("  Warning: failed to insert node {}: {}", node.id, e),
+        }
+    }
+    inserted
+}
+
+/// Build a complete KB from a directory of `.org` files: open a fresh store,
+/// ingest the corpus, optionally require an `index` node, optionally seed
+/// views.
+///
+/// This is the pipeline the practices and devpractices binaries had duplicated
+/// line for line, and it is what tests should call to exercise *the real
+/// shipped corpus* — `assets/practices`/`assets/devpractices` are the tracked
+/// source of truth, so building from them in-process is strictly more faithful
+/// than opening a pre-built artifact that may not have been regenerated.
+pub fn build_org_kb(
+    src_dir: &Path,
+    output_path: &Path,
+    opts: &OrgKbBuildOptions,
+) -> Result<OrgIngestStats, KbBuildError> {
+    let store = open_fresh_store(output_path, opts.engine)?;
+    let stats = ingest_org_dir(&store, src_dir, opts.source)?;
+
+    if opts.require_index {
+        require_index_node(&store, src_dir)?;
+    }
+    if opts.seed_views {
+        store
+            .seed_views()
+            .map_err(|e| KbBuildError::Store(e.to_string()))?;
+    }
+    Ok(stats)
 }
 
 /// Ingest every `.org` file in `dir` (sorted by path for determinism):
@@ -80,19 +246,19 @@ pub fn open_fresh_store(output_path: &Path) -> CozoKbStore {
 /// node (tagged [`NodeSource::Seed`]), `add_typed_link` each typed link, and
 /// `add_meta_member` each transclusion directive.
 ///
-/// Panics if `dir` does not exist (the caller is almost certainly not
+/// Errors if `dir` does not exist (the caller is almost certainly not
 /// running from the workspace root) or if zero nodes were parsed (refusing
 /// to silently ship an empty KB). Per-file read errors and per-item
 /// store-write errors are logged as warnings and skipped, not fatal —
 /// matching the existing binaries' behavior of getting as much content in
 /// as possible rather than aborting on one bad node/link.
-pub fn ingest_org_dir(store: &CozoKbStore, dir: &Path) -> OrgIngestStats {
+pub fn ingest_org_dir(
+    store: &CozoKbStore,
+    dir: &Path,
+    source: NodeSource,
+) -> Result<OrgIngestStats, KbBuildError> {
     if !dir.is_dir() {
-        panic!(
-            "{} not found -- expected to run from the workspace root with the seed .org \
-             files checked in",
-            dir.display()
-        );
+        return Err(KbBuildError::MissingSourceDir(dir.to_path_buf()));
     }
 
     let mut all_nodes = Vec::new();
@@ -100,7 +266,7 @@ pub fn ingest_org_dir(store: &CozoKbStore, dir: &Path) -> OrgIngestStats {
     let mut all_transclusions = Vec::new();
 
     let mut org_files: Vec<_> = std::fs::read_dir(dir)
-        .unwrap_or_else(|e| panic!("failed to read {}: {e}", dir.display()))
+        .map_err(|e| KbBuildError::Io(dir.to_path_buf(), e))?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|ext| ext == "org"))
@@ -116,12 +282,7 @@ pub fn ingest_org_dir(store: &CozoKbStore, dir: &Path) -> OrgIngestStats {
             }
         };
         let result = crate::org::parse_org_multi_result(&content);
-        all_nodes.extend(
-            result
-                .nodes
-                .into_iter()
-                .map(|n| n.with_source(NodeSource::Seed, 1)),
-        );
+        all_nodes.extend(result.nodes);
         all_typed_links.extend(result.typed_links);
         all_transclusions.extend(result.transclusions);
     }
@@ -133,21 +294,14 @@ pub fn ingest_org_dir(store: &CozoKbStore, dir: &Path) -> OrgIngestStats {
     // Insert org-parsed nodes into the store (upsert, no delete). We use
     // insert_node rather than replace_all_nodes to avoid the CozoDB sled tombstone
     // issue: :rm leaves partial tuples that break load_all().
-    for node in &all_nodes {
-        if let Err(e) = store.insert_node(node) {
-            eprintln!("  Warning: failed to insert node {}: {}", node.id, e);
-        }
-    }
+    insert_nodes(store, &all_nodes, source);
     eprintln!(
         "  Org files: {} files, {node_count} nodes parsed",
         org_files.len()
     );
 
     if node_count == 0 {
-        panic!(
-            "no nodes parsed from {} -- refusing to ship an empty KB",
-            dir.display()
-        );
+        return Err(KbBuildError::EmptyCorpus(dir.to_path_buf()));
     }
 
     let mut link_count = 0;
@@ -175,34 +329,32 @@ pub fn ingest_org_dir(store: &CozoKbStore, dir: &Path) -> OrgIngestStats {
         eprintln!("  Transclusions: {transclusion_count} parsed, {trans_count} stored");
     }
 
-    OrgIngestStats {
+    Ok(OrgIngestStats {
         org_files: org_files.len(),
         nodes: node_count,
         typed_links_parsed: typed_link_count,
         typed_links_stored: link_count,
         transclusions_parsed: transclusion_count,
         transclusions_stored: trans_count as usize,
-    }
+    })
 }
 
-/// Panic if `store` has no node with the literal id `"index"`.
+/// Error if `store` has no node with the literal id `"index"`.
 ///
 /// `read_guidance_kb_context` (`crates/ai/src/guidance.rs`) looks up
 /// exactly that id for whichever KB instance `ai_guidance_kb` names, so a
 /// guidance KB shipped without one would silently fail to surface any
 /// content at read time instead of failing loudly at build time.
 ///
-/// `source_dir_hint` names the caller's source directory in the panic
-/// message (e.g. `"assets/practices"`), so each caller's failure correctly
-/// points at its own content rather than a generic/wrong location.
-pub fn require_index_node(store: &CozoKbStore, source_dir_hint: &str) {
+/// `src_dir` names the caller's own corpus in the error, so each caller's
+/// failure points at its own content rather than a generic location. It is
+/// the same path that was ingested, rather than a separately-passed hint
+/// string that could disagree with it.
+pub fn require_index_node(store: &CozoKbStore, src_dir: &Path) -> Result<(), KbBuildError> {
     if store.get_node("index").ok().flatten().is_none() {
-        panic!(
-            "{source_dir_hint}/index.org must define node id \"index\" (literal, not \
-             namespaced) -- guidance.rs::read_guidance_kb_context() looks up exactly that \
-             id for whichever KB instance ai_guidance_kb names"
-        );
+        return Err(KbBuildError::MissingIndexNode(src_dir.to_path_buf()));
     }
+    Ok(())
 }
 
 /// Compute a SHA-256 checksum for the CozoDB store.
@@ -340,7 +492,7 @@ mod tests {
         let store = CozoKbStore::open_mem().expect("failed to open in-memory store");
         store.seed_type_system().expect("seed type system");
 
-        let stats = ingest_org_dir(&store, src_dir.path());
+        let stats = ingest_org_dir(&store, src_dir.path(), NodeSource::Seed).expect("ingest ok");
 
         assert_eq!(stats.org_files, 3);
         assert_eq!(stats.nodes, 3, "exactly 3 nodes across the 3 fixture files");
@@ -370,42 +522,95 @@ mod tests {
         let store = CozoKbStore::open_mem().expect("failed to open in-memory store");
         store.seed_type_system().expect("seed type system");
 
-        let stats = ingest_org_dir(&store, src_dir.path());
+        let stats = ingest_org_dir(&store, src_dir.path(), NodeSource::Seed).expect("ingest ok");
         assert_eq!(stats.org_files, 1);
         assert_eq!(stats.nodes, 1);
     }
 
+    /// The provenance stamp is the thing that makes shipped content read-only:
+    /// `kb_update_node_with` refuses `Some(NodeSource::Seed)` and nothing else.
+    /// Assert it on a node read back out of the store, not on the input.
     #[test]
-    #[should_panic(expected = "not found")]
-    fn ingest_org_dir_panics_on_missing_directory() {
+    fn ingested_nodes_carry_the_requested_provenance() {
+        let src_dir = TempDir::new().unwrap();
+        write_org(src_dir.path(), "a.org", NODE_A);
+
         let store = CozoKbStore::open_mem().expect("failed to open in-memory store");
         store.seed_type_system().expect("seed type system");
-        ingest_org_dir(
-            &store,
-            Path::new("/nonexistent/definitely-not-a-real-dir-9f3c"),
+        ingest_org_dir(&store, src_dir.path(), NodeSource::Seed).expect("ingest ok");
+
+        let node = store
+            .get_node("test:a")
+            .expect("query ok")
+            .expect("node must exist");
+        assert_eq!(
+            node.source,
+            Some(NodeSource::Seed),
+            "an unstamped node is editable, and the next rebuild silently destroys the edit"
         );
     }
 
+    /// The same guarantee for the generator that does *not* go through
+    /// `ingest_org_dir` — the ADR KB builds `.md`-sourced nodes and inserts
+    /// them directly, which is exactly how it ended up with `source == None`.
     #[test]
-    #[should_panic(expected = "refusing to ship an empty KB")]
-    fn ingest_org_dir_panics_on_zero_nodes() {
+    fn insert_nodes_stamps_provenance_on_nodes_that_never_saw_an_org_file() {
+        let store = CozoKbStore::open_mem().expect("failed to open in-memory store");
+        store.seed_type_system().expect("seed type system");
+
+        let unstamped = Node::new(
+            "concept:adr-999-fixture",
+            "ADR-999",
+            crate::NodeKind::Concept,
+            "Body.",
+        );
+        assert_eq!(unstamped.source, None, "fixture must start unstamped");
+
+        let inserted = insert_nodes(&store, std::slice::from_ref(&unstamped), NodeSource::Seed);
+        assert_eq!(inserted, 1);
+
+        let read_back = store
+            .get_node("concept:adr-999-fixture")
+            .expect("query ok")
+            .expect("node must exist");
+        assert_eq!(read_back.source, Some(NodeSource::Seed));
+    }
+
+    #[test]
+    fn ingest_org_dir_errors_on_missing_directory() {
+        let store = CozoKbStore::open_mem().expect("failed to open in-memory store");
+        store.seed_type_system().expect("seed type system");
+        let err = ingest_org_dir(
+            &store,
+            Path::new("/nonexistent/definitely-not-a-real-dir-9f3c"),
+            NodeSource::Seed,
+        )
+        .expect_err("a missing corpus must not silently produce an empty KB");
+        assert!(matches!(err, KbBuildError::MissingSourceDir(_)), "{err:?}");
+    }
+
+    #[test]
+    fn ingest_org_dir_errors_on_zero_nodes() {
         let src_dir = TempDir::new().unwrap();
         // Directory exists but has no .org files.
         std::fs::write(src_dir.path().join("README.md"), "nothing to ingest").unwrap();
 
         let store = CozoKbStore::open_mem().expect("failed to open in-memory store");
         store.seed_type_system().expect("seed type system");
-        ingest_org_dir(&store, src_dir.path());
+        let err = ingest_org_dir(&store, src_dir.path(), NodeSource::Seed)
+            .expect_err("an empty corpus must not produce a shippable KB");
+        assert!(matches!(err, KbBuildError::EmptyCorpus(_)), "{err:?}");
     }
 
     // --- require_index_node ---
 
     #[test]
-    #[should_panic(expected = "must define node id \"index\"")]
-    fn require_index_node_panics_on_fresh_store_with_no_index() {
+    fn require_index_node_errors_on_fresh_store_with_no_index() {
         let store = CozoKbStore::open_mem().expect("failed to open in-memory store");
         store.seed_type_system().expect("seed type system");
-        require_index_node(&store, "assets/fixture-kb");
+        let err = require_index_node(&store, Path::new("assets/fixture-kb"))
+            .expect_err("a guidance KB without an index node surfaces nothing at read time");
+        assert!(matches!(err, KbBuildError::MissingIndexNode(_)), "{err:?}");
     }
 
     #[test]
@@ -419,10 +624,79 @@ mod tests {
             "index.org",
             ":PROPERTIES:\n:ID: index\n:END:\n#+title: Index\n\nEntry point.\n",
         );
-        ingest_org_dir(&store, src_dir.path());
+        ingest_org_dir(&store, src_dir.path(), NodeSource::Seed).expect("ingest ok");
 
-        // Should not panic.
-        require_index_node(&store, "assets/fixture-kb");
+        require_index_node(&store, Path::new("assets/fixture-kb")).expect("index node present");
+    }
+
+    // --- build_org_kb ---
+
+    /// The disk engine available in *this* build.
+    ///
+    /// `mae-kb`'s own default features are sled-only (`Cargo.toml`), so a bare
+    /// `cargo test -p mae-kb` has no sqlite; the editor and daemon builds unify
+    /// `storage-sqlite` in via `mae-core`/`daemon`. Selecting here rather than
+    /// `#[cfg]`-ing the test away keeps the round-trip covered in both
+    /// configurations — and the reason this matters at all is that the engine
+    /// is a *runtime* string dispatch inside cozo: asking for an
+    /// uncompiled engine fails with a `bail!` at open time, not at compile
+    /// time, which is precisely why `open_fresh_store` takes it as a parameter.
+    #[cfg(feature = "storage-sqlite")]
+    const TEST_DISK_ENGINE: &str = "sqlite";
+    #[cfg(not(feature = "storage-sqlite"))]
+    const TEST_DISK_ENGINE: &str = "sled";
+
+    /// The composed pipeline, built to disk and reopened independently.
+    #[test]
+    fn build_org_kb_produces_a_queryable_store_on_disk() {
+        let src_dir = TempDir::new().unwrap();
+        write_org(
+            src_dir.path(),
+            "index.org",
+            ":PROPERTIES:\n:ID: index\n:END:\n#+title: Index\n\nEntry point.\n",
+        );
+        write_org(src_dir.path(), "a.org", NODE_A);
+
+        let out = TempDir::new().unwrap();
+        let output = out.path().join("fixture.cozo");
+        let stats = build_org_kb(
+            src_dir.path(),
+            &output,
+            &OrgKbBuildOptions {
+                engine: TEST_DISK_ENGINE,
+                ..OrgKbBuildOptions::default()
+            },
+        )
+        .expect("build ok");
+        assert_eq!(stats.nodes, 2);
+
+        // Reopen independently: the point of building to disk is that another
+        // process can read it back.
+        let reopened = CozoKbStore::open_with_engine(&output, TEST_DISK_ENGINE).expect("reopen");
+        let node = reopened
+            .get_node("test:a")
+            .expect("query ok")
+            .expect("node must survive the round trip to disk");
+        assert_eq!(node.title, "Node A");
+        assert_eq!(node.source, Some(NodeSource::Seed));
+    }
+
+    #[test]
+    fn build_org_kb_refuses_a_guidance_corpus_with_no_index_node() {
+        let src_dir = TempDir::new().unwrap();
+        write_org(src_dir.path(), "a.org", NODE_A);
+
+        let out = TempDir::new().unwrap();
+        let err = build_org_kb(
+            src_dir.path(),
+            &out.path().join("fixture.cozo"),
+            &OrgKbBuildOptions {
+                engine: TEST_DISK_ENGINE,
+                ..OrgKbBuildOptions::default()
+            },
+        )
+        .expect_err("require_index must be enforced by the composed pipeline too");
+        assert!(matches!(err, KbBuildError::MissingIndexNode(_)), "{err:?}");
     }
 
     // --- open_fresh_store ---
@@ -434,7 +708,7 @@ mod tests {
 
         // First open: parent dirs don't exist yet.
         {
-            let _store = open_fresh_store(&output);
+            let _store = open_fresh_store(&output, RELEASE_ASSET_ENGINE).expect("open ok");
         }
         assert!(output.exists(), "store output should exist after opening");
 
@@ -447,7 +721,7 @@ mod tests {
         }
 
         {
-            let _store = open_fresh_store(&output);
+            let _store = open_fresh_store(&output, RELEASE_ASSET_ENGINE).expect("open ok");
         }
         if output.is_dir() {
             assert!(

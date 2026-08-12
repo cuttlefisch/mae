@@ -230,67 +230,59 @@ mod tests {
         assert!(ctx.contains("Always write tests first."));
     }
 
-    /// Recursively copy a directory tree — used to stage a throwaway copy of
-    /// a pre-built KB asset before opening it live. CozoDB (sled especially)
-    /// always opens read-write and may migrate/compact/write recovery
-    /// snapshots on open, which would dirty a git-tracked asset (hit for
-    /// real once already: an early version of the sibling test in
-    /// `bootstrap.rs` opened the real `assets/mae-practices.cozo` directly
-    /// through `init_kb_federation`'s normal import path and it got silently
-    /// migrated sled->sqlite, `.sled.bak-*` debris and all). Mirrors
-    /// `manual_kb.rs::copy_dir_all`/`load_nodes_readonly`'s same precaution.
-    fn copy_kb_asset_to_tempdir(src: &Path) -> tempfile::TempDir {
-        fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
-            std::fs::create_dir_all(dst)?;
-            for entry in std::fs::read_dir(src)? {
-                let entry = entry?;
-                let to = dst.join(entry.file_name());
-                if entry.file_type()?.is_dir() {
-                    copy_dir_all(&entry.path(), &to)?;
-                } else {
-                    std::fs::copy(entry.path(), &to)?;
-                }
-            }
-            Ok(())
-        }
+    /// Build a guidance KB from its REAL tracked org corpus (`assets/practices`
+    /// or `assets/devpractices`) into a throwaway tempdir, and return that dir
+    /// plus the store path inside it.
+    ///
+    /// This replaces an earlier helper that copied the pre-built
+    /// `assets/mae-*.cozo` artifact. Building from source is better on three
+    /// counts:
+    ///
+    /// 1. **It cannot go stale.** The old helper asserted the artifact existed
+    ///    and told you to "run `make practices-kb` first", so the test either
+    ///    depended on build order or silently validated a months-old artifact.
+    ///    The `.org` files are the tracked source of truth; the store is a
+    ///    build product of exactly this function.
+    /// 2. **It works on a fresh clone.** The artifacts are gitignored, and CI's
+    ///    test leg never builds them.
+    /// 3. **No copy dance.** The old helper existed only because CozoDB (sled
+    ///    especially) always opens read-write and would migrate/compact a
+    ///    git-tracked asset in place — hit for real once, `.sled.bak-*` debris
+    ///    and all. Building to sqlite in a tempdir removes the hazard rather
+    ///    than tiptoeing around it.
+    ///
+    /// sqlite rather than [`mae_kb::kb_build::RELEASE_ASSET_ENGINE`]: it is a
+    /// single file, needs no lock-file stripping, and is what
+    /// `kb_storage_engine` defaults to anyway. It is always available here
+    /// because `mae-ai` depends on `mae-core`, which requests `mae-kb` with
+    /// `storage-sqlite` — cargo unifies that into every build of this crate.
+    fn build_real_guidance_kb(corpus: &str) -> (tempfile::TempDir, PathBuf) {
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets")
+            .join(corpus);
         let tmp = tempfile::tempdir().unwrap();
-        let dst = tmp.path().join(src.file_name().unwrap());
-        if src.is_dir() {
-            copy_dir_all(src, &dst).expect("failed to stage KB asset copy");
-        } else {
-            std::fs::copy(src, &dst).expect("failed to stage KB asset copy");
-        }
-        tmp
+        let db_path = tmp.path().join(format!("mae-{corpus}.cozo"));
+        mae_kb::kb_build::build_org_kb(
+            &src,
+            &db_path,
+            &mae_kb::kb_build::OrgKbBuildOptions {
+                engine: "sqlite",
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("failed to build {corpus} KB from {}: {e}", src.display()));
+        (tmp, db_path)
     }
 
-    /// Issue #370, end-to-end against the REAL shipped asset (not a
-    /// synthetic store): once `assets/mae-practices.cozo` is registered as
-    /// a federated instance named "MaePractices" — exactly what
-    /// `crates/mae/src/practices_kb.rs::ensure_registered` does at startup
-    /// — `ai_guidance_kb = "MaePractices"` (the shipped `init.scm` default)
-    /// must actually resolve to real practices content, not just a
-    /// hand-authored fixture that might not reflect what actually ships.
-    /// Operates on a throwaway COPY (see `copy_kb_asset_to_tempdir`) — the
-    /// committed asset itself is never opened directly.
-    #[test]
-    fn read_guidance_kb_context_resolves_the_real_shipped_practices_kb() {
-        let real_asset =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/mae-practices.cozo");
-        assert!(
-            real_asset.exists(),
-            "expected the real built practices KB at {} -- run `make practices-kb` first",
-            real_asset.display()
-        );
-        let staged = copy_kb_asset_to_tempdir(&real_asset);
-        let staged_asset = staged.path().join(real_asset.file_name().unwrap());
-
-        let data_dir = tempfile::tempdir().unwrap();
+    /// A registry containing exactly one instance, shaped the way
+    /// `guidance_kb_engine::ensure_registered` writes it (dir-less, priority 0).
+    fn write_single_instance_registry(data_dir: &Path, name: &str, db_path: PathBuf) {
         let mut registry = mae_kb::federation::KbRegistry::default();
         registry.instances.push(mae_kb::federation::KbInstance {
-            uuid: "uuid-mae-practices".into(),
-            name: "MaePractices".into(),
+            uuid: format!("uuid-{}", name.to_lowercase()),
+            name: name.into(),
             org_dir: PathBuf::new(),
-            db_path: staged_asset,
+            db_path,
             primary: false,
             enabled: true,
             last_import: None,
@@ -305,10 +297,28 @@ mod tests {
             remote_hub: None,
         });
         std::fs::write(
-            data_dir.path().join("kb-registry.toml"),
+            data_dir.join("kb-registry.toml"),
             toml::to_string(&registry).unwrap(),
         )
         .unwrap();
+    }
+
+    /// Issue #370, end-to-end against the REAL shipped asset (not a
+    /// synthetic store): once `assets/mae-practices.cozo` is registered as
+    /// a federated instance named "MaePractices" — exactly what
+    /// `crates/mae/src/practices_kb.rs::ensure_registered` does at startup
+    /// — `ai_guidance_kb = "MaePractices"` (the shipped `init.scm` default)
+    /// must actually resolve to real practices content, not just a
+    /// hand-authored fixture that might not reflect what actually ships.
+    /// Built from `assets/practices/*.org` into a tempdir (see
+    /// `build_real_guidance_kb`) — the tracked corpus IS what ships, so this
+    /// exercises real content without depending on a `make` target.
+    #[test]
+    fn read_guidance_kb_context_resolves_the_real_shipped_practices_kb() {
+        let (_built, db_path) = build_real_guidance_kb("practices");
+
+        let data_dir = tempfile::tempdir().unwrap();
+        write_single_instance_registry(data_dir.path(), "MaePractices", db_path);
 
         let ctx = read_guidance_kb_context(data_dir.path(), "MaePractices")
             .expect("the real practices KB's index node must resolve");
@@ -329,41 +339,10 @@ mod tests {
     /// content leaked through under the wrong name.
     #[test]
     fn read_guidance_kb_context_resolves_the_real_shipped_devpractices_kb() {
-        let real_asset =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/mae-devpractices.cozo");
-        assert!(
-            real_asset.exists(),
-            "expected the real built DevPractices KB at {} -- run `make devpractices-kb` first",
-            real_asset.display()
-        );
-        let staged = copy_kb_asset_to_tempdir(&real_asset);
-        let staged_asset = staged.path().join(real_asset.file_name().unwrap());
+        let (_built, db_path) = build_real_guidance_kb("devpractices");
 
         let data_dir = tempfile::tempdir().unwrap();
-        let mut registry = mae_kb::federation::KbRegistry::default();
-        registry.instances.push(mae_kb::federation::KbInstance {
-            uuid: "uuid-mae-devpractices".into(),
-            name: "DevPractices".into(),
-            org_dir: PathBuf::new(),
-            db_path: staged_asset,
-            primary: false,
-            enabled: true,
-            last_import: None,
-            collab_id: None,
-            shared: false,
-            remote_peers: Vec::new(),
-            last_sync: None,
-            ai_residency: mae_kb::federation::AiResidency::default(),
-            project_root: None,
-            kind: mae_kb::federation::KbInstanceKind::default(),
-            priority: 0,
-            remote_hub: None,
-        });
-        std::fs::write(
-            data_dir.path().join("kb-registry.toml"),
-            toml::to_string(&registry).unwrap(),
-        )
-        .unwrap();
+        write_single_instance_registry(data_dir.path(), "DevPractices", db_path);
 
         let ctx = read_guidance_kb_context(data_dir.path(), "DevPractices")
             .expect("the real DevPractices KB's index node must resolve");

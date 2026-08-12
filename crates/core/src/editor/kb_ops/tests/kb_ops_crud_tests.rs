@@ -149,6 +149,67 @@ fn kb_delete_node_rejects_seed_deletion() {
     assert!(editor.kb.primary.get("index").is_some());
 }
 
+/// The ADR KB's generator never stamped `NodeSource`, so its nodes carried
+/// `source == None` — and this guard refuses only `Some(Seed)`. An in-editor
+/// or MCP `kb_update` on an installed ADR node therefore **succeeded**, wrote
+/// into the derived store, and was silently destroyed by the next
+/// `make adr-kb` / install. Fixed by stamping at the single write boundary
+/// (`kb_build::insert_nodes`) rather than at each generator's discretion.
+///
+/// Both halves are asserted deliberately. The second one pins the *mechanism*:
+/// an identically-shaped node without the stamp is still editable, which is
+/// what makes the stamp — not the id, not the `concept:adr-` namespace — the
+/// thing doing the protecting. If someone "fixes" this by special-casing the
+/// namespace in the guard, the second assertion should be what makes them
+/// stop and think.
+#[test]
+fn kb_update_node_rejects_a_seed_stamped_adr_node_and_the_stamp_is_what_does_it() {
+    let mut editor = Editor::new();
+
+    let stamped = mae_kb::Node::new(
+        "concept:adr-076-bundled-kb-system",
+        "ADR-076",
+        mae_kb::NodeKind::Concept,
+        "Original body.",
+    )
+    .with_source(mae_kb::NodeSource::Seed, 1);
+    editor.kb.primary.insert(stamped);
+
+    let err = editor
+        .kb_update_node(
+            "concept:adr-076-bundled-kb-system",
+            Some("Hijacked"),
+            None,
+            None,
+        )
+        .expect_err("a shipped ADR node must not be editable");
+    assert!(err.contains("seed node"), "unexpected error: {err}");
+    assert_eq!(
+        editor
+            .kb
+            .primary
+            .get("concept:adr-076-bundled-kb-system")
+            .unwrap()
+            .title,
+        "ADR-076",
+        "the refused edit must not have partially applied"
+    );
+
+    // The same shape WITHOUT the stamp — exactly what the ADR builder used to
+    // emit — is editable. That is the bug, pinned rather than described.
+    let unstamped = mae_kb::Node::new(
+        "concept:adr-999-unstamped",
+        "ADR-999",
+        mae_kb::NodeKind::Concept,
+        "Original body.",
+    );
+    assert_eq!(unstamped.source, None, "fixture must start unstamped");
+    editor.kb.primary.insert(unstamped);
+    editor
+        .kb_update_node("concept:adr-999-unstamped", Some("Hijacked"), None, None)
+        .expect("an unstamped node IS editable -- which is precisely why the stamp matters");
+}
+
 #[test]
 fn kb_update_node_merges_fields() {
     let mut editor = Editor::new();
