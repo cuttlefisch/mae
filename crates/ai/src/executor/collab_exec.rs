@@ -269,6 +269,22 @@ fn execute_kb_share(editor: &mut Editor, args: &Value) -> Result<String, String>
         .unwrap_or(mae_core::KB_DEFAULT_NAME)
         .to_string();
 
+    // A system KB is MAE's own corpus, rebuilt from the binary — sharing one is
+    // wrong on both ends. The peer gains a replicated copy of content their own
+    // MAE already ships and will rebuild, and — worse — `NodeSource` is not
+    // carried in the CRDT wire payload, so every node arrives re-stamped
+    // `Federation`. That silently strips the `Seed` provenance which is the
+    // ONLY thing making shipped content read-only, leaving the receiver with an
+    // editable copy of MAE's own manual/practices that their next upgrade
+    // overwrites.
+    if let Some(sys) = mae_kb::system_kb::find(&kb_name) {
+        return Err(format!(
+            "'{}' is a MAE system KB and cannot be shared — its content ships with MAE and \
+             is rebuilt on upgrade. Share your own KB instead.",
+            sys.name
+        ));
+    }
+
     // Collect node IDs from the named KB. `instances` is keyed by UUID, so
     // resolve name→uuid via the registry first (a bare name lookup missed).
     //
@@ -324,6 +340,17 @@ fn execute_kb_share_p2p(editor: &mut Editor, args: &Value) -> Result<String, Str
         .map(str::to_string)
         .or_else(|| editor.kb.active_instance_name())
         .unwrap_or_else(|| mae_core::KB_DEFAULT_NAME.to_string());
+
+    // Same refusal as the hub share path above — the P2P variant is a second
+    // door to the same room, and `active_instance_name()` means a system KB can
+    // be reached here without the caller naming one.
+    if let Some(sys) = mae_kb::system_kb::find(&kb_id) {
+        return Err(format!(
+            "'{}' is a MAE system KB and cannot be shared — its content ships with MAE and \
+             is rebuilt on upgrade. Share your own KB instead.",
+            sys.name
+        ));
+    }
 
     let ticket = editor.kb.share_p2p(&kb_id)?;
     editor.set_status(format!("Minted P2P join link for '{kb_id}'"));
@@ -592,6 +619,48 @@ mod tests {
     use crate::types::ToolCall;
     use mae_kb::KbStore;
     use serde_json::json;
+
+    /// Sharing a system KB is the most damaging of the lifecycle bugs, because
+    /// it is silent and lands on someone else's machine: `NodeSource` is not
+    /// carried in the CRDT wire payload, so every node arrives re-stamped
+    /// `Federation` and the peer ends up with an editable copy of MAE's own
+    /// corpus that their next upgrade overwrites.
+    ///
+    /// Both share doors are covered — `kb_share` and `kb_share_p2p` — because a
+    /// guard on one is not a guard.
+    #[test]
+    fn a_system_kb_cannot_be_shared_through_either_door() {
+        for tool in ["kb_share", "kb_share_p2p"] {
+            for name in ["DevPractices", "MaePractices", "manual", "ADR"] {
+                let mut editor = Editor::new();
+                let err = dispatch(&mut editor, &make_call(tool, json!({"kb_id": name})))
+                    .expect("tool must be routed here")
+                    .expect_err("sharing a system KB must be refused");
+                assert!(
+                    err.contains("system KB"),
+                    "{tool}/{name} must be refused as a system KB, got: {err}"
+                );
+            }
+        }
+    }
+
+    /// The half that keeps the refusal honest: an ordinary KB name must not be
+    /// rejected as a system KB. It fails for its own reasons (no such
+    /// instance), which is a different message.
+    #[test]
+    fn an_ordinary_kb_name_is_not_refused_as_a_system_kb() {
+        let mut editor = Editor::new();
+        let err = dispatch(
+            &mut editor,
+            &make_call("kb_share", json!({"kb_id": "MyDevPractices"})),
+        )
+        .expect("tool must be routed here")
+        .expect_err("no such instance");
+        assert!(
+            !err.contains("system KB"),
+            "an ordinary name must not be refused as a system KB: {err}"
+        );
+    }
 
     fn make_call(name: &str, args: Value) -> ToolCall {
         ToolCall {

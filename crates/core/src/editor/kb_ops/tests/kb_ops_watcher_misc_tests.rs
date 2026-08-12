@@ -34,6 +34,123 @@ fn kb_register_refuses_a_reserved_system_kb_name() {
     );
 }
 
+/// Unregistering a system KB used to succeed and mean nothing: startup
+/// re-registers it, so the user saw "unregistered" and an unchanged editor one
+/// restart later.
+///
+/// Uses a real registry row named `DevPractices`, which is the shape a machine
+/// that has already run MAE actually has — reservation is enforced at
+/// registration time, so pre-existing rows are exactly what this guard must
+/// handle.
+#[test]
+fn kb_unregister_refuses_a_system_kb() {
+    let mut editor = Editor::new();
+    let _test_dirs = with_test_dirs(&mut editor);
+    seed_system_kb_row(&mut editor, "DevPractices");
+
+    editor.kb_unregister("DevPractices");
+
+    assert!(
+        editor.kb.registry.find("DevPractices").is_some(),
+        "a system KB must survive kb_unregister"
+    );
+    assert!(
+        editor.status_msg.contains("system KB"),
+        "{}",
+        editor.status_msg
+    );
+}
+
+/// `kb_reimport` on a dir-less system KB walked nothing and wrote the empty
+/// result back over the in-memory KB, emptying the session's guidance.
+#[test]
+fn kb_reimport_refuses_a_system_kb_and_leaves_its_nodes_intact() {
+    let mut editor = Editor::new();
+    let _test_dirs = with_test_dirs(&mut editor);
+    let uuid = seed_system_kb_row(&mut editor, "DevPractices");
+
+    let mut kb = mae_kb::KnowledgeBase::new();
+    kb.insert(mae_kb::Node::new(
+        "index",
+        "Practices",
+        mae_kb::NodeKind::Note,
+        "Always write tests first.",
+    ));
+    editor.kb.instances.insert(uuid.clone(), kb);
+
+    assert!(editor.kb_reimport("DevPractices", None).is_none());
+    assert!(
+        editor.kb.instances[&uuid].get("index").is_some(),
+        "reimport must not empty a system KB -- this is the bug, not a nicety"
+    );
+    assert!(
+        editor.status_msg.contains("system KB"),
+        "{}",
+        editor.status_msg
+    );
+}
+
+/// A uuid must not walk past the guard: the check resolves the instance's
+/// *name*, not the argument it was handed.
+#[test]
+fn a_system_kb_is_refused_when_addressed_by_uuid_not_just_by_name() {
+    let mut editor = Editor::new();
+    let _test_dirs = with_test_dirs(&mut editor);
+    let uuid = seed_system_kb_row(&mut editor, "MaePractices");
+
+    editor.kb_unregister(&uuid);
+    assert!(
+        editor.kb.registry.find("MaePractices").is_some(),
+        "addressing a system KB by uuid must not bypass the refusal"
+    );
+}
+
+/// Register a registry row for a system KB by name, mirroring what
+/// `guidance_kb_engine::ensure_registered_with_path` writes at startup (a
+/// dir-less instance) — `kb_register` cannot produce one, since the name is
+/// reserved.
+fn seed_system_kb_row(editor: &mut Editor, name: &str) -> String {
+    let uuid = mae_kb::federation::generate_uuid();
+    editor
+        .kb
+        .registry
+        .instances
+        .push(mae_kb::federation::KbInstance {
+            uuid: uuid.clone(),
+            name: name.to_string(),
+            org_dir: std::path::PathBuf::new(),
+            db_path: std::path::PathBuf::new(),
+            primary: false,
+            enabled: true,
+            last_import: None,
+            collab_id: None,
+            shared: false,
+            remote_peers: Vec::new(),
+            last_sync: None,
+            ai_residency: mae_kb::federation::AiResidency::default(),
+            project_root: None,
+            kind: mae_kb::federation::KbInstanceKind::Guidance,
+            priority: 0,
+            remote_hub: None,
+        });
+    uuid
+}
+
+/// The half that keeps the guards honest: an ordinary user KB is still fully
+/// manageable. Without this, "refuse everything" would pass every test above.
+#[test]
+fn an_ordinary_kb_can_still_be_unregistered_and_reimported() {
+    let dir = create_test_org_dir();
+    let mut editor = Editor::new();
+    let _test_dirs = with_test_dirs(&mut editor);
+    let result = editor.kb_register("MyNotes", dir.path()).unwrap();
+
+    assert!(editor.kb_reimport("MyNotes", None).is_some());
+    editor.kb_unregister("MyNotes");
+    assert!(editor.kb.registry.find("MyNotes").is_none());
+    assert!(!editor.kb.watchers.contains_key(&result.uuid));
+}
+
 /// The half that keeps the reservation honest: a name that merely *resembles*
 /// a system KB is still the user's to take.
 #[test]
