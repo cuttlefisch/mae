@@ -37,6 +37,7 @@ mod scheme_lsp_bridge;
 mod shell_keys;
 mod shell_lifecycle;
 mod sync_broadcast;
+mod system_corpus;
 mod terminal_loop;
 mod test_runner;
 mod upgrade;
