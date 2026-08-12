@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.102] - 2026-08-12
+
+
+
+
+### Features
+
+- *(kb)* Make a missing guidance KB diagnosable instead of silent ([8604fd3](https://github.com/cuttlefisch/mae/commit/8604fd38e743831a430ace6d10992b78b843c8d7))
+
+### Miscellaneous
+
+- Bump version to 0.14.102 ([c425b0b](https://github.com/cuttlefisch/mae/commit/c425b0b16bd759646a6f22afb1dc7c9cb6162618))
+
 ## [0.14.101] - 2026-08-12
 
 
