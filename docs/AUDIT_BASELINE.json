@@ -82,7 +82,7 @@
     "crates/lsp/src/protocol.rs": 1941,
     "crates/mae/src/ai_event_handler.rs": 2608,
     "crates/mae/src/ai_residency.rs": 1653,
-    "crates/mae/src/bootstrap.rs": 3579,
+    "crates/mae/src/bootstrap/mod.rs": 2839,
     "crates/mae/src/cli.rs": 842,
     "crates/mae/src/collab_bridge/mod.rs": 5709,
     "crates/mae/src/collab_bridge/tests/collab_bridge_write_failure_tests.rs": 520,
