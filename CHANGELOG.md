@@ -2,14 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.14.98] - 2026-08-11
+## [0.14.99] - 2026-08-12
 
 
 
+
+### Features
+
+- *(#640)* :set ai-tier takes effect live, without a relaunch ([5e7ee23](https://github.com/cuttlefisch/mae/commit/5e7ee232dce2a69fb8e9547bde12429ad56fd111))
 
 ### Bug Fixes
 
 - *(#487)* Make the write-failure guard deterministic, and drop the retry mask ([be67d04](https://github.com/cuttlefisch/mae/commit/be67d0470a0086f6cc73010bdee9b19c62a149a4))
+- *(#640)* Ai_tier reaches the enforced policy, and one tier vocabulary ([720c4a7](https://github.com/cuttlefisch/mae/commit/720c4a7fbfba9482b7d86299258721978b964f4f))
+- *(#640)* The spawned agent inherits the resolved tier ([eb57f76](https://github.com/cuttlefisch/mae/commit/eb57f76dfb2c7a3b004b3619f17043568bfc5efd))
+- *(#693)* Condition waits for collab TCP e2e, and the ambient dependency behind them ([d9cdd89](https://github.com/cuttlefisch/mae/commit/d9cdd898c49c04435229b44ef43df4c87c814c27))
+
+### Documentation
+
+- The tier's help said it did nothing, and named only the legacy surface ([40c58b1](https://github.com/cuttlefisch/mae/commit/40c58b1efe7f75974a8922966e49f3d01c269eea))
+
+### Build System
+
+- *(deny)* Accept RUSTSEC-2026-0249 (smartstring unmaintained via cozo) ([a910714](https://github.com/cuttlefisch/mae/commit/a910714afe83a1f81057fdeec46c72277b50555d))
+- *(deny)* Accept RUSTSEC-2026-0249 (smartstring unmaintained via cozo) ([c86a4b8](https://github.com/cuttlefisch/mae/commit/c86a4b88135fa32b1d5ec391d9a5d364fd295019))
+- *(deps)* Bump lru to 0.18.2 (RUSTSEC-2026-0253) ([3e55b1a](https://github.com/cuttlefisch/mae/commit/3e55b1a3088364a99c43f9ef186e6c8bab1fbe6f))
+
+### Miscellaneous
+
+- Bump version to 0.14.98 ([d863073](https://github.com/cuttlefisch/mae/commit/d8630731eb29b4326c634f3b8b2f5d9761600025))
+- *(#640)* Move test modules out of two files at the size ceiling ([dbd1af9](https://github.com/cuttlefisch/mae/commit/dbd1af916092949d68a75b1cb095fe08291a5eb0))
 
 ## [0.14.97] - 2026-08-10
 
