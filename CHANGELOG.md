@@ -2,10 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.104] - 2026-08-12
+
+
+
+
+### Refactor
+
+- *(mae)* Split bootstrap's inline tests out by subject ([21c54a6](https://github.com/cuttlefisch/mae/commit/21c54a6752a8e1aae422b3a2b913aa08672a5eaa))
+
+### Miscellaneous
+
+- Bump version to 0.14.104 ([c4bd454](https://github.com/cuttlefisch/mae/commit/c4bd454d792016179caaebbef54afce4f279fa62))
+
 ## [0.14.103] - 2026-08-12
 
 
 
+
+### Bug Fixes
+
+- *(kb)* Source the manual from its corpus, keeping the always-present invariant ([85bc109](https://github.com/cuttlefisch/mae/commit/85bc1096aad410d6e16dc2034fcfe37de8f2d048))
 
 ### Miscellaneous
 
