@@ -133,8 +133,22 @@ pub struct KbContext {
     /// watcher skips a reload within a short cooldown of this so our OWN writes don't
     /// trigger churn (their file events are drained-and-ignored, not reloaded).
     pub last_local_store_write: Option<std::time::Instant>,
-    /// Pre-built manual KB store (read-only, shipped with MAE binary).
-    pub manual_cozo: Option<Arc<mae_kb::CozoKbStore>>,
+    /// Stores for MAE's own **system KBs** (`mae_kb::system_kb`), keyed by
+    /// catalog name — read-only, their content shipped with the binary.
+    ///
+    /// Deliberately **not** `registry.instances`. A system KB is not the user's
+    /// data: its truth ships with MAE, it is rebuilt rather than migrated on
+    /// upgrade, it is never CRDT-shared, and losing one is harmless. Modelling
+    /// it as a registry row made every operation that iterates the registry
+    /// treat a bundled corpus as user data — which is where the `kb_share`,
+    /// `kb_reimport` and duplicate-name bugs came from.
+    ///
+    /// Generalises what `manual_cozo` already was: a single system store held
+    /// outside the registry and joined into the query layer as a pseudo-instance.
+    /// The manual was the only KB that got that treatment; now all of them do,
+    /// and every one is labelled with its own name rather than the manual's
+    /// nodes landing indistinguishably in `primary`.
+    pub system_stores: std::collections::BTreeMap<String, Arc<mae_kb::CozoKbStore>>,
     /// Standardized KB data directory layout (XDG-compliant).
     pub data_dir: Option<mae_kb::data_dir::KbDataDir>,
     /// KB federation: registry of external KB instances (org-roam dirs etc.).
@@ -471,12 +485,12 @@ impl KbContext {
     /// Build or rebuild the federated query layer from current stores.
     /// Call after store/instance_store changes (register, unregister, reimport).
     pub fn rebuild_query_layer(&mut self) {
-        // Determine the primary query layer: prefer user's primary CozoDB store,
-        // fall back to the manual KB store if no user store is available.
+        // Determine the primary query layer: prefer the user's primary CozoDB
+        // store, falling back to the manual system store when there is none.
         let primary_arc = self
             .primary_cozo
             .as_ref()
-            .or(self.manual_cozo.as_ref())
+            .or_else(|| self.system_stores.get(mae_kb::system_kb::MANUAL))
             .cloned();
 
         if let Some(ref cozo) = primary_arc {
@@ -484,17 +498,25 @@ impl KbContext {
             let mut federated = mae_kb::FederatedQuery::new(primary_layer);
             federated.set_max_fanout_instances(self.federated_max_fanout_instances);
 
-            // If we used the user store as primary AND a manual store exists separately,
-            // add the manual store as an instance so its nodes are queryable. The manual
-            // KB has no `KbInstance` registry row, so it always participates at the
-            // default (0) priority.
-            if let Some(ref primary) = self.primary_cozo {
-                if let Some(ref manual) = self.manual_cozo {
-                    if !Arc::ptr_eq(primary, manual) {
-                        let manual_layer = Arc::new(mae_kb::CozoQueryLayer::new(manual.clone()));
-                        federated.add_instance("manual".to_string(), 0, manual_layer);
-                    }
+            // Every system store participates as a pseudo-instance **under its
+            // own catalog name**, at the default (0) priority — none of them has
+            // a `KbInstance` registry row to take a priority from.
+            //
+            // The name is the point, not incidental. Previously only the manual
+            // got this treatment, and its nodes were ALSO inserted into
+            // `kb.primary` at startup, so a `kb_search` hit from MAE's own
+            // documentation came back with `instance: null` — indistinguishable
+            // from one of the user's own notes. Labelling each system store lets
+            // a caller (and an AI peer) tell "this is MAE's docs" from "this is
+            // your note" without guessing from an id prefix.
+            for (name, store) in &self.system_stores {
+                // Skip the one already serving AS primary (the no-user-store
+                // fallback above) — adding it twice would double every hit.
+                if primary_arc.as_ref().is_some_and(|p| Arc::ptr_eq(p, store)) {
+                    continue;
                 }
+                let layer = Arc::new(mae_kb::CozoQueryLayer::new(store.clone()));
+                federated.add_instance(name.clone(), 0, layer);
             }
 
             for (name, inst_store) in &self.instance_stores {
@@ -554,7 +576,7 @@ impl KbContext {
             pending_preload: None,
             store_watcher: None,
             last_local_store_write: None,
-            manual_cozo: None,
+            system_stores: std::collections::BTreeMap::new(),
             data_dir: None,
             registry: mae_kb::federation::KbRegistry::default(),
             registry_watcher: None,

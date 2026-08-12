@@ -528,6 +528,57 @@ impl Editor {
             }
         }
 
+        // Then MAE's own system KBs, labelled with their catalog name.
+        //
+        // This pass is **required**, not a nicety: these corpora used to be
+        // `kb.instances` entries (via a registry row) and were covered by the
+        // loop above. Evicting them from the registry without this would drop
+        // MAE's own documentation and practices out of search entirely.
+        //
+        // They are queried through a `CozoQueryLayer` rather than mirrored into
+        // an in-memory `KnowledgeBase`, so the content exists once.
+        //
+        // Scope handling mirrors a local instance: they are local, never remote,
+        // and never project-scoped. `KbScope::Named` matches the catalog name.
+        //
+        // NOTE the manual is a partial exception, and deliberately so for now:
+        // its nodes are also inserted into `kb.primary` at startup, and primary
+        // is processed first, so a manual hit is deduped there and still arrives
+        // unlabelled. Fixing that means taking the manual out of `kb.primary`,
+        // which `is_builtin_node`, help resolution and the seed-node write
+        // guards all currently depend on — a separate change.
+        let include_system = match scope {
+            KbScope::All | KbScope::LocalOnly => true,
+            KbScope::RemoteOnly | KbScope::Project(_) => false,
+            KbScope::Named(_) => true, // narrowed per-store below
+        };
+        if include_system {
+            for (name, store) in &self.kb.system_stores {
+                if let KbScope::Named(n) = scope {
+                    if n != name {
+                        continue;
+                    }
+                }
+                let layer = mae_kb::CozoQueryLayer::new(store.clone());
+                let hits = mae_kb::query::KbQueryLayer::search(
+                    &layer,
+                    query,
+                    self.kb.search_max_results,
+                )
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, query, kb = %name, "system KB search failed");
+                    Vec::new()
+                });
+                for hit in hits {
+                    if let Some(node) = mae_kb::query::KbQueryLayer::get(&layer, &hit.id) {
+                        if seen_ids.insert(node.id.clone()) {
+                            results.push((Some(name.clone()), node));
+                        }
+                    }
+                }
+            }
+        }
+
         // ADR-061 Phase F2: fuse in semantic hits BEFORE the alpha/recency
         // resort below, so relevance-mode RRF fusion composes with the same
         // sort-mode logic every other mode already goes through — a

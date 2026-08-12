@@ -17,7 +17,6 @@ mod collab_bridge;
 mod config;
 mod daemon_supervisor;
 mod dap_bridge;
-mod devpractices_kb;
 mod doctor;
 #[cfg(feature = "gui")]
 mod graph_layout_bridge;
@@ -33,7 +32,6 @@ mod lsp_bridge;
 mod manual_kb;
 mod mdns_discovery;
 pub mod pkg;
-mod practices_kb;
 mod scheme_dap_bridge;
 mod scheme_lsp_bridge;
 mod shell_keys;

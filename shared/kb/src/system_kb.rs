@@ -87,13 +87,20 @@ pub struct SystemKb {
     pub auto_enable: bool,
 }
 
+/// The manual/help corpus's catalog name.
+///
+/// Named rather than spelled out at use sites because it is load-bearing in two
+/// places that must agree: the query layer's primary fallback, and the
+/// pseudo-instance label a search hit carries.
+pub const MANUAL: &str = "manual";
+
 /// Every system KB MAE knows about.
 ///
 /// Adding an entry reserves its name against `kb_register` and makes it
 /// read-only, so entries are added deliberately, not incidentally.
 pub const SYSTEM_KBS: &[SystemKb] = &[
     SystemKb {
-        name: "manual",
+        name: MANUAL,
         corpus_dir: "assets/manual",
         asset_filename: "mae-manual.cozo",
         env_override: "MAE_MANUAL_PATH",
@@ -150,6 +157,49 @@ pub fn is_reserved_name(name: &str) -> bool {
 /// The system KBs MAE makes available without being asked.
 pub fn auto_enabled() -> impl Iterator<Item = &'static SystemKb> {
     SYSTEM_KBS.iter().filter(|kb| kb.auto_enable)
+}
+
+/// What a reserved-name registry row turned out to be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReservedRow {
+    /// MAE put it there. Safe to remove: the corpus is now served from the
+    /// catalog, and the row's store is a derived copy of a shipped asset.
+    MaeProvisioned,
+    /// A reserved name, but not the shape MAE writes — so someone pointed it at
+    /// content of their own. Never removed automatically: the row may be the
+    /// only record of where that content lives.
+    UserOwned,
+}
+
+/// Classify a registry row that carries a reserved system-KB name.
+///
+/// **Keyed on shape, deliberately not on `kind`.** `KbInstanceKind::Guidance`
+/// looks like the natural discriminator and is not trustworthy: on a real
+/// machine that has run MAE for months, the two auto-registered rows were found
+/// carrying *different* kinds — `DevPractices` as `Guidance` and `MaePractices`
+/// as `UserRegistered` — because the variant post-dates the code that writes
+/// some of these rows. A field that is wrong on half the population cannot
+/// decide whether to delete something.
+///
+/// The shape MAE writes, on the other hand, is exact and was never produced by
+/// `kb_register`: a **dir-less** instance whose `db_path` is the data dir's own
+/// copy of the shipped asset (see `guidance_kb_engine::ensure_registered`).
+///
+/// `data_dir` is the caller's resolved MAE data directory.
+pub fn classify_reserved_row(
+    name: &str,
+    org_dir: &std::path::Path,
+    db_path: &std::path::Path,
+    data_dir: &std::path::Path,
+) -> Option<ReservedRow> {
+    let entry = find(name)?;
+    let mae_shape =
+        org_dir.as_os_str().is_empty() && db_path == data_dir.join(entry.asset_filename).as_path();
+    Some(if mae_shape {
+        ReservedRow::MaeProvisioned
+    } else {
+        ReservedRow::UserOwned
+    })
 }
 
 #[cfg(test)]
@@ -213,6 +263,74 @@ mod tests {
         for kb in SYSTEM_KBS {
             assert!(is_reserved_name(kb.name));
         }
+    }
+
+    /// The migration predicate decides whether a row gets DELETED, so its
+    /// negative half matters more than its positive one.
+    ///
+    /// Both fixtures are the real shapes seen on a machine that had run MAE for
+    /// months — including the one that motivated keying on shape rather than
+    /// `kind`: `MaePractices` was stamped `UserRegistered` and `DevPractices`
+    /// `Guidance`, though MAE wrote both.
+    #[test]
+    fn a_mae_provisioned_row_is_recognised_by_shape_whatever_its_kind_says() {
+        let data = std::path::Path::new("/home/u/.local/share/mae");
+        for name in ["MaePractices", "DevPractices", "manual"] {
+            let entry = find(name).unwrap();
+            assert_eq!(
+                classify_reserved_row(
+                    name,
+                    std::path::Path::new(""),
+                    &data.join(entry.asset_filename),
+                    data
+                ),
+                Some(ReservedRow::MaeProvisioned),
+                "{name}"
+            );
+        }
+    }
+
+    /// A reserved name pointing at the user's own org directory is theirs, and
+    /// removing it would discard the only record of where that content lives.
+    #[test]
+    fn a_reserved_name_over_a_users_own_content_is_never_mae_provisioned() {
+        let data = std::path::Path::new("/home/u/.local/share/mae");
+        // Their own org dir under the reserved name (ADR-076 D4's override).
+        assert_eq!(
+            classify_reserved_row(
+                "DevPractices",
+                std::path::Path::new("/home/u/notes/practices"),
+                &data.join("mae-devpractices.cozo"),
+                data
+            ),
+            Some(ReservedRow::UserOwned)
+        );
+        // Dir-less, but pointing somewhere MAE never writes.
+        assert_eq!(
+            classify_reserved_row(
+                "DevPractices",
+                std::path::Path::new(""),
+                std::path::Path::new("/home/u/elsewhere/mine.cozo"),
+                data
+            ),
+            Some(ReservedRow::UserOwned)
+        );
+    }
+
+    /// An ordinary KB is not classified at all — the migration must never even
+    /// consider deleting a row it has no claim to.
+    #[test]
+    fn an_unreserved_name_is_not_classified() {
+        let data = std::path::Path::new("/home/u/.local/share/mae");
+        assert_eq!(
+            classify_reserved_row(
+                "MyNotes",
+                std::path::Path::new(""),
+                &data.join("mae-devpractices.cozo"),
+                data
+            ),
+            None
+        );
     }
 
     /// `auto_enable` governs availability only. If this ever equals the full
