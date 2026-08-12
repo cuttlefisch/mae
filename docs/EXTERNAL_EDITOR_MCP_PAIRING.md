@@ -288,7 +288,11 @@ these up expecting them to affect Copilot in any way.
 **What still matters, server-side:**
 
 - **`ai_guidance_kb`** — if set (MAE ships a default of `"DevPractices"`; check via
-  `:describe-option ai-guidance-kb`), it's surfaced to *every* connected client's MCP
+  `:describe-option ai-guidance-kb`). Changing it requires the **privileged** tier: it
+  names the standing instructions every session is told to follow, and a control the
+  agent can repoint is not a control (principle #16). Set it as the human — `:set-save`,
+  or the deterministic `mae --ensure-guidance-config` below — not by asking the agent to.
+  It's surfaced to *every* connected client's MCP
   `initialize` response `instructions` field — for free, no extra config. **Precisely
   what that field contains** (verified directly against `crates/mae/src/main.rs`, not
   assumed): a short *pointer* sentence — `"Before acting, consult KB '<name>' for

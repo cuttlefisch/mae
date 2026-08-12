@@ -292,6 +292,61 @@ fn a_write_tier_session_cannot_reach_auto_accept_through_set_option() {
     }
 }
 
+/// Principle #16: `ai_guidance_kb` names the corpus of standing instructions
+/// every AI session is told to follow, so the human sets it and the agent does
+/// not.
+///
+/// This was `Write`-settable until the system-KB split, and nothing caught it:
+/// `ordinary_options_are_still_settable_at_write_tier` below skips authority
+/// options *dynamically*, so moving one across the line changes which branch it
+/// takes rather than failing. Hence an explicit gate.
+///
+/// Why it matters in practice: `initialize.instructions` is rebuilt per MCP
+/// connection from the LIVE option value, so a `Write`-tier agent could blank
+/// or repoint its own standing instructions for every subsequent session in the
+/// process. Persisting was already blocked (`save_option_to_init` refuses
+/// AI-originated dispatch), but an in-memory change lasting the life of the
+/// editor is not meaningfully weaker.
+///
+/// Asserted on both surfaces the option answers to, since `normalize_op` maps
+/// the kebab spelling onto the same entry and a guard on one spelling is not a
+/// guard.
+#[test]
+fn ai_guidance_kb_cannot_be_changed_by_a_write_tier_agent() {
+    for spelling in ["ai_guidance_kb", "ai-guidance-kb"] {
+        let args = serde_json::json!({"option": spelling, "value": "SomeOtherKb"});
+        assert_eq!(
+            crate::tools::effective_tier("set_option", &args, PermissionTier::Write),
+            PermissionTier::Privileged,
+            "{spelling} must escalate to Privileged"
+        );
+        let (success, output) = run("set_option", args, PermissionTier::Write);
+        assert!(
+            !success,
+            "set_option {spelling} SUCCEEDED at Write tier: {output}"
+        );
+    }
+}
+
+/// The adversarial half: escalating `ai_guidance_kb` must not have swept its
+/// siblings along. `ai_guidance_inline_budget_chars` only caps how much
+/// guidance is inlined and `ai_guidance_export_live_sync` only mirrors it to a
+/// file — neither decides *which* corpus the agent is told to follow, so both
+/// stay ordinary. A blanket `ai_guidance*` escalation would pass the test above
+/// and fail this one.
+#[test]
+fn the_other_guidance_options_stay_ordinary() {
+    for name in [
+        "ai_guidance_inline_budget_chars",
+        "ai_guidance_export_live_sync",
+    ] {
+        assert!(
+            !crate::tools::is_agent_authority_option(name),
+            "{name} must remain settable at Write tier"
+        );
+    }
+}
+
 /// ...while ordinary option setting is untouched. Sampled over the real
 /// registry rather than one hand-picked option: the failure mode being guarded
 /// against is "raise `set_option` wholesale", which would show up here as a

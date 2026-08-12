@@ -275,6 +275,7 @@ fn external_registry_change_adopts_new_instance() {
             data_dir.path(),
             None,
         )
+        .expect("'External' is not a reserved system-KB name")
     });
     saved.unwrap();
 
@@ -323,6 +324,7 @@ fn registry_watch_reload_suppressed_within_local_write_cooldown() {
             data_dir.path(),
             None,
         )
+        .expect("'External' is not a reserved system-KB name")
     });
     saved.unwrap();
 

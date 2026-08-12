@@ -219,6 +219,17 @@ impl Editor {
         };
         let _ = std::fs::create_dir_all(&data_dir);
 
+        // Refuse a reserved system-KB name BEFORE `update()` so no registry
+        // write happens at all — a rejected registration must not leave a
+        // rewritten `kb-registry.toml` behind.
+        if mae_kb::system_kb::is_reserved_name(name) {
+            self.set_status(format!(
+                "KB register error: '{name}' is a reserved MAE system KB name — \
+                 use a different name"
+            ));
+            return None;
+        }
+
         let (registry, uuid, saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
             reg.register(
                 name.to_string(),
@@ -227,6 +238,16 @@ impl Editor {
                 self.kb.data_dir.as_ref(),
             )
         });
+        // The reserved-name check above already returned, so the only way this
+        // errors is a future refusal added to `register` — surface it rather
+        // than proceeding with an unusable uuid.
+        let uuid = match uuid {
+            Ok(uuid) => uuid,
+            Err(e) => {
+                self.set_status(format!("KB register error: {e}"));
+                return None;
+            }
+        };
         if let Err(e) = saved {
             tracing::warn!(error = %e, "failed to persist KB registry");
         }
@@ -427,7 +448,38 @@ impl Editor {
     }
 
     /// Unregister a KB instance by name or UUID.
+    /// Whether `name_or_uuid` resolves to one of MAE's own system KBs
+    /// (`mae_kb::system_kb`), which the user manages neither the lifecycle nor
+    /// the content of.
+    ///
+    /// Checks the resolved instance's *name* rather than the argument, so
+    /// passing a uuid does not walk past the guard.
+    ///
+    /// Shared by the lifecycle operations rather than repeated at each, so a
+    /// fourth one cannot be added without the check — the same reason node
+    /// provenance is stamped at one write boundary in `kb_build::insert_nodes`.
+    pub(crate) fn kb_is_system(&self, name_or_uuid: &str) -> Option<String> {
+        let name = self
+            .kb
+            .registry
+            .find(name_or_uuid)
+            .map(|i| i.name.clone())
+            .unwrap_or_else(|| name_or_uuid.to_string());
+        mae_kb::system_kb::is_reserved_name(&name).then_some(name)
+    }
+
     pub fn kb_unregister(&mut self, name_or_uuid: &str) {
+        // Unregistering a system KB is a no-op that looks like an action: the
+        // startup engine re-adds it on the next launch (registration is
+        // additive and idempotent), so the user gets a success message and an
+        // unchanged editor one restart later.
+        if let Some(name) = self.kb_is_system(name_or_uuid) {
+            self.set_status(format!(
+                "'{name}' is a MAE system KB — it cannot be unregistered (it is \
+                 re-provisioned at startup)"
+            ));
+            return;
+        }
         let found = self.kb.registry.find(name_or_uuid).map(|i| i.uuid.clone());
         match found {
             Some(uuid) => {
@@ -513,6 +565,20 @@ impl Editor {
         name_or_uuid: &str,
         mode: Option<mae_kb::IngestMode>,
     ) -> Option<KbImportResult> {
+        // Reimporting a system KB actively corrupts it. A bundled corpus is
+        // registered dir-less (`org_dir` is empty), so the import walks nothing
+        // and the empty result is written straight back over the in-memory KB —
+        // emptying this session's guidance. The durable store survives only by
+        // luck: `kb_build` never calls `record_source_file`, so `IngestMode::Full`'s
+        // deletion sweep finds no recorded sources and removes nothing. Had the
+        // builder recorded them, a reimport would have deleted every node.
+        if let Some(name) = self.kb_is_system(name_or_uuid) {
+            self.set_status(format!(
+                "'{name}' is a MAE system KB — its content comes from MAE, not from an \
+                 org directory, so there is nothing to reimport"
+            ));
+            return None;
+        }
         let inst = self.kb.registry.find(name_or_uuid).cloned();
         match inst {
             Some(instance) => {
