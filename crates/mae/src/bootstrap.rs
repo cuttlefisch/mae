@@ -2491,8 +2491,24 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
             if kb.name == mae_kb::system_kb::MANUAL {
                 continue; // loaded above, into an in-memory store
             }
-            if let Some(store) = crate::guidance_kb_engine::load_system_store(kb, &data_dir) {
-                editor.kb.system_stores.insert(kb.name.to_string(), store);
+            let Some(path) = crate::guidance_kb_engine::ensure_local_copy(kb, &data_dir) else {
+                continue;
+            };
+            // Opened through `kb_open_instance_store`, which honours
+            // `kb_storage_engine` and performs the sled->sqlite migration — the
+            // same path the old registry import used. Opening the copied sled
+            // store directly instead stalled the main thread ~6s at startup.
+            match editor.kb_open_instance_store(&path) {
+                Ok(store) => {
+                    editor
+                        .kb
+                        .system_stores
+                        .insert(kb.name.to_string(), std::sync::Arc::new(store));
+                }
+                Err(e) => {
+                    warn!(kb = kb.name, path = %path.display(), error = %e,
+                        "failed to open bundled system KB store");
+                }
             }
         }
 

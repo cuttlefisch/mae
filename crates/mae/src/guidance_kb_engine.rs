@@ -26,7 +26,6 @@
 
 use mae_kb::system_kb::SystemKb;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 /// Well-known install locations for `kb`'s pre-built asset, checked in
 /// priority order. Mirrors `manual_kb::well_known_paths` exactly (same
@@ -68,41 +67,36 @@ pub fn locate(kb: &SystemKb, data_dir: &Path) -> Option<PathBuf> {
         .find(|p| p.exists())
 }
 
-/// Locate `kb`'s asset, ensure MAE has its own copy of it in `data_dir`, open
-/// it, and return the store. `None` if nothing is installed — a silent no-op,
-/// which is the shipped behaviour for anyone without the asset.
+/// Locate `kb`'s asset and ensure MAE has its own copy of it in `data_dir`,
+/// returning the path to that copy. `None` if nothing is installed — a silent
+/// no-op, which is the shipped behaviour for anyone without the asset.
 ///
-/// **The copy is load-bearing, not tidiness.** A store opened here is opened
-/// read-write, and CozoDB migrates a sled store to sqlite in place on first
-/// open (`kb_storage_engine` defaults to sqlite). Opening the located asset
-/// directly would rewrite it — hit for real once, leaving `.sled.bak-*`
-/// migration debris alongside the then-committed `assets/mae-practices.cozo`.
-/// Copying first means MAE mutates only its own derived cache.
-pub fn load_system_store(kb: &SystemKb, data_dir: &Path) -> Option<Arc<mae_kb::CozoKbStore>> {
+/// **The copy is load-bearing, not tidiness.** The returned path is opened
+/// read-write by the caller, and CozoDB migrates a sled store to sqlite in
+/// place on first open (`kb_storage_engine` defaults to sqlite). Handing back
+/// the located asset directly would rewrite it — hit for real once, leaving
+/// `.sled.bak-*` migration debris alongside the then-committed
+/// `assets/mae-practices.cozo`. Copying first means MAE mutates only its own
+/// derived cache.
+///
+/// Deliberately stops at the path rather than opening the store itself. The
+/// caller opens it through `Editor::kb_open_instance_store`, which honours
+/// `kb_storage_engine` and performs the sled->sqlite migration. Opening it here
+/// as sled instead cost **six seconds of main-thread stall** at startup — the
+/// watchdog caught it — because a bundled sled store is tens of megabytes and
+/// sled is the slowest of the three engines (measured in
+/// `kb_provisioning_cost`). Same reason the old registry-import path went
+/// through that function.
+pub fn ensure_local_copy(kb: &SystemKb, data_dir: &Path) -> Option<PathBuf> {
     let found = locate(kb, data_dir)?;
     let canonical = data_dir.join(kb.asset_filename);
-    let path = if found == canonical {
-        found
-    } else if copy_kb_asset(&found, &canonical).is_ok() {
-        canonical
+    if found == canonical {
+        return Some(found);
+    }
+    if copy_kb_asset(&found, &canonical).is_ok() {
+        Some(canonical)
     } else {
-        return None;
-    };
-    // Try sqlite, then sled — never `CozoKbStore::open`, which hardcodes sled.
-    // Shipped assets are sled today and a locally-built one is sqlite, and cozo
-    // resolves the engine by *runtime* string match, so guessing wrong fails at
-    // open time with an opaque `bail!` rather than at compile time. Same order
-    // as `guidance::read_guidance_kb_context`, so the two agree about which
-    // store they are looking at.
-    match mae_kb::CozoKbStore::open_with_engine(&path, "sqlite")
-        .or_else(|_| mae_kb::CozoKbStore::open_with_engine(&path, "sled"))
-    {
-        Ok(store) => Some(Arc::new(store)),
-        Err(e) => {
-            tracing::warn!(kb = kb.name, path = %path.display(), error = %e,
-                "failed to open bundled system KB store");
-            None
-        }
+        None
     }
 }
 
