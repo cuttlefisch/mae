@@ -2202,8 +2202,13 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
         // (read-only — we never open the on-disk asset read-write, since sled
         // would write recovery snapshots and dirty a git-tracked asset or drift
         // an install's checksum), otherwise from the code-generated seed nodes
-        // already in `editor.kb.primary`. Without a manual cozo, `SPC h h` fails
-        // with "no such KB node: index".
+        // already in `editor.kb.primary`.
+        //
+        // The comment that used to sit here claimed `SPC h h` fails without a
+        // manual cozo, "no such KB node: index". That has not been true since
+        // 416c9262 added the query-layer-miss fallback, and `kb_seed` produces a
+        // real `index` node regardless — losing the pre-built store costs
+        // hand-written prose, not reachability.
         match mae_kb::CozoKbStore::open_mem() {
             Ok(mem_store) => {
                 let mut sourced_from_prebuilt = false;
@@ -2267,7 +2272,10 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
                 let _ = mem_store.seed_type_system();
                 let _ = mem_store.seed_typed_relationships();
                 let _ = mem_store.seed_views();
-                editor.kb.manual_cozo = Some(std::sync::Arc::new(mem_store));
+                editor.kb.system_stores.insert(
+                    mae_kb::system_kb::MANUAL.to_string(),
+                    std::sync::Arc::new(mem_store),
+                );
             }
             Err(e) => {
                 warn!(error = %e, "failed to open in-memory manual KB store");
@@ -2449,21 +2457,60 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
                 info!("migrated kb-registry.toml from config to data directory");
             }
         }
-        // Issue #370: auto-register the shipped MAE-contributor practices KB
-        // as a federated instance, if one is installed and not already
-        // registered, so `ai_guidance_kb` resolves to it when a contributor
-        // explicitly switches to "MaePractices" (the shipped init.scm
-        // template defaults to "DevPractices" since ADR-076 — see the call
-        // below). Additive-only and a silent no-op otherwise — run BEFORE
-        // the registry load below so a newly-added entry is picked up by the
-        // same import loop that handles every other instance, with no
-        // separate import path needed.
-        crate::practices_kb::ensure_registered(&data_dir);
-        // Issue #514 / ADR-076: same auto-registration, for the generic
-        // DevPractices KB (the fresh-install default `ai_guidance_kb`
-        // target per ADR-076 D6). Same ordering guarantee as above — must
-        // run before the registry load below.
-        crate::devpractices_kb::ensure_registered(&data_dir);
+        // System KBs no longer live in `kb-registry.toml`. Evict the rows MAE
+        // itself wrote there before this change, so every registry consumer
+        // (`kb_health`, `kb_agenda`, federated search, backup) sees only the
+        // user's own KBs. Idempotent, and never touches a reserved-name row
+        // that turned out to hold the user's own content.
+        let (evicted, kept_user_rows) =
+            crate::guidance_kb_engine::evict_system_rows_from_registry(&data_dir);
+        if !evicted.is_empty() {
+            info!(kbs = ?evicted, "evicted MAE-provisioned system KB rows from the registry");
+        }
+        for name in kept_user_rows {
+            editor.notify(
+                mae_core::notifications::Notification::warning(
+                    "kb",
+                    format!("'{name}' is a reserved MAE system KB name"),
+                )
+                .body(format!(
+                    "A KB of yours is registered as '{name}', which is now one of MAE's own \
+                     corpora. MAE's takes precedence. Re-register yours under a different name \
+                     and point `ai_guidance_kb` at it."
+                ))
+                .key(format!("kb-reserved-name-{name}")),
+            );
+        }
+
+        // Open MAE's own bundled corpora into `kb.system_stores` — outside the
+        // registry, read-mostly, and labelled by catalog name in the query
+        // layer. A silent no-op for any corpus whose asset is not installed,
+        // which is the shipped behaviour for a build that skipped `make
+        // practices-kb`/`devpractices-kb`.
+        for kb in mae_kb::system_kb::auto_enabled() {
+            if kb.name == mae_kb::system_kb::MANUAL {
+                continue; // loaded above, into an in-memory store
+            }
+            let Some(path) = crate::guidance_kb_engine::ensure_local_copy(kb, &data_dir) else {
+                continue;
+            };
+            // Opened through `kb_open_instance_store`, which honours
+            // `kb_storage_engine` and performs the sled->sqlite migration — the
+            // same path the old registry import used. Opening the copied sled
+            // store directly instead stalled the main thread ~6s at startup.
+            match editor.kb_open_instance_store(&path) {
+                Ok(store) => {
+                    editor
+                        .kb
+                        .system_stores
+                        .insert(kb.name.to_string(), std::sync::Arc::new(store));
+                }
+                Err(e) => {
+                    warn!(kb = kb.name, path = %path.display(), error = %e,
+                        "failed to open bundled system KB store");
+                }
+            }
+        }
 
         let registry = mae_kb::federation::KbRegistry::load(&data_dir);
         for inst in &registry.instances {
@@ -2947,23 +2994,25 @@ mod tests {
         (tmp, db_path)
     }
 
-    /// Issue #370, end-to-end: `init_kb_federation` must auto-register the
-    /// shipped practices KB and load it into `editor.kb.registry`/
-    /// `editor.kb.instances`, proving the whole chain — locate, register,
-    /// import — against MAE's REAL practices content rather than a synthetic
-    /// fixture that might not reflect its shape. The content comes from the
-    /// tracked `assets/practices/*.org` corpus via `build_real_guidance_kb`,
-    /// which is what the shipped asset is built from.
+    /// Issue #370 / #514, end-to-end, restated for the system-KB split:
+    /// `init_kb_federation` must make MAE's own corpora available **without**
+    /// putting them in `kb-registry.toml`.
+    ///
+    /// The oracles are deliberately both-sided. Asserting only "it loaded"
+    /// would still pass if the corpus were auto-registered exactly as before;
+    /// asserting only "no registry row" would pass if it failed to load at all.
+    /// Content comes from the tracked `assets/*/**.org` corpora via
+    /// `build_real_guidance_kb`, which is what the shipped asset is built from.
     #[test]
-    fn init_kb_federation_auto_registers_and_loads_the_practices_kb() {
-        // Isolate from any ambient env override so this test's own
-        // `MAE_PRACTICES_KB_PATH` is authoritative regardless of what else
-        // might be running in this process.
+    fn init_kb_federation_serves_system_kbs_from_the_catalog_not_the_registry() {
         let _lock = mae_effect_sandbox::lock_env();
-        let prev = std::env::var("MAE_PRACTICES_KB_PATH").ok();
+        let prev_p = std::env::var("MAE_PRACTICES_KB_PATH").ok();
+        let prev_d = std::env::var("MAE_DEVPRACTICES_KB_PATH").ok();
 
-        let (_built, staged_asset) = build_real_guidance_kb("practices");
-        std::env::set_var("MAE_PRACTICES_KB_PATH", &staged_asset);
+        let (_bp, practices) = build_real_guidance_kb("practices");
+        let (_bd, devpractices) = build_real_guidance_kb("devpractices");
+        std::env::set_var("MAE_PRACTICES_KB_PATH", &practices);
+        std::env::set_var("MAE_DEVPRACTICES_KB_PATH", &devpractices);
 
         let tmp = tempfile::tempdir().unwrap();
         let mut editor = mae_core::Editor::new();
@@ -2971,76 +3020,162 @@ mod tests {
 
         init_kb_federation(&mut editor, false);
 
-        match prev {
+        match prev_p {
             Some(v) => std::env::set_var("MAE_PRACTICES_KB_PATH", v),
             None => std::env::remove_var("MAE_PRACTICES_KB_PATH"),
         }
-
-        let inst = editor
-            .kb
-            .registry
-            .find(crate::practices_kb::INSTANCE_NAME)
-            .expect("MaePractices must be auto-registered");
-        // `ensure_registered` copies the located asset into this data dir's
-        // own canonical location before registering it (never the located
-        // path directly, unless it was already there) — see its doc
-        // comment for why a federated instance's `db_path` can't safely
-        // point straight at `staged_asset`'s source location either.
-        assert_eq!(inst.db_path, tmp.path().join("mae-practices.cozo"));
-        assert!(
-            editor.kb.instances.contains_key(&inst.uuid),
-            "the newly-registered instance must be imported into kb.instances \
-             this same session, not only persisted to the registry file"
-        );
-        let kb = &editor.kb.instances[&inst.uuid];
-        assert!(
-            kb.get("index").is_some(),
-            "the real practices KB's index node must have loaded"
-        );
-    }
-
-    /// Issue #514 / ADR-076, end-to-end: same proof as
-    /// `init_kb_federation_auto_registers_and_loads_the_practices_kb`, for
-    /// the DevPractices sibling, built from the tracked
-    /// `assets/devpractices/*.org` corpus.
-    #[test]
-    fn init_kb_federation_auto_registers_and_loads_the_devpractices_kb() {
-        // Isolate from any ambient env override so this test's own
-        // `MAE_DEVPRACTICES_KB_PATH` is authoritative regardless of what
-        // else might be running in this process.
-        let _lock = mae_effect_sandbox::lock_env();
-        let prev = std::env::var("MAE_DEVPRACTICES_KB_PATH").ok();
-
-        let (_built, staged_asset) = build_real_guidance_kb("devpractices");
-        std::env::set_var("MAE_DEVPRACTICES_KB_PATH", &staged_asset);
-
-        let tmp = tempfile::tempdir().unwrap();
-        let mut editor = mae_core::Editor::new();
-        editor.data_dir_override = Some(tmp.path().to_path_buf());
-
-        init_kb_federation(&mut editor, false);
-
-        match prev {
+        match prev_d {
             Some(v) => std::env::set_var("MAE_DEVPRACTICES_KB_PATH", v),
             None => std::env::remove_var("MAE_DEVPRACTICES_KB_PATH"),
         }
 
-        let inst = editor
-            .kb
-            .registry
-            .find(crate::devpractices_kb::INSTANCE_NAME)
-            .expect("DevPractices must be auto-registered");
-        assert_eq!(inst.db_path, tmp.path().join("mae-devpractices.cozo"));
+        for name in ["MaePractices", "DevPractices"] {
+            let store = editor
+                .kb
+                .system_stores
+                .get(name)
+                .unwrap_or_else(|| panic!("{name} must be served as a system store"));
+            assert!(
+                mae_kb::KbStore::get_node(store.as_ref(), "index")
+                    .ok()
+                    .flatten()
+                    .is_some(),
+                "{name}'s real index node must have loaded"
+            );
+            assert!(
+                editor.kb.registry.find(name).is_none(),
+                "{name} must NOT appear in kb-registry.toml — that is what made every \
+                 registry consumer treat a bundled corpus as the user's data"
+            );
+        }
+    }
+
+    /// The migration: a registry that already carries MAE-provisioned rows —
+    /// the state of any machine that has run MAE before this change — is
+    /// cleaned up, while the user's own KBs are left exactly alone.
+    ///
+    /// The `kind` values here are the ones observed on a real long-running
+    /// install: `MaePractices` stamped `UserRegistered` and `DevPractices`
+    /// `Guidance`, though MAE wrote both. That is precisely why the classifier
+    /// keys on shape instead.
+    #[test]
+    fn init_kb_federation_evicts_mae_provisioned_rows_and_keeps_the_users_own() {
+        let _lock = mae_effect_sandbox::lock_env();
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path();
+
+        let row = |name: &str, org_dir: std::path::PathBuf, db_path: std::path::PathBuf, kind| {
+            mae_kb::federation::KbInstance {
+                uuid: mae_kb::federation::generate_uuid(),
+                name: name.to_string(),
+                org_dir,
+                db_path,
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind,
+                priority: 0,
+                remote_hub: None,
+            }
+        };
+
+        let user_dir = tempfile::tempdir().unwrap();
+        let mut registry = mae_kb::federation::KbRegistry::default();
+        registry.instances.push(row(
+            "MaePractices",
+            std::path::PathBuf::new(),
+            data_dir.join("mae-practices.cozo"),
+            mae_kb::federation::KbInstanceKind::UserRegistered,
+        ));
+        registry.instances.push(row(
+            "DevPractices",
+            std::path::PathBuf::new(),
+            data_dir.join("mae-devpractices.cozo"),
+            mae_kb::federation::KbInstanceKind::Guidance,
+        ));
+        registry.instances.push(row(
+            "MyNotes",
+            user_dir.path().to_path_buf(),
+            data_dir.join("kb/local/mynotes/kb.sqlite"),
+            mae_kb::federation::KbInstanceKind::UserRegistered,
+        ));
+        registry.save(data_dir).unwrap();
+
+        let (removed, kept) = crate::guidance_kb_engine::evict_system_rows_from_registry(data_dir);
+
+        assert_eq!(removed.len(), 2, "both MAE-provisioned rows: {removed:?}");
         assert!(
-            editor.kb.instances.contains_key(&inst.uuid),
-            "the newly-registered instance must be imported into kb.instances \
-             this same session, not only persisted to the registry file"
+            kept.is_empty(),
+            "no reserved-name row was the user's: {kept:?}"
         );
-        let kb = &editor.kb.instances[&inst.uuid];
+
+        let after = mae_kb::federation::KbRegistry::load(data_dir);
+        assert!(after.find("MaePractices").is_none());
+        assert!(after.find("DevPractices").is_none());
         assert!(
-            kb.get("index").is_some(),
-            "the real DevPractices KB's index node must have loaded"
+            after.find("MyNotes").is_some(),
+            "the user's own KB must survive untouched"
         );
+        assert_eq!(after.instances.len(), 1);
+
+        // Idempotent: a second pass removes nothing and still leaves the user's.
+        let (again, _) = crate::guidance_kb_engine::evict_system_rows_from_registry(data_dir);
+        assert!(again.is_empty(), "second pass must be a no-op: {again:?}");
+        assert_eq!(
+            mae_kb::federation::KbRegistry::load(data_dir)
+                .instances
+                .len(),
+            1
+        );
+    }
+
+    /// The half that stops the migration being a licence to delete: a reserved
+    /// name pointing at the user's OWN org directory is their content, and the
+    /// only record of where it lives. It is kept, and reported.
+    #[test]
+    fn eviction_never_removes_a_reserved_name_that_holds_the_users_own_content() {
+        let _lock = mae_effect_sandbox::lock_env();
+        let tmp = tempfile::tempdir().unwrap();
+        let user_dir = tempfile::tempdir().unwrap();
+
+        let mut registry = mae_kb::federation::KbRegistry::default();
+        registry.instances.push(mae_kb::federation::KbInstance {
+            uuid: mae_kb::federation::generate_uuid(),
+            name: "DevPractices".to_string(),
+            org_dir: user_dir.path().to_path_buf(),
+            db_path: tmp.path().join("kb/local/mine/kb.sqlite"),
+            primary: false,
+            enabled: true,
+            last_import: None,
+            collab_id: None,
+            shared: false,
+            remote_peers: Vec::new(),
+            last_sync: None,
+            ai_residency: mae_kb::federation::AiResidency::default(),
+            project_root: None,
+            kind: mae_kb::federation::KbInstanceKind::UserRegistered,
+            priority: 0,
+            remote_hub: None,
+        });
+        registry.save(tmp.path()).unwrap();
+
+        let (removed, kept) =
+            crate::guidance_kb_engine::evict_system_rows_from_registry(tmp.path());
+
+        assert!(
+            removed.is_empty(),
+            "must not delete the user's content: {removed:?}"
+        );
+        assert_eq!(kept, vec!["DevPractices".to_string()]);
+        assert!(mae_kb::federation::KbRegistry::load(tmp.path())
+            .find("DevPractices")
+            .is_some());
     }
 
     /// #323: `daemon_version_skew` (main.rs) was already implemented, unit-tested,

@@ -7,6 +7,73 @@
 
 use super::*;
 
+/// A hit from one of MAE's own corpora must be **labelled** with which corpus
+/// it came from.
+///
+/// Before the split, the manual's nodes were inserted into `kb.primary` at
+/// startup *and* served from a store the query layer joined in as a
+/// pseudo-instance called `"manual"`. A `kb_search` hit from MAE's own
+/// documentation therefore came back with `instance: None` — indistinguishable
+/// from one of the user's own notes, leaving an AI peer to guess from the id
+/// prefix.
+///
+/// Both halves are asserted: a system hit carries its catalog name, and a hit
+/// from the user's primary still carries `None`. Asserting only the first would
+/// pass if every result were suddenly labelled.
+#[test]
+fn a_system_kb_hit_is_labelled_with_its_catalog_name() {
+    let mut editor = Editor::new();
+    let _test_dirs = with_test_dirs(&mut editor);
+
+    // A distinctive node of the user's own, in the in-memory primary that
+    // federated search actually reads (not `primary_cozo`).
+    editor.kb.primary.insert(mae_kb::Node::new(
+        "user:zzz",
+        "Sundial notes",
+        mae_kb::NodeKind::Note,
+        "sundial",
+    ));
+
+    // A system store with a distinctive node of MAE's.
+    let sys = mae_kb::CozoKbStore::open_mem().unwrap();
+    sys.seed_type_system().unwrap();
+    sys.insert_node(&mae_kb::Node::new(
+        "concept:zzz",
+        "Sundial concept",
+        mae_kb::NodeKind::Concept,
+        "sundial",
+    ))
+    .unwrap();
+    editor
+        .kb
+        .system_stores
+        .insert("DevPractices".to_string(), std::sync::Arc::new(sys));
+
+    editor.kb.rebuild_query_layer();
+    let hits = editor.kb_federated_search("sundial");
+
+    let sys_label = hits
+        .iter()
+        .find(|(_, n)| n.id == "concept:zzz")
+        .map(|(label, _)| label.clone())
+        .expect("the system KB's node must be found");
+    assert_eq!(
+        sys_label,
+        Some("DevPractices".to_string()),
+        "a system hit must name its corpus, not arrive indistinguishable from the user's notes"
+    );
+
+    let user_label = hits
+        .iter()
+        .find(|(_, n)| n.id == "user:zzz")
+        .map(|(label, _)| label.clone())
+        .expect("the user's own node must be found");
+    assert_eq!(
+        user_label, None,
+        "the user's own primary must stay unlabelled — otherwise 'labelled' means nothing"
+    );
+}
+
 /// `kb_register` is the user-facing surface — and an MCP tool an AI peer can
 /// call — so the reservation has to hold here, not only in `KbRegistry`.
 ///

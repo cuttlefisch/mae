@@ -66,9 +66,10 @@ pub fn read_project_context(cwd: &Path) -> Option<String> {
 }
 
 /// Read a designated "guidance KB"'s content — standing practices an AI
-/// agent should treat as required, not optional. `guidance_kb` names a
-/// registered federated KB instance (see `:kb-register`/`kb_register`);
-/// empty disables this. Kept deliberately simple for v1: the KB's `index`
+/// agent should treat as required, not optional. `guidance_kb` names either one
+/// of MAE's own system KBs (`mae_kb::system_kb`, e.g. the shipped
+/// `"DevPractices"` default) or a registered federated instance of the user's
+/// own (`:kb-register`/`kb_register`); empty disables this. Kept deliberately simple for v1: the KB's `index`
 /// node body (its root/overview content), not a full crawl or
 /// embedding-based summary — and scoped to registered instances only, not
 /// `primary` (whose store path/engine resolution is an editor-bootstrap
@@ -80,10 +81,33 @@ pub fn read_guidance_kb_context(data_dir: &Path, guidance_kb: &str) -> Option<St
     if guidance_kb.is_empty() {
         return None;
     }
-    let registry = mae_kb::federation::KbRegistry::load(data_dir);
-    let instance = registry.find(guidance_kb)?;
-    let store = mae_kb::CozoKbStore::open_with_engine(&instance.db_path, "sqlite")
-        .or_else(|_| mae_kb::CozoKbStore::open_with_engine(&instance.db_path, "sled"))
+    // Resolve the **system catalog first**, then the user's registry.
+    //
+    // Order matters and is not arbitrary. MAE's own corpora no longer appear in
+    // `kb-registry.toml` at all (they are served from `mae_kb::system_kb`), so a
+    // registry-only lookup would silently stop resolving the shipped default —
+    // guidance would vanish for every install, with no error, which is exactly
+    // the failure mode this option already suffered once (see the `@ai-caution`
+    // on `ai_guidance_kb` in `crates/core/src/options.rs`).
+    //
+    // A system name cannot be shadowed: `KbRegistry::register` reserves them. So
+    // "catalog first" removes an ambiguity rather than creating one, and a user
+    // who wants their own practices registers under their own name and points
+    // `ai_guidance_kb` there — which this still resolves, via the registry arm.
+    //
+    // This process has no `Editor`, so it re-derives the store path rather than
+    // reading `kb.system_stores`: `mae-agent-cli` calls this with no editor at
+    // all, and the MCP path builds `initialize.instructions` before one is
+    // reachable.
+    let db_path = match mae_kb::system_kb::find(guidance_kb) {
+        Some(kb) => data_dir.join(kb.asset_filename),
+        None => {
+            let registry = mae_kb::federation::KbRegistry::load(data_dir);
+            registry.find(guidance_kb)?.db_path.clone()
+        }
+    };
+    let store = mae_kb::CozoKbStore::open_with_engine(&db_path, "sqlite")
+        .or_else(|_| mae_kb::CozoKbStore::open_with_engine(&db_path, "sled"))
         .ok()?;
     let node = store.get_node("index").ok().flatten()?;
     Some(format!(
@@ -261,6 +285,9 @@ mod tests {
             .join("../../assets")
             .join(corpus);
         let tmp = tempfile::tempdir().unwrap();
+        // Built at the catalog's canonical filename inside what will be the
+        // data dir, because resolution is catalog-first: a system KB is found
+        // at `data_dir/<asset_filename>`, not via a registry row.
         let db_path = tmp.path().join(format!("mae-{corpus}.cozo"));
         mae_kb::kb_build::build_org_kb(
             &src,
@@ -272,35 +299,6 @@ mod tests {
         )
         .unwrap_or_else(|e| panic!("failed to build {corpus} KB from {}: {e}", src.display()));
         (tmp, db_path)
-    }
-
-    /// A registry containing exactly one instance, shaped the way
-    /// `guidance_kb_engine::ensure_registered` writes it (dir-less, priority 0).
-    fn write_single_instance_registry(data_dir: &Path, name: &str, db_path: PathBuf) {
-        let mut registry = mae_kb::federation::KbRegistry::default();
-        registry.instances.push(mae_kb::federation::KbInstance {
-            uuid: format!("uuid-{}", name.to_lowercase()),
-            name: name.into(),
-            org_dir: PathBuf::new(),
-            db_path,
-            primary: false,
-            enabled: true,
-            last_import: None,
-            collab_id: None,
-            shared: false,
-            remote_peers: Vec::new(),
-            last_sync: None,
-            ai_residency: mae_kb::federation::AiResidency::default(),
-            project_root: None,
-            kind: mae_kb::federation::KbInstanceKind::default(),
-            priority: 0,
-            remote_hub: None,
-        });
-        std::fs::write(
-            data_dir.join("kb-registry.toml"),
-            toml::to_string(&registry).unwrap(),
-        )
-        .unwrap();
     }
 
     /// Issue #370, end-to-end against the REAL shipped asset (not a
@@ -315,12 +313,11 @@ mod tests {
     /// exercises real content without depending on a `make` target.
     #[test]
     fn read_guidance_kb_context_resolves_the_real_shipped_practices_kb() {
-        let (_built, db_path) = build_real_guidance_kb("practices");
+        let (built, _db_path) = build_real_guidance_kb("practices");
 
-        let data_dir = tempfile::tempdir().unwrap();
-        write_single_instance_registry(data_dir.path(), "MaePractices", db_path);
-
-        let ctx = read_guidance_kb_context(data_dir.path(), "MaePractices")
+        // No registry row: MaePractices is a system KB, resolved from the
+        // catalog. Seeding a row would test the path that no longer exists.
+        let ctx = read_guidance_kb_context(built.path(), "MaePractices")
             .expect("the real practices KB's index node must resolve");
         assert!(ctx.contains("MaePractices"));
         assert!(
@@ -339,12 +336,9 @@ mod tests {
     /// content leaked through under the wrong name.
     #[test]
     fn read_guidance_kb_context_resolves_the_real_shipped_devpractices_kb() {
-        let (_built, db_path) = build_real_guidance_kb("devpractices");
+        let (built, _db_path) = build_real_guidance_kb("devpractices");
 
-        let data_dir = tempfile::tempdir().unwrap();
-        write_single_instance_registry(data_dir.path(), "DevPractices", db_path);
-
-        let ctx = read_guidance_kb_context(data_dir.path(), "DevPractices")
+        let ctx = read_guidance_kb_context(built.path(), "DevPractices")
             .expect("the real DevPractices KB's index node must resolve");
         assert!(ctx.contains("DevPractices"));
         assert!(
