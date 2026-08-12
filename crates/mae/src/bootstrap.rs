@@ -2253,77 +2253,60 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
                 .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share/mae"))
         });
 
-        // Build an in-memory manual KB so the help system's cozo-backed
-        // `KbQueryLayer` can resolve built-in nodes (`index`, command/option
-        // help, etc.). It is sourced from the pre-built CozoDB file when found
-        // (read-only — we never open the on-disk asset read-write, since sled
-        // would write recovery snapshots and dirty a git-tracked asset or drift
-        // an install's checksum), otherwise from the code-generated seed nodes
-        // already in `editor.kb.primary`.
+        // The manual KB, sourced from its ORG CORPUS rather than a shipped
+        // pre-built store.
         //
-        // The comment that used to sit here claimed `SPC h h` fails without a
-        // manual cozo, "no such KB node: index". That has not been true since
-        // 416c9262 added the query-layer-miss fallback, and `kb_seed` produces a
-        // real `index` node regardless — losing the pre-built store costs
-        // hand-written prose, not reachability.
+        // # The invariant this preserves
+        //
+        // `system_stores["manual"]` is populated **synchronously, on every
+        // startup, in every mode**. That is not incidental: the query layer's
+        // primary is the user's own `primary.cozo`, and MAE's documentation
+        // reaches it only as this pseudo-instance. An earlier attempt made the
+        // manual a durable cache that was absent until built — and absent
+        // forever under `--headless` — which silently emptied `kb-find` and
+        // `kb-insert-link` of every `cmd:`/`concept:`/`option:` node, and made
+        // `kb_list`/`kb_links_to`/`kb_graph` return nothing for MAE's own docs.
+        // Reverted; this is the shape that holds.
+        //
+        // # Order
+        //
+        // 1. `kb.primary` already carries the code-generated nodes from
+        //    `Editor::new()` plus the user's own `~/.config/mae/help/*.org`
+        //    (0.020s, regenerated every launch — which is what keeps user help
+        //    edits taking effect immediately).
+        // 2. The org corpus is ingested INTO `kb.primary`, upserting richer
+        //    hand-written prose over its terser `seed_kb()` counterpart. That is
+        //    the long-standing intent of `assets/manual/`.
+        // 3. One `persist_nodes` projects the union into the in-memory store.
+        //
+        // Ingesting into `primary` first, rather than into the store directly,
+        // means the org prose lands in BOTH — matching what the pre-built path
+        // did, and keeping the palettes (which read `kb.primary` when there is
+        // no query layer) complete.
         match mae_kb::CozoKbStore::open_mem() {
             Ok(mem_store) => {
-                let mut sourced_from_prebuilt = false;
-                if let Some(result) = crate::manual_kb::locate_and_validate(&data_dir, None) {
-                    match &result.validation {
-                        crate::manual_kb::ManualValidation::Valid => {
-                            debug!(path = %result.path.display(), "manual KB checksum valid");
-                        }
-                        crate::manual_kb::ManualValidation::Historical { matched_version } => {
-                            warn!(
-                                path = %result.path.display(),
-                                matched = %matched_version,
-                                current = env!("CARGO_PKG_VERSION"),
-                                "manual KB is from an older mae version"
+                if let Some(kb) = mae_kb::system_kb::find(mae_kb::system_kb::MANUAL) {
+                    let cache_dir = crate::pkg::paths::cache_dir_candidate("mae")
+                        .unwrap_or_else(|| data_dir.join("cache"));
+                    match crate::system_corpus::resolve(kb, &cache_dir) {
+                        Some(src) => {
+                            let report = editor.kb.primary.ingest_org_dir(&src);
+                            info!(
+                                nodes = report.indexed,
+                                skipped = report.skipped_no_id,
+                                src = %src.display(),
+                                "ingested manual corpus"
                             );
                         }
-                        crate::manual_kb::ManualValidation::Unknown => {
-                            warn!(
-                                path = %result.path.display(),
-                                "manual KB checksum does not match any known release"
-                            );
-                        }
-                        crate::manual_kb::ManualValidation::Custom => {
-                            info!(path = %result.path.display(), "using custom manual KB");
-                        }
-                    }
-                    match crate::manual_kb::load_nodes_readonly(&result.path) {
-                        Ok(nodes) => {
-                            let count = nodes.len();
-                            for node in &nodes {
-                                editor.kb.primary.insert(node.clone());
-                                if let Err(e) = mem_store.insert_node(node) {
-                                    warn!(error = %e, id = %node.id, "failed to load manual node");
-                                }
-                            }
-                            info!(count, path = %result.path.display(), "loaded manual KB nodes (read-only)");
-                            sourced_from_prebuilt = true;
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "failed to read pre-built manual KB; falling back to seed");
+                        None => {
+                            debug!("no manual corpus available; help serves seed nodes only");
                         }
                     }
                 }
 
-                if !sourced_from_prebuilt {
-                    // No usable pre-built KB: seed the in-memory manual cozo from
-                    // the code-generated nodes already present in `kb.primary`.
-                    match mem_store.persist_nodes(&editor.kb.primary) {
-                        Ok(count) => {
-                            info!(
-                                count,
-                                "built in-memory manual KB from seed (no pre-built KB found)"
-                            );
-                        }
-                        Err(e) => {
-                            warn!(error = %e, "failed to persist seed nodes to in-memory manual KB");
-                        }
-                    }
+                match mem_store.persist_nodes(&editor.kb.primary) {
+                    Ok(count) => debug!(count, "projected manual KB into memory"),
+                    Err(e) => warn!(error = %e, "failed to project manual KB"),
                 }
 
                 let _ = mem_store.seed_type_system();
@@ -3121,6 +3104,71 @@ mod tests {
                  registry consumer treat a bundled corpus as the user's data"
             );
         }
+    }
+
+    /// **The invariant.** After `init_kb_federation`, MAE's own documentation is
+    /// reachable through the query layer — in every mode, from the first tick.
+    ///
+    /// This is the gate whose absence let a real regression ship. An earlier
+    /// attempt made the manual a durable cache that was absent until built, and
+    /// absent forever under `--headless`. Every test still passed, because they
+    /// all asserted the projection *worked*; none asserted documentation stayed
+    /// reachable while it did not yet exist. The observable damage was that
+    /// `kb-find`/`kb-insert-link` contained zero `cmd:`/`concept:`/`option:`
+    /// nodes, and `kb_list`/`kb_links_to`/`kb_graph` returned empty for MAE's
+    /// own docs, on first launch and after every upgrade.
+    ///
+    /// The oracle is deliberately the QUERY LAYER, not `kb.primary`. The query
+    /// layer's primary is the user's own store; MAE's docs reach it only as the
+    /// `"manual"` pseudo-instance, so asserting on `kb.primary` would pass even
+    /// with the manual missing from every federated read.
+    #[test]
+    fn mae_documentation_is_reachable_through_the_query_layer_from_the_first_tick() {
+        let _lock = mae_effect_sandbox::lock_env();
+        let prev_cache = std::env::var("XDG_CACHE_HOME").ok();
+        let cache = tempfile::tempdir().unwrap();
+        std::env::set_var("XDG_CACHE_HOME", cache.path());
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut editor = mae_core::Editor::new();
+        editor.data_dir_override = Some(tmp.path().to_path_buf());
+
+        init_kb_federation(&mut editor, false);
+
+        match prev_cache {
+            Some(v) => std::env::set_var("XDG_CACHE_HOME", v),
+            None => std::env::remove_var("XDG_CACHE_HOME"),
+        }
+
+        assert!(
+            editor
+                .kb
+                .system_stores
+                .contains_key(mae_kb::system_kb::MANUAL),
+            "the manual store must be present immediately, in every mode"
+        );
+
+        let q = editor
+            .kb
+            .query_layer()
+            .expect("a query layer must exist once the manual store is present");
+
+        // A code-generated node and an org-only node: the two halves that must
+        // both land. `concept:scheme-api` exists ONLY in `assets/manual/`, so it
+        // proves the corpus was ingested rather than just the seed nodes.
+        for id in ["index", "cmd:save", "concept:scheme-api"] {
+            assert!(
+                q.get(id).is_some(),
+                "{id} must be reachable through the query layer"
+            );
+        }
+
+        // ...and the palettes, which is where the regression was user-visible.
+        let pairs = editor.kb_all_node_pairs();
+        assert!(
+            pairs.iter().any(|(id, _)| id == "cmd:save"),
+            "kb-find / kb-insert-link candidates must include MAE help nodes"
+        );
     }
 
     /// The Windows / Docker / `cargo install` case: **no pre-built store
