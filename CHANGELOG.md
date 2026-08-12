@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.103] - 2026-08-12
+
+
+
+
+### Miscellaneous
+
+- Bump version to 0.14.103 ([a9f1949](https://github.com/cuttlefisch/mae/commit/a9f1949846dbf7e25fbaa70357b5bbc88ac8b6da))
+
 ## [0.14.102] - 2026-08-12
 
 
@@ -10,6 +19,7 @@ All notable changes to this project will be documented in this file.
 ### Features
 
 - *(kb)* Make a missing guidance KB diagnosable instead of silent ([8604fd3](https://github.com/cuttlefisch/mae/commit/8604fd38e743831a430ace6d10992b78b843c8d7))
+- *(kb)* Embed the system-KB corpora, and build guidance when no store ships ([fd8bdea](https://github.com/cuttlefisch/mae/commit/fd8bdea42d9ca9d7694af70e04d948ad78d64332))
 
 ### Miscellaneous
 
