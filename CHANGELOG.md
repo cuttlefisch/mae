@@ -2,14 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.14.100] - 2026-08-12
+## [0.14.101] - 2026-08-12
 
 
 
 
 ### Testing
 
+- *(kb)* Phase 0 evidence — what runtime KB provisioning would cost ([c892a15](https://github.com/cuttlefisch/mae/commit/c892a152122c61ba0b8050b97aad96978d9578c1))
+
+## [0.14.100] - 2026-08-12
+
+
+
+
+### Features
+
+- *(kb)* The agent no longer chooses its own standing instructions ([9b42abd](https://github.com/cuttlefisch/mae/commit/9b42abded5aaa647eb254e13a20493447c5cb89f))
+
+### Testing
+
 - *(scheme)* Make the debug-overhead ratio robust to scheduler noise ([7e6c54f](https://github.com/cuttlefisch/mae/commit/7e6c54ff46a11ab2096bda03808e5b9a3f482a8f))
+- *(kb)* Move the system-KB guards into their own module ([5392e50](https://github.com/cuttlefisch/mae/commit/5392e50da6693354e206c4e0771b3395ee2372bc))
+
+### Miscellaneous
+
+- Bump version to 0.14.100 ([930c882](https://github.com/cuttlefisch/mae/commit/930c882ba0fd6ec82bd11bbdc5c0e95dc9b85e9e))
 
 ## [0.14.99] - 2026-08-12
 
@@ -18,6 +36,8 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- *(kb)* A compile-time system-KB catalog, and reserved names ([2d6dc94](https://github.com/cuttlefisch/mae/commit/2d6dc943d4a56ae461500a1fa5bdbefb689ecf76))
+- *(kb)* Refuse lifecycle operations on a system KB ([44143b8](https://github.com/cuttlefisch/mae/commit/44143b819a398b25ef6530be6cb7524004941eb7))
 - *(#640)* :set ai-tier takes effect live, without a relaunch ([5e7ee23](https://github.com/cuttlefisch/mae/commit/5e7ee232dce2a69fb8e9547bde12429ad56fd111))
 
 ### Bug Fixes
