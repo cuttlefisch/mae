@@ -6,6 +6,7 @@
 //!
 //!   - [`dirs_candidate`]      — user CONFIG path (`$XDG_CONFIG_HOME` or `~/.config`)
 //!   - [`data_dir_candidate`]  — user DATA path (`$XDG_DATA_HOME` or `~/.local/share`)
+//!   - [`cache_dir_candidate`] — user CACHE path (`$XDG_CACHE_HOME` or `~/.cache`)
 //!   - [`builtin_module_dirs`] — ordered built-in module search path (the single
 //!     source of truth shared by the editor loader and the `mae` package CLI)
 //!
@@ -36,6 +37,27 @@ pub fn data_dir_candidate(rel: &str) -> Option<PathBuf> {
             std::env::var("HOME")
                 .ok()
                 .map(|h| PathBuf::from(h).join(".local/share"))
+        })
+        .map(|base| base.join(rel))
+}
+
+/// User cache path: `$XDG_CACHE_HOME/<rel>`, else `~/.cache/<rel>`.
+///
+/// The distinction from [`data_dir_candidate`] is the point, not tidiness.
+/// Cache holds what MAE can **rebuild**: derived, disposable, and safe for a
+/// user (or a disk-cleanup tool) to delete without losing anything. Data holds
+/// what only exists once — the user's own KBs, their registry, their collab
+/// identity. Putting a rebuildable system-KB projection in data is what let
+/// `backup-kbs.sh` end up archiving four regenerable stores while ignoring the
+/// irreplaceable ones.
+pub fn cache_dir_candidate(rel: &str) -> Option<PathBuf> {
+    std::env::var("XDG_CACHE_HOME")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| PathBuf::from(h).join(".cache"))
         })
         .map(|base| base.join(rel))
 }
