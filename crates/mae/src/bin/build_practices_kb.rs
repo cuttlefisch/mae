@@ -27,15 +27,13 @@ fn main() {
 
     eprintln!("Building practices KB...");
 
-    let store = kb_build::open_fresh_store(&output_path);
-    eprintln!("  Type system seeded");
-
     let practices_dir = PathBuf::from("assets/practices");
-    kb_build::ingest_org_dir(&store, &practices_dir);
-    kb_build::require_index_node(&store, "assets/practices");
-
-    store.seed_views().expect("failed to seed views");
-    eprintln!("  Views seeded");
+    kb_build::build_org_kb(
+        &practices_dir,
+        &output_path,
+        &kb_build::OrgKbBuildOptions::default(),
+    )
+    .expect("failed to build practices KB");
 
     let checksum = kb_build::compute_db_checksum(&output_path);
     kb_build::write_checksum_sidecar(&output_path, &checksum);

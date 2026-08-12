@@ -79,12 +79,17 @@ mod tests {
 
     // The remaining tests exercise `guidance_kb_engine::ensure_registered_with_path`
     // directly (bypassing `locate()`'s real filesystem/exe-ancestors
-    // resolution entirely) — `ensure_registered` itself would always find
-    // the real committed `assets/mae-practices.cozo` from within this
-    // repo's own test suite (same as `assets/mae-manual.cozo` already is),
-    // making a "nothing located" scenario impossible to construct here, and
-    // adding no coverage beyond the trivial `Option` early-return in
-    // `ensure_registered` itself.
+    // resolution entirely) — on any machine that has run `make practices-kb`,
+    // `ensure_registered` finds the built `assets/mae-practices.cozo` via
+    // `locate()`'s exe-ancestor probe, so a "nothing located" scenario is not
+    // reliably constructible here and would add no coverage beyond the trivial
+    // `Option` early-return in `ensure_registered` itself.
+    //
+    // Note the asymmetry that implies: whether `locate()` finds anything
+    // depends on whether that `make` target has been run, so these tests
+    // deliberately do not exercise it. The tests that DO want real content
+    // build it from the tracked `assets/practices/*.org` corpus instead —
+    // see `bootstrap.rs::build_real_guidance_kb`.
 
     #[test]
     fn ensure_registered_with_path_adds_entry_when_absent() {

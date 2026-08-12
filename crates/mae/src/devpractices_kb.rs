@@ -67,9 +67,9 @@ mod tests {
     // The remaining tests exercise `guidance_kb_engine::ensure_registered_with_path`
     // directly (bypassing `locate()`'s real filesystem/exe-ancestors
     // resolution entirely) — same rationale as `practices_kb`'s equivalent
-    // tests: once `assets/mae-devpractices.cozo` is committed,
-    // `ensure_registered` would always find the real file from within this
-    // repo's own test suite.
+    // tests: on a machine that has run `make devpractices-kb`,
+    // `ensure_registered` finds the built asset via `locate()`'s exe-ancestor
+    // probe, so a "nothing located" scenario is not reliably constructible.
 
     #[test]
     fn ensure_registered_with_path_adds_entry_when_absent() {

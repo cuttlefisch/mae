@@ -31,7 +31,6 @@
 use mae_kb::adr_kb::generate_corpus_nodes;
 use mae_kb::adr_parse::{body_after_header, discover_adr_corpus, validate_corpus};
 use mae_kb::kb_build;
-use mae_kb::KbStore;
 use std::path::PathBuf;
 
 fn main() {
@@ -104,18 +103,18 @@ fn main() {
     let nodes = generate_corpus_nodes(&corpus, &bodies);
     eprintln!("  Generated {} nodes", nodes.len());
 
-    let store = kb_build::open_fresh_store(&output_path);
+    let store = kb_build::open_fresh_store(&output_path, kb_build::RELEASE_ASSET_ENGINE)
+        .expect("failed to open CozoDB for ADR KB output");
     eprintln!("  Type system seeded");
 
-    let mut inserted = 0;
-    for node in &nodes {
-        // KbStore::insert_node (not a raw file/DB write) — see module doc comment on why
-        // this is the load-bearing choice that keeps this generator CRDT-write-path-safe.
-        match store.insert_node(node) {
-            Ok(()) => inserted += 1,
-            Err(e) => eprintln!("  Warning: failed to insert node {}: {}", node.id, e),
-        }
-    }
+    // kb_build::insert_nodes (not a raw file/DB write, and not a local insert
+    // loop) — it goes through KbStore::insert_node, which is the load-bearing
+    // choice that keeps this generator CRDT-write-path-safe, AND it stamps
+    // NodeSource::Seed. That stamp is what makes these nodes read-only: this
+    // generator previously had its own insert loop and left `source == None`,
+    // so an in-editor or MCP `kb_update` on an installed ADR node succeeded
+    // and was then silently destroyed by the next `make adr-kb`.
+    let inserted = kb_build::insert_nodes(&store, &nodes, mae_kb::NodeSource::Seed);
     eprintln!("  Inserted {inserted}/{} ADR nodes", nodes.len());
 
     if inserted == 0 {
