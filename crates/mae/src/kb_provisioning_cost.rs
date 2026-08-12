@@ -38,7 +38,7 @@
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     fn workspace_root() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -169,73 +169,6 @@ mod tests {
             "\nThe watchdog (crate::watchdog) trips at ~10s. Provisioning happens once per \
              version, off the main thread; the figure to compare is the slowest of these \
              against that bar, with headroom for slower hardware."
-        );
-    }
-
-    /// Measurement 4 — the one nobody has taken: what today's mechanism costs.
-    ///
-    /// [`crate::manual_kb::load_nodes_readonly`] recursively copies the entire
-    /// pre-built manual store into `$TMPDIR`, opens it, `load_all()`s, and
-    /// deletes the copy — **on every startup**. If building the corpus from
-    /// ~240K of org text is cheaper than that, the "is provisioning fast
-    /// enough?" question is moot: the change is a strict improvement on its own
-    /// hot path rather than a cost to be justified.
-    ///
-    /// Reports the minimum of several runs. This is I/O-bound, so the fastest
-    /// observed run is the one least contaminated by unrelated load — and a
-    /// minimum is the conservative choice here, because it flatters the
-    /// mechanism being argued *against*.
-    ///
-    /// Skips rather than fails when no pre-built store is present: the stores
-    /// are gitignored build artifacts, so a clean checkout legitimately has
-    /// none.
-    #[test]
-    #[ignore = "measurement, not an assertion; run with --ignored --nocapture"]
-    fn measure_the_cost_the_change_would_replace() {
-        println!("\n=== today's per-startup manual-KB load ===");
-
-        let store = workspace_root().join("assets/mae-manual.cozo");
-        // `exists()` is not enough, and assuming it was cost a measurement:
-        // switching between a branch where the store is tracked and one where
-        // it is deleted leaves the directory behind with only an empty `blobs/`
-        // inside. That reported "0K, 0 nodes, 0.016s" as though it were a real
-        // result — a timing that would have flattered the very mechanism this
-        // test exists to weigh against. Require actual content.
-        if dir_size(&store) < 1024 {
-            println!(
-                "(skipped: no usable pre-built manual store at {} — `make manual-kb` to measure)",
-                store.display()
-            );
-            return;
-        }
-        println!("store on disk: {}K", dir_size(&store) / 1024);
-
-        let mut best = Duration::MAX;
-        let mut count = 0usize;
-        for _ in 0..3 {
-            let start = Instant::now();
-            match crate::manual_kb::load_nodes_readonly(&store) {
-                Ok(nodes) => {
-                    best = best.min(start.elapsed());
-                    count = nodes.len();
-                }
-                Err(e) => {
-                    println!("FAILED: {e}");
-                    return;
-                }
-            }
-        }
-        assert!(
-            count > 0,
-            "loaded 0 nodes from a non-empty store — the measurement is invalid, not fast"
-        );
-        println!(
-            "load_nodes_readonly: {:.3}s (best of 3), {count} nodes",
-            best.as_secs_f64()
-        );
-        println!(
-            "\nCompare against the manual row above: if building from org source is cheaper \
-             than this, runtime provisioning is faster than what it replaces."
         );
     }
 }

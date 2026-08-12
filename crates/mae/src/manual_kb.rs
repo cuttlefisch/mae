@@ -1,132 +1,65 @@
-//! Manual KB location, validation, and loading.
+//! Locating a pre-built manual KB file.
 //!
-//! The manual KB is a pre-built CozoDB file containing the full mae manual
-//! (~400+ seed nodes). It ships alongside the binary and provides instant
-//! AI context on first launch.
+//! # What used to be here
 //!
-//! Resolution order:
-//! 1. `$MAE_MANUAL_PATH` env var
-//! 2. Config option `manual_kb_path`
-//! 3. Well-known paths: `{exe_dir}/mae-manual.cozo`, `{data_dir}/mae-manual.cozo`
-//! 4. Fallback: build from seed at runtime (current behavior, slower)
+//! This module also carried checksum "validation" — `KNOWN_CHECKSUMS`,
+//! `ManualValidation::{Valid, Historical, Unknown}`, and a `validate_checksum`
+//! consulted at every startup. All of it is gone, because none of it did
+//! anything: `KNOWN_CHECKSUMS` was an empty array ("populated by the release
+//! process", which never happened), so `validate_checksum` returned `Valid`
+//! unconditionally and the `Historical`/`Unknown` arms were unreachable. A
+//! security-shaped mechanism that always says yes is worse than none, because
+//! `install.sh` advertised it ("SHA-256 checksum stored (validated at
+//! runtime)").
+//!
+//! It could not have been made to work in that form either. A sled store is
+//! rewritten in place the first time it is opened and is **not byte-reproducible**
+//! (`release.yml` records measured hashes differing between a fresh build and
+//! the committed sidecar), so an installed store can never be checksum-verified
+//! against a fixed constant. Download integrity is covered where it actually
+//! works: `SHA256SUMS` over the release tarball.
+//!
+//! # What is left
+//!
+//! Finding a pre-built store, for `mae upgrade`'s preflight report. The manual's
+//! own content no longer comes from here — `bootstrap` builds a version-keyed
+//! projection from the corpus instead.
 
-use mae_kb::KbStore;
-use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
-/// Result of locating and validating a manual KB file.
-pub struct ManualKbResult {
-    pub path: PathBuf,
-    pub validation: ManualValidation,
-}
-
-/// Validation status of a manual KB file.
-#[derive(Debug)]
-pub enum ManualValidation {
-    /// Checksum matches current release version.
-    Valid,
-    /// Checksum matches a historical release (usable but outdated).
-    Historical { matched_version: String },
-    /// Checksum matches no known release (untrusted).
-    Unknown,
-    /// User-provided custom manual (no checksum validation).
-    Custom,
-}
-
-/// Known SHA-256 checksums of official mae-manual.cozo releases.
-/// Updated at release time by CI. Newest first.
+/// Locate a pre-built manual KB, if one is installed.
 ///
-/// Note: sled-backed CozoDB stores are directories, so the checksum
-/// is computed over all files sorted by relative path (see `compute_db_checksum`).
-const KNOWN_CHECKSUMS: &[(&str, &str)] = &[
-    // Checksums will be populated by the release process.
-    // Format: ("version", "sha256hex")
-];
-
-/// Locate and validate the manual KB.
-pub fn locate_and_validate(
-    data_dir: &Path,
-    manual_kb_path_override: Option<&str>,
-) -> Option<ManualKbResult> {
-    // 1. Explicit override via env var.
+/// Resolution: `$MAE_MANUAL_PATH`, then the `manual_kb_path` config override,
+/// then the well-known install locations.
+pub fn locate(data_dir: &Path, manual_kb_path_override: Option<&str>) -> Option<PathBuf> {
     if let Ok(path) = std::env::var("MAE_MANUAL_PATH") {
         let path = PathBuf::from(path);
         if path.exists() {
-            info!(path = %path.display(), "using manual KB from MAE_MANUAL_PATH");
-            return Some(ManualKbResult {
-                path,
-                validation: ManualValidation::Custom,
-            });
+            debug!(path = %path.display(), "using manual KB from MAE_MANUAL_PATH");
+            return Some(path);
         }
         warn!(path = %path.display(), "MAE_MANUAL_PATH set but file not found");
     }
 
-    // 2. Config option override.
     if let Some(cfg_path) = manual_kb_path_override {
         if !cfg_path.is_empty() {
             let path = PathBuf::from(cfg_path);
             if path.exists() {
-                info!(path = %path.display(), "using manual KB from config");
-                return Some(ManualKbResult {
-                    path,
-                    validation: ManualValidation::Custom,
-                });
+                debug!(path = %path.display(), "using manual KB from config");
+                return Some(path);
             }
             warn!(path = %path.display(), "manual_kb_path configured but file not found");
         }
     }
 
-    // 3. Well-known paths.
-    let candidates = well_known_paths(data_dir);
-    for candidate in &candidates {
-        if candidate.exists() {
-            debug!(path = %candidate.display(), "found manual KB at well-known path");
-            let checksum = compute_db_checksum(candidate);
-            let validation = validate_checksum(&checksum);
-            return Some(ManualKbResult {
-                path: candidate.clone(),
-                validation,
-            });
-        }
+    let found = well_known_paths(data_dir)
+        .into_iter()
+        .find(|candidate| candidate.exists());
+    if found.is_none() {
+        debug!("no pre-built manual KB found");
     }
-
-    // 4. Not found — caller should fall back to seed_kb().
-    debug!("no pre-built manual KB found; will seed at runtime");
-    None
-}
-
-/// Recursively copy a directory tree (used to stage a throwaway manual-KB copy).
-fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let to = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir_all(&entry.path(), &to)?;
-        } else {
-            std::fs::copy(entry.path(), &to)?;
-        }
-    }
-    Ok(())
-}
-
-/// Read all nodes from a pre-built manual KB **without mutating the source**.
-///
-/// sled (CozoDB's backend) always opens read-write and writes recovery
-/// snapshots on open, which would dirty a git-tracked asset or drift an
-/// installed file's checksum. We copy the store into a throwaway temp dir,
-/// read from the copy, then discard it — leaving the original untouched.
-pub fn load_nodes_readonly(path: &Path) -> Result<Vec<mae_kb::Node>, String> {
-    let tmp = std::env::temp_dir().join(format!("mae-manual-ro-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&tmp);
-    copy_dir_all(path, &tmp).map_err(|e| format!("staging manual KB copy: {e}"))?;
-    let result = (|| {
-        let store = mae_kb::CozoKbStore::open(&tmp).map_err(|e| e.to_string())?;
-        store.load_all().map_err(|e| e.to_string())
-    })();
-    let _ = std::fs::remove_dir_all(&tmp);
-    result
+    found
 }
 
 /// Well-known paths where the manual KB might be found.
@@ -161,66 +94,4 @@ fn well_known_paths(data_dir: &Path) -> Vec<PathBuf> {
     ));
 
     paths
-}
-
-/// Validate a checksum against known releases.
-fn validate_checksum(checksum: &str) -> ManualValidation {
-    let current_version = env!("CARGO_PKG_VERSION");
-
-    for (version, known_hash) in KNOWN_CHECKSUMS {
-        if *known_hash == checksum {
-            if *version == current_version {
-                return ManualValidation::Valid;
-            }
-            return ManualValidation::Historical {
-                matched_version: version.to_string(),
-            };
-        }
-    }
-
-    // No match — could be a dev build or tampered file.
-    // In dev builds (no checksums populated), treat as valid.
-    if KNOWN_CHECKSUMS.is_empty() {
-        return ManualValidation::Valid;
-    }
-
-    ManualValidation::Unknown
-}
-
-/// Compute a SHA-256 checksum for the CozoDB store.
-///
-/// For sled (directory-based), hashes all files sorted by relative path.
-/// For single-file backends, hashes the file directly.
-pub fn compute_db_checksum(path: &Path) -> String {
-    let mut hasher = Sha256::new();
-
-    if path.is_dir() {
-        let mut files = Vec::new();
-        collect_files_recursive(path, &mut files);
-        files.sort();
-        for file in &files {
-            let rel = file.strip_prefix(path).unwrap_or(file);
-            hasher.update(rel.to_string_lossy().as_bytes());
-            if let Ok(data) = std::fs::read(file) {
-                hasher.update(&data);
-            }
-        }
-    } else if let Ok(data) = std::fs::read(path) {
-        hasher.update(&data);
-    }
-
-    hex::encode(hasher.finalize())
-}
-
-fn collect_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                collect_files_recursive(&path, out);
-            } else {
-                out.push(path);
-            }
-        }
-    }
 }

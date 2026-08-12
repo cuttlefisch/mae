@@ -411,7 +411,7 @@ fn preflight(state: &InstallState, channel: &Channel) -> Vec<Check> {
     let manual_ok = state
         .data_dir
         .as_ref()
-        .map(|d| crate::manual_kb::locate_and_validate(d, None).is_some())
+        .map(|d| crate::manual_kb::locate(d, None).is_some())
         .unwrap_or(false);
     checks.push(Check {
         ok: manual_ok,
