@@ -540,6 +540,12 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   pre-existing, now 3,062 after absorbing `main.rs`'s config/KB-federation/daemon-connect code) and
   `crates/mae/src/gui_app.rs` (new, 1,270 lines) — both flagged in `.claude/commands/mae-audit.md`'s
   "Known exceptions" list and carry their own `@ai-caution` markers, not split further this pass.
+  **Update (2026-08-12):** `bootstrap.rs` is now `crates/mae/src/bootstrap/mod.rs` — its inline test
+  module was extracted to `bootstrap/tests/{startup,kb_federation,modules,memory}.rs`, all four under
+  the 500-line test ceiling, leaving the production half smaller than the figure quoted above. Kept
+  as *child* modules so `use super::super::*` still reaches bootstrap's private helpers without
+  widening any visibility. The tracked ceiling exception (and its `@ai-caution` marker) moved with
+  the file; the numbers live in `docs/AUDIT_BASELINE.json`, not here.
   Also resolved earlier in this same effort: the remote-cursor render duplication (principle #8) and
   the git_status/notifications_view/kb_sharing hand-mirrored view pattern (via
   `render_common::collab_cursor` / `foldable_view`).
