@@ -37,36 +37,43 @@ use headless_test_support::{spawn_isolated_headless, HeadlessGuard};
 /// (`## Required Practices (KB: {name})\n{index node's body}`). Must run BEFORE the
 /// headless subprocess starts, since it reads this registry at its own startup.
 ///
-/// Builds the `KbInstance` directly rather than calling `KbRegistry::register`,
-/// mirroring `guidance_kb_engine::ensure_registered_with_path` — which is what
-/// actually registers a guidance KB at startup, and which likewise pushes a
-/// dir-less instance instead of going through the user-facing `register()`
-/// path. That distinction became load-bearing once system-KB names were
-/// reserved against `register()`: seeding `"DevPractices"` the old way would
-/// now be refused, and refusing it would have been correct — the old form was
-/// simulating a registration production never performs.
+/// Seeds a **system KB** at the path the catalog resolves (`<data
+/// dir>/<asset_filename>`), and a user KB as an ordinary registry row.
+///
+/// The distinction is the point. System KBs left `kb-registry.toml` entirely,
+/// so `read_guidance_kb_context` resolves them from `mae_kb::system_kb` first
+/// and only falls through to the registry for the user's own. Seeding a
+/// registry row named `DevPractices` — which is what this helper used to do —
+/// now tests a path production no longer has, and would let this guard pass
+/// while the shipped default was in fact broken.
 fn seed_guidance_kb(xdg_data: &Path, kb_name: &str, index_body: &str) {
-    let db_path = xdg_data.join(format!("seeded-{}.cozo", kb_name.to_lowercase()));
-    let mut registry = mae_kb::federation::KbRegistry::default();
-    registry.instances.push(mae_kb::federation::KbInstance {
-        uuid: mae_kb::federation::generate_uuid(),
-        name: kb_name.to_string(),
-        org_dir: PathBuf::new(),
-        db_path: db_path.clone(),
-        primary: false,
-        enabled: true,
-        last_import: None,
-        collab_id: None,
-        shared: false,
-        remote_peers: Vec::new(),
-        last_sync: None,
-        ai_residency: mae_kb::federation::AiResidency::default(),
-        project_root: None,
-        kind: mae_kb::federation::KbInstanceKind::Guidance,
-        priority: 0,
-        remote_hub: None,
-    });
-    registry.save(xdg_data).expect("save kb-registry.toml");
+    let db_path = match mae_kb::system_kb::find(kb_name) {
+        Some(kb) => xdg_data.join(kb.asset_filename),
+        None => {
+            let db_path = xdg_data.join(format!("seeded-{}.cozo", kb_name.to_lowercase()));
+            let mut registry = mae_kb::federation::KbRegistry::default();
+            registry.instances.push(mae_kb::federation::KbInstance {
+                uuid: mae_kb::federation::generate_uuid(),
+                name: kb_name.to_string(),
+                org_dir: PathBuf::new(),
+                db_path: db_path.clone(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::UserRegistered,
+                priority: 0,
+                remote_hub: None,
+            });
+            registry.save(xdg_data).expect("save kb-registry.toml");
+            db_path
+        }
+    };
 
     let store = mae_kb::CozoKbStore::open(&db_path).expect("open seeded guidance KB store");
     store.seed_type_system().expect("seed type system");
