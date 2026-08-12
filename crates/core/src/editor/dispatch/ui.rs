@@ -446,9 +446,44 @@ For full setup guide: :help ai-setup";
         if let Some(wid) = agent_win_id {
             self.window_mgr.set_focused(wid);
         }
-        let cmd = self.ai.editor_name.clone();
-        self.shell.agent_spawns.push((new_idx, cmd));
+        self.shell
+            .agent_spawns
+            .push((new_idx, self.agent_spawn_command()));
         self.set_mode(Mode::ShellInsert);
+    }
+
+    /// The command line used to spawn the agent shell.
+    ///
+    /// ADR-084 D7 / #640: `mae-agent` resolves its own permission tier from
+    /// `--permission-mode`, whose clap default is `shell`. It reads neither
+    /// `ai_tier`, `MAE_AI_PERMISSIONS`, nor `config.toml` — so before this, the
+    /// DEFAULT AI surface (ADR-049) ran at `shell` regardless of what the editor
+    /// had resolved, and ADR-090 D5's `readonly` posture stopped at the process
+    /// boundary. Passing the resolved tier makes the two agree.
+    ///
+    /// @ai-caution: [permission] The flag is added ONLY for `mae-agent`. Other
+    /// `ai_editor` values (`claude`, `aider`, …) do not take it and would fail
+    /// to start. An explicit `--permission-mode` already in the option is left
+    /// alone: a user who wrote one meant it, and silently overriding a
+    /// deliberate choice is how config surfaces stop being trustworthy.
+    pub(crate) fn agent_spawn_command(&self) -> String {
+        let cmd = self.ai.editor_name.clone();
+        if cmd.contains("--permission-mode") {
+            return cmd;
+        }
+        let program = cmd.split_whitespace().next().unwrap_or("");
+        let base = std::path::Path::new(program)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(program);
+        if base == "mae-agent" {
+            format!(
+                "{cmd} --permission-mode {}",
+                self.ai.tier_live.get().config_name()
+            )
+        } else {
+            cmd
+        }
     }
 
     fn open_demo(&mut self, label: &str, content: &str) {

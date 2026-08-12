@@ -65,21 +65,26 @@ read-only shim, then remove it.**
 Phased, because two of the five phases have real prerequisites and one is a bug fix that
 should not wait for the others.
 
-### Phase 0 — Correct the generated template
+### Phase 0 — Correct the generated template — **DONE** (issue #639, closed 2026-08-05)
 
-`default_config_template()` (`crates/mae/src/config.rs:1276`), written to disk by
-`--init-config` (`:356`) and printed by `--print-config-template`
-(`crates/mae/src/cli.rs:145`), currently emits:
+Shipped ahead of this ADR being actioned. Recorded here rather than left describing a tree
+that no longer exists: this document's own drift is the same failure it was written to fix.
 
-```
-# Tiers: "readonly", "write", "shell" (default), "privileged"
-# auto_approve_tier = "shell"
-```
+`default_config_template()` (`crates/mae/src/config.rs`) used to emit `# auto_approve_tier =
+"shell"` and call `shell` the default, while the shipped default is `ReadOnly`
+(`crates/ai/src/tools/categories.rs`, ADR-090 D5) — so MAE shipped a generator producing
+precisely the outcome ADR-090's *Alternatives considered* rejected.
 
-The shipped default is `ReadOnly` (`crates/ai/src/tools/categories.rs:405`, ADR-090 D5),
-under a comment reading *"Raising it back to `Shell` re-creates the fail-open default ADR-084
-D4 identified; don't."* MAE therefore ships a generator producing precisely the outcome
-ADR-090's *Alternatives considered* rejected. Independently correct; do it first.
+It now emits `# Tiers: "readonly" (default), …` and `# auto_approve_tier = "readonly"`,
+verified by running `--print-config-template`, not only by reading source. There is a single
+template source, used by both `--init-config` and `--print-config-template`, so no second
+generator survives with the old text.
+
+**Gate 0 is satisfied** by `generated_template_states_the_shipped_default` and
+`template_offers_no_tier_above_the_default` (`crates/mae/src/config_template_tests.rs`), both
+deriving the expected value from `PermissionPolicy::default()` rather than hardcoding
+`"readonly"` — which is what the gate demanded, and what stops the template drifting from the
+default a second time.
 
 ### Phase 1 — Scheme participates in tier resolution *(blocked on ADR-084 D7)*
 
