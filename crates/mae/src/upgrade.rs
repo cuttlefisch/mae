@@ -407,20 +407,34 @@ fn preflight(state: &InstallState, channel: &Channel) -> Vec<Check> {
         fix: None,
     });
 
-    // Data dir + manual KB.
-    let manual_ok = state
+    // Manual KB.
+    //
+    // This used to report whether a pre-built store was installed, with the
+    // fix line "the upgrade will reinstall it". Both halves stopped being true
+    // once the manual's content came from the corpus compiled into the binary
+    // (`system_corpus`): releases no longer ship a store to find, so the check
+    // would have answered "no" for every user on every upgrade, and pointed at
+    // a reinstall that no longer happens.
+    //
+    // The manual is now present by construction, so the honest report is that
+    // it travels with the binary. A separately-installed store is still
+    // *located* (`MAE_MANUAL_PATH`, `manual_kb_path`, the well-known paths) and
+    // is worth mentioning when one exists, but its absence is not a problem.
+    let installed_store = state
         .data_dir
         .as_ref()
-        .map(|d| crate::manual_kb::locate(d, None).is_some())
-        .unwrap_or(false);
+        .and_then(|d| crate::manual_kb::locate(d, None));
     checks.push(Check {
-        ok: manual_ok,
+        ok: true,
         error: false,
-        msg: format!(
-            "manual knowledge base present: {}",
-            if manual_ok { "yes" } else { "no" }
-        ),
-        fix: Some("the upgrade will reinstall it".to_string()),
+        msg: match &installed_store {
+            Some(p) => format!(
+                "manual knowledge base: compiled into the binary (a pre-built store is also installed at {})",
+                p.display()
+            ),
+            None => "manual knowledge base: compiled into the binary".to_string(),
+        },
+        fix: None,
     });
 
     // Modules dir.

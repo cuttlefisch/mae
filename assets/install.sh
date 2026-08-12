@@ -422,80 +422,41 @@ elif [ "$OS" = "Darwin" ]; then
 fi
 
 # ========================================================================
-# 3. Manual KB (knowledge base with 860+ help nodes)
+# 3. System KB corpora — nothing to install
+#
+# The manual, MaePractices and DevPractices corpora are compiled into the
+# `mae` binary (crates/mae/src/system_corpus.rs) and built into stores on
+# first run, under the XDG cache dir. They are no longer shipped as
+# pre-built `.cozo` directories, which is why this step only *removes*
+# things.
+#
+# Why the change: a pre-built store was 53-159x its source text, was sled
+# (which the sqlite-only daemon cannot open at all), was rewritten by cozo
+# on first open so it could never actually be checksum-verified after
+# installation, and was absent entirely on Windows, in the Docker image and
+# under `cargo install`. Embedding the sources makes the corpora present by
+# construction on every platform, with no packaging step to forget.
+#
+# Upgrade path: an older install left stores here. They are dead weight now
+# — MAE reads the cache-built ones — so remove them rather than leaving
+# hundreds of MB orphaned with nothing pointing at them. Only the exact
+# names MAE itself shipped are touched; anything else in the data dir is the
+# user's and is left alone.
 # ========================================================================
-step "Installing manual KB"
+step "Removing superseded pre-built KB stores"
 mkdir -p "$DATADIR/mae"
 
-if [ -d "$SCRIPT_DIR/mae-manual.cozo" ]; then
-    rm -rf "$DATADIR/mae/mae-manual.cozo"
-    cp -r "$SCRIPT_DIR/mae-manual.cozo" "$DATADIR/mae/mae-manual.cozo"
-    verify "$DATADIR/mae/mae-manual.cozo" "manual KB -> $DATADIR/mae/"
-
-    # SHA-256 checksum
-    if [ -f "$SCRIPT_DIR/mae-manual.cozo.sha256" ]; then
-        cp "$SCRIPT_DIR/mae-manual.cozo.sha256" "$DATADIR/mae/mae-manual.cozo.sha256"
-        ok "SHA-256 checksum stored (validated at runtime)"
+removed_any=0
+for kb in mae-manual mae-practices mae-devpractices; do
+    if [ -d "$DATADIR/mae/$kb.cozo" ]; then
+        rm -rf "$DATADIR/mae/$kb.cozo"
+        rm -f "$DATADIR/mae/$kb.cozo.sha256"
+        ok "removed superseded $kb.cozo (now built from the embedded corpus)"
+        removed_any=1
     fi
-
-    # Clear quarantine on manual KB (macOS — quarantine prevents sled from opening)
-    if [ "$OS" = "Darwin" ] && command -v xattr >/dev/null 2>&1; then
-        xattr -cr "$DATADIR/mae/mae-manual.cozo" 2>/dev/null || true
-        ok "cleared quarantine on manual KB"
-    fi
-else
-    fail "mae-manual.cozo not found in package"
-fi
-
-# ========================================================================
-# 3a. DevPractices KB (generic developer-practices guidance, issue #514,
-#     ADR-076 — the shipped `ai_guidance_kb` default for fresh installs)
-# ========================================================================
-step "Installing DevPractices KB"
-
-if [ -d "$SCRIPT_DIR/mae-devpractices.cozo" ]; then
-    rm -rf "$DATADIR/mae/mae-devpractices.cozo"
-    cp -r "$SCRIPT_DIR/mae-devpractices.cozo" "$DATADIR/mae/mae-devpractices.cozo"
-    verify "$DATADIR/mae/mae-devpractices.cozo" "DevPractices KB -> $DATADIR/mae/"
-
-    if [ -f "$SCRIPT_DIR/mae-devpractices.cozo.sha256" ]; then
-        cp "$SCRIPT_DIR/mae-devpractices.cozo.sha256" "$DATADIR/mae/mae-devpractices.cozo.sha256"
-        ok "SHA-256 checksum stored (validated at runtime)"
-    fi
-
-    if [ "$OS" = "Darwin" ] && command -v xattr >/dev/null 2>&1; then
-        xattr -cr "$DATADIR/mae/mae-devpractices.cozo" 2>/dev/null || true
-        ok "cleared quarantine on DevPractices KB"
-    fi
-else
-    # Unlike the manual KB, this is auto-registered at startup with a
-    # documented silent-no-op-if-missing runtime behavior (guidance_kb_engine.rs)
-    # — a missing package asset is a build/packaging issue worth flagging, but
-    # not fatal to a working install (ai_guidance_kb simply resolves to nothing).
-    warn "mae-devpractices.cozo not found in package — ai_guidance_kb default won't resolve"
-fi
-
-# ========================================================================
-# 3b. MaePractices KB (MAE-contributor guidance, issue #370, ADR-076)
-# ========================================================================
-step "Installing MaePractices KB"
-
-if [ -d "$SCRIPT_DIR/mae-practices.cozo" ]; then
-    rm -rf "$DATADIR/mae/mae-practices.cozo"
-    cp -r "$SCRIPT_DIR/mae-practices.cozo" "$DATADIR/mae/mae-practices.cozo"
-    verify "$DATADIR/mae/mae-practices.cozo" "MaePractices KB -> $DATADIR/mae/"
-
-    if [ -f "$SCRIPT_DIR/mae-practices.cozo.sha256" ]; then
-        cp "$SCRIPT_DIR/mae-practices.cozo.sha256" "$DATADIR/mae/mae-practices.cozo.sha256"
-        ok "SHA-256 checksum stored (validated at runtime)"
-    fi
-
-    if [ "$OS" = "Darwin" ] && command -v xattr >/dev/null 2>&1; then
-        xattr -cr "$DATADIR/mae/mae-practices.cozo" 2>/dev/null || true
-        ok "cleared quarantine on MaePractices KB"
-    fi
-else
-    warn "mae-practices.cozo not found in package — MaePractices guidance won't be available"
+done
+if [ "$removed_any" -eq 0 ]; then
+    skip "no pre-built KB stores to remove"
 fi
 
 # ========================================================================
@@ -511,7 +472,12 @@ if [ -d "$SCRIPT_DIR/mae-adr.cozo" ]; then
 
     if [ -f "$SCRIPT_DIR/mae-adr.cozo.sha256" ]; then
         cp "$SCRIPT_DIR/mae-adr.cozo.sha256" "$DATADIR/mae/mae-adr.cozo.sha256"
-        ok "SHA-256 checksum stored (validated at runtime)"
+        # Stored for a manual `shasum -c` against the published asset only.
+        # It deliberately does NOT say "validated at runtime", as this line
+        # used to: MAE never checked it, and could not have. cozo rewrites a
+        # sled store the first time it is opened, so any checksum taken at
+        # packaging time stops matching the moment the store is used.
+        ok "SHA-256 checksum stored (for manual verification against the published asset)"
     fi
 
     if [ "$OS" = "Darwin" ] && command -v xattr >/dev/null 2>&1; then
