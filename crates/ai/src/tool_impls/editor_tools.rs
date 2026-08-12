@@ -1092,6 +1092,46 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
         "none"
     };
 
+    // Guidance KB (system-KB split). Reported here because a missing or
+    // misconfigured guidance corpus is otherwise SILENT: the reader returns
+    // `None` for four different reasons and nothing distinguishes them, so an
+    // AI peer can run with no standing practices and nobody finds out. That
+    // already happened once undetected — see `ai_guidance_kb`'s `@ai-caution`.
+    //
+    // `mae --check-config --report` calls this function, so the check reaches
+    // the CLI for free rather than needing its own copy.
+    let guidance_status = editor
+        .mae_data_dir()
+        .map(|d| crate::guidance::diagnose_guidance_kb(&d, &editor.ai_guidance_kb));
+    let guidance_json = match &guidance_status {
+        None => serde_json::json!({
+            "configured": editor.ai_guidance_kb,
+            "status": "unknown",
+            "detail": "could not resolve MAE's data directory",
+        }),
+        Some(st) => {
+            if let Some(problem) = st.problem_summary() {
+                issues.push(problem);
+            }
+            serde_json::json!({
+                "configured": editor.ai_guidance_kb,
+                "status": match st {
+                    crate::guidance::GuidanceStatus::Ok { .. } => "ok",
+                    crate::guidance::GuidanceStatus::Unset => "unset",
+                    crate::guidance::GuidanceStatus::Unresolvable { .. } => "unresolvable",
+                    crate::guidance::GuidanceStatus::StoreMissing { .. } => "store_missing",
+                    crate::guidance::GuidanceStatus::StoreUnopenable { .. } => "store_unopenable",
+                    crate::guidance::GuidanceStatus::NoIndexNode { .. } => "no_index_node",
+                },
+                "chars": match st {
+                    crate::guidance::GuidanceStatus::Ok { chars } => Some(*chars),
+                    _ => None,
+                },
+                "is_problem": st.is_problem(),
+            })
+        }
+    };
+
     let report = serde_json::json!({
         "ai_agent": {
             "command": ai_cmd,
@@ -1122,6 +1162,7 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
             "synced_docs": editor.collab.synced_docs,
             "daemon_binary_found": daemon_found,
         },
+        "guidance_kb": guidance_json,
         "init_files": init_files,
         "modules": modules_json,
         "options_modified": options_modified,

@@ -65,47 +65,169 @@ pub fn read_project_context(cwd: &Path) -> Option<String> {
     None
 }
 
-/// Read a designated "guidance KB"'s content — standing practices an AI
-/// agent should treat as required, not optional. `guidance_kb` names either one
-/// of MAE's own system KBs (`mae_kb::system_kb`, e.g. the shipped
-/// `"DevPractices"` default) or a registered federated instance of the user's
-/// own (`:kb-register`/`kb_register`); empty disables this. Kept deliberately simple for v1: the KB's `index`
-/// node body (its root/overview content), not a full crawl or
-/// embedding-based summary — and scoped to registered instances only, not
-/// `primary` (whose store path/engine resolution is an editor-bootstrap
-/// concern this crate doesn't own). Best-effort: any failure (KB not
-/// registered, store unopenable, no `index` node) returns `None` rather
-/// than erroring — a missing/misconfigured guidance KB must never break
-/// session startup.
+/// Why a guidance KB did or did not produce content.
+///
+/// `read_guidance_kb_context` returns `Option<String>`, which collapses four
+/// genuinely different situations into one `None`: nobody configured guidance,
+/// the configured name resolves to nothing, the store cannot be opened, and the
+/// store opened but has no `index` node. That collapse is why a missing
+/// guidance KB has always been *silent* — there was nothing for a diagnostic to
+/// report even if one had asked.
+///
+/// The distinction matters because only one of these is fine. An unset option
+/// is a deliberate opt-out; the other three are misconfigurations that leave an
+/// AI peer running with no standing practices and no indication of it. This
+/// already happened once undetected: the default was `""` until 2026-08-04 while
+/// `"DevPractices"` lived only in the init.scm template, so every pre-existing
+/// install silently received no guidance (see the `@ai-caution` on
+/// `ai_guidance_kb` in `crates/core/src/options.rs`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuidanceStatus {
+    /// Content was read. Carries its size so a caller can report what landed.
+    Ok { chars: usize },
+    /// `ai_guidance_kb` is empty — a deliberate opt-out, not a problem.
+    Unset,
+    /// The name matches neither a system KB nor a registered instance.
+    Unresolvable { name: String },
+    /// Resolved to a path where no store exists — the shape of an install that
+    /// never built the corpus (`cargo install`, Windows, a TUI-only build).
+    StoreMissing { name: String, path: PathBuf },
+    /// A store exists at the resolved path but could not be opened on any
+    /// engine — corrupt, or written by an engine this build lacks.
+    StoreUnopenable { name: String, path: PathBuf },
+    /// The store opened but has no `index` node, which is the only node the
+    /// reader looks at. A KB built without one surfaces nothing.
+    NoIndexNode { name: String, path: PathBuf },
+}
+
+impl GuidanceStatus {
+    /// Whether this represents a misconfiguration worth telling someone about.
+    /// [`GuidanceStatus::Unset`] is not — it is how you turn guidance off.
+    pub fn is_problem(&self) -> bool {
+        !matches!(self, GuidanceStatus::Ok { .. } | GuidanceStatus::Unset)
+    }
+
+    /// One line naming what is wrong and what to do, or `None` when nothing is.
+    pub fn problem_summary(&self) -> Option<String> {
+        match self {
+            GuidanceStatus::Ok { .. } | GuidanceStatus::Unset => None,
+            GuidanceStatus::Unresolvable { name } => Some(format!(
+                "ai_guidance_kb is set to '{name}', which is neither a MAE system KB nor a \
+                 registered KB — the AI peer is running with no standing practices. Check \
+                 `:kb-instances`, or set it to a bundled corpus such as \"DevPractices\"."
+            )),
+            GuidanceStatus::StoreMissing { name, path } => Some(format!(
+                "ai_guidance_kb '{name}' has no built store at {} — the AI peer is running \
+                 with no standing practices. Build it (`make devpractices-kb`) or install a \
+                 package that ships it.",
+                path.display()
+            )),
+            GuidanceStatus::StoreUnopenable { name, path } => Some(format!(
+                "ai_guidance_kb '{name}' resolves to a store that could not be opened \
+                 ({}) — the AI peer is running with no standing practices.",
+                path.display()
+            )),
+            GuidanceStatus::NoIndexNode { name, path } => Some(format!(
+                "ai_guidance_kb '{name}' opened ({}) but has no `index` node, which is the \
+                 only node guidance reads — the AI peer is running with no standing practices.",
+                path.display()
+            )),
+        }
+    }
+}
+
+/// Resolve the guidance KB and report exactly what happened.
+///
+/// [`read_guidance_kb_context`] is this function with the detail thrown away;
+/// they share one resolution path so a diagnostic can never disagree with what
+/// a session actually received.
+pub fn diagnose_guidance_kb(data_dir: &Path, guidance_kb: &str) -> GuidanceStatus {
+    if guidance_kb.is_empty() {
+        return GuidanceStatus::Unset;
+    }
+    let name = guidance_kb.to_string();
+    let Some(db_path) = resolve_guidance_db_path(data_dir, guidance_kb) else {
+        return GuidanceStatus::Unresolvable { name };
+    };
+    // Existence FIRST, and this is not merely tidier. Cozo's sqlite backend
+    // *creates* the database when it opens a path that does not exist, so
+    // opening blind turned "you have no guidance KB" into an empty store on
+    // disk and a `NoIndexNode` diagnosis — a read-only question with a
+    // filesystem side effect, and a misleading answer. `read_guidance_kb_context`
+    // has always had this behaviour, so a misconfigured `ai_guidance_kb` has
+    // been quietly littering the data dir with empty stores.
+    if !db_path.exists() {
+        return GuidanceStatus::StoreMissing {
+            name,
+            path: db_path,
+        };
+    }
+    let Ok(store) = mae_kb::CozoKbStore::open_with_engine(&db_path, "sqlite")
+        .or_else(|_| mae_kb::CozoKbStore::open_with_engine(&db_path, "sled"))
+    else {
+        return GuidanceStatus::StoreUnopenable {
+            name,
+            path: db_path,
+        };
+    };
+    match store.get_node("index").ok().flatten() {
+        Some(node) => GuidanceStatus::Ok {
+            chars: node.body.len(),
+        },
+        None => GuidanceStatus::NoIndexNode {
+            name,
+            path: db_path,
+        },
+    }
+}
+
+/// Where a guidance KB's store lives: the **system catalog first**, then the
+/// user's registry.
+///
+/// Order matters and is not arbitrary. MAE's own corpora no longer appear in
+/// `kb-registry.toml` (they are served from `mae_kb::system_kb`), so a
+/// registry-only lookup would silently stop resolving the shipped default.
+/// A system name cannot be shadowed — `KbRegistry::register` reserves them — so
+/// catalog-first removes an ambiguity rather than creating one, and a user who
+/// wants their own practices registers under their own name and points
+/// `ai_guidance_kb` there, which the registry arm still resolves.
+///
+/// Re-derives the path rather than reading `kb.system_stores` because callers
+/// have no `Editor`: `mae-agent-cli` runs as its own process, and the MCP path
+/// builds `initialize.instructions` before one is reachable.
+fn resolve_guidance_db_path(data_dir: &Path, guidance_kb: &str) -> Option<PathBuf> {
+    if let Some(kb) = mae_kb::system_kb::find(guidance_kb) {
+        return Some(data_dir.join(kb.asset_filename));
+    }
+    let registry = mae_kb::federation::KbRegistry::load(data_dir);
+    Some(registry.find(guidance_kb)?.db_path.clone())
+}
+
+/// Read a designated "guidance KB"'s content — standing practices an AI agent
+/// should treat as required, not optional. `guidance_kb` names either one of
+/// MAE's own system KBs (`mae_kb::system_kb`, e.g. the shipped `"DevPractices"`
+/// default) or a registered federated instance of the user's own
+/// (`:kb-register`/`kb_register`); empty disables this.
+///
+/// Kept deliberately simple: the KB's `index` node body (its root/overview
+/// content), not a full crawl or embedding-based summary.
+///
+/// Best-effort — any failure returns `None` rather than erroring, because a
+/// misconfigured guidance KB must never break session startup. Use
+/// [`diagnose_guidance_kb`] when you need to know *which* failure it was; this
+/// function deliberately discards that, and discarding it silently is what made
+/// the failure invisible for so long.
 pub fn read_guidance_kb_context(data_dir: &Path, guidance_kb: &str) -> Option<String> {
     if guidance_kb.is_empty() {
         return None;
     }
-    // Resolve the **system catalog first**, then the user's registry.
-    //
-    // Order matters and is not arbitrary. MAE's own corpora no longer appear in
-    // `kb-registry.toml` at all (they are served from `mae_kb::system_kb`), so a
-    // registry-only lookup would silently stop resolving the shipped default —
-    // guidance would vanish for every install, with no error, which is exactly
-    // the failure mode this option already suffered once (see the `@ai-caution`
-    // on `ai_guidance_kb` in `crates/core/src/options.rs`).
-    //
-    // A system name cannot be shadowed: `KbRegistry::register` reserves them. So
-    // "catalog first" removes an ambiguity rather than creating one, and a user
-    // who wants their own practices registers under their own name and points
-    // `ai_guidance_kb` there — which this still resolves, via the registry arm.
-    //
-    // This process has no `Editor`, so it re-derives the store path rather than
-    // reading `kb.system_stores`: `mae-agent-cli` calls this with no editor at
-    // all, and the MCP path builds `initialize.instructions` before one is
-    // reachable.
-    let db_path = match mae_kb::system_kb::find(guidance_kb) {
-        Some(kb) => data_dir.join(kb.asset_filename),
-        None => {
-            let registry = mae_kb::federation::KbRegistry::load(data_dir);
-            registry.find(guidance_kb)?.db_path.clone()
-        }
-    };
+    // Shares `resolve_guidance_db_path` with `diagnose_guidance_kb`, so a
+    // diagnostic can never disagree with what a session actually received.
+    let db_path = resolve_guidance_db_path(data_dir, guidance_kb)?;
+    // See `diagnose_guidance_kb`: opening a non-existent sqlite path creates it.
+    if !db_path.exists() {
+        return None;
+    }
     let store = mae_kb::CozoKbStore::open_with_engine(&db_path, "sqlite")
         .or_else(|_| mae_kb::CozoKbStore::open_with_engine(&db_path, "sled"))
         .ok()?;
@@ -400,5 +522,135 @@ mod tests {
             build_guidance_context(cwd.path(), Some(data_dir.path()), "dev-practices").unwrap();
         assert!(ctx.contains("project rules"));
         assert!(ctx.contains("kb guidance body"));
+    }
+}
+
+#[cfg(test)]
+mod diagnosis_tests {
+    use super::*;
+
+    /// An unset option is how you turn guidance OFF. Reporting it as a problem
+    /// would make the diagnostic cry wolf on every install that deliberately
+    /// opted out — and a diagnostic that always fires gets ignored, which is
+    /// the same outcome as the silence it replaced.
+    #[test]
+    fn unset_is_not_a_problem() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = diagnose_guidance_kb(tmp.path(), "");
+        assert_eq!(st, GuidanceStatus::Unset);
+        assert!(!st.is_problem());
+        assert!(st.problem_summary().is_none());
+    }
+
+    /// The four `None` cases are now distinguishable. Each carries the name so
+    /// the message can say which KB, and the two path-bearing ones carry where
+    /// it looked — without that, "guidance is missing" is unactionable.
+    #[test]
+    fn an_unresolvable_name_is_a_problem_that_names_itself() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = diagnose_guidance_kb(tmp.path(), "NoSuchKb");
+        assert!(matches!(st, GuidanceStatus::Unresolvable { .. }));
+        assert!(st.is_problem());
+        let msg = st.problem_summary().expect("must explain itself");
+        assert!(msg.contains("NoSuchKb"), "{msg}");
+        assert!(
+            msg.contains("no standing practices"),
+            "must say what the consequence is, not just that a lookup failed: {msg}"
+        );
+    }
+
+    /// A system KB whose store was never built resolves to a path that will not
+    /// open — the shape of a `cargo install` or Windows install today.
+    #[test]
+    fn a_system_kb_with_no_built_store_reports_store_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let st = diagnose_guidance_kb(tmp.path(), "DevPractices");
+        assert!(
+            matches!(st, GuidanceStatus::StoreMissing { .. }),
+            "expected StoreMissing, got {st:?}"
+        );
+        assert!(st.is_problem());
+        // And the question must not have ANSWERED itself into existence: cozo's
+        // sqlite backend creates a database on open, so a diagnosis that opened
+        // blind would leave an empty store behind and report NoIndexNode.
+        assert!(
+            !tmp.path().join("mae-devpractices.cozo").exists(),
+            "diagnosing must not create the store it is asking about"
+        );
+    }
+
+    /// A store that opens but has no `index` node surfaces nothing, because
+    /// `index` is the only node guidance reads. Distinguishing this from "the
+    /// store is missing" is the difference between "rebuild it" and "your
+    /// corpus lacks an entry point".
+    #[test]
+    fn a_store_without_an_index_node_is_distinguished_from_a_missing_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = mae_kb::CozoKbStore::open_with_engine(
+            tmp.path().join("mae-devpractices.cozo"),
+            "sqlite",
+        )
+        .expect("open");
+        store.seed_type_system().expect("seed");
+        store
+            .insert_node(&mae_kb::Node::new(
+                "not-index",
+                "Something",
+                mae_kb::NodeKind::Note,
+                "body",
+            ))
+            .expect("insert");
+        drop(store);
+
+        let st = diagnose_guidance_kb(tmp.path(), "DevPractices");
+        assert!(
+            matches!(st, GuidanceStatus::NoIndexNode { .. }),
+            "expected NoIndexNode, got {st:?}"
+        );
+        assert!(st.is_problem());
+    }
+
+    /// The diagnosis and the reader must never disagree: they share one
+    /// resolution path precisely so a report cannot claim guidance is fine
+    /// while a session receives nothing (or vice versa). Asserted over every
+    /// case rather than one, since the whole point is that they track.
+    #[test]
+    fn the_diagnosis_agrees_with_what_a_session_actually_receives() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        for name in ["", "NoSuchKb", "DevPractices"] {
+            let st = diagnose_guidance_kb(tmp.path(), name);
+            let got = read_guidance_kb_context(tmp.path(), name);
+            assert_eq!(
+                matches!(st, GuidanceStatus::Ok { .. }),
+                got.is_some(),
+                "diagnosis {st:?} disagrees with the reader for {name:?}"
+            );
+        }
+
+        // ...and the agreeing-positive case, so this is not vacuously true by
+        // everything being None.
+        let store = mae_kb::CozoKbStore::open_with_engine(
+            tmp.path().join("mae-devpractices.cozo"),
+            "sqlite",
+        )
+        .expect("open");
+        store.seed_type_system().expect("seed");
+        store
+            .insert_node(&mae_kb::Node::new(
+                "index",
+                "Index",
+                mae_kb::NodeKind::Note,
+                "Always write tests first.",
+            ))
+            .expect("insert");
+        drop(store);
+
+        let st = diagnose_guidance_kb(tmp.path(), "DevPractices");
+        assert!(matches!(st, GuidanceStatus::Ok { .. }), "{st:?}");
+        assert!(!st.is_problem());
+        let got = read_guidance_kb_context(tmp.path(), "DevPractices")
+            .expect("the reader must agree the KB resolves");
+        assert!(got.contains("Always write tests first."));
     }
 }
