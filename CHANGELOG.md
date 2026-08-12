@@ -7,9 +7,21 @@ All notable changes to this project will be documented in this file.
 
 
 
+### Features
+
+- *(kb)* Evict system KBs from the registry, and label their hits ([e840aa6](https://github.com/cuttlefisch/mae/commit/e840aa65d975464812b153152be3aedb8b7f99fa))
+
+### Bug Fixes
+
+- *(kb)* Open system stores via the engine-aware path, not raw sled ([ec3bdc0](https://github.com/cuttlefisch/mae/commit/ec3bdc043a22421a68bed68160c73e0d3317aacd))
+
 ### Testing
 
 - *(kb)* Phase 0 evidence — what runtime KB provisioning would cost ([c892a15](https://github.com/cuttlefisch/mae/commit/c892a152122c61ba0b8050b97aad96978d9578c1))
+
+### Miscellaneous
+
+- Bump version to 0.14.101 ([b593273](https://github.com/cuttlefisch/mae/commit/b593273dd00f2d0888c88f1445662fa2bbd21287))
 
 ## [0.14.100] - 2026-08-12
 
