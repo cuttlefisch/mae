@@ -23,7 +23,7 @@
 
 #![cfg(target_os = "linux")]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use mae_kb::KbStore;
@@ -36,16 +36,39 @@ use headless_test_support::{spawn_isolated_headless, HeadlessGuard};
 /// an `index` node — the exact shape `mae_ai::guidance::read_guidance_kb_context` reads
 /// (`## Required Practices (KB: {name})\n{index node's body}`). Must run BEFORE the
 /// headless subprocess starts, since it reads this registry at its own startup.
+///
+/// Builds the `KbInstance` directly rather than calling `KbRegistry::register`,
+/// mirroring `guidance_kb_engine::ensure_registered_with_path` — which is what
+/// actually registers a guidance KB at startup, and which likewise pushes a
+/// dir-less instance instead of going through the user-facing `register()`
+/// path. That distinction became load-bearing once system-KB names were
+/// reserved against `register()`: seeding `"DevPractices"` the old way would
+/// now be refused, and refusing it would have been correct — the old form was
+/// simulating a registration production never performs.
 fn seed_guidance_kb(xdg_data: &Path, kb_name: &str, index_body: &str) {
+    let db_path = xdg_data.join(format!("seeded-{}.cozo", kb_name.to_lowercase()));
     let mut registry = mae_kb::federation::KbRegistry::default();
-    let org_dir = xdg_data.join("guidance-src");
-    let uuid = registry.register(kb_name.to_string(), org_dir, xdg_data, None);
+    registry.instances.push(mae_kb::federation::KbInstance {
+        uuid: mae_kb::federation::generate_uuid(),
+        name: kb_name.to_string(),
+        org_dir: PathBuf::new(),
+        db_path: db_path.clone(),
+        primary: false,
+        enabled: true,
+        last_import: None,
+        collab_id: None,
+        shared: false,
+        remote_peers: Vec::new(),
+        last_sync: None,
+        ai_residency: mae_kb::federation::AiResidency::default(),
+        project_root: None,
+        kind: mae_kb::federation::KbInstanceKind::Guidance,
+        priority: 0,
+        remote_hub: None,
+    });
     registry.save(xdg_data).expect("save kb-registry.toml");
 
-    let inst = registry
-        .find_by_uuid(&uuid)
-        .expect("just-registered instance");
-    let store = mae_kb::CozoKbStore::open(&inst.db_path).expect("open seeded guidance KB store");
+    let store = mae_kb::CozoKbStore::open(&db_path).expect("open seeded guidance KB store");
     store.seed_type_system().expect("seed type system");
     store
         .insert_node(&mae_kb::Node::new(

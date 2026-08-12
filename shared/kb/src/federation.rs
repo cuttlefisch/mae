@@ -401,7 +401,29 @@ impl KbRegistry {
         org_dir: PathBuf,
         data_dir: &Path,
         kb_data_dir: Option<&crate::data_dir::KbDataDir>,
-    ) -> String {
+    ) -> Result<String, String> {
+        // A system-KB name (`crate::system_kb`) is MAE's own, and answers to
+        // exactly one corpus. Refused here rather than at `Editor::kb_register`
+        // so every caller is covered — the daemon registers instances too, and
+        // an enforcement point one layer up is one an alternate path walks past.
+        //
+        // This also fixes a real ambiguity rather than merely adding a rule:
+        // the duplicate check below matches on `org_dir` and never on `name`,
+        // so registering a second `DevPractices` used to append a shadowed row
+        // that `find()` would never return. ADR-076 D4's documented "your own
+        // registration always wins" therefore held only if you happened to
+        // register BEFORE startup auto-registration ran. Reserving the name
+        // makes the answer order-independent: to override MAE's practices with
+        // your own, register under your own name and point `ai_guidance_kb` at
+        // it — an explicit choice that still wins, and one that says so.
+        if crate::system_kb::is_reserved_name(&name) {
+            return Err(format!(
+                "'{name}' is a reserved MAE system KB name. Register your own KB under a \
+                 different name, then point `ai_guidance_kb` at it if you want it used as \
+                 guidance."
+            ));
+        }
+
         // Canonicalize so a symlinked/relative/non-normalized path registers
         // to the same, stable location every time (#303) — otherwise a
         // node's `source_file` (stamped from the walked, canonical-ish path
@@ -414,7 +436,7 @@ impl KbRegistry {
 
         // Check for existing registration with same path
         if let Some(existing) = self.instances.iter().find(|i| i.org_dir == org_dir) {
-            return existing.uuid.clone();
+            return Ok(existing.uuid.clone());
         }
 
         // Check for sentinel file with existing UUID
@@ -466,7 +488,7 @@ impl KbRegistry {
             remote_hub: None,
         };
         self.instances.push(instance);
-        uuid
+        Ok(uuid)
     }
 
     /// Register a `RemoteHub`-kind instance (ADR-062 Phase C) — a hub KB reachable only
@@ -1347,6 +1369,78 @@ enabled = true
         assert_eq!(pre_062.instances[0].kind, KbInstanceKind::UserRegistered);
     }
 
+    /// A user (or an AI peer, via the `kb_register` MCP tool) must not be able
+    /// to claim a name MAE's own corpora answer to.
+    ///
+    /// The oracle is the registry's *contents*, not just the returned `Err`: a
+    /// refusal that still appended a row would leave exactly the shadowed
+    /// duplicate this reservation exists to prevent — `find()` returns the
+    /// first match, so a second `DevPractices` row was previously unreachable
+    /// but permanently present.
+    #[test]
+    fn a_reserved_system_kb_name_cannot_be_registered_and_leaves_no_row() {
+        let mut reg = KbRegistry::default();
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+
+        for reserved in ["DevPractices", "MaePractices", "manual", "ADR"] {
+            let err = reg
+                .register(
+                    reserved.to_string(),
+                    tmp.path().to_path_buf(),
+                    data.path(),
+                    None,
+                )
+                .expect_err("a system-KB name must be refused");
+            assert!(err.contains("reserved"), "{err}");
+        }
+        assert!(
+            reg.instances.is_empty(),
+            "a refused registration must not append a row: {:?}",
+            reg.instances.iter().map(|i| &i.name).collect::<Vec<_>>()
+        );
+    }
+
+    /// Case-insensitively, because the reservation is worthless if
+    /// `devpractices` slips past the check and then resolves to the system
+    /// corpus at read time (`system_kb::find` is itself case-insensitive).
+    #[test]
+    fn reservation_is_case_insensitive() {
+        let mut reg = KbRegistry::default();
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        assert!(reg
+            .register(
+                "devpractices".to_string(),
+                tmp.path().to_path_buf(),
+                data.path(),
+                None
+            )
+            .is_err());
+    }
+
+    /// The half that matters more: reserving names blocks `kb_register`, so
+    /// over-reserving locks users out of names MAE has no claim to. A
+    /// near-miss ("Practices" is not "MaePractices") must still register.
+    #[test]
+    fn an_unreserved_name_still_registers_including_near_misses() {
+        let data = tempfile::tempdir().unwrap();
+        for name in ["Practices", "MyDevPractices", "adr-notes", "FieldJournal"] {
+            let mut reg = KbRegistry::default();
+            let tmp = tempfile::tempdir().unwrap();
+            let uuid = reg
+                .register(
+                    name.to_string(),
+                    tmp.path().to_path_buf(),
+                    data.path(),
+                    None,
+                )
+                .unwrap_or_else(|e| panic!("{name} must be registrable: {e}"));
+            assert!(!uuid.is_empty());
+            assert!(reg.find(name).is_some(), "{name} must be findable");
+        }
+    }
+
     #[test]
     fn registry_register_and_find() {
         let mut reg = KbRegistry::default();
@@ -1355,13 +1449,17 @@ enabled = true
         let data = std::env::temp_dir().join("mae-test-fed-data");
         let _ = std::fs::create_dir_all(&data);
 
-        let uuid = reg.register("Test".to_string(), tmp.clone(), &data, None);
+        let uuid = reg
+            .register("Test".to_string(), tmp.clone(), &data, None)
+            .unwrap();
         assert!(!uuid.is_empty());
         assert!(reg.find("Test").is_some());
         assert!(reg.find(&uuid).is_some());
 
         // Idempotent
-        let uuid2 = reg.register("Test2".to_string(), tmp.clone(), &data, None);
+        let uuid2 = reg
+            .register("Test2".to_string(), tmp.clone(), &data, None)
+            .unwrap();
         assert_eq!(uuid, uuid2);
         assert_eq!(reg.instances.len(), 1);
 
@@ -1378,7 +1476,7 @@ enabled = true
         let data = std::env::temp_dir().join("mae-test-fed-data-2");
         let _ = std::fs::create_dir_all(&data);
 
-        reg.register("Test".to_string(), tmp.clone(), &data, None);
+        let _ = reg.register("Test".to_string(), tmp.clone(), &data, None);
         assert_eq!(reg.instances.len(), 1);
         reg.unregister("Test");
         assert_eq!(reg.instances.len(), 0);
@@ -1410,6 +1508,7 @@ enabled = true
                 data.path(),
                 None,
             )
+            .expect("'A' is not a reserved system-KB name")
         });
         saved_a.unwrap();
 
@@ -1423,6 +1522,7 @@ enabled = true
                 data.path(),
                 None,
             )
+            .expect("'B' is not a reserved system-KB name")
         });
         saved_b.unwrap();
 
@@ -1475,6 +1575,7 @@ enabled = true
                             &data_dir,
                             None,
                         )
+                        .expect("'project' is not a reserved system-KB name")
                     });
                     saved.unwrap();
                     uuid

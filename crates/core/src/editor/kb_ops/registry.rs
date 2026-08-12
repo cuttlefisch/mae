@@ -219,6 +219,17 @@ impl Editor {
         };
         let _ = std::fs::create_dir_all(&data_dir);
 
+        // Refuse a reserved system-KB name BEFORE `update()` so no registry
+        // write happens at all — a rejected registration must not leave a
+        // rewritten `kb-registry.toml` behind.
+        if mae_kb::system_kb::is_reserved_name(name) {
+            self.set_status(format!(
+                "KB register error: '{name}' is a reserved MAE system KB name — \
+                 use a different name"
+            ));
+            return None;
+        }
+
         let (registry, uuid, saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
             reg.register(
                 name.to_string(),
@@ -227,6 +238,16 @@ impl Editor {
                 self.kb.data_dir.as_ref(),
             )
         });
+        // The reserved-name check above already returned, so the only way this
+        // errors is a future refusal added to `register` — surface it rather
+        // than proceeding with an unusable uuid.
+        let uuid = match uuid {
+            Ok(uuid) => uuid,
+            Err(e) => {
+                self.set_status(format!("KB register error: {e}"));
+                return None;
+            }
+        };
         if let Err(e) = saved {
             tracing::warn!(error = %e, "failed to persist KB registry");
         }

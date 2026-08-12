@@ -1,5 +1,54 @@
 use super::*;
 
+/// `kb_register` is the user-facing surface — and an MCP tool an AI peer can
+/// call — so the reservation has to hold here, not only in `KbRegistry`.
+///
+/// Oracles are the observable effects, not the return value: nothing lands in
+/// the registry, no watcher is attached, and the user is told why. A refusal
+/// that still started a watcher on a system corpus would be a live file-watch
+/// on MAE's own assets.
+#[test]
+fn kb_register_refuses_a_reserved_system_kb_name() {
+    let dir = create_test_org_dir();
+    let mut editor = Editor::new();
+    let _test_dirs = with_test_dirs(&mut editor);
+
+    let before = editor.kb.registry.instances.len();
+    assert!(
+        editor.kb_register("DevPractices", dir.path()).is_none(),
+        "a reserved system-KB name must not register"
+    );
+    assert_eq!(
+        editor.kb.registry.instances.len(),
+        before,
+        "a refused registration must not append a registry row"
+    );
+    assert!(
+        editor.kb.watchers.is_empty(),
+        "a refused registration must not attach a watcher"
+    );
+    assert!(
+        editor.status_msg.contains("reserved"),
+        "the refusal must say why, not fail silently: {}",
+        editor.status_msg
+    );
+}
+
+/// The half that keeps the reservation honest: a name that merely *resembles*
+/// a system KB is still the user's to take.
+#[test]
+fn kb_register_still_accepts_a_name_that_merely_resembles_a_system_kb() {
+    let dir = create_test_org_dir();
+    let mut editor = Editor::new();
+    let _test_dirs = with_test_dirs(&mut editor);
+
+    let result = editor
+        .kb_register("MyDevPractices", dir.path())
+        .expect("a non-reserved name must still register");
+    assert!(editor.kb.registry.find("MyDevPractices").is_some());
+    assert!(editor.kb.watchers.contains_key(&result.uuid));
+}
+
 #[test]
 fn watcher_starts_on_register() {
     let dir = create_test_org_dir();
