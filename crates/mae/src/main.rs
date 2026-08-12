@@ -763,7 +763,13 @@ fn main() -> io::Result<()> {
             }
             tools
         };
-        let mut permission_policy = match config::resolve_permission_policy(&app_config) {
+        // ADR-096 Phase 1: init.scm has already executed by here
+        // (`load_init_file` runs well before this), so Scheme can participate in
+        // tier resolution without any live-mutable machinery. Precedence is
+        // env > scheme > config.toml > default.
+        let scheme_overrides = config::SchemeAiOverrides::from_editor(&editor);
+        let mut permission_policy =
+            match config::resolve_permission_policy_with_scheme(&app_config, &scheme_overrides) {
             Ok(p) => p,
             Err(e) => {
                 error!("{e}");
@@ -771,6 +777,12 @@ fn main() -> io::Result<()> {
                 std::process::exit(2);
             }
         };
+        // ADR-084 D7: seed the shared cell with what startup resolved, then hand
+        // the policy that same cell. From here `:set ai-tier` moves the enforced
+        // line without a relaunch, and every clone of this policy — including the
+        // one the spawned AgentSession owns — sees it.
+        editor.ai.tier_live.set(permission_policy.auto_approve_up_to);
+        permission_policy.live = Some(editor.ai.tier_live.clone());
         // ADR-056: seed the server's global tool-category restriction from
         // config/init.scm before any MCP session connects, same pattern as
         // `mcp_tools_tiered` below. Empty (default) leaves the policy

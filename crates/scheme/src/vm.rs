@@ -3224,19 +3224,44 @@ mod tests {
         let code = "(define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(fib 15)";
         let iterations = 10u32;
 
-        // Normal mode
-        let start_normal = std::time::Instant::now();
-        for _ in 0..iterations {
-            vm_normal.eval_with_file(code, "normal.scm").unwrap();
-        }
-        let normal_time = start_normal.elapsed();
+        // Interleaved best-of-N rather than one measurement each.
+        //
+        // Unlike its two sibling `perf_*` tests, which assert an ABSOLUTE
+        // per-op budget with wide headroom (<5ms, <20ms), this one asserts a
+        // RATIO of two wall-clock spans of roughly 60ms. That makes it the only
+        // one where a single scheduler preemption is fatal: a hiccup landing in
+        // the debug loop inflates the numerator, and one landing in the normal
+        // loop shrinks the denominator, either way moving the ratio far more
+        // than the instrumentation being measured. It failed on a shared macOS
+        // runner at 5.1x while the actual overhead is well under 3x.
+        //
+        // `min` is the standard robust estimator for "how fast can this go":
+        // noise only ever adds time, so the fastest observed run is the one
+        // least contaminated by it. Interleaving the two modes means a machine
+        // that slows down partway through penalises both sides rather than
+        // skewing the ratio.
+        //
+        // Honest limit: this is reasoned, not reproduced. The original could
+        // not be made to fail locally in 50 runs, including with every core
+        // saturated — so this removes a well-understood noise source rather
+        // than a demonstrated one.
+        const ROUNDS: usize = 5;
+        let mut normal_time = std::time::Duration::MAX;
+        let mut debug_time = std::time::Duration::MAX;
 
-        // Debug mode (no breakpoints)
-        let start_debug = std::time::Instant::now();
-        for _ in 0..iterations {
-            vm_debug.eval_with_file(code, "debug.scm").unwrap();
+        for _ in 0..ROUNDS {
+            let start = std::time::Instant::now();
+            for _ in 0..iterations {
+                vm_normal.eval_with_file(code, "normal.scm").unwrap();
+            }
+            normal_time = normal_time.min(start.elapsed());
+
+            let start = std::time::Instant::now();
+            for _ in 0..iterations {
+                vm_debug.eval_with_file(code, "debug.scm").unwrap();
+            }
+            debug_time = debug_time.min(start.elapsed());
         }
-        let debug_time = start_debug.elapsed();
 
         // Debug mode overhead should be <3x (BreakpointCheck opcode at top level only)
         let ratio = debug_time.as_micros() as f64 / normal_time.as_micros().max(1) as f64;

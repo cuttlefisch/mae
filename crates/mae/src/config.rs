@@ -533,12 +533,23 @@ fn run_key_command(cmd: &Option<String>) -> Option<String> {
 
 /// Overrides from Scheme init.scm (via `set-option!`).
 /// Non-empty strings take precedence over TOML file values but not env vars.
+#[derive(Default)]
 pub struct SchemeAiOverrides {
     pub provider: String,
     pub model: String,
     pub api_key_command: String,
     pub base_url: String,
     pub thinking: String,
+    /// The `ai_tier` option, but ONLY when a user explicitly set it (#640).
+    ///
+    /// @ai-caution: [permission] Unlike every other field here, this option has
+    /// a meaningful registered default (`readonly`), not an empty one — so
+    /// "non-empty" cannot mean "the user chose this". Populating it
+    /// unconditionally would make Scheme *always* look set and silently outrank
+    /// config.toml, inverting the documented precedence. `from_editor` gates it
+    /// on `explicitly_set_options`, the same chokepoint
+    /// `ai_guidance_export_live_sync` already uses (`main.rs`, ADR-063 Phase B).
+    pub tier: String,
 }
 
 impl SchemeAiOverrides {
@@ -550,6 +561,11 @@ impl SchemeAiOverrides {
             api_key_command: editor.ai.api_key_command.clone(),
             base_url: editor.ai.base_url.clone(),
             thinking: editor.ai.thinking.clone(),
+            tier: if editor.explicitly_set_options.contains("ai_tier") {
+                editor.ai.permission_tier.clone()
+            } else {
+                String::new()
+            },
         }
     }
 
@@ -560,6 +576,7 @@ impl SchemeAiOverrides {
             "api_key_command" => &self.api_key_command,
             "base_url" => &self.base_url,
             "thinking" => &self.thinking,
+            "tier" => &self.tier,
             _ => return None,
         };
         if val.is_empty() {
@@ -692,14 +709,7 @@ pub fn resolve_ai_config_with_scheme(
 /// Used by tests and `--check-config`.
 #[cfg(test)]
 pub fn resolve_ai_config(file_config: &Config) -> Option<ProviderConfig> {
-    let empty = SchemeAiOverrides {
-        provider: String::new(),
-        model: String::new(),
-        api_key_command: String::new(),
-        base_url: String::new(),
-        thinking: String::new(),
-    };
-    resolve_ai_config_with_scheme(file_config, &empty)
+    resolve_ai_config_with_scheme(file_config, &SchemeAiOverrides::default())
 }
 
 /// The permission-tier spellings MAE accepts, for error messages and validation.
@@ -735,18 +745,51 @@ pub fn parse_permission_tier(s: &str) -> Option<PermissionTier> {
 /// Returns `Err` with a user-facing message when the configured tier is not a
 /// recognised value, so startup can refuse rather than guess. `make check-config`
 /// surfaces this before launch.
+/// Backward-compatible wrapper: resolve without Scheme overrides. Test-only,
+/// mirroring `resolve_ai_config` above — both production call sites now pass
+/// Scheme overrides, and a non-Scheme-aware resolver reachable from production
+/// is exactly how the tier came to be resolvable from only one surface.
+#[cfg(test)]
 pub fn resolve_permission_policy(config: &Config) -> Result<PermissionPolicy, String> {
+    resolve_permission_policy_with_scheme(config, &SchemeAiOverrides::default())
+}
+
+/// As [`resolve_permission_policy`], but with Scheme (`init.scm`, `:set`)
+/// participating in the precedence: **env > scheme > config.toml > default**.
+///
+/// ADR-096 Phase 1 / ADR-084 D7. Mirrors [`resolve_ai_config_with_scheme`],
+/// which already implements exactly this precedence for provider and model —
+/// deliberately the same shape rather than a second one, since the surfaces
+/// disagreeing about precedence is the defect being fixed.
+///
+/// Scheme outranks config.toml because `init.scm` is the primary config surface
+/// and config.toml is legacy bootstrap (ADR-096); env still wins over both, so a
+/// one-off `MAE_AI_PERMISSIONS=readonly mae` remains the way to tighten a single
+/// launch without editing anything.
+///
+/// @ai-caution: [permission] `scheme.opt("tier")` is `None` unless the user
+/// EXPLICITLY set `ai_tier` — see `SchemeAiOverrides::tier`. If that gating is
+/// ever lost, Scheme's registered default silently outranks a deliberately
+/// configured config.toml value, which is a permission change wearing a
+/// refactor's clothes.
+pub fn resolve_permission_policy_with_scheme(
+    config: &Config,
+    scheme: &SchemeAiOverrides,
+) -> Result<PermissionPolicy, String> {
     let (tier_str, source) = match std::env::var("MAE_AI_PERMISSIONS").ok() {
         Some(v) => (v, "MAE_AI_PERMISSIONS"),
-        None => match config.ai.auto_approve_tier.clone() {
-            Some(v) => (v, "[ai] auto_approve_tier in config.toml"),
-            None => (
-                PermissionPolicy::default()
-                    .auto_approve_up_to
-                    .config_name()
-                    .to_string(),
-                "built-in default",
-            ),
+        None => match scheme.opt("tier") {
+            Some(v) => (v, "ai_tier set from Scheme (init.scm / :set)"),
+            None => match config.ai.auto_approve_tier.clone() {
+                Some(v) => (v, "[ai] auto_approve_tier in config.toml"),
+                None => (
+                    PermissionPolicy::default()
+                        .auto_approve_up_to
+                        .config_name()
+                        .to_string(),
+                    "built-in default",
+                ),
+            },
         },
     };
     let tier = parse_permission_tier(&tier_str).ok_or_else(|| {
@@ -765,6 +808,9 @@ pub fn resolve_permission_policy(config: &Config) -> Result<PermissionPolicy, St
         // ceiling (ADR-051) and an unparseable declaration are hard.
         hard_ceiling: None,
         allowed_categories: None,
+        // Attached by the caller once the editor's shared cell exists; a policy
+        // resolved here is a startup snapshot, not yet live.
+        live: None,
     })
 }
 
@@ -2116,3 +2162,7 @@ mod tests {
 #[cfg(test)]
 #[path = "config_template_tests.rs"]
 mod template_truth_tests;
+
+#[cfg(test)]
+#[path = "config_tier_resolution_tests.rs"]
+mod config_tier_resolution_tests;

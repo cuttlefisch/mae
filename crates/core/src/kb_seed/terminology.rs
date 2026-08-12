@@ -160,15 +160,17 @@ pub fn install_terminology_nodes(kb: &mut KnowledgeBase) {
             "Tier",
             "AI permission level controlling what actions the agent can take. Tiers: \
              ReadOnly (read buffers, navigate), Write (edit buffers, create files), \
-             Shell (execute shell commands), Privileged (all operations). Set it with the \
-             `MAE_AI_PERMISSIONS` env var, or the `[ai] auto_approve_tier` config.toml key. \
+             Shell (execute shell commands), Privileged (all operations). \
+             Set it, highest precedence first: the `MAE_AI_PERMISSIONS` env var; \
+             `(set-option! \"ai-tier\" \"shell\")` in init.scm — the primary surface; or the \
+             `[ai] auto_approve_tier` config.toml key, which is legacy bootstrap (ADR-096). \
              Values are case-insensitive (`PermissionTier::parse` lowercases its input), and \
              an unrecognised value is REFUSED — MAE fails to start rather than resolving it \
-             to any tier. \
-             NOTE: the `ai_tier` OptionRegistry option currently updates only the status-bar \
-             badge and does NOT change the enforced policy, and the tier is not enforced on \
-             every path — see SECURITY.md. Treat it as a guardrail against accident, not as \
-             a boundary against an adversarial or prompt-injected model.",
+             to any tier. Startup resolves the initial value; `:set ai-tier <tier>` changes it live, \
+             taking effect on the next tool call. \
+             NOTE: the tier is not enforced on every path — see SECURITY.md. Treat it as a \
+             guardrail against accident, not as a boundary against an adversarial or \
+             prompt-injected model.",
         ),
     ];
 

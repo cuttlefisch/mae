@@ -38,13 +38,27 @@ of three things:
 `auto_approve_tier = "trusted"` (= shell), which auto-approved essentially everything. It now ships
 **readonly**: reads run, writes and shell are *asked*. Nothing is silently denied, so the stricter
 default does not break `run_build`/`run_test` — it asks about them. If you want the old behaviour,
-set `auto_approve_tier = "shell"` explicitly and understand what you are granting.
+set the tier to `shell` explicitly and understand what you are granting.
+
+**Where to set it**, highest precedence first. Startup resolves the initial value; `:set ai-tier
+<tier>` then changes it live, taking effect on the next tool call:
+
+| Surface | Form |
+|---|---|
+| Environment | `MAE_AI_PERMISSIONS=shell mae` — one launch, overrides everything |
+| `init.scm` (primary) | `(set-option! "ai-tier" "shell")` |
+| `config.toml` (legacy bootstrap, ADR-096) | `[ai] auto_approve_tier = "shell"` |
+
+Values are case-insensitive and an unrecognised one is **refused** — MAE fails to start rather
+than resolving a typo to some tier (CWE-636). Note that before #640 the `init.scm` form was
+registered and persisted but reached only the status-bar badge, so on older builds it silently did
+nothing.
 
 Which surfaces can ask:
 
 | Surface | `ask` |
 |---|---|
-| `mae-agent` TUI (the default AI surface, ADR-049) | prompts inline (`y` / `a` / `n`) |
+| `mae-agent` TUI (the default AI surface, ADR-049) | prompts inline (`y` / `a` / `n`). Spawned from the editor it inherits the resolved tier; launched standalone it takes `--permission-mode` (default `shell`) |
 | Embedded editor session (`:ai`, `delegate()`) | prompts in the conversation buffer; answer with `:ai-accept` / `:ai-reject`. `ai-mode = auto-accept` pre-answers **ask** only — it can never turn a **deny** into an allow |
 | `mae-agent --prompt` | **denies** — no human attached, and it says so |
 | External MCP dispatch (VS Code/Copilot, Claude Code via the shim) | **denies** — MAE implements no MCP elicitation, and the requesting client is not the local human |

@@ -1,98 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Permission tier for AI operations.
-///
-/// Container-first: standard ops are pre-allowed within the container.
-/// Only "escape hatch" operations (host filesystem, external network)
-/// require explicit user approval.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum PermissionTier {
-    /// Read buffer contents, cursor state, file metadata.
-    ReadOnly,
-    /// Modify buffers, move cursors, standard editing.
-    Write,
-    /// Execute shell commands within the container.
-    Shell,
-    /// Host filesystem, external network, editor config changes.
-    Privileged,
-}
-
-impl PermissionTier {
-    /// The canonical config spelling of this tier — the one
-    /// `mae::config::parse_permission_tier` round-trips and the one a denial
-    /// message should name, so a user can paste it straight back into
-    /// `ai_tier` without guessing.
-    ///
-    /// The legacy aliases (`standard`/`trusted`/`full`) are still accepted on
-    /// input and still used by `ai_permissions`' human-readable help text;
-    /// they are deliberately not produced here.
-    ///
-    /// @ai-caution: [permission] Exhaustive by construction — no `_` arm, so a
-    /// new tier variant breaks the build rather than acquiring a name by
-    /// default (ADR-084 D3).
-    pub fn config_name(self) -> &'static str {
-        match self {
-            PermissionTier::ReadOnly => "readonly",
-            PermissionTier::Write => "write",
-            PermissionTier::Shell => "shell",
-            PermissionTier::Privileged => "privileged",
-        }
-    }
-
-    /// Parse a tier spelling, or `None` if it is not recognised.
-    ///
-    /// **This is the single tier vocabulary.** ADR-090 D4: before it existed,
-    /// `mae::config::parse_permission_tier` (lowercase config spellings),
-    /// `ai_event_handler`'s wire spellings, and `mae-agent`'s
-    /// `PermissionMode::parse` were three separate parsers for the same four
-    /// tiers, each with a slightly different alias set. Callers wrap this;
-    /// none of them re-implements it.
-    ///
-    /// `full-auto`/`yolo`/`auto` are accepted as `Privileged` because
-    /// `mae-agent`'s `--permission-mode` has always taken them, and under the
-    /// three-state model a `Privileged` auto-approval ceiling *is*
-    /// "auto-approve everything" — there is nothing above it left to ask
-    /// about.
-    ///
-    /// @ai-caution: [security] Callers MUST treat `None` as an error and
-    /// refuse to start (ADR-084 D4). Resolving an unrecognised tier to *any*
-    /// real tier — especially via `unwrap_or_default()` — is CWE-636, and it
-    /// means a typo silently widens access with nothing to notice it. The
-    /// realistic source of an unknown value here is a typo in a local config
-    /// written by the same person running the binary, not version skew, so
-    /// leniency buys nothing.
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "readonly" | "read-only" | "read_only" => Some(PermissionTier::ReadOnly),
-            "write" | "standard" => Some(PermissionTier::Write),
-            "shell" | "trusted" => Some(PermissionTier::Shell),
-            "privileged" | "full" | "full-auto" | "full_auto" | "yolo" | "auto" => {
-                Some(PermissionTier::Privileged)
-            }
-            _ => None,
-        }
-    }
-
-    /// Every spelling [`PermissionTier::parse`] accepts, for error messages
-    /// and validation. Kept next to the parser so the two cannot drift —
-    /// asserted by `every_advertised_spelling_parses`.
-    pub const VALID_SPELLINGS: &'static [&'static str] = &[
-        "readonly",
-        "read-only",
-        "read_only",
-        "write",
-        "standard",
-        "shell",
-        "trusted",
-        "privileged",
-        "full",
-        "full-auto",
-        "full_auto",
-        "yolo",
-        "auto",
-    ];
-}
+/// Re-exported from `mae-core`, which now owns the tier so that
+/// `Editor::set_option` can validate `ai_tier` against the SAME vocabulary this
+/// crate enforces. It lived here until the option's set arm grew a second,
+/// CamelCase-only spelling list and the two drifted (#640). Every existing
+/// `mae_ai::PermissionTier` path is unchanged by the move.
+pub use mae_core::PermissionTier;
 
 /// A tool definition sent to the LLM provider.
 /// Format is provider-agnostic — serialized into Claude/OpenAI format by each provider.

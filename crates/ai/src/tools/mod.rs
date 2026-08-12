@@ -1,6 +1,8 @@
 mod ai_tools;
 pub mod authorization;
 mod categories;
+#[cfg(test)]
+mod categories_tests;
 mod collab_tools;
 mod core_tools;
 mod dap_tools;
@@ -11,6 +13,8 @@ mod decision_tests;
 mod dispatch_contract_tests;
 pub mod dispatchability;
 mod kb_tools;
+#[cfg(test)]
+mod live_tier_tests;
 mod lsp_tools;
 #[cfg(test)]
 mod mirror_tier_parity_tests;

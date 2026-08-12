@@ -175,6 +175,7 @@ Source: `crates/core/src/lib.rs`
 | `driven_window` | mod |
 | `editor` | mod |
 | `effect_sandbox` | mod |
+| `permission_tier` | mod |
 | `event_record` | mod |
 | `file_browser` | mod |
 | `file_lock` | mod |

@@ -144,6 +144,7 @@ fn a_category_restriction_denies_at_dispatch_and_never_asks() {
         auto_approve_up_to: PermissionTier::Privileged,
         hard_ceiling: None,
         allowed_categories: Some(only_knowledge),
+        live: None,
     };
     // Well-formed arguments in every case: schema validation runs before the
     // permission gate, so a malformed call would never reach the decision this

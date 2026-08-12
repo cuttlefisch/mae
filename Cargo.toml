@@ -28,7 +28,7 @@ exclude = ["tools/code-map", "tools/audit-metrics", "daemon"]
 resolver = "2"
 
 [workspace.package]
-version = "0.14.98"
+version = "0.14.99"
 edition = "2021"
 license = "GPL-3.0-or-later"
 rust-version = "1.95"
