@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.100] - 2026-08-12
+
+
+
+
+### Testing
+
+- *(scheme)* Make the debug-overhead ratio robust to scheduler noise ([7e6c54f](https://github.com/cuttlefisch/mae/commit/7e6c54ff46a11ab2096bda03808e5b9a3f482a8f))
+
 ## [0.14.99] - 2026-08-12
 
 
@@ -14,9 +23,14 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 
 - *(#487)* Make the write-failure guard deterministic, and drop the retry mask ([be67d04](https://github.com/cuttlefisch/mae/commit/be67d0470a0086f6cc73010bdee9b19c62a149a4))
+- *(#693)* Condition waits for collab TCP e2e, and the ambient dependency behind them ([d9cdd89](https://github.com/cuttlefisch/mae/commit/d9cdd898c49c04435229b44ef43df4c87c814c27))
 - *(#640)* Ai_tier reaches the enforced policy, and one tier vocabulary ([720c4a7](https://github.com/cuttlefisch/mae/commit/720c4a7fbfba9482b7d86299258721978b964f4f))
 - *(#640)* The spawned agent inherits the resolved tier ([eb57f76](https://github.com/cuttlefisch/mae/commit/eb57f76dfb2c7a3b004b3619f17043568bfc5efd))
-- *(#693)* Condition waits for collab TCP e2e, and the ambient dependency behind them ([d9cdd89](https://github.com/cuttlefisch/mae/commit/d9cdd898c49c04435229b44ef43df4c87c814c27))
+
+### Refactor
+
+- *(kb)* One build function for org KBs, and one node-write boundary ([b886335](https://github.com/cuttlefisch/mae/commit/b8863358dd6cae2febbb268e71a935d3749002f4))
+- *(kb)* Split migrate.rs tests into a child module ([95c24ea](https://github.com/cuttlefisch/mae/commit/95c24ea2ab291fdaf9656f3fce54fba5f647a439))
 
 ### Documentation
 
@@ -24,14 +38,17 @@ All notable changes to this project will be documented in this file.
 
 ### Build System
 
-- *(deny)* Accept RUSTSEC-2026-0249 (smartstring unmaintained via cozo) ([a910714](https://github.com/cuttlefisch/mae/commit/a910714afe83a1f81057fdeec46c72277b50555d))
 - *(deny)* Accept RUSTSEC-2026-0249 (smartstring unmaintained via cozo) ([c86a4b8](https://github.com/cuttlefisch/mae/commit/c86a4b88135fa32b1d5ec391d9a5d364fd295019))
+- *(deps)* Bump lru to 0.18.2 (RUSTSEC-2026-0253) ([b6e092c](https://github.com/cuttlefisch/mae/commit/b6e092cbba7e17d3da1caddd0181f35390b8e41d))
+- *(deny)* Accept RUSTSEC-2026-0249 (smartstring unmaintained via cozo) ([a910714](https://github.com/cuttlefisch/mae/commit/a910714afe83a1f81057fdeec46c72277b50555d))
 - *(deps)* Bump lru to 0.18.2 (RUSTSEC-2026-0253) ([3e55b1a](https://github.com/cuttlefisch/mae/commit/3e55b1a3088364a99c43f9ef186e6c8bab1fbe6f))
 
 ### Miscellaneous
 
 - Bump version to 0.14.98 ([d863073](https://github.com/cuttlefisch/mae/commit/d8630731eb29b4326c634f3b8b2f5d9761600025))
+- Untrack the remaining ~58MB of rebuilt KB blobs ([bf9b9c9](https://github.com/cuttlefisch/mae/commit/bf9b9c9c42332c8e5bc9c9d544b09860608c5ef3))
 - *(#640)* Move test modules out of two files at the size ceiling ([dbd1af9](https://github.com/cuttlefisch/mae/commit/dbd1af916092949d68a75b1cb095fe08291a5eb0))
+- Bump version to 0.14.99 ([48b6d74](https://github.com/cuttlefisch/mae/commit/48b6d74cb9adb5a421c7ea06f423163f92394959))
 
 ## [0.14.97] - 2026-08-10
 
