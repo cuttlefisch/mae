@@ -1006,6 +1006,14 @@ fn effective_permission_policy(
         auto_approve_up_to: global.auto_approve_up_to,
         hard_ceiling: global.hard_ceiling,
         allowed_categories,
+        // ADR-084 D7: carry the global's live cell, so a runtime `:set ai-tier`
+        // reaches per-SESSION policies too. Dropping it here would leave every
+        // MCP session pinned to whatever the tier was when it connected — the
+        // subtlest possible version of the #640 decoy, since the global policy
+        // would update while the policy actually consulted on dispatch did not.
+        // It cannot loosen a session: `with_hard_ceiling` below still clamps,
+        // and `decide_tier` checks the ceiling before the auto-approve line.
+        live: global.live.clone(),
     };
     match hard {
         // `with_hard_ceiling` only ever lowers, on both axes, so a session

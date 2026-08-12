@@ -789,7 +789,12 @@ mod tests {
             .into_iter()
             .map(|s| s.text)
             .collect();
-        assert!(joined.contains("[AI:ReadOnly]"), "got: {joined}");
+        // Derived, not a literal: the badge must show the SAME canonical
+        // spelling `get_option`, `:set-save` and config.toml use, so a user can
+        // read the badge and paste it back. Hardcoding "ReadOnly" here is what
+        // let the display drift from the vocabulary in the first place (#640).
+        let shown = crate::PermissionTier::ReadOnly.config_name();
+        assert!(joined.contains(&format!("[AI:{shown}]")), "got: {joined}");
     }
 
     #[test]

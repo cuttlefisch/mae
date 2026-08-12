@@ -36,6 +36,6 @@ Env var overrides: ~MAE_AGENTS_AUTO_MCP=0~, ~MAE_AGENTS_AUTO_APPROVE=0~
 The bootstrap system is agent-agnostic. See the doc comments in ~agents.rs~ for how to add support for new AI agents. Claude Code is the reference implementation.
 
 ** AI permission tiers (internal)
-MAE's own tool permissions are separate from agent approval. Use the ~ai_permissions~ tool or ~MAE_AI_PERMISSIONS~ env var to control what tier the AI auto-approves up to.
+MAE's own tool permissions are separate from agent approval. Use the ~ai_permissions~ tool to see the current tier and where it came from. Set it with ~(set-option! "ai-tier" "shell")~ in =init.scm=, or ~MAE_AI_PERMISSIONS~ for a single launch.
 
 See also: [[concept:terminal]], [[concept:ai-as-peer]], [[index]]

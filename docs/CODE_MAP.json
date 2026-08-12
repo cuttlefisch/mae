@@ -341,6 +341,10 @@
           "kind": "mod"
         },
         {
+          "name": "permission_tier",
+          "kind": "mod"
+        },
+        {
           "name": "event_record",
           "kind": "mod"
         },

@@ -587,11 +587,23 @@ pub fn setup_ai(
         // refused startup upstream (`--check-config`/`main`), so a failure
         // here can only be a re-read race -- take the restrictive default
         // rather than inventing a permissive fallback.
-        let permission_policy = crate::config::resolve_permission_policy(&file_config)
-            .unwrap_or_else(|e| {
-                warn!(error = %e, "AI permission policy unresolvable — using the restrictive default");
-                mae_ai::PermissionPolicy::default()
-            });
+        let permission_policy = crate::config::resolve_permission_policy_with_scheme(
+            &file_config,
+            &crate::config::SchemeAiOverrides::from_editor(editor),
+        )
+        .unwrap_or_else(|e| {
+            warn!(error = %e, "AI permission policy unresolvable — using the restrictive default");
+            mae_ai::PermissionPolicy::default()
+        });
+        // ADR-084 D7: the same shared cell the editor writes, so a runtime
+        // `:set ai-tier` reaches this spawned session too. Seeded from what was
+        // just resolved, so the first read matches startup exactly.
+        let permission_policy = {
+            let mut p = permission_policy;
+            editor.ai.tier_live.set(p.auto_approve_up_to);
+            p.live = Some(editor.ai.tier_live.clone());
+            p
+        };
 
         let session = AgentSession::new(provider, tools, prompt, event_tx.clone(), cmd_rx)
             .with_budget(model, budget)

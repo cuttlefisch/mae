@@ -115,6 +115,7 @@ fn a_session_declared_ceiling_denies_and_is_never_softened_to_ask() {
                 source: HardCeilingSource::SessionDeclared,
             }),
             allowed_categories: None,
+            live: None,
         }
         // The constructor is what production uses; go through it so the test
         // exercises the clamping rule too.
@@ -188,6 +189,7 @@ fn a_category_restriction_denies_at_every_tier_including_ones_the_tier_axis_allo
         auto_approve_up_to: PermissionTier::Privileged,
         hard_ceiling: None,
         allowed_categories: Some(only_knowledge),
+        live: None,
     };
 
     // Out-of-category, and uncategorized (fail-closed), at every tier.
@@ -220,6 +222,7 @@ fn a_category_denial_wins_over_an_ask_when_both_apply() {
         auto_approve_up_to: PermissionTier::ReadOnly,
         hard_ceiling: None,
         allowed_categories: Some(only_knowledge),
+        live: None,
     };
     assert_eq!(
         policy.decide("shell_exec", PermissionTier::Shell),
@@ -266,6 +269,7 @@ fn approval_can_never_promote_a_deny() {
         auto_approve_up_to: PermissionTier::ReadOnly,
         hard_ceiling: None,
         allowed_categories: Some(only_knowledge),
+        live: None,
     };
     assert_eq!(
         restricted
@@ -320,6 +324,7 @@ fn with_hard_ceiling_only_ever_lowers() {
                         source: HardCeilingSource::SessionDeclared,
                     }),
                     allowed_categories: None,
+                    live: None,
                 };
                 let tightened = base.with_hard_ceiling(HardCeiling {
                     tier: declared,
@@ -399,6 +404,7 @@ fn the_ambient_scheme_tier_is_the_allow_line_not_the_deny_line() {
                     source: HardCeilingSource::SessionDeclared,
                 }),
                 allowed_categories: None,
+                live: None,
             };
             let ambient = policy.ambient_scheme_tier();
             assert!(

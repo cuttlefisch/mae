@@ -628,11 +628,23 @@ fn open_ai_agent_dispatches_directly_to_agent_shell() {
         .find(|b| b.agent_shell)
         .expect("open-ai-agent should create an agent shell buffer");
     assert_eq!(shell_buf.name, "*AI:mae-agent*");
-    assert!(editor
-        .shell
-        .agent_spawns
-        .iter()
-        .any(|(_, cmd)| cmd == "mae-agent"));
+    // The spawn now carries the editor's resolved tier (#640): `mae-agent` reads
+    // no tier config of its own, so without this the default AI surface ran at
+    // its own clap default (`shell`) regardless of ADR-090 D5. Asserted as
+    // program + inherited tier, both derived, rather than as a fixed string.
+    let expected = format!(
+        "mae-agent --permission-mode {}",
+        editor.ai.tier_live.get().config_name()
+    );
+    assert!(
+        editor
+            .shell
+            .agent_spawns
+            .iter()
+            .any(|(_, cmd)| *cmd == expected),
+        "expected a spawn of {expected:?}, got {:?}",
+        editor.shell.agent_spawns
+    );
 }
 
 #[test]
@@ -1315,3 +1327,75 @@ fn setup_daemon_status_points_at_collab_start() {
 }
 
 // ===== Operator-pending mode tests (WU0) =====
+
+// --- ADR-084 D7 / #640 Gate 3: the spawned agent inherits the resolved tier ---
+
+/// The default AI surface used to run at `shell` no matter what the editor
+/// resolved, because `mae-agent`'s `--permission-mode` defaults to `shell` and it
+/// reads no tier config of its own. Oracle is the spawned COMMAND LINE, and the
+/// tier is derived from `config_name()` rather than written as a literal, so the
+/// spelling cannot drift from what `mae-agent` actually parses.
+#[test]
+fn agent_shell_is_spawned_with_the_resolved_tier() {
+    let mut editor = Editor::new();
+    editor.set_option("ai_tier", "write").unwrap();
+
+    let cmd = editor.agent_spawn_command();
+    let expected = crate::PermissionTier::Write.config_name();
+    assert_eq!(
+        cmd,
+        format!("mae-agent --permission-mode {expected}"),
+        "the agent shell must inherit the editor's resolved tier"
+    );
+}
+
+/// Only `mae-agent` takes the flag. `claude`/`aider` do not, and injecting it
+/// would stop them starting at all.
+#[test]
+fn a_non_mae_agent_ai_editor_gets_no_injected_flag() {
+    for other in ["claude", "aider", "/usr/local/bin/codex"] {
+        let mut editor = Editor::new();
+        editor.set_option("ai_editor", other).unwrap();
+        assert_eq!(
+            editor.agent_spawn_command(),
+            other,
+            "{other} must be spawned unchanged — it does not take --permission-mode"
+        );
+    }
+}
+
+/// A path-qualified `mae-agent` is still recognised: the check is on the program
+/// name, not the whole string.
+#[test]
+fn a_path_qualified_mae_agent_still_inherits_the_tier() {
+    let mut editor = Editor::new();
+    editor
+        .set_option("ai_editor", "/home/u/.local/bin/mae-agent")
+        .unwrap();
+    editor.set_option("ai_tier", "shell").unwrap();
+    assert!(
+        editor
+            .agent_spawn_command()
+            .ends_with("--permission-mode shell"),
+        "got: {}",
+        editor.agent_spawn_command()
+    );
+}
+
+/// An explicit `--permission-mode` the user wrote themselves is left alone.
+/// Silently overriding a deliberate choice is how a config surface stops being
+/// trustworthy — the same failure mode as the option that reported success and
+/// did nothing.
+#[test]
+fn an_explicit_permission_mode_in_ai_editor_is_not_overridden() {
+    let mut editor = Editor::new();
+    editor
+        .set_option("ai_editor", "mae-agent --permission-mode privileged")
+        .unwrap();
+    editor.set_option("ai_tier", "readonly").unwrap();
+    assert_eq!(
+        editor.agent_spawn_command(),
+        "mae-agent --permission-mode privileged",
+        "an explicit user-written flag must win over the resolved tier"
+    );
+}

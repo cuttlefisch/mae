@@ -492,14 +492,32 @@ impl super::Editor {
                     ))
                 }
             },
-            "ai_tier" => match value {
-                "ReadOnly" | "Write" | "Shell" | "Privileged" => {
-                    self.ai.permission_tier = value.to_string();
+            // #640: validated through `PermissionTier::parse` — the single tier
+            // vocabulary — rather than a second, stricter list. This arm used to
+            // accept ONLY `ReadOnly`/`Write`/`Shell`/`Privileged`, exactly, so
+            // `:set ai-tier shell` (the spelling config.toml uses, that
+            // `config_name()` emits, and that `mae-agent --permission-mode`
+            // takes) was rejected outright, while `kb_seed/terminology.rs` told
+            // users the values were case-insensitive.
+            //
+            // Stored in canonical `config_name()` form so every surface agrees
+            // on one spelling: what `get_option` returns, what `:set-save`
+            // writes to init.scm, and what config.toml holds are now the same
+            // string.
+            "ai_tier" => match crate::PermissionTier::parse(value) {
+                Some(tier) => {
+                    self.ai.permission_tier = tier.config_name().to_string();
+                    // ADR-084 D7: push to the shared cell so the change reaches
+                    // the ENFORCED policy — including the already-spawned
+                    // AgentSession, which holds a clone of it. Without this line
+                    // the option is back to painting the status bar (#640).
+                    self.ai.tier_live.set(tier);
                 }
-                _ => {
+                None => {
                     return Err(format!(
-                        "Invalid AI tier: '{}' (expected ReadOnly, Write, Shell, or Privileged)",
-                        value
+                        "Invalid AI tier: '{}' (expected one of: {})",
+                        value,
+                        crate::PermissionTier::VALID_SPELLINGS.join(", ")
                     ))
                 }
             },
