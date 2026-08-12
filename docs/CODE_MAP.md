@@ -315,6 +315,7 @@ Source: `shared/kb/src/lib.rs`
 | `migrate` | mod |
 | `org` | mod |
 | `store` | mod |
+| `system_kb` | mod |
 | `watch` | mod |
 | `cache` | mod |
 | `cozo_store` | mod |

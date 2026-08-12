@@ -781,6 +781,10 @@
           "kind": "mod"
         },
         {
+          "name": "system_kb",
+          "kind": "mod"
+        },
+        {
           "name": "watch",
           "kind": "mod"
         },

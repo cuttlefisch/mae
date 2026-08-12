@@ -27,6 +27,7 @@ mod gui_app;
 mod gui_event;
 mod guidance_kb_engine;
 mod headless_loop;
+mod kb_provisioning_cost;
 mod key_handling;
 mod lsp_bridge;
 mod manual_kb;

@@ -126,7 +126,23 @@ const NON_AI_AUTHORITY_OPTIONS: &[&str] = &["babel_confirm", "babel_trust_paths"
 /// `ai_embedding_base_url` redirect every prompt (and its context) to an
 /// attacker-chosen host; `ai_mode` auto-answers confirmations; `ai_tier` *is*
 /// the policy; `ai_editor` and `ai_agent_login_shell` decide what process the
-/// agent surface launches; `ai_chat_enabled` switches the surface itself.
+/// agent surface launches; `ai_chat_enabled` switches the surface itself; and
+/// `ai_guidance_kb` names the corpus of standing instructions every session is
+/// told to follow (see below).
+///
+/// `ai_guidance_kb` was on this list until the system-KB split. It fails the
+/// bar's *first* clause — "could a hostile value change what the agent is
+/// permitted to do" reads narrowly as tiers and tools, but guidance is the
+/// mechanism by which the human tells the agent what to do at all, and
+/// `initialize.instructions` is rebuilt per MCP connection from the LIVE
+/// option value. So a `Write`-tier agent could blank or repoint its own
+/// standing instructions for every subsequent session in the process.
+/// Persistence was already blocked (`save_option_to_init` refuses AI-originated
+/// dispatch, principle #16's fourth config-write path) — but an in-memory
+/// change that survives for the life of the editor is not meaningfully weaker.
+///
+/// Principle #16: a control the agent can change is not a control. Human sets
+/// the agent's standing instructions; the agent does not.
 const ORDINARY_AI_OPTIONS: &[&str] = &[
     "ai_conversation_split_ratio",
     "ai_embedding_chunk_version",
@@ -134,7 +150,6 @@ const ORDINARY_AI_OPTIONS: &[&str] = &[
     "ai_embedding_provider",
     "ai_guidance_export_live_sync",
     "ai_guidance_inline_budget_chars",
-    "ai_guidance_kb",
     "ai_model",
     "ai_profile",
     "ai_provider",

@@ -48,6 +48,7 @@ pub mod kb_build;
 pub mod migrate;
 pub mod org;
 pub mod store;
+pub mod system_kb;
 pub mod watch;
 
 pub mod cache;
