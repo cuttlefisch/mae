@@ -2183,6 +2183,63 @@ pub(crate) fn apply_app_config(editor: &mut Editor, app_config: &crate::config::
 /// Load the KB federation registry and import enabled instances (primary
 /// CozoDB store, manual/help KB, federated instances, shared-KB recovery).
 /// No-op in `--clean`/`-q` mode.
+/// Build a guidance KB from its embedded source corpus into the cache, and
+/// return the store path. `None` if MAE ships no corpus for it, or the build
+/// fails.
+///
+/// The store lands in **cache**, not data: it is derived from bytes inside the
+/// binary and rebuildable at any time, so it must not sit among the user's own
+/// irreplaceable KBs (see `pkg::paths::cache_dir_candidate`).
+///
+/// Keyed on the running version, which is also what fixes the never-refreshed
+/// bug: a bundled corpus used to be copied once and then pinned forever, so
+/// `cargo install`/brew upgrades left users on whatever content first landed.
+fn build_guidance_from_embedded_corpus(
+    kb: &mae_kb::system_kb::SystemKb,
+    data_dir: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let cache_dir =
+        crate::pkg::paths::cache_dir_candidate("mae").unwrap_or_else(|| data_dir.join("cache"));
+    let src = crate::system_corpus::resolve(kb, &cache_dir)?;
+
+    let out = cache_dir.join("kb").join(format!(
+        "{}-{}.cozo",
+        kb.asset_filename.trim_end_matches(".cozo"),
+        env!("CARGO_PKG_VERSION")
+    ));
+    if out.exists() {
+        return Some(out);
+    }
+
+    let started = std::time::Instant::now();
+    match mae_kb::kb_build::build_org_kb(
+        &src,
+        &out,
+        &mae_kb::kb_build::OrgKbBuildOptions {
+            // sqlite, not the sled that release assets ship as: measured 8-14x
+            // faster to build and ~3x smaller on disk, and it is what
+            // `kb_storage_engine` defaults to, so nothing migrates it later.
+            engine: "sqlite",
+            ..Default::default()
+        },
+    ) {
+        Ok(stats) => {
+            info!(
+                kb = kb.name,
+                nodes = stats.nodes,
+                ms = started.elapsed().as_millis() as u64,
+                "built guidance KB from embedded corpus"
+            );
+            Some(out)
+        }
+        Err(e) => {
+            warn!(kb = kb.name, src = %src.display(), error = %e,
+                "failed to build guidance KB from embedded corpus");
+            None
+        }
+    }
+}
+
 pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
     // Load KB federation registry and import enabled instances.
     if !clean_mode {
@@ -2491,8 +2548,24 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
             if kb.name == mae_kb::system_kb::MANUAL {
                 continue; // loaded above, into an in-memory store
             }
-            let Some(path) = crate::guidance_kb_engine::ensure_local_copy(kb, &data_dir) else {
-                continue;
+            let path = match crate::guidance_kb_engine::ensure_local_copy(kb, &data_dir) {
+                Some(path) => path,
+                // No pre-built store installed — the shape of a `cargo install`,
+                // a Windows package, or the Docker image, all of which ship
+                // ZERO KB corpora today. Build it from the embedded source
+                // instead, so those installs get guidance at all.
+                //
+                // Synchronous, and that is a measured choice rather than an
+                // oversight: `kb_provisioning_cost` puts the guidance corpora at
+                // 0.021s (MaePractices) and 0.198s (DevPractices) on sqlite —
+                // ~0.22s combined, against a ~10s startup watchdog. The manual
+                // is the expensive one (6.4s sqlite / 2.2s in-memory, dominated
+                // by `persist_nodes`) and is deliberately NOT built here; it
+                // keeps its pre-built store and its own in-memory path above.
+                None => match build_guidance_from_embedded_corpus(kb, &data_dir) {
+                    Some(path) => path,
+                    None => continue,
+                },
             };
             // Opened through `kb_open_instance_store`, which honours
             // `kb_storage_engine` and performs the sled->sqlite migration — the
@@ -3048,6 +3121,75 @@ mod tests {
                  registry consumer treat a bundled corpus as the user's data"
             );
         }
+    }
+
+    /// The Windows / Docker / `cargo install` case: **no pre-built store
+    /// installed**, and guidance must still work.
+    ///
+    /// Those three ship zero KB corpora today, so `ai_guidance_kb`'s shipped
+    /// default resolves to nothing and the AI peer runs with no standing
+    /// practices. Building from source is what fixes that, and this asserts the
+    /// chain end to end: no installed store -> corpus -> built store -> the real
+    /// `index` node, in the cache rather than among the user's data.
+    ///
+    /// **What this does NOT cover, verified rather than assumed:** the corpus it
+    /// builds from resolves ON-DISK here, not from the embedded copy.
+    /// `system_corpus::resolve` prefers `assets/<corpus>` found by walking the
+    /// executable's ancestors, and in this checkout the test binary's ancestors
+    /// genuinely contain it — `current_exe()` is not something a test can
+    /// redirect. The embedded half is covered separately by
+    /// `system_corpus::tests::the_embedded_corpus_materialises_into_a_walkable_directory`.
+    /// Claiming otherwise here would be exactly the "passes for the wrong
+    /// reason" this test exists to avoid.
+    #[test]
+    fn guidance_is_built_from_the_embedded_corpus_when_no_store_is_installed() {
+        let _lock = mae_effect_sandbox::lock_env();
+        let prev_d = std::env::var("MAE_DEVPRACTICES_KB_PATH").ok();
+        let prev_cache = std::env::var("XDG_CACHE_HOME").ok();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        std::env::set_var("XDG_CACHE_HOME", cache.path());
+        // A path that does not exist, so `locate()` finds no installed STORE
+        // and the build-from-source branch is the only way through.
+        std::env::set_var(
+            "MAE_DEVPRACTICES_KB_PATH",
+            tmp.path().join("definitely-absent.cozo"),
+        );
+
+        let kb = mae_kb::system_kb::find("DevPractices").unwrap();
+        let built = build_guidance_from_embedded_corpus(kb, tmp.path());
+
+        match prev_d {
+            Some(v) => std::env::set_var("MAE_DEVPRACTICES_KB_PATH", v),
+            None => std::env::remove_var("MAE_DEVPRACTICES_KB_PATH"),
+        }
+        match prev_cache {
+            Some(v) => std::env::set_var("XDG_CACHE_HOME", v),
+            None => std::env::remove_var("XDG_CACHE_HOME"),
+        }
+
+        let path = built.expect("must build DevPractices from the embedded corpus");
+        assert!(
+            path.exists(),
+            "the built store must exist at {}",
+            path.display()
+        );
+        assert!(
+            path.starts_with(cache.path()),
+            "a rebuildable store belongs in cache, not among the user's data: {}",
+            path.display()
+        );
+
+        let store = mae_kb::CozoKbStore::open_with_engine(&path, "sqlite").expect("open");
+        let index = mae_kb::KbStore::get_node(&store, "index")
+            .expect("query")
+            .expect("the built KB must carry the real index node");
+        assert!(
+            index.body.contains("DevPractices"),
+            "expected the real DevPractices corpus, got: {}",
+            index.body
+        );
     }
 
     /// The migration: a registry that already carries MAE-provisioned rows —
