@@ -792,13 +792,34 @@ impl Editor {
                     break;
                 }
             }
-            // Fall back to fuzzy search top result (local + federated).
+            // Last resort: fuzzy search (local + federated) — but only when it
+            // is UNAMBIGUOUS, and never silently.
+            //
+            // This used to take the top hit of N and open it without a word, so
+            // asking for one node could land you on a different one with no
+            // indication it had happened. Every caller reaching this point
+            // passed an id it believed exact (`tutor`'s literal
+            // `tutorial:getting-started`, an agenda line's own `node_id`, a
+            // palette selection), so arriving here means that belief was wrong
+            // — precisely when guessing quietly is worst.
+            //
+            // Matches `help_follow_link`'s convention, which already got this
+            // right: resolve only a single unambiguous candidate, and announce
+            // the substitution. Anything else falls through to the "no help
+            // node" message below rather than picking a winner.
             if found.is_none() {
-                let results = self.kb_federated_search(node_id);
-                if let Some((_, node)) = results.into_iter().next() {
-                    if node.id != "index" {
-                        found = Some(node.id.clone());
-                    }
+                let mut seen = std::collections::HashSet::new();
+                let candidates: Vec<String> = self
+                    .kb_federated_search(node_id)
+                    .into_iter()
+                    .map(|(_, node)| node.id)
+                    // `index` is the fallback target itself; resolving *to* it
+                    // would report a substitution that changes nothing.
+                    .filter(|id| id != "index" && seen.insert(id.clone()))
+                    .collect();
+                if let [only] = candidates.as_slice() {
+                    self.set_status(format!("Resolved: {} → {}", node_id, only));
+                    found = Some(only.clone());
                 }
             }
             match found {
@@ -2046,6 +2067,95 @@ mod tests {
         e.open_help_at("nonexistent:thing");
         assert_eq!(e.kb_view().unwrap().current, "index");
         assert!(e.status_msg.contains("No help node"));
+    }
+
+    /// A fuzzy substitution must be ANNOUNCED, not made behind the user's back.
+    ///
+    /// Every caller that reaches the fuzzy fallback passed an id it believed
+    /// exact, so landing on a different node is already a surprise; doing it
+    /// silently means the user reads the wrong node's content believing it is
+    /// the one they asked for.
+    #[test]
+    fn open_help_at_announces_an_unambiguous_fuzzy_substitution() {
+        let mut e = Editor::new();
+        e.kb.primary.insert(mae_kb::Node::new(
+            "user:zorptastic-alpha",
+            "Zorptastic Alpha",
+            mae_kb::NodeKind::Note,
+            "body",
+        ));
+
+        e.open_help_at("zorptastic");
+
+        assert_eq!(
+            e.kb_view().unwrap().current,
+            "user:zorptastic-alpha",
+            "a single unambiguous match should still resolve"
+        );
+        assert!(
+            e.status_msg.contains("Resolved")
+                && e.status_msg.contains("zorptastic")
+                && e.status_msg.contains("user:zorptastic-alpha"),
+            "the substitution must name both what was asked for and what was \
+             opened, got: {}",
+            e.status_msg
+        );
+    }
+
+    /// The negative case, and the one that matters most: when the fuzzy search
+    /// is AMBIGUOUS, picking a winner is guessing. It must decline and say so
+    /// rather than open whichever node happened to rank first.
+    #[test]
+    fn open_help_at_refuses_to_pick_a_winner_among_ambiguous_fuzzy_matches() {
+        let mut e = Editor::new();
+        for (id, title) in [
+            ("user:zorptastic-alpha", "Zorptastic Alpha"),
+            ("user:zorptastic-beta", "Zorptastic Beta"),
+            ("user:zorptastic-gamma", "Zorptastic Gamma"),
+        ] {
+            e.kb.primary
+                .insert(mae_kb::Node::new(id, title, mae_kb::NodeKind::Note, "body"));
+        }
+
+        e.open_help_at("zorptastic");
+
+        assert_eq!(
+            e.kb_view().unwrap().current,
+            "index",
+            "an ambiguous query must fall back to the index, not to a guess"
+        );
+        assert!(
+            e.status_msg.contains("No help node"),
+            "the user must be told nothing resolved, got: {}",
+            e.status_msg
+        );
+        assert!(
+            !e.status_msg.contains("Resolved"),
+            "nothing was resolved, so nothing should claim to be: {}",
+            e.status_msg
+        );
+    }
+
+    /// Regression guard for the two paths that must NOT have changed: an exact
+    /// id, and the documented namespace expansion (`buffer` -> `concept:buffer`).
+    /// Neither is a substitution the user needs warning about.
+    #[test]
+    fn open_help_at_exact_and_prefix_expansion_are_unaffected_and_silent() {
+        let mut e = Editor::new();
+
+        e.open_help_at("concept:buffer");
+        assert_eq!(e.kb_view().unwrap().current, "concept:buffer");
+        assert!(
+            !e.status_msg.contains("Resolved"),
+            "exact hit is not a substitution"
+        );
+
+        e.open_help_at("buffer");
+        assert_eq!(
+            e.kb_view().unwrap().current,
+            "concept:buffer",
+            "namespace expansion must still work"
+        );
     }
 
     #[test]
