@@ -2,10 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.14.107] - 2026-08-13
+## [0.14.108] - 2026-08-13
 
 
 
+
+### Bug Fixes
+
+- *(guidance)* The built store must be where the reader looks ([358d0a3](https://github.com/cuttlefisch/mae/commit/358d0a38e70dab6a95e22cead1f488b07ff6dc54))
+- *(install)* Uninstall removes only what install placed ([d8bb7fa](https://github.com/cuttlefisch/mae/commit/d8bb7fa74a98c02b087f70b1d7f255a4e1585c8a))
+- *(kb)* Headless and self-test never drained the KB background work ([b889633](https://github.com/cuttlefisch/mae/commit/b88963343cd0e4e9afd21a22f74d0085d10f27cb))
 
 ### Refactor
 
@@ -13,7 +19,17 @@ All notable changes to this project will be documented in this file.
 
 ### Testing
 
+- *(kb)* Prove a store-only node becomes searchable headless ([2135938](https://github.com/cuttlefisch/mae/commit/2135938b6f56746d091adc8d8ab20610b7a8c763))
 - *(guidance)* Isolate the cache dir in the diagnosis tests ([4d07d85](https://github.com/cuttlefisch/mae/commit/4d07d8534f70c2f54c11e67550e5a75a74c8bd50))
+
+### Miscellaneous
+
+- Bump version to 0.14.108 ([1296d8d](https://github.com/cuttlefisch/mae/commit/1296d8d18349df5275bf6d976be12300d7545245))
+
+## [0.14.107] - 2026-08-13
+
+
+
 
 ### Miscellaneous
 
@@ -25,19 +41,11 @@ All notable changes to this project will be documented in this file.
 
 
 
-### Bug Fixes
-
-- *(guidance)* The built store must be where the reader looks ([358d0a3](https://github.com/cuttlefisch/mae/commit/358d0a38e70dab6a95e22cead1f488b07ff6dc54))
-- *(install)* Uninstall removes only what install placed ([d8bb7fa](https://github.com/cuttlefisch/mae/commit/d8bb7fa74a98c02b087f70b1d7f255a4e1585c8a))
-- *(kb)* Headless and self-test never drained the KB background work ([b889633](https://github.com/cuttlefisch/mae/commit/b88963343cd0e4e9afd21a22f74d0085d10f27cb))
-
 ### Documentation
 
 - *(install)* Correct the --help data-dir line ([5425fac](https://github.com/cuttlefisch/mae/commit/5425fac0f7cc74803d6495499afd55b237d40975))
-
-### Testing
-
-- *(kb)* Prove a store-only node becomes searchable headless ([2135938](https://github.com/cuttlefisch/mae/commit/2135938b6f56746d091adc8d8ab20610b7a8c763))
+- *(adr)* ADR-104 — system KBs are a distinct class; supersedes ADR-076 ([34c449e](https://github.com/cuttlefisch/mae/commit/34c449eb073494a9bb09d26f8ed3892bca55b308))
+- *(adr)* Record the ADR-058 Phase A drift that ADR-104 fixes ([c9905e1](https://github.com/cuttlefisch/mae/commit/c9905e19bc284271efc8d7a5e5234c6bc6d57841))
 
 ### Miscellaneous
 
