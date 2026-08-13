@@ -1863,26 +1863,46 @@ pub fn execute_kb_shortest_path(
         .get("to")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required argument: to".to_string())?;
-    let store = editor
-        .kb
-        .store
-        .as_ref()
-        .ok_or_else(|| "No KB store configured".to_string())?;
-    let path = store.shortest_path(from, to).map_err(|e| e.to_string())?;
+    // Federated when a query layer exists, exactly like `kb_graph`. Reading
+    // `editor.kb.store` alone meant MAE's own manual/practices nodes — which
+    // are never written to the user's `primary.cozo` — could not be endpoints,
+    // and the walk returned an empty Vec that is indistinguishable from "no
+    // path exists" (ADR-086's empty-vs-failure line).
+    let path = match editor.kb.query_layer() {
+        Some(q) => {
+            mae_kb::graph_query::shortest_path_over(q, from, to).map_err(|e| e.to_string())?
+        }
+        None => {
+            let store = editor
+                .kb
+                .store
+                .as_ref()
+                .ok_or_else(|| "No KB store configured".to_string())?;
+            store.shortest_path(from, to).map_err(|e| e.to_string())?
+        }
+    };
 
     let local_bypass = requester_provider.is_some_and(mae_core::ai_residency::is_local_provider);
     let primary_restricted = !local_bypass
         && editor.kb.registry.primary_ai_residency
             == mae_kb::federation::AiResidency::LocalModelsOnly;
+    // Resolve from whichever source produced the path, so a federated hop is
+    // judged on its own record rather than failing the lookup and being dropped.
+    let resolve = |nid: &str| -> Option<mae_kb::Node> {
+        match editor.kb.query_layer() {
+            Some(q) => q.get(nid),
+            None => editor
+                .kb
+                .store
+                .as_ref()
+                .and_then(|s| s.get_node(nid).ok().flatten()),
+        }
+    };
     let filtered: Vec<&String> = path
         .iter()
         .filter(|nid| {
             !primary_restricted
-                || store
-                    .get_node(nid)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|n| mae_core::ai_residency::is_residency_exempt(&n))
+                || resolve(nid).is_some_and(|n| mae_core::ai_residency::is_residency_exempt(&n))
         })
         .collect();
     // A path is a single ordered structure, not a list of independent
@@ -1919,27 +1939,47 @@ pub fn execute_kb_neighborhood(
         .and_then(|v| v.as_u64())
         .unwrap_or(2)
         .min(5) as u32;
-    let store = editor
-        .kb
-        .store
-        .as_ref()
-        .ok_or_else(|| "No KB store configured".to_string())?;
-    match store.neighborhood(id, depth) {
+    // Federated when a query layer exists, exactly like `kb_graph`. Walking
+    // `editor.kb.store` alone meant a root living in MAE's own manual or
+    // practices content — never written to the user's `primary.cozo` — was
+    // simply not found, and the walk returned an empty SubGraph: a successful
+    // answer that reads as "this node has no neighbours" (ADR-086).
+    let query = editor.kb.query_layer();
+    let walked = match query {
+        Some(q) => mae_kb::graph_query::neighborhood_over(q, id, depth),
+        None => editor
+            .kb
+            .store
+            .as_ref()
+            .ok_or_else(|| "No KB store configured".to_string())?
+            .neighborhood(id, depth),
+    };
+    match walked {
         Ok(subgraph) => {
             let local_bypass =
                 requester_provider.is_some_and(mae_core::ai_residency::is_local_provider);
             let primary_restricted = !local_bypass
                 && editor.kb.registry.primary_ai_residency
                     == mae_kb::federation::AiResidency::LocalModelsOnly;
+            // Resolve the node for the residency check from whichever source
+            // was walked, so a federated hit is judged on its own record
+            // rather than silently failing the lookup and being dropped.
+            let resolve = |nid: &str| -> Option<mae_kb::Node> {
+                match query {
+                    Some(q) => q.get(nid),
+                    None => editor
+                        .kb
+                        .store
+                        .as_ref()
+                        .and_then(|s| s.get_node(nid).ok().flatten()),
+                }
+            };
             let kept_ids: std::collections::HashSet<&str> = subgraph
                 .nodes
                 .iter()
                 .filter(|(nid, _)| {
                     !primary_restricted
-                        || store
-                            .get_node(nid)
-                            .ok()
-                            .flatten()
+                        || resolve(nid)
                             .is_some_and(|n| mae_core::ai_residency::is_residency_exempt(&n))
                 })
                 .map(|(nid, _)| nid.as_str())

@@ -454,6 +454,114 @@ impl RelatedSource for KbStoreRelatedBackend<'_> {
     }
 }
 
+/// Typed-edge neighborhood over the **federated query layer**, matching
+/// [`crate::store::KbStore::neighborhood`]'s `SubGraph` shape.
+///
+/// `kb_neighborhood` and `kb_shortest_path` read `editor.kb.store` — the user's
+/// own `primary.cozo` — directly, while every other graph tool goes through the
+/// query layer. MAE's manual and practices nodes are never written to
+/// `primary.cozo`, so those two walked from a root they could not find and
+/// returned `SubGraph { nodes: [], edges: [] }`: a **successful, empty** answer
+/// that reads as "this node has no neighbours" when the truth is "I was not
+/// looking where the node lives". That is the empty-vs-failure confusion
+/// ADR-086 exists to prevent, and it was reachable for any `concept:*`,
+/// `cmd:*` or `option:*` id.
+///
+/// Kept here beside [`bfs_neighborhood`] rather than added to the tool
+/// executors, so the walk stays in one place (principle #8) and the Scheme
+/// surface can adopt it without a second implementation.
+pub fn neighborhood_over(
+    q: &dyn crate::query::KbQueryLayer,
+    root: &str,
+    depth: u32,
+) -> Result<crate::store::SubGraph, crate::store::KbStoreError> {
+    use std::collections::{HashSet, VecDeque};
+
+    let mut nodes: Vec<(String, String)> = Vec::new();
+    let mut edges: Vec<(String, String, String)> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut queue: VecDeque<(String, u32)> = VecDeque::new();
+
+    seen.insert(root.to_string());
+    queue.push_back((root.to_string(), 0));
+
+    while let Some((id, hop)) = queue.pop_front() {
+        if let Some(n) = q.get(&id) {
+            nodes.push((id.clone(), n.title));
+        }
+        if hop >= depth {
+            continue;
+        }
+        // Both directions: a neighbourhood is undirected, but the edges we
+        // report keep their real orientation and relation type.
+        for l in q.links_from(&id)?.into_iter().chain(q.links_to(&id)?) {
+            edges.push((l.src.clone(), l.dst.clone(), l.rel_type.clone()));
+            for side in [l.src, l.dst] {
+                if side != id && seen.insert(side.clone()) {
+                    queue.push_back((side, hop + 1));
+                }
+            }
+        }
+    }
+
+    // An edge is only meaningful here if both ends are in the walked set —
+    // same restriction `bfs_neighborhood` applies.
+    let ids: HashSet<&str> = nodes.iter().map(|(i, _)| i.as_str()).collect();
+    edges.retain(|(s, d, _)| ids.contains(s.as_str()) && ids.contains(d.as_str()));
+    edges.sort();
+    edges.dedup();
+
+    Ok(crate::store::SubGraph { nodes, edges })
+}
+
+/// Shortest path between two ids over the federated query layer.
+///
+/// Same motivation as [`neighborhood_over`]: the store-only version returned an
+/// empty `Vec` — indistinguishable from "no path exists" — whenever either
+/// endpoint lived outside the user's own `primary.cozo`.
+///
+/// Undirected BFS, matching `KbStore::shortest_path`'s existing semantics
+/// (a path through the graph, not a directed dependency chain).
+pub fn shortest_path_over(
+    q: &dyn crate::query::KbQueryLayer,
+    from: &str,
+    to: &str,
+) -> Result<Vec<String>, crate::store::KbStoreError> {
+    use std::collections::{HashMap, VecDeque};
+
+    if from == to {
+        return Ok(vec![from.to_string()]);
+    }
+
+    let mut prev: HashMap<String, String> = HashMap::new();
+    let mut queue: VecDeque<String> = VecDeque::new();
+    queue.push_back(from.to_string());
+    prev.insert(from.to_string(), String::new());
+
+    while let Some(id) = queue.pop_front() {
+        for l in q.links_from(&id)?.into_iter().chain(q.links_to(&id)?) {
+            let next = if l.src == id { l.dst } else { l.src };
+            if prev.contains_key(&next) {
+                continue;
+            }
+            prev.insert(next.clone(), id.clone());
+            if next == to {
+                // Walk the parent chain back and reverse.
+                let mut path = vec![to.to_string()];
+                let mut cur = id;
+                while !cur.is_empty() {
+                    path.push(cur.clone());
+                    cur = prev.get(&cur).cloned().unwrap_or_default();
+                }
+                path.reverse();
+                return Ok(path);
+            }
+            queue.push_back(next);
+        }
+    }
+    Ok(Vec::new())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
