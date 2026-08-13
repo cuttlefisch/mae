@@ -1,6 +1,28 @@
 # ADR-076: The system of bundled knowledge bases (Manual, MaePractices, DevPractices, ADR)
 
-**Status:** Accepted, implementation in progress.
+**Status:** **Superseded by [ADR-104](104-system-kbs-are-a-distinct-class.md)** (2026-08-13). Kept
+readable as history — the record of how MAE first bundled its own corpora, and of the problem that
+motivated it.
+
+*Carried forward unchanged by ADR-104:* the bundled-KB **taxonomy** (manual / MaePractices /
+DevPractices / ADR, with the ADR corpus deliberately opt-in per ADR-059), and the
+**contributor-override precedent** — a user's own same-named registration wins over the bundled
+default. ADR-104 keeps that precedent but sharpens its rationale, having found that the nearest
+prior art (Emacs `load-path` shadowing) resolves the same collision the *opposite* way; it survives
+only on a content-vs-code distinction this ADR did not state.
+
+*Replaced by ADR-104:* the **delivery mechanism**. Pre-built `.cozo` stores no longer ship in any
+artifact — they were sled: a directory, rewritten in place on first open (so never actually
+checksum-verifiable), unopenable by the sqlite-only daemon, and absent on Windows, in the Docker
+image and under `cargo install` entirely. The corpora are now compiled into the binary and built on
+first run, and system KBs are no longer rows in `kb-registry.toml` at all — they are a compile-time
+catalog.
+
+This ADR's own Context recorded that MaePractices and the ADR KB "were never wired into
+`release.yml`/`install.sh`, so the overwhelming majority of real users got neither." That was the
+first symptom of the class confusion ADR-104 fixes structurally.
+
+**Original status:** Accepted, implementation in progress.
 **Depends on:** ADR-063 (guidance-delivery uniformity — `read_guidance_kb_context`'s
 consumption mechanism, unchanged by this ADR). Builds on the precedent set by issue
 #370 (MaePractices).
