@@ -1,13 +1,15 @@
 #!/bin/sh
-# backup-kbs.sh — archive the installed KB stores, verify the archive, and only
-# then remove the originals.
+# backup-kbs.sh — archive the user's KBs, verify the archive, and only then
+# remove the originals.
 #
-# `make install` copies four CozoDB stores into the mae data dir; `make
-# uninstall` used to remove the binaries, desktop entry, icon and modules and
-# leave all four behind — hundreds of MB orphaned with no documented way to
-# clean them up. Deleting them outright is the wrong correction: a KB is user
-# data, and some of it (a customised practices KB, a federated instance) may
-# exist nowhere else.
+# `make uninstall` removes the binaries, desktop entry, icon and modules and
+# would otherwise leave the mae data dir behind. Deleting it outright is the
+# wrong correction: a KB is user data, and most of it (a customised practices
+# KB, a federated instance, the registry recording where they came from) exists
+# nowhere else.
+#
+# So: archive first, VERIFY the archive, and remove the originals only if the
+# verification passed.
 #
 # So: archive first, VERIFY the archive, and remove the originals only if the
 # verification passed. Any failure leaves everything exactly where it was.
@@ -25,8 +27,48 @@
 
 set -eu
 
-# The four stores `make install` writes, plus their checksum siblings.
-KBS="mae-manual.cozo mae-practices.cozo mae-devpractices.cozo mae-adr.cozo"
+# What is worth archiving, discovered per base rather than hard-coded.
+#
+# This used to be a fixed list of the four stores `make install` wrote:
+#   mae-manual.cozo mae-practices.cozo mae-devpractices.cozo mae-adr.cozo
+# which had it exactly backwards. Those are MAE's own corpora — every one of
+# them is regenerable, and three are now built automatically from sources
+# compiled into the binary, so they are the *only* KB content in the data dir
+# that is never worth protecting. Meanwhile a user's own registered KBs, and
+# the registry that records them, were ignored entirely: the script would
+# happily report "nothing to archive" while standing in a directory full of
+# irreplaceable notes.
+#
+# So: archive everything KB-shaped EXCEPT the regenerable system stores.
+# Unknown names are included by default, which is the safe direction for a
+# script whose next step is `rm -rf` — a stale MAE store that slips through
+# costs disk, whereas a missed user KB costs data.
+#
+# `mae-adr.cozo` is deliberately still archived even though `make adr-kb` can
+# rebuild it: that requires a checkout of MAE's own sources, which an end user
+# installing from a release does not have.
+REGENERABLE="mae-manual.cozo mae-practices.cozo mae-devpractices.cozo"
+
+# Echo the archivable entry names in $1, one per line.
+#
+# Word-splitting on the result is the established contract in this script, so
+# the names must not contain whitespace. MAE only ever creates `*.cozo` stores
+# and `kb-registry.toml` here; anything stranger is skipped rather than risk
+# producing a member list that tar would misread.
+kb_items_in() {
+    _base="$1"
+    [ -f "$_base/kb-registry.toml" ] && printf '%s\n' "kb-registry.toml"
+    for _p in "$_base"/*.cozo; do
+        [ -e "$_p" ] || continue
+        _n="${_p##*/}"
+        case " $REGENERABLE " in *" $_n "*) continue ;; esac
+        case "$_n" in *[[:space:]]*)
+            echo "backup-kbs: skipping '$_n' — whitespace in the name" >&2
+            continue ;;
+        esac
+        printf '%s\n' "$_n"
+    done
+}
 
 # XDG-first on EVERY platform, then the platform default (CLAUDE.md #13).
 # Deliberately not `dirs::data_dir()` semantics: that ignores XDG on macOS and
@@ -56,7 +98,7 @@ done
 # scope is worse than no listing.
 target_base=""
 for base in $BASES; do
-    for kb in $KBS; do
+    for kb in $(kb_items_in "$base"); do
         if [ -e "$base/$kb" ]; then
             target_base="$base"
             break
@@ -74,7 +116,7 @@ fi
 # silence would read as "there was only one".
 for base in $BASES; do
     [ "$base" = "$target_base" ] && continue
-    for kb in $KBS; do
+    for kb in $(kb_items_in "$base"); do
         [ -e "$base/$kb" ] || continue
         echo "backup-kbs: note — $base also holds KBs; this run only handles $target_base"
         break
@@ -83,7 +125,7 @@ done
 
 if [ "${1:-}" = "--list" ]; then
     echo "backup-kbs: would archive from $target_base:"
-    for kb in $KBS; do
+    for kb in $(kb_items_in "$target_base"); do
         [ -e "$target_base/$kb" ] && echo "  $kb"
     done
     exit 0
@@ -119,7 +161,7 @@ archive="$dest/mae-kbs-$TS.tar.gz"
 tmplist="$(mktemp)"
 trap 'rm -f "$tmplist"' EXIT INT TERM
 : > "$tmplist"
-for kb in $KBS; do
+for kb in $(kb_items_in "$target_base"); do
     [ -e "$target_base/$kb" ] || continue
     printf '%s\n' "$kb" >> "$tmplist"
     [ -e "$target_base/$kb.sha256" ] && printf '%s\n' "$kb.sha256" >> "$tmplist"
