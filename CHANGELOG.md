@@ -2,7 +2,48 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.107] - 2026-08-13
+
+
+
+
+### Refactor
+
+- *(mae)* Split the eviction tests out of kb_federation ([c0de78d](https://github.com/cuttlefisch/mae/commit/c0de78d3e1914f50c6772afb69d7850432037974))
+
+### Testing
+
+- *(guidance)* Isolate the cache dir in the diagnosis tests ([4d07d85](https://github.com/cuttlefisch/mae/commit/4d07d8534f70c2f54c11e67550e5a75a74c8bd50))
+
+### Miscellaneous
+
+- *(deps)* Bump the rust-dependencies group with 6 updates ([2be4cdc](https://github.com/cuttlefisch/mae/commit/2be4cdca165c3b9466360ba212438e75a1ac978a))
+- Bump version to 0.14.107 ([480e7a6](https://github.com/cuttlefisch/mae/commit/480e7a663b9f5ad1f2d6a934f82102662a3ab6d3))
+
 ## [0.14.106] - 2026-08-13
+
+
+
+
+### Bug Fixes
+
+- *(guidance)* The built store must be where the reader looks ([358d0a3](https://github.com/cuttlefisch/mae/commit/358d0a38e70dab6a95e22cead1f488b07ff6dc54))
+- *(install)* Uninstall removes only what install placed ([d8bb7fa](https://github.com/cuttlefisch/mae/commit/d8bb7fa74a98c02b087f70b1d7f255a4e1585c8a))
+- *(kb)* Headless and self-test never drained the KB background work ([b889633](https://github.com/cuttlefisch/mae/commit/b88963343cd0e4e9afd21a22f74d0085d10f27cb))
+
+### Documentation
+
+- *(install)* Correct the --help data-dir line ([5425fac](https://github.com/cuttlefisch/mae/commit/5425fac0f7cc74803d6495499afd55b237d40975))
+
+### Testing
+
+- *(kb)* Prove a store-only node becomes searchable headless ([2135938](https://github.com/cuttlefisch/mae/commit/2135938b6f56746d091adc8d8ab20610b7a8c763))
+
+### Miscellaneous
+
+- Bump version to 0.14.106 ([06eefbb](https://github.com/cuttlefisch/mae/commit/06eefbb27052273947749855c81497f28e92ec26))
+
+## [0.14.105] - 2026-08-12
 
 
 
@@ -16,27 +57,6 @@ All notable changes to this project will be documented in this file.
 - *(scripts)* Back up the user's KBs, not MAE's regenerable ones ([88006d5](https://github.com/cuttlefisch/mae/commit/88006d5f1f6eac7258909c9dbeadb27838e6cbe8))
 - *(install)* Stop asserting stores that are no longer shipped ([75c0273](https://github.com/cuttlefisch/mae/commit/75c0273c92774874e87d61195e82336a599757f7))
 
-### Documentation
-
-- *(install)* Correct the --help data-dir line ([5425fac](https://github.com/cuttlefisch/mae/commit/5425fac0f7cc74803d6495499afd55b237d40975))
-
-### Miscellaneous
-
-- Bump version to 0.14.106 ([06eefbb](https://github.com/cuttlefisch/mae/commit/06eefbb27052273947749855c81497f28e92ec26))
-
-## [0.14.105] - 2026-08-12
-
-
-
-
-### Bug Fixes
-
-- *(kb)* Source the manual from its corpus, keeping the always-present invariant ([85bc109](https://github.com/cuttlefisch/mae/commit/85bc1096aad410d6e16dc2034fcfe37de8f2d048))
-
-### Refactor
-
-- *(mae)* Split bootstrap's inline tests out by subject ([21c54a6](https://github.com/cuttlefisch/mae/commit/21c54a6752a8e1aae422b3a2b913aa08672a5eaa))
-
 ### Miscellaneous
 
 - Bump version to 0.14.105 ([1a13e0d](https://github.com/cuttlefisch/mae/commit/1a13e0d715ecc8506229f65456426043d5479434))
@@ -46,9 +66,9 @@ All notable changes to this project will be documented in this file.
 
 
 
-### Features
+### Refactor
 
-- *(kb)* Embed the system-KB corpora, and build guidance when no store ships ([fd8bdea](https://github.com/cuttlefisch/mae/commit/fd8bdea42d9ca9d7694af70e04d948ad78d64332))
+- *(mae)* Split bootstrap's inline tests out by subject ([21c54a6](https://github.com/cuttlefisch/mae/commit/21c54a6752a8e1aae422b3a2b913aa08672a5eaa))
 
 ### Miscellaneous
 
@@ -59,9 +79,9 @@ All notable changes to this project will be documented in this file.
 
 
 
-### Features
+### Bug Fixes
 
-- *(kb)* Make a missing guidance KB diagnosable instead of silent ([8604fd3](https://github.com/cuttlefisch/mae/commit/8604fd38e743831a430ace6d10992b78b843c8d7))
+- *(kb)* Source the manual from its corpus, keeping the always-present invariant ([85bc109](https://github.com/cuttlefisch/mae/commit/85bc1096aad410d6e16dc2034fcfe37de8f2d048))
 
 ### Miscellaneous
 
@@ -74,11 +94,8 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
-- *(kb)* Evict system KBs from the registry, and label their hits ([e840aa6](https://github.com/cuttlefisch/mae/commit/e840aa65d975464812b153152be3aedb8b7f99fa))
-
-### Bug Fixes
-
-- *(kb)* Open system stores via the engine-aware path, not raw sled ([ec3bdc0](https://github.com/cuttlefisch/mae/commit/ec3bdc043a22421a68bed68160c73e0d3317aacd))
+- *(kb)* Make a missing guidance KB diagnosable instead of silent ([8604fd3](https://github.com/cuttlefisch/mae/commit/8604fd38e743831a430ace6d10992b78b843c8d7))
+- *(kb)* Embed the system-KB corpora, and build guidance when no store ships ([fd8bdea](https://github.com/cuttlefisch/mae/commit/fd8bdea42d9ca9d7694af70e04d948ad78d64332))
 
 ### Miscellaneous
 
@@ -91,18 +108,18 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
-- *(kb)* A compile-time system-KB catalog, and reserved names ([2d6dc94](https://github.com/cuttlefisch/mae/commit/2d6dc943d4a56ae461500a1fa5bdbefb689ecf76))
-- *(kb)* Refuse lifecycle operations on a system KB ([44143b8](https://github.com/cuttlefisch/mae/commit/44143b819a398b25ef6530be6cb7524004941eb7))
-- *(kb)* The agent no longer chooses its own standing instructions ([9b42abd](https://github.com/cuttlefisch/mae/commit/9b42abded5aaa647eb254e13a20493447c5cb89f))
+- *(kb)* Evict system KBs from the registry, and label their hits ([e840aa6](https://github.com/cuttlefisch/mae/commit/e840aa65d975464812b153152be3aedb8b7f99fa))
+
+### Bug Fixes
+
+- *(kb)* Open system stores via the engine-aware path, not raw sled ([ec3bdc0](https://github.com/cuttlefisch/mae/commit/ec3bdc043a22421a68bed68160c73e0d3317aacd))
 
 ### Testing
 
-- *(kb)* Move the system-KB guards into their own module ([5392e50](https://github.com/cuttlefisch/mae/commit/5392e50da6693354e206c4e0771b3395ee2372bc))
 - *(kb)* Phase 0 evidence — what runtime KB provisioning would cost ([c892a15](https://github.com/cuttlefisch/mae/commit/c892a152122c61ba0b8050b97aad96978d9578c1))
 
 ### Miscellaneous
 
-- *(deps)* Bump the rust-dependencies group with 6 updates ([2be4cdc](https://github.com/cuttlefisch/mae/commit/2be4cdca165c3b9466360ba212438e75a1ac978a))
 - Bump version to 0.14.101 ([b593273](https://github.com/cuttlefisch/mae/commit/b593273dd00f2d0888c88f1445662fa2bbd21287))
 
 ## [0.14.100] - 2026-08-12
@@ -110,9 +127,14 @@ All notable changes to this project will be documented in this file.
 
 
 
+### Features
+
+- *(kb)* The agent no longer chooses its own standing instructions ([9b42abd](https://github.com/cuttlefisch/mae/commit/9b42abded5aaa647eb254e13a20493447c5cb89f))
+
 ### Testing
 
 - *(scheme)* Make the debug-overhead ratio robust to scheduler noise ([7e6c54f](https://github.com/cuttlefisch/mae/commit/7e6c54ff46a11ab2096bda03808e5b9a3f482a8f))
+- *(kb)* Move the system-KB guards into their own module ([5392e50](https://github.com/cuttlefisch/mae/commit/5392e50da6693354e206c4e0771b3395ee2372bc))
 
 ### Miscellaneous
 
@@ -125,6 +147,8 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- *(kb)* A compile-time system-KB catalog, and reserved names ([2d6dc94](https://github.com/cuttlefisch/mae/commit/2d6dc943d4a56ae461500a1fa5bdbefb689ecf76))
+- *(kb)* Refuse lifecycle operations on a system KB ([44143b8](https://github.com/cuttlefisch/mae/commit/44143b819a398b25ef6530be6cb7524004941eb7))
 - *(#640)* :set ai-tier takes effect live, without a relaunch ([5e7ee23](https://github.com/cuttlefisch/mae/commit/5e7ee232dce2a69fb8e9547bde12429ad56fd111))
 
 ### Bug Fixes
