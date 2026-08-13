@@ -247,6 +247,19 @@ pub(crate) async fn run_headless_loop(
                 }
                 editor.try_autosave();
                 crate::daemon_supervisor::supervise_daemon(editor);
+
+                // Every KB background drain. This was missing entirely, and it
+                // was not a cheap omission: `init_kb_federation` spawns the
+                // primary-store preload and parks the receiver, so with nothing
+                // draining it `kb.primary` stayed empty for the life of the
+                // process. `primary_thin()` is false headless, so
+                // `kb_federated_search_scoped` ranks over that empty mirror --
+                // meaning `kb_search`/`kb_search_context`/`kb_vector_search`
+                // returned ZERO of the user's own notes, with no error, in the
+                // mode the MCP server actually runs in. Headless also never
+                // picked up org-dir watcher events or cross-process registry
+                // changes.
+                editor.drain_kb_background();
             }
 
             // No Editor::on_idle_tick() call here (ADR-055 P4, audited not
@@ -257,6 +270,13 @@ pub(crate) async fn run_headless_loop(
             // work with no observable effect, exactly what P4 exists to
             // catch; omitting it is the audited-correct answer, not an
             // oversight.
+            //
+            // The KB drains above are the opposite case, and the distinction is
+            // the point: `on_idle_tick` is about what the user SEES, which is
+            // nothing headless; `drain_kb_background` is about what the KB
+            // KNOWS, which every surface needs. The original audit applied P4's
+            // reasoning to the visual work and did not notice the KB drains
+            // living in the GUI's `idle_work` alongside it.
 
             _ = mcp_idle_tick => {
                 if let Some(ts) = last_mcp_activity {

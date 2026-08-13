@@ -227,7 +227,7 @@ jobs:
           # Duplicated in .config/nextest.toml (heavy-subprocess-e2e group) and
           # badges.yml. A new heavy binary must be added to all three; verified
           # by `make heavy-e2e-check`.
-          HEAVY_FILTER='binary(headless_e2e) + binary(guidance_delivery_e2e) + binary(headless_kb_convergence_e2e) + binary(headless_soak_shaped_e2e) + binary(headless_idle_cpu_e2e) + binary(mcp_tool_tiering_e2e) + binary(tool_schema_nested_e2e) + binary(headless_guard_leak_regression_e2e)'
+          HEAVY_FILTER='binary(headless_e2e) + binary(guidance_delivery_e2e) + binary(headless_kb_convergence_e2e) + binary(headless_kb_preload_e2e) + binary(headless_soak_shaped_e2e) + binary(headless_idle_cpu_e2e) + binary(mcp_tool_tiering_e2e) + binary(tool_schema_nested_e2e) + binary(headless_guard_leak_regression_e2e)'
           cargo nextest run --workspace --release --features gui -E "$HEAVY_FILTER"
           cargo nextest run --workspace --release --features gui -E "not ($HEAVY_FILTER)"
           cargo test --doc --workspace --release --features gui

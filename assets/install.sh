@@ -455,6 +455,25 @@ for kb in mae-manual mae-practices mae-devpractices; do
         removed_any=1
     fi
 done
+
+# MAE's own migration debris, which this block used to leave behind: cozo
+# renames a store aside as `<name>.cozo.sled.bak-<timestamp>` when migrating
+# sled -> sqlite, and matching only `.cozo`/`.cozo.sha256` orphaned every one of
+# them. They accumulate per migration — 198 MB across 31 directories on one
+# developer machine — and then made the end-of-uninstall summary claim the data
+# dir was non-empty because of "user KBs, transcripts, etc.", which was false.
+#
+# Scoped to MAE's OWN store names, never a glob over the data dir, so a user KB
+# that happens to have been migrated is never touched.
+for kb in mae-manual mae-practices mae-devpractices mae-adr; do
+    for bak in "$DATADIR/mae/$kb.cozo.sled.bak-"*; do
+        [ -e "$bak" ] || continue
+        rm -rf "$bak"
+        ok "removed orphaned $(basename "$bak")"
+        removed_any=1
+    done
+done
+
 if [ "$removed_any" -eq 0 ]; then
     skip "no pre-built KB stores to remove"
 fi

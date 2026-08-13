@@ -143,8 +143,16 @@ verify-binary:
 dev:
 	$(CARGO) build $(FEAT_FLAG)
 
-## install: build release binary + manual KB + practices KB, install to PREFIX, register desktop entry
-install: build manual-kb practices-kb devpractices-kb adr-kb
+## install: build release binary, install to PREFIX, register desktop entry
+##
+## No longer depends on manual-kb/practices-kb/devpractices-kb. Those built
+## ~55 MB of stores that this target then DELETED from $(DATADIR) as superseded
+## (see below) — while leaving them in assets/, where guidance_kb_engine's
+## exe-ancestor probe picks them up. That is why a dev checkout exercised the
+## pre-built sled branch and never the embedded branch every user gets.
+## `adr-kb` is dropped too: the ADR copy below is conditional now, and building
+## a 65 MB store on every `make install` to maybe-copy it is not a fair default.
+install: build
 	@mkdir -p $(PREFIX)
 	@install -m 755 $(RELEASE_BIN) $(PREFIX)/$(BINARY)
 	@install -m 755 $(RELEASE_SHIM) $(PREFIX)/$(SHIM_BINARY)
@@ -265,17 +273,36 @@ install-all: install install-daemon-service
 	@echo "  mae                      — launch editor"
 	@echo "  systemctl --user enable --now mae-daemon"
 
-## uninstall: remove installed binaries, desktop entries, icon, and services
-uninstall:
-	@# The KB stores go FIRST, and only via the archive-verify-then-remove path.
-	@# `install` copies four CozoDB stores into $(DATADIR)/mae; uninstall used to
-	@# remove binaries, desktop entry, icon and modules and silently orphan all
-	@# four. Deleting them outright would be the wrong correction — a KB is user
-	@# data and a customised one may exist nowhere else — so they are archived and
-	@# the archive is verified before anything is removed. A failure there leaves
-	@# every original in place and aborts the uninstall, deliberately: losing the
-	@# binaries is recoverable, losing the KBs is not.
+## backup-kbs: archive YOUR KBs (not MAE's regenerable ones), verify, then remove originals
+##
+## Deliberately standalone rather than wired into `uninstall`. Relocating a
+## user's irreplaceable notes is a decision they make, never a side effect of
+## removing a binary. The script archives everything KB-shaped in the data dir
+## EXCEPT the regenerable system stores, verifies the archive, and only then
+## removes the originals; any failure leaves everything where it was.
+backup-kbs:
 	@./scripts/backup-kbs.sh
+
+## uninstall: remove installed binaries, desktop entries, icon, modules, and services
+uninstall:
+	@# THE RULE: uninstall removes only what install placed. Nothing else.
+	@#
+	@# This is Emacs's rule, adopted deliberately. `make uninstall` there touches
+	@# nothing outside PREFIX and never considers ~/.emacs.d, because it was
+	@# never installed; its known bugs are the OPPOSITE failure (leaving its own
+	@# .eln files behind). Emacs never faces the ambiguity MAE had because its
+	@# installed files and user files live in disjoint trees — MAE installs INTO
+	@# $(DATADIR)/mae, where the user's KBs also live, which is how "what does
+	@# uninstall remove" came to have two answers.
+	@#
+	@# It used to call backup-kbs.sh, which archived the user's KBs and then
+	@# `rm -rf`'d the originals, while `install.sh --uninstall` left them alone.
+	@# Two supported uninstalls, and the `make` one relocated irreplaceable data.
+	@# backup-kbs.sh remains available as `make backup-kbs` — an explicit choice,
+	@# not a side effect of removing a binary.
+	@#
+	@# NEVER touched here: $(DATADIR)/mae/*.cozo that MAE did not install,
+	@# kb-registry.toml, transcripts/, and all of $(CONFIGDIR)/mae.
 	@rm -f $(PREFIX)/$(BINARY)
 	@rm -f $(PREFIX)/$(SHIM_BINARY)
 	@rm -f $(PREFIX)/mae-daemon
@@ -288,15 +315,38 @@ uninstall:
 	@echo "Removed $(DATADIR)/icons/hicolor/scalable/apps/mae.svg"
 	@rm -rf $(DATADIR)/mae/modules
 	@echo "Removed $(DATADIR)/mae/modules/"
+##
+## The ADR store is MAE's own and IS installed by this Makefile, so it goes.
+	@if [ -d $(DATADIR)/mae/mae-adr.cozo ]; then \
+		rm -rf $(DATADIR)/mae/mae-adr.cozo $(DATADIR)/mae/mae-adr.cozo.sha256; \
+		echo "Removed $(DATADIR)/mae/mae-adr.cozo"; \
+	fi
+##
+## MAE's own debris, which neither uninstall path cleaned up: cozo renames a
+## store aside as `<name>.cozo.sled.bak-<ts>` when migrating sled -> sqlite, and
+## the superseded-store removal only ever matched `.cozo`/`.cozo.sha256`. These
+## accumulate per migration and are pure orphans — 198 MB across 31 directories
+## on one developer machine. Scoped to MAE's OWN store names, never a glob over
+## the data dir, so a user KB that happens to have been migrated is untouched.
+	@for kb in mae-manual mae-practices mae-devpractices mae-adr; do \
+		for bak in $(DATADIR)/mae/$$kb.cozo.sled.bak-*; do \
+			[ -e "$$bak" ] || continue; \
+			rm -rf "$$bak"; \
+			echo "Removed orphaned $$(basename $$bak)"; \
+		done; \
+	done
 	@if [ "$$(uname -s)" = "Darwin" ]; then \
 		launchctl bootout gui/$$(id -u)/com.cuttlefisch.mae-daemon 2>/dev/null || true; \
 		rm -f $(HOME)/Library/LaunchAgents/com.cuttlefisch.mae-daemon.plist; \
-		echo "Removed launchd agent"; \
+		rm -f $(HOME)/Library/LaunchAgents/com.cuttlefisch.mae-headless.plist; \
+		echo "Removed launchd agents"; \
 		rm -rf $(HOME)/Applications/MAE.app; \
 		echo "Removed ~/Applications/MAE.app"; \
 	else \
 		systemctl --user disable --now mae-daemon 2>/dev/null || true; \
 		rm -f $(HOME)/.config/systemd/user/mae-daemon.service; \
+		rm -f $(HOME)/.config/systemd/user/mae-daemon@.service; \
+		rm -f $(HOME)/.config/systemd/user/mae-headless@.service; \
 		systemctl --user daemon-reload 2>/dev/null || true; \
 		echo "Removed systemd services"; \
 	fi

@@ -50,7 +50,15 @@ pub fn data_dir_candidate(rel: &str) -> Option<PathBuf> {
 /// identity. Putting a rebuildable system-KB projection in data is what let
 /// `backup-kbs.sh` end up archiving four regenerable stores while ignoring the
 /// irreplaceable ones.
+///
+/// Delegates to [`mae_kb::system_kb::default_cache_dir`] for `"mae"` rather
+/// than keeping a second implementation: the guidance reader in `mae-ai`
+/// cannot depend on this binary crate, so the resolution had to live somewhere
+/// both can reach, and two copies of it would be free to drift (principle #8).
 pub fn cache_dir_candidate(rel: &str) -> Option<PathBuf> {
+    if rel == "mae" {
+        return mae_kb::system_kb::default_cache_dir();
+    }
     std::env::var("XDG_CACHE_HOME")
         .ok()
         .map(PathBuf::from)

@@ -29,10 +29,11 @@ then creates the GitHub Release with generated notes:
 
 | Artifact | File | Contents |
 |---|---|---|
-| Linux CLI/TUI+GUI | `mae-linux-x86_64.tar.gz` | GUI-capable `mae` + `mae-daemon` + `mae-mcp-shim` + modules + manual KB + configs |
+| Linux CLI/TUI+GUI | `mae-linux-x86_64.tar.gz` | GUI-capable `mae` + `mae-daemon` + `mae-mcp-shim` + modules + configs |
 | Linux GUI | `mae-linux-x86_64-gui.AppImage` | self-contained GUI AppImage |
 | macOS app | `MAE-macos-aarch64.zip` | `MAE.app` + `mae-daemon` + `mae-mcp-shim` + `install.sh` |
-| macOS CLI | `mae-macos-aarch64.tar.gz` | GUI-capable `mae` (`-nw` for terminal) + services + modules + manual KB |
+| macOS CLI | `mae-macos-aarch64.tar.gz` | GUI-capable `mae` (`-nw` for terminal) + services + modules |
+| ADR KB (opt-in) | `mae-adr.cozo.tar.gz` | MAE's own decision history, for contributors — not in any package |
 
 The tag is the single source of truth for a release — the build does not re-derive the version.
 
@@ -56,8 +57,11 @@ The tag is the single source of truth for a release — the build does not re-de
    `version-bump.yml` write `VERSION` + `Cargo.toml`. (Or, for a manual cut, set `VERSION`
    yourself and update `Cargo.toml` to match, then commit.)
 
-4. **Rebuild the manual KB** if concepts changed this cycle: `make manual-kb` (bakes
-   `assets/mae-manual.cozo` from `kb_seed`). The release artifacts ship the baked manual.
+4. **Nothing to do for the manual/practices KBs.** Their `.org` corpora are compiled into the
+   binary (`crates/mae/src/system_corpus.rs`) and built on first run, so a release ships no
+   pre-built store and there is no bake step to remember (ADR-104 D6). Editing `assets/manual/`
+   is enough. The **ADR KB** is the exception — it is not embedded, and `release.yml` builds and
+   publishes `mae-adr.cozo.tar.gz` on its own.
 
 5. **Tag and push.** From the release commit on `main`:
    ```bash
@@ -71,8 +75,10 @@ The tag is the single source of truth for a release — the build does not re-de
 - **CI:** confirm all four `release.yml` build jobs are green and the Release has all four assets
   attached.
 - **Install lifecycle:** download an artifact and run the bundled `install.sh` in a clean HOME —
-  it places binaries in `~/.local/bin/`, modules, the manual KB, config scaffolding, and the
-  service units (systemd on Linux, launchd on macOS). The `container / smoke + new-user` and
+  it places binaries in `~/.local/bin/`, modules, config scaffolding, and the service units
+  (systemd on Linux, launchd on macOS). It installs no KB stores — confirm instead that `:help`
+  resolves and that `audit_configuration` reports guidance `Ok` rather than `StoreMissing`, which
+  is what proves the first-run build actually happened. The `container / smoke + new-user` and
   `install / script validation` CI jobs exercise the pristine first-run path.
 - **Smoke:** `mae --version` matches the tag; `mae-daemon --check-config` is clean; `:help` opens
   and `concept:kb-sharing` covers the E2E/rotation/recovery/mesh material.

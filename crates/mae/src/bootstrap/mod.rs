@@ -2202,11 +2202,9 @@ fn build_guidance_from_embedded_corpus(
         crate::pkg::paths::cache_dir_candidate("mae").unwrap_or_else(|| data_dir.join("cache"));
     let src = crate::system_corpus::resolve(kb, &cache_dir)?;
 
-    let out = cache_dir.join("kb").join(format!(
-        "{}-{}.cozo",
-        kb.asset_filename.trim_end_matches(".cozo"),
-        env!("CARGO_PKG_VERSION")
-    ));
+    // The single authority for this path — see its doc comment. Computing it
+    // here instead is what made the built store unreachable to the reader.
+    let out = mae_kb::system_kb::built_store_path(&cache_dir, kb);
     if out.exists() {
         return Some(out);
     }
