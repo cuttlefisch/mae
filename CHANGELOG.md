@@ -2,10 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.111] - 2026-08-13
+
+
+
+
+### Bug Fixes
+
+- *(kb)* Graph reads see the federated graph, and both link directions agree ([ce03424](https://github.com/cuttlefisch/mae/commit/ce034240681b48e86d0361ce54276b94fc727798))
+
+### Miscellaneous
+
+- Bump version to 0.14.110 ([0e4d1f6](https://github.com/cuttlefisch/mae/commit/0e4d1f6a8fe834d53e166f63b081efef3d29da91))
+
 ## [0.14.109] - 2026-08-13
 
 
 
+
+### Bug Fixes
+
+- *(kb)* Stop the shutdown snapshot copying MAE's manual into user storage ([94f9ad2](https://github.com/cuttlefisch/mae/commit/94f9ad2f67538460e974d7c3a89adf6e6c7e7b19))
 
 ### Documentation
 
@@ -29,10 +46,6 @@ All notable changes to this project will be documented in this file.
 
 
 
-
-### Bug Fixes
-
-- *(kb)* Graph reads see the federated graph, and both link directions agree ([ce03424](https://github.com/cuttlefisch/mae/commit/ce034240681b48e86d0361ce54276b94fc727798))
 
 ### Refactor
 
