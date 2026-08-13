@@ -197,6 +197,31 @@ pub fn diagnose_guidance_kb(data_dir: &Path, guidance_kb: &str) -> GuidanceStatu
 /// builds `initialize.instructions` before one is reachable.
 fn resolve_guidance_db_path(data_dir: &Path, guidance_kb: &str) -> Option<PathBuf> {
     if let Some(kb) = mae_kb::system_kb::find(guidance_kb) {
+        // Order matters, and each arm exists for a reason:
+        //
+        // 1. `env_override` — the explicit escape hatch, so a contributor can
+        //    point at a store they built. Honoured only if it exists; "set but
+        //    absent" falls through rather than resolving to a dead path.
+        // 2. The cache-built store — what a first run actually produces. This
+        //    arm is the fix for the regression described on
+        //    `system_kb::built_store_path`: it used to be missing entirely, so
+        //    the builder's output was unreachable and guidance silently
+        //    delivered nothing on every clean install.
+        // 3. `<data dir>/<asset_filename>` — legacy installs that still carry
+        //    a pre-built store. Nothing ships one any more (ADR-104 D6), but a
+        //    machine upgraded from an older MAE has one until it is removed.
+        if let Ok(p) = std::env::var(kb.env_override) {
+            let p = PathBuf::from(p);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+        if let Some(built) = mae_kb::system_kb::default_cache_dir()
+            .map(|cache| mae_kb::system_kb::built_store_path(&cache, kb))
+            .filter(|p| p.exists())
+        {
+            return Some(built);
+        }
         return Some(data_dir.join(kb.asset_filename));
     }
     let registry = mae_kb::federation::KbRegistry::load(data_dir);

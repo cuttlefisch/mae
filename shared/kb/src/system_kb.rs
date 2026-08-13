@@ -159,6 +159,53 @@ pub fn auto_enabled() -> impl Iterator<Item = &'static SystemKb> {
     SYSTEM_KBS.iter().filter(|kb| kb.auto_enable)
 }
 
+/// User cache path: `$XDG_CACHE_HOME/mae`, else `~/.cache/mae`.
+///
+/// XDG-first on **every** platform, deliberately not `dirs::cache_dir()` —
+/// that follows Apple conventions on macOS and ignores `XDG_CACHE_HOME`, which
+/// both contradicts the documented `~/.cache/mae` contract and breaks env-var
+/// test isolation (CLAUDE.md principle #13).
+///
+/// This lives here, in the crate that owns the catalog, because both the
+/// builder (`crates/mae`) and the reader (`crates/ai`) must agree on it and
+/// neither can depend on the other. `crates/mae/src/pkg/paths.rs` delegates
+/// here rather than keeping a second copy.
+pub fn default_cache_dir() -> Option<std::path::PathBuf> {
+    std::env::var("XDG_CACHE_HOME")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| std::path::PathBuf::from(h).join(".cache"))
+        })
+        .map(|base| base.join("mae"))
+}
+
+/// Where `kb`'s built store lives: `<cache>/kb/<name>-<version>.cozo`.
+///
+/// **The single authority for this path, and it has to stay that way.** It was
+/// briefly computed in two places — the builder wrote
+/// `<cache>/kb/<name>-<version>.cozo` while the guidance reader derived
+/// `<data dir>/<asset_filename>` — and because nothing tested the join, a
+/// clean install built the store correctly and then delivered no guidance at
+/// all. Two functions answering "where does this KB live" is exactly the
+/// duplicated-mechanism failure principle #8 exists to prevent; if you need
+/// this path, call this function.
+///
+/// Version-keyed so an upgrade rebuilds rather than serving whatever content
+/// first landed. The version is this crate's own `CARGO_PKG_VERSION`: every
+/// crate in the workspace shares one version, so taking it here yields one
+/// answer for every caller, where a passed-in version could differ per caller
+/// and silently split the cache.
+pub fn built_store_path(cache_dir: &std::path::Path, kb: &SystemKb) -> std::path::PathBuf {
+    cache_dir.join("kb").join(format!(
+        "{}-{}.cozo",
+        kb.asset_filename.trim_end_matches(".cozo"),
+        env!("CARGO_PKG_VERSION")
+    ))
+}
+
 /// What a reserved-name registry row turned out to be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReservedRow {
