@@ -485,7 +485,10 @@ if [ -d "$SCRIPT_DIR/mae-adr.cozo" ]; then
         ok "cleared quarantine on ADR KB"
     fi
 else
-    warn "mae-adr.cozo not found in package — kb_register it manually if you rebuild it later"
+    # `skip`, not `warn`: release packages deliberately do not carry the ADR KB
+    # (it ships as its own asset), so this is the normal case for every user and
+    # a warning here would be noise on every single install.
+    skip "ADR KB not in package (opt-in — 'make fetch-adr-kb', then kb_register it)"
 fi
 
 # ========================================================================
@@ -721,30 +724,21 @@ for bin in mae-mcp-shim mae-daemon; do
 done
 
 # Verify data files
-if [ -d "$DATADIR/mae/mae-manual.cozo" ]; then
-    ok "manual KB present"
-else
-    fail "manual KB missing"
-fi
+#
+# The manual, DevPractices and MaePractices corpora are no longer checked for
+# here, because there is nothing on disk to check: they are compiled into the
+# `mae` binary and built into stores on first run. Verifying their absence as
+# `fail "manual KB missing"` — which is what this block did before the corpora
+# were embedded — would now fail every single install.
+ok "manual + guidance KBs: compiled into the binary"
 
-# The 3 bundled guidance/reference KBs are warn-not-fail here, consistent
-# with their install-step treatment above and their documented
-# silent-no-op-if-missing runtime behavior (guidance_kb_engine.rs) — unlike
-# the manual KB, a missing one degrades a feature, it doesn't break :help.
-if [ -d "$DATADIR/mae/mae-devpractices.cozo" ]; then
-    ok "DevPractices KB present"
-else
-    warn "DevPractices KB missing"
-fi
-if [ -d "$DATADIR/mae/mae-practices.cozo" ]; then
-    ok "MaePractices KB present"
-else
-    warn "MaePractices KB missing"
-fi
+# The ADR KB is the one that can legitimately be absent: it is not embedded
+# (ADR-059 keeps it opt-in and contributor-only) and ships as its own release
+# asset, so most packages do not carry it. Informational, never fatal.
 if [ -d "$DATADIR/mae/mae-adr.cozo" ]; then
     ok "ADR KB present"
 else
-    warn "ADR KB missing"
+    skip "ADR KB not installed (opt-in — 'make fetch-adr-kb', then kb_register it)"
 fi
 
 MODULE_COUNT=$(find "$DATADIR/mae/modules" -name "module.toml" 2>/dev/null | wc -l | tr -d ' ')
