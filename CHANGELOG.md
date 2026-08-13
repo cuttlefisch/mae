@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.106] - 2026-08-13
+
+
+
+
+### Documentation
+
+- *(install)* Correct the --help data-dir line ([5425fac](https://github.com/cuttlefisch/mae/commit/5425fac0f7cc74803d6495499afd55b237d40975))
+
+## [0.14.105] - 2026-08-12
+
+
+
+
+### Features
+
+- *(delivery)* Stop shipping pre-built KB stores ([c814a9d](https://github.com/cuttlefisch/mae/commit/c814a9d5a80e47d943d46a51192794931f91f3c4))
+
+### Bug Fixes
+
+- *(scripts)* Back up the user's KBs, not MAE's regenerable ones ([88006d5](https://github.com/cuttlefisch/mae/commit/88006d5f1f6eac7258909c9dbeadb27838e6cbe8))
+- *(install)* Stop asserting stores that are no longer shipped ([75c0273](https://github.com/cuttlefisch/mae/commit/75c0273c92774874e87d61195e82336a599757f7))
+
+### Miscellaneous
+
+- Bump version to 0.14.105 ([1a13e0d](https://github.com/cuttlefisch/mae/commit/1a13e0d715ecc8506229f65456426043d5479434))
+
 ## [0.14.104] - 2026-08-12
 
 
