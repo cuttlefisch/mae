@@ -98,6 +98,28 @@ dev-practices KB name → `Guidance`; everything else → `UserRegistered`).
 Zero migration step, zero registry-file rewrite required — Phase A is a
 pure additive schema change, deployable and dormant on its own.
 
+> **Drift recorded 2026-08-13 (ADR-104).** The `kind` field shipped, and the
+> inference rule above did **not** hold in practice. On a real registry,
+> `MaePractices` was recorded `UserRegistered` while `DevPractices` was
+> `Guidance` — two different values for two rows MAE itself had written, because
+> the "name matches the shipped dev-practices KB name" clause only ever matched
+> one of the shipped corpora. The field intended to mark provenance had drifted
+> into meaninglessness, which is why ADR-104's eviction migration keys on row
+> *shape* rather than on `kind`.
+>
+> ADR-104 D2 removes the need for `Guidance` altogether: system KBs are no
+> longer rows in `kb-registry.toml` at all, but a compile-time catalog
+> (`mae_kb::system_kb`), and existing system rows are evicted at startup. The
+> `Guidance` variant is therefore unreachable for the corpora it was invented
+> for. `Primary` / `Project` / `UserRegistered` are unaffected and still
+> describe exactly what the registry can describe correctly — user KBs.
+>
+> The general lesson, per principle #15: an inference rule that reconstructs a
+> classification from *other* fields is only as good as its weakest clause, and
+> it fails silently. The class distinction ADR-104 draws is structural — a
+> different code path, not a different enum value on a shared one — precisely so
+> there is nothing to infer.
+
 **Phase B — opt-in-by-default provisioning trigger.** The first KB-touching
 action performed inside a detected project root (per
 `detect_project_root`) for which no registry entry has

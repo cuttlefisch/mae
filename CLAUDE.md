@@ -40,7 +40,7 @@ Two workspaces + shared crates (ADR-014):
 
 ```
 mae/                              (repo root)
-├── Cargo.toml                    (editor workspace — cozo+sled)
+├── Cargo.toml                    (editor workspace — cozo with BOTH sled + sqlite)
 ├── Cargo.lock                    (editor lock)
 ├── crates/                       (editor-only crates — 18 crates)
 ├── daemon/                       (daemon workspace — cozo+sqlite, no rusqlite)
@@ -245,7 +245,7 @@ All phases below are COMPLETE. See ROADMAP.md for granular milestone details.
 | 4. LSP + DAP + Syntax | LSP nav/completion, DAP debugging, tree-sitter (17 langs), KB | — |
 | 5. Knowledge Base | CozoDB graph (Datalog), federated queries, org parser, HNSW vectors | — |
 | 6. Embedded Shell | alacritty_terminal, MCP server, file auto-reload | — |
-| 7. Documentation | Help system (1,300+ KB nodes), tutorials, `:describe-configuration` | — |
+| 7. Documentation | Help system (code-generated seed nodes + the `assets/manual` org corpus), tutorials, `:describe-configuration` | — |
 | 8. GUI Backend | winit + Skia, inline images, multi-cursor, magit-style git | 2,629 |
 
 **Current:** actively released on the 0.14.x line — collaborative **KB sharing** is user-ready: trusted-peer mTLS auth, per-KB
@@ -311,11 +311,24 @@ Working on MAE? Switch to MAE's own conventions with one command:
 `:set-save ai-guidance-kb MaePractices`. The ADR KB stays deliberately **opt-in**, not
 auto-registered (per ADR-059 — injecting dozens of ADR summaries into every AI session by default
 would be noise, not signal); `kb_register` it manually to query MAE's own architecture decisions.
-All four are built via a shared pipeline (`shared/kb/src/kb_build.rs`) and bundled into every
-release artifact except Windows (TUI-only, ADR-066 Phase B) — see ADR-076 for the full taxonomy,
-the shared auto-registration engine (`crates/mae/src/guidance_kb_engine.rs`), and the "a
-contributor's own same-named registration always wins over the bundled default" precedent that
-makes this whole system safely overridable.
+All four are built via a shared pipeline (`shared/kb/src/kb_build.rs`).
+
+**Superseded by ADR-104 — do not read the paragraph above as current delivery.** It said the four
+were "bundled into every release artifact except Windows", which was already only half true when
+written (ADR-076's own Context records that MaePractices and the ADR KB were never wired into
+`release.yml`/`install.sh`, so most users got neither). **No pre-built `.cozo` store ships in any
+artifact now.** The manual, MaePractices and DevPractices *sources* are compiled into the binary
+(`crates/mae/src/system_corpus.rs`) and built into stores on first run under `$XDG_CACHE_HOME`,
+which is what finally gives Windows, the Docker image and `cargo install` — all of which shipped
+**zero** corpora — MAE's documentation and practices at all. The ADR KB is not embedded and still
+ships as its own `mae-adr.cozo.tar.gz` asset (ADR-059 keeps it opt-in).
+
+System KBs are also no longer rows in `kb-registry.toml`: they are a compile-time catalog
+(`mae_kb::system_kb`), their names are reserved against `kb_register`, and existing rows are evicted
+at startup. See **ADR-104** for the class distinction, the Phase 0 measurements behind the first-run
+build, and the "a contributor's own same-named registration wins" precedent — which survives from
+ADR-076 but only on a content-vs-code distinction, since the nearest prior art (Emacs `load-path`
+shadowing) resolves the same collision the opposite way.
 
 **Next — P2P decentralized KB sync** (multi-session/multi-machine initiative): a **daemon mesh** so global
 peers maintain shared KBs with **no central server**. Design = **ADR-025** (iroh QUIC transport, Ed25519
@@ -686,6 +699,16 @@ KB link enrichment — the *link* half ADR-061 deferred: a 24/7 Ollama sweep tha
 pairs over a fixed relation vocabulary, gates them through a conservative empirically-calibrated
 three-band confidence policy the agent cannot loosen, and materializes only reviewed/high-confidence
 edges as ADR-101 status flips; grounded in `docs/research/103-kb-link-enrichment-prior-art.md`).
+Finally, **ADR-104** (*accepted and implemented*) — **system KBs are a distinct class, delivered
+with the binary; supersedes ADR-076**: MAE's own operational corpora (manual/MaePractices/
+DevPractices/ADR) have a different lifecycle from content users author, so they become a
+compile-time catalog (`mae_kb::system_kb`) with reserved names rather than rows in the user's
+`kb-registry.toml`; the `.org` sources are embedded via `include_dir!` and built into stores on
+first run under `$XDG_CACHE_HOME`, and **no pre-built `.cozo` ships in any artifact**. Grounded in
+`docs/research/104-system-kb-prior-art.md`, which corrected the delivery rationale — the objection
+is to shipping *sled* (a directory, rewritten on first open so never checksum-verifiable,
+unopenable by the sqlite-only daemon), not to pre-built stores in general, so a future single-file
+sqlite store is deliberately left open.
 
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
 > from it entirely until 2026-08-04, i.e. every ADR from the KB-visualization arc and the whole
