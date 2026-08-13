@@ -107,6 +107,10 @@ pub trait DaemonControl: Send + Sync {
     fn join_p2p_ticket(&self, ticket: &str) -> Result<String, String>;
 }
 
+/// What the background system-KB provisioning thread sends back: each corpus's
+/// catalog name paired with its opened store.
+pub type SystemStoreReceiver = std::sync::mpsc::Receiver<Vec<(String, Arc<mae_kb::CozoKbStore>)>>;
+
 /// Knowledge base context: backing store, federation, watchers, and config.
 pub struct KbContext {
     /// Primary knowledge base instance (manual + user notes + AI-facing kb_* tools).
@@ -125,6 +129,25 @@ pub struct KbContext {
     /// consumes it on an idle tick. `Some` while loading (keeps the ~10s load off the
     /// main thread, which otherwise tripped the startup watchdog on large stores).
     pub pending_preload: Option<std::sync::mpsc::Receiver<Result<Vec<mae_kb::Node>, String>>>,
+    /// Background provisioning of MAE's own guidance corpora (DevPractices,
+    /// MaePractices), drained by `drain_kb_system_stores` on an idle tick.
+    ///
+    /// These used to be built and opened synchronously during
+    /// `init_kb_federation`, justified by a measurement — 0.021s + 0.198s —
+    /// taken on one fast Linux developer machine. On a Windows CI runner the
+    /// same work is dramatically slower, and since MAE started embedding the
+    /// corpora (#706) Windows builds them on *every* first launch, having
+    /// previously shipped none. GUI startup went from ~46s to ~92-110s and the
+    /// window-appears test began failing intermittently against its 120s bound
+    /// (issue #713).
+    ///
+    /// Nothing at first tick needs them: guidance is read at MCP `initialize`
+    /// and at `mae-agent-cli` start, and search reaches them through the query
+    /// layer, which is rebuilt when this drains. The **manual** deliberately
+    /// stays synchronous — ADR-104 / #707's invariant is that the query layer
+    /// carries MAE's documentation from the first tick, and deferring that is
+    /// the regression #707 exists to have fixed.
+    pub pending_system_stores: Option<SystemStoreReceiver>,
     /// Phase 4: watches the durable primary store for changes by OTHER daemon-less
     /// processes. `Some` only for a locally-owned sqlite primary (the multi-instance
     /// case); `None` for sled or a daemon-hosted primary.
@@ -574,6 +597,7 @@ impl KbContext {
             primary_cozo: None,
             store_unavailable: false,
             pending_preload: None,
+            pending_system_stores: None,
             store_watcher: None,
             last_local_store_write: None,
             system_stores: std::collections::BTreeMap::new(),

@@ -5,6 +5,38 @@ use std::collections::HashSet;
 
 use super::*;
 
+/// Open a KB store at `path` honouring `engine`, auto-migrating an existing
+/// sled store to sqlite once.
+///
+/// A free function rather than only an `Editor` method because system-KB
+/// provisioning now runs on a background thread, which has no `&Editor` — and
+/// the alternative, calling `CozoKbStore::open_with_engine` directly from
+/// there, is exactly the mistake this helper exists to prevent: it gets sled
+/// unconditionally (its hardcoded default) regardless of `kb_storage_engine`,
+/// and then sticks on sled's single-writer exclusive lock. [`Editor::kb_open_instance_store`]
+/// delegates here so both paths cannot drift (principle #8).
+pub fn open_instance_store_with_engine(
+    path: &Path,
+    configured_engine: &str,
+) -> Result<mae_kb::CozoKbStore, mae_kb::KbStoreError> {
+    let mut engine = configured_engine.to_string();
+
+    if engine == "sqlite" {
+        if let Err(e) = mae_kb::migrate::migrate_sled_to_sqlite(path) {
+            tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                "sled→sqlite migration failed; opening existing store"
+            );
+            if path.is_dir() {
+                engine = "sled".to_string();
+            }
+        }
+    }
+
+    mae_kb::CozoKbStore::open_with_engine(path, &engine)
+}
+
 impl Editor {
     /// Above this loaded-node count, kb-find switches from eager all-load +
     /// client-filter to a bounded, query-driven ranked window (lazy at scale).
@@ -56,22 +88,7 @@ impl Editor {
         &self,
         path: &Path,
     ) -> Result<mae_kb::CozoKbStore, mae_kb::KbStoreError> {
-        let mut engine = self.kb.storage_engine.clone();
-
-        if engine == "sqlite" {
-            if let Err(e) = mae_kb::migrate::migrate_sled_to_sqlite(path) {
-                tracing::warn!(
-                    error = %e,
-                    path = %path.display(),
-                    "sled→sqlite migration failed; opening existing store"
-                );
-                if path.is_dir() {
-                    engine = "sled".to_string();
-                }
-            }
-        }
-
-        mae_kb::CozoKbStore::open_with_engine(path, &engine)
+        open_instance_store_with_engine(path, &self.kb.storage_engine)
     }
 
     /// Open the durable store for a registered org-dir KB instance, import
@@ -782,20 +799,13 @@ impl Editor {
     /// disconnect + editor shutdown while the daemon hosts the primary.
     ///
     /// @ai-caution: [kb-provenance] Skips MAE's own built-in content. `kb.primary`
-    /// is not just the user's notes — it also carries the entire bundled manual
-    /// (~1,200 `cmd:`/`concept:`/`option:`/`lesson:` nodes seeded by `Editor::new()`
-    /// and then enriched from `assets/manual/*.org`). Without this filter every
-    /// shutdown and every collab disconnect copied all of it into the user's own
-    /// `primary.cozo`, which is *not* where MAE's docs live: they are served from
-    /// the in-memory `system_stores["manual"]`, rebuilt from the corpus on every
-    /// launch. The copies were therefore pure bloat that also went stale on
-    /// upgrade, and — because a snapshot is indistinguishable from user content
-    /// once written — they would be swept into anything that shares or exports
-    /// the primary KB.
-    ///
-    /// The `Seed` stamp is the discriminator (matching the built-in guards in
-    /// `kb_ops::nodes`), which is only trustworthy because the manual ingest
-    /// re-stamps what it overwrites — see `KnowledgeBase::stamp_source_for`.
+    /// carries the entire bundled manual (~1,200 nodes) alongside the user's notes,
+    /// and without this filter every shutdown copied all of it into the user's
+    /// `primary.cozo` — where MAE's docs do not belong, since they are served from
+    /// `system_stores["manual"]` and rebuilt each launch. The `Seed` stamp is the
+    /// discriminator (as in `kb_ops::nodes`), trustworthy only because the manual
+    /// ingest re-stamps what it overwrites — see `KnowledgeBase::stamp_source_for`.
+    /// Rationale and both oracles: `kb_ops::tests::kb_ops_provenance_tests`.
     pub fn kb_snapshot_primary_to_store(&self) {
         let Some(ref store) = self.kb.store else {
             return;

@@ -87,8 +87,20 @@ pub fn locate(kb: &SystemKb, data_dir: &Path) -> Option<PathBuf> {
 /// sled is the slowest of the three engines (measured in
 /// `kb_provisioning_cost`). Same reason the old registry-import path went
 /// through that function.
-pub fn ensure_local_copy(kb: &SystemKb, data_dir: &Path) -> Option<PathBuf> {
-    let found = locate(kb, data_dir)?;
+/// Copy an already-located system-KB asset into the canonical data-dir path.
+///
+/// Takes `found` rather than calling [`locate`] itself, and that split is
+/// load-bearing: `locate` reads process env (`kb.env_override`), while system-KB
+/// provisioning runs on a background thread. Looking it up inside the thread
+/// made the answer depend on when the thread happened to run — a caller that
+/// sets those vars around `init_kb_federation` could restore them first, which
+/// passed locally and failed on CI. Resolve on the main thread, pass the result
+/// here.
+///
+/// (There was briefly an `ensure_local_copy` wrapper doing the lookup inline.
+/// It ended up with no callers, which is the honest signal that the lookup does
+/// not belong bundled with the copy.)
+pub fn ensure_local_copy_of(kb: &SystemKb, data_dir: &Path, found: PathBuf) -> Option<PathBuf> {
     let canonical = data_dir.join(kb.asset_filename);
     if found == canonical {
         return Some(found);

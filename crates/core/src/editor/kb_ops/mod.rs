@@ -7,7 +7,7 @@ use mae_kb::KbStore;
 
 use super::Editor;
 
-pub use registry::KbResolution;
+pub use registry::{open_instance_store_with_engine, KbResolution};
 pub use search::QueryVector;
 
 /// The honest, point-of-action advisory shown when a user enables E2E content
@@ -185,7 +185,7 @@ mod activity;
 mod daily;
 mod dispatch;
 mod nodes;
-mod registry;
+pub(crate) mod registry;
 mod search;
 mod sync;
 mod watchers;

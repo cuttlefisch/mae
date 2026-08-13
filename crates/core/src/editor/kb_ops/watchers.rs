@@ -28,8 +28,47 @@ impl Editor {
     pub fn drain_kb_background(&mut self) {
         self.drain_kb_watchers();
         self.drain_kb_preload();
+        self.drain_kb_system_stores();
         self.drain_kb_store_watch();
         self.drain_kb_registry_watch();
+    }
+
+    /// Adopt MAE's guidance corpora once the background provisioning thread
+    /// finishes building/opening them, and rebuild the query layer so they
+    /// become searchable.
+    ///
+    /// See [`crate::editor::kb_state::KbContext::pending_system_stores`] for why
+    /// this is off the startup path at all (issue #713: it doubled GUI startup
+    /// on Windows, which since #706 builds these corpora on every first launch).
+    /// A failure inside the thread is logged there and simply yields fewer
+    /// entries here — the same silent-no-op-if-absent behaviour guidance already
+    /// had, rather than a new failure mode.
+    pub fn drain_kb_system_stores(&mut self) {
+        let Some(rx) = self.kb.pending_system_stores.as_ref() else {
+            return;
+        };
+        let built = match rx.try_recv() {
+            Ok(v) => v,
+            // `Empty` means still building; `Disconnected` means the thread
+            // ended without sending, which is already logged on its side.
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.kb.pending_system_stores = None;
+                return;
+            }
+        };
+        self.kb.pending_system_stores = None;
+        if built.is_empty() {
+            return;
+        }
+        for (name, store) in built {
+            tracing::debug!(kb = %name, "system KB store ready");
+            self.kb.system_stores.insert(name, store);
+        }
+        // Required, not cosmetic: the query layer joins `system_stores` as
+        // labelled pseudo-instances, so a store adopted after startup is
+        // invisible to every federated read until this runs.
+        self.kb.rebuild_query_layer();
     }
 
     /// Phase 1a: consume the background primary-store preload on an idle tick.
