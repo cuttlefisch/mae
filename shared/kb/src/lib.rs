@@ -2188,6 +2188,30 @@ impl KnowledgeBase {
         }
     }
 
+    /// Stamp only the named nodes that have no source — the scoped counterpart
+    /// of [`Self::stamp_source`].
+    ///
+    /// @ai-caution: [kb-provenance] `ingest_org_dir` REPLACES a node wholesale
+    /// (`insert` overwrites; it does not merge), so ingesting a corpus over
+    /// already-stamped nodes DESTROYS their provenance — a `concept:buffer`
+    /// stamped `Seed` by `seed_kb()` comes back with `source: None`. Every
+    /// built-in-content guard in the editor keys on `source == Some(Seed)`, so
+    /// the whole hand-written manual silently stops being recognized as
+    /// built-in. Re-stamp after such an ingest, scoped to the ids the ingest
+    /// actually reported (`IngestReport::ingested_ids`) — a blanket
+    /// [`Self::stamp_source`] would also brand the user's own unstamped nodes
+    /// (e.g. `~/.config/mae/help/*.org`) as MAE's, making them uneditable.
+    pub fn stamp_source_for(&mut self, ids: &[String], source: NodeSource, version: u32) {
+        for id in ids {
+            if let Some(node) = self.nodes.get_mut(id) {
+                if node.source.is_none() {
+                    node.source = Some(source);
+                    node.source_version = Some(version);
+                }
+            }
+        }
+    }
+
     /// Ingest a project config as a KB node.
     pub fn ingest_project(&mut self, name: &str, root: &std::path::Path, config_body: &str) {
         let id = format!("project:{}", name.to_lowercase().replace(' ', "-"));
@@ -2691,6 +2715,55 @@ mod tests {
         assert_eq!(kb.len(), 0);
         assert!(kb.is_empty());
         assert!(kb.get("nope").is_none());
+    }
+
+    /// `stamp_source_for` is scoped in BOTH directions: it must not touch a node
+    /// outside the id list, and it must not overwrite provenance that already
+    /// exists. Either failure mis-brands a user's own note as MAE's built-in
+    /// content, which makes it uneditable and undeletable through the KB API.
+    #[test]
+    fn stamp_source_for_is_scoped_by_id_and_never_overwrites() {
+        let mut kb = kb_with(vec![
+            // In the list, unstamped → gets stamped.
+            Node::new("concept:buffer", "Buffer", NodeKind::Concept, "b"),
+            Node::new("cmd:save", "Save", NodeKind::Command, "s"),
+            // In the list, but ALREADY stamped by the user → must be left alone.
+            Node::new("concept:mine", "Mine", NodeKind::Concept, "m")
+                .with_source(NodeSource::Manual, 7),
+            // NOT in the list, unstamped → must stay unstamped even though it
+            // carries a built-in-looking prefix.
+            Node::new("concept:untouched", "Untouched", NodeKind::Concept, "u"),
+            Node::new("note:user", "User note", NodeKind::Note, "n"),
+        ]);
+
+        let ids = [
+            "concept:buffer".to_string(),
+            "cmd:save".to_string(),
+            "concept:mine".to_string(),
+            // An id the ingest reported but that no longer exists must not panic.
+            "concept:vanished".to_string(),
+        ];
+        kb.stamp_source_for(&ids, NodeSource::Seed, 1);
+
+        for id in ["concept:buffer", "cmd:save"] {
+            let n = kb.get(id).unwrap();
+            assert_eq!(n.source, Some(NodeSource::Seed), "{id} should be stamped");
+            assert_eq!(n.source_version, Some(1), "{id} version");
+        }
+        let mine = kb.get("concept:mine").unwrap();
+        assert_eq!(
+            mine.source,
+            Some(NodeSource::Manual),
+            "an existing stamp must never be overwritten"
+        );
+        assert_eq!(mine.source_version, Some(7), "existing version preserved");
+        for id in ["concept:untouched", "note:user"] {
+            assert_eq!(
+                kb.get(id).unwrap().source,
+                None,
+                "{id} is outside the id list and must stay unstamped"
+            );
+        }
     }
 
     #[test]
