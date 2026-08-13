@@ -405,15 +405,20 @@ jobs:
           | Platform | File | Contents |
           |----------|------|----------|
           | **macOS app** | `MAE-macos-aarch64.zip` | `MAE.app` + `mae-daemon` + `mae-mcp-shim` + installer |
-          | **macOS CLI** | `mae-macos-aarch64.tar.gz` | GUI-capable `mae` (GUI by default; `-nw` for terminal) + all services + modules + bundled KBs + configs |
-          | **Linux GUI** | `mae-linux-x86_64-gui.AppImage` | Self-contained AppImage (modules + bundled KBs included) |
-          | **Linux** | `mae-linux-x86_64.tar.gz` | `mae` (GUI-enabled) + all services (static musl) + modules + bundled KBs + systemd units |
+          | **macOS CLI** | `mae-macos-aarch64.tar.gz` | GUI-capable `mae` (GUI by default; `-nw` for terminal) + all services + modules + configs |
+          | **Linux GUI** | `mae-linux-x86_64-gui.AppImage` | Self-contained AppImage (modules included) |
+          | **Linux** | `mae-linux-x86_64.tar.gz` | `mae` (GUI-enabled) + all services (static musl) + modules + systemd units |
 
-          All packages include the built-in help system (860+ KB nodes), doom-style keybindings, and four
-          bundled knowledge bases: the manual/help KB, **DevPractices** (generic developer-guidance KB,
-          used by `ai_guidance_kb` out of the box), **MaePractices** (MAE-contributor guidance, switch to
-          it with `:set-save ai-guidance-kb MaePractices`), and the **ADR KB** (MAE's own architecture
-          decisions — opt-in, `kb_register` it manually if you want to query it). See ADR-076.
+          All packages include the built-in help system, doom-style keybindings, and MAE's knowledge
+          bases — the manual/help KB, **DevPractices** (generic developer guidance, used by
+          `ai_guidance_kb` out of the box) and **MaePractices** (MAE-contributor guidance, switch with
+          `:set-save ai-guidance-kb MaePractices`).
+
+          Those three are **compiled into the binary** and built on first run, rather than shipped as
+          pre-built `.cozo` stores — which is why Windows, the Docker image and `cargo install`, none of
+          which ever carried a store, now have them too. The **ADR KB** (MAE's own architecture
+          decisions) is the exception: it stays opt-in and ships as its own `mae-adr.cozo.tar.gz` asset —
+          download it, then `kb_register` it by path. See ADR-104.
 
           ## Installation
 
