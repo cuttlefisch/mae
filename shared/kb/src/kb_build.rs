@@ -169,15 +169,7 @@ pub fn open_fresh_store(output_path: &Path, engine: &str) -> Result<CozoKbStore,
         std::fs::create_dir_all(parent).map_err(|e| KbBuildError::Io(parent.to_path_buf(), e))?;
     }
 
-    // Remove existing DB so we start fresh (sled uses a directory, sqlite a file).
-    if output_path.exists() {
-        let removed = if output_path.is_dir() {
-            std::fs::remove_dir_all(output_path)
-        } else {
-            std::fs::remove_file(output_path)
-        };
-        removed.map_err(|e| KbBuildError::Io(output_path.to_path_buf(), e))?;
-    }
+    remove_store_path(output_path)?;
 
     let store = CozoKbStore::open_with_engine(output_path, engine)
         .map_err(|e| KbBuildError::Store(e.to_string()))?;
@@ -189,6 +181,37 @@ pub fn open_fresh_store(output_path: &Path, engine: &str) -> Result<CozoKbStore,
         .map_err(|e| KbBuildError::Store(e.to_string()))?;
 
     Ok(store)
+}
+
+/// Delete whatever store currently sits at `path`, so a build starts fresh.
+/// sled is a directory and sqlite a file, hence the branch. Absent is success.
+fn remove_store_path(path: &Path) -> Result<(), KbBuildError> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let removed = if path.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    };
+    removed.map_err(|e| KbBuildError::Io(path.to_path_buf(), e))
+}
+
+/// Sibling path a build is staged at before being promoted to `output_path`.
+///
+/// A sibling (not a tempdir) so the promoting `rename` stays within one
+/// filesystem — a cross-device rename fails, and falling back to copy would
+/// reintroduce the very partial-write window staging exists to remove. The pid
+/// keeps two concurrent builders off each other's staging path.
+fn staging_path(output_path: &Path) -> std::path::PathBuf {
+    let name = output_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "kb.cozo".to_string());
+    output_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!(".{name}.staging-{}", std::process::id()))
 }
 
 /// Write `nodes` into `store`, stamping every one with `source`.
@@ -222,12 +245,54 @@ pub fn insert_nodes(store: &CozoKbStore, nodes: &[Node], source: NodeSource) -> 
 /// shipped corpus* — `assets/practices`/`assets/devpractices` are the tracked
 /// source of truth, so building from them in-process is strictly more faithful
 /// than opening a pre-built artifact that may not have been regenerated.
+///
+/// @ai-caution: [kb-provenance] The build is staged and then atomically renamed
+/// into place — **`output_path` must never exist in a half-written state.**
+/// Readers of a built store decide it is usable by testing `Path::exists()`
+/// alone (`guidance::resolve_guidance_db_path`'s cache arm, and
+/// `build_guidance_from_embedded_corpus`'s early return). Building in place made
+/// that test a lie: the file appeared the instant the store opened and filled
+/// over the following seconds, so a concurrent reader could open a store with no
+/// `index` node yet and conclude the KB had no guidance. Worse, the early return
+/// keys on the same check, so a build interrupted partway left a permanently
+/// poisoned cache entry that was never rebuilt — guidance silently delivering
+/// nothing until the version-keyed filename changed at the next release.
+///
+/// Staging makes existence mean completeness, which is what those callers
+/// already assume. Do not "simplify" this back to building at `output_path`.
 pub fn build_org_kb(
     src_dir: &Path,
     output_path: &Path,
     opts: &OrgKbBuildOptions,
 ) -> Result<OrgIngestStats, KbBuildError> {
-    let store = open_fresh_store(output_path, opts.engine)?;
+    let staging = staging_path(output_path);
+    let stats = build_into(src_dir, &staging, opts).inspect_err(|_| {
+        // Never leave a failed build's staging store behind.
+        let _ = remove_store_path(&staging);
+    })?;
+
+    // `rename` refuses an existing destination on Windows, so the old store has
+    // to go first. That leaves a brief window where the path is ABSENT, which is
+    // the safe direction: absent means "not built yet" to every reader, and they
+    // rebuild or fall through. A partial store is what has to be impossible.
+    remove_store_path(output_path)?;
+    std::fs::rename(&staging, output_path).map_err(|e| {
+        let _ = remove_store_path(&staging);
+        KbBuildError::Io(output_path.to_path_buf(), e)
+    })?;
+    Ok(stats)
+}
+
+/// The build itself, against whatever path it is handed. Split out of
+/// [`build_org_kb`] so the store is dropped — flushing sqlite's WAL and sled's
+/// buffers — *before* the promoting rename runs, rather than at the end of the
+/// caller's scope.
+fn build_into(
+    src_dir: &Path,
+    path: &Path,
+    opts: &OrgKbBuildOptions,
+) -> Result<OrgIngestStats, KbBuildError> {
+    let store = open_fresh_store(path, opts.engine)?;
     let stats = ingest_org_dir(&store, src_dir, opts.source)?;
 
     if opts.require_index {
@@ -679,6 +744,117 @@ mod tests {
             .expect("node must survive the round trip to disk");
         assert_eq!(node.title, "Node A");
         assert_eq!(node.source, Some(NodeSource::Seed));
+    }
+
+    /// The property the staging rename exists to guarantee: `output_path` must
+    /// not exist until the build is finished.
+    ///
+    /// The oracle is how many times a concurrent watcher sees the path at all.
+    /// Building in place, the file appears the instant the store opens and then
+    /// fills for the rest of the build, so a watcher sees it over and over
+    /// (~40-50 times here); staged, it can only ever appear once, at the rename.
+    /// That distinction is the bug itself, not a proxy for it — every consumer
+    /// decides a built store is usable from `Path::exists()` alone
+    /// (`guidance::resolve_guidance_db_path`'s cache arm, and
+    /// `build_guidance_from_embedded_corpus`'s early return), so a path that
+    /// exists mid-build is a store handed out mid-build.
+    ///
+    /// Deliberately `<= 1` rather than `== 1`: a starved poller thread may never
+    /// tick between the rename and the builder returning, and 0 sightings is the
+    /// same guarantee holding. The failing direction is not close to the bound.
+    #[test]
+    fn the_final_path_does_not_exist_until_the_build_is_finished() {
+        let src_dir = TempDir::new().unwrap();
+        write_org(
+            src_dir.path(),
+            "index.org",
+            ":PROPERTIES:\n:ID: index\n:END:\n#+title: Index\n\nEntry point.\n",
+        );
+        // Enough nodes that the build spans a meaningful number of poll ticks.
+        for i in 0..60 {
+            write_org(
+                src_dir.path(),
+                &format!("n{i}.org"),
+                &format!(":PROPERTIES:\n:ID: test:n{i}\n:END:\n#+title: Node {i}\n\nBody {i}.\n"),
+            );
+        }
+
+        let out = TempDir::new().unwrap();
+        let output = out.path().join("fixture.cozo");
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let poll_output = output.clone();
+        let poll_done = done.clone();
+        let poller = std::thread::spawn(move || {
+            let mut sightings = 0usize;
+            while !poll_done.load(std::sync::atomic::Ordering::Relaxed) {
+                if poll_output.exists() {
+                    sightings += 1;
+                }
+                std::thread::yield_now();
+            }
+            sightings
+        });
+
+        let stats = build_org_kb(
+            src_dir.path(),
+            &output,
+            &OrgKbBuildOptions {
+                engine: TEST_DISK_ENGINE,
+                ..OrgKbBuildOptions::default()
+            },
+        )
+        .expect("build ok");
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        let sightings = poller.join().expect("poller ok");
+
+        assert_eq!(stats.nodes, 61);
+        assert!(
+            sightings <= 1,
+            "the final path was visible {sightings} times during the build — it is \
+             being built in place again, so readers can open a partial store"
+        );
+        // And the finished article is intact and complete.
+        let reopened = CozoKbStore::open_with_engine(&output, TEST_DISK_ENGINE).expect("reopen");
+        assert!(matches!(reopened.get_node("index"), Ok(Some(_))));
+        assert!(matches!(reopened.get_node("test:n59"), Ok(Some(_))));
+    }
+
+    /// A build that fails validation must leave NOTHING at the final path — not
+    /// the partial store it just built, and not a stale one from a prior run.
+    /// Otherwise the failure poisons the cache: readers see a file, trust it,
+    /// and the builder's early `exists()` return never rebuilds it.
+    #[test]
+    fn a_failed_build_leaves_no_store_and_no_staging_behind() {
+        let src_dir = TempDir::new().unwrap();
+        write_org(src_dir.path(), "a.org", NODE_A); // no index node
+
+        let out = TempDir::new().unwrap();
+        let output = out.path().join("fixture.cozo");
+        build_org_kb(
+            src_dir.path(),
+            &output,
+            &OrgKbBuildOptions {
+                engine: TEST_DISK_ENGINE,
+                require_index: true,
+                ..OrgKbBuildOptions::default()
+            },
+        )
+        .expect_err("a corpus with no index node must fail");
+
+        assert!(
+            !output.exists(),
+            "a failed build must not leave a store at the final path"
+        );
+        let leftovers: Vec<String> = std::fs::read_dir(out.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "staging artifacts left behind: {leftovers:?}"
+        );
     }
 
     #[test]
