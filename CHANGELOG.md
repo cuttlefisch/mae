@@ -2,25 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.109] - 2026-08-13
+
+
+
+
+### Documentation
+
+- *(adr)* ADR-104 — system KBs are a distinct class; supersedes ADR-076 ([34c449e](https://github.com/cuttlefisch/mae/commit/34c449eb073494a9bb09d26f8ed3892bca55b308))
+- *(adr)* Record the ADR-058 Phase A drift that ADR-104 fixes ([c9905e1](https://github.com/cuttlefisch/mae/commit/c9905e19bc284271efc8d7a5e5234c6bc6d57841))
+
+### Miscellaneous
+
+- Bump version to 0.14.109 ([8294c26](https://github.com/cuttlefisch/mae/commit/8294c2653234efa86dbdbfd6f9309293e90a24e7))
+
 ## [0.14.108] - 2026-08-13
 
 
 
-
-### Bug Fixes
-
-- *(guidance)* The built store must be where the reader looks ([358d0a3](https://github.com/cuttlefisch/mae/commit/358d0a38e70dab6a95e22cead1f488b07ff6dc54))
-- *(install)* Uninstall removes only what install placed ([d8bb7fa](https://github.com/cuttlefisch/mae/commit/d8bb7fa74a98c02b087f70b1d7f255a4e1585c8a))
-- *(kb)* Headless and self-test never drained the KB background work ([b889633](https://github.com/cuttlefisch/mae/commit/b88963343cd0e4e9afd21a22f74d0085d10f27cb))
-
-### Refactor
-
-- *(mae)* Split the eviction tests out of kb_federation ([c0de78d](https://github.com/cuttlefisch/mae/commit/c0de78d3e1914f50c6772afb69d7850432037974))
-
-### Testing
-
-- *(kb)* Prove a store-only node becomes searchable headless ([2135938](https://github.com/cuttlefisch/mae/commit/2135938b6f56746d091adc8d8ab20610b7a8c763))
-- *(guidance)* Isolate the cache dir in the diagnosis tests ([4d07d85](https://github.com/cuttlefisch/mae/commit/4d07d8534f70c2f54c11e67550e5a75a74c8bd50))
 
 ### Miscellaneous
 
@@ -30,6 +29,18 @@ All notable changes to this project will be documented in this file.
 
 
 
+
+### Bug Fixes
+
+- *(kb)* Graph reads see the federated graph, and both link directions agree ([ce03424](https://github.com/cuttlefisch/mae/commit/ce034240681b48e86d0361ce54276b94fc727798))
+
+### Refactor
+
+- *(mae)* Split the eviction tests out of kb_federation ([c0de78d](https://github.com/cuttlefisch/mae/commit/c0de78d3e1914f50c6772afb69d7850432037974))
+
+### Testing
+
+- *(guidance)* Isolate the cache dir in the diagnosis tests ([4d07d85](https://github.com/cuttlefisch/mae/commit/4d07d8534f70c2f54c11e67550e5a75a74c8bd50))
 
 ### Miscellaneous
 
@@ -41,11 +52,19 @@ All notable changes to this project will be documented in this file.
 
 
 
+### Bug Fixes
+
+- *(guidance)* The built store must be where the reader looks ([358d0a3](https://github.com/cuttlefisch/mae/commit/358d0a38e70dab6a95e22cead1f488b07ff6dc54))
+- *(install)* Uninstall removes only what install placed ([d8bb7fa](https://github.com/cuttlefisch/mae/commit/d8bb7fa74a98c02b087f70b1d7f255a4e1585c8a))
+- *(kb)* Headless and self-test never drained the KB background work ([b889633](https://github.com/cuttlefisch/mae/commit/b88963343cd0e4e9afd21a22f74d0085d10f27cb))
+
 ### Documentation
 
 - *(install)* Correct the --help data-dir line ([5425fac](https://github.com/cuttlefisch/mae/commit/5425fac0f7cc74803d6495499afd55b237d40975))
-- *(adr)* ADR-104 — system KBs are a distinct class; supersedes ADR-076 ([34c449e](https://github.com/cuttlefisch/mae/commit/34c449eb073494a9bb09d26f8ed3892bca55b308))
-- *(adr)* Record the ADR-058 Phase A drift that ADR-104 fixes ([c9905e1](https://github.com/cuttlefisch/mae/commit/c9905e19bc284271efc8d7a5e5234c6bc6d57841))
+
+### Testing
+
+- *(kb)* Prove a store-only node becomes searchable headless ([2135938](https://github.com/cuttlefisch/mae/commit/2135938b6f56746d091adc8d8ab20610b7a8c763))
 
 ### Miscellaneous
 
