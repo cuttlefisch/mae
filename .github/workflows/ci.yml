@@ -308,7 +308,6 @@ jobs:
         run: |
           cargo build --release --package mae-mcp
           cargo build --release --package mae-agent-cli
-          ./target/release/build-manual-kb assets/mae-manual.cozo
 
       - name: Stage editor artifacts
         if: matrix.step == 'test' && needs.changes.outputs.version-bump-only != 'true'
@@ -317,8 +316,6 @@ jobs:
           cp target/release/mae /tmp/mae-artifacts/
           cp target/release/mae-mcp-shim /tmp/mae-artifacts/
           cp target/release/mae-agent /tmp/mae-artifacts/
-          cp -r assets/mae-manual.cozo /tmp/mae-artifacts/
-          cp assets/mae-manual.cozo.sha256 /tmp/mae-artifacts/
 
       - name: Upload editor artifacts
         if: matrix.step == 'test' && needs.changes.outputs.version-bump-only != 'true'
@@ -1072,8 +1069,6 @@ jobs:
           cp /tmp/mae-dl/mae-mcp-shim /tmp/mae-pkg/mae-mcp-shim
           cp /tmp/daemon-dl/mae-daemon /tmp/mae-pkg/mae-daemon
           chmod +x /tmp/mae-pkg/mae /tmp/mae-pkg/mae-mcp-shim /tmp/mae-pkg/mae-daemon
-          cp -r /tmp/mae-dl/mae-manual.cozo /tmp/mae-pkg/mae-manual.cozo
-          cp /tmp/mae-dl/mae-manual.cozo.sha256 /tmp/mae-pkg/mae-manual.cozo.sha256
           cp -r modules /tmp/mae-pkg/modules
           cp assets/sample-config.toml /tmp/mae-pkg/sample-config.toml
           cp assets/daemon-config.toml /tmp/mae-pkg/daemon-config.toml
@@ -1096,7 +1091,6 @@ jobs:
           test -x "$HOME/.local/bin/mae-daemon"        && echo "OK: mae-daemon"
 
           echo "=== Checking data ==="
-          test -d "$HOME/.local/share/mae/mae-manual.cozo"  && echo "OK: manual KB"
           test -d "$HOME/.local/share/mae/modules"          && echo "OK: modules"
           MODULE_COUNT=$(find "$HOME/.local/share/mae/modules" -name "module.toml" | wc -l)
           test "$MODULE_COUNT" -ge 10 && echo "OK: $MODULE_COUNT modules found"
@@ -1151,7 +1145,6 @@ jobs:
           ! test -f "$HOME/.local/bin/mae-daemon"        && echo "OK: mae-daemon removed"
 
           echo "=== Checking data removed ==="
-          ! test -d "$HOME/.local/share/mae/mae-manual.cozo"  && echo "OK: manual KB removed"
           ! test -d "$HOME/.local/share/mae/modules"          && echo "OK: modules removed"
 
           echo "=== Checking systemd units removed ==="
@@ -1211,9 +1204,8 @@ jobs:
       - name: Build daemon workspace (release)
         run: cd daemon && cargo build --release
 
-      - name: Build manual KB + mae-mcp-shim
+      - name: Build mae-mcp-shim
         run: |
-          ./target/release/build-manual-kb assets/mae-manual.cozo
           cargo build --release --package mae-mcp
 
       # Bounded, fast-signal subset -- mirrors the MSRV job's own established
@@ -1234,8 +1226,6 @@ jobs:
           cp target/release/mae-mcp-shim /tmp/mae-pkg/mae-mcp-shim
           cp daemon/target/release/mae-daemon /tmp/mae-pkg/mae-daemon
           chmod +x /tmp/mae-pkg/mae /tmp/mae-pkg/mae-mcp-shim /tmp/mae-pkg/mae-daemon
-          cp -r assets/mae-manual.cozo /tmp/mae-pkg/mae-manual.cozo
-          cp assets/mae-manual.cozo.sha256 /tmp/mae-pkg/mae-manual.cozo.sha256
           cp -r modules /tmp/mae-pkg/modules
           cp assets/sample-config.toml /tmp/mae-pkg/sample-config.toml
           cp assets/daemon-config.toml /tmp/mae-pkg/daemon-config.toml

@@ -151,22 +151,32 @@ install: build manual-kb practices-kb devpractices-kb adr-kb
 	@echo "Installed $(BINARY) -> $(PREFIX)/$(BINARY)"
 	@echo "Installed $(SHIM_BINARY) -> $(PREFIX)/$(SHIM_BINARY)"
 	@mkdir -p $(DATADIR)/mae
-	@rm -rf $(DATADIR)/mae/mae-manual.cozo
-	@cp -r assets/mae-manual.cozo $(DATADIR)/mae/mae-manual.cozo
-	@cp assets/mae-manual.cozo.sha256 $(DATADIR)/mae/mae-manual.cozo.sha256
-	@echo "Installed manual KB -> $(DATADIR)/mae/mae-manual.cozo"
-	@rm -rf $(DATADIR)/mae/mae-practices.cozo
-	@cp -r assets/mae-practices.cozo $(DATADIR)/mae/mae-practices.cozo
-	@cp assets/mae-practices.cozo.sha256 $(DATADIR)/mae/mae-practices.cozo.sha256
-	@echo "Installed practices KB -> $(DATADIR)/mae/mae-practices.cozo"
-	@rm -rf $(DATADIR)/mae/mae-devpractices.cozo
-	@cp -r assets/mae-devpractices.cozo $(DATADIR)/mae/mae-devpractices.cozo
-	@cp assets/mae-devpractices.cozo.sha256 $(DATADIR)/mae/mae-devpractices.cozo.sha256
-	@echo "Installed DevPractices KB -> $(DATADIR)/mae/mae-devpractices.cozo"
-	@rm -rf $(DATADIR)/mae/mae-adr.cozo
-	@cp -r assets/mae-adr.cozo $(DATADIR)/mae/mae-adr.cozo
-	@cp assets/mae-adr.cozo.sha256 $(DATADIR)/mae/mae-adr.cozo.sha256
-	@echo "Installed ADR KB -> $(DATADIR)/mae/mae-adr.cozo"
+##
+## The manual / MaePractices / DevPractices corpora are compiled into the
+## binary (crates/mae/src/system_corpus.rs) and built on first run, so there
+## is nothing to install for them. Remove stores an older `make install` put
+## here, so they don't sit orphaned with nothing pointing at them.
+	@for kb in mae-manual mae-practices mae-devpractices; do \
+		if [ -d "$(DATADIR)/mae/$$kb.cozo" ]; then \
+			rm -rf "$(DATADIR)/mae/$$kb.cozo" "$(DATADIR)/mae/$$kb.cozo.sha256"; \
+			echo "Removed superseded $$kb.cozo (now built from the embedded corpus)"; \
+		fi; \
+	done
+##
+## The ADR KB is the exception: it is NOT embedded (ADR-059 keeps it opt-in,
+## and 1.17 MB of MAE's own decision history has no business in every user's
+## binary), so it is still installed from a built store when one exists.
+## Conditional because `assets/mae-adr.cozo` is untracked — it appears only
+## after `make adr-kb` or `make fetch-adr-kb`, and `make install` must not
+## fail for a contributor who has run neither.
+	@if [ -d assets/mae-adr.cozo ]; then \
+		rm -rf $(DATADIR)/mae/mae-adr.cozo; \
+		cp -r assets/mae-adr.cozo $(DATADIR)/mae/mae-adr.cozo; \
+		[ -f assets/mae-adr.cozo.sha256 ] && cp assets/mae-adr.cozo.sha256 $(DATADIR)/mae/mae-adr.cozo.sha256 || true; \
+		echo "Installed ADR KB -> $(DATADIR)/mae/mae-adr.cozo"; \
+	else \
+		echo "Skipped ADR KB (build with 'make adr-kb' or fetch with 'make fetch-adr-kb')"; \
+	fi
 	@mkdir -p $(DATADIR)/applications
 	@sed 's|Exec=mae|Exec=$(PREFIX)/$(BINARY)|' $(DESKTOP_FILE) > $(DATADIR)/applications/mae.desktop
 	@echo "Installed desktop entry -> $(DATADIR)/applications/mae.desktop"
