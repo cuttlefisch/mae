@@ -2365,6 +2365,23 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
                     match crate::system_corpus::resolve(kb, &cache_dir) {
                         Some(src) => {
                             let report = editor.kb.primary.ingest_org_dir(&src);
+                            // Step 2 upserts, and an upsert REPLACES the node —
+                            // so it strips the `Seed` stamp `Editor::new()` put
+                            // on every code-generated counterpart. Restore it,
+                            // scoped to the ids this corpus actually provided.
+                            //
+                            // Without this the whole hand-written manual reads
+                            // as unstamped user content: the three "built-in
+                            // help is protected" guards in `kb_ops::nodes` stop
+                            // firing (an agent could rewrite or delete
+                            // `concept:buffer`), and `kb_snapshot_primary_to_store`
+                            // copies MAE's entire manual into the user's own
+                            // `primary.cozo`. See `stamp_source_for`.
+                            editor.kb.primary.stamp_source_for(
+                                &report.ingested_ids,
+                                mae_kb::NodeSource::Seed,
+                                1,
+                            );
                             info!(
                                 nodes = report.indexed,
                                 skipped = report.skipped_no_id,
