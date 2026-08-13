@@ -2194,7 +2194,7 @@ pub(crate) fn apply_app_config(editor: &mut Editor, app_config: &crate::config::
 ///
 /// Every failure is a logged no-op for that one corpus, not an error for the
 /// batch — matching the silent-no-op-if-absent behaviour guidance already had.
-fn provision_guidance_stores(
+pub(crate) fn provision_guidance_stores(
     data_dir: &std::path::Path,
     engine: &str,
 ) -> Vec<(String, std::sync::Arc<mae_kb::CozoKbStore>)> {

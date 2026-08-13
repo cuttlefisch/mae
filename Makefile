@@ -101,7 +101,7 @@ ICON_FILE    := assets/mae.svg
 	clean clean-cache prune-artifacts disk-report \
 	code-map code-map-check heavy-e2e-check \
 	audit-metrics audit-metrics-check audit-metrics-bless \
-	manual-kb install-manual practices-kb install-practices \
+	manual-kb install-manual practices-kb install-practices kb-provisioning-cost backup-kbs \
 	devpractices-kb install-devpractices adr-kb fetch-adr-kb install-adr \
 	docker-ci docker-new-user docker-smoke docker-dev docker-clean \
 	docker-collab-test docker-headless-e2e \
@@ -272,6 +272,20 @@ install-all: install install-daemon-service
 	@echo "Full install complete."
 	@echo "  mae                      — launch editor"
 	@echo "  systemctl --user enable --now mae-daemon"
+
+## kb-provisioning-cost: measure what KB provisioning costs ON THIS MACHINE
+##
+## Prints; never asserts. The figures are machine-specific, so a threshold here
+## would be a measured number in prose by another name.
+##
+## Run this BEFORE moving any KB provisioning back onto the startup path, and
+## run it on the platform you are deciding for. Issue #713: the build-only
+## measurement reported ~0.22s and was used to justify doing this synchronously
+## everywhere; the real path (build + engine-aware open) measures ~0.4s on the
+## same fast Linux box, and far worse on a Windows runner that builds all three
+## corpora on every first launch.
+kb-provisioning-cost:
+	$(CARGO) test -p mae --bin mae -- --ignored --nocapture kb_provisioning_cost
 
 ## backup-kbs: archive YOUR KBs (not MAE's regenerable ones), verify, then remove originals
 ##

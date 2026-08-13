@@ -34,6 +34,26 @@
 //!
 //! **No figure from these runs belongs in prose.** Record them in the ADR that
 //! consumes them, dated, with the machine named.
+//!
+//! # What this harness got wrong, and why it now measures the real function
+//!
+//! It measured a *proxy* for startup rather than startup, and the gap between
+//! the two is how a wrong number came to be trusted (issue #713).
+//!
+//! [`measure_corpus_build_cost_per_engine`] times `build_org_kb` alone. That
+//! produced the "0.021s (MaePractices) + 0.198s (DevPractices), ~0.22s
+//! combined" figure which was then cited in `bootstrap` to justify doing this
+//! work synchronously on every platform's startup path. Two things were missing
+//! from it: the `kb_open_instance_store` open that follows every build, and any
+//! platform other than the fast Linux box it was run on. Windows — which since
+//! #706 builds these corpora on *every* first launch, having previously shipped
+//! none — paid roughly double the GUI startup time, and the window-appears test
+//! started failing intermittently against its 120s bound.
+//!
+//! So [`measure_real_guidance_provisioning`] now times
+//! `bootstrap::provision_guidance_stores` — the actual function `init_kb_federation`
+//! calls — instead of a stand-in for it. A harness whose numbers justify a
+//! design decision has to measure the thing being decided about.
 
 #[cfg(test)]
 mod tests {
@@ -55,6 +75,71 @@ mod tests {
             .filter_map(|e| e.ok())
             .map(|e| dir_size(&e.path()))
             .sum()
+    }
+
+    /// **The decisive measurement, and the one that was missing.**
+    ///
+    /// Times `bootstrap::provision_guidance_stores` — the real function, doing
+    /// locate-or-build *and* the engine-aware open that follows — on a clean
+    /// cache, which is what a first launch after an upgrade actually faces.
+    ///
+    /// Compare against the ~0.22s that
+    /// [`measure_corpus_build_cost_per_engine`] reported for the build half
+    /// alone. If the two disagree materially on this machine, that gap is the
+    /// one that put guidance provisioning on the startup critical path and kept
+    /// it there (#713).
+    ///
+    /// Run this on every platform before moving work back onto startup.
+    #[test]
+    #[ignore = "measurement, not an assertion; run with --ignored --nocapture"]
+    fn measure_real_guidance_provisioning() {
+        println!("\n=== guidance provisioning, THE REAL PATH (locate-or-build + open) ===");
+
+        let data = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        // Cold cache, and no installed store to short-circuit to: the state a
+        // fresh install or a post-upgrade first launch is in.
+        let _lock = mae_effect_sandbox::lock_env();
+        let prev = std::env::var("XDG_CACHE_HOME").ok();
+        std::env::set_var("XDG_CACHE_HOME", cache.path());
+
+        let start = Instant::now();
+        let built = crate::bootstrap::provision_guidance_stores(data.path(), "sqlite");
+        let elapsed = start.elapsed();
+
+        // Warm: the second launch on the same version, which should hit the
+        // version-keyed cache and skip the build entirely.
+        let warm_start = Instant::now();
+        let warm = crate::bootstrap::provision_guidance_stores(data.path(), "sqlite");
+        let warm_elapsed = warm_start.elapsed();
+
+        match prev {
+            Some(v) => std::env::set_var("XDG_CACHE_HOME", v),
+            None => std::env::remove_var("XDG_CACHE_HOME"),
+        }
+
+        println!(
+            "cold cache: {:>7.3}s for {} store(s): {}",
+            elapsed.as_secs_f64(),
+            built.len(),
+            built
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        println!(
+            "warm cache: {:>7.3}s for {} store(s)",
+            warm_elapsed.as_secs_f64(),
+            warm.len()
+        );
+        println!(
+            "\nThis is what `init_kb_federation` used to do BEFORE the window \
+             appeared. It now runs on a background thread (#713). Compare the cold \
+             figure against the ~0.22s the build-only measurement below reported \
+             on one Linux machine — and against this platform's own numbers, not \
+             another's, before ever moving it back."
+        );
     }
 
     /// Measurements 1 and 3: wall-clock and on-disk size, per corpus per engine.
