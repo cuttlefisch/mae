@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.113] - 2026-08-13
+
+
+
+
+### Bug Fixes
+
+- *(help)* Announce a fuzzy help substitution, and refuse an ambiguous one ([e91a1f2](https://github.com/cuttlefisch/mae/commit/e91a1f23b374b33fd1b1800cbd8bfe12997e89f9))
+
 ## [0.14.112] - 2026-08-13
 
 
@@ -14,6 +23,10 @@ All notable changes to this project will be documented in this file.
 ### Testing
 
 - *(kb)* Make the staging guarantee testable without a timing race ([78b653a](https://github.com/cuttlefisch/mae/commit/78b653a367b85f78f51812a5d77665d9428a7340))
+
+### Miscellaneous
+
+- Bump version to 0.14.112 ([f874027](https://github.com/cuttlefisch/mae/commit/f874027ee04b847097249103a9f883d3cea6c9bf))
 
 ## [0.14.111] - 2026-08-13
 
