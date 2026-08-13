@@ -477,16 +477,40 @@ impl KbQueryLayer for FederatedQuery {
     }
 
     fn links_from(&self, id: &str) -> Result<Vec<Link>, KbStoreError> {
-        // Return links from whichever store owns the node
-        if self.primary.contains(id) {
-            return self.primary.links_from(id);
-        }
-        for (_, _, inst) in self.priority_ordered_instances() {
-            if inst.contains(id) {
-                return inst.links_from(id);
+        // Merge outgoing links from all stores — symmetric with `links_to`
+        // below, and for the same reason it gives: an instance's edges are
+        // real, distinct edges, not competing copies of one fact.
+        //
+        // This used to return early from whichever store "owned" the node
+        // (issue #698), which made the two directions disagree: an edge
+        // recorded in instance B about a node owned by the primary showed up
+        // in `links_to(dst)` but never in `links_from(src)`. Any forward-BFS
+        // consumer — `kb_graph`, `kb_neighborhood`, `kb_shortest_path`,
+        // `related_enriched` — therefore walked a strictly smaller graph than
+        // the reverse walk reported, with no error and no way to notice.
+        //
+        // Failure posture matches `links_to` exactly: primary propagates (it
+        // is the caller's authoritative baseline), a sibling instance's
+        // failure is logged and excluded rather than failing the whole query.
+        let mut links = self.primary.links_from(id)?;
+        for (name, _, inst) in &self.instances {
+            match inst.links_from(id) {
+                Ok(more) => links.extend(more),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    instance = %name,
+                    "links_from failed for a federated instance; excluded from the merge"
+                ),
             }
         }
-        Ok(Vec::new())
+        // Unlike `links_to`, merging outgoing edges CAN produce true duplicates:
+        // a federated copy of the same node carries its own copy of the same
+        // outgoing edge, and that is one fact, not two. Dedup on the identity
+        // triple only — weight/confidence/display may legitimately differ
+        // between copies, and first-wins keeps the primary's version.
+        let mut seen = std::collections::HashSet::new();
+        links.retain(|l| seen.insert((l.src.clone(), l.dst.clone(), l.rel_type.clone())));
+        Ok(links)
     }
 
     fn links_to(&self, id: &str) -> Result<Vec<Link>, KbStoreError> {
@@ -1067,6 +1091,105 @@ mod tests {
         assert!(federated.contains("only:inst"));
         let node = federated.get("only:inst").unwrap();
         assert_eq!(node.title, "Instance Only");
+    }
+
+    /// Issue #698: the two link directions must describe the **same graph**.
+    ///
+    /// `links_from` used to return early from whichever store "owned" the node,
+    /// while `links_to` merged across all of them. So an edge recorded in a
+    /// federated instance, about a node the primary owns, appeared in
+    /// `links_to(dst)` and never in `links_from(src)` — and every forward-BFS
+    /// consumer (`kb_graph`, `kb_neighborhood`, `kb_shortest_path`,
+    /// `related_enriched`) silently walked a smaller graph than the reverse
+    /// walk reported.
+    ///
+    /// Written as a round-trip property rather than a fixed expectation: for
+    /// every edge either direction reports, the other must report it too.
+    #[test]
+    fn links_from_and_links_to_describe_the_same_edges() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = Arc::new(CozoKbStore::open(tmp.path().join("p.cozo")).unwrap());
+        let i = Arc::new(CozoKbStore::open(tmp.path().join("i.cozo")).unwrap());
+
+        // The node is owned by the PRIMARY — which is what made the old
+        // ownership routing return the primary's links and stop.
+        p.insert_node(&Node::new("concept:tide", "Tide", NodeKind::Note, ""))
+            .unwrap();
+        p.insert_node(&Node::new("concept:moon", "Moon", NodeKind::Note, ""))
+            .unwrap();
+        p.add_link("concept:tide", "concept:moon", None).unwrap();
+
+        // ...while a FEDERATED instance records a further outgoing edge about
+        // that same node. Both are real edges; neither is a copy of the other.
+        i.insert_node(&Node::new("concept:tide", "Tide", NodeKind::Note, ""))
+            .unwrap();
+        i.insert_node(&Node::new("note:survey", "Survey", NodeKind::Note, ""))
+            .unwrap();
+        i.add_link("concept:tide", "note:survey", None).unwrap();
+
+        let mut fed = FederatedQuery::new(Arc::new(CozoQueryLayer::new(p)));
+        fed.add_instance("field".into(), 0, Arc::new(CozoQueryLayer::new(i)));
+
+        let from: std::collections::HashSet<(String, String)> = fed
+            .links_from("concept:tide")
+            .unwrap()
+            .into_iter()
+            .map(|l| (l.src, l.dst))
+            .collect();
+
+        // The instance-recorded edge is the one that used to vanish.
+        assert!(
+            from.contains(&("concept:tide".into(), "note:survey".into())),
+            "an edge recorded in a federated instance about a primary-owned node \
+             must still be reachable going forward; got {from:?}"
+        );
+        assert!(
+            from.contains(&("concept:tide".into(), "concept:moon".into())),
+            "the primary's own outgoing edge must survive the merge; got {from:?}"
+        );
+
+        // The symmetry property: every forward edge is reported backward too.
+        for (src, dst) in &from {
+            let back: std::collections::HashSet<(String, String)> = fed
+                .links_to(dst)
+                .unwrap()
+                .into_iter()
+                .map(|l| (l.src, l.dst))
+                .collect();
+            assert!(
+                back.contains(&(src.clone(), dst.clone())),
+                "{src} -> {dst} is reported by links_from but not by links_to({dst})"
+            );
+        }
+    }
+
+    /// The dedup half of the same change, and the reason `links_from` cannot
+    /// simply concatenate the way `links_to` does: a federated **copy** of a
+    /// node carries its own copy of the same outgoing edge. That is one fact,
+    /// not two, and a naive merge would report it twice.
+    #[test]
+    fn a_federated_copy_of_the_same_edge_is_reported_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = Arc::new(CozoKbStore::open(tmp.path().join("p.cozo")).unwrap());
+        let i = Arc::new(CozoKbStore::open(tmp.path().join("i.cozo")).unwrap());
+
+        for s in [&p, &i] {
+            s.insert_node(&Node::new("concept:tide", "Tide", NodeKind::Note, ""))
+                .unwrap();
+            s.insert_node(&Node::new("concept:moon", "Moon", NodeKind::Note, ""))
+                .unwrap();
+            s.add_link("concept:tide", "concept:moon", None).unwrap();
+        }
+
+        let mut fed = FederatedQuery::new(Arc::new(CozoQueryLayer::new(p)));
+        fed.add_instance("mirror".into(), 0, Arc::new(CozoQueryLayer::new(i)));
+
+        let links = fed.links_from("concept:tide").unwrap();
+        assert_eq!(
+            links.len(),
+            1,
+            "the same edge held by two stores is one edge, got {links:?}"
+        );
     }
 
     /// ADR-062 Phase B: two *non-primary* instances that happen to register the same node
