@@ -1722,6 +1722,30 @@ pub fn reload_all_modules(scheme: &mut SchemeRuntime, editor: &mut Editor) {
         .filter(|m| matches!(m.status, crate::pkg::loader::ModuleStatus::Loaded))
         .count();
     info!(modules = loaded, "reloaded all modules");
+
+    // `load_modules` installs `module:*` nodes into `kb.primary` only. At
+    // STARTUP that is enough, because the manual's in-memory store is projected
+    // from `kb.primary` afterwards and the query layer is built from that. On a
+    // RELOAD nothing re-projects, so a module discovered or changed after
+    // startup was visible to `kb_search` (which reads `kb.primary`) and
+    // invisible to `kb_list`/`kb_graph`/`kb_links_*` (which read the query
+    // layer) until the next restart — the same two-sources-of-truth split that
+    // produced the headless search blindness.
+    //
+    // Re-projecting the whole of `kb.primary` is what startup does too, and it
+    // is an in-memory store, so this is a cheap upsert rather than disk work.
+    if let Some(manual) = editor
+        .kb
+        .system_stores
+        .get(mae_kb::system_kb::MANUAL)
+        .cloned()
+    {
+        if let Err(e) = manual.persist_nodes(&editor.kb.primary) {
+            warn!(error = %e, "failed to re-project module nodes after reload");
+        }
+        editor.kb.rebuild_query_layer();
+    }
+
     editor.set_status(format!("Reloaded {loaded} module(s)"));
 }
 
