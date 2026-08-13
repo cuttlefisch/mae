@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.112] - 2026-08-13
+
+
+
+
+### Documentation
+
+- *(kb)* Condense the snapshot guard's rationale to clear the file ceiling ([a2f66e6](https://github.com/cuttlefisch/mae/commit/a2f66e6371fc9eadabd0c99a2691b3acf48f266a))
+
+### Testing
+
+- *(kb)* Make the staging guarantee testable without a timing race ([78b653a](https://github.com/cuttlefisch/mae/commit/78b653a367b85f78f51812a5d77665d9428a7340))
+
 ## [0.14.111] - 2026-08-13
 
 
@@ -9,20 +22,22 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
-- *(kb)* Graph reads see the federated graph, and both link directions agree ([ce03424](https://github.com/cuttlefisch/mae/commit/ce034240681b48e86d0361ce54276b94fc727798))
+- *(kb)* Build a KB store to a staging path and rename it into place ([5d1c0b3](https://github.com/cuttlefisch/mae/commit/5d1c0b3c1904726ac5f71ce2b1227a98c23778ad))
+- *(kb)* Stop the shutdown snapshot copying MAE's manual into user storage ([94f9ad2](https://github.com/cuttlefisch/mae/commit/94f9ad2f67538460e974d7c3a89adf6e6c7e7b19))
+
+### Refactor
+
+- *(kb)* Split kb_build's tests out to stay under the file ceiling ([8502bab](https://github.com/cuttlefisch/mae/commit/8502bab2f8b689a7bb72fd0d2e8c2b7ab120a6b0))
 
 ### Miscellaneous
 
 - Bump version to 0.14.110 ([0e4d1f6](https://github.com/cuttlefisch/mae/commit/0e4d1f6a8fe834d53e166f63b081efef3d29da91))
+- Bump version to 0.14.111 ([acc053d](https://github.com/cuttlefisch/mae/commit/acc053ddc9061b9c20419e6f440358621dfd3f06))
 
 ## [0.14.109] - 2026-08-13
 
 
 
-
-### Bug Fixes
-
-- *(kb)* Stop the shutdown snapshot copying MAE's manual into user storage ([94f9ad2](https://github.com/cuttlefisch/mae/commit/94f9ad2f67538460e974d7c3a89adf6e6c7e7b19))
 
 ### Documentation
 
@@ -38,6 +53,10 @@ All notable changes to this project will be documented in this file.
 
 
 
+### Bug Fixes
+
+- *(kb)* Resolve the guidance env lookup before spawning the thread ([5698731](https://github.com/cuttlefisch/mae/commit/5698731eaa56a2b18a68f7dec88c1f67ecce0339))
+
 ### Miscellaneous
 
 - Bump version to 0.14.108 ([1296d8d](https://github.com/cuttlefisch/mae/commit/1296d8d18349df5275bf6d976be12300d7545245))
@@ -47,6 +66,12 @@ All notable changes to this project will be documented in this file.
 
 
 
+### Bug Fixes
+
+- *(kb)* Graph reads see the federated graph, and both link directions agree ([ce03424](https://github.com/cuttlefisch/mae/commit/ce034240681b48e86d0361ce54276b94fc727798))
+- *(kb)* Build guidance corpora off the startup critical path (#713) ([cd50d14](https://github.com/cuttlefisch/mae/commit/cd50d142403ba43aee8262cc0f18cceba810f91e))
+- *(kb)* Module hot-reload reaches the query layer ([3d64ffa](https://github.com/cuttlefisch/mae/commit/3d64ffacfe4ec87e71abd20c9b164f71e14a6b27))
+
 ### Refactor
 
 - *(mae)* Split the eviction tests out of kb_federation ([c0de78d](https://github.com/cuttlefisch/mae/commit/c0de78d3e1914f50c6772afb69d7850432037974))
@@ -54,6 +79,7 @@ All notable changes to this project will be documented in this file.
 ### Testing
 
 - *(guidance)* Isolate the cache dir in the diagnosis tests ([4d07d85](https://github.com/cuttlefisch/mae/commit/4d07d8534f70c2f54c11e67550e5a75a74c8bd50))
+- *(kb)* The provisioning harness now measures the real startup path ([32f81d5](https://github.com/cuttlefisch/mae/commit/32f81d51c677c73f294f926a2b923bc9a958eff8))
 
 ### Miscellaneous
 
