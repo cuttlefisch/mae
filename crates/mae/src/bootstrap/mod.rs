@@ -2183,6 +2183,51 @@ pub(crate) fn apply_app_config(editor: &mut Editor, app_config: &crate::config::
 /// Load the KB federation registry and import enabled instances (primary
 /// CozoDB store, manual/help KB, federated instances, shared-KB recovery).
 /// No-op in `--clean`/`-q` mode.
+/// Locate-or-build and open every auto-enabled guidance corpus.
+///
+/// Runs on a background thread (see the call site in `init_kb_federation` and
+/// `KbContext::pending_system_stores` for why), so it takes an owned data dir
+/// and the configured storage engine rather than an `&Editor`.
+///
+/// The manual is skipped: it is loaded synchronously into an in-memory store so
+/// the query layer carries MAE's documentation from the first tick.
+///
+/// Every failure is a logged no-op for that one corpus, not an error for the
+/// batch — matching the silent-no-op-if-absent behaviour guidance already had.
+fn provision_guidance_stores(
+    data_dir: &std::path::Path,
+    engine: &str,
+) -> Vec<(String, std::sync::Arc<mae_kb::CozoKbStore>)> {
+    let mut out = Vec::new();
+    for kb in mae_kb::system_kb::auto_enabled() {
+        if kb.name == mae_kb::system_kb::MANUAL {
+            continue;
+        }
+        // An installed store wins; otherwise build from the embedded corpus —
+        // the `cargo install` / Windows / Docker case, all of which ship ZERO
+        // KB corpora, and which is the whole reason embedding exists.
+        let path = match crate::guidance_kb_engine::ensure_local_copy(kb, data_dir) {
+            Some(path) => path,
+            None => match build_guidance_from_embedded_corpus(kb, data_dir) {
+                Some(path) => path,
+                None => continue,
+            },
+        };
+        // Through the shared engine-aware opener, which honours
+        // `kb_storage_engine` and performs the sled->sqlite migration. Calling
+        // `CozoKbStore::open_with_engine` directly here would silently get
+        // sled's hardcoded default and stick on its single-writer lock.
+        match mae_core::editor::open_instance_store_with_engine(&path, engine) {
+            Ok(store) => out.push((kb.name.to_string(), std::sync::Arc::new(store))),
+            Err(e) => {
+                warn!(kb = kb.name, path = %path.display(), error = %e,
+                    "failed to open bundled system KB store");
+            }
+        }
+    }
+    out
+}
+
 /// Build a guidance KB from its embedded source corpus into the cache, and
 /// return the store path. `None` if MAE ships no corpus for it, or the build
 /// fails.
@@ -2525,46 +2570,34 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
         // layer. A silent no-op for any corpus whose asset is not installed,
         // which is the shipped behaviour for a build that skipped `make
         // practices-kb`/`devpractices-kb`.
-        for kb in mae_kb::system_kb::auto_enabled() {
-            if kb.name == mae_kb::system_kb::MANUAL {
-                continue; // loaded above, into an in-memory store
-            }
-            let path = match crate::guidance_kb_engine::ensure_local_copy(kb, &data_dir) {
-                Some(path) => path,
-                // No pre-built store installed — the shape of a `cargo install`,
-                // a Windows package, or the Docker image, all of which ship
-                // ZERO KB corpora today. Build it from the embedded source
-                // instead, so those installs get guidance at all.
-                //
-                // Synchronous, and that is a measured choice rather than an
-                // oversight: `kb_provisioning_cost` puts the guidance corpora at
-                // 0.021s (MaePractices) and 0.198s (DevPractices) on sqlite —
-                // ~0.22s combined, against a ~10s startup watchdog. The manual
-                // is the expensive one (6.4s sqlite / 2.2s in-memory, dominated
-                // by `persist_nodes`) and is deliberately NOT built here; it
-                // keeps its pre-built store and its own in-memory path above.
-                None => match build_guidance_from_embedded_corpus(kb, &data_dir) {
-                    Some(path) => path,
-                    None => continue,
-                },
-            };
-            // Opened through `kb_open_instance_store`, which honours
-            // `kb_storage_engine` and performs the sled->sqlite migration — the
-            // same path the old registry import used. Opening the copied sled
-            // store directly instead stalled the main thread ~6s at startup.
-            match editor.kb_open_instance_store(&path) {
-                Ok(store) => {
-                    editor
-                        .kb
-                        .system_stores
-                        .insert(kb.name.to_string(), std::sync::Arc::new(store));
-                }
-                Err(e) => {
-                    warn!(kb = kb.name, path = %path.display(), error = %e,
-                        "failed to open bundled system KB store");
-                }
-            }
-        }
+        // OFF the startup critical path, on a background thread drained by
+        // `drain_kb_system_stores`.
+        //
+        // This loop used to run synchronously here, justified by a measurement
+        // — 0.021s (MaePractices) + 0.198s (DevPractices) on sqlite — taken on
+        // one fast Linux developer machine. That number did not generalise. On
+        // a Windows CI runner the same cozo work is dramatically slower, and
+        // since #706 embedded the corpora Windows *builds* them on every first
+        // launch, having previously shipped none at all. GUI startup went from
+        // ~46s to ~92-110s, and the window-appears test began failing
+        // intermittently against its 120s bound (issue #713).
+        //
+        // `kb_provisioning_cost.rs` exists precisely so those numbers could be
+        // taken on macOS and a 2-core runner "instead of being claimed from one
+        // developer's Linux box" — and it was never wired into CI, so they
+        // never were. It is wired up in this change.
+        //
+        // The manual stays synchronous above: ADR-104 / #707's invariant is
+        // that the query layer carries MAE's documentation from the first tick.
+        let engine = editor.kb.storage_engine.clone();
+        let provision_dir = data_dir.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        editor.kb.pending_system_stores = Some(rx);
+        std::thread::spawn(move || {
+            let built = provision_guidance_stores(&provision_dir, &engine);
+            // A closed receiver just means the editor shut down first.
+            let _ = tx.send(built);
+        });
 
         let registry = mae_kb::federation::KbRegistry::load(&data_dir);
         for inst in &registry.instances {

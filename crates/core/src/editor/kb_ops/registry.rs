@@ -5,6 +5,38 @@ use std::collections::HashSet;
 
 use super::*;
 
+/// Open a KB store at `path` honouring `engine`, auto-migrating an existing
+/// sled store to sqlite once.
+///
+/// A free function rather than only an `Editor` method because system-KB
+/// provisioning now runs on a background thread, which has no `&Editor` — and
+/// the alternative, calling `CozoKbStore::open_with_engine` directly from
+/// there, is exactly the mistake this helper exists to prevent: it gets sled
+/// unconditionally (its hardcoded default) regardless of `kb_storage_engine`,
+/// and then sticks on sled's single-writer exclusive lock. [`Editor::kb_open_instance_store`]
+/// delegates here so both paths cannot drift (principle #8).
+pub fn open_instance_store_with_engine(
+    path: &Path,
+    configured_engine: &str,
+) -> Result<mae_kb::CozoKbStore, mae_kb::KbStoreError> {
+    let mut engine = configured_engine.to_string();
+
+    if engine == "sqlite" {
+        if let Err(e) = mae_kb::migrate::migrate_sled_to_sqlite(path) {
+            tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                "sled→sqlite migration failed; opening existing store"
+            );
+            if path.is_dir() {
+                engine = "sled".to_string();
+            }
+        }
+    }
+
+    mae_kb::CozoKbStore::open_with_engine(path, &engine)
+}
+
 impl Editor {
     /// Above this loaded-node count, kb-find switches from eager all-load +
     /// client-filter to a bounded, query-driven ranked window (lazy at scale).
@@ -56,22 +88,7 @@ impl Editor {
         &self,
         path: &Path,
     ) -> Result<mae_kb::CozoKbStore, mae_kb::KbStoreError> {
-        let mut engine = self.kb.storage_engine.clone();
-
-        if engine == "sqlite" {
-            if let Err(e) = mae_kb::migrate::migrate_sled_to_sqlite(path) {
-                tracing::warn!(
-                    error = %e,
-                    path = %path.display(),
-                    "sled→sqlite migration failed; opening existing store"
-                );
-                if path.is_dir() {
-                    engine = "sled".to_string();
-                }
-            }
-        }
-
-        mae_kb::CozoKbStore::open_with_engine(path, &engine)
+        open_instance_store_with_engine(path, &self.kb.storage_engine)
     }
 
     /// Open the durable store for a registered org-dir KB instance, import

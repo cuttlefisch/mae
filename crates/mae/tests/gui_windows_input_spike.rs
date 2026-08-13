@@ -148,9 +148,22 @@ fn a_real_window_appears_and_a_synthetic_click_lands() {
         let stdout = std::fs::read_to_string(&stdout_path).unwrap_or_default();
         let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
         panic!(
-            "no window titled {WINDOW_TITLE:?} appeared within 120s -- either the \
-             runner lacks a real desktop session, or the GUI process failed to \
-             start. Captured subprocess output:\n--- stdout ---\n{stdout}\n\
+            "no window titled {WINDOW_TITLE:?} appeared within 120s.\n\
+             \n\
+             Check STARTUP COST FIRST. This bound is not generous: the test has \
+             been measured at 46s, 92s and 110s on passing runs of this same job, \
+             so it fails intermittently whenever startup grows (issue #713 -- \
+             embedding the KB corpora in #706 roughly doubled it, because Windows \
+             ships no pre-built stores and so builds them all on first launch). \
+             Repeated cozo `stratum`/`epoch` lines in the stderr below mean the \
+             process is alive and grinding through KB work, not hung.\n\
+             \n\
+             Only if startup is NOT the cause: the runner may lack a real desktop \
+             session, or the process may have failed to start outright -- in which \
+             case the stderr below is short or empty rather than full of KB \
+             activity.\n\
+             \n\
+             Captured subprocess output:\n--- stdout ---\n{stdout}\n\
              --- stderr ---\n{stderr}"
         );
     }

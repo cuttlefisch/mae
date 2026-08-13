@@ -608,6 +608,27 @@ jobs:
           incremental: "false"
       - name: cargo build --workspace --features gui (debug, fast signal)
         run: cargo build --workspace --features gui
+      # Issue #713: the numbers that justify what startup does synchronously
+      # were measured on one fast Linux developer machine and did not
+      # generalise -- guidance provisioning was called "~0.22s combined" and,
+      # on this runner, helped push GUI startup from ~46s to ~92-110s against a
+      # 120s window-wait bound.
+      #
+      # `kb_provisioning_cost.rs` exists precisely so those figures could be
+      # taken "on macOS and on a 2-core runner through the existing CI, instead
+      # of being claimed from one developer's Linux box" (its own doc comment,
+      # citing principle #13) -- and it had been wired into nothing since the
+      # day it was written. This is that wiring.
+      #
+      # Informational: it prints, it does not assert. A hard threshold here
+      # would be a number in prose by another name, stale the first time runner
+      # hardware changes. The point is that the figure EXISTS for this platform
+      # when someone next reasons about the startup path.
+      - name: KB provisioning cost (informational, Windows figures for #713)
+        timeout-minutes: 10
+        continue-on-error: true
+        run: cargo test -p mae --bin mae --features gui -- --ignored --nocapture kb_provisioning_cost
+
       - name: cargo test -p mae --features gui --test gui_windows_input_spike
         # 8m, not 5m: the test's own window-wait budget is 120s (see the
         # test's own doc comment -- a cold Windows CI runner's KB

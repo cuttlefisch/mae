@@ -171,6 +171,16 @@ fn init_kb_federation_serves_system_kbs_from_the_catalog_not_the_registry() {
         None => std::env::remove_var("MAE_DEVPRACTICES_KB_PATH"),
     }
 
+    // The guidance corpora are provisioned on a background thread now (issue
+    // #713 — building them synchronously doubled GUI startup on Windows), so
+    // wait for the drain an event loop would perform on its idle tick. Bounded,
+    // because "never arrives" must fail rather than hang.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while editor.kb.system_stores.len() < 3 && std::time::Instant::now() < deadline {
+        editor.drain_kb_system_stores();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+
     for name in ["MaePractices", "DevPractices"] {
         let store = editor
             .kb
