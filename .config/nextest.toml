@@ -56,6 +56,7 @@ filter = '''
   binary(headless_e2e)
   + binary(guidance_delivery_e2e)
   + binary(headless_kb_convergence_e2e)
+  + binary(headless_kb_preload_e2e)
   + binary(headless_soak_shaped_e2e)
   + binary(headless_idle_cpu_e2e)
   + binary(mcp_tool_tiering_e2e)

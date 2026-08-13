@@ -109,7 +109,7 @@ jobs:
           # exactly that way once already -- headless_guard_leak_regression_e2e
           # arrived with #613 and was added to none of them. Keep the three in
           # sync; `make heavy-e2e-check` verifies it.
-          HEAVY_FILTER='binary(headless_e2e) + binary(guidance_delivery_e2e) + binary(headless_kb_convergence_e2e) + binary(headless_soak_shaped_e2e) + binary(headless_idle_cpu_e2e) + binary(mcp_tool_tiering_e2e) + binary(tool_schema_nested_e2e) + binary(headless_guard_leak_regression_e2e)'
+          HEAVY_FILTER='binary(headless_e2e) + binary(guidance_delivery_e2e) + binary(headless_kb_convergence_e2e) + binary(headless_kb_preload_e2e) + binary(headless_soak_shaped_e2e) + binary(headless_idle_cpu_e2e) + binary(mcp_tool_tiering_e2e) + binary(tool_schema_nested_e2e) + binary(headless_guard_leak_regression_e2e)'
           # PIPESTATUS[0], not $? -- `$?` after `cmd | tee file` reflects
           # `tee`'s own exit code unless the shell has `pipefail` set, and this
           # step deliberately doesn't assume that (explicit is safer than
