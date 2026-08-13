@@ -16,6 +16,7 @@ macro_rules! require_scheme {
     };
 }
 
+mod eviction;
 mod kb_federation;
 mod memory;
 mod modules;

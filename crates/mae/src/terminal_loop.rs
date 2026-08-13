@@ -97,12 +97,11 @@ pub(crate) async fn run_terminal_loop(
             .heartbeat
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        // Phase 1a: consume the background primary-store preload when it finishes
-        // (the GUI drains this in idle_work; the TUI loop has no idle_work, so do it
-        // here — cheap Option check, populates the mirror once loading completes).
-        editor.drain_kb_preload();
-        // Phase 4: cross-instance mirror refresh on external store change.
-        editor.drain_kb_store_watch();
+        // Every KB background drain. The GUI does this inside `idle_work`; the
+        // TUI loop has no `idle_work`, so it calls the same shared set here.
+        // It previously called only two of the four by hand, silently skipping
+        // federated-instance watchers and cross-process registry changes.
+        editor.drain_kb_background();
 
         // Watchdog recovery: cancel pending AI work after prolonged stall (>10s).
         if editor
@@ -779,6 +778,13 @@ pub(crate) async fn run_headless_self_test(
             eprintln!("mae: self-test timed out after 5 minutes");
             return 2;
         }
+
+        // Same reason as the headless loop: `init_kb_federation` spawned the
+        // primary-store preload before we got here, and nothing in this loop
+        // consumed it — so the KB tools the self-test is *exercising* ran
+        // against an empty in-memory mirror. A self-test that cannot see the
+        // user's KB is testing something other than MAE.
+        editor.drain_kb_background();
 
         let event = tokio::select! {
             ev = ai_event_rx.recv() => ev,

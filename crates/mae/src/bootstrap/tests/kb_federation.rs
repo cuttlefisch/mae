@@ -326,129 +326,71 @@ fn guidance_is_built_from_the_embedded_corpus_when_no_store_is_installed() {
     );
 }
 
-/// The migration: a registry that already carries MAE-provisioned rows —
-/// the state of any machine that has run MAE before this change — is
-/// cleaned up, while the user's own KBs are left exactly alone.
+/// The oracle the whole guidance mechanism was missing: **what the pipeline
+/// builds must be what the reader finds.**
 ///
-/// The `kind` values here are the ones observed on a real long-running
-/// install: `MaePractices` stamped `UserRegistered` and `DevPractices`
-/// `Guidance`, though MAE wrote both. That is precisely why the classifier
-/// keys on shape instead.
+/// [`guidance_is_built_from_the_embedded_corpus_when_no_store_is_installed`]
+/// above proves the store gets built, and asserts it lands in cache. It never
+/// asks whether anything can then *read* it — and nothing could, because
+/// `resolve_guidance_db_path` derived `<data dir>/<asset_filename>` while the
+/// builder wrote `<cache>/kb/<name>-<version>.cozo`. Two functions, two
+/// answers to "where does this KB live", no test connecting them (principle
+/// #8). The consequence was total: on a clean install `ai_guidance_kb`
+/// delivered nothing, so MCP `initialize.instructions` and `mae-agent-cli`'s
+/// system prompt carried no practices block at all.
+///
+/// `crates/mae/tests/guidance_delivery_e2e.rs` could not catch it either — it
+/// hand-seeds `<data dir>/<asset_filename>`, i.e. it constructs by hand the
+/// exact artifact the pipeline stopped producing, then asserts delivery works.
+/// A fixture that builds the thing under test cannot fail when the thing under
+/// test stops being built.
+///
+/// So this asserts the *join*, with no hand-seeding: build the way a real
+/// first run builds, then read the way a real MCP `initialize` reads.
 #[test]
-fn init_kb_federation_evicts_mae_provisioned_rows_and_keeps_the_users_own() {
+fn a_freshly_built_guidance_store_is_found_by_the_guidance_reader() {
     let _lock = mae_effect_sandbox::lock_env();
-    let tmp = tempfile::tempdir().unwrap();
-    let data_dir = tmp.path();
+    let prev_d = std::env::var("MAE_DEVPRACTICES_KB_PATH").ok();
+    let prev_cache = std::env::var("XDG_CACHE_HOME").ok();
 
-    let row = |name: &str, org_dir: std::path::PathBuf, db_path: std::path::PathBuf, kind| {
-        mae_kb::federation::KbInstance {
-            uuid: mae_kb::federation::generate_uuid(),
-            name: name.to_string(),
-            org_dir,
-            db_path,
-            primary: false,
-            enabled: true,
-            last_import: None,
-            collab_id: None,
-            shared: false,
-            remote_peers: Vec::new(),
-            last_sync: None,
-            ai_residency: mae_kb::federation::AiResidency::default(),
-            project_root: None,
-            kind,
-            priority: 0,
-            remote_hub: None,
-        }
-    };
-
-    let user_dir = tempfile::tempdir().unwrap();
-    let mut registry = mae_kb::federation::KbRegistry::default();
-    registry.instances.push(row(
-        "MaePractices",
-        std::path::PathBuf::new(),
-        data_dir.join("mae-practices.cozo"),
-        mae_kb::federation::KbInstanceKind::UserRegistered,
-    ));
-    registry.instances.push(row(
-        "DevPractices",
-        std::path::PathBuf::new(),
-        data_dir.join("mae-devpractices.cozo"),
-        mae_kb::federation::KbInstanceKind::Guidance,
-    ));
-    registry.instances.push(row(
-        "MyNotes",
-        user_dir.path().to_path_buf(),
-        data_dir.join("kb/local/mynotes/kb.sqlite"),
-        mae_kb::federation::KbInstanceKind::UserRegistered,
-    ));
-    registry.save(data_dir).unwrap();
-
-    let (removed, kept) = crate::guidance_kb_engine::evict_system_rows_from_registry(data_dir);
-
-    assert_eq!(removed.len(), 2, "both MAE-provisioned rows: {removed:?}");
-    assert!(
-        kept.is_empty(),
-        "no reserved-name row was the user's: {kept:?}"
+    let data_dir = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    std::env::set_var("XDG_CACHE_HOME", cache.path());
+    // Point the override at a path that does not exist, so no *installed*
+    // store can satisfy this and the build-from-corpus branch is the only way
+    // through. Without this the dev checkout's own `assets/mae-devpractices.cozo`
+    // would satisfy `locate()` and the test would pass for the wrong reason —
+    // which is precisely how a contributor's machine diverges from a user's.
+    std::env::set_var(
+        "MAE_DEVPRACTICES_KB_PATH",
+        data_dir.path().join("definitely-absent.cozo"),
     );
 
-    let after = mae_kb::federation::KbRegistry::load(data_dir);
-    assert!(after.find("MaePractices").is_none());
-    assert!(after.find("DevPractices").is_none());
-    assert!(
-        after.find("MyNotes").is_some(),
-        "the user's own KB must survive untouched"
-    );
-    assert_eq!(after.instances.len(), 1);
+    let kb = mae_kb::system_kb::find("DevPractices").unwrap();
+    let built = build_guidance_from_embedded_corpus(kb, data_dir.path());
+    let context = mae_ai::guidance::read_guidance_kb_context(data_dir.path(), "DevPractices");
 
-    // Idempotent: a second pass removes nothing and still leaves the user's.
-    let (again, _) = crate::guidance_kb_engine::evict_system_rows_from_registry(data_dir);
-    assert!(again.is_empty(), "second pass must be a no-op: {again:?}");
-    assert_eq!(
-        mae_kb::federation::KbRegistry::load(data_dir)
-            .instances
-            .len(),
-        1
-    );
-}
+    match prev_d {
+        Some(v) => std::env::set_var("MAE_DEVPRACTICES_KB_PATH", v),
+        None => std::env::remove_var("MAE_DEVPRACTICES_KB_PATH"),
+    }
+    match prev_cache {
+        Some(v) => std::env::set_var("XDG_CACHE_HOME", v),
+        None => std::env::remove_var("XDG_CACHE_HOME"),
+    }
 
-/// The half that stops the migration being a licence to delete: a reserved
-/// name pointing at the user's OWN org directory is their content, and the
-/// only record of where it lives. It is kept, and reported.
-#[test]
-fn eviction_never_removes_a_reserved_name_that_holds_the_users_own_content() {
-    let _lock = mae_effect_sandbox::lock_env();
-    let tmp = tempfile::tempdir().unwrap();
-    let user_dir = tempfile::tempdir().unwrap();
+    let built = built.expect("the corpus must build");
+    assert!(built.exists(), "built store missing at {}", built.display());
 
-    let mut registry = mae_kb::federation::KbRegistry::default();
-    registry.instances.push(mae_kb::federation::KbInstance {
-        uuid: mae_kb::federation::generate_uuid(),
-        name: "DevPractices".to_string(),
-        org_dir: user_dir.path().to_path_buf(),
-        db_path: tmp.path().join("kb/local/mine/kb.sqlite"),
-        primary: false,
-        enabled: true,
-        last_import: None,
-        collab_id: None,
-        shared: false,
-        remote_peers: Vec::new(),
-        last_sync: None,
-        ai_residency: mae_kb::federation::AiResidency::default(),
-        project_root: None,
-        kind: mae_kb::federation::KbInstanceKind::UserRegistered,
-        priority: 0,
-        remote_hub: None,
+    let context = context.unwrap_or_else(|| {
+        panic!(
+            "guidance built to {} but the reader found nothing — the builder and \
+             `resolve_guidance_db_path` disagree about where a system KB's store lives",
+            built.display()
+        )
     });
-    registry.save(tmp.path()).unwrap();
-
-    let (removed, kept) = crate::guidance_kb_engine::evict_system_rows_from_registry(tmp.path());
-
     assert!(
-        removed.is_empty(),
-        "must not delete the user's content: {removed:?}"
+        context.contains("DevPractices"),
+        "the delivered guidance must be the real corpus, got: {context}"
     );
-    assert_eq!(kept, vec!["DevPractices".to_string()]);
-    assert!(mae_kb::federation::KbRegistry::load(tmp.path())
-        .find("DevPractices")
-        .is_some());
 }
