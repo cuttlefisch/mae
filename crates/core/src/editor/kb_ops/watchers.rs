@@ -4,6 +4,34 @@
 use super::*;
 
 impl Editor {
+    /// Every KB background drain, in one call — the set an event loop owes the
+    /// KB once per tick, regardless of which frontend it is.
+    ///
+    /// **This exists because hand-rolling the set drifted, badly.** Three event
+    /// loops each picked their own subset: the GUI (`idle_work`) called all
+    /// four, the TUI called two, and the headless loops — including
+    /// `--self-test`, and the mode the MCP server actually runs in — called
+    /// none. Nothing enforced agreement, so the divergence was invisible.
+    ///
+    /// The headless consequence was not merely wasted work. `init_kb_federation`
+    /// spawns the preload and parks the receiver; with nothing draining it,
+    /// `kb.primary` stays empty, and because `primary_thin()` is false in that
+    /// mode `kb_federated_search_scoped` ranks over the empty mirror. So
+    /// `kb_search`/`kb_search_context`/`kb_vector_search` returned **zero of the
+    /// user's own notes, forever, with no error**, while the query-layer-backed
+    /// tools (`kb_list`, `kb_graph`, `kb_links_*`) saw them fine — two tools,
+    /// opposite blind spots, same session.
+    ///
+    /// Every member is a cheap `Option`/`try_recv` check when there is nothing
+    /// to do, so calling all four everywhere costs nothing measurable and
+    /// removes the chance to pick a subset (principle #8).
+    pub fn drain_kb_background(&mut self) {
+        self.drain_kb_watchers();
+        self.drain_kb_preload();
+        self.drain_kb_store_watch();
+        self.drain_kb_registry_watch();
+    }
+
     /// Phase 1a: consume the background primary-store preload on an idle tick.
     ///
     /// The loader thread (spawned at startup) runs the O(n) `load_all` off the UI

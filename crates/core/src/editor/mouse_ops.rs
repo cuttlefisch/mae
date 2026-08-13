@@ -475,19 +475,12 @@ impl super::Editor {
         // 3. Poll pending async git diff results.
         self.poll_pending_git_diff();
 
-        // 4. Drain KB file watchers for federated instances.
-        self.drain_kb_watchers();
-
-        // 5. Consume the background primary-store preload (Phase 1a) if it finished.
-        self.drain_kb_preload();
-
-        // 6. Cross-instance freshness (Phase 4): if another process changed the shared
-        //    store, kick a background mirror reload.
-        self.drain_kb_store_watch();
-
-        // 7. Cross-process freshness for kb-registry.toml: pick up a KB
-        //    registered/unregistered by another mae process.
-        self.drain_kb_registry_watch();
+        // 4-7. Every KB background drain: federated-instance file watchers, the
+        //      Phase 1a primary-store preload, cross-instance store freshness,
+        //      and cross-process `kb-registry.toml` freshness. One call rather
+        //      than four, so a frontend cannot quietly implement a subset — see
+        //      `drain_kb_background` for the divergence that caused.
+        self.drain_kb_background();
 
         // 8. Evict per-window graph-view state (`viewports`/`rendered`/
         //    `render_epoch`) for windows that have since closed. Delegates
