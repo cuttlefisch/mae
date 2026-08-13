@@ -280,31 +280,42 @@ mod tests {
         assert_eq!(node.source, Some(NodeSource::Seed));
     }
 
-    /// The property the staging rename exists to guarantee: `output_path` must
-    /// not exist until the build is finished.
+    /// The property the staging rename exists to guarantee: a store visible at
+    /// `output_path` is always a COMPLETE store.
     ///
-    /// The oracle is how many times a concurrent watcher sees the path at all.
-    /// Building in place, the file appears the instant the store opens and then
-    /// fills for the rest of the build, so a watcher sees it over and over
-    /// (~40-50 times here); staged, it can only ever appear once, at the rename.
-    /// That distinction is the bug itself, not a proxy for it — every consumer
-    /// decides a built store is usable from `Path::exists()` alone
-    /// (`guidance::resolve_guidance_db_path`'s cache arm, and
-    /// `build_guidance_from_embedded_corpus`'s early return), so a path that
-    /// exists mid-build is a store handed out mid-build.
+    /// The oracle is the last node written, not the path's existence. That
+    /// matters — two weaker oracles were tried and both were bad:
     ///
-    /// Deliberately `<= 1` rather than `== 1`: a starved poller thread may never
-    /// tick between the rename and the builder returning, and 0 sightings is the
-    /// same guarantee holding. The failing direction is not close to the bound.
+    /// - Counting how often a watcher sees the path is scheduling-dependent in
+    ///   the *passing* direction. The rename happens inside `build_org_kb`, but
+    ///   the flag saying "done" can only be set after it returns, so a poller on
+    ///   a loaded runner legitimately counts many post-rename sightings. It
+    ///   passed locally and failed in CI, which is the definition of a flaky
+    ///   test rather than a real bound.
+    /// - Checking for the `index` node is *vacuous*: `index.org` sorts first and
+    ///   commits early, so it is present almost immediately even mid-build. It
+    ///   scored zero violations with the bug present.
+    ///
+    /// The last node by ingest order is the honest probe: a store still being
+    /// built cannot have it yet, and one that has it is finished. Any sighting
+    /// after the rename therefore passes no matter how many times the poller
+    /// ticks, and every sighting before it fails.
+    ///
+    /// **sqlite only, deliberately.** A concurrent reader cannot open a sled
+    /// store at all (single-writer lock), so this would be silently vacuous
+    /// there — and that same lock means sled is not exposed to the bug. sqlite
+    /// is what the runtime guidance cache actually uses, which is where the
+    /// failure was observed.
+    #[cfg(feature = "storage-sqlite")]
     #[test]
-    fn the_final_path_does_not_exist_until_the_build_is_finished() {
+    fn a_store_visible_at_the_final_path_is_always_complete() {
         let src_dir = TempDir::new().unwrap();
         write_org(
             src_dir.path(),
             "index.org",
             ":PROPERTIES:\n:ID: index\n:END:\n#+title: Index\n\nEntry point.\n",
         );
-        // Enough nodes that the build spans a meaningful number of poll ticks.
+        // `zz:last` sorts last by filename, so it is ingested last.
         for i in 0..60 {
             write_org(
                 src_dir.path(),
@@ -312,6 +323,11 @@ mod tests {
                 &format!(":PROPERTIES:\n:ID: test:n{i}\n:END:\n#+title: Node {i}\n\nBody {i}.\n"),
             );
         }
+        write_org(
+            src_dir.path(),
+            "zz.org",
+            ":PROPERTIES:\n:ID: zz:last\n:END:\n#+title: Last\n\nWritten last.\n",
+        );
 
         let out = TempDir::new().unwrap();
         let output = out.path().join("fixture.cozo");
@@ -320,38 +336,43 @@ mod tests {
         let poll_output = output.clone();
         let poll_done = done.clone();
         let poller = std::thread::spawn(move || {
-            let mut sightings = 0usize;
+            let (mut opened, mut incomplete) = (0usize, 0usize);
             while !poll_done.load(std::sync::atomic::Ordering::Relaxed) {
                 if poll_output.exists() {
-                    sightings += 1;
+                    if let Ok(store) = CozoKbStore::open_with_engine(&poll_output, "sqlite") {
+                        opened += 1;
+                        if !matches!(store.get_node("zz:last"), Ok(Some(_))) {
+                            incomplete += 1;
+                        }
+                    }
                 }
                 std::thread::yield_now();
             }
-            sightings
+            (opened, incomplete)
         });
 
         let stats = build_org_kb(
             src_dir.path(),
             &output,
             &OrgKbBuildOptions {
-                engine: TEST_DISK_ENGINE,
+                engine: "sqlite",
                 ..OrgKbBuildOptions::default()
             },
         )
         .expect("build ok");
         done.store(true, std::sync::atomic::Ordering::Relaxed);
-        let sightings = poller.join().expect("poller ok");
+        let (_opened, incomplete) = poller.join().expect("poller ok");
 
-        assert_eq!(stats.nodes, 61);
-        assert!(
-            sightings <= 1,
-            "the final path was visible {sightings} times during the build — it is \
-             being built in place again, so readers can open a partial store"
+        assert_eq!(stats.nodes, 62);
+        assert_eq!(
+            incomplete, 0,
+            "a reader opened a store at the final path that was missing the \
+             last-ingested node — the build is landing in place again, so \
+             consumers can be handed a partial KB"
         );
-        // And the finished article is intact and complete.
-        let reopened = CozoKbStore::open_with_engine(&output, TEST_DISK_ENGINE).expect("reopen");
+        let reopened = CozoKbStore::open_with_engine(&output, "sqlite").expect("reopen");
+        assert!(matches!(reopened.get_node("zz:last"), Ok(Some(_))));
         assert!(matches!(reopened.get_node("index"), Ok(Some(_))));
-        assert!(matches!(reopened.get_node("test:n59"), Ok(Some(_))));
     }
 
     /// A build that fails validation must leave NOTHING at the final path — not
