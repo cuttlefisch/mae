@@ -103,14 +103,23 @@ mod tests {
         let prev = std::env::var("XDG_CACHE_HOME").ok();
         std::env::set_var("XDG_CACHE_HOME", cache.path());
 
+        // Mirrors what `init_kb_federation` hands the thread: the env lookup
+        // resolved on the caller's side.
+        let located = || -> Vec<(&'static mae_kb::system_kb::SystemKb, Option<PathBuf>)> {
+            mae_kb::system_kb::auto_enabled()
+                .filter(|kb| kb.name != mae_kb::system_kb::MANUAL)
+                .map(|kb| (kb, crate::guidance_kb_engine::locate(kb, data.path())))
+                .collect()
+        };
+
         let start = Instant::now();
-        let built = crate::bootstrap::provision_guidance_stores(data.path(), "sqlite");
+        let built = crate::bootstrap::provision_guidance_stores(data.path(), "sqlite", located());
         let elapsed = start.elapsed();
 
         // Warm: the second launch on the same version, which should hit the
         // version-keyed cache and skip the build entirely.
         let warm_start = Instant::now();
-        let warm = crate::bootstrap::provision_guidance_stores(data.path(), "sqlite");
+        let warm = crate::bootstrap::provision_guidance_stores(data.path(), "sqlite", located());
         let warm_elapsed = warm_start.elapsed();
 
         match prev {

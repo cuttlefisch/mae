@@ -2221,16 +2221,23 @@ pub(crate) fn apply_app_config(editor: &mut Editor, app_config: &crate::config::
 pub(crate) fn provision_guidance_stores(
     data_dir: &std::path::Path,
     engine: &str,
+    located: Vec<(
+        &'static mae_kb::system_kb::SystemKb,
+        Option<std::path::PathBuf>,
+    )>,
 ) -> Vec<(String, std::sync::Arc<mae_kb::CozoKbStore>)> {
     let mut out = Vec::new();
-    for kb in mae_kb::system_kb::auto_enabled() {
-        if kb.name == mae_kb::system_kb::MANUAL {
-            continue;
-        }
+    for (kb, found) in located {
         // An installed store wins; otherwise build from the embedded corpus —
         // the `cargo install` / Windows / Docker case, all of which ship ZERO
         // KB corpora, and which is the whole reason embedding exists.
-        let path = match crate::guidance_kb_engine::ensure_local_copy(kb, data_dir) {
+        //
+        // `found` was resolved on the main thread: `locate` reads process env,
+        // and looking it up here made the answer depend on when this thread
+        // happened to run.
+        let path = match found
+            .and_then(|f| crate::guidance_kb_engine::ensure_local_copy_of(kb, data_dir, f))
+        {
             Some(path) => path,
             None => match build_guidance_from_embedded_corpus(kb, data_dir) {
                 Some(path) => path,
@@ -2615,10 +2622,30 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
         // that the query layer carries MAE's documentation from the first tick.
         let engine = editor.kb.storage_engine.clone();
         let provision_dir = data_dir.clone();
+        // Resolve the env-dependent lookup HERE, on the main thread, and hand
+        // the thread concrete paths.
+        //
+        // `guidance_kb_engine::locate` reads `kb.env_override`
+        // (`MAE_PRACTICES_KB_PATH` / `MAE_DEVPRACTICES_KB_PATH`). Reading that
+        // inside the thread made the result depend on when the thread happened
+        // to run: a caller that sets those vars around `init_kb_federation` —
+        // which is exactly what the catalog-serving test does — could restore
+        // them before the thread got there. It passed locally and failed on CI,
+        // which is the signature of a race, not a flaky machine.
+        //
+        // Process env is a main-thread input; a background worker should be
+        // handed what it needs, not go looking for ambient state later.
+        let located: Vec<(
+            &'static mae_kb::system_kb::SystemKb,
+            Option<std::path::PathBuf>,
+        )> = mae_kb::system_kb::auto_enabled()
+            .filter(|kb| kb.name != mae_kb::system_kb::MANUAL)
+            .map(|kb| (kb, crate::guidance_kb_engine::locate(kb, &data_dir)))
+            .collect();
         let (tx, rx) = std::sync::mpsc::channel();
         editor.kb.pending_system_stores = Some(rx);
         std::thread::spawn(move || {
-            let built = provision_guidance_stores(&provision_dir, &engine);
+            let built = provision_guidance_stores(&provision_dir, &engine, located);
             // A closed receiver just means the editor shut down first.
             let _ = tx.send(built);
         });
