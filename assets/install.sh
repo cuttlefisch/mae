@@ -49,7 +49,7 @@ for arg in "$@"; do
             echo ""
             echo "Install locations:"
             echo "  PREFIX/bin/                      binaries"
-            echo "  XDG_DATA_HOME/mae/               manual/DevPractices/MaePractices/ADR KBs, modules"
+            echo "  XDG_DATA_HOME/mae/               modules, your KBs (the ADR KB too, if installed)"
             echo "  XDG_CONFIG_HOME/mae/              config files (preserved on upgrade/uninstall)"
             echo "  ~/.config/systemd/user/           systemd units (Linux)"
             echo "  ~/Library/LaunchAgents/           launchd agents (macOS)"
