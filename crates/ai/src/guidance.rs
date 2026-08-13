@@ -554,6 +554,33 @@ mod tests {
 mod diagnosis_tests {
     use super::*;
 
+    /// Run `f` with `XDG_CACHE_HOME` pointed at a fresh empty tempdir, then
+    /// restore it and return `f`'s result.
+    ///
+    /// Every test here that means "no store is installed **anywhere**" needs
+    /// this, because `resolve_guidance_db_path` consults the cache-built store
+    /// as well as the data dir. Isolating only the data dir leaves the real
+    /// `~/.cache/mae` in play — which is not hypothetical: these tests passed
+    /// locally on a machine with a cold cache and failed on CI, where an
+    /// earlier step in the same job had already built one.
+    ///
+    /// Deliberately restores the variable BEFORE the caller asserts, following
+    /// the pattern the `bootstrap` tests established: an assertion that fires
+    /// inside the guarded region would leave `XDG_CACHE_HOME` pointing at a
+    /// deleted tempdir for every test that runs after it.
+    fn with_isolated_cache<T>(f: impl FnOnce() -> T) -> T {
+        let _lock = mae_effect_sandbox::lock_env();
+        let cache = tempfile::tempdir().unwrap();
+        let prev = std::env::var("XDG_CACHE_HOME").ok();
+        std::env::set_var("XDG_CACHE_HOME", cache.path());
+        let out = f();
+        match prev {
+            Some(v) => std::env::set_var("XDG_CACHE_HOME", v),
+            None => std::env::remove_var("XDG_CACHE_HOME"),
+        }
+        out
+    }
+
     /// An unset option is how you turn guidance OFF. Reporting it as a problem
     /// would make the diagnostic cry wolf on every install that deliberately
     /// opted out — and a diagnostic that always fires gets ignored, which is
@@ -589,7 +616,7 @@ mod diagnosis_tests {
     #[test]
     fn a_system_kb_with_no_built_store_reports_store_missing() {
         let tmp = tempfile::tempdir().unwrap();
-        let st = diagnose_guidance_kb(tmp.path(), "DevPractices");
+        let st = with_isolated_cache(|| diagnose_guidance_kb(tmp.path(), "DevPractices"));
         assert!(
             matches!(st, GuidanceStatus::StoreMissing { .. }),
             "expected StoreMissing, got {st:?}"
@@ -627,7 +654,10 @@ mod diagnosis_tests {
             .expect("insert");
         drop(store);
 
-        let st = diagnose_guidance_kb(tmp.path(), "DevPractices");
+        // Isolated: with the cache consulted ahead of the data dir, a store
+        // built into the real `~/.cache/mae` would answer instead of the
+        // deliberately index-less one seeded here.
+        let st = with_isolated_cache(|| diagnose_guidance_kb(tmp.path(), "DevPractices"));
         assert!(
             matches!(st, GuidanceStatus::NoIndexNode { .. }),
             "expected NoIndexNode, got {st:?}"
@@ -644,8 +674,12 @@ mod diagnosis_tests {
         let tmp = tempfile::tempdir().unwrap();
 
         for name in ["", "NoSuchKb", "DevPractices"] {
-            let st = diagnose_guidance_kb(tmp.path(), name);
-            let got = read_guidance_kb_context(tmp.path(), name);
+            let (st, got) = with_isolated_cache(|| {
+                (
+                    diagnose_guidance_kb(tmp.path(), name),
+                    read_guidance_kb_context(tmp.path(), name),
+                )
+            });
             assert_eq!(
                 matches!(st, GuidanceStatus::Ok { .. }),
                 got.is_some(),
@@ -671,11 +705,15 @@ mod diagnosis_tests {
             .expect("insert");
         drop(store);
 
-        let st = diagnose_guidance_kb(tmp.path(), "DevPractices");
+        let (st, got) = with_isolated_cache(|| {
+            (
+                diagnose_guidance_kb(tmp.path(), "DevPractices"),
+                read_guidance_kb_context(tmp.path(), "DevPractices"),
+            )
+        });
         assert!(matches!(st, GuidanceStatus::Ok { .. }), "{st:?}");
         assert!(!st.is_problem());
-        let got = read_guidance_kb_context(tmp.path(), "DevPractices")
-            .expect("the reader must agree the KB resolves");
+        let got = got.expect("the reader must agree the KB resolves");
         assert!(got.contains("Always write tests first."));
     }
 }
