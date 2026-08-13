@@ -780,20 +780,41 @@ impl Editor {
     /// retired. Bypasses the retire guard (writes the store directly). Bounded by the
     /// (lazy) mirror size — only nodes touched this session. Called on collab
     /// disconnect + editor shutdown while the daemon hosts the primary.
+    ///
+    /// @ai-caution: [kb-provenance] Skips MAE's own built-in content. `kb.primary`
+    /// is not just the user's notes — it also carries the entire bundled manual
+    /// (~1,200 `cmd:`/`concept:`/`option:`/`lesson:` nodes seeded by `Editor::new()`
+    /// and then enriched from `assets/manual/*.org`). Without this filter every
+    /// shutdown and every collab disconnect copied all of it into the user's own
+    /// `primary.cozo`, which is *not* where MAE's docs live: they are served from
+    /// the in-memory `system_stores["manual"]`, rebuilt from the corpus on every
+    /// launch. The copies were therefore pure bloat that also went stale on
+    /// upgrade, and — because a snapshot is indistinguishable from user content
+    /// once written — they would be swept into anything that shares or exports
+    /// the primary KB.
+    ///
+    /// The `Seed` stamp is the discriminator (matching the built-in guards in
+    /// `kb_ops::nodes`), which is only trustworthy because the manual ingest
+    /// re-stamps what it overwrites — see `KnowledgeBase::stamp_source_for`.
     pub fn kb_snapshot_primary_to_store(&self) {
         let Some(ref store) = self.kb.store else {
             return;
         };
         let mut n = 0usize;
+        let mut skipped = 0usize;
         for id in self.kb.primary.list_ids(None) {
             if let Some(node) = self.kb.primary.get(&id) {
+                if node.source == Some(mae_kb::NodeSource::Seed) {
+                    skipped += 1;
+                    continue;
+                }
                 if store.update_node(node).is_ok() {
                     n += 1;
                 }
             }
         }
-        if n > 0 {
-            tracing::debug!(target: "kb_sync", count = n, "D3b: snapshot primary mirror → local store");
+        if n > 0 || skipped > 0 {
+            tracing::debug!(target: "kb_sync", count = n, skipped_builtin = skipped, "D3b: snapshot primary mirror → local store");
         }
     }
 
