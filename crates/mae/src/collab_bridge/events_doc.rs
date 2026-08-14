@@ -17,8 +17,10 @@ pub(super) fn handle_remote_update_event(
     // delta, NOT buffer text. Apply it to our local collection replica and
     // relearn our authorization epoch live — no manual reconnect. It never
     // maps to a buffer, so intercept it before the buffer lookup.
-    if let Some(kb_id) = doc_id.strip_prefix("kbc:") {
-        handle_kbc_membership_broadcast(editor, kb_id, &update_bytes);
+    // @ai-caution: [kb-scoping] (ADR-105 D1) Address type, not string prefix.
+    if let Some(mae_sync::DocAddress::KbCollection { kb_id }) = mae_sync::DocAddress::parse(&doc_id)
+    {
+        handle_kbc_membership_broadcast(editor, &kb_id, &update_bytes);
     } else if let Some(idx) = editor.find_buffer_by_collab_doc_id(&doc_id) {
         // Capture cursor char offsets for all windows viewing this buffer
         // so we can restore them after the rope rebuild.

@@ -91,13 +91,24 @@ impl Projector {
 
     /// Project one changed doc. Reading state happens off the doc write path (the
     /// channel decouples); the index lock is never held across an await.
+    /// @ai-caution: [kb-scoping] (ADR-105 D1) Matches the ADDRESS TYPE, not a string
+    /// prefix. This is the CRDT→cozo routing (ADR-029): a doc that stops being
+    /// recognized here is not an error anywhere — it simply stops being projected, and
+    /// the cozo store silently goes stale while the CRDT truth moves on. Exhaustive so
+    /// a new or renamed variant fails to compile instead.
     pub async fn project_doc(&self, doc_name: &str) -> Result<(), String> {
-        if let Some(node_id) = doc_name.strip_prefix("kb:") {
-            self.project_node_change(node_id).await
-        } else if let Some(kb_id) = doc_name.strip_prefix("kbc:") {
-            self.project_collection_change(kb_id).await
-        } else {
-            Ok(())
+        match mae_sync::DocAddress::parse(doc_name) {
+            Some(mae_sync::DocAddress::KbNode { node_id }) => {
+                self.project_node_change(&node_id).await
+            }
+            Some(mae_sync::DocAddress::KbCollection { kb_id }) => {
+                self.project_collection_change(&kb_id).await
+            }
+            // Buffer collab and unrecognized names are not KB content — nothing to
+            // project.
+            Some(mae_sync::DocAddress::File { .. })
+            | Some(mae_sync::DocAddress::Shared { .. })
+            | None => Ok(()),
         }
     }
 

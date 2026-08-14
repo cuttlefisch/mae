@@ -160,8 +160,21 @@ pub struct ApplyResult {
 /// transient buffer-collab session) keeps the evict-and-delete behavior. A future
 /// refinement could make this an explicit per-doc flag (e.g. to distinguish a hosted
 /// KB from a transiently-previewed one); the prefix rule matches today's flows.
+///
+/// @ai-caution: [kb-scoping] (ADR-105 D1) Matches the ADDRESS TYPE, not a string
+/// prefix. This predicate decides whether a document is **deleted from storage** on
+/// idle eviction, so a KB doc that stops being recognized here is not a subtle
+/// degradation — it is silent data loss. Keying on `starts_with("kb:")` meant any
+/// change to node addressing would have done exactly that.
 pub(crate) fn is_durable_doc(name: &str) -> bool {
-    name.starts_with("kb:") || name.starts_with("kbc:")
+    match mae_sync::DocAddress::parse(name) {
+        Some(mae_sync::DocAddress::KbNode { .. })
+        | Some(mae_sync::DocAddress::KbCollection { .. }) => true,
+        // Transient buffer collab, and anything unrecognized: evict-and-delete, as before.
+        Some(mae_sync::DocAddress::File { .. })
+        | Some(mae_sync::DocAddress::Shared { .. })
+        | None => false,
+    }
 }
 
 /// Pick the least-recently-used **idle** (no connected client) document to memory-evict
@@ -674,15 +687,20 @@ impl DocStore {
         {
             let docs = self.docs.read().await;
             for name in docs.keys() {
-                if let Some(id) = name.strip_prefix("kbc:") {
-                    ids.insert(id.to_string());
+                // @ai-caution: [kb-scoping] (ADR-105 D1) Address type, not string prefix.
+                if let Some(mae_sync::DocAddress::KbCollection { kb_id }) =
+                    mae_sync::DocAddress::parse(name)
+                {
+                    ids.insert(kb_id);
                 }
             }
         }
         if let Ok(names) = self.storage.list_documents().await {
             for name in names {
-                if let Some(id) = name.strip_prefix("kbc:") {
-                    ids.insert(id.to_string());
+                if let Some(mae_sync::DocAddress::KbCollection { kb_id }) =
+                    mae_sync::DocAddress::parse(&name)
+                {
+                    ids.insert(kb_id);
                 }
             }
         }
