@@ -32,6 +32,60 @@ fn kb_collection_is_e2e_reads_signed_mode_not_the_flippable_flag() {
         "the unsigned flag is ignored — the SIGNED monotonic mode still says e2e"
     );
 }
+/// ADVERSARIAL (#573): a key-blind relay must not be able to talk this editor into
+/// emitting plaintext by polluting the op-log.
+///
+/// The op-log is a grow-only YMap, so anyone who can append — exactly the
+/// honest-but-untrusted relay ADR-037 is designed against — can add genesis-shaped
+/// records of their own. The gate used to take the FIRST genesis-shaped record and
+/// only then ask whether it was the owner's; when an injected record sorted first
+/// the comparison failed and the gate answered "not encrypted", which is the arm
+/// that puts the node on the wire in the clear.
+///
+/// The other half of the oracle: the fix must not make everything look encrypted.
+/// A KB with no signed enable is still plaintext, and an attacker injecting genesis
+/// records cannot promote it — otherwise the gate would be trivially "always true"
+/// and the test above would prove nothing.
+#[test]
+fn injected_genesis_records_cannot_promote_a_plain_kb_to_e2e() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::membership::{MembershipAction, MembershipOp};
+
+    let owner = Identity::generate("owner");
+    let mut coll = mae_sync::kb::KbCollectionDoc::new_owned("KB", &owner.fingerprint(), "owner");
+
+    let mallory = Identity::generate("mallory");
+    let (mfp, mpk, msec) = (
+        mallory.fingerprint(),
+        mallory.public().to_bytes(),
+        mallory.secret_bytes(),
+    );
+    let op = MembershipOp {
+        kb_id: "KB".to_string(),
+        action: MembershipAction::Admit,
+        subject: mfp.clone(),
+        role: Some(mae_sync::kb::Role::Owner),
+        can_invite: true,
+        author: mfp.clone(),
+        issued_at: 1001,
+        expires_at: None,
+        epoch: 0,
+        prev_hash: String::new(),
+        wrapped_key: None,
+        new_pubkey: None,
+        new_wrap_pubkey: None,
+        recovery_pubkey: None,
+        replication: Default::default(),
+    };
+    coll.append_signed_op(&op, &op.sign(&msec), &mpk);
+
+    assert!(
+        !kb_collection_is_e2e(&coll.encode_state()),
+        "a KB with no owner-signed enable is plaintext; an attacker must not be \
+         able to assert encryption on the owner's behalf either"
+    );
+}
+
 /// ADR-037 #170 — the share/re-share path must NEVER ship a plaintext node snapshot to
 /// the key-blind daemon on an E2e KB (the attacker's test). It sends the already-sealed
 /// op-set or SKIPS the node; a plaintext canary must appear in NO wire payload. The
