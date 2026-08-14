@@ -714,6 +714,7 @@ mod tests {
             Instant::now(),
             crate::conn_limit::ConnLimiter::new(0),
             Arc::new(mae_daemon::artifact_store::NoArtifactStore),
+            Arc::new(mae_daemon::quota::NoQuota),
             mae_daemon::kb_query::KbQueryLimits::default(),
             None,
         ));
