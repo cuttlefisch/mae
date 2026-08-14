@@ -1738,21 +1738,19 @@ fn kb_collection_is_e2e(collection_state: &[u8]) -> bool {
         return false;
     };
     let ops = coll.oplog_ops();
-    let Some(anchor) = ops
-        .iter()
-        .find(|o| {
-            o.op.prev_hash.is_empty()
-                && o.op.action == mae_sync::membership::MembershipAction::Admit
-                && o.op.subject == o.op.author
-        })
-        .map(|o| o.author_pubkey)
-    else {
+    // F1 (#573): resolve the anchor with the ownership test bound INSIDE the search.
+    //
+    // This used to take the FIRST genesis-shaped record and only then compare it to
+    // the owner. The op-log is a grow-only YMap, so the key-blind relay ADR-037
+    // defends against can append its own unsigned genesis-shaped record; when that
+    // one sorted first, the comparison failed and this returned `false` — and a
+    // `false` here means "not encrypted", so `build_kb_node_update_request` took its
+    // plaintext arm and put the node on the wire in the clear. Injecting a handful of
+    // records made winning the YMap ordering near-certain. The owner's genuine genesis
+    // was in the same log the whole time; the search simply never got to it.
+    let Some(anchor) = mae_sync::membership::owner_anchor_pubkey(&ops, &coll.owner()) else {
         return false;
     };
-    // F1: the genesis anchor must be the authenticated owner (refuse a forged genesis).
-    if mae_sync::membership::fingerprint_of(&anchor) != coll.owner() {
-        return false;
-    }
     mae_sync::membership::derive_encryption(&ops, &anchor) == mae_sync::kb::Encryption::E2e
 }
 
