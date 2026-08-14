@@ -49,7 +49,7 @@ async fn kb_share_stores_collection_and_nodes() {
 
     // Verify each node doc is stored and decodable.
     for node_id in &["concept:test", "concept:arch", "lesson:intro"] {
-        let doc_name = format!("kb:{node_id}");
+        let doc_name = mae_sync::kb_node_doc_name("my-kb", node_id);
         let (state, _sv) = store
             .encode_state_and_sv(&doc_name)
             .await
@@ -93,7 +93,7 @@ async fn kb_share_realistic_org_content_roundtrip() {
 
     // Read back and verify content is byte-for-byte identical.
     let (state, _) = store
-        .encode_state_and_sv("kb:concept:org-test")
+        .encode_state_and_sv("kbn:org-kb:concept:org-test")
         .await
         .unwrap();
     let doc = mae_sync::kb::KbNodeDoc::from_bytes(&state).unwrap();
@@ -242,7 +242,7 @@ async fn kb_node_update_applies_and_broadcasts() {
     let mut rx = {
         let mut b = bc.lock().unwrap();
         b.subscribe(session_b_id, vec!["sync_update".to_string()]);
-        b.subscribe_doc(session_b_id, "kb:n1");
+        b.subscribe_doc(session_b_id, "kbn:update-kb:n1");
         b.subscribe_doc(session_b_id, "kbc:update-kb");
         b.subscribe(session_b_id, vec!["sync_update".to_string()])
     };
@@ -276,7 +276,7 @@ async fn kb_node_update_applies_and_broadcasts() {
     assert_eq!(resp.result.unwrap()["applied"], true);
 
     // Verify the stored doc reflects the update.
-    let (state, _) = store.encode_state_and_sv("kb:n1").await.unwrap();
+    let (state, _) = store.encode_state_and_sv("kbn:update-kb:n1").await.unwrap();
     let stored = mae_sync::kb::KbNodeDoc::from_bytes(&state).unwrap();
     assert_eq!(
         stored.body(),
@@ -287,7 +287,7 @@ async fn kb_node_update_applies_and_broadcasts() {
     // Verify broadcast was sent (best-effort check).
     if let Ok(EditorEvent::SyncUpdate { buffer_name, .. }) = rx.try_recv() {
         assert_eq!(
-            buffer_name, "kb:n1",
+            buffer_name, "kbn:update-kb:n1",
             "broadcast should be for the updated node doc"
         );
     }
@@ -314,7 +314,7 @@ async fn kb_leave_unsubscribes_session() {
 
     // Verify session tracks the collection + node docs.
     assert!(session_docs.contains("kbc:leave-kb"));
-    assert!(session_docs.contains("kb:n1"));
+    assert!(session_docs.contains("kbn:leave-kb:n1"));
 
     // Leave.
     let msg = serde_json::json!({

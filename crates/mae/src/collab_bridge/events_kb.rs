@@ -433,6 +433,46 @@ pub(super) fn drain_kb_node_updates(editor: &mut Editor, collab_tx: &mpsc::Sende
     if !matches!(editor.collab.status, CollabStatus::Connected { .. }) {
         return;
     }
+    // ADR-105 D7: manifest ops drain BEFORE node updates.
+    //
+    // A brand-new node's first `kb/node_update` used to arrive before its
+    // `kb/collection_node_add`, so the daemon saw content for a node its manifest
+    // did not yet list. That ordering is now a CONTRACT, because the write path
+    // checks `require_node_in_kb` (D6) — without the reorder, creating a node would
+    // be refused outright. Isolation does not depend on this (the scoped address
+    // does); creation does.
+    // Phase D1.1: drain collection-manifest ops (created/deleted nodes) →
+    // kb/collection_node_*. Best-effort: only sent when connected; creates also
+    // self-heal on the reconnect re-share (which rebuilds the full manifest).
+    for (kb_id, node_id, title, add) in std::mem::take(&mut editor.collab.pending_kb_manifest) {
+        tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, add, "drain: send kb/collection_node");
+        // #156 F5: never write a cleartext node title into the manifest of an E2e KB —
+        // the key-blind daemon/relay stores the manifest in the clear and would read it.
+        // The real title lives encrypted inside the node op-set; an E2e manifest needs
+        // only the node_id (the Blocked/list views fall back to it). Downgrade-resistant:
+        // `kb_collection_is_e2e` reads the SIGNED op-log, not the relay-flippable flag.
+        let title = if add
+            && editor
+                .collab
+                .kb_collection_state
+                .get(&kb_id)
+                .is_some_and(|s| kb_collection_is_e2e(s))
+        {
+            String::new()
+        } else {
+            title
+        };
+        let cmd = CollabCommand::KbCollectionNode {
+            kb_id,
+            node_id,
+            title,
+            add,
+        };
+        if collab_tx.try_send(cmd).is_err() {
+            warn!("collab command channel full — KB manifest op dropped");
+        }
+    }
+
     // Durable path: SQLite-persisted updates (survives crashes). Non-destructive
     // read — the row is removed only on daemon-confirmed ack.
     let pending = editor
@@ -495,38 +535,6 @@ pub(super) fn drain_kb_node_updates(editor: &mut Editor, collab_tx: &mpsc::Sende
     }
     if in_mem > 0 {
         tracing::debug!(target: "kb_sync", count = in_mem, "drain: flushed in-memory kb updates");
-    }
-
-    // Phase D1.1: drain collection-manifest ops (created/deleted nodes) →
-    // kb/collection_node_*. Best-effort: only sent when connected; creates also
-    // self-heal on the reconnect re-share (which rebuilds the full manifest).
-    for (kb_id, node_id, title, add) in std::mem::take(&mut editor.collab.pending_kb_manifest) {
-        tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, add, "drain: send kb/collection_node");
-        // #156 F5: never write a cleartext node title into the manifest of an E2e KB —
-        // the key-blind daemon/relay stores the manifest in the clear and would read it.
-        // The real title lives encrypted inside the node op-set; an E2e manifest needs
-        // only the node_id (the Blocked/list views fall back to it). Downgrade-resistant:
-        // `kb_collection_is_e2e` reads the SIGNED op-log, not the relay-flippable flag.
-        let title = if add
-            && editor
-                .collab
-                .kb_collection_state
-                .get(&kb_id)
-                .is_some_and(|s| kb_collection_is_e2e(s))
-        {
-            String::new()
-        } else {
-            title
-        };
-        let cmd = CollabCommand::KbCollectionNode {
-            kb_id,
-            node_id,
-            title,
-            add,
-        };
-        if collab_tx.try_send(cmd).is_err() {
-            warn!("collab command channel full — KB manifest op dropped");
-        }
     }
 }
 

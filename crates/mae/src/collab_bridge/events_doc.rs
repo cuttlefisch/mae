@@ -202,7 +202,7 @@ fn handle_buffer_state_event(
     let buf_name = match &doc_addr {
         Some(mae_sync::DocAddress::File { rel_path, .. }) => rel_path.clone(),
         Some(mae_sync::DocAddress::Shared { name }) => name.clone(),
-        Some(mae_sync::DocAddress::KbNode { node_id }) => node_id.clone(),
+        Some(mae_sync::DocAddress::KbNode { node_id, .. }) => node_id.clone(),
         Some(mae_sync::DocAddress::KbCollection { kb_id }) => {
             format!("[kbc:{kb_id}]")
         }

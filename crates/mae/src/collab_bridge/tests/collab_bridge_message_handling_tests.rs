@@ -174,7 +174,7 @@ async fn handle_response_kb_join_subscribes_to_collection_and_node_docs() {
         "join must subscribe to the collection doc"
     );
     assert!(
-        shared.contains(&"kb:testkb:n1".to_string()),
+        shared.contains(&"kbn:testkb:testkb:n1".to_string()),
         "join must subscribe to each node doc — else inbound live updates are dropped (B-13)"
     );
 }

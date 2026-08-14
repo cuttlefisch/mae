@@ -23,14 +23,9 @@
 use super::*;
 
 fn node_doc(kb_id: &str, node_id: &str) -> String {
-    // Stage 1 keeps today's flat addressing; Stage 2 gives `KbNode` a `kb_id`. Going
-    // through the type means this file needs no edit when that happens — only the
-    // constructor below does.
-    let _ = kb_id;
-    mae_sync::DocAddress::KbNode {
-        node_id: node_id.to_string(),
-    }
-    .to_doc_name()
+    // Stage 2 gave `KbNode` its `kb_id`. Only this constructor changed — every
+    // assertion in this file was written against the type, so none of them moved.
+    mae_sync::kb_node_doc_name(kb_id, node_id)
 }
 
 fn collection_doc(kb_id: &str) -> String {

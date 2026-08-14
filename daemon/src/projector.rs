@@ -98,8 +98,8 @@ impl Projector {
     /// a new or renamed variant fails to compile instead.
     pub async fn project_doc(&self, doc_name: &str) -> Result<(), String> {
         match mae_sync::DocAddress::parse(doc_name) {
-            Some(mae_sync::DocAddress::KbNode { node_id }) => {
-                self.project_node_change(&node_id).await
+            Some(mae_sync::DocAddress::KbNode { kb_id, node_id }) => {
+                self.project_node_change(&kb_id, &node_id).await
             }
             Some(mae_sync::DocAddress::KbCollection { kb_id }) => {
                 self.project_collection_change(&kb_id).await
@@ -112,30 +112,35 @@ impl Projector {
         }
     }
 
-    /// A node doc changed → re-project it into every KB whose manifest lists it. If no
-    /// collection has been seen yet for this node, it's a no-op — the collection change
-    /// will project it (and register the routing).
-    async fn project_node_change(&self, node_id: &str) -> Result<(), String> {
-        let kbs: Vec<String> = {
+    /// A node doc changed → re-project it into **its own** KB. If that KB's collection
+    /// has not been seen yet, it's a no-op — the collection change will project it
+    /// (and register the routing).
+    ///
+    /// ADR-105: this used to fan out into *every* KB whose manifest listed the id,
+    /// because node docs were globally addressed and one document was genuinely shared
+    /// by every such KB. That fan-out copied one tenant's node content into another
+    /// tenant's cozo store. The address now carries `kb_id`, so the relationship is
+    /// 1:1 and the fan-out is gone. `node_to_kbs` survives as the "does this KB's
+    /// manifest know this node yet" check, which is what defers projection until the
+    /// collection has caught up.
+    async fn project_node_change(&self, kb_id: &str, node_id: &str) -> Result<(), String> {
+        let known = {
             let idx = self.index.lock().unwrap_or_else(|e| e.into_inner());
             idx.node_to_kbs
                 .get(node_id)
-                .map(|s| s.iter().cloned().collect())
-                .unwrap_or_default()
+                .is_some_and(|kbs| kbs.contains(kb_id))
         };
-        if kbs.is_empty() {
+        if !known {
             return Ok(());
         }
+        let doc = mae_sync::kb_node_doc_name(kb_id, node_id);
         let (state, _sv) = self
             .doc_store
-            .encode_state_and_sv(&format!("kb:{node_id}"))
+            .encode_state_and_sv(&doc)
             .await
-            .map_err(|e| format!("read 'kb:{node_id}': {e}"))?;
-        for kb_id in kbs {
-            let store = self.stores.store_for(&kb_id).await?;
-            project_node(&store, node_id, &state)?;
-        }
-        Ok(())
+            .map_err(|e| format!("read '{doc}': {e}"))?;
+        let store = self.stores.store_for(kb_id).await?;
+        project_node(&store, node_id, &state)
     }
 
     /// A collection changed → diff its manifest against the last-seen one: delete removed
@@ -165,10 +170,10 @@ impl Projector {
         }
         for node_id in &added {
             // Best-effort: the node doc may not have synced yet — it will be projected on
-            // its own `kb:` change once it arrives (routing is registered below).
+            // its own `kbn:` change once it arrives (routing is registered below).
             if let Ok((state, _sv)) = self
                 .doc_store
-                .encode_state_and_sv(&format!("kb:{node_id}"))
+                .encode_state_and_sv(&mae_sync::kb_node_doc_name(kb_id, node_id))
                 .await
             {
                 if let Err(e) = project_node(&store, node_id, &state) {
@@ -261,7 +266,7 @@ impl Projector {
         for node_id in &truth {
             let Ok((state, _sv)) = self
                 .doc_store
-                .encode_state_and_sv(&format!("kb:{node_id}"))
+                .encode_state_and_sv(&mae_sync::kb_node_doc_name(kb_id, node_id))
                 .await
             else {
                 // No node doc yet — the manifest lists it but content has not synced.
@@ -464,7 +469,7 @@ mod tests {
 
         let node = mae_sync::kb::KbNodeDoc::new("concept:x", "X", "x", &[]);
         doc_store
-            .apply_update("kb:concept:x", &node.encode(), None)
+            .apply_update("kbn:kb1:concept:x", &node.encode(), None)
             .await
             .unwrap();
         let scratch = mae_sync::kb::KbNodeDoc::new("s", "S", "s", &[]);
@@ -473,7 +478,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(rx.recv().await.unwrap(), "kb:concept:x");
+        assert_eq!(rx.recv().await.unwrap(), "kbn:kb1:concept:x");
         assert!(
             rx.try_recv().is_err(),
             "ephemeral docs must not emit changes"
@@ -496,12 +501,12 @@ mod tests {
         // Seed two node docs + a collection listing them.
         let a = mae_sync::kb::KbNodeDoc::new("concept:a", "A", "see [[concept:b]]", &[]);
         doc_store
-            .apply_update("kb:concept:a", &a.encode(), None)
+            .apply_update("kbn:kb1:concept:a", &a.encode(), None)
             .await
             .unwrap();
         let b = mae_sync::kb::KbNodeDoc::new("concept:b", "B", "b body", &[]);
         doc_store
-            .apply_update("kb:concept:b", &b.encode(), None)
+            .apply_update("kbn:kb1:concept:b", &b.encode(), None)
             .await
             .unwrap();
         let mut coll = mae_sync::kb::KbCollectionDoc::new("kb1", "owner");
@@ -520,14 +525,17 @@ mod tests {
 
         // Edit concept:a's title on its EXISTING CRDT lineage (a real edit — applying a
         // fresh independent doc would merge, not replace). The node change is routed to kb1.
-        let (a_state, _sv) = doc_store.encode_state_and_sv("kb:concept:a").await.unwrap();
+        let (a_state, _sv) = doc_store
+            .encode_state_and_sv("kbn:kb1:concept:a")
+            .await
+            .unwrap();
         let mut a_doc = mae_sync::kb::KbNodeDoc::from_bytes_with_client_id(&a_state, 999).unwrap();
         let edit = a_doc.set_title("A2");
         doc_store
-            .apply_update("kb:concept:a", &edit, None)
+            .apply_update("kbn:kb1:concept:a", &edit, None)
             .await
             .unwrap();
-        projector.project_doc("kb:concept:a").await.unwrap();
+        projector.project_doc("kbn:kb1:concept:a").await.unwrap();
         assert_eq!(store.get_node("concept:a").unwrap().unwrap().title, "A2");
 
         // Remove concept:b from the manifest → it's deleted from the projection.
@@ -562,7 +570,7 @@ mod tests {
 
         let a = mae_sync::kb::KbNodeDoc::new("concept:a", "A", "a", &[]);
         doc_store
-            .apply_update("kb:concept:a", &a.encode(), None)
+            .apply_update("kbn:kb1:concept:a", &a.encode(), None)
             .await
             .unwrap();
         let mut coll = mae_sync::kb::KbCollectionDoc::new("kb1", "owner");
@@ -606,7 +614,7 @@ mod tests {
 
         // A real production call through the now-poisoned lock must succeed, not
         // cascade-panic.
-        let result = projector.project_doc("kb:concept:a").await;
+        let result = projector.project_doc("kbn:kb1:concept:a").await;
         assert!(
             result.is_ok(),
             "a poisoned index lock must not cascade into a panic on the next call: {result:?}"

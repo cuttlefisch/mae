@@ -220,7 +220,7 @@ async fn get(
         .await
         .map_err(McpError::internal_error)?;
 
-    let node_doc = format!("kb:{node_id}");
+    let node_doc = mae_sync::kb_node_doc_name(kb_id, node_id);
     let (state, _sv) = doc_store
         .encode_state_and_sv(&node_doc)
         .await
@@ -291,7 +291,7 @@ async fn search(
         if results.len() >= limit {
             break;
         }
-        let node_doc = format!("kb:{node_id}");
+        let node_doc = mae_sync::kb_node_doc_name(kb_id, &node_id);
         let Ok((state, _sv)) = doc_store.encode_state_and_sv(&node_doc).await else {
             continue; // a manifest entry with no materialized doc yet -- skip, not an error
         };
@@ -395,7 +395,7 @@ async fn graph(
             let mut edges = Vec::new();
             let mut edges_truncated = false;
             'scan: for id in &node_ids {
-                let node_doc = format!("kb:{id}");
+                let node_doc = mae_sync::kb_node_doc_name(kb_id, id);
                 if let Ok((state, _sv)) = doc_store.encode_state_and_sv(&node_doc).await {
                     if let Ok(doc) = KbNodeDoc::from_bytes(&state) {
                         for link in doc.links() {

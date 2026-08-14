@@ -101,7 +101,7 @@ pub async fn import_kb(doc_store: &DocStore, artifact: &[u8]) -> Result<KbCheckp
         .map_err(|e| format!("restore collection '{}': {e}", cp.kb_id))?;
     for (id, state) in &cp.nodes {
         doc_store
-            .share_doc(&format!("kb:{id}"), state)
+            .share_doc(&mae_sync::kb_node_doc_name(&cp.kb_id, id), state)
             .await
             .map_err(|e| format!("restore node '{id}': {e}"))?;
     }
@@ -164,7 +164,7 @@ pub async fn checkpoint_kb(doc_store: &DocStore, kb_id: &str) -> Result<KbCheckp
     let mut nodes = Vec::with_capacity(node_ids.len());
     for node_id in &node_ids {
         let (state, _sv) = doc_store
-            .encode_state_and_sv(&format!("kb:{node_id}"))
+            .encode_state_and_sv(&mae_sync::kb_node_doc_name(kb_id, node_id))
             .await
             .map_err(|e| format!("load node '{node_id}': {e}"))?;
         nodes.push((node_id.clone(), state));
@@ -213,9 +213,9 @@ mod tests {
             .unwrap();
 
         let n1 = mae_sync::kb::KbNodeDoc::new("n1", "Node 1", "body one", &[]);
-        store.share_doc("kb:n1", &n1.encode()).await.unwrap();
+        store.share_doc("kbn:kb1:n1", &n1.encode()).await.unwrap();
         let n2 = mae_sync::kb::KbNodeDoc::new("n2", "Node 2", "body two", &[]);
-        store.share_doc("kb:n2", &n2.encode()).await.unwrap();
+        store.share_doc("kbn:kb1:n2", &n2.encode()).await.unwrap();
     }
 
     #[tokio::test]
@@ -244,7 +244,7 @@ mod tests {
         // A node-content change moves the hash.
         let n1 = mae_sync::kb::KbNodeDoc::new("n1", "Node 1", "EDITED", &[]);
         store
-            .apply_update("kb:n1", &n1.encode(), None)
+            .apply_update("kbn:kb1:n1", &n1.encode(), None)
             .await
             .unwrap();
         let c = checkpoint_kb(&store, "kb1").await.unwrap();
@@ -272,12 +272,12 @@ mod tests {
 
         // Node bodies restored (semantic round-trip — the docs are KbNodeDoc maps,
         // not plain text, so check the structured state, not doc_store.content()).
-        let (n1s, _) = dst.encode_state_and_sv("kb:n1").await.unwrap();
+        let (n1s, _) = dst.encode_state_and_sv("kbn:kb1:n1").await.unwrap();
         assert_eq!(
             mae_sync::kb::KbNodeDoc::from_bytes(&n1s).unwrap().body(),
             "body one"
         );
-        let (n2s, _) = dst.encode_state_and_sv("kb:n2").await.unwrap();
+        let (n2s, _) = dst.encode_state_and_sv("kbn:kb1:n2").await.unwrap();
         assert_eq!(
             mae_sync::kb::KbNodeDoc::from_bytes(&n2s).unwrap().body(),
             "body two"

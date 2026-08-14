@@ -27,7 +27,7 @@ async fn raw_sync_read_of_a_kb_doc_is_access_gated() {
 
     // A stranger (non-member) must be DENIED both the collection doc and any node doc, on
     // BOTH raw read methods.
-    for doc in ["kbc:kbsec", "kb:kbsec:alpha"] {
+    for doc in ["kbc:kbsec", "kbn:kbsec:alpha"] {
         for method in ["sync/full_state", "sync/state_vector"] {
             let r = dispatch_as(
                 &store,

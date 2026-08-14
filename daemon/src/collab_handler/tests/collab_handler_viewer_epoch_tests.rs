@@ -120,7 +120,10 @@ async fn viewer_era_edits_do_not_cascade_on_grant() {
     // Strong no-cascade oracle: snapshot the canonical state BEFORE the fenced push
     // and assert it is BYTE-IDENTICAL after — a fenced op must perturb the
     // authoritative node by exactly zero bytes (stronger than a substring check).
-    let (before, _) = store.encode_state_and_sv("kb:concept:n").await.unwrap();
+    let (before, _) = store
+        .encode_state_and_sv("kbn:kbx:concept:n")
+        .await
+        .unwrap();
     let resp = dispatch_as(
         &store,
         &bc,
@@ -142,7 +145,10 @@ async fn viewer_era_edits_do_not_cascade_on_grant() {
 
     // NO CASCADE: the canonical state is byte-identical (and, redundantly, never
     // contains the viewer-era edit).
-    let (state, _) = store.encode_state_and_sv("kb:concept:n").await.unwrap();
+    let (state, _) = store
+        .encode_state_and_sv("kbn:kbx:concept:n")
+        .await
+        .unwrap();
     assert_eq!(
         state, before,
         "a fenced op must leave the canonical node byte-identical (no cascade)"
@@ -174,7 +180,10 @@ async fn viewer_era_edits_do_not_cascade_on_grant() {
         .is_none(),
         "a fresh current-epoch edit is accepted"
     );
-    let (state, _) = store.encode_state_and_sv("kb:concept:n").await.unwrap();
+    let (state, _) = store
+        .encode_state_and_sv("kbn:kbx:concept:n")
+        .await
+        .unwrap();
     assert!(
         TextSync::from_state(&state)
             .unwrap()
@@ -265,7 +274,10 @@ async fn stale_epoch_continuation_of_canonical_client_is_fenced() {
     // THE EXPLOIT: bob authors a CONTINUATION under his now-stale epoch-0 client,
     // chained onto the canonical state (not a fresh lineage). Role gate passes
     // (he is an editor); the epoch fence must still reject it.
-    let (canonical_state, _) = store.encode_state_and_sv("kb:concept:n").await.unwrap();
+    let (canonical_state, _) = store
+        .encode_state_and_sv("kbn:kbx:concept:n")
+        .await
+        .unwrap();
     let cid0 = derive_kb_client_id(&fp("bob"), 0);
     let mut ts = TextSync::from_state_with_client_id(&canonical_state, cid0).unwrap();
     let cont_update = ts.insert(0, "VIEWER-ERA-CONT ");
@@ -293,7 +305,10 @@ async fn stale_epoch_continuation_of_canonical_client_is_fenced() {
     // NO CASCADE: the canonical state is byte-identical to before the fenced push
     // (`canonical_state` was captured just above to build the continuation), and
     // never gains the viewer-interval edit.
-    let (state, _) = store.encode_state_and_sv("kb:concept:n").await.unwrap();
+    let (state, _) = store
+        .encode_state_and_sv("kbn:kbx:concept:n")
+        .await
+        .unwrap();
     assert_eq!(
         state, canonical_state,
         "a fenced continuation must leave the canonical node byte-identical (no cascade)"

@@ -489,6 +489,8 @@ Source: `shared/sync/src/lib.rs`
 | `wire` | mod |
 | `SyncError` | enum |
 | `DocAddress` | enum |
+| `kb_node_doc_name` | fn |
+| `kb_id_is_addressable` | fn |
 | `SavePolicy` | enum |
 | `ClockStatus` | enum |
 | `SyncDiagnosis` | struct |

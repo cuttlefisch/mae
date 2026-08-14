@@ -721,17 +721,23 @@ mod tests {
             let backend = SqliteBackend::open(&db_path).unwrap();
             // Write the plaintext canary as a node's content, then compact it into the
             // snapshot (mirrors a plaintext share that has been checkpointed to disk).
-            let id = backend.wal_append("kb:n1", canary, None).await.unwrap();
-            backend.compact("kb:n1", canary, id).await.unwrap();
+            let id = backend
+                .wal_append("kbn:testkb:n1", canary, None)
+                .await
+                .unwrap();
+            backend.compact("kbn:testkb:n1", canary, id).await.unwrap();
             // Also leave a fresh WAL-tail copy (mirrors a not-yet-compacted plaintext edit).
-            backend.wal_append("kb:n1", canary, None).await.unwrap();
+            backend
+                .wal_append("kbn:testkb:n1", canary, None)
+                .await
+                .unwrap();
             assert!(
                 raw_contains_canary(&db_path),
                 "precondition: the plaintext canary is on disk before purge (else the test is vacuous)"
             );
 
             // The purge (what reseal-as-replace's share_doc triggers).
-            backend.delete_document("kb:n1").await.unwrap();
+            backend.delete_document("kbn:testkb:n1").await.unwrap();
 
             assert!(
                 !raw_contains_canary(&db_path),

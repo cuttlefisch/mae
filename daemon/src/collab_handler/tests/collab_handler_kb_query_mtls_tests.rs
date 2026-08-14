@@ -115,7 +115,7 @@ async fn owner_replace_body_msg(
     new_body: &str,
 ) -> serde_json::Value {
     use mae_sync::kb::KbNodeDoc;
-    let node_doc = format!("kb:{node_id}");
+    let node_doc = mae_sync::kb_node_doc_name(kb_id, node_id);
     let (state, _sv) = store.encode_state_and_sv(&node_doc).await.unwrap();
     let cid = derive_kb_client_id(owner_fp, 0);
     let mut node = KbNodeDoc::from_bytes_with_client_id(&state, cid).unwrap();

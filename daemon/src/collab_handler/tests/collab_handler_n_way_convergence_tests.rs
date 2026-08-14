@@ -75,7 +75,10 @@ async fn three_concurrent_editors_converge_without_losing_any_edit() {
         );
     }
 
-    let (state, _) = store.encode_state_and_sv("kb:concept:n").await.unwrap();
+    let (state, _) = store
+        .encode_state_and_sv("kbn:kb-converge:concept:n")
+        .await
+        .unwrap();
     let merged = TextSync::from_state(&state).unwrap().content();
     for text in ["ALICE", "BOB", "CAROL"] {
         assert!(
@@ -151,7 +154,10 @@ async fn three_concurrent_editors_converge_to_identical_content_regardless_of_or
             );
         }
 
-        let (state, _) = store.encode_state_and_sv("kb:concept:n").await.unwrap();
+        let (state, _) = store
+            .encode_state_and_sv("kbn:kb-converge:concept:n")
+            .await
+            .unwrap();
         TextSync::from_state(&state).unwrap().content()
     }
 

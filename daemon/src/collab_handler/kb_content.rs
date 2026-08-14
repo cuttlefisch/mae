@@ -164,7 +164,7 @@ pub(super) async fn handle_kb_share(
                     continue;
                 }
             };
-            let node_doc = format!("kb:{node_id}");
+            let node_doc = mae_sync::kb_node_doc_name(&kb_id, node_id);
             // ADR-020 B-12: MERGE onto an existing node instead of
             // delete+replace, so an owner re-share does not reset the node's
             // CRDT lineage or clobber peer edits the owner hasn't seen yet.
@@ -289,7 +289,7 @@ pub(super) async fn handle_kb_node_fetch(
         return JsonRpcResponse::error(id, McpError::internal_error(msg));
     }
 
-    let node_doc = format!("kb:{node_id}");
+    let node_doc = mae_sync::kb_node_doc_name(&kb_id, &node_id);
     match doc_store.encode_state_and_sv(&node_doc).await {
         Ok((state, sv)) => {
             // Keep the member live-subscribed to this node going forward.
@@ -317,16 +317,27 @@ pub(super) async fn handle_kb_node_fetch(
     }
 }
 
-// @ai-caution: [kb-scoping] This path has the SAME unscoped-`node_id` shape #571
-// fixed for `kb/node_fetch` above: it gates `KbOp::Edit` on `kb_id`, then writes
-// `kb:{node_id}` from the flat, KB-unscoped doc namespace. The epoch fence does
-// not close it — the author writes under their own KB's epoch, which the fence
-// accepts. Do NOT simply add `require_node_in_kb` here: the editor drains node
-// updates BEFORE manifest adds (`collab_bridge/events_kb.rs`, `pending_kb_updates`
-// then `pending_kb_manifest`), so a brand-new node's update legitimately arrives
-// before its `kb/collection_node_add` and an unconditional check would break node
-// creation outright. Needs a create-carve-out or a drain reorder — a design call,
-// not a one-liner. Tracked separately; see #571's PR for the analysis.
+// ADR-105 (#718): this path used to write `kb:{node_id}` from the flat, KB-unscoped
+// doc namespace after gating `KbOp::Edit` on `kb_id` — so a write authorized against
+// one KB landed on another KB's node, and the epoch fence did not close it (the
+// author writes under their OWN KB's epoch, which the fence accepts).
+//
+// The address now carries `kb_id` (D2), which is what makes the collision
+// unexpressible. The `require_node_in_kb` check below is defense in depth on top of
+// that, per the prior-art brief: prefixed keys AND authorization checks, neither
+// sufficient alone. It answers a question scoping does not — whether the node is in
+// THIS KB's manifest.
+//
+// The old marker here warned that adding `require_node_in_kb` to this path would
+// break node creation. ADR-105 first planned to add it anyway (D6) once the drain
+// was reordered — and implementation refuted that. Post-scoping it is a
+// MANIFEST-CONSISTENCY check, not a tenant-isolation one: the address already
+// carries `kb_id` and `kb_access` above already proved membership, so all it adds
+// is "a member may not create an orphan node inside their OWN KB". Against that it
+// costs a distributed ordering dependency — a joining peer pulling nodes, or a
+// relay forwarding content, can legitimately deliver a node update before its
+// manifest entry. It broke ten such flows in the daemon's own suite. Withdrawn;
+// see ADR-105 D6.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_kb_node_update(
     doc_store: &DocStore,
@@ -440,7 +451,7 @@ pub(super) async fn handle_kb_node_update(
         }
     }
 
-    let node_doc = format!("kb:{node_id}");
+    let node_doc = mae_sync::kb_node_doc_name(&kb_id, &node_id);
 
     // ADR-036 §D3 SIGNED CONTENT OP VERIFICATION. If the op carries a signed
     // authorship header, the content AUTHOR (from the *signed header*, not the

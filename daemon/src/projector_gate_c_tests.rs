@@ -34,7 +34,7 @@ async fn seed(doc_store: &Arc<DocStore>, kb_id: &str, nodes: &[(&str, &str, &str
     for (id, title, body) in nodes {
         let n = mae_sync::kb::KbNodeDoc::new(id, title, body, &[]);
         doc_store
-            .apply_update(&format!("kb:{id}"), &n.encode(), None)
+            .apply_update(&format!("kbn:kb1:{id}"), &n.encode(), None)
             .await
             .unwrap();
         coll.add_node(id, title);
@@ -81,7 +81,7 @@ async fn a_crdt_node_write_becomes_visible_to_a_cozo_query() {
     // And a subsequent EDIT reaches the projection too — not just the initial seed.
     let mut edited = mae_sync::kb::KbNodeDoc::from_bytes(
         &doc_store
-            .encode_state_and_sv("kb:concept:rope")
+            .encode_state_and_sv("kbn:kb1:concept:rope")
             .await
             .unwrap()
             .0,
@@ -89,10 +89,10 @@ async fn a_crdt_node_write_becomes_visible_to_a_cozo_query() {
     .unwrap();
     let upd = edited.set_body("now mentions zippers instead");
     doc_store
-        .apply_update("kb:concept:rope", &upd, None)
+        .apply_update("kbn:kb1:concept:rope", &upd, None)
         .await
         .unwrap();
-    projector.project_doc("kb:concept:rope").await.unwrap();
+    projector.project_doc("kbn:kb1:concept:rope").await.unwrap();
 
     let n = store.get_node("concept:rope").unwrap().unwrap();
     assert_eq!(
@@ -125,14 +125,14 @@ async fn reprojection_is_idempotent_and_order_independent() {
         projector.project_doc("kbc:kb1").await.unwrap();
         for i in order {
             projector
-                .project_doc(&format!("kb:{}", nodes[i].0))
+                .project_doc(&format!("kbn:kb1:{}", nodes[i].0))
                 .await
                 .unwrap();
         }
         // Project everything a second time — idempotence.
         for i in order {
             projector
-                .project_doc(&format!("kb:{}", nodes[i].0))
+                .project_doc(&format!("kbn:kb1:{}", nodes[i].0))
                 .await
                 .unwrap();
         }
