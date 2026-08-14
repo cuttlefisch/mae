@@ -14,6 +14,7 @@ mod collab_handler_derive_cache_tests;
 mod collab_handler_device_revocation_fence_tests;
 mod collab_handler_governance_quorum_tests;
 mod collab_handler_kb_lifecycle_tests;
+mod collab_handler_kb_list_isolation_tests;
 mod collab_handler_kb_query_mtls_tests;
 mod collab_handler_lease_race_tests;
 mod collab_handler_legacy_migration_tests;

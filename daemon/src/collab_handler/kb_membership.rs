@@ -50,9 +50,51 @@ pub(super) async fn handle_kb_register(
     )
 }
 
-pub(super) async fn handle_kb_list(doc_store: &DocStore, id: serde_json::Value) -> JsonRpcResponse {
+/// List the KBs this caller may read.
+///
+/// @ai-caution: [kb-scoping] (#653) This MUST stay principal-filtered. It used to
+/// return `list_kb_metas()` wholesale with no principal and no `kb_access` call, so
+/// any client authenticated to the collab listener learned the id, name and node
+/// count of **every** KB co-hosted on the daemon — including tenants it has no
+/// membership in. On the multi-tenant daemon ADR-060 describes, that is a roster
+/// leak, and it also hands an attacker the exact `kb_id` values the cross-KB
+/// content paths key on (#571, #718).
+///
+/// Only `Allow` is listed. `AllowAutoJoin` (a permissive-policy KB the caller is
+/// not yet a member of) is deliberately **excluded**: making every permissive KB
+/// on a shared host enumerable is the same leak in a smaller costume, and nothing
+/// needs it — a client that knows a `kb_id` can still `kb/join` directly. If
+/// discovery of joinable KBs is wanted later, add it as its own method with its own
+/// decision, rather than widening this one.
+///
+/// Unauthenticated callers are unaffected: `kb_access` returns `Allow` for a `None`
+/// principal *before* it loads any collection, so a single-user daemon with auth off
+/// sees exactly what it saw before, at no extra cost.
+pub(super) async fn handle_kb_list(
+    doc_store: &DocStore,
+    auth_principal: Option<&str>,
+    transport: Transport,
+    id: serde_json::Value,
+) -> JsonRpcResponse {
     let kbs = doc_store.list_kb_metas().await;
-    JsonRpcResponse::success(id, serde_json::json!({ "kbs": kbs }))
+    let mut visible = Vec::with_capacity(kbs.len());
+    for meta in kbs {
+        // A meta row with no `kb_id` cannot be authorized, so it cannot be listed.
+        // Fail closed rather than treating an unreadable row as public.
+        let Some(kb_id) = meta.get("kb_id").and_then(|v| v.as_str()) else {
+            warn!("kb/list: skipping KB meta with no kb_id");
+            continue;
+        };
+        match kb_access(doc_store, kb_id, auth_principal, KbOp::Read, transport).await {
+            Ok(AccessDecision::Allow) => visible.push(meta),
+            Ok(_) => {}
+            Err(e) => {
+                // Denied-by-error is still denied: omit it.
+                warn!(kb_id, error = %e, "kb/list: access check failed, omitting KB");
+            }
+        }
+    }
+    JsonRpcResponse::success(id, serde_json::json!({ "kbs": visible }))
 }
 
 pub(super) async fn handle_kb_unregister(
