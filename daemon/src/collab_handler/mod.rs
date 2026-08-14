@@ -80,6 +80,7 @@ pub async fn handle_client_with_auth<R, W, A>(
     start_time: std::time::Instant,
     transport: Transport,
     artifact_store: Arc<dyn crate::artifact_store::ArtifactStore>,
+    quota: Arc<dyn crate::quota::QuotaCharger>,
     kb_query_limits: crate::kb_query::KbQueryLimits,
     self_issue: Option<crate::oauth_self_issue::SelfIssueConfig>,
 ) where
@@ -125,6 +126,7 @@ pub async fn handle_client_with_auth<R, W, A>(
         start_time,
         transport,
         artifact_store,
+        quota,
         kb_query_limits,
         self_issue,
     )
@@ -141,6 +143,7 @@ pub async fn handle_client<R, W>(
     start_time: std::time::Instant,
     transport: Transport,
     artifact_store: Arc<dyn crate::artifact_store::ArtifactStore>,
+    quota: Arc<dyn crate::quota::QuotaCharger>,
     kb_query_limits: crate::kb_query::KbQueryLimits,
     self_issue: Option<crate::oauth_self_issue::SelfIssueConfig>,
 ) where
@@ -156,6 +159,7 @@ pub async fn handle_client<R, W>(
         start_time,
         transport,
         artifact_store,
+        quota,
         kb_query_limits,
         self_issue,
     )
@@ -174,6 +178,7 @@ pub async fn handle_client_authenticated<R, W>(
     start_time: std::time::Instant,
     transport: Transport,
     artifact_store: Arc<dyn crate::artifact_store::ArtifactStore>,
+    quota: Arc<dyn crate::quota::QuotaCharger>,
     kb_query_limits: crate::kb_query::KbQueryLimits,
     self_issue: Option<crate::oauth_self_issue::SelfIssueConfig>,
 ) where
@@ -189,6 +194,7 @@ pub async fn handle_client_authenticated<R, W>(
         start_time,
         transport,
         artifact_store,
+        quota,
         kb_query_limits,
         self_issue,
     )
@@ -214,6 +220,7 @@ async fn run_session<R, W>(
     start_time: std::time::Instant,
     transport: Transport,
     artifact_store: Arc<dyn crate::artifact_store::ArtifactStore>,
+    quota: Arc<dyn crate::quota::QuotaCharger>,
     kb_query_limits: crate::kb_query::KbQueryLimits,
     self_issue: Option<crate::oauth_self_issue::SelfIssueConfig>,
 ) where
@@ -345,7 +352,7 @@ async fn run_session<R, W>(
                 }
 
                 let mut response = if is_doc {
-                    handle_doc_request_inner(&msg, &doc_store, &broadcaster, start_time, session_id, auth_label.as_deref(), auth_principal.as_deref(), auth_pubkey.as_ref(), &mut session_docs, transport, artifact_store.as_ref(), kb_query_limits, self_issue.clone()).await
+                    handle_doc_request_inner(&msg, &doc_store, quota.as_ref(), &broadcaster, start_time, session_id, auth_label.as_deref(), auth_principal.as_deref(), auth_pubkey.as_ref(), &mut session_docs, transport, artifact_store.as_ref(), kb_query_limits, self_issue.clone()).await
                 } else {
                     mae_mcp::handle_request(
                         &msg, &tool_defs, &tool_tx, &mut session, &broadcaster,
@@ -652,6 +659,7 @@ async fn handle_doc_request(
     handle_doc_request_inner(
         msg,
         doc_store,
+        &crate::quota::NoQuota,
         broadcaster,
         start_time,
         session_id,
@@ -1743,6 +1751,7 @@ async fn deny_kb_doc_read(
 async fn handle_doc_request_inner(
     msg: &str,
     doc_store: &DocStore,
+    quota: &dyn crate::quota::QuotaCharger,
     broadcaster: &SharedBroadcaster,
     start_time: std::time::Instant,
     session_id: u64,
@@ -1767,6 +1776,35 @@ async fn handle_doc_request_inner(
 
     let id = request.id.clone();
     let params = request.params.unwrap_or(serde_json::Value::Null);
+
+    // ADR-060 Phase C (#456): per-tenant quota enforcement for the collab/mTLS
+    // surface, keyed on the authenticated principal.
+    //
+    // Placed here — after parsing, before any handler runs — for the same reason
+    // `handler.rs::charge_tenant_or_reject` sits inside `snapshot_query_layer`: a
+    // rejected request must cost only a `dashmap` lookup and a few atomics, never
+    // the doc-store work the handler was about to do.
+    //
+    // The guard is bound for the rest of this function so a tenant's connection
+    // slot is held for the request's duration and released when it returns.
+    //
+    // `kb/query.*` is charged HERE and not inside `kb_query::dispatch`, even though
+    // the OAuth listener reaches that function directly: charging inside it would
+    // bill this path twice, once here and once there. The rule is that each
+    // listener charges at its own entry.
+    let _quota_lease =
+        match crate::quota::charge_or_reject(quota, auth_principal, &request.method, id.clone()) {
+            Ok(lease) => lease,
+            Err(resp) => {
+                warn!(
+                    session = session_id,
+                    method = %request.method,
+                    principal = auth_principal.unwrap_or("<none>"),
+                    "collab request rejected by tenant quota"
+                );
+                return resp;
+            }
+        };
 
     info!(session = session_id, method = %request.method, "doc request");
     match request.method.as_str() {

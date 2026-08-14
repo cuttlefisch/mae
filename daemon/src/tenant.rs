@@ -12,18 +12,19 @@
 //! tenant-scoped concurrent-request cap (`conn_limit::ConnLimiter`, reused
 //! rather than reinvented — CLAUDE.md principle #8).
 //!
-//! **Scope of this implementation pass** (principle #15 — a bounded down
-//! payment, not silently partial): wired into the KB Unix socket
-//! (`handler.rs::dispatch`'s `snapshot_query_layer`/`snapshot_store`
-//! chokepoint) with the exact cost table the ADR names for that surface.
-//! Principal-keyed enforcement on the collab/OAuth listeners
-//! (`check_and_charge_by_principal` below) is implemented and tested here as
-//! a listener-agnostic capability, but not yet plugged into
-//! `collab_handler::handle_doc_request_inner` — that wiring, plus a cost
-//! table for `sync/*`/`kb/share`/`kb/node_update`-shaped methods (a
-//! different RPC surface than the KB socket's `kb/get`-shaped one, needing
-//! its own reasoned mapping rather than reusing this one blindly), is
-//! tracked as explicit follow-on work rather than left as a silent gap.
+//! **All three surfaces are now enforced** (#456 closed the follow-on gap this
+//! module's doc used to describe): the KB Unix socket keys on the instance
+//! address via `handler.rs::dispatch`'s `snapshot_query_layer`/`snapshot_store`
+//! chokepoint, and the collab/mTLS and OAuth listeners key on the authenticated
+//! principal via [`collab_method_cost`] + [`TenantQuota`].
+//!
+//! That wiring needed one thing this module originally said it would not: a
+//! **signature change**. The note here used to claim follow-on wiring "only
+//! needs a call site". It does not — `TenantRegistry` and `ConnGuard` live in
+//! the *binary* crate while `collab_handler` lives in the *library* crate, so
+//! the listener has to be handed an implementation through a seam it can name.
+//! That seam is `mae_daemon::quota::QuotaCharger`, mirroring the
+//! `ArtifactStore` trait that already solves the identical problem.
 
 use crate::config::TenantConfig;
 use crate::conn_limit::{ConnGuard, ConnLimiter};
@@ -50,6 +51,74 @@ pub enum RequestCost {
     /// `kb/hygiene_scan` (writes suggestions), `kb/hygiene_accept`,
     /// `kb/hygiene_dismiss` — any mutating hygiene arm.
     Mutation,
+}
+
+/// Cost class for a collab/OAuth JSON-RPC method (#456).
+///
+/// ADR-060 Phase C names a cost table for the **KB socket**'s `kb/get`-shaped
+/// method set. The collab/OAuth surface is a structurally different set — whole-doc
+/// sync, membership mutation, artifact fetch — so it gets its own mapping here
+/// rather than reusing that table uncritically. The three classes are the same
+/// because the load classes are the same: a bounded lookup, a whole-store or
+/// whole-document materialization, and a write.
+///
+/// Unknown methods are [`RequestCost::Read`]. That is deliberate: an unrecognized
+/// method is about to be rejected as unknown by the dispatcher anyway, so charging
+/// it the maximum would let a caller burn a tenant's budget with nonsense method
+/// names — the cheapest class is the safe default here, not the most expensive.
+///
+/// **`sync/awareness` is not a concern despite being the highest-frequency method
+/// on this surface.** The editor sends it fire-and-forget with no `id`
+/// (`collab_bridge/mod.rs`), so it is a JSON-RPC *notification* and routes to
+/// `handle_doc_notification_inner`, which is not a charging chokepoint. Only a
+/// client that sends awareness *as a request* pays, and then only `Read`.
+pub fn collab_method_cost(method: &str) -> RequestCost {
+    match method {
+        // Whole-document or whole-collection materialization.
+        "sync/full_state" | "sync/resync" | "docs/list" | "docs/content" => RequestCost::Scan,
+        // `kb/list` authorizes every co-hosted KB one at a time (#653), so it scales
+        // with the number of KBs on the daemon rather than being a bounded lookup.
+        "kb/list" => RequestCost::Scan,
+        // Server-side scans over node content (ADR-053's live query surface).
+        "kb/query.search" | "kb/query.graph" => RequestCost::Scan,
+        // Artifact bodies are unbounded blobs.
+        "kb/fetch_artifact" => RequestCost::Scan,
+
+        // Writes: document content, collection state, and every membership or
+        // policy mutation. Membership ops are cheap in bytes but authorize-then-
+        // sign-then-persist-then-broadcast, and they are exactly what an abusive
+        // tenant would loop on.
+        "sync/update"
+        | "sync/share"
+        | "docs/save_intent"
+        | "docs/save_committed"
+        | "docs/delete"
+        | "kb/node_update"
+        | "kb/collection_op"
+        | "kb/share"
+        | "kb/join"
+        | "kb/leave"
+        | "kb/register"
+        | "kb/unregister"
+        | "kb/add_member"
+        | "kb/remove_member"
+        | "kb/set_member"
+        | "kb/approve_member"
+        | "kb/set_policy"
+        | "kb/set_governance"
+        | "kb/block_principal"
+        | "kb/unblock_principal"
+        | "kb/revoke"
+        | "kb/claim_lease"
+        | "kb/reimport"
+        | "kb/query.self_token" => RequestCost::Mutation,
+
+        // Everything else — bounded lookups (`sync/state_vector`, `sync/diff`,
+        // `kb/node_fetch`, `docs/metadata`, `docs/stats`, `kb/list_pending`,
+        // `kb/blocklist`, `kb/query.get`, `kb/query.capabilities`,
+        // `kb/query.my_wrapped_key`) and unknown methods.
+        _ => RequestCost::Read,
+    }
 }
 
 impl RequestCost {
@@ -163,13 +232,8 @@ impl TenantQuotaState {
 pub struct TenantRegistry {
     configs: HashMap<String, TenantConfig>,
     by_instance: HashMap<String, String>,
-    // Exercised by this module's own tests via `check_and_charge_by_principal`
-    // below (real, tested capability); not yet read by any production caller
-    // since no listener wires principal-keyed enforcement in this pass — see
-    // the module doc's "Scope of this implementation pass". Not dead code to
-    // delete, so `dead_code` is allowed deliberately rather than worked
-    // around by leaving the whole capability half-built.
-    #[allow(dead_code)]
+    // #456: read in production by `check_and_charge_by_principal`, which the
+    // collab and OAuth listeners now call through `TenantQuota`.
     by_principal: HashMap<String, String>,
     states: DashMap<String, Arc<TenantQuotaState>>,
 }
@@ -244,8 +308,7 @@ impl TenantRegistry {
 
     /// Collab/OAuth path: `principal` is the authenticated fingerprint/PSK-id
     /// (`Session::authenticated_principal()` / OAuth's mapped `sub` claim).
-    /// Not yet wired into `collab_handler` (see module doc) — implemented
-    /// and tested here so that follow-on wiring only needs a call site, not
+    /// Called in production by [`TenantQuota`] from both listeners (#456), via
     /// new mechanism. `dead_code`-allowed for the same reason as
     /// `by_principal` above: real, tested, deliberately not yet called from
     /// production.
@@ -598,3 +661,41 @@ mod tests {
         }
     }
 }
+
+/// Binds the collab/OAuth listeners' [`QuotaCharger`](mae_daemon::quota::QuotaCharger)
+/// seam to this registry (#456).
+///
+/// Lives here, in the binary, because `TenantRegistry` and `ConnGuard` do — see
+/// `mae_daemon::quota`'s module doc for why the library cannot call them directly.
+/// Holds the registry `Arc` rather than `DaemonState`: `charge` is synchronous and
+/// on the hot path, so it must not need an async lock. Safe because `state.tenants`
+/// is assigned once at startup and never replaced.
+pub struct TenantQuota(pub Arc<TenantRegistry>);
+
+impl mae_daemon::quota::QuotaCharger for TenantQuota {
+    fn charge(
+        &self,
+        principal: Option<&str>,
+        method: &str,
+    ) -> Result<mae_daemon::quota::QuotaLease, String> {
+        let cost = collab_method_cost(method);
+        let (outcome, guard) = self.0.check_and_charge_by_principal(principal, cost);
+        match outcome {
+            TenantOutcome::Unconfigured | TenantOutcome::Admitted => Ok(guard
+                .map(|g| mae_daemon::quota::QuotaLease::held(Box::new(g)))
+                .unwrap_or_else(mae_daemon::quota::QuotaLease::none)),
+            TenantOutcome::QuotaExceeded => Err(format!(
+                "tenant quota exceeded for '{}' (method '{method}')",
+                principal.unwrap_or("<unauthenticated>")
+            )),
+            TenantOutcome::ConnectionCapExceeded => Err(format!(
+                "tenant at connection capacity for '{}'",
+                principal.unwrap_or("<unauthenticated>")
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "tenant_collab_quota_tests.rs"]
+mod collab_quota_tests;

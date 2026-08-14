@@ -1,8 +1,8 @@
 # ADR-060: Daemon multi-tenancy
 
-**Status:** Accepted — all phases A–G landed (see "Implementation note" sections below).
-Phase C's collab/OAuth-side principal-keyed wiring is the one explicitly deferred piece,
-tracked as issue #456, not silently gapped.
+**Status:** Accepted — all phases A–G landed (see "Implementation note" sections below),
+including Phase C's collab/OAuth-side principal-keyed wiring, which was the one deferred
+piece and closed by issue #456.
 **Extends:** ADR-035, ADR-054, ADR-057.
 **Relates to:** ADR-017, ADR-018, ADR-025.
 **Tracking:** issue #408 (epic tracker) — corrected from a stale "#375" reference (that issue
@@ -978,3 +978,40 @@ Doesn't affect tenant routing/quotas (those correctly use the resolved `config`)
 scheduler's own tick intervals. Tracked as issue #461, not fixed in this pass (out of this
 phase's own scope — a config-change-CONTRACT phase, not a config-resolution-correctness
 phase).
+
+## Implementation note (Phase C follow-on, #456 — principal-keyed wiring)
+
+Phase C originally shipped its mechanism wired only into the **KB Unix socket**. The
+principal-keyed half (`TenantRegistry::check_and_charge_by_principal`) was implemented and
+unit-tested but reached no listener, so on the collab and OAuth surfaces — the ones hosted
+users actually arrive on — one tenant could still exhaust the daemon for every other. That
+is now closed.
+
+**Two things this turned up that the deferral note had wrong.**
+
+1. `tenant.rs` recorded that follow-on wiring "only needs a call site, not a signature
+   change". It needed both. `TenantRegistry` and `ConnGuard` live in the **binary** crate
+   (they are built from `daemon.toml` config types); `collab_handler` lives in the
+   **library** crate, which cannot name them. The wiring therefore needs a seam the library
+   *can* name: `mae_daemon::quota::QuotaCharger`, with `tenant::TenantQuota` implementing it
+   in the binary. This mirrors `ArtifactStore`, which already solves the identical problem
+   the identical way.
+
+2. **Each listener charges at its own entry, and `kb_query::dispatch` is deliberately not a
+   chokepoint.** Both the collab listener (via `handle_doc_request_inner`) and the OAuth
+   listener (via `route_authenticated_request`) reach `kb_query::dispatch` for `kb/query.*`.
+   Charging inside that shared function would bill the collab path twice — once at its own
+   entry and once again inside. So the rule is one charge per listener, at the door.
+
+**The cost table** (`tenant::collab_method_cost`) is this surface's own, not a reuse of the
+KB socket's: `Scan` for whole-document or whole-collection materialization (`sync/full_state`,
+`sync/resync`, `docs/list`, `docs/content`, `kb/query.search`, `kb/query.graph`,
+`kb/fetch_artifact`) and for `kb/list`, which since #653 authorizes every co-hosted KB one at
+a time and so scales with KB count; `Mutation` for content, collection and membership writes;
+`Read` for bounded lookups. Unknown methods are charged as `Read` deliberately — the
+dispatcher is about to reject them anyway, and pricing them as mutations would let anyone
+drain a tenant's budget with nonsense method names.
+
+`sync/awareness` is the highest-frequency method on this surface and is **not** charged: the
+editor sends it fire-and-forget with no `id`, so it is a JSON-RPC notification routed to
+`handle_doc_notification_inner`, which is not a charging chokepoint.

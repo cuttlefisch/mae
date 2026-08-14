@@ -377,6 +377,11 @@ async fn main() {
             let key_path = config.oauth.key_path.clone();
             let doc_store = doc_store_for_query.clone();
             let oauth_limiter = conn_limit::ConnLimiter::new(config.oauth.max_connections);
+            // ADR-060 Phase C (#456): the OAuth listener charges against the same
+            // per-tenant budget as the collab listener, keyed on the token's mapped
+            // principal.
+            let oauth_quota: Arc<dyn mae_daemon::quota::QuotaCharger> =
+                Arc::new(tenant::TenantQuota(Arc::clone(&state.lock().await.tenants)));
             // ADR-067 Phase D3: `None` unless BOTH the operator opted in AND
             // this daemon actually has a key-mode identity to validate
             // against (see `daemon_identity_for_oauth`'s own doc comment) —
@@ -403,6 +408,7 @@ async fn main() {
                     doc_store,
                     oauth_limiter,
                     self_issue,
+                    oauth_quota,
                 )
                 .await
                 {
@@ -535,6 +541,7 @@ async fn spawn_p2p_mesh(
         start_time,
         conn_limit::ConnLimiter::new(p2p.max_connections),
         Arc::new(handler::DaemonArtifactStore(Arc::clone(&state))),
+        Arc::new(tenant::TenantQuota(Arc::clone(&state.lock().await.tenants))),
         kb_query_limits,
         self_issue,
     ));
@@ -958,6 +965,14 @@ async fn spawn_collab_server(
     // this daemon's local KB content store.
     let artifact_store: Arc<dyn mae_daemon::artifact_store::ArtifactStore> =
         Arc::new(handler::DaemonArtifactStore(Arc::clone(&state)));
+    // ADR-060 Phase C (#456): the same shared-handle-cloned-per-connection pattern,
+    // bridging the listeners' quota seam to this daemon's `TenantRegistry`. Snapshot
+    // the registry `Arc` here rather than locking `DaemonState` per request —
+    // `state.tenants` is assigned once at startup and never replaced.
+    let quota_charger: Arc<dyn mae_daemon::quota::QuotaCharger> = {
+        let tenants = Arc::clone(&state.lock().await.tenants);
+        Arc::new(tenant::TenantQuota(tenants))
+    };
     tokio::spawn(async move {
         loop {
             match tcp_listener.accept().await {
@@ -976,6 +991,7 @@ async fn spawn_collab_server(
                     let bc = Arc::clone(&broadcaster);
                     let auth = collab_auth.clone();
                     let artifacts = Arc::clone(&artifact_store);
+                    let quota = Arc::clone(&quota_charger);
                     let self_issue = self_issue_for_collab.clone();
                     tokio::spawn(async move {
                         let _guard = guard;
@@ -1038,6 +1054,7 @@ async fn spawn_collab_server(
                                         server_start_time,
                                         mae_sync::kb::Transport::Hub,
                                         artifacts,
+                                        quota,
                                         kb_query_limits,
                                         self_issue,
                                     )
@@ -1061,6 +1078,7 @@ async fn spawn_collab_server(
                                     server_start_time,
                                     mae_sync::kb::Transport::Hub,
                                     artifacts,
+                                    quota,
                                     kb_query_limits,
                                     self_issue,
                                 )
@@ -1080,6 +1098,7 @@ async fn spawn_collab_server(
                                     server_start_time,
                                     mae_sync::kb::Transport::Hub,
                                     artifacts,
+                                    quota,
                                     kb_query_limits,
                                     self_issue,
                                 )
@@ -1094,6 +1113,7 @@ async fn spawn_collab_server(
                                     server_start_time,
                                     mae_sync::kb::Transport::Hub,
                                     artifacts,
+                                    quota,
                                     kb_query_limits,
                                     self_issue,
                                 )
