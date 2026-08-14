@@ -1933,7 +1933,7 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "kb/list" => kb_membership::handle_kb_list(doc_store, id).await,
+        "kb/list" => kb_membership::handle_kb_list(doc_store, auth_principal, transport, id).await,
 
         "kb/unregister" => {
             kb_membership::handle_kb_unregister(doc_store, session_id, session_docs, id, &params)
