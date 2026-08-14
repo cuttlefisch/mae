@@ -260,9 +260,17 @@ async fn peer_session(
                                 // op can't slip in via the peer path (complete mediation).
                                 // The op's author (from the verified signed header) is the
                                 // principal whose current-epoch client_id must match.
+                                // @ai-caution: [kb-scoping] (ADR-105 D1) Address TYPE, not
+                                // string prefix — a node doc that stops matching here
+                                // falls to `_ => None` and is never epoch-fenced on the
+                                // P2P path.
+                                let node_addr = match mae_sync::DocAddress::parse(&doc) {
+                                    Some(mae_sync::DocAddress::KbNode { node_id, .. }) => Some(node_id),
+                                    _ => None,
+                                };
                                 let fence_reject = match (
                                     verified.as_ref().and_then(|h| h.get("author").and_then(|a| a.as_str())),
-                                    doc.strip_prefix("kb:"),
+                                    node_addr.as_deref(),
                                 ) {
                                     (Some(author), Some(node_id)) => {
                                         mae_daemon::collab_handler::enforce_epoch_fence(

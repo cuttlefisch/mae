@@ -827,9 +827,14 @@ pub async fn verify_relayed_content_op(
     header: Option<&serde_json::Value>,
     require_signed: bool,
 ) -> Result<Option<serde_json::Value>, String> {
-    let Some(node_id) = doc.strip_prefix("kb:") else {
+    // @ai-caution: [kb-scoping] (ADR-105 D1) Address TYPE, not string prefix — a node
+    // doc that stops matching here returns `Ok(None)` ("not a content op"), which
+    // SKIPS ADR-036 signature verification entirely.
+    let Some(mae_sync::DocAddress::KbNode { node_id, .. }) = mae_sync::DocAddress::parse(doc)
+    else {
         return Ok(None); // collection/non-KB doc — not a content op
     };
+    let node_id = &node_id;
     let Some(anchor) = resolve_content_anchor(doc_store, kb_id).await else {
         return Ok(None); // un-anchored + not ours — legacy gate applies
     };
@@ -1625,15 +1630,25 @@ async fn deny_collection_smuggling(
     principal: Option<&str>,
     transport: Transport,
 ) -> Result<(), String> {
-    if let Some(kb_id) = doc_name.strip_prefix("kbc:") {
-        match kb_access(doc_store, kb_id, principal, KbOp::Manage, transport).await? {
-            AccessDecision::Allow => Ok(()),
-            _ => Err(format!(
-                "only the owner may write the collection doc for KB '{kb_id}'"
-            )),
+    // @ai-caution: [kb-scoping] (ADR-105 D1) Address TYPE, not string prefix — a
+    // collection doc that stops matching here falls through ungated, and this is the
+    // ADR-018 membership-smuggling defense (owner-only raw collection writes).
+    match mae_sync::DocAddress::parse(doc_name) {
+        Some(mae_sync::DocAddress::KbCollection { kb_id }) => {
+            match kb_access(doc_store, &kb_id, principal, KbOp::Manage, transport).await? {
+                AccessDecision::Allow => Ok(()),
+                _ => Err(format!(
+                    "only the owner may write the collection doc for KB '{kb_id}'"
+                )),
+            }
         }
-    } else {
-        Ok(())
+        // Node docs are gated by their own path (`kb/node_update`'s `kb_access` +
+        // epoch fence, and `sync/update`'s #169 M1 arm); buffer collab and
+        // unrecognized names are not collection docs.
+        Some(mae_sync::DocAddress::KbNode { .. })
+        | Some(mae_sync::DocAddress::File { .. })
+        | Some(mae_sync::DocAddress::Shared { .. })
+        | None => Ok(()),
     }
 }
 
@@ -1718,21 +1733,45 @@ async fn deny_kb_doc_read(
     principal: Option<&str>,
     transport: Transport,
 ) -> Result<(), String> {
-    if let Some(kb_id) = doc_name.strip_prefix("kbc:") {
-        match kb_access(doc_store, kb_id, principal, KbOp::Read, transport).await? {
-            AccessDecision::Allow => Ok(()),
-            _ => Err(format!(
-                "not authorized to read the collection doc for KB '{kb_id}' (members only)"
-            )),
+    // ADR-105 D1: match the ADDRESS TYPE, never a string prefix. The arms below are
+    // exhaustive on purpose — adding or renaming a `DocAddress` variant must fail to
+    // compile here rather than silently stop guarding. This gate previously read
+    // `doc_name.starts_with("kb:")`, which would have fallen through to `Ok(())` — i.e.
+    // handed raw node plaintext to any connected client — the moment the node
+    // addressing scheme changed.
+    match mae_sync::DocAddress::parse(doc_name) {
+        Some(mae_sync::DocAddress::KbCollection { kb_id }) => {
+            match kb_access(doc_store, &kb_id, principal, KbOp::Read, transport).await? {
+                AccessDecision::Allow => Ok(()),
+                _ => Err(format!(
+                    "not authorized to read the collection doc for KB '{kb_id}' (members only)"
+                )),
+            }
         }
-    } else if doc_name.starts_with("kb:") {
-        Err(
+        Some(mae_sync::DocAddress::KbNode { .. }) => Err(
             "KB node content must be fetched via the access-gated `kb/node_fetch`, \
              not the raw `sync/full_state` / `sync/state_vector` path"
                 .to_string(),
-        )
-    } else {
-        Ok(())
+        ),
+        // Buffer collab: not KB content, so no KB gate applies. `sync/share` lets a
+        // client pick an arbitrary doc name, so an unparseable name is ordinary
+        // buffer collaboration, not something suspicious — gating it here would break
+        // a real feature. (Tried fail-closed first;
+        // `raw_sync_read_of_a_kb_doc_is_access_gated` correctly rejected it for
+        // exactly that reason.)
+        //
+        // The protection this rewrite buys is the EXHAUSTIVE match, not the default
+        // arm: KB content can only be written under a `DocAddress::KbNode` /
+        // `KbCollection` address, and adding or renaming such a variant now fails to
+        // compile here instead of silently falling through to `Ok(())`.
+        //
+        // @ai-caution: [kb-scoping] If a legacy/compat KB address variant is added
+        // during the ADR-105 Stage 4 migration, it MUST be denied here like `KbNode`
+        // — a legacy name that stops parsing would otherwise land in this arm and be
+        // served raw.
+        Some(mae_sync::DocAddress::File { .. })
+        | Some(mae_sync::DocAddress::Shared { .. })
+        | None => Ok(()),
     }
 }
 

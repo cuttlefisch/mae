@@ -130,7 +130,13 @@ pub(super) async fn handle_sync_update(
     // `verify_relayed_content_op` (it's gated on `kb_id`), `kb_access`, AND the fence,
     // writing the node CRDT with no role/signature/epoch check, then broadcasting.
     // Text buffers (non-`kb:` docs) are unaffected.
-    if let Some(node_id) = doc_name.strip_prefix("kb:") {
+    // @ai-caution: [kb-scoping] (ADR-105 D1) Address TYPE, not string prefix. A node
+    // doc that stops matching here skips signature verification, `kb_access` AND the
+    // epoch fence — precisely the bypass the comment above records having fixed.
+    if let Some(mae_sync::DocAddress::KbNode { node_id, .. }) =
+        mae_sync::DocAddress::parse(&doc_name)
+    {
+        let node_id = &node_id;
         match params.get("kb_id").and_then(|v| v.as_str()) {
             Some(kb_id) => {
                 // Fence on the VERIFIED header author (a relayed op's true author —
