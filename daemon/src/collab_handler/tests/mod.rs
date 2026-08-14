@@ -17,6 +17,7 @@ mod collab_handler_governance_quorum_tests;
 mod collab_handler_kb_lifecycle_tests;
 mod collab_handler_kb_list_isolation_tests;
 mod collab_handler_kb_query_mtls_tests;
+mod collab_handler_kb_share_ownership_tests;
 mod collab_handler_lease_race_tests;
 mod collab_handler_legacy_migration_tests;
 mod collab_handler_member_access_tests;
@@ -246,6 +247,38 @@ pub(crate) async fn set_replication_query_only(
         .apply_update(&format!("kbc:{kb_id}"), &update, None)
         .await
         .unwrap();
+}
+
+/// Read `node_id` from `kb_id` as `who` and return its decoded body.
+///
+/// Shared rather than per-file: a cross-KB test's oracle has to be the victim's
+/// CONTENT, because a refused-but-applied write passes a response-only check.
+/// Two test modules need exactly that (ADR-105 D5 and the same-node-id isolation
+/// suite), so it lives with the other shared helpers.
+pub(crate) async fn read_node_body(
+    store: &Arc<DocStore>,
+    bc: &SharedBroadcaster,
+    who: &str,
+    kb_id: &str,
+    node_id: &str,
+    docs: &mut HashSet<String>,
+) -> String {
+    let r = dispatch_as(
+        store,
+        bc,
+        Some(who),
+        Some(&fp(who)),
+        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"kb/node_fetch",
+            "params":{"kb_id":kb_id,"node_id":node_id}}),
+        docs,
+    )
+    .await;
+    assert!(r.error.is_none(), "{who} fetch failed: {:?}", r.error);
+    let state = base64_to_update(r.result.as_ref().unwrap()["state"].as_str().unwrap())
+        .expect("state decodes");
+    mae_sync::kb::KbNodeDoc::from_bytes(&state)
+        .map(|d| d.body())
+        .unwrap_or_default()
 }
 
 pub(crate) fn kb_join_msg(kb_id: &str) -> serde_json::Value {

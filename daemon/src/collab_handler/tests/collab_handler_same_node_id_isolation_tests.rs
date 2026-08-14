@@ -85,33 +85,6 @@ async fn edit_node(
     .await
 }
 
-/// Read `node_id` from `kb_id` as `who` and return its decoded body.
-async fn read_node_body(
-    store: &Arc<DocStore>,
-    bc: &SharedBroadcaster,
-    who: &str,
-    kb_id: &str,
-    node_id: &str,
-    docs: &mut HashSet<String>,
-) -> String {
-    let r = dispatch_as(
-        store,
-        bc,
-        Some(who),
-        Some(&fp(who)),
-        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"kb/node_fetch",
-            "params":{"kb_id":kb_id,"node_id":node_id}}),
-        docs,
-    )
-    .await;
-    assert!(r.error.is_none(), "{who} fetch failed: {:?}", r.error);
-    let state = base64_to_update(r.result.as_ref().unwrap()["state"].as_str().unwrap())
-        .expect("state decodes");
-    mae_sync::kb::KbNodeDoc::from_bytes(&state)
-        .map(|d| d.body())
-        .unwrap_or_default()
-}
-
 /// FINDING 2 (the honest case, and the one no existing test could see): two tenants
 /// who each use `concept:architecture` in their own KB must not share a document.
 ///

@@ -769,6 +769,10 @@
           "kind": "mod"
         },
         {
+          "name": "kb_identity",
+          "kind": "mod"
+        },
+        {
           "name": "migrate",
           "kind": "mod"
         },

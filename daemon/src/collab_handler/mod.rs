@@ -24,8 +24,10 @@ mod docs_methods;
 mod kb_artifacts;
 mod kb_content;
 mod kb_governance;
+mod kb_id_guard;
 pub mod kb_lease;
 mod kb_membership;
+mod kb_share_ownership;
 mod sync_methods;
 
 use std::collections::HashSet;
@@ -1845,40 +1847,13 @@ async fn handle_doc_request_inner(
             }
         };
 
-    // ADR-105 D3: a `kb_id` becomes part of every node document's address
-    // (`kbn:{kb_id}:{node_id}`), and `node_id` routinely contains colons — so the
-    // address parses back unambiguously only if the KB id contains none. This is
-    // not hygiene, it is the SAME defect ADR-105 was written to remove: kb_id
-    // "a:b" + node "c" and kb_id "a" + node "b:c" both spell `kbn:a:b:c`, so two
-    // tenants collide on one document exactly as in #718. `kb_id` is
-    // client-supplied on `kb/share`, which makes that reachable by anyone.
-    //
-    // Enforced HERE — one chokepoint, after parsing and before any handler runs,
-    // on the same rationale the quota lease above states — rather than in each of
-    // the ~20 `kb/*` handlers, where a single missed site is the whole bypass.
-    // Keyed on the PRESENCE of a `kb_id` param, not on a list of method names, so
-    // a method added later is covered without anyone remembering to add it.
-    //
-    // A KB whose id already contains a colon is refused rather than grandfathered:
-    // its nodes are already mis-addressed, so failing loudly is strictly better
-    // than continuing to collide silently.
-    if let Some(kb_id) = params.get("kb_id").and_then(|v| v.as_str()) {
-        if !mae_sync::kb_id_is_addressable(kb_id) {
-            warn!(
-                session = session_id,
-                method = %request.method,
-                kb_id,
-                "rejected: KB id is not addressable (empty or contains ':')"
-            );
-            return JsonRpcResponse::error(
-                id,
-                McpError::invalid_request(format!(
-                    "KB id {kb_id:?} is not addressable: it must be non-empty and \
-                     must not contain ':' (it forms part of each node's document \
-                     address, which splits on the first colon)"
-                )),
-            );
-        }
+    // ADR-105 D3: a KB id becomes part of every node document's address, so it
+    // must be one the address can unambiguously carry. One chokepoint here rather
+    // than in each `kb/*` handler — see `kb_id_guard` for why that matters.
+    if let Some(resp) =
+        kb_id_guard::refuse_unaddressable_kb_id(session_id, &request.method, &params, &id)
+    {
+        return resp;
     }
 
     info!(session = session_id, method = %request.method, "doc request");

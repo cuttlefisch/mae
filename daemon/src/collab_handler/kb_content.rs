@@ -99,6 +99,20 @@ pub(super) async fn handle_kb_share(
             );
         }
     } else {
+        // ADR-105 D5: the collection exists — but is it THIS caller's? (See
+        // `kb_share_ownership` for why B-12's preserve-don't-clobber was not enough
+        // on its own.)
+        if let Some(resp) = kb_share_ownership::refuse_if_owned_by_another(
+            doc_store,
+            session_id,
+            &kb_id,
+            auth_principal,
+            &id,
+        )
+        .await
+        {
+            return resp;
+        }
         info!(
             session = session_id,
             kb_id = %kb_id,
