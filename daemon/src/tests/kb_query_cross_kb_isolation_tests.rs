@@ -2,9 +2,17 @@
 //!
 //! Split out of `kb_query_tests.rs`, which is scoped to ADR-053 Phase G's own
 //! surface (encryption-aware branching, the Read gate, per-call caps). This
-//! file pins a different property: the `DocStore` doc namespace is FLAT
-//! (`kb:{node_id}`, no `kb_id` component), so authorizing a KB must not
-//! authorize an arbitrary globally-addressed document.
+//! file pins a different property: authorizing a KB must not authorize an
+//! arbitrary document belonging to another one.
+//!
+//! When written, the `DocStore` namespace was FLAT (`kb:{node_id}`, no `kb_id`
+//! component), so that was a live read of another tenant's content and the
+//! manifest check was the ONLY thing standing between them. ADR-105 Stage 2
+//! scoped node docs to `kbn:{kb_id}:{node_id}`, which makes the same
+//! substitution structurally unable to name B's document at all. The gate is
+//! now defence in depth rather than the sole defence — so these tests keep
+//! asserting it directly, because a scoped address that someone later
+//! un-scopes must not be able to quietly restore the original hole.
 //!
 //! Reuses that file's seeding helpers rather than duplicating them.
 
@@ -165,9 +173,16 @@ async fn kb_query_get_cannot_read_a_node_belonging_to_another_kb() {
             generous_limits(),
         )
         .await;
+        // Built through the same constructor the fetch path uses: the property
+        // is "no document was materialized", not "the name is spelled X", so a
+        // literal here would go stale into a silent pass. It already did once —
+        // this probed `kb:{phantom}` after ADR-105 Stage 2 renamed node docs to
+        // `kbn:{kb_id}:{node_id}`, an address the fetch could no longer create
+        // under any circumstance, so the assertion held vacuously.
+        let phantom_doc = mae_sync::kb_node_doc_name(&kb_a, &phantom);
         assert!(
-            !doc_store.has_doc(&format!("kb:{phantom}")).await,
-            "case {case}: a refused fetch still materialized 'kb:{phantom}' -- the \
+            !doc_store.has_doc(&phantom_doc).await,
+            "case {case}: a refused fetch still materialized '{phantom_doc}' -- the \
              scope check must precede encode_state_and_sv"
         );
 

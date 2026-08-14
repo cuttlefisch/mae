@@ -206,12 +206,15 @@ async fn get(
 ) -> Result<Value, McpError> {
     let (coll, encryption) = load_gated(doc_store, kb_id, principal).await?;
 
-    // #571: `load_gated` authorized the KB; this authorizes the DOCUMENT. The
-    // doc namespace is flat (`kb:{node_id}`), so without this a member of any
-    // KB could read any node of any other KB co-hosted here. Uses the
-    // collection `load_gated` already loaded, so it costs no extra I/O — and
+    // #571: `load_gated` authorized the KB; this authorizes the DOCUMENT. When
+    // written, the doc namespace was flat (`kb:{node_id}`) and this was the only
+    // thing stopping a member of any KB from reading any node of any other KB
+    // co-hosted here. ADR-105 Stage 2 scoped the address itself, so the
+    // substitution can no longer name another KB's document — but keep this:
+    // it is what still refuses a node this KB's manifest does not list, and it
     // runs before `encode_state_and_sv`, which would otherwise materialize the
-    // doc via `get_or_create`.
+    // doc via `get_or_create` and let a caller pre-squat arbitrary node ids.
+    // Uses the collection `load_gated` already loaded, so it costs no extra I/O.
     //
     // Only `get` and `node_fetch` need this: `search`/`graph` iterate the
     // manifest itself and `my_wrapped_key` takes no node_id, so all three are
