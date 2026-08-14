@@ -956,6 +956,36 @@ pub fn is_owner_principal(
     owner_principal_chain(&crypto, &genesis.op.subject).contains(fp)
 }
 
+/// The trust anchor for a KB whose declared owner fingerprint is `owner_fp`: the
+/// public key of the **crypto-valid** genesis self-admit authored by that owner.
+/// `None` when the log carries no such record (un-anchored / legacy).
+///
+/// This exists because callers outside this module cannot reach [`crypto_valid`],
+/// and the two-step "find a genesis, then check whether it is the owner's" is a
+/// trap (#573). The op-log is a grow-only YMap, so anyone who can append — notably
+/// the key-blind relay ADR-037 defends against — can add a genesis-shaped record of
+/// their own. A caller that picks the *first* genesis-shaped record and only then
+/// compares it to the owner will select the attacker's record and reject it,
+/// concluding the KB has no valid anchor, when the owner's genuine genesis is
+/// sitting right there in the same log.
+///
+/// So the ownership test is bound **inside** the search, exactly as
+/// [`derive_governance`] and [`derive_encryption`] bind theirs — the attacker's
+/// record is skipped rather than selected-then-rejected. Forging a match would
+/// require signing as the owner, since [`crypto_valid`] verifies the signature
+/// under `author_pubkey` and the fingerprint is taken from that same key.
+pub fn owner_anchor_pubkey(ops: &[SignedMembershipOp], owner_fp: &str) -> Option<[u8; 32]> {
+    crypto_valid(ops)
+        .iter()
+        .find(|o| {
+            o.op.prev_hash.is_empty()
+                && o.op.action == MembershipAction::Admit
+                && o.op.subject == o.op.author
+                && fingerprint_of(&o.author_pubkey) == owner_fp
+        })
+        .map(|o| o.author_pubkey)
+}
+
 /// Derive the KB's active [`Governance`] from the signed op-log (ADR-026 §A4).
 /// Owner-rooted + deterministic: the **latest** crypto-valid `SetGovernance` op
 /// authored by the anchored owner, in causal order, wins; absent/unparseable ⇒
@@ -2078,6 +2108,72 @@ mod tests {
             None,
             "",
         )
+    }
+
+    /// ADVERSARIAL (#573): the anchor search must SKIP records that merely look like
+    /// a genesis, not select one and then reject it.
+    ///
+    /// The op-log is a grow-only YMap, so the key-blind relay ADR-037 defends against
+    /// can append genesis-shaped records of its own. `kb_collection_is_e2e` used to
+    /// take the first genesis-shaped record and only then compare it to the owner;
+    /// when an injected record came first it concluded there was no valid anchor and
+    /// answered "not encrypted" — the arm that puts node content on the wire in the
+    /// clear.
+    ///
+    /// Order is fixed explicitly here rather than left to YMap iteration. That is the
+    /// point: through the real collection the ordering is hash-derived and varies per
+    /// decode, so an end-to-end version of this test catches the bug only
+    /// probabilistically. Fixing the order makes the guarantee exact.
+    #[test]
+    fn owner_anchor_pubkey_skips_injected_genesis_records_ordered_before_the_owners() {
+        let owner = id(1);
+        let mallory = id(2);
+
+        // (a) Genesis-shaped and VALIDLY SIGNED by the attacker — passes the crypto
+        //     filter, so only binding the owner fingerprint inside the search stops it.
+        let forged_signed = genesis(&mallory);
+        // (b) Genesis-shaped, claiming the attacker's key, but not signed — stopped by
+        //     the crypto-valid filter alone.
+        let mut forged_unsigned = genesis(&mallory);
+        forged_unsigned.sig = vec![0u8; 64];
+
+        // Attacker records FIRST: the exact ordering that defeated find-then-check.
+        let ops = vec![forged_unsigned, forged_signed, genesis(&owner)];
+
+        assert_eq!(
+            owner_anchor_pubkey(&ops, &owner.fp),
+            Some(owner.pubkey),
+            "the owner's genuine genesis must still be found behind injected records"
+        );
+        // Selective oracle: it resolves the OWNER, not merely "some anchor" — an
+        // implementation returning the attacker's key would satisfy `is_some()`.
+        assert_ne!(
+            owner_anchor_pubkey(&ops, &owner.fp),
+            Some(mallory.pubkey),
+            "must never resolve the attacker's key as the anchor"
+        );
+        // And a principal with no genesis of their own anchors nothing, even though
+        // the log is full of genesis-shaped records.
+        assert_eq!(
+            owner_anchor_pubkey(&ops, &id(3).fp),
+            None,
+            "a non-owner must not inherit an anchor from someone else's genesis"
+        );
+    }
+
+    /// The other half: an attacker cannot *manufacture* an anchor for a KB whose
+    /// owner never authored a genesis. Without this, a fix that simply returned the
+    /// first crypto-valid genesis would pass the test above.
+    #[test]
+    fn owner_anchor_pubkey_is_none_when_only_attacker_genesis_records_exist() {
+        let owner = id(1);
+        let mallory = id(2);
+        let ops = vec![genesis(&mallory)];
+        assert_eq!(
+            owner_anchor_pubkey(&ops, &owner.fp),
+            None,
+            "an attacker-authored genesis must not anchor the owner's KB"
+        );
     }
 
     #[test]
