@@ -94,7 +94,18 @@ pub const DEFAULT_COLLAB_ADDRESS: &str = "127.0.0.1:9473";
 /// Default TCP port for the collaborative state server.
 pub const DEFAULT_COLLAB_PORT: u16 = 9473;
 
-/// Default KB instance name (primary KB).
+/// Default KB instance **display name** (primary KB).
+///
+/// A name, never an identifier. Every editor's primary answers to it, which is
+/// exactly why ADR-105 D4 stopped using it as a collaborative id: on a shared
+/// daemon the first tenant to connect claimed `"default"` permanently and every
+/// later tenant's primary share was accepted and then denied on every subsequent
+/// operation. Resolve a name with `KbRegistry::target_of_name`, and get a KB's id
+/// from `KbRegistry::collab_id_of_target` — do not reach for this constant to
+/// answer "which KB is this?".
+///
+/// Kept in agreement with `mae_kb::PRIMARY_NAME_ALIASES` by
+/// `kb_default_name_agrees_with_the_shared_alias_list`.
 pub const KB_DEFAULT_NAME: &str = "default";
 /// Default KB sync mode for collaborative editing.
 pub const KB_SYNC_MODE_DEFAULT: &str = "on_save";
