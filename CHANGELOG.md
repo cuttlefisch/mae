@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.114] - 2026-08-14
+
+
+
+
+### Bug Fixes
+
+- *(collab)* Bind the owner test inside the E2E anchor search (#573) ([6dcc339](https://github.com/cuttlefisch/mae/commit/6dcc3399bda1639b8f8a9f98483619796d9c2122))
+
 ## [0.14.113] - 2026-08-13
 
 
@@ -10,6 +19,10 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 
 - *(help)* Announce a fuzzy help substitution, and refuse an ambiguous one ([e91a1f2](https://github.com/cuttlefisch/mae/commit/e91a1f23b374b33fd1b1800cbd8bfe12997e89f9))
+
+### Miscellaneous
+
+- Bump version to 0.14.113 ([a02084b](https://github.com/cuttlefisch/mae/commit/a02084bbf6e523fce8a953c81828d866bf2a9541))
 
 ## [0.14.112] - 2026-08-13
 
