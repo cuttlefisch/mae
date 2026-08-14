@@ -35,9 +35,19 @@ pub(super) fn handle_kb_shared_event(
             .kb_collection_state
             .insert(kb_id.clone(), collection_state);
     }
+    // ADR-105 D4: which KB is this? `kb_id` is a collab id, not a name, so it
+    // cannot be compared against "default"/"primary" any more. Prefer the in-flight
+    // record from `kb_intent_to_command`; fall back to the durable registry, which
+    // is what answers after a reconnect (the share is confirmed again, but this
+    // process never issued the request that would have populated the map).
+    let target = editor
+        .collab
+        .pending_share_targets
+        .remove(&kb_id)
+        .or_else(|| editor.kb.registry.target_of_collab_id(&kb_id));
     // Track which nodes are shared for continuous sync.
     // Get node IDs from the primary KB (or the named instance).
-    let node_ids: HashSet<String> = if kb_id == mae_core::KB_DEFAULT_NAME || kb_id == "primary" {
+    let node_ids: HashSet<String> = if target == Some(mae_kb::KbTarget::Primary) {
         if let Some(q) = editor.kb.query_layer() {
             // Must NOT collapse to an empty set: the comment below spells out why —
             // an empty `shared_kbs` entry means later edits never match and no
@@ -57,21 +67,34 @@ pub(super) fn handle_kb_shared_event(
             editor.kb.primary.list_ids(None).into_iter().collect()
         }
     } else {
-        // `instances` is keyed by UUID, but `kb_id` is the human name
-        // (e.g. "collabtest"). Resolve name→uuid via the registry first,
-        // else `shared_kbs` gets an EMPTY set and later edits to the
-        // shared KB never match → no kb/node_update is broadcast (I-9).
-        let uuid = editor
-            .kb
-            .registry
-            .find(&kb_id)
-            .map(|inst| inst.uuid.clone());
+        // `instances` is keyed by UUID. Resolving `kb_id` through `target` above
+        // covers a minted id, a legacy name-id, and an instance addressed by name;
+        // the `find(&kb_id)` fallback stays for an id this editor has never seen
+        // (a joiner's first confirmation), where the registry row may still be
+        // keyed only by name. Falling through to an EMPTY set means later edits to
+        // the shared KB never match and no `kb/node_update` is broadcast (I-9), so
+        // every path that can resolve is tried before that happens.
+        let uuid = match &target {
+            Some(mae_kb::KbTarget::Instance(uuid)) => Some(uuid.clone()),
+            _ => editor
+                .kb
+                .registry
+                .find(&kb_id)
+                .map(|inst| inst.uuid.clone()),
+        };
         let kb = uuid
             .and_then(|u| editor.kb.instances.get(&u))
             .or_else(|| editor.kb.instances.get(&kb_id));
         match kb {
             Some(kb) => kb.list_ids(None).into_iter().collect(),
-            None => HashSet::new(),
+            None => {
+                tracing::warn!(
+                    target: "kb_sync", kb_id = %kb_id,
+                    "share confirmed for a KB this editor cannot resolve; edits to \
+                     it will not broadcast (I-9)"
+                );
+                HashSet::new()
+            }
         }
     };
     editor.collab.shared_kbs.insert(kb_id.clone(), node_ids);
@@ -97,13 +120,32 @@ pub(super) fn handle_kb_shared_event(
         if let Some(dir) = editor.mae_data_dir() {
             let (registry, (), saved) = mae_kb::federation::KbRegistry::update(&dir, |reg| {
                 let now = mae_kb::data_dir::chrono_now_iso();
-                if kb_id == mae_core::KB_DEFAULT_NAME || kb_id == "primary" {
-                    reg.primary_shared = true;
-                    reg.primary_collab_id = Some(kb_id.clone());
-                } else if let Some(inst) = reg.find_mut(&kb_id) {
-                    inst.shared = true;
-                    inst.collab_id = Some(kb_id.clone());
-                    inst.last_sync = Some(now);
+                // ADR-105 D4: stamp the KB `target` names, not the one whose NAME
+                // happens to equal this id. The old comparison answered `false` for
+                // every minted id, so it stamped no marker at all and did it
+                // silently — a confirmed share that does not survive restart, which
+                // presents later as "sync just stopped".
+                match target {
+                    Some(mae_kb::KbTarget::Primary) => {
+                        reg.primary_shared = true;
+                        reg.primary_collab_id = Some(kb_id.clone());
+                    }
+                    Some(mae_kb::KbTarget::Instance(ref uuid)) => {
+                        if let Some(inst) = reg.find_mut(uuid) {
+                            inst.shared = true;
+                            inst.collab_id = Some(kb_id.clone());
+                            inst.last_sync = Some(now);
+                        }
+                    }
+                    // An id this editor did not share and cannot resolve. Stamping
+                    // anything here would attach another peer's KB to a local row.
+                    None => {
+                        tracing::warn!(
+                            target: "kb_sync", kb_id = %kb_id,
+                            "share confirmed for an unrecognised collab id; no \
+                             durable marker stamped"
+                        );
+                    }
                 }
             });
             if let Err(e) = saved {
@@ -556,21 +598,47 @@ pub(super) fn kb_intent_to_command(
             // `to_collection` mints an ephemeral, non-persisted lineage and a peer's
             // later edit no-ops against the owner's divergent local doc (bob→alice).
             editor.kb_prepare_share_lineage(&kb_name, &node_ids);
-            // Look up the KB instance: KB_DEFAULT_NAME/"primary" → editor.kb.primary,
-            // otherwise resolve a registered instance. `editor.kb.instances` is keyed
-            // by UUID, but callers pass a human name (e.g. ":kb-share collabtest"), so
-            // map name→uuid via the registry first (find() accepts a name or a uuid).
-            // Without this, every named-instance share failed with "KB not found".
-            let kb = if kb_name == mae_core::KB_DEFAULT_NAME || kb_name == "primary" {
-                Some(&editor.kb.primary)
-            } else {
-                let uuid = editor
-                    .kb
-                    .registry
-                    .find(&kb_name)
-                    .map(|inst| inst.uuid.clone());
-                uuid.and_then(|u| editor.kb.instances.get(&u))
-                    .or_else(|| editor.kb.instances.get(&kb_name))
+            // Which KB did the human name? `:kb-share collabtest`, or a keybinding
+            // defaulting to the primary. Resolved BEFORE the store lookup below so
+            // the registry's mutable borrow (minting, next) ends first.
+            let Some(target) = editor.kb.registry.target_of_name(&kb_name) else {
+                editor.set_status(format!("KB '{}' not found", kb_name));
+                return None;
+            };
+            // ADR-105 D4: the id this KB syncs under is its own durable collab id —
+            // minted once, on first share — NOT its display name. Sharing under the
+            // name meant every editor's primary claimed the literal "default", so on
+            // a shared daemon the first tenant to connect held that id forever and
+            // every later tenant's primary share was accepted and then denied on
+            // every subsequent operation (finding F).
+            //
+            // `collab_id_for_share` returns an ALREADY-SHARED KB's id unchanged.
+            // That is mandatory, not an optimisation: `kb_id` is signed into every
+            // membership op, so re-minting one destroys the KB's membership and
+            // makes an E2E KB read as plaintext (finding A).
+            let Some(kb_id) = editor.kb_collab_id_for_share(&target) else {
+                // The mint could not be persisted. Proceeding would share under an
+                // id the next share of this same KB would not reproduce, orphaning
+                // this collection and its membership on the daemon.
+                editor.set_status(format!(
+                    "Failed to share KB '{kb_name}': could not establish its collab id"
+                ));
+                return None;
+            };
+            // The confirmation carries only `kb_id`, and it is no longer a name, so
+            // remember which KB it belongs to. Without this the confirm handler has
+            // to guess, and its guess fails open: an unrecognised id stamps no
+            // durable marker and seeds an EMPTY node set, after which edits match
+            // nothing and sync stops silently (ADR-086).
+            editor
+                .collab
+                .pending_share_targets
+                .insert(kb_id.clone(), target.clone());
+
+            // `editor.kb.instances` is keyed by UUID; the primary is not in it at all.
+            let kb = match &target {
+                mae_kb::KbTarget::Primary => Some(&editor.kb.primary),
+                mae_kb::KbTarget::Instance(uuid) => editor.kb.instances.get(uuid),
             };
             let kb = match kb {
                 Some(k) => k,
@@ -580,8 +648,11 @@ pub(super) fn kb_intent_to_command(
                 }
             };
             let creator = editor.collab.user_name.clone();
-            let kb_id = kb_name.clone();
 
+            // `to_collection` takes the DISPLAY name: it becomes the collection's
+            // `name` metadata, which is what a peer shows a human. Duplicate names
+            // there are merely confusing, never load-bearing — that separation is
+            // the whole of D4.
             match kb.to_collection(&kb_name, &creator, &node_ids) {
                 Ok((coll, node_states)) => {
                     let collection_state = coll.encode_state();
@@ -663,7 +734,20 @@ pub(super) fn kb_intent_to_command(
                 .unwrap_or_default();
             // #171: also carry each shared node's plaintext state so the network task can
             // RE-SEAL them under the new content key (it holds the key + the secret).
-            let node_states = editor.kb_share_node_states(&kb_id);
+            //
+            // ADR-105 D4: `kb_id` here is a collab ID, so resolve it as one. An empty
+            // list is not a benign no-op — it means E2E is enabled on a KB whose
+            // nodes were never re-sealed, i.e. plaintext content under an encrypted
+            // label — so refuse rather than proceed if the KB cannot be resolved.
+            let Some(target) = editor.kb.registry.target_of_collab_id(&kb_id) else {
+                error!(kb = %kb_id, "kb-set-encryption: unknown collab id; refusing \
+                       rather than enabling E2E with no nodes re-sealed");
+                editor.set_status(format!(
+                    "Cannot enable encryption: KB '{kb_id}' is not a shared KB of this editor"
+                ));
+                return None;
+            };
+            let node_states = editor.kb_share_node_states(&target);
             Some(CollabCommand::KbSetEncryption {
                 kb_id,
                 mode,

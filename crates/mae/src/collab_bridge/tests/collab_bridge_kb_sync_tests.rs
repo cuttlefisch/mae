@@ -2,6 +2,30 @@
 
 use super::*;
 
+/// Perform the REQUEST half of a share and return the collab id it will be
+/// confirmed under (ADR-105 D4).
+///
+/// These tests used to inject a synthetic `KbShared { kb_id: "<name>" }`, which
+/// worked only while a KB's id and its display name were the same string. They
+/// are not any more: the id is minted on first share and the confirmation is the
+/// only place it comes back. Driving the real request path means the test asserts
+/// the property that actually matters — the id round-trips from request to
+/// confirm — instead of hard-coding what the id used to be.
+pub(super) fn share_request(editor: &mut Editor, kb_name: &str) -> String {
+    let cmd = crate::collab_bridge::events_kb::kb_intent_to_command(
+        editor,
+        CollabIntent::ShareKb {
+            kb_name: kb_name.to_string(),
+            node_ids: vec![],
+        },
+    )
+    .unwrap_or_else(|| panic!("share request for {kb_name:?} produced no command"));
+    match cmd {
+        CollabCommand::ShareKb { kb_id, .. } => kb_id,
+        other => panic!("expected a ShareKb command, got {other:?}"),
+    }
+}
+
 #[test]
 fn collab_kb_shared_populates_tracking() {
     let mut editor = Editor::new();
@@ -23,21 +47,27 @@ fn collab_kb_shared_populates_tracking() {
         "body 2".to_string(),
     ));
 
-    // Simulate KbShared event.
+    // Request, then confirm under whatever id the request minted.
+    let kb_id = share_request(&mut editor, "default");
+    assert!(
+        !mae_kb::PRIMARY_NAME_ALIASES.contains(&kb_id.as_str()),
+        "precondition: a first share must mint an id, not reuse the display name \
+         — otherwise this test passes through the very conflation D4 removes"
+    );
     handle_collab_event(
         &mut editor,
         CollabEvent::KbShared {
-            kb_id: "default".to_string(),
+            kb_id: kb_id.clone(),
             node_count: 2,
             collection_state: Vec::new(),
         },
     );
 
     assert!(
-        editor.collab.shared_kbs.contains_key("default"),
+        editor.collab.shared_kbs.contains_key(&kb_id),
         "shared_kbs should track the shared KB"
     );
-    let tracked = &editor.collab.shared_kbs["default"];
+    let tracked = &editor.collab.shared_kbs[&kb_id];
     assert!(
         tracked.contains("node-1") && tracked.contains("node-2"),
         "shared_kbs should contain all node IDs: {:?}",
@@ -47,7 +77,7 @@ fn collab_kb_shared_populates_tracking() {
     assert!(editor.kb.registry.primary_shared);
     assert_eq!(
         editor.kb.registry.primary_collab_id.as_deref(),
-        Some("default")
+        Some(kb_id.as_str())
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
@@ -158,16 +188,21 @@ fn collab_kb_shared_named_instance_tracks_nodes_by_uuid() {
     // (an instance can only be shared once it's already registered+persisted).
     editor.kb.registry.save(&tmp).unwrap();
 
+    let kb_id = share_request(&mut editor, "collabtest");
+    assert_ne!(
+        kb_id, "collabtest",
+        "precondition: a first share mints an id distinct from the display name"
+    );
     handle_collab_event(
         &mut editor,
         CollabEvent::KbShared {
-            kb_id: "collabtest".to_string(),
+            kb_id: kb_id.clone(),
             node_count: 2,
             collection_state: Vec::new(),
         },
     );
 
-    let tracked = &editor.collab.shared_kbs["collabtest"];
+    let tracked = &editor.collab.shared_kbs[&kb_id];
     assert!(
         tracked.contains("collabtest:overview") && tracked.contains("collabtest:alpha"),
         "named-instance share must track nodes via uuid resolution, got: {:?}",
@@ -176,7 +211,7 @@ fn collab_kb_shared_named_instance_tracks_nodes_by_uuid() {
     // Durable marker stamped (survives restart).
     let inst = editor.kb.registry.find("collabtest").unwrap();
     assert!(inst.shared, "share must stamp durable shared=true");
-    assert_eq!(inst.collab_id.as_deref(), Some("collabtest"));
+    assert_eq!(inst.collab_id.as_deref(), Some(kb_id.as_str()));
     // And persisted to the isolated registry file.
     assert!(
         tmp.join("kb-registry.toml").exists(),
@@ -231,10 +266,11 @@ fn adr019_share_marker_survives_registry_reload() {
     // once it's already registered+persisted).
     editor.kb.registry.save(&tmp).unwrap();
 
+    let kb_id = share_request(&mut editor, "collabtest");
     handle_collab_event(
         &mut editor,
         CollabEvent::KbShared {
-            kb_id: "collabtest".to_string(),
+            kb_id: kb_id.clone(),
             node_count: 1,
             collection_state: Vec::new(),
         },
@@ -246,8 +282,17 @@ fn adr019_share_marker_survives_registry_reload() {
         .find("collabtest")
         .expect("instance survives reload");
     assert!(
-        inst.shared && inst.collab_id.as_deref() == Some("collabtest"),
+        inst.shared && inst.collab_id.as_deref() == Some(kb_id.as_str()),
         "durable share marker must survive a registry save→load round-trip"
+    );
+    // ADR-105 D4: and the id it survives as must resolve BACK to this instance.
+    // The marker alone is not enough — a restarted editor recovers "which KB is
+    // this?" from the id, and an id that no longer resolves is how a confirmed
+    // share becomes a KB that silently stops syncing.
+    assert_eq!(
+        reloaded.target_of_collab_id(&kb_id),
+        Some(mae_kb::KbTarget::Instance("uuid-ct".into())),
+        "the persisted collab id must resolve back to the instance that owns it"
     );
 
     // A restarted editor (empty cache) with the reloaded registry: the emit

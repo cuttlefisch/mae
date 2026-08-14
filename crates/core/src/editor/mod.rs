@@ -415,6 +415,21 @@ pub struct CollabState {
     /// marker — hosting must not imply peer-share or survive a daemon-less launch).
     /// Also a once-per-connection guard against re-enqueuing the host share.
     pub daemon_host_pending: HashSet<String>,
+    /// ADR-105 D4: collab id → which KB an in-flight `kb/share` is for.
+    ///
+    /// Sharing is request-then-confirm, and the confirmation carries only the
+    /// collab id. Before D4 that id WAS the KB's name, so the handler recovered
+    /// the KB by comparing it against "default"/"primary" — which stops working
+    /// the moment the id is a minted uuid, and stops working *silently*: the
+    /// lookup falls through, finds no instance, and stamps the durable share
+    /// marker on nothing while `shared_kbs` gets an empty node set, so edits
+    /// afterwards match nothing and sync quietly stops (the ADR-086 failure).
+    ///
+    /// A map rather than a set (unlike `daemon_host_pending` beside it) because
+    /// the answer needed is *which KB*, not merely *whether* one is in flight.
+    /// Consumed on the matching `KbShared`; `KbRegistry::target_of_collab_id` is
+    /// the durable fallback once the share has been confirmed once.
+    pub pending_share_targets: HashMap<String, mae_kb::KbTarget>,
     /// KB sync mode: "manual" (explicit :kb-sync), "on_save" (auto on node edit).
     pub kb_sync_mode: String,
     /// Epoch-fence resolution: "prompt" (raise the ADR-024 Accept/Keep/Stash
@@ -530,6 +545,7 @@ impl CollabState {
             last_awareness_sent: std::time::Instant::now(),
             shared_kbs: HashMap::new(),
             daemon_host_pending: HashSet::new(),
+            pending_share_targets: HashMap::new(),
             pending_kb_manifest: Vec::new(),
             kb_sync_mode: KB_SYNC_MODE_DEFAULT.to_string(),
             fence_resolution: "prompt".to_string(),

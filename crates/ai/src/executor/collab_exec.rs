@@ -300,17 +300,17 @@ fn execute_kb_share(editor: &mut Editor, args: &Value) -> Result<String, String>
     // reads `kb.list_ids(None)` off the in-memory primary KB directly, not
     // a query layer), so the `node_ids` this function hands off downstream
     // stays consistent with what that function would derive on its own.
-    let node_ids: Vec<String> = if kb_name == mae_core::KB_DEFAULT_NAME || kb_name == "primary" {
-        editor.kb.primary.list_ids(None)
-    } else {
-        let uuid = editor.kb.registry.find(&kb_name).map(|i| i.uuid.clone());
-        match uuid
-            .and_then(|u| editor.kb.instances.get(&u))
-            .or_else(|| editor.kb.instances.get(&kb_name))
-        {
+    //
+    // ADR-105 D4: resolved through `target_of_name` so the primary's accepted
+    // spellings are listed once, in the registry, rather than re-inlined at every
+    // site that has to ask "is this the primary?".
+    let node_ids: Vec<String> = match editor.kb.registry.target_of_name(&kb_name) {
+        Some(mae_kb::KbTarget::Primary) => editor.kb.primary.list_ids(None),
+        Some(mae_kb::KbTarget::Instance(uuid)) => match editor.kb.instances.get(&uuid) {
             Some(kb) => kb.list_ids(None),
             None => return Err(format!("No KB instance named '{}'", kb_name)),
-        }
+        },
+        None => return Err(format!("No KB instance named '{}'", kb_name)),
     };
 
     let count = node_ids.len();
@@ -333,7 +333,7 @@ fn execute_kb_share_p2p(editor: &mut Editor, args: &Value) -> Result<String, Str
     // primitive (ADR-025 §"Driving surfaces"): a synchronous daemon control call
     // that mints a shareable join "magnet link". The AI peer gets the ticket back
     // directly, so it can hand it to a collaborator with no CLI step.
-    let kb_id = args
+    let kb_name = args
         .get("kb_id")
         .or_else(|| args.get("kb_name"))
         .and_then(|v| v.as_str())
@@ -344,13 +344,24 @@ fn execute_kb_share_p2p(editor: &mut Editor, args: &Value) -> Result<String, Str
     // Same refusal as the hub share path above — the P2P variant is a second
     // door to the same room, and `active_instance_name()` means a system KB can
     // be reached here without the caller naming one.
-    if let Some(sys) = mae_kb::system_kb::find(&kb_id) {
+    if let Some(sys) = mae_kb::system_kb::find(&kb_name) {
         return Err(format!(
             "'{}' is a MAE system KB and cannot be shared — its content ships with MAE and \
              is rebuilt on upgrade. Share your own KB instead.",
             sys.name
         ));
     }
+
+    // ADR-105 D4/H4: `share_p2p` puts this on the wire as the KB's id, so resolve
+    // the caller's name to the KB's real collab id — reusing the hub share's id if
+    // it already has one. Sending the name would mesh-share this KB under a second
+    // id, splitting one KB across two identities the daemon treats as unrelated.
+    let Some(target) = editor.kb.registry.target_of_name(&kb_name) else {
+        return Err(format!("No KB instance named '{kb_name}'"));
+    };
+    let kb_id = editor
+        .kb_collab_id_for_share(&target)
+        .ok_or_else(|| format!("Could not establish a collab id for KB '{kb_name}'"))?;
 
     let ticket = editor.kb.share_p2p(&kb_id)?;
     editor.set_status(format!("Minted P2P join link for '{kb_id}'"));

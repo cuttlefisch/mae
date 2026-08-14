@@ -383,30 +383,37 @@ impl Editor {
     /// already-shared KB (#171): the network task seeds `seal_op` with each node's
     /// current state so the sealed op-set CONTINUES the node's client-id lineage (no
     /// clock collision with the plaintext base) and joiners can open the sealed content.
-    pub fn kb_share_node_states(&self, kb_name: &str) -> Vec<(String, Vec<u8>)> {
-        let is_primary = kb_name == crate::editor::KB_DEFAULT_NAME || kb_name == "primary";
-        let kb = if is_primary {
-            Some(&self.kb.primary)
-        } else {
-            let uuid = self.kb.registry.find(kb_name).map(|i| i.uuid.clone());
-            uuid.and_then(|u| self.kb.instances.get(&u))
-                .or_else(|| self.kb.instances.get(kb_name))
+    /// Takes a [`mae_kb::KbTarget`], not a string, deliberately (ADR-105 D4).
+    ///
+    /// Its one caller — `KbSetEncryption` — has a collab *id*, while this used to
+    /// resolve a *name* (`kb_name == KB_DEFAULT_NAME || kb_name == "primary"`).
+    /// Those were the same string for the primary until D4 minted real ids, at
+    /// which point the comparison silently stopped matching and this returned an
+    /// EMPTY list. The consequence is not a missing feature: enabling E2E on a
+    /// shared primary would re-seal zero nodes, leaving every node's content in
+    /// plaintext under a KB labelled encrypted. A `KbTarget` argument makes the
+    /// caller say which it has and makes the mismatch a compile error.
+    pub fn kb_share_node_states(&self, target: &mae_kb::KbTarget) -> Vec<(String, Vec<u8>)> {
+        let (kb, label) = match target {
+            mae_kb::KbTarget::Primary => (Some(&self.kb.primary), crate::editor::KB_DEFAULT_NAME),
+            mae_kb::KbTarget::Instance(uuid) => (self.kb.instances.get(uuid), uuid.as_str()),
         };
-        kb.and_then(|kb| kb.to_collection(kb_name, "", &[]).ok())
+        kb.and_then(|kb| kb.to_collection(label, "", &[]).ok())
             .map(|(_coll, node_states)| node_states)
             .unwrap_or_default()
     }
 
+    /// Takes the human-facing NAME (`:kb-share collabtest`, or a keybinding's
+    /// default), which is what its caller has at this point in the share path —
+    /// the collab id is minted just after. Resolved through
+    /// `KbRegistry::target_of_name` so the primary's accepted spellings live in one
+    /// place rather than being re-listed here (ADR-105 D4).
     pub fn kb_prepare_share_lineage(&mut self, kb_name: &str, node_ids: &[String]) {
         let cid = self.kb_local_client_id();
-        let is_primary = kb_name == crate::editor::KB_DEFAULT_NAME || kb_name == "primary";
-        let owner: Option<String> = if is_primary {
-            None
-        } else {
-            match self.kb.registry.find(kb_name).map(|i| i.uuid.clone()) {
-                Some(u) => Some(u),
-                None => return,
-            }
+        let owner: Option<String> = match self.kb.registry.target_of_name(kb_name) {
+            Some(mae_kb::KbTarget::Primary) => None,
+            Some(mae_kb::KbTarget::Instance(uuid)) => Some(uuid),
+            None => return,
         };
         // Establish + persist lineage in-memory; collect the nodes to write through.
         let updated: Vec<mae_kb::Node> = {

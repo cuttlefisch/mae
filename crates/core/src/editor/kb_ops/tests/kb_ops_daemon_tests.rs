@@ -1,10 +1,14 @@
 use super::*;
 
 /// Phase D (ADR-029): when the daemon hosts the primary, a primary-node edit
-/// must queue a CRDT update under the canonical "default" collab id — even
-/// though the user never ran `kb-share` (durable `primary_shared` stays false).
+/// must queue a CRDT update under the primary's OWN collab id — even though the
+/// user never ran `kb-share` (durable `primary_shared` stays false).
+///
+/// ADR-105 D4: that id used to be the literal "default", which meant two editors
+/// hosting their primaries on one daemon emitted under the same id — finding F,
+/// reached through the hosting path rather than the peer-share path.
 #[test]
-fn kb_update_node_daemon_hosted_primary_queues_under_default() {
+fn kb_update_node_daemon_hosted_primary_queues_under_its_own_collab_id() {
     let mut editor = Editor::new();
     editor.kb.primary.insert(mae_kb::Node::new(
         "note:alpha",
@@ -15,6 +19,13 @@ fn kb_update_node_daemon_hosted_primary_queues_under_default() {
     editor.collab.kb_sync_mode = "on_save".into();
     // Daemon hosts the primary at runtime; no durable peer-share marker.
     editor.kb.set_daemon_hosts_primary(true);
+    // ADR-105 D4: production reaches hosting through `refresh_daemon_host_state`,
+    // which establishes the primary's collab id as it flips the flag. Setting the
+    // flag directly skips that, so mirror it — a hosted primary without an id
+    // broadcasts under nothing.
+    let hosted_id = editor
+        .kb_collab_id_for_share(&mae_kb::KbTarget::Primary)
+        .expect("primary collab id");
     assert!(!editor.kb.registry.primary_shared);
 
     assert!(editor.collab.pending_kb_updates.is_empty());
@@ -27,7 +38,7 @@ fn kb_update_node_daemon_hosted_primary_queues_under_default() {
         "daemon-hosted primary edit must queue a kb/node_update"
     );
     let (kb_id, node_id, _bytes) = &editor.collab.pending_kb_updates[0];
-    assert_eq!(kb_id, crate::editor::KB_DEFAULT_NAME);
+    assert_eq!(kb_id, &hosted_id);
     assert_eq!(node_id, "note:alpha");
     // Hosting is runtime-only — it must NOT have stamped the durable marker.
     assert!(
@@ -111,6 +122,13 @@ fn kb_create_node_daemon_hosted_emits_doc_and_manifest_add() {
     let mut editor = Editor::new();
     editor.collab.kb_sync_mode = "on_save".into();
     editor.kb.set_daemon_hosts_primary(true);
+    // ADR-105 D4: production reaches hosting through `refresh_daemon_host_state`,
+    // which establishes the primary's collab id as it flips the flag. Setting the
+    // flag directly skips that, so mirror it — a hosted primary without an id
+    // broadcasts under nothing.
+    let hosted_id = editor
+        .kb_collab_id_for_share(&mae_kb::KbTarget::Primary)
+        .expect("primary collab id");
 
     assert!(editor.collab.pending_kb_updates.is_empty());
     assert!(editor.collab.pending_kb_manifest.is_empty());
@@ -120,15 +138,12 @@ fn kb_create_node_daemon_hosted_emits_doc_and_manifest_add() {
 
     // Node doc enqueued (transient queue — no durable store in a unit test).
     assert_eq!(editor.collab.pending_kb_updates.len(), 1);
-    assert_eq!(
-        editor.collab.pending_kb_updates[0].0,
-        crate::editor::KB_DEFAULT_NAME
-    );
+    assert_eq!(editor.collab.pending_kb_updates[0].0, hosted_id);
     assert_eq!(editor.collab.pending_kb_updates[0].1, "note:new");
     // Manifest add enqueued (kb_id, node_id, title, add=true).
     assert_eq!(editor.collab.pending_kb_manifest.len(), 1);
     let (kb_id, node_id, title, add) = &editor.collab.pending_kb_manifest[0];
-    assert_eq!(kb_id, crate::editor::KB_DEFAULT_NAME);
+    assert_eq!(kb_id, &hosted_id);
     assert_eq!(node_id, "note:new");
     assert_eq!(title, "New");
     assert!(*add);
@@ -163,11 +178,18 @@ fn kb_delete_node_daemon_hosted_enqueues_manifest_remove() {
     ));
     editor.collab.kb_sync_mode = "on_save".into();
     editor.kb.set_daemon_hosts_primary(true);
+    // ADR-105 D4: production reaches hosting through `refresh_daemon_host_state`,
+    // which establishes the primary's collab id as it flips the flag. Setting the
+    // flag directly skips that, so mirror it — a hosted primary without an id
+    // broadcasts under nothing.
+    let hosted_id = editor
+        .kb_collab_id_for_share(&mae_kb::KbTarget::Primary)
+        .expect("primary collab id");
 
     editor.kb_delete_node("note:del").unwrap();
     assert_eq!(editor.collab.pending_kb_manifest.len(), 1);
     let (kb_id, node_id, _title, add) = &editor.collab.pending_kb_manifest[0];
-    assert_eq!(kb_id, crate::editor::KB_DEFAULT_NAME);
+    assert_eq!(kb_id, &hosted_id);
     assert_eq!(node_id, "note:del");
     assert!(!*add, "delete must enqueue a manifest REMOVE");
     assert!(editor.kb.primary.get("note:del").is_none());

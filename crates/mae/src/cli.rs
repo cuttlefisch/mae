@@ -244,11 +244,32 @@ pub(crate) fn handle_kb_share_p2p(args: &[String]) {
     if args.get(1).is_none_or(|a| a != "kb-share-p2p") {
         return;
     }
-    let kb_id = args
-        .get(2)
-        .filter(|a| !a.starts_with("--"))
-        .cloned()
-        .unwrap_or_else(|| "default".to_string());
+    // ADR-105 D4: with no argument this used to default to the literal "default",
+    // which was the primary's collab id only while a KB synced under its display
+    // name. Resolve the primary's real id from the registry instead — this CLI has
+    // no Editor, so it reads the same XDG-first registry the editor persists to.
+    // An unshared primary has no id, and mesh-sharing one the hub does not know is
+    // how a KB ends up split across two identities, so say so rather than guess.
+    let kb_id = match args.get(2).filter(|a| !a.starts_with("--")).cloned() {
+        Some(explicit) => explicit,
+        None => {
+            let primary_id = crate::pkg::paths::data_dir_candidate("mae")
+                .map(|dir| mae_kb::federation::KbRegistry::load(&dir))
+                .and_then(|reg| reg.primary_collab_id.clone());
+            match primary_id {
+                Some(id) => id,
+                None => {
+                    eprintln!(
+                        "error: the primary KB has not been shared yet, so it has no \
+                         collab id to mesh-share.\n\
+                         share it first (`:kb-share` in the editor), or name a KB \
+                         explicitly: mae kb-share-p2p <kb-id>"
+                    );
+                    return;
+                }
+            }
+        }
+    };
     let flag = |name: &str| -> Option<String> {
         args.iter()
             .position(|a| a == name)
