@@ -4219,9 +4219,12 @@ pub(crate) fn refresh_kb_content_key_on_collection_delta(
     doc_id: &str,
     delta: &[u8],
 ) {
-    let Some(kb_id) = doc_id.strip_prefix("kbc:") else {
+    // @ai-caution: [kb-scoping] (ADR-105 D1) Address type, not string prefix.
+    let Some(mae_sync::DocAddress::KbCollection { kb_id }) = mae_sync::DocAddress::parse(doc_id)
+    else {
         return;
     };
+    let kb_id = &kb_id;
     let Some(id) = kb.signing_identity else {
         return;
     };
@@ -4360,7 +4363,14 @@ pub(crate) fn handle_incoming_message(
                             }
                             if let Ok(bytes) = mae_sync::encoding::base64_to_update(update_b64) {
                                 // Route KB node updates to KbNodeUpdate event.
-                                if let Some(node_id) = buffer_name.strip_prefix("kb:") {
+                                // @ai-caution: [kb-scoping] (ADR-105 D1) Address TYPE,
+                                // not string prefix — a node doc that stops matching
+                                // here is silently never routed, so the editor's KB
+                                // stops receiving remote edits with no error.
+                                if let Some(mae_sync::DocAddress::KbNode { node_id, .. }) =
+                                    mae_sync::DocAddress::parse(&buffer_name)
+                                {
+                                    let node_id = &node_id;
                                     debug!(node = %node_id, wal_seq, "routing sync_update as KB node update");
                                     route_kb_node_update(
                                         node_id,
@@ -4418,7 +4428,12 @@ pub(crate) fn handle_incoming_message(
                         }
                         if let Ok(bytes) = mae_sync::encoding::base64_to_update(update_b64) {
                             // Route KB node updates to KbNodeUpdate event.
-                            if let Some(node_id) = doc_id.strip_prefix("kb:") {
+                            // @ai-caution: [kb-scoping] (ADR-105 D1) See the sibling
+                            // routing site above — address type, not string prefix.
+                            if let Some(mae_sync::DocAddress::KbNode { node_id, .. }) =
+                                mae_sync::DocAddress::parse(&doc_id)
+                            {
+                                let node_id = &node_id;
                                 route_kb_node_update(
                                     node_id,
                                     bytes,

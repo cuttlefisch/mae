@@ -687,15 +687,20 @@ impl DocStore {
         {
             let docs = self.docs.read().await;
             for name in docs.keys() {
-                if let Some(id) = name.strip_prefix("kbc:") {
-                    ids.insert(id.to_string());
+                // @ai-caution: [kb-scoping] (ADR-105 D1) Address type, not string prefix.
+                if let Some(mae_sync::DocAddress::KbCollection { kb_id }) =
+                    mae_sync::DocAddress::parse(name)
+                {
+                    ids.insert(kb_id);
                 }
             }
         }
         if let Ok(names) = self.storage.list_documents().await {
             for name in names {
-                if let Some(id) = name.strip_prefix("kbc:") {
-                    ids.insert(id.to_string());
+                if let Some(mae_sync::DocAddress::KbCollection { kb_id }) =
+                    mae_sync::DocAddress::parse(&name)
+                {
+                    ids.insert(kb_id);
                 }
             }
         }
