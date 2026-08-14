@@ -64,7 +64,7 @@ async fn kb_node_crdt_is_served_under_the_default_auth_mode() {
     let resp = kb_call(
         &server.socket,
         "kb/node_crdt",
-        serde_json::json!({"id": "concept:does-not-exist"}),
+        serde_json::json!({"kb_id": "default", "id": "concept:does-not-exist"}),
     )
     .await;
 
@@ -94,10 +94,13 @@ async fn kb_node_crdt_is_not_ready_when_collab_is_disabled() {
         return;
     };
 
+    // `kb_id` must be present even though this call is expected to fail: the
+    // ADR-105 param check runs BEFORE the doc-store lookup, so omitting it yields
+    // `InvalidParams` and this control silently stops observing `NotReady` at all.
     let resp = kb_call(
         &server.socket,
         "kb/node_crdt",
-        serde_json::json!({"id": "concept:does-not-exist"}),
+        serde_json::json!({"kb_id": "default", "id": "concept:does-not-exist"}),
     )
     .await;
 
@@ -110,6 +113,42 @@ async fn kb_node_crdt_is_not_ready_when_collab_is_disabled() {
             .unwrap_or_default()
             .contains("not ready"),
         "expected a not-ready error when there is no collab doc store at all, got: {err:?}"
+    );
+}
+
+/// ADR-105 Stage 2 made `kb_id` a REQUIRED param of `kb/node_crdt`, because a
+/// node id alone cannot name a document once node docs are per-KB. Nothing
+/// asserted that at the RPC boundary, and the omission bit immediately: both
+/// tests above kept calling without it and were rejected as `InvalidParams`
+/// before they reached the behaviour they exist to measure. Pin the rejection so
+/// a future defaulting-instead-of-rejecting change — which would silently
+/// reintroduce exactly the cross-KB collision Stage 2 removed — has to fail here
+/// first.
+#[tokio::test]
+async fn kb_node_crdt_rejects_a_call_that_does_not_name_a_kb() {
+    let Some(server) = spawn_server().await else {
+        return;
+    };
+
+    let resp = kb_call(
+        &server.socket,
+        "kb/node_crdt",
+        serde_json::json!({"id": "concept:does-not-exist"}),
+    )
+    .await;
+
+    let err = resp.get("error").unwrap_or_else(|| {
+        panic!(
+            "an unscoped node address must be refused, never resolved against \
+             some default KB: {resp:?}"
+        )
+    });
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("kb_id"),
+        "the error must name the missing param rather than fail generically: {err:?}"
     );
 }
 
