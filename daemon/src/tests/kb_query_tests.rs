@@ -621,9 +621,14 @@ async fn kb_query_unreachable_when_disabled() {
         params: Some(json!({"kb_id": "kb1"})),
     };
 
-    let response =
-        crate::oauth::route_authenticated_request(Some(rpc), &config, Some(&doc_store), &principal)
-            .await;
+    let response = crate::oauth::route_authenticated_request(
+        Some(rpc),
+        &config,
+        Some(&doc_store),
+        &principal,
+        &mae_daemon::quota::NoQuota,
+    )
+    .await;
 
     let error = response
         .get("error")
@@ -665,8 +670,14 @@ async fn kb_query_enabled_but_no_doc_store_gets_a_distinct_jsonrpc_error() {
         params: Some(json!({"kb_id": "kb1"})),
     };
 
-    let response =
-        crate::oauth::route_authenticated_request(Some(rpc), &config, None, &principal).await;
+    let response = crate::oauth::route_authenticated_request(
+        Some(rpc),
+        &config,
+        None,
+        &principal,
+        &mae_daemon::quota::NoQuota,
+    )
+    .await;
 
     let error = response
         .get("error")

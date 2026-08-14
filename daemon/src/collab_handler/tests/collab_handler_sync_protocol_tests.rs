@@ -245,6 +245,7 @@ async fn full_client_session_over_pipe() {
             std::time::Instant::now(),
             Transport::Hub,
             Arc::new(crate::artifact_store::NoArtifactStore),
+            std::sync::Arc::new(crate::quota::NoQuota),
             crate::kb_query::KbQueryLimits::default(),
             None,
         )

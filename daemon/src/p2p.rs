@@ -191,6 +191,7 @@ pub async fn serve(
     start_time: Instant,
     limiter: crate::conn_limit::ConnLimiter,
     artifact_store: Arc<dyn mae_daemon::artifact_store::ArtifactStore>,
+    quota: Arc<dyn mae_daemon::quota::QuotaCharger>,
     kb_query_limits: mae_daemon::kb_query::KbQueryLimits,
     self_issue: Option<mae_daemon::oauth_self_issue::SelfIssueConfig>,
 ) {
@@ -206,6 +207,7 @@ pub async fn serve(
         let authorized_keys_path = authorized_keys_path.clone();
         let doc_store = Arc::clone(&doc_store);
         let artifact_store = Arc::clone(&artifact_store);
+        let quota = Arc::clone(&quota);
         let broadcaster = broadcaster.clone();
         let self_issue = self_issue.clone();
         tokio::spawn(async move {
@@ -273,6 +275,7 @@ pub async fn serve(
                 start_time,
                 mae_sync::kb::Transport::P2p,
                 artifact_store,
+                quota,
                 kb_query_limits,
                 self_issue,
             )
@@ -587,6 +590,7 @@ mod tests {
             Instant::now(),
             crate::conn_limit::ConnLimiter::new(1),
             Arc::new(mae_daemon::artifact_store::NoArtifactStore),
+            Arc::new(mae_daemon::quota::NoQuota),
             mae_daemon::kb_query::KbQueryLimits::default(),
             None,
         ));
@@ -662,6 +666,7 @@ mod tests {
             Instant::now(),
             crate::conn_limit::ConnLimiter::new(0),
             Arc::new(mae_daemon::artifact_store::NoArtifactStore),
+            Arc::new(mae_daemon::quota::NoQuota),
             mae_daemon::kb_query::KbQueryLimits::default(),
             None,
         ));

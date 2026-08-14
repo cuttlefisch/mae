@@ -29,6 +29,7 @@ mod collab_handler_replication_policy_tests;
 mod collab_handler_self_issue_token_tests;
 mod collab_handler_signed_content_relay_tests;
 mod collab_handler_sync_protocol_tests;
+mod collab_handler_tenant_quota_tests;
 mod collab_handler_transport_oplog_tests;
 mod collab_handler_viewer_epoch_tests;
 
@@ -91,6 +92,7 @@ pub(crate) async fn kb_share_as(
     handle_doc_request_inner(
         &msg.to_string(),
         store,
+        &crate::quota::NoQuota,
         bc,
         std::time::Instant::now(),
         0,
@@ -117,6 +119,7 @@ pub(crate) async fn dispatch_as(
     handle_doc_request_inner(
         &msg.to_string(),
         store,
+        &crate::quota::NoQuota,
         bc,
         std::time::Instant::now(),
         0,
@@ -147,6 +150,7 @@ pub(crate) async fn dispatch_as_with_artifacts(
     handle_doc_request_inner(
         &msg.to_string(),
         store,
+        &crate::quota::NoQuota,
         bc,
         std::time::Instant::now(),
         0,
@@ -178,6 +182,7 @@ pub(crate) async fn dispatch_as_with_self_issue(
     handle_doc_request_inner(
         &msg.to_string(),
         store,
+        &crate::quota::NoQuota,
         bc,
         std::time::Instant::now(),
         0,
