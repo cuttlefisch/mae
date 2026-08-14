@@ -6,6 +6,25 @@ on:
   pull_request:
     branches: [main]
 
+# Supersede a PR's own in-flight run when it is pushed again.
+#
+# Without this, every push starts another full matrix (Linux + Windows + macOS +
+# containers + e2e) and none of the older ones stop. They then compete for the
+# SAME account-wide GitHub-hosted runner concurrency as everything else, so runs
+# sit `queued` and CI looks broken when it is really starved. Routine workflow
+# here makes that compound rather than being exceptional: back-merging `main` as
+# you go (and stacking a follow-on commit) is three pushes to one PR, i.e. three
+# full matrices where only the last one's result is wanted.
+#
+# `github.ref` is `refs/pull/N/merge` for a PR run and `refs/heads/main` for a
+# push, so a PR's runs only ever supersede that same PR's runs.
+concurrency:
+  group: ci-${{ github.ref }}
+  # ...but NEVER cancel a `main` run. Post-merge CI on main is the verdict the
+  # badge/release jobs read, and each merged commit deserves its own — the same
+  # reasoning that makes `version-bump.yml` use `cancel-in-progress: false`.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 env:
   CARGO_TERM_COLOR: always
   # Harden dependency fetching against transient network flakes. The daemon's
