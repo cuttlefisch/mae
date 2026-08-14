@@ -2711,7 +2711,7 @@ async fn run_collab_task(
                                         shared_docs.push(coll_doc);
                                     }
                                     for (id, _) in &node_states {
-                                        let node_doc = format!("kb:{id}");
+                                        let node_doc = mae_sync::kb_node_doc_name(&kb_id, id);
                                         if !shared_docs.contains(&node_doc) {
                                             shared_docs.push(node_doc);
                                         }
@@ -4996,7 +4996,7 @@ fn handle_response(
                     shared_docs.push(coll_doc);
                 }
                 for n in &nodes {
-                    let node_doc = format!("kb:{}", n.id);
+                    let node_doc = mae_sync::kb_node_doc_name(&kb_id, &n.id);
                     if !shared_docs.contains(&node_doc) {
                         shared_docs.push(node_doc);
                     }

@@ -593,7 +593,16 @@ impl Editor {
             return;
         }
         // Prefer the daemon (authoritative, fresh content + correct lineage).
-        let daemon_state = self.kb.query_layer().and_then(|q| q.node_crdt_state(id));
+        // ADR-105: node docs are addressed per-KB, so the daemon needs the KB this
+        // node belongs to. This path is the primary mirror, so that is the primary's
+        // own collab id.
+        let kb_id = self
+            .kb_collab_id_of(&None)
+            .unwrap_or_else(|| crate::editor::KB_DEFAULT_NAME.to_string());
+        let daemon_state = self
+            .kb
+            .query_layer()
+            .and_then(|q| q.node_crdt_state(&kb_id, id));
         if let Some(state) = daemon_state {
             match self.kb.primary.apply_remote_update(id, &state) {
                 Ok(_) if self.kb.primary.get(id).is_some() => {

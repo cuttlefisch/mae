@@ -190,7 +190,7 @@ async fn owned_kb_signed_op_broadcast_carries_content_header_for_mesh_relay() {
     let peer_sid = 999u64;
     let mut rx = {
         let mut b = bc.lock().unwrap();
-        b.subscribe_doc(peer_sid, "kb:concept:n");
+        b.subscribe_doc(peer_sid, "kbn:kbc:concept:n");
         b.subscribe(peer_sid, vec!["sync_update".to_string()])
     };
 
@@ -241,7 +241,7 @@ async fn owned_kb_signed_op_broadcast_carries_content_header_for_mesh_relay() {
             ..
         } = ev
         {
-            if buffer_name == "kb:concept:n" {
+            if buffer_name == "kbn:kbc:concept:n" {
                 assert!(
                     content_header.is_some(),
                     "owned-KB signed op MUST broadcast WITH a content_header for mesh \
@@ -313,7 +313,7 @@ async fn verify_relayed_content_op_owned_kb_branches() {
         }
         .header_params()
     };
-    let doc = "kb:concept:n";
+    let doc = "kbn:kbc:concept:n";
 
     // A valid member's signed op verifies (owned-KB anchor resolved from the signer).
     let h = header(&bob, 0);

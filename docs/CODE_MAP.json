@@ -1247,6 +1247,14 @@
           "kind": "enum"
         },
         {
+          "name": "kb_node_doc_name",
+          "kind": "fn"
+        },
+        {
+          "name": "kb_id_is_addressable",
+          "kind": "fn"
+        },
+        {
           "name": "SavePolicy",
           "kind": "enum"
         },

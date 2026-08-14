@@ -28,10 +28,19 @@ resolve to **the same document**. This is what the code computes, not an inferen
    write then lands on a globally-addressed document. The ADR-023 epoch fence does not close it —
    the author writes under their own KB's epoch, which the fence accepts.
 2. **Correctness, previously unrecorded.** Two *honest* tenants who both use `concept:architecture`
-   silently share one CRDT document. Observed while researching this ADR: a tenant's first write to
-   their own KB failed with `rebase required: … carries an op from stale-epoch client …` — the
-   epoch fence firing because another tenant's KB had touched the same document. Cross-tenant
-   interference surfacing as a spurious availability failure in an unrelated tenant.
+   silently share one CRDT document — one tenant reads their own KB, through their own membership,
+   and receives the other's content. Demonstrated by
+   `collab_handler_same_node_id_isolation_tests`, which fails against the pre-fix tree.
+
+   **A correction, recorded because it was published in this ADR before being checked.** An earlier
+   draft also claimed a second symptom: cross-tenant *epoch* interference, citing an observed
+   `rebase required: … carries an op from stale-epoch client …` when a tenant edited their own KB.
+   That attribution was wrong. Re-measured with the test harness authoring edits under the
+   epoch-derived client id (`derive_kb_client_id`, what `kb_ops::nodes` actually uses) instead of
+   yrs' default, the error disappears **and the scenario passes against the unfixed tree**. The
+   fence was correctly rejecting a genuinely stale-epoch op authored by the harness; it was never
+   evidence of collision. The claim is withdrawn rather than quietly dropped, because it was cited
+   as motivation for this ADR.
 
 Consequence 2 is why this is an **addressing** defect. The authorization hole is a symptom; no
 amount of checking makes two tenants' documents distinct.
@@ -128,25 +137,49 @@ breaking D2's split, and ownership transfer would change a KB's identity.
 Turns finding E's silent merge into a named conflict. With D4 this should be unreachable, which is
 exactly why it must fail loudly if it is ever reached.
 
-### D6 — `require_node_in_kb` stays, and the write path gains it
+### D6 — WITHDRAWN: the write path does **not** gain `require_node_in_kb`
 
-**This reverses the first draft**, on the prior-art brief. That draft held that namespacing makes
-the check redundant. Published consensus (OWASP, AWS, Redis) is the opposite: tenant-prefixed keys
-**and** authorization checks, neither sufficient alone.
+**This decision was reversed by implementation, and the reversal is recorded rather than
+edited away because D6 was itself written as a reversal.**
 
-They answer different questions. Namespacing guarantees a *well-formed* address cannot collide. It
-does not authorize the caller for the KB named in that address (`kb_access` does), nor establish
-that the node is in that KB's manifest (`require_node_in_kb` does) — which still matters for a node
-not granted within an otherwise readable KB. Removing it would have been a regression introduced by
-this ADR, and is recorded because a decision defended by a wrong reason gets re-litigated the moment
-that reason is challenged.
+D6 originally added `require_node_in_kb` to `handle_kb_node_update`, justified by the prior-art
+brief's C3: tenant-prefixed keys **and** authorization checks, neither sufficient alone. Building it
+showed that reasoning was misapplied.
 
-### D7 — Node creation is ordered manifest-first, as a stated contract
+**What the check actually is, post-D2.** The address now carries `kb_id`, and `kb_access` above
+already proved membership of that KB. So `require_node_in_kb` no longer answers "is this another
+tenant's node" — the address settles that. It answers "is this node in my own KB's manifest yet",
+which is a **manifest-consistency** check, not a tenant-isolation one. The authorization check the
+literature means is `kb_access`, and that is present. Conflating the two is what produced D6.
 
-The editor drains `pending_kb_updates` before `pending_kb_manifest`, so a new node's first update
-arrives before its `kb/collection_node_add`. That inverts. Not load-bearing for isolation (D2 is);
-it exists so a legitimate create is not refused by D6, which is what the `@ai-caution` marker at
-`kb_content.rs` predicted would break.
+**What it costs.** A distributed ordering dependency. A joining peer pulling nodes, or a relay
+forwarding a content op, can legitimately deliver a node update before the corresponding manifest
+entry. Measured: the check broke **ten** tests across membership-join, device revocation, block
+enforcement, N-way convergence and the mTLS query surface — all legitimate flows, none of them
+cross-tenant.
+
+**What it would have bought.** Only that a member cannot create an orphan node *inside their own
+KB*. That is hygiene, and it is not worth an ordering dependency across the mesh.
+
+The read-side check (#571, `kb/node_fetch`) is untouched: it already shipped, and post-scoping it is
+harmless belt-and-braces within a single KB.
+
+This is the second decision in this ADR that survived review and died in implementation. The first
+(the epoch-interference finding) was a wrong measurement; this one was a wrong inference from a
+correct source. Staging exists so both surface before the change is load-bearing.
+
+### D7 — Node creation is ordered manifest-first
+
+The editor drained `pending_kb_updates` before `pending_kb_manifest`, so a new node's first update
+arrived before its `kb/collection_node_add`. That is inverted.
+
+**Re-justified after D6's withdrawal.** This was originally introduced *for* D6, and with D6 gone it
+would be unmotivated — except that it carries an independent benefit worth keeping:
+`project_node_change` no-ops when the collection does not yet list the node, so manifest-first means
+a newly created node's content projects into cozo immediately instead of waiting for its next edit.
+
+It is explicitly **not** relied on for isolation (D2 is), and nothing refuses a write that arrives
+out of order.
 
 ### D8 — Staged, and the addressing change is taken before first hosted deployment
 
@@ -176,8 +209,9 @@ Effects, not returned values. Each must **fail against `main`** before being kep
    failure of CLAUDE.md #14 occurring inside a test written to be adversarial, and it is why this
    bug survived a review. Reusing that shape rebuilds the blind spot.
 1. Two tenants, same node id → each reads **its own** content.
-2. No cross-tenant epoch interference: the observed `rebase required: … stale-epoch client …` no
-   longer occurs when another tenant holds a same-named node.
+2. A tenant's own edit keeps working when another tenant holds a same-named node. A guard that
+   scoping does not *introduce* fence interference — **not** evidence of the bug; see the
+   correction in Context.
 3. **Two tenants can both share a primary KB** (finding F).
 4. A foreign-node write is refused **and the victim's content is unchanged** — asserted on content,
    since a refused-but-applied write would pass a response-only assertion.

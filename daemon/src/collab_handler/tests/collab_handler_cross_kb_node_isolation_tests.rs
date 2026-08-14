@@ -102,7 +102,7 @@ async fn kb_node_fetch_cannot_read_a_node_belonging_to_another_kb() {
     // what pins the scope check ABOVE the `session_docs.insert` /
     // `subscribe_doc` block rather than merely before the response is built.
     assert!(
-        !mallory_docs.contains("kb:concept:b-secret"),
+        !mallory_docs.contains("kbn:kb-b:concept:b-secret"),
         "refused fetch still subscribed the session to kb-b's node — every future \
          update to it would be delivered to Mallory"
     );
@@ -126,7 +126,7 @@ async fn kb_node_fetch_cannot_read_a_node_belonging_to_another_kb() {
         own.error
     );
     assert!(
-        mallory_docs.contains("kb:concept:a-own"),
+        mallory_docs.contains("kbn:kb-a:concept:a-own"),
         "a legitimate fetch must still subscribe the session"
     );
 
@@ -146,7 +146,7 @@ async fn kb_node_fetch_cannot_read_a_node_belonging_to_another_kb() {
         reverse.error.is_some(),
         "the victim read Mallory's node — isolation is one-directional"
     );
-    assert!(!victim_docs.contains("kb:concept:a-own"));
+    assert!(!victim_docs.contains("kbn:kb-a:concept:a-own"));
 }
 
 /// The same attack via the raw sync surface, which was ungated entirely.
@@ -211,7 +211,7 @@ async fn raw_sync_methods_cannot_read_a_node_belonging_to_another_kb() {
             Some(&fp("mallory")),
             serde_json::json!({
                 "jsonrpc":"2.0","id":9,"method": method,
-                "params":{"doc":"kb:concept:b-secret","sv":""}}),
+                "params":{"doc":"kbn:kb-b:concept:b-secret","sv":""}}),
             &mut mallory_docs,
         )
         .await;

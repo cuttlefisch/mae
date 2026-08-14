@@ -420,10 +420,10 @@ impl KbQueryLayer for LruQueryLayer {
         self.invalidate(id);
     }
 
-    fn node_crdt_state(&self, id: &str) -> Option<Vec<u8>> {
+    fn node_crdt_state(&self, kb_id: &str, id: &str) -> Option<Vec<u8>> {
         let result = {
             let mut client = self.client.lock().unwrap_or_else(|e| e.into_inner());
-            client.call("kb/node_crdt", json!({"id": id}))
+            client.call("kb/node_crdt", json!({"kb_id": kb_id, "id": id}))
         };
         match result {
             Ok(val) => val

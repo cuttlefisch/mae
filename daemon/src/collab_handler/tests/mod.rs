@@ -27,6 +27,7 @@ mod collab_handler_protocol_dispatch_tests;
 mod collab_handler_rebind_gate_tests;
 mod collab_handler_recovery_key_tests;
 mod collab_handler_replication_policy_tests;
+mod collab_handler_same_node_id_isolation_tests;
 mod collab_handler_self_issue_token_tests;
 mod collab_handler_signed_content_relay_tests;
 mod collab_handler_sync_protocol_tests;

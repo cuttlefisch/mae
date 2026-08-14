@@ -167,8 +167,8 @@ mod tests {
 
     #[test]
     fn distinct_owners_produce_distinct_tickets() {
-        let a = JoinTicket::new(sample_endpoint("owner-a", 9473), "kb:x");
-        let b = JoinTicket::new(sample_endpoint("owner-b", 9473), "kb:x");
+        let a = JoinTicket::new(sample_endpoint("owner-a", 9473), "kbx");
+        let b = JoinTicket::new(sample_endpoint("owner-b", 9473), "kbx");
         assert_ne!(a.node_id(), b.node_id(), "different identities");
         assert_ne!(a.to_string(), b.to_string(), "different tickets");
     }

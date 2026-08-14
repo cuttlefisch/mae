@@ -338,7 +338,7 @@ async fn kb_node_docs(doc_store: &Arc<DocStore>, kb_id: &str) -> Vec<String> {
     };
     coll.list_nodes()
         .into_iter()
-        .map(|(id, _)| format!("kb:{id}"))
+        .map(|(id, _)| mae_sync::kb_node_doc_name(kb_id, &id))
         .collect()
 }
 
@@ -457,7 +457,10 @@ async fn node_svs_for(doc_store: &Arc<DocStore>, kb_id: &str) -> Vec<Value> {
     };
     let mut out = Vec::new();
     for (node_id, _title) in coll.list_nodes() {
-        if let Ok(sv) = doc_store.state_vector(&format!("kb:{node_id}")).await {
+        if let Ok(sv) = doc_store
+            .state_vector(&mae_sync::kb_node_doc_name(kb_id, &node_id))
+            .await
+        {
             out.push(json!({ "id": node_id, "sv": update_to_base64(&sv) }));
         }
     }
@@ -550,7 +553,7 @@ async fn apply_join_response(
                 doc_store,
                 broadcaster,
                 exclude_sid,
-                &format!("kb:{id}"),
+                &mae_sync::kb_node_doc_name(kb_id, id),
                 &update,
                 None,
             )
@@ -694,7 +697,10 @@ mod tests {
         // agnostically), so a test can produce a real edit update with TextSync.
         let node = KbNodeDoc::new("concept:n", "Node N", "hello", &[]);
         a_store
-            .share_doc("kb:concept:n", &node.encode())
+            .share_doc(
+                &mae_sync::kb_node_doc_name(kb_id, "concept:n"),
+                &node.encode(),
+            )
             .await
             .unwrap();
 
@@ -777,7 +783,7 @@ mod tests {
             .expect("dial + join");
         assert_eq!(outcome, JoinOutcome::Pulled { nodes: 1 });
         assert!(b_store.has_doc("kbc:kbx").await);
-        assert!(b_store.has_doc("kb:concept:n").await);
+        assert!(b_store.has_doc("kbn:kbx:concept:n").await);
         assert_eq!(
             b_store.kb_anchor("kbx").await,
             Some(a_id.public().to_bytes())
@@ -850,19 +856,22 @@ mod tests {
         assert!(
             wait_until(5, || {
                 let s = Arc::clone(&b_store);
-                async move { s.has_doc("kb:concept:n").await }
+                async move { s.has_doc("kbn:kbl:concept:n").await }
             })
             .await,
             "B should pull the node on join"
         );
         // No settle needed: kb/join subscribed B to sync_update AS OF the snapshot
         // (2c-3c), so an owner edit right after the pull is still pushed.
-        let before = b_store.state_vector("kb:concept:n").await.unwrap();
+        let before = b_store.state_vector("kbn:kbl:concept:n").await.unwrap();
 
         // A edits the node AFTER B subscribed, and broadcasts it the way the server's
         // node-update path does → A's session for B pushes a sync_update notification.
         let mut a_node = {
-            let (st, _) = a_store.encode_state_and_sv("kb:concept:n").await.unwrap();
+            let (st, _) = a_store
+                .encode_state_and_sv("kbn:kbl:concept:n")
+                .await
+                .unwrap();
             // A real editor authors KB node ops under derive_kb_client_id(fp, epoch)
             // (crates/core/src/editor/kb_ops/nodes.rs:240). The mesh epoch fence (#157 N1) binds the relayed
             // payload's yrs client_id to the author's CURRENT epoch, so the test
@@ -876,7 +885,7 @@ mod tests {
         };
         let edit = a_node.insert(0, "LIVE-EDIT ");
         a_store
-            .apply_update("kb:concept:n", &edit, None)
+            .apply_update("kbn:kbl:concept:n", &edit, None)
             .await
             .unwrap();
         // A (the owner = a member) SIGNS the edit (ADR-036): the broadcast carries the
@@ -885,7 +894,7 @@ mod tests {
         // guarantee end-to-end on a real 2-endpoint mesh.
         let signed = sign_content_op(&a_id, "kbl", "concept:n", 0, &edit);
         a_bc.lock().unwrap().broadcast(&EditorEvent::SyncUpdate {
-            buffer_name: "kb:concept:n".to_string(),
+            buffer_name: "kbn:kbl:concept:n".to_string(),
             update_base64: update_to_base64(&edit),
             wal_seq: 0,
             content_header: Some(signed.header_params()),
@@ -896,7 +905,7 @@ mod tests {
             let s = Arc::clone(&b_store);
             let before = before.clone();
             async move {
-                s.state_vector("kb:concept:n")
+                s.state_vector("kbn:kbl:concept:n")
                     .await
                     .map(|sv| sv != before)
                     .unwrap_or(false)
@@ -932,24 +941,27 @@ mod tests {
         assert!(
             wait_until(5, || {
                 let s = Arc::clone(&b_store);
-                async move { s.has_doc("kb:concept:n").await }
+                async move { s.has_doc("kbn:kbl:concept:n").await }
             })
             .await,
             "B should pull the node on join"
         );
-        let before = b_store.state_vector("kb:concept:n").await.unwrap();
+        let before = b_store.state_vector("kbn:kbl:concept:n").await.unwrap();
 
         // A genuine edit A makes locally (so the yrs bytes are valid) — but relayed
         // two illegitimate ways.
         let mut a_node = {
-            let (st, _) = a_store.encode_state_and_sv("kb:concept:n").await.unwrap();
+            let (st, _) = a_store
+                .encode_state_and_sv("kbn:kbl:concept:n")
+                .await
+                .unwrap();
             TextSync::from_state(&st).unwrap()
         };
         let edit = a_node.insert(0, "FORGED ");
 
         let push = |bc: &SharedBroadcaster, upd: &[u8], header: Option<serde_json::Value>| {
             bc.lock().unwrap().broadcast(&EditorEvent::SyncUpdate {
-                buffer_name: "kb:concept:n".to_string(),
+                buffer_name: "kbn:kbl:concept:n".to_string(),
                 update_base64: update_to_base64(upd),
                 wal_seq: 0,
                 content_header: header,
@@ -959,7 +971,7 @@ mod tests {
             let s = Arc::clone(b_store);
             let before = before.to_vec();
             async move {
-                s.state_vector("kb:concept:n")
+                s.state_vector("kbn:kbl:concept:n")
                     .await
                     .map(|sv| sv != before)
                     .unwrap_or(false)
@@ -994,7 +1006,10 @@ mod tests {
         // its job, not the connection having quietly died (the trap a bare
         // assert-absence test would mask).
         let valid_edit = {
-            let (st, _) = a_store.encode_state_and_sv("kb:concept:n").await.unwrap();
+            let (st, _) = a_store
+                .encode_state_and_sv("kbn:kbl:concept:n")
+                .await
+                .unwrap();
             // Stamp the way a real editor does (derive_kb_client_id,
             // crates/core/src/editor/kb_ops/nodes.rs:240)
             // so the valid owner edit clears the #157 N1 mesh epoch fence — the
@@ -1042,18 +1057,21 @@ mod tests {
         assert!(
             wait_until(5, || {
                 let s = Arc::clone(&b_store);
-                async move { s.has_doc("kb:concept:n").await }
+                async move { s.has_doc("kbn:kbo:concept:n").await }
             })
             .await,
             "B should pull on join"
         );
         tokio::time::sleep(Duration::from_millis(300)).await;
-        let a_before = a_store.state_vector("kb:concept:n").await.unwrap();
+        let a_before = a_store.state_vector("kbn:kbo:concept:n").await.unwrap();
 
         // B's "editor" edits the node locally and broadcasts it on B's broadcaster
         // (the dialer is subscribed, doc-scoped to this KB) → forwarded to the owner.
         let mut b_node = {
-            let (st, _) = b_store.encode_state_and_sv("kb:concept:n").await.unwrap();
+            let (st, _) = b_store
+                .encode_state_and_sv("kbn:kbo:concept:n")
+                .await
+                .unwrap();
             // A real editor authors KB node ops under derive_kb_client_id(fp, epoch)
             // (crates/core/src/editor/kb_ops/nodes.rs:240). The B→A forward now clears the epoch fence on the owner's
             // sync/update path too (#169 M1), so B's edit must be stamped the way the editor
@@ -1066,12 +1084,12 @@ mod tests {
         };
         let edit = b_node.insert(0, "B-EDIT ");
         b_store
-            .apply_update("kb:concept:n", &edit, None)
+            .apply_update("kbn:kbo:concept:n", &edit, None)
             .await
             .unwrap();
         let push_b = |header: Option<serde_json::Value>| {
             b_bc.lock().unwrap().broadcast(&EditorEvent::SyncUpdate {
-                buffer_name: "kb:concept:n".to_string(),
+                buffer_name: "kbn:kbo:concept:n".to_string(),
                 update_base64: update_to_base64(&edit),
                 wal_seq: 0,
                 content_header: header,
@@ -1081,7 +1099,7 @@ mod tests {
             let s = Arc::clone(a_store);
             let before = a_before.to_vec();
             async move {
-                s.state_vector("kb:concept:n")
+                s.state_vector("kbn:kbo:concept:n")
                     .await
                     .map(|sv| sv != before)
                     .unwrap_or(false)

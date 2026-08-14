@@ -166,21 +166,28 @@ async fn tcp_kb_node_update_broadcasts() {
         "node_update failed: {update_resp}"
     );
 
-    // Client B should receive a sync_update notification for "kb:n1"
+    // Client B should receive a sync_update notification for "kbn:update-kb:n1"
     let notif = client_b
         .wait_for_notification("notifications/sync_update", 5000)
         .await;
     assert!(
         notif.is_some(),
-        "client B should receive sync_update notification for kb:n1"
+        "client B should receive sync_update notification for kbn:update-kb:n1"
     );
 
     let notif = notif.unwrap();
     let data = &notif["params"]["event"]["data"];
+    // Spelled as a literal rather than via `mae_sync::kb_node_doc_name`, on
+    // purpose: this is the wire format two peers agree on, so building the
+    // expectation with the same constructor the daemon uses would make the
+    // assertion tautological and let a rename ship unnoticed. It read "kb:n1"
+    // until ADR-105 Stage 2 scoped node docs per-KB — a deliberate
+    // pre-deployment protocol change (D8), which is exactly the kind of change
+    // this line exists to force someone to look at.
     assert_eq!(
         data["buffer_name"].as_str().unwrap(),
-        "kb:n1",
-        "notification should be for kb:n1, got: {}",
+        "kbn:update-kb:n1",
+        "notification should be for kbn:update-kb:n1, got: {}",
         notif
     );
 

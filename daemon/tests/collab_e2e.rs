@@ -2317,7 +2317,7 @@ async fn kb_node_update_applies_and_broadcasts_to_peer() {
     let event_data = &notif["params"]["event"]["data"];
     assert_eq!(
         event_data["buffer_name"],
-        serde_json::json!("kb:testkb:n1"),
+        serde_json::json!("kbn:testkb:testkb:n1"),
         "broadcast must target the node doc: {notif}"
     );
 

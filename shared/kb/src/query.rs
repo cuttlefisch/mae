@@ -124,7 +124,11 @@ pub trait KbQueryLayer: Send + Sync {
     /// lazy edit hydration on a thin client: the editor applies this to its in-memory
     /// mirror to obtain the node WITH its real lineage before editing. Default `None`
     /// (no daemon / non-RPC layers); `LruQueryLayer` overrides via `kb/node_crdt`.
-    fn node_crdt_state(&self, _id: &str) -> Option<Vec<u8>> {
+    ///
+    /// ADR-105: takes `kb_id` because a node document is addressed per-KB. Without it
+    /// the daemon cannot name the document — and resolving the KB server-side from
+    /// the node id alone is precisely the ambiguity this ADR removes.
+    fn node_crdt_state(&self, _kb_id: &str, _id: &str) -> Option<Vec<u8>> {
         None
     }
 

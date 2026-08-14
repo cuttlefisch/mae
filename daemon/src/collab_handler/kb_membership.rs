@@ -346,7 +346,7 @@ pub(super) async fn handle_kb_join(
     let mut nodes = Vec::new();
     let mut diff_count = 0usize;
     for node_id in &node_ids {
-        let doc_name = format!("kb:{node_id}");
+        let doc_name = mae_sync::kb_node_doc_name(&kb_id, node_id);
         // Member sent an SV for this node → send only the ops it lacks.
         let encoded = match member_svs.get(node_id) {
             Some(member_sv) => doc_store
@@ -695,7 +695,7 @@ pub(super) async fn handle_kb_leave(
     // Unsubscribe only from this KB's node docs.
     let mut removed_count: u64 = 0;
     for node_id in &node_ids {
-        let doc_name = format!("kb:{node_id}");
+        let doc_name = mae_sync::kb_node_doc_name(&kb_id, node_id);
         if session_docs.remove(&doc_name) {
             broadcaster
                 .lock()

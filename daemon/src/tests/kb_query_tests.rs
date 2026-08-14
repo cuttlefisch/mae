@@ -71,7 +71,10 @@ pub(super) async fn seed_unencrypted_kb(
         let _ = node.add_link(link); // building via encode_state() below, not incrementally
     }
     doc_store
-        .share_doc(&format!("kb:{node_id}"), &node.encode_state())
+        .share_doc(
+            &mae_sync::kb_node_doc_name(kb_id, node_id),
+            &node.encode_state(),
+        )
         .await
         .unwrap();
 }
@@ -149,7 +152,7 @@ pub(super) async fn seed_e2e_kb(
         state = op_set::merge(&state, &outer).unwrap();
     }
     doc_store
-        .share_doc(&format!("kb:{node_id}"), &state)
+        .share_doc(&mae_sync::kb_node_doc_name(kb_id, node_id), &state)
         .await
         .unwrap();
 
@@ -383,7 +386,10 @@ async fn unencrypted_kb_search_is_capped_and_cannot_full_dump() {
     for i in 0..N {
         let node = KbNodeDoc::new(&format!("n{i}"), "Matching Title", "matches the query", &[]);
         doc_store
-            .share_doc(&format!("kb:n{i}"), &node.encode_state())
+            .share_doc(
+                &mae_sync::kb_node_doc_name("big-kb", &format!("n{i}")),
+                &node.encode_state(),
+            )
             .await
             .unwrap();
     }
@@ -498,7 +504,7 @@ async fn kb_query_graph_edge_count_is_capped_even_from_a_single_densely_linked_h
         let _ = hub.add_link(&format!("target-{i}"));
     }
     doc_store
-        .share_doc("kb:hub", &hub.encode_state())
+        .share_doc("kbn:hub-kb:hub", &hub.encode_state())
         .await
         .unwrap();
 

@@ -42,7 +42,7 @@ impl std::error::Error for SyncError {}
 ///
 /// Documents can be identified by project-relative file path, KB node ID,
 /// KB collection manifest, or arbitrary shared name. The string form uses
-/// URI-like prefixes: `file:{project_hash}/{rel_path}`, `kb:{node_id}`,
+/// URI-like prefixes: `file:{project_hash}/{rel_path}`, `kbn:{kb_id}:{node_id}`,
 /// `kbc:{kb_id}`, `shared:{name}`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DocAddress {
@@ -51,8 +51,15 @@ pub enum DocAddress {
         project_hash: String,
         rel_path: String,
     },
-    /// A knowledge-base node.
-    KbNode { node_id: String },
+    /// A knowledge-base node, scoped to the KB that owns it (ADR-105).
+    ///
+    /// @ai-caution: [kb-scoping] `kb_id` is REQUIRED and must stay in the address.
+    /// It used to be absent, so two KBs whose manifests both listed a node id
+    /// resolved to one document — which was simultaneously a cross-tenant write
+    /// hole (#718, #571) and a silent correctness bug for two honest tenants that
+    /// happened to use the same node id. Re-flattening this makes the collision
+    /// expressible again; see ADR-105.
+    KbNode { kb_id: String, node_id: String },
     /// A KB collection manifest (node inventory for a shared KB).
     KbCollection { kb_id: String },
     /// An arbitrary shared document (e.g. scratch buffers, REPL).
@@ -67,7 +74,7 @@ impl DocAddress {
                 project_hash,
                 rel_path,
             } => format!("file:{project_hash}/{rel_path}"),
-            DocAddress::KbNode { node_id } => format!("kb:{node_id}"),
+            DocAddress::KbNode { kb_id, node_id } => format!("kbn:{kb_id}:{node_id}"),
             DocAddress::KbCollection { kb_id } => format!("kbc:{kb_id}"),
             DocAddress::Shared { name } => format!("shared:{name}"),
         }
@@ -93,12 +100,17 @@ impl DocAddress {
             Some(DocAddress::KbCollection {
                 kb_id: rest.to_string(),
             })
-        } else if let Some(rest) = s.strip_prefix("kb:") {
-            if rest.is_empty() {
+        } else if let Some(rest) = s.strip_prefix("kbn:") {
+            // Split on the FIRST colon: `node_id` routinely contains colons
+            // (`concept:buffer`), `kb_id` may not (ADR-105 D2, enforced by
+            // `kb_id_is_addressable`), so only this direction is unambiguous.
+            let (kb_id, node_id) = rest.split_once(':')?;
+            if kb_id.is_empty() || node_id.is_empty() {
                 return None;
             }
             Some(DocAddress::KbNode {
-                node_id: rest.to_string(),
+                kb_id: kb_id.to_string(),
+                node_id: node_id.to_string(),
             })
         } else if let Some(rest) = s.strip_prefix("shared:") {
             if rest.is_empty() {
@@ -111,6 +123,30 @@ impl DocAddress {
             None
         }
     }
+}
+
+/// The canonical document name for a KB node (ADR-105).
+///
+/// The one constructor for a node doc name. Call this instead of formatting the
+/// string, so the address scheme is spelled in exactly one place — `grep` for
+/// `format!("kb` finding nothing outside this module is the invariant.
+pub fn kb_node_doc_name(kb_id: &str, node_id: &str) -> String {
+    DocAddress::KbNode {
+        kb_id: kb_id.to_string(),
+        node_id: node_id.to_string(),
+    }
+    .to_doc_name()
+}
+
+/// May `kb_id` appear in a [`DocAddress::KbNode`] address (ADR-105 D2)?
+///
+/// A KB id is a user-chosen name and was historically unvalidated. It becomes part
+/// of the document address, and `node_id` routinely contains colons, so the address
+/// parses unambiguously only if the KB id contains none. Enforced where KB ids
+/// enter rather than assumed, so a bad name fails with an actionable error instead
+/// of silently mis-addressing every node in that KB.
+pub fn kb_id_is_addressable(kb_id: &str) -> bool {
+    !kb_id.is_empty() && !kb_id.contains(':')
 }
 
 /// Save policy derived from `DocAddress` type.
@@ -379,10 +415,11 @@ mod tests {
     #[test]
     fn doc_address_kb_roundtrip() {
         let addr = DocAddress::KbNode {
+            kb_id: "team-a".to_string(),
             node_id: "concept:buffer".to_string(),
         };
         let s = addr.to_doc_name();
-        assert_eq!(s, "kb:concept:buffer");
+        assert_eq!(s, "kbn:team-a:concept:buffer");
         let parsed = DocAddress::parse(&s).unwrap();
         assert_eq!(parsed, addr);
     }
@@ -629,14 +666,46 @@ mod tests {
     }
 
     #[test]
-    fn doc_address_parse_colon_in_kb_id() {
-        let addr = DocAddress::parse("kb:concept:buffer").unwrap();
+    fn doc_address_parse_colon_in_node_id() {
+        // `node_id` routinely contains colons, so the split must take the FIRST
+        // one only — `kb_id` is colon-free by `kb_id_is_addressable` (ADR-105 D2).
+        let addr = DocAddress::parse("kbn:team-a:concept:buffer").unwrap();
         assert_eq!(
             addr,
             DocAddress::KbNode {
+                kb_id: "team-a".to_string(),
                 node_id: "concept:buffer".to_string(),
             }
         );
+    }
+
+    /// ADR-105: the pre-scoping flat form must NOT parse.
+    ///
+    /// This is what lets Phase B's migration tell a legacy key from a scoped one.
+    /// Had the scoped form reused the `kb:` prefix, `kb:concept:buffer` would have
+    /// silently parsed as `kb_id="concept", node_id="buffer"` — a legacy key
+    /// mis-read as a scoped address for a KB that does not exist, with no error
+    /// anywhere. Discovered by this very test during implementation, which is why
+    /// the prefix is `kbn:`.
+    #[test]
+    fn doc_address_rejects_the_legacy_unscoped_kb_form() {
+        assert_eq!(DocAddress::parse("kb:concept:buffer"), None);
+        assert_eq!(DocAddress::parse("kb:plain-node"), None);
+        // ...while the collection prefix, which was always scoped, still parses.
+        assert_eq!(
+            DocAddress::parse("kbc:team-a"),
+            Some(DocAddress::KbCollection {
+                kb_id: "team-a".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn kb_id_is_addressable_rejects_colons_and_empty() {
+        assert!(kb_id_is_addressable("team-a"));
+        assert!(kb_id_is_addressable("default"));
+        assert!(!kb_id_is_addressable("team:a"), "a colon breaks the split");
+        assert!(!kb_id_is_addressable(""));
     }
 
     #[test]
@@ -699,6 +768,7 @@ mod tests {
         );
         assert_eq!(
             DocAddress::KbNode {
+                kb_id: "team-a".into(),
                 node_id: "x".into(),
             }
             .save_policy(),

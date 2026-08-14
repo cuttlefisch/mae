@@ -368,9 +368,15 @@ pub async fn dispatch(
             let id = params["id"]
                 .as_str()
                 .ok_or(DaemonError::InvalidParams("missing 'id'"))?;
+            // ADR-105: node docs are addressed per-KB, so this method needs the KB.
+            // Required, not defaulted: guessing the KB from the node id alone is the
+            // ambiguity the scoped address exists to remove.
+            let kb_id = params["kb_id"]
+                .as_str()
+                .ok_or(DaemonError::InvalidParams("missing 'kb_id'"))?;
             let doc_store = { state.lock().await.doc_store.clone() };
             let ds = doc_store.ok_or(DaemonError::NotReady)?;
-            let doc_name = format!("kb:{id}");
+            let doc_name = mae_sync::kb_node_doc_name(kb_id, id);
             if !ds.has_durable_doc(&doc_name).await {
                 return Ok(Value::Null);
             }
@@ -1090,10 +1096,10 @@ async fn establish_p2p_share(
             .share_doc(&collection_doc, &coll.encode_state())
             .await
             .map_err(|e| DaemonError::Internal(format!("share collection: {e}")))?;
-        // Seed each node doc (`kb:{node_id}`) so a joining peer pulls real content,
-        // not just the manifest. Same naming + encoding as the TCP `kb/share` path.
+        // Seed each node doc so a joining peer pulls real content, not just the
+        // manifest. Same naming + encoding as the TCP `kb/share` path.
         for (node_id, state) in &node_states {
-            let node_doc = format!("kb:{node_id}");
+            let node_doc = mae_sync::kb_node_doc_name(kb_id, node_id);
             let res = if doc_store.has_doc(&node_doc).await {
                 doc_store
                     .apply_update(&node_doc, state, None)
@@ -1274,23 +1280,33 @@ mod tests {
             500,
         ));
         let node = mae_sync::kb::KbNodeDoc::new("concept:x", "X", "body", &[]);
-        ds.share_doc("kb:concept:x", &node.encode()).await.unwrap();
+        ds.share_doc("kbn:testkb:concept:x", &node.encode())
+            .await
+            .unwrap();
         let mut st = DaemonState::new();
         st.doc_store = Some(ds);
         let state = Arc::new(Mutex::new(st));
 
         // Hosted node → base64 CRDT state.
-        let r = dispatch("kb/node_crdt", json!({"id": "concept:x"}), &state)
-            .await
-            .unwrap();
+        let r = dispatch(
+            "kb/node_crdt",
+            json!({"kb_id": "testkb", "id": "concept:x"}),
+            &state,
+        )
+        .await
+        .unwrap();
         assert!(
             r["state"].as_str().is_some(),
             "hosted node must return CRDT state: {r}"
         );
         // Absent node → null (no spurious empty-doc materialization).
-        let r2 = dispatch("kb/node_crdt", json!({"id": "concept:absent"}), &state)
-            .await
-            .unwrap();
+        let r2 = dispatch(
+            "kb/node_crdt",
+            json!({"kb_id": "testkb", "id": "concept:absent"}),
+            &state,
+        )
+        .await
+        .unwrap();
         assert!(r2.is_null(), "absent node must return null, got: {r2}");
     }
 
@@ -1343,7 +1359,7 @@ mod tests {
         // P2P disabled (no endpoint) → the control method reports NotReady rather
         // than minting a useless ticket.
         let state = Arc::new(Mutex::new(DaemonState::new()));
-        let result = dispatch("p2p/mint_ticket", json!({"kb_id": "kb:x"}), &state).await;
+        let result = dispatch("p2p/mint_ticket", json!({"kb_id": "kbx"}), &state).await;
         assert!(matches!(result, Err(DaemonError::NotReady)));
     }
 
@@ -1646,7 +1662,10 @@ mod tests {
             1
         );
         let (nbytes, _) = doc_store
-            .encode_state_and_sv("kb:collabtest:overview")
+            .encode_state_and_sv(&mae_sync::kb_node_doc_name(
+                "collabtest",
+                "collabtest:overview",
+            ))
             .await
             .unwrap();
         let node_doc = KbNodeDoc::from_bytes(&nbytes).unwrap();

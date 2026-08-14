@@ -54,7 +54,7 @@ async fn sync_update_to_kb_doc_without_kb_id_is_rejected() {
     let update = ts.insert(0, "smuggled-node-write");
     let msg = serde_json::json!({
         "jsonrpc": "2.0", "id": 1, "method": "sync/update",
-        "params": { "doc": "kb:concept:smuggle", "update": update_to_base64(&update) }
+        "params": { "doc": "kbn:kbsmug:concept:smuggle", "update": update_to_base64(&update) }
     });
     let resp = handle_doc_request(
         &msg.to_string(),

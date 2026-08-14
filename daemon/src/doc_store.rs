@@ -1098,7 +1098,7 @@ mod tests {
             .unwrap();
         let node = mae_sync::kb::KbNodeDoc::new("concept:x", "X", "body", &[]);
         store
-            .share_doc("kb:concept:x", &node.encode())
+            .share_doc("kbn:testkb:concept:x", &node.encode())
             .await
             .unwrap();
 
@@ -1262,8 +1262,14 @@ mod tests {
         // A durable KB node doc with content; the sharer then disconnects.
         let mut ts = TextSync::with_client_id("", 1);
         let kb_update = ts.insert(0, "ZEPHYRINE");
-        store.share_doc("kb:concept:x", &kb_update).await.unwrap();
-        store.track_client_disconnect("kb:concept:x").await.unwrap();
+        store
+            .share_doc("kbn:testkb:concept:x", &kb_update)
+            .await
+            .unwrap();
+        store
+            .track_client_disconnect("kbn:testkb:concept:x")
+            .await
+            .unwrap();
 
         // An ephemeral (non-KB) doc.
         let mut ts2 = TextSync::with_client_id("", 2);
@@ -1273,16 +1279,16 @@ mod tests {
 
         // Idle-evict everything (threshold 0).
         let evicted = store.evict_idle(0).await;
-        assert!(evicted.contains(&"kb:concept:x".to_string()));
+        assert!(evicted.contains(&"kbn:testkb:concept:x".to_string()));
         assert!(evicted.contains(&"scratch:buf".to_string()));
 
         // Both are dropped from memory.
-        assert!(!store.has_doc("kb:concept:x").await);
+        assert!(!store.has_doc("kbn:testkb:concept:x").await);
         assert!(!store.has_doc("scratch:buf").await);
 
         // The durable KB doc survives on disk and lazy-reloads with its content intact.
         assert_eq!(
-            store.content("kb:concept:x").await.unwrap(),
+            store.content("kbn:testkb:concept:x").await.unwrap(),
             "ZEPHYRINE",
             "durable KB doc must survive idle eviction on disk"
         );
@@ -1464,7 +1470,7 @@ mod tests {
             let mut ts = TextSync::with_client_id("", i as u64 + 1);
             let u = ts.insert(0, &format!("node {i}"));
             store
-                .apply_update(&format!("kb:node:{i}"), &u, Some(i as u64 + 1))
+                .apply_update(&format!("kbn:testkb:node:{i}"), &u, Some(i as u64 + 1))
                 .await
                 .unwrap();
         }
@@ -1476,7 +1482,10 @@ mod tests {
         // Every node is still retrievable (reloads from disk on access).
         for i in 0..20u32 {
             assert_eq!(
-                store.content(&format!("kb:node:{i}")).await.unwrap(),
+                store
+                    .content(&format!("kbn:testkb:node:{i}"))
+                    .await
+                    .unwrap(),
                 format!("node {i}")
             );
         }
