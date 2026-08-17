@@ -9,6 +9,7 @@ pub mod artifact_store;
 pub mod checkpoint;
 pub mod collab_handler;
 pub mod doc_store;
+pub mod kb_doc_migration;
 pub mod kb_query;
 pub mod lease_fence;
 pub mod oauth_self_issue;
