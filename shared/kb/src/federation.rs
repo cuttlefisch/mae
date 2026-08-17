@@ -1082,19 +1082,50 @@ fn write_sentinel(org_dir: &Path, uuid: &str, name: &str) -> io::Result<()> {
     std::fs::write(&sentinel, content)
 }
 
-/// Generate a simple UUID-like string.
+/// Generate a random UUID (RFC 4122 version 4, 122 bits of OS entropy).
+///
+/// Mints KB instance ids and — since ADR-105 D4 — KB collab ids, which are
+/// signed into every membership op and are write-once for the life of the KB. A
+/// collision is therefore not a cosmetic problem: two KBs sharing an id share a
+/// collection, a membership list, and a node-document namespace.
+///
+/// **This used to derive the id from a nanosecond clock and 16 bits of pid, with
+/// no randomness at all**, so uniqueness came entirely from the clock advancing
+/// between calls.
+///
+/// That is not a theoretical weakness — it **collided in practice, on macOS**, and
+/// CI caught it the first time the uniqueness property was asserted:
+/// `generate_uuid collided within one process`. macOS's `SystemTime::now()` is
+/// coarser than Linux's, so consecutive mints landed in the same tick. Twenty
+/// thousand mints had measured clean on Linux, which made the whole risk look
+/// cross-machine and remote; it was neither. Per CLAUDE.md principle #13, a
+/// property that holds on one developer's platform and not the other is not a
+/// property.
+///
+/// Its trailing 48-bit field was dead as well: `ts >> 64` is zero for
+/// nanoseconds-since-epoch until the year 2554, so every id ended in
+/// `000000000000` and the real entropy was ~80 bits at best, concentrated in a
+/// value two machines can easily agree on.
+///
+/// `rand::random` is the version-stable top-level API (the idiom already used in
+/// `mae-sync`'s `content_crypto`), backed by the OS CSPRNG.
+///
+/// Probability is only the first of three layers, because "very unlikely" is not
+/// a failure mode anyone can debug. See [`KbRegistry::collab_id_for_share`] for
+/// the local uniqueness check and the daemon's `kb_share_ownership` for what
+/// happens when two machines collide anyway.
 pub fn generate_uuid() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let pid = std::process::id();
+    let mut b = rand::random::<[u8; 16]>();
+    b[6] = (b[6] & 0x0f) | 0x40; // version 4
+    b[8] = (b[8] & 0x3f) | 0x80; // RFC 4122 variant
+    let h = |s: &[u8]| s.iter().map(|x| format!("{x:02x}")).collect::<String>();
     format!(
-        "{:016x}-{:04x}-4000-8000-{:012x}",
-        ts & 0xFFFFFFFFFFFFFFFF,
-        pid & 0xFFFF,
-        ts >> 64
+        "{}-{}-{}-{}-{}",
+        h(&b[0..4]),
+        h(&b[4..6]),
+        h(&b[6..8]),
+        h(&b[8..10]),
+        h(&b[10..16])
     )
 }
 

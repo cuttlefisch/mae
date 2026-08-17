@@ -143,32 +143,106 @@ fn an_unknown_collab_id_resolves_to_nothing() {
     assert_eq!(reg.target_of_collab_id("notes"), None);
 }
 
-/// D4 rests on `generate_uuid` actually being unique, and nothing asserted
-/// that before minting became load-bearing for KB identity.
+/// D4 rests on `generate_uuid` being unique, and nothing asserted that before
+/// minting became load-bearing for KB identity.
 ///
-/// Its entropy is a nanosecond timestamp plus the low 16 bits of the pid —
-/// no randomness at all — so within one process uniqueness comes entirely
-/// from the clock advancing between calls. That holds on a nanosecond clock
-/// (measured: 20k mints, zero duplicates) and is the case that matters here,
-/// since a single editor sharing several KBs mints them from one process with
-/// a fixed pid.
+/// It now draws 122 bits of OS entropy. It used to derive the id from a
+/// nanosecond clock and 16 bits of pid with NO randomness, so uniqueness came
+/// entirely from the clock advancing between calls.
 ///
-/// Two DIFFERENT machines minting in the same nanosecond with matching
-/// low-16-bit pids would still collide. Left as-is deliberately: making the
-/// mint random means a new direct dependency (`uuid`/`rand` reach this crate
-/// only transitively, via cozo) and would change every instance uuid too, and
-/// D5 already turns a duplicate id into a named refusal rather than the silent
-/// merge finding E describes. Recorded so the trade-off is a decision rather
-/// than an oversight.
+/// This test's predecessor **failed on macOS in CI** the first time it ran there
+/// — `generate_uuid collided within one process` — while 20k mints measured clean
+/// on Linux. macOS's `SystemTime::now()` is coarser, so consecutive mints shared a
+/// tick. The risk was never the remote cross-machine one it looked like from a
+/// Linux box; it was reproducible on a supported platform (CLAUDE.md #13).
+///
+/// The trailing 48-bit field was dead as well (`ts >> 64` is zero until the year
+/// 2554), so every id ended `000000000000`.
 #[test]
-fn minting_is_unique_within_a_process() {
+fn minting_is_unique_and_actually_random() {
     let n = 20_000;
     let ids: std::collections::HashSet<String> = (0..n).map(|_| generate_uuid()).collect();
+    assert_eq!(ids.len(), n, "generate_uuid collided within one process");
+
+    // The property that matters is entropy, not merely non-repetition: a counter
+    // never repeats either and would still collide across machines. A nearly
+    // constant trailing field is exactly the shape the old implementation had,
+    // where it was literally always zero.
+    let tails: std::collections::HashSet<&str> = ids.iter().map(|s| &s[s.len() - 12..]).collect();
+    assert!(
+        tails.len() > n / 2,
+        "the last field is nearly constant across {n} mints ({} distinct), so the \
+         id is not carrying real entropy",
+        tails.len()
+    );
+
+    for id in ids.iter().take(64) {
+        assert_eq!(id.len(), 36, "expected UUID layout: {id}");
+        assert_eq!(&id[14..15], "4", "expected version 4: {id}");
+        assert!(
+            mae_sync::kb_id_is_addressable(id),
+            "a minted id becomes part of every node's address (D3): {id}"
+        );
+    }
+}
+
+/// Layer one of three, and the only deterministic one: a mint never hands out an
+/// id already used in THIS registry. Probability covers the cross-machine case and
+/// the daemon catches what is left, but a local collision needs no network to
+/// detect and so should not be left to chance at all.
+#[test]
+fn minting_never_reuses_an_id_already_in_this_registry() {
+    let mut reg = KbRegistry::default();
+    let uuid = instance(&mut reg, "notes");
+    let first = reg.collab_id_for_share(&KbTarget::Instance(uuid));
+    let primary = reg.collab_id_for_share(&KbTarget::Primary);
+    assert_ne!(first, primary);
+    assert_eq!(reg.target_of_collab_id(&primary), Some(KbTarget::Primary));
+}
+
+/// The recovery `remint_unconfirmed_collab_id` exists for: an id the daemon
+/// refused is replaced, so the KB stays shareable. Without it,
+/// `collab_id_for_share` — correctly — returns the refused id forever and the KB
+/// is unshareable until someone hand-edits `kb-registry.toml`.
+#[test]
+fn an_unconfirmed_id_can_be_reminted() {
+    let mut reg = KbRegistry::default();
+    let taken = reg.collab_id_for_share(&KbTarget::Primary);
+    assert!(!reg.primary_shared, "precondition: nothing confirmed");
+
+    let fresh = reg
+        .remint_unconfirmed_collab_id(&KbTarget::Primary)
+        .expect("an unconfirmed id is not ours and must be replaceable");
+    assert_ne!(fresh, taken);
+    assert_eq!(reg.primary_collab_id.as_deref(), Some(fresh.as_str()));
     assert_eq!(
-        ids.len(),
-        n,
-        "generate_uuid collided within one process; KB identity (D4) and every \
-         instance uuid rest on this"
+        reg.collab_id_for_share(&KbTarget::Primary),
+        fresh,
+        "the next share must go out under the new id"
+    );
+}
+
+/// The control, and the dangerous direction: a CONFIRMED share's id is write-once
+/// no matter what the daemon says. Re-minting it would evaporate the KB's signed
+/// membership and make an E2E KB read as plaintext (finding A) — worse than any
+/// failed share. Asserted for both target shapes, since the primary and an
+/// instance store that marker in different places.
+#[test]
+fn a_confirmed_ids_remint_is_refused_for_both_target_shapes() {
+    let mut reg = KbRegistry::default();
+    let before = reg.collab_id_for_share(&KbTarget::Primary);
+    reg.primary_shared = true;
+    assert_eq!(reg.remint_unconfirmed_collab_id(&KbTarget::Primary), None);
+    assert_eq!(reg.primary_collab_id.as_deref(), Some(before.as_str()));
+
+    let uuid = instance(&mut reg, "notes");
+    let t = KbTarget::Instance(uuid.clone());
+    let inst_before = reg.collab_id_for_share(&t);
+    reg.find_mut(&uuid).unwrap().shared = true;
+    assert_eq!(reg.remint_unconfirmed_collab_id(&t), None);
+    assert_eq!(
+        reg.collab_id_of_target(&t).as_deref(),
+        Some(inst_before.as_str())
     );
 }
 

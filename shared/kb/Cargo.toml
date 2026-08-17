@@ -34,6 +34,10 @@ mae-sync = { path = "../sync", optional = true }
 mae-mcp = { path = "../mcp" }
 cozo = { version = "0.7", default-features = false, features = ["rayon"] }
 sha2 = "0.11"
+# ADR-105 D4: `generate_uuid` mints KB instance ids and collab ids. Not a new
+# dependency in the tree — `mae-sync` and `mae-mcp`, both of which this crate
+# already depends on, pin the same 0.10.
+rand = "0.10"
 ndarray = "0.15"
 hex = "0.4"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "blocking"], optional = true }

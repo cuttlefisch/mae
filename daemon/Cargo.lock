@@ -2895,6 +2895,7 @@ dependencies = [
  "mae-sync",
  "ndarray",
  "notify",
+ "rand 0.10.1",
  "reqwest",
  "serde",
  "serde_json",

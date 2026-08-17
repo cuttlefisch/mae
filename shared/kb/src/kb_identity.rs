@@ -129,16 +129,73 @@ impl KbRegistry {
         if let Some(existing) = self.collab_id_of_target(target) {
             return existing;
         }
-        let minted = generate_uuid();
+        let minted = self.mint_unused_collab_id();
+        self.set_collab_id(target, &minted);
+        minted
+    }
+
+    /// Discard `target`'s collab id and mint a fresh one (ADR-105 D4).
+    ///
+    /// **The recovery path for an id that was minted but never confirmed** — the
+    /// daemon answered `KB_ID_OWNED_BY_ANOTHER`, so this id belongs to someone
+    /// else and every retry under it will be refused identically. Without this the
+    /// KB is permanently unshareable: `collab_id_for_share` correctly returns an
+    /// existing id unchanged, so a poisoned id is re-presented forever and the only
+    /// fix is hand-editing `kb-registry.toml`.
+    ///
+    /// Returns `None` — refusing to re-mint — when the KB **has a confirmed share**
+    /// under that id. That case is not a collision: it means a KB we genuinely own
+    /// is reported as someone else's, i.e. we are talking to the wrong daemon or
+    /// the id was taken over. Re-minting there would destroy our own signed
+    /// membership and read an E2E KB as plaintext (finding A) — the very thing the
+    /// write-once rule exists to prevent. The caller must surface it instead.
+    ///
+    /// The confirmed-share marker is the right discriminator because it is stamped
+    /// only on a confirmed share, so "minted but never accepted" and "ours" are
+    /// exactly the two states it separates.
+    pub fn remint_unconfirmed_collab_id(&mut self, target: &KbTarget) -> Option<String> {
+        let confirmed = match target {
+            KbTarget::Primary => self.primary_shared,
+            KbTarget::Instance(uuid) => self.find_by_uuid(uuid).is_some_and(|i| i.shared),
+        };
+        if confirmed {
+            return None;
+        }
+        let minted = self.mint_unused_collab_id();
+        self.set_collab_id(target, &minted);
+        Some(minted)
+    }
+
+    /// Mint an id no KB in THIS registry already uses.
+    ///
+    /// Layer one of three against collisions, and the only deterministic one: a
+    /// local check needs no network and cannot be probabilistic. `generate_uuid`
+    /// now draws 122 bits of OS entropy, so the loop realistically never spins —
+    /// but "realistically never" is a probability, and a duplicate id silently
+    /// merges two KBs' collections and node namespaces, which is too sharp an edge
+    /// to leave to one. The bound stops a broken RNG from hanging the editor;
+    /// exhausting it returns the last candidate, which the daemon still refuses
+    /// rather than accepting a duplicate.
+    fn mint_unused_collab_id(&self) -> String {
+        let mut candidate = generate_uuid();
+        for _ in 0..8 {
+            if self.target_of_collab_id(&candidate).is_none() {
+                break;
+            }
+            candidate = generate_uuid();
+        }
+        candidate
+    }
+
+    fn set_collab_id(&mut self, target: &KbTarget, id: &str) {
         match target {
-            KbTarget::Primary => self.primary_collab_id = Some(minted.clone()),
+            KbTarget::Primary => self.primary_collab_id = Some(id.to_string()),
             KbTarget::Instance(uuid) => {
                 if let Some(inst) = self.instances.iter_mut().find(|i| &i.uuid == uuid) {
-                    inst.collab_id = Some(minted.clone());
+                    inst.collab_id = Some(id.to_string());
                 }
             }
         }
-        minted
     }
 }
 

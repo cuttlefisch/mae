@@ -98,6 +98,15 @@ pub(super) fn handle_kb_shared_event(
         }
     };
     editor.collab.shared_kbs.insert(kb_id.clone(), node_ids);
+    // ADR-105 D5: the share succeeded, so any re-mint budget spent getting here is
+    // spent. Not clearing it would let three unrelated conflicts across a long
+    // session exhaust the bound and refuse a recovery that would have worked.
+    if let Some(t) = target.as_ref() {
+        editor
+            .collab
+            .share_id_remint_attempts
+            .remove(&events_kb_share_conflict::remint_attempt_key(t));
+    }
 
     // Phase D (ADR-029): was this a daemon-host share (auto-hosting the
     // primary) rather than a user/peer share? Consume the in-flight marker.

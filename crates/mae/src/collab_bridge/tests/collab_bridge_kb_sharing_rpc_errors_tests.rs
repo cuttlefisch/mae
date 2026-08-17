@@ -157,3 +157,84 @@ async fn kb_list_pending_rejection_is_not_silent() {
         .expect("a rejection must produce a visible event, not silence");
     assert!(matches!(event, CollabEvent::Error { .. }));
 }
+
+/// ADR-105 D5: the daemon's "that id is someone else's" refusal must be routed to
+/// the RECOVERY path, and routed by its error CODE.
+///
+/// This covers the seam the recovery tests cannot: they dispatch
+/// `KbShareIdConflict` directly, so they prove what happens once the event exists
+/// and say nothing about whether it is ever emitted. Verified by mutation — with
+/// the code comparison broken, those tests still pass and only this one fails.
+///
+/// Branching on the code rather than the message is the point. A recovery that
+/// hinges on error prose staying byte-identical is a recovery that stops working
+/// the first time someone rewords a string, and it fails by silently reverting to
+/// "share failed forever".
+#[tokio::test]
+async fn kb_share_id_conflict_is_routed_by_code_not_message() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut shared = Vec::new();
+
+    let val = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+            "code": mae_mcp::protocol::KB_ID_OWNED_BY_ANOTHER,
+            // Deliberately NOT the daemon's real wording: if this were routed by
+            // message text, this test would fail — which is the property under test.
+            "message": "some entirely different phrasing"
+        }
+    });
+    handle_response(
+        &val,
+        PendingResponseKind::KbShare {
+            kb_id: "contested".to_string(),
+        },
+        &tx,
+        &mut shared,
+        &mut std::collections::HashMap::new(),
+        kb_ctx!(),
+    );
+    match rx.try_recv().expect("a conflict must produce an event") {
+        CollabEvent::KbShareIdConflict { kb_id, detail } => {
+            assert_eq!(kb_id, "contested");
+            assert_eq!(detail, "some entirely different phrasing");
+        }
+        other => panic!(
+            "a KB_ID_OWNED_BY_ANOTHER refusal must become KbShareIdConflict (the \
+             recoverable path), got {other:?}"
+        ),
+    }
+}
+
+/// The control: every OTHER share failure must stay a plain error. Routing them
+/// all to the recovery path would re-mint a KB's id on any transient failure,
+/// which is the finding-A destruction this whole design is built to avoid.
+#[tokio::test]
+async fn an_ordinary_share_failure_is_not_treated_as_an_id_conflict() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut shared = Vec::new();
+
+    let val = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": { "code": -32603, "message": "failed to share collection doc: disk full" }
+    });
+    handle_response(
+        &val,
+        PendingResponseKind::KbShare {
+            kb_id: "mine".to_string(),
+        },
+        &tx,
+        &mut shared,
+        &mut std::collections::HashMap::new(),
+        kb_ctx!(),
+    );
+    match rx.try_recv().expect("a failure must produce an event") {
+        CollabEvent::Error { message } => assert!(message.contains("disk full")),
+        other => panic!(
+            "an unrelated failure must NOT enter the re-mint path — that would change \
+             a live KB's id on any transient error, got {other:?}"
+        ),
+    }
+}

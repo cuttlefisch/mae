@@ -86,6 +86,16 @@ async fn kb_share_refuses_an_id_owned_by_another_principal() {
         "the refusal must name the contested id: {}",
         err.message
     );
+    // The CODE is the contract, not the prose. The editor's recovery (discard an
+    // id it minted but never got confirmed, mint a fresh one, retry) branches on
+    // this value — if it drifts, that recovery silently stops running and the KB
+    // becomes permanently unshareable instead.
+    assert_eq!(
+        err.code,
+        mae_mcp::protocol::KB_ID_OWNED_BY_ANOTHER,
+        "an ownership refusal must be distinguishable from any other failure by \
+         code alone: {err:?}"
+    );
 
     // The response is not the oracle — a refused-but-applied share would pass a
     // response-only check. Assert on the OWNER and the CONTENT.

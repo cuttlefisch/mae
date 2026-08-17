@@ -51,9 +51,14 @@ pub(super) async fn refuse_if_owned_by_another(
                     owner = %owner, caller = %principal,
                     "kb/share: refused — id already owned by another principal"
                 );
+                // A DISTINCT code, not a generic invalid_request: the client has a
+                // real recovery available (discard an id it minted but never got
+                // confirmed, mint a fresh one, retry) and it must not have to
+                // string-match an error message to find it. See
+                // `mae_mcp::protocol::KB_ID_OWNED_BY_ANOTHER`.
                 return Some(JsonRpcResponse::error(
                     id.clone(),
-                    McpError::invalid_request(format!(
+                    McpError::kb_id_owned_by_another(format!(
                         "KB id '{kb_id}' is already shared by a different owner; \
                          choose a different id (its collection and membership are \
                          not yours to re-share)"

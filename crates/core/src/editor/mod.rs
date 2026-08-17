@@ -430,6 +430,18 @@ pub struct CollabState {
     /// Consumed on the matching `KbShared`; `KbRegistry::target_of_collab_id` is
     /// the durable fallback once the share has been confirmed once.
     pub pending_share_targets: HashMap<String, mae_kb::KbTarget>,
+    /// ADR-105 D4/D5: how many times a KB's collab id has been re-minted after
+    /// the daemon refused it, keyed by a stable per-KB key (NOT the collab id,
+    /// which changes on every attempt).
+    ///
+    /// Recovery re-issues the share, and the re-issued share can be refused
+    /// again. Without a bound that is a livelock — share, refuse, re-mint,
+    /// persist, share — spinning network requests and registry disk writes for
+    /// as long as the daemon keeps saying no. With random 122-bit ids a genuine
+    /// second collision is not the worry; a daemon bug or misconfiguration that
+    /// reports every collection as foreign-owned is, and it produces exactly the
+    /// same loop. Cleared on a confirmed share.
+    pub share_id_remint_attempts: HashMap<String, u8>,
     /// KB sync mode: "manual" (explicit :kb-sync), "on_save" (auto on node edit).
     pub kb_sync_mode: String,
     /// Epoch-fence resolution: "prompt" (raise the ADR-024 Accept/Keep/Stash
@@ -546,6 +558,7 @@ impl CollabState {
             shared_kbs: HashMap::new(),
             daemon_host_pending: HashSet::new(),
             pending_share_targets: HashMap::new(),
+            share_id_remint_attempts: HashMap::new(),
             pending_kb_manifest: Vec::new(),
             kb_sync_mode: KB_SYNC_MODE_DEFAULT.to_string(),
             fence_resolution: "prompt".to_string(),

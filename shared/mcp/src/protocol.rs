@@ -138,7 +138,28 @@ impl McpError {
             message,
         }
     }
+
+    /// The requested KB id already belongs to a different owner (ADR-105 D5).
+    ///
+    /// A distinct code rather than a generic `invalid_request`, because the client
+    /// must be able to *act* on it: an id that was minted but never confirmed is
+    /// safe to discard and re-mint, and that recovery cannot be driven by
+    /// string-matching an error message. See `KB_ID_OWNED_BY_ANOTHER`.
+    pub fn kb_id_owned_by_another(message: String) -> Self {
+        McpError {
+            code: KB_ID_OWNED_BY_ANOTHER,
+            message,
+        }
+    }
 }
+
+/// `kb/share` refused: the id already belongs to a different owner (ADR-105 D5).
+///
+/// Named so both sides reference one constant — the daemon raises it and the
+/// editor branches on it to decide whether re-minting is safe. A magic number
+/// duplicated at those two sites is precisely the kind of drift that turns a
+/// recovery path into a silent no-op.
+pub const KB_ID_OWNED_BY_ANOTHER: i64 = -32005;
 
 /// MCP initialize result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
