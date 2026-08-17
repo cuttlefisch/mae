@@ -71,6 +71,15 @@ pub async fn migrate_legacy_node_docs(
         .filter(|n| n.starts_with("kb:") && mae_sync::DocAddress::parse(n).is_none())
         .collect();
     if legacy.is_empty() {
+        // Debug, not info: this is the outcome on every start after the first and
+        // on every store created since Stage 2, so logging it at info would be
+        // pure noise. Emitted at all so an operator rehearsing an upgrade can
+        // CONFIRM the migration ran and found nothing, rather than having to infer
+        // it from the absence of output.
+        tracing::debug!(
+            documents = all.len(),
+            "ADR-105 migration: no legacy kb: node documents"
+        );
         return Ok(Migration::NothingToDo);
     }
     info!(
