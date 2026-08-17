@@ -474,28 +474,6 @@ impl Editor {
     /// though hosting must never imply a peer share. It stamps identity only —
     /// the durable `primary_shared` / `shared` markers are still written solely on
     /// a confirmed peer share.
-    pub fn kb_collab_id_for_share(&mut self, target: &mae_kb::KbTarget) -> Option<String> {
-        match self.mae_data_dir() {
-            Some(dir) => {
-                let (registry, id, saved) = mae_kb::federation::KbRegistry::update(&dir, |reg| {
-                    reg.collab_id_for_share(target)
-                });
-                if let Err(e) = saved {
-                    // An unpersisted mint yields a DIFFERENT id next time, orphaning
-                    // this share's collection and membership on the daemon.
-                    tracing::error!(error = %e, "failed to persist KB collab id");
-                    return None;
-                }
-                self.kb.registry = registry;
-                self.kb.last_local_registry_write = Some(std::time::Instant::now());
-                Some(id)
-            }
-            // No data dir (headless/test): mint in memory so the session still
-            // works. Nothing durable is written, so nothing can be orphaned.
-            None => Some(self.kb.registry.collab_id_for_share(target)),
-        }
-    }
-
     pub(super) fn kb_collab_id_of(&self, owner: &Option<String>) -> Option<String> {
         match owner {
             // ADR-105 D4: the `unwrap_or_else` fallback is LEGACY-ONLY. A share

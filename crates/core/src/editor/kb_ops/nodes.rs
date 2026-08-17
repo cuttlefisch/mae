@@ -590,6 +590,63 @@ impl Editor {
     /// `Join` computes its node state-vectors editor-side (ADR-022).
     pub fn queue_kb_collab_action(&mut self, action: crate::editor::KbCollabAction) {
         use crate::editor::{CollabIntent, KbCollabAction};
+        // ADR-105 D4: every arm below except `Share` carries a KB **id**, and a
+        // caller naturally passes the display NAME (`(kb-join "collabtest")`).
+        // Those were the same string until ids were minted. Resolved here, at the
+        // single funnel every Scheme primitive routes through, rather than in each
+        // primitive — one missed primitive would reach the daemon as a KB that does
+        // not exist, and `kb/join` records a pending request for an unknown id
+        // rather than erroring, so the miss would present as "the owner approved
+        // but the join never completed". `Share` is untouched: it takes a name by
+        // design and mints the id itself.
+        let action = match action {
+            KbCollabAction::Join { kb_id } => KbCollabAction::Join {
+                kb_id: self.kb_collab_id_arg(&kb_id),
+            },
+            KbCollabAction::Leave { kb_id } => KbCollabAction::Leave {
+                kb_id: self.kb_collab_id_arg(&kb_id),
+            },
+            KbCollabAction::AddMember {
+                kb_id,
+                member,
+                role,
+            } => KbCollabAction::AddMember {
+                kb_id: self.kb_collab_id_arg(&kb_id),
+                member,
+                role,
+            },
+            KbCollabAction::RemoveMember { kb_id, member } => KbCollabAction::RemoveMember {
+                kb_id: self.kb_collab_id_arg(&kb_id),
+                member,
+            },
+            KbCollabAction::Approve {
+                kb_id,
+                principal,
+                role,
+            } => KbCollabAction::Approve {
+                kb_id: self.kb_collab_id_arg(&kb_id),
+                principal,
+                role,
+            },
+            KbCollabAction::SetPolicy { kb_id, policy } => KbCollabAction::SetPolicy {
+                kb_id: self.kb_collab_id_arg(&kb_id),
+                policy,
+            },
+            KbCollabAction::SetEncryption { kb_id, mode } => KbCollabAction::SetEncryption {
+                kb_id: self.kb_collab_id_arg(&kb_id),
+                mode,
+            },
+            KbCollabAction::SetBlock {
+                kb_id,
+                member,
+                blocked,
+            } => KbCollabAction::SetBlock {
+                kb_id: self.kb_collab_id_arg(&kb_id),
+                member,
+                blocked,
+            },
+            other => other,
+        };
         let intent = match action {
             KbCollabAction::Share { kb_name } => CollabIntent::ShareKb {
                 kb_name,

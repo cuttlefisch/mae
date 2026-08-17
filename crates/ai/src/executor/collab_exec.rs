@@ -35,6 +35,27 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
     Some(result)
 }
 
+/// Read the required `kb_id` argument and resolve it to the id that addresses the
+/// KB on the wire (ADR-105 D4).
+///
+/// One function rather than the same eight lines at every `kb_*` tool, because the
+/// resolution is the whole point: after D4 a caller may pass the KB's display NAME
+/// or its collab id, and those stopped being the same string. A site that forgets
+/// to resolve reaches the daemon as a KB that does not exist — which fails in the
+/// least useful way available, since `kb/join` on an unknown id records a pending
+/// request rather than erroring.
+///
+/// An argument matching neither a known id nor a known name passes through
+/// unchanged: that is the joiner's case, where a peer's id names a KB this editor
+/// has never seen and could not resolve.
+fn required_kb_id(editor: &Editor, args: &Value) -> Result<String, String> {
+    Ok(editor.kb_collab_id_arg(
+        args.get("kb_id")
+            .and_then(|v| v.as_str())
+            .ok_or("Missing required 'kb_id' parameter")?,
+    ))
+}
+
 fn execute_collab_status(editor: &Editor) -> Result<String, String> {
     let status_str = editor.collab.status.as_str();
     let peer_count = match editor.collab.status {
@@ -395,11 +416,7 @@ fn execute_kb_join_p2p(editor: &mut Editor, args: &Value) -> Result<String, Stri
 }
 
 fn execute_kb_join(editor: &mut Editor, args: &Value) -> Result<String, String> {
-    let kb_id = args
-        .get("kb_id")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing required 'kb_id' parameter")?
-        .to_string();
+    let kb_id = required_kb_id(editor, args)?;
     let node_svs = editor.kb_join_node_svs(&kb_id);
     editor.collab.pending_intent = Some(CollabIntent::JoinKb {
         kb_id: kb_id.clone(),
@@ -415,11 +432,7 @@ fn execute_kb_join(editor: &mut Editor, args: &Value) -> Result<String, String> 
 }
 
 fn execute_kb_leave(editor: &mut Editor, args: &Value) -> Result<String, String> {
-    let kb_id = args
-        .get("kb_id")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing required 'kb_id' parameter")?
-        .to_string();
+    let kb_id = required_kb_id(editor, args)?;
     editor.collab.pending_intent = Some(CollabIntent::LeaveKb {
         kb_id: kb_id.clone(),
     });
@@ -433,11 +446,7 @@ fn execute_kb_leave(editor: &mut Editor, args: &Value) -> Result<String, String>
 }
 
 fn execute_kb_add_member(editor: &mut Editor, args: &Value) -> Result<String, String> {
-    let kb_id = args
-        .get("kb_id")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing required 'kb_id' parameter")?
-        .to_string();
+    let kb_id = required_kb_id(editor, args)?;
     let member = args
         .get("member")
         .and_then(|v| v.as_str())
@@ -466,11 +475,7 @@ fn execute_kb_add_member(editor: &mut Editor, args: &Value) -> Result<String, St
 }
 
 fn execute_kb_remove_member(editor: &mut Editor, args: &Value) -> Result<String, String> {
-    let kb_id = args
-        .get("kb_id")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing required 'kb_id' parameter")?
-        .to_string();
+    let kb_id = required_kb_id(editor, args)?;
     let member = args
         .get("member")
         .and_then(|v| v.as_str())
@@ -494,11 +499,7 @@ fn execute_kb_remove_member(editor: &mut Editor, args: &Value) -> Result<String,
 /// Local-only to this daemon (never propagated); NOT owner-gated. `block` selects
 /// kb_block_member vs kb_unblock_member.
 fn execute_kb_set_block(editor: &mut Editor, args: &Value, block: bool) -> Result<String, String> {
-    let kb_id = args
-        .get("kb_id")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing required 'kb_id' parameter")?
-        .to_string();
+    let kb_id = required_kb_id(editor, args)?;
     let member = args
         .get("member")
         .and_then(|v| v.as_str())
@@ -529,11 +530,7 @@ fn execute_kb_set_block(editor: &mut Editor, args: &Value, block: bool) -> Resul
 /// Approve a pending join request as `role` (owner-only, ADR-018). Use
 /// `kb_sharing_status` first to read the pending requests' fingerprints.
 fn execute_kb_approve(editor: &mut Editor, args: &Value) -> Result<String, String> {
-    let kb_id = args
-        .get("kb_id")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing required 'kb_id' parameter")?
-        .to_string();
+    let kb_id = required_kb_id(editor, args)?;
     let principal = args
         .get("member")
         .or_else(|| args.get("principal"))
@@ -565,11 +562,7 @@ fn execute_kb_approve(editor: &mut Editor, args: &Value) -> Result<String, Strin
 
 /// Set a KB's join policy: restrictive | invite | permissive (owner-only, ADR-018).
 fn execute_kb_set_policy(editor: &mut Editor, args: &Value) -> Result<String, String> {
-    let kb_id = args
-        .get("kb_id")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing required 'kb_id' parameter")?
-        .to_string();
+    let kb_id = required_kb_id(editor, args)?;
     let policy = args
         .get("policy")
         .and_then(|v| v.as_str())
@@ -595,11 +588,7 @@ fn execute_kb_set_policy(editor: &mut Editor, args: &Value) -> Result<String, St
 }
 
 fn execute_kb_set_encryption(editor: &mut Editor, args: &Value) -> Result<String, String> {
-    let kb_id = args
-        .get("kb_id")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing required 'kb_id' parameter")?
-        .to_string();
+    let kb_id = required_kb_id(editor, args)?;
     let mode = args
         .get("mode")
         .and_then(|v| v.as_str())

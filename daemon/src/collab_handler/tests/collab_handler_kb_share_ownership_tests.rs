@@ -159,3 +159,106 @@ async fn an_owner_can_still_reshare_their_own_kb() {
         );
     }
 }
+
+/// ADVERSARIAL (ADR-105): asking about a KB must not CREATE it.
+///
+/// `load_collection` reached the doc store through `encode_state_and_sv`, which
+/// goes through `get_or_create` — so every read of an unknown KB materialized an
+/// empty `kbc:{kb_id}`, and that function's own "not found" error was unreachable.
+///
+/// The consequence is a pre-squat, and it defeats D5 rather than being caught by
+/// it. Mallory joins an id nobody has shared: the collection springs into
+/// existence with NO owner, and she is recorded pending on it. When the real owner
+/// later shares that id, an ownerless collection reads as merely "unowned", so D5
+/// allows it — and ADR-020 B-12's preserve-don't-clobber branch then keeps the
+/// squatted empty collection and discards the owner's real one, genesis, owner
+/// binding, members and all. The owner ends up owning nothing, with a stranger's
+/// pending request already inside.
+#[tokio::test]
+async fn joining_an_unshared_kb_neither_succeeds_nor_creates_it() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut mallory_docs = HashSet::new();
+
+    let kb = "not-yet-shared";
+    let r = dispatch_as(
+        &store,
+        &bc,
+        Some("mallory"),
+        Some(&fp("mallory")),
+        kb_join_msg(kb),
+        &mut mallory_docs,
+    )
+    .await;
+
+    assert!(
+        r.error.is_some(),
+        "joining a KB nobody has shared must fail, not record a pending request \
+         against a KB that does not exist: {r:?}"
+    );
+    assert!(
+        !store.has_doc(&format!("kbc:{kb}")).await,
+        "a refused join still materialized the collection — that is the squat"
+    );
+}
+
+/// The consequence made observable end to end: after a refused join, the real
+/// owner's share must land with THEM as owner.
+///
+/// The oracle is the owner field, not the share's return value. Before the fix the
+/// share still "succeeded" — it just preserved the squatted collection and threw
+/// the owner's away, so a response-only check sees nothing wrong.
+#[tokio::test]
+async fn a_refused_join_cannot_pre_empt_the_real_owners_share() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut mallory_docs = HashSet::new();
+    let mut alice_docs = HashSet::new();
+
+    let kb = "contested-before-share";
+    let _ = dispatch_as(
+        &store,
+        &bc,
+        Some("mallory"),
+        Some(&fp("mallory")),
+        kb_join_msg(kb),
+        &mut mallory_docs,
+    )
+    .await;
+
+    let node = "concept:architecture";
+    let n = make_test_node(node, "Architecture", "ALICE-ORIGINAL", &[]);
+    let mut coll = mae_sync::kb::KbCollectionDoc::new_owned(kb, "Alice's KB", "alice");
+    coll.add_node(node, node);
+    let msg = serde_json::json!({
+        "jsonrpc":"2.0","id":1,"method":"kb/share",
+        "params":{
+            "kb_id": kb, "name": "Alice's KB", "creator": "alice",
+            "collection_state": update_to_base64(&coll.encode_state()),
+            "nodes": [{"id": node, "state": update_to_base64(&n)}],
+        }
+    });
+    let r = dispatch_as(
+        &store,
+        &bc,
+        Some("alice"),
+        Some(&fp("alice")),
+        msg,
+        &mut alice_docs,
+    )
+    .await;
+    assert!(r.error.is_none(), "alice's share must succeed: {r:?}");
+
+    let coll_after = load_collection(&store, kb).await.expect("collection loads");
+    assert_eq!(
+        coll_after.owner(),
+        fp("alice"),
+        "the owner's collection was discarded in favour of a pre-created one, so \
+         the KB has no real owner"
+    );
+    assert!(
+        coll_after.pending().is_empty(),
+        "a stranger's pending request survived into the owner's KB: {:?}",
+        coll_after.pending()
+    );
+}

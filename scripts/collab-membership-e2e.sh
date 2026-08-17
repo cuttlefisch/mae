@@ -9,9 +9,17 @@
 #
 # Flow (default join policy = invite):
 #   1. alice shares `collabtest` → owner bound to alice's key fingerprint.
-#   2. bob :kb-join collabtest             → PENDING (invite policy).
+#   2. bob :kb-join <collab-id>            → PENDING (invite policy).
 #   3. alice :kb-approve collabtest <bob-fingerprint> editor.
-#   4. bob :kb-join collabtest again       → ALLOWED (now a member).
+#   4. bob :kb-join <collab-id> again      → ALLOWED (now a member).
+#
+# ADR-105 D4: a KB is shared under a MINTED collab id, not its display name, so
+# alice and bob address it differently and that asymmetry is the point of the
+# test. Alice types `collabtest` — her editor resolves the name she registered.
+# Bob cannot: he never registered that name, so he needs the id out of band,
+# exactly as he would need a magnet link or a repo URL. Passing the name would
+# reach the daemon as a KB that does not exist. The id travels through the same
+# /sync barrier dir the rest of the coordination uses.
 #
 # Membership keys on the cryptographic PRINCIPAL (fingerprint), never the label —
 # bob is approved by his fingerprint (captured from `mae-daemon authorized`).
@@ -120,13 +128,17 @@ cat > "$WORK/scen/bob.scm" <<EOF
 (describe-group "bob (member candidate)"
   (lambda ()
     (it-test "connects" (lambda () (wait-connected 30000)))
-    (it-test "waits for share" (lambda () (wait-for-file "$WORK/sync/shared" 60000)))
-    (it-test "requests join (invite policy -> pending)"
-      (lambda () (execute-ex "kb-join collabtest") (sleep-ms 1000)))
+    (it-test "waits for share" (lambda () (wait-for-file "$WORK/sync/kbid" 60000)))
+    (it-test "requests join by collab id (invite policy -> pending)"
+      (lambda ()
+        (execute-ex (string-append "kb-join " (read-file "$WORK/sync/kbid")))
+        (sleep-ms 1000)))
     (it-test "signals tried" (lambda () (write-file "$WORK/sync/bob-tried" "1")))
     (it-test "waits for approval" (lambda () (wait-for-file "$WORK/sync/added" 60000)))
-    (it-test "joins (now a member)"
-      (lambda () (execute-ex "kb-join collabtest") (sleep-ms 1000)))
+    (it-test "joins by collab id (now a member)"
+      (lambda ()
+        (execute-ex (string-append "kb-join " (read-file "$WORK/sync/kbid")))
+        (sleep-ms 1000)))
     (it-test "signals joined" (lambda () (write-file "$WORK/sync/bob-joined" "1")))))
 EOF
 
@@ -145,6 +157,30 @@ harness_spawn APID "$WORK/alice.tap" -- env \
   HOME="$WORK/alice" XDG_CONFIG_HOME="$WORK/alice/.config" XDG_DATA_HOME="$WORK/alice/.local/share" \
   MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 MAE_LOG="warn" \
   ${TIMEOUT_BIN:+$TIMEOUT_BIN 120} "$MAE_BIN" --test "$WORK/scen/alice.scm"
+
+# ADR-105 D4: publish the id alice actually shared under, so bob can address the
+# same KB. This models the out-of-band exchange a real joiner needs (a ticket, a
+# link, a pasted id) — a display name is not an address, which is the whole point
+# of D4. Read from alice's own durable registry rather than guessed: that file is
+# where the mint is persisted. Only one instance is registered here, so the first
+# `collab_id` is unambiguous. Written WITHOUT a trailing newline because bob
+# string-appends it straight into an ex-command.
+ALICE_REG="$WORK/alice/.local/share/mae/kb-registry.toml"
+KB_ID=""
+for _ in $(seq 1 120); do
+  [ -f "$WORK/sync/shared" ] || { sleep 0.5; continue; }
+  KB_ID="$(grep -oE 'collab_id = "[^"]+"' "$ALICE_REG" 2>/dev/null | head -1 | cut -d'"' -f2)"
+  [ -n "$KB_ID" ] && break
+  sleep 0.5
+done
+if [ -z "$KB_ID" ]; then
+  echo "ERROR: alice never persisted a collab id for the shared KB"
+  cat "$ALICE_REG" 2>/dev/null || echo "(no registry at $ALICE_REG)"
+  exit 1
+fi
+echo "alice shared 'collabtest' under collab id: $KB_ID"
+printf %s "$KB_ID" > "$WORK/sync/kbid"
+
 sleep 3
 harness_spawn BPID "$WORK/bob.tap" -- env \
   HOME="$WORK/bob" XDG_CONFIG_HOME="$WORK/bob/.config" XDG_DATA_HOME="$WORK/bob/.local/share" \
@@ -161,11 +197,14 @@ grep -iE 'kb/join: pending|kb/approve_member: complete|kb/join: complete' "$WORK
 # --- Verdict (strip ANSI from the daemon log first) ---
 LOG="$WORK/daemon.clean.log"
 sed 's/\x1b\[[0-9;]*m//g' "$WORK/daemon.log" > "$LOG"
-# ADR-018 invite flow, keyed on daemon acceptance lines for `collabtest`:
+# ADR-018 invite flow, keyed on daemon acceptance lines for the KB's COLLAB ID
+# (ADR-105 D4 — the display name no longer appears on the wire):
 #   bob's join → pending; owner approves; bob's next join → complete (member).
-pending=$(grep -cE 'kb/join: pending.*collabtest' "$LOG" || true)
-approved=$(grep -cE 'kb/approve_member: complete.*collabtest' "$LOG" || true)
-joined_after_approve=$(awk '/kb\/approve_member: complete.*collabtest/{seen=1} seen && /kb\/join: complete.*collabtest/{c++} END{print c+0}' "$LOG")
+# Keying on $KB_ID is also what proves alice and bob addressed the SAME KB: before
+# D4-aware resolution they used different ids and every one of these counts was 0.
+pending=$(grep -cE "kb/join: pending.*$KB_ID" "$LOG" || true)
+approved=$(grep -cE "kb/approve_member: complete.*$KB_ID" "$LOG" || true)
+joined_after_approve=$(awk -v id="$KB_ID" '$0 ~ "kb/approve_member: complete.*" id {seen=1} seen && $0 ~ "kb/join: complete.*" id {c++} END{print c+0}' "$LOG")
 fail=0
 [ "$pending" -ge 1 ] || { echo "FAIL: bob's invite join was not recorded pending (got $pending)"; fail=1; }
 [ "$approved" -ge 1 ] || { echo "FAIL: owner approval not seen (got $approved)"; fail=1; }

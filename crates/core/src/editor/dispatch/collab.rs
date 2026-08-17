@@ -283,7 +283,8 @@ impl Editor {
                 // :kb-add-member <kb-id> <fingerprint> [role]  (args via command_line).
                 let line = self.vi.command_line.trim().to_string();
                 let mut parts = line.split_whitespace();
-                let kb_id = parts.next().unwrap_or("").to_string();
+                // ADR-105 D4: the user types a NAME or an id; the wire needs the id.
+                let kb_id = self.kb_collab_id_arg(parts.next().unwrap_or(""));
                 let member = parts.next().unwrap_or("").to_string();
                 let role = parts.next().unwrap_or("editor").to_string();
                 if member.is_empty() {
@@ -347,7 +348,8 @@ impl Editor {
                 // :kb-approve <kb-id> <fingerprint> [role]
                 let line = self.vi.command_line.trim().to_string();
                 let mut parts = line.split_whitespace();
-                let kb_id = parts.next().unwrap_or("").to_string();
+                // ADR-105 D4: resolve a typed name to the KB's collab id.
+                let kb_id = self.kb_collab_id_arg(parts.next().unwrap_or(""));
                 let principal = parts.next().unwrap_or("").to_string();
                 let role = parts.next().unwrap_or("editor").to_string();
                 if principal.is_empty() {
@@ -370,7 +372,7 @@ impl Editor {
             }
             "kb-pending" => {
                 // :kb-pending <kb-id>
-                let kb_id = self.vi.command_line.trim().to_string();
+                let kb_id = self.kb_collab_id_arg(self.vi.command_line.trim());
                 if kb_id.is_empty() {
                     self.set_status("usage: :kb-pending <kb-id>".to_string());
                     return Some(true);
@@ -383,7 +385,8 @@ impl Editor {
                 // :kb-set-policy <kb-id> <restrictive|invite|permissive>
                 let line = self.vi.command_line.trim().to_string();
                 let mut parts = line.split_whitespace();
-                let kb_id = parts.next().unwrap_or("").to_string();
+                // ADR-105 D4: resolve a typed name to the KB's collab id.
+                let kb_id = self.kb_collab_id_arg(parts.next().unwrap_or(""));
                 let policy = parts.next().unwrap_or("").to_string();
                 if kb_id.is_empty()
                     || !matches!(policy.as_str(), "restrictive" | "invite" | "permissive")
