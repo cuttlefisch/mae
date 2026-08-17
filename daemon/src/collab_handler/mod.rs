@@ -715,24 +715,16 @@ pub async fn load_collection(doc_store: &DocStore, kb_id: &str) -> Result<KbColl
     let collection_doc = format!("kbc:{kb_id}");
     // ADR-105: a KB that does not exist must NOT be brought into existence by
     // someone asking about it. `encode_state_and_sv` goes through `get_or_create`,
-    // so without this check every caller — `kb_access` included — materialized an
-    // empty `kbc:{kb_id}` for any id it was handed, and the "not found" error just
-    // below was unreachable. The author's intent was already written here; only the
-    // behaviour was missing.
+    // so without this every caller — `kb_access` included — materialized an empty
+    // `kbc:{kb_id}` for any id handed to it, and the "not found" error just below
+    // was unreachable. That enabled a pre-squat which DEFEATS D5 rather than being
+    // caught by it; the chain is spelled out in
+    // `collab_handler_kb_share_ownership_tests`.
     //
-    // What that cost, concretely: `kb/join` on an unknown id created the collection
-    // and recorded the caller as PENDING on it. Since a collection created this way
-    // has no owner, the id then looked merely "unowned" — so a later, legitimate
-    // `kb/share` of that id was allowed, hit ADR-020 B-12's preserve-don't-clobber
-    // branch, and the real owner's collection (with their genesis, owner binding and
-    // members) was silently discarded in favour of the squatted empty one. The owner
-    // ends up owning nothing, with a stranger's pending request already in it.
-    //
-    // It also made a misaddressed join unreadable: passing a KB's display NAME where
-    // an id belongs answered "pending" instead of "no such KB", which is what made
-    // the ADR-105 D4 e2e failure present as "the owner approved but the join never
-    // completed".
-    if !doc_store.has_doc(&collection_doc).await {
+    // `has_durable_doc`, never `has_doc`: a collection is memory-evicted when idle
+    // and lazy-reloaded (ADR-032 A2), so the memory-only check would report "not
+    // found" for a live KB and turn this guard into an intermittent outage.
+    if !doc_store.has_durable_doc(&collection_doc).await {
         return Err(format!("KB '{kb_id}' not found"));
     }
     let (state, _sv) = doc_store

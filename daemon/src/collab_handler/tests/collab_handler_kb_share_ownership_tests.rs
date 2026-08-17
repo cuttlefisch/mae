@@ -262,3 +262,57 @@ async fn a_refused_join_cannot_pre_empt_the_real_owners_share() {
         coll_after.pending()
     );
 }
+
+/// The must-exist guard above must not mistake an idle-EVICTED KB for a missing
+/// one.
+///
+/// A collection doc is durable (ADR-032 A2): memory-evicted when idle, kept on
+/// disk, lazy-reloaded. `has_doc` looks only in memory, so guarding with it turns
+/// "nobody has touched this KB recently" into "no such KB" — an intermittent
+/// outage on exactly the KBs a busy daemon evicts first, and one that would look
+/// like a flake rather than a bug. `has_durable_doc` exists for this distinction
+/// and says so in its own doc comment.
+///
+/// Written because the first version of that guard used `has_doc` and the entire
+/// daemon suite still passed: nothing else forces eviction, so the defect was
+/// invisible until eviction is driven deliberately. Uses `share_doc` +
+/// `evict_idle(0)` directly — the technique `durable_kb_doc_survives_idle_eviction`
+/// established — rather than going through `kb/share`, whose connected-client
+/// bookkeeping keeps the doc pinned and would make the eviction silently not happen.
+#[tokio::test]
+async fn an_idle_evicted_kb_is_still_found() {
+    let store = test_doc_store();
+
+    let kb = "evicted-but-real";
+    let node = "concept:architecture";
+    let mut coll = mae_sync::kb::KbCollectionDoc::new_owned(kb, "Alice's KB", "alice");
+    coll.add_node(node, node);
+    store
+        .share_doc(&format!("kbc:{kb}"), &coll.encode_state())
+        .await
+        .unwrap();
+    store
+        .track_client_disconnect(&format!("kbc:{kb}"))
+        .await
+        .unwrap();
+
+    let evicted = store.evict_idle(0).await;
+    assert!(
+        evicted.contains(&format!("kbc:{kb}")),
+        "precondition: the collection must actually be evicted, or this test proves \
+         nothing (evicted: {evicted:?})"
+    );
+    assert!(
+        !store.has_doc(&format!("kbc:{kb}")).await,
+        "precondition: and it must be out of MEMORY"
+    );
+
+    let reloaded = load_collection(&store, kb)
+        .await
+        .expect("an evicted-but-durable KB must still load — it is on disk");
+    assert!(
+        reloaded.has_node(node),
+        "the reloaded collection must be the REAL one, not a fresh empty doc: {:?}",
+        reloaded.list_nodes()
+    );
+}
