@@ -120,10 +120,28 @@ async fn viewer_era_edits_do_not_cascade_on_grant() {
     // Strong no-cascade oracle: snapshot the canonical state BEFORE the fenced push
     // and assert it is BYTE-IDENTICAL after — a fenced op must perturb the
     // authoritative node by exactly zero bytes (stronger than a substring check).
+    //
+    // ADR-105: seed real owner content FIRST. This snapshot previously read a node
+    // that had never been written — `encode_state_and_sv` materialized it on read,
+    // so "byte-identical before and after" compared an empty doc to an empty doc
+    // and would have held no matter what the fence did. Surfaced when reads stopped
+    // creating durable docs. Now the oracle has something to protect.
+    store
+        .share_doc(
+            "kbn:kbx:concept:n",
+            &make_test_node("concept:n", "N", "OWNER-CANONICAL", &[]),
+        )
+        .await
+        .unwrap();
     let (before, _) = store
         .encode_state_and_sv("kbn:kbx:concept:n")
         .await
         .unwrap();
+    assert!(
+        !before.is_empty(),
+        "precondition: the canonical state must be non-empty, or the byte-identity \
+         oracle below proves nothing"
+    );
     let resp = dispatch_as(
         &store,
         &bc,

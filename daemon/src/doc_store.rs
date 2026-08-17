@@ -150,6 +150,25 @@ pub struct ApplyResult {
     pub wal_seq: u64,
 }
 
+/// May this access bring a DURABLE document into existence? (ADR-105.)
+///
+/// Ephemeral docs (buffers) are created on demand by design — `sync/share` and
+/// `sync/full_state` on a fresh name are supposed to mint one. Durable docs (KB
+/// nodes and collections) are not: they exist because someone shared or synced
+/// them, and any other path that creates one is manufacturing state out of a
+/// question. Keyed on the doc ADDRESS via `is_durable_doc`, the same
+/// `DocAddress` machinery ADR-105 Stage 1 introduced for exactly this reason —
+/// so the rule is enforced by the type of the thing, not by each caller
+/// remembering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DurableCreation {
+    /// This access is a genuine creation path (`share_doc`, or a peer update
+    /// legitimately delivering content before its manifest entry).
+    Allowed,
+    /// Anything else. A missing durable doc is an error, never a fresh empty one.
+    Refused,
+}
+
 /// Whether a document holds **durable KB content** — a KB collection (`kbc:{kb_id}`)
 /// or a KB node (`kb:{node_id}`) — versus ephemeral collab-session state.
 ///
@@ -461,8 +480,30 @@ impl DocStore {
         }
     }
 
-    /// Get or create a document. Loads from storage if not in memory.
+    /// Get a document, creating it if absent. Loads from storage if not in memory.
+    ///
+    /// Refuses to CREATE a durable doc — see [`DurableCreation`]. Use
+    /// [`Self::get_or_create_allowing_durable`] on the paths that legitimately
+    /// bring a KB doc into existence.
     async fn get_or_create(&self, doc_name: &str) -> Result<Arc<Mutex<DocEntry>>, StorageError> {
+        self.get_or_create_with(doc_name, DurableCreation::Refused)
+            .await
+    }
+
+    /// [`Self::get_or_create`] for the two paths that may create a durable doc.
+    async fn get_or_create_allowing_durable(
+        &self,
+        doc_name: &str,
+    ) -> Result<Arc<Mutex<DocEntry>>, StorageError> {
+        self.get_or_create_with(doc_name, DurableCreation::Allowed)
+            .await
+    }
+
+    async fn get_or_create_with(
+        &self,
+        doc_name: &str,
+        creation: DurableCreation,
+    ) -> Result<Arc<Mutex<DocEntry>>, StorageError> {
         // Fast path: read lock.
         {
             let docs = self.docs.read().await;
@@ -523,6 +564,14 @@ impl DocStore {
                 (sync, last_id)
             }
             None => {
+                // ADR-105: the chokepoint. A durable doc that does not exist is not
+                // created by whoever asked about it — that is how `kb/join` on an
+                // unknown id used to materialize a collection with no owner, letting
+                // a stranger pre-squat an id the real owner would later be given a
+                // stripped copy of.
+                if creation == DurableCreation::Refused && is_durable_doc(doc_name) {
+                    return Err(StorageError::DurableDocMissing(doc_name.to_string()));
+                }
                 debug!(doc = doc_name, "new document created");
                 (TextSync::empty_relay(), 0)
             }
@@ -564,7 +613,10 @@ impl DocStore {
         );
 
         // Apply to in-memory document.
-        let entry = self.get_or_create(doc_name).await?;
+        // ADR-105: a peer's update may legitimately be the first thing that brings a
+        // KB doc into existence here — join and mesh relay both deliver content before
+        // the manifest entry that lists it (the reason D6 was withdrawn in Stage 2).
+        let entry = self.get_or_create_allowing_durable(doc_name).await?;
         let should_compact = {
             let mut doc = entry.lock().await;
             doc.sync
@@ -910,6 +962,23 @@ impl DocStore {
 
     /// Encode full state and state vector atomically (single lock acquisition).
     /// Used by `sync/resync` to satisfy INV-2 (state vector consistency).
+    /// [`Self::encode_state_and_sv`] for a read that has ALREADY authorized the
+    /// document and may legitimately bring it into existence (ADR-105).
+    ///
+    /// The one such read is `kb/node_fetch` after `require_node_in_kb`: the node is
+    /// in this KB's manifest, so materializing its document is not a squat — it is
+    /// a member fetching a node whose content has not arrived yet, which is a real
+    /// intermediate state under D7's manifest-first ordering. The authorization is
+    /// what makes it safe, and it is why that check is ordered above this call.
+    pub async fn encode_state_and_sv_authorized(
+        &self,
+        doc_name: &str,
+    ) -> Result<(Vec<u8>, Vec<u8>), StorageError> {
+        let entry = self.get_or_create_allowing_durable(doc_name).await?;
+        let doc = entry.lock().await;
+        Ok((doc.sync.encode_state(), doc.sync.state_vector()))
+    }
+
     pub async fn encode_state_and_sv(
         &self,
         doc_name: &str,
@@ -963,7 +1032,8 @@ impl DocStore {
         let wal_id = self.storage.wal_append(doc_name, update, None).await?;
 
         // Create new doc, apply update, set connected_clients=1.
-        let entry = self.get_or_create(doc_name).await?;
+        // ADR-105: share IS the creation path for a KB collection/node.
+        let entry = self.get_or_create_allowing_durable(doc_name).await?;
         {
             let mut doc = entry.lock().await;
             doc.sync

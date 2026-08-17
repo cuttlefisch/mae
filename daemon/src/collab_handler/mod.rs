@@ -1191,10 +1191,17 @@ pub async fn enforce_epoch_fence_with_coll(
     let c_now = derive_kb_client_id(principal, epoch_now);
     // Full authoritative state (not just the SV) so the fence detects a contiguous-clock
     // continuation of an already-canonical client (B-20) that the update's own SV hides.
-    let (base_state, _sv) = doc_store
-        .encode_state_and_sv(node_doc)
-        .await
-        .map_err(|e| format!("node state lookup failed for '{node_id}': {e}"))?;
+    // ADR-105: a node with NO document yet has no prior ops, so nothing can be a
+    // stale-epoch continuation — this is the first update bringing it into existence
+    // (join and mesh relay both deliver content that way). Returning early rather
+    // than substituting an empty base: `update_new_op_authors` decodes its base as
+    // an ENCODED yrs state, so `Vec::new()` fails with "unexpected end of buffer"
+    // and turns every first write into a decode error.
+    let base_state = match doc_store.encode_state_and_sv(node_doc).await {
+        Ok((state, _sv)) => state,
+        Err(crate::storage::StorageError::DurableDocMissing(_)) => return Ok(()),
+        Err(e) => return Err(format!("node state lookup failed for '{node_id}': {e}")),
+    };
     let authors = update_new_op_authors(update_bytes, &base_state)
         .map_err(|e| format!("could not decode update: {e}"))?;
     if let Some(stale) = authors.iter().find(|a| **a != c_now) {

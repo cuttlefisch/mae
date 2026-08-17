@@ -316,3 +316,39 @@ async fn an_idle_evicted_kb_is_still_found() {
         reloaded.list_nodes()
     );
 }
+
+#[tokio::test]
+async fn kb_join_of_a_kb_that_was_never_shared_is_refused() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+
+    let msg = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "kb/join",
+        "params": { "kb_id": "nonexistent-kb" }
+    });
+    let resp = handle_doc_request(
+        &msg.to_string(),
+        &store,
+        &bc,
+        std::time::Instant::now(),
+        0,
+        &mut HashSet::new(),
+    )
+    .await;
+
+    // ADR-105: this used to assert the OPPOSITE — "server creates empty doc on read
+    // (get_or_create semantics), so this succeeds but returns 0 nodes". That was the
+    // defect written down as the expectation: a read brought the KB into existence,
+    // which let anyone pre-squat an id by joining it, and the real owner's later
+    // share was then merged into the squatted collection rather than replacing it.
+    // Joining a KB nobody has shared is an error, and the collection must not exist
+    // afterwards.
+    assert!(
+        resp.error.is_some(),
+        "joining a KB that was never shared must fail, not mint an empty one: {resp:?}"
+    );
+    assert!(
+        !store.has_durable_doc("kbc:nonexistent-kb").await,
+        "the refused join still materialized the collection"
+    );
+}

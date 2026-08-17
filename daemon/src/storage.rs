@@ -19,6 +19,14 @@ use tracing::{debug, info, warn};
 pub enum StorageError {
     Sqlite(String),
     Io(String),
+    /// A durable document (a KB node or collection — see `is_durable_doc`) does
+    /// not exist, and the access that asked for it is not one that may create
+    /// one (ADR-105).
+    ///
+    /// A distinct variant rather than a stringly-typed `Sqlite`, because callers
+    /// branch on it: "this KB is not here" is an ordinary answer for a read and a
+    /// hard error for a write, and neither is a storage fault.
+    DurableDocMissing(String),
 }
 
 impl std::fmt::Display for StorageError {
@@ -26,6 +34,7 @@ impl std::fmt::Display for StorageError {
         match self {
             Self::Sqlite(msg) => write!(f, "sqlite: {msg}"),
             Self::Io(msg) => write!(f, "io: {msg}"),
+            Self::DurableDocMissing(doc) => write!(f, "no such document: {doc}"),
         }
     }
 }

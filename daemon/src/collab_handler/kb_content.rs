@@ -304,7 +304,12 @@ pub(super) async fn handle_kb_node_fetch(
     }
 
     let node_doc = mae_sync::kb_node_doc_name(&kb_id, &node_id);
-    match doc_store.encode_state_and_sv(&node_doc).await {
+    // `_authorized`: the manifest check above has established that this node
+    // belongs to this KB, so materializing its document here is a member fetching
+    // a node whose content has not arrived yet — not a squat. ADR-105 makes the
+    // ordering the comment above relies on structural: the plain accessor now
+    // REFUSES to create a durable doc, so this call has to say that it may.
+    match doc_store.encode_state_and_sv_authorized(&node_doc).await {
         Ok((state, sv)) => {
             // Keep the member live-subscribed to this node going forward.
             if session_docs.insert(node_doc.clone()) {
