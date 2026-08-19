@@ -38,13 +38,12 @@ mod webview;
 
 use config::DaemonConfig;
 use handler::DaemonState;
-use mae_daemon::{collab_handler, doc_store, storage};
+use mae_daemon::{collab_handler, doc_store, kb_doc_migration, storage};
 use mae_kb::CozoKbStore;
 use mae_mcp::broadcast::{EventBroadcaster, SharedBroadcaster};
 use scheduler::DaemonScheduler;
 use serde_json::{json, Value};
 use std::sync::Arc;
-use storage::StorageBackend;
 use tokio::io::BufReader;
 use tokio::net::UnixListener;
 use tokio::sync::Mutex;
@@ -587,23 +586,11 @@ async fn init_doc_store(
     // Shared by the TCP listener and the P2P mesh so both report the same uptime.
     let server_start_time = std::time::Instant::now();
 
-    // Recover documents from storage
-    match backend.list_documents().await {
-        Ok(docs) => {
-            if !docs.is_empty() {
-                info!(
-                    count = docs.len(),
-                    "recovering collab documents from storage"
-                );
-                for doc_name in &docs {
-                    if let Err(e) = doc_store.state_vector(doc_name).await {
-                        warn!(doc = %doc_name, error = %e, "recovery failed");
-                    }
-                }
-                info!(count = docs.len(), "collab recovery complete");
-            }
-        }
-        Err(e) => warn!(error = %e, "failed to list collab documents for recovery"),
+    // Prepare the doc store from storage before anything serves: migrate legacy
+    // addresses, then warm every document. Both live in `kb_doc_migration`, which
+    // explains why the ORDER matters and why an un-migratable store must not start.
+    if !kb_doc_migration::prepare_doc_store(backend.as_ref(), &doc_store).await {
+        return None;
     }
 
     Some((doc_store, broadcaster, server_start_time))

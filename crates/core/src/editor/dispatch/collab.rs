@@ -94,8 +94,10 @@ impl Editor {
                 let kb_name = self
                     .kb
                     .active_instance_name()
-                    .unwrap_or_else(|| "default".to_string());
+                    .unwrap_or_else(|| crate::editor::KB_DEFAULT_NAME.to_string());
                 self.collab.pending_intent = Some(CollabIntent::ShareKb {
+                    // A NAME, correctly: `kb_intent_to_command` resolves it and
+                    // mints/reuses the KB's collab id (ADR-105 D4).
                     kb_name: kb_name.clone(),
                     node_ids: vec![],
                 });
@@ -108,10 +110,26 @@ impl Editor {
                 // TCP stream), this is a SYNCHRONOUS daemon control-socket call
                 // that returns the ticket immediately (ADR-025 §"Driving
                 // surfaces" — same backend as the Scheme primitive + MCP tool).
-                let kb_id = self
+                // ADR-105 D4/H4: `share_p2p` sends this straight to the daemon as
+                // the KB's id, so it must BE the collab id — not the display name
+                // `active_instance_name()` returns. Passing the name would mesh-share
+                // the same KB under a second, different id from its hub share.
+                let kb_name = self
                     .kb
                     .active_instance_name()
-                    .unwrap_or_else(|| "default".to_string());
+                    .unwrap_or_else(|| crate::editor::KB_DEFAULT_NAME.to_string());
+                let Some(target) = self.kb.registry.target_of_name(&kb_name) else {
+                    self.set_status(format!("kb-share-p2p: KB '{kb_name}' not found"));
+                    self.mark_full_redraw();
+                    return Some(true);
+                };
+                let Some(kb_id) = self.kb_collab_id_for_share(&target) else {
+                    self.set_status(format!(
+                        "kb-share-p2p: could not establish a collab id for '{kb_name}'"
+                    ));
+                    self.mark_full_redraw();
+                    return Some(true);
+                };
                 match self.kb.share_p2p(&kb_id) {
                     Ok(ticket) => {
                         // Surface via the attention bus → mirrored to *Messages*
@@ -163,12 +181,31 @@ impl Editor {
                 Some(true)
             }
             "kb-join" => {
-                // Join a KB — SPC-key dispatch uses active name or "default".
+                // Join a KB — SPC-key dispatch uses the active KB's own collab id.
                 // :kb-join <id> is handled in command.rs before reaching here.
-                let kb_id = self
+                //
+                // ADR-105 D4/H4: `JoinKb.kb_id` goes on the wire as a KB id, so it
+                // must be one. `active_instance_name()` returns a display NAME, which
+                // only doubled as an id while every KB synced under its name. The
+                // no-arg form can therefore only re-join a KB this editor already
+                // knows an id for; joining a stranger's KB needs their id, which is
+                // what `:kb-join <id>` is for.
+                let kb_name = self
                     .kb
                     .active_instance_name()
-                    .unwrap_or_else(|| "default".to_string());
+                    .unwrap_or_else(|| crate::editor::KB_DEFAULT_NAME.to_string());
+                let Some(kb_id) = self
+                    .kb
+                    .registry
+                    .target_of_name(&kb_name)
+                    .and_then(|t| self.kb.registry.collab_id_of_target(&t))
+                else {
+                    self.set_status(format!(
+                        "kb-join: '{kb_name}' has no collab id — use :kb-join <id>                          with the id the owner shared"
+                    ));
+                    self.mark_full_redraw();
+                    return Some(true);
+                };
                 let node_svs = self.kb_join_node_svs(&kb_id);
                 self.collab.pending_intent = Some(CollabIntent::JoinKb {
                     kb_id: kb_id.clone(),
@@ -179,10 +216,23 @@ impl Editor {
                 Some(true)
             }
             "kb-leave" => {
-                let kb_id = self
+                // ADR-105 D4/H4: leaving addresses the KB by its collab id, same as
+                // joining. A name reaches the daemon as an id it does not know, and
+                // the leave silently applies to nothing.
+                let kb_name = self
                     .kb
                     .active_instance_name()
-                    .unwrap_or_else(|| "default".to_string());
+                    .unwrap_or_else(|| crate::editor::KB_DEFAULT_NAME.to_string());
+                let Some(kb_id) = self
+                    .kb
+                    .registry
+                    .target_of_name(&kb_name)
+                    .and_then(|t| self.kb.registry.collab_id_of_target(&t))
+                else {
+                    self.set_status(format!("kb-leave: '{kb_name}' is not a shared KB"));
+                    self.mark_full_redraw();
+                    return Some(true);
+                };
                 self.collab.pending_intent = Some(CollabIntent::LeaveKb {
                     kb_id: kb_id.clone(),
                 });
@@ -233,7 +283,8 @@ impl Editor {
                 // :kb-add-member <kb-id> <fingerprint> [role]  (args via command_line).
                 let line = self.vi.command_line.trim().to_string();
                 let mut parts = line.split_whitespace();
-                let kb_id = parts.next().unwrap_or("").to_string();
+                // ADR-105 D4: the user types a NAME or an id; the wire needs the id.
+                let kb_id = self.kb_collab_id_arg(parts.next().unwrap_or(""));
                 let member = parts.next().unwrap_or("").to_string();
                 let role = parts.next().unwrap_or("editor").to_string();
                 if member.is_empty() {
@@ -297,7 +348,8 @@ impl Editor {
                 // :kb-approve <kb-id> <fingerprint> [role]
                 let line = self.vi.command_line.trim().to_string();
                 let mut parts = line.split_whitespace();
-                let kb_id = parts.next().unwrap_or("").to_string();
+                // ADR-105 D4: resolve a typed name to the KB's collab id.
+                let kb_id = self.kb_collab_id_arg(parts.next().unwrap_or(""));
                 let principal = parts.next().unwrap_or("").to_string();
                 let role = parts.next().unwrap_or("editor").to_string();
                 if principal.is_empty() {
@@ -320,7 +372,7 @@ impl Editor {
             }
             "kb-pending" => {
                 // :kb-pending <kb-id>
-                let kb_id = self.vi.command_line.trim().to_string();
+                let kb_id = self.kb_collab_id_arg(self.vi.command_line.trim());
                 if kb_id.is_empty() {
                     self.set_status("usage: :kb-pending <kb-id>".to_string());
                     return Some(true);
@@ -333,7 +385,8 @@ impl Editor {
                 // :kb-set-policy <kb-id> <restrictive|invite|permissive>
                 let line = self.vi.command_line.trim().to_string();
                 let mut parts = line.split_whitespace();
-                let kb_id = parts.next().unwrap_or("").to_string();
+                // ADR-105 D4: resolve a typed name to the KB's collab id.
+                let kb_id = self.kb_collab_id_arg(parts.next().unwrap_or(""));
                 let policy = parts.next().unwrap_or("").to_string();
                 if kb_id.is_empty()
                     || !matches!(policy.as_str(), "restrictive" | "invite" | "permissive")

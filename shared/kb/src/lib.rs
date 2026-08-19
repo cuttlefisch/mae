@@ -45,6 +45,7 @@ pub mod federation;
 pub mod fuzzy;
 pub mod graph_query;
 pub mod kb_build;
+pub mod kb_identity;
 pub mod migrate;
 pub mod org;
 pub mod store;
@@ -73,6 +74,7 @@ pub use federation::{
     import_org_dir_to_store, ImportHealth, ImportReport as FederationImportReport, IngestMode,
     KbScope,
 };
+pub use kb_identity::{KbTarget, PRIMARY_NAME_ALIASES};
 pub use org::{IngestReport, OrgParseResult, ParsedLink};
 pub use query::{CozoQueryLayer, FederatedQuery, InMemoryQueryLayer, KbQueryLayer};
 pub use store::{

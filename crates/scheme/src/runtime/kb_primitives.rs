@@ -90,14 +90,24 @@ pub(super) fn register_kb_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedSt
             "Mint a P2P join ticket (magnet link) for a KB and return the mae://join/… string (default: primary KB).",
             Arity::Variadic(0), tier::PRIVILEGED,
             move |args: &[Value]| {
-                let kb_id = if args.is_empty() {
+                let requested = if args.is_empty() {
                     mae_core::KB_DEFAULT_NAME.to_string()
                 } else {
                     arg_string(args, 0, "kb-share-p2p")?
                 };
                 // Clone the Arc out before the blocking call so the SharedState
                 // lock is not held across daemon I/O.
-                let control = s.lock().daemon_control.clone();
+                //
+                // ADR-105 D4: resolve the caller's NAME to the KB's collab id in the
+                // same lock. This primitive is synchronous — it returns the minted
+                // ticket — so it cannot route through `queue_kb_collab_action` where
+                // the other KB primitives get resolved. Minting against a display
+                // name produces a ticket for a KB the daemon does not have, and the
+                // peer that dials it pulls nothing.
+                let (control, kb_id) = {
+                    let st = s.lock();
+                    (st.daemon_control.clone(), st.kb_collab_id_arg(&requested))
+                };
                 match control {
                     Some(c) => c
                         .mint_p2p_ticket(&kb_id)

@@ -192,33 +192,6 @@ async fn kb_join_returns_collection_and_all_nodes() {
 }
 
 #[tokio::test]
-async fn kb_join_nonexistent_returns_empty() {
-    let store = test_doc_store();
-    let bc = test_broadcaster();
-
-    let msg = serde_json::json!({
-        "jsonrpc": "2.0", "id": 1, "method": "kb/join",
-        "params": { "kb_id": "nonexistent-kb" }
-    });
-    let resp = handle_doc_request(
-        &msg.to_string(),
-        &store,
-        &bc,
-        std::time::Instant::now(),
-        0,
-        &mut HashSet::new(),
-    )
-    .await;
-
-    // Server creates empty doc on read (get_or_create semantics), so this
-    // succeeds but returns 0 nodes — the client interprets empty collection.
-    assert!(resp.error.is_none(), "kb/join creates empty doc — no error");
-    let result = resp.result.unwrap();
-    let nodes = result["nodes"].as_array().unwrap();
-    assert_eq!(nodes.len(), 0, "nonexistent KB should return 0 nodes");
-}
-
-#[tokio::test]
 async fn kb_node_update_applies_and_broadcasts() {
     let store = test_doc_store();
     let bc = test_broadcaster();

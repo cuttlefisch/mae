@@ -26,6 +26,7 @@
 mod events_connection;
 mod events_doc;
 mod events_kb;
+mod events_kb_share_conflict;
 
 use std::collections::HashSet;
 use std::sync::Mutex;
@@ -494,6 +495,20 @@ pub enum CollabEvent {
         /// preserved on re-share) — seeds the owner's local collection replica so
         /// it can introspect its own KB's membership (C1 then keeps it fresh).
         collection_state: Vec<u8>,
+    },
+    /// ADR-105 D4/D5: `kb/share` was refused because the id belongs to a different
+    /// owner, so the id this editor minted is unusable and must be replaced.
+    ///
+    /// A distinct event rather than a generic `Error`, because there is a real
+    /// recovery: an id minted but never confirmed is not ours, so discarding it and
+    /// minting a fresh one is both safe and the only way the KB ever becomes
+    /// shareable — `collab_id_for_share` correctly returns an existing id
+    /// unchanged, so a refused id would otherwise be re-presented forever and the
+    /// only fix would be hand-editing `kb-registry.toml`.
+    KbShareIdConflict {
+        kb_id: String,
+        /// The daemon's message, surfaced when recovery is NOT safe.
+        detail: String,
     },
     /// Joined a shared KB — carries collection + node states.
     KbJoined {
@@ -979,6 +994,9 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             node_count,
             collection_state,
         } => events_kb::handle_kb_shared_event(editor, kb_id, node_count, collection_state),
+        CollabEvent::KbShareIdConflict { kb_id, detail } => {
+            events_kb_share_conflict::handle_kb_share_id_conflict(editor, kb_id, detail)
+        }
         CollabEvent::KbJoined {
             kb_id,
             collection_state,
@@ -4875,6 +4893,22 @@ fn handle_response(
                         collection_state,
                     },
                 );
+            } else if val
+                .get("error")
+                .and_then(|e| e.get("code"))
+                .and_then(|c| c.as_i64())
+                == Some(mae_mcp::protocol::KB_ID_OWNED_BY_ANOTHER)
+            {
+                // ADR-105 D5: this id is someone else's. Branching on the CODE, not
+                // on the message text — the recovery below is load-bearing and must
+                // not hinge on error prose staying byte-identical.
+                let detail = val
+                    .get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                try_send_evt(evt_tx, CollabEvent::KbShareIdConflict { kb_id, detail });
             } else {
                 try_send_evt(
                     evt_tx,

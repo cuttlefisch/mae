@@ -1199,10 +1199,15 @@ impl Editor {
                 // instance, so `:kb-join <other-kb>` silently joined the wrong KB.
                 // No-arg falls through to dispatch (active instance / picker).
                 if command == "kb-join" {
-                    if let Some(kb_id) = args.map(str::trim).filter(|s| !s.is_empty()) {
-                        let node_svs = self.kb_join_node_svs(kb_id);
+                    if let Some(arg) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                        // ADR-105 D4: the user may type this KB's display NAME or a
+                        // peer's collab id. Resolve a name we know; pass an
+                        // unrecognised value through, since joining a stranger's KB
+                        // means using an id this editor has never seen.
+                        let kb_id = self.kb_collab_id_arg(arg);
+                        let node_svs = self.kb_join_node_svs(&kb_id);
                         self.collab.pending_intent = Some(super::CollabIntent::JoinKb {
-                            kb_id: kb_id.to_string(),
+                            kb_id: kb_id.clone(),
                             node_svs,
                         });
                         self.set_status(format!("Joining KB '{}'...", kb_id));
@@ -1210,9 +1215,11 @@ impl Editor {
                     }
                 }
                 if command == "kb-leave" {
-                    if let Some(kb_id) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                    if let Some(arg) = args.map(str::trim).filter(|s| !s.is_empty()) {
+                        // ADR-105 D4: as `kb-join` above.
+                        let kb_id = self.kb_collab_id_arg(arg);
                         self.collab.pending_intent = Some(super::CollabIntent::LeaveKb {
-                            kb_id: kb_id.to_string(),
+                            kb_id: kb_id.clone(),
                         });
                         self.set_status(format!("Leaving KB '{}'...", kb_id));
                         return true;

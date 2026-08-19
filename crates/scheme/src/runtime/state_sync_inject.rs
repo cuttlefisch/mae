@@ -38,6 +38,25 @@ impl SchemeRuntime {
         // Keep the daemon control channel current so `(kb-share-p2p)` drives the
         // live backend (cheap Arc clone; None when no daemon is wired).
         self.shared.lock().daemon_control = editor.kb.daemon_control();
+        // ADR-105 D4: mirror display NAME → collab id so the synchronous
+        // `(kb-share-p2p "name")` primitive can resolve what the caller typed. It
+        // returns its ticket inline, so it cannot go through
+        // `queue_kb_collab_action` where every other KB primitive is resolved.
+        {
+            let reg = &editor.kb.registry;
+            let mut map = std::collections::HashMap::new();
+            if let Some(id) = reg.primary_collab_id.clone() {
+                for alias in mae_kb::PRIMARY_NAME_ALIASES {
+                    map.insert((*alias).to_string(), id.clone());
+                }
+            }
+            for inst in &reg.instances {
+                if let Some(id) = inst.collab_id.clone() {
+                    map.insert(inst.name.clone(), id);
+                }
+            }
+            self.shared.lock().set_kb_collab_ids(map);
+        }
 
         let buf = editor.active_buffer();
         let win = editor.window_mgr.focused_window();

@@ -24,8 +24,10 @@ mod docs_methods;
 mod kb_artifacts;
 mod kb_content;
 mod kb_governance;
+mod kb_id_guard;
 pub mod kb_lease;
 mod kb_membership;
+mod kb_share_ownership;
 mod sync_methods;
 
 use std::collections::HashSet;
@@ -711,6 +713,20 @@ pub enum AccessDecision {
 /// through the public wrapper for a call path that isn't hot.
 pub async fn load_collection(doc_store: &DocStore, kb_id: &str) -> Result<KbCollectionDoc, String> {
     let collection_doc = format!("kbc:{kb_id}");
+    // ADR-105: a KB that does not exist must NOT be brought into existence by
+    // someone asking about it. `encode_state_and_sv` goes through `get_or_create`,
+    // so without this every caller — `kb_access` included — materialized an empty
+    // `kbc:{kb_id}` for any id handed to it, and the "not found" error just below
+    // was unreachable. That enabled a pre-squat which DEFEATS D5 rather than being
+    // caught by it; the chain is spelled out in
+    // `collab_handler_kb_share_ownership_tests`.
+    //
+    // `has_durable_doc`, never `has_doc`: a collection is memory-evicted when idle
+    // and lazy-reloaded (ADR-032 A2), so the memory-only check would report "not
+    // found" for a live KB and turn this guard into an intermittent outage.
+    if !doc_store.has_durable_doc(&collection_doc).await {
+        return Err(format!("KB '{kb_id}' not found"));
+    }
     let (state, _sv) = doc_store
         .encode_state_and_sv(&collection_doc)
         .await
@@ -1175,10 +1191,17 @@ pub async fn enforce_epoch_fence_with_coll(
     let c_now = derive_kb_client_id(principal, epoch_now);
     // Full authoritative state (not just the SV) so the fence detects a contiguous-clock
     // continuation of an already-canonical client (B-20) that the update's own SV hides.
-    let (base_state, _sv) = doc_store
-        .encode_state_and_sv(node_doc)
-        .await
-        .map_err(|e| format!("node state lookup failed for '{node_id}': {e}"))?;
+    // ADR-105: a node with NO document yet has no prior ops, so nothing can be a
+    // stale-epoch continuation — this is the first update bringing it into existence
+    // (join and mesh relay both deliver content that way). Returning early rather
+    // than substituting an empty base: `update_new_op_authors` decodes its base as
+    // an ENCODED yrs state, so `Vec::new()` fails with "unexpected end of buffer"
+    // and turns every first write into a decode error.
+    let base_state = match doc_store.encode_state_and_sv(node_doc).await {
+        Ok((state, _sv)) => state,
+        Err(crate::storage::StorageError::DurableDocMissing(_)) => return Ok(()),
+        Err(e) => return Err(format!("node state lookup failed for '{node_id}': {e}")),
+    };
     let authors = update_new_op_authors(update_bytes, &base_state)
         .map_err(|e| format!("could not decode update: {e}"))?;
     if let Some(stale) = authors.iter().find(|a| **a != c_now) {
@@ -1844,6 +1867,15 @@ async fn handle_doc_request_inner(
                 return resp;
             }
         };
+
+    // ADR-105 D3: a KB id becomes part of every node document's address, so it
+    // must be one the address can unambiguously carry. One chokepoint here rather
+    // than in each `kb/*` handler — see `kb_id_guard` for why that matters.
+    if let Some(resp) =
+        kb_id_guard::refuse_unaddressable_kb_id(session_id, &request.method, &params, &id)
+    {
+        return resp;
+    }
 
     info!(session = session_id, method = %request.method, "doc request");
     match request.method.as_str() {

@@ -312,6 +312,7 @@ Source: `shared/kb/src/lib.rs`
 | `fuzzy` | mod |
 | `graph_query` | mod |
 | `kb_build` | mod |
+| `kb_identity` | mod |
 | `migrate` | mod |
 | `org` | mod |
 | `store` | mod |

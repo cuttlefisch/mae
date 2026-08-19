@@ -94,7 +94,18 @@ pub const DEFAULT_COLLAB_ADDRESS: &str = "127.0.0.1:9473";
 /// Default TCP port for the collaborative state server.
 pub const DEFAULT_COLLAB_PORT: u16 = 9473;
 
-/// Default KB instance name (primary KB).
+/// Default KB instance **display name** (primary KB).
+///
+/// A name, never an identifier. Every editor's primary answers to it, which is
+/// exactly why ADR-105 D4 stopped using it as a collaborative id: on a shared
+/// daemon the first tenant to connect claimed `"default"` permanently and every
+/// later tenant's primary share was accepted and then denied on every subsequent
+/// operation. Resolve a name with `KbRegistry::target_of_name`, and get a KB's id
+/// from `KbRegistry::collab_id_of_target` — do not reach for this constant to
+/// answer "which KB is this?".
+///
+/// Kept in agreement with `mae_kb::PRIMARY_NAME_ALIASES` by
+/// `kb_default_name_agrees_with_the_shared_alias_list`.
 pub const KB_DEFAULT_NAME: &str = "default";
 /// Default KB sync mode for collaborative editing.
 pub const KB_SYNC_MODE_DEFAULT: &str = "on_save";
@@ -404,6 +415,33 @@ pub struct CollabState {
     /// marker — hosting must not imply peer-share or survive a daemon-less launch).
     /// Also a once-per-connection guard against re-enqueuing the host share.
     pub daemon_host_pending: HashSet<String>,
+    /// ADR-105 D4: collab id → which KB an in-flight `kb/share` is for.
+    ///
+    /// Sharing is request-then-confirm, and the confirmation carries only the
+    /// collab id. Before D4 that id WAS the KB's name, so the handler recovered
+    /// the KB by comparing it against "default"/"primary" — which stops working
+    /// the moment the id is a minted uuid, and stops working *silently*: the
+    /// lookup falls through, finds no instance, and stamps the durable share
+    /// marker on nothing while `shared_kbs` gets an empty node set, so edits
+    /// afterwards match nothing and sync quietly stops (the ADR-086 failure).
+    ///
+    /// A map rather than a set (unlike `daemon_host_pending` beside it) because
+    /// the answer needed is *which KB*, not merely *whether* one is in flight.
+    /// Consumed on the matching `KbShared`; `KbRegistry::target_of_collab_id` is
+    /// the durable fallback once the share has been confirmed once.
+    pub pending_share_targets: HashMap<String, mae_kb::KbTarget>,
+    /// ADR-105 D4/D5: how many times a KB's collab id has been re-minted after
+    /// the daemon refused it, keyed by a stable per-KB key (NOT the collab id,
+    /// which changes on every attempt).
+    ///
+    /// Recovery re-issues the share, and the re-issued share can be refused
+    /// again. Without a bound that is a livelock — share, refuse, re-mint,
+    /// persist, share — spinning network requests and registry disk writes for
+    /// as long as the daemon keeps saying no. With random 122-bit ids a genuine
+    /// second collision is not the worry; a daemon bug or misconfiguration that
+    /// reports every collection as foreign-owned is, and it produces exactly the
+    /// same loop. Cleared on a confirmed share.
+    pub share_id_remint_attempts: HashMap<String, u8>,
     /// KB sync mode: "manual" (explicit :kb-sync), "on_save" (auto on node edit).
     pub kb_sync_mode: String,
     /// Epoch-fence resolution: "prompt" (raise the ADR-024 Accept/Keep/Stash
@@ -519,6 +557,8 @@ impl CollabState {
             last_awareness_sent: std::time::Instant::now(),
             shared_kbs: HashMap::new(),
             daemon_host_pending: HashSet::new(),
+            pending_share_targets: HashMap::new(),
+            share_id_remint_attempts: HashMap::new(),
             pending_kb_manifest: Vec::new(),
             kb_sync_mode: KB_SYNC_MODE_DEFAULT.to_string(),
             fence_resolution: "prompt".to_string(),

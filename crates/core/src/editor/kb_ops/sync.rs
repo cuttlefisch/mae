@@ -458,8 +458,30 @@ impl Editor {
     /// propagating edits across editor restart/reconnect (the cache may be
     /// empty until reconstruction runs). `owner == None` ⇒ primary KB;
     /// `Some(uuid)` ⇒ a federated instance.
+    /// The collaborative id to share `target` under, minting one on first share
+    /// and persisting it (ADR-105 D4).
+    ///
+    /// The single place the editor decides a KB's collab id. Both callers need the
+    /// SAME answer for the same KB and reach it at different times — the share
+    /// request builds the wire payload, while the daemon-host path needs the id
+    /// *before* enqueuing so its in-flight marker is keyed by the id the
+    /// confirmation will actually carry. Two independent mints would produce two
+    /// ids for one KB, so this is deliberately one function rather than two call
+    /// sites doing the same thing.
+    ///
+    /// Idempotent by construction: `collab_id_for_share` returns an existing id
+    /// unchanged, which is also why calling it from the host path is safe even
+    /// though hosting must never imply a peer share. It stamps identity only —
+    /// the durable `primary_shared` / `shared` markers are still written solely on
+    /// a confirmed peer share.
     pub(super) fn kb_collab_id_of(&self, owner: &Option<String>) -> Option<String> {
         match owner {
+            // ADR-105 D4: the `unwrap_or_else` fallback is LEGACY-ONLY. A share
+            // confirmed under D4 always writes `primary_collab_id`, so reaching it
+            // means a registry that recorded `primary_shared` without an id — i.e.
+            // one written before D4, whose primary genuinely did sync as "default".
+            // Do not "modernise" it to a minted id: that would change a live KB's
+            // signed identity (finding A).
             None => self.kb.registry.primary_shared.then(|| {
                 self.kb
                     .registry
@@ -495,6 +517,22 @@ impl Editor {
                 self.collab.status,
                 crate::editor::CollabStatus::Connected { .. }
             );
+        // ADR-105 D4: hosting means primary edits broadcast, and they broadcast
+        // under the primary's collab id — so establish that id HERE, at the single
+        // writer of the hosting flag, rather than hoping some other path minted it
+        // first. `kb_sync_target` is called per edit and is `&self`, so it cannot
+        // mint; if the id were missing there it would return `None` and primary
+        // edits would silently stop broadcasting.
+        //
+        // Hosting is reachable without a fresh collab connection (a
+        // `set_option("daemon_default", …)` flip re-runs this and nothing else), so
+        // relying on the connect handler's mint would leave exactly that path
+        // broken. Minting is idempotent and stamps identity only — it does not
+        // imply a peer share, which is the distinction this function's doc comment
+        // above turns on.
+        if hosting {
+            let _ = self.kb_collab_id_for_share(&mae_kb::KbTarget::Primary);
+        }
         self.kb.set_daemon_hosts_primary(hosting);
     }
 
@@ -508,8 +546,15 @@ impl Editor {
             return None;
         }
         self.kb_collab_id_of(owner).or_else(|| {
+            // ADR-105 D4: the daemon-hosted primary broadcasts under the primary's
+            // OWN collab id, not the literal "default". Two editors hosting their
+            // primaries on one daemon both used to emit under "default" — the same
+            // finding-F collision as the peer-share path, reached by a different
+            // route. Read-only here: this is the emit gate, called per edit, and the
+            // id was minted when the host share was enqueued.
             (owner.is_none() && self.kb.daemon_hosts_primary())
-                .then(|| crate::editor::KB_DEFAULT_NAME.to_string())
+                .then(|| self.kb.registry.primary_collab_id.clone())
+                .flatten()
         })
     }
 

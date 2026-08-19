@@ -182,6 +182,7 @@ impl KbImportResult {
 }
 
 mod activity;
+mod collab_id;
 mod daily;
 mod dispatch;
 mod nodes;

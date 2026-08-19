@@ -980,6 +980,17 @@ jobs:
           MAE_BIN: ${{ github.workspace }}/target/release/mae
           MAE_DAEMON_BIN: ${{ github.workspace }}/daemon/target/release/mae-daemon
         run: scripts/collab-membership-e2e.sh
+      - name: Two-tenant primary-KB sharing (ADR-105 finding F)
+        # The only e2e where two tenants share their PRIMARY. Every sibling script
+        # shares `collabtest`, a NAMED instance whose name is unique by
+        # construction, so none of them can observe the collision this guards:
+        # every editor's primary is called "default", and while that name doubled
+        # as the collab id the second tenant's share was accepted and then denied
+        # on every operation.
+        env:
+          MAE_BIN: ${{ github.workspace }}/target/release/mae
+          MAE_DAEMON_BIN: ${{ github.workspace }}/daemon/target/release/mae-daemon
+        run: scripts/collab-two-tenant-primary-e2e.sh
       - name: E2E encrypted KB-sharing lifecycle (ADR-037 Phase 3d gate)
         env:
           MAE_BIN: ${{ github.workspace }}/target/release/mae

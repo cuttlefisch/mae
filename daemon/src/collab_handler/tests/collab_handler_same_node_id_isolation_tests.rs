@@ -85,33 +85,6 @@ async fn edit_node(
     .await
 }
 
-/// Read `node_id` from `kb_id` as `who` and return its decoded body.
-async fn read_node_body(
-    store: &Arc<DocStore>,
-    bc: &SharedBroadcaster,
-    who: &str,
-    kb_id: &str,
-    node_id: &str,
-    docs: &mut HashSet<String>,
-) -> String {
-    let r = dispatch_as(
-        store,
-        bc,
-        Some(who),
-        Some(&fp(who)),
-        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"kb/node_fetch",
-            "params":{"kb_id":kb_id,"node_id":node_id}}),
-        docs,
-    )
-    .await;
-    assert!(r.error.is_none(), "{who} fetch failed: {:?}", r.error);
-    let state = base64_to_update(r.result.as_ref().unwrap()["state"].as_str().unwrap())
-        .expect("state decodes");
-    mae_sync::kb::KbNodeDoc::from_bytes(&state)
-        .map(|d| d.body())
-        .unwrap_or_default()
-}
-
 /// FINDING 2 (the honest case, and the one no existing test could see): two tenants
 /// who each use `concept:architecture` in their own KB must not share a document.
 ///
@@ -269,5 +242,129 @@ async fn writing_your_own_kbs_node_must_not_reach_another_kbs_node_of_the_same_n
     assert!(
         victim_body.contains("VICTIM-ORIGINAL"),
         "the victim's own content must survive intact, got: {victim_body:?}"
+    );
+}
+
+/// ADVERSARIAL (ADR-105 D3): the collision the scoped address removed comes
+/// straight back if a KB id may contain a colon.
+///
+/// `kbn:{kb_id}:{node_id}` splits on the FIRST colon, so KB `a:b` holding node `c`
+/// and KB `a` holding node `b:c` both spell `kbn:a:b:c` — one document, two
+/// tenants, which is #718 verbatim. Node ids legitimately contain colons
+/// (`concept:architecture`), so the ambiguity can only be closed on the KB id
+/// side, and `kb_id` arrives client-supplied on `kb/share`.
+///
+/// D3's `kb_id_is_addressable` shipped in Stage 2 and was called from NOWHERE.
+/// This pins the enforcement, not the predicate.
+#[tokio::test]
+async fn a_colon_bearing_kb_id_is_refused_before_it_can_collide() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut docs = HashSet::new();
+
+    // The pair that collides. Neither party is an attacker: both are ordinary
+    // ids, and it is the ADDRESS that conflates them.
+    let node = "c";
+    let coll = {
+        let mut c = mae_sync::kb::KbCollectionDoc::new_owned("a:b", "", "alice");
+        c.add_node(node, node);
+        c
+    };
+    let msg = serde_json::json!({
+        "jsonrpc":"2.0","id":1,"method":"kb/share",
+        "params":{
+            "kb_id": "a:b",
+            "name": "a:b",
+            "creator": "alice",
+            "collection_state": update_to_base64(&coll.encode_state()),
+            "nodes": [{"id": node, "state": update_to_base64(
+                &make_test_node(node, "Architecture", "ALICE-BODY", &[]))}],
+        }
+    });
+    let r = dispatch_as(
+        &store,
+        &bc,
+        Some("alice"),
+        Some(&fp("alice")),
+        msg,
+        &mut docs,
+    )
+    .await;
+
+    let err = r
+        .error
+        .as_ref()
+        .unwrap_or_else(|| panic!("a colon-bearing KB id must be refused, not shared"));
+    assert!(
+        err.message.contains("a:b") && err.message.contains(':'),
+        "the refusal must name the offending id and say what is wrong with it, got: {}",
+        err.message
+    );
+
+    // The document must not exist under ANY spelling: a refusal that still
+    // materialized the doc would leave the collision in place.
+    assert!(
+        !store
+            .has_doc(&mae_sync::kb_node_doc_name("a:b", node))
+            .await,
+        "refused share still created the node document"
+    );
+    assert!(
+        !store.has_doc("kbc:a:b").await,
+        "refused share still created the collection document"
+    );
+}
+
+/// The non-vacuity control for the test above, and the property that makes D3
+/// narrow rather than blanket: a colon in the NODE id is legitimate and common,
+/// and must keep working. `a`/`b:c` is precisely the sibling that would have
+/// collided with `a:b`/`c` — so this also proves the pair was a real collision
+/// and not two ids that could never have met.
+#[tokio::test]
+async fn a_colon_in_the_node_id_stays_legal() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut docs = HashSet::new();
+
+    share_kb_with_node_as(&store, &bc, "alice", "a", "b:c", "ALICE-BODY", &mut docs).await;
+
+    assert!(
+        store.has_doc(&mae_sync::kb_node_doc_name("a", "b:c")).await,
+        "a node id containing ':' is ordinary (concept:architecture) and must share"
+    );
+}
+
+/// An empty KB id addresses `kbn::{node_id}`, which `DocAddress::parse` rejects —
+/// so it would be an unparseable name reaching the guards that fail CLOSED. Refuse
+/// it at entry instead, where the caller gets an actionable error.
+#[tokio::test]
+async fn an_empty_kb_id_is_refused() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut docs = HashSet::new();
+
+    let coll = mae_sync::kb::KbCollectionDoc::new_owned("", "", "alice");
+    let msg = serde_json::json!({
+        "jsonrpc":"2.0","id":1,"method":"kb/share",
+        "params":{
+            "kb_id": "",
+            "name": "",
+            "creator": "alice",
+            "collection_state": update_to_base64(&coll.encode_state()),
+            "nodes": [],
+        }
+    });
+    let r = dispatch_as(
+        &store,
+        &bc,
+        Some("alice"),
+        Some(&fp("alice")),
+        msg,
+        &mut docs,
+    )
+    .await;
+    assert!(
+        r.error.is_some(),
+        "an empty KB id must be refused at entry, not left to fail deeper"
     );
 }

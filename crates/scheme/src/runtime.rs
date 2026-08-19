@@ -218,6 +218,17 @@ pub struct SharedState {
     /// synchronous-return primitives like `(kb-share-p2p)` can drive the same
     /// backend as the command + MCP tool (ADR-025 §"Driving surfaces").
     daemon_control: Option<std::sync::Arc<dyn mae_core::DaemonControl>>,
+    /// ADR-105 D4: display NAME → collab id, for every KB this editor has shared,
+    /// plus the primary under each of its aliases.
+    ///
+    /// Exists because `(kb-share-p2p "name")` is SYNCHRONOUS — it returns the
+    /// minted ticket to the caller — so it cannot route through
+    /// `queue_kb_collab_action`, where every other Scheme KB primitive gets its
+    /// name resolved. Without this it handed the daemon a display name as a KB id
+    /// and minted a ticket for a KB that does not exist, so a peer dialled in and
+    /// pulled nothing. Read-only mirror kept fresh by `inject_editor_state`, the
+    /// documented pattern for editor state a primitive needs to read.
+    kb_collab_ids: std::collections::HashMap<String, String>,
     /// Pending buffer creation: (name).
     pending_create_buffer: Option<String>,
     /// Pending buffer kill by name.
@@ -392,6 +403,24 @@ pub struct SharedState {
 }
 
 impl SharedState {
+    /// Resolve a KB argument a caller typed into the id that addresses it on the
+    /// wire (ADR-105 D4). Mirrors `Editor::kb_collab_id_arg`: an argument that is
+    /// already a known collab id wins, then a display name, else it passes through
+    /// unchanged (a peer's id this editor has never seen).
+    pub(crate) fn kb_collab_id_arg(&self, arg: &str) -> String {
+        if self.kb_collab_ids.values().any(|id| id == arg) {
+            return arg.to_string();
+        }
+        self.kb_collab_ids
+            .get(arg)
+            .cloned()
+            .unwrap_or_else(|| arg.to_string())
+    }
+
+    /// Replace the name → collab-id mirror (called from `inject_editor_state`).
+    pub fn set_kb_collab_ids(&mut self, map: std::collections::HashMap<String, String>) {
+        self.kb_collab_ids = map;
+    }
     /// Read-only access to the primary KB store, if one is registered
     /// (mirrors `kb_queries.rs`'s internal `state.kb_store` reads). The
     /// narrow public accessor out-of-tree kernel-primitive crates use

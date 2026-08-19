@@ -101,9 +101,9 @@ if [ "$E2E_MESH" = "1" ]; then
   BK_FP="$(bob "$MAE_BIN" --collab-identity 2>/dev/null | sed -n 's/.*fingerprint: //p' | awk '{print $1}')"
   [ -n "$BK_FP" ] || { echo "ERROR: could not read bob editor fingerprint"; exit 1; }
   E2E_ENABLE="    (it-test \"enables E2E (owner) BEFORE authoring the canary\" (lambda () (kb-set-encryption \"collabtest\" \"e2e\") (sleep-ms 2500)))"
-  E2E_BOB_JOIN="    (it-test \"editor requests membership over the mesh (publishes BK wrap key)\" (lambda () (execute-ex \"kb-join collabtest\") (sleep-ms 3000)))
+  E2E_BOB_JOIN="    (it-test \"editor requests membership over the mesh (publishes BK wrap key)\" (lambda () (execute-ex (string-append \"kb-join \" (read-file \"$WORK/sync/kbid\"))) (sleep-ms 3000)))
     (it-test \"signals editor-join\" (lambda () (write-file \"$WORK/sync/bob-ejoin\" \"1\")))"
-  E2E_BOB_PULL="    (it-test \"re-joins as approved member — pulls the wrapped content key + decrypts\" (lambda () (execute-ex \"kb-join collabtest\") (sleep-ms 4000)))"
+  E2E_BOB_PULL="    (it-test \"re-joins as approved member — pulls the wrapped content key + decrypts\" (lambda () (execute-ex (string-append \"kb-join \" (read-file \"$WORK/sync/kbid\"))) (sleep-ms 4000)))"
   E2E_ALICE_ADD="    (it-test \"waits for bob's editor membership request\" (lambda () (wait-for-file \"$WORK/sync/bob-ejoin\" 60000) (sleep-ms 1500)))
     (it-test \"approves bob's EDITOR (wraps content key to BK, not the daemon)\" (lambda () (execute-ex \"kb-approve collabtest $BK_FP editor\") (sleep-ms 2500)))"
 fi
@@ -150,7 +150,7 @@ cat > "$WORK/scen/bob.scm" <<EOF
 (describe-group "bob (mesh joiner, daemon B)"
   (lambda ()
     (it-test "connects to daemon B" (lambda () (wait-connected 30000)))
-    (it-test "waits for alice's ticket" (lambda () (wait-for-file "$WORK/sync/shared" 60000) (sleep-ms 300)))
+    (it-test "waits for alice's ticket" (lambda () (wait-for-file "$WORK/sync/kbid" 60000) (sleep-ms 300)))
     (it-test "joins via the P2P ticket (daemon B dials daemon A)" (lambda () (execute-ex (string-append "kb-join-p2p " (read-file "$TICKET_FILE"))) (sleep-ms 2000)))
 $E2E_BOB_JOIN
     (it-test "waits for dial + owner approval + a dialer retry (pulls content)" (lambda () (sleep-ms 42000)))
@@ -173,6 +173,28 @@ port_listening "$PORTB" || { echo "ERROR: daemon B never listened"; cat "$WORK/d
 harness_spawn APID "$WORK/alice.tap" -- env HOME="$WORK/alice" XDG_CONFIG_HOME="$WORK/alice/.config" XDG_DATA_HOME="$WORK/alice/.local/share" \
   MAE_COLLAB_SERVER="127.0.0.1:$PORTA" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 MAE_LOG="${MAE_E2E_ALICE_LOG:-mae_mcp=warn,info}" \
   ${TIMEOUT_BIN:+$TIMEOUT_BIN $EDITOR_TIMEOUT} "$MAE_BIN" --test "$WORK/scen/alice.scm"
+# ADR-105 D4: a KB is shared under a MINTED collab id, not its display name, so a
+# joiner cannot address it by name — alice's editor resolves `collabtest` from her
+# own registry, bob's cannot because he never registered it. Publish the real id
+# alongside the P2P ticket, both being out-of-band material a joiner needs. Read
+# from alice's durable registry, where the mint is persisted. Written without a
+# trailing newline: bob string-appends it straight into an ex-command.
+ALICE_REG="$WORK/alice/.local/share/mae/kb-registry.toml"
+KB_ID=""
+for _ in $(seq 1 160); do
+  [ -f "$WORK/sync/shared" ] || { sleep 0.5; continue; }
+  KB_ID="$(grep -oE 'collab_id = "[^"]+"' "$ALICE_REG" 2>/dev/null | head -1 | cut -d'"' -f2)"
+  [ -n "$KB_ID" ] && break
+  sleep 0.5
+done
+if [ -z "$KB_ID" ]; then
+  echo "ERROR: alice never persisted a collab id for the shared KB"
+  cat "$ALICE_REG" 2>/dev/null || echo "(no registry at $ALICE_REG)"
+  exit 1
+fi
+echo "alice shared 'collabtest' under collab id: $KB_ID"
+printf %s "$KB_ID" > "$WORK/sync/kbid"
+
 harness_spawn BPID "$WORK/bob.tap" -- env HOME="$WORK/bob" XDG_CONFIG_HOME="$WORK/bob/.config" XDG_DATA_HOME="$WORK/bob/.local/share" \
   MAE_COLLAB_SERVER="127.0.0.1:$PORTB" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 MAE_LOG="${MAE_E2E_BOB_LOG:-mae_mcp=warn,info}" \
   ${TIMEOUT_BIN:+$TIMEOUT_BIN $EDITOR_TIMEOUT} "$MAE_BIN" --test "$WORK/scen/bob.scm"

@@ -165,7 +165,7 @@ if [ "$ROTATE" = "1" ]; then
     (it-test \"signals rotated-id\" (lambda () (write-file \"$WORK/sync/rotid\" \"1\")))"
   BOB_ROTATE="    (it-test \"signals read CANARY1\" (lambda () (write-file \"$WORK/sync/bob-got1\" \"1\")))
     (it-test \"waits for the post-rotation edit\" (lambda () (wait-for-file \"$WORK/sync/rotid\" 60000)))
-    (it-test \"re-joins to pull post-rotation content under the rotated owner (snapshot, like CANARY1)\" (lambda () (execute-ex \"kb-join collabtest\") (sleep-ms 3500)))"
+    (it-test \"re-joins to pull post-rotation content under the rotated owner (snapshot, like CANARY1)\" (lambda () (execute-ex (string-append \"kb-join \" (read-file \"$WORK/sync/kbid\"))) (sleep-ms 3500)))"
 fi
 
 # ADR-040 §Recovery-key segments — empty unless MAE_E2E_RECOVER=1. After bob reads CANARY1 as a
@@ -208,12 +208,12 @@ cat > "$WORK/scen/bob.scm" <<EOF
 (describe-group "bob (joiner)"
   (lambda ()
     (it-test "connects" (lambda () (wait-connected 30000)))
-    (it-test "waits for share" (lambda () (wait-for-file "$WORK/sync/shared" 60000)))
-    (it-test "join (pending)" (lambda () (execute-ex "kb-join collabtest") (sleep-ms 1000)))
+    (it-test "waits for share" (lambda () (wait-for-file "$WORK/sync/kbid" 60000)))
+    (it-test "join (pending)" (lambda () (execute-ex (string-append "kb-join " (read-file "$WORK/sync/kbid"))) (sleep-ms 1000)))
     (it-test "signals tried" (lambda () (write-file "$WORK/sync/bob-tried" "1")))
     (it-test "waits for approval" (lambda () (wait-for-file "$WORK/sync/added" 60000)))
     (it-test "waits for the sealed edit FIRST" (lambda () (wait-for-file "$WORK/sync/edited" 60000) (sleep-ms 500)))
-    (it-test "join (member) — pulls sealed content + decrypts to disk" (lambda () (execute-ex "kb-join collabtest") (sleep-ms 3000)))
+    (it-test "join (member) — pulls sealed content + decrypts to disk" (lambda () (execute-ex (string-append "kb-join " (read-file "$WORK/sync/kbid"))) (sleep-ms 3000)))
 $BOB_REMOVAL$BOB_ROTATE$BOB_RECOVER
     (it-test "signals done" (lambda () (write-file "$WORK/sync/bob-done" "1")))))
 EOF
@@ -228,7 +228,7 @@ cat > "$WORK/scen/carol.scm" <<EOF
     (it-test "connects" (lambda () (wait-connected 30000)))
     (it-test "waits for the restored backup (collection op-log + recovery key)" (lambda () (wait-for-file "$WORK/sync/carol-restored" 60000) (sleep-ms 500)))
     (it-test "recovers bob's identity from the restored offline recovery key (ADR-040, B2)" (lambda () (execute-ex "collab-recover-identity $CAROL_COLLAB/recovery $BOB_FP") (sleep-ms 4000)))
-    (it-test "re-joins as the RECOVERED member — pulls + decrypts the sealed content" (lambda () (execute-ex "kb-join collabtest") (sleep-ms 4000)))
+    (it-test "re-joins as the RECOVERED member — pulls + decrypts the sealed content" (lambda () (execute-ex (string-append "kb-join " (read-file "$WORK/sync/kbid"))) (sleep-ms 4000)))
     (it-test "signals done" (lambda () (write-file "$WORK/sync/carol-done" "1")))))
 EOF
 fi
@@ -246,6 +246,29 @@ harness_spawn APID "$WORK/alice.tap" -- env \
   MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 \
   MAE_LOG="${MAE_E2E_ALICE_LOG:-mae_mcp=warn,info}" \
   ${TIMEOUT_BIN:+$TIMEOUT_BIN $EDITOR_TIMEOUT} "$MAE_BIN" --test "$WORK/scen/alice.scm"
+# ADR-105 D4: a KB is shared under a MINTED collab id, not its display name, so a
+# joiner cannot address it by name — alice's editor resolves `collabtest` from her
+# own registry, bob's cannot because he never registered it. Publish the real id
+# through the same /sync barrier dir the rest of the coordination uses, modelling
+# the out-of-band exchange a real joiner needs (a ticket, a link, a pasted id).
+# Read from alice's durable registry, where the mint is persisted. Written without
+# a trailing newline: bob string-appends it straight into an ex-command.
+ALICE_REG="$WORK/alice/.local/share/mae/kb-registry.toml"
+KB_ID=""
+for _ in $(seq 1 160); do
+  [ -f "$WORK/sync/shared" ] || { sleep 0.5; continue; }
+  KB_ID="$(grep -oE 'collab_id = "[^"]+"' "$ALICE_REG" 2>/dev/null | head -1 | cut -d'"' -f2)"
+  [ -n "$KB_ID" ] && break
+  sleep 0.5
+done
+if [ -z "$KB_ID" ]; then
+  echo "ERROR: alice never persisted a collab id for the shared KB"
+  cat "$ALICE_REG" 2>/dev/null || echo "(no registry at $ALICE_REG)"
+  exit 1
+fi
+echo "alice shared 'collabtest' under collab id: $KB_ID"
+printf %s "$KB_ID" > "$WORK/sync/kbid"
+
 harness_spawn BPID "$WORK/bob.tap" -- env \
   HOME="$WORK/bob" XDG_CONFIG_HOME="$WORK/bob/.config" XDG_DATA_HOME="$WORK/bob/.local/share" \
   MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 \

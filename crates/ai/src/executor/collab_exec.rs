@@ -35,6 +35,27 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
     Some(result)
 }
 
+/// Read the required `kb_id` argument and resolve it to the id that addresses the
+/// KB on the wire (ADR-105 D4).
+///
+/// One function rather than the same eight lines at every `kb_*` tool, because the
+/// resolution is the whole point: after D4 a caller may pass the KB's display NAME
+/// or its collab id, and those stopped being the same string. A site that forgets
+/// to resolve reaches the daemon as a KB that does not exist — which fails in the
+/// least useful way available, since `kb/join` on an unknown id records a pending
+/// request rather than erroring.
+///
+/// An argument matching neither a known id nor a known name passes through
+/// unchanged: that is the joiner's case, where a peer's id names a KB this editor
+/// has never seen and could not resolve.
+fn required_kb_id(editor: &Editor, args: &Value) -> Result<String, String> {
+    Ok(editor.kb_collab_id_arg(
+        args.get("kb_id")
+            .and_then(|v| v.as_str())
+            .ok_or("Missing required 'kb_id' parameter")?,
+    ))
+}
+
 fn execute_collab_status(editor: &Editor) -> Result<String, String> {
     let status_str = editor.collab.status.as_str();
     let peer_count = match editor.collab.status {
@@ -300,17 +321,17 @@ fn execute_kb_share(editor: &mut Editor, args: &Value) -> Result<String, String>
     // reads `kb.list_ids(None)` off the in-memory primary KB directly, not
     // a query layer), so the `node_ids` this function hands off downstream
     // stays consistent with what that function would derive on its own.
-    let node_ids: Vec<String> = if kb_name == mae_core::KB_DEFAULT_NAME || kb_name == "primary" {
-        editor.kb.primary.list_ids(None)
-    } else {
-        let uuid = editor.kb.registry.find(&kb_name).map(|i| i.uuid.clone());
-        match uuid
-            .and_then(|u| editor.kb.instances.get(&u))
-            .or_else(|| editor.kb.instances.get(&kb_name))
-        {
+    //
+    // ADR-105 D4: resolved through `target_of_name` so the primary's accepted
+    // spellings are listed once, in the registry, rather than re-inlined at every
+    // site that has to ask "is this the primary?".
+    let node_ids: Vec<String> = match editor.kb.registry.target_of_name(&kb_name) {
+        Some(mae_kb::KbTarget::Primary) => editor.kb.primary.list_ids(None),
+        Some(mae_kb::KbTarget::Instance(uuid)) => match editor.kb.instances.get(&uuid) {
             Some(kb) => kb.list_ids(None),
             None => return Err(format!("No KB instance named '{}'", kb_name)),
-        }
+        },
+        None => return Err(format!("No KB instance named '{}'", kb_name)),
     };
 
     let count = node_ids.len();
@@ -333,7 +354,7 @@ fn execute_kb_share_p2p(editor: &mut Editor, args: &Value) -> Result<String, Str
     // primitive (ADR-025 §"Driving surfaces"): a synchronous daemon control call
     // that mints a shareable join "magnet link". The AI peer gets the ticket back
     // directly, so it can hand it to a collaborator with no CLI step.
-    let kb_id = args
+    let kb_name = args
         .get("kb_id")
         .or_else(|| args.get("kb_name"))
         .and_then(|v| v.as_str())
@@ -344,13 +365,24 @@ fn execute_kb_share_p2p(editor: &mut Editor, args: &Value) -> Result<String, Str
     // Same refusal as the hub share path above — the P2P variant is a second
     // door to the same room, and `active_instance_name()` means a system KB can
     // be reached here without the caller naming one.
-    if let Some(sys) = mae_kb::system_kb::find(&kb_id) {
+    if let Some(sys) = mae_kb::system_kb::find(&kb_name) {
         return Err(format!(
             "'{}' is a MAE system KB and cannot be shared — its content ships with MAE and \
              is rebuilt on upgrade. Share your own KB instead.",
             sys.name
         ));
     }
+
+    // ADR-105 D4/H4: `share_p2p` puts this on the wire as the KB's id, so resolve
+    // the caller's name to the KB's real collab id — reusing the hub share's id if
+    // it already has one. Sending the name would mesh-share this KB under a second
+    // id, splitting one KB across two identities the daemon treats as unrelated.
+    let Some(target) = editor.kb.registry.target_of_name(&kb_name) else {
+        return Err(format!("No KB instance named '{kb_name}'"));
+    };
+    let kb_id = editor
+        .kb_collab_id_for_share(&target)
+        .ok_or_else(|| format!("Could not establish a collab id for KB '{kb_name}'"))?;
 
     let ticket = editor.kb.share_p2p(&kb_id)?;
     editor.set_status(format!("Minted P2P join link for '{kb_id}'"));
@@ -384,11 +416,7 @@ fn execute_kb_join_p2p(editor: &mut Editor, args: &Value) -> Result<String, Stri
 }
 
 fn execute_kb_join(editor: &mut Editor, args: &Value) -> Result<String, String> {
-    let kb_id = args
-        .get("kb_id")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing required 'kb_id' parameter")?
-        .to_string();
+    let kb_id = required_kb_id(editor, args)?;
     let node_svs = editor.kb_join_node_svs(&kb_id);
     editor.collab.pending_intent = Some(CollabIntent::JoinKb {
         kb_id: kb_id.clone(),
@@ -404,11 +432,7 @@ fn execute_kb_join(editor: &mut Editor, args: &Value) -> Result<String, String> 
 }
 
 fn execute_kb_leave(editor: &mut Editor, args: &Value) -> Result<String, String> {
-    let kb_id = args
-        .get("kb_id")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing required 'kb_id' parameter")?
-        .to_string();
+    let kb_id = required_kb_id(editor, args)?;
     editor.collab.pending_intent = Some(CollabIntent::LeaveKb {
         kb_id: kb_id.clone(),
     });
@@ -422,11 +446,7 @@ fn execute_kb_leave(editor: &mut Editor, args: &Value) -> Result<String, String>
 }
 
 fn execute_kb_add_member(editor: &mut Editor, args: &Value) -> Result<String, String> {
-    let kb_id = args
-        .get("kb_id")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing required 'kb_id' parameter")?
-        .to_string();
+    let kb_id = required_kb_id(editor, args)?;
     let member = args
         .get("member")
         .and_then(|v| v.as_str())
@@ -455,11 +475,7 @@ fn execute_kb_add_member(editor: &mut Editor, args: &Value) -> Result<String, St
 }
 
 fn execute_kb_remove_member(editor: &mut Editor, args: &Value) -> Result<String, String> {
-    let kb_id = args
-        .get("kb_id")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing required 'kb_id' parameter")?
-        .to_string();
+    let kb_id = required_kb_id(editor, args)?;
     let member = args
         .get("member")
         .and_then(|v| v.as_str())
@@ -483,11 +499,7 @@ fn execute_kb_remove_member(editor: &mut Editor, args: &Value) -> Result<String,
 /// Local-only to this daemon (never propagated); NOT owner-gated. `block` selects
 /// kb_block_member vs kb_unblock_member.
 fn execute_kb_set_block(editor: &mut Editor, args: &Value, block: bool) -> Result<String, String> {
-    let kb_id = args
-        .get("kb_id")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing required 'kb_id' parameter")?
-        .to_string();
+    let kb_id = required_kb_id(editor, args)?;
     let member = args
         .get("member")
         .and_then(|v| v.as_str())
@@ -518,11 +530,7 @@ fn execute_kb_set_block(editor: &mut Editor, args: &Value, block: bool) -> Resul
 /// Approve a pending join request as `role` (owner-only, ADR-018). Use
 /// `kb_sharing_status` first to read the pending requests' fingerprints.
 fn execute_kb_approve(editor: &mut Editor, args: &Value) -> Result<String, String> {
-    let kb_id = args
-        .get("kb_id")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing required 'kb_id' parameter")?
-        .to_string();
+    let kb_id = required_kb_id(editor, args)?;
     let principal = args
         .get("member")
         .or_else(|| args.get("principal"))
@@ -554,11 +562,7 @@ fn execute_kb_approve(editor: &mut Editor, args: &Value) -> Result<String, Strin
 
 /// Set a KB's join policy: restrictive | invite | permissive (owner-only, ADR-018).
 fn execute_kb_set_policy(editor: &mut Editor, args: &Value) -> Result<String, String> {
-    let kb_id = args
-        .get("kb_id")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing required 'kb_id' parameter")?
-        .to_string();
+    let kb_id = required_kb_id(editor, args)?;
     let policy = args
         .get("policy")
         .and_then(|v| v.as_str())
@@ -584,11 +588,7 @@ fn execute_kb_set_policy(editor: &mut Editor, args: &Value) -> Result<String, St
 }
 
 fn execute_kb_set_encryption(editor: &mut Editor, args: &Value) -> Result<String, String> {
-    let kb_id = args
-        .get("kb_id")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing required 'kb_id' parameter")?
-        .to_string();
+    let kb_id = required_kb_id(editor, args)?;
     let mode = args
         .get("mode")
         .and_then(|v| v.as_str())

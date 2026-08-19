@@ -122,7 +122,22 @@ pub(super) fn handle_connected_event(editor: &mut Editor, address: String, peer_
     // daemon_host_pending, consumed on the KbShared confirm.
     editor.refresh_daemon_host_state();
     if editor.kb.daemon_hosts_primary() {
-        let kb_id = mae_core::KB_DEFAULT_NAME.to_string();
+        // ADR-105 D4: key the in-flight marker by the COLLAB ID, because that is
+        // what the `KbShared` confirmation carries. It used to be the literal
+        // "default" — the primary's name and its id being the same string is
+        // exactly what D4 separates — so keying by name here would leave the
+        // confirmation unable to match, and a host-only share would then stamp the
+        // durable `primary_shared` marker it must never stamp (hosting is runtime
+        // -only and must not survive into a later daemon-less launch).
+        //
+        // Minted HERE rather than inside the intent so both sides agree; the helper
+        // is idempotent, so the request path reuses this id rather than minting a
+        // second one.
+        let Some(kb_id) = editor.kb_collab_id_for_share(&mae_kb::KbTarget::Primary) else {
+            warn!("Phase D: cannot host primary KB — no collab id could be established");
+            editor.mark_full_redraw();
+            return;
+        };
         if editor.collab.daemon_host_pending.insert(kb_id.clone()) {
             let node_ids: Vec<String> = editor.kb.primary.list_ids(None);
             info!(
@@ -134,7 +149,11 @@ pub(super) fn handle_connected_event(editor: &mut Editor, address: String, peer_
                 .collab
                 .reconnect_intents
                 .push_back(CollabIntent::ShareKb {
-                    kb_name: kb_id,
+                    // The intent carries the KB's NAME — `kb_intent_to_command`
+                    // resolves it and reuses the id minted above. Passing the id
+                    // here would fail to resolve: a minted uuid is neither a
+                    // primary alias nor a registered instance name.
+                    kb_name: mae_core::KB_DEFAULT_NAME.to_string(),
                     node_ids,
                 });
         }

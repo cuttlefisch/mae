@@ -383,30 +383,37 @@ impl Editor {
     /// already-shared KB (#171): the network task seeds `seal_op` with each node's
     /// current state so the sealed op-set CONTINUES the node's client-id lineage (no
     /// clock collision with the plaintext base) and joiners can open the sealed content.
-    pub fn kb_share_node_states(&self, kb_name: &str) -> Vec<(String, Vec<u8>)> {
-        let is_primary = kb_name == crate::editor::KB_DEFAULT_NAME || kb_name == "primary";
-        let kb = if is_primary {
-            Some(&self.kb.primary)
-        } else {
-            let uuid = self.kb.registry.find(kb_name).map(|i| i.uuid.clone());
-            uuid.and_then(|u| self.kb.instances.get(&u))
-                .or_else(|| self.kb.instances.get(kb_name))
+    /// Takes a [`mae_kb::KbTarget`], not a string, deliberately (ADR-105 D4).
+    ///
+    /// Its one caller — `KbSetEncryption` — has a collab *id*, while this used to
+    /// resolve a *name* (`kb_name == KB_DEFAULT_NAME || kb_name == "primary"`).
+    /// Those were the same string for the primary until D4 minted real ids, at
+    /// which point the comparison silently stopped matching and this returned an
+    /// EMPTY list. The consequence is not a missing feature: enabling E2E on a
+    /// shared primary would re-seal zero nodes, leaving every node's content in
+    /// plaintext under a KB labelled encrypted. A `KbTarget` argument makes the
+    /// caller say which it has and makes the mismatch a compile error.
+    pub fn kb_share_node_states(&self, target: &mae_kb::KbTarget) -> Vec<(String, Vec<u8>)> {
+        let (kb, label) = match target {
+            mae_kb::KbTarget::Primary => (Some(&self.kb.primary), crate::editor::KB_DEFAULT_NAME),
+            mae_kb::KbTarget::Instance(uuid) => (self.kb.instances.get(uuid), uuid.as_str()),
         };
-        kb.and_then(|kb| kb.to_collection(kb_name, "", &[]).ok())
+        kb.and_then(|kb| kb.to_collection(label, "", &[]).ok())
             .map(|(_coll, node_states)| node_states)
             .unwrap_or_default()
     }
 
+    /// Takes the human-facing NAME (`:kb-share collabtest`, or a keybinding's
+    /// default), which is what its caller has at this point in the share path —
+    /// the collab id is minted just after. Resolved through
+    /// `KbRegistry::target_of_name` so the primary's accepted spellings live in one
+    /// place rather than being re-listed here (ADR-105 D4).
     pub fn kb_prepare_share_lineage(&mut self, kb_name: &str, node_ids: &[String]) {
         let cid = self.kb_local_client_id();
-        let is_primary = kb_name == crate::editor::KB_DEFAULT_NAME || kb_name == "primary";
-        let owner: Option<String> = if is_primary {
-            None
-        } else {
-            match self.kb.registry.find(kb_name).map(|i| i.uuid.clone()) {
-                Some(u) => Some(u),
-                None => return,
-            }
+        let owner: Option<String> = match self.kb.registry.target_of_name(kb_name) {
+            Some(mae_kb::KbTarget::Primary) => None,
+            Some(mae_kb::KbTarget::Instance(uuid)) => Some(uuid),
+            None => return,
         };
         // Establish + persist lineage in-memory; collect the nodes to write through.
         let updated: Vec<mae_kb::Node> = {
@@ -583,6 +590,63 @@ impl Editor {
     /// `Join` computes its node state-vectors editor-side (ADR-022).
     pub fn queue_kb_collab_action(&mut self, action: crate::editor::KbCollabAction) {
         use crate::editor::{CollabIntent, KbCollabAction};
+        // ADR-105 D4: every arm below except `Share` carries a KB **id**, and a
+        // caller naturally passes the display NAME (`(kb-join "collabtest")`).
+        // Those were the same string until ids were minted. Resolved here, at the
+        // single funnel every Scheme primitive routes through, rather than in each
+        // primitive — one missed primitive would reach the daemon as a KB that does
+        // not exist, and `kb/join` records a pending request for an unknown id
+        // rather than erroring, so the miss would present as "the owner approved
+        // but the join never completed". `Share` is untouched: it takes a name by
+        // design and mints the id itself.
+        let action = match action {
+            KbCollabAction::Join { kb_id } => KbCollabAction::Join {
+                kb_id: self.kb_collab_id_arg(&kb_id),
+            },
+            KbCollabAction::Leave { kb_id } => KbCollabAction::Leave {
+                kb_id: self.kb_collab_id_arg(&kb_id),
+            },
+            KbCollabAction::AddMember {
+                kb_id,
+                member,
+                role,
+            } => KbCollabAction::AddMember {
+                kb_id: self.kb_collab_id_arg(&kb_id),
+                member,
+                role,
+            },
+            KbCollabAction::RemoveMember { kb_id, member } => KbCollabAction::RemoveMember {
+                kb_id: self.kb_collab_id_arg(&kb_id),
+                member,
+            },
+            KbCollabAction::Approve {
+                kb_id,
+                principal,
+                role,
+            } => KbCollabAction::Approve {
+                kb_id: self.kb_collab_id_arg(&kb_id),
+                principal,
+                role,
+            },
+            KbCollabAction::SetPolicy { kb_id, policy } => KbCollabAction::SetPolicy {
+                kb_id: self.kb_collab_id_arg(&kb_id),
+                policy,
+            },
+            KbCollabAction::SetEncryption { kb_id, mode } => KbCollabAction::SetEncryption {
+                kb_id: self.kb_collab_id_arg(&kb_id),
+                mode,
+            },
+            KbCollabAction::SetBlock {
+                kb_id,
+                member,
+                blocked,
+            } => KbCollabAction::SetBlock {
+                kb_id: self.kb_collab_id_arg(&kb_id),
+                member,
+                blocked,
+            },
+            other => other,
+        };
         let intent = match action {
             KbCollabAction::Share { kb_name } => CollabIntent::ShareKb {
                 kb_name,
