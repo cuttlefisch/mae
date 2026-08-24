@@ -555,12 +555,12 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         // --- Graph KB tools (v0.12.0) ---
         ToolDefBuilder::new(
             "kb_agenda",
-            "Query KB nodes using agenda-style filters. Returns matching nodes as JSON array. Filters: todo (by state), priority (minimum char), tag, stale (days), orphan (no links), dead_end (no outgoing), missing_role (no :role: property set), weakly_linked (fewer than N outgoing links), custom (raw Datalog).",
+            "Query KB nodes using agenda-style filters. Returns matching nodes as JSON array. Filters: todo (by state), priority (minimum char), tag, stale (days), orphan (no links), dead_end (no outgoing), missing_role (no :role: property set), weakly_linked (fewer than N outgoing links). Arbitrary Datalog is not available here - use kb_raw_query.",
         )
         .prop_enum(
             "filter",
             "string",
-            "Filter type: todo, priority, tag, stale, orphan, dead_end, missing_role, weakly_linked, custom",
+            "Filter type: todo, priority, tag, stale, orphan, dead_end, missing_role, weakly_linked",
             [
                 "todo",
                 "priority",
@@ -570,13 +570,12 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
                 "dead_end",
                 "missing_role",
                 "weakly_linked",
-                "custom",
             ],
         )
         .prop(
             "value",
             "string",
-            "Filter value: todo state (e.g. 'TODO'), priority char (e.g. 'A'), tag name, days for stale, N for weakly_linked, or Datalog query for custom",
+            "Filter value: todo state (e.g. 'TODO'), priority char (e.g. 'A'), tag name, days for stale, or N for weakly_linked",
         )
         .prop(
             "scope",

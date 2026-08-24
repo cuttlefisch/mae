@@ -44,6 +44,7 @@ pub mod export;
 pub mod federation;
 pub mod fuzzy;
 pub mod graph_query;
+pub mod ident;
 pub mod kb_build;
 pub mod kb_identity;
 pub mod migrate;

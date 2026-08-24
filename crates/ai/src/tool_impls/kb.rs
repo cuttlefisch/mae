@@ -2148,7 +2148,22 @@ pub fn execute_kb_agenda(
             let n = value.parse::<u32>().unwrap_or(2);
             mae_kb::AgendaFilter::WeaklyLinked(n)
         }
-        "custom" => mae_kb::AgendaFilter::Custom(value.to_string()),
+        // Principle #16: NOT offered to the agent, rather than offered and then
+        // denied. `custom` is arbitrary Datalog, which is exactly why ADR-085
+        // moved `kb_raw_query` out of the `Knowledge` category into a Privileged
+        // one -- and this filter was left behind, so an ADR-051-hardened pairing
+        // (`mcp_tool_category_allowlist = "knowledge"`, ReadOnly ceiling) still
+        // reached every relation in the store.
+        //
+        // The human keeps it: `:kb-agenda custom` still constructs this variant
+        // from `kb_ops::dispatch`. That asymmetry IS the control.
+        "custom" => {
+            return Err(concat!(
+                "kb_agenda does not accept 'custom' - arbitrary Datalog is ",
+                "available through kb_raw_query, which is Privileged for that reason"
+            )
+            .to_string());
+        }
         _ => return Err(format!("Unknown filter type: {filter_type}")),
     };
 
@@ -2329,6 +2344,14 @@ pub fn execute_kb_view_query(editor: &Editor, args: &serde_json::Value) -> Resul
         .store
         .as_ref()
         .ok_or_else(|| "No KB store configured".to_string())?;
+
+    // @ai-caution: [datalog-injection] `view_id` is interpolated into a
+    // CozoScript string literal below, and the result's `query` column is then
+    // EXECUTED as a second query -- so an id that escapes this literal is
+    // arbitrary Datalog at `ReadOnly` tier. CozoScript has no prepared form for
+    // this position, so the identifier is validated instead. One shared
+    // mechanism, not a per-site `replace()` (principle #7/#8).
+    mae_kb::ident::check_node_id(view_id)?;
 
     // Get the view definition from the views relation
     let (_headers, rows) = store
