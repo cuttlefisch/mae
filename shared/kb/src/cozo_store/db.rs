@@ -43,16 +43,9 @@ impl CozoKbStore {
         let properties_json = serde_json::to_string(&node.properties)
             .map_err(|e| KbStoreError::Storage(e.to_string()))?;
         let pri_str = node.priority.map(|c| c.to_string()).unwrap_or_default();
-        let source_str = node
-            .source
-            .map(|s| match s {
-                crate::NodeSource::Seed => "seed",
-                crate::NodeSource::UserOrg => "user_org",
-                crate::NodeSource::Manual => "manual",
-                crate::NodeSource::Federation => "federation",
-                crate::NodeSource::Promoted => "promoted",
-            })
-            .unwrap_or("");
+        // Single source of truth for the serialized form (#710) — this used to be
+        // a second inline copy of the mapping that now lives on `NodeSource`.
+        let source_str = node.source.map(|s| s.as_str()).unwrap_or("");
         let (crdt_bytes, has_crdt) = match &node.crdt_doc {
             Some(doc) => (doc.clone(), true),
             None => (vec![], false),

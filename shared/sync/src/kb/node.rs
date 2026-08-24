@@ -40,6 +40,15 @@ const PRIORITY_KEY: &str = "prio";
 const ALIASES_KEY: &str = "aliases";
 const PROPS_KEY: &str = "props";
 const SOURCE_VERSION_KEY: &str = "src_v";
+/// Provenance (`mae_kb::NodeSource`, as its serialized string).
+///
+/// @ai-caution: [kb-truth] Provenance MUST cross the wire. `NodeSource::Seed` is
+/// the only enforced read-only mechanism for shipped content, and before this key
+/// existed a shared node arrived at the peer re-stamped `Federation` — so a
+/// read-only corpus became fully editable the moment it was shared (#710). That
+/// is also the real reason ADR-104 D1 refuses to share system KBs at all: the
+/// refusal is a workaround for this gap, not a policy in its own right.
+const SOURCE_KEY: &str = "source";
 
 /// Current node schema version. Absent ⇒ v1 (text fields only).
 pub const NODE_SCHEMA_VERSION: i64 = 2;
@@ -59,6 +68,9 @@ pub struct MaterializedNode {
     pub aliases: Vec<String>,
     pub properties: std::collections::HashMap<String, String>,
     pub source_version: Option<u32>,
+    /// Provenance, as its serialized string. `None` for a v1 document, and for a
+    /// v2 document authored before `source` joined the schema.
+    pub source: Option<String>,
 }
 
 /// A KB node represented as a yrs document.
@@ -411,6 +423,21 @@ impl KbNodeDoc {
         self.set_scalar(SOURCE_VERSION_KEY, v.map(|n| n.to_string()).as_deref())
     }
 
+    /// Provenance (`mae_kb::NodeSource` as its serialized string). Absent ⇒ `None`.
+    ///
+    /// Tolerant reader per ADR-093: a document authored before this key existed
+    /// returns `None`, and the caller keeps whatever provenance it already had
+    /// rather than having it blanked.
+    pub fn source(&self) -> Option<String> {
+        self.scalar(SOURCE_KEY)
+    }
+
+    /// Set the provenance. Returns the encoded update.
+    #[must_use = "dropping this update silently prevents provenance from syncing, which is #710"]
+    pub fn set_source(&mut self, source: Option<&str>) -> Vec<u8> {
+        self.set_scalar(SOURCE_KEY, source)
+    }
+
     /// Aliases. Absent ⇒ empty.
     pub fn aliases(&self) -> Vec<String> {
         let root = self.doc.get_or_insert_map("node");
@@ -624,6 +651,7 @@ impl KbNodeDoc {
             aliases: self.aliases(),
             properties: self.properties(),
             source_version: self.source_version(),
+            source: self.source(),
         }
     }
 
