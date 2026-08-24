@@ -28,6 +28,7 @@ mod kb_id_guard;
 pub mod kb_lease;
 mod kb_membership;
 mod kb_share_ownership;
+mod method_authz;
 mod sync_methods;
 
 use std::collections::HashSet;
@@ -1878,8 +1879,28 @@ async fn handle_doc_request_inner(
     }
 
     info!(session = session_id, method = %request.method, "doc request");
-    match request.method.as_str() {
-        "sync/state_vector" => {
+
+    // @ai-caution: [dispatch-authz] The match below is over `Method`, not
+    // `&str`, and it is exhaustive. That is what makes a new method impossible
+    // to route until it is also classified in `method_authz::DocScope::of` --
+    // the property the previous two rounds of this bug lacked. See
+    // `method_authz`'s header for both of them.
+    let Some(method) = method_authz::Method::parse(request.method.as_str()) else {
+        return JsonRpcResponse::error(
+            id,
+            McpError::method_not_found(format!("Unknown method: {}", request.method)),
+        );
+    };
+
+    // One chokepoint, keyed on the address TYPE (ADR-105 D1), for the methods
+    // that name a caller-supplied document but cannot authorize a KB one.
+    if let Some(resp) = method_authz::authorize_named_doc(session_id, method, &params, &id) {
+        return resp;
+    }
+
+    use method_authz::Method;
+    match method {
+        Method::SyncStateVector => {
             sync_methods::handle_sync_state_vector(
                 doc_store,
                 session_id,
@@ -1891,7 +1912,7 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "sync/update" => {
+        Method::SyncUpdate => {
             sync_methods::handle_sync_update(
                 doc_store,
                 broadcaster,
@@ -1905,7 +1926,7 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "sync/awareness" => {
+        Method::SyncAwareness => {
             sync_methods::handle_sync_awareness(
                 broadcaster,
                 session_id,
@@ -1917,7 +1938,7 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "sync/full_state" => {
+        Method::SyncFullState => {
             sync_methods::handle_sync_full_state(
                 doc_store,
                 broadcaster,
@@ -1931,15 +1952,15 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "sync/diff" => {
+        Method::SyncDiff => {
             sync_methods::handle_sync_diff(auth_principal, transport, doc_store, id, &params).await
         }
 
-        "docs/list" => docs_methods::handle_docs_list(doc_store, id).await,
+        Method::DocsList => docs_methods::handle_docs_list(doc_store, id).await,
 
-        "docs/content" => docs_methods::handle_docs_content(doc_store, id, &params).await,
+        Method::DocsContent => docs_methods::handle_docs_content(doc_store, id, &params).await,
 
-        "sync/resync" => {
+        Method::SyncResync => {
             sync_methods::handle_sync_resync(
                 auth_principal,
                 transport,
@@ -1953,17 +1974,17 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "docs/stats" => docs_methods::handle_docs_stats(doc_store, id, &params).await,
+        Method::DocsStats => docs_methods::handle_docs_stats(doc_store, id, &params).await,
 
-        "docs/metadata" => {
+        Method::DocsMetadata => {
             docs_methods::handle_docs_metadata(doc_store, broadcaster, id, &params).await
         }
 
-        "docs/save_intent" => {
+        Method::DocsSaveIntent => {
             docs_methods::handle_docs_save_intent(doc_store, session_id, id, &params).await
         }
 
-        "docs/save_committed" => {
+        Method::DocsSaveCommitted => {
             docs_methods::handle_docs_save_committed(
                 doc_store,
                 broadcaster,
@@ -1975,7 +1996,7 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "sync/share" => {
+        Method::SyncShare => {
             sync_methods::handle_sync_share(
                 doc_store,
                 broadcaster,
@@ -1987,11 +2008,15 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "docs/delete" => docs_methods::handle_docs_delete(doc_store, session_id, id, &params).await,
+        Method::DocsDelete => {
+            docs_methods::handle_docs_delete(doc_store, session_id, id, &params).await
+        }
 
-        "$/debug" => docs_methods::handle_debug_stats(doc_store, broadcaster, start_time, id).await,
+        Method::DebugStats => {
+            docs_methods::handle_debug_stats(doc_store, broadcaster, start_time, id).await
+        }
 
-        "kb/register" => {
+        Method::KbRegister => {
             kb_membership::handle_kb_register(
                 doc_store,
                 broadcaster,
@@ -2003,14 +2028,16 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "kb/list" => kb_membership::handle_kb_list(doc_store, auth_principal, transport, id).await,
+        Method::KbList => {
+            kb_membership::handle_kb_list(doc_store, auth_principal, transport, id).await
+        }
 
-        "kb/unregister" => {
+        Method::KbUnregister => {
             kb_membership::handle_kb_unregister(doc_store, session_id, session_docs, id, &params)
                 .await
         }
 
-        "kb/share" => {
+        Method::KbShare => {
             kb_content::handle_kb_share(
                 doc_store,
                 broadcaster,
@@ -2024,7 +2051,7 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "kb/join" => {
+        Method::KbJoin => {
             kb_membership::handle_kb_join(
                 doc_store,
                 broadcaster,
@@ -2040,7 +2067,7 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "kb/node_fetch" => {
+        Method::KbNodeFetch => {
             kb_content::handle_kb_node_fetch(
                 doc_store,
                 broadcaster,
@@ -2054,7 +2081,7 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "kb/node_update" => {
+        Method::KbNodeUpdate => {
             kb_content::handle_kb_node_update(
                 doc_store,
                 broadcaster,
@@ -2068,7 +2095,7 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "kb/collection_op" => {
+        Method::KbCollectionOp => {
             kb_content::handle_kb_collection_op(
                 doc_store,
                 broadcaster,
@@ -2080,7 +2107,7 @@ async fn handle_doc_request_inner(
             )
             .await
         }
-        "kb/claim_lease" => {
+        Method::KbClaimLease => {
             kb_lease::handle_kb_claim_lease(
                 doc_store,
                 broadcaster,
@@ -2092,7 +2119,7 @@ async fn handle_doc_request_inner(
             )
             .await
         }
-        "kb/fetch_artifact" => {
+        Method::KbFetchArtifact => {
             kb_artifacts::handle_kb_fetch_artifact(
                 doc_store,
                 auth_principal,
@@ -2103,7 +2130,7 @@ async fn handle_doc_request_inner(
             )
             .await
         }
-        "kb/add_member" | "kb/remove_member" => {
+        Method::KbAddMember | Method::KbRemoveMember => {
             kb_membership::handle_kb_add_remove_member(
                 doc_store,
                 broadcaster,
@@ -2117,7 +2144,7 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "kb/collection_node_add" | "kb/collection_node_remove" => {
+        Method::KbCollectionNodeAdd | Method::KbCollectionNodeRemove => {
             kb_content::handle_kb_collection_node_add_remove(
                 doc_store,
                 broadcaster,
@@ -2131,7 +2158,7 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "kb/set_policy" => {
+        Method::KbSetPolicy => {
             kb_governance::handle_kb_set_policy(
                 doc_store,
                 broadcaster,
@@ -2144,7 +2171,7 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "kb/block_principal" | "kb/unblock_principal" => {
+        Method::KbBlockPrincipal | Method::KbUnblockPrincipal => {
             kb_governance::handle_kb_block_unblock_principal(
                 doc_store,
                 session_id,
@@ -2156,9 +2183,9 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "kb/blocklist" => kb_governance::handle_kb_blocklist(doc_store, id, &params).await,
+        Method::KbBlocklist => kb_governance::handle_kb_blocklist(doc_store, id, &params).await,
 
-        "kb/set_governance" => {
+        Method::KbSetGovernance => {
             kb_governance::handle_kb_set_governance(
                 doc_store,
                 broadcaster,
@@ -2171,7 +2198,7 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "kb/revoke" => {
+        Method::KbRevoke => {
             kb_governance::handle_kb_revoke(
                 doc_store,
                 broadcaster,
@@ -2184,12 +2211,12 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "kb/list_pending" => {
+        Method::KbListPending => {
             kb_membership::handle_kb_list_pending(doc_store, auth_principal, transport, id, &params)
                 .await
         }
 
-        "kb/approve_member" => {
+        Method::KbApproveMember => {
             kb_membership::handle_kb_approve_member(
                 doc_store,
                 broadcaster,
@@ -2202,7 +2229,7 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        "kb/leave" => {
+        Method::KbLeave => {
             kb_membership::handle_kb_leave(
                 doc_store,
                 broadcaster,
@@ -2224,11 +2251,11 @@ async fn handle_doc_request_inner(
         // the exact `SHA256:...` fingerprint-or-`psk:<keyid>` shape
         // `kb_query::dispatch`'s `principal` parameter expects (see this
         // function's own doc comment) — zero translation needed.
-        "kb/query.capabilities"
-        | "kb/query.get"
-        | "kb/query.search"
-        | "kb/query.graph"
-        | "kb/query.my_wrapped_key" => {
+        Method::KbQueryCapabilities
+        | Method::KbQueryGet
+        | Method::KbQuerySearch
+        | Method::KbQueryGraph
+        | Method::KbQueryMyWrappedKey => {
             match crate::kb_query::dispatch(
                 &request.method,
                 &params,
@@ -2255,7 +2282,7 @@ async fn handle_doc_request_inner(
         // to smuggle a different identity through -- `auth_principal` (this
         // TLS handshake's own verified fingerprint) is the ONLY source of
         // the minted `sub`, zero additional trust decision needed.
-        "kb/query.self_token" => {
+        Method::KbQuerySelfToken => {
             let Some(principal) = auth_principal else {
                 return JsonRpcResponse::error(
                     id,
@@ -2296,11 +2323,6 @@ async fn handle_doc_request_inner(
                 ),
             }
         }
-
-        other => JsonRpcResponse::error(
-            id,
-            McpError::method_not_found(format!("Unknown method: {other}")),
-        ),
     }
 }
 

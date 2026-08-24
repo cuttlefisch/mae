@@ -77,51 +77,43 @@ async fn seed_kb_with_node(
     docs
 }
 
-/// S1: `docs/content` returns any document's plaintext by name, to anyone.
+/// S1: `docs/content` must not serve a KB document.
 ///
-/// **Scoped precisely.** A KB *node* body does NOT come back through this call,
-/// but not because anything stops it: `DocStore::content` delegates to
-/// `TextSync::content()`, which reads the top-level `TEXT_NAME` text root, while
-/// `KbNodeDoc` nests its body as a `TextPrelim` inside a root `Y.Map`. The
-/// accessor simply reads a root the node schema does not populate. That is an
-/// accident of schema, not a control, and it must not be recorded as one — it
-/// would evaporate the moment either shape changed.
+/// **Scoped to the property MAE actually provides.** A KB *node body* does not
+/// come back through this call today even without a guard, because
+/// `DocStore::content` delegates to `TextSync::content()`, which reads the
+/// top-level `TEXT_NAME` root, while `KbNodeDoc` nests its body as a
+/// `TextPrelim` inside a root `Y.Map`. That is an accident of schema, not a
+/// control — it would evaporate the moment either shape changed — so the
+/// property is pinned here explicitly rather than left to coincidence.
 ///
-/// What DOES leak is every plain collaborative buffer, which is exactly what
-/// `TextSync` is for. Those have no membership model at all, so `docs/content`
-/// is their only possible gate, and there is none.
+/// What is deliberately NOT asserted: that a plain collaborative buffer is
+/// protected. Plain buffers have no membership model, and `sync/full_state` on
+/// one is equally ungated, so any check here is a step rather than a boundary.
+/// See the note on `method_authz::authorize_named_doc`.
 #[tokio::test]
-async fn docs_content_cannot_read_another_sessions_collaborative_buffer() {
+async fn docs_content_cannot_read_a_kb_node_document() {
     let store = test_doc_store();
     let bc = test_broadcaster();
 
     const SECRET: &str = "SALARY-BANDS-Q3-DO-NOT-DISTRIBUTE";
+    let _victim_docs =
+        seed_kb_with_node(&store, &bc, "victim", "kb-b", "concept:b-secret", SECRET).await;
 
-    // The victim shares an ordinary file buffer and types into it.
-    let mut victim_docs = HashSet::new();
-    let sync = TextSync::new(SECRET);
-    let update = sync.encode_state();
-    let shared = dispatch_as(
+    // Mallory owns kb-a. Deliberately the highest role available: if an owner
+    // of one KB cannot reach another KB's node this way, no lesser role can.
+    let mut mallory_docs = HashSet::new();
+    kb_share_as(
         &store,
         &bc,
-        Some("victim"),
-        Some(&fp("victim")),
-        serde_json::json!({
-            "jsonrpc":"2.0","id":1,"method":"sync/update",
-            "params":{"doc":"victim-private-notes.org","update":update_to_base64(&update)}}),
-        &mut victim_docs,
+        Some("mallory"),
+        Some(&fp("mallory")),
+        "kb-a",
+        "mallory",
+        &mut mallory_docs,
     )
     .await;
-    assert!(
-        shared.error.is_none(),
-        "victim could not share: {:?}",
-        shared.error
-    );
 
-    // Mallory has an unrelated session. She never had this document's name from
-    // the victim — she gets it from `docs/list` below, which is the other half
-    // of the problem.
-    let mut mallory_docs = HashSet::new();
     let attack = dispatch_as(
         &store,
         &bc,
@@ -129,16 +121,75 @@ async fn docs_content_cannot_read_another_sessions_collaborative_buffer() {
         Some(&fp("mallory")),
         serde_json::json!({
             "jsonrpc":"2.0","id":9,"method":"docs/content",
-            "params":{"doc":"victim-private-notes.org"}}),
+            "params":{"doc":"kbn:kb-b:concept:b-secret"}}),
         &mut mallory_docs,
     )
     .await;
 
+    let err = attack
+        .error
+        .as_ref()
+        .expect("docs/content on a KB node must be refused, not merely empty");
+    // The denial must not distinguish "exists, not yours" from "does not exist",
+    // or it becomes an existence oracle over every tenant's node ids.
+    assert!(
+        !err.message.contains("kb-b") || err.message.contains("is not available"),
+        "refusal text leaks more than it should: {}",
+        err.message
+    );
     let leaked = serde_json::to_string(&attack.result).unwrap_or_default();
     assert!(
         !leaked.contains(SECRET),
-        "docs/content returned another session's buffer plaintext. No principal is \
-         passed to the handler at all. Got: {leaked}"
+        "content came back anyway: {leaked}"
+    );
+
+    // Same refusal for a collection manifest, which carries membership.
+    let coll_attack = dispatch_as(
+        &store,
+        &bc,
+        Some("mallory"),
+        Some(&fp("mallory")),
+        serde_json::json!({
+            "jsonrpc":"2.0","id":10,"method":"docs/content","params":{"doc":"kbc:kb-b"}}),
+        &mut mallory_docs,
+    )
+    .await;
+    assert!(
+        coll_attack.error.is_some(),
+        "docs/content served a collection manifest: {:?}",
+        coll_attack.result
+    );
+
+    // POSITIVE CONTROL: an ordinary buffer still works, so this is a KB-address
+    // refusal and not a blanket break of `docs/content`.
+    let sync = TextSync::new("ordinary shared buffer");
+    let mut victim_buf = HashSet::new();
+    dispatch_as(
+        &store,
+        &bc,
+        Some("victim"),
+        Some(&fp("victim")),
+        serde_json::json!({
+            "jsonrpc":"2.0","id":11,"method":"sync/update",
+            "params":{"doc":"notes.org","update":update_to_base64(&sync.encode_state())}}),
+        &mut victim_buf,
+    )
+    .await;
+    let ok = dispatch_as(
+        &store,
+        &bc,
+        Some("victim"),
+        Some(&fp("victim")),
+        serde_json::json!({
+            "jsonrpc":"2.0","id":12,"method":"docs/content","params":{"doc":"notes.org"}}),
+        &mut victim_buf,
+    )
+    .await;
+    assert_eq!(
+        ok.result.as_ref().and_then(|r| r["content"].as_str()),
+        Some("ordinary shared buffer"),
+        "plain-buffer collaboration must be unaffected: {:?}",
+        ok.error
     );
 }
 
