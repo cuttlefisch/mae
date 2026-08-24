@@ -133,7 +133,7 @@
     "daemon/tests/collab_stress.rs": 552,
     "daemon/tests/network_e2e.rs": 659,
     "daemon/tests/oauth_e2e.rs": 789,
-    "shared/kb/src/federation.rs": 1714,
+    "shared/kb/src/federation.rs": 1936,
     "shared/kb/src/lib.rs": 5145,
     "shared/kb/src/org.rs": 2417,
     "shared/kb/src/query.rs": 1888,

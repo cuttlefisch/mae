@@ -46,6 +46,7 @@ fn register(editor: &mut Editor, dir: &std::path::Path) {
         ai_residency: mae_kb::federation::AiResidency::default(),
         project_root: None,
         kind: KbInstanceKind::default(),
+        ingest_policy: Default::default(),
         priority: 0,
         remote_hub: None,
     });
