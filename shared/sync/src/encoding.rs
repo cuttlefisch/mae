@@ -186,4 +186,84 @@ mod tests {
             "pseudo-random bytes should not be a valid yrs update"
         );
     }
+
+    /// lib0 varint encoding of `n` as an unsigned integer: 7 bits per byte,
+    /// high bit = "more bytes follow". Written out rather than pulled from a
+    /// helper so the payload below is auditable by eye.
+    fn varint(mut n: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        while n >= 0x80 {
+            out.push((n as u8 & 0x7F) | 0x80);
+            n >>= 7;
+        }
+        out.push(n as u8);
+        out
+    }
+
+    /// A hostile state vector is FIVE BYTES and used to abort the whole process.
+    ///
+    /// `StateVector::decode` reads an attacker-controlled `u32` length prefix.
+    /// Through yrs 0.27.3 it then called `HashMap::with_capacity_and_hasher(len, ..)`
+    /// unguarded, so a varint declaring `u32::MAX` entries requested a ~100 GB
+    /// allocation -> `handle_alloc_error` -> **`abort()`, non-unwinding**. Not a
+    /// panic: `catch_unwind` could not have contained it.
+    ///
+    /// This reaches the daemon over `sync/diff`, which is a *read* request: it needs
+    /// no write authority and bypasses the signature check, the ADR-023 epoch fence
+    /// and the message-size cap by construction (a 5-byte payload is under any cap).
+    ///
+    /// Fixed upstream in yrs 0.27.4 (y-crdt PR #639) by a fallible `try_reserve`.
+    /// This test is the regression guard on that pin: if a future bump regresses it,
+    /// the test process aborts rather than failing, which is itself the signal.
+    #[test]
+    fn hostile_state_vector_length_prefix_is_a_decode_error_not_an_abort() {
+        let doc = Doc::with_client_id(1);
+        for declared in [u32::MAX as u64, u32::MAX as u64 / 2, 1 << 24] {
+            let bomb = varint(declared);
+            assert!(
+                bomb.len() <= 5,
+                "the whole point is that this is tiny: {} bytes",
+                bomb.len()
+            );
+            let err = encode_diff(&doc, &bomb);
+            assert!(
+                err.is_err(),
+                "a state vector declaring {declared} entries must be refused, not allocated"
+            );
+        }
+    }
+
+    /// The same length-prefix class on the *update* path, which is what
+    /// `validate_update` gates before a WAL append. `Any::decode`'s nested map and
+    /// array sites had the same unguarded `with_capacity` through 0.27.3.
+    ///
+    /// Truncated-but-well-formed prefixes matter more than `b"garbage"`: garbage
+    /// fails at byte 0 and proves nothing about what a *plausible* payload does.
+    #[test]
+    fn truncated_and_overlong_updates_are_refused_without_aborting() {
+        // A valid update, then every truncation of it. Each must be refused
+        // cleanly -- no abort, no panic, no silent Ok.
+        let doc = Doc::with_client_id(1);
+        let text = doc.get_or_insert_text("t");
+        let mut txn = doc.transact_mut();
+        text.insert(&mut txn, 0, "the quick brown fox");
+        let valid = txn.encode_update_v1();
+        drop(txn);
+        assert!(
+            validate_update(&valid).is_ok(),
+            "control: the update is valid"
+        );
+
+        for cut in 1..valid.len() {
+            let _ = validate_update(&valid[..cut]);
+        }
+
+        // A declared-huge block count with no blocks behind it.
+        let mut bomb = varint(u32::MAX as u64);
+        bomb.extend_from_slice(&[0x00]);
+        assert!(
+            validate_update(&bomb).is_err(),
+            "an update declaring u32::MAX blocks must be refused"
+        );
+    }
 }

@@ -32,6 +32,44 @@ updates:
         versions: ["3.x"]
       - dependency-name: "curve25519-dalek"
         versions: ["5.x"]
+  # The daemon is a SEPARATE workspace with its own Cargo.lock, and until this
+  # entry existed it was scanned by neither dependabot nor cargo-deny -- which is
+  # how the network-facing component came to sit on yrs 0.27.0 while the editor
+  # was on 0.27.3, both carrying the `sync/diff` allocation bomb (y-crdt PR #639).
+  # Note the dalek pins below are described in terms of the DAEMON's iroh
+  # dependency, so they always belonged here as much as at the root.
+  - package-ecosystem: cargo
+    directory: /daemon
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps):"
+    groups:
+      rust-dependencies:
+        patterns: ["*"]
+    ignore:
+      # sha2 0.11.x uses hybrid-array (drops LowerHex, incompatible with hmac 0.12).
+      # Only ignore 0.11.x — a future 0.12+ may resolve the trait/hmac compat.
+      # Tracking: https://github.com/cuttlefisch/mae/issues/51
+      - dependency-name: "sha2"
+        versions: ["0.11.x"]
+      # ndarray 0.16.x/0.17.x are incompatible with cozo 0.7 (pins ndarray 0.15).
+      # Only ignore known-bad ranges — a future ndarray or cozo release may unblock.
+      - dependency-name: "ndarray"
+        versions: ["0.16.x", "0.17.x"]
+      # The dalek trio is blocked by iroh: the daemon workspace depends on both iroh
+      # and the shared crypto crates (path deps), and iroh/iroh-base hard-pin
+      # ed25519-dalek = "=3.0.0-rc.0" and curve25519-dalek = "=5.0.0-rc.0" (still true
+      # as of iroh 1.0.2). A stable ^3/^5 requirement cannot unify with those
+      # pre-release pins, so bumping breaks daemon/Cargo.lock resolution entirely.
+      # Keep pinned at 2/2/4 (see shared/mcp/Cargo.toml + shared/sync/Cargo.toml).
+      # Revisit once iroh ships a release depending on the stable dalek 3.x/5.x.
+      - dependency-name: "ed25519-dalek"
+        versions: ["3.x"]
+      - dependency-name: "x25519-dalek"
+        versions: ["3.x"]
+      - dependency-name: "curve25519-dalek"
+        versions: ["5.x"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
