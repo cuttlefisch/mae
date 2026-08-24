@@ -474,6 +474,12 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   - `crates/scheme/src/stdlib/base.rs` (2283 → 2607) and
     `crates/scheme/src/runtime/state_sync_apply.rs` (814) — crossed mechanically when ADR-084 D3 added
     a required tier argument to every `register_fn` call, plus rustfmt reflow. Not new complexity.
+  - `crates/core/src/editor/kb_ops/registry.rs` (1291 → 1436) — the KB registry's whole lifecycle in
+    one file: register, reimport, detach, store resolution, primary/system handling. Re-blessed
+    2026-08-24 while adding the #631 dir-less reimport guard; note **main had already drifted 128
+    lines past the recorded 1291 without a bless**, each PR staying under the 10% step, which is the
+    ratchet's blind spot. A genuine split candidate along the lifecycle seams — unlike the data
+    tables above, this one is not correct to grow.
 
 
 - [ ] **Editor struct field extraction** (**reopened 2026-08** — was marked complete at "~69 fields",

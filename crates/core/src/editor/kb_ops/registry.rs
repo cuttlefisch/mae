@@ -1,5 +1,12 @@
 //! KB instance registry: register/unregister/reimport, instance store
 //! adoption, and instance-persistence plumbing.
+//!
+//! @ai-caution: [architecture-debt] Over the source-size ceiling and accepted in
+//! `docs/AUDIT_BASELINE.json`. This file is the KB registry's whole lifecycle —
+//! register, reimport, detach, store resolution, primary/system handling — and it
+//! is a genuine split candidate along those seams, not a data table that is
+//! correct to grow. Cross-referenced from ROADMAP.md's "Architecture Debt".
+//! Do not add a new lifecycle verb here without splitting first.
 
 use std::collections::HashSet;
 

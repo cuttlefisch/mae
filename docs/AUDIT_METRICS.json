@@ -26,9 +26,9 @@
     },
     {
       "path": "crates/agent-cli/src/main.rs",
-      "lines": 1344,
-      "test_lines": 484,
-      "code_lines": 860,
+      "lines": 1383,
+      "test_lines": 495,
+      "code_lines": 888,
       "is_test_file": false,
       "max_fn_lines": 108,
       "max_fn_name": "run_event_loop",
@@ -74,19 +74,19 @@
     },
     {
       "path": "crates/agent-cli/src/tui/confirm.rs",
-      "lines": 231,
-      "test_lines": 100,
-      "code_lines": 131,
+      "lines": 217,
+      "test_lines": 106,
+      "code_lines": 111,
       "is_test_file": false,
-      "max_fn_lines": 45,
-      "max_fn_name": "needs_confirmation_matrix_covers_all_tier_mode_combinations",
-      "max_match_arms": 6,
+      "max_fn_lines": 42,
+      "max_fn_name": "render_overlay",
+      "max_match_arms": 4,
       "max_struct_fields": 3,
       "max_struct_name": "PendingConfirm",
-      "max_nesting": 1,
+      "max_nesting": 3,
       "use_count": 9,
-      "pub_items": 7,
-      "test_count": 3
+      "pub_items": 5,
+      "test_count": 4
     },
     {
       "path": "crates/agent-cli/src/tui/input.rs",
@@ -249,20 +249,52 @@
       "test_count": 0
     },
     {
+      "path": "crates/ai/src/executor/approval_tests.rs",
+      "lines": 306,
+      "test_lines": 306,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 36,
+      "max_fn_name": "a_tool_missing_from_the_dispatch_list_falls_back_to_write_not_to_its_own_tier",
+      "max_match_arms": 3,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 3,
+      "pub_items": 0,
+      "test_count": 8
+    },
+    {
+      "path": "crates/ai/src/executor/authorization_tests.rs",
+      "lines": 375,
+      "test_lines": 375,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 51,
+      "max_fn_name": "a_write_tier_session_cannot_raise_its_own_tier_through_set_option",
+      "max_match_arms": 10,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 3,
+      "use_count": 4,
+      "pub_items": 0,
+      "test_count": 9
+    },
+    {
       "path": "crates/ai/src/executor/collab_exec.rs",
-      "lines": 1037,
-      "test_lines": 448,
-      "code_lines": 589,
+      "lines": 1106,
+      "test_lines": 490,
+      "code_lines": 616,
       "is_test_file": false,
       "max_fn_lines": 94,
       "max_fn_name": "kb_share_primary_node_ids_exclude_federated_instance_nodes",
       "max_match_arms": 24,
       "max_struct_fields": 0,
       "max_struct_name": "",
-      "max_nesting": 1,
+      "max_nesting": 2,
       "use_count": 7,
       "pub_items": 0,
-      "test_count": 24
+      "test_count": 26
     },
     {
       "path": "crates/ai/src/executor/core_exec.rs",
@@ -346,29 +378,29 @@
     },
     {
       "path": "crates/ai/src/executor/mod.rs",
-      "lines": 192,
+      "lines": 261,
       "test_lines": 56,
-      "code_lines": 136,
+      "code_lines": 205,
       "is_test_file": false,
       "max_fn_lines": 16,
       "max_fn_name": "an_unknown_or_adjacent_name_is_rejected_not_guessed",
       "max_match_arms": 9,
-      "max_struct_fields": 0,
-      "max_struct_name": "",
+      "max_struct_fields": 4,
+      "max_struct_name": "ApprovalRequest",
       "max_nesting": 1,
       "use_count": 7,
-      "pub_items": 6,
+      "pub_items": 9,
       "test_count": 2
     },
     {
       "path": "crates/ai/src/executor/mod_tests.rs",
-      "lines": 1664,
-      "test_lines": 1664,
+      "lines": 1702,
+      "test_lines": 1702,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 63,
       "max_fn_name": "known_mutating_tools_are_never_declared_read_only",
-      "max_match_arms": 2,
+      "max_match_arms": 3,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 4,
@@ -410,19 +442,19 @@
     },
     {
       "path": "crates/ai/src/executor/permission.rs",
-      "lines": 25,
-      "test_lines": 0,
-      "code_lines": 25,
+      "lines": 150,
+      "test_lines": 76,
+      "code_lines": 74,
       "is_test_file": false,
-      "max_fn_lines": 19,
+      "max_fn_lines": 59,
       "max_fn_name": "format_permissions_info",
-      "max_match_arms": 4,
+      "max_match_arms": 2,
       "max_struct_fields": 0,
       "max_struct_name": "",
-      "max_nesting": 0,
-      "use_count": 2,
+      "max_nesting": 1,
+      "use_count": 4,
       "pub_items": 0,
-      "test_count": 0
+      "test_count": 4
     },
     {
       "path": "crates/ai/src/executor/sandbox.rs",
@@ -457,12 +489,44 @@
       "test_count": 9
     },
     {
-      "path": "crates/ai/src/executor/shell_exec.rs",
-      "lines": 160,
+      "path": "crates/ai/src/executor/session_dispatch_tests.rs",
+      "lines": 445,
+      "test_lines": 445,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 73,
+      "max_fn_name": "three_concurrent_sessions_keep_independent_agent_state",
+      "max_match_arms": 7,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 4,
+      "pub_items": 0,
+      "test_count": 11
+    },
+    {
+      "path": "crates/ai/src/executor/session_exec.rs",
+      "lines": 190,
       "test_lines": 0,
-      "code_lines": 160,
+      "code_lines": 190,
       "is_test_file": false,
-      "max_fn_lines": 85,
+      "max_fn_lines": 34,
+      "max_fn_name": "execute_web_fetch",
+      "max_match_arms": 7,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 2,
+      "pub_items": 6,
+      "test_count": 0
+    },
+    {
+      "path": "crates/ai/src/executor/shell_exec.rs",
+      "lines": 154,
+      "test_lines": 0,
+      "code_lines": 154,
+      "is_test_file": false,
+      "max_fn_lines": 79,
       "max_fn_name": "execute_shell_exec_sync",
       "max_match_arms": 27,
       "max_struct_fields": 0,
@@ -490,11 +554,11 @@
     },
     {
       "path": "crates/ai/src/executor/tool_dispatch.rs",
-      "lines": 1142,
-      "test_lines": 235,
-      "code_lines": 907,
+      "lines": 1182,
+      "test_lines": 244,
+      "code_lines": 938,
       "is_test_file": false,
-      "max_fn_lines": 528,
+      "max_fn_lines": 552,
       "max_fn_name": "execute_tool_dispatch_body",
       "max_match_arms": 9,
       "max_struct_fields": 0,
@@ -538,25 +602,25 @@
     },
     {
       "path": "crates/ai/src/guidance.rs",
-      "lines": 434,
-      "test_lines": 314,
-      "code_lines": 120,
+      "lines": 719,
+      "test_lines": 426,
+      "code_lines": 293,
       "is_test_file": false,
       "max_fn_lines": 45,
       "max_fn_name": "build_guidance_context_combines_both_sections",
-      "max_match_arms": 2,
+      "max_match_arms": 5,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 3,
       "use_count": 4,
-      "pub_items": 4,
-      "test_count": 12
+      "pub_items": 8,
+      "test_count": 17
     },
     {
       "path": "crates/ai/src/lib.rs",
-      "lines": 56,
+      "lines": 63,
       "test_lines": 0,
-      "code_lines": 56,
+      "code_lines": 63,
       "is_test_file": false,
       "max_fn_lines": 0,
       "max_fn_name": "",
@@ -650,11 +714,11 @@
     },
     {
       "path": "crates/ai/src/session/handle_prompt.rs",
-      "lines": 1393,
+      "lines": 1506,
       "test_lines": 0,
-      "code_lines": 1393,
+      "code_lines": 1506,
       "is_test_file": false,
-      "max_fn_lines": 1156,
+      "max_fn_lines": 1197,
       "max_fn_name": "handle_prompt",
       "max_match_arms": 4,
       "max_struct_fields": 0,
@@ -666,19 +730,35 @@
     },
     {
       "path": "crates/ai/src/session/mod.rs",
-      "lines": 286,
+      "lines": 318,
       "test_lines": 0,
-      "code_lines": 286,
+      "code_lines": 318,
       "is_test_file": false,
-      "max_fn_lines": 94,
+      "max_fn_lines": 104,
       "max_fn_name": "new",
       "max_match_arms": 0,
-      "max_struct_fields": 40,
+      "max_struct_fields": 41,
       "max_struct_name": "AgentSession",
       "max_nesting": 2,
       "use_count": 5,
-      "pub_items": 5,
+      "pub_items": 6,
       "test_count": 0
+    },
+    {
+      "path": "crates/ai/src/session/permission_gate_tests.rs",
+      "lines": 352,
+      "test_lines": 352,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 41,
+      "max_fn_name": "an_untiered_tool_is_treated_as_privileged_not_trusted",
+      "max_match_arms": 3,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 4,
+      "use_count": 3,
+      "pub_items": 0,
+      "test_count": 8
     },
     {
       "path": "crates/ai/src/session/progress.rs",
@@ -698,27 +778,27 @@
     },
     {
       "path": "crates/ai/src/session/run_loop.rs",
-      "lines": 437,
+      "lines": 320,
       "test_lines": 0,
-      "code_lines": 437,
+      "code_lines": 320,
       "is_test_file": false,
-      "max_fn_lines": 101,
+      "max_fn_lines": 92,
       "max_fn_name": "execute_shell",
-      "max_match_arms": 7,
+      "max_match_arms": 5,
       "max_struct_fields": 0,
       "max_struct_name": "",
-      "max_nesting": 5,
+      "max_nesting": 3,
       "use_count": 4,
       "pub_items": 1,
       "test_count": 0
     },
     {
       "path": "crates/ai/src/session/tests.rs",
-      "lines": 2085,
-      "test_lines": 2085,
+      "lines": 2123,
+      "test_lines": 2123,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 92,
+      "max_fn_lines": 94,
       "max_fn_name": "hard_cap_aborts_before_provider_call",
       "max_match_arms": 5,
       "max_struct_fields": 1,
@@ -743,6 +823,22 @@
       "use_count": 2,
       "pub_items": 9,
       "test_count": 6
+    },
+    {
+      "path": "crates/ai/src/shell_policy.rs",
+      "lines": 177,
+      "test_lines": 98,
+      "code_lines": 79,
+      "is_test_file": false,
+      "max_fn_lines": 23,
+      "max_fn_name": "a_hostile_timeout_cannot_exceed_or_wrap_past_the_ceiling",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 2,
+      "pub_items": 3,
+      "test_count": 5
     },
     {
       "path": "crates/ai/src/token_estimate.rs",
@@ -794,17 +890,17 @@
     },
     {
       "path": "crates/ai/src/tool_impls/editor_tools.rs",
-      "lines": 1520,
-      "test_lines": 307,
-      "code_lines": 1213,
+      "lines": 1566,
+      "test_lines": 312,
+      "code_lines": 1254,
       "is_test_file": false,
-      "max_fn_lines": 301,
+      "max_fn_lines": 342,
       "max_fn_name": "execute_audit_configuration",
       "max_match_arms": 16,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 3,
-      "use_count": 12,
+      "use_count": 11,
       "pub_items": 33,
       "test_count": 17
     },
@@ -826,9 +922,9 @@
     },
     {
       "path": "crates/ai/src/tool_impls/git.rs",
-      "lines": 350,
+      "lines": 365,
       "test_lines": 0,
-      "code_lines": 350,
+      "code_lines": 365,
       "is_test_file": false,
       "max_fn_lines": 40,
       "max_fn_name": "execute_git_status",
@@ -906,9 +1002,9 @@
     },
     {
       "path": "crates/ai/src/tool_impls/kb.rs",
-      "lines": 6453,
+      "lines": 6493,
       "test_lines": 3988,
-      "code_lines": 2465,
+      "code_lines": 2505,
       "is_test_file": false,
       "max_fn_lines": 183,
       "max_fn_name": "kb_search_context_dev_practices_shaped_kb_surfaces_all_six_originally_reported_queries",
@@ -970,9 +1066,9 @@
     },
     {
       "path": "crates/ai/src/tool_impls/project.rs",
-      "lines": 229,
-      "test_lines": 0,
-      "code_lines": 229,
+      "lines": 330,
+      "test_lines": 86,
+      "code_lines": 244,
       "is_test_file": false,
       "max_fn_lines": 47,
       "max_fn_name": "execute_project_files",
@@ -980,9 +1076,9 @@
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 2,
-      "use_count": 1,
+      "use_count": 2,
       "pub_items": 7,
-      "test_count": 0
+      "test_count": 2
     },
     {
       "path": "crates/ai/src/tool_impls/shell.rs",
@@ -1033,19 +1129,51 @@
       "test_count": 0
     },
     {
-      "path": "crates/ai/src/tools/categories.rs",
-      "lines": 661,
-      "test_lines": 274,
-      "code_lines": 387,
+      "path": "crates/ai/src/tools/authorization.rs",
+      "lines": 564,
+      "test_lines": 303,
+      "code_lines": 261,
       "is_test_file": false,
-      "max_fn_lines": 74,
-      "max_fn_name": "classify_tool_tier",
+      "max_fn_lines": 45,
+      "max_fn_name": "authorization_change_ops_are_privileged_on_every_surface",
+      "max_match_arms": 3,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 5,
+      "pub_items": 5,
+      "test_count": 11
+    },
+    {
+      "path": "crates/ai/src/tools/categories.rs",
+      "lines": 550,
+      "test_lines": 0,
+      "code_lines": 550,
+      "is_test_file": false,
+      "max_fn_lines": 92,
+      "max_fn_name": "classify_tool_category",
       "max_match_arms": 13,
-      "max_struct_fields": 2,
+      "max_struct_fields": 4,
       "max_struct_name": "PermissionPolicy",
       "max_nesting": 2,
-      "use_count": 4,
-      "pub_items": 12,
+      "use_count": 2,
+      "pub_items": 17,
+      "test_count": 0
+    },
+    {
+      "path": "crates/ai/src/tools/categories_tests.rs",
+      "lines": 288,
+      "test_lines": 288,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 46,
+      "max_fn_name": "tool_category_all_covers_every_variant_exactly_once",
+      "max_match_arms": 1,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 5,
+      "pub_items": 0,
       "test_count": 12
     },
     {
@@ -1097,9 +1225,41 @@
       "test_count": 0
     },
     {
+      "path": "crates/ai/src/tools/decision.rs",
+      "lines": 141,
+      "test_lines": 0,
+      "code_lines": 141,
+      "is_test_file": false,
+      "max_fn_lines": 20,
+      "max_fn_name": "deny_message",
+      "max_match_arms": 2,
+      "max_struct_fields": 2,
+      "max_struct_name": "HardCeiling",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 10,
+      "test_count": 0
+    },
+    {
+      "path": "crates/ai/src/tools/decision_tests.rs",
+      "lines": 466,
+      "test_lines": 466,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 40,
+      "max_fn_name": "the_ambient_scheme_tier_is_the_allow_line_not_the_deny_line",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 3,
+      "use_count": 3,
+      "pub_items": 0,
+      "test_count": 13
+    },
+    {
       "path": "crates/ai/src/tools/dispatch_contract_tests.rs",
-      "lines": 379,
-      "test_lines": 379,
+      "lines": 380,
+      "test_lines": 380,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 72,
@@ -1111,6 +1271,22 @@
       "use_count": 3,
       "pub_items": 0,
       "test_count": 2
+    },
+    {
+      "path": "crates/ai/src/tools/dispatchability.rs",
+      "lines": 289,
+      "test_lines": 210,
+      "code_lines": 79,
+      "is_test_file": false,
+      "max_fn_lines": 33,
+      "max_fn_name": "no_advertised_tool_is_unroutable",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 4,
+      "pub_items": 2,
+      "test_count": 5
     },
     {
       "path": "crates/ai/src/tools/kb_tools.rs",
@@ -1129,6 +1305,22 @@
       "test_count": 0
     },
     {
+      "path": "crates/ai/src/tools/live_tier_tests.rs",
+      "lines": 123,
+      "test_lines": 123,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 24,
+      "max_fn_name": "a_live_tier_change_does_not_alter_an_in_flight_one_time_approval",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 0,
+      "use_count": 3,
+      "pub_items": 0,
+      "test_count": 4
+    },
+    {
       "path": "crates/ai/src/tools/lsp_tools.rs",
       "lines": 110,
       "test_lines": 0,
@@ -1145,10 +1337,26 @@
       "test_count": 0
     },
     {
+      "path": "crates/ai/src/tools/mirror_tier_parity_tests.rs",
+      "lines": 76,
+      "test_lines": 76,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 46,
+      "max_fn_name": "command_mirror_tiers_match_their_hand_authored_twins",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 5,
+      "pub_items": 0,
+      "test_count": 1
+    },
+    {
       "path": "crates/ai/src/tools/mod.rs",
-      "lines": 605,
-      "test_lines": 442,
-      "code_lines": 163,
+      "lines": 643,
+      "test_lines": 457,
+      "code_lines": 186,
       "is_test_file": false,
       "max_fn_lines": 43,
       "max_fn_name": "scheme_tools_to_definitions",
@@ -1156,7 +1364,7 @@
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 2,
-      "use_count": 5,
+      "use_count": 8,
       "pub_items": 4,
       "test_count": 33
     },
@@ -1178,11 +1386,11 @@
     },
     {
       "path": "crates/ai/src/tools/shell_tools.rs",
-      "lines": 199,
+      "lines": 203,
       "test_lines": 0,
-      "code_lines": 199,
+      "code_lines": 203,
       "is_test_file": false,
-      "max_fn_lines": 193,
+      "max_fn_lines": 197,
       "max_fn_name": "shell_tool_definitions",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -1242,25 +1450,41 @@
     },
     {
       "path": "crates/ai/src/types.rs",
-      "lines": 363,
+      "lines": 351,
       "test_lines": 103,
-      "code_lines": 260,
+      "code_lines": 248,
       "is_test_file": false,
       "max_fn_lines": 25,
       "max_fn_name": "tool_definition_serde_round_trip",
-      "max_match_arms": 4,
+      "max_match_arms": 2,
       "max_struct_fields": 6,
       "max_struct_name": "ToolProperty",
       "max_nesting": 1,
-      "use_count": 3,
-      "pub_items": 12,
+      "use_count": 4,
+      "pub_items": 10,
       "test_count": 6
     },
     {
+      "path": "crates/ai/src/web.rs",
+      "lines": 217,
+      "test_lines": 66,
+      "code_lines": 151,
+      "is_test_file": false,
+      "max_fn_lines": 83,
+      "max_fn_name": "strip_html",
+      "max_match_arms": 7,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 5,
+      "use_count": 1,
+      "pub_items": 3,
+      "test_count": 4
+    },
+    {
       "path": "crates/babel/src/backend/compiled.rs",
-      "lines": 576,
-      "test_lines": 192,
-      "code_lines": 384,
+      "lines": 665,
+      "test_lines": 248,
+      "code_lines": 417,
       "is_test_file": false,
       "max_fn_lines": 55,
       "max_fn_name": "run_binary",
@@ -1268,9 +1492,9 @@
       "max_struct_fields": 7,
       "max_struct_name": "CompiledBackend",
       "max_nesting": 3,
-      "use_count": 14,
+      "use_count": 15,
       "pub_items": 2,
-      "test_count": 9
+      "test_count": 10
     },
     {
       "path": "crates/babel/src/backend/internal.rs",
@@ -1338,9 +1562,9 @@
     },
     {
       "path": "crates/babel/src/execute.rs",
-      "lines": 550,
+      "lines": 554,
       "test_lines": 218,
-      "code_lines": 332,
+      "code_lines": 336,
       "is_test_file": false,
       "max_fn_lines": 101,
       "max_fn_name": "execute_shell",
@@ -1348,15 +1572,15 @@
       "max_struct_fields": 5,
       "max_struct_name": "BabelExecutor",
       "max_nesting": 3,
-      "use_count": 10,
+      "use_count": 11,
       "pub_items": 6,
       "test_count": 14
     },
     {
       "path": "crates/babel/src/lib.rs",
-      "lines": 914,
+      "lines": 915,
       "test_lines": 263,
-      "code_lines": 651,
+      "code_lines": 652,
       "is_test_file": false,
       "max_fn_lines": 83,
       "max_fn_name": "parse_src_blocks",
@@ -1385,10 +1609,26 @@
       "test_count": 6
     },
     {
+      "path": "crates/babel/src/posix_shell.rs",
+      "lines": 329,
+      "test_lines": 142,
+      "code_lines": 187,
+      "is_test_file": false,
+      "max_fn_lines": 41,
+      "max_fn_name": "falls_back_to_install_roots_when_path_has_only_the_stub",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 3,
+      "use_count": 4,
+      "pub_items": 0,
+      "test_count": 5
+    },
+    {
       "path": "crates/babel/src/results.rs",
-      "lines": 375,
-      "test_lines": 174,
-      "code_lines": 201,
+      "lines": 520,
+      "test_lines": 266,
+      "code_lines": 254,
       "is_test_file": false,
       "max_fn_lines": 48,
       "max_fn_name": "format_org_table",
@@ -1396,25 +1636,25 @@
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 4,
-      "use_count": 3,
-      "pub_items": 4,
-      "test_count": 15
+      "use_count": 4,
+      "pub_items": 5,
+      "test_count": 18
     },
     {
       "path": "crates/babel/src/safety.rs",
-      "lines": 155,
-      "test_lines": 81,
-      "code_lines": 74,
+      "lines": 470,
+      "test_lines": 315,
+      "code_lines": 155,
       "is_test_file": false,
-      "max_fn_lines": 18,
-      "max_fn_name": "matches_trust_pattern",
-      "max_match_arms": 4,
+      "max_fn_lines": 34,
+      "max_fn_name": "normalization_and_containment_hold_as_properties",
+      "max_match_arms": 3,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 3,
-      "use_count": 3,
+      "use_count": 6,
       "pub_items": 3,
-      "test_count": 9
+      "test_count": 18
     },
     {
       "path": "crates/babel/src/session.rs",
@@ -1610,9 +1850,9 @@
     },
     {
       "path": "crates/core/src/buffer.rs",
-      "lines": 3856,
+      "lines": 4064,
       "test_lines": 2021,
-      "code_lines": 1835,
+      "code_lines": 2043,
       "is_test_file": false,
       "max_fn_lines": 63,
       "max_fn_name": "redo_survives_remote_update_through_buffer",
@@ -1621,7 +1861,7 @@
       "max_struct_name": "Buffer",
       "max_nesting": 3,
       "use_count": 16,
-      "pub_items": 92,
+      "pub_items": 104,
       "test_count": 128
     },
     {
@@ -1690,8 +1930,8 @@
     },
     {
       "path": "crates/core/src/commands.rs",
-      "lines": 1924,
-      "test_lines": 393,
+      "lines": 1991,
+      "test_lines": 460,
       "code_lines": 1531,
       "is_test_file": false,
       "max_fn_lines": 1349,
@@ -1702,7 +1942,7 @@
       "max_nesting": 2,
       "use_count": 2,
       "pub_items": 16,
-      "test_count": 26
+      "test_count": 27
     },
     {
       "path": "crates/core/src/conversation.rs",
@@ -1818,9 +2058,9 @@
     },
     {
       "path": "crates/core/src/display_region.rs",
-      "lines": 1261,
+      "lines": 1263,
       "test_lines": 606,
-      "code_lines": 655,
+      "code_lines": 657,
       "is_test_file": false,
       "max_fn_lines": 123,
       "max_fn_name": "compute_image_regions",
@@ -1865,36 +2105,68 @@
       "test_count": 15
     },
     {
-      "path": "crates/core/src/editor/ai_state.rs",
-      "lines": 250,
+      "path": "crates/core/src/editor/agent_session.rs",
+      "lines": 125,
       "test_lines": 0,
-      "code_lines": 250,
+      "code_lines": 125,
       "is_test_file": false,
-      "max_fn_lines": 46,
+      "max_fn_lines": 15,
+      "max_fn_name": "set_agent_mode",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 1,
+      "pub_items": 8,
+      "test_count": 0
+    },
+    {
+      "path": "crates/core/src/editor/ai_state.rs",
+      "lines": 354,
+      "test_lines": 0,
+      "code_lines": 354,
+      "is_test_file": false,
+      "max_fn_lines": 53,
       "max_fn_name": "new",
       "max_match_arms": 0,
-      "max_struct_fields": 43,
+      "max_struct_fields": 46,
       "max_struct_name": "AiState",
-      "max_nesting": 0,
+      "max_nesting": 1,
       "use_count": 4,
-      "pub_items": 5,
+      "pub_items": 8,
       "test_count": 0
     },
     {
       "path": "crates/core/src/editor/babel_ops.rs",
-      "lines": 732,
-      "test_lines": 164,
-      "code_lines": 568,
+      "lines": 645,
+      "test_lines": 0,
+      "code_lines": 645,
       "is_test_file": false,
-      "max_fn_lines": 64,
+      "max_fn_lines": 94,
       "max_fn_name": "babel_execute_all",
       "max_match_arms": 6,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 2,
-      "use_count": 5,
+      "use_count": 4,
       "pub_items": 13,
-      "test_count": 7
+      "test_count": 0
+    },
+    {
+      "path": "crates/core/src/editor/babel_ops_tests.rs",
+      "lines": 454,
+      "test_lines": 454,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 46,
+      "max_fn_name": "export_subtree_picks_the_heading_at_the_cursor_not_the_last_one",
+      "max_match_arms": 3,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 14
     },
     {
       "path": "crates/core/src/editor/changes.rs",
@@ -1914,11 +2186,11 @@
     },
     {
       "path": "crates/core/src/editor/command.rs",
-      "lines": 1534,
-      "test_lines": 208,
-      "code_lines": 1326,
+      "lines": 1574,
+      "test_lines": 212,
+      "code_lines": 1362,
       "is_test_file": false,
-      "max_fn_lines": 1219,
+      "max_fn_lines": 1255,
       "max_fn_name": "execute_command",
       "max_match_arms": 77,
       "max_struct_fields": 0,
@@ -2026,11 +2298,11 @@
     },
     {
       "path": "crates/core/src/editor/dispatch/collab.rs",
-      "lines": 626,
+      "lines": 679,
       "test_lines": 259,
-      "code_lines": 367,
+      "code_lines": 420,
       "is_test_file": false,
-      "max_fn_lines": 352,
+      "max_fn_lines": 405,
       "max_fn_name": "dispatch_collab",
       "max_match_arms": 25,
       "max_struct_fields": 0,
@@ -2170,11 +2442,11 @@
     },
     {
       "path": "crates/core/src/editor/dispatch/kb.rs",
-      "lines": 335,
+      "lines": 343,
       "test_lines": 0,
-      "code_lines": 335,
+      "code_lines": 343,
       "is_test_file": false,
-      "max_fn_lines": 324,
+      "max_fn_lines": 332,
       "max_fn_name": "dispatch_kb",
       "max_match_arms": 49,
       "max_struct_fields": 0,
@@ -2234,11 +2506,11 @@
     },
     {
       "path": "crates/core/src/editor/dispatch/nav.rs",
-      "lines": 723,
+      "lines": 759,
       "test_lines": 0,
-      "code_lines": 723,
+      "code_lines": 759,
       "is_test_file": false,
-      "max_fn_lines": 577,
+      "max_fn_lines": 613,
       "max_fn_name": "dispatch_nav",
       "max_match_arms": 60,
       "max_struct_fields": 0,
@@ -2298,9 +2570,9 @@
     },
     {
       "path": "crates/core/src/editor/dispatch/ui.rs",
-      "lines": 542,
+      "lines": 577,
       "test_lines": 0,
-      "code_lines": 542,
+      "code_lines": 577,
       "is_test_file": false,
       "max_fn_lines": 402,
       "max_fn_name": "dispatch_ui",
@@ -2346,9 +2618,9 @@
     },
     {
       "path": "crates/core/src/editor/edit_ops.rs",
-      "lines": 620,
+      "lines": 616,
       "test_lines": 0,
-      "code_lines": 620,
+      "code_lines": 616,
       "is_test_file": false,
       "max_fn_lines": 140,
       "max_fn_name": "fill_paragraph",
@@ -2378,9 +2650,9 @@
     },
     {
       "path": "crates/core/src/editor/file_ops.rs",
-      "lines": 2174,
-      "test_lines": 612,
-      "code_lines": 1562,
+      "lines": 2248,
+      "test_lines": 664,
+      "code_lines": 1584,
       "is_test_file": false,
       "max_fn_lines": 281,
       "max_fn_name": "start_self_debug",
@@ -2390,13 +2662,13 @@
       "max_nesting": 5,
       "use_count": 10,
       "pub_items": 42,
-      "test_count": 36
+      "test_count": 38
     },
     {
       "path": "crates/core/src/editor/git_ops.rs",
-      "lines": 1377,
+      "lines": 1400,
       "test_lines": 141,
-      "code_lines": 1236,
+      "code_lines": 1259,
       "is_test_file": false,
       "max_fn_lines": 311,
       "max_fn_name": "git_status",
@@ -2410,9 +2682,9 @@
     },
     {
       "path": "crates/core/src/editor/graph_view_ops.rs",
-      "lines": 8749,
-      "test_lines": 6199,
-      "code_lines": 2550,
+      "lines": 8826,
+      "test_lines": 6267,
+      "code_lines": 2559,
       "is_test_file": false,
       "max_fn_lines": 537,
       "max_fn_name": "populate_graph_buffer",
@@ -2422,13 +2694,13 @@
       "max_nesting": 5,
       "use_count": 11,
       "pub_items": 27,
-      "test_count": 133
+      "test_count": 134
     },
     {
       "path": "crates/core/src/editor/heading_ops.rs",
-      "lines": 1181,
+      "lines": 1178,
       "test_lines": 171,
-      "code_lines": 1010,
+      "code_lines": 1007,
       "is_test_file": false,
       "max_fn_lines": 182,
       "max_fn_name": "update_statistics_cookies",
@@ -2442,9 +2714,9 @@
     },
     {
       "path": "crates/core/src/editor/help_ops.rs",
-      "lines": 3198,
-      "test_lines": 1546,
-      "code_lines": 1652,
+      "lines": 3308,
+      "test_lines": 1635,
+      "code_lines": 1673,
       "is_test_file": false,
       "max_fn_lines": 193,
       "max_fn_name": "kb_populate_buffer",
@@ -2454,7 +2726,7 @@
       "max_nesting": 6,
       "use_count": 23,
       "pub_items": 20,
-      "test_count": 63
+      "test_count": 66
     },
     {
       "path": "crates/core/src/editor/hook_ops.rs",
@@ -2474,9 +2746,9 @@
     },
     {
       "path": "crates/core/src/editor/idle_ops.rs",
-      "lines": 178,
+      "lines": 190,
       "test_lines": 82,
-      "code_lines": 96,
+      "code_lines": 108,
       "is_test_file": false,
       "max_fn_lines": 26,
       "max_fn_name": "on_idle_tick_forces_redraw_exactly_once_per_activation",
@@ -2506,18 +2778,34 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/activity.rs",
-      "lines": 261,
+      "lines": 279,
       "test_lines": 0,
-      "code_lines": 261,
+      "code_lines": 279,
       "is_test_file": false,
       "max_fn_lines": 110,
       "max_fn_name": "show_kb_audit_report",
-      "max_match_arms": 0,
+      "max_match_arms": 2,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 5,
       "use_count": 1,
-      "pub_items": 4,
+      "pub_items": 6,
+      "test_count": 0
+    },
+    {
+      "path": "crates/core/src/editor/kb_ops/collab_id.rs",
+      "lines": 60,
+      "test_lines": 0,
+      "code_lines": 60,
+      "is_test_file": false,
+      "max_fn_lines": 20,
+      "max_fn_name": "kb_collab_id_for_share",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 1,
+      "pub_items": 2,
       "test_count": 0
     },
     {
@@ -2538,9 +2826,9 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/dispatch.rs",
-      "lines": 353,
+      "lines": 381,
       "test_lines": 0,
-      "code_lines": 353,
+      "code_lines": 381,
       "is_test_file": false,
       "max_fn_lines": 85,
       "max_fn_name": "dispatch_kb_agenda",
@@ -2554,9 +2842,9 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/mod.rs",
-      "lines": 255,
+      "lines": 256,
       "test_lines": 0,
-      "code_lines": 255,
+      "code_lines": 256,
       "is_test_file": false,
       "max_fn_lines": 40,
       "max_fn_name": "to_json",
@@ -2570,12 +2858,12 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/nodes.rs",
-      "lines": 840,
+      "lines": 904,
       "test_lines": 0,
-      "code_lines": 840,
+      "code_lines": 904,
       "is_test_file": false,
-      "max_fn_lines": 82,
-      "max_fn_name": "kb_promote_node",
+      "max_fn_lines": 131,
+      "max_fn_name": "queue_kb_collab_action",
       "max_match_arms": 9,
       "max_struct_fields": 0,
       "max_struct_name": "",
@@ -2586,27 +2874,27 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/registry.rs",
-      "lines": 1291,
+      "lines": 1443,
       "test_lines": 350,
-      "code_lines": 941,
+      "code_lines": 1093,
       "is_test_file": false,
-      "max_fn_lines": 98,
+      "max_fn_lines": 129,
       "max_fn_name": "kb_reimport",
       "max_match_arms": 2,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 4,
       "use_count": 5,
-      "pub_items": 15,
+      "pub_items": 16,
       "test_count": 12
     },
     {
       "path": "crates/core/src/editor/kb_ops/search.rs",
-      "lines": 622,
+      "lines": 695,
       "test_lines": 0,
-      "code_lines": 622,
+      "code_lines": 695,
       "is_test_file": false,
-      "max_fn_lines": 138,
+      "max_fn_lines": 189,
       "max_fn_name": "kb_federated_search_scoped_impl",
       "max_match_arms": 5,
       "max_struct_fields": 3,
@@ -2618,9 +2906,9 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/sync.rs",
-      "lines": 708,
+      "lines": 762,
       "test_lines": 0,
-      "code_lines": 708,
+      "code_lines": 762,
       "is_test_file": false,
       "max_fn_lines": 224,
       "max_fn_name": "kb_register_joined_instance",
@@ -2634,11 +2922,11 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_activity_tests.rs",
-      "lines": 168,
-      "test_lines": 168,
+      "lines": 247,
+      "test_lines": 247,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 65,
+      "max_fn_lines": 52,
       "max_fn_name": "kb_record_modification_only_updates_the_node_whose_body_actually_changed",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -2646,7 +2934,7 @@
       "max_nesting": 1,
       "use_count": 1,
       "pub_items": 0,
-      "test_count": 3
+      "test_count": 7
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_collab_sync_tests.rs",
@@ -2666,8 +2954,8 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_concurrency_tests.rs",
-      "lines": 337,
-      "test_lines": 337,
+      "lines": 339,
+      "test_lines": 339,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 68,
@@ -2682,8 +2970,8 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_crud_tests.rs",
-      "lines": 323,
-      "test_lines": 323,
+      "lines": 384,
+      "test_lines": 384,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 54,
@@ -2694,12 +2982,12 @@
       "max_nesting": 0,
       "use_count": 1,
       "pub_items": 0,
-      "test_count": 10
+      "test_count": 11
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_daemon_tests.rs",
-      "lines": 342,
-      "test_lines": 342,
+      "lines": 364,
+      "test_lines": 364,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 39,
@@ -2729,25 +3017,105 @@
       "test_count": 24
     },
     {
-      "path": "crates/core/src/editor/kb_ops/tests/kb_ops_registry_tests.rs",
-      "lines": 625,
-      "test_lines": 625,
+      "path": "crates/core/src/editor/kb_ops/tests/kb_ops_instance_matching_tests.rs",
+      "lines": 90,
+      "test_lines": 90,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 42,
-      "max_fn_name": "kb_migrate_stranded_federation_nodes_preserves_and_surfaces_diverged_content",
+      "max_fn_lines": 59,
+      "max_fn_name": "an_empty_org_dir_instance_does_not_claim_every_path",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 1
+    },
+    {
+      "path": "crates/core/src/editor/kb_ops/tests/kb_ops_primary_naming_tests.rs",
+      "lines": 55,
+      "test_lines": 55,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 16,
+      "max_fn_name": "every_primary_alias_reaches_the_primary_residency_policy",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 2
+    },
+    {
+      "path": "crates/core/src/editor/kb_ops/tests/kb_ops_provenance_tests.rs",
+      "lines": 168,
+      "test_lines": 168,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 79,
+      "max_fn_name": "manual_ingest_strips_provenance_and_the_rescan_restores_every_guard",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 2
+    },
+    {
+      "path": "crates/core/src/editor/kb_ops/tests/kb_ops_read_clobber_tests.rs",
+      "lines": 195,
+      "test_lines": 195,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 45,
+      "max_fn_name": "reading_any_node_leaves_every_body_untouched",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 2,
+      "pub_items": 0,
+      "test_count": 3
+    },
+    {
+      "path": "crates/core/src/editor/kb_ops/tests/kb_ops_registry_tests.rs",
+      "lines": 670,
+      "test_lines": 670,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 56,
+      "max_fn_name": "mae_data_dir_is_xdg_first_not_platform_native",
       "max_match_arms": 2,
       "max_struct_fields": 0,
       "max_struct_name": "",
-      "max_nesting": 0,
+      "max_nesting": 1,
       "use_count": 1,
       "pub_items": 0,
-      "test_count": 24
+      "test_count": 25
+    },
+    {
+      "path": "crates/core/src/editor/kb_ops/tests/kb_ops_reimport_guard_tests.rs",
+      "lines": 75,
+      "test_lines": 75,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 52,
+      "max_fn_name": "reimporting_a_dir_less_instance_does_not_blank_it",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 1
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_search_federation_tests.rs",
-      "lines": 1004,
-      "test_lines": 1004,
+      "lines": 1005,
+      "test_lines": 1005,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 113,
@@ -2759,6 +3127,22 @@
       "use_count": 6,
       "pub_items": 0,
       "test_count": 30
+    },
+    {
+      "path": "crates/core/src/editor/kb_ops/tests/kb_ops_system_kb_tests.rs",
+      "lines": 241,
+      "test_lines": 241,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 51,
+      "max_fn_name": "a_system_kb_hit_is_labelled_with_its_catalog_name",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 0,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 7
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_vector_blend_tests.rs",
@@ -2778,8 +3162,8 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_watcher_misc_tests.rs",
-      "lines": 629,
-      "test_lines": 629,
+      "lines": 668,
+      "test_lines": 668,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 71,
@@ -2790,12 +3174,12 @@
       "max_nesting": 2,
       "use_count": 3,
       "pub_items": 0,
-      "test_count": 18
+      "test_count": 19
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/mod.rs",
-      "lines": 51,
-      "test_lines": 51,
+      "lines": 57,
+      "test_lines": 57,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 23,
@@ -2810,9 +3194,9 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/watchers.rs",
-      "lines": 441,
+      "lines": 508,
       "test_lines": 0,
-      "code_lines": 441,
+      "code_lines": 508,
       "is_test_file": false,
       "max_fn_lines": 133,
       "max_fn_name": "drain_kb_watchers",
@@ -2821,7 +3205,7 @@
       "max_struct_name": "",
       "max_nesting": 6,
       "use_count": 1,
-      "pub_items": 6,
+      "pub_items": 8,
       "test_count": 0
     },
     {
@@ -2858,18 +3242,18 @@
     },
     {
       "path": "crates/core/src/editor/kb_state.rs",
-      "lines": 680,
+      "lines": 785,
       "test_lines": 77,
-      "code_lines": 603,
+      "code_lines": 708,
       "is_test_file": false,
-      "max_fn_lines": 61,
+      "max_fn_lines": 69,
       "max_fn_name": "rebuild_query_layer",
       "max_match_arms": 5,
-      "max_struct_fields": 49,
+      "max_struct_fields": 52,
       "max_struct_name": "KbContext",
-      "max_nesting": 4,
+      "max_nesting": 3,
       "use_count": 8,
-      "pub_items": 25,
+      "pub_items": 27,
       "test_count": 4
     },
     {
@@ -2890,9 +3274,9 @@
     },
     {
       "path": "crates/core/src/editor/lsp_actions.rs",
-      "lines": 643,
+      "lines": 664,
       "test_lines": 247,
-      "code_lines": 396,
+      "code_lines": 417,
       "is_test_file": false,
       "max_fn_lines": 94,
       "max_fn_name": "show_rename_preview",
@@ -3018,27 +3402,27 @@
     },
     {
       "path": "crates/core/src/editor/mod.rs",
-      "lines": 1908,
+      "lines": 1960,
       "test_lines": 0,
-      "code_lines": 1908,
+      "code_lines": 1960,
       "is_test_file": false,
-      "max_fn_lines": 269,
+      "max_fn_lines": 270,
       "max_fn_name": "new_inner",
       "max_match_arms": 5,
       "max_struct_fields": 261,
       "max_struct_name": "Editor",
       "max_nesting": 3,
-      "use_count": 31,
+      "use_count": 32,
       "pub_items": 26,
       "test_count": 0
     },
     {
       "path": "crates/core/src/editor/mouse_ops.rs",
-      "lines": 927,
+      "lines": 948,
       "test_lines": 30,
-      "code_lines": 897,
+      "code_lines": 918,
       "is_test_file": false,
-      "max_fn_lines": 173,
+      "max_fn_lines": 178,
       "max_fn_name": "handle_mouse_click_inner",
       "max_match_arms": 3,
       "max_struct_fields": 0,
@@ -3082,13 +3466,13 @@
     },
     {
       "path": "crates/core/src/editor/option_ops.rs",
-      "lines": 4062,
+      "lines": 4140,
       "test_lines": 1233,
-      "code_lines": 2829,
+      "code_lines": 2907,
       "is_test_file": false,
-      "max_fn_lines": 1340,
+      "max_fn_lines": 1368,
       "max_fn_name": "set_option",
-      "max_match_arms": 231,
+      "max_match_arms": 232,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 4,
@@ -3162,11 +3546,11 @@
     },
     {
       "path": "crates/core/src/editor/render_ops.rs",
-      "lines": 389,
+      "lines": 394,
       "test_lines": 0,
-      "code_lines": 389,
+      "code_lines": 394,
       "is_test_file": false,
-      "max_fn_lines": 122,
+      "max_fn_lines": 127,
       "max_fn_name": "line_text_visual_rows",
       "max_match_arms": 2,
       "max_struct_fields": 0,
@@ -3194,9 +3578,9 @@
     },
     {
       "path": "crates/core/src/editor/search_ops.rs",
-      "lines": 508,
+      "lines": 507,
       "test_lines": 0,
-      "code_lines": 508,
+      "code_lines": 507,
       "is_test_file": false,
       "max_fn_lines": 138,
       "max_fn_name": "execute_global_command",
@@ -3306,8 +3690,8 @@
     },
     {
       "path": "crates/core/src/editor/tests/command_tests.rs",
-      "lines": 1317,
-      "test_lines": 1317,
+      "lines": 1401,
+      "test_lines": 1401,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 39,
@@ -3318,7 +3702,7 @@
       "max_nesting": 1,
       "use_count": 10,
       "pub_items": 0,
-      "test_count": 87
+      "test_count": 91
     },
     {
       "path": "crates/core/src/editor/tests/count_tests.rs",
@@ -3370,8 +3754,8 @@
     },
     {
       "path": "crates/core/src/editor/tests/misc_tests.rs",
-      "lines": 1042,
-      "test_lines": 1042,
+      "lines": 1053,
+      "test_lines": 1053,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 87,
@@ -3386,8 +3770,8 @@
     },
     {
       "path": "crates/core/src/editor/tests/mod.rs",
-      "lines": 71,
-      "test_lines": 71,
+      "lines": 73,
+      "test_lines": 73,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 13,
@@ -3449,9 +3833,9 @@
       "test_count": 32
     },
     {
-      "path": "crates/core/src/editor/tests/option_tests.rs",
-      "lines": 1440,
-      "test_lines": 1440,
+      "path": "crates/core/src/editor/tests/option_set_save_tests.rs",
+      "lines": 382,
+      "test_lines": 382,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 43,
@@ -3460,9 +3844,25 @@
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 3,
-      "use_count": 8,
+      "use_count": 2,
       "pub_items": 0,
-      "test_count": 79
+      "test_count": 13
+    },
+    {
+      "path": "crates/core/src/editor/tests/option_tests.rs",
+      "lines": 1218,
+      "test_lines": 1218,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 42,
+      "max_fn_name": "which_key_options_round_trip",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 3,
+      "use_count": 6,
+      "pub_items": 0,
+      "test_count": 71
     },
     {
       "path": "crates/core/src/editor/tests/org_checkbox_tests.rs",
@@ -3546,8 +3946,8 @@
     },
     {
       "path": "crates/core/src/editor/tests/shell_tests.rs",
-      "lines": 830,
-      "test_lines": 830,
+      "lines": 832,
+      "test_lines": 832,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 72,
@@ -3573,6 +3973,22 @@
       "max_struct_name": "",
       "max_nesting": 3,
       "use_count": 6,
+      "pub_items": 0,
+      "test_count": 13
+    },
+    {
+      "path": "crates/core/src/editor/tests/text_index_domain_tests.rs",
+      "lines": 419,
+      "test_lines": 419,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 37,
+      "max_fn_name": "move_right_visits_every_cluster_exactly_once_then_stops",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 3,
+      "use_count": 3,
       "pub_items": 0,
       "test_count": 13
     },
@@ -3642,9 +4058,9 @@
     },
     {
       "path": "crates/core/src/editor/visual.rs",
-      "lines": 707,
+      "lines": 725,
       "test_lines": 0,
-      "code_lines": 707,
+      "code_lines": 725,
       "is_test_file": false,
       "max_fn_lines": 72,
       "max_fn_name": "visual_paste",
@@ -3658,9 +4074,9 @@
     },
     {
       "path": "crates/core/src/editor/window_ops.rs",
-      "lines": 1114,
+      "lines": 1125,
       "test_lines": 0,
-      "code_lines": 1114,
+      "code_lines": 1125,
       "is_test_file": false,
       "max_fn_lines": 138,
       "max_fn_name": "find_or_create_companion_window",
@@ -3670,6 +4086,22 @@
       "max_nesting": 4,
       "use_count": 6,
       "pub_items": 27,
+      "test_count": 0
+    },
+    {
+      "path": "crates/core/src/effect_sandbox.rs",
+      "lines": 8,
+      "test_lines": 0,
+      "code_lines": 8,
+      "is_test_file": false,
+      "max_fn_lines": 0,
+      "max_fn_name": "",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 0,
+      "use_count": 1,
+      "pub_items": 0,
       "test_count": 0
     },
     {
@@ -3818,19 +4250,67 @@
     },
     {
       "path": "crates/core/src/grapheme.rs",
-      "lines": 900,
-      "test_lines": 567,
-      "code_lines": 333,
+      "lines": 397,
+      "test_lines": 0,
+      "code_lines": 397,
       "is_test_file": false,
+      "max_fn_lines": 22,
+      "max_fn_name": "checked_byte_boundary",
+      "max_match_arms": 0,
+      "max_struct_fields": 2,
+      "max_struct_name": "WidthPolicy",
+      "max_nesting": 2,
+      "use_count": 2,
+      "pub_items": 21,
+      "test_count": 0
+    },
+    {
+      "path": "crates/core/src/grapheme_corpus_tests.rs",
+      "lines": 458,
+      "test_lines": 458,
+      "code_lines": 0,
+      "is_test_file": true,
       "max_fn_lines": 36,
       "max_fn_name": "falsifies_the_deleted_per_char_sum",
       "max_match_arms": 0,
       "max_struct_fields": 4,
       "max_struct_name": "Case",
       "max_nesting": 2,
-      "use_count": 6,
-      "pub_items": 16,
-      "test_count": 24
+      "use_count": 2,
+      "pub_items": 0,
+      "test_count": 14
+    },
+    {
+      "path": "crates/core/src/grapheme_proptests.rs",
+      "lines": 81,
+      "test_lines": 68,
+      "code_lines": 13,
+      "is_test_file": false,
+      "max_fn_lines": 0,
+      "max_fn_name": "",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 0,
+      "use_count": 3,
+      "pub_items": 0,
+      "test_count": 0
+    },
+    {
+      "path": "crates/core/src/grapheme_tests.rs",
+      "lines": 112,
+      "test_lines": 112,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 9,
+      "max_fn_name": "display_width_up_to_grapheme_cjk",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 0,
+      "use_count": 2,
+      "pub_items": 0,
+      "test_count": 11
     },
     {
       "path": "crates/core/src/heading.rs",
@@ -3978,9 +4458,9 @@
     },
     {
       "path": "crates/core/src/kb_seed/scheme_api.rs",
-      "lines": 2391,
+      "lines": 2397,
       "test_lines": 419,
-      "code_lines": 1972,
+      "code_lines": 1978,
       "is_test_file": false,
       "max_fn_lines": 112,
       "max_fn_name": "install_scheme_nodes",
@@ -3994,19 +4474,19 @@
     },
     {
       "path": "crates/core/src/kb_seed/terminology.rs",
-      "lines": 177,
-      "test_lines": 0,
-      "code_lines": 177,
+      "lines": 249,
+      "test_lines": 66,
+      "code_lines": 183,
       "is_test_file": false,
-      "max_fn_lines": 167,
+      "max_fn_lines": 171,
       "max_fn_name": "install_terminology_nodes",
       "max_match_arms": 0,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 1,
-      "use_count": 1,
+      "use_count": 2,
       "pub_items": 1,
-      "test_count": 0
+      "test_count": 3
     },
     {
       "path": "crates/core/src/kb_seed/tutorials.rs",
@@ -4026,9 +4506,9 @@
     },
     {
       "path": "crates/core/src/kb_sharing.rs",
-      "lines": 671,
+      "lines": 689,
       "test_lines": 0,
-      "code_lines": 671,
+      "code_lines": 689,
       "is_test_file": false,
       "max_fn_lines": 198,
       "max_fn_name": "build_view",
@@ -4042,8 +4522,8 @@
     },
     {
       "path": "crates/core/src/kb_sharing_tests.rs",
-      "lines": 385,
-      "test_lines": 385,
+      "lines": 422,
+      "test_lines": 422,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 152,
@@ -4051,10 +4531,10 @@
       "max_match_arms": 0,
       "max_struct_fields": 0,
       "max_struct_name": "",
-      "max_nesting": 0,
+      "max_nesting": 1,
       "use_count": 5,
       "pub_items": 0,
-      "test_count": 11
+      "test_count": 12
     },
     {
       "path": "crates/core/src/kb_view.rs",
@@ -4106,9 +4586,9 @@
     },
     {
       "path": "crates/core/src/lib.rs",
-      "lines": 173,
+      "lines": 179,
       "test_lines": 0,
-      "code_lines": 173,
+      "code_lines": 179,
       "is_test_file": false,
       "max_fn_lines": 0,
       "max_fn_name": "",
@@ -4116,7 +4596,7 @@
       "max_struct_fields": 6,
       "max_struct_name": "SchemeToolDef",
       "max_nesting": 0,
-      "use_count": 32,
+      "use_count": 34,
       "pub_items": 3,
       "test_count": 0
     },
@@ -4169,6 +4649,22 @@
       "test_count": 14
     },
     {
+      "path": "crates/core/src/lsp_position.rs",
+      "lines": 150,
+      "test_lines": 104,
+      "code_lines": 46,
+      "is_test_file": false,
+      "max_fn_lines": 22,
+      "max_fn_name": "round_trips_at_every_char_boundary_of_the_nasty_corpus",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 2,
+      "pub_items": 2,
+      "test_count": 5
+    },
+    {
       "path": "crates/core/src/messages.rs",
       "lines": 255,
       "test_lines": 97,
@@ -4218,24 +4714,40 @@
     },
     {
       "path": "crates/core/src/options.rs",
-      "lines": 1648,
+      "lines": 1686,
       "test_lines": 331,
-      "code_lines": 1317,
+      "code_lines": 1355,
       "is_test_file": false,
-      "max_fn_lines": 1105,
+      "max_fn_lines": 1128,
       "max_fn_name": "new",
       "max_match_arms": 5,
       "max_struct_fields": 7,
       "max_struct_name": "OptionDef",
       "max_nesting": 2,
       "use_count": 2,
-      "pub_items": 14,
+      "pub_items": 15,
       "test_count": 19
     },
     {
+      "path": "crates/core/src/permission_tier.rs",
+      "lines": 250,
+      "test_lines": 45,
+      "code_lines": 205,
+      "is_test_file": false,
+      "max_fn_lines": 13,
+      "max_fn_name": "config_name_round_trips_through_parse",
+      "max_match_arms": 5,
+      "max_struct_fields": 1,
+      "max_struct_name": "LiveTier",
+      "max_nesting": 1,
+      "use_count": 2,
+      "pub_items": 9,
+      "test_count": 3
+    },
+    {
       "path": "crates/core/src/project.rs",
-      "lines": 831,
-      "test_lines": 385,
+      "lines": 833,
+      "test_lines": 387,
       "code_lines": 446,
       "is_test_file": false,
       "max_fn_lines": 29,
@@ -4618,8 +5130,8 @@
     },
     {
       "path": "crates/core/src/render_common/status.rs",
-      "lines": 1103,
-      "test_lines": 416,
+      "lines": 1108,
+      "test_lines": 421,
       "code_lines": 687,
       "is_test_file": false,
       "max_fn_lines": 166,
@@ -4634,11 +5146,11 @@
     },
     {
       "path": "crates/core/src/render_common/which_key.rs",
-      "lines": 288,
-      "test_lines": 107,
-      "code_lines": 181,
+      "lines": 355,
+      "test_lines": 163,
+      "code_lines": 192,
       "is_test_file": false,
-      "max_fn_lines": 98,
+      "max_fn_lines": 108,
       "max_fn_name": "compute_which_key_layout",
       "max_match_arms": 0,
       "max_struct_fields": 12,
@@ -4682,19 +5194,19 @@
     },
     {
       "path": "crates/core/src/session.rs",
-      "lines": 134,
-      "test_lines": 30,
-      "code_lines": 104,
+      "lines": 466,
+      "test_lines": 274,
+      "code_lines": 192,
       "is_test_file": false,
-      "max_fn_lines": 35,
+      "max_fn_lines": 38,
       "max_fn_name": "from_editor",
-      "max_match_arms": 0,
-      "max_struct_fields": 5,
+      "max_match_arms": 2,
+      "max_struct_fields": 6,
       "max_struct_name": "SessionBuffer",
-      "max_nesting": 2,
+      "max_nesting": 4,
       "use_count": 3,
-      "pub_items": 6,
-      "test_count": 2
+      "pub_items": 8,
+      "test_count": 9
     },
     {
       "path": "crates/core/src/swap.rs",
@@ -4842,18 +5354,18 @@
     },
     {
       "path": "crates/core/src/text_utils.rs",
-      "lines": 405,
-      "test_lines": 210,
-      "code_lines": 195,
+      "lines": 428,
+      "test_lines": 213,
+      "code_lines": 215,
       "is_test_file": false,
-      "max_fn_lines": 29,
+      "max_fn_lines": 30,
       "max_fn_name": "which_key_column_layout_basic",
       "max_match_arms": 12,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 1,
       "use_count": 2,
-      "pub_items": 5,
+      "pub_items": 7,
       "test_count": 22
     },
     {
@@ -4906,9 +5418,9 @@
     },
     {
       "path": "crates/core/src/window.rs",
-      "lines": 3575,
+      "lines": 3629,
       "test_lines": 1658,
-      "code_lines": 1917,
+      "code_lines": 1971,
       "is_test_file": false,
       "max_fn_lines": 104,
       "max_fn_name": "ensure_scroll_wrapped_with_margin",
@@ -4922,9 +5434,9 @@
     },
     {
       "path": "crates/core/src/word.rs",
-      "lines": 1403,
+      "lines": 1405,
       "test_lines": 609,
-      "code_lines": 794,
+      "code_lines": 796,
       "is_test_file": false,
       "max_fn_lines": 65,
       "max_fn_name": "big_word_object_range",
@@ -4954,28 +5466,28 @@
     },
     {
       "path": "crates/core/src/wrap.rs",
-      "lines": 505,
-      "test_lines": 190,
-      "code_lines": 315,
+      "lines": 612,
+      "test_lines": 266,
+      "code_lines": 346,
       "is_test_file": false,
-      "max_fn_lines": 40,
-      "max_fn_name": "wrap_line_display_rows",
+      "max_fn_lines": 44,
+      "max_fn_name": "wrap_cursor_position",
       "max_match_arms": 3,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 3,
       "use_count": 2,
       "pub_items": 10,
-      "test_count": 22
+      "test_count": 26
     },
     {
       "path": "crates/core/tests/kb_sync_n_peer_e2e.rs",
-      "lines": 646,
-      "test_lines": 646,
+      "lines": 664,
+      "test_lines": 664,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 56,
-      "max_fn_name": "promoted_node_shares_and_joins_peer_materializes_as_federation",
+      "max_fn_lines": 57,
+      "max_fn_name": "run_concurrent_edits_converge",
       "max_match_arms": 2,
       "max_struct_fields": 3,
       "max_struct_name": "Peer",
@@ -5082,11 +5594,11 @@
     },
     {
       "path": "crates/export/src/html.rs",
-      "lines": 429,
-      "test_lines": 151,
-      "code_lines": 278,
+      "lines": 495,
+      "test_lines": 211,
+      "code_lines": 284,
       "is_test_file": false,
-      "max_fn_lines": 118,
+      "max_fn_lines": 122,
       "max_fn_name": "render_element",
       "max_match_arms": 11,
       "max_struct_fields": 0,
@@ -5094,7 +5606,7 @@
       "max_nesting": 4,
       "use_count": 3,
       "pub_items": 1,
-      "test_count": 7
+      "test_count": 8
     },
     {
       "path": "crates/export/src/html_graph.rs",
@@ -5114,18 +5626,18 @@
     },
     {
       "path": "crates/export/src/lib.rs",
-      "lines": 1811,
+      "lines": 1846,
       "test_lines": 770,
-      "code_lines": 1041,
+      "code_lines": 1076,
       "is_test_file": false,
-      "max_fn_lines": 314,
-      "max_fn_name": "parse_org_document",
+      "max_fn_lines": 332,
+      "max_fn_name": "parse_org_document_with_lines",
       "max_match_arms": 11,
       "max_struct_fields": 7,
       "max_struct_name": "OrgMeta",
       "max_nesting": 4,
       "use_count": 1,
-      "pub_items": 13,
+      "pub_items": 14,
       "test_count": 51
     },
     {
@@ -5210,11 +5722,11 @@
     },
     {
       "path": "crates/gui/src/buffer_render.rs",
-      "lines": 1210,
-      "test_lines": 209,
-      "code_lines": 1001,
+      "lines": 1216,
+      "test_lines": 210,
+      "code_lines": 1006,
       "is_test_file": false,
-      "max_fn_lines": 609,
+      "max_fn_lines": 613,
       "max_fn_name": "render_buffer_content",
       "max_match_arms": 3,
       "max_struct_fields": 6,
@@ -5226,8 +5738,8 @@
     },
     {
       "path": "crates/gui/src/canvas.rs",
-      "lines": 1679,
-      "test_lines": 272,
+      "lines": 1684,
+      "test_lines": 277,
       "code_lines": 1407,
       "is_test_file": false,
       "max_fn_lines": 114,
@@ -5258,11 +5770,11 @@
     },
     {
       "path": "crates/gui/src/cursor.rs",
-      "lines": 929,
-      "test_lines": 256,
-      "code_lines": 673,
+      "lines": 991,
+      "test_lines": 273,
+      "code_lines": 718,
       "is_test_file": false,
-      "max_fn_lines": 219,
+      "max_fn_lines": 259,
       "max_fn_name": "compute_cursor_position",
       "max_match_arms": 3,
       "max_struct_fields": 5,
@@ -5338,27 +5850,27 @@
     },
     {
       "path": "crates/gui/src/layout.rs",
-      "lines": 991,
-      "test_lines": 273,
-      "code_lines": 718,
+      "lines": 1051,
+      "test_lines": 307,
+      "code_lines": 744,
       "is_test_file": false,
-      "max_fn_lines": 413,
+      "max_fn_lines": 419,
       "max_fn_name": "compute_layout",
       "max_match_arms": 2,
       "max_struct_fields": 14,
       "max_struct_name": "LineLayout",
       "max_nesting": 4,
-      "use_count": 9,
+      "use_count": 10,
       "pub_items": 16,
       "test_count": 13
     },
     {
       "path": "crates/gui/src/lib.rs",
-      "lines": 1952,
+      "lines": 1954,
       "test_lines": 61,
-      "code_lines": 1891,
+      "code_lines": 1893,
       "is_test_file": false,
-      "max_fn_lines": 647,
+      "max_fn_lines": 649,
       "max_fn_name": "render",
       "max_match_arms": 7,
       "max_struct_fields": 17,
@@ -5386,17 +5898,17 @@
     },
     {
       "path": "crates/gui/src/popup_render.rs",
-      "lines": 1419,
+      "lines": 1433,
       "test_lines": 48,
-      "code_lines": 1371,
+      "code_lines": 1385,
       "is_test_file": false,
-      "max_fn_lines": 153,
+      "max_fn_lines": 160,
       "max_fn_name": "render_command_palette",
       "max_match_arms": 4,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 4,
-      "use_count": 10,
+      "use_count": 9,
       "pub_items": 14,
       "test_count": 5
     },
@@ -5450,11 +5962,11 @@
     },
     {
       "path": "crates/gui/src/status_render.rs",
-      "lines": 119,
+      "lines": 120,
       "test_lines": 0,
-      "code_lines": 119,
+      "code_lines": 120,
       "is_test_file": false,
-      "max_fn_lines": 86,
+      "max_fn_lines": 87,
       "max_fn_name": "render_status_bar",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -5658,19 +6170,83 @@
     },
     {
       "path": "crates/mae/src/ai_event_handler.rs",
-      "lines": 2608,
-      "test_lines": 996,
-      "code_lines": 1612,
+      "lines": 1793,
+      "test_lines": 0,
+      "code_lines": 1793,
       "is_test_file": false,
-      "max_fn_lines": 612,
+      "max_fn_lines": 686,
       "max_fn_name": "handle_ai_event",
-      "max_match_arms": 18,
+      "max_match_arms": 19,
       "max_struct_fields": 10,
       "max_struct_name": "AiEventContext",
       "max_nesting": 5,
-      "use_count": 10,
+      "use_count": 7,
       "pub_items": 14,
-      "test_count": 21
+      "test_count": 0
+    },
+    {
+      "path": "crates/mae/src/ai_event_handler_adr090_tests.rs",
+      "lines": 212,
+      "test_lines": 212,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 32,
+      "max_fn_name": "a_category_restriction_denies_on_the_mcp_surface",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 6
+    },
+    {
+      "path": "crates/mae/src/ai_event_handler_permission_tests.rs",
+      "lines": 200,
+      "test_lines": 200,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 71,
+      "max_fn_name": "execute_command_scheme_sourced_gets_companion_window_protection",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 2,
+      "pub_items": 0,
+      "test_count": 8
+    },
+    {
+      "path": "crates/mae/src/ai_event_handler_session_permission_tests.rs",
+      "lines": 480,
+      "test_lines": 480,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 153,
+      "max_fn_name": "three_plus_sessions_with_differing_ceilings_stay_isolated_on_both_axes",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 7
+    },
+    {
+      "path": "crates/mae/src/ai_event_handler_tests.rs",
+      "lines": 399,
+      "test_lines": 399,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 55,
+      "max_fn_name": "execute_command_denies_a_scheme_sourced_command_above_the_declared_ceiling",
+      "max_match_arms": 0,
+      "max_struct_fields": 1,
+      "max_struct_name": "FakeProvider",
+      "max_nesting": 0,
+      "use_count": 4,
+      "pub_items": 0,
+      "test_count": 6
     },
     {
       "path": "crates/mae/src/ai_residency.rs",
@@ -5690,27 +6266,27 @@
     },
     {
       "path": "crates/mae/src/bin/build_adr_kb.rs",
-      "lines": 138,
+      "lines": 137,
       "test_lines": 0,
-      "code_lines": 138,
+      "code_lines": 137,
       "is_test_file": false,
       "max_fn_lines": 101,
       "max_fn_name": "main",
-      "max_match_arms": 2,
+      "max_match_arms": 0,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 2,
-      "use_count": 5,
+      "use_count": 4,
       "pub_items": 0,
       "test_count": 0
     },
     {
       "path": "crates/mae/src/bin/build_devpractices_kb.rs",
-      "lines": 51,
+      "lines": 49,
       "test_lines": 0,
-      "code_lines": 51,
+      "code_lines": 49,
       "is_test_file": false,
-      "max_fn_lines": 28,
+      "max_fn_lines": 26,
       "max_fn_name": "main",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -5722,11 +6298,11 @@
     },
     {
       "path": "crates/mae/src/bin/build_manual_kb.rs",
-      "lines": 70,
+      "lines": 76,
       "test_lines": 0,
-      "code_lines": 70,
+      "code_lines": 76,
       "is_test_file": false,
-      "max_fn_lines": 54,
+      "max_fn_lines": 60,
       "max_fn_name": "main",
       "max_match_arms": 2,
       "max_struct_fields": 0,
@@ -5738,11 +6314,11 @@
     },
     {
       "path": "crates/mae/src/bin/build_practices_kb.rs",
-      "lines": 50,
+      "lines": 48,
       "test_lines": 0,
-      "code_lines": 50,
+      "code_lines": 48,
       "is_test_file": false,
-      "max_fn_lines": 28,
+      "max_fn_lines": 26,
       "max_fn_name": "main",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -5769,26 +6345,122 @@
       "test_count": 0
     },
     {
-      "path": "crates/mae/src/bootstrap.rs",
-      "lines": 3579,
-      "test_lines": 868,
-      "code_lines": 2711,
+      "path": "crates/mae/src/bootstrap/mod.rs",
+      "lines": 2941,
+      "test_lines": 0,
+      "code_lines": 2941,
       "is_test_file": false,
-      "max_fn_lines": 454,
+      "max_fn_lines": 528,
       "max_fn_name": "init_kb_federation",
       "max_match_arms": 10,
       "max_struct_fields": 1,
       "max_struct_name": "EditorLogLayer",
       "max_nesting": 6,
-      "use_count": 30,
+      "use_count": 22,
       "pub_items": 26,
-      "test_count": 26
+      "test_count": 0
+    },
+    {
+      "path": "crates/mae/src/bootstrap/tests/eviction.rs",
+      "lines": 137,
+      "test_lines": 137,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 74,
+      "max_fn_name": "init_kb_federation_evicts_mae_provisioned_rows_and_keeps_the_users_own",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 0,
+      "pub_items": 0,
+      "test_count": 2
+    },
+    {
+      "path": "crates/mae/src/bootstrap/tests/kb_federation.rs",
+      "lines": 406,
+      "test_lines": 406,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 54,
+      "max_fn_name": "init_kb_federation_serves_system_kbs_from_the_catalog_not_the_registry",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 3,
+      "pub_items": 0,
+      "test_count": 6
+    },
+    {
+      "path": "crates/mae/src/bootstrap/tests/memory.rs",
+      "lines": 150,
+      "test_lines": 150,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 22,
+      "max_fn_name": "synthesize_memory_categories_ordered",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 9
+    },
+    {
+      "path": "crates/mae/src/bootstrap/tests/mod.rs",
+      "lines": 23,
+      "test_lines": 23,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 0,
+      "max_fn_name": "",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 0,
+      "use_count": 0,
+      "pub_items": 0,
+      "test_count": 0
+    },
+    {
+      "path": "crates/mae/src/bootstrap/tests/modules.rs",
+      "lines": 334,
+      "test_lines": 334,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 57,
+      "max_fn_name": "reload_all_modules_loads_embedded_and_is_idempotent",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 4,
+      "pub_items": 0,
+      "test_count": 10
+    },
+    {
+      "path": "crates/mae/src/bootstrap/tests/startup.rs",
+      "lines": 165,
+      "test_lines": 165,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 71,
+      "max_fn_name": "init_daemon_connection_notifies_on_a_real_version_mismatch",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 3,
+      "use_count": 3,
+      "pub_items": 0,
+      "test_count": 3
     },
     {
       "path": "crates/mae/src/cli.rs",
-      "lines": 842,
+      "lines": 894,
       "test_lines": 45,
-      "code_lines": 797,
+      "code_lines": 849,
       "is_test_file": false,
       "max_fn_lines": 117,
       "max_fn_name": "handle_setup_collab",
@@ -5802,11 +6474,11 @@
     },
     {
       "path": "crates/mae/src/collab_bridge/events_connection.rs",
-      "lines": 342,
+      "lines": 361,
       "test_lines": 0,
-      "code_lines": 342,
+      "code_lines": 361,
       "is_test_file": false,
-      "max_fn_lines": 100,
+      "max_fn_lines": 119,
       "max_fn_name": "handle_connected_event",
       "max_match_arms": 8,
       "max_struct_fields": 0,
@@ -5818,9 +6490,9 @@
     },
     {
       "path": "crates/mae/src/collab_bridge/events_doc.rs",
-      "lines": 570,
+      "lines": 572,
       "test_lines": 0,
-      "code_lines": 570,
+      "code_lines": 572,
       "is_test_file": false,
       "max_fn_lines": 150,
       "max_fn_name": "handle_buffer_state_event",
@@ -5834,33 +6506,49 @@
     },
     {
       "path": "crates/mae/src/collab_bridge/events_kb.rs",
-      "lines": 685,
+      "lines": 786,
       "test_lines": 0,
-      "code_lines": 685,
+      "code_lines": 786,
       "is_test_file": false,
-      "max_fn_lines": 143,
+      "max_fn_lines": 185,
       "max_fn_name": "kb_intent_to_command",
       "max_match_arms": 13,
       "max_struct_fields": 0,
       "max_struct_name": "",
-      "max_nesting": 4,
+      "max_nesting": 5,
       "use_count": 2,
       "pub_items": 0,
       "test_count": 0
     },
     {
-      "path": "crates/mae/src/collab_bridge/mod.rs",
-      "lines": 5709,
+      "path": "crates/mae/src/collab_bridge/events_kb_share_conflict.rs",
+      "lines": 186,
       "test_lines": 0,
-      "code_lines": 5709,
+      "code_lines": 186,
+      "is_test_file": false,
+      "max_fn_lines": 137,
+      "max_fn_name": "handle_kb_share_id_conflict",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 0
+    },
+    {
+      "path": "crates/mae/src/collab_bridge/mod.rs",
+      "lines": 5868,
+      "test_lines": 24,
+      "code_lines": 5844,
       "is_test_file": false,
       "max_fn_lines": 1892,
       "max_fn_name": "run_collab_task",
-      "max_match_arms": 31,
+      "max_match_arms": 32,
       "max_struct_fields": 12,
       "max_struct_name": "CollabSpawn",
       "max_nesting": 8,
-      "use_count": 20,
+      "use_count": 22,
       "pub_items": 2,
       "test_count": 0
     },
@@ -5898,8 +6586,8 @@
     },
     {
       "path": "crates/mae/src/collab_bridge/tests/collab_bridge_e2e_flags_offline_tests.rs",
-      "lines": 319,
-      "test_lines": 319,
+      "lines": 373,
+      "test_lines": 373,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 102,
@@ -5908,9 +6596,9 @@
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 2,
-      "use_count": 8,
+      "use_count": 10,
       "pub_items": 0,
-      "test_count": 7
+      "test_count": 8
     },
     {
       "path": "crates/mae/src/collab_bridge/tests/collab_bridge_e2e_recovery_tests.rs",
@@ -6025,20 +6713,52 @@
       "test_count": 5
     },
     {
-      "path": "crates/mae/src/collab_bridge/tests/collab_bridge_kb_sharing_rpc_errors_tests.rs",
-      "lines": 159,
-      "test_lines": 159,
+      "path": "crates/mae/src/collab_bridge/tests/collab_bridge_kb_identity_tests.rs",
+      "lines": 172,
+      "test_lines": 172,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 31,
-      "max_fn_name": "kb_approve_member_rejection_is_not_silent",
+      "max_fn_lines": 70,
+      "max_fn_name": "two_editors_can_both_share_their_primary_kb",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 2,
+      "pub_items": 0,
+      "test_count": 3
+    },
+    {
+      "path": "crates/mae/src/collab_bridge/tests/collab_bridge_kb_share_conflict_tests.rs",
+      "lines": 403,
+      "test_lines": 403,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 82,
+      "max_fn_name": "creating_a_node_drains_manifest_then_update_under_the_minted_id",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 2,
+      "pub_items": 0,
+      "test_count": 6
+    },
+    {
+      "path": "crates/mae/src/collab_bridge/tests/collab_bridge_kb_sharing_rpc_errors_tests.rs",
+      "lines": 240,
+      "test_lines": 240,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 34,
+      "max_fn_name": "kb_share_id_conflict_is_routed_by_code_not_message",
       "max_match_arms": 2,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 1,
       "use_count": 1,
       "pub_items": 0,
-      "test_count": 5
+      "test_count": 7
     },
     {
       "path": "crates/mae/src/collab_bridge/tests/collab_bridge_kb_sharing_staleness_tests.rs",
@@ -6058,13 +6778,13 @@
     },
     {
       "path": "crates/mae/src/collab_bridge/tests/collab_bridge_kb_sync_tests.rs",
-      "lines": 431,
-      "test_lines": 431,
+      "lines": 476,
+      "test_lines": 476,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 88,
+      "max_fn_lines": 98,
       "max_fn_name": "adr019_share_marker_survives_registry_reload",
-      "max_match_arms": 0,
+      "max_match_arms": 2,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 0,
@@ -6138,8 +6858,8 @@
     },
     {
       "path": "crates/mae/src/collab_bridge/tests/collab_bridge_write_failure_tests.rs",
-      "lines": 520,
-      "test_lines": 520,
+      "lines": 547,
+      "test_lines": 547,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 77,
@@ -6154,8 +6874,8 @@
     },
     {
       "path": "crates/mae/src/collab_bridge/tests/mod.rs",
-      "lines": 42,
-      "test_lines": 42,
+      "lines": 44,
+      "test_lines": 44,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 0,
@@ -6170,9 +6890,9 @@
     },
     {
       "path": "crates/mae/src/config.rs",
-      "lines": 1989,
-      "test_lines": 621,
-      "code_lines": 1368,
+      "lines": 2168,
+      "test_lines": 717,
+      "code_lines": 1451,
       "is_test_file": false,
       "max_fn_lines": 233,
       "max_fn_name": "run_wizard",
@@ -6180,14 +6900,46 @@
       "max_struct_fields": 12,
       "max_struct_name": "AiSection",
       "max_nesting": 4,
-      "use_count": 8,
-      "pub_items": 29,
-      "test_count": 34
+      "use_count": 7,
+      "pub_items": 30,
+      "test_count": 35
+    },
+    {
+      "path": "crates/mae/src/config_template_tests.rs",
+      "lines": 86,
+      "test_lines": 86,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 26,
+      "max_fn_name": "generated_template_states_the_shipped_default",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 2,
+      "pub_items": 0,
+      "test_count": 2
+    },
+    {
+      "path": "crates/mae/src/config_tier_resolution_tests.rs",
+      "lines": 202,
+      "test_lines": 202,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 41,
+      "max_fn_name": "tier_precedence_is_env_then_scheme_then_toml_then_default",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 2,
+      "pub_items": 0,
+      "test_count": 5
     },
     {
       "path": "crates/mae/src/daemon_supervisor.rs",
-      "lines": 544,
-      "test_lines": 307,
+      "lines": 542,
+      "test_lines": 305,
       "code_lines": 237,
       "is_test_file": false,
       "max_fn_lines": 82,
@@ -6215,22 +6967,6 @@
       "use_count": 3,
       "pub_items": 0,
       "test_count": 0
-    },
-    {
-      "path": "crates/mae/src/devpractices_kb.rs",
-      "lines": 133,
-      "test_lines": 95,
-      "code_lines": 38,
-      "is_test_file": false,
-      "max_fn_lines": 39,
-      "max_fn_name": "ensure_registered_with_path_never_overwrites_an_existing_entry",
-      "max_match_arms": 2,
-      "max_struct_fields": 0,
-      "max_struct_name": "",
-      "max_nesting": 1,
-      "use_count": 4,
-      "pub_items": 1,
-      "test_count": 3
     },
     {
       "path": "crates/mae/src/doctor.rs",
@@ -6266,9 +7002,9 @@
     },
     {
       "path": "crates/mae/src/gui_app.rs",
-      "lines": 1662,
+      "lines": 1666,
       "test_lines": 0,
-      "code_lines": 1662,
+      "code_lines": 1666,
       "is_test_file": false,
       "max_fn_lines": 291,
       "max_fn_name": "about_to_wait",
@@ -6298,27 +7034,27 @@
     },
     {
       "path": "crates/mae/src/guidance_kb_engine.rs",
-      "lines": 179,
+      "lines": 194,
       "test_lines": 0,
-      "code_lines": 179,
+      "code_lines": 194,
       "is_test_file": false,
-      "max_fn_lines": 30,
-      "max_fn_name": "ensure_registered_with_path",
-      "max_match_arms": 0,
-      "max_struct_fields": 3,
-      "max_struct_name": "BundledGuidanceKb",
-      "max_nesting": 2,
-      "use_count": 1,
-      "pub_items": 4,
+      "max_fn_lines": 40,
+      "max_fn_name": "evict_system_rows_from_registry",
+      "max_match_arms": 3,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 3,
+      "use_count": 3,
+      "pub_items": 3,
       "test_count": 0
     },
     {
       "path": "crates/mae/src/headless_loop.rs",
-      "lines": 576,
+      "lines": 600,
       "test_lines": 152,
-      "code_lines": 424,
+      "code_lines": 448,
       "is_test_file": false,
-      "max_fn_lines": 210,
+      "max_fn_lines": 234,
       "max_fn_name": "run_headless_loop",
       "max_match_arms": 3,
       "max_struct_fields": 0,
@@ -6329,12 +7065,28 @@
       "test_count": 10
     },
     {
-      "path": "crates/mae/src/key_handling/command.rs",
-      "lines": 786,
-      "test_lines": 66,
-      "code_lines": 720,
+      "path": "crates/mae/src/kb_provisioning_cost.rs",
+      "lines": 268,
+      "test_lines": 210,
+      "code_lines": 58,
       "is_test_file": false,
-      "max_fn_lines": 482,
+      "max_fn_lines": 57,
+      "max_fn_name": "measure_real_guidance_provisioning",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 2,
+      "pub_items": 0,
+      "test_count": 3
+    },
+    {
+      "path": "crates/mae/src/key_handling/command.rs",
+      "lines": 795,
+      "test_lines": 66,
+      "code_lines": 729,
+      "is_test_file": false,
+      "max_fn_lines": 491,
       "max_fn_name": "handle_command_mode",
       "max_match_arms": 24,
       "max_struct_fields": 0,
@@ -6362,11 +7114,11 @@
     },
     {
       "path": "crates/mae/src/key_handling/conversation.rs",
-      "lines": 555,
+      "lines": 588,
       "test_lines": 184,
-      "code_lines": 371,
+      "code_lines": 404,
       "is_test_file": false,
-      "max_fn_lines": 208,
+      "max_fn_lines": 233,
       "max_fn_name": "handle_conversation_input",
       "max_match_arms": 26,
       "max_struct_fields": 0,
@@ -6410,11 +7162,11 @@
     },
     {
       "path": "crates/mae/src/key_handling/mod.rs",
-      "lines": 558,
+      "lines": 560,
       "test_lines": 0,
-      "code_lines": 558,
+      "code_lines": 560,
       "is_test_file": false,
-      "max_fn_lines": 273,
+      "max_fn_lines": 275,
       "max_fn_name": "handle_key",
       "max_match_arms": 17,
       "max_struct_fields": 0,
@@ -6426,9 +7178,9 @@
     },
     {
       "path": "crates/mae/src/key_handling/normal.rs",
-      "lines": 534,
+      "lines": 537,
       "test_lines": 0,
-      "code_lines": 534,
+      "code_lines": 537,
       "is_test_file": false,
       "max_fn_lines": 231,
       "max_fn_name": "handle_keymap_mode",
@@ -6490,9 +7242,9 @@
     },
     {
       "path": "crates/mae/src/lsp_bridge.rs",
-      "lines": 1002,
+      "lines": 1006,
       "test_lines": 52,
-      "code_lines": 950,
+      "code_lines": 954,
       "is_test_file": false,
       "max_fn_lines": 414,
       "max_fn_name": "handle_lsp_event",
@@ -6506,34 +7258,34 @@
     },
     {
       "path": "crates/mae/src/main.rs",
-      "lines": 1396,
-      "test_lines": 184,
-      "code_lines": 1212,
+      "lines": 1524,
+      "test_lines": 235,
+      "code_lines": 1289,
       "is_test_file": false,
-      "max_fn_lines": 830,
+      "max_fn_lines": 874,
       "max_fn_name": "main",
       "max_match_arms": 4,
       "max_struct_fields": 1,
       "max_struct_name": "DaemonControlClient",
-      "max_nesting": 5,
+      "max_nesting": 6,
       "use_count": 10,
       "pub_items": 0,
-      "test_count": 18
+      "test_count": 20
     },
     {
       "path": "crates/mae/src/manual_kb.rs",
-      "lines": 226,
+      "lines": 97,
       "test_lines": 0,
-      "code_lines": 226,
+      "code_lines": 97,
       "is_test_file": false,
-      "max_fn_lines": 46,
-      "max_fn_name": "locate_and_validate",
+      "max_fn_lines": 31,
+      "max_fn_name": "well_known_paths",
       "max_match_arms": 0,
-      "max_struct_fields": 2,
-      "max_struct_name": "ManualKbResult",
+      "max_struct_fields": 0,
+      "max_struct_name": "",
       "max_nesting": 3,
-      "use_count": 4,
-      "pub_items": 5,
+      "use_count": 2,
+      "pub_items": 1,
       "test_count": 0
     },
     {
@@ -6618,19 +7370,19 @@
     },
     {
       "path": "crates/mae/src/pkg/lockfile.rs",
-      "lines": 204,
-      "test_lines": 53,
-      "code_lines": 151,
+      "lines": 328,
+      "test_lines": 141,
+      "code_lines": 187,
       "is_test_file": false,
-      "max_fn_lines": 31,
-      "max_fn_name": "sha256_hex",
-      "max_match_arms": 2,
+      "max_fn_lines": 36,
+      "max_fn_name": "a_corrupt_lockfile_is_never_silently_emptied_or_overwritten",
+      "max_match_arms": 3,
       "max_struct_fields": 4,
       "max_struct_name": "PackagePin",
       "max_nesting": 2,
       "use_count": 7,
-      "pub_items": 10,
-      "test_count": 5
+      "pub_items": 11,
+      "test_count": 8
     },
     {
       "path": "crates/mae/src/pkg/manifest.rs",
@@ -6666,9 +7418,9 @@
     },
     {
       "path": "crates/mae/src/pkg/paths.rs",
-      "lines": 140,
-      "test_lines": 38,
-      "code_lines": 102,
+      "lines": 171,
+      "test_lines": 39,
+      "code_lines": 132,
       "is_test_file": false,
       "max_fn_lines": 37,
       "max_fn_name": "builtin_module_dirs",
@@ -6677,7 +7429,7 @@
       "max_struct_name": "",
       "max_nesting": 3,
       "use_count": 2,
-      "pub_items": 3,
+      "pub_items": 4,
       "test_count": 2
     },
     {
@@ -6695,22 +7447,6 @@
       "use_count": 6,
       "pub_items": 4,
       "test_count": 7
-    },
-    {
-      "path": "crates/mae/src/practices_kb.rs",
-      "lines": 147,
-      "test_lines": 99,
-      "code_lines": 48,
-      "is_test_file": false,
-      "max_fn_lines": 38,
-      "max_fn_name": "ensure_registered_with_path_never_overwrites_an_existing_entry",
-      "max_match_arms": 2,
-      "max_struct_fields": 0,
-      "max_struct_name": "",
-      "max_nesting": 1,
-      "use_count": 4,
-      "pub_items": 1,
-      "test_count": 3
     },
     {
       "path": "crates/mae/src/scheme_dap_bridge.rs",
@@ -6793,12 +7529,28 @@
       "test_count": 5
     },
     {
-      "path": "crates/mae/src/terminal_loop.rs",
-      "lines": 949,
-      "test_lines": 43,
-      "code_lines": 906,
+      "path": "crates/mae/src/system_corpus.rs",
+      "lines": 261,
+      "test_lines": 115,
+      "code_lines": 146,
       "is_test_file": false,
-      "max_fn_lines": 660,
+      "max_fn_lines": 24,
+      "max_fn_name": "materialise",
+      "max_match_arms": 4,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 4,
+      "pub_items": 1,
+      "test_count": 5
+    },
+    {
+      "path": "crates/mae/src/terminal_loop.rs",
+      "lines": 972,
+      "test_lines": 43,
+      "code_lines": 929,
+      "is_test_file": false,
+      "max_fn_lines": 663,
       "max_fn_name": "run_terminal_loop",
       "max_match_arms": 7,
       "max_struct_fields": 0,
@@ -6826,12 +7578,12 @@
     },
     {
       "path": "crates/mae/src/upgrade.rs",
-      "lines": 1096,
+      "lines": 1105,
       "test_lines": 165,
-      "code_lines": 931,
+      "code_lines": 940,
       "is_test_file": false,
-      "max_fn_lines": 113,
-      "max_fn_name": "run_tarball_upgrade",
+      "max_fn_lines": 125,
+      "max_fn_name": "preflight",
       "max_match_arms": 6,
       "max_struct_fields": 6,
       "max_struct_name": "InstallState",
@@ -6842,19 +7594,19 @@
     },
     {
       "path": "crates/mae/src/watchdog.rs",
-      "lines": 180,
-      "test_lines": 0,
-      "code_lines": 180,
+      "lines": 376,
+      "test_lines": 97,
+      "code_lines": 279,
       "is_test_file": false,
-      "max_fn_lines": 48,
+      "max_fn_lines": 61,
       "max_fn_name": "watchdog_loop",
-      "max_match_arms": 2,
+      "max_match_arms": 5,
       "max_struct_fields": 3,
       "max_struct_name": "ThreadDump",
-      "max_nesting": 4,
-      "use_count": 5,
+      "max_nesting": 3,
+      "use_count": 6,
       "pub_items": 7,
-      "test_count": 0
+      "test_count": 5
     },
     {
       "path": "crates/mae/tests/check_config_theme_failure.rs",
@@ -6874,8 +7626,8 @@
     },
     {
       "path": "crates/mae/tests/collab_tcp_e2e_kb_protocol.rs",
-      "lines": 369,
-      "test_lines": 369,
+      "lines": 376,
+      "test_lines": 376,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 100,
@@ -6922,32 +7674,32 @@
     },
     {
       "path": "crates/mae/tests/collab_tcp_e2e_support/mod.rs",
-      "lines": 341,
-      "test_lines": 341,
+      "lines": 487,
+      "test_lines": 487,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 24,
-      "max_fn_name": "spawn_daemon",
+      "max_fn_lines": 63,
+      "max_fn_name": "spawn_server",
       "max_match_arms": 2,
       "max_struct_fields": 3,
       "max_struct_name": "TcpClient",
       "max_nesting": 4,
       "use_count": 8,
-      "pub_items": 22,
+      "pub_items": 24,
       "test_count": 0
     },
     {
       "path": "crates/mae/tests/collab_tcp_e2e_tests.rs",
-      "lines": 283,
-      "test_lines": 283,
+      "lines": 290,
+      "test_lines": 290,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 57,
-      "max_fn_name": "tcp_offline_edit_reconnect_resync",
+      "max_fn_lines": 56,
+      "max_fn_name": "tcp_concurrent_three_editors",
       "max_match_arms": 0,
       "max_struct_fields": 0,
       "max_struct_name": "",
-      "max_nesting": 2,
+      "max_nesting": 1,
       "use_count": 5,
       "pub_items": 0,
       "test_count": 8
@@ -6970,11 +7722,11 @@
     },
     {
       "path": "crates/mae/tests/gui_windows_input_spike.rs",
-      "lines": 240,
-      "test_lines": 240,
+      "lines": 253,
+      "test_lines": 253,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 138,
+      "max_fn_lines": 151,
       "max_fn_name": "a_real_window_appears_and_a_synthetic_click_lands",
       "max_match_arms": 0,
       "max_struct_fields": 1,
@@ -6986,44 +7738,44 @@
     },
     {
       "path": "crates/mae/tests/guidance_delivery_e2e.rs",
-      "lines": 311,
-      "test_lines": 311,
+      "lines": 325,
+      "test_lines": 325,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 72,
-      "max_fn_name": "spawn_isolated_headless_with_guidance",
-      "max_match_arms": 0,
-      "max_struct_fields": 1,
-      "max_struct_name": "HeadlessGuard",
-      "max_nesting": 3,
+      "max_fn_lines": 43,
+      "max_fn_name": "spawn_isolated_headless_with_guidance_opts",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
       "use_count": 5,
       "pub_items": 0,
-      "test_count": 3
+      "test_count": 4
     },
     {
       "path": "crates/mae/tests/headless_e2e.rs",
-      "lines": 259,
-      "test_lines": 259,
+      "lines": 161,
+      "test_lines": 161,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 160,
+      "max_fn_lines": 125,
       "max_fn_name": "headless_real_subprocess_boots_serves_mcp_and_shuts_down_cleanly",
       "max_match_arms": 0,
-      "max_struct_fields": 1,
-      "max_struct_name": "HeadlessGuard",
-      "max_nesting": 3,
-      "use_count": 4,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 0,
+      "use_count": 3,
       "pub_items": 0,
       "test_count": 1
     },
     {
-      "path": "crates/mae/tests/headless_idle_cpu_e2e.rs",
-      "lines": 159,
-      "test_lines": 159,
+      "path": "crates/mae/tests/headless_guard_leak_regression_e2e.rs",
+      "lines": 109,
+      "test_lines": 109,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 78,
-      "max_fn_name": "idle_headless_instance_uses_bounded_near_zero_cpu",
+      "max_fn_lines": 52,
+      "max_fn_name": "a_panic_while_the_guard_is_alive_still_kills_the_real_process",
       "max_match_arms": 0,
       "max_struct_fields": 0,
       "max_struct_name": "",
@@ -7033,9 +7785,25 @@
       "test_count": 1
     },
     {
+      "path": "crates/mae/tests/headless_idle_cpu_e2e.rs",
+      "lines": 89,
+      "test_lines": 89,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 49,
+      "max_fn_name": "idle_headless_instance_uses_bounded_near_zero_cpu",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 2,
+      "pub_items": 0,
+      "test_count": 1
+    },
+    {
       "path": "crates/mae/tests/headless_kb_convergence_e2e.rs",
-      "lines": 394,
-      "test_lines": 394,
+      "lines": 409,
+      "test_lines": 409,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 111,
@@ -7044,17 +7812,33 @@
       "max_struct_fields": 3,
       "max_struct_name": "HeadlessInstance",
       "max_nesting": 2,
-      "use_count": 5,
+      "use_count": 6,
+      "pub_items": 0,
+      "test_count": 1
+    },
+    {
+      "path": "crates/mae/tests/headless_kb_preload_e2e.rs",
+      "lines": 253,
+      "test_lines": 253,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 63,
+      "max_fn_name": "start",
+      "max_match_arms": 0,
+      "max_struct_fields": 3,
+      "max_struct_name": "Session",
+      "max_nesting": 2,
+      "use_count": 6,
       "pub_items": 0,
       "test_count": 1
     },
     {
       "path": "crates/mae/tests/headless_soak_shaped_e2e.rs",
-      "lines": 231,
-      "test_lines": 231,
+      "lines": 163,
+      "test_lines": 163,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 93,
+      "max_fn_lines": 65,
       "max_fn_name": "sustained_connect_disconnect_churn_shows_bounded_rss_and_fd_growth",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -7063,6 +7847,22 @@
       "use_count": 4,
       "pub_items": 0,
       "test_count": 1
+    },
+    {
+      "path": "crates/mae/tests/headless_test_support/mod.rs",
+      "lines": 303,
+      "test_lines": 303,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 52,
+      "max_fn_name": "spawn_isolated_headless",
+      "max_match_arms": 2,
+      "max_struct_fields": 1,
+      "max_struct_name": "HeadlessGuard",
+      "max_nesting": 3,
+      "use_count": 4,
+      "pub_items": 12,
+      "test_count": 0
     },
     {
       "path": "crates/mae/tests/kb_graph_validation_embeddings.rs",
@@ -7210,35 +8010,35 @@
     },
     {
       "path": "crates/mae/tests/mcp_tool_tiering_e2e.rs",
-      "lines": 338,
-      "test_lines": 338,
+      "lines": 239,
+      "test_lines": 239,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 71,
+      "max_fn_lines": 69,
       "max_fn_name": "extended_tier_tool_is_discoverable_via_request_tools_and_directly_callable",
       "max_match_arms": 0,
-      "max_struct_fields": 1,
-      "max_struct_name": "HeadlessGuard",
-      "max_nesting": 3,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
       "use_count": 4,
       "pub_items": 0,
       "test_count": 3
     },
     {
       "path": "crates/mae/tests/tool_schema_nested_e2e.rs",
-      "lines": 219,
-      "test_lines": 219,
+      "lines": 169,
+      "test_lines": 169,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 116,
+      "max_fn_lines": 76,
       "max_fn_name": "propose_changes_schema_has_a_real_items_sub_schema_over_the_real_wire",
       "max_match_arms": 0,
-      "max_struct_fields": 1,
-      "max_struct_name": "HeadlessGuard",
-      "max_nesting": 3,
-      "use_count": 4,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 3,
       "pub_items": 0,
-      "test_count": 1
+      "test_count": 2
     },
     {
       "path": "crates/make/src/detect.rs",
@@ -7306,9 +8106,9 @@
     },
     {
       "path": "crates/renderer/src/buffer_render.rs",
-      "lines": 892,
+      "lines": 899,
       "test_lines": 52,
-      "code_lines": 840,
+      "code_lines": 847,
       "is_test_file": false,
       "max_fn_lines": 577,
       "max_fn_name": "render_buffer",
@@ -7338,11 +8138,11 @@
     },
     {
       "path": "crates/renderer/src/cursor.rs",
-      "lines": 167,
+      "lines": 184,
       "test_lines": 0,
-      "code_lines": 167,
+      "code_lines": 184,
       "is_test_file": false,
-      "max_fn_lines": 147,
+      "max_fn_lines": 164,
       "max_fn_name": "set_cursor",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -7418,11 +8218,11 @@
     },
     {
       "path": "crates/renderer/src/lib.rs",
-      "lines": 618,
+      "lines": 619,
       "test_lines": 0,
-      "code_lines": 618,
+      "code_lines": 619,
       "is_test_file": false,
-      "max_fn_lines": 226,
+      "max_fn_lines": 227,
       "max_fn_name": "render_frame",
       "max_match_arms": 7,
       "max_struct_fields": 1,
@@ -7450,11 +8250,11 @@
     },
     {
       "path": "crates/renderer/src/popup_render.rs",
-      "lines": 948,
+      "lines": 960,
       "test_lines": 0,
-      "code_lines": 948,
+      "code_lines": 960,
       "is_test_file": false,
-      "max_fn_lines": 172,
+      "max_fn_lines": 184,
       "max_fn_name": "render_command_palette",
       "max_match_arms": 4,
       "max_struct_fields": 0,
@@ -7482,11 +8282,11 @@
     },
     {
       "path": "crates/renderer/src/splash_render.rs",
-      "lines": 168,
+      "lines": 173,
       "test_lines": 0,
-      "code_lines": 168,
+      "code_lines": 173,
       "is_test_file": false,
-      "max_fn_lines": 141,
+      "max_fn_lines": 146,
       "max_fn_name": "render_splash",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -7498,11 +8298,11 @@
     },
     {
       "path": "crates/renderer/src/status_render.rs",
-      "lines": 97,
+      "lines": 101,
       "test_lines": 0,
-      "code_lines": 97,
+      "code_lines": 101,
       "is_test_file": false,
-      "max_fn_lines": 73,
+      "max_fn_lines": 77,
       "max_fn_name": "render_status_bar",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -7530,11 +8330,11 @@
     },
     {
       "path": "crates/renderer/src/which_key_render.rs",
-      "lines": 107,
+      "lines": 108,
       "test_lines": 0,
-      "code_lines": 107,
+      "code_lines": 108,
       "is_test_file": false,
-      "max_fn_lines": 86,
+      "max_fn_lines": 87,
       "max_fn_name": "render_which_key_popup",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -7562,17 +8362,17 @@
     },
     {
       "path": "crates/scheme/src/compiler.rs",
-      "lines": 3082,
+      "lines": 3112,
       "test_lines": 0,
-      "code_lines": 3082,
+      "code_lines": 3112,
       "is_test_file": false,
       "max_fn_lines": 160,
       "max_fn_name": "compile_define_record_type",
       "max_match_arms": 43,
-      "max_struct_fields": 7,
-      "max_struct_name": "CodeObject",
+      "max_struct_fields": 8,
+      "max_struct_name": "Compiler",
       "max_nesting": 6,
-      "use_count": 4,
+      "use_count": 5,
       "pub_items": 8,
       "test_count": 0
     },
@@ -7610,11 +8410,11 @@
     },
     {
       "path": "crates/scheme/src/introspect.rs",
-      "lines": 545,
+      "lines": 561,
       "test_lines": 287,
-      "code_lines": 258,
+      "code_lines": 274,
       "is_test_file": false,
-      "max_fn_lines": 64,
+      "max_fn_lines": 80,
       "max_fn_name": "register_introspection",
       "max_match_arms": 3,
       "max_struct_fields": 6,
@@ -7706,8 +8506,8 @@
     },
     {
       "path": "crates/scheme/src/parity_tests.rs",
-      "lines": 896,
-      "test_lines": 896,
+      "lines": 901,
+      "test_lines": 901,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 75,
@@ -7737,9 +8537,25 @@
       "test_count": 4
     },
     {
+      "path": "crates/scheme/src/permission_option_tests.rs",
+      "lines": 281,
+      "test_lines": 281,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 107,
+      "max_fn_name": "no_unlisted_scheme_route_reaches_the_option_queues",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 4,
+      "use_count": 3,
+      "pub_items": 0,
+      "test_count": 5
+    },
+    {
       "path": "crates/scheme/src/permission_tests.rs",
-      "lines": 571,
-      "test_lines": 571,
+      "lines": 617,
+      "test_lines": 617,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 94,
@@ -7750,7 +8566,7 @@
       "max_nesting": 4,
       "use_count": 4,
       "pub_items": 0,
-      "test_count": 13
+      "test_count": 14
     },
     {
       "path": "crates/scheme/src/reader.rs",
@@ -7770,18 +8586,18 @@
     },
     {
       "path": "crates/scheme/src/runtime.rs",
-      "lines": 1205,
+      "lines": 1242,
       "test_lines": 0,
-      "code_lines": 1205,
+      "code_lines": 1242,
       "is_test_file": false,
       "max_fn_lines": 65,
       "max_fn_name": "new",
       "max_match_arms": 3,
-      "max_struct_fields": 110,
+      "max_struct_fields": 111,
       "max_struct_name": "SharedState",
       "max_nesting": 3,
       "use_count": 26,
-      "pub_items": 59,
+      "pub_items": 60,
       "test_count": 0
     },
     {
@@ -7818,9 +8634,9 @@
     },
     {
       "path": "crates/scheme/src/runtime/kb_crud.rs",
-      "lines": 417,
+      "lines": 426,
       "test_lines": 0,
-      "code_lines": 417,
+      "code_lines": 426,
       "is_test_file": false,
       "max_fn_lines": 247,
       "max_fn_name": "register_kb_crud_fns",
@@ -7882,11 +8698,11 @@
     },
     {
       "path": "crates/scheme/src/runtime/kb_primitives.rs",
-      "lines": 618,
+      "lines": 628,
       "test_lines": 0,
-      "code_lines": 618,
+      "code_lines": 628,
       "is_test_file": false,
-      "max_fn_lines": 597,
+      "max_fn_lines": 607,
       "max_fn_name": "register_kb_primitive_fns",
       "max_match_arms": 2,
       "max_struct_fields": 0,
@@ -7978,9 +8794,9 @@
     },
     {
       "path": "crates/scheme/src/runtime/state_sync_apply.rs",
-      "lines": 814,
+      "lines": 821,
       "test_lines": 0,
-      "code_lines": 814,
+      "code_lines": 821,
       "is_test_file": false,
       "max_fn_lines": 154,
       "max_fn_name": "apply_kb_mutations",
@@ -8010,16 +8826,16 @@
     },
     {
       "path": "crates/scheme/src/runtime/state_sync_inject.rs",
-      "lines": 454,
+      "lines": 483,
       "test_lines": 0,
-      "code_lines": 454,
+      "code_lines": 483,
       "is_test_file": false,
-      "max_fn_lines": 137,
+      "max_fn_lines": 163,
       "max_fn_name": "inject_scalar_globals",
       "max_match_arms": 10,
       "max_struct_fields": 0,
       "max_struct_name": "",
-      "max_nesting": 2,
+      "max_nesting": 3,
       "use_count": 7,
       "pub_items": 1,
       "test_count": 0
@@ -8074,9 +8890,9 @@
     },
     {
       "path": "crates/scheme/src/stdlib/base.rs",
-      "lines": 2607,
+      "lines": 2612,
       "test_lines": 336,
-      "code_lines": 2271,
+      "code_lines": 2276,
       "is_test_file": false,
       "max_fn_lines": 575,
       "max_fn_name": "register_arithmetic",
@@ -8234,9 +9050,9 @@
     },
     {
       "path": "crates/scheme/src/vm.rs",
-      "lines": 3229,
-      "test_lines": 1322,
-      "code_lines": 1907,
+      "lines": 3274,
+      "test_lines": 1347,
+      "code_lines": 1927,
       "is_test_file": false,
       "max_fn_lines": 421,
       "max_fn_name": "run",
@@ -8585,6 +9401,22 @@
       "test_count": 4
     },
     {
+      "path": "daemon/src/cli.rs",
+      "lines": 314,
+      "test_lines": 153,
+      "code_lines": 161,
+      "is_test_file": false,
+      "max_fn_lines": 70,
+      "max_fn_name": "parse",
+      "max_match_arms": 9,
+      "max_struct_fields": 10,
+      "max_struct_name": "Cli",
+      "max_nesting": 3,
+      "use_count": 3,
+      "pub_items": 3,
+      "test_count": 10
+    },
+    {
       "path": "daemon/src/collab_handler/docs_methods.rs",
       "lines": 193,
       "test_lines": 0,
@@ -8618,9 +9450,9 @@
     },
     {
       "path": "daemon/src/collab_handler/kb_content.rs",
-      "lines": 802,
+      "lines": 855,
       "test_lines": 0,
-      "code_lines": 802,
+      "code_lines": 855,
       "is_test_file": false,
       "max_fn_lines": 259,
       "max_fn_name": "handle_kb_node_update",
@@ -8634,13 +9466,29 @@
     },
     {
       "path": "daemon/src/collab_handler/kb_governance.rs",
-      "lines": 322,
+      "lines": 331,
       "test_lines": 0,
-      "code_lines": 322,
+      "code_lines": 331,
       "is_test_file": false,
-      "max_fn_lines": 71,
+      "max_fn_lines": 80,
       "max_fn_name": "handle_kb_set_governance",
       "max_match_arms": 3,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 0
+    },
+    {
+      "path": "daemon/src/collab_handler/kb_id_guard.rs",
+      "lines": 52,
+      "test_lines": 0,
+      "code_lines": 52,
+      "is_test_file": false,
+      "max_fn_lines": 17,
+      "max_fn_name": "refuse_unaddressable_kb_id",
+      "max_match_arms": 0,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 1,
@@ -8666,9 +9514,9 @@
     },
     {
       "path": "daemon/src/collab_handler/kb_membership.rs",
-      "lines": 649,
+      "lines": 710,
       "test_lines": 0,
-      "code_lines": 649,
+      "code_lines": 710,
       "is_test_file": false,
       "max_fn_lines": 265,
       "max_fn_name": "handle_kb_join",
@@ -8681,28 +9529,44 @@
       "test_count": 0
     },
     {
-      "path": "daemon/src/collab_handler/mod.rs",
-      "lines": 2183,
+      "path": "daemon/src/collab_handler/kb_share_ownership.rs",
+      "lines": 84,
       "test_lines": 0,
-      "code_lines": 2183,
+      "code_lines": 84,
       "is_test_file": false,
-      "max_fn_lines": 435,
+      "max_fn_lines": 47,
+      "max_fn_name": "refuse_if_owned_by_another",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 0
+    },
+    {
+      "path": "daemon/src/collab_handler/mod.rs",
+      "lines": 2398,
+      "test_lines": 0,
+      "code_lines": 2398,
+      "is_test_file": false,
+      "max_fn_lines": 477,
       "max_fn_name": "handle_doc_request_inner",
       "max_match_arms": 38,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 4,
       "use_count": 17,
-      "pub_items": 13,
+      "pub_items": 14,
       "test_count": 0
     },
     {
       "path": "daemon/src/collab_handler/sync_methods.rs",
-      "lines": 458,
+      "lines": 502,
       "test_lines": 0,
-      "code_lines": 458,
+      "code_lines": 502,
       "is_test_file": false,
-      "max_fn_lines": 156,
+      "max_fn_lines": 162,
       "max_fn_name": "handle_sync_update",
       "max_match_arms": 2,
       "max_struct_fields": 0,
@@ -8746,11 +9610,11 @@
     },
     {
       "path": "daemon/src/collab_handler/tests/collab_handler_connection_limits_tests.rs",
-      "lines": 64,
-      "test_lines": 64,
+      "lines": 65,
+      "test_lines": 65,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 46,
+      "max_fn_lines": 47,
       "max_fn_name": "silent_client_is_dropped_within_the_handshake_timeout",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -8759,6 +9623,22 @@
       "use_count": 4,
       "pub_items": 0,
       "test_count": 1
+    },
+    {
+      "path": "daemon/src/collab_handler/tests/collab_handler_cross_kb_node_isolation_tests.rs",
+      "lines": 232,
+      "test_lines": 232,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 130,
+      "max_fn_name": "kb_node_fetch_cannot_read_a_node_belonging_to_another_kb",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 2
     },
     {
       "path": "daemon/src/collab_handler/tests/collab_handler_cross_kb_role_isolation_tests.rs",
@@ -8793,6 +9673,38 @@
       "test_count": 4
     },
     {
+      "path": "daemon/src/collab_handler/tests/collab_handler_device_revocation_fence_tests.rs",
+      "lines": 373,
+      "test_lines": 373,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 78,
+      "max_fn_name": "a_removed_device_stops_writing_with_no_key_rotation_involved",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 5
+    },
+    {
+      "path": "daemon/src/collab_handler/tests/collab_handler_doc_address_guard_tests.rs",
+      "lines": 215,
+      "test_lines": 215,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 37,
+      "max_fn_name": "raw_reads_of_a_node_doc_are_refused_by_address_type",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 5
+    },
+    {
       "path": "daemon/src/collab_handler/tests/collab_handler_governance_quorum_tests.rs",
       "lines": 257,
       "test_lines": 257,
@@ -8810,8 +9722,8 @@
     },
     {
       "path": "daemon/src/collab_handler/tests/collab_handler_kb_lifecycle_tests.rs",
-      "lines": 497,
-      "test_lines": 497,
+      "lines": 470,
+      "test_lines": 470,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 82,
@@ -8822,7 +9734,23 @@
       "max_nesting": 1,
       "use_count": 1,
       "pub_items": 0,
-      "test_count": 10
+      "test_count": 9
+    },
+    {
+      "path": "daemon/src/collab_handler/tests/collab_handler_kb_list_isolation_tests.rs",
+      "lines": 171,
+      "test_lines": 171,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 49,
+      "max_fn_name": "kb_list_does_not_reveal_a_kb_the_caller_is_not_a_member_of",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 3
     },
     {
       "path": "daemon/src/collab_handler/tests/collab_handler_kb_query_mtls_tests.rs",
@@ -8839,6 +9767,22 @@
       "use_count": 4,
       "pub_items": 0,
       "test_count": 3
+    },
+    {
+      "path": "daemon/src/collab_handler/tests/collab_handler_kb_share_ownership_tests.rs",
+      "lines": 354,
+      "test_lines": 354,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 90,
+      "max_fn_name": "kb_share_refuses_an_id_owned_by_another_principal",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 6
     },
     {
       "path": "daemon/src/collab_handler/tests/collab_handler_lease_race_tests.rs",
@@ -8874,12 +9818,12 @@
     },
     {
       "path": "daemon/src/collab_handler/tests/collab_handler_member_access_tests.rs",
-      "lines": 234,
-      "test_lines": 234,
+      "lines": 262,
+      "test_lines": 262,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 50,
-      "max_fn_name": "only_owner_manages_members",
+      "max_fn_lines": 72,
+      "max_fn_name": "kb_node_fetch_serves_members_denies_nonmembers",
       "max_match_arms": 0,
       "max_struct_fields": 0,
       "max_struct_name": "",
@@ -8906,11 +9850,11 @@
     },
     {
       "path": "daemon/src/collab_handler/tests/collab_handler_n_way_convergence_tests.rs",
-      "lines": 170,
-      "test_lines": 170,
+      "lines": 176,
+      "test_lines": 176,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 75,
+      "max_fn_lines": 78,
       "max_fn_name": "three_concurrent_editors_converge_to_identical_content_regardless_of_order",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -8922,19 +9866,19 @@
     },
     {
       "path": "daemon/src/collab_handler/tests/collab_handler_persist_failure_tests.rs",
-      "lines": 168,
-      "test_lines": 168,
+      "lines": 364,
+      "test_lines": 364,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 51,
-      "max_fn_name": "pending_join_reports_error_when_persist_fails_not_a_false_pending",
+      "max_fn_lines": 68,
+      "max_fn_name": "add_member_flags_the_signed_oplog_divergence_instead_of_hiding_it",
       "max_match_arms": 0,
       "max_struct_fields": 2,
       "max_struct_name": "FailingBackend",
       "max_nesting": 1,
-      "use_count": 3,
+      "use_count": 6,
       "pub_items": 0,
-      "test_count": 2
+      "test_count": 5
     },
     {
       "path": "daemon/src/collab_handler/tests/collab_handler_protocol_dispatch_tests.rs",
@@ -9001,6 +9945,22 @@
       "test_count": 3
     },
     {
+      "path": "daemon/src/collab_handler/tests/collab_handler_same_node_id_isolation_tests.rs",
+      "lines": 370,
+      "test_lines": 370,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 56,
+      "max_fn_name": "a_colon_bearing_kb_id_is_refused_before_it_can_collide",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 6
+    },
+    {
       "path": "daemon/src/collab_handler/tests/collab_handler_self_issue_token_tests.rs",
       "lines": 174,
       "test_lines": 174,
@@ -9034,11 +9994,11 @@
     },
     {
       "path": "daemon/src/collab_handler/tests/collab_handler_sync_protocol_tests.rs",
-      "lines": 403,
-      "test_lines": 403,
+      "lines": 404,
+      "test_lines": 404,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 70,
+      "max_fn_lines": 71,
       "max_fn_name": "full_client_session_over_pipe",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -9047,6 +10007,22 @@
       "use_count": 2,
       "pub_items": 0,
       "test_count": 9
+    },
+    {
+      "path": "daemon/src/collab_handler/tests/collab_handler_tenant_quota_tests.rs",
+      "lines": 104,
+      "test_lines": 104,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 29,
+      "max_fn_name": "a_throttled_request_is_refused_by_the_collab_dispatch",
+      "max_match_arms": 0,
+      "max_struct_fields": 2,
+      "max_struct_name": "AlwaysThrottle",
+      "max_nesting": 0,
+      "use_count": 3,
+      "pub_items": 0,
+      "test_count": 2
     },
     {
       "path": "daemon/src/collab_handler/tests/collab_handler_transport_oplog_tests.rs",
@@ -9066,11 +10042,11 @@
     },
     {
       "path": "daemon/src/collab_handler/tests/collab_handler_viewer_epoch_tests.rs",
-      "lines": 327,
-      "test_lines": 327,
+      "lines": 360,
+      "test_lines": 360,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 146,
+      "max_fn_lines": 173,
       "max_fn_name": "viewer_era_edits_do_not_cascade_on_grant",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -9082,8 +10058,8 @@
     },
     {
       "path": "daemon/src/collab_handler/tests/mod.rs",
-      "lines": 418,
-      "test_lines": 418,
+      "lines": 461,
+      "test_lines": 461,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 33,
@@ -9098,25 +10074,57 @@
     },
     {
       "path": "daemon/src/config.rs",
-      "lines": 1050,
+      "lines": 1154,
       "test_lines": 199,
-      "code_lines": 851,
+      "code_lines": 955,
       "is_test_file": false,
-      "max_fn_lines": 76,
+      "max_fn_lines": 78,
       "max_fn_name": "check_collab",
       "max_match_arms": 2,
       "max_struct_fields": 17,
       "max_struct_name": "OAuthConfig",
       "max_nesting": 4,
       "use_count": 4,
-      "pub_items": 23,
+      "pub_items": 28,
       "test_count": 14
     },
     {
+      "path": "daemon/src/config_bind_tests.rs",
+      "lines": 72,
+      "test_lines": 72,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 14,
+      "max_fn_name": "an_unauthenticated_off_host_bind_is_refused",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 3
+    },
+    {
+      "path": "daemon/src/config_guards.rs",
+      "lines": 41,
+      "test_lines": 0,
+      "code_lines": 41,
+      "is_test_file": false,
+      "max_fn_lines": 11,
+      "max_fn_name": "unauthenticated_bind_issues",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 2,
+      "pub_items": 1,
+      "test_count": 0
+    },
+    {
       "path": "daemon/src/conn_limit.rs",
-      "lines": 123,
+      "lines": 130,
       "test_lines": 57,
-      "code_lines": 66,
+      "code_lines": 73,
       "is_test_file": false,
       "max_fn_lines": 18,
       "max_fn_name": "guard_decrements_even_when_dropped_via_a_panic_unwind",
@@ -9125,16 +10133,16 @@
       "max_struct_name": "ConnLimiter",
       "max_nesting": 1,
       "use_count": 3,
-      "pub_items": 5,
+      "pub_items": 6,
       "test_count": 4
     },
     {
       "path": "daemon/src/dialer.rs",
-      "lines": 1157,
-      "test_lines": 549,
-      "code_lines": 608,
+      "lines": 1184,
+      "test_lines": 565,
+      "code_lines": 619,
       "is_test_file": false,
-      "max_fn_lines": 150,
+      "max_fn_lines": 158,
       "max_fn_name": "peer_session",
       "max_match_arms": 3,
       "max_struct_fields": 0,
@@ -9146,18 +10154,18 @@
     },
     {
       "path": "daemon/src/doc_store.rs",
-      "lines": 1823,
-      "test_lines": 781,
-      "code_lines": 1042,
+      "lines": 1920,
+      "test_lines": 790,
+      "code_lines": 1130,
       "is_test_file": false,
-      "max_fn_lines": 78,
-      "max_fn_name": "get_or_create",
+      "max_fn_lines": 86,
+      "max_fn_name": "get_or_create_with",
       "max_match_arms": 2,
       "max_struct_fields": 14,
       "max_struct_name": "DocStore",
       "max_nesting": 3,
       "use_count": 13,
-      "pub_items": 55,
+      "pub_items": 56,
       "test_count": 39
     },
     {
@@ -9178,14 +10186,14 @@
     },
     {
       "path": "daemon/src/handler.rs",
-      "lines": 2247,
-      "test_lines": 1138,
-      "code_lines": 1109,
+      "lines": 2336,
+      "test_lines": 1151,
+      "code_lines": 1185,
       "is_test_file": false,
-      "max_fn_lines": 639,
+      "max_fn_lines": 656,
       "max_fn_name": "dispatch",
       "max_match_arms": 23,
-      "max_struct_fields": 11,
+      "max_struct_fields": 13,
       "max_struct_name": "DaemonState",
       "max_nesting": 5,
       "use_count": 18,
@@ -9209,13 +10217,29 @@
       "test_count": 7
     },
     {
-      "path": "daemon/src/kb_query.rs",
-      "lines": 419,
-      "test_lines": 0,
-      "code_lines": 419,
+      "path": "daemon/src/kb_doc_migration.rs",
+      "lines": 441,
+      "test_lines": 197,
+      "code_lines": 244,
       "is_test_file": false,
-      "max_fn_lines": 58,
-      "max_fn_name": "graph",
+      "max_fn_lines": 117,
+      "max_fn_name": "migrate_legacy_node_docs",
+      "max_match_arms": 3,
+      "max_struct_fields": 2,
+      "max_struct_name": "Ambiguous",
+      "max_nesting": 4,
+      "use_count": 7,
+      "pub_items": 5,
+      "test_count": 6
+    },
+    {
+      "path": "daemon/src/kb_query.rs",
+      "lines": 436,
+      "test_lines": 0,
+      "code_lines": 436,
+      "is_test_file": false,
+      "max_fn_lines": 62,
+      "max_fn_name": "get",
       "max_match_arms": 6,
       "max_struct_fields": 3,
       "max_struct_name": "KbQueryLimits",
@@ -9258,9 +10282,9 @@
     },
     {
       "path": "daemon/src/lib.rs",
-      "lines": 25,
+      "lines": 27,
       "test_lines": 0,
-      "code_lines": 25,
+      "code_lines": 27,
       "is_test_file": false,
       "max_fn_lines": 0,
       "max_fn_name": "",
@@ -9274,17 +10298,17 @@
     },
     {
       "path": "daemon/src/main.rs",
-      "lines": 1566,
+      "lines": 1715,
       "test_lines": 0,
-      "code_lines": 1566,
+      "code_lines": 1715,
       "is_test_file": false,
-      "max_fn_lines": 422,
+      "max_fn_lines": 438,
       "max_fn_name": "spawn_collab_server",
-      "max_match_arms": 5,
+      "max_match_arms": 8,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 8,
-      "use_count": 14,
+      "use_count": 13,
       "pub_items": 0,
       "test_count": 0
     },
@@ -9306,19 +10330,19 @@
     },
     {
       "path": "daemon/src/oauth.rs",
-      "lines": 952,
-      "test_lines": 231,
-      "code_lines": 721,
+      "lines": 768,
+      "test_lines": 0,
+      "code_lines": 768,
       "is_test_file": false,
-      "max_fn_lines": 130,
+      "max_fn_lines": 136,
       "max_fn_name": "handle_request",
       "max_match_arms": 5,
       "max_struct_fields": 10,
       "max_struct_name": "ResourceServerConfig",
       "max_nesting": 3,
-      "use_count": 23,
+      "use_count": 15,
       "pub_items": 9,
-      "test_count": 12
+      "test_count": 0
     },
     {
       "path": "daemon/src/oauth_self_issue.rs",
@@ -9337,10 +10361,26 @@
       "test_count": 6
     },
     {
+      "path": "daemon/src/oauth_tests.rs",
+      "lines": 297,
+      "test_lines": 297,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 43,
+      "max_fn_name": "every_response_is_marked_no_store",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 8,
+      "pub_items": 0,
+      "test_count": 13
+    },
+    {
       "path": "daemon/src/p2p.rs",
-      "lines": 692,
-      "test_lines": 408,
-      "code_lines": 284,
+      "lines": 697,
+      "test_lines": 410,
+      "code_lines": 287,
       "is_test_file": false,
       "max_fn_lines": 89,
       "max_fn_name": "two_endpoints_round_trip_a_framed_message",
@@ -9353,20 +10393,68 @@
       "test_count": 10
     },
     {
-      "path": "daemon/src/projector.rs",
-      "lines": 485,
-      "test_lines": 249,
-      "code_lines": 236,
+      "path": "daemon/src/projection_stores.rs",
+      "lines": 44,
+      "test_lines": 0,
+      "code_lines": 44,
       "is_test_file": false,
-      "max_fn_lines": 65,
-      "max_fn_name": "collection_change_projects_routes_and_deletes_nodes",
+      "max_fn_lines": 4,
+      "max_fn_name": "store_for",
+      "max_match_arms": 0,
+      "max_struct_fields": 1,
+      "max_struct_name": "DaemonProjectionStores",
+      "max_nesting": 0,
+      "use_count": 5,
+      "pub_items": 2,
+      "test_count": 0
+    },
+    {
+      "path": "daemon/src/projector.rs",
+      "lines": 653,
+      "test_lines": 253,
+      "code_lines": 400,
+      "is_test_file": false,
+      "max_fn_lines": 68,
+      "max_fn_name": "reconcile_kb",
       "max_match_arms": 7,
       "max_struct_fields": 3,
-      "max_struct_name": "Projector",
+      "max_struct_name": "DriftReport",
       "max_nesting": 5,
       "use_count": 11,
-      "pub_items": 7,
+      "pub_items": 11,
       "test_count": 6
+    },
+    {
+      "path": "daemon/src/projector_gate_c_tests.rs",
+      "lines": 422,
+      "test_lines": 422,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 90,
+      "max_fn_name": "every_projected_field_is_drift_detectable",
+      "max_match_arms": 0,
+      "max_struct_fields": 1,
+      "max_struct_name": "MemStores",
+      "max_nesting": 2,
+      "use_count": 5,
+      "pub_items": 0,
+      "test_count": 5
+    },
+    {
+      "path": "daemon/src/quota.rs",
+      "lines": 86,
+      "test_lines": 0,
+      "code_lines": 86,
+      "is_test_file": false,
+      "max_fn_lines": 7,
+      "max_fn_name": "charge_or_reject",
+      "max_match_arms": 0,
+      "max_struct_fields": 1,
+      "max_struct_name": "QuotaLease",
+      "max_nesting": 1,
+      "use_count": 0,
+      "pub_items": 6,
+      "test_count": 0
     },
     {
       "path": "daemon/src/scheduler.rs",
@@ -9386,13 +10474,13 @@
     },
     {
       "path": "daemon/src/storage.rs",
-      "lines": 911,
-      "test_lines": 387,
-      "code_lines": 524,
+      "lines": 926,
+      "test_lines": 393,
+      "code_lines": 533,
       "is_test_file": false,
       "max_fn_lines": 62,
       "max_fn_name": "load_document",
-      "max_match_arms": 2,
+      "max_match_arms": 3,
       "max_struct_fields": 3,
       "max_struct_name": "WalEntry",
       "max_nesting": 3,
@@ -9402,24 +10490,72 @@
     },
     {
       "path": "daemon/src/tenant.rs",
-      "lines": 600,
+      "lines": 701,
       "test_lines": 300,
-      "code_lines": 300,
+      "code_lines": 401,
       "is_test_file": false,
       "max_fn_lines": 49,
       "max_fn_name": "evicting_a_tenant_self_heals_and_never_disturbs_co_resident_tenants",
-      "max_match_arms": 3,
+      "max_match_arms": 6,
       "max_struct_fields": 4,
       "max_struct_name": "TenantQuotaState",
       "max_nesting": 2,
       "use_count": 9,
-      "pub_items": 10,
+      "pub_items": 12,
       "test_count": 8
     },
     {
+      "path": "daemon/src/tenant_collab_quota_tests.rs",
+      "lines": 150,
+      "test_lines": 150,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 23,
+      "max_fn_name": "a_mutation_costs_more_of_the_budget_than_a_read",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 3,
+      "pub_items": 0,
+      "test_count": 5
+    },
+    {
+      "path": "daemon/src/tests/connection_observability_tests.rs",
+      "lines": 246,
+      "test_lines": 246,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 61,
+      "max_fn_name": "collab_sessions_are_reported_when_a_broadcaster_exists",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 5
+    },
+    {
+      "path": "daemon/src/tests/kb_query_cross_kb_isolation_tests.rs",
+      "lines": 234,
+      "test_lines": 234,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 186,
+      "max_fn_name": "kb_query_get_cannot_read_a_node_belonging_to_another_kb",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 4,
+      "use_count": 7,
+      "pub_items": 0,
+      "test_count": 1
+    },
+    {
       "path": "daemon/src/tests/kb_query_tests.rs",
-      "lines": 920,
-      "test_lines": 920,
+      "lines": 937,
+      "test_lines": 937,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 76,
@@ -9498,8 +10634,8 @@
     },
     {
       "path": "daemon/src/tests/mod.rs",
-      "lines": 143,
-      "test_lines": 143,
+      "lines": 151,
+      "test_lines": 151,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 51,
@@ -9511,6 +10647,22 @@
       "use_count": 8,
       "pub_items": 0,
       "test_count": 0
+    },
+    {
+      "path": "daemon/src/tests/multi_instance_tests.rs",
+      "lines": 353,
+      "test_lines": 353,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 75,
+      "max_fn_name": "identity_and_authorized_keys_do_not_follow_data_dir",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 3,
+      "pub_items": 0,
+      "test_count": 6
     },
     {
       "path": "daemon/src/tests/webview_tests.rs",
@@ -9562,8 +10714,8 @@
     },
     {
       "path": "daemon/tests/collab_e2e.rs",
-      "lines": 2648,
-      "test_lines": 2648,
+      "lines": 2649,
+      "test_lines": 2649,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 152,
@@ -9578,8 +10730,8 @@
     },
     {
       "path": "daemon/tests/collab_stress.rs",
-      "lines": 552,
-      "test_lines": 552,
+      "lines": 553,
+      "test_lines": 553,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 92,
@@ -9591,6 +10743,22 @@
       "use_count": 8,
       "pub_items": 0,
       "test_count": 4
+    },
+    {
+      "path": "daemon/tests/common/mod.rs",
+      "lines": 221,
+      "test_lines": 221,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 55,
+      "max_fn_name": "spawn_server_opts",
+      "max_match_arms": 0,
+      "max_struct_fields": 4,
+      "max_struct_name": "ServerGuard",
+      "max_nesting": 3,
+      "use_count": 7,
+      "pub_items": 8,
+      "test_count": 0
     },
     {
       "path": "daemon/tests/config_change_contract_e2e.rs",
@@ -9609,6 +10777,22 @@
       "test_count": 1
     },
     {
+      "path": "daemon/tests/daemon_state_auth_modes_e2e.rs",
+      "lines": 199,
+      "test_lines": 199,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 25,
+      "max_fn_name": "kb_node_crdt_is_served_under_the_default_auth_mode",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 4,
+      "pub_items": 0,
+      "test_count": 5
+    },
+    {
       "path": "daemon/tests/federated_instance_startup_e2e.rs",
       "lines": 210,
       "test_lines": 210,
@@ -9623,6 +10807,38 @@
       "use_count": 6,
       "pub_items": 0,
       "test_count": 1
+    },
+    {
+      "path": "daemon/tests/hub_observability_e2e.rs",
+      "lines": 97,
+      "test_lines": 97,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 76,
+      "max_fn_name": "tcp_daemon_status_reports_connected_collab_clients",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 1
+    },
+    {
+      "path": "daemon/tests/instance_selection_e2e.rs",
+      "lines": 369,
+      "test_lines": 369,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 68,
+      "max_fn_name": "authorize_writes_into_the_instance_its_config_names",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 2,
+      "pub_items": 0,
+      "test_count": 6
     },
     {
       "path": "daemon/tests/multi_tenant_process_isolation_e2e.rs",
@@ -9642,17 +10858,17 @@
     },
     {
       "path": "daemon/tests/network_e2e.rs",
-      "lines": 659,
-      "test_lines": 659,
+      "lines": 527,
+      "test_lines": 527,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 65,
       "max_fn_name": "tcp_save_intent_ok",
       "max_match_arms": 0,
-      "max_struct_fields": 3,
-      "max_struct_name": "ServerGuard",
-      "max_nesting": 3,
-      "use_count": 7,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 5,
       "pub_items": 0,
       "test_count": 10
     },
@@ -9674,11 +10890,11 @@
     },
     {
       "path": "daemon/tests/remote_hub_query_layer_e2e.rs",
-      "lines": 352,
-      "test_lines": 352,
+      "lines": 360,
+      "test_lines": 360,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 72,
+      "max_fn_lines": 80,
       "max_fn_name": "spawn_daemon_with_oauth",
       "max_match_arms": 0,
       "max_struct_fields": 3,
@@ -9721,6 +10937,22 @@
       "test_count": 1
     },
     {
+      "path": "shared/effect-sandbox/src/lib.rs",
+      "lines": 280,
+      "test_lines": 86,
+      "code_lines": 194,
+      "is_test_file": false,
+      "max_fn_lines": 12,
+      "max_fn_name": "opting_in_permits_effects_only_within_the_scope",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 2,
+      "pub_items": 4,
+      "test_count": 6
+    },
+    {
       "path": "shared/kb/examples/dogfood_metrics.rs",
       "lines": 78,
       "test_lines": 0,
@@ -9733,6 +10965,22 @@
       "max_struct_name": "",
       "max_nesting": 1,
       "use_count": 2,
+      "pub_items": 0,
+      "test_count": 0
+    },
+    {
+      "path": "shared/kb/examples/org_parse_latency.rs",
+      "lines": 132,
+      "test_lines": 0,
+      "code_lines": 132,
+      "is_test_file": false,
+      "max_fn_lines": 102,
+      "max_fn_name": "main",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 3,
+      "use_count": 1,
       "pub_items": 0,
       "test_count": 0
     },
@@ -9850,12 +11098,12 @@
     },
     {
       "path": "shared/kb/src/cozo_store/db.rs",
-      "lines": 417,
+      "lines": 586,
       "test_lines": 0,
-      "code_lines": 417,
+      "code_lines": 586,
       "is_test_file": false,
-      "max_fn_lines": 45,
-      "max_fn_name": "node_put_params",
+      "max_fn_lines": 82,
+      "max_fn_name": "retry_on_transient_sqlite_busy_with_deadline",
       "max_match_arms": 5,
       "max_struct_fields": 0,
       "max_struct_name": "",
@@ -9898,16 +11146,16 @@
     },
     {
       "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-      "lines": 515,
+      "lines": 599,
       "test_lines": 0,
-      "code_lines": 515,
+      "code_lines": 599,
       "is_test_file": false,
-      "max_fn_lines": 89,
+      "max_fn_lines": 114,
       "max_fn_name": "fts_search",
-      "max_match_arms": 2,
+      "max_match_arms": 3,
       "max_struct_fields": 0,
       "max_struct_name": "",
-      "max_nesting": 4,
+      "max_nesting": 3,
       "use_count": 2,
       "pub_items": 0,
       "test_count": 0
@@ -9946,17 +11194,17 @@
     },
     {
       "path": "shared/kb/src/cozo_store/schema.rs",
-      "lines": 785,
+      "lines": 770,
       "test_lines": 0,
-      "code_lines": 785,
+      "code_lines": 770,
       "is_test_file": false,
-      "max_fn_lines": 317,
+      "max_fn_lines": 316,
       "max_fn_name": "ensure_schema",
-      "max_match_arms": 3,
+      "max_match_arms": 0,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 2,
-      "use_count": 2,
+      "use_count": 3,
       "pub_items": 7,
       "test_count": 0
     },
@@ -10026,19 +11274,67 @@
     },
     {
       "path": "shared/kb/src/cozo_store/tests/db_tests.rs",
-      "lines": 47,
-      "test_lines": 47,
+      "lines": 292,
+      "test_lines": 292,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 23,
-      "max_fn_name": "node_source_round_trips_through_the_store_for_every_variant",
+      "max_fn_lines": 30,
+      "max_fn_name": "gives_up_after_the_bounded_retry_budget_on_persistent_contention",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 3,
+      "use_count": 4,
+      "pub_items": 0,
+      "test_count": 12
+    },
+    {
+      "path": "shared/kb/src/cozo_store/tests/fts_migration_tests.rs",
+      "lines": 283,
+      "test_lines": 283,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 78,
+      "max_fn_name": "stale_fts_index_is_rebuilt_on_open",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 2,
+      "pub_items": 0,
+      "test_count": 4
+    },
+    {
+      "path": "shared/kb/src/cozo_store/tests/fts_query_tests.rs",
+      "lines": 387,
+      "test_lines": 387,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 93,
+      "max_fn_name": "tantivy_fts_on_sqlite",
       "max_match_arms": 0,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 1,
-      "use_count": 2,
+      "use_count": 1,
       "pub_items": 0,
-      "test_count": 2
+      "test_count": 8
+    },
+    {
+      "path": "shared/kb/src/cozo_store/tests/fts_search_tests.rs",
+      "lines": 364,
+      "test_lines": 364,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 48,
+      "max_fn_name": "fts_unique_terms_rank_their_own_node_first",
+      "max_match_arms": 3,
+      "max_struct_fields": 4,
+      "max_struct_name": "FtsCase",
+      "max_nesting": 5,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 5
     },
     {
       "path": "shared/kb/src/cozo_store/tests/graph_tests.rs",
@@ -10074,19 +11370,19 @@
     },
     {
       "path": "shared/kb/src/cozo_store/tests/kb_store_impl_tests.rs",
-      "lines": 453,
-      "test_lines": 453,
+      "lines": 279,
+      "test_lines": 279,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 93,
-      "max_fn_name": "tantivy_fts_on_sqlite",
+      "max_fn_lines": 38,
+      "max_fn_name": "replace_all_nodes_removes_rows_entirely_rather_than_truncating_them",
       "max_match_arms": 2,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 1,
       "use_count": 1,
       "pub_items": 0,
-      "test_count": 15
+      "test_count": 11
     },
     {
       "path": "shared/kb/src/cozo_store/tests/links_tests.rs",
@@ -10106,8 +11402,8 @@
     },
     {
       "path": "shared/kb/src/cozo_store/tests/mod.rs",
-      "lines": 23,
-      "test_lines": 23,
+      "lines": 26,
+      "test_lines": 26,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 5,
@@ -10122,8 +11418,8 @@
     },
     {
       "path": "shared/kb/src/cozo_store/tests/schema_tests.rs",
-      "lines": 399,
-      "test_lines": 399,
+      "lines": 215,
+      "test_lines": 215,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 55,
@@ -10132,9 +11428,9 @@
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 4,
-      "use_count": 3,
+      "use_count": 1,
       "pub_items": 0,
-      "test_count": 14
+      "test_count": 6
     },
     {
       "path": "shared/kb/src/cozo_store/tests/source_files_tests.rs",
@@ -10170,8 +11466,8 @@
     },
     {
       "path": "shared/kb/src/cozo_store/tests/versioning_tests.rs",
-      "lines": 136,
-      "test_lines": 136,
+      "lines": 249,
+      "test_lines": 249,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 44,
@@ -10182,7 +11478,7 @@
       "max_nesting": 1,
       "use_count": 1,
       "pub_items": 0,
-      "test_count": 4
+      "test_count": 7
     },
     {
       "path": "shared/kb/src/cozo_store/util.rs",
@@ -10218,18 +11514,18 @@
     },
     {
       "path": "shared/kb/src/cozo_store/versioning.rs",
-      "lines": 165,
+      "lines": 214,
       "test_lines": 0,
-      "code_lines": 165,
+      "code_lines": 214,
       "is_test_file": false,
       "max_fn_lines": 65,
       "max_fn_name": "restore_version",
-      "max_match_arms": 0,
+      "max_match_arms": 2,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 1,
       "use_count": 2,
-      "pub_items": 3,
+      "pub_items": 4,
       "test_count": 0
     },
     {
@@ -10298,19 +11594,19 @@
     },
     {
       "path": "shared/kb/src/federation.rs",
-      "lines": 1714,
-      "test_lines": 635,
-      "code_lines": 1079,
+      "lines": 1862,
+      "test_lines": 714,
+      "code_lines": 1148,
       "is_test_file": false,
-      "max_fn_lines": 162,
+      "max_fn_lines": 168,
       "max_fn_name": "import_org_dir_to_store",
       "max_match_arms": 5,
       "max_struct_fields": 16,
       "max_struct_name": "KbInstance",
       "max_nesting": 7,
-      "use_count": 12,
+      "use_count": 11,
       "pub_items": 45,
-      "test_count": 24
+      "test_count": 27
     },
     {
       "path": "shared/kb/src/fuzzy.rs",
@@ -10330,18 +11626,18 @@
     },
     {
       "path": "shared/kb/src/graph_query.rs",
-      "lines": 608,
+      "lines": 716,
       "test_lines": 151,
-      "code_lines": 457,
+      "code_lines": 565,
       "is_test_file": false,
       "max_fn_lines": 68,
       "max_fn_name": "bfs_neighborhood",
       "max_match_arms": 2,
       "max_struct_fields": 7,
       "max_struct_name": "GraphBfsNode",
-      "max_nesting": 3,
-      "use_count": 7,
-      "pub_items": 12,
+      "max_nesting": 4,
+      "use_count": 9,
+      "pub_items": 14,
       "test_count": 7
     },
     {
@@ -10362,25 +11658,73 @@
     },
     {
       "path": "shared/kb/src/kb_build.rs",
-      "lines": 459,
-      "test_lines": 202,
-      "code_lines": 257,
+      "lines": 476,
+      "test_lines": 0,
+      "code_lines": 476,
       "is_test_file": false,
-      "max_fn_lines": 97,
+      "max_fn_lines": 81,
       "max_fn_name": "ingest_org_dir",
-      "max_match_arms": 2,
+      "max_match_arms": 5,
       "max_struct_fields": 6,
       "max_struct_name": "OrgIngestStats",
       "max_nesting": 3,
-      "use_count": 5,
+      "use_count": 3,
+      "pub_items": 10,
+      "test_count": 0
+    },
+    {
+      "path": "shared/kb/src/kb_build_tests.rs",
+      "lines": 464,
+      "test_lines": 464,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 65,
+      "max_fn_name": "a_store_visible_at_the_final_path_is_always_complete",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 5,
+      "use_count": 2,
+      "pub_items": 0,
+      "test_count": 17
+    },
+    {
+      "path": "shared/kb/src/kb_identity.rs",
+      "lines": 204,
+      "test_lines": 0,
+      "code_lines": 204,
+      "is_test_file": false,
+      "max_fn_lines": 11,
+      "max_fn_name": "remint_unconfirmed_collab_id",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 1,
       "pub_items": 6,
-      "test_count": 11
+      "test_count": 0
+    },
+    {
+      "path": "shared/kb/src/kb_identity_tests.rs",
+      "lines": 269,
+      "test_lines": 269,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 25,
+      "max_fn_name": "minting_is_unique_and_actually_random",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 3,
+      "pub_items": 0,
+      "test_count": 10
     },
     {
       "path": "shared/kb/src/lib.rs",
-      "lines": 5145,
-      "test_lines": 2523,
-      "code_lines": 2622,
+      "lines": 5343,
+      "test_lines": 2641,
+      "code_lines": 2702,
       "is_test_file": false,
       "max_fn_lines": 120,
       "max_fn_name": "extract_subgraph",
@@ -10388,9 +11732,9 @@
       "max_struct_fields": 13,
       "max_struct_name": "Node",
       "max_nesting": 8,
-      "use_count": 11,
-      "pub_items": 85,
-      "test_count": 117
+      "use_count": 12,
+      "pub_items": 86,
+      "test_count": 119
     },
     {
       "path": "shared/kb/src/lru_query.rs",
@@ -10409,10 +11753,10 @@
       "test_count": 8
     },
     {
-      "path": "shared/kb/src/migrate.rs",
-      "lines": 798,
-      "test_lines": 307,
-      "code_lines": 491,
+      "path": "shared/kb/src/migrate/mod.rs",
+      "lines": 492,
+      "test_lines": 0,
+      "code_lines": 492,
       "is_test_file": false,
       "max_fn_lines": 58,
       "max_fn_name": "migrate_sled_to_sqlite",
@@ -10420,15 +11764,31 @@
       "max_struct_fields": 6,
       "max_struct_name": "MigrateOptions",
       "max_nesting": 4,
-      "use_count": 6,
+      "use_count": 5,
       "pub_items": 8,
+      "test_count": 0
+    },
+    {
+      "path": "shared/kb/src/migrate/tests.rs",
+      "lines": 335,
+      "test_lines": 335,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 40,
+      "max_fn_name": "sled_to_sqlite_preserves_nodes_links_and_backs_up",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
       "test_count": 13
     },
     {
       "path": "shared/kb/src/org.rs",
-      "lines": 2417,
-      "test_lines": 1085,
-      "code_lines": 1332,
+      "lines": 2518,
+      "test_lines": 1164,
+      "code_lines": 1354,
       "is_test_file": false,
       "max_fn_lines": 105,
       "max_fn_name": "parse_org_multi_with_types",
@@ -10436,15 +11796,15 @@
       "max_struct_fields": 7,
       "max_struct_name": "ParsedLink",
       "max_nesting": 6,
-      "use_count": 5,
+      "use_count": 6,
       "pub_items": 16,
-      "test_count": 56
+      "test_count": 59
     },
     {
       "path": "shared/kb/src/query.rs",
-      "lines": 1888,
-      "test_lines": 874,
-      "code_lines": 1014,
+      "lines": 2015,
+      "test_lines": 973,
+      "code_lines": 1042,
       "is_test_file": false,
       "max_fn_lines": 175,
       "max_fn_name": "health_report",
@@ -10454,7 +11814,7 @@
       "max_nesting": 4,
       "use_count": 5,
       "pub_items": 11,
-      "test_count": 17
+      "test_count": 19
     },
     {
       "path": "shared/kb/src/remote_hub.rs",
@@ -10474,9 +11834,9 @@
     },
     {
       "path": "shared/kb/src/store.rs",
-      "lines": 601,
+      "lines": 610,
       "test_lines": 51,
-      "code_lines": 550,
+      "code_lines": 559,
       "is_test_file": false,
       "max_fn_lines": 27,
       "max_fn_name": "node_version_verify_integrity_detects_tampering",
@@ -10489,20 +11849,52 @@
       "test_count": 2
     },
     {
-      "path": "shared/kb/src/watch.rs",
-      "lines": 349,
-      "test_lines": 73,
-      "code_lines": 276,
+      "path": "shared/kb/src/system_kb.rs",
+      "lines": 394,
+      "test_lines": 142,
+      "code_lines": 252,
       "is_test_file": false,
-      "max_fn_lines": 38,
-      "max_fn_name": "drain",
-      "max_match_arms": 3,
+      "max_fn_lines": 22,
+      "max_fn_name": "a_reserved_name_over_a_users_own_content_is_never_mae_provisioned",
+      "max_match_arms": 0,
+      "max_struct_fields": 6,
+      "max_struct_name": "SystemKb",
+      "max_nesting": 2,
+      "use_count": 1,
+      "pub_items": 9,
+      "test_count": 9
+    },
+    {
+      "path": "shared/kb/src/watch.rs",
+      "lines": 591,
+      "test_lines": 0,
+      "code_lines": 591,
+      "is_test_file": false,
+      "max_fn_lines": 42,
+      "max_fn_name": "pump",
+      "max_match_arms": 4,
       "max_struct_fields": 4,
-      "max_struct_name": "OrgDirWatcher",
+      "max_struct_name": "Registration",
       "max_nesting": 5,
-      "use_count": 8,
-      "pub_items": 13,
-      "test_count": 4
+      "use_count": 5,
+      "pub_items": 14,
+      "test_count": 0
+    },
+    {
+      "path": "shared/kb/src/watch_tests.rs",
+      "lines": 328,
+      "test_lines": 328,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 44,
+      "max_fn_name": "every_watched_dir_still_receives_only_its_own_events",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 4,
+      "use_count": 2,
+      "pub_items": 0,
+      "test_count": 12
     },
     {
       "path": "shared/kb/tests/cozo_scale_test.rs",
@@ -10522,9 +11914,9 @@
     },
     {
       "path": "shared/mcp/src/auth.rs",
-      "lines": 1149,
-      "test_lines": 332,
-      "code_lines": 817,
+      "lines": 1201,
+      "test_lines": 397,
+      "code_lines": 804,
       "is_test_file": false,
       "max_fn_lines": 80,
       "max_fn_name": "server_handshake",
@@ -10533,8 +11925,8 @@
       "max_struct_name": "KeyHello",
       "max_nesting": 3,
       "use_count": 12,
-      "pub_items": 19,
-      "test_count": 17
+      "pub_items": 17,
+      "test_count": 18
     },
     {
       "path": "shared/mcp/src/broadcast.rs",
@@ -10650,11 +12042,11 @@
     },
     {
       "path": "shared/mcp/src/identity.rs",
-      "lines": 1194,
-      "test_lines": 470,
-      "code_lines": 724,
+      "lines": 1225,
+      "test_lines": 489,
+      "code_lines": 736,
       "is_test_file": false,
-      "max_fn_lines": 44,
+      "max_fn_lines": 63,
       "max_fn_name": "without_the_lock_concurrent_naive_load_mutate_save_does_lose_keys",
       "max_match_arms": 3,
       "max_struct_fields": 3,
@@ -10666,19 +12058,19 @@
     },
     {
       "path": "shared/mcp/src/keystore.rs",
-      "lines": 383,
-      "test_lines": 115,
-      "code_lines": 268,
+      "lines": 494,
+      "test_lines": 203,
+      "code_lines": 291,
       "is_test_file": false,
-      "max_fn_lines": 35,
-      "max_fn_name": "add_key_creates_secure_file_and_roundtrips",
+      "max_fn_lines": 47,
+      "max_fn_name": "a_secret_is_never_observable_with_permissive_mode_while_being_written",
       "max_match_arms": 3,
       "max_struct_fields": 2,
       "max_struct_name": "KeyEntry",
-      "max_nesting": 2,
-      "use_count": 8,
+      "max_nesting": 5,
+      "use_count": 14,
       "pub_items": 16,
-      "test_count": 7
+      "test_count": 9
     },
     {
       "path": "shared/mcp/src/lib.rs",
@@ -10714,9 +12106,9 @@
     },
     {
       "path": "shared/mcp/src/protocol.rs",
-      "lines": 378,
+      "lines": 399,
       "test_lines": 141,
-      "code_lines": 237,
+      "code_lines": 258,
       "is_test_file": false,
       "max_fn_lines": 23,
       "max_fn_name": "tool_info_serializes_annotations_as_camel_case",
@@ -10725,7 +12117,7 @@
       "max_struct_name": "ToolInfo",
       "max_nesting": 2,
       "use_count": 2,
-      "pub_items": 21,
+      "pub_items": 22,
       "test_count": 9
     },
     {
@@ -10842,8 +12234,8 @@
     },
     {
       "path": "shared/sync/src/encoding.rs",
-      "lines": 189,
-      "test_lines": 150,
+      "lines": 269,
+      "test_lines": 230,
       "code_lines": 39,
       "is_test_file": false,
       "max_fn_lines": 41,
@@ -10854,7 +12246,7 @@
       "max_nesting": 2,
       "use_count": 5,
       "pub_items": 5,
-      "test_count": 8
+      "test_count": 10
     },
     {
       "path": "shared/sync/src/kb/collection_artifacts.rs",
@@ -10874,9 +12266,9 @@
     },
     {
       "path": "shared/sync/src/kb/collection_core.rs",
-      "lines": 225,
+      "lines": 249,
       "test_lines": 0,
-      "code_lines": 225,
+      "code_lines": 249,
       "is_test_file": false,
       "max_fn_lines": 19,
       "max_fn_name": "blank_node_titles_delta",
@@ -10885,7 +12277,7 @@
       "max_struct_name": "",
       "max_nesting": 2,
       "use_count": 4,
-      "pub_items": 17,
+      "pub_items": 18,
       "test_count": 0
     },
     {
@@ -10970,18 +12362,18 @@
     },
     {
       "path": "shared/sync/src/kb/node.rs",
-      "lines": 380,
+      "lines": 653,
       "test_lines": 0,
-      "code_lines": 380,
+      "code_lines": 653,
       "is_test_file": false,
-      "max_fn_lines": 19,
-      "max_fn_name": "new",
+      "max_fn_lines": 35,
+      "max_fn_name": "set_aliases",
       "max_match_arms": 2,
-      "max_struct_fields": 5,
+      "max_struct_fields": 11,
       "max_struct_name": "MaterializedNode",
-      "max_nesting": 2,
+      "max_nesting": 3,
       "use_count": 5,
-      "pub_items": 29,
+      "pub_items": 42,
       "test_count": 0
     },
     {
@@ -11002,8 +12394,8 @@
     },
     {
       "path": "shared/sync/src/kb/tests/collection_core_tests.rs",
-      "lines": 132,
-      "test_lines": 132,
+      "lines": 171,
+      "test_lines": 171,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 36,
@@ -11014,7 +12406,7 @@
       "max_nesting": 0,
       "use_count": 1,
       "pub_items": 0,
-      "test_count": 6
+      "test_count": 7
     },
     {
       "path": "shared/sync/src/kb/tests/collection_crypto_recovery_tests.rs",
@@ -11114,8 +12506,8 @@
     },
     {
       "path": "shared/sync/src/kb/tests/mod.rs",
-      "lines": 26,
-      "test_lines": 26,
+      "lines": 27,
+      "test_lines": 27,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 7,
@@ -11129,9 +12521,25 @@
       "test_count": 0
     },
     {
+      "path": "shared/sync/src/kb/tests/node_convergence_tests.rs",
+      "lines": 462,
+      "test_lines": 462,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 59,
+      "max_fn_name": "three_peers_editing_one_body_converge_identically_under_every_apply_order",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 3,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 12
+    },
+    {
       "path": "shared/sync/src/kb/tests/node_tests.rs",
-      "lines": 320,
-      "test_lines": 320,
+      "lines": 319,
+      "test_lines": 319,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 29,
@@ -11146,9 +12554,9 @@
     },
     {
       "path": "shared/sync/src/lib.rs",
-      "lines": 716,
-      "test_lines": 353,
-      "code_lines": 363,
+      "lines": 786,
+      "test_lines": 387,
+      "code_lines": 399,
       "is_test_file": false,
       "max_fn_lines": 59,
       "max_fn_name": "compare_state_vectors",
@@ -11157,14 +12565,14 @@
       "max_struct_name": "SyncDiagnosis",
       "max_nesting": 4,
       "use_count": 10,
-      "pub_items": 11,
-      "test_count": 28
+      "pub_items": 13,
+      "test_count": 30
     },
     {
       "path": "shared/sync/src/membership.rs",
-      "lines": 3912,
-      "test_lines": 2503,
-      "code_lines": 1409,
+      "lines": 4008,
+      "test_lines": 2569,
+      "code_lines": 1439,
       "is_test_file": false,
       "max_fn_lines": 139,
       "max_fn_name": "derive_valid_members_governed",
@@ -11173,14 +12581,14 @@
       "max_struct_name": "MembershipOp",
       "max_nesting": 5,
       "use_count": 11,
-      "pub_items": 36,
-      "test_count": 61
+      "pub_items": 37,
+      "test_count": 63
     },
     {
       "path": "shared/sync/src/op_set.rs",
-      "lines": 457,
-      "test_lines": 255,
-      "code_lines": 202,
+      "lines": 611,
+      "test_lines": 364,
+      "code_lines": 247,
       "is_test_file": false,
       "max_fn_lines": 76,
       "max_fn_name": "reseal_on_enable_grafts_onto_a_plaintext_shared_node_then_edits_chain",
@@ -11190,13 +12598,13 @@
       "max_nesting": 2,
       "use_count": 9,
       "pub_items": 8,
-      "test_count": 7
+      "test_count": 10
     },
     {
       "path": "shared/sync/src/text.rs",
-      "lines": 2178,
+      "lines": 2252,
       "test_lines": 1395,
-      "code_lines": 783,
+      "code_lines": 857,
       "is_test_file": false,
       "max_fn_lines": 84,
       "max_fn_name": "apply_update",
@@ -11225,6 +12633,22 @@
       "test_count": 4
     },
     {
+      "path": "shared/sync/tests/browser_interop.rs",
+      "lines": 476,
+      "test_lines": 476,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 73,
+      "max_fn_name": "three_writers_converge_identically_under_every_apply_order",
+      "max_match_arms": 2,
+      "max_struct_fields": 10,
+      "max_struct_name": "Observed",
+      "max_nesting": 2,
+      "use_count": 4,
+      "pub_items": 0,
+      "test_count": 9
+    },
+    {
       "path": "shared/sync/tests/crdt_stress.rs",
       "lines": 345,
       "test_lines": 345,
@@ -11239,6 +12663,70 @@
       "use_count": 2,
       "pub_items": 0,
       "test_count": 5
+    },
+    {
+      "path": "shared/sync/tests/device_secret_storage_and_revocation.rs",
+      "lines": 447,
+      "test_lines": 447,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 33,
+      "max_fn_name": "a_member_cannot_deliver_the_content_key_to_their_own_device",
+      "max_match_arms": 0,
+      "max_struct_fields": 3,
+      "max_struct_name": "Principal",
+      "max_nesting": 1,
+      "use_count": 5,
+      "pub_items": 0,
+      "test_count": 11
+    },
+    {
+      "path": "shared/sync/tests/multi_device_identity.rs",
+      "lines": 362,
+      "test_lines": 362,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 27,
+      "max_fn_name": "a_newly_enrolled_device_holds_no_content_key_until_an_owner_wrap_exists",
+      "max_match_arms": 0,
+      "max_struct_fields": 3,
+      "max_struct_name": "Principal",
+      "max_nesting": 0,
+      "use_count": 3,
+      "pub_items": 0,
+      "test_count": 7
+    },
+    {
+      "path": "shared/sync/tests/revocation_forward_secrecy.rs",
+      "lines": 293,
+      "test_lines": 293,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 30,
+      "max_fn_name": "every_additional_rotation_strands_strictly_more_history",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 4,
+      "pub_items": 0,
+      "test_count": 7
+    },
+    {
+      "path": "shared/sync/tests/yrs_decoder_utf8_ub_reproducer.rs",
+      "lines": 103,
+      "test_lines": 103,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 41,
+      "max_fn_name": "no_single_byte_corruption_reaches_an_invalid_str",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 3,
+      "use_count": 2,
+      "pub_items": 0,
+      "test_count": 1
     },
     {
       "path": "test_fixtures/lsp_test.rs",
@@ -11341,18 +12829,33 @@
     "cautions": [
       {
         "path": "crates/agent-cli/src/main.rs",
-        "line": 287,
+        "line": 285,
         "category": "security"
       },
       {
         "path": "crates/agent-cli/src/main.rs",
-        "line": 327,
+        "line": 325,
         "category": "security"
       },
       {
+        "path": "crates/agent-cli/src/main.rs",
+        "line": 523,
+        "category": "security"
+      },
+      {
+        "path": "crates/agent-cli/src/tui/confirm.rs",
+        "line": 12,
+        "category": "permission"
+      },
+      {
         "path": "crates/ai/src/executor/mod.rs",
-        "line": 78,
+        "line": 79,
         "category": "dispatch"
+      },
+      {
+        "path": "crates/ai/src/executor/mod.rs",
+        "line": 126,
+        "category": "security"
       },
       {
         "path": "crates/ai/src/executor/self_test.rs",
@@ -11360,9 +12863,29 @@
         "category": "self-test"
       },
       {
+        "path": "crates/ai/src/session/handle_prompt.rs",
+        "line": 21,
+        "category": "security"
+      },
+      {
+        "path": "crates/ai/src/session/handle_prompt.rs",
+        "line": 668,
+        "category": "permission"
+      },
+      {
+        "path": "crates/ai/src/session/mod.rs",
+        "line": 162,
+        "category": "test-safety"
+      },
+      {
         "path": "crates/ai/src/session/progress.rs",
         "line": 91,
         "category": "self-test"
+      },
+      {
+        "path": "crates/ai/src/shell_policy.rs",
+        "line": 11,
+        "category": "security"
       },
       {
         "path": "crates/ai/src/tool_impls/file.rs",
@@ -11375,9 +12898,94 @@
         "category": "security"
       },
       {
-        "path": "crates/ai/src/types.rs",
-        "line": 31,
+        "path": "crates/ai/src/tool_impls/git.rs",
+        "line": 12,
+        "category": "test-safety"
+      },
+      {
+        "path": "crates/ai/src/tools/authorization.rs",
+        "line": 33,
         "category": "permission"
+      },
+      {
+        "path": "crates/ai/src/tools/authorization.rs",
+        "line": 120,
+        "category": "permission"
+      },
+      {
+        "path": "crates/ai/src/tools/authorization.rs",
+        "line": 197,
+        "category": "permission"
+      },
+      {
+        "path": "crates/ai/src/tools/authorization.rs",
+        "line": 223,
+        "category": "permission"
+      },
+      {
+        "path": "crates/ai/src/tools/categories.rs",
+        "line": 327,
+        "category": "permission"
+      },
+      {
+        "path": "crates/ai/src/tools/categories.rs",
+        "line": 454,
+        "category": "permission"
+      },
+      {
+        "path": "crates/ai/src/tools/categories.rs",
+        "line": 483,
+        "category": "permission"
+      },
+      {
+        "path": "crates/ai/src/tools/categories.rs",
+        "line": 497,
+        "category": "security"
+      },
+      {
+        "path": "crates/ai/src/tools/categories.rs",
+        "line": 502,
+        "category": "permission"
+      },
+      {
+        "path": "crates/ai/src/tools/decision.rs",
+        "line": 19,
+        "category": "security"
+      },
+      {
+        "path": "crates/ai/src/tools/dispatchability.rs",
+        "line": 27,
+        "category": "dispatch"
+      },
+      {
+        "path": "crates/ai/src/types.rs",
+        "line": 121,
+        "category": "security"
+      },
+      {
+        "path": "crates/babel/src/backend/compiled.rs",
+        "line": 236,
+        "category": "concurrency"
+      },
+      {
+        "path": "crates/babel/src/posix_shell.rs",
+        "line": 17,
+        "category": "cross-platform"
+      },
+      {
+        "path": "crates/babel/src/safety.rs",
+        "line": 10,
+        "category": "security"
+      },
+      {
+        "path": "crates/babel/src/safety.rs",
+        "line": 36,
+        "category": "cross-platform"
+      },
+      {
+        "path": "crates/babel/src/safety.rs",
+        "line": 121,
+        "category": "security"
       },
       {
         "path": "crates/canvas/src/kb_graph.rs",
@@ -11400,14 +13008,39 @@
         "category": "rendering"
       },
       {
+        "path": "crates/core/src/buffer.rs",
+        "line": 1225,
+        "category": "rendering"
+      },
+      {
         "path": "crates/core/src/display_region.rs",
         "line": 1,
         "category": "rendering"
       },
       {
+        "path": "crates/core/src/editor/agent_session.rs",
+        "line": 15,
+        "category": "dispatch"
+      },
+      {
         "path": "crates/core/src/editor/ai_state.rs",
-        "line": 126,
+        "line": 195,
+        "category": "dispatch"
+      },
+      {
+        "path": "crates/core/src/editor/ai_state.rs",
+        "line": 217,
         "category": "security"
+      },
+      {
+        "path": "crates/core/src/editor/babel_ops.rs",
+        "line": 170,
+        "category": "security"
+      },
+      {
+        "path": "crates/core/src/editor/babel_ops.rs",
+        "line": 514,
+        "category": "test-safety"
       },
       {
         "path": "crates/core/src/editor/dispatch/mod.rs",
@@ -11430,9 +13063,24 @@
         "category": "window-split"
       },
       {
+        "path": "crates/core/src/editor/dispatch/ui.rs",
+        "line": 464,
+        "category": "permission"
+      },
+      {
         "path": "crates/core/src/editor/file_ops.rs",
         "line": 84,
         "category": "security"
+      },
+      {
+        "path": "crates/core/src/editor/file_ops.rs",
+        "line": 94,
+        "category": "security"
+      },
+      {
+        "path": "crates/core/src/editor/git_ops.rs",
+        "line": 939,
+        "category": "test-safety"
       },
       {
         "path": "crates/core/src/editor/graph_view_ops.rs",
@@ -11441,13 +13089,58 @@
       },
       {
         "path": "crates/core/src/editor/graph_view_ops.rs",
-        "line": 2095,
+        "line": 2104,
+        "category": "architecture-debt"
+      },
+      {
+        "path": "crates/core/src/editor/idle_ops.rs",
+        "line": 59,
+        "category": "docs-drift"
+      },
+      {
+        "path": "crates/core/src/editor/kb_ops/activity.rs",
+        "line": 9,
+        "category": "kb-truth"
+      },
+      {
+        "path": "crates/core/src/editor/kb_ops/dispatch.rs",
+        "line": 331,
+        "category": "data-loss"
+      },
+      {
+        "path": "crates/core/src/editor/kb_ops/dispatch.rs",
+        "line": 339,
+        "category": "data-loss"
+      },
+      {
+        "path": "crates/core/src/editor/kb_ops/registry.rs",
+        "line": 4,
         "category": "architecture-debt"
       },
       {
         "path": "crates/core/src/editor/kb_ops/registry.rs",
-        "line": 812,
+        "line": 58,
+        "category": "test-safety"
+      },
+      {
+        "path": "crates/core/src/editor/kb_ops/registry.rs",
+        "line": 825,
+        "category": "kb-provenance"
+      },
+      {
+        "path": "crates/core/src/editor/kb_ops/registry.rs",
+        "line": 964,
         "category": "correctness"
+      },
+      {
+        "path": "crates/core/src/editor/kb_ops/tests/kb_ops_registry_tests.rs",
+        "line": 13,
+        "category": "test-safety"
+      },
+      {
+        "path": "crates/core/src/editor/kb_state.rs",
+        "line": 118,
+        "category": "kb-truth"
       },
       {
         "path": "crates/core/src/editor/mod.rs",
@@ -11456,8 +13149,28 @@
       },
       {
         "path": "crates/core/src/editor/mod.rs",
-        "line": 691,
+        "line": 735,
         "category": "architecture-debt"
+      },
+      {
+        "path": "crates/core/src/editor/mod.rs",
+        "line": 1226,
+        "category": "guidance-delivery"
+      },
+      {
+        "path": "crates/core/src/editor/option_ops.rs",
+        "line": 1768,
+        "category": "security"
+      },
+      {
+        "path": "crates/core/src/editor/option_ops.rs",
+        "line": 1783,
+        "category": "test-safety"
+      },
+      {
+        "path": "crates/core/src/editor/tests/misc_tests.rs",
+        "line": 564,
+        "category": "test-safety"
       },
       {
         "path": "crates/core/src/graph_view.rs",
@@ -11491,13 +13204,63 @@
       },
       {
         "path": "crates/core/src/kb_seed/scheme_api.rs",
-        "line": 2183,
+        "line": 1,
         "category": "architecture-debt"
       },
       {
         "path": "crates/core/src/kb_seed/scheme_api.rs",
-        "line": 2259,
+        "line": 2189,
         "category": "architecture-debt"
+      },
+      {
+        "path": "crates/core/src/kb_seed/scheme_api.rs",
+        "line": 2265,
+        "category": "architecture-debt"
+      },
+      {
+        "path": "crates/core/src/kb_sharing.rs",
+        "line": 123,
+        "category": "text-index"
+      },
+      {
+        "path": "crates/core/src/lsp_position.rs",
+        "line": 4,
+        "category": "text-index-domain"
+      },
+      {
+        "path": "crates/core/src/options.rs",
+        "line": 538,
+        "category": "guidance-delivery"
+      },
+      {
+        "path": "crates/core/src/options.rs",
+        "line": 1328,
+        "category": "config-corruption"
+      },
+      {
+        "path": "crates/core/src/permission_tier.rs",
+        "line": 28,
+        "category": "permission"
+      },
+      {
+        "path": "crates/core/src/permission_tier.rs",
+        "line": 62,
+        "category": "permission"
+      },
+      {
+        "path": "crates/core/src/permission_tier.rs",
+        "line": 89,
+        "category": "security"
+      },
+      {
+        "path": "crates/core/src/permission_tier.rs",
+        "line": 110,
+        "category": "permission"
+      },
+      {
+        "path": "crates/core/src/permission_tier.rs",
+        "line": 170,
+        "category": "permission"
       },
       {
         "path": "crates/core/src/render_common/splash.rs",
@@ -11507,7 +13270,7 @@
       {
         "path": "crates/core/src/scheme_async.rs",
         "line": 32,
-        "category": "architecture-debt"
+        "category": "dispatch"
       },
       {
         "path": "crates/core/src/text_utils.rs",
@@ -11521,12 +13284,12 @@
       },
       {
         "path": "crates/core/src/window.rs",
-        "line": 796,
+        "line": 850,
         "category": "architecture-debt"
       },
       {
         "path": "crates/core/src/window.rs",
-        "line": 1095,
+        "line": 1149,
         "category": "window-split"
       },
       {
@@ -11561,18 +13324,43 @@
       },
       {
         "path": "crates/mae/src/ai_event_handler.rs",
-        "line": 838,
+        "line": 105,
         "category": "security"
       },
       {
-        "path": "crates/mae/src/bootstrap.rs",
+        "path": "crates/mae/src/ai_event_handler.rs",
+        "line": 908,
+        "category": "security"
+      },
+      {
+        "path": "crates/mae/src/ai_event_handler.rs",
+        "line": 928,
+        "category": "permission"
+      },
+      {
+        "path": "crates/mae/src/ai_event_handler.rs",
+        "line": 952,
+        "category": "security"
+      },
+      {
+        "path": "crates/mae/src/ai_event_handler.rs",
+        "line": 1679,
+        "category": "permission"
+      },
+      {
+        "path": "crates/mae/src/bootstrap/mod.rs",
         "line": 1,
         "category": "architecture-debt"
       },
       {
-        "path": "crates/mae/src/bootstrap.rs",
-        "line": 1039,
+        "path": "crates/mae/src/bootstrap/mod.rs",
+        "line": 1063,
         "category": "security"
+      },
+      {
+        "path": "crates/mae/src/collab_bridge/events_doc.rs",
+        "line": 20,
+        "category": "kb-scoping"
       },
       {
         "path": "crates/mae/src/collab_bridge/mod.rs",
@@ -11581,13 +13369,38 @@
       },
       {
         "path": "crates/mae/src/collab_bridge/mod.rs",
-        "line": 1799,
+        "line": 1927,
         "category": "architecture-debt"
       },
       {
+        "path": "crates/mae/src/collab_bridge/mod.rs",
+        "line": 4240,
+        "category": "kb-scoping"
+      },
+      {
+        "path": "crates/mae/src/collab_bridge/mod.rs",
+        "line": 4384,
+        "category": "kb-scoping"
+      },
+      {
+        "path": "crates/mae/src/collab_bridge/mod.rs",
+        "line": 4449,
+        "category": "kb-scoping"
+      },
+      {
         "path": "crates/mae/src/config.rs",
-        "line": 708,
+        "line": 132,
         "category": "security"
+      },
+      {
+        "path": "crates/mae/src/config.rs",
+        "line": 545,
+        "category": "permission"
+      },
+      {
+        "path": "crates/mae/src/config.rs",
+        "line": 770,
+        "category": "permission"
       },
       {
         "path": "crates/mae/src/gui_app.rs",
@@ -11600,6 +13413,21 @@
         "category": "architecture-debt"
       },
       {
+        "path": "crates/mae/src/main.rs",
+        "line": 345,
+        "category": "guidance-delivery"
+      },
+      {
+        "path": "crates/mae/src/pkg/lockfile.rs",
+        "line": 59,
+        "category": "data-loss"
+      },
+      {
+        "path": "crates/mae/src/pkg/lockfile.rs",
+        "line": 168,
+        "category": "security"
+      },
+      {
         "path": "crates/mae/src/shell_keys.rs",
         "line": 1,
         "category": "shell-lifecycle"
@@ -11610,14 +13438,44 @@
         "category": "shell-lifecycle"
       },
       {
+        "path": "crates/mae/tests/headless_kb_convergence_e2e.rs",
+        "line": 228,
+        "category": "permission"
+      },
+      {
+        "path": "crates/mae/tests/headless_test_support/mod.rs",
+        "line": 69,
+        "category": "permission"
+      },
+      {
         "path": "crates/renderer/src/buffer_render.rs",
         "line": 4,
         "category": "rendering"
       },
       {
+        "path": "crates/scheme/src/compiler.rs",
+        "line": 245,
+        "category": "permission"
+      },
+      {
+        "path": "crates/scheme/src/compiler.rs",
+        "line": 2177,
+        "category": "permission"
+      },
+      {
+        "path": "crates/scheme/src/introspect.rs",
+        "line": 253,
+        "category": "docs-drift"
+      },
+      {
         "path": "crates/scheme/src/lisp_error.rs",
         "line": 121,
         "category": "permission"
+      },
+      {
+        "path": "crates/scheme/src/parity_tests.rs",
+        "line": 11,
+        "category": "architecture-debt"
       },
       {
         "path": "crates/scheme/src/permission.rs",
@@ -11635,13 +13493,18 @@
         "category": "permission"
       },
       {
+        "path": "crates/scheme/src/permission_tests.rs",
+        "line": 9,
+        "category": "architecture-debt"
+      },
+      {
         "path": "crates/scheme/src/runtime.rs",
         "line": 1,
         "category": "architecture-debt"
       },
       {
         "path": "crates/scheme/src/runtime.rs",
-        "line": 802,
+        "line": 831,
         "category": "permission"
       },
       {
@@ -11652,17 +13515,17 @@
       {
         "path": "crates/scheme/src/runtime/kb_crud.rs",
         "line": 28,
-        "category": "architecture-debt"
+        "category": "security"
       },
       {
         "path": "crates/scheme/src/runtime/kb_crud.rs",
         "line": 74,
-        "category": "architecture-debt"
+        "category": "security"
       },
       {
         "path": "crates/scheme/src/runtime/kb_crud.rs",
         "line": 140,
-        "category": "architecture-debt"
+        "category": "kb-search"
       },
       {
         "path": "crates/scheme/src/runtime/kb_graph_view.rs",
@@ -11671,12 +13534,17 @@
       },
       {
         "path": "crates/scheme/src/runtime/kb_primitives.rs",
-        "line": 363,
+        "line": 373,
         "category": "permission"
       },
       {
         "path": "crates/scheme/src/runtime/lsp_dap.rs",
         "line": 36,
+        "category": "security"
+      },
+      {
+        "path": "crates/scheme/src/runtime/state_sync_apply.rs",
+        "line": 16,
         "category": "architecture-debt"
       },
       {
@@ -11692,6 +13560,11 @@
       {
         "path": "crates/scheme/src/runtime_tests.rs",
         "line": 1,
+        "category": "architecture-debt"
+      },
+      {
+        "path": "crates/scheme/src/stdlib/base.rs",
+        "line": 53,
         "category": "architecture-debt"
       },
       {
@@ -11721,7 +13594,27 @@
       },
       {
         "path": "crates/scheme/src/vm.rs",
-        "line": 1490,
+        "line": 454,
+        "category": "permission"
+      },
+      {
+        "path": "crates/scheme/src/vm.rs",
+        "line": 521,
+        "category": "permission"
+      },
+      {
+        "path": "crates/scheme/src/vm.rs",
+        "line": 584,
+        "category": "permission"
+      },
+      {
+        "path": "crates/scheme/src/vm.rs",
+        "line": 770,
+        "category": "permission"
+      },
+      {
+        "path": "crates/scheme/src/vm.rs",
+        "line": 1510,
         "category": "permission"
       },
       {
@@ -11730,9 +13623,129 @@
         "category": "architecture-debt"
       },
       {
+        "path": "daemon/src/cli.rs",
+        "line": 3,
+        "category": "multi-instance"
+      },
+      {
+        "path": "daemon/src/collab_handler/kb_membership.rs",
+        "line": 55,
+        "category": "kb-scoping"
+      },
+      {
         "path": "daemon/src/collab_handler/mod.rs",
         "line": 9,
         "category": "architecture-debt"
+      },
+      {
+        "path": "daemon/src/collab_handler/mod.rs",
+        "line": 854,
+        "category": "kb-scoping"
+      },
+      {
+        "path": "daemon/src/collab_handler/mod.rs",
+        "line": 946,
+        "category": "architecture-debt"
+      },
+      {
+        "path": "daemon/src/collab_handler/mod.rs",
+        "line": 1664,
+        "category": "kb-scoping"
+      },
+      {
+        "path": "daemon/src/collab_handler/mod.rs",
+        "line": 1799,
+        "category": "kb-scoping"
+      },
+      {
+        "path": "daemon/src/collab_handler/sync_methods.rs",
+        "line": 133,
+        "category": "kb-scoping"
+      },
+      {
+        "path": "daemon/src/collab_handler/sync_methods.rs",
+        "line": 321,
+        "category": "security"
+      },
+      {
+        "path": "daemon/src/collab_handler/sync_methods.rs",
+        "line": 386,
+        "category": "security"
+      },
+      {
+        "path": "daemon/src/config.rs",
+        "line": 788,
+        "category": "multi-instance"
+      },
+      {
+        "path": "daemon/src/config_guards.rs",
+        "line": 20,
+        "category": "security"
+      },
+      {
+        "path": "daemon/src/dialer.rs",
+        "line": 263,
+        "category": "kb-scoping"
+      },
+      {
+        "path": "daemon/src/doc_store.rs",
+        "line": 183,
+        "category": "kb-scoping"
+      },
+      {
+        "path": "daemon/src/doc_store.rs",
+        "line": 742,
+        "category": "kb-scoping"
+      },
+      {
+        "path": "daemon/src/handler.rs",
+        "line": 60,
+        "category": "observability"
+      },
+      {
+        "path": "daemon/src/handler.rs",
+        "line": 717,
+        "category": "daemon-state"
+      },
+      {
+        "path": "daemon/src/main.rs",
+        "line": 78,
+        "category": "multi-instance"
+      },
+      {
+        "path": "daemon/src/main.rs",
+        "line": 318,
+        "category": "daemon-state"
+      },
+      {
+        "path": "daemon/src/oauth.rs",
+        "line": 330,
+        "category": "security"
+      },
+      {
+        "path": "daemon/src/projection_stores.rs",
+        "line": 34,
+        "category": "daemon-locking"
+      },
+      {
+        "path": "daemon/src/projector.rs",
+        "line": 94,
+        "category": "kb-scoping"
+      },
+      {
+        "path": "daemon/src/projector.rs",
+        "line": 362,
+        "category": "kb-truth"
+      },
+      {
+        "path": "shared/effect-sandbox/src/lib.rs",
+        "line": 52,
+        "category": "test-safety"
+      },
+      {
+        "path": "shared/effect-sandbox/src/lib.rs",
+        "line": 184,
+        "category": "test-safety"
       },
       {
         "path": "shared/kb/src/cozo_store/db.rs",
@@ -11740,19 +13753,54 @@
         "category": "architecture-debt"
       },
       {
+        "path": "shared/kb/src/cozo_store/db.rs",
+        "line": 509,
+        "category": "store-contention"
+      },
+      {
+        "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
+        "line": 202,
+        "category": "kb-search"
+      },
+      {
+        "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
+        "line": 385,
+        "category": "data-loss"
+      },
+      {
+        "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
+        "line": 441,
+        "category": "data-loss"
+      },
+      {
         "path": "shared/kb/src/cozo_store/schema.rs",
-        "line": 88,
+        "line": 14,
+        "category": "kb-search"
+      },
+      {
+        "path": "shared/kb/src/cozo_store/schema.rs",
+        "line": 141,
         "category": "architecture-debt"
       },
       {
         "path": "shared/kb/src/cozo_store/schema.rs",
-        "line": 98,
+        "line": 151,
         "category": "architecture-debt"
+      },
+      {
+        "path": "shared/kb/src/cozo_store/versioning.rs",
+        "line": 23,
+        "category": "kb-truth"
       },
       {
         "path": "shared/kb/src/federation.rs",
-        "line": 676,
+        "line": 708,
         "category": "architecture-debt"
+      },
+      {
+        "path": "shared/kb/src/kb_build.rs",
+        "line": 249,
+        "category": "kb-provenance"
       },
       {
         "path": "shared/kb/src/lib.rs",
@@ -11761,8 +13809,48 @@
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 253,
+        "line": 256,
         "category": "correctness"
+      },
+      {
+        "path": "shared/kb/src/lib.rs",
+        "line": 423,
+        "category": "crdt"
+      },
+      {
+        "path": "shared/kb/src/lib.rs",
+        "line": 2196,
+        "category": "kb-provenance"
+      },
+      {
+        "path": "shared/kb/src/org.rs",
+        "line": 916,
+        "category": "kb-links"
+      },
+      {
+        "path": "shared/kb/src/store.rs",
+        "line": 308,
+        "category": "data-loss"
+      },
+      {
+        "path": "shared/kb/src/watch.rs",
+        "line": 37,
+        "category": "resource-exhaustion"
+      },
+      {
+        "path": "shared/mcp/src/auth.rs",
+        "line": 230,
+        "category": "security"
+      },
+      {
+        "path": "shared/mcp/src/identity.rs",
+        "line": 42,
+        "category": "test-safety"
+      },
+      {
+        "path": "shared/mcp/src/keystore.rs",
+        "line": 221,
+        "category": "security"
       },
       {
         "path": "shared/mcp/src/protocol.rs",
@@ -11775,9 +13863,49 @@
         "category": "dispatch"
       },
       {
+        "path": "shared/sync/src/kb/node.rs",
+        "line": 26,
+        "category": "crdt"
+      },
+      {
+        "path": "shared/sync/src/kb/node.rs",
+        "line": 282,
+        "category": "crdt"
+      },
+      {
+        "path": "shared/sync/src/kb/node.rs",
+        "line": 426,
+        "category": "crdt"
+      },
+      {
+        "path": "shared/sync/src/kb/node.rs",
+        "line": 484,
+        "category": "crdt"
+      },
+      {
+        "path": "shared/sync/src/lib.rs",
+        "line": 56,
+        "category": "kb-scoping"
+      },
+      {
         "path": "shared/sync/src/membership.rs",
         "line": 20,
         "category": "architecture-debt"
+      },
+      {
+        "path": "shared/sync/src/op_set.rs",
+        "line": 171,
+        "category": "crdt"
+      },
+      {
+        "path": "shared/sync/src/op_set.rs",
+        "line": 217,
+        "category": "crdt"
+      },
+      {
+        "path": "shared/sync/src/text.rs",
+        "line": 70,
+        "category": "crdt"
       }
     ],
     "stability": [
@@ -11788,6 +13916,18 @@
       {
         "path": "crates/ai/src/lib.rs",
         "value": "stable"
+      },
+      {
+        "path": "crates/ai/src/tools/authorization.rs",
+        "value": "experimental"
+      },
+      {
+        "path": "crates/ai/src/tools/dispatchability.rs",
+        "value": "experimental"
+      },
+      {
+        "path": "crates/ai/src/web.rs",
+        "value": "experimental"
       },
       {
         "path": "crates/babel/src/lib.rs",
@@ -11828,6 +13968,10 @@
       {
         "path": "crates/lsp/src/lib.rs",
         "value": "stable"
+      },
+      {
+        "path": "crates/mae/src/guidance_kb_engine.rs",
+        "value": "experimental"
       },
       {
         "path": "crates/mae/src/main.rs",
@@ -11942,6 +14086,10 @@
         "value": "stable"
       },
       {
+        "path": "shared/effect-sandbox/src/lib.rs",
+        "value": "stable"
+      },
+      {
         "path": "shared/kb/src/lib.rs",
         "value": "stable"
       },
@@ -11954,11 +14102,7 @@
         "value": "stable"
       }
     ],
-    "orphaned_debt_markers": [
-      "crates/core/src/scheme_async.rs",
-      "crates/scheme/src/runtime/kb_crud.rs",
-      "crates/scheme/src/runtime/lsp_dap.rs"
-    ],
+    "orphaned_debt_markers": [],
     "untracked_in_code": [],
     "uncategorised": [],
     "missing_stability": []
