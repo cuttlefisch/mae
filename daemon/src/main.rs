@@ -1565,7 +1565,7 @@ fn run_doctor(config: &DaemonConfig, compare_with: Option<&DaemonConfig>) -> i32
         println!("  oauth: disabled");
     }
 
-    println!("  yrs version: 0.22");
+    println!("  yrs version: {}", env!("MAE_YRS_VERSION"));
 
     let Some(other) = compare_with else {
         return 0;
