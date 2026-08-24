@@ -2,54 +2,6 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.14.115] - 2026-08-24
-
-
-
-
-### Security
-
-- *(security)* Close the yrs length-prefix allocation bomb on the sync/diff read path ([91419f8](https://github.com/cuttlefisch/mae/commit/91419f86b19a1001e8839b9adf9cfedc76105929))
-- *(security)* Carry y-crdt PR #644 to close the decoder's UTF-8 UB, and scan the daemon workspace ([b300172](https://github.com/cuttlefisch/mae/commit/b300172650674d779518ab41aee31818bcf067d6))
-
-### Features
-
-- *(kb)* Give KB identity a real predicate, not a name comparison (ADR-105 D4) ([6335063](https://github.com/cuttlefisch/mae/commit/63350634f569d4f8f3400e77dfa15805a4bdd390))
-- *(kb)* A KB syncs under its own minted id, not its display name (ADR-105 D4) ([d04cf8b](https://github.com/cuttlefisch/mae/commit/d04cf8b4cc316860cc7a374db79478a52f594bde))
-- *(daemon)* Migrate legacy kb: node documents to per-KB addresses (ADR-105 Stage 4) ([09c782e](https://github.com/cuttlefisch/mae/commit/09c782e019ea614502e73e49423d20fd07ce5626))
-
-### Bug Fixes
-
-- *(daemon)* Kb/list must not enumerate KBs the caller cannot read (#653) ([650d086](https://github.com/cuttlefisch/mae/commit/650d086eb39716966dd7d87eec39c710d4292748))
-- *(daemon)* Enforce per-tenant quotas on the collab and OAuth listeners (#456) ([7e3276d](https://github.com/cuttlefisch/mae/commit/7e3276db86f8bf6820e6fa99527382580c3a8589))
-- *(kb)* Address KB node documents per-KB (ADR-105 Stage 2, closes #718) ([51a673d](https://github.com/cuttlefisch/mae/commit/51a673d04a0e50f8052ef61fb30dc20a2aa8dc96))
-- *(test)* Repair two more assertions ADR-105 Stage 2 left stale ([b45d532](https://github.com/cuttlefisch/mae/commit/b45d5328f21de2d3b177b4dd913a79660ea0476c))
-- *(kb)* Enforce that a KB id is addressable (ADR-105 D3) ([478fbba](https://github.com/cuttlefisch/mae/commit/478fbbacaf0127f362c183276333d0e814d60a6e))
-- *(kb)* A KB id belongs to whoever shared it first (ADR-105 D5) ([7e7a81d](https://github.com/cuttlefisch/mae/commit/7e7a81d87f973dced54e7915b074c4ec1a580536))
-- *(kb)* Make a colliding KB collab id recoverable, not permanent (ADR-105 D4/D5) ([ce3b30d](https://github.com/cuttlefisch/mae/commit/ce3b30df501094358d82e3ddff2220c54bd4754f))
-- *(kb)* Resolve a typed KB name to its collab id, and stop reads creating KBs ([4d81f91](https://github.com/cuttlefisch/mae/commit/4d81f914a091ef4843f000447ae2e2f6acb7cfee))
-- *(kb)* The must-exist guard must not mistake an evicted KB for a missing one ([22e418a](https://github.com/cuttlefisch/mae/commit/22e418a4b96a42ed1d30e528ae2ece6a81d60637))
-- Arm the watchdog on the event loop, and stop reads creating durable docs ([759852e](https://github.com/cuttlefisch/mae/commit/759852e76a54af44079019f140174e4a2bbd0745))
-
-### Refactor
-
-- *(daemon)* Guard KB documents by address type, not string prefix (ADR-105 Stage 1) ([b43608a](https://github.com/cuttlefisch/mae/commit/b43608a455a4a98e2c684964e56f2ee02fd8b9b2))
-- Complete the doc-address sweep — one place spells the name form ([3411755](https://github.com/cuttlefisch/mae/commit/3411755dd1f37afc4484eb694271f903ba215d54))
-
-### Testing
-
-- *(daemon)* Scope the auth-mode e2e's kb/node_crdt calls to a KB (ADR-105 Stage 2) ([a3d780a](https://github.com/cuttlefisch/mae/commit/a3d780a034e2d3e2b167945ea997fb1a0c146afa))
-- *(collab)* Two tenants must both be able to share their primary KB (ADR-105 F) ([8722dd9](https://github.com/cuttlefisch/mae/commit/8722dd9f8791b8db7407cf0910fa0aa50a5ba64c))
-- *(sync)* Reproduce the yrs v1 decoder's UTF-8 undefined behaviour (y-crdt#415) ([0078847](https://github.com/cuttlefisch/mae/commit/0078847a4ade75f5e0e71035c663cd8266f014be))
-
-### CI
-
-- Supersede a PR's own in-flight run when it is pushed again ([af72dfc](https://github.com/cuttlefisch/mae/commit/af72dfcbb75e99c63313af6590646ae557100028))
-
-### Miscellaneous
-
-- *(daemon)* Confirm the ADR-105 migration ran, at debug level ([15e4289](https://github.com/cuttlefisch/mae/commit/15e428931200404bb05c5e9b4eda3703329cdc05))
-
 ## [0.14.114] - 2026-08-14
 
 
@@ -58,10 +10,6 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 
 - *(collab)* Bind the owner test inside the E2E anchor search (#573) ([6dcc339](https://github.com/cuttlefisch/mae/commit/6dcc3399bda1639b8f8a9f98483619796d9c2122))
-
-### Miscellaneous
-
-- Bump version to 0.14.114 ([9934c70](https://github.com/cuttlefisch/mae/commit/9934c702c17d754dafa067bbc1b9d3930a02dc55))
 
 ## [0.14.113] - 2026-08-13
 

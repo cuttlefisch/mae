@@ -1,5 +1,12 @@
 //! KB instance registry: register/unregister/reimport, instance store
 //! adoption, and instance-persistence plumbing.
+//!
+//! @ai-caution: [architecture-debt] Over the source-size ceiling and accepted in
+//! `docs/AUDIT_BASELINE.json`. This file is the KB registry's whole lifecycle —
+//! register, reimport, detach, store resolution, primary/system handling — and it
+//! is a genuine split candidate along those seams, not a data table that is
+//! correct to grow. Cross-referenced from ROADMAP.md's "Architecture Debt".
+//! Do not add a new lifecycle verb here without splitting first.
 
 use std::collections::HashSet;
 
@@ -599,6 +606,23 @@ impl Editor {
         let inst = self.kb.registry.find(name_or_uuid).cloned();
         match inst {
             Some(instance) => {
+                // #631: an empty `org_dir` is the documented convention for any
+                // instance whose content does not come from disk — every joined
+                // collab KB uses it (`federation.rs`). Walking "" yields nothing,
+                // and the empty result was then written straight back over the
+                // live in-memory KB, silently emptying it until restart. The
+                // system-KB guard above covers only one user of that convention.
+                //
+                // Every other org-dir consumer already filters these out
+                // (`kb_reimport_file`, `kb_path_in_instance`, the watcher drain,
+                // the daemon scheduler); this was the one that did not.
+                if instance.org_dir.as_os_str().is_empty() {
+                    self.set_status(format!(
+                        "'{}' has no org directory — its content lives in the store,                          so there is nothing to reimport",
+                        instance.name
+                    ));
+                    return None;
+                }
                 let mode = mode.unwrap_or_default();
 
                 // Reuse the already-open store handle if this instance's store

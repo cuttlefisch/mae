@@ -641,7 +641,16 @@ async fn spawn_projector(
             .instances
             .iter()
             .filter(|i| i.enabled)
-            .map(|i| i.name.clone())
+            // #732: address the collection doc by the KB's MINTED id, not its
+            // display name. `rebuild_kb` reads `kbc:{kb_id}`, and every other
+            // daemon site (dialer, checkpoint, kb_membership, and
+            // `scheduler.rs`'s own `collab_id` lookup) uses the minted id. Using
+            // the name meant that for any KB shared after ADR-105 D4 started
+            // minting uuids, the startup self-heal read a document that does not
+            // exist and silently did nothing -- the failure is downgraded to
+            // `debug!` below, so a cold projection just stayed cold until the
+            // next live write happened to arrive.
+            .map(|i| i.collab_id.clone().unwrap_or_else(|| i.name.clone()))
             .collect()
     };
     for kb_id in kb_ids {

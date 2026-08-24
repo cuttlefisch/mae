@@ -984,7 +984,13 @@ pub fn import_org_dir_to_store(
                 // error and keep importing the rest. Only track the node (dedup id, kb
                 // mirror, counts) once it actually persisted.
                 let node_id = node.id.clone();
-                if let Err(e) = store.insert_node(&node) {
+                // Snapshot whatever this ingest is about to overwrite, so a
+                // clobber is undoable via `kb_restore`. No-op when the node is
+                // new or its content is unchanged, which is the overwhelmingly
+                // common case for a re-ingest.
+                if let Err(e) =
+                    store.insert_node_with_history(&node, "replaced by org-directory ingest")
+                {
                     report.errors.push((
                         path.to_path_buf(),
                         format!("node '{node_id}': persist failed: {e}"),

@@ -227,21 +227,34 @@ impl Editor {
         weights: &mae_kb::activity::ActivityWeights,
         today: (i32, u32, u32),
     ) -> f64 {
+        // #729: activity timestamps live in the per-replica table, NOT in node
+        // content. A node's own properties are still consulted as a fallback so
+        // a corpus ingested before that change keeps its historical
+        // `:last-accessed:` values; the local table wins where both exist,
+        // because only it is still being updated.
+        let local = self.kb.activity.get(id);
+        let score = |props: &std::collections::HashMap<String, String>| match local {
+            Some(a) => mae_kb::activity::activity_score(&a.overlay(props), weights, today),
+            None => mae_kb::activity::activity_score(props, weights, today),
+        };
+
         if let Some(q) = self.kb.query_layer() {
             if let Some(node) = q.get(id) {
-                return mae_kb::activity::activity_score(&node.properties, weights, today);
+                return score(&node.properties);
             }
-            return 0.0;
+            // Still score a node the query layer cannot see: the activity table
+            // is keyed by id alone and does not depend on the node resolving.
+            return local.map_or(0.0, |_| score(&std::collections::HashMap::new()));
         }
         if let Some(node) = self.kb.primary.get(id) {
-            return mae_kb::activity::activity_score(&node.properties, weights, today);
+            return score(&node.properties);
         }
         for kb in self.kb.instances.values() {
             if let Some(node) = kb.get(id) {
-                return mae_kb::activity::activity_score(&node.properties, weights, today);
+                return score(&node.properties);
             }
         }
-        0.0
+        local.map_or(0.0, |_| score(&std::collections::HashMap::new()))
     }
 
     /// Re-import a single file into the KB instance that covers its directory.
