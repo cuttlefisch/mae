@@ -46,6 +46,13 @@ Harden the `doc_store` into a durable, snapshotable HOME for KB CRDT truth.
    **consistent state-vector** (briefly gating writes or using SQLite snapshot isolation),
    producing a **content-hashed** artifact. This is the projector's trusted rebuild root and can
    back ADR-026 signed checkpoints / ADR-028 compaction; it also bounds CRDT **tombstone growth**.
+
+   > **Corrected by ADR-107 (2026-08-24).** The tombstone-growth claim is false. yrs sets
+   > `skip_gc: false`, so garbage collection is on by default and a checkpoint is a full state
+   > encode that carries the delete set with it — capturing tombstones rather than bounding them.
+   > A checkpoint remains an excellent rebuild root and rollback artifact (now reachable via
+   > `mae-daemon checkpoint`/`restore`, #632); it is not, and never was, a growth bound. ADR-107
+   > proposes the actual mechanism.
 4. **Backup / restore / export.** Export a KB's full CRDT state (collection + nodes, as a portable
    artifact) and import it on another daemon — for migration (the RoamNotes onboarding), disaster
    recovery, and KB hand-off. Restore is a checkpoint replay.
