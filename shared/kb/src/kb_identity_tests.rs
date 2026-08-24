@@ -30,6 +30,7 @@ fn instance(reg: &mut KbRegistry, name: &str) -> String {
         ai_residency: AiResidency::default(),
         project_root: None,
         kind: KbInstanceKind::UserRegistered,
+        ingest_policy: Default::default(),
         priority: 0,
         remote_hub: None,
     });

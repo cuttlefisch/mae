@@ -179,6 +179,7 @@ fn collab_kb_shared_named_instance_tracks_nodes_by_uuid() {
             ai_residency: mae_kb::federation::AiResidency::default(),
             project_root: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
+            ingest_policy: Default::default(),
             priority: 0,
             remote_hub: None,
         });
@@ -257,6 +258,7 @@ fn adr019_share_marker_survives_registry_reload() {
             ai_residency: mae_kb::federation::AiResidency::default(),
             project_root: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
+            ingest_policy: Default::default(),
             priority: 0,
             remote_hub: None,
         });

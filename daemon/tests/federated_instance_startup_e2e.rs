@@ -93,6 +93,7 @@ fn prepare_multi_instance_data_dir() -> (tempfile::TempDir, String) {
             ai_residency: Default::default(),
             project_root: None,
             kind: Default::default(),
+            ingest_policy: Default::default(),
             priority: 0,
             remote_hub: None,
         }],
