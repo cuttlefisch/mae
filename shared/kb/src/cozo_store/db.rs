@@ -43,16 +43,9 @@ impl CozoKbStore {
         let properties_json = serde_json::to_string(&node.properties)
             .map_err(|e| KbStoreError::Storage(e.to_string()))?;
         let pri_str = node.priority.map(|c| c.to_string()).unwrap_or_default();
-        let source_str = node
-            .source
-            .map(|s| match s {
-                crate::NodeSource::Seed => "seed",
-                crate::NodeSource::UserOrg => "user_org",
-                crate::NodeSource::Manual => "manual",
-                crate::NodeSource::Federation => "federation",
-                crate::NodeSource::Promoted => "promoted",
-            })
-            .unwrap_or("");
+        // Single source of truth for the serialized form (#710) — this used to be
+        // a second inline copy of the mapping that now lives on `NodeSource`.
+        let source_str = node.source.map(|s| s.as_str()).unwrap_or("");
         let (crdt_bytes, has_crdt) = match &node.crdt_doc {
             Some(doc) => (doc.clone(), true),
             None => (vec![], false),
@@ -75,8 +68,13 @@ impl CozoKbStore {
             dv_str(""),            // assignee
             DataValue::from(0i64), // due_date
             dv_str(""),            // sprint
-            DataValue::from(now),  // created_at
-            DataValue::from(now),  // updated_at
+            // Node age is a fact about the node. Using `now` here meant every
+            // write reset it, so `created_at` recorded "last written" and a
+            // re-ingest destroyed age outright — `view:backlog` has been
+            // ordering by the wrong thing. Prefer the CRDT's immutable stamp;
+            // fall back to `now` only for a node that has never carried one.
+            DataValue::from(node.created_at.unwrap_or(now)), // created_at
+            DataValue::from(now),                            // updated_at
         ])
     }
     /// Build the parameter map for [`Self::NODE_PUT_SCRIPT`] from a node.
