@@ -330,6 +330,7 @@ fn kb_federated_search_scope_project_never_leaks_across_projects() {
             ai_residency: mae_kb::federation::AiResidency::default(),
             project_root: f.root.map(std::path::PathBuf::from),
             kind: f.kind,
+            ingest_policy: Default::default(),
             priority: 0,
             remote_hub: None,
         });
@@ -430,6 +431,7 @@ fn kb_scope_project_path_identity_not_string_equality() {
         ai_residency: mae_kb::federation::AiResidency::default(),
         project_root: Some(canonical_a.clone()),
         kind: KbInstanceKind::Project,
+        ingest_policy: Default::default(),
         priority: 0,
         remote_hub: None,
     });
