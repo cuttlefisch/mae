@@ -1,6 +1,22 @@
-//! Regression tests for KB activity tracking (#316): a self-inflicted write
-//! to a node's `:PROPERTIES:` drawer must not make an open buffer for that
-//! same file look externally modified.
+//! KB activity tracking.
+//!
+//! Activity timestamps are **per-replica local state** (`kb.activity`), not node
+//! content. They used to be written into each node's `:PROPERTIES:` drawer *and
+//! its `.org` file*, with the file then reimported over the store — which made a
+//! plain read destructive (#729, see `kb_ops_read_clobber_tests`).
+//!
+//! Historical note, because the coverage here changed shape rather than
+//! disappearing: two tests used to guard #316 — a self-inflicted property write
+//! bumped a file's mtime, and an open buffer for that same path would then fire
+//! a spurious "changed on disk, reload?" prompt mid-edit. Those tests exercised
+//! `kb_update_property_in_file`, which no longer exists: activity writes touch
+//! no file at all, so #316's trigger is gone from this path *by construction*,
+//! which is what the first test below pins.
+//!
+//! #316's underlying hazard is NOT gone from the codebase — `kb_ops/daily.rs`
+//! still writes `.org` files under a `write_guard` and never calls
+//! `resync_after_external_write`. That gap is tracked separately; it is not
+//! reachable from activity tracking any more.
 
 use super::*;
 
@@ -10,95 +26,101 @@ fn insert_test_instance(editor: &mut Editor, node: mae_kb::Node) {
     editor.kb.instances.insert("test-instance".to_string(), kb);
 }
 
-/// #316: `kb_update_property_in_file` writes to disk (bumping the real
-/// mtime), but before the fix nothing told an open `Buffer` for that same
-/// path that the change was self-inflicted — its independent freshness
-/// tracking (`file_mtime`/`content_hash`) would then detect the change on
-/// its own and the next focus-regain would fire a spurious "changed on
-/// disk, reload?" prompt during active editing.
+/// The #729 invariant, stated positively: recording activity must leave the
+/// node's source file **byte-identical**.
+///
+/// This is deliberately an assertion about the file's bytes rather than about
+/// which function was called, so it holds against any future re-implementation
+/// of activity tracking — including one that reintroduces a "just update the
+/// drawer" shortcut.
 #[test]
-fn kb_update_property_in_file_resyncs_an_open_buffers_freshness_state() {
+fn recording_activity_never_touches_the_source_file() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("note.org");
-    std::fs::write(
-        &path,
-        ":PROPERTIES:\n:ID: test-node\n:END:\n#+title: Note\n\nBody.\n",
-    )
-    .unwrap();
+    let original = ":PROPERTIES:\n:ID: test-node\n:END:\n#+title: Note\n\nBody.\n";
+    std::fs::write(&path, original).unwrap();
 
     let mut editor = Editor::new();
     let mut node = mae_kb::Node::new("test-node", "Note", mae_kb::NodeKind::Note, "Body.");
     node.source_file = Some(path.clone());
     insert_test_instance(&mut editor, node);
 
-    // Open the same file in a buffer, exactly like a user actively editing it.
-    let buf = crate::buffer::Buffer::from_file(&path).unwrap();
-    editor.buffers.push(buf);
-    let buf_idx = editor.buffers.len() - 1;
+    editor.kb_record_access("test-node");
+    editor.kb_record_link("test-node");
+    editor.kb_record_modification(&path);
 
-    assert!(!editor.buffers[buf_idx].check_disk_changed());
-    assert!(!editor.buffers[buf_idx].check_disk_changed_by_hash());
-
-    // Simulate the self-write activity tracking performs (e.g. via
-    // kb_record_access/kb_record_modification).
-    editor.kb_update_property_in_file(&path, "test-node", "last-accessed", "2026-07-20");
-
-    // A real external change on disk occurred (the file's bytes did
-    // change), but the buffer must recognize this as already-accounted-for,
-    // not something requiring a reload prompt.
-    assert!(
-        !editor.buffers[buf_idx].check_disk_changed(),
-        "self-inflicted KB write must not look like an external mtime change"
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        original,
+        "activity tracking must not write the source file — that write, plus the \
+         reimport that followed it, is what made reading a node destructive (#729)"
     );
+
+    // And the node itself is untouched: activity is not node content.
+    let node = editor.kb_get_node_mut("test-node").unwrap();
+    for key in ["last-accessed", "last-linked", "last-modified", "hash"] {
+        assert!(
+            !node.properties.contains_key(key),
+            "'{key}' must live in the per-replica activity table, not in the node"
+        );
+    }
+}
+
+/// Activity still has to *work* — the point of moving it, not abandoning it.
+/// Recorded timestamps must raise the node's activity score, which is what
+/// `KbSort::Activity` orders on.
+#[test]
+fn recorded_activity_still_scores() {
+    let mut editor = Editor::new();
+    insert_test_instance(
+        &mut editor,
+        mae_kb::Node::new("scored", "Scored", mae_kb::NodeKind::Note, "Body."),
+    );
+    let weights = mae_kb::activity::ActivityWeights::default();
+    let today = crate::editor::kb_ops::today_ymd();
+
+    let before = editor.kb_activity_score_for_id("scored", &weights, today);
+    editor.kb_record_access("scored");
+    let after = editor.kb_activity_score_for_id("scored", &weights, today);
+
     assert!(
-        !editor.buffers[buf_idx].check_disk_changed_by_hash(),
-        "self-inflicted KB write must not look like an external content change"
+        after > before,
+        "recording an access must raise the activity score ({before} -> {after})"
     );
 }
 
-/// Without the buffer lookup, a genuinely external change to a DIFFERENT
-/// open buffer's file must still be detected normally — the fix must not
-/// accidentally suppress real external-change detection.
+/// A corpus ingested before #729 carries years of `:last-accessed:` values in
+/// its `.org` files. Those must keep counting, or the change silently resets
+/// every user's activity ranking.
 #[test]
-fn resync_after_external_write_does_not_mask_unrelated_files() {
-    let dir = TempDir::new().unwrap();
-    let tracked_path = dir.path().join("tracked.org");
-    let other_path = dir.path().join("other.org");
-    std::fs::write(
-        &tracked_path,
-        ":PROPERTIES:\n:ID: tracked-node\n:END:\n#+title: Tracked\n\nBody.\n",
-    )
-    .unwrap();
-    std::fs::write(&other_path, "unrelated content\n").unwrap();
-
+fn historical_properties_from_disk_still_score() {
     let mut editor = Editor::new();
-    let mut node = mae_kb::Node::new("tracked-node", "Tracked", mae_kb::NodeKind::Note, "Body.");
-    node.source_file = Some(tracked_path.clone());
+    let mut node = mae_kb::Node::new("legacy", "Legacy", mae_kb::NodeKind::Note, "Body.");
+    node.properties.insert("last-accessed".into(), {
+        let (y, m, d) = crate::editor::kb_ops::today_ymd();
+        mae_kb::activity::format_date(y, m, d)
+    });
     insert_test_instance(&mut editor, node);
 
-    let other_buf = crate::buffer::Buffer::from_file(&other_path).unwrap();
-    editor.buffers.push(other_buf);
-    let other_idx = editor.buffers.len() - 1;
-
-    // A real external edit to the unrelated file, independent of any KB write.
-    std::thread::sleep(std::time::Duration::from_millis(10));
-    std::fs::write(&other_path, "changed externally\n").unwrap();
-
-    editor.kb_update_property_in_file(&tracked_path, "tracked-node", "last-accessed", "2026-07-20");
+    let weights = mae_kb::activity::ActivityWeights::default();
+    let score =
+        editor.kb_activity_score_for_id("legacy", &weights, crate::editor::kb_ops::today_ymd());
 
     assert!(
-        editor.buffers[other_idx].check_disk_changed_by_hash(),
-        "an unrelated file's real external change must still be detected"
+        score > 0.0,
+        "a pre-existing on-disk :last-accessed: must still contribute — the local \
+         table is an overlay, not a replacement"
     );
 }
 
 /// The unfiled node-scoping bug found while investigating #316:
-/// `kb_record_modification` used to hash the WHOLE file after its first
-/// `:END:` and misattribute the result to whichever node
-/// `kb_find_node_by_path` happened to return first — so editing one
-/// sibling node's body silently rewrote a DIFFERENT sibling's
-/// `:hash:`/`:last-modified:`. This file has two list-item nodes sharing
-/// one `source_file`, mirroring the #332 minimal repro shape.
+/// `kb_record_modification` used to hash the WHOLE file after its first `:END:`
+/// and misattribute the result to whichever node `kb_find_node_by_path` returned
+/// first — so editing one sibling's body silently stamped a DIFFERENT sibling.
+/// Two list-item nodes share one `source_file` here, mirroring #332's shape.
+///
+/// Now asserted against the local activity table rather than the drawer, since
+/// that is where the stamp lives.
 #[test]
 fn kb_record_modification_only_updates_the_node_whose_body_actually_changed() {
     let dir = TempDir::new().unwrap();
@@ -113,6 +135,7 @@ fn kb_record_modification_only_updates_the_node_whose_body_actually_changed() {
 
     let mut editor = Editor::new();
     let mut kb = mae_kb::KnowledgeBase::new();
+    let parsed = mae_kb::org::parse_org_multi(&initial);
     for (id, title, body) in [
         ("file-id", "Repro", ""),
         ("step-1", "First step.", "First step."),
@@ -120,49 +143,105 @@ fn kb_record_modification_only_updates_the_node_whose_body_actually_changed() {
     ] {
         let mut node = mae_kb::Node::new(id, title, mae_kb::NodeKind::Note, body);
         node.source_file = Some(path.clone());
-        // Seed each node's :hash: to what it would be for the initial content
-        // (mirroring what a real ingest would compute), so the first
-        // recorded modification only sees whichever node's body actually
-        // moved.
-        let parsed = mae_kb::org::parse_org_multi(&initial);
-        let parsed_node = parsed.iter().find(|n| n.id == id).unwrap();
-        node.properties.insert(
-            "hash".to_string(),
-            mae_kb::activity::body_hash(&parsed_node.body),
-        );
         kb.insert(node);
+        // Seed each node's baseline hash the way a real ingest would, so the
+        // first recorded modification sees only whichever body actually moved.
+        let parsed_node = parsed.iter().find(|n| n.id == id).unwrap();
+        editor.kb.activity.entry(id.to_string()).or_default().hash =
+            Some(mae_kb::activity::body_hash(&parsed_node.body));
     }
     editor.kb.instances.insert("test-instance".to_string(), kb);
 
     // Only step-2's text changes.
-    let changed = make_content("First step.", "Second step, edited.");
-    std::fs::write(&path, &changed).unwrap();
-
+    std::fs::write(&path, make_content("First step.", "Second step, edited.")).unwrap();
     editor.kb_record_modification(&path);
 
-    let step1_modified = editor
-        .kb_get_node_mut("step-1")
-        .and_then(|n| n.properties.get("last-modified").cloned());
-    let step2_modified = editor
-        .kb_get_node_mut("step-2")
-        .and_then(|n| n.properties.get("last-modified").cloned());
     assert!(
-        step1_modified.is_none(),
-        "step-1's body didn't change — its :last-modified: must not be touched"
+        editor
+            .kb
+            .activity
+            .get("step-1")
+            .and_then(|a| a.modified.as_ref())
+            .is_none(),
+        "step-1's body didn't change — it must not be stamped modified"
     );
     assert!(
-        step2_modified.is_some(),
-        "step-2's body changed — its :last-modified: must be stamped"
+        editor
+            .kb
+            .activity
+            .get("step-2")
+            .and_then(|a| a.modified.as_ref())
+            .is_some(),
+        "step-2's body changed — it must be stamped modified"
+    );
+}
+
+/// Activity must survive a restart. Moving it out of the `.org` files removed
+/// the thing that used to persist it, so the round-trip is the replacement
+/// guarantee and needs its own guard — otherwise the fix for #729 would quietly
+/// reset every user's activity ranking on every launch.
+#[test]
+fn the_activity_table_round_trips_through_disk() {
+    let mut editor = Editor::new();
+    let _tmp = with_test_dirs(&mut editor);
+
+    editor.kb_record_access("a");
+    editor.kb_record_link("b");
+    editor.kb.activity.entry("c".into()).or_default().hash = Some("deadbeef".into());
+    editor.kb.activity_dirty = true;
+
+    let before = editor.kb.activity.clone();
+    editor.kb_save_activity();
+    assert!(
+        !editor.kb.activity_dirty,
+        "a successful save must clear the dirty flag, or every shutdown rewrites"
     );
 
-    // The on-disk drawers reflect the same: only step-2 gained the property.
-    let on_disk = std::fs::read_to_string(&path).unwrap();
-    let step1_drawer_start = on_disk.find(":ID: step-1").unwrap();
-    let step1_drawer_end =
-        on_disk[step1_drawer_start..].find(":END:").unwrap() + step1_drawer_start;
-    assert!(!on_disk[step1_drawer_start..step1_drawer_end].contains("last-modified"));
-    let step2_drawer_start = on_disk.find(":ID: step-2").unwrap();
-    let step2_drawer_end =
-        on_disk[step2_drawer_start..].find(":END:").unwrap() + step2_drawer_start;
-    assert!(on_disk[step2_drawer_start..step2_drawer_end].contains("last-modified"));
+    // A fresh editor pointed at the same data dir.
+    let mut reopened = Editor::new();
+    reopened.data_dir_override = editor.data_dir_override.clone();
+    reopened.kb_load_activity();
+
+    assert_eq!(
+        reopened.kb.activity, before,
+        "the activity table must survive a restart intact"
+    );
+}
+
+/// A clean table must not rewrite the file. Activity is touched on every node
+/// read, so a save-on-every-shutdown regardless of change would be pure write
+/// amplification against the user's data dir.
+#[test]
+fn saving_a_clean_activity_table_writes_nothing() {
+    let mut editor = Editor::new();
+    let tmp = with_test_dirs(&mut editor);
+    let path = tmp.path().join("data").join("kb-activity.json");
+
+    editor.kb_record_access("a");
+    editor.kb_save_activity();
+    let first = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+    // Nothing recorded since — the save must be a no-op.
+    editor.kb_save_activity();
+    let second = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+    assert_eq!(first, second, "a clean table must not be rewritten");
+}
+
+/// A corrupt table must degrade to "no activity signal", never to a failed
+/// start. Ranking is cosmetic; refusing to open the editor over it would not be.
+#[test]
+fn a_corrupt_activity_table_degrades_instead_of_failing() {
+    let mut editor = Editor::new();
+    let tmp = with_test_dirs(&mut editor);
+    let dir = tmp.path().join("data");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("kb-activity.json"), "{ this is not json").unwrap();
+
+    editor.kb_load_activity();
+
+    assert!(
+        editor.kb.activity.is_empty(),
+        "a corrupt table must load as empty rather than panicking or half-loading"
+    );
 }

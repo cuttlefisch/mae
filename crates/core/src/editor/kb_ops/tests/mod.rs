@@ -12,6 +12,7 @@ mod kb_ops_durability_tests;
 mod kb_ops_instance_matching_tests;
 mod kb_ops_primary_naming_tests;
 mod kb_ops_provenance_tests;
+mod kb_ops_read_clobber_tests;
 mod kb_ops_registry_tests;
 mod kb_ops_search_federation_tests;
 mod kb_ops_system_kb_tests;

@@ -491,6 +491,10 @@ impl GuiApp {
         if self.editor.kb.daemon_hosts_primary() {
             self.editor.kb_snapshot_primary_to_store();
         }
+        // #729: persist the per-replica activity table (no-op if unchanged).
+        // Unconditional — activity is local state and has nothing to do with
+        // whether the primary KB happens to be daemon-hosted.
+        self.editor.kb_save_activity();
 
         // Persist history (skipped in clean mode)
         if !self.editor.clean_mode {

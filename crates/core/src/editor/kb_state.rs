@@ -112,6 +112,58 @@ pub trait DaemonControl: Send + Sync {
 pub type SystemStoreReceiver = std::sync::mpsc::Receiver<Vec<(String, Arc<mae_kb::CozoKbStore>)>>;
 
 /// Knowledge base context: backing store, federation, watchers, and config.
+/// Per-replica activity timestamps for a node, used only to rank
+/// activity-sorted search and help results.
+///
+/// @ai-caution: [kb-truth] This is **local, derived state and must never become
+/// node content.** It was previously written into the node's `:PROPERTIES:`
+/// drawer *and its `.org` file*, and the file was then reimported over the
+/// store — so merely READING a node reverted it to disk and could delete
+/// store-only siblings outright (#729). It is also the highest-frequency writer
+/// in the system (every node read), which on a CRDT-backed node would retire a
+/// `Y.Map` entry per read, forever, on the one field class with no compaction
+/// story.
+///
+/// Excluding derived/local attributes from synced content is the mainstream
+/// design, not a local workaround: Anytype diverts
+/// `LocalAndDerivedRelationKeys` out of its change stream entirely, Evolu uses
+/// `_`-prefixed local-only tables, and Automerge/Yjs keep this class in
+/// ephemeral messages and Awareness respectively.
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NodeActivity {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accessed: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked: Option<String>,
+    /// Body hash at the last recorded modification, for change detection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+}
+
+impl NodeActivity {
+    /// Overlay these timestamps onto a node's own properties for scoring.
+    ///
+    /// The node's properties are the FALLBACK, not the loser: a corpus ingested
+    /// before this existed carries years of `:last-accessed:` values in its
+    /// `.org` files, and those must keep counting. Local values win where both
+    /// exist, because only the local ones are still being updated.
+    pub fn overlay(&self, props: &HashMap<String, String>) -> HashMap<String, String> {
+        let mut merged = props.clone();
+        for (key, val) in [
+            ("last-accessed", &self.accessed),
+            ("last-modified", &self.modified),
+            ("last-linked", &self.linked),
+        ] {
+            if let Some(v) = val {
+                merged.insert(key.to_string(), v.clone());
+            }
+        }
+        merged
+    }
+}
+
 pub struct KbContext {
     /// Primary knowledge base instance (manual + user notes + AI-facing kb_* tools).
     pub primary: mae_kb::KnowledgeBase,
@@ -278,6 +330,11 @@ pub struct KbContext {
     pub notes_dir: Option<PathBuf>,
     /// KB option: enable activity tracking (last-accessed/modified/linked timestamps).
     pub activity_tracking: bool,
+    /// Per-replica activity timestamps, keyed by node id. Local only — never
+    /// written into a node, a `.org` file, or the CRDT. See [`NodeActivity`].
+    pub activity: HashMap<String, NodeActivity>,
+    /// Whether `activity` has unsaved changes.
+    pub activity_dirty: bool,
     /// KB option: decay rate for activity scoring.
     pub activity_decay: f64,
     /// KB option: search result ordering ("relevance", "activity", "alphabetical", "recency").
@@ -635,6 +692,8 @@ impl KbContext {
             auto_register: false,
             notes_dir: None,
             activity_tracking: true,
+            activity: HashMap::new(),
+            activity_dirty: false,
             activity_decay: 0.01,
             search_sort: "relevance".to_string(),
             search_scope: "all".to_string(),

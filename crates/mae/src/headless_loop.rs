@@ -388,6 +388,10 @@ pub(crate) async fn run_headless_loop(
             if editor.kb.daemon_hosts_primary() {
                 editor.kb_snapshot_primary_to_store();
             }
+            // #729: persist the per-replica activity table (no-op if unchanged).
+            // Unconditional — activity is local state and has nothing to do with
+            // whether the primary KB happens to be daemon-hosted.
+            editor.kb_save_activity();
             if !editor.clean_mode {
                 if let Err(e) = save_history_on_exit(editor) {
                     tracing::error!(error = %e, "failed to save history");
