@@ -349,6 +349,11 @@ pub fn project_node(store: &CozoKbStore, node_id: &str, state: &[u8]) -> Result<
     let links: Vec<(String, String, f64, f64)> =
         mae_kb::org::parse_typed_links(&node.body, &node.id)
             .into_iter()
+            // An external URL is a link in the TEXT, not an edge in the GRAPH.
+            // Projecting one creates an edge to a node that cannot exist, which
+            // `kb_health` then reports as broken, permanently, once per external
+            // link in the corpus.
+            .filter(|l| !mae_kb::org::is_external_link_target(&l.target))
             .map(|l| (l.target, l.rel_type, l.weight, l.confidence))
             .collect();
     store
