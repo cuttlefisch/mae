@@ -40,6 +40,25 @@ const PRIORITY_KEY: &str = "prio";
 const ALIASES_KEY: &str = "aliases";
 const PROPS_KEY: &str = "props";
 const SOURCE_VERSION_KEY: &str = "src_v";
+/// Provenance (`mae_kb::NodeSource`, as its serialized string).
+///
+/// @ai-caution: [kb-truth] Provenance MUST cross the wire. `NodeSource::Seed` is
+/// the only enforced read-only mechanism for shipped content, and before this key
+/// existed a shared node arrived at the peer re-stamped `Federation` — so a
+/// read-only corpus became fully editable the moment it was shared (#710). That
+/// is also the real reason ADR-104 D1 refuses to share system KBs at all: the
+/// refusal is a workaround for this gap, not a policy in its own right.
+const SOURCE_KEY: &str = "source";
+/// Creation timestamp (unix seconds), stamped ONCE at construction.
+///
+/// @ai-caution: [kb-truth] Immutable by contract — there is deliberately no
+/// setter. The Cozo row's `created_at` is written as `now` on EVERY insert, so
+/// it records "last written" rather than "created", and a re-ingest destroys
+/// node age outright; the one stored view that reads it (`view:backlog`) has
+/// therefore been ordering by the wrong thing. A field living only in the
+/// projection is also destroyed by the next rebuild (ADR-029), which is why this
+/// belongs in the document rather than being patched in the row encoder.
+const CREATED_KEY: &str = "created";
 
 /// Current node schema version. Absent ⇒ v1 (text fields only).
 pub const NODE_SCHEMA_VERSION: i64 = 2;
@@ -59,6 +78,20 @@ pub struct MaterializedNode {
     pub aliases: Vec<String>,
     pub properties: std::collections::HashMap<String, String>,
     pub source_version: Option<u32>,
+    /// Provenance, as its serialized string. `None` for a v1 document, and for a
+    /// v2 document authored before `source` joined the schema.
+    pub source: Option<String>,
+    /// Creation timestamp (unix seconds). `None` for a document authored before
+    /// the key existed.
+    pub created_at: Option<i64>,
+}
+
+/// Seconds since the unix epoch, or 0 if the clock predates it.
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// A KB node represented as a yrs document.
@@ -98,6 +131,9 @@ impl KbNodeDoc {
             // COLL_LEASE_KEY in collection_core.rs.
             root.insert(&mut txn, ALIASES_KEY, ArrayPrelim::default());
             root.insert(&mut txn, PROPS_KEY, MapPrelim::default());
+            // Stamped once, here, and never moved — node age is a fact about the
+            // node, not about the last time something wrote it.
+            Self::stamp_created_at(&root, &mut txn, unix_now());
         }
         Self { doc }
     }
@@ -321,6 +357,30 @@ impl KbNodeDoc {
     // `@ai-caution` on the key constants for why that matters.
     // ------------------------------------------------------------------
 
+    /// Stamp the schema version, but **only when it would actually change**.
+    ///
+    /// @ai-caution: [crdt-growth] `schema_v` is a CONSTANT. Re-inserting it on
+    /// every field change made it the hottest key in the document, and every
+    /// overwrite of a `Y.Map` key retires the previous Item permanently — yrs has
+    /// no way to reclaim those (see the upstream tombstone-leak issue on exactly
+    /// this `Y.Map` shape). MAE's own workload made that acute: activity tracking
+    /// used to write on every node READ, so a document accrued two un-reclaimable
+    /// tombstones per read, forever, on the one field class with no compaction
+    /// story. Activity moved out of node content in #729; this removes the other
+    /// half.
+    ///
+    /// Reading before writing is not an optimisation here — an unconditional
+    /// write is unbounded growth for zero information.
+    fn stamp_schema_version(root: &yrs::MapRef, txn: &mut yrs::TransactionMut) {
+        use yrs::Map;
+        let current = root
+            .get(txn, SCHEMA_VERSION_KEY)
+            .and_then(|v| v.to_string(txn).parse::<i64>().ok());
+        if current != Some(NODE_SCHEMA_VERSION) {
+            root.insert(txn, SCHEMA_VERSION_KEY, NODE_SCHEMA_VERSION.to_string());
+        }
+    }
+
     /// Schema version of this document. **1** when the key is absent — i.e. a
     /// document authored before ADR-093, carrying text fields only.
     pub fn schema_version(&self) -> i64 {
@@ -357,11 +417,7 @@ impl KbNodeDoc {
                     root.remove(&mut txn, key);
                 }
             }
-            root.insert(
-                &mut txn,
-                SCHEMA_VERSION_KEY,
-                NODE_SCHEMA_VERSION.to_string(),
-            );
+            Self::stamp_schema_version(&root, &mut txn);
         }
         txn.encode_update_v1()
     }
@@ -411,6 +467,39 @@ impl KbNodeDoc {
         self.set_scalar(SOURCE_VERSION_KEY, v.map(|n| n.to_string()).as_deref())
     }
 
+    /// Creation timestamp (unix seconds). Absent ⇒ `None`, for a document
+    /// authored before this key existed.
+    pub fn created_at(&self) -> Option<i64> {
+        self.scalar(CREATED_KEY).and_then(|s| s.parse::<i64>().ok())
+    }
+
+    /// Stamp the creation time if the document does not already carry one.
+    ///
+    /// Idempotent and one-way — there is no setter that can move it. An existing
+    /// document gains a stamp on first construction-from-bytes rather than
+    /// staying blank forever, but never a SECOND one.
+    fn stamp_created_at(root: &yrs::MapRef, txn: &mut yrs::TransactionMut, now: i64) {
+        use yrs::Map;
+        if root.get(txn, CREATED_KEY).is_none() {
+            root.insert(txn, CREATED_KEY, now.to_string());
+        }
+    }
+
+    /// Provenance (`mae_kb::NodeSource` as its serialized string). Absent ⇒ `None`.
+    ///
+    /// Tolerant reader per ADR-093: a document authored before this key existed
+    /// returns `None`, and the caller keeps whatever provenance it already had
+    /// rather than having it blanked.
+    pub fn source(&self) -> Option<String> {
+        self.scalar(SOURCE_KEY)
+    }
+
+    /// Set the provenance. Returns the encoded update.
+    #[must_use = "dropping this update silently prevents provenance from syncing, which is #710"]
+    pub fn set_source(&mut self, source: Option<&str>) -> Vec<u8> {
+        self.set_scalar(SOURCE_KEY, source)
+    }
+
     /// Aliases. Absent ⇒ empty.
     pub fn aliases(&self) -> Vec<String> {
         let root = self.doc.get_or_insert_map("node");
@@ -456,11 +545,7 @@ impl KbNodeDoc {
         // Stamp the version only on a real change — an unchanged save must not
         // author an op (ADR-092 D2's no-churn rule).
         if changed {
-            root.insert(
-                &mut txn,
-                SCHEMA_VERSION_KEY,
-                NODE_SCHEMA_VERSION.to_string(),
-            );
+            Self::stamp_schema_version(&root, &mut txn);
         }
         txn.encode_update_v1()
     }
@@ -513,11 +598,7 @@ impl KbNodeDoc {
         // Stamp the version only on a real change — an unchanged save must not
         // author an op (ADR-092 D2's no-churn rule).
         if changed {
-            root.insert(
-                &mut txn,
-                SCHEMA_VERSION_KEY,
-                NODE_SCHEMA_VERSION.to_string(),
-            );
+            Self::stamp_schema_version(&root, &mut txn);
         }
         txn.encode_update_v1()
     }
@@ -624,6 +705,8 @@ impl KbNodeDoc {
             aliases: self.aliases(),
             properties: self.properties(),
             source_version: self.source_version(),
+            source: self.source(),
+            created_at: self.created_at(),
         }
     }
 
