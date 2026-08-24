@@ -307,6 +307,42 @@ pub enum NodeSource {
     Promoted,
 }
 
+impl NodeSource {
+    /// The serialized form, shared by the Cozo row encoding and the CRDT payload.
+    ///
+    /// @ai-caution: [kb-truth] These strings are PERSISTED and now also cross the
+    /// wire (#710), so they are a compatibility surface — renaming one silently
+    /// reclassifies existing nodes and drops provenance arriving from a peer on
+    /// an older build. Previously this mapping was inlined in the cozo row
+    /// encoder, so a second copy could disagree with it (principle #8).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NodeSource::Seed => "seed",
+            NodeSource::UserOrg => "user_org",
+            NodeSource::Manual => "manual",
+            NodeSource::Federation => "federation",
+            NodeSource::Promoted => "promoted",
+        }
+    }
+
+    /// Parse the serialized form. Unknown ⇒ `None`.
+    ///
+    /// Deliberately NOT lossy-with-a-default, unlike `NodeKind::from_str_lossy`:
+    /// guessing a provenance is how read-only content becomes editable. An
+    /// unrecognised value means "a peer knows something this build does not", and
+    /// the caller keeps whatever it already had.
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s {
+            "seed" => Some(NodeSource::Seed),
+            "user_org" => Some(NodeSource::UserOrg),
+            "manual" => Some(NodeSource::Manual),
+            "federation" => Some(NodeSource::Federation),
+            "promoted" => Some(NodeSource::Promoted),
+            _ => None,
+        }
+    }
+}
+
 /// A single node in the knowledge base.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
@@ -349,6 +385,11 @@ pub struct Node {
     /// are materialized from the CRDT content for FTS5 and display.
     #[serde(skip)]
     pub crdt_doc: Option<Vec<u8>>,
+    /// Creation timestamp (unix seconds), when known from the node's CRDT
+    /// document. `None` for a node that has never had one — the Cozo row then
+    /// falls back to "now" on first insert, as it always did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<i64>,
 }
 
 impl Node {
@@ -372,6 +413,7 @@ impl Node {
             properties: HashMap::new(),
             source_file: None,
             crdt_doc: None,
+            created_at: None,
         }
     }
 
@@ -446,6 +488,10 @@ impl Node {
         let _ = doc.set_source_version(self.source_version);
         let _ = doc.set_aliases(&self.aliases);
         let _ = doc.set_properties(&self.properties);
+        // #710: provenance must cross the wire. Without it a shared node arrives
+        // re-stamped `Federation`, so `Seed`-marked read-only content becomes
+        // editable at the peer.
+        let _ = doc.set_source(self.source.map(|s| s.as_str()));
     }
 
     /// Update this node's fields from a `KbNodeDoc`, and store the encoded CRDT
@@ -468,6 +514,14 @@ impl Node {
             self.source_version = doc.source_version();
             self.aliases = doc.aliases();
             self.properties = doc.properties();
+            // Tolerant: a v2 document authored before `source` joined the schema
+            // carries none, and must not blank the provenance we already hold.
+            if let Some(src) = doc.source().and_then(|s| NodeSource::from_str_opt(&s)) {
+                self.source = Some(src);
+            }
+        }
+        if let Some(c) = doc.created_at() {
+            self.created_at = Some(c);
         }
         self.crdt_doc = Some(doc.encode());
     }
@@ -494,12 +548,21 @@ impl Node {
             .unwrap_or(kind);
         let mut node = Node::new(mat.id, mat.title, resolved_kind, mat.body);
         node.tags = mat.tags;
-        node.source = Some(source);
+        // #710: the DOCUMENT's provenance wins; `source` is only the fallback for
+        // a document that does not carry one. Before this, every projected node
+        // was stamped with the caller's argument — `NodeSource::Federation` from
+        // the projector — which is what destroyed `Seed` marking on sync.
+        node.source = mat
+            .source
+            .as_deref()
+            .and_then(NodeSource::from_str_opt)
+            .or(Some(source));
         node.todo_state = mat.todo_state;
         node.priority = mat.priority.and_then(|p| p.chars().next());
         node.source_version = mat.source_version;
         node.aliases = mat.aliases;
         node.properties = mat.properties;
+        node.created_at = mat.created_at;
         node.crdt_doc = Some(doc.encode());
         // Populate links from materialized links array.
         // (links are also parseable from body, but CRDT links array is authoritative)
@@ -1582,6 +1645,7 @@ impl KnowledgeBase {
                         properties: HashMap::new(),
                         source_file: None,
                         crdt_doc: None,
+                        created_at: None,
                     });
                 }
                 for (target, rel_type, weight) in typed_links {
@@ -3870,6 +3934,11 @@ mod tests {
         node.properties
             .insert("ROLE".to_string(), "hub".to_string());
         node.source_version = Some(7);
+        // #710: provenance is a field like any other, and this test asserted
+        // every field EXCEPT this one — which is precisely why it shipped absent
+        // from the wire. `Seed` specifically, because it is the only enforced
+        // read-only marking and therefore the one whose loss actually costs.
+        node.source = Some(NodeSource::Seed);
 
         let doc = node.to_crdt_doc().expect("to_crdt_doc");
         // Wrong on purpose — see the doc comment.
@@ -3893,6 +3962,11 @@ mod tests {
         assert_eq!(
             restored.source_version, node.source_version,
             "source_version"
+        );
+        assert_eq!(
+            restored.source, node.source,
+            "source must come from the doc, not the caller's argument — the \
+             caller passed Manual and the doc says Seed (#710)"
         );
     }
 

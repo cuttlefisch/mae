@@ -953,6 +953,45 @@ const KB_NAMESPACES: &[&str] = &[
     "project:",
 ];
 
+/// URI schemes that are definitely NOT KB node ids.
+///
+/// @ai-caution: [kb-links] Deliberately an EXCLUDE list, not an include list.
+/// The obvious filter — "keep only `KB_NAMESPACES`" — is wrong for edges: an
+/// org-roam-style `:ID:` is frequently a bare UUID with no namespace at all, so
+/// an include list silently DROPS real links. A false negative here costs a plain
+/// render; a false negative there costs a graph edge. Only add a scheme when it
+/// cannot possibly be a node id.
+const EXTERNAL_LINK_SCHEMES: &[&str] = &[
+    "http://",
+    "https://",
+    "ftp://",
+    "ftps://",
+    "mailto:",
+    "file:",
+    "attachment:",
+    "docview:",
+    "news:",
+    "irc:",
+    "info:",
+    "shell:",
+    "elisp:",
+    "man:",
+    "doi:",
+];
+
+/// Whether a link target addresses something outside the KB graph.
+///
+/// Used to keep external links out of the `links` relation. Before this, every
+/// `[[https://…]]` in a node body became a graph edge to a node that cannot
+/// exist, and `kb_health`'s broken-link query reported each one — permanently,
+/// and once per external link in the corpus.
+pub fn is_external_link_target(target: &str) -> bool {
+    let lowered = target.trim().to_ascii_lowercase();
+    EXTERNAL_LINK_SCHEMES
+        .iter()
+        .any(|scheme| lowered.starts_with(scheme))
+}
+
 /// Check if a link target looks like an internal KB node ID.
 fn is_kb_node_id(target: &str) -> bool {
     if target == "index" {
@@ -1008,6 +1047,10 @@ pub fn parse_org_multi_result(content: &str) -> OrgParseResult {
     if let Some(ref file_id) = header.file_id {
         let links = parse_typed_links(content, file_id);
         for link in links {
+            // An external URL is a link in the TEXT, not an edge in the GRAPH.
+            if is_external_link_target(&link.target) {
+                continue;
+            }
             typed_links.push((file_id.clone(), link));
         }
     }
@@ -1033,6 +1076,9 @@ pub fn parse_org_multi_result(content: &str) -> OrgParseResult {
             let body_raw = lines[start..end].join("\n");
             let links = parse_typed_links(&body_raw, hid);
             for link in links {
+                if is_external_link_target(&link.target) {
+                    continue;
+                }
                 typed_links.push((hid.clone(), link));
             }
         }
@@ -1053,6 +1099,9 @@ pub fn parse_org_multi_result(content: &str) -> OrgParseResult {
             let body_raw = lines[item_start..item_end].join("\n");
             let links = parse_typed_links(&body_raw, iid);
             for link in links {
+                if is_external_link_target(&link.target) {
+                    continue;
+                }
                 typed_links.push((iid.clone(), link));
             }
         }
