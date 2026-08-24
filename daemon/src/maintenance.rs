@@ -41,8 +41,9 @@ pub struct MaintenanceResult {
 /// `kb_health` tool already call) plus an integrity check over every node's
 /// latest recorded version. Honest scoping: version history (`node_history`)
 /// is populated only for nodes that have been explicitly snapshotted at least
-/// once (`snapshot_version` — called today from the promote flow and restore
-/// path, not from every `kb_create`/`kb_update`), so a node with no recorded
+/// once (`snapshot_version` — called today from the destructive-ingest path
+/// (`insert_node_with_history`, ADR-106) and the restore path, not from every
+/// `kb_create`/`kb_update`), so a node with no recorded
 /// history is silently skipped here rather than treated as a false-positive
 /// integrity failure. Read-only — never mutates the store, so it is always
 /// safe to run concurrently with reads and safe to re-run after an

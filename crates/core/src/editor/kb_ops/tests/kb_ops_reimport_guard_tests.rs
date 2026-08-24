@@ -54,6 +54,7 @@ fn reimporting_a_dir_less_instance_does_not_blank_it() {
             ai_residency: mae_kb::federation::AiResidency::default(),
             project_root: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
+            ingest_policy: Default::default(),
             priority: 0,
             remote_hub: None,
         });
