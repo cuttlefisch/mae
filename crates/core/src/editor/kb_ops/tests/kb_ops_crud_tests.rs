@@ -312,6 +312,7 @@ fn kb_update_node_shared_instance_queues_crdt_update() {
             ai_residency: mae_kb::federation::AiResidency::default(),
             project_root: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
+            ingest_policy: Default::default(),
             priority: 0,
             remote_hub: None,
         });
@@ -365,6 +366,7 @@ fn kb_update_node_unshared_instance_does_not_queue() {
             ai_residency: mae_kb::federation::AiResidency::default(),
             project_root: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
+            ingest_policy: Default::default(),
             priority: 0,
             remote_hub: None,
         });

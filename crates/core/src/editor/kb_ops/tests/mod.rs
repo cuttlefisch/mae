@@ -9,6 +9,7 @@ mod kb_ops_concurrency_tests;
 mod kb_ops_crud_tests;
 mod kb_ops_daemon_tests;
 mod kb_ops_durability_tests;
+mod kb_ops_ingest_policy_tests;
 mod kb_ops_instance_matching_tests;
 mod kb_ops_primary_naming_tests;
 mod kb_ops_provenance_tests;

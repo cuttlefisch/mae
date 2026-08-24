@@ -126,6 +126,37 @@ pub struct RemoteHubConfig {
     pub auth: RemoteHubAuth,
 }
 
+/// Where an instance's content comes from — the axis the KB cutover turns on.
+///
+/// Orthogonal to every existing axis: `enabled` means "exists at all", `kind` is
+/// the instance's role, `shared` is whether peers see it. None of those answer
+/// "may a `.org` file overwrite what is in the store", which is the question
+/// eleven separate ingest paths were each answering for themselves.
+///
+/// @ai-caution: [kb-truth] A new ingest path MUST consult this before writing.
+/// Ingest is a destructive whole-row `:put` (`update_node` IS `insert_node`, with
+/// no merge anywhere), so a path that skips this check silently reverts a
+/// detached KB to text — which is the class of bug #729 was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IngestPolicy {
+    /// The `.org` directory is authoritative: text overwrites the store. Today's
+    /// behaviour, and the `#[serde(default)]`, so every registry entry written
+    /// before this field existed keeps working exactly as it did.
+    #[default]
+    FromOrgDir,
+    /// The store is authoritative and no ingest may write to it. The `.org`
+    /// directory, if one remains, is a stale archive.
+    StoreIsTruth,
+}
+
+impl IngestPolicy {
+    /// Whether an ingest may write this instance's store.
+    pub fn allows_ingest(self) -> bool {
+        matches!(self, Self::FromOrgDir)
+    }
+}
+
 /// A registered KB instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KbInstance {
@@ -170,6 +201,10 @@ pub struct KbInstance {
     /// field directly — see that method's doc comment for why.
     #[serde(default)]
     pub kind: KbInstanceKind,
+    /// Whether a `.org` ingest may overwrite this instance's store. `#[serde(default)]`
+    /// is `FromOrgDir`, so every pre-existing registry entry is unchanged.
+    #[serde(default)]
+    pub ingest_policy: IngestPolicy,
     /// Federated search priority (ADR-062 Phase B). Higher wins when two instances'
     /// results collide on the same node id — replaces the previous implicit "whichever
     /// instance was registered/iterated first" rule with an explicit, user-controllable
@@ -225,6 +260,13 @@ impl KbInstance {
     /// discipline `KbRegistry::register`'s own `org_dir` canonicalization already requires),
     /// so two paths naming the same directory via different spellings don't silently fail to
     /// match, and — the sibling risk — two *different* directories don't silently collide.
+    /// Whether an ingest may write this instance's store (Phase 1 of the KB
+    /// cutover). Prefer this over reading `ingest_policy` directly — a future
+    /// policy variant should not require auditing every call site again.
+    pub fn allows_ingest(&self) -> bool {
+        self.ingest_policy.allows_ingest()
+    }
+
     pub fn matches_project_root(&self, root: &Path) -> bool {
         self.effective_kind() == KbInstanceKind::Project
             && self.project_root.as_deref() == Some(root)
@@ -307,6 +349,12 @@ pub struct KbRegistry {
     /// residency policy lives here instead.
     #[serde(default)]
     pub primary_ai_residency: AiResidency,
+    /// Ingest policy for the **primary** KB (KB cutover, Phase 1). The primary
+    /// has no `KbInstance` row, so — mirroring `primary_ai_residency` above — its
+    /// policy lives here. `#[serde(default)]` is `FromOrgDir`, preserving today's
+    /// behaviour for every existing registry.
+    #[serde(default)]
+    pub primary_ingest_policy: IngestPolicy,
     /// Project roots (already-canonicalized, matching `Editor::resolve_kb_scope`'s and
     /// `register`'s own canonicalization discipline) the user has explicitly declined
     /// project-KB provisioning for (ADR-058 Phase E) — never re-prompt for these. Lives here,
@@ -484,6 +532,7 @@ impl KbRegistry {
             ai_residency: AiResidency::default(),
             project_root: None,
             kind: KbInstanceKind::default(),
+            ingest_policy: Default::default(),
             priority: 0,
             remote_hub: None,
         };
@@ -530,6 +579,7 @@ impl KbRegistry {
             ai_residency: AiResidency::default(),
             project_root: None,
             kind: KbInstanceKind::RemoteHub,
+            ingest_policy: Default::default(),
             priority: 0,
             remote_hub: Some(RemoteHubConfig {
                 base_url,
@@ -558,6 +608,28 @@ impl KbRegistry {
     /// found matching 'default'". A residency policy that silently declines to apply is
     /// worse than most bugs of this size: ADR-048 exists to keep a sensitive KB away from
     /// hosted models, and the caller was told the KB did not exist.
+    /// Set an instance's ingest policy, or the primary's (KB cutover, Phase 1).
+    ///
+    /// Mirrors [`Self::set_ai_residency`] exactly, including primary aliasing —
+    /// the primary KB has no `KbInstance` row, so its policy lives on the
+    /// registry. Returns whether anything matched.
+    pub fn set_ingest_policy(&mut self, name_or_uuid: &str, policy: IngestPolicy) -> bool {
+        if crate::kb_identity::PRIMARY_NAME_ALIASES
+            .iter()
+            .any(|a| name_or_uuid.eq_ignore_ascii_case(a))
+        {
+            self.primary_ingest_policy = policy;
+            return true;
+        }
+        match self.find_mut(name_or_uuid) {
+            Some(inst) => {
+                inst.ingest_policy = policy;
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn set_ai_residency(&mut self, name_or_uuid: &str, policy: AiResidency) -> bool {
         if crate::kb_identity::PRIMARY_NAME_ALIASES
             .iter()
@@ -1235,6 +1307,7 @@ mod tests {
             ai_residency: AiResidency::default(),
             project_root: None,
             kind: KbInstanceKind::default(),
+            ingest_policy: Default::default(),
             priority: 0,
             remote_hub: None,
         };
@@ -1834,6 +1907,7 @@ enabled = true
                     ai_residency: AiResidency::default(),
                     project_root: None,
                     kind: KbInstanceKind::default(),
+                    ingest_policy: Default::default(),
                     priority: 0,
                     remote_hub: None,
                 });

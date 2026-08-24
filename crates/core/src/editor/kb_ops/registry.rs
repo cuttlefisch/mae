@@ -616,6 +616,19 @@ impl Editor {
                 // Every other org-dir consumer already filters these out
                 // (`kb_reimport_file`, `kb_path_in_instance`, the watcher drain,
                 // the daemon scheduler); this was the one that did not.
+                // Phase 1 (KB cutover): a detached instance's store IS the
+                // truth. Re-importing text over it is precisely the clobber the
+                // cutover exists to stop, so refuse rather than silently
+                // reverting the user's store to a stale archive.
+                if !instance.allows_ingest() {
+                    self.set_status(format!(
+                        "'{}' is detached — its store is the source of truth, so \
+                         re-importing the org directory would overwrite it \
+                         (re-attach with :kb-attach to allow ingest)",
+                        instance.name
+                    ));
+                    return None;
+                }
                 if instance.org_dir.as_os_str().is_empty() {
                     self.set_status(format!(
                         "'{}' has no org directory — its content lives in the store,                          so there is nothing to reimport",
@@ -1127,6 +1140,7 @@ mod scoped_owner_tests {
                 ai_residency: mae_kb::federation::AiResidency::default(),
                 project_root: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
+                ingest_policy: Default::default(),
                 priority: 0,
                 remote_hub: None,
             });
@@ -1218,6 +1232,7 @@ mod partition_boundary_links_by_instance_tests {
                 ai_residency: mae_kb::federation::AiResidency::default(),
                 project_root: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
+                ingest_policy: Default::default(),
                 priority: 0,
                 remote_hub: None,
             });
@@ -1439,5 +1454,48 @@ mod partition_boundary_links_by_instance_tests {
             sources.is_empty(),
             "an unloaded/unregistered instance must yield an empty protected set, not panic"
         );
+    }
+}
+
+impl Editor {
+    /// Set an instance's ingest policy, or the primary's (KB cutover, Phase 1).
+    ///
+    /// Detaching makes the STORE authoritative: no `.org` ingest may write it
+    /// thereafter. Attaching restores the default, where the org directory is
+    /// authoritative and overwrites the store on ingest.
+    ///
+    /// Persists immediately, deliberately. A policy that held only for the
+    /// current session would be worse than none — the startup agenda ingest is
+    /// one of the paths it exists to stop, and that runs before anything could
+    /// re-apply an in-memory-only setting.
+    ///
+    /// Mirrors `kb_set_ai_residency`'s shape, including primary aliasing.
+    pub fn kb_set_ingest_policy(
+        &mut self,
+        name_or_uuid: &str,
+        policy: mae_kb::federation::IngestPolicy,
+    ) -> Result<String, String> {
+        let changed = if let Some(data_dir) = self.mae_data_dir() {
+            let (registry, changed, saved) =
+                mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+                    reg.set_ingest_policy(name_or_uuid, policy)
+                });
+            if let Err(e) = saved {
+                tracing::warn!(error = %e, "failed to persist KB registry");
+            }
+            self.kb.registry = registry;
+            self.kb.last_local_registry_write = Some(std::time::Instant::now());
+            changed
+        } else {
+            self.kb.registry.set_ingest_policy(name_or_uuid, policy)
+        };
+        if !changed {
+            return Err(format!("No such KB: {name_or_uuid}"));
+        }
+        Ok(if policy.allows_ingest() {
+            format!("'{name_or_uuid}' attached — its org directory is authoritative and will overwrite the store on ingest")
+        } else {
+            format!("'{name_or_uuid}' detached — its store is now the source of truth; no org ingest will overwrite it")
+        })
     }
 }

@@ -39,6 +39,7 @@ fn init_kb_federation_evicts_mae_provisioned_rows_and_keeps_the_users_own() {
             ai_residency: mae_kb::federation::AiResidency::default(),
             project_root: None,
             kind,
+            ingest_policy: Default::default(),
             priority: 0,
             remote_hub: None,
         }
@@ -119,6 +120,7 @@ fn eviction_never_removes_a_reserved_name_that_holds_the_users_own_content() {
         ai_residency: mae_kb::federation::AiResidency::default(),
         project_root: None,
         kind: mae_kb::federation::KbInstanceKind::UserRegistered,
+        ingest_policy: Default::default(),
         priority: 0,
         remote_hub: None,
     });
