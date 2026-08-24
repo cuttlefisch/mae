@@ -134,3 +134,164 @@ fn restore_verifies_checksum() {
         );
     }
 }
+
+/// The whole point of `snapshot_version`: a destructive ingest must be undoable.
+///
+/// Until `insert_node_with_history` existed it had NO production caller — only
+/// `restore_version` snapshotting before its own overwrite — so `kb_history` was
+/// always empty and `kb_restore` could not undo the one thing that destroys
+/// content: a re-ingest replacing store state from a `.org` file.
+#[test]
+fn an_overwriting_ingest_is_recoverable_from_history() {
+    let store = CozoKbStore::open_mem().unwrap();
+    store.seed_type_system().unwrap();
+
+    let original = Node::new("n1", "Title", NodeKind::Note, "the original body");
+    store.insert_node(&original).unwrap();
+
+    let clobbering = Node::new("n1", "Title", NodeKind::Note, "REPLACED BY INGEST");
+    let snapshotted = store
+        .insert_node_with_history(&clobbering, "replaced by org-directory ingest")
+        .unwrap();
+    assert!(
+        snapshotted,
+        "an overwrite of different content must snapshot"
+    );
+
+    // The clobber landed...
+    assert_eq!(
+        store.get_node("n1").unwrap().unwrap().body,
+        "REPLACED BY INGEST"
+    );
+
+    // ...and is undoable, which is the property that matters.
+    let history = store.node_history("n1", 100).unwrap();
+    assert_eq!(history.len(), 1, "exactly one version recorded");
+    store.restore_version("n1", history[0].version).unwrap();
+    assert_eq!(
+        store.get_node("n1").unwrap().unwrap().body,
+        "the original body",
+        "restoring the snapshot must recover the pre-ingest content"
+    );
+}
+
+/// Bounded by construction: re-ingesting unchanged content must record nothing.
+///
+/// This is the case that actually dominates — a watcher tick, a daemon scheduler
+/// pass, a startup ingest all re-read files that did not change. Appending a
+/// version each time would grow `node_versions` without recording anything a
+/// user could want back.
+#[test]
+fn re_ingesting_unchanged_content_records_no_version() {
+    let store = CozoKbStore::open_mem().unwrap();
+    store.seed_type_system().unwrap();
+
+    let node = Node::new("n1", "Title", NodeKind::Note, "stable body");
+    store.insert_node(&node).unwrap();
+
+    for _ in 0..25 {
+        let snapshotted = store
+            .insert_node_with_history(&node.clone(), "ingest")
+            .unwrap();
+        assert!(!snapshotted, "unchanged content must not snapshot");
+    }
+    assert!(
+        store.node_history("n1", 100).unwrap().is_empty(),
+        "25 unchanged re-ingests must leave history empty"
+    );
+
+    // A new node is not an overwrite either.
+    let fresh = Node::new("n2", "Fresh", NodeKind::Note, "brand new");
+    assert!(
+        !store.insert_node_with_history(&fresh, "ingest").unwrap(),
+        "creating a node destroys nothing, so it must not snapshot"
+    );
+}
+
+/// #731 — version history must survive the projector's repair path.
+///
+/// The audit claimed `reconcile_kb`'s heal DESTROYS history. That is **false**,
+/// and worth pinning rather than leaving as folklore: `delete_node` removes the
+/// node row and its links and does not touch `node_versions`, and nothing else
+/// in the store deletes versions either. So history outlives both a delete and a
+/// re-projection, which is what makes it usable as a recovery surface at all.
+#[test]
+fn version_history_survives_node_deletion_and_reprojection() {
+    let store = CozoKbStore::open_mem().unwrap();
+    store.seed_type_system().unwrap();
+
+    store
+        .insert_node(&Node::new("n1", "T", NodeKind::Note, "v1 body"))
+        .unwrap();
+    store
+        .insert_node_with_history(&Node::new("n1", "T", NodeKind::Note, "v2 body"), "edit")
+        .unwrap();
+    assert_eq!(store.node_history("n1", 100).unwrap().len(), 1);
+
+    // What the projector's heal does to an "extra" node.
+    store.delete_node("n1").unwrap();
+    assert!(store.get_node("n1").unwrap().is_none(), "node row is gone");
+    assert_eq!(
+        store.node_history("n1", 100).unwrap().len(),
+        1,
+        "deleting a node must NOT delete its version history"
+    );
+
+    // And what it does to a "differing" node: an unconditional re-put.
+    store
+        .insert_node(&Node::new("n1", "T", NodeKind::Note, "reprojected"))
+        .unwrap();
+    assert_eq!(
+        store.node_history("n1", 100).unwrap().len(),
+        1,
+        "re-projection must not disturb history either"
+    );
+}
+
+/// Overwriting SEEDED content records no version.
+///
+/// MAE seeds code-generated nodes and then ingests a corpus over them, so
+/// without this the very first ingest on a fresh install would snapshot every
+/// seeded node it touched — which is both noise and a direct contradiction of
+/// the bound the test above pins. Seed content is regenerable from the binary
+/// (ADR-104), so there is nothing a user could want restored.
+///
+/// Caught by CI rather than by the unit tests: `crates/mae/tests/` seeds a store
+/// and then imports org fixtures over it, which is exactly this shape.
+#[test]
+fn overwriting_seeded_content_records_no_version() {
+    let store = CozoKbStore::open_mem().unwrap();
+    store.seed_type_system().unwrap();
+
+    let mut seeded = Node::new("concept:x", "Seeded", NodeKind::Concept, "generated body");
+    seeded.source = Some(crate::NodeSource::Seed);
+    store.insert_node(&seeded).unwrap();
+
+    let from_corpus = Node::new(
+        "concept:x",
+        "Seeded",
+        NodeKind::Concept,
+        "richer prose from org",
+    );
+    assert!(
+        !store
+            .insert_node_with_history(&from_corpus, "corpus ingest")
+            .unwrap(),
+        "an ingest over SEEDED content must not snapshot"
+    );
+    assert!(
+        store.node_history("concept:x", 100).unwrap().is_empty(),
+        "no version recorded for a seed overwrite"
+    );
+
+    // But once the node is no longer seed-provenanced, it is user content again
+    // and a further overwrite DOES snapshot — the skip is about provenance, not
+    // about the id.
+    let authored = Node::new("concept:x", "Seeded", NodeKind::Concept, "user edit");
+    assert!(
+        store
+            .insert_node_with_history(&authored, "user edit")
+            .unwrap(),
+        "content that is no longer Seed-provenanced must snapshot again"
+    );
+}

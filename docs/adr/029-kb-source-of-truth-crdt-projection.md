@@ -63,6 +63,14 @@ intelligence — maintained locally by every daemon that holds a CRDT replica.
    doc (`kbc:{kb_id}`) holds the node manifest + membership + policy + signed oplog (already
    CRDT, ADR-026). Cozo holds *no authoritative content* — only the projection + derived state.
 
+   > **Amended by ADR-106 (2026-08-24).** That last sentence is false as written, and was false when
+   > written. `node_versions` — the `kb_history`/`kb_restore` surface — lives only in Cozo, does not
+   > sync, and is not captured by the ADR-032 checkpoint, so it cannot be re-derived from CRDT truth.
+   > ADR-106 carves it out deliberately as a **local, non-synced audit trail** with its own
+   > durability requirement, rather than pretending it is derived. Read this decision as: Cozo holds
+   > no authoritative *node content*; the one non-derivable relation it does hold is named and
+   > justified in ADR-106.
+
 2. **Cozo is produced by a deterministic projector** = the org parser we already ship
    (`shared/kb/src/org.rs` `parse_org_multi_result`/`parse_typed_links`), run incrementally. The
    **structural projection (nodes, typed-link graph, FTS) MUST be a pure function of CRDT state**:

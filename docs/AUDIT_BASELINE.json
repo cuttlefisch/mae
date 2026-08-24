@@ -30,7 +30,7 @@
     "crates/core/src/editor/heading_ops.rs": 1181,
     "crates/core/src/editor/help_ops.rs": 3198,
     "crates/core/src/editor/kb_ops/nodes.rs": 840,
-    "crates/core/src/editor/kb_ops/registry.rs": 1291,
+    "crates/core/src/editor/kb_ops/registry.rs": 1436,
     "crates/core/src/editor/kb_ops/tests/kb_ops_durability_tests.rs": 985,
     "crates/core/src/editor/kb_ops/tests/kb_ops_registry_tests.rs": 625,
     "crates/core/src/editor/kb_ops/tests/kb_ops_search_federation_tests.rs": 1004,

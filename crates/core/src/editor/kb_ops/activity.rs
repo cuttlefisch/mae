@@ -4,14 +4,25 @@
 use super::*;
 
 impl Editor {
-    /// Record an access event for a KB node. Updates `:last-accessed:` in the
-    /// source .org file (if any) and in-memory properties.
+    /// Record an access event for a KB node.
+    ///
+    /// @ai-caution: [kb-truth] Writes ONLY to the per-replica activity table.
+    /// This used to call `kb_update_property_on_disk`, which wrote the node's
+    /// `.org` file and then reimported it over the store — so reading a node
+    /// reverted it to disk, and could delete store-only siblings outright
+    /// (#729). Reading must never write node content. If you are adding a new
+    /// activity signal, put it here, not in the node.
     pub fn kb_record_access(&mut self, node_id: &str) {
         if !self.kb.activity_tracking {
             return;
         }
         let today = today_str();
-        self.kb_update_property_on_disk(node_id, "last-accessed", &today);
+        self.kb
+            .activity
+            .entry(node_id.to_string())
+            .or_default()
+            .accessed = Some(today);
+        self.kb.activity_dirty = true;
     }
 
     /// Record a modification event for every node parsed from `path`.
@@ -41,95 +52,42 @@ impl Editor {
                 continue;
             }
             let new_hash = mae_kb::activity::body_hash(&parsed.body);
+            // The previously-seen hash: the local table first, falling back to
+            // a `:hash:` already in the node from a pre-#729 ingest so an
+            // existing corpus does not report every node as changed once.
             let old_hash = self
-                .kb_get_node_mut(&parsed.id)
-                .and_then(|n| n.properties.get("hash").cloned());
+                .kb
+                .activity
+                .get(&parsed.id)
+                .and_then(|a| a.hash.clone())
+                .or_else(|| {
+                    self.kb_get_node_mut(&parsed.id)
+                        .and_then(|n| n.properties.get("hash").cloned())
+                });
             if old_hash.as_deref() == Some(&new_hash) {
                 continue; // this node's content unchanged
             }
-            self.kb_update_property_in_file(path, &parsed.id, "hash", &new_hash);
-            self.kb_update_property_in_file(path, &parsed.id, "last-modified", &today);
-            if let Some(node) = self.kb_get_node_mut(&parsed.id) {
-                node.properties.insert("hash".to_string(), new_hash);
-                node.properties
-                    .insert("last-modified".to_string(), today.clone());
-            }
+            let entry = self.kb.activity.entry(parsed.id.clone()).or_default();
+            entry.hash = Some(new_hash);
+            entry.modified = Some(today.clone());
+            self.kb.activity_dirty = true;
         }
     }
 
-    /// Record a link event for a target node. Updates `:last-linked:`.
+    /// Record a link event for a target node. Local-only, same rule as
+    /// [`Self::kb_record_access`] — inserting a link must not rewrite and
+    /// reimport the target's `.org` file (#729).
     pub fn kb_record_link(&mut self, target_id: &str) {
         if !self.kb.activity_tracking {
             return;
         }
         let today = today_str();
-        self.kb_update_property_on_disk(target_id, "last-linked", &today);
-    }
-
-    /// Update a single property in a node's source .org file on disk.
-    /// Uses write-guard to prevent cascade.
-    pub(super) fn kb_update_property_on_disk(&mut self, node_id: &str, key: &str, value: &str) {
-        // Find the source file for this node
-        let source_path = self.kb_node_source_path(node_id);
-        let Some(path) = source_path else {
-            return;
-        };
-        self.kb_update_property_in_file(&path, node_id, key, value);
-        // Update in-memory node properties
-        if let Some(node) = self.kb_get_node_mut(node_id) {
-            node.properties.insert(key.to_string(), value.to_string());
-        }
-    }
-
-    /// Write a property to a .org file and reimport. Uses write-guard.
-    /// `node_id` selects which of the file's `:PROPERTIES:` drawers to
-    /// touch — a file can hold several (file-level, per-heading,
-    /// per-list-item, see #332) — every other drawer is left untouched.
-    pub(super) fn kb_update_property_in_file(
-        &mut self,
-        path: &std::path::Path,
-        node_id: &str,
-        key: &str,
-        value: &str,
-    ) {
-        let Ok(content) = std::fs::read_to_string(path) else {
-            return;
-        };
-        let Some(updated) = mae_kb::org::update_property(&content, node_id, key, value) else {
-            return;
-        };
-        // Guard the path to prevent watcher cascade
-        self.kb.write_guard.insert(path.to_path_buf());
-        if std::fs::write(path, &updated).is_ok() {
-            // Reimport synchronously to keep in-memory KB in sync
-            self.kb_reimport_file(path);
-            self.kb.watcher_stats.reimports_total += 1;
-            // #316: this write bumps the file's real disk mtime — if the
-            // user has this same path open in a buffer, its independent
-            // freshness tracking (Buffer::file_mtime/content_hash) must be
-            // told the change is self-inflicted and already accounted for,
-            // or the next focus-regain/switch fires a spurious "changed on
-            // disk, reload?" prompt mid-edit. `write_guard` only suppresses
-            // the KB watcher's own reaction — it has no reach into the
-            // buffer layer, which is a completely separate mechanism.
-            if let Some(buf) = self
-                .buffers
-                .iter_mut()
-                .find(|b| b.file_path() == Some(path))
-            {
-                buf.resync_after_external_write(&updated);
-            }
-        }
-    }
-
-    /// Get the source file path for a node by ID.
-    pub(super) fn kb_node_source_path(&self, node_id: &str) -> Option<std::path::PathBuf> {
-        for kb in self.kb.instances.values() {
-            if let Some(node) = kb.get(node_id) {
-                return node.source_file.clone();
-            }
-        }
-        None
+        self.kb
+            .activity
+            .entry(target_id.to_string())
+            .or_default()
+            .linked = Some(today);
+        self.kb.activity_dirty = true;
     }
 
     /// Get a mutable reference to a node by ID (across all KB instances).
@@ -258,4 +216,64 @@ impl Editor {
     }
 
     // ── Dailies ─────────────────────────────────────────────────────
+}
+
+impl Editor {
+    /// Filename for the per-replica activity table, under the MAE data dir.
+    ///
+    /// Deliberately NOT inside any KB's `org_dir` and NOT in the CRDT: this is
+    /// local, derived state (#729). A peer has no use for another peer's read
+    /// timestamps, and syncing them would make every read author an operation.
+    const ACTIVITY_FILE: &'static str = "kb-activity.json";
+
+    /// Load the activity table. Missing or unreadable file ⇒ empty, never an
+    /// error: activity ranking degrading to "no signal" is a cosmetic loss,
+    /// and refusing to start over it would not be.
+    pub fn kb_load_activity(&mut self) {
+        let Some(dir) = self.mae_data_dir() else {
+            return;
+        };
+        let Ok(raw) = std::fs::read_to_string(dir.join(Self::ACTIVITY_FILE)) else {
+            return;
+        };
+        match serde_json::from_str(&raw) {
+            Ok(map) => {
+                self.kb.activity = map;
+                self.kb.activity_dirty = false;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "kb activity table unreadable — starting empty");
+            }
+        }
+    }
+
+    /// Persist the activity table if it changed. No-op when clean, so a session
+    /// that never opened a node writes nothing.
+    ///
+    /// Written via a temp file + rename so an interrupted save cannot leave a
+    /// truncated table behind — the same reason the registry does it.
+    pub fn kb_save_activity(&mut self) {
+        if !self.kb.activity_dirty {
+            return;
+        }
+        let Some(dir) = self.mae_data_dir() else {
+            return;
+        };
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        let Ok(json) = serde_json::to_string(&self.kb.activity) else {
+            return;
+        };
+        let final_path = dir.join(Self::ACTIVITY_FILE);
+        let tmp_path = dir.join(format!("{}.tmp", Self::ACTIVITY_FILE));
+        if std::fs::write(&tmp_path, json).is_ok()
+            && std::fs::rename(&tmp_path, &final_path).is_ok()
+        {
+            self.kb.activity_dirty = false;
+        } else {
+            let _ = std::fs::remove_file(&tmp_path);
+            tracing::warn!("failed to persist kb activity table");
+        }
+    }
 }
