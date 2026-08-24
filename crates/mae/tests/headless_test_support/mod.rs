@@ -155,6 +155,27 @@ pub fn socket_is_live(path: &Path) -> bool {
     std::os::unix::net::UnixStream::connect(path).is_ok()
 }
 
+/// How long a freshly-spawned `mae --headless` gets to bind its socket.
+///
+/// @ai-caution: [test-timing] This is INFRASTRUCTURE SETUP, not an assertion.
+/// Every one of these tests asserts something else entirely once the socket is
+/// up; this bound exists only so a genuine hang fails instead of blocking
+/// forever. Do not tighten it to "make the test stricter" — a tight value here
+/// measures provisioning cost, which is not what any caller is testing.
+///
+/// It was 30s, and that was **negative margin**. A first-run headless instance
+/// pays ADR-104 system-KB provisioning before it binds, measured on a developer
+/// machine at 29.8s / 30.9s / 31.4s across three debug-profile runs, with `main`
+/// itself at 29s. So the operation straddled its own timeout: `main` was one
+/// slow run from failing, and any change adding a second or two tipped it over —
+/// which is exactly how this surfaced (#741). CI runners are slower than the
+/// machine those numbers came from.
+///
+/// A genuine startup hang still fails here, just after a wait that is long
+/// enough to be meaningful rather than a coin flip. The provisioning cost itself
+/// is the real problem and is tracked separately (#741, #713).
+const SOCKET_BIND_TIMEOUT: Duration = Duration::from_secs(180);
+
 pub fn wait_for_socket_live(path: &Path, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -285,7 +306,7 @@ pub fn spawn_isolated_headless(
     // `guard`'s `Drop` regardless of how this function's caller's test ends.
     let guard = HeadlessGuard::new(child);
 
-    let bound = wait_for_socket_live(&socket_path, Duration::from_secs(30));
+    let bound = wait_for_socket_live(&socket_path, SOCKET_BIND_TIMEOUT);
     if !bound {
         if let Some(path) = stderr_log {
             let log = std::fs::read_to_string(path)
