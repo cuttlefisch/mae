@@ -242,3 +242,181 @@ async fn reconciliation_detects_and_heals_every_drift_class() {
         "reconciliation is not idempotent — second pass still reports {after:?}"
     );
 }
+
+/// #730 — **every** field the projector writes must be drift-detectable.
+///
+/// The comparison used to check title/body/tags only, so drift in any field
+/// ADR-093 added — `kind`, `todo_state`, `priority`, `aliases`, `properties`,
+/// `source_version` — reported a CLEAN projection. This file's own header says
+/// a verification pass that has never caught anything is indistinguishable from
+/// one that cannot; that was literally true for two thirds of the schema.
+///
+/// Written as a sweep rather than a case per field on purpose: the failure mode
+/// is "a field nobody thought to compare", and a hand-listed set of assertions
+/// reproduces exactly that blind spot. Each iteration corrupts ONE field of the
+/// projected row and requires the reconciler to notice.
+#[tokio::test]
+async fn every_projected_field_is_drift_detectable() {
+    let doc_store = mem_store();
+    let stores = MemStores::new();
+
+    // A node carrying a value in every v2 field, so corrupting any one of them
+    // is a real change rather than a no-op against a default.
+    let mut node = mae_sync::kb::KbNodeDoc::new("n1", "Title", "Body", &["tag".into()]);
+    let _ = node.set_kind(Some("concept"));
+    let _ = node.set_todo_state(Some("TODO"));
+    let _ = node.set_priority(Some("A"));
+    let _ = node.set_aliases(&["alias-one".into()]);
+    let _ = node.set_source_version(Some(7));
+    let mut props = std::collections::HashMap::new();
+    props.insert("role".to_string(), "original".to_string());
+    let _ = node.set_properties(&props);
+
+    let mut coll = mae_sync::kb::KbCollectionDoc::new("kb1", "owner");
+    coll.add_node("n1", "Title");
+    doc_store
+        .apply_update("kbn:kb1:n1", &node.encode(), None)
+        .await
+        .unwrap();
+    doc_store
+        .apply_update("kbc:kb1", &coll.encode_state(), None)
+        .await
+        .unwrap();
+
+    let projector = Projector::new(
+        Arc::clone(&doc_store),
+        Arc::clone(&stores) as Arc<dyn ProjectionStores>,
+    );
+    projector.rebuild_kb("kb1").await.unwrap();
+
+    let store = stores.store_for("kb1").await.unwrap();
+    assert!(
+        projector
+            .reconcile_kb("kb1", false)
+            .await
+            .unwrap()
+            .is_clean(),
+        "precondition: a freshly projected KB must report no drift"
+    );
+
+    // One corruption per projected field. `Node` is mutated in place and written
+    // straight back, so only the named field differs from CRDT truth.
+    /// One named corruption of a single projected field.
+    type Corruption = (&'static str, fn(&mut Node));
+
+    let corruptions: Vec<Corruption> = vec![
+        ("title", |n| n.title = "CORRUPTED".into()),
+        ("body", |n| n.body = "CORRUPTED".into()),
+        ("tags", |n| n.tags = vec!["CORRUPTED".into()]),
+        ("kind", |n| n.kind = mae_kb::NodeKind::Task),
+        ("todo_state", |n| n.todo_state = Some("DONE".into())),
+        ("priority", |n| n.priority = Some('C')),
+        ("aliases", |n| n.aliases = vec!["CORRUPTED".into()]),
+        ("properties", |n| {
+            n.properties.insert("role".into(), "CORRUPTED".into());
+        }),
+        ("source_version", |n| n.source_version = Some(999)),
+    ];
+
+    for (field, corrupt) in corruptions {
+        let mut projected = store.get_node("n1").unwrap().unwrap();
+        corrupt(&mut projected);
+        store.insert_node(&projected).unwrap();
+
+        let report = projector.reconcile_kb("kb1", false).await.unwrap();
+        assert!(
+            report.differing.contains(&"n1".to_string()),
+            "drift in '{field}' went UNDETECTED — the reconciler reported {report:?}"
+        );
+
+        // Heal, and confirm the heal actually restored this field, so the test
+        // also proves repair covers what detection covers.
+        let healed = projector.reconcile_kb("kb1", true).await.unwrap();
+        assert_eq!(
+            healed.differing,
+            vec!["n1".to_string()],
+            "healing pass must report the same drift it repairs ('{field}')"
+        );
+        assert!(
+            projector
+                .reconcile_kb("kb1", false)
+                .await
+                .unwrap()
+                .is_clean(),
+            "after healing '{field}', the projection must match CRDT truth again"
+        );
+    }
+}
+
+/// #732 — the startup self-heal must address the collection doc by the KB's
+/// **minted id**, not its display name.
+///
+/// `spawn_projector` collected `instance.name` and passed it as `kb_id`, while
+/// `rebuild_kb` reads `kbc:{kb_id}` — the address every other daemon site
+/// (dialer, checkpoint, kb_membership, and `scheduler.rs`'s own `collab_id`
+/// lookup) derives from the minted id. So for any KB shared after ADR-105 D4
+/// started minting uuids, startup read a document that does not exist.
+///
+/// Nothing caught it because nothing distinguished **"rebuilt 0 nodes"** from
+/// **"never found the document"** — both surfaced as a quiet `debug!`. This test
+/// pins that distinction: a rebuild keyed on a name that is not the doc's
+/// address must be an ERROR, and the one keyed on the minted id must return the
+/// real node count.
+#[tokio::test]
+async fn rebuild_is_keyed_on_the_minted_id_not_the_display_name() {
+    let doc_store = mem_store();
+    let stores = MemStores::new();
+
+    // The realistic post-ADR-105 shape: display name and minted id differ.
+    let minted_id = "6f1c9a2e-0d43-4b77-9a51-2c8e7b3f5a10";
+    let display_name = "my-notes";
+
+    let mut coll = mae_sync::kb::KbCollectionDoc::new(minted_id, "owner");
+    for (id, title, body) in [("n1", "One", "first"), ("n2", "Two", "second")] {
+        let n = mae_sync::kb::KbNodeDoc::new(id, title, body, &[]);
+        doc_store
+            .apply_update(
+                &mae_sync::kb_node_doc_name(minted_id, id),
+                &n.encode(),
+                None,
+            )
+            .await
+            .unwrap();
+        coll.add_node(id, title);
+    }
+    doc_store
+        .apply_update(&format!("kbc:{minted_id}"), &coll.encode_state(), None)
+        .await
+        .unwrap();
+
+    let projector = Projector::new(
+        Arc::clone(&doc_store),
+        Arc::clone(&stores) as Arc<dyn ProjectionStores>,
+    );
+
+    // The bug: keyed on the display name, there is no such collection document.
+    // This MUST fail loudly rather than quietly rebuild nothing.
+    assert!(
+        projector.rebuild_kb(display_name).await.is_err(),
+        "a rebuild keyed on the display name must report that the collection doc \
+         does not exist — reporting success with 0 nodes is what made #732 silent"
+    );
+
+    // Keyed on the minted id, the rebuild finds the real manifest.
+    assert_eq!(
+        projector.rebuild_kb(minted_id).await.unwrap(),
+        2,
+        "the minted id addresses the collection doc, so both nodes project"
+    );
+
+    // And the projection is genuinely populated — the count is not enough on its
+    // own, since a rebuild that reported 2 while projecting nothing would be the
+    // same class of silent failure.
+    let store = stores.store_for(minted_id).await.unwrap();
+    for id in ["n1", "n2"] {
+        assert!(
+            store.get_node(id).unwrap().is_some(),
+            "node '{id}' must be present in the Cozo projection after rebuild"
+        );
+    }
+}

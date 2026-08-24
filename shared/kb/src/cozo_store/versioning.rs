@@ -5,6 +5,63 @@ use super::util::{btree_params, cozo_err, dv_str};
 use super::*;
 
 impl CozoKbStore {
+    /// Insert a node, first snapshotting the row it is about to replace **if
+    /// that row exists and its content actually differs**.
+    ///
+    /// This is the write path for text→store ingest, which is a destructive
+    /// whole-row `:put` (`update_node` IS `insert_node`, with no merge anywhere).
+    /// Until this existed, `snapshot_version` had no production caller at all —
+    /// only `restore_version` called it, to snapshot before its own overwrite —
+    /// so `kb_history` was always empty and `kb_restore` could not undo a
+    /// clobber, which is the single thing it exists to do.
+    ///
+    /// **Bounded by construction.** The common case by far is re-ingesting an
+    /// unchanged file, and that writes no version: the content hash is compared
+    /// first. A version is appended only when bytes that a user could care about
+    /// are genuinely about to be replaced by different bytes.
+    ///
+    /// @ai-caution: [kb-truth] Deliberately NOT wired into `insert_node`
+    /// itself. The projector also writes through `insert_node`, and projection
+    /// is *derived* state — snapshotting it would append a version per node on
+    /// every full rebuild while recording nothing a user could want restored.
+    /// History belongs to authored writes, not to re-derivation.
+    pub fn insert_node_with_history(
+        &self,
+        node: &Node,
+        change_summary: &str,
+    ) -> Result<bool, KbStoreError> {
+        let snapshotted = match self.get_node(&node.id)? {
+            // Seeded content is code-generated and regenerable from the binary
+            // (ADR-104), so an ingest overwriting it is not a data-loss event and
+            // there is nothing a user could want restored. Skipping it is also
+            // what makes the "bounded" claim above true: MAE seeds nodes and THEN
+            // ingests a corpus over them, so without this the very first ingest
+            // would snapshot every seeded node it touches. `kb_snapshot_primary_to_store`
+            // already skips Seed nodes for the same reason.
+            Some(existing) if existing.source == Some(crate::NodeSource::Seed) => false,
+            Some(existing) if !Self::same_versioned_content(&existing, node) => {
+                self.snapshot_version(&node.id, change_summary)?;
+                true
+            }
+            _ => false,
+        };
+        self.insert_node(node)?;
+        Ok(snapshotted)
+    }
+
+    /// Whether two nodes agree on every field a version snapshot records.
+    ///
+    /// Compares exactly what [`NodeVersion::compute_hash`] covers, so a change
+    /// this reports is a change the snapshot would actually capture — anything
+    /// broader would append versions that restore to an identical state.
+    fn same_versioned_content(a: &Node, b: &Node) -> bool {
+        a.title == b.title
+            && a.body == b.body
+            && a.tags == b.tags
+            && a.todo_state == b.todo_state
+            && a.priority == b.priority
+    }
+
     /// Snapshot the current state of a node into node_versions.
     /// Computes a content checksum for tamper detection (SOC II audit trail).
     pub fn snapshot_version(&self, id: &str, change_summary: &str) -> Result<i64, KbStoreError> {

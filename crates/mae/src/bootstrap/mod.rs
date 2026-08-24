@@ -2668,6 +2668,9 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
         });
 
         let registry = mae_kb::federation::KbRegistry::load(&data_dir);
+        // #729: per-replica activity timestamps live beside the registry, not
+        // in node content.
+        editor.kb_load_activity();
         for inst in &registry.instances {
             if !inst.enabled {
                 continue;

@@ -273,14 +273,19 @@ impl Projector {
                 // Not drift: there is nothing to project.
                 continue;
             };
-            let expected = mae_sync::kb::KbNodeDoc::from_bytes(&state)
+            let doc = mae_sync::kb::KbNodeDoc::from_bytes(&state)
                 .map_err(|e| format!("parse 'kb:{node_id}': {e}"))?;
+            // #730: derive the expected row the SAME way `project_node` does,
+            // then compare on that, rather than hand-listing fields here. The
+            // comparison used to check only title/body/tags, so a projection
+            // whose `properties`, `kind`, `todo_state`, `priority`, `aliases` or
+            // `source_version` had drifted reported ZERO drift -- precisely the
+            // fields ADR-093 added to the node document, invisible to the tier
+            // whose whole job is to notice.
+            let expected = Node::from_crdt_doc(&doc, kind_from_id(node_id), NodeSource::Federation);
             match store.get_node(node_id) {
                 Ok(Some(actual)) => {
-                    if actual.title != expected.title()
-                        || actual.body != expected.body()
-                        || actual.tags != expected.tags()
-                    {
+                    if projected_fields_differ(&actual, &expected) {
                         report.differing.push(node_id.clone());
                         if heal {
                             project_node(&store, node_id, &state)?;
@@ -350,6 +355,27 @@ pub fn project_node(store: &CozoKbStore, node_id: &str, state: &[u8]) -> Result<
         .replace_node_links(&node.id, &links)
         .map_err(|e| format!("project links for '{node_id}': {e}"))?;
     Ok(())
+}
+
+/// Whether the projected row disagrees with what CRDT truth derives.
+///
+/// @ai-caution: [kb-truth] Compares every field [`project_node`] writes through
+/// `insert_node`. **If you add a field to the projection, add it here** -- a
+/// field the projector writes but this does not compare is a field that can
+/// drift silently forever, which is exactly how #730 happened. Deliberately
+/// exhaustive-by-hand rather than a derived equality, because `Node` also
+/// carries fields the projection does NOT derive (`source_file`, `crdt_doc`),
+/// and comparing those would report permanent false drift.
+fn projected_fields_differ(actual: &Node, expected: &Node) -> bool {
+    actual.title != expected.title
+        || actual.body != expected.body
+        || actual.tags != expected.tags
+        || actual.kind != expected.kind
+        || actual.todo_state != expected.todo_state
+        || actual.priority != expected.priority
+        || actual.aliases != expected.aliases
+        || actual.properties != expected.properties
+        || actual.source_version != expected.source_version
 }
 
 /// Derive a node's kind from its id namespace (e.g. `concept:x` → Concept), defaulting
