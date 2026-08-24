@@ -321,6 +321,30 @@ impl KbNodeDoc {
     // `@ai-caution` on the key constants for why that matters.
     // ------------------------------------------------------------------
 
+    /// Stamp the schema version, but **only when it would actually change**.
+    ///
+    /// @ai-caution: [crdt-growth] `schema_v` is a CONSTANT. Re-inserting it on
+    /// every field change made it the hottest key in the document, and every
+    /// overwrite of a `Y.Map` key retires the previous Item permanently — yrs has
+    /// no way to reclaim those (see the upstream tombstone-leak issue on exactly
+    /// this `Y.Map` shape). MAE's own workload made that acute: activity tracking
+    /// used to write on every node READ, so a document accrued two un-reclaimable
+    /// tombstones per read, forever, on the one field class with no compaction
+    /// story. Activity moved out of node content in #729; this removes the other
+    /// half.
+    ///
+    /// Reading before writing is not an optimisation here — an unconditional
+    /// write is unbounded growth for zero information.
+    fn stamp_schema_version(root: &yrs::MapRef, txn: &mut yrs::TransactionMut) {
+        use yrs::Map;
+        let current = root
+            .get(txn, SCHEMA_VERSION_KEY)
+            .and_then(|v| v.to_string(txn).parse::<i64>().ok());
+        if current != Some(NODE_SCHEMA_VERSION) {
+            root.insert(txn, SCHEMA_VERSION_KEY, NODE_SCHEMA_VERSION.to_string());
+        }
+    }
+
     /// Schema version of this document. **1** when the key is absent — i.e. a
     /// document authored before ADR-093, carrying text fields only.
     pub fn schema_version(&self) -> i64 {
@@ -357,11 +381,7 @@ impl KbNodeDoc {
                     root.remove(&mut txn, key);
                 }
             }
-            root.insert(
-                &mut txn,
-                SCHEMA_VERSION_KEY,
-                NODE_SCHEMA_VERSION.to_string(),
-            );
+            Self::stamp_schema_version(&root, &mut txn);
         }
         txn.encode_update_v1()
     }
@@ -456,11 +476,7 @@ impl KbNodeDoc {
         // Stamp the version only on a real change — an unchanged save must not
         // author an op (ADR-092 D2's no-churn rule).
         if changed {
-            root.insert(
-                &mut txn,
-                SCHEMA_VERSION_KEY,
-                NODE_SCHEMA_VERSION.to_string(),
-            );
+            Self::stamp_schema_version(&root, &mut txn);
         }
         txn.encode_update_v1()
     }
@@ -513,11 +529,7 @@ impl KbNodeDoc {
         // Stamp the version only on a real change — an unchanged save must not
         // author an op (ADR-092 D2's no-churn rule).
         if changed {
-            root.insert(
-                &mut txn,
-                SCHEMA_VERSION_KEY,
-                NODE_SCHEMA_VERSION.to_string(),
-            );
+            Self::stamp_schema_version(&root, &mut txn);
         }
         txn.encode_update_v1()
     }
