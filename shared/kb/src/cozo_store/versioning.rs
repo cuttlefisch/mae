@@ -31,6 +31,14 @@ impl CozoKbStore {
         change_summary: &str,
     ) -> Result<bool, KbStoreError> {
         let snapshotted = match self.get_node(&node.id)? {
+            // Seeded content is code-generated and regenerable from the binary
+            // (ADR-104), so an ingest overwriting it is not a data-loss event and
+            // there is nothing a user could want restored. Skipping it is also
+            // what makes the "bounded" claim above true: MAE seeds nodes and THEN
+            // ingests a corpus over them, so without this the very first ingest
+            // would snapshot every seeded node it touches. `kb_snapshot_primary_to_store`
+            // already skips Seed nodes for the same reason.
+            Some(existing) if existing.source == Some(crate::NodeSource::Seed) => false,
             Some(existing) if !Self::same_versioned_content(&existing, node) => {
                 self.snapshot_version(&node.id, change_summary)?;
                 true

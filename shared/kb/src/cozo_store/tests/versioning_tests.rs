@@ -247,3 +247,51 @@ fn version_history_survives_node_deletion_and_reprojection() {
         "re-projection must not disturb history either"
     );
 }
+
+/// Overwriting SEEDED content records no version.
+///
+/// MAE seeds code-generated nodes and then ingests a corpus over them, so
+/// without this the very first ingest on a fresh install would snapshot every
+/// seeded node it touched — which is both noise and a direct contradiction of
+/// the bound the test above pins. Seed content is regenerable from the binary
+/// (ADR-104), so there is nothing a user could want restored.
+///
+/// Caught by CI rather than by the unit tests: `crates/mae/tests/` seeds a store
+/// and then imports org fixtures over it, which is exactly this shape.
+#[test]
+fn overwriting_seeded_content_records_no_version() {
+    let store = CozoKbStore::open_mem().unwrap();
+    store.seed_type_system().unwrap();
+
+    let mut seeded = Node::new("concept:x", "Seeded", NodeKind::Concept, "generated body");
+    seeded.source = Some(crate::NodeSource::Seed);
+    store.insert_node(&seeded).unwrap();
+
+    let from_corpus = Node::new(
+        "concept:x",
+        "Seeded",
+        NodeKind::Concept,
+        "richer prose from org",
+    );
+    assert!(
+        !store
+            .insert_node_with_history(&from_corpus, "corpus ingest")
+            .unwrap(),
+        "an ingest over SEEDED content must not snapshot"
+    );
+    assert!(
+        store.node_history("concept:x", 100).unwrap().is_empty(),
+        "no version recorded for a seed overwrite"
+    );
+
+    // But once the node is no longer seed-provenanced, it is user content again
+    // and a further overwrite DOES snapshot — the skip is about provenance, not
+    // about the id.
+    let authored = Node::new("concept:x", "Seeded", NodeKind::Concept, "user edit");
+    assert!(
+        store
+            .insert_node_with_history(&authored, "user edit")
+            .unwrap(),
+        "content that is no longer Seed-provenanced must snapshot again"
+    );
+}
