@@ -697,11 +697,28 @@ jobs:
           retention-days: 1
 
   audit:
-    name: cargo-deny
+    # Both workspaces, because they have SEPARATE lockfiles. Running only at the
+    # repo root left daemon/Cargo.lock scanned by nothing -- which is how the
+    # network-facing binary sat on yrs 0.27.0, carrying the `sync/diff`
+    # length-prefix allocation bomb fixed upstream in 0.27.4 (y-crdt PR #639),
+    # while the editor workspace had already moved to 0.27.3.
+    # deny.toml lives only at the root; `manifest-path` selects the workspace to
+    # scan, and cargo-deny walks up for config, so both legs share one policy.
+    name: cargo-deny (${{ matrix.workspace }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - workspace: editor
+            manifest: Cargo.toml
+          - workspace: daemon
+            manifest: daemon/Cargo.toml
     steps:
       - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: ${{ matrix.manifest }}
 
   export-js-check:
     name: kb-export-subgraph-html graph.js syntax check
