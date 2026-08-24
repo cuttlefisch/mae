@@ -34,6 +34,28 @@ ignore = [
     # namespace-declaration allocation.
     { id = "RUSTSEC-2026-0194", reason = "wayland-scanner build-time parse of trusted protocol XML; not attacker input; quick-xml pinned ^0.39 upstream" },
     { id = "RUSTSEC-2026-0195", reason = "wayland-scanner build-time parse of trusted protocol XML; not attacker input; quick-xml pinned ^0.39 upstream" },
+    # --- Daemon-workspace advisories. These were invisible until the cargo-deny
+    # job became a matrix over BOTH workspaces; daemon/Cargo.lock had never been
+    # scanned by anything. The h2 vulnerability found at the same time
+    # (RUSTSEC-2026-0258) was fixed by updating rather than ignored.
+    #
+    # rsa: Marvin Attack is a timing sidechannel on RSA PRIVATE-KEY operations
+    # (decryption/signing). The daemon is an OAuth *resource server*: `oauth.rs`
+    # only ever calls `decode` with `Algorithm::RS256`, a public-key verification,
+    # and it holds no RSA private key. Self-issued tokens sign with
+    # `Algorithm::EdDSA` (`oauth_self_issue.rs`), not RSA. So the vulnerable code
+    # path is linked but unreachable. Pulled in by jsonwebtoken 10.x, which has no
+    # RSA-free build. Re-evaluate immediately if the daemon ever gains an RSA
+    # signing or decryption path.
+    { id = "RUSTSEC-2023-0071", reason = "rsa via jsonwebtoken; daemon only VERIFIES RS256 (public key) and signs EdDSA — no private-key RSA op exists, so the Marvin sidechannel is unreachable" },
+    # paste: build-time proc-macro, unmaintained with no upstream fix.
+    # iroh → netwatch → netdev → netlink-packet-core → paste (Linux netlink only).
+    { id = "RUSTSEC-2024-0436", reason = "iroh transitive build-time proc-macro, no upstream fix" },
+    # rustls-pemfile: unmaintained, and unlike the others this is a DIRECT
+    # mae-daemon dependency, so it is ours to migrate (rustls-pki-types now
+    # provides PEM parsing). Ignored here only to keep the newly-added daemon
+    # cargo-deny leg green; tracked for migration rather than accepted forever.
+    { id = "RUSTSEC-2025-0134", reason = "direct mae-daemon dep; migrate to rustls-pki-types PEM parsing — tracked, not permanently accepted" },
     # smallstr unmaintained (yrs → smallstr) — yrs is the CRDT substrate ADR-002
     # accepted as the sync engine (mae-sync); advisory itself states no safe
     # upgrade is available. Tracked in #374 — revisit if yrs drops the
@@ -91,4 +113,10 @@ wildcards = "allow"
 unknown-registry = "warn"
 unknown-git = "warn"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+# The MAE fork of y-crdt, carrying upstream PR #644 (UTF-8 validation in the v1
+# decoder) on top of the v0.27.4 tag. Pinned by commit SHA in both workspace
+# roots' `[patch.crates-io]`. Declared here rather than left to `unknown-git =
+# "warn"` so the exception is explicit and reviewable, and so dropping the patch
+# also means deleting this line.
+# Remove when https://github.com/y-crdt/y-crdt/pull/644 lands upstream.
+allow-git = ["https://github.com/cuttlefisch/y-crdt"]
