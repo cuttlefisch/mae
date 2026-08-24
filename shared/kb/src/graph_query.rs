@@ -277,7 +277,7 @@ pub struct KbStoreBackend<'a>(pub &'a dyn KbStore);
 
 impl GraphNeighbors for KbStoreBackend<'_> {
     fn contains(&self, id: &str) -> bool {
-        matches!(self.0.get_node(id), Ok(Some(_)))
+        matches!(self.0.get_node_light(id), Ok(Some(_)))
     }
 
     fn neighbor_ids(&self, id: &str) -> Result<Vec<String>, crate::store::KbStoreError> {
@@ -298,7 +298,7 @@ impl GraphNeighbors for KbStoreBackend<'_> {
     }
 
     fn describe(&self, id: &str) -> Option<(String, String, Option<String>, bool)> {
-        self.0.get_node(id).ok().flatten().map(|n| {
+        self.0.get_node_light(id).ok().flatten().map(|n| {
             let is_seed = n.source == Some(crate::NodeSource::Seed);
             (n.title, n.kind.as_str().to_string(), None, is_seed)
         })
@@ -447,7 +447,7 @@ impl RelatedSource for KbStoreRelatedBackend<'_> {
     }
 
     fn describe(&self, id: &str) -> Option<(String, String, Option<String>, bool)> {
-        self.0.get_node(id).ok().flatten().map(|n| {
+        self.0.get_node_light(id).ok().flatten().map(|n| {
             let is_seed = n.source == Some(crate::NodeSource::Seed);
             (n.title, n.kind.as_str().to_string(), None, is_seed)
         })

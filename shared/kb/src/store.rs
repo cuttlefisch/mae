@@ -266,6 +266,23 @@ pub trait KbStore: Send + Sync {
     fn update_node(&self, node: &Node) -> Result<(), KbStoreError>;
     fn delete_node(&self, id: &str) -> Result<(), KbStoreError>;
     fn get_node(&self, id: &str) -> Result<Option<Node>, KbStoreError>;
+
+    /// [`Self::get_node`] without the `crdt_doc` blob.
+    ///
+    /// The returned [`Node`] always has `crdt_doc: None`, so this is **only**
+    /// for callers that read metadata/title/body — never for the CRDT paths
+    /// (`Node::to_crdt_doc`, `upsert_with_crdt`, the "has this node been
+    /// CRDT-edited?" check in `kb_ops::nodes`), which need the real bytes.
+    ///
+    /// Provided rather than required: the default is `get_node`, which is
+    /// always *correct*, just not always cheap. A backend that can skip
+    /// decoding the blob overrides it. (Deliberately not another
+    /// `NotSupported` default — see ADR-108's exit-ramp notes on this trait's
+    /// 29 Cozo-only methods.)
+    fn get_node_light(&self, id: &str) -> Result<Option<Node>, KbStoreError> {
+        self.get_node(id)
+    }
+
     fn list_ids(&self, prefix: Option<&str>) -> Result<Vec<String>, KbStoreError>;
 
     // --- Search ---
