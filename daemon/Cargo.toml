@@ -107,3 +107,27 @@ criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
 [[bench]]
 name = "kb_dispatch_concurrency"
 harness = false
+
+# TEMPORARY: carries y-crdt PR #644 ("validate UTF-8 when decoding string content
+# from the wire"), which is OPEN and unmerged upstream as of 2026-08-24 with no
+# maintainer reply since 2026-08-06. Pinned to a commit SHA in our own fork rather
+# than to the contributor's branch, so it cannot be force-pushed or deleted out
+# from under a build, and so the bytes are reproducible.
+#
+# Why we carry it: `yrs::Read::read_string` builds a `&str` from raw wire bytes via
+# `from_utf8_unchecked`, so ONE corrupted byte in an otherwise-valid v1 update
+# decodes as `Ok` and materializing it is undefined behaviour -- a non-unwinding
+# abort under the debug-only `char` precondition check, silently unsound in
+# release. `catch_unwind` contains neither, and MAE-side validation cannot help:
+# validating IS decoding, and decoding is where the UB lives.
+#
+# It is durable here, not just a crash: `validate_update` is `Update::decode_v1`
+# and the daemon writes validate -> WAL append -> apply, so a poisoned update is
+# persisted and replayed on every restart.
+#
+# Reproducer: `cargo test -p mae-sync --test yrs_decoder_utf8_ub_reproducer -- --ignored`
+# Upstream: https://github.com/y-crdt/y-crdt/pull/644 (issue #415)
+#
+# REMOVE THIS BLOCK (both workspaces) when #644 lands upstream and yrs releases it.
+[patch.crates-io]
+yrs = { git = "https://github.com/cuttlefisch/y-crdt", rev = "40a08982b4e95fe8d06c84e4df5a5713eca11c25" }

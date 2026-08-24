@@ -1,11 +1,9 @@
 //! Reproducer for the yrs v1 decoder's UTF-8 undefined behaviour (y-crdt#415).
 //!
-//! **`#[ignore]`d on purpose: this test does not fail, it ABORTS the process.**
-//! Run it deliberately with:
-//!
-//! ```text
-//! cargo test -p mae-sync --test yrs_decoder_utf8_ub_reproducer -- --ignored --nocapture
-//! ```
+//! **This is a live regression guard on the `[patch.crates-io]` pin, not a
+//! curiosity.** With the patch in place every corruption is refused at decode and
+//! this test passes. Drop the patch and it does not "fail" -- it **aborts the test
+//! process**, which is a loud enough signal in CI to be the point.
 //!
 //! ## What it demonstrates
 //!
@@ -15,7 +13,7 @@
 //! payload of an otherwise-valid update yields `Ok(update)` carrying an invalid
 //! `&str`, and the corruption surfaces later as genuine UB.
 //!
-//! Observed on yrs 0.27.4, debug profile:
+//! Observed on **stock** yrs 0.27.4, debug profile:
 //!
 //! ```text
 //! unsafe precondition(s) violated: invalid value for `char`
@@ -43,7 +41,12 @@
 //! Not fixed upstream. The fix is y-crdt PR #644 ("validate UTF-8 when decoding
 //! string content from the wire"), **open and unmerged** as of 2026-08-24, with no
 //! maintainer reply since 2026-08-06. yrs 0.27.4 fixed the *allocation* class
-//! (PR #639) but not this. Note the sibling site at
+//! (PR #639) but not this.
+//!
+//! MAE therefore carries #644 itself, cherry-picked onto the v0.27.4 tag in
+//! `cuttlefisch/y-crdt` and pinned by commit SHA from both workspace roots. With
+//! that patch the measured result is **0 of 26 single-byte corruptions decoding
+//! `Ok`** -- every one is refused. Without it, the first one aborts. Note the sibling site at
 //! `yrs/src/updates/decoder.rs:486` (`StringDecoder::new`) is on the **v2** path,
 //! which MAE does not use — grep confirms zero `decode_v2`/`DecoderV2` references
 //! — so `read.rs:137` is the only site that is actually reachable here.
@@ -56,8 +59,7 @@ use yrs::updates::decoder::Decode;
 use yrs::{Doc, GetString, Text, Transact};
 
 #[test]
-#[ignore = "aborts the process by design — this reproduces UB, it does not assert against it"]
-fn a_single_corrupted_byte_decodes_as_ok_and_yields_an_invalid_str() {
+fn no_single_byte_corruption_reaches_an_invalid_str() {
     let doc = Doc::with_client_id(1);
     let text = doc.get_or_insert_text("t");
     let mut txn = doc.transact_mut();
@@ -85,5 +87,17 @@ fn a_single_corrupted_byte_decodes_as_ok_and_yields_an_invalid_str() {
     println!(
         "corrupting each of {} bytes: {decoded_ok} decoded Ok, {refused} refused",
         valid.len()
+    );
+
+    // The oracle is deliberately about UTF-8 specifically, not "nothing decoded".
+    // A corrupted byte outside the string payload may legitimately still decode;
+    // what must never happen is a decode that yields an invalid `&str`. Reaching
+    // this line at all is most of the assertion -- the unpatched decoder aborts
+    // before returning -- and the count pins the observed behaviour so a silent
+    // regression to `from_utf8_unchecked` shows up as a diff, not a mystery.
+    assert_eq!(
+        decoded_ok + refused,
+        valid.len(),
+        "every corruption must produce a decision, not a crash"
     );
 }
