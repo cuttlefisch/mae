@@ -67,6 +67,7 @@ fn seed_guidance_kb(xdg_data: &Path, kb_name: &str, index_body: &str) {
                 ai_residency: mae_kb::federation::AiResidency::default(),
                 project_root: None,
                 kind: mae_kb::federation::KbInstanceKind::UserRegistered,
+                ingest_policy: Default::default(),
                 priority: 0,
                 remote_hub: None,
             });

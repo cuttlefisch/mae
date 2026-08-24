@@ -204,6 +204,7 @@ fn seed_system_kb_row(editor: &mut Editor, name: &str) -> String {
             ai_residency: mae_kb::federation::AiResidency::default(),
             project_root: None,
             kind: mae_kb::federation::KbInstanceKind::Guidance,
+            ingest_policy: Default::default(),
             priority: 0,
             remote_hub: None,
         });

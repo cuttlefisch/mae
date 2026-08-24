@@ -13,6 +13,7 @@
 //! CozoDB. The daemon is an upgrade that provides persistent SQLite KB,
 //! collaboration, and services that outlive the editor session.
 
+mod checkpoint_cli;
 mod cli;
 mod config;
 #[cfg(test)]
@@ -127,6 +128,16 @@ async fn main() {
         Some("authorize") => std::process::exit(run_authorize(&config, &cli.rest)),
         Some("revoke") => {
             std::process::exit(run_revoke(&config, cli.rest.first().map(|s| s.as_str())))
+        }
+        // ADR-032 checkpoints: the CRDT-truth backup/rollback artifact. Wired to a
+        // real surface because until now it had ZERO production callers (#632) —
+        // a rollback mechanism that has only ever run in a unit test is an
+        // assumption, not a safety net.
+        Some("checkpoint") => {
+            std::process::exit(checkpoint_cli::run_checkpoint(&config, &cli.rest).await);
+        }
+        Some("restore") => {
+            std::process::exit(checkpoint_cli::run_restore(&config, &cli.rest).await);
         }
         _ => {}
     }

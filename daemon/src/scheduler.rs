@@ -146,7 +146,7 @@ impl DaemonScheduler {
             ds.registry
                 .instances
                 .iter()
-                .filter(|inst| inst.enabled && !inst.org_dir.as_os_str().is_empty())
+                .filter(|inst| is_watcher_ingest_target(inst))
                 .filter_map(|inst| {
                     let store = resolve_kb_store(&ds, &inst.uuid)?;
                     Some((inst.uuid.clone(), inst.org_dir.clone(), store))
@@ -426,6 +426,22 @@ impl DaemonScheduler {
     }
 }
 
+/// Whether the 500 ms watcher tick may re-ingest this instance's org directory.
+///
+/// @ai-caution: [kb-truth] Named and extracted so it can be TESTED. This tick
+/// runs every 500 ms with `IngestMode::Full` — the most destructive ingest mode,
+/// which also deletes nodes whose source file is gone — and no editor option ever
+/// reached it: `kb_watcher_enabled` gates the *editor's* watcher and has never
+/// had a consumer in this file. So before the `allows_ingest` check, the daemon
+/// could re-ingest text over a store the user had explicitly made authoritative,
+/// on a timer, with nothing available to turn it off.
+///
+/// A dir-less instance (every joined collab KB) has no org directory to watch,
+/// and a disabled one is not loaded at all.
+pub(crate) fn is_watcher_ingest_target(inst: &mae_kb::federation::KbInstance) -> bool {
+    inst.enabled && !inst.org_dir.as_os_str().is_empty() && inst.allows_ingest()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -673,6 +689,73 @@ mod tests {
                 .unwrap(),
             None,
             "a LocalModelsOnly KB must never have its content embedded via a hosted provider"
+        );
+    }
+}
+
+#[cfg(test)]
+mod ingest_policy_tests {
+    use super::is_watcher_ingest_target;
+    use mae_kb::federation::{AiResidency, IngestPolicy, KbInstance, KbInstanceKind};
+
+    fn instance(policy: IngestPolicy, org_dir: &str, enabled: bool) -> KbInstance {
+        KbInstance {
+            uuid: "u".into(),
+            name: "kb".into(),
+            org_dir: org_dir.into(),
+            db_path: "/tmp/kb.db".into(),
+            primary: false,
+            enabled,
+            last_import: None,
+            collab_id: None,
+            shared: false,
+            remote_peers: Vec::new(),
+            last_sync: None,
+            ai_residency: AiResidency::default(),
+            project_root: None,
+            kind: KbInstanceKind::default(),
+            ingest_policy: policy,
+            priority: 0,
+            remote_hub: None,
+        }
+    }
+
+    /// The gap this closes: the tick fires every 500 ms with `IngestMode::Full`
+    /// — which also DELETES nodes whose source file is gone — and no editor
+    /// option ever reached it. `kb_watcher_enabled` gates the editor's watcher
+    /// and has no consumer in this file, so a user who detached a KB in the
+    /// editor still had the daemon re-ingesting text over it on a timer, with
+    /// nothing available to stop it.
+    #[test]
+    fn a_detached_instance_is_never_a_watcher_target() {
+        assert!(
+            !is_watcher_ingest_target(&instance(IngestPolicy::StoreIsTruth, "/tmp/org", true)),
+            "the 500 ms tick must not re-ingest a detached instance"
+        );
+    }
+
+    /// The complement, so the filter cannot be "return false" and still pass.
+    #[test]
+    fn an_attached_instance_with_an_org_dir_is_a_watcher_target() {
+        assert!(is_watcher_ingest_target(&instance(
+            IngestPolicy::FromOrgDir,
+            "/tmp/org",
+            true
+        )));
+    }
+
+    /// The pre-existing exclusions must survive the new one — a dir-less
+    /// instance (every joined collab KB) has nothing to watch, and a disabled
+    /// instance is not loaded at all.
+    #[test]
+    fn dir_less_and_disabled_instances_remain_excluded() {
+        assert!(
+            !is_watcher_ingest_target(&instance(IngestPolicy::FromOrgDir, "", true)),
+            "a dir-less instance has no org directory to watch"
+        );
+        assert!(
+            !is_watcher_ingest_target(&instance(IngestPolicy::FromOrgDir, "/tmp/org", false)),
+            "a disabled instance is not loaded"
         );
     }
 }
