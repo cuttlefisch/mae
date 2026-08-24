@@ -99,3 +99,58 @@ fn provenance_survives_concurrent_edits_from_two_peers() {
         );
     }
 }
+
+/// `created_at` is stamped once and never moves.
+///
+/// The Cozo row wrote `now` on EVERY insert, so it recorded "last written" and a
+/// re-ingest destroyed node age outright — the one stored view reading it
+/// (`view:backlog`) has been ordering by the wrong thing. Putting it in the
+/// document also means it survives a projection rebuild, which a projection-only
+/// field does not (ADR-029).
+///
+/// The assertion is that many edits do not move it, rather than that some
+/// specific value appears — an implementation that re-stamped on write would
+/// still produce a plausible timestamp, just the wrong one.
+#[test]
+fn created_at_is_stamped_once_and_never_moves() {
+    let mut doc = KbNodeDoc::new("n1", "T", "B", &[]);
+    let stamped = doc.created_at().expect("a fresh document carries a stamp");
+    assert!(stamped > 0, "the stamp must be a real time, got {stamped}");
+
+    for i in 0..50 {
+        let _ = doc.set_title(&format!("edit {i}"));
+        let _ = doc.set_body(&format!("body {i}"));
+        let _ = doc.set_todo_state(Some(if i % 2 == 0 { "TODO" } else { "DONE" }));
+    }
+
+    assert_eq!(
+        doc.created_at(),
+        Some(stamped),
+        "150 edits moved the creation stamp — it is recording last-written, \
+         which is the defect it exists to fix"
+    );
+}
+
+/// It must also survive the wire, or a peer sees the node as newly created.
+#[test]
+fn created_at_survives_the_wire_and_a_merge() {
+    let origin = KbNodeDoc::new("n1", "T", "B", &[]);
+    let stamped = origin.created_at().unwrap();
+
+    let mut peer = KbNodeDoc::from_bytes(&origin.encode_state()).unwrap();
+    assert_eq!(
+        peer.created_at(),
+        Some(stamped),
+        "the peer must see the ORIGIN's creation time, not its own"
+    );
+
+    // A remote edit merging in must not disturb it either.
+    let mut other = KbNodeDoc::from_bytes(&origin.encode_state()).unwrap();
+    let update = other.set_title("remote edit");
+    peer.apply_update(&update).unwrap();
+    assert_eq!(
+        peer.created_at(),
+        Some(stamped),
+        "a merged remote edit moved the creation stamp"
+    );
+}

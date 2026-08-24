@@ -68,8 +68,13 @@ impl CozoKbStore {
             dv_str(""),            // assignee
             DataValue::from(0i64), // due_date
             dv_str(""),            // sprint
-            DataValue::from(now),  // created_at
-            DataValue::from(now),  // updated_at
+            // Node age is a fact about the node. Using `now` here meant every
+            // write reset it, so `created_at` recorded "last written" and a
+            // re-ingest destroyed age outright — `view:backlog` has been
+            // ordering by the wrong thing. Prefer the CRDT's immutable stamp;
+            // fall back to `now` only for a node that has never carried one.
+            DataValue::from(node.created_at.unwrap_or(now)), // created_at
+            DataValue::from(now),                            // updated_at
         ])
     }
     /// Build the parameter map for [`Self::NODE_PUT_SCRIPT`] from a node.

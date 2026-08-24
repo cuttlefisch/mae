@@ -49,6 +49,16 @@ const SOURCE_VERSION_KEY: &str = "src_v";
 /// is also the real reason ADR-104 D1 refuses to share system KBs at all: the
 /// refusal is a workaround for this gap, not a policy in its own right.
 const SOURCE_KEY: &str = "source";
+/// Creation timestamp (unix seconds), stamped ONCE at construction.
+///
+/// @ai-caution: [kb-truth] Immutable by contract — there is deliberately no
+/// setter. The Cozo row's `created_at` is written as `now` on EVERY insert, so
+/// it records "last written" rather than "created", and a re-ingest destroys
+/// node age outright; the one stored view that reads it (`view:backlog`) has
+/// therefore been ordering by the wrong thing. A field living only in the
+/// projection is also destroyed by the next rebuild (ADR-029), which is why this
+/// belongs in the document rather than being patched in the row encoder.
+const CREATED_KEY: &str = "created";
 
 /// Current node schema version. Absent ⇒ v1 (text fields only).
 pub const NODE_SCHEMA_VERSION: i64 = 2;
@@ -71,6 +81,17 @@ pub struct MaterializedNode {
     /// Provenance, as its serialized string. `None` for a v1 document, and for a
     /// v2 document authored before `source` joined the schema.
     pub source: Option<String>,
+    /// Creation timestamp (unix seconds). `None` for a document authored before
+    /// the key existed.
+    pub created_at: Option<i64>,
+}
+
+/// Seconds since the unix epoch, or 0 if the clock predates it.
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// A KB node represented as a yrs document.
@@ -110,6 +131,9 @@ impl KbNodeDoc {
             // COLL_LEASE_KEY in collection_core.rs.
             root.insert(&mut txn, ALIASES_KEY, ArrayPrelim::default());
             root.insert(&mut txn, PROPS_KEY, MapPrelim::default());
+            // Stamped once, here, and never moved — node age is a fact about the
+            // node, not about the last time something wrote it.
+            Self::stamp_created_at(&root, &mut txn, unix_now());
         }
         Self { doc }
     }
@@ -423,6 +447,24 @@ impl KbNodeDoc {
         self.set_scalar(SOURCE_VERSION_KEY, v.map(|n| n.to_string()).as_deref())
     }
 
+    /// Creation timestamp (unix seconds). Absent ⇒ `None`, for a document
+    /// authored before this key existed.
+    pub fn created_at(&self) -> Option<i64> {
+        self.scalar(CREATED_KEY).and_then(|s| s.parse::<i64>().ok())
+    }
+
+    /// Stamp the creation time if the document does not already carry one.
+    ///
+    /// Idempotent and one-way — there is no setter that can move it. An existing
+    /// document gains a stamp on first construction-from-bytes rather than
+    /// staying blank forever, but never a SECOND one.
+    fn stamp_created_at(root: &yrs::MapRef, txn: &mut yrs::TransactionMut, now: i64) {
+        use yrs::Map;
+        if root.get(txn, CREATED_KEY).is_none() {
+            root.insert(txn, CREATED_KEY, now.to_string());
+        }
+    }
+
     /// Provenance (`mae_kb::NodeSource` as its serialized string). Absent ⇒ `None`.
     ///
     /// Tolerant reader per ADR-093: a document authored before this key existed
@@ -652,6 +694,7 @@ impl KbNodeDoc {
             properties: self.properties(),
             source_version: self.source_version(),
             source: self.source(),
+            created_at: self.created_at(),
         }
     }
 

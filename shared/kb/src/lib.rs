@@ -384,6 +384,11 @@ pub struct Node {
     /// are materialized from the CRDT content for FTS5 and display.
     #[serde(skip)]
     pub crdt_doc: Option<Vec<u8>>,
+    /// Creation timestamp (unix seconds), when known from the node's CRDT
+    /// document. `None` for a node that has never had one — the Cozo row then
+    /// falls back to "now" on first insert, as it always did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<i64>,
 }
 
 impl Node {
@@ -407,6 +412,7 @@ impl Node {
             properties: HashMap::new(),
             source_file: None,
             crdt_doc: None,
+            created_at: None,
         }
     }
 
@@ -513,6 +519,9 @@ impl Node {
                 self.source = Some(src);
             }
         }
+        if let Some(c) = doc.created_at() {
+            self.created_at = Some(c);
+        }
         self.crdt_doc = Some(doc.encode());
     }
 
@@ -552,6 +561,7 @@ impl Node {
         node.source_version = mat.source_version;
         node.aliases = mat.aliases;
         node.properties = mat.properties;
+        node.created_at = mat.created_at;
         node.crdt_doc = Some(doc.encode());
         // Populate links from materialized links array.
         // (links are also parseable from body, but CRDT links array is authoritative)
@@ -1634,6 +1644,7 @@ impl KnowledgeBase {
                         properties: HashMap::new(),
                         source_file: None,
                         crdt_doc: None,
+                        created_at: None,
                     });
                 }
                 for (target, rel_type, weight) in typed_links {
