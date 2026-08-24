@@ -125,7 +125,7 @@
     "daemon/src/dialer.rs": 1157,
     "daemon/src/doc_store.rs": 1823,
     "daemon/src/handler.rs": 2247,
-    "daemon/src/main.rs": 1566,
+    "daemon/src/main.rs": 1726,
     "daemon/src/oauth.rs": 952,
     "daemon/src/storage.rs": 911,
     "daemon/src/tests/kb_query_tests.rs": 920,

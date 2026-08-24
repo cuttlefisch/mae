@@ -300,3 +300,155 @@ mod tests {
         );
     }
 }
+
+/// #632 — rollback practised, not assumed.
+///
+/// These live beside the existing unit tests deliberately. Those assert the
+/// artifact round-trips and its hash verifies; that is necessary and it is not
+/// the thing anyone actually needs to know. The question a backup has to answer
+/// is *"if I restore this, do I get my content back?"* — which is only settled by
+/// destroying content, restoring, and comparing against a census taken before.
+///
+/// ADR-032 names its target use case as a real user-corpus onboarding —
+/// thousands of nodes of genuine work. Until this file was wired to a CLI
+/// surface it had **zero production callers**, so the restore path had never
+/// executed outside a unit test. A rollback mechanism that has never run is an
+/// assumption.
+#[cfg(test)]
+mod rollback_tests {
+    use super::*;
+    use crate::storage::SqliteBackend;
+
+    async fn store() -> std::sync::Arc<DocStore> {
+        std::sync::Arc::new(DocStore::new(
+            std::sync::Arc::new(SqliteBackend::open_memory().unwrap()),
+            500,
+        ))
+    }
+
+    /// A census of what a KB actually contains, taken through the same surface a
+    /// reader would use. Compared before and after, so the assertion is about
+    /// CONTENT, not about bytes or hashes agreeing with themselves.
+    async fn census(doc_store: &DocStore, kb_id: &str, ids: &[&str]) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for id in ids {
+            let name = mae_sync::kb_node_doc_name(kb_id, id);
+            let body = match doc_store.encode_state_and_sv(&name).await {
+                Ok((state, _)) => mae_sync::kb::KbNodeDoc::from_bytes(&state)
+                    .map(|d| d.body())
+                    .unwrap_or_else(|_| "<unparseable>".into()),
+                Err(_) => "<missing>".into(),
+            };
+            out.push(((*id).to_string(), body));
+        }
+        out
+    }
+
+    async fn seed(doc_store: &DocStore, kb_id: &str, nodes: &[(&str, &str)]) {
+        let mut coll = mae_sync::kb::KbCollectionDoc::new(kb_id, "owner");
+        for (id, body) in nodes {
+            let n = mae_sync::kb::KbNodeDoc::new(id, id, body, &[]);
+            doc_store
+                .apply_update(&mae_sync::kb_node_doc_name(kb_id, id), &n.encode(), None)
+                .await
+                .unwrap();
+            coll.add_node(id, id);
+        }
+        doc_store
+            .apply_update(&format!("kbc:{kb_id}"), &coll.encode_state(), None)
+            .await
+            .unwrap();
+    }
+
+    /// The actual rollback claim: destroy content, restore, get it back.
+    #[tokio::test]
+    async fn a_checkpoint_restores_content_that_was_destroyed_after_it_was_taken() {
+        let doc_store = store().await;
+        let kb = "kb-rollback";
+        let ids = ["n1", "n2", "n3"];
+        seed(
+            &doc_store,
+            kb,
+            &[("n1", "first"), ("n2", "second"), ("n3", "third")],
+        )
+        .await;
+
+        let before = census(&doc_store, kb, &ids).await;
+        let artifact = export_kb(&doc_store, kb).await.unwrap();
+
+        // Destroy content the way an ingest clobber would: overwrite bodies with
+        // something else entirely.
+        for id in ids {
+            let name = mae_sync::kb_node_doc_name(kb, id);
+            let (state, _) = doc_store.encode_state_and_sv(&name).await.unwrap();
+            let mut doc = mae_sync::kb::KbNodeDoc::from_bytes(&state).unwrap();
+            let update = doc.set_body("CLOBBERED");
+            doc_store.apply_update(&name, &update, None).await.unwrap();
+        }
+        let damaged = census(&doc_store, kb, &ids).await;
+        assert_ne!(
+            damaged, before,
+            "precondition: the damage must be real, or the restore proves nothing"
+        );
+
+        import_kb(&doc_store, &artifact).await.unwrap();
+
+        assert_eq!(
+            census(&doc_store, kb, &ids).await,
+            before,
+            "restoring a checkpoint must reproduce the exact content it captured"
+        );
+    }
+
+    /// A checkpoint of a KB with no nodes must be recognisable as such rather
+    /// than succeeding quietly. An empty artifact that restores "successfully"
+    /// is the failure mode most likely to be discovered during a real rollback.
+    #[tokio::test]
+    async fn an_empty_kb_checkpoints_to_a_visibly_empty_artifact() {
+        let doc_store = store().await;
+        seed(&doc_store, "kb-empty", &[]).await;
+
+        let cp = checkpoint_kb(&doc_store, "kb-empty").await.unwrap();
+        assert_eq!(
+            cp.node_count(),
+            0,
+            "an empty KB must report zero nodes, so the CLI can say so out loud"
+        );
+    }
+
+    /// A checkpoint for a KB that does not exist must fail, not produce an empty
+    /// artifact named after it — otherwise a typo in the kb_id yields a
+    /// plausible-looking backup of nothing.
+    #[tokio::test]
+    async fn checkpointing_an_unknown_kb_fails_rather_than_writing_an_empty_artifact() {
+        let doc_store = store().await;
+        assert!(
+            export_kb(&doc_store, "no-such-kb").await.is_err(),
+            "a typo'd kb_id must fail loudly, not back up nothing"
+        );
+    }
+
+    /// Restore must reject a corrupted artifact rather than writing partial
+    /// content — a half-restored KB is worse than a failed restore.
+    #[tokio::test]
+    async fn a_corrupted_artifact_is_rejected_before_anything_is_written() {
+        let doc_store = store().await;
+        let kb = "kb-corrupt";
+        seed(&doc_store, kb, &[("n1", "original")]).await;
+        let mut artifact = export_kb(&doc_store, kb).await.unwrap();
+
+        // Flip a byte in the payload, past the magic header.
+        let idx = artifact.len() / 2;
+        artifact[idx] ^= 0xFF;
+
+        assert!(
+            import_kb(&doc_store, &artifact).await.is_err(),
+            "a corrupted artifact must be refused"
+        );
+        assert_eq!(
+            census(&doc_store, kb, &["n1"]).await,
+            vec![("n1".to_string(), "original".to_string())],
+            "a refused restore must leave existing content untouched"
+        );
+    }
+}
