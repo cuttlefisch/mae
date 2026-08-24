@@ -298,6 +298,12 @@ impl Editor {
             // a real one SHADOWS it: saves under the real KB's directory get
             // attributed to, and written into, the dir-less one's store.
             .filter(|i| !i.org_dir.as_os_str().is_empty())
+            // Phase 1 (KB cutover): a detached instance's store is the truth, so
+            // no `.org` file may write it. This is the chokepoint for every
+            // path-driven ingest — buffer save, the watcher drain, and anything
+            // else that reaches a file inside a KB directory — so a new caller
+            // gets the policy for free rather than having to remember it.
+            .filter(|i| i.allows_ingest())
             .map(|i| (i.uuid.clone(), i.org_dir.clone()))
         {
             if path.starts_with(&inst) {

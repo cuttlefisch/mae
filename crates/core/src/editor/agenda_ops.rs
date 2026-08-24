@@ -231,6 +231,14 @@ impl Editor {
     }
 
     fn ingest_single_agenda_path(&mut self, path: &str) {
+        // Phase 1 (KB cutover): the agenda ingest writes `kb.primary` on every
+        // launch, driven by `org_agenda_files`. When the primary is detached its
+        // store is the truth, so re-reading those files would silently revert it
+        // at startup — the same clobber as any other ingest, just on a schedule
+        // nobody associates with ingestion.
+        if !self.kb.registry.primary_ingest_policy.allows_ingest() {
+            return;
+        }
         let p = std::path::Path::new(path);
         if p.is_dir() {
             self.kb.primary.ingest_org_dir(p);
