@@ -40,6 +40,8 @@ mod suggestions;
 mod util;
 mod vector;
 mod versioning;
+#[cfg(feature = "storage-sqlite")]
+mod wal;
 
 /// CozoDB-backed KbStore using SQLite embedded storage.
 pub struct CozoKbStore {

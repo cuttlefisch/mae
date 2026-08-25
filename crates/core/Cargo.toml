@@ -19,7 +19,7 @@ mae-babel = { path = "../babel" }
 mae-canvas = { path = "../canvas" }
 mae-export = { path = "../export" }
 mae-format = { path = "../format" }
-mae-kb = { path = "../../shared/kb", features = ["storage-sled", "storage-sqlite", "crdt"] }
+mae-kb = { path = "../../shared/kb", features = ["storage-sqlite", "storage-sled", "crdt"] }
 mae-lookup = { path = "../lookup" }
 mae-make = { path = "../make" }
 mae-snippets = { path = "../snippets" }

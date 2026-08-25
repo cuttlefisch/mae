@@ -111,6 +111,29 @@ share meaningfully overlapping content (a more realistic team scenario than this
 benchmark's deliberately-disjoint synthetic stores) would be expected to do better than
 this ceiling, not worse — but that claim is not made here, since it wasn't measured here.
 
+**Second correction (2026-08-25, and it partially reverses the first).** The
+correction below is right that cozo 0.7.6 never configures `journal_mode=WAL`.
+It is wrong to leave the implication that MAE therefore *cannot* have WAL —
+which is how it was read, and how `db.rs` came to state that "there is no hook
+this crate could use to set the pragma even if it wanted to".
+
+**WAL is a property of the database file's header, not of the connection.** Per
+[sqlite.org/wal.html](https://www.sqlite.org/wal.html): *"applications can be
+converted to using SQLite in WAL mode **without making any changes to the
+application itself**."* So MAE now opens the file once with the `sqlite` crate,
+sets the pragma, closes, and hands the file to cozo — which inherits it.
+`shared/kb/src/cozo_store/wal.rs`, demonstrated in `wal_tests` (a fresh store is
+created in WAL mode and is still in WAL mode after a cozo close/reopen), per
+ADR-108's requirement that this be shown rather than asserted.
+
+**What that changes, precisely:** readers no longer block on a writer
+*across processes* on a filesystem that supports WAL. It does **not** remove
+cozo's own in-process `ShardedLock` (`storage/sqlite.rs:66-78`), where a write
+still excludes every reader on the same `Db` instance — see ADR-108 D7. And
+`busy_timeout` is still never configured, so the application-level retries
+described below remain necessary, now for the narrower case of filesystems that
+cannot support WAL (network filesystems cannot) and stores not yet reopened.
+
 **Correction (found via a real CI failure, not assumed — ~2026-07):** the WAL
 mode / `busy_timeout` PRAGMAs above describe an implementation against
 `crates/kb/src/persist.rs`, a file that no longer exists — this codebase's KB
