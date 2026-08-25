@@ -167,8 +167,11 @@ pub struct VectorHit {
 /// Classification of why a link is broken.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrokenLinkReason {
-    /// Target node was deleted or never existed.
-    DeletedNode,
+    /// Target was not found in the corpus that was searched.
+    ///
+    /// Same caveat as `crate::BrokenLinkKind::TargetNotFound`: absence from the
+    /// searched set is not evidence of deletion.
+    TargetNotFound,
     /// Target ID is malformed.
     MalformedId,
 }
