@@ -11978,9 +11978,9 @@
     },
     {
       "path": "shared/kb/src/lib.rs",
-      "lines": 5574,
+      "lines": 5575,
       "test_lines": 2698,
-      "code_lines": 2876,
+      "code_lines": 2877,
       "is_test_file": false,
       "max_fn_lines": 120,
       "max_fn_name": "extract_subgraph",
@@ -12055,6 +12055,22 @@
       "use_count": 6,
       "pub_items": 17,
       "test_count": 59
+    },
+    {
+      "path": "shared/kb/src/project_identity.rs",
+      "lines": 336,
+      "test_lines": 158,
+      "code_lines": 178,
+      "is_test_file": false,
+      "max_fn_lines": 31,
+      "max_fn_name": "all_worktrees_of_one_clone_share_the_id",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 3,
+      "pub_items": 6,
+      "test_count": 8
     },
     {
       "path": "shared/kb/src/query.rs",
@@ -14297,27 +14313,27 @@
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 261,
+        "line": 262,
         "category": "correctness"
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 317,
+        "line": 318,
         "category": "kb-truth"
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 470,
+        "line": 471,
         "category": "crdt"
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 707,
+        "line": 708,
         "category": "health-reporting"
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 2295,
+        "line": 2296,
         "category": "kb-provenance"
       },
       {
