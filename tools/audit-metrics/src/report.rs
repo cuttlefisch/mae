@@ -1,19 +1,71 @@
 //! Baseline comparison and report rendering.
 //!
-//! The baseline is what makes this a *ratchet* rather than a wall of 126
-//! pre-existing failures. Accepted debt is recorded with the size it was
-//! accepted at; the gate then fails on genuinely new debt, or on accepted debt
-//! that grew — which is exactly the failure mode the hand-maintained prose
-//! missed (one tracked file grew +96% while its documented number sat still).
+//! The baseline is what makes this a *ratchet* rather than a wall of
+//! pre-existing failures. What it gates changed in 2026-08 — see below.
+//!
+//! # What is gated, and why it is no longer file size
+//!
+//! **File size is measured and reported, never gated.** It was gated until
+//! 2026-08-25, and the evidence against that is in-repo and one-sided:
+//!
+//! * The gate's one real capability — stopping a brand-new oversized file —
+//!   was exercised and lost. `crates/scheme/src/parity_tests.rs` was created
+//!   AFTER the ratchet landed, at 896 lines (nearly 2x the 500-line test
+//!   ceiling), and was **blessed into the baseline rather than split**.
+//! * It grandfathered 141 violations, median 1,210 against an 800 ceiling,
+//!   largest 14,516 — i.e. it froze the very debt it existed to prevent, and
+//!   then charged everyone else for it.
+//! * A **proportional** tolerance inverted the incentive: the 14,516-line file
+//!   could still add 1,451 lines; a 571-line test file could add 11.
+//! * Sub-threshold drift on `main` meant an unrelated PR adding ~20 lines wore
+//!   a failure it did not cause — four times in the last forty CI runs,
+//!   including on a **docs-only** PR.
+//! * Every `bless` is an "effective false positive" in Google Tricorder's
+//!   sense (*"any report where a user chooses not to take action"*): roughly 5
+//!   blesses against 2 genuine refactors in 23 days, versus their stated bar
+//!   for *blocking* checks of essentially zero.
+//! * On this repo, `corr(churn, fix-commits) = 0.88` vs `corr(size, .) = 0.50`.
+//!   Size is the weakest signal available here.
+//!
+//! Prior art agrees: PMD **deleted** `ExcessiveClassLength` (*"LoC is noisy"*),
+//! Google's Tricorder excluded size/complexity metrics as unactionable, airbnb
+//! sets ESLint's `max-lines` to `off`, and `checkpatch.pl` has no length check
+//! at all.
+//!
+//! **Function length and nesting depth are gated instead.** They are per-item,
+//! so they cannot drift, cannot be inherited from `main`, and are actionable in
+//! the way Tricorder requires: *"the problem should be obvious and actionable
+//! when pointed out."* "This 1,271-line function has a 78-arm match" is; "this
+//! file is 1,154 lines" is not.
+//!
+//! **And the ratchet is monotonic on an exact value, with no tolerance band.**
+//! That band was MAE's own invention — RuboCop todo files, PHPStan/Psalm/
+//! Android-lint baselines, betterer and mypy-baseline are all exact — and it is
+//! what produced the drift-then-blame failure.
 
-use crate::scan::FileMetrics;
+use crate::scan::{FileMetrics, FUNCTION_CEILING, NESTING_CEILING};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// How much an accepted exception may grow before the gate fails it.
-/// Generous enough that ordinary maintenance inside a big file doesn't trip
-/// the build; tight enough that a file cannot silently double.
-pub const GROWTH_TOLERANCE: f64 = 0.10;
+/// Per-file structural debt that IS gated. Monotonic: neither value may rise.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Structure {
+    /// Longest function in the file, in lines.
+    #[serde(default)]
+    pub max_fn_lines: usize,
+    /// Deepest block nesting in the file.
+    #[serde(default)]
+    pub max_nesting: usize,
+}
+
+impl Structure {
+    fn of(m: &FileMetrics) -> Self {
+        Self { max_fn_lines: m.max_fn_lines, max_nesting: m.max_nesting }
+    }
+    fn over_ceiling(&self) -> bool {
+        self.max_fn_lines > FUNCTION_CEILING || self.max_nesting > NESTING_CEILING
+    }
+}
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Baseline {
@@ -21,17 +73,23 @@ pub struct Baseline {
     /// reading a CI failure, not for the tool.
     #[serde(default)]
     pub note: String,
-    /// path -> accepted line count at the time it was baselined.
+    /// path -> accepted line count. **Reported, not gated** — retained because
+    /// drift *detection* is the mechanism's genuine, documented win: it replaced
+    /// a hand-maintained prose list in which 14 of 15 figures had rotted, one by
+    /// +96%.
     #[serde(default)]
     pub accepted: BTreeMap<String, usize>,
+    /// path -> accepted structural debt. **This is what gates CI.**
+    #[serde(default)]
+    pub accepted_structure: BTreeMap<String, Structure>,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum Verdict {
-    /// Over ceiling, not in the baseline — brand-new debt.
-    NewViolation { path: String, lines: usize, ceiling: usize },
-    /// In the baseline, but grew past `GROWTH_TOLERANCE`.
-    Grew { path: String, was: usize, now: usize },
+    /// Over a structural ceiling and not in the baseline — brand-new debt.
+    NewViolation { path: String, what: String },
+    /// In the baseline, and got worse. Exact, not proportional.
+    Grew { path: String, what: String },
     /// In the baseline but no longer over ceiling — the entry can be dropped.
     Resolved { path: String },
 }
@@ -46,13 +104,8 @@ impl Verdict {
 
     pub fn describe(&self) -> String {
         match self {
-            Verdict::NewViolation { path, lines, ceiling } => {
-                format!("NEW  {path} — {lines} lines, ceiling {ceiling}")
-            }
-            Verdict::Grew { path, was, now } => {
-                let pct = ((*now as f64 / *was as f64) - 1.0) * 100.0;
-                format!("GREW {path} — {was} → {now} (+{pct:.0}%)")
-            }
+            Verdict::NewViolation { path, what } => format!("NEW  {path} — {what}"),
+            Verdict::Grew { path, what } => format!("WORSE {path} — {what}"),
             Verdict::Resolved { path } => {
                 format!("FIXED {path} — now under ceiling, drop it from the baseline")
             }
@@ -60,51 +113,67 @@ impl Verdict {
     }
 }
 
+/// Describe how `now` breaches the ceilings, or how it worsened against `was`.
+fn describe_structure(now: &Structure, was: Option<&Structure>) -> Option<String> {
+    let mut parts = Vec::new();
+    match was {
+        // Baselined: only a genuine INCREASE fails. Exact — no tolerance band.
+        Some(was) => {
+            if now.max_fn_lines > was.max_fn_lines {
+                parts.push(format!(
+                    "longest fn {} → {} (ceiling {FUNCTION_CEILING})",
+                    was.max_fn_lines, now.max_fn_lines
+                ));
+            }
+            if now.max_nesting > was.max_nesting {
+                parts.push(format!(
+                    "nesting {} → {} (ceiling {NESTING_CEILING})",
+                    was.max_nesting, now.max_nesting
+                ));
+            }
+        }
+        // Not baselined: any breach is new debt.
+        None => {
+            if now.max_fn_lines > FUNCTION_CEILING {
+                parts.push(format!("fn {}>{FUNCTION_CEILING} lines", now.max_fn_lines));
+            }
+            if now.max_nesting > NESTING_CEILING {
+                parts.push(format!("nesting {}>{NESTING_CEILING}", now.max_nesting));
+            }
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
 pub fn compare(metrics: &[FileMetrics], baseline: &Baseline) -> Vec<Verdict> {
     let mut out = Vec::new();
 
     for m in metrics {
-        match baseline.accepted.get(&m.path) {
-            Some(&was) if m.over_ceiling() => {
-                let limit = (was as f64 * (1.0 + GROWTH_TOLERANCE)) as usize;
-                if m.lines > limit {
-                    out.push(Verdict::Grew {
-                        path: m.path.clone(),
-                        was,
-                        now: m.lines,
-                    });
+        // A file `syn` could not parse reports zeroes for exactly these fields,
+        // which would read as "no debt" and, worse, as an improvement against a
+        // baseline. Skip it — `scan` surfaces the parse failure separately.
+        if m.parse_failed {
+            continue;
+        }
+        let now = Structure::of(m);
+        match baseline.accepted_structure.get(&m.path) {
+            Some(was) => {
+                if let Some(what) = describe_structure(&now, Some(was)) {
+                    out.push(Verdict::Grew { path: m.path.clone(), what });
+                } else if !now.over_ceiling() {
+                    out.push(Verdict::Resolved { path: m.path.clone() });
                 }
             }
-            Some(_) => out.push(Verdict::Resolved { path: m.path.clone() }),
-            None if m.over_ceiling() => out.push(Verdict::NewViolation {
-                path: m.path.clone(),
-                lines: m.lines,
-                ceiling: m.ceiling(),
-            }),
-            None => {}
+            None => {
+                if let Some(what) = describe_structure(&now, None) {
+                    out.push(Verdict::NewViolation { path: m.path.clone(), what });
+                }
+            }
         }
     }
-
-    out.sort_by_key(|v| match v {
-        Verdict::NewViolation { path, .. } | Verdict::Grew { path, .. } | Verdict::Resolved { path } => path.clone(),
-    });
     out
 }
 
-/// Build a fresh baseline from current metrics — every over-ceiling file
-/// accepted at its present size. Used by `--bless`.
-pub fn bless(metrics: &[FileMetrics], note: &str) -> Baseline {
-    Baseline {
-        note: note.to_string(),
-        accepted: metrics
-            .iter()
-            .filter(|m| m.over_ceiling())
-            .map(|m| (m.path.clone(), m.lines))
-            .collect(),
-    }
-}
-
-/// Short human summary printed after every run.
 pub fn summarise(metrics: &[FileMetrics]) -> String {
     let total_lines: usize = metrics.iter().map(|m| m.lines).sum();
     let code: usize = metrics.iter().map(|m| m.code_lines).sum();
@@ -152,6 +221,25 @@ pub fn summarise(metrics: &[FileMetrics]) -> String {
 /// pre-existing population, and failing all of them at once would be an
 /// unactionable wall rather than a ratchet). Surfacing them here is what makes
 /// them visible at all — nothing enforced or reported them before.
+/// Re-baseline. Records BOTH the gated structural debt and the reported line
+/// counts, so the size report keeps working while only structure gates.
+pub fn bless(metrics: &[FileMetrics], note: &str) -> Baseline {
+    Baseline {
+        note: note.to_string(),
+        accepted: metrics
+            .iter()
+            .filter(|m| m.over_ceiling())
+            .map(|m| (m.path.clone(), m.lines))
+            .collect(),
+        accepted_structure: metrics
+            .iter()
+            .filter(|m| !m.parse_failed)
+            .map(|m| (m.path.clone(), Structure::of(m)))
+            .filter(|(_, st)| st.over_ceiling())
+            .collect(),
+    }
+}
+
 pub fn worst_offenders(metrics: &[FileMetrics], limit: usize) -> Vec<String> {
     let mut ranked: Vec<(usize, usize, &FileMetrics)> = metrics
         .iter()
@@ -170,87 +258,109 @@ pub fn worst_offenders(metrics: &[FileMetrics], limit: usize) -> Vec<String> {
 mod tests {
     use super::*;
 
-    fn metric(path: &str, lines: usize) -> FileMetrics {
+    /// A file whose longest function is `fn_lines` and whose deepest nesting is
+    /// `nesting`. `lines` is set independently so the tests can prove that file
+    /// SIZE no longer influences the verdict.
+    fn metric(path: &str, lines: usize, fn_lines: usize, nesting: usize) -> FileMetrics {
         let mut m = crate::scan::measure(path, "fn a() {}\n");
         m.lines = lines;
+        m.max_fn_lines = fn_lines;
+        m.max_fn_name = "big_fn".to_string();
+        m.max_nesting = nesting;
         m
     }
 
-    fn baseline_with(path: &str, lines: usize) -> Baseline {
+    fn baselined(path: &str, fn_lines: usize, nesting: usize) -> Baseline {
         let mut b = Baseline::default();
-        b.accepted.insert(path.to_string(), lines);
+        b.accepted_structure
+            .insert(path.to_string(), Structure { max_fn_lines: fn_lines, max_nesting: nesting });
         b
     }
 
+    /// **The property the whole change exists for.** A file may grow without
+    /// limit in LINES; only its structure is gated. Under the old model this
+    /// was a `Grew` failure, and it is what made unrelated PRs fail.
     #[test]
-    fn a_new_over_ceiling_file_fails() {
-        let v = compare(&[metric("crates/a/src/new.rs", 900)], &Baseline::default());
-        assert_eq!(
-            v,
-            vec![Verdict::NewViolation {
-                path: "crates/a/src/new.rs".into(),
-                lines: 900,
-                ceiling: 800
-            }]
+    fn a_file_that_only_grew_in_lines_does_not_fail() {
+        let v = compare(
+            &[metric("crates/a/src/big.rs", 14_516, 40, 3)],
+            &baselined("crates/a/src/big.rs", 40, 3),
         );
+        assert!(v.iter().all(|x| !x.is_failure()), "{v:?}");
+    }
+
+    #[test]
+    fn a_new_file_with_an_over_long_function_fails() {
+        let v = compare(
+            &[metric("crates/a/src/new.rs", 100, FUNCTION_CEILING + 1, 1)],
+            &Baseline::default(),
+        );
+        assert!(matches!(v.as_slice(), [Verdict::NewViolation { .. }]), "{v:?}");
         assert!(v[0].is_failure());
+        assert!(v[0].describe().contains("fn"), "{}", v[0].describe());
+    }
+
+    #[test]
+    fn a_new_file_that_nests_too_deep_fails() {
+        let v = compare(
+            &[metric("crates/a/src/new.rs", 100, 10, NESTING_CEILING + 1)],
+            &Baseline::default(),
+        );
+        assert!(matches!(v.as_slice(), [Verdict::NewViolation { .. }]), "{v:?}");
+    }
+
+    /// Exact, not proportional — a single extra line on the longest function
+    /// fails. The old ±10% band is precisely what let debt drift sub-threshold
+    /// until an unrelated PR was the straw.
+    #[test]
+    fn one_more_line_on_an_accepted_function_fails_with_no_tolerance_band() {
+        let v = compare(
+            &[metric("crates/a/src/big.rs", 900, 121, 3)],
+            &baselined("crates/a/src/big.rs", 120, 3),
+        );
+        assert!(matches!(v.as_slice(), [Verdict::Grew { .. }]), "{v:?}");
+        assert!(v[0].describe().contains("120 → 121"), "{}", v[0].describe());
     }
 
     #[test]
     fn an_accepted_file_holding_steady_passes() {
         let v = compare(
-            &[metric("crates/a/src/big.rs", 3000)],
-            &baseline_with("crates/a/src/big.rs", 3000),
+            &[metric("crates/a/src/big.rs", 3000, 120, 6)],
+            &baselined("crates/a/src/big.rs", 120, 6),
         );
-        assert!(v.is_empty(), "{v:?}");
+        assert!(v.iter().all(|x| !x.is_failure()), "{v:?}");
     }
 
+    /// Improving must never fail the build — that would teach the wrong lesson.
     #[test]
-    fn an_accepted_file_that_grew_past_tolerance_fails() {
-        // +96% is the real graph_view_ops.rs case that drifted unnoticed.
+    fn shrinking_below_every_ceiling_is_reported_as_resolved_not_failed() {
         let v = compare(
-            &[metric("crates/a/src/big.rs", 8745)],
-            &baseline_with("crates/a/src/big.rs", 4464),
+            &[metric("crates/a/src/big.rs", 3000, FUNCTION_CEILING - 1, NESTING_CEILING - 1)],
+            &baselined("crates/a/src/big.rs", 300, 9),
         );
-        assert!(matches!(v.as_slice(), [Verdict::Grew { .. }]), "{v:?}");
-        assert!(v[0].is_failure());
-    }
-
-    #[test]
-    fn growth_within_tolerance_is_allowed() {
-        let v = compare(
-            &[metric("crates/a/src/big.rs", 3100)],
-            &baseline_with("crates/a/src/big.rs", 3000),
-        );
-        assert!(v.is_empty(), "5% growth should not fail the build: {v:?}");
-    }
-
-    #[test]
-    fn shrinking_below_ceiling_is_reported_but_never_fails_the_build() {
-        // Fixing a file must not break CI.
-        let v = compare(
-            &[metric("crates/a/src/big.rs", 400)],
-            &baseline_with("crates/a/src/big.rs", 3000),
-        );
-        assert_eq!(v, vec![Verdict::Resolved { path: "crates/a/src/big.rs".into() }]);
+        assert!(matches!(v.as_slice(), [Verdict::Resolved { .. }]), "{v:?}");
         assert!(!v[0].is_failure());
     }
 
+    /// A file `syn` could not parse reports ZEROES for these fields. Counting
+    /// that as an improvement would silently launder real debt out of the
+    /// baseline, so it is skipped entirely.
     #[test]
-    fn test_files_are_judged_against_the_lower_ceiling() {
-        // 600 lines is fine for source, over ceiling for a test file.
-        assert!(compare(&[metric("crates/a/src/x.rs", 600)], &Baseline::default()).is_empty());
-        let v = compare(&[metric("crates/a/tests/x.rs", 600)], &Baseline::default());
-        assert!(matches!(v.as_slice(), [Verdict::NewViolation { ceiling: 500, .. }]), "{v:?}");
+    fn an_unparseable_file_is_skipped_rather_than_read_as_improved() {
+        let mut m = metric("crates/a/src/broken.rs", 3000, 0, 0);
+        m.parse_failed = true;
+        let v = compare(&[m], &baselined("crates/a/src/broken.rs", 300, 9));
+        assert!(v.is_empty(), "an unparseable file must produce no verdict: {v:?}");
     }
 
+    /// `bless` records structure for gating AND line counts for the report.
     #[test]
-    fn bless_accepts_exactly_the_over_ceiling_files() {
-        let b = bless(
-            &[metric("a/src/big.rs", 900), metric("a/src/small.rs", 10)],
-            "note",
+    fn bless_records_both_the_gated_structure_and_the_reported_size() {
+        let b = bless(&[metric("crates/a/src/big.rs", 9000, 300, 9)], "note");
+        assert_eq!(b.accepted.get("crates/a/src/big.rs"), Some(&9000));
+        assert_eq!(
+            b.accepted_structure.get("crates/a/src/big.rs"),
+            Some(&Structure { max_fn_lines: 300, max_nesting: 9 })
         );
-        assert_eq!(b.accepted.len(), 1);
-        assert_eq!(b.accepted.get("a/src/big.rs"), Some(&900));
     }
 }

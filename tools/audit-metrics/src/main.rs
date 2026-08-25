@@ -161,7 +161,7 @@ fn generate(
     print_marker_summary(marker_report);
     let worst = report::worst_offenders(metrics, 15);
     if !worst.is_empty() {
-        println!("\n  most ceiling breaches (informational — the gate ratchets on file size):");
+        println!("\n  most ceiling breaches (file size is REPORTED, not gated — see report.rs):");
         for w in worst {
             println!("    {w}");
         }
@@ -237,9 +237,13 @@ fn do_check(
         eprintln!("  {}", v.describe());
     }
     eprintln!(
-        "\nSplit the file, or -- if the debt is deliberate -- run \
+        "\nShorten the function, or reduce the nesting -- both are local, per-item \
+         changes, not a file split. If the debt is deliberate, run \
          `make audit-metrics-bless`, add an `@ai-caution: [architecture-debt]` marker, \
-         and cross-link it from ROADMAP.md per CLAUDE.md's tagging convention."
+         and cross-link it from ROADMAP.md per CLAUDE.md's tagging convention.\n\
+         \nNote: file SIZE is measured and reported but no longer gated -- it \
+         grandfathered the debt it existed to prevent and failed unrelated PRs. \
+         See tools/audit-metrics/src/report.rs for the evidence."
     );
     ExitCode::FAILURE
 }

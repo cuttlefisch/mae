@@ -37,6 +37,7 @@ pub mod activity;
 pub mod adr_kb;
 pub mod adr_parse;
 pub mod backup;
+pub mod capabilities;
 pub mod data_dir;
 pub mod embedding_client;
 pub mod enrichment;

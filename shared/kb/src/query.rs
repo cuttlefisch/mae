@@ -161,6 +161,22 @@ pub trait KbQueryLayer: Send + Sync {
     /// fan-out round to set its own aggregate `last_query_was_partial()` flag — the
     /// "timeout-and-continue degradation contract" Phase E's Decision text calls for,
     /// without widening every `KbQueryLayer` method's return type to carry a `Result`.
+    /// Which methods this backing can actually answer.
+    ///
+    /// @ai-caution: [capability-model] Defaults to **everything**, deliberately.
+    /// A new implementation that forgets to declare is therefore treated as
+    /// claiming full support and gets tested against the reference by the
+    /// conformance suite — failing loudly — rather than quietly excusing itself
+    /// by omission. Declare a gap only where the backing *genuinely cannot*
+    /// answer, never to silence a failing comparison.
+    ///
+    /// See `crate::capabilities` for why this exists: MAE had three partial
+    /// capability signals and no single one, so a caller could not tell "no
+    /// results" from "cannot answer" from "the remote replied with garbage".
+    fn capabilities(&self) -> crate::capabilities::QueryCapabilities {
+        crate::capabilities::QueryCapabilities::all()
+    }
+
     fn degraded(&self) -> bool {
         false
     }

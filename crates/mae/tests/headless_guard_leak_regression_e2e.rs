@@ -39,7 +39,6 @@
 #![cfg(target_os = "linux")]
 
 use std::panic::AssertUnwindSafe;
-use std::time::Duration;
 
 mod headless_test_support;
 use headless_test_support::spawn_isolated_headless;
@@ -91,19 +90,14 @@ async fn a_panic_while_the_guard_is_alive_still_kills_the_real_process() {
     // Poll rather than assert instantly: SIGTERM -> exit -> reap is not
     // synchronous with the `Drop` call returning control here (the Drop
     // impl itself blocks on `wait_for_exit`, so this is generous, not
-    // load-bearing, headroom for a loaded CI machine).
-    let mut still_alive = true;
-    for _ in 0..50 {
-        if !pid_exists(pid) {
-            still_alive = false;
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    // load-bearing, headroom for a loaded CI machine). Bounded by wall-clock,
+    // not by an iteration count — see `mae_mcp::ready`.
+    let reaped = mae_mcp::ready::wait_until(|| async { !pid_exists(pid) }).await;
     assert!(
-        !still_alive,
+        reaped,
         "pid {pid} is STILL ALIVE after a panic unwound through its HeadlessGuard's \
          scope -- this is the exact process-leak defect this test exists to catch; \
-         Drop either didn't run or didn't successfully terminate the process"
+         Drop either didn't run or didn't successfully terminate the process. {}",
+        mae_mcp::ready::timeout_message(&format!("the reaping of pid {pid}"))
     );
 }

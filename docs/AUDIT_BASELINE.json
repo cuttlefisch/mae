@@ -1,146 +1,1327 @@
 {
   "note": "Accepted pre-existing ceiling exceptions, recorded at the size they were accepted. The gate fails on NEW violations and on accepted files that grow past the tolerance; it never fails a file for shrinking. Regenerate with `make audit-metrics-bless` ONLY when deliberately accepting new debt.",
   "accepted": {
-    "crates/agent-cli/src/main.rs": 1344,
+    "crates/agent-cli/src/main.rs": 1383,
     "crates/ai/src/context_limits.rs": 807,
-    "crates/ai/src/executor/collab_exec.rs": 1037,
-    "crates/ai/src/executor/mod_tests.rs": 1664,
+    "crates/ai/src/executor/collab_exec.rs": 1107,
+    "crates/ai/src/executor/mod_tests.rs": 1702,
     "crates/ai/src/executor/model_exam.rs": 817,
     "crates/ai/src/executor/self_test.rs": 1347,
-    "crates/ai/src/executor/tool_dispatch.rs": 1142,
-    "crates/ai/src/session/handle_prompt.rs": 1393,
-    "crates/ai/src/session/tests.rs": 2085,
+    "crates/ai/src/executor/tool_dispatch.rs": 1182,
+    "crates/ai/src/session/handle_prompt.rs": 1506,
+    "crates/ai/src/session/tests.rs": 2123,
     "crates/ai/src/tool_impls/dap.rs": 811,
-    "crates/ai/src/tool_impls/editor_tools.rs": 1520,
-    "crates/ai/src/tool_impls/kb.rs": 6453,
+    "crates/ai/src/tool_impls/editor_tools.rs": 1566,
+    "crates/ai/src/tool_impls/kb.rs": 6542,
     "crates/ai/src/tool_impls/kb_export_html.rs": 1330,
-    "crates/babel/src/lib.rs": 914,
+    "crates/babel/src/lib.rs": 915,
     "crates/canvas/src/kb_graph.rs": 1510,
-    "crates/core/src/buffer.rs": 3856,
+    "crates/core/src/buffer.rs": 4064,
     "crates/core/src/command_palette.rs": 1065,
-    "crates/core/src/commands.rs": 1924,
+    "crates/core/src/commands.rs": 1991,
     "crates/core/src/conversation.rs": 1780,
-    "crates/core/src/display_region.rs": 1261,
-    "crates/core/src/editor/command.rs": 1534,
+    "crates/core/src/display_region.rs": 1263,
+    "crates/core/src/editor/command.rs": 1590,
     "crates/core/src/editor/dap_ops.rs": 1675,
     "crates/core/src/editor/debug_panel_ops.rs": 856,
-    "crates/core/src/editor/file_ops.rs": 2174,
-    "crates/core/src/editor/git_ops.rs": 1377,
-    "crates/core/src/editor/graph_view_ops.rs": 8749,
-    "crates/core/src/editor/heading_ops.rs": 1181,
-    "crates/core/src/editor/help_ops.rs": 3198,
-    "crates/core/src/editor/kb_ops/nodes.rs": 840,
-    "crates/core/src/editor/kb_ops/registry.rs": 1436,
-    "crates/core/src/editor/kb_ops/tests/kb_ops_durability_tests.rs": 985,
-    "crates/core/src/editor/kb_ops/tests/kb_ops_registry_tests.rs": 625,
-    "crates/core/src/editor/kb_ops/tests/kb_ops_search_federation_tests.rs": 1004,
-    "crates/core/src/editor/kb_ops/tests/kb_ops_watcher_misc_tests.rs": 629,
+    "crates/core/src/editor/file_ops.rs": 2248,
+    "crates/core/src/editor/git_ops.rs": 1400,
+    "crates/core/src/editor/graph_view_ops.rs": 8830,
+    "crates/core/src/editor/heading_ops.rs": 1178,
+    "crates/core/src/editor/help_ops.rs": 3313,
+    "crates/core/src/editor/kb_ops/nodes.rs": 904,
+    "crates/core/src/editor/kb_ops/registry.rs": 1501,
+    "crates/core/src/editor/kb_ops/tests/kb_ops_durability_tests.rs": 986,
+    "crates/core/src/editor/kb_ops/tests/kb_ops_registry_tests.rs": 670,
+    "crates/core/src/editor/kb_ops/tests/kb_ops_search_federation_tests.rs": 1007,
+    "crates/core/src/editor/kb_ops/tests/kb_ops_watcher_misc_tests.rs": 668,
     "crates/core/src/editor/keymaps.rs": 1023,
     "crates/core/src/editor/lsp_ops.rs": 1063,
-    "crates/core/src/editor/mod.rs": 1908,
-    "crates/core/src/editor/mouse_ops.rs": 927,
+    "crates/core/src/editor/mod.rs": 1960,
+    "crates/core/src/editor/mouse_ops.rs": 948,
     "crates/core/src/editor/multicursor.rs": 827,
     "crates/core/src/editor/notify_ops.rs": 853,
-    "crates/core/src/editor/option_ops.rs": 4062,
+    "crates/core/src/editor/option_ops.rs": 4140,
     "crates/core/src/editor/tests/buffer_tests.rs": 887,
-    "crates/core/src/editor/tests/command_tests.rs": 1317,
-    "crates/core/src/editor/tests/misc_tests.rs": 1042,
+    "crates/core/src/editor/tests/command_tests.rs": 1401,
+    "crates/core/src/editor/tests/misc_tests.rs": 1053,
     "crates/core/src/editor/tests/mouse_tests.rs": 977,
     "crates/core/src/editor/tests/navigation_tests.rs": 696,
-    "crates/core/src/editor/tests/option_tests.rs": 1440,
-    "crates/core/src/editor/tests/shell_tests.rs": 830,
+    "crates/core/src/editor/tests/option_tests.rs": 1218,
+    "crates/core/src/editor/tests/shell_tests.rs": 832,
     "crates/core/src/editor/tests/visual_tests.rs": 903,
-    "crates/core/src/editor/window_ops.rs": 1114,
+    "crates/core/src/editor/window_ops.rs": 1125,
     "crates/core/src/file_picker.rs": 1200,
     "crates/core/src/graph_view.rs": 6589,
     "crates/core/src/kb_seed/concepts.rs": 1826,
     "crates/core/src/kb_seed/lessons.rs": 862,
     "crates/core/src/kb_seed/mod.rs": 1721,
-    "crates/core/src/kb_seed/scheme_api.rs": 2391,
+    "crates/core/src/kb_seed/scheme_api.rs": 2397,
     "crates/core/src/keymap.rs": 1152,
-    "crates/core/src/options.rs": 1648,
-    "crates/core/src/project.rs": 831,
-    "crates/core/src/render_common/status.rs": 1103,
+    "crates/core/src/options.rs": 1686,
+    "crates/core/src/project.rs": 833,
+    "crates/core/src/render_common/status.rs": 1108,
     "crates/core/src/syntax/markup.rs": 1225,
     "crates/core/src/syntax/mod.rs": 1481,
     "crates/core/src/theme.rs": 994,
-    "crates/core/src/window.rs": 3575,
-    "crates/core/src/word.rs": 1403,
-    "crates/core/tests/kb_sync_n_peer_e2e.rs": 646,
+    "crates/core/src/window.rs": 3629,
+    "crates/core/src/word.rs": 1405,
+    "crates/core/tests/kb_sync_n_peer_e2e.rs": 664,
     "crates/dap/src/client.rs": 1198,
     "crates/dap/src/manager.rs": 1403,
     "crates/export/src/html_graph.rs": 3693,
-    "crates/export/src/lib.rs": 1811,
-    "crates/gui/src/buffer_render.rs": 1210,
-    "crates/gui/src/canvas.rs": 1679,
-    "crates/gui/src/cursor.rs": 929,
-    "crates/gui/src/layout.rs": 991,
-    "crates/gui/src/lib.rs": 1952,
-    "crates/gui/src/popup_render.rs": 1419,
+    "crates/export/src/lib.rs": 1846,
+    "crates/gui/src/buffer_render.rs": 1216,
+    "crates/gui/src/canvas.rs": 1684,
+    "crates/gui/src/cursor.rs": 991,
+    "crates/gui/src/layout.rs": 1051,
+    "crates/gui/src/lib.rs": 1954,
+    "crates/gui/src/popup_render.rs": 1433,
     "crates/lsp/src/client.rs": 1238,
     "crates/lsp/src/manager.rs": 987,
     "crates/lsp/src/protocol.rs": 1941,
-    "crates/mae/src/ai_event_handler.rs": 2608,
-    "crates/mae/src/ai_residency.rs": 1653,
-    "crates/mae/src/bootstrap/mod.rs": 2839,
-    "crates/mae/src/cli.rs": 842,
-    "crates/mae/src/collab_bridge/mod.rs": 5709,
-    "crates/mae/src/collab_bridge/tests/collab_bridge_write_failure_tests.rs": 520,
-    "crates/mae/src/config.rs": 1989,
-    "crates/mae/src/gui_app.rs": 1662,
+    "crates/mae/src/ai_event_handler.rs": 1793,
+    "crates/mae/src/ai_residency.rs": 1654,
+    "crates/mae/src/bootstrap/mod.rs": 2942,
+    "crates/mae/src/cli.rs": 894,
+    "crates/mae/src/collab_bridge/mod.rs": 5868,
+    "crates/mae/src/collab_bridge/tests/collab_bridge_write_failure_tests.rs": 547,
+    "crates/mae/src/config.rs": 2168,
+    "crates/mae/src/gui_app.rs": 1666,
     "crates/mae/src/key_handling/command_palette.rs": 921,
     "crates/mae/src/key_handling/tests.rs": 568,
-    "crates/mae/src/lsp_bridge.rs": 1002,
-    "crates/mae/src/main.rs": 1396,
+    "crates/mae/src/lsp_bridge.rs": 1006,
+    "crates/mae/src/main.rs": 1524,
     "crates/mae/src/pkg/cli.rs": 880,
-    "crates/mae/src/terminal_loop.rs": 949,
+    "crates/mae/src/terminal_loop.rs": 972,
     "crates/mae/src/test_runner.rs": 854,
-    "crates/mae/src/upgrade.rs": 1096,
+    "crates/mae/src/upgrade.rs": 1105,
     "crates/mae/tests/kb_graph_validation_support/mod.rs": 578,
     "crates/mae/tests/mcp_event_loop_integration.rs": 615,
-    "crates/renderer/src/buffer_render.rs": 892,
-    "crates/renderer/src/popup_render.rs": 948,
-    "crates/scheme/src/compiler.rs": 3082,
+    "crates/renderer/src/buffer_render.rs": 899,
+    "crates/renderer/src/popup_render.rs": 960,
+    "crates/scheme/src/compiler.rs": 3112,
     "crates/scheme/src/lsp.rs": 902,
-    "crates/scheme/src/parity_tests.rs": 896,
-    "crates/scheme/src/permission_tests.rs": 571,
+    "crates/scheme/src/parity_tests.rs": 901,
+    "crates/scheme/src/permission_tests.rs": 617,
     "crates/scheme/src/reader.rs": 1347,
-    "crates/scheme/src/runtime.rs": 1205,
-    "crates/scheme/src/runtime/state_sync_apply.rs": 814,
-    "crates/scheme/src/runtime_tests.rs": 2620,
-    "crates/scheme/src/stdlib/base.rs": 2607,
+    "crates/scheme/src/runtime.rs": 1242,
+    "crates/scheme/src/runtime/state_sync_apply.rs": 821,
+    "crates/scheme/src/runtime_tests.rs": 2621,
+    "crates/scheme/src/stdlib/base.rs": 2612,
     "crates/scheme/src/stdlib/io.rs": 2048,
     "crates/scheme/src/stdlib/libraries.rs": 928,
     "crates/scheme/src/value.rs": 1235,
-    "crates/scheme/src/vm.rs": 3229,
+    "crates/scheme/src/vm.rs": 3274,
     "crates/scheme/tests/r7rs_compliance.rs": 14516,
     "crates/scheme/tests/scheme_benchmarks.rs": 643,
     "crates/scheme/tests/scheme_io_ports.rs": 1245,
     "crates/scheme/tests/scheme_programs.rs": 955,
     "crates/scheme/tests/scheme_torture.rs": 1625,
     "crates/shell/src/terminal.rs": 907,
-    "daemon/src/collab_handler/kb_content.rs": 802,
-    "daemon/src/collab_handler/mod.rs": 2183,
-    "daemon/src/config.rs": 1050,
-    "daemon/src/dialer.rs": 1157,
-    "daemon/src/doc_store.rs": 1823,
-    "daemon/src/handler.rs": 2247,
-    "daemon/src/main.rs": 1726,
-    "daemon/src/oauth.rs": 952,
-    "daemon/src/storage.rs": 911,
-    "daemon/src/tests/kb_query_tests.rs": 920,
-    "daemon/tests/collab_e2e.rs": 2648,
-    "daemon/tests/collab_stress.rs": 552,
-    "daemon/tests/network_e2e.rs": 659,
-    "daemon/tests/oauth_e2e.rs": 789,
+    "daemon/src/collab_handler/kb_content.rs": 855,
+    "daemon/src/collab_handler/mod.rs": 1990,
+    "daemon/src/config.rs": 1057,
+    "daemon/src/dialer.rs": 1184,
+    "daemon/src/doc_store.rs": 1920,
+    "daemon/src/handler.rs": 2339,
+    "daemon/src/main.rs": 1753,
+    "daemon/src/storage.rs": 926,
+    "daemon/src/tests/kb_query_tests.rs": 937,
+    "daemon/tests/collab_e2e.rs": 2649,
+    "daemon/tests/collab_stress.rs": 553,
+    "daemon/tests/network_e2e.rs": 527,
+    "daemon/tests/oauth_e2e.rs": 794,
     "shared/kb/src/federation.rs": 1936,
-    "shared/kb/src/lib.rs": 5145,
-    "shared/kb/src/org.rs": 2417,
-    "shared/kb/src/query.rs": 1888,
-    "shared/mcp/src/auth.rs": 1149,
-    "shared/mcp/src/identity.rs": 1194,
+    "shared/kb/src/lib.rs": 5477,
+    "shared/kb/src/org.rs": 2567,
+    "shared/kb/src/query.rs": 2015,
+    "shared/mcp/src/auth.rs": 1201,
+    "shared/mcp/src/identity.rs": 1225,
     "shared/mcp/src/lib.rs": 3457,
-    "shared/sync/src/membership.rs": 3912,
-    "shared/sync/src/text.rs": 2178
+    "shared/sync/src/membership.rs": 4008,
+    "shared/sync/src/text.rs": 2252
+  },
+  "accepted_structure": {
+    "crates/agent-cli/src/agent_loop.rs": {
+      "max_fn_lines": 82,
+      "max_nesting": 2
+    },
+    "crates/agent-cli/src/main.rs": {
+      "max_fn_lines": 108,
+      "max_nesting": 4
+    },
+    "crates/agent-cli/src/mcp_client.rs": {
+      "max_fn_lines": 95,
+      "max_nesting": 5
+    },
+    "crates/ai/src/claude.rs": {
+      "max_fn_lines": 88,
+      "max_nesting": 3
+    },
+    "crates/ai/src/executor/collab_exec.rs": {
+      "max_fn_lines": 95,
+      "max_nesting": 2
+    },
+    "crates/ai/src/executor/grading.rs": {
+      "max_fn_lines": 187,
+      "max_nesting": 5
+    },
+    "crates/ai/src/executor/kb_exec.rs": {
+      "max_fn_lines": 100,
+      "max_nesting": 2
+    },
+    "crates/ai/src/executor/model_exam.rs": {
+      "max_fn_lines": 171,
+      "max_nesting": 5
+    },
+    "crates/ai/src/executor/perf.rs": {
+      "max_fn_lines": 210,
+      "max_nesting": 5
+    },
+    "crates/ai/src/executor/self_test.rs": {
+      "max_fn_lines": 1050,
+      "max_nesting": 4
+    },
+    "crates/ai/src/executor/tool_dispatch.rs": {
+      "max_fn_lines": 552,
+      "max_nesting": 7
+    },
+    "crates/ai/src/gemini.rs": {
+      "max_fn_lines": 103,
+      "max_nesting": 3
+    },
+    "crates/ai/src/guardrail.rs": {
+      "max_fn_lines": 121,
+      "max_nesting": 4
+    },
+    "crates/ai/src/ollama.rs": {
+      "max_fn_lines": 83,
+      "max_nesting": 2
+    },
+    "crates/ai/src/openai.rs": {
+      "max_fn_lines": 107,
+      "max_nesting": 3
+    },
+    "crates/ai/src/session/handle_prompt.rs": {
+      "max_fn_lines": 1197,
+      "max_nesting": 7
+    },
+    "crates/ai/src/session/mod.rs": {
+      "max_fn_lines": 104,
+      "max_nesting": 2
+    },
+    "crates/ai/src/session/run_loop.rs": {
+      "max_fn_lines": 92,
+      "max_nesting": 3
+    },
+    "crates/ai/src/session/tests.rs": {
+      "max_fn_lines": 94,
+      "max_nesting": 3
+    },
+    "crates/ai/src/tool_impls/buffer.rs": {
+      "max_fn_lines": 82,
+      "max_nesting": 2
+    },
+    "crates/ai/src/tool_impls/editor_tools.rs": {
+      "max_fn_lines": 342,
+      "max_nesting": 3
+    },
+    "crates/ai/src/tool_impls/kb.rs": {
+      "max_fn_lines": 183,
+      "max_nesting": 5
+    },
+    "crates/ai/src/tool_impls/kb_export_html.rs": {
+      "max_fn_lines": 321,
+      "max_nesting": 3
+    },
+    "crates/ai/src/tool_impls/lsp.rs": {
+      "max_fn_lines": 81,
+      "max_nesting": 3
+    },
+    "crates/ai/src/tools/ai_tools.rs": {
+      "max_fn_lines": 85,
+      "max_nesting": 0
+    },
+    "crates/ai/src/tools/categories.rs": {
+      "max_fn_lines": 92,
+      "max_nesting": 2
+    },
+    "crates/ai/src/tools/core_tools.rs": {
+      "max_fn_lines": 646,
+      "max_nesting": 1
+    },
+    "crates/ai/src/tools/dap_tools.rs": {
+      "max_fn_lines": 168,
+      "max_nesting": 0
+    },
+    "crates/ai/src/tools/kb_tools.rs": {
+      "max_fn_lines": 718,
+      "max_nesting": 0
+    },
+    "crates/ai/src/tools/lsp_tools.rs": {
+      "max_fn_lines": 104,
+      "max_nesting": 0
+    },
+    "crates/ai/src/tools/shell_tools.rs": {
+      "max_fn_lines": 197,
+      "max_nesting": 0
+    },
+    "crates/ai/src/web.rs": {
+      "max_fn_lines": 83,
+      "max_nesting": 5
+    },
+    "crates/babel/src/execute.rs": {
+      "max_fn_lines": 101,
+      "max_nesting": 3
+    },
+    "crates/babel/src/lib.rs": {
+      "max_fn_lines": 83,
+      "max_nesting": 5
+    },
+    "crates/babel/src/noweb.rs": {
+      "max_fn_lines": 81,
+      "max_nesting": 5
+    },
+    "crates/babel/src/session.rs": {
+      "max_fn_lines": 133,
+      "max_nesting": 4
+    },
+    "crates/babel/src/vars.rs": {
+      "max_fn_lines": 29,
+      "max_nesting": 6
+    },
+    "crates/canvas/src/kb_graph.rs": {
+      "max_fn_lines": 220,
+      "max_nesting": 3
+    },
+    "crates/canvas/src/layout.rs": {
+      "max_fn_lines": 96,
+      "max_nesting": 4
+    },
+    "crates/core/src/commands.rs": {
+      "max_fn_lines": 1349,
+      "max_nesting": 2
+    },
+    "crates/core/src/conversation.rs": {
+      "max_fn_lines": 142,
+      "max_nesting": 4
+    },
+    "crates/core/src/diff.rs": {
+      "max_fn_lines": 94,
+      "max_nesting": 3
+    },
+    "crates/core/src/display_region.rs": {
+      "max_fn_lines": 123,
+      "max_nesting": 10
+    },
+    "crates/core/src/editor/agenda_ops.rs": {
+      "max_fn_lines": 92,
+      "max_nesting": 3
+    },
+    "crates/core/src/editor/babel_ops.rs": {
+      "max_fn_lines": 94,
+      "max_nesting": 2
+    },
+    "crates/core/src/editor/command.rs": {
+      "max_fn_lines": 1271,
+      "max_nesting": 6
+    },
+    "crates/core/src/editor/debug_panel_ops.rs": {
+      "max_fn_lines": 181,
+      "max_nesting": 3
+    },
+    "crates/core/src/editor/dispatch/collab.rs": {
+      "max_fn_lines": 405,
+      "max_nesting": 3
+    },
+    "crates/core/src/editor/dispatch/config.rs": {
+      "max_fn_lines": 433,
+      "max_nesting": 5
+    },
+    "crates/core/src/editor/dispatch/dap.rs": {
+      "max_fn_lines": 120,
+      "max_nesting": 4
+    },
+    "crates/core/src/editor/dispatch/edit.rs": {
+      "max_fn_lines": 731,
+      "max_nesting": 8
+    },
+    "crates/core/src/editor/dispatch/file.rs": {
+      "max_fn_lines": 234,
+      "max_nesting": 3
+    },
+    "crates/core/src/editor/dispatch/file_tree.rs": {
+      "max_fn_lines": 350,
+      "max_nesting": 6
+    },
+    "crates/core/src/editor/dispatch/fold_org.rs": {
+      "max_fn_lines": 190,
+      "max_nesting": 2
+    },
+    "crates/core/src/editor/dispatch/git.rs": {
+      "max_fn_lines": 97,
+      "max_nesting": 3
+    },
+    "crates/core/src/editor/dispatch/kb.rs": {
+      "max_fn_lines": 332,
+      "max_nesting": 5
+    },
+    "crates/core/src/editor/dispatch/lsp.rs": {
+      "max_fn_lines": 129,
+      "max_nesting": 6
+    },
+    "crates/core/src/editor/dispatch/mod.rs": {
+      "max_fn_lines": 436,
+      "max_nesting": 4
+    },
+    "crates/core/src/editor/dispatch/nav.rs": {
+      "max_fn_lines": 613,
+      "max_nesting": 5
+    },
+    "crates/core/src/editor/dispatch/terminal.rs": {
+      "max_fn_lines": 158,
+      "max_nesting": 4
+    },
+    "crates/core/src/editor/dispatch/ui.rs": {
+      "max_fn_lines": 402,
+      "max_nesting": 5
+    },
+    "crates/core/src/editor/dispatch/visual.rs": {
+      "max_fn_lines": 104,
+      "max_nesting": 2
+    },
+    "crates/core/src/editor/dispatch/window.rs": {
+      "max_fn_lines": 152,
+      "max_nesting": 8
+    },
+    "crates/core/src/editor/edit_ops.rs": {
+      "max_fn_lines": 140,
+      "max_nesting": 3
+    },
+    "crates/core/src/editor/ex_parse.rs": {
+      "max_fn_lines": 99,
+      "max_nesting": 3
+    },
+    "crates/core/src/editor/file_ops.rs": {
+      "max_fn_lines": 281,
+      "max_nesting": 5
+    },
+    "crates/core/src/editor/git_ops.rs": {
+      "max_fn_lines": 311,
+      "max_nesting": 5
+    },
+    "crates/core/src/editor/graph_view_ops.rs": {
+      "max_fn_lines": 537,
+      "max_nesting": 5
+    },
+    "crates/core/src/editor/heading_ops.rs": {
+      "max_fn_lines": 182,
+      "max_nesting": 5
+    },
+    "crates/core/src/editor/help_ops.rs": {
+      "max_fn_lines": 193,
+      "max_nesting": 6
+    },
+    "crates/core/src/editor/kb_ops/activity.rs": {
+      "max_fn_lines": 110,
+      "max_nesting": 5
+    },
+    "crates/core/src/editor/kb_ops/daily.rs": {
+      "max_fn_lines": 90,
+      "max_nesting": 5
+    },
+    "crates/core/src/editor/kb_ops/dispatch.rs": {
+      "max_fn_lines": 85,
+      "max_nesting": 3
+    },
+    "crates/core/src/editor/kb_ops/nodes.rs": {
+      "max_fn_lines": 131,
+      "max_nesting": 5
+    },
+    "crates/core/src/editor/kb_ops/registry.rs": {
+      "max_fn_lines": 142,
+      "max_nesting": 4
+    },
+    "crates/core/src/editor/kb_ops/search.rs": {
+      "max_fn_lines": 189,
+      "max_nesting": 6
+    },
+    "crates/core/src/editor/kb_ops/sync.rs": {
+      "max_fn_lines": 225,
+      "max_nesting": 6
+    },
+    "crates/core/src/editor/kb_ops/tests/kb_ops_durability_tests.rs": {
+      "max_fn_lines": 85,
+      "max_nesting": 1
+    },
+    "crates/core/src/editor/kb_ops/tests/kb_ops_search_federation_tests.rs": {
+      "max_fn_lines": 114,
+      "max_nesting": 2
+    },
+    "crates/core/src/editor/kb_ops/tests/kb_ops_vector_blend_tests.rs": {
+      "max_fn_lines": 83,
+      "max_nesting": 1
+    },
+    "crates/core/src/editor/kb_ops/watchers.rs": {
+      "max_fn_lines": 133,
+      "max_nesting": 6
+    },
+    "crates/core/src/editor/keymaps.rs": {
+      "max_fn_lines": 417,
+      "max_nesting": 4
+    },
+    "crates/core/src/editor/lsp_actions.rs": {
+      "max_fn_lines": 94,
+      "max_nesting": 6
+    },
+    "crates/core/src/editor/mod.rs": {
+      "max_fn_lines": 270,
+      "max_nesting": 3
+    },
+    "crates/core/src/editor/mouse_ops.rs": {
+      "max_fn_lines": 178,
+      "max_nesting": 6
+    },
+    "crates/core/src/editor/notify_ops.rs": {
+      "max_fn_lines": 128,
+      "max_nesting": 3
+    },
+    "crates/core/src/editor/option_ops.rs": {
+      "max_fn_lines": 1368,
+      "max_nesting": 4
+    },
+    "crates/core/src/editor/render_ops.rs": {
+      "max_fn_lines": 127,
+      "max_nesting": 3
+    },
+    "crates/core/src/editor/search_ops.rs": {
+      "max_fn_lines": 138,
+      "max_nesting": 3
+    },
+    "crates/core/src/editor/session_ops.rs": {
+      "max_fn_lines": 92,
+      "max_nesting": 2
+    },
+    "crates/core/src/editor/table_ops.rs": {
+      "max_fn_lines": 83,
+      "max_nesting": 4
+    },
+    "crates/core/src/editor/tests/misc_tests.rs": {
+      "max_fn_lines": 87,
+      "max_nesting": 1
+    },
+    "crates/core/src/editor/text_objects.rs": {
+      "max_fn_lines": 116,
+      "max_nesting": 4
+    },
+    "crates/core/src/editor/window_ops.rs": {
+      "max_fn_lines": 138,
+      "max_nesting": 4
+    },
+    "crates/core/src/graph_view.rs": {
+      "max_fn_lines": 598,
+      "max_nesting": 5
+    },
+    "crates/core/src/kb_seed/mod.rs": {
+      "max_fn_lines": 506,
+      "max_nesting": 4
+    },
+    "crates/core/src/kb_seed/scheme_api.rs": {
+      "max_fn_lines": 112,
+      "max_nesting": 4
+    },
+    "crates/core/src/kb_seed/terminology.rs": {
+      "max_fn_lines": 171,
+      "max_nesting": 1
+    },
+    "crates/core/src/kb_seed/tutorials.rs": {
+      "max_fn_lines": 97,
+      "max_nesting": 1
+    },
+    "crates/core/src/kb_sharing.rs": {
+      "max_fn_lines": 198,
+      "max_nesting": 4
+    },
+    "crates/core/src/kb_sharing_tests.rs": {
+      "max_fn_lines": 152,
+      "max_nesting": 1
+    },
+    "crates/core/src/keymap.rs": {
+      "max_fn_lines": 72,
+      "max_nesting": 5
+    },
+    "crates/core/src/link_detect.rs": {
+      "max_fn_lines": 56,
+      "max_nesting": 5
+    },
+    "crates/core/src/options.rs": {
+      "max_fn_lines": 1128,
+      "max_nesting": 2
+    },
+    "crates/core/src/render_common/status.rs": {
+      "max_fn_lines": 166,
+      "max_nesting": 3
+    },
+    "crates/core/src/render_common/which_key.rs": {
+      "max_fn_lines": 108,
+      "max_nesting": 4
+    },
+    "crates/core/src/syntax/languages.rs": {
+      "max_fn_lines": 84,
+      "max_nesting": 5
+    },
+    "crates/core/src/syntax/markup.rs": {
+      "max_fn_lines": 369,
+      "max_nesting": 6
+    },
+    "crates/core/src/syntax/spans.rs": {
+      "max_fn_lines": 128,
+      "max_nesting": 3
+    },
+    "crates/core/src/table.rs": {
+      "max_fn_lines": 89,
+      "max_nesting": 5
+    },
+    "crates/core/src/window.rs": {
+      "max_fn_lines": 104,
+      "max_nesting": 4
+    },
+    "crates/dap/src/client.rs": {
+      "max_fn_lines": 83,
+      "max_nesting": 5
+    },
+    "crates/dap/src/manager.rs": {
+      "max_fn_lines": 340,
+      "max_nesting": 4
+    },
+    "crates/export/examples/fixture_export.rs": {
+      "max_fn_lines": 252,
+      "max_nesting": 3
+    },
+    "crates/export/src/html.rs": {
+      "max_fn_lines": 122,
+      "max_nesting": 4
+    },
+    "crates/export/src/html_graph.rs": {
+      "max_fn_lines": 146,
+      "max_nesting": 5
+    },
+    "crates/export/src/lib.rs": {
+      "max_fn_lines": 332,
+      "max_nesting": 4
+    },
+    "crates/export/src/markdown.rs": {
+      "max_fn_lines": 97,
+      "max_nesting": 4
+    },
+    "crates/export/src/markdown_parser.rs": {
+      "max_fn_lines": 230,
+      "max_nesting": 5
+    },
+    "crates/export/src/org_writer.rs": {
+      "max_fn_lines": 95,
+      "max_nesting": 4
+    },
+    "crates/gui/src/buffer_render.rs": {
+      "max_fn_lines": 613,
+      "max_nesting": 7
+    },
+    "crates/gui/src/canvas.rs": {
+      "max_fn_lines": 114,
+      "max_nesting": 3
+    },
+    "crates/gui/src/cursor.rs": {
+      "max_fn_lines": 259,
+      "max_nesting": 5
+    },
+    "crates/gui/src/debug_render.rs": {
+      "max_fn_lines": 83,
+      "max_nesting": 3
+    },
+    "crates/gui/src/layout.rs": {
+      "max_fn_lines": 419,
+      "max_nesting": 4
+    },
+    "crates/gui/src/lib.rs": {
+      "max_fn_lines": 649,
+      "max_nesting": 7
+    },
+    "crates/gui/src/messages_render.rs": {
+      "max_fn_lines": 101,
+      "max_nesting": 4
+    },
+    "crates/gui/src/popup_render.rs": {
+      "max_fn_lines": 160,
+      "max_nesting": 4
+    },
+    "crates/gui/src/shell_render.rs": {
+      "max_fn_lines": 271,
+      "max_nesting": 5
+    },
+    "crates/gui/src/splash_render.rs": {
+      "max_fn_lines": 191,
+      "max_nesting": 4
+    },
+    "crates/gui/src/status_render.rs": {
+      "max_fn_lines": 87,
+      "max_nesting": 3
+    },
+    "crates/lsp/src/client.rs": {
+      "max_fn_lines": 105,
+      "max_nesting": 4
+    },
+    "crates/lsp/src/manager.rs": {
+      "max_fn_lines": 294,
+      "max_nesting": 4
+    },
+    "crates/mae/src/ai_event_handler.rs": {
+      "max_fn_lines": 686,
+      "max_nesting": 5
+    },
+    "crates/mae/src/ai_event_handler_session_permission_tests.rs": {
+      "max_fn_lines": 153,
+      "max_nesting": 1
+    },
+    "crates/mae/src/ai_residency.rs": {
+      "max_fn_lines": 143,
+      "max_nesting": 4
+    },
+    "crates/mae/src/bin/build_adr_kb.rs": {
+      "max_fn_lines": 101,
+      "max_nesting": 2
+    },
+    "crates/mae/src/bootstrap/mod.rs": {
+      "max_fn_lines": 529,
+      "max_nesting": 6
+    },
+    "crates/mae/src/cli.rs": {
+      "max_fn_lines": 117,
+      "max_nesting": 4
+    },
+    "crates/mae/src/collab_bridge/events_connection.rs": {
+      "max_fn_lines": 119,
+      "max_nesting": 3
+    },
+    "crates/mae/src/collab_bridge/events_doc.rs": {
+      "max_fn_lines": 150,
+      "max_nesting": 5
+    },
+    "crates/mae/src/collab_bridge/events_kb.rs": {
+      "max_fn_lines": 185,
+      "max_nesting": 5
+    },
+    "crates/mae/src/collab_bridge/events_kb_share_conflict.rs": {
+      "max_fn_lines": 137,
+      "max_nesting": 2
+    },
+    "crates/mae/src/collab_bridge/mod.rs": {
+      "max_fn_lines": 1892,
+      "max_nesting": 8
+    },
+    "crates/mae/src/collab_bridge/tests/collab_bridge_e2e_derive_encrypt_tests.rs": {
+      "max_fn_lines": 127,
+      "max_nesting": 2
+    },
+    "crates/mae/src/collab_bridge/tests/collab_bridge_e2e_flags_offline_tests.rs": {
+      "max_fn_lines": 102,
+      "max_nesting": 2
+    },
+    "crates/mae/src/collab_bridge/tests/collab_bridge_e2e_rotation_tests.rs": {
+      "max_fn_lines": 104,
+      "max_nesting": 1
+    },
+    "crates/mae/src/collab_bridge/tests/collab_bridge_kb_share_conflict_tests.rs": {
+      "max_fn_lines": 82,
+      "max_nesting": 2
+    },
+    "crates/mae/src/collab_bridge/tests/collab_bridge_kb_sync_tests.rs": {
+      "max_fn_lines": 99,
+      "max_nesting": 0
+    },
+    "crates/mae/src/config.rs": {
+      "max_fn_lines": 233,
+      "max_nesting": 4
+    },
+    "crates/mae/src/daemon_supervisor.rs": {
+      "max_fn_lines": 82,
+      "max_nesting": 4
+    },
+    "crates/mae/src/dap_bridge.rs": {
+      "max_fn_lines": 123,
+      "max_nesting": 3
+    },
+    "crates/mae/src/doctor.rs": {
+      "max_fn_lines": 431,
+      "max_nesting": 3
+    },
+    "crates/mae/src/gui_app.rs": {
+      "max_fn_lines": 291,
+      "max_nesting": 7
+    },
+    "crates/mae/src/headless_loop.rs": {
+      "max_fn_lines": 234,
+      "max_nesting": 6
+    },
+    "crates/mae/src/key_handling/command.rs": {
+      "max_fn_lines": 491,
+      "max_nesting": 6
+    },
+    "crates/mae/src/key_handling/command_palette.rs": {
+      "max_fn_lines": 396,
+      "max_nesting": 4
+    },
+    "crates/mae/src/key_handling/conversation.rs": {
+      "max_fn_lines": 233,
+      "max_nesting": 4
+    },
+    "crates/mae/src/key_handling/file_picker.rs": {
+      "max_fn_lines": 104,
+      "max_nesting": 4
+    },
+    "crates/mae/src/key_handling/insert.rs": {
+      "max_fn_lines": 191,
+      "max_nesting": 2
+    },
+    "crates/mae/src/key_handling/mod.rs": {
+      "max_fn_lines": 275,
+      "max_nesting": 5
+    },
+    "crates/mae/src/key_handling/normal.rs": {
+      "max_fn_lines": 231,
+      "max_nesting": 6
+    },
+    "crates/mae/src/lsp_bridge.rs": {
+      "max_fn_lines": 414,
+      "max_nesting": 4
+    },
+    "crates/mae/src/main.rs": {
+      "max_fn_lines": 874,
+      "max_nesting": 6
+    },
+    "crates/mae/src/mdns_discovery.rs": {
+      "max_fn_lines": 58,
+      "max_nesting": 5
+    },
+    "crates/mae/src/pkg/cli.rs": {
+      "max_fn_lines": 172,
+      "max_nesting": 5
+    },
+    "crates/mae/src/pkg/resolver.rs": {
+      "max_fn_lines": 124,
+      "max_nesting": 4
+    },
+    "crates/mae/src/scheme_dap_bridge.rs": {
+      "max_fn_lines": 202,
+      "max_nesting": 5
+    },
+    "crates/mae/src/scheme_lsp_bridge.rs": {
+      "max_fn_lines": 217,
+      "max_nesting": 5
+    },
+    "crates/mae/src/shell_lifecycle.rs": {
+      "max_fn_lines": 190,
+      "max_nesting": 5
+    },
+    "crates/mae/src/sync_broadcast.rs": {
+      "max_fn_lines": 65,
+      "max_nesting": 5
+    },
+    "crates/mae/src/terminal_loop.rs": {
+      "max_fn_lines": 663,
+      "max_nesting": 6
+    },
+    "crates/mae/src/test_runner.rs": {
+      "max_fn_lines": 191,
+      "max_nesting": 5
+    },
+    "crates/mae/src/upgrade.rs": {
+      "max_fn_lines": 125,
+      "max_nesting": 4
+    },
+    "crates/mae/tests/collab_tcp_e2e_kb_protocol.rs": {
+      "max_fn_lines": 100,
+      "max_nesting": 2
+    },
+    "crates/mae/tests/gui_windows_input_spike.rs": {
+      "max_fn_lines": 151,
+      "max_nesting": 2
+    },
+    "crates/mae/tests/headless_e2e.rs": {
+      "max_fn_lines": 125,
+      "max_nesting": 0
+    },
+    "crates/mae/tests/headless_kb_convergence_e2e.rs": {
+      "max_fn_lines": 111,
+      "max_nesting": 2
+    },
+    "crates/mae/tests/kb_graph_validation_support/mod.rs": {
+      "max_fn_lines": 490,
+      "max_nesting": 2
+    },
+    "crates/mae/tests/kb_search_grading.rs": {
+      "max_fn_lines": 104,
+      "max_nesting": 2
+    },
+    "crates/mae/tests/mcp_event_loop_integration.rs": {
+      "max_fn_lines": 132,
+      "max_nesting": 3
+    },
+    "crates/renderer/src/buffer_render.rs": {
+      "max_fn_lines": 577,
+      "max_nesting": 7
+    },
+    "crates/renderer/src/cursor.rs": {
+      "max_fn_lines": 164,
+      "max_nesting": 5
+    },
+    "crates/renderer/src/debug_render.rs": {
+      "max_fn_lines": 88,
+      "max_nesting": 3
+    },
+    "crates/renderer/src/lib.rs": {
+      "max_fn_lines": 227,
+      "max_nesting": 6
+    },
+    "crates/renderer/src/popup_render.rs": {
+      "max_fn_lines": 184,
+      "max_nesting": 3
+    },
+    "crates/renderer/src/shell_render.rs": {
+      "max_fn_lines": 117,
+      "max_nesting": 4
+    },
+    "crates/renderer/src/splash_render.rs": {
+      "max_fn_lines": 146,
+      "max_nesting": 2
+    },
+    "crates/renderer/src/which_key_render.rs": {
+      "max_fn_lines": 87,
+      "max_nesting": 2
+    },
+    "crates/scheme/src/compiler.rs": {
+      "max_fn_lines": 160,
+      "max_nesting": 6
+    },
+    "crates/scheme/src/library.rs": {
+      "max_fn_lines": 54,
+      "max_nesting": 6
+    },
+    "crates/scheme/src/macros.rs": {
+      "max_fn_lines": 81,
+      "max_nesting": 9
+    },
+    "crates/scheme/src/permission_option_tests.rs": {
+      "max_fn_lines": 107,
+      "max_nesting": 4
+    },
+    "crates/scheme/src/permission_tests.rs": {
+      "max_fn_lines": 94,
+      "max_nesting": 4
+    },
+    "crates/scheme/src/runtime/editor_ops.rs": {
+      "max_fn_lines": 484,
+      "max_nesting": 2
+    },
+    "crates/scheme/src/runtime/io_packages.rs": {
+      "max_fn_lines": 514,
+      "max_nesting": 3
+    },
+    "crates/scheme/src/runtime/kb_crud.rs": {
+      "max_fn_lines": 247,
+      "max_nesting": 5
+    },
+    "crates/scheme/src/runtime/kb_export.rs": {
+      "max_fn_lines": 95,
+      "max_nesting": 4
+    },
+    "crates/scheme/src/runtime/kb_graph_view.rs": {
+      "max_fn_lines": 263,
+      "max_nesting": 2
+    },
+    "crates/scheme/src/runtime/kb_primitives.rs": {
+      "max_fn_lines": 607,
+      "max_nesting": 2
+    },
+    "crates/scheme/src/runtime/kb_queries.rs": {
+      "max_fn_lines": 545,
+      "max_nesting": 4
+    },
+    "crates/scheme/src/runtime/keybindings.rs": {
+      "max_fn_lines": 166,
+      "max_nesting": 1
+    },
+    "crates/scheme/src/runtime/lsp_dap.rs": {
+      "max_fn_lines": 200,
+      "max_nesting": 4
+    },
+    "crates/scheme/src/runtime/misc_primitives.rs": {
+      "max_fn_lines": 172,
+      "max_nesting": 3
+    },
+    "crates/scheme/src/runtime/shell_agenda.rs": {
+      "max_fn_lines": 85,
+      "max_nesting": 2
+    },
+    "crates/scheme/src/runtime/state_sync_apply.rs": {
+      "max_fn_lines": 154,
+      "max_nesting": 5
+    },
+    "crates/scheme/src/runtime/state_sync_apply2.rs": {
+      "max_fn_lines": 83,
+      "max_nesting": 5
+    },
+    "crates/scheme/src/runtime/state_sync_inject.rs": {
+      "max_fn_lines": 163,
+      "max_nesting": 3
+    },
+    "crates/scheme/src/runtime/state_sync_inject_kb.rs": {
+      "max_fn_lines": 267,
+      "max_nesting": 3
+    },
+    "crates/scheme/src/runtime/test_primitives.rs": {
+      "max_fn_lines": 422,
+      "max_nesting": 2
+    },
+    "crates/scheme/src/stdlib/base.rs": {
+      "max_fn_lines": 575,
+      "max_nesting": 7
+    },
+    "crates/scheme/src/stdlib/char.rs": {
+      "max_fn_lines": 223,
+      "max_nesting": 1
+    },
+    "crates/scheme/src/stdlib/io.rs": {
+      "max_fn_lines": 1778,
+      "max_nesting": 6
+    },
+    "crates/scheme/src/stdlib/libraries.rs": {
+      "max_fn_lines": 277,
+      "max_nesting": 2
+    },
+    "crates/scheme/src/stdlib/string.rs": {
+      "max_fn_lines": 373,
+      "max_nesting": 2
+    },
+    "crates/scheme/src/stdlib/vector.rs": {
+      "max_fn_lines": 250,
+      "max_nesting": 3
+    },
+    "crates/scheme/src/vm.rs": {
+      "max_fn_lines": 421,
+      "max_nesting": 6
+    },
+    "crates/scheme/tests/r7rs_compliance.rs": {
+      "max_fn_lines": 93,
+      "max_nesting": 1
+    },
+    "crates/scheme/tests/scheme_programs.rs": {
+      "max_fn_lines": 83,
+      "max_nesting": 1
+    },
+    "crates/snippets/src/parser.rs": {
+      "max_fn_lines": 110,
+      "max_nesting": 4
+    },
+    "daemon/benches/kb_dispatch_concurrency.rs": {
+      "max_fn_lines": 96,
+      "max_nesting": 7
+    },
+    "daemon/src/collab_handler/access.rs": {
+      "max_fn_lines": 157,
+      "max_nesting": 4
+    },
+    "daemon/src/collab_handler/kb_artifacts.rs": {
+      "max_fn_lines": 86,
+      "max_nesting": 1
+    },
+    "daemon/src/collab_handler/kb_content.rs": {
+      "max_fn_lines": 259,
+      "max_nesting": 5
+    },
+    "daemon/src/collab_handler/kb_membership.rs": {
+      "max_fn_lines": 265,
+      "max_nesting": 4
+    },
+    "daemon/src/collab_handler/mod.rs": {
+      "max_fn_lines": 498,
+      "max_nesting": 4
+    },
+    "daemon/src/collab_handler/sync_methods.rs": {
+      "max_fn_lines": 194,
+      "max_nesting": 4
+    },
+    "daemon/src/collab_handler/tests/collab_handler_block_enforcement_tests.rs": {
+      "max_fn_lines": 271,
+      "max_nesting": 2
+    },
+    "daemon/src/collab_handler/tests/collab_handler_cross_kb_node_isolation_tests.rs": {
+      "max_fn_lines": 130,
+      "max_nesting": 1
+    },
+    "daemon/src/collab_handler/tests/collab_handler_cross_kb_role_isolation_tests.rs": {
+      "max_fn_lines": 106,
+      "max_nesting": 0
+    },
+    "daemon/src/collab_handler/tests/collab_handler_derive_cache_tests.rs": {
+      "max_fn_lines": 81,
+      "max_nesting": 2
+    },
+    "daemon/src/collab_handler/tests/collab_handler_governance_quorum_tests.rs": {
+      "max_fn_lines": 131,
+      "max_nesting": 1
+    },
+    "daemon/src/collab_handler/tests/collab_handler_kb_lifecycle_tests.rs": {
+      "max_fn_lines": 82,
+      "max_nesting": 1
+    },
+    "daemon/src/collab_handler/tests/collab_handler_kb_query_mtls_tests.rs": {
+      "max_fn_lines": 160,
+      "max_nesting": 0
+    },
+    "daemon/src/collab_handler/tests/collab_handler_kb_share_ownership_tests.rs": {
+      "max_fn_lines": 90,
+      "max_nesting": 1
+    },
+    "daemon/src/collab_handler/tests/collab_handler_membership_join_tests.rs": {
+      "max_fn_lines": 95,
+      "max_nesting": 0
+    },
+    "daemon/src/collab_handler/tests/collab_handler_protocol_dispatch_tests.rs": {
+      "max_fn_lines": 90,
+      "max_nesting": 2
+    },
+    "daemon/src/collab_handler/tests/collab_handler_replication_policy_tests.rs": {
+      "max_fn_lines": 110,
+      "max_nesting": 2
+    },
+    "daemon/src/collab_handler/tests/collab_handler_signed_content_relay_tests.rs": {
+      "max_fn_lines": 136,
+      "max_nesting": 3
+    },
+    "daemon/src/collab_handler/tests/collab_handler_transport_oplog_tests.rs": {
+      "max_fn_lines": 88,
+      "max_nesting": 2
+    },
+    "daemon/src/collab_handler/tests/collab_handler_unauthorized_surface_tests.rs": {
+      "max_fn_lines": 99,
+      "max_nesting": 0
+    },
+    "daemon/src/collab_handler/tests/collab_handler_viewer_epoch_tests.rs": {
+      "max_fn_lines": 173,
+      "max_nesting": 1
+    },
+    "daemon/src/dialer.rs": {
+      "max_fn_lines": 158,
+      "max_nesting": 4
+    },
+    "daemon/src/doc_store.rs": {
+      "max_fn_lines": 86,
+      "max_nesting": 3
+    },
+    "daemon/src/enrichment.rs": {
+      "max_fn_lines": 86,
+      "max_nesting": 3
+    },
+    "daemon/src/handler.rs": {
+      "max_fn_lines": 656,
+      "max_nesting": 5
+    },
+    "daemon/src/hygiene.rs": {
+      "max_fn_lines": 79,
+      "max_nesting": 5
+    },
+    "daemon/src/kb_doc_migration.rs": {
+      "max_fn_lines": 117,
+      "max_nesting": 4
+    },
+    "daemon/src/kb_query.rs": {
+      "max_fn_lines": 62,
+      "max_nesting": 6
+    },
+    "daemon/src/main.rs": {
+      "max_fn_lines": 446,
+      "max_nesting": 8
+    },
+    "daemon/src/oauth.rs": {
+      "max_fn_lines": 136,
+      "max_nesting": 3
+    },
+    "daemon/src/p2p.rs": {
+      "max_fn_lines": 89,
+      "max_nesting": 3
+    },
+    "daemon/src/projector.rs": {
+      "max_fn_lines": 68,
+      "max_nesting": 5
+    },
+    "daemon/src/projector_gate_c_tests.rs": {
+      "max_fn_lines": 90,
+      "max_nesting": 2
+    },
+    "daemon/src/scheduler.rs": {
+      "max_fn_lines": 189,
+      "max_nesting": 4
+    },
+    "daemon/src/tests/kb_query_cross_kb_isolation_tests.rs": {
+      "max_fn_lines": 186,
+      "max_nesting": 4
+    },
+    "daemon/src/tests/kb_socket_malformed_and_disconnect_tests.rs": {
+      "max_fn_lines": 86,
+      "max_nesting": 1
+    },
+    "daemon/src/webview.rs": {
+      "max_fn_lines": 129,
+      "max_nesting": 1
+    },
+    "daemon/tests/collab_e2e.rs": {
+      "max_fn_lines": 152,
+      "max_nesting": 5
+    },
+    "daemon/tests/collab_stress.rs": {
+      "max_fn_lines": 92,
+      "max_nesting": 4
+    },
+    "daemon/tests/config_change_contract_e2e.rs": {
+      "max_fn_lines": 97,
+      "max_nesting": 2
+    },
+    "daemon/tests/oauth_e2e.rs": {
+      "max_fn_lines": 106,
+      "max_nesting": 3
+    },
+    "daemon/tests/self_issued_token_e2e.rs": {
+      "max_fn_lines": 108,
+      "max_nesting": 2
+    },
+    "shared/kb/examples/org_parse_latency.rs": {
+      "max_fn_lines": 102,
+      "max_nesting": 3
+    },
+    "shared/kb/src/cozo_store/db.rs": {
+      "max_fn_lines": 82,
+      "max_nesting": 2
+    },
+    "shared/kb/src/cozo_store/health.rs": {
+      "max_fn_lines": 107,
+      "max_nesting": 3
+    },
+    "shared/kb/src/cozo_store/kb_store_impl.rs": {
+      "max_fn_lines": 157,
+      "max_nesting": 3
+    },
+    "shared/kb/src/cozo_store/schema.rs": {
+      "max_fn_lines": 316,
+      "max_nesting": 2
+    },
+    "shared/kb/src/cozo_store/tests/agenda_tests.rs": {
+      "max_fn_lines": 85,
+      "max_nesting": 1
+    },
+    "shared/kb/src/cozo_store/tests/blocks_tests.rs": {
+      "max_fn_lines": 81,
+      "max_nesting": 0
+    },
+    "shared/kb/src/cozo_store/tests/fts_query_tests.rs": {
+      "max_fn_lines": 93,
+      "max_nesting": 1
+    },
+    "shared/kb/src/cozo_store/tests/fts_search_tests.rs": {
+      "max_fn_lines": 48,
+      "max_nesting": 5
+    },
+    "shared/kb/src/cozo_store/tests/query_plan_guard_tests.rs": {
+      "max_fn_lines": 120,
+      "max_nesting": 5
+    },
+    "shared/kb/src/data_dir.rs": {
+      "max_fn_lines": 84,
+      "max_nesting": 2
+    },
+    "shared/kb/src/export.rs": {
+      "max_fn_lines": 40,
+      "max_nesting": 5
+    },
+    "shared/kb/src/federation.rs": {
+      "max_fn_lines": 168,
+      "max_nesting": 7
+    },
+    "shared/kb/src/fuzzy.rs": {
+      "max_fn_lines": 103,
+      "max_nesting": 4
+    },
+    "shared/kb/src/kb_build.rs": {
+      "max_fn_lines": 81,
+      "max_nesting": 3
+    },
+    "shared/kb/src/kb_build_tests.rs": {
+      "max_fn_lines": 65,
+      "max_nesting": 5
+    },
+    "shared/kb/src/lib.rs": {
+      "max_fn_lines": 120,
+      "max_nesting": 8
+    },
+    "shared/kb/src/org.rs": {
+      "max_fn_lines": 107,
+      "max_nesting": 6
+    },
+    "shared/kb/src/query.rs": {
+      "max_fn_lines": 175,
+      "max_nesting": 4
+    },
+    "shared/kb/src/remote_hub.rs": {
+      "max_fn_lines": 102,
+      "max_nesting": 2
+    },
+    "shared/kb/src/watch.rs": {
+      "max_fn_lines": 42,
+      "max_nesting": 5
+    },
+    "shared/kb/tests/cozo_scale_test.rs": {
+      "max_fn_lines": 92,
+      "max_nesting": 3
+    },
+    "shared/mcp/src/client.rs": {
+      "max_fn_lines": 89,
+      "max_nesting": 5
+    },
+    "shared/mcp/src/keystore.rs": {
+      "max_fn_lines": 47,
+      "max_nesting": 5
+    },
+    "shared/mcp/src/lib.rs": {
+      "max_fn_lines": 334,
+      "max_nesting": 5
+    },
+    "shared/mcp/src/shim.rs": {
+      "max_fn_lines": 131,
+      "max_nesting": 5
+    },
+    "shared/sync/src/kb/tests/collection_crypto_recovery_tests.rs": {
+      "max_fn_lines": 89,
+      "max_nesting": 1
+    },
+    "shared/sync/src/kb/tests/collection_crypto_rotation_tests.rs": {
+      "max_fn_lines": 152,
+      "max_nesting": 1
+    },
+    "shared/sync/src/kb/tests/collection_crypto_tests.rs": {
+      "max_fn_lines": 83,
+      "max_nesting": 0
+    },
+    "shared/sync/src/membership.rs": {
+      "max_fn_lines": 139,
+      "max_nesting": 5
+    },
+    "shared/sync/src/text.rs": {
+      "max_fn_lines": 84,
+      "max_nesting": 4
+    },
+    "tools/code-map/src/main.rs": {
+      "max_fn_lines": 109,
+      "max_nesting": 3
+    }
   }
 }

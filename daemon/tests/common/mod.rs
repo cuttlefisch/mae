@@ -97,26 +97,31 @@ async fn spawn_server_opts(
         .spawn()
         .expect("failed to spawn mae-daemon");
     let socket = tmp.path().join("mae-daemon.sock");
-    for _ in 0..50 {
-        if let Some(status) = try_daemon_status(&socket).await {
-            let collab_up = status["connections"]["collab"].is_object();
-            if collab_up == wait_for_collab {
-                return Some(ServerGuard {
-                    _child: child,
-                    _tmp: tmp,
-                    addr,
-                    socket,
-                });
-            }
+    // Bounded by wall-clock, not by an iteration count — see `mae_mcp::ready`.
+    // This helper is shared by most of the daemon e2e suite, so the old fixed
+    // 5s budget set the flake floor for all of them at once.
+    let ready = mae_mcp::ready::wait_until(|| async {
+        match try_daemon_status(&socket).await {
+            Some(status) => status["connections"]["collab"].is_object() == wait_for_collab,
+            None => false,
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    panic!(
-        "mae-daemon did not become ready within 5s (addr {addr}, socket {}, \
-         expecting collab {})",
-        socket.display(),
-        if wait_for_collab { "up" } else { "disabled" }
+    })
+    .await;
+    assert!(
+        ready,
+        "{}",
+        mae_mcp::ready::timeout_message(&format!(
+            "mae-daemon (addr {addr}, socket {}, expecting collab {})",
+            socket.display(),
+            if wait_for_collab { "up" } else { "disabled" }
+        ))
     );
+    Some(ServerGuard {
+        _child: child,
+        _tmp: tmp,
+        addr,
+        socket,
+    })
 }
 
 /// Read a Content-Length framed message from a TCP stream.
@@ -190,15 +195,22 @@ pub async fn daemon_status(socket: &Path) -> serde_json::Value {
 /// asynchronously, so every count assertion that follows a disconnect has to
 /// wait rather than sample once.
 pub async fn await_collab_active(socket: &Path, want: u64) -> Option<u64> {
-    let mut last = None;
-    for _ in 0..50 {
-        last = daemon_status(socket).await["connections"]["collab"]["active"].as_u64();
-        if last == Some(want) {
-            return last;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+    // Bounded by wall-clock, not by an iteration count — see `mae_mcp::ready`.
+    // Deliberately still returns the last value SEEN rather than panicking:
+    // callers assert on it themselves, so a mismatch is reported with their own
+    // context. Only the budget changes here, not what is waited for.
+    let hit = mae_mcp::ready::wait_for_some(|| async {
+        daemon_status(socket).await["connections"]["collab"]["active"]
+            .as_u64()
+            .filter(|v| *v == want)
+    })
+    .await;
+    match hit {
+        Some(v) => Some(v),
+        // Timed out — sample once more so the caller's assertion names the
+        // count actually observed, exactly as the old loop's `last` did.
+        None => daemon_status(socket).await["connections"]["collab"]["active"].as_u64(),
     }
-    last
 }
 
 /// `daemon_status`, but returning `None` instead of panicking while the daemon

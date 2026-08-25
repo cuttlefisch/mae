@@ -737,6 +737,10 @@
           "kind": "mod"
         },
         {
+          "name": "capabilities",
+          "kind": "mod"
+        },
+        {
           "name": "data_dir",
           "kind": "mod"
         },
@@ -1012,6 +1016,10 @@
         },
         {
           "name": "protocol",
+          "kind": "mod"
+        },
+        {
+          "name": "ready",
           "kind": "mod"
         },
         {

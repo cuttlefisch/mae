@@ -52,6 +52,7 @@ pub mod identity;
 pub mod keystore;
 pub mod local_ipc;
 pub mod protocol;
+pub mod ready;
 pub mod session;
 pub mod tls;
 

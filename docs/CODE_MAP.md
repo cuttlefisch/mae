@@ -304,6 +304,7 @@ Source: `shared/kb/src/lib.rs`
 | `adr_kb` | mod |
 | `adr_parse` | mod |
 | `backup` | mod |
+| `capabilities` | mod |
 | `data_dir` | mod |
 | `embedding_client` | mod |
 | `enrichment` | mod |
@@ -395,6 +396,7 @@ Source: `shared/mcp/src/lib.rs`
 | `keystore` | mod |
 | `local_ipc` | mod |
 | `protocol` | mod |
+| `ready` | mod |
 | `session` | mod |
 | `tls` | mod |
 | `build_shim_initialize_params` | fn |

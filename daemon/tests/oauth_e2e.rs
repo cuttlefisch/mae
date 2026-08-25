@@ -220,17 +220,15 @@ max_connections = {max_connections}
 
     // Wait for the OAuth listener to actually accept a TCP connection
     // (TLS handshake happens per-request below, not needed for this probe).
-    let mut connected = false;
-    for _ in 0..100 {
-        if tokio::net::TcpStream::connect(oauth_addr).await.is_ok() {
-            connected = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    // Bounded by wall-clock, not by an iteration count — see `mae_mcp::ready`.
+    let connected = mae_mcp::ready::wait_until(|| async {
+        tokio::net::TcpStream::connect(oauth_addr).await.is_ok()
+    })
+    .await;
     assert!(
         connected,
-        "mae-daemon's OAuth listener never accepted a connection on {oauth_addr} within 10s"
+        "{}",
+        mae_mcp::ready::timeout_message(&format!("mae-daemon's OAuth listener on {oauth_addr}"))
     );
 
     DaemonGuard {
@@ -320,17 +318,15 @@ webview_enabled = {webview_enabled}
         .spawn()
         .expect("failed to spawn mae-daemon");
 
-    let mut connected = false;
-    for _ in 0..100 {
-        if tokio::net::TcpStream::connect(oauth_addr).await.is_ok() {
-            connected = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    // Bounded by wall-clock, not by an iteration count — see `mae_mcp::ready`.
+    let connected = mae_mcp::ready::wait_until(|| async {
+        tokio::net::TcpStream::connect(oauth_addr).await.is_ok()
+    })
+    .await;
     assert!(
         connected,
-        "mae-daemon's OAuth listener never accepted a connection on {oauth_addr} within 10s"
+        "{}",
+        mae_mcp::ready::timeout_message(&format!("mae-daemon's OAuth listener on {oauth_addr}"))
     );
 
     DaemonGuard {

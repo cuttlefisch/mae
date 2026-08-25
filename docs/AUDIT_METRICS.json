@@ -7674,8 +7674,8 @@
     },
     {
       "path": "crates/mae/tests/collab_tcp_e2e_psk_auth.rs",
-      "lines": 268,
-      "test_lines": 268,
+      "lines": 271,
+      "test_lines": 271,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 68,
@@ -7786,17 +7786,17 @@
     },
     {
       "path": "crates/mae/tests/headless_guard_leak_regression_e2e.rs",
-      "lines": 109,
-      "test_lines": 109,
+      "lines": 103,
+      "test_lines": 103,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 52,
+      "max_fn_lines": 47,
       "max_fn_name": "a_panic_while_the_guard_is_alive_still_kills_the_real_process",
       "max_match_arms": 0,
       "max_struct_fields": 0,
       "max_struct_name": "",
-      "max_nesting": 2,
-      "use_count": 3,
+      "max_nesting": 1,
+      "use_count": 2,
       "pub_items": 0,
       "test_count": 1
     },
@@ -7818,8 +7818,8 @@
     },
     {
       "path": "crates/mae/tests/headless_kb_convergence_e2e.rs",
-      "lines": 409,
-      "test_lines": 409,
+      "lines": 413,
+      "test_lines": 413,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 111,
@@ -9370,9 +9370,9 @@
     },
     {
       "path": "daemon/examples/windows_remote_verify.rs",
-      "lines": 246,
+      "lines": 251,
       "test_lines": 0,
-      "code_lines": 246,
+      "code_lines": 251,
       "is_test_file": false,
       "max_fn_lines": 46,
       "max_fn_name": "check_collab_tcp",
@@ -9610,9 +9610,9 @@
     },
     {
       "path": "daemon/src/collab_handler/mod.rs",
-      "lines": 1986,
+      "lines": 1990,
       "test_lines": 0,
-      "code_lines": 1986,
+      "code_lines": 1990,
       "is_test_file": false,
       "max_fn_lines": 498,
       "max_fn_name": "handle_doc_request_inner",
@@ -10154,18 +10154,18 @@
     },
     {
       "path": "daemon/src/config.rs",
-      "lines": 1154,
+      "lines": 1057,
       "test_lines": 199,
-      "code_lines": 955,
+      "code_lines": 858,
       "is_test_file": false,
       "max_fn_lines": 78,
       "max_fn_name": "check_collab",
       "max_match_arms": 2,
-      "max_struct_fields": 17,
-      "max_struct_name": "OAuthConfig",
+      "max_struct_fields": 13,
+      "max_struct_name": "DaemonConfig",
       "max_nesting": 4,
-      "use_count": 4,
-      "pub_items": 28,
+      "use_count": 5,
+      "pub_items": 27,
       "test_count": 14
     },
     {
@@ -10215,6 +10215,22 @@
       "use_count": 3,
       "pub_items": 6,
       "test_count": 4
+    },
+    {
+      "path": "daemon/src/content_op_policy.rs",
+      "lines": 85,
+      "test_lines": 27,
+      "code_lines": 58,
+      "is_test_file": false,
+      "max_fn_lines": 9,
+      "max_fn_name": "the_mesh_requires_a_signature_regardless_of_configuration",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 0,
+      "use_count": 3,
+      "pub_items": 4,
+      "test_count": 2
     },
     {
       "path": "daemon/src/dialer.rs",
@@ -10362,9 +10378,9 @@
     },
     {
       "path": "daemon/src/lib.rs",
-      "lines": 27,
+      "lines": 28,
       "test_lines": 0,
-      "code_lines": 27,
+      "code_lines": 28,
       "is_test_file": false,
       "max_fn_lines": 0,
       "max_fn_name": "",
@@ -10378,11 +10394,11 @@
     },
     {
       "path": "daemon/src/main.rs",
-      "lines": 1726,
+      "lines": 1753,
       "test_lines": 0,
-      "code_lines": 1726,
+      "code_lines": 1753,
       "is_test_file": false,
-      "max_fn_lines": 438,
+      "max_fn_lines": 446,
       "max_fn_name": "spawn_collab_server",
       "max_match_arms": 10,
       "max_struct_fields": 0,
@@ -10425,6 +10441,22 @@
       "test_count": 0
     },
     {
+      "path": "daemon/src/oauth_config.rs",
+      "lines": 133,
+      "test_lines": 0,
+      "code_lines": 133,
+      "is_test_file": false,
+      "max_fn_lines": 20,
+      "max_fn_name": "default",
+      "max_match_arms": 0,
+      "max_struct_fields": 17,
+      "max_struct_name": "OAuthConfig",
+      "max_nesting": 0,
+      "use_count": 3,
+      "pub_items": 1,
+      "test_count": 0
+    },
+    {
       "path": "daemon/src/oauth_self_issue.rs",
       "lines": 368,
       "test_lines": 152,
@@ -10442,8 +10474,8 @@
     },
     {
       "path": "daemon/src/oauth_tests.rs",
-      "lines": 297,
-      "test_lines": 297,
+      "lines": 302,
+      "test_lines": 302,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 43,
@@ -10826,13 +10858,13 @@
     },
     {
       "path": "daemon/tests/common/mod.rs",
-      "lines": 221,
-      "test_lines": 221,
+      "lines": 233,
+      "test_lines": 233,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 55,
+      "max_fn_lines": 60,
       "max_fn_name": "spawn_server_opts",
-      "max_match_arms": 0,
+      "max_match_arms": 2,
       "max_struct_fields": 4,
       "max_struct_name": "ServerGuard",
       "max_nesting": 3,
@@ -10842,8 +10874,8 @@
     },
     {
       "path": "daemon/tests/config_change_contract_e2e.rs",
-      "lines": 189,
-      "test_lines": 189,
+      "lines": 194,
+      "test_lines": 194,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 97,
@@ -10851,7 +10883,7 @@
       "max_match_arms": 0,
       "max_struct_fields": 2,
       "max_struct_name": "DaemonHandle",
-      "max_nesting": 2,
+      "max_nesting": 1,
       "use_count": 5,
       "pub_items": 0,
       "test_count": 1
@@ -10874,8 +10906,8 @@
     },
     {
       "path": "daemon/tests/federated_instance_startup_e2e.rs",
-      "lines": 211,
-      "test_lines": 211,
+      "lines": 215,
+      "test_lines": 215,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 60,
@@ -10883,7 +10915,7 @@
       "max_match_arms": 0,
       "max_struct_fields": 2,
       "max_struct_name": "DaemonHandle",
-      "max_nesting": 2,
+      "max_nesting": 1,
       "use_count": 6,
       "pub_items": 0,
       "test_count": 1
@@ -10922,8 +10954,8 @@
     },
     {
       "path": "daemon/tests/multi_tenant_process_isolation_e2e.rs",
-      "lines": 192,
-      "test_lines": 192,
+      "lines": 195,
+      "test_lines": 195,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 60,
@@ -10954,8 +10986,8 @@
     },
     {
       "path": "daemon/tests/oauth_e2e.rs",
-      "lines": 789,
-      "test_lines": 789,
+      "lines": 790,
+      "test_lines": 790,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 106,
@@ -10970,11 +11002,11 @@
     },
     {
       "path": "daemon/tests/remote_hub_query_layer_e2e.rs",
-      "lines": 360,
-      "test_lines": 360,
+      "lines": 362,
+      "test_lines": 362,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 80,
+      "max_fn_lines": 77,
       "max_fn_name": "spawn_daemon_with_oauth",
       "max_match_arms": 0,
       "max_struct_fields": 3,
@@ -10986,33 +11018,33 @@
     },
     {
       "path": "daemon/tests/self_issued_token_e2e.rs",
-      "lines": 377,
-      "test_lines": 377,
+      "lines": 374,
+      "test_lines": 374,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 108,
+      "max_fn_lines": 106,
       "max_fn_name": "spawn_daemon_with_self_issue",
       "max_match_arms": 0,
       "max_struct_fields": 4,
       "max_struct_name": "DaemonGuard",
-      "max_nesting": 2,
-      "use_count": 4,
+      "max_nesting": 1,
+      "use_count": 3,
       "pub_items": 0,
       "test_count": 6
     },
     {
       "path": "daemon/tests/windows_remote_verify_smoke_test.rs",
-      "lines": 251,
-      "test_lines": 251,
+      "lines": 263,
+      "test_lines": 263,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 70,
+      "max_fn_lines": 78,
       "max_fn_name": "spawn_daemon_with_collab_and_oauth",
       "max_match_arms": 0,
       "max_struct_fields": 4,
       "max_struct_name": "DaemonGuard",
       "max_nesting": 3,
-      "use_count": 9,
+      "use_count": 8,
       "pub_items": 0,
       "test_count": 1
     },
@@ -11145,6 +11177,22 @@
       "test_count": 3
     },
     {
+      "path": "shared/kb/src/capabilities.rs",
+      "lines": 202,
+      "test_lines": 43,
+      "code_lines": 159,
+      "is_test_file": false,
+      "max_fn_lines": 20,
+      "max_fn_name": "name",
+      "max_match_arms": 17,
+      "max_struct_fields": 1,
+      "max_struct_name": "QueryCapabilities",
+      "max_nesting": 1,
+      "use_count": 2,
+      "pub_items": 8,
+      "test_count": 3
+    },
+    {
       "path": "shared/kb/src/cozo_store/agenda.rs",
       "lines": 104,
       "test_lines": 0,
@@ -11226,9 +11274,9 @@
     },
     {
       "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-      "lines": 681,
+      "lines": 677,
       "test_lines": 0,
-      "code_lines": 681,
+      "code_lines": 677,
       "is_test_file": false,
       "max_fn_lines": 157,
       "max_fn_name": "fts_search",
@@ -11274,9 +11322,9 @@
     },
     {
       "path": "shared/kb/src/cozo_store/schema.rs",
-      "lines": 786,
+      "lines": 792,
       "test_lines": 0,
-      "code_lines": 786,
+      "code_lines": 792,
       "is_test_file": false,
       "max_fn_lines": 316,
       "max_fn_name": "ensure_schema",
@@ -11354,8 +11402,8 @@
     },
     {
       "path": "shared/kb/src/cozo_store/tests/db_tests.rs",
-      "lines": 292,
-      "test_lines": 292,
+      "lines": 318,
+      "test_lines": 318,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 30,
@@ -11366,7 +11414,7 @@
       "max_nesting": 3,
       "use_count": 4,
       "pub_items": 0,
-      "test_count": 12
+      "test_count": 13
     },
     {
       "path": "shared/kb/src/cozo_store/tests/fts_migration_tests.rs",
@@ -11610,9 +11658,9 @@
     },
     {
       "path": "shared/kb/src/cozo_store/util.rs",
-      "lines": 155,
+      "lines": 172,
       "test_lines": 0,
-      "code_lines": 155,
+      "code_lines": 172,
       "is_test_file": false,
       "max_fn_lines": 58,
       "max_fn_name": "row_to_node",
@@ -11818,9 +11866,9 @@
     },
     {
       "path": "shared/kb/src/kb_build.rs",
-      "lines": 515,
+      "lines": 535,
       "test_lines": 0,
-      "code_lines": 515,
+      "code_lines": 535,
       "is_test_file": false,
       "max_fn_lines": 81,
       "max_fn_name": "ingest_org_dir",
@@ -11882,9 +11930,9 @@
     },
     {
       "path": "shared/kb/src/lib.rs",
-      "lines": 5477,
+      "lines": 5481,
       "test_lines": 2698,
-      "code_lines": 2779,
+      "code_lines": 2783,
       "is_test_file": false,
       "max_fn_lines": 120,
       "max_fn_name": "extract_subgraph",
@@ -11962,9 +12010,9 @@
     },
     {
       "path": "shared/kb/src/query.rs",
-      "lines": 2015,
+      "lines": 2031,
       "test_lines": 973,
-      "code_lines": 1042,
+      "code_lines": 1058,
       "is_test_file": false,
       "max_fn_lines": 175,
       "max_fn_name": "health_report",
@@ -11978,9 +12026,9 @@
     },
     {
       "path": "shared/kb/src/remote_hub.rs",
-      "lines": 759,
+      "lines": 790,
       "test_lines": 345,
-      "code_lines": 414,
+      "code_lines": 445,
       "is_test_file": false,
       "max_fn_lines": 102,
       "max_fn_name": "call",
@@ -11988,24 +12036,40 @@
       "max_struct_fields": 4,
       "max_struct_name": "RemoteHubQueryLayer",
       "max_nesting": 2,
-      "use_count": 13,
+      "use_count": 14,
       "pub_items": 6,
       "test_count": 9
     },
     {
+      "path": "shared/kb/src/storage_feature_guard_tests.rs",
+      "lines": 95,
+      "test_lines": 95,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 36,
+      "max_fn_name": "every_consumer_declares_the_same_storage_features",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 2
+    },
+    {
       "path": "shared/kb/src/store.rs",
-      "lines": 630,
+      "lines": 659,
       "test_lines": 51,
-      "code_lines": 579,
+      "code_lines": 608,
       "is_test_file": false,
       "max_fn_lines": 27,
       "max_fn_name": "node_version_verify_integrity_detects_tampering",
-      "max_match_arms": 3,
+      "max_match_arms": 4,
       "max_struct_fields": 10,
       "max_struct_name": "NodeVersion",
       "max_nesting": 0,
       "use_count": 3,
-      "pub_items": 19,
+      "pub_items": 20,
       "test_count": 2
     },
     {
@@ -12103,6 +12167,22 @@
       "use_count": 1,
       "pub_items": 0,
       "test_count": 1
+    },
+    {
+      "path": "shared/kb/tests/query_layer_conformance.rs",
+      "lines": 234,
+      "test_lines": 234,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 29,
+      "max_fn_name": "declared_search_implementations_agree_on_which_documents_match",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 3,
+      "pub_items": 0,
+      "test_count": 6
     },
     {
       "path": "shared/mcp/src/auth.rs",
@@ -12266,9 +12346,9 @@
     },
     {
       "path": "shared/mcp/src/lib.rs",
-      "lines": 3457,
+      "lines": 3458,
       "test_lines": 2368,
-      "code_lines": 1089,
+      "code_lines": 1090,
       "is_test_file": false,
       "max_fn_lines": 334,
       "max_fn_name": "handle_request",
@@ -12311,6 +12391,22 @@
       "use_count": 2,
       "pub_items": 22,
       "test_count": 9
+    },
+    {
+      "path": "shared/mcp/src/ready.rs",
+      "lines": 225,
+      "test_lines": 102,
+      "code_lines": 123,
+      "is_test_file": false,
+      "max_fn_lines": 43,
+      "max_fn_name": "the_budget_is_configurable_and_a_never_true_condition_times_out",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 3,
+      "pub_items": 5,
+      "test_count": 4
     },
     {
       "path": "shared/mcp/src/session.rs",
@@ -12970,9 +13066,9 @@
     },
     {
       "path": "tools/audit-metrics/src/main.rs",
-      "lines": 285,
+      "lines": 289,
       "test_lines": 0,
-      "code_lines": 285,
+      "code_lines": 289,
       "is_test_file": false,
       "max_fn_lines": 61,
       "max_fn_name": "main",
@@ -13002,19 +13098,19 @@
     },
     {
       "path": "tools/audit-metrics/src/report.rs",
-      "lines": 256,
-      "test_lines": 87,
-      "code_lines": 169,
+      "lines": 366,
+      "test_lines": 109,
+      "code_lines": 257,
       "is_test_file": false,
       "max_fn_lines": 40,
       "max_fn_name": "summarise",
-      "max_match_arms": 4,
-      "max_struct_fields": 2,
+      "max_match_arms": 3,
+      "max_struct_fields": 3,
       "max_struct_name": "Baseline",
       "max_nesting": 3,
       "use_count": 4,
-      "pub_items": 8,
-      "test_count": 7
+      "pub_items": 9,
+      "test_count": 8
     },
     {
       "path": "tools/audit-metrics/src/scan.rs",
@@ -13668,7 +13764,7 @@
       },
       {
         "path": "crates/mae/tests/headless_kb_convergence_e2e.rs",
-        "line": 228,
+        "line": 232,
         "category": "permission"
       },
       {
@@ -13888,22 +13984,22 @@
       },
       {
         "path": "daemon/src/collab_handler/mod.rs",
-        "line": 950,
+        "line": 954,
         "category": "architecture-debt"
       },
       {
         "path": "daemon/src/collab_handler/mod.rs",
-        "line": 1231,
+        "line": 1235,
         "category": "kb-scoping"
       },
       {
         "path": "daemon/src/collab_handler/mod.rs",
-        "line": 1366,
+        "line": 1370,
         "category": "kb-scoping"
       },
       {
         "path": "daemon/src/collab_handler/mod.rs",
-        "line": 1449,
+        "line": 1453,
         "category": "dispatch-authz"
       },
       {
@@ -13928,12 +14024,17 @@
       },
       {
         "path": "daemon/src/config.rs",
-        "line": 788,
+        "line": 691,
         "category": "multi-instance"
       },
       {
         "path": "daemon/src/config_guards.rs",
         "line": 20,
+        "category": "security"
+      },
+      {
+        "path": "daemon/src/content_op_policy.rs",
+        "line": 8,
         "category": "security"
       },
       {
@@ -13963,12 +14064,12 @@
       },
       {
         "path": "daemon/src/main.rs",
-        "line": 79,
+        "line": 80,
         "category": "multi-instance"
       },
       {
         "path": "daemon/src/main.rs",
-        "line": 329,
+        "line": 330,
         "category": "daemon-state"
       },
       {
@@ -14005,6 +14106,11 @@
         "path": "shared/effect-sandbox/src/lib.rs",
         "line": 184,
         "category": "test-safety"
+      },
+      {
+        "path": "shared/kb/src/capabilities.rs",
+        "line": 3,
+        "category": "capability-model"
       },
       {
         "path": "shared/kb/src/cozo_store/agenda.rs",
@@ -14058,13 +14164,23 @@
       },
       {
         "path": "shared/kb/src/cozo_store/schema.rs",
-        "line": 141,
+        "line": 64,
+        "category": "storage"
+      },
+      {
+        "path": "shared/kb/src/cozo_store/schema.rs",
+        "line": 147,
         "category": "architecture-debt"
       },
       {
         "path": "shared/kb/src/cozo_store/schema.rs",
-        "line": 151,
+        "line": 157,
         "category": "architecture-debt"
+      },
+      {
+        "path": "shared/kb/src/cozo_store/util.rs",
+        "line": 88,
+        "category": "error-classification"
       },
       {
         "path": "shared/kb/src/cozo_store/versioning.rs",
@@ -14093,17 +14209,17 @@
       },
       {
         "path": "shared/kb/src/kb_build.rs",
-        "line": 199,
+        "line": 221,
         "category": "storage"
       },
       {
         "path": "shared/kb/src/kb_build.rs",
-        "line": 268,
+        "line": 290,
         "category": "kb-provenance"
       },
       {
         "path": "shared/kb/src/kb_build.rs",
-        "line": 293,
+        "line": 315,
         "category": "storage"
       },
       {
@@ -14113,27 +14229,27 @@
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 257,
+        "line": 261,
         "category": "correctness"
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 313,
+        "line": 317,
         "category": "kb-truth"
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 466,
+        "line": 470,
         "category": "crdt"
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 703,
+        "line": 707,
         "category": "health-reporting"
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 2273,
+        "line": 2277,
         "category": "kb-provenance"
       },
       {
@@ -14147,8 +14263,18 @@
         "category": "kb-links"
       },
       {
+        "path": "shared/kb/src/query.rs",
+        "line": 166,
+        "category": "capability-model"
+      },
+      {
         "path": "shared/kb/src/store.rs",
-        "line": 328,
+        "line": 248,
+        "category": "error-classification"
+      },
+      {
+        "path": "shared/kb/src/store.rs",
+        "line": 353,
         "category": "data-loss"
       },
       {
@@ -14180,6 +14306,11 @@
         "path": "shared/mcp/src/protocol.rs",
         "line": 3,
         "category": "dispatch"
+      },
+      {
+        "path": "shared/mcp/src/ready.rs",
+        "line": 4,
+        "category": "test-timing"
       },
       {
         "path": "shared/mcp/src/session.rs",

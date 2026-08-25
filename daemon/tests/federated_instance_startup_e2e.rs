@@ -116,16 +116,20 @@ async fn spawn_daemon(tmp: &tempfile::TempDir) -> DaemonHandle {
         .spawn()
         .expect("failed to spawn mae-daemon");
 
-    for _ in 0..100 {
-        if UnixStream::connect(&socket_path).await.is_ok() {
-            return DaemonHandle { child, socket_path };
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+    // Bounded by wall-clock, not by an iteration count — see `mae_mcp::ready`.
+    let bound =
+        mae_mcp::ready::wait_until(|| async { UnixStream::connect(&socket_path).await.is_ok() })
+            .await;
+    if !bound {
+        // Don't leave a zombie/orphaned process behind on the failure path.
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!(
+            "{}",
+            mae_mcp::ready::timeout_message("mae-daemon's KB Unix socket")
+        );
     }
-    // Don't leave a zombie/orphaned process behind on the failure path.
-    let _ = child.kill();
-    let _ = child.wait();
-    panic!("mae-daemon did not bind its KB socket within 10s");
+    DaemonHandle { child, socket_path }
 }
 
 async fn kb_get(

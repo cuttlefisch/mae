@@ -363,6 +363,37 @@ impl KbQueryLayer for RemoteHubQueryLayer {
         Ok(Vec::new())
     }
 
+    /// The gaps are real, not defensive: ADR-053's `kb/query.*` surface has
+    /// **five methods** (`capabilities`, `get`, `search`, `graph`,
+    /// `my_wrapped_key`) against this trait's seventeen. What is declared here
+    /// is what that surface can genuinely answer — everything else returns
+    /// empty today, and a caller had no way to tell that from a real answer.
+    ///
+    /// `id_title_pairs` is a gap by DESIGN rather than by omission: the graph
+    /// endpoint returns bare ids, and fetching each title would be, in this
+    /// file's own words, "an N+1 network-call performance trap". Closing it
+    /// needs a bulk endpoint (D1a), not a loop here.
+    ///
+    /// **Shrinking this set to empty is the objective definition of "network
+    /// parity"** — the gate D1 is measured against.
+    fn capabilities(&self) -> crate::capabilities::QueryCapabilities {
+        use crate::capabilities::QueryMethod as M;
+        crate::capabilities::QueryCapabilities::all_except(&[
+            M::LinksFrom,
+            M::LinksTo,
+            M::IdTitlePairs,
+            M::HealthReport,
+            M::Neighborhood,
+            M::Related,
+            M::LinkedInDegree,
+            M::TodoNodes,
+            M::Agenda,
+            M::History,
+            M::NamespacePrefixes,
+            M::NodeCrdtState,
+        ])
+    }
+
     fn links_to(&self, _id: &str) -> Result<Vec<Link>, KbStoreError> {
         Ok(Vec::new())
     }
