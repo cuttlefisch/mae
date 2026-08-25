@@ -2458,9 +2458,9 @@
     },
     {
       "path": "crates/core/src/editor/dispatch/kb.rs",
-      "lines": 374,
+      "lines": 373,
       "test_lines": 0,
-      "code_lines": 374,
+      "code_lines": 373,
       "is_test_file": false,
       "max_fn_lines": 266,
       "max_fn_name": "dispatch_kb",
