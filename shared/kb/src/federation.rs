@@ -385,12 +385,56 @@ impl KbRegistry {
     }
 
     /// Load registry from `~/.local/share/mae/kb-registry.toml`.
+    ///
+    /// **A machine that has run MAE for a while may also have a LEGACY
+    /// `kb/registry.toml`** (#798). That path is not read, and editing it has no
+    /// effect — but `kb/` is where the stores live, so it is the *intuitive*
+    /// location and people reach for it. The result is an empty registry, which
+    /// is indistinguishable from "no KBs registered yet" on a fresh install, and
+    /// every later operation reports "No such KB" — describing the symptom rather
+    /// than the cause.
+    ///
+    /// So the legacy file is **adopted** when the live one is absent, rather than
+    /// merely warned about: telling the user their file is in the wrong place is
+    /// worse than putting it in the right one, and the two cannot both be
+    /// authoritative. When BOTH exist the live path wins and the legacy one is
+    /// only reported, because silently preferring a stale file would be the same
+    /// wrong-answer failure in the other direction.
     pub fn load(data_dir: &Path) -> Self {
         let path = data_dir.join("kb-registry.toml");
+        let legacy = data_dir.join("kb").join("registry.toml");
+
         if !path.exists() {
+            if legacy.exists() {
+                tracing::warn!(
+                    legacy = %legacy.display(),
+                    live = %path.display(),
+                    "KB registry found at the LEGACY path; adopting it. Move or \
+                     delete the legacy file to silence this."
+                );
+                let adopted = Self::read_or_default(&legacy);
+                // Best-effort promotion, so the next load is unambiguous. A
+                // failure here is not fatal: the registry is already loaded.
+                if let Err(e) = adopted.save(data_dir) {
+                    tracing::warn!(error = %e, "could not promote the legacy KB registry");
+                }
+                return adopted;
+            }
             return Self::default();
         }
-        match std::fs::read_to_string(&path) {
+
+        if legacy.exists() {
+            tracing::warn!(
+                legacy = %legacy.display(),
+                "a LEGACY KB registry exists alongside the live one and is being \
+                 IGNORED — edits to it have no effect. Delete it to avoid confusion."
+            );
+        }
+        Self::read_or_default(&path)
+    }
+
+    fn read_or_default(path: &Path) -> Self {
+        match std::fs::read_to_string(path) {
             Ok(content) => toml::from_str(&content).unwrap_or_default(),
             Err(_) => Self::default(),
         }
@@ -2152,5 +2196,86 @@ mod import_census_tests {
             "the reconciliation must SAY it, not merely record it: {}",
             report.census_line()
         );
+    }
+}
+
+/// #798: two registry paths exist; the legacy one must not silently vanish.
+#[cfg(test)]
+mod legacy_registry_path_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn write_registry(path: &Path, name: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            path,
+            format!(
+                "[[instances]]\nuuid = \"u-{name}\"\nname = \"{name}\"\n\
+                 org_dir = \"/tmp/{name}\"\ndb_path = \"/tmp/{name}.db\"\n\
+                 primary = false\nenabled = true\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    /// **The silent-empty-registry bug.** A registry at the legacy path used to
+    /// load as EMPTY — indistinguishable from a fresh install, with every later
+    /// operation reporting "No such KB" and naming the symptom rather than the
+    /// cause.
+    #[test]
+    fn a_registry_at_the_legacy_path_is_adopted_not_ignored() {
+        let d = TempDir::new().unwrap();
+        write_registry(&d.path().join("kb").join("registry.toml"), "Legacy");
+
+        let reg = KbRegistry::load(d.path());
+        assert_eq!(
+            reg.instances.len(),
+            1,
+            "a legacy-path registry must be adopted, not silently read as empty"
+        );
+        assert_eq!(reg.instances[0].name, "Legacy");
+    }
+
+    /// ...and promoted, so the next load is unambiguous rather than depending on
+    /// the fallback forever.
+    #[test]
+    fn an_adopted_legacy_registry_is_promoted_to_the_live_path() {
+        let d = TempDir::new().unwrap();
+        write_registry(&d.path().join("kb").join("registry.toml"), "Legacy");
+
+        let _ = KbRegistry::load(d.path());
+
+        assert!(
+            d.path().join("kb-registry.toml").exists(),
+            "the adopted registry must be written to the live path"
+        );
+        assert_eq!(
+            KbRegistry::load(d.path()).instances[0].name,
+            "Legacy",
+            "and reload cleanly from there"
+        );
+    }
+
+    /// **The live path wins when both exist.** Silently preferring a stale file
+    /// would be the same wrong-answer failure in the other direction — and the
+    /// legacy file on a real machine is genuinely stale (a month older here).
+    #[test]
+    fn the_live_path_wins_when_both_exist() {
+        let d = TempDir::new().unwrap();
+        write_registry(&d.path().join("kb").join("registry.toml"), "Stale");
+        write_registry(&d.path().join("kb-registry.toml"), "Live");
+
+        let reg = KbRegistry::load(d.path());
+        assert_eq!(
+            reg.instances[0].name, "Live",
+            "the live registry must win; the legacy one is only reported"
+        );
+    }
+
+    /// A genuinely fresh install still loads empty — no false adoption.
+    #[test]
+    fn no_registry_anywhere_is_still_empty() {
+        let d = TempDir::new().unwrap();
+        assert!(KbRegistry::load(d.path()).instances.is_empty());
     }
 }
