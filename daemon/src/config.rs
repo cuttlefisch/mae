@@ -256,6 +256,25 @@ pub struct AuthConfig {
     /// (mode = "key") Use native mTLS for confidentiality (recommended). When
     /// false, falls back to the plaintext JSON KeyAuth handshake.
     pub tls: bool,
+    /// Require every KB content op to carry an ADR-036 signature, on the hub
+    /// transport as well as the mesh.
+    ///
+    /// The mesh has always required one (`Transport::P2p`). The hub accepts
+    /// unsigned ops as a **migration accommodation**, whose own code comment
+    /// reads "hub migration: accept legacy unsigned" -- and which had no config
+    /// flag, no deadline and no metric, so nobody could ever tell when it was
+    /// safe to close. A migration path with no exit criterion is permanent by
+    /// default.
+    ///
+    /// Defaults to `false` to preserve today's behaviour for existing
+    /// deployments. Flip it once the accepted-unsigned counter has stayed at
+    /// zero across a representative period: that counter is the evidence this
+    /// flag exists to be decided by.
+    ///
+    /// The count is reported **by the running daemon at shutdown** — not by
+    /// `daemon doctor`, which is a separate process and cannot read another
+    /// process's counter.
+    pub require_signed_content_ops: bool,
 }
 
 impl Default for AuthConfig {
@@ -268,6 +287,9 @@ impl Default for AuthConfig {
             authorized_keys: None,
             identity_dir: None,
             tls: true,
+            // Preserve existing behaviour; see the field doc for the exit
+            // criterion that decides when a deployment can flip it.
+            require_signed_content_ops: false,
         }
     }
 }

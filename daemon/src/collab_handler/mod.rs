@@ -874,6 +874,10 @@ pub async fn verify_relayed_content_op(
                     "unsigned content op for KB '{kb_id}' node '{node_id}' rejected on the mesh (ADR-036 require-signed)"
                 ))
             } else {
+                // Counted, not merely permitted. This is the number that decides
+                // when `require_signed_content_ops` can be flipped on -- see
+                // `content_op_policy`.
+                crate::content_op_policy::note_unsigned_accepted();
                 Ok(None) // hub migration: accept legacy unsigned
             };
         }

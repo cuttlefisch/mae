@@ -112,7 +112,7 @@ pub(super) async fn handle_sync_update(
             &doc_name,
             &update_bytes,
             params.get("content_header"),
-            matches!(transport, Transport::P2p),
+            crate::content_op_policy::require_signed(transport),
         )
         .await
         {
