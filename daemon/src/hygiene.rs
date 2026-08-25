@@ -125,7 +125,9 @@ fn detect_kind_mismatches(store: &CozoKbStore, result: &mut HygieneScanResult) {
     };
 
     for id in &ids {
-        let node = match store.get_node(id) {
+        // Light variant: this loop reads `kind`/`priority`, never the CRDT
+        // blob, and runs once per node in the corpus.
+        let node = match store.get_node_light(id) {
             Ok(Some(n)) => n,
             _ => continue,
         };
@@ -179,7 +181,9 @@ fn detect_missing_metadata(store: &CozoKbStore, result: &mut HygieneScanResult) 
     };
 
     for id in &ids {
-        let node = match store.get_node(id) {
+        // Light variant: this loop reads `kind`/`priority`, never the CRDT
+        // blob, and runs once per node in the corpus.
+        let node = match store.get_node_light(id) {
             Ok(Some(n)) => n,
             _ => continue,
         };

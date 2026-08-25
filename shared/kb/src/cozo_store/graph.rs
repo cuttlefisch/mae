@@ -92,7 +92,7 @@ impl CozoKbStore {
         // Collect node info
         let mut nodes = Vec::new();
         for nid in &visited {
-            if let Some(node) = self.get_node(nid)? {
+            if let Some(node) = self.get_node_light(nid)? {
                 nodes.push((node.id, node.title));
             }
         }
@@ -116,7 +116,7 @@ impl CozoKbStore {
     /// `links_from`/`links_to` primitives (mirrors `neighborhood`'s approach,
     /// which avoids fragile recursive/self-join Datalog).
     pub fn related(&self, id: &str, limit: usize) -> Result<Vec<(String, f64)>, KbStoreError> {
-        let Some(node) = self.get_node(id)? else {
+        let Some(node) = self.get_node_light(id)? else {
             return Ok(Vec::new());
         };
         const W_DIRECT: f64 = 2.0;
