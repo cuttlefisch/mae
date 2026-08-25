@@ -311,3 +311,41 @@ enabled = true
         "and so must the primary"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5: `source-file` follow mode is retired for a DETACHED KB.
+// ---------------------------------------------------------------------------
+
+/// **The trap this closes.** A detached instance's `.org` files are a stale
+/// archive, but they still exist and still open — so following a link into one
+/// hands the user a document that LOOKS live while being silently disconnected
+/// from their KB.
+///
+/// Worse than a broken link: a broken link is visible.
+#[test]
+fn a_detached_instance_reports_the_store_as_truth() {
+    let dir = TempDir::new().unwrap();
+    let mut editor = Editor::new();
+    let _tmp = with_test_dirs(&mut editor);
+    detached_instance_with_divergent_store(&mut editor, dir.path());
+
+    assert!(
+        editor.kb_store_is_truth_for("note-a"),
+        "a detached instance's node must report store-is-truth, so link follow \
+         stops opening its stale archive"
+    );
+}
+
+/// The paired positive: an ATTACHED instance is unchanged, so this narrows
+/// behaviour and never widens it. Without this, the test above would pass on an
+/// implementation that reported store-is-truth for everything -- which would
+/// silently disable `source-file` follow mode for every existing user.
+#[test]
+fn an_attached_instance_is_unaffected() {
+    let mut editor = Editor::new();
+    let _tmp = with_test_dirs(&mut editor);
+    assert!(
+        !editor.kb_store_is_truth_for("concept:anything"),
+        "an ordinary (attached) KB must keep today's behaviour exactly"
+    );
+}
