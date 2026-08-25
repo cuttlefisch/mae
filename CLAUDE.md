@@ -217,14 +217,54 @@ principles, `ROADMAP.md`'s "Architecture Debt" checklist, and — for size-ceili
 exception in one place, add an `@ai-caution: [architecture-debt]` marker at the file in question and a
 pointer in the other two, so a reader landing in any one of the three finds the others.
 
-**Never write a line count (or any other measured number) into that prose.** Size-ceiling debt is
-enforced by `tools/audit-metrics` and ratcheted in CI (`make audit-metrics-check`): a new
-over-ceiling file fails, an accepted file that grows past 10% fails, a file that shrinks never fails.
-The baseline holds the numbers; `make audit-metrics-bless` re-accepts them deliberately. This
-replaced a hand-maintained list in `.claude/commands/mae-audit.md` that had drifted badly by 2026-08
-— 14 of 15 tracked sizes stale, one file +96% past its recorded figure, and an untracked backlog
-roughly twice what the prose claimed. The cross-reference *placement* discipline held; the
-*number-freshness* discipline could not, because a moving number cannot live in prose.
+**Never write a line count (or any other measured number) into that prose.** Structural debt is
+measured by `tools/audit-metrics` and ratcheted in CI (`make audit-metrics-check`). The baseline
+holds the numbers; `make audit-metrics-bless` re-accepts them deliberately. This replaced a
+hand-maintained list in `.claude/commands/mae-audit.md` that had drifted badly by 2026-08 — 14 of 15
+tracked sizes stale, one file +96% past its recorded figure, and an untracked backlog roughly twice
+what the prose claimed. The cross-reference *placement* discipline held; the *number-freshness*
+discipline could not, because a moving number cannot live in prose.
+
+**Amendment 2026-08-25 (principle #17): the gate no longer ratchets on FILE SIZE.** It gates
+**function length and nesting depth**; file size is measured and reported only. This reverses the
+original design, so the evidence is recorded here rather than in a commit message nobody re-reads:
+
+- **The size gate failed its own purpose test.** Its one real capability is stopping a brand-new
+  oversized file. That was exercised — `crates/scheme/src/parity_tests.rs` was created *after* the
+  ratchet landed at **896 lines**, nearly 2× the 500-line test ceiling — and the response was to
+  **bless it into the baseline**, not split it.
+- **It grandfathered the debt it existed to prevent.** 141 accepted violations, median 1,210 against
+  an 800 ceiling, largest 14,516. The stated goal is avoiding Emacs's `xdisp.c` (38,605 lines);
+  `graph_view_ops.rs` was already 23% of that, accepted and frozen.
+- **A *proportional* tolerance inverted the incentive**: the 14,516-line file could still add 1,451
+  lines while a 571-line test file could add 11. That band was MAE's own invention — RuboCop todo
+  files, PHPStan/Psalm/Android-lint baselines, betterer and mypy-baseline are all exact — and it
+  produced sub-threshold drift, so an unrelated PR adding ~20 lines wore a failure it did not cause.
+  Four of the last forty CI runs, including a **docs-only** PR.
+- **Every `bless` is an effective false positive** in Google Tricorder's sense (*"any report where a
+  user chooses not to take action"*) — ~5 blesses against 2 genuine refactors in 23 days, versus
+  their stated bar for *blocking* checks of essentially zero.
+- **Size is the weakest signal available here**: on this repo `corr(churn, fix-commits) = 0.88` vs
+  `corr(size, fix-commits) = 0.50`.
+- Prior art is one-sided: PMD **deleted** `ExcessiveClassLength` (*"LoC is noisy, NCSS is a more
+  solid metric"*), Google's Tricorder excluded size/complexity metrics as failing *"the problem
+  should be obvious and actionable when pointed out"*, airbnb sets ESLint's `max-lines` to `off`, and
+  `checkpatch.pl` has no length check at all.
+
+**What is gated instead, and why it is better rather than merely different:** function length and
+nesting are **per-item**, so they cannot drift with unrelated edits, cannot be inherited from `main`,
+and have a *local* remedy — shorten a function — rather than an architectural one. And the ratchet is
+now **monotonic on an exact value with no tolerance band**, which is what every other baseline tool in
+the field does.
+
+**Stated honestly, because it is the same criticism:** the new gate grandfathers 295 files of existing
+structural debt, the worst being a 1,892-line function. It prevents *worsening*; it does not pay down
+what is there. What genuinely improved is that innocent PRs stop failing, and that the remaining
+failures name something a developer can actually act on.
+
+Principle #5 (module boundaries) is what file size was a poor proxy for. The better instruments for it
+are dependency-direction enforcement and churn×complexity hotspots — neither built here, both noted so
+the next person does not reach for a size ceiling again.
 `tools/audit-metrics` also verifies the cross-reference itself, reporting orphaned markers, tracked
 entries with no in-code marker, `@ai-caution`s missing their `[category]`, and crate roots missing
 `@stability`.
