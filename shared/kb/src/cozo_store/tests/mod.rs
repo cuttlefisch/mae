@@ -12,6 +12,7 @@ fn make_store() -> (tempfile::TempDir, CozoKbStore) {
 
 mod agenda_tests;
 mod blocks_tests;
+mod d4_bench;
 mod db_tests;
 mod fts_migration_tests;
 mod fts_query_tests;
