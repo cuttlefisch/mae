@@ -5,9 +5,6 @@ use crate::Mode;
 use super::super::Editor;
 
 impl Editor {
-    /// Dispatch KB, capture, daily, and agenda commands.
-    /// Returns `Some(true)` if handled.
-
     /// Finish a capture: persist, tidy the scratch buffers, return to where the
     /// user was.
     ///
@@ -104,6 +101,8 @@ impl Editor {
         }
     }
 
+    /// Dispatch KB, capture, daily, and agenda commands.
+    /// Returns `Some(true)` if handled.
     pub(super) fn dispatch_kb(&mut self, name: &str) -> Option<bool> {
         match name {
             "kb-find" | "kb-create" => {
