@@ -109,8 +109,14 @@ pub fn node_to_org(node: &Node) -> String {
 
     out.push('\n');
 
-    // Body — convert [[id|display]] links to org format [[id][display]]
-    let body = convert_links_to_org(&node.body);
+    // Body — convert [[id|display]] links to org format [[id][display]].
+    //
+    // `body_after_header` runs first, and it is a no-op for any node ingested
+    // after #655. It exists for the ones ingested BEFORE: their bodies still
+    // carry the `:PROPERTIES:` drawer and `#+title:` that `parse_org` used to
+    // copy in wholesale, so exporting them would emit both a second time. Same
+    // function the parser uses, so the two cannot drift (principle #8).
+    let body = convert_links_to_org(&crate::org::body_after_header(&node.body));
     out.push_str(&body);
     if !body.ends_with('\n') {
         out.push('\n');
@@ -364,5 +370,108 @@ mod tests {
 
         let id3 = fnv1a_kb_id("research", "bob");
         assert_ne!(id1, id3);
+    }
+}
+
+/// The org round-trip: `parse_org` → `node_to_org` → `parse_org`.
+///
+/// **No test in this crate exercised the round trip before #655.** The existing
+/// export tests hand-build a clean `Node`, so they structurally cannot see what
+/// an *ingested* node carries — which is exactly where the defect lives.
+#[cfg(test)]
+mod round_trip_tests {
+    use crate::org::parse_org;
+
+    const FIXTURE: &str = ":PROPERTIES:\n\
+                          :ID: note:alpha\n\
+                          :ROLE: reference\n\
+                          :END:\n\
+                          #+title: Alpha\n\
+                          \n\
+                          Some prose about alpha.\n";
+
+    /// **#655 falsified.** An ingest → export round trip emits the properties
+    /// drawer **twice**: once from `node.properties`, and again inside
+    /// `node.body`, because `parse_org` sets `body` to the whole file text.
+    ///
+    /// This is the three-line reproduction the plan called for, and it decides
+    /// the field-authority question empirically rather than by argument: the two
+    /// stores are not merely redundant, they are *observably* divergent the
+    /// moment anything writes back.
+    #[test]
+    fn an_ingest_export_round_trip_emits_exactly_one_properties_drawer() {
+        let node = parse_org(FIXTURE).expect("fixture has a file-level :ID:");
+        let exported = super::node_to_org(&node);
+        assert_eq!(
+            exported.matches(":PROPERTIES:").count(),
+            1,
+            "a node must serialize to ONE drawer -- properties are stored twice \
+             (#655), so the round trip duplicates them:\n{exported}"
+        );
+        assert_eq!(
+            exported.matches(":END:").count(),
+            1,
+            "...and one :END: to match:\n{exported}"
+        );
+    }
+
+    /// The round trip must be **idempotent**: re-parsing the export yields the
+    /// same node. Without this, every ingest→export cycle grows the body by one
+    /// more drawer.
+    #[test]
+    fn the_round_trip_is_idempotent() {
+        let once = parse_org(FIXTURE).expect("parses");
+        let exported = super::node_to_org(&once);
+        let twice = parse_org(&exported).expect("the export must itself be parseable");
+
+        assert_eq!(twice.id, once.id);
+        assert_eq!(twice.title, once.title);
+        assert_eq!(
+            twice.properties, once.properties,
+            "properties must survive the round trip unchanged"
+        );
+        assert_eq!(
+            twice.body, once.body,
+            "the body must be a fixed point -- if it grows, every export cycle \
+             accretes another drawer"
+        );
+    }
+
+    /// The drawer is a *rendering* of `properties`, so a property that exists
+    /// only in the structured field must still appear in the export.
+    #[test]
+    fn a_property_set_only_on_the_struct_is_rendered_into_the_drawer() {
+        let mut node = parse_org(FIXTURE).expect("parses");
+        node.properties
+            .insert("assignee".to_string(), "hayden".to_string());
+        let exported = super::node_to_org(&node);
+        assert!(
+            exported.contains(":ASSIGNEE: hayden"),
+            "a structured-only property must be rendered:\n{exported}"
+        );
+        assert_eq!(exported.matches(":PROPERTIES:").count(), 1);
+    }
+
+    /// A node ingested BEFORE #655 still has the drawer inside its body. Its
+    /// export must not emit two drawers either — otherwise the fix only helps
+    /// content written after it, and every existing KB keeps the defect.
+    #[test]
+    fn a_legacy_body_that_still_contains_a_drawer_exports_one_drawer() {
+        use crate::{Node, NodeKind};
+        let mut node = Node::new("note:legacy", "Legacy", NodeKind::Note, FIXTURE);
+        node.properties
+            .insert("role".to_string(), "reference".to_string());
+
+        let exported = super::node_to_org(&node);
+        assert_eq!(
+            exported.matches(":PROPERTIES:").count(),
+            1,
+            "a pre-#655 body carries its own drawer; the export must not add a \
+             second:\n{exported}"
+        );
+        assert!(
+            exported.contains("Some prose about alpha."),
+            "the actual prose must survive:\n{exported}"
+        );
     }
 }

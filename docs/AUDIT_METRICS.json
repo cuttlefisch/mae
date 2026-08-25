@@ -11290,11 +11290,11 @@
     },
     {
       "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-      "lines": 693,
+      "lines": 717,
       "test_lines": 0,
-      "code_lines": 693,
+      "code_lines": 717,
       "is_test_file": false,
-      "max_fn_lines": 157,
+      "max_fn_lines": 133,
       "max_fn_name": "fts_search",
       "max_match_arms": 3,
       "max_struct_fields": 0,
@@ -11338,9 +11338,9 @@
     },
     {
       "path": "shared/kb/src/cozo_store/schema.rs",
-      "lines": 803,
+      "lines": 817,
       "test_lines": 0,
-      "code_lines": 803,
+      "code_lines": 817,
       "is_test_file": false,
       "max_fn_lines": 314,
       "max_fn_name": "ensure_schema",
@@ -11482,8 +11482,8 @@
     },
     {
       "path": "shared/kb/src/cozo_store/tests/fts_search_tests.rs",
-      "lines": 364,
-      "test_lines": 364,
+      "lines": 413,
+      "test_lines": 413,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 48,
@@ -11494,7 +11494,7 @@
       "max_nesting": 5,
       "use_count": 1,
       "pub_items": 0,
-      "test_count": 5
+      "test_count": 6
     },
     {
       "path": "shared/kb/src/cozo_store/tests/graph_tests.rs",
@@ -11802,19 +11802,19 @@
     },
     {
       "path": "shared/kb/src/export.rs",
-      "lines": 368,
-      "test_lines": 105,
-      "code_lines": 263,
+      "lines": 477,
+      "test_lines": 201,
+      "code_lines": 276,
       "is_test_file": false,
-      "max_fn_lines": 40,
-      "max_fn_name": "convert_links_to_org",
+      "max_fn_lines": 43,
+      "max_fn_name": "node_to_org",
       "max_match_arms": 3,
       "max_struct_fields": 3,
       "max_struct_name": "ExportReport",
       "max_nesting": 5,
-      "use_count": 4,
+      "use_count": 6,
       "pub_items": 6,
-      "test_count": 9
+      "test_count": 13
     },
     {
       "path": "shared/kb/src/federation.rs",
@@ -12026,9 +12026,9 @@
     },
     {
       "path": "shared/kb/src/org.rs",
-      "lines": 2567,
+      "lines": 2644,
       "test_lines": 1164,
-      "code_lines": 1403,
+      "code_lines": 1480,
       "is_test_file": false,
       "max_fn_lines": 107,
       "max_fn_name": "parse_org_multi_result",
@@ -14171,32 +14171,37 @@
       },
       {
         "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-        "line": 54,
-        "category": "kb-query"
-      },
-      {
-        "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-        "line": 200,
-        "category": "kb-query"
-      },
-      {
-        "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-        "line": 262,
+        "line": 51,
         "category": "kb-search"
       },
       {
         "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-        "line": 363,
+        "line": 102,
         "category": "kb-query"
       },
       {
         "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-        "line": 467,
+        "line": 248,
+        "category": "kb-query"
+      },
+      {
+        "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
+        "line": 319,
+        "category": "kb-search"
+      },
+      {
+        "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
+        "line": 387,
+        "category": "kb-query"
+      },
+      {
+        "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
+        "line": 491,
         "category": "data-loss"
       },
       {
         "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-        "line": 523,
+        "line": 547,
         "category": "data-loss"
       },
       {
@@ -14206,17 +14211,17 @@
       },
       {
         "path": "shared/kb/src/cozo_store/schema.rs",
-        "line": 64,
+        "line": 78,
         "category": "storage"
       },
       {
         "path": "shared/kb/src/cozo_store/schema.rs",
-        "line": 147,
+        "line": 161,
         "category": "architecture-debt"
       },
       {
         "path": "shared/kb/src/cozo_store/schema.rs",
-        "line": 157,
+        "line": 171,
         "category": "architecture-debt"
       },
       {
@@ -14296,12 +14301,12 @@
       },
       {
         "path": "shared/kb/src/org.rs",
-        "line": 916,
+        "line": 993,
         "category": "kb-links"
       },
       {
         "path": "shared/kb/src/org.rs",
-        "line": 958,
+        "line": 1035,
         "category": "kb-links"
       },
       {
