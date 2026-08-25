@@ -9530,15 +9530,15 @@
     },
     {
       "path": "daemon/src/collab_handler/kb_content.rs",
-      "lines": 855,
+      "lines": 969,
       "test_lines": 0,
-      "code_lines": 855,
+      "code_lines": 969,
       "is_test_file": false,
-      "max_fn_lines": 259,
-      "max_fn_name": "handle_kb_node_update",
+      "max_fn_lines": 223,
+      "max_fn_name": "handle_kb_share",
       "max_match_arms": 3,
-      "max_struct_fields": 0,
-      "max_struct_name": "",
+      "max_struct_fields": 8,
+      "max_struct_name": "RebirthGate",
       "max_nesting": 5,
       "use_count": 1,
       "pub_items": 0,
@@ -10009,6 +10009,22 @@
       "test_count": 10
     },
     {
+      "path": "daemon/src/collab_handler/tests/collab_handler_rebirth_tests.rs",
+      "lines": 302,
+      "test_lines": 302,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 42,
+      "max_fn_name": "anchored_kb_with_node",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 4,
+      "pub_items": 0,
+      "test_count": 4
+    },
+    {
       "path": "daemon/src/collab_handler/tests/collab_handler_recovery_key_tests.rs",
       "lines": 277,
       "test_lines": 277,
@@ -10170,8 +10186,8 @@
     },
     {
       "path": "daemon/src/collab_handler/tests/mod.rs",
-      "lines": 462,
-      "test_lines": 462,
+      "lines": 463,
+      "test_lines": 463,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 33,
@@ -14019,6 +14035,11 @@
         "path": "daemon/src/cli.rs",
         "line": 3,
         "category": "multi-instance"
+      },
+      {
+        "path": "daemon/src/collab_handler/kb_content.rs",
+        "line": 664,
+        "category": "security"
       },
       {
         "path": "daemon/src/collab_handler/kb_membership.rs",
