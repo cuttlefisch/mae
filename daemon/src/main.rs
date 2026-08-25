@@ -28,6 +28,7 @@ pub mod hygiene;
 mod lazy_fetch_client;
 pub mod maintenance;
 mod oauth;
+mod oauth_config;
 mod p2p;
 mod projection_stores;
 mod scheduler;
@@ -472,6 +473,24 @@ async fn main() {
         }
     }
 
+    // The ADR-036 migration's exit criterion, reported where an operator will
+    // see it. A run that ends at zero is evidence the hub can move to
+    // `require_signed_content_ops = true`; a non-zero count names work still to
+    // do. See `content_op_policy`.
+    let unsigned = mae_daemon::content_op_policy::unsigned_accepted();
+    if unsigned == 0 {
+        tracing::info!(
+            "collab: 0 unsigned content ops accepted this run — safe to set \
+             [collab.auth] require_signed_content_ops = true"
+        );
+    } else {
+        tracing::warn!(
+            count = unsigned,
+            "collab: accepted unsigned content ops this run (ADR-036 hub migration) — \
+             a client is still sending them; do not enable require_signed_content_ops yet"
+        );
+    }
+
     // Broadcast shutdown
     let _ = shutdown_tx.send(());
 
@@ -718,6 +737,14 @@ async fn spawn_collab_server(
     //   "psk": trust a SET of symmetric keys (keystore + legacy psk/psk_command).
     //   "key": asymmetric Ed25519 — own identity + authorized_keys (ADR-017).
     //   else:  no auth (trusted loopback).
+    // Daemon-wide, fixed at startup: whether the HUB also demands an ADR-036
+    // signature on content ops (the mesh always does). See `content_op_policy`
+    // for why the migration accommodation needed both a lever and a counter.
+    mae_daemon::content_op_policy::set_require_signed(collab.auth.require_signed_content_ops);
+    if collab.auth.require_signed_content_ops {
+        tracing::info!("collab: unsigned content ops will be REJECTED on the hub transport too");
+    }
+
     let auth_mode = collab.auth.mode.clone();
     // ADR-067 Phase D3: set inside the "key" arm below; stays `None` for
     // psk/none auth, which have no Ed25519 identity to self-issue with.
