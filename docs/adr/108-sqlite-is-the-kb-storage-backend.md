@@ -118,7 +118,30 @@ separate, deliberate change." **This ADR is that deliberate change.**
    but N=4 at 73 ms for four concurrent requests**, which request cost cannot explain.
 
    **Therefore, in order:** fix the query defects (#753), re-run `kb_dispatch_concurrency` on an idle
-   daemon with 20 and 24 added to the sweep, and only then grade ADR-102's gate. Grading it against
+   daemon with 20 and 24 added to the sweep, and only then grade ADR-102's gate.
+
+   > **DONE, and the result changes the risk assessment.** #753 merged and the benchmark was re-run
+   > against the same 20,000-node sqlite store. Criterion's own comparison against the stored
+   > baseline: **−90.4% at N=32, −90.5% at N=64, −94.5% multi-tenant 4×4, −90.7% multi-tenant 8×4**
+   > (p = 0.00 throughout).
+   >
+   > | measurement | before | after |
+   > |---|---:|---:|
+   > | single-client p99 | ~146 ms | **21.6 ms** |
+   > | N=32 concurrent, p99 | 349 ms | **34.2 ms** |
+   > | N=64 concurrent, p99 | 627 ms | **58.8 ms** |
+   > | multi-tenant 8×4 = 32, p99 | ~580 ms | **57.1 ms** |
+   >
+   > **The SLO (p99 ≤ 2× single-client baseline) now holds to N=32**, against a stated target of ~20
+   > concurrent. The earlier "holds to exactly 20" figure was measured on a daemon whose hygiene scan
+   > was consuming a core, so it was never a real reading of the engine.
+   >
+   > **So the scaling risk this decision was hedged against was ours, not Cozo's.** That does not
+   > retire ADR-102's gate — the bar is ~50 concurrent at 100K nodes, and this run is 20K — but it
+   > removes the reason to expect a miss. Two things remain genuinely unmeasured and should not be
+   > inferred from these numbers: the **collab doc store** has still never been benchmarked for
+   > concurrency at all, and there is still **no write-contention benchmark**, which is where the one
+   > surviving argument for a different engine lives (D7). Grading it against
    the current baseline would attribute MAE's bug to the engine. The doc store — the path real-time
    collaborative editing actually takes — **has still never been benchmarked for concurrency at all**,
    and that gap is unchanged.
