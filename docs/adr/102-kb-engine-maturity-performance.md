@@ -93,10 +93,35 @@ first; Track 2 opens only if Track 1 misses the bar.**
 
 ### D2 — Track 1: Cozo-on-RocksDB + concurrency architecture (do first)
 
-- Enable cozo `storage-rocksdb` behind a **daemon-only** feature flag and `open_with_engine("rocksdb")`,
-  **including the cozo version upgrade RocksDB forces** (`storage-rocksdb` does not exist in 0.7.6 per
-  ADR-012) — and prove the upgrade does not regress Datalog, HNSW, or the projector before anything
-  else. This upgrade is a first-class risk with its own gate, not an incidental.
+- Enable cozo `storage-rocksdb` behind a **daemon-only** feature flag and `open_with_engine("rocksdb")`.
+
+  > **CORRECTION (2026-08-24, principle #17). This bullet previously read "including the cozo version
+  > upgrade RocksDB forces (`storage-rocksdb` does not exist in 0.7.6 per ADR-012)" and called that
+  > upgrade "a first-class risk with its own gate". Both halves were wrong, and the gate was not
+  > real.**
+  >
+  > **`storage-rocksdb` exists in cozo 0.7.6.** Verified in the vendored manifest rather than docs.rs:
+  > `cozo-0.7.6/Cargo.toml:243` reads `storage-rocksdb = ["dep:cozorocks"]`, on `cozorocks 0.1.7`, a
+  > published crate. **No cozo version upgrade is required**, so Track 1 is cheaper and materially
+  > less risky than this ADR recorded.
+  >
+  > **The citation had drifted.** ADR-012 does not say what this bullet attributed to it. What ADR-012
+  > actually records (line 12) is that `Cargo.toml` declared `features = ["storage-new-rocksdb"]`,
+  > *"non-existent in cozo 0.7.6"* — a different, misspelt feature name in a broken dependency
+  > declaration. ADR-012 goes on (line 47) to list **`storage-rocksdb` as *Rejected*, on "35MB binary
+  > overhead, C++ build deps"** — a judgement that presupposes the feature exists. A claim about one
+  > feature name became a claim about another across one citation.
+  >
+  > That build-cost objection is the *real* risk here and should be re-evaluated on its merits, along
+  > with cross-compilation and Windows (ADR-104's concern) and whether a directory-shaped store has a
+  > verifiable backup story. RocksDB has checkpoint APIs, unlike sled, so it is not ADR-104's sled
+  > objection repeated.
+  >
+  > **Why this matters more than a footnote:** `cozo-0.7.6/src/storage/rocks.rs:132-135` takes **no
+  > lock** — `self.db.transact().set_snapshot(true).start()`, `_write` ignored, an MVCC snapshot —
+  > whereas `storage/sqlite.rs:66-78` takes a `ShardedLock` where a write excludes every reader on
+  > that `Db`. So the write-contention ceiling is **SQLite-backend-specific**, and the remedy is a
+  > feature flag plus a store migration. Tracked as #687.
 - Where RocksDB removes the cause of a sqlite workaround (BUSY panics, WAL absence), **retire that
   workaround** rather than carry both.
 - **Concurrency architecture, not just the store.** The ~8-session ceiling is partly per-node query
@@ -120,7 +145,9 @@ stores still auto-migrate to sqlite; the migration is not removed).
 ### D5 — Escalation gate: Track 2 (replace Cozo) opens only on a missed bar
 
 If Track 1 cannot hit ~50 users / 100K nodes within SLO, open a head-to-head evaluation of
-client-server / higher-concurrency engines — **Postgres + pgvector + Apache AGE**, **KùzuDB**,
+client-server / higher-concurrency engines — **Postgres + pgvector + Apache AGE**, ~~**KùzuDB**~~
+(**archived** as of 2026 — read-only, last release Oct 2025; one of the three candidates below no
+longer exists),
 **Neo4j** — scored on: concurrent-write throughput, vector search, graph/Datalog expressiveness vs
 MAE's actual query set, embeddability vs operational weight, maturity/backing, and migration cost
 (every Datalog query + HNSW + the projector). Track 2 is **named, scoped, and deferred**, not
