@@ -70,6 +70,103 @@ pub struct RemoteHubQueryLayer {
 }
 
 impl RemoteHubQueryLayer {
+    /// D1: one `kb/query.links` round trip, decoded into `Link`s.
+    ///
+    /// Returns `(links, truncated)`. The hub reports bare node ids, so `rel_type`
+    /// is the generic `"links_to"` and weight/confidence take their defaults --
+    /// the wire format carries no typed-edge information yet (ADR-101 would add
+    /// it). Stated here rather than silently defaulted, because a caller reading
+    /// `rel_type` off a hub link would otherwise believe it was authored.
+    fn links_in_direction(&self, id: &str, direction: &str) -> (Vec<Link>, bool) {
+        let Some(result) = self.call(
+            "kb/query.links",
+            serde_json::json!({"node_id": id, "direction": direction}),
+        ) else {
+            return (Vec::new(), false);
+        };
+        if let Some(reason) = result.get("unavailable_reason").and_then(|v| v.as_str()) {
+            // An E2E KB cannot answer this server-side (ADR-037's key-blind
+            // daemon). Surfaced as degraded rather than as an empty list.
+            self.set_outcome(LastOutcome::MalformedResponse(reason.to_string()));
+            return (Vec::new(), false);
+        }
+        let truncated = result
+            .get("truncated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let key = if direction == "to" {
+            "links_to"
+        } else {
+            "links_from"
+        };
+        let links = result
+            .get(key)
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|other| {
+                        let (src, dst) = if direction == "to" {
+                            (other.to_string(), id.to_string())
+                        } else {
+                            (id.to_string(), other.to_string())
+                        };
+                        Link {
+                            src,
+                            dst,
+                            rel_type: "links_to".to_string(),
+                            display: None,
+                            weight: 1.0,
+                            confidence: 1.0,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        (links, truncated)
+    }
+
+    /// D1: served by `kb/query.titles`, the bulk endpoint this method's previous
+    /// refusal explicitly asked for.
+    ///
+    /// It used to return empty and say so in a comment -- *"an N+1 network-call
+    /// performance trap"* -- which was a correct diagnosis of the wrong fix
+    /// (looping `get`). Titles live in the collection manifest the hub already
+    /// loads for any gated read, so this is one call and no per-node fetch.
+    fn id_title_pairs_impl(&self, prefix: Option<&str>) -> Vec<(String, String)> {
+        let mut params = serde_json::Map::new();
+        if let Some(p) = prefix {
+            params.insert("prefix".into(), serde_json::json!(p));
+        }
+        let Some(result) = self.call("kb/query.titles", serde_json::Value::Object(params)) else {
+            return Vec::new();
+        };
+        if result
+            .get("truncated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            self.set_outcome(LastOutcome::MalformedResponse(
+                "title listing hit the hub's max_scan_nodes cap; results are partial".to_string(),
+            ));
+        }
+        result
+            .get("pairs")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|pair| {
+                        let a = pair.as_array()?;
+                        Some((
+                            a.first()?.as_str()?.to_string(),
+                            a.get(1)?.as_str()?.to_string(),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn new(config: RemoteHubConfig) -> Self {
         Self::with_timeout(config, DEFAULT_TIMEOUT)
     }
@@ -355,12 +452,10 @@ impl KbQueryLayer for RemoteHubQueryLayer {
             .collect())
     }
 
-    fn links_from(&self, _id: &str) -> Result<Vec<Link>, KbStoreError> {
-        // ADR-053's surface has no links_from/links_to endpoint (only get/search/graph) —
-        // structurally empty rather than a partial/best-effort attempt via kb/query.graph
-        // (whole-KB, no per-node filtering), matching the trait's own documented default
-        // for layers that don't implement link traversal.
-        Ok(Vec::new())
+    /// D1: served by `kb/query.links`, which reads the node's own document --
+    /// **O(1) in corpus size**, because edges are stored on their source.
+    fn links_from(&self, id: &str) -> Result<Vec<Link>, KbStoreError> {
+        Ok(self.links_in_direction(id, "from").0)
     }
 
     /// The gaps are real, not defensive: ADR-053's `kb/query.*` surface has
@@ -379,11 +474,7 @@ impl KbQueryLayer for RemoteHubQueryLayer {
     fn capabilities(&self) -> crate::capabilities::QueryCapabilities {
         use crate::capabilities::QueryMethod as M;
         crate::capabilities::QueryCapabilities::all_except(&[
-            M::LinksFrom,
-            M::LinksTo,
-            M::IdTitlePairs,
             M::HealthReport,
-            M::Neighborhood,
             M::Related,
             M::LinkedInDegree,
             M::TodoNodes,
@@ -394,8 +485,20 @@ impl KbQueryLayer for RemoteHubQueryLayer {
         ])
     }
 
-    fn links_to(&self, _id: &str) -> Result<Vec<Link>, KbStoreError> {
-        Ok(Vec::new())
+    /// D1: served by `kb/query.links`. **O(N) server-side and capped** -- edges
+    /// live on the source, so finding what points AT a node is a scan (the same
+    /// asymmetry #265 records for `links:by_dst` on the Cozo side).
+    ///
+    /// A truncated scan sets `degraded()`, because a short backlink list reads as
+    /// "nothing links here" -- a wrong answer, not a partial one.
+    fn links_to(&self, id: &str) -> Result<Vec<Link>, KbStoreError> {
+        let (links, truncated) = self.links_in_direction(id, "to");
+        if truncated {
+            self.set_outcome(LastOutcome::MalformedResponse(
+                "backlink scan hit the hub's max_scan_nodes cap; results are partial".to_string(),
+            ));
+        }
+        Ok(links)
     }
 
     fn list_ids(&self, _prefix: Option<&str>) -> Result<Vec<String>, KbStoreError> {
@@ -419,26 +522,73 @@ impl KbQueryLayer for RemoteHubQueryLayer {
         Ok(None)
     }
 
-    fn id_title_pairs(&self, _prefix: Option<&str>) -> Result<Vec<(String, String)>, KbStoreError> {
-        // ADR-053's `kb/query.graph` returns bare node ids, no titles (no bulk
-        // id+title endpoint exists on this surface) — deliberately NOT implemented via
-        // `list_ids` + a `get()` call per id: for a hub with thousands of nodes that
-        // would be an N+1 network-call performance trap hidden behind an innocuous-
-        // looking "list all node titles" call, exactly the kind of silent scaling cliff
-        // ADR-062's own org-roam-grounded Context section warns against. Empty here
-        // (same graceful-degrade contract `related`'s trait default already uses for
-        // capabilities a layer doesn't support), not a slow best-effort attempt.
-        Ok(Vec::new())
+    fn id_title_pairs(&self, prefix: Option<&str>) -> Result<Vec<(String, String)>, KbStoreError> {
+        Ok(self.id_title_pairs_impl(prefix))
     }
 
+    /// D1: served by `kb/query.neighborhood`, a real per-node BFS rather than
+    /// `kb/query.graph`'s flat whole-KB dump.
+    ///
+    /// The hub clamps `depth` to 1..=3 and spends ONE `max_scan_nodes` budget
+    /// across the whole traversal, so total server work is bounded regardless of
+    /// depth -- each hop otherwise runs a backlink scan.
     fn neighborhood(
         &self,
-        _id: &str,
-        _depth: u32,
+        id: &str,
+        depth: u32,
     ) -> Result<Option<crate::store::SubGraph>, KbStoreError> {
-        // No BFS/neighborhood endpoint on ADR-053's surface (`kb/query.graph` is a flat,
-        // undepthed whole-KB dump, not a per-node BFS) — not supported.
-        Ok(None)
+        let Some(result) = self.call(
+            "kb/query.neighborhood",
+            serde_json::json!({"node_id": id, "depth": depth}),
+        ) else {
+            return Ok(None);
+        };
+        if let Some(reason) = result.get("unavailable_reason").and_then(|v| v.as_str()) {
+            self.set_outcome(LastOutcome::MalformedResponse(reason.to_string()));
+            return Ok(None);
+        }
+        if result
+            .get("truncated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            self.set_outcome(LastOutcome::MalformedResponse(
+                "neighborhood traversal hit the hub's max_scan_nodes cap; the subgraph is partial"
+                    .to_string(),
+            ));
+        }
+        let nodes = result
+            .get("nodes")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|n| {
+                        let a = n.as_array()?;
+                        Some((
+                            a.first()?.as_str()?.to_string(),
+                            a.get(1)?.as_str()?.to_string(),
+                        ))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let edges = result
+            .get("edges")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|e| {
+                        let a = e.as_array()?;
+                        Some((
+                            a.first()?.as_str()?.to_string(),
+                            a.get(1)?.as_str()?.to_string(),
+                            "links_to".to_string(),
+                        ))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        Ok(Some(crate::store::SubGraph { nodes, edges }))
     }
 }
 
@@ -786,5 +936,164 @@ mod tests {
             !federated_healthy.last_query_was_partial(),
             "a federation with no degraded source must not report partial results"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // D1 -- the four gaps this layer used to declare and now closes.
+    // -----------------------------------------------------------------------
+
+    fn rpc_body(result: serde_json::Value) -> String {
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": result}).to_string()
+    }
+
+    /// Backlinks: the direction must survive the wire, not just the count.
+    ///
+    /// A `links_to` edge is stored as `(other -> id)`. Getting that backwards
+    /// would still produce one `Link` and pass a length assertion, which is why
+    /// this pins `src`/`dst` explicitly.
+    #[test]
+    fn links_to_reconstructs_the_edge_in_the_right_direction() {
+        let addr = spawn_one_shot_mock(
+            "HTTP/1.1 200 OK",
+            &rpc_body(serde_json::json!({
+                "kb_id": "k", "node_id": "b", "encryption": "none",
+                "links_from": [], "links_to": ["c"], "truncated": false
+            })),
+        );
+        let layer = RemoteHubQueryLayer::with_timeout(
+            test_config(format!("http://{addr}")),
+            Duration::from_secs(5),
+        );
+        let links = layer.links_to("b").unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0].src, "c",
+            "the OTHER node is the source of a backlink"
+        );
+        assert_eq!(links[0].dst, "b");
+    }
+
+    /// A hub that truncated its scan must leave the layer visibly degraded.
+    ///
+    /// This is the difference between "no backlinks" and "we did not finish
+    /// looking" -- a caller acts on the first and should not be told it when the
+    /// second is true.
+    #[test]
+    fn a_truncated_backlink_response_marks_the_layer_degraded() {
+        let addr = spawn_one_shot_mock(
+            "HTTP/1.1 200 OK",
+            &rpc_body(serde_json::json!({
+                "kb_id": "k", "node_id": "b", "encryption": "none",
+                "links_from": [], "links_to": [], "truncated": true
+            })),
+        );
+        let layer = RemoteHubQueryLayer::with_timeout(
+            test_config(format!("http://{addr}")),
+            Duration::from_secs(5),
+        );
+        let links = layer.links_to("b").unwrap();
+        assert!(links.is_empty());
+        assert!(
+            matches!(layer.last_outcome(), LastOutcome::MalformedResponse(_)),
+            "an empty-because-truncated result must not look like an authoritative empty"
+        );
+    }
+
+    /// An E2E KB's structural refusal must reach the caller as degraded, not as
+    /// a confident empty answer.
+    #[test]
+    fn an_e2e_refusal_is_surfaced_rather_than_read_as_no_links() {
+        let addr = spawn_one_shot_mock(
+            "HTTP/1.1 200 OK",
+            &rpc_body(serde_json::json!({
+                "kb_id": "k", "node_id": "b", "encryption": "e2e",
+                "links_from": [], "links_to": [], "truncated": false,
+                "unavailable_reason": "links are inside the encrypted node document"
+            })),
+        );
+        let layer = RemoteHubQueryLayer::with_timeout(
+            test_config(format!("http://{addr}")),
+            Duration::from_secs(5),
+        );
+        assert!(layer.links_from("b").unwrap().is_empty());
+        assert!(matches!(
+            layer.last_outcome(),
+            LastOutcome::MalformedResponse(_)
+        ));
+    }
+
+    /// The bulk title endpoint, decoded into the `(id, title)` pairs the trait
+    /// promises -- one call, no N+1.
+    #[test]
+    fn id_title_pairs_decodes_the_bulk_response() {
+        let addr = spawn_one_shot_mock(
+            "HTTP/1.1 200 OK",
+            &rpc_body(serde_json::json!({
+                "kb_id": "k", "encryption": "none",
+                "pairs": [["a", "Alpha"], ["b", "Beta"]], "truncated": false
+            })),
+        );
+        let layer = RemoteHubQueryLayer::with_timeout(
+            test_config(format!("http://{addr}")),
+            Duration::from_secs(5),
+        );
+        let pairs = layer.id_title_pairs(None).unwrap();
+        assert_eq!(
+            pairs,
+            vec![
+                ("a".to_string(), "Alpha".to_string()),
+                ("b".to_string(), "Beta".to_string())
+            ]
+        );
+    }
+
+    /// The subgraph carries titles and typed-ish edges, and a truncated walk is
+    /// flagged.
+    #[test]
+    fn neighborhood_decodes_nodes_edges_and_flags_truncation() {
+        let addr = spawn_one_shot_mock(
+            "HTTP/1.1 200 OK",
+            &rpc_body(serde_json::json!({
+                "kb_id": "k", "root": "a", "encryption": "none",
+                "nodes": [["a", "Alpha"], ["b", "Beta"]],
+                "edges": [["a", "b"]],
+                "truncated": true
+            })),
+        );
+        let layer = RemoteHubQueryLayer::with_timeout(
+            test_config(format!("http://{addr}")),
+            Duration::from_secs(5),
+        );
+        let sub = layer.neighborhood("a", 1).unwrap().expect("a subgraph");
+        assert_eq!(sub.nodes.len(), 2);
+        assert_eq!(sub.edges, vec![("a".into(), "b".into(), "links_to".into())]);
+        assert!(matches!(
+            layer.last_outcome(),
+            LastOutcome::MalformedResponse(_)
+        ));
+    }
+
+    /// The countable gate D1 is measured against: these four are no longer gaps.
+    ///
+    /// Asserting the CLOSED set rather than the remaining one, so the test does
+    /// not have to be edited every time another endpoint lands.
+    #[test]
+    fn the_four_endpoints_this_change_added_are_no_longer_declared_gaps() {
+        use crate::capabilities::QueryMethod as M;
+        let layer = RemoteHubQueryLayer::with_timeout(
+            test_config("http://127.0.0.1:1".to_string()),
+            Duration::from_secs(1),
+        );
+        let caps = layer.capabilities();
+        for m in [M::LinksFrom, M::LinksTo, M::Neighborhood, M::IdTitlePairs] {
+            assert!(
+                caps.supports(m),
+                "{m:?} is served by a real endpoint now and must not be declared a gap"
+            );
+        }
+        // ...and the ones still genuinely missing stay declared, so the set is an
+        // honest inventory rather than an optimistic one.
+        assert!(!caps.supports(M::HealthReport));
+        assert!(!caps.supports(M::Agenda));
     }
 }

@@ -10346,13 +10346,13 @@
     },
     {
       "path": "daemon/src/kb_query.rs",
-      "lines": 436,
+      "lines": 728,
       "test_lines": 0,
-      "code_lines": 436,
+      "code_lines": 728,
       "is_test_file": false,
       "max_fn_lines": 62,
-      "max_fn_name": "get",
-      "max_match_arms": 6,
+      "max_fn_name": "dispatch",
+      "max_match_arms": 9,
       "max_struct_fields": 3,
       "max_struct_name": "KbQueryLimits",
       "max_nesting": 6,
@@ -10682,8 +10682,8 @@
     },
     {
       "path": "daemon/src/tests/kb_query_tests.rs",
-      "lines": 937,
-      "test_lines": 937,
+      "lines": 1300,
+      "test_lines": 1300,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 76,
@@ -10691,10 +10691,10 @@
       "max_match_arms": 0,
       "max_struct_fields": 0,
       "max_struct_name": "",
-      "max_nesting": 1,
+      "max_nesting": 2,
       "use_count": 9,
       "pub_items": 0,
-      "test_count": 12
+      "test_count": 18
     },
     {
       "path": "daemon/src/tests/kb_socket_concurrency_tests.rs",
@@ -12058,19 +12058,19 @@
     },
     {
       "path": "shared/kb/src/remote_hub.rs",
-      "lines": 790,
-      "test_lines": 345,
-      "code_lines": 445,
+      "lines": 1099,
+      "test_lines": 504,
+      "code_lines": 595,
       "is_test_file": false,
       "max_fn_lines": 102,
       "max_fn_name": "call",
       "max_match_arms": 3,
       "max_struct_fields": 4,
       "max_struct_name": "RemoteHubQueryLayer",
-      "max_nesting": 2,
-      "use_count": 14,
+      "max_nesting": 3,
+      "use_count": 15,
       "pub_items": 6,
-      "test_count": 9
+      "test_count": 15
     },
     {
       "path": "shared/kb/src/storage_feature_guard_tests.rs",
@@ -13130,19 +13130,19 @@
     },
     {
       "path": "tools/audit-metrics/src/report.rs",
-      "lines": 366,
-      "test_lines": 109,
-      "code_lines": 257,
+      "lines": 431,
+      "test_lines": 161,
+      "code_lines": 270,
       "is_test_file": false,
-      "max_fn_lines": 40,
-      "max_fn_name": "summarise",
+      "max_fn_lines": 42,
+      "max_fn_name": "describe_structure",
       "max_match_arms": 3,
       "max_struct_fields": 3,
       "max_struct_name": "Baseline",
       "max_nesting": 3,
       "use_count": 4,
       "pub_items": 9,
-      "test_count": 8
+      "test_count": 11
     },
     {
       "path": "tools/audit-metrics/src/scan.rs",
