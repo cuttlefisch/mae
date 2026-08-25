@@ -206,6 +206,7 @@ const OP_NEW_PUBKEY_KEY: &str = "new_pubkey"; // ADR-040: hex(successor Ed25519 
 const OP_NEW_WRAP_PUBKEY_KEY: &str = "new_wrap_pubkey"; // ADR-040/I1: hex(successor X25519 wrap pubkey) on a Rebind
 const OP_RECOVERY_PUBKEY_KEY: &str = "recovery_pubkey"; // ADR-040 §Recovery: hex(recovery Ed25519 pubkey) on a RegisterRecoveryKey
 const OP_REPLICATION_KEY: &str = "replication"; // ADR-067: "query_only" on a restricted Admit/SetRole; absent = Full
+const OP_CONTENT_HASH_KEY: &str = "content_hash"; // ADR-107: SHA-256 of a reborn node's content; Rebirth only
 const MEMBER_ROLE_KEY: &str = "role";
 const MEMBER_LABEL_KEY: &str = "label";
 /// ADR-023: per-member monotonic authorization epoch, bumped by the daemon on

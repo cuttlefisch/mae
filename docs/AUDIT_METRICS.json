@@ -6634,8 +6634,8 @@
     },
     {
       "path": "crates/mae/src/collab_bridge/tests/collab_bridge_e2e_flags_offline_tests.rs",
-      "lines": 373,
-      "test_lines": 373,
+      "lines": 374,
+      "test_lines": 374,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 102,
@@ -12650,11 +12650,11 @@
     },
     {
       "path": "shared/sync/src/kb/collection_oplog.rs",
-      "lines": 291,
+      "lines": 302,
       "test_lines": 0,
-      "code_lines": 291,
+      "code_lines": 302,
       "is_test_file": false,
-      "max_fn_lines": 64,
+      "max_fn_lines": 69,
       "max_fn_name": "decode_op_record",
       "max_match_arms": 2,
       "max_struct_fields": 0,
@@ -12682,9 +12682,9 @@
     },
     {
       "path": "shared/sync/src/kb/mod.rs",
-      "lines": 489,
+      "lines": 490,
       "test_lines": 0,
-      "code_lines": 489,
+      "code_lines": 490,
       "is_test_file": false,
       "max_fn_lines": 30,
       "max_fn_name": "update_new_op_authors",
@@ -12906,19 +12906,19 @@
     },
     {
       "path": "shared/sync/src/membership.rs",
-      "lines": 4008,
-      "test_lines": 2569,
-      "code_lines": 1439,
+      "lines": 4336,
+      "test_lines": 2782,
+      "code_lines": 1554,
       "is_test_file": false,
       "max_fn_lines": 139,
       "max_fn_name": "derive_valid_members_governed",
-      "max_match_arms": 9,
-      "max_struct_fields": 15,
+      "max_match_arms": 10,
+      "max_struct_fields": 16,
       "max_struct_name": "MembershipOp",
       "max_nesting": 5,
       "use_count": 11,
-      "pub_items": 37,
-      "test_count": 63
+      "pub_items": 38,
+      "test_count": 71
     },
     {
       "path": "shared/sync/src/op_set.rs",
@@ -13002,8 +13002,8 @@
     },
     {
       "path": "shared/sync/tests/device_secret_storage_and_revocation.rs",
-      "lines": 447,
-      "test_lines": 447,
+      "lines": 448,
+      "test_lines": 448,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 33,
@@ -13018,8 +13018,8 @@
     },
     {
       "path": "shared/sync/tests/multi_device_identity.rs",
-      "lines": 362,
-      "test_lines": 362,
+      "lines": 363,
+      "test_lines": 363,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 27,
@@ -14429,6 +14429,11 @@
         "path": "shared/sync/src/membership.rs",
         "line": 20,
         "category": "architecture-debt"
+      },
+      {
+        "path": "shared/sync/src/membership.rs",
+        "line": 1148,
+        "category": "security"
       },
       {
         "path": "shared/sync/src/op_set.rs",

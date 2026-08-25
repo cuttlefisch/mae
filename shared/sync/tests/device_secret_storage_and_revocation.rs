@@ -81,6 +81,7 @@ fn blank(action: MembershipAction, subject: &str, author: &str) -> MembershipOp 
         new_wrap_pubkey: None,
         recovery_pubkey: None,
         replication: Default::default(),
+        content_hash: None,
     }
 }
 
