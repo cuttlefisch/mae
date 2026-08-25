@@ -793,6 +793,41 @@ pub(crate) fn handle_test_mode(args: &[String]) -> io::Result<()> {
         }
     }
 
+    // The primary KB store: the interactive path opens it in `init_kb_federation`;
+    // the `--test` path must too (#781), else a scenario's `kb-create` reports
+    // success and writes NOWHERE, and `kb-get` on the same id returns `#f`.
+    //
+    // Worse than a broken feature: a scenario asserting only "the call did not
+    // error" PASSED, so every KB assertion in a Scheme test was silently vacuous.
+    // Consistent with the evidence -- across 27 files in `tests/editor/`, not one
+    // exercised a `kb-` primitive. Nobody could write one that worked.
+    //
+    // Only the primary store, deliberately: `init_kb_federation` also provisions
+    // the guidance corpora, which is the genuinely expensive part
+    // (`kb_provisioning_cost.rs` exists because that cost is real) and is not what
+    // a scenario needs to observe its own writes.
+    if let Some(dd) = editor.mae_data_dir() {
+        let kb_root = dd.join("kb");
+        if std::fs::create_dir_all(&kb_root).is_ok() {
+            let engine = editor.kb.storage_engine.clone();
+            match crate::bootstrap::open_and_seed_primary_store(
+                &kb_root.join("primary.cozo"),
+                &engine,
+            ) {
+                Ok(store) => {
+                    editor.kb.primary_cozo = Some(store.clone());
+                    editor.kb.store = Some(store);
+                }
+                // Non-fatal: a scenario that never touches the KB must still run,
+                // and one that does now fails on its own assertion with a real
+                // message rather than on a missing store.
+                Err(e) => {
+                    eprintln!("mae: --test could not open the primary KB store: {e}");
+                }
+            }
+        }
+    }
+
     // P2P control channel: the interactive path wires this (the second DaemonClient at
     // the `set_daemon_control` site below); the `--test` path must too, else a scenario
     // that drives `kb-share-p2p` / `kb-join-p2p` (daemon control-socket RPCs, not the

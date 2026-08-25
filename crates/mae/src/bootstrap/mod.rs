@@ -2314,6 +2314,44 @@ fn build_guidance_from_embedded_corpus(
     }
 }
 
+/// Open (or create) the primary KB store at `path` and seed its type system,
+/// typed relationships and stored views.
+///
+/// **Extracted so the `--test` harness can call the SAME code the interactive
+/// path does** (#781). Before this, `handle_test_mode` never opened a primary
+/// store at all, so a scenario's `kb-create` reported success and wrote nowhere —
+/// and `kb-get` on the same id returned `#f`. Worse than a broken feature: a
+/// scenario asserting only "the call did not error" **passed**, so every KB
+/// assertion in a Scheme test was silently vacuous. Verified by the store file's
+/// mtime never changing.
+///
+/// That is the third instance of one shape in this function alone — the two
+/// `kb.data_dir` and P2P-control blocks above it each carry a comment reading
+/// *"the interactive path sets this; the `--test` path must too"*. Sharing the
+/// code is what stops a fourth.
+///
+/// Seeding failures are logged and non-fatal, exactly as they were inline: a KB
+/// that cannot seed its views is degraded, not unusable, and refusing to open the
+/// store would take the user's whole corpus down with it.
+pub(crate) fn open_and_seed_primary_store(
+    path: &std::path::Path,
+    engine: &str,
+) -> Result<std::sync::Arc<mae_kb::CozoKbStore>, mae_kb::store::KbStoreError> {
+    let store = mae_kb::CozoKbStore::open_with_engine(path, engine)?;
+    if let Err(e) = store.seed_type_system() {
+        warn!(error = %e, "failed to seed KB type system");
+    }
+    match store.seed_typed_relationships() {
+        Ok(n) => debug!(count = n, "seeded typed KB relationships"),
+        Err(e) => warn!(error = %e, "failed to seed typed relationships"),
+    }
+    if let Err(e) = store.seed_views() {
+        warn!(error = %e, "failed to seed KB views");
+    }
+    info!(path = %path.display(), "primary KB store opened (CozoDB)");
+    Ok(std::sync::Arc::new(store))
+}
+
 pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
     // Load KB federation registry and import enabled instances.
     if !clean_mode {
@@ -2493,23 +2531,8 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
                     }
                 }
 
-                match mae_kb::CozoKbStore::open_with_engine(&cozo_path, &engine) {
-                    Ok(store) => {
-                        if let Err(e) = store.seed_type_system() {
-                            warn!(error = %e, "failed to seed KB type system");
-                        }
-                        match store.seed_typed_relationships() {
-                            Ok(n) => debug!(count = n, "seeded typed KB relationships"),
-                            Err(e) => {
-                                warn!(error = %e, "failed to seed typed relationships")
-                            }
-                        }
-                        if let Err(e) = store.seed_views() {
-                            warn!(error = %e, "failed to seed KB views");
-                        }
-
-                        info!(path = %cozo_path.display(), "primary KB store opened (CozoDB)");
-                        let arc_store = std::sync::Arc::new(store);
+                match open_and_seed_primary_store(&cozo_path, &engine) {
+                    Ok(arc_store) => {
                         editor.kb.primary_cozo = Some(arc_store.clone());
                         editor.kb.store = Some(arc_store.clone());
 
