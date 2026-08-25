@@ -256,7 +256,9 @@ if [ "$ACTION" = "uninstall" ]; then
     else
         skip "MaePractices KB not found"
     fi
-    if [ -d "$DATADIR/mae/mae-adr.cozo" ]; then
+    # `-e`, not `-d`: sqlite stores are FILES (ADR-108). A store installed
+    # before that change is still a directory, so uninstall must accept both.
+    if [ -e "$DATADIR/mae/mae-adr.cozo" ]; then
         rm -rf "$DATADIR/mae/mae-adr.cozo"
         rm -f "$DATADIR/mae/mae-adr.cozo.sha256"
         ok "removed ADR KB"
@@ -484,7 +486,8 @@ fi
 # ========================================================================
 step "Installing ADR KB"
 
-if [ -d "$SCRIPT_DIR/mae-adr.cozo" ]; then
+# `-e`, not `-d` -- see the note in the uninstall path above.
+if [ -e "$SCRIPT_DIR/mae-adr.cozo" ]; then
     rm -rf "$DATADIR/mae/mae-adr.cozo"
     cp -r "$SCRIPT_DIR/mae-adr.cozo" "$DATADIR/mae/mae-adr.cozo"
     verify "$DATADIR/mae/mae-adr.cozo" "ADR KB -> $DATADIR/mae/"
@@ -754,7 +757,7 @@ ok "manual + guidance KBs: compiled into the binary"
 # The ADR KB is the one that can legitimately be absent: it is not embedded
 # (ADR-059 keeps it opt-in and contributor-only) and ships as its own release
 # asset, so most packages do not carry it. Informational, never fatal.
-if [ -d "$DATADIR/mae/mae-adr.cozo" ]; then
+if [ -e "$DATADIR/mae/mae-adr.cozo" ]; then
     ok "ADR KB present"
 else
     skip "ADR KB not installed (opt-in — 'make fetch-adr-kb', then kb_register it)"
