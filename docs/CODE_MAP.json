@@ -765,6 +765,10 @@
           "kind": "mod"
         },
         {
+          "name": "ident",
+          "kind": "mod"
+        },
+        {
           "name": "kb_build",
           "kind": "mod"
         },

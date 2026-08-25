@@ -10,7 +10,16 @@ pub(super) async fn handle_docs_list(
     doc_store: &DocStore,
     id: serde_json::Value,
 ) -> JsonRpcResponse {
-    let names = doc_store.document_names().await;
+    // KB documents are excluded here, not filtered by the caller: their names
+    // alone disclose every tenant's KB ids and node ids on a shared host.
+    // `kb/list` is the membership-checked surface for those. See
+    // `method_authz::is_enumerable`.
+    let names: Vec<String> = doc_store
+        .document_names()
+        .await
+        .into_iter()
+        .filter(|n| super::method_authz::is_enumerable(n))
+        .collect();
     JsonRpcResponse::success(id, serde_json::json!({ "documents": names }))
 }
 
