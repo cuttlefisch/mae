@@ -203,3 +203,72 @@ fn agenda_weakly_linked_filter() {
         "WeaklyLinked(1) should match DeadEnd's node set exactly"
     );
 }
+
+/// The attacker's test for the agenda filters, and the regression guard for the
+/// escaping that used to sit there.
+///
+/// Three of these filters previously did `x.replace('\'', "")` and `Priority`
+/// did nothing at all. That is wrong twice over: a value containing a quote is
+/// silently CHANGED (so it matches the wrong rows), and a value crafted to
+/// escape the literal reaches the query planner.
+///
+/// The oracle is the RESULT SET, not an error — a filter that merely refused
+/// hostile input would pass a "does not blow up" assertion while still being
+/// unable to match a legitimate quote-bearing tag.
+#[test]
+fn agenda_filter_values_are_bound_not_interpolated() {
+    let (_tmp, store) = make_store();
+
+    // A tag that legitimately contains a single quote. Under the old
+    // `replace('\'', "")` this became `oneilstag` and matched nothing.
+    let mut quoted = Node::new("note:quoted", "Quoted", NodeKind::Note, "body");
+    quoted.tags = vec!["o'neil".to_string()];
+    store.insert_node(&quoted).unwrap();
+
+    let mut plain = Node::new("note:plain", "Plain", NodeKind::Note, "body");
+    plain.tags = vec!["ordinary".to_string()];
+    store.insert_node(&plain).unwrap();
+
+    let hits = store
+        .agenda_query(&AgendaFilter::Tag("o'neil".to_string()))
+        .expect("a quote in a tag must be queryable, not an error");
+    let ids: Vec<&str> = hits.iter().map(|n| n.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["note:quoted"],
+        "a legitimate quote-bearing tag must match exactly its own node"
+    );
+
+    // Injection: a value crafted to escape the literal and widen the match.
+    // It must match NOTHING — not every node, which is what a successful
+    // injection would return.
+    for hostile in [
+        "' , title != '",
+        "x' or tags_json != '",
+        "'\n?[id, title, kind, body, tags_json, todo_state, priority, source, \
+         source_version, aliases_json, properties_json, crdt_doc, has_crdt] := \
+         *nodes{id, title, kind, body, tags_json, todo_state, priority, source, \
+         source_version, aliases_json, properties_json, crdt_doc, has_crdt}\n",
+    ] {
+        let out = store
+            .agenda_query(&AgendaFilter::Tag(hostile.to_string()))
+            .unwrap_or_default();
+        assert!(
+            out.is_empty(),
+            "hostile tag {hostile:?} matched {} node(s) — the value reached the planner",
+            out.len()
+        );
+    }
+
+    // Todo state: same property, different filter arm.
+    let out = store
+        .agenda_query(&AgendaFilter::Todo(Some(
+            "' or todo_state != '".to_string(),
+        )))
+        .unwrap_or_default();
+    assert!(
+        out.is_empty(),
+        "hostile todo state matched {} node(s)",
+        out.len()
+    );
+}

@@ -101,7 +101,10 @@ AK="$(alice "$MAE_BIN" --collab-identity 2>/dev/null | sed -n 's/.*public key:  
 BK="$(bob "$MAE_BIN" --collab-identity 2>/dev/null | sed -n 's/.*public key:  mae-ed25519 //p' | awk '{print $1}')"
 srv "$MAE_DAEMON_BIN" authorize mae-ed25519 "$AK" alice >/dev/null
 srv "$MAE_DAEMON_BIN" authorize mae-ed25519 "$BK" bob   >/dev/null
-BOB_FP="$(srv "$MAE_DAEMON_BIN" authorized 2>/dev/null | awk '$1=="bob"{print $2}' | grep -m1 '^SHA256:')"
+# `|| true`: under `set -euo pipefail` a non-matching `grep` exits 1, `pipefail`
+# propagates it, and this command substitution then aborts the script -- before the
+# `[ -n "$BOB_FP" ]` guard below, which exists for exactly this case.
+BOB_FP="$(srv "$MAE_DAEMON_BIN" authorized 2>/dev/null | awk '$1=="bob"{print $2}' | grep -m1 '^SHA256:' || true)"
 [ -n "$BOB_FP" ] || { echo "ERROR: could not read bob's fingerprint"; exit 1; }
 INIT_WHO="alice bob"
 # ADR-040 §Recovery-key: carol is bob's NEW key, authorized on the daemon OUT-OF-BAND (§4) —

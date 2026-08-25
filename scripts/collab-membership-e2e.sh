@@ -90,8 +90,11 @@ srv "$MAE_DAEMON_BIN" authorize mae-ed25519 "$A_KEY" alice >/dev/null
 srv "$MAE_DAEMON_BIN" authorize mae-ed25519 "$B_KEY" bob   >/dev/null
 # ADR-018: membership keys on the cryptographic PRINCIPAL (key fingerprint), not
 # the label. Capture bob's fingerprint from the authorized list for the approve.
-BOB_FP="$(srv "$MAE_DAEMON_BIN" authorized 2>/dev/null | awk '/[[:space:]]bob[[:space:]]/{print $2} /^  bob /{print $2}' | grep -m1 '^SHA256:')"
-[ -n "$BOB_FP" ] || BOB_FP="$(srv "$MAE_DAEMON_BIN" authorized 2>/dev/null | awk '$1=="bob"{print $2}' | head -1)"
+# `|| true`: under `set -euo pipefail` a non-matching `grep` exits 1, `pipefail`
+# propagates it, and this command substitution then aborts the script -- before the
+# `[ -n "$BOB_FP" ]` guard below, which exists for exactly this case.
+BOB_FP="$(srv "$MAE_DAEMON_BIN" authorized 2>/dev/null | awk '/[[:space:]]bob[[:space:]]/{print $2} /^  bob /{print $2}' | grep -m1 '^SHA256:' || true)"
+[ -n "$BOB_FP" ] || BOB_FP="$(srv "$MAE_DAEMON_BIN" authorized 2>/dev/null | awk '$1=="bob"{print $2}' | head -1 || true)"
 [ -n "$BOB_FP" ] || { echo "ERROR: could not read bob's fingerprint"; srv "$MAE_DAEMON_BIN" authorized; exit 1; }
 
 for who in alice bob; do
