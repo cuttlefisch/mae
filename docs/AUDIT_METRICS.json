@@ -12698,19 +12698,19 @@
     },
     {
       "path": "shared/sync/src/kb/node.rs",
-      "lines": 736,
-      "test_lines": 0,
-      "code_lines": 736,
+      "lines": 1017,
+      "test_lines": 174,
+      "code_lines": 843,
       "is_test_file": false,
-      "max_fn_lines": 31,
-      "max_fn_name": "set_aliases",
+      "max_fn_lines": 46,
+      "max_fn_name": "rebirth_hash",
       "max_match_arms": 2,
       "max_struct_fields": 13,
       "max_struct_name": "MaterializedNode",
       "max_nesting": 3,
-      "use_count": 7,
-      "pub_items": 45,
-      "test_count": 0
+      "use_count": 8,
+      "pub_items": 47,
+      "test_count": 6
     },
     {
       "path": "shared/sync/src/kb/tests/collection_artifacts_tests.rs",
