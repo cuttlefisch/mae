@@ -66,7 +66,7 @@ data-encoding = "2"
 # evaluated choice over the third-party `rmcp-server-kit` wrapper (see the
 # ADR's "Alternatives rejected"). `jsonwebtoken` itself is the widely-used,
 # well-established Keats crate, not a new/unproven dependency.
-jsonwebtoken = { version = "10", default-features = false, features = ["use_pem", "rust_crypto"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "rust_crypto"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "logging"] }
 tokio-rustls = "0.26"
@@ -91,8 +91,8 @@ mae-kb = { path = "../shared/kb", default-features = false, features = ["crdt", 
 # rsa 0.9 depends on rand_core 0.6 -- rand must stay on the matching 0.8
 # line or RsaPrivateKey::new's CryptoRngCore bound fails to resolve.
 rsa = "0.9"
-rand = "0.8"
-base64 = "0.22"
+rand = "0.10"
+base64 = "0.23"
 # oauth_kb_query_e2e.rs generates a real self-signed TLS cert for the real
 # OAuth listener it spawns -- same crate `shared/mcp/src/tls.rs` already
 # uses for mTLS test cert generation.
