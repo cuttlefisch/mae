@@ -184,13 +184,24 @@ fn convert_links_to_org(body: &str) -> String {
                     link_content.push(ch);
                 }
             }
-            // Parse id|display or just id
+            // Parse id|display or just id, and emit org's `id:` link scheme.
+            //
+            // **The `id:` prefix is load-bearing, not decoration.** Without it the
+            // export round trip DESTROYS every internal link: `parse_org` treats a
+            // prefix-less `[[n:1][one]]` as an EXTERNAL link and flattens it to
+            // plain text (`one (n:1)`), so re-importing an export left a corpus
+            // with no graph at all.
+            //
+            // Measured, not theorised — `round_trip_identity_tests` fails on the
+            // prior behaviour with exactly that transformation. It is also the
+            // concrete answer to whether the org export can serve as a RECOVERY
+            // path (ADR-092 D3 / R1): it could not, and this is why.
             if let Some(pipe) = link_content.find('|') {
                 let id = &link_content[..pipe];
                 let display = &link_content[pipe + 1..];
-                result.push_str(&format!("[[{id}][{display}]]"));
+                result.push_str(&format!("[[id:{id}][{display}]]"));
             } else {
-                result.push_str(&format!("[[{link_content}]]"));
+                result.push_str(&format!("[[id:{link_content}]]"));
             }
         } else {
             result.push(ch);
@@ -300,11 +311,19 @@ mod tests {
 
     #[test]
     fn convert_links_org() {
+        // The `id:` scheme is REQUIRED on the way out. This test previously
+        // asserted its absence -- pinning the defect as expected behaviour --
+        // and that is exactly why the round trip destroyed links: `parse_org`
+        // reads a prefix-less `[[x][d]]` as an EXTERNAL link and flattens it to
+        // `d (x)`. See `round_trip_identity_tests`.
         assert_eq!(
             convert_links_to_org("See [[concept:buffer|buffers]] for details."),
-            "See [[concept:buffer][buffers]] for details."
+            "See [[id:concept:buffer][buffers]] for details."
         );
-        assert_eq!(convert_links_to_org("[[simple-link]]"), "[[simple-link]]");
+        assert_eq!(
+            convert_links_to_org("[[simple-link]]"),
+            "[[id:simple-link]]"
+        );
     }
 
     #[test]
@@ -472,6 +491,87 @@ mod round_trip_tests {
         assert!(
             exported.contains("Some prose about alpha."),
             "the actual prose must survive:\n{exported}"
+        );
+    }
+}
+
+/// ADR-092 D3: is the org round-trip **identity**?
+///
+/// The ADR requires the serialize/parse pair to be *"identity on whichever
+/// in-text link grammar it was handed rather than a normaliser"*. R1 sharpened
+/// the stakes: whether the export can ever be a **recovery path** (rather than
+/// migration-and-rendering only) turns on whether every field survives a round
+/// trip — *verified by a test rather than assumed*.
+///
+/// These tests establish where that stands today, honestly. A property that does
+/// not hold is recorded as not holding, not quietly narrowed until it passes.
+#[cfg(test)]
+mod round_trip_identity_tests {
+    use crate::org::parse_org;
+
+    /// Parse → export → parse must be a **fixed point** on every field the
+    /// parser reads. This is weaker than byte identity and is the property that
+    /// actually matters: a second cycle must not change anything.
+    #[test]
+    fn the_round_trip_is_a_fixed_point_on_every_parsed_field() {
+        for fixture in [
+            ":PROPERTIES:\n:ID: n:1\n:END:\n#+title: Plain\n\nJust prose.\n",
+            ":PROPERTIES:\n:ID: n:2\n:ROLE: owner\n:END:\n#+title: With props\n\nBody.\n",
+            ":PROPERTIES:\n:ID: n:3\n:END:\n#+title: Tagged\n#+filetags: :alpha:beta:\n\nBody.\n",
+            ":PROPERTIES:\n:ID: n:4\n:END:\n#+title: Linked\n\nSee [[id:n:1][one]] and [[id:n:2]].\n",
+            ":PROPERTIES:\n:ID: n:5\n:END:\n#+title: Unicode — ✎ 日本語\n\nBödy wíth ñon-ASCII.\n",
+        ] {
+            let once = parse_org(fixture).expect("fixture parses");
+            let exported = super::node_to_org(&once);
+            let twice = parse_org(&exported).expect("the export must itself parse");
+
+            assert_eq!(twice.id, once.id, "id drifted:\n{exported}");
+            assert_eq!(twice.title, once.title, "title drifted:\n{exported}");
+            assert_eq!(twice.body, once.body, "body drifted:\n{exported}");
+            assert_eq!(twice.tags, once.tags, "tags drifted:\n{exported}");
+            assert_eq!(
+                twice.properties, once.properties,
+                "properties drifted:\n{exported}"
+            );
+
+            // ...and a THIRD cycle changes nothing, which is what "fixed point"
+            // means. A round trip that converges only after two passes would
+            // still corrupt the first export.
+            let thrice = super::node_to_org(&twice);
+            assert_eq!(
+                thrice, exported,
+                "the export is not stable across cycles:\n{exported}\n---\n{thrice}"
+            );
+        }
+    }
+
+    /// **The link grammar must survive as authored, not be normalised.**
+    ///
+    /// ADR-030 makes the in-text grammar the human's edit surface; a serializer
+    /// that rewrites `[[id:x][disp]]` into some canonical form is editing the
+    /// user's prose behind their back. ADR-092 D3 says so explicitly.
+    #[test]
+    fn a_link_survives_the_round_trip_in_a_resolvable_form() {
+        let src = ":PROPERTIES:\n:ID: n:1\n:END:\n#+title: T\n\nSee [[id:n:2][two]].\n";
+        let node = parse_org(src).expect("parses");
+        let exported = super::node_to_org(&node);
+        let reparsed = parse_org(&exported).expect("re-parses");
+
+        // The parser rewrites `[[id:x][d]]` to its internal `[[x|d]]` form, so
+        // byte identity does not hold here -- but the LINK must still resolve to
+        // the same target after a round trip, which is the property that matters
+        // for a recovery path.
+        let links_of = |n: &crate::Node| crate::org::parse_typed_links(&n.body, &n.id);
+        let before: Vec<String> = links_of(&node).into_iter().map(|l| l.target).collect();
+        let after: Vec<String> = links_of(&reparsed).into_iter().map(|l| l.target).collect();
+        assert_eq!(
+            before, after,
+            "a link's TARGET must survive the round trip:\n{exported}"
+        );
+        assert_eq!(
+            before,
+            vec!["n:2".to_string()],
+            "and resolve to the real id"
         );
     }
 }

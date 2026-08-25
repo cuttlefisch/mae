@@ -11834,19 +11834,19 @@
     },
     {
       "path": "shared/kb/src/export.rs",
-      "lines": 477,
-      "test_lines": 201,
-      "code_lines": 276,
+      "lines": 577,
+      "test_lines": 278,
+      "code_lines": 299,
       "is_test_file": false,
-      "max_fn_lines": 43,
-      "max_fn_name": "node_to_org",
+      "max_fn_lines": 51,
+      "max_fn_name": "convert_links_to_org",
       "max_match_arms": 3,
       "max_struct_fields": 3,
       "max_struct_name": "ExportReport",
       "max_nesting": 5,
-      "use_count": 6,
+      "use_count": 7,
       "pub_items": 6,
-      "test_count": 13
+      "test_count": 15
     },
     {
       "path": "shared/kb/src/federation.rs",
