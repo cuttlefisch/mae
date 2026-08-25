@@ -3,6 +3,24 @@
 
 use super::*;
 
+/// Where this KB's dailies live.
+///
+/// **Phase 3.** Dailies were unconditionally file-backed: existence was
+/// `path.exists()`, creation was `fs::write`, and chain-fill string-spliced
+/// `Previous:`/`Next:` into file text. Post-cutover that is *wholly broken*, not
+/// degraded — a detached KB has no `.org` directory for any of it to touch, and a
+/// fresh install has none either.
+///
+/// The algorithm is the same either way; only the substrate differs. One seam, two
+/// backings (principle #8), rather than a second copy of chain-fill.
+pub(super) enum DailyBacking {
+    /// A `.org` directory is configured and the KB still ingests from it.
+    Files(std::path::PathBuf),
+    /// No dailies directory, or the KB's store is the source of truth. The daily
+    /// is a node, addressed by `daily:YYYY-MM-DD`.
+    Store,
+}
+
 impl Editor {
     /// Resolve the dailies directory. Explicit setting takes priority;
     /// falls back to `kb_notes_dir/daily`.
@@ -24,44 +42,129 @@ impl Editor {
         format!("daily:{}", mae_kb::activity::format_date(y, m, d))
     }
 
-    /// Check if a daily file exists on disk.
-    pub(super) fn kb_daily_exists(&self, y: i32, m: u32, d: u32) -> bool {
-        self.kb_daily_path(y, m, d)
-            .map(|p| p.exists())
-            .unwrap_or(false)
+    /// Which backing serves dailies right now.
+    ///
+    /// `Store` whenever there is no dailies directory to write to, or the primary
+    /// KB has been detached (`IngestPolicy::StoreIsTruth`) — writing a file that
+    /// no ingest will ever read is worse than not writing one, because it looks
+    /// like it worked.
+    pub(super) fn kb_daily_backing(&self) -> DailyBacking {
+        let store_is_truth = self
+            .kb
+            .registry
+            .instances
+            .iter()
+            .find(|i| i.primary)
+            .is_some_and(|i| !i.ingest_policy.allows_ingest());
+        match self.kb_dailies_dir() {
+            Some(dir) if !store_is_truth => DailyBacking::Files(dir),
+            _ => DailyBacking::Store,
+        }
     }
 
-    /// Create a daily .org file stub with PROPERTIES drawer + title.
-    /// Does NOT insert Previous: link (chain_fill does that).
-    pub(super) fn kb_create_daily_stub(
+    /// Does this daily exist yet?
+    pub(super) fn kb_daily_exists(&self, y: i32, m: u32, d: u32) -> bool {
+        match self.kb_daily_backing() {
+            DailyBacking::Files(_) => self
+                .kb_daily_path(y, m, d)
+                .map(|p| p.exists())
+                .unwrap_or(false),
+            DailyBacking::Store => {
+                let id = Self::kb_daily_id(y, m, d);
+                self.kb_get_node_anywhere(&id).is_some()
+            }
+        }
+    }
+
+    /// The daily's current text, whichever backing holds it.
+    pub(super) fn kb_daily_text(&self, y: i32, m: u32, d: u32) -> Option<String> {
+        match self.kb_daily_backing() {
+            DailyBacking::Files(_) => {
+                let path = self.kb_daily_path(y, m, d)?;
+                std::fs::read_to_string(&path).ok()
+            }
+            DailyBacking::Store => self
+                .kb_get_node_anywhere(&Self::kb_daily_id(y, m, d))
+                .map(|n| n.body),
+        }
+    }
+
+    /// Replace the daily's text.
+    pub(super) fn kb_daily_set_text(
         &mut self,
         y: i32,
         m: u32,
         d: u32,
-    ) -> Result<std::path::PathBuf, String> {
-        let dir = self
-            .kb_dailies_dir()
-            .ok_or("No dailies directory configured")?;
-        if !dir.exists() {
-            std::fs::create_dir_all(&dir)
-                .map_err(|e| format!("Failed to create dailies dir: {}", e))?;
+        text: &str,
+    ) -> Result<(), String> {
+        match self.kb_daily_backing() {
+            DailyBacking::Files(_) => {
+                let path = self.kb_daily_path(y, m, d).ok_or("No dailies directory")?;
+                std::fs::write(&path, text).map_err(|e| format!("Failed to write daily: {e}"))?;
+                self.kb.write_guard.insert(path.clone());
+                self.kb_reimport_file(&path);
+                self.kb.watcher_stats.reimports_total += 1;
+                Ok(())
+            }
+            DailyBacking::Store => {
+                let id = Self::kb_daily_id(y, m, d);
+                // ADR-092's designated sole content mutator, deliberately --
+                // a daily is a node, so it must not get its own private write
+                // path. This is the write side of "one write path for a KB node".
+                self.kb_update_node_with(&id, |n| n.body = text.to_string())
+            }
         }
-        let path = dir.join(format!("{}.org", mae_kb::activity::format_date(y, m, d)));
-        if path.exists() {
-            return Ok(path);
+    }
+
+    /// Open the daily for reading/editing.
+    pub(super) fn kb_daily_open(&mut self, y: i32, m: u32, d: u32) -> Result<(), String> {
+        match self.kb_daily_backing() {
+            DailyBacking::Files(_) => {
+                let path = self.kb_daily_path(y, m, d).ok_or("No dailies directory")?;
+                self.open_file_at_path(&path);
+                Ok(())
+            }
+            DailyBacking::Store => {
+                self.open_help_at(&Self::kb_daily_id(y, m, d));
+                Ok(())
+            }
+        }
+    }
+
+    /// Ensure the daily exists, creating an empty one if not.
+    ///
+    /// Returns without doing anything when it already exists, so it is safe to
+    /// call on every navigation.
+    pub(super) fn kb_daily_ensure(&mut self, y: i32, m: u32, d: u32) -> Result<(), String> {
+        if self.kb_daily_exists(y, m, d) {
+            return Ok(());
         }
         let id = Self::kb_daily_id(y, m, d);
         let date_str = mae_kb::activity::format_date(y, m, d);
-        let content = format!(
-            ":PROPERTIES:\n:ID: {}\n:END:\n#+title: {}\n\n",
-            id, date_str
-        );
-        std::fs::write(&path, &content).map_err(|e| format!("Failed to write daily: {}", e))?;
-        // Guard and reimport
-        self.kb.write_guard.insert(path.clone());
-        self.kb_reimport_file(&path);
-        self.kb.watcher_stats.reimports_total += 1;
-        Ok(path)
+        match self.kb_daily_backing() {
+            DailyBacking::Files(dir) => {
+                if !dir.exists() {
+                    std::fs::create_dir_all(&dir)
+                        .map_err(|e| format!("Failed to create dailies dir: {e}"))?;
+                }
+                // The drawer is written because the FILE is the ingest source
+                // here -- it is how the id reaches the store. On the store
+                // backing the node carries its id directly, and #655 made the
+                // drawer a rendering rather than a second home for it.
+                let content = format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {date_str}\n\n");
+                let path = dir.join(format!("{date_str}.org"));
+                std::fs::write(&path, &content)
+                    .map_err(|e| format!("Failed to write daily: {e}"))?;
+                self.kb.write_guard.insert(path.clone());
+                self.kb_reimport_file(&path);
+                self.kb.watcher_stats.reimports_total += 1;
+                Ok(())
+            }
+            DailyBacking::Store => {
+                self.kb_create_node(&id, &date_str, "", mae_kb::NodeKind::Note)?;
+                Ok(())
+            }
+        }
     }
 
     /// Find the nearest existing daily before/after a date.
@@ -104,8 +207,7 @@ impl Editor {
         };
 
         // Ensure target date exists
-        let target_path = self.kb_create_daily_stub(y, m, d)?;
-        let _ = target_path; // used implicitly via reimport
+        self.kb_daily_ensure(y, m, d)?;
 
         // Walk backwards to find the anchor (pre-existing daily)
         let max_gap = self.kb.daily_chain_gap_max;
@@ -121,7 +223,7 @@ impl Editor {
                 break;
             }
             // Create stub for the gap day
-            self.kb_create_daily_stub(prev.0, prev.1, prev.2)?;
+            self.kb_daily_ensure(prev.0, prev.1, prev.2)?;
             result.stubs_created.push(prev);
             chain.push(prev);
             cur = prev;
@@ -137,64 +239,62 @@ impl Editor {
             let link_line = format!("Previous: [[id:{}][{}]]", prev_id, prev_date_str);
 
             // Insert "Previous:" link on chain[i] pointing to chain[i+1]
-            if let Some(path) = self.kb_daily_path(cy, cm, cd) {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    if !content.contains("Previous:") {
-                        let mut lines: Vec<&str> = content.lines().collect();
-                        let insert_pos = lines
-                            .iter()
-                            .position(|l| l.starts_with("#+title:"))
-                            .map(|i| i + 1)
-                            .unwrap_or(lines.len());
-                        lines.insert(insert_pos, &link_line);
-                        let updated = lines.join("\n") + "\n";
-                        self.kb.write_guard.insert(path.clone());
-                        if std::fs::write(&path, &updated).is_ok() {
-                            self.kb_reimport_file(&path);
-                            self.kb.watcher_stats.reimports_total += 1;
-                            result.links_inserted += 1;
-                        }
-                    }
-                }
+            if self.kb_daily_insert_link(cy, cm, cd, "Previous:", &link_line)? {
+                result.links_inserted += 1;
             }
 
-            // Insert symmetric "Next:" link on chain[i+1] pointing to chain[i]
+            // Symmetric "Next:" link on chain[i+1] pointing back at chain[i].
             let next_id = Self::kb_daily_id(cy, cm, cd);
             let next_date_str = mae_kb::activity::format_date(cy, cm, cd);
             let next_link_line = format!("Next: [[id:{}][{}]]", next_id, next_date_str);
-
-            if let Some(prev_path) = self.kb_daily_path(py, pm, pd) {
-                if let Ok(content) = std::fs::read_to_string(&prev_path) {
-                    if !content.contains("Next:") {
-                        let mut lines: Vec<&str> = content.lines().collect();
-                        let insert_pos = lines
-                            .iter()
-                            .position(|l| l.starts_with("#+title:"))
-                            .map(|i| i + 1)
-                            .unwrap_or(lines.len());
-                        lines.insert(insert_pos, &next_link_line);
-                        let updated = lines.join("\n") + "\n";
-                        self.kb.write_guard.insert(prev_path.clone());
-                        if std::fs::write(&prev_path, &updated).is_ok() {
-                            self.kb_reimport_file(&prev_path);
-                            self.kb.watcher_stats.reimports_total += 1;
-                            result.links_inserted += 1;
-                        }
-                    }
-                }
+            if self.kb_daily_insert_link(py, pm, pd, "Next:", &next_link_line)? {
+                result.links_inserted += 1;
             }
         }
 
         Ok(result)
     }
 
+    /// Insert one chain link into a daily, once.
+    ///
+    /// The same algorithm the file backing always used -- find `#+title:`, insert
+    /// after it, skip if a link of this kind is already present -- but expressed
+    /// over `kb_daily_text`/`kb_daily_set_text` so it works on a node body too.
+    /// It was written out twice (once for `Previous:`, once for `Next:`), which is
+    /// how a store backing would have become four copies instead of one.
+    ///
+    /// Returns whether a link was actually inserted.
+    fn kb_daily_insert_link(
+        &mut self,
+        y: i32,
+        m: u32,
+        d: u32,
+        marker: &str,
+        link_line: &str,
+    ) -> Result<bool, String> {
+        let Some(content) = self.kb_daily_text(y, m, d) else {
+            return Ok(false);
+        };
+        if content.contains(marker) {
+            return Ok(false);
+        }
+        let mut lines: Vec<&str> = content.lines().collect();
+        let insert_pos = lines
+            .iter()
+            .position(|l| l.starts_with("#+title:"))
+            .map(|i| i + 1)
+            .unwrap_or(lines.len());
+        lines.insert(insert_pos, link_line);
+        let updated = lines.join("\n") + "\n";
+        self.kb_daily_set_text(y, m, d, &updated)?;
+        Ok(true)
+    }
+
     /// Open today's daily with chain-fill.
     pub fn kb_goto_daily_today(&mut self) -> Result<(), String> {
         let (y, m, d) = today_ymd();
         self.kb_daily_chain_fill(y, m, d)?;
-        let path = self.kb_daily_path(y, m, d).ok_or("No dailies directory")?;
-        self.open_file_at_path(&path);
-        Ok(())
+        self.kb_daily_open(y, m, d)
     }
 
     /// Open yesterday's daily.
@@ -202,7 +302,7 @@ impl Editor {
         let (y, m, d) = today_ymd();
         let (py, pm, pd) = mae_kb::activity::prev_day(y, m, d);
         if !self.kb_daily_exists(py, pm, pd) {
-            self.kb_create_daily_stub(py, pm, pd)?;
+            self.kb_daily_ensure(py, pm, pd)?;
         }
         let path = self
             .kb_daily_path(py, pm, pd)

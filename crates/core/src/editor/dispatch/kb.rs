@@ -7,6 +7,103 @@ use super::super::Editor;
 impl Editor {
     /// Dispatch KB, capture, daily, and agenda commands.
     /// Returns `Some(true)` if handled.
+
+    /// Finish a capture: persist, tidy the scratch buffers, return to where the
+    /// user was.
+    ///
+    /// Extracted from `dispatch_kb` (already 332 lines) rather than blessed.
+    fn kb_capture_finalize(&mut self) {
+        if let Some(cap) = self.kb.capture_state.take() {
+            // Phase 3: `save` writes the capture BUFFER to its file, and
+            // a store-backed capture has no file -- the node itself is
+            // the buffer, already persisted by `kb_create_node` and
+            // edited through the node write path. Calling `save` here
+            // would at best no-op and at worst prompt for a filename.
+            if cap.file_path.is_some() {
+                self.dispatch_builtin("save");
+            }
+            // Remove hidden KB buffer seeded for this node.
+            //
+            // Only when there IS one: the file backing seeds a hidden KB
+            // buffer alongside the file buffer, but a store-backed
+            // capture has no file buffer -- the KB buffer is the one the
+            // user is looking at, so removing it would close the capture
+            // out from under them.
+            if let Some(hi) = cap.file_path.as_ref().and_then(|_| {
+                self.buffers
+                    .iter()
+                    .position(|b| b.kb_view().is_some_and(|hv| hv.current == cap.node_id))
+            }) {
+                self.buffers.remove(hi);
+                // Audit #605.2 — pairs with every `buffers.remove()`;
+                // without it the Editor's index-keyed maps (syntax, AI
+                // target, shell viewports) keep stale indices.
+                self.notify_buffer_removed(hi);
+                for win in self.window_mgr.iter_windows_mut() {
+                    if win.buffer_idx > hi {
+                        win.buffer_idx = win.buffer_idx.saturating_sub(1);
+                    }
+                }
+            }
+            let ret = cap
+                .return_buffer_idx
+                .min(self.buffers.len().saturating_sub(1));
+            self.display_buffer(ret);
+            self.set_status("Capture finalized");
+        } else {
+            self.set_status("No active capture");
+        }
+    }
+
+    /// Abandon a capture, discarding the buffer without a save prompt.
+    fn kb_capture_abort(&mut self) {
+        if let Some(cap) = self.kb.capture_state.take() {
+            // Force-kill the capture buffer (no save prompt). For a
+            // store-backed capture this IS the KB buffer, which is why
+            // the removal below is file-only.
+            self.dispatch_builtin("force-kill-buffer");
+            // Remove hidden KB buffer seeded for this node.
+            //
+            // Only when there IS one: the file backing seeds a hidden KB
+            // buffer alongside the file buffer, but a store-backed
+            // capture has no file buffer -- the KB buffer is the one the
+            // user is looking at, so removing it would close the capture
+            // out from under them.
+            if let Some(hi) = cap.file_path.as_ref().and_then(|_| {
+                self.buffers
+                    .iter()
+                    .position(|b| b.kb_view().is_some_and(|hv| hv.current == cap.node_id))
+            }) {
+                self.buffers.remove(hi);
+                // Audit #605.2 — pairs with every `buffers.remove()`;
+                // without it the Editor's index-keyed maps (syntax, AI
+                // target, shell viewports) keep stale indices.
+                self.notify_buffer_removed(hi);
+                for win in self.window_mgr.iter_windows_mut() {
+                    if win.buffer_idx > hi {
+                        win.buffer_idx = win.buffer_idx.saturating_sub(1);
+                    }
+                }
+            }
+            // Delete the file from disk
+            if let Some(ref path) = cap.file_path {
+                let _ = std::fs::remove_file(path);
+            }
+            // Remove node from KB
+            self.kb.primary.remove(&cap.node_id);
+            for kb in self.kb.instances.values_mut() {
+                kb.remove(&cap.node_id);
+            }
+            let ret = cap
+                .return_buffer_idx
+                .min(self.buffers.len().saturating_sub(1));
+            self.display_buffer(ret);
+            self.set_status("Capture aborted");
+        } else {
+            self.set_status("No active capture");
+        }
+    }
+
     pub(super) fn dispatch_kb(&mut self, name: &str) -> Option<bool> {
         match name {
             "kb-find" | "kb-create" => {
@@ -204,74 +301,8 @@ impl Editor {
             "dismiss-kb-preview-popup" => self.kb_preview_dismiss(),
             "kb-preview-scroll-down" => self.kb_preview_scroll_down(),
             "kb-preview-scroll-up" => self.kb_preview_scroll_up(),
-            "capture-finalize" => {
-                if let Some(cap) = self.kb.capture_state.take() {
-                    self.dispatch_builtin("save");
-                    // Remove hidden KB buffer seeded for this node
-                    if let Some(hi) = self
-                        .buffers
-                        .iter()
-                        .position(|b| b.kb_view().is_some_and(|hv| hv.current == cap.node_id))
-                    {
-                        self.buffers.remove(hi);
-                        // Audit #605.2 — pairs with every `buffers.remove()`;
-                        // without it the Editor's index-keyed maps (syntax, AI
-                        // target, shell viewports) keep stale indices.
-                        self.notify_buffer_removed(hi);
-                        for win in self.window_mgr.iter_windows_mut() {
-                            if win.buffer_idx > hi {
-                                win.buffer_idx = win.buffer_idx.saturating_sub(1);
-                            }
-                        }
-                    }
-                    let ret = cap
-                        .return_buffer_idx
-                        .min(self.buffers.len().saturating_sub(1));
-                    self.display_buffer(ret);
-                    self.set_status("Capture finalized");
-                } else {
-                    self.set_status("No active capture");
-                }
-            }
-            "capture-abort" => {
-                if let Some(cap) = self.kb.capture_state.take() {
-                    // Force-kill the capture buffer (no save prompt)
-                    self.dispatch_builtin("force-kill-buffer");
-                    // Remove hidden KB buffer seeded for this node
-                    if let Some(hi) = self
-                        .buffers
-                        .iter()
-                        .position(|b| b.kb_view().is_some_and(|hv| hv.current == cap.node_id))
-                    {
-                        self.buffers.remove(hi);
-                        // Audit #605.2 — pairs with every `buffers.remove()`;
-                        // without it the Editor's index-keyed maps (syntax, AI
-                        // target, shell viewports) keep stale indices.
-                        self.notify_buffer_removed(hi);
-                        for win in self.window_mgr.iter_windows_mut() {
-                            if win.buffer_idx > hi {
-                                win.buffer_idx = win.buffer_idx.saturating_sub(1);
-                            }
-                        }
-                    }
-                    // Delete the file from disk
-                    if let Some(ref path) = cap.file_path {
-                        let _ = std::fs::remove_file(path);
-                    }
-                    // Remove node from KB
-                    self.kb.primary.remove(&cap.node_id);
-                    for kb in self.kb.instances.values_mut() {
-                        kb.remove(&cap.node_id);
-                    }
-                    let ret = cap
-                        .return_buffer_idx
-                        .min(self.buffers.len().saturating_sub(1));
-                    self.display_buffer(ret);
-                    self.set_status("Capture aborted");
-                } else {
-                    self.set_status("No active capture");
-                }
-            }
+            "capture-finalize" => self.kb_capture_finalize(),
+            "capture-abort" => self.kb_capture_abort(),
             "daily-goto-today" => {
                 if let Err(e) = self.kb_goto_daily_today() {
                     self.set_status(format!("Daily: {}", e));
