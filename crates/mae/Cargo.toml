@@ -39,7 +39,7 @@ mae-ai = { path = "../ai" }
 mae-lsp = { path = "../lsp" }
 mae-dap = { path = "../dap" }
 mae-shell = { path = "../shell" }
-mae-kb = { path = "../../shared/kb", features = ["storage-sled", "crdt"] }
+mae-kb = { path = "../../shared/kb", features = ["storage-sqlite", "storage-sled", "crdt"] }
 mae-mcp = { path = "../../shared/mcp" }
 mae-sync = { path = "../../shared/sync" }
 mae-gui = { path = "../gui", optional = true }
