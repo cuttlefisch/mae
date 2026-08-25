@@ -116,7 +116,7 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "buffer_read" => execute_buffer_read(editor, &call.arguments),
         "buffer_write" => execute_buffer_write(editor, &call.arguments),
         "cursor_info" => execute_cursor_info(editor),
-        "file_read" => execute_file_read(&call.arguments),
+        "file_read" => execute_file_read(editor, &call.arguments),
         "list_buffers" => execute_list_buffers(editor),
         "editor_state" => execute_editor_state(editor),
         "read_messages" => execute_read_messages(editor, &call.arguments),

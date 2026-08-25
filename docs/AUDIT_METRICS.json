@@ -858,9 +858,9 @@
     },
     {
       "path": "crates/ai/src/tool_impls/buffer.rs",
-      "lines": 310,
-      "test_lines": 111,
-      "code_lines": 199,
+      "lines": 453,
+      "test_lines": 227,
+      "code_lines": 226,
       "is_test_file": false,
       "max_fn_lines": 82,
       "max_fn_name": "execute_buffer_write",
@@ -868,9 +868,9 @@
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 2,
-      "use_count": 4,
+      "use_count": 6,
       "pub_items": 5,
-      "test_count": 5
+      "test_count": 8
     },
     {
       "path": "crates/ai/src/tool_impls/dap.rs",
@@ -2890,9 +2890,9 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/registry.rs",
-      "lines": 1501,
+      "lines": 1524,
       "test_lines": 352,
-      "code_lines": 1149,
+      "code_lines": 1172,
       "is_test_file": false,
       "max_fn_lines": 142,
       "max_fn_name": "kb_reimport",
@@ -2901,7 +2901,7 @@
       "max_struct_name": "",
       "max_nesting": 4,
       "use_count": 5,
-      "pub_items": 17,
+      "pub_items": 18,
       "test_count": 12
     },
     {
@@ -13502,7 +13502,7 @@
       },
       {
         "path": "crates/core/src/editor/kb_ops/registry.rs",
-        "line": 977,
+        "line": 1000,
         "category": "correctness"
       },
       {
