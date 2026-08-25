@@ -84,7 +84,14 @@ pub async fn dispatch(
         "kb/query.capabilities" => capabilities(doc_store, &kb_id, principal).await,
         "kb/query.get" => {
             let node_id = required_node_id(params)?;
-            get(doc_store, &kb_id, &node_id, principal, limits.max_body_bytes).await
+            get(
+                doc_store,
+                &kb_id,
+                &node_id,
+                principal,
+                limits.max_body_bytes,
+            )
+            .await
         }
         "kb/query.search" => {
             let query = params
@@ -637,8 +644,15 @@ async fn neighborhood(
     }
 
     let candidates: Vec<String> = coll.list_nodes().into_iter().map(|(id, _)| id).collect();
-    let (seen, edges, truncated) =
-        walk_neighborhood(doc_store, kb_id, node_id, depth, &candidates, max_scan_nodes).await;
+    let (seen, edges, truncated) = walk_neighborhood(
+        doc_store,
+        kb_id,
+        node_id,
+        depth,
+        &candidates,
+        max_scan_nodes,
+    )
+    .await;
 
     // Titles come from the collection manifest, which is already loaded -- so the
     // subgraph carries (id, title) without the per-node fetch that would make this
