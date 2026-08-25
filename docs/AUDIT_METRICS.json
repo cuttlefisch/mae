@@ -12074,9 +12074,9 @@
     },
     {
       "path": "shared/kb/src/remote_hub.rs",
-      "lines": 1099,
-      "test_lines": 504,
-      "code_lines": 595,
+      "lines": 1302,
+      "test_lines": 612,
+      "code_lines": 690,
       "is_test_file": false,
       "max_fn_lines": 102,
       "max_fn_name": "call",
@@ -12084,9 +12084,9 @@
       "max_struct_fields": 4,
       "max_struct_name": "RemoteHubQueryLayer",
       "max_nesting": 3,
-      "use_count": 15,
+      "use_count": 16,
       "pub_items": 6,
-      "test_count": 15
+      "test_count": 19
     },
     {
       "path": "shared/kb/src/storage_feature_guard_tests.rs",
