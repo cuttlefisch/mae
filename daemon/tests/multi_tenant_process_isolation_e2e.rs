@@ -52,17 +52,20 @@ async fn spawn_tenant_process() -> Option<TenantProcess> {
         .kill_on_drop(true)
         .spawn()
         .expect("failed to spawn mae-daemon");
-    for _ in 0..50 {
-        if tokio::net::TcpStream::connect(addr).await.is_ok() {
-            return Some(TenantProcess {
-                child,
-                _tmp: tmp,
-                addr,
-            });
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    panic!("mae-daemon did not start within 5s on {addr}");
+    // Bounded by wall-clock, not by an iteration count — see `mae_mcp::ready`.
+    let up =
+        mae_mcp::ready::wait_until(|| async { tokio::net::TcpStream::connect(addr).await.is_ok() })
+            .await;
+    assert!(
+        up,
+        "{}",
+        mae_mcp::ready::timeout_message(&format!("mae-daemon on {addr}"))
+    );
+    Some(TenantProcess {
+        child,
+        _tmp: tmp,
+        addr,
+    })
 }
 
 async fn read_framed(

@@ -1019,6 +1019,10 @@
           "kind": "mod"
         },
         {
+          "name": "ready",
+          "kind": "mod"
+        },
+        {
           "name": "session",
           "kind": "mod"
         },

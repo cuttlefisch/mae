@@ -396,6 +396,7 @@ Source: `shared/mcp/src/lib.rs`
 | `keystore` | mod |
 | `local_ipc` | mod |
 | `protocol` | mod |
+| `ready` | mod |
 | `session` | mod |
 | `tls` | mod |
 | `build_shim_initialize_params` | fn |

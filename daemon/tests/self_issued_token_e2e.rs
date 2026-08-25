@@ -35,7 +35,6 @@
 //! new risk surface this phase introduces.
 
 use std::net::SocketAddr;
-use std::time::Duration;
 
 use mae_daemon::oauth_self_issue::{mint_self_token, SelfIssueConfig};
 use mae_mcp::identity::Identity;
@@ -167,17 +166,15 @@ self_issued_token_ttl_secs = 3600
         .spawn()
         .expect("failed to spawn mae-daemon");
 
-    let mut connected = false;
-    for _ in 0..100 {
-        if tokio::net::TcpStream::connect(oauth_addr).await.is_ok() {
-            connected = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    // Bounded by wall-clock, not by an iteration count — see `mae_mcp::ready`.
+    let connected = mae_mcp::ready::wait_until(|| async {
+        tokio::net::TcpStream::connect(oauth_addr).await.is_ok()
+    })
+    .await;
     assert!(
         connected,
-        "mae-daemon's OAuth listener never accepted a connection on {oauth_addr} within 10s"
+        "{}",
+        mae_mcp::ready::timeout_message(&format!("mae-daemon's OAuth listener on {oauth_addr}"))
     );
 
     DaemonGuard {
