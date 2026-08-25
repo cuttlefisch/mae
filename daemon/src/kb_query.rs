@@ -104,7 +104,11 @@ pub async fn dispatch(
                 .and_then(|v| v.as_u64())
                 .map(|n| n as usize)
                 .unwrap_or(limits.max_search_results)
-                .clamp(1, limits.max_search_results);
+                // `.min().max()`, NOT `.clamp(1, max)`: clamp PANICS when
+                // min > max, so a config with `max_search_results = 0` would
+                // abort the daemon instead of returning one result.
+                .min(limits.max_search_results)
+                .max(1);
             let n = limits.max_scan_nodes;
             search(doc_store, &kb_id, &query, limit, principal, n).await
         }
