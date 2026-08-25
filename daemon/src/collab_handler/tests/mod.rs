@@ -34,6 +34,7 @@ mod collab_handler_signed_content_relay_tests;
 mod collab_handler_sync_protocol_tests;
 mod collab_handler_tenant_quota_tests;
 mod collab_handler_transport_oplog_tests;
+mod collab_handler_unauthorized_surface_tests;
 mod collab_handler_viewer_epoch_tests;
 
 // Shared test helpers/fixtures used across multiple test modules
