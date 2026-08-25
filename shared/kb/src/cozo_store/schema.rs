@@ -59,9 +59,15 @@ const FTS_EXTRACTOR_VERSION: &str = "2";
 const FTS_VERSION_KEY: &str = "fts_extractor_version";
 
 impl CozoKbStore {
-    /// Open (or create) a CozoDB at the given path using the sled storage engine.
+    /// Open (or create) a CozoDB at the given path using the default backend.
+    ///
+    /// @ai-caution: [storage] sqlite, per ADR-108 -- this used to open **sled**,
+    /// which silently disagreed with `kb_storage_engine`'s own sqlite default and
+    /// was the reachable path by which new sled stores could still appear. sled
+    /// remains compiled ONLY so `migrate_sled_to_sqlite` can read an old store;
+    /// no code path may create one.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, KbStoreError> {
-        Self::open_with_engine(path, "sled")
+        Self::open_with_engine(path, "sqlite")
     }
     /// Open (or create) a CozoDB at the given path with a specific storage engine.
     ///

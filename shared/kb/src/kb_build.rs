@@ -62,7 +62,7 @@ use std::path::{Path, PathBuf};
 /// Callers that do not ship their output — tests, and eventually runtime
 /// provisioning — should pass `"sqlite"`, which is a single file, needs no
 /// lock-file stripping, and is what `kb_storage_engine` defaults to anyway.
-pub const RELEASE_ASSET_ENGINE: &str = "sled";
+pub const RELEASE_ASSET_ENGINE: &str = "sqlite";
 
 /// A build step failed. Carries enough context to name the corpus and the
 /// reason without the caller reconstructing either.

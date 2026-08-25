@@ -6,7 +6,10 @@ edition = "2021"
 license = "GPL-3.0-or-later"
 
 [features]
-default = ["storage-sled"]
+# sqlite is THE backend (ADR-108). sled is retained only so the one-time
+# sled->sqlite migration can still read an old store -- no code path may create
+# one. See `migrate_sled_to_sqlite`.
+default = ["storage-sqlite"]
 storage-sled = ["cozo/storage-sled"]
 # SQLite (WAL) backend — lets N processes share one on-disk store safely (multiple
 # readers + serialized writer). Compiled ALONGSIDE sled so the one-time sled→sqlite
