@@ -53,13 +53,16 @@ data_dir = "{data_dir}"
 
     let child = spawn_daemon(&["--config", config_path.to_str().unwrap()]);
 
-    for _ in 0..50 {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        if TcpStream::connect(&addr).await.is_ok() {
-            return (child, addr, tmp);
-        }
-    }
-    panic!("PSK mae-daemon did not start within 5s on {}", addr);
+    // Bounded by wall-clock, not by an iteration count — see `mae_mcp::ready`.
+    // The fixed 5s budget this replaces is what failed under CI contention
+    // (#769) while passing on every developer machine.
+    let up = mae_mcp::ready::wait_until(|| async { TcpStream::connect(&addr).await.is_ok() }).await;
+    assert!(
+        up,
+        "{}",
+        mae_mcp::ready::timeout_message(&format!("PSK mae-daemon on {addr}"))
+    );
+    (child, addr, tmp)
 }
 
 /// TcpClient with PSK auth: performs client_handshake before initialize.

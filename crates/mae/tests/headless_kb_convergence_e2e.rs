@@ -92,13 +92,17 @@ async fn spawn_isolated_daemon() -> (tokio::process::Child, String, tempfile::Te
         .spawn()
         .expect("failed to spawn mae-daemon");
 
-    for _ in 0..50 {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        if tokio::net::TcpStream::connect(&addr).await.is_ok() {
-            return (child, addr, tmp);
-        }
-    }
-    panic!("mae-daemon did not start within 5s on {addr}");
+    // Bounded by wall-clock, not by an iteration count — see `mae_mcp::ready`.
+    let up = mae_mcp::ready::wait_until(|| async {
+        tokio::net::TcpStream::connect(&addr).await.is_ok()
+    })
+    .await;
+    assert!(
+        up,
+        "{}",
+        mae_mcp::ready::timeout_message(&format!("mae-daemon on {addr}"))
+    );
+    (child, addr, tmp)
 }
 
 struct HeadlessInstance {

@@ -14,7 +14,6 @@
 
 use std::net::SocketAddr;
 use std::path::Path;
-use std::time::Duration;
 
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use rsa::pkcs1::EncodeRsaPrivateKey;
@@ -174,23 +173,31 @@ kb_query_enabled = true
         .expect("failed to spawn mae-daemon");
 
     let collab_addr: SocketAddr = format!("127.0.0.1:{collab_port}").parse().unwrap();
-    for _ in 0..100 {
-        if tokio::net::TcpStream::connect(collab_addr).await.is_ok() {
-            return (
-                DaemonGuard {
-                    child,
-                    _tmp: tmp,
-                    collab_addr,
-                    oauth_url: format!("https://127.0.0.1:{oauth_port}"),
-                },
-                resource,
-            );
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+    // Bounded by wall-clock, not by an iteration count — see `mae_mcp::ready`.
+    let bound = mae_mcp::ready::wait_until(|| async {
+        tokio::net::TcpStream::connect(collab_addr).await.is_ok()
+    })
+    .await;
+    if !bound {
+        // Don't leave a zombie/orphaned process behind on the failure path.
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!(
+            "{}",
+            mae_mcp::ready::timeout_message(&format!(
+                "mae-daemon's collab listener on {collab_addr}"
+            ))
+        );
     }
-    let _ = child.kill();
-    let _ = child.wait();
-    panic!("mae-daemon did not bind its collab socket within 10s");
+    (
+        DaemonGuard {
+            child,
+            _tmp: tmp,
+            collab_addr,
+            oauth_url: format!("https://127.0.0.1:{oauth_port}"),
+        },
+        resource,
+    )
 }
 
 /// `windows_remote_verify` is an `examples/` target (needs dev-dependencies
