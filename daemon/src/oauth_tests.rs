@@ -80,7 +80,12 @@ mod tests {
     /// #14's "real inputs, not unicorn values") so no test accidentally
     /// depends on key material another test also uses.
     fn generate_test_key() -> (String, JwkOwned) {
-        let mut rng = rand::thread_rng();
+        // Use the RNG from `rsa`'s OWN `rand_core`, not the workspace `rand`.
+        // The daemon is on rand 0.10 (rand_core 0.10) while `rsa` still wants
+        // rand_core 0.6's traits, so a `rand::rng()` handle does not satisfy
+        // `CryptoRngCore` -- two rand_core versions in one graph. `OsRng` is also
+        // the right choice on merit for key generation.
+        let mut rng = rsa::rand_core::OsRng;
         let private_key = RsaPrivateKey::new(&mut rng, 2048).expect("RSA keygen");
         let pem = private_key
             .to_pkcs1_pem(rsa::pkcs8::LineEnding::LF)
