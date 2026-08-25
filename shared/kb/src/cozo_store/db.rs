@@ -197,8 +197,19 @@ impl CozoKbStore {
     /// `new_cozo_sqlite`/`SqliteStorage::transact` open their own `sqlite` crate
     /// `Connection` internally with no `pragma busy_timeout`/`journal_mode=WAL`
     /// call anywhere, and the connection itself is never exposed via any public
-    /// API — there is no hook this crate could use to set the pragma even if it
-    /// wanted to. So a concurrent cross-process writer transiently fails with
+    /// API.
+    ///
+    /// **CORRECTION.** This used to conclude "there is no hook this crate could
+    /// use to set the pragma even if it wanted to". The premise above is right;
+    /// that conclusion was wrong. **WAL is a property of the database file's
+    /// header, not of the connection** — so MAE sets it out of band before cozo
+    /// opens the file (`wal::ensure_wal`), and every cozo connection thereafter
+    /// inherits it. Demonstrated in `wal_tests`, not assumed.
+    ///
+    /// This retry therefore still exists, but for a narrower case than it was
+    /// written for: a store on a filesystem that cannot support WAL (network
+    /// filesystems cannot), or one created before `ensure_wal` shipped and not
+    /// yet reopened. So a concurrent cross-process writer transiently fails with
     /// "database is locked" (an experiment showed ~14% raw write-failure under
     /// two-writer contention, 0% with this backoff), and the only lever
     /// available is an application-level retry loop. Multi-instance
@@ -277,9 +288,11 @@ impl CozoKbStore {
     /// **Found via a real CI failure, not assumed**: a read was originally
     /// unprotected here on the theory that only writers need retry — true
     /// under SQLite's WAL mode, where readers never block on a writer, but
-    /// FALSE under the default rollback-journal mode cozo 0.7.6 actually
-    /// uses (confirmed no `journal_mode=WAL` is ever configured — see
-    /// `open_with_engine`'s own `@ai-caution` note). In rollback-journal
+    /// FALSE under the rollback-journal mode cozo 0.7.6 leaves a store in by
+    /// default. MAE now sets WAL out of band at open (`wal::ensure_wal`), so on
+    /// a filesystem that supports it this contention no longer arises — but the
+    /// retry stays for the filesystems that do not, and for stores not yet
+    /// reopened since. In rollback-journal
     /// mode a writer's exclusive lock blocks readers too, so an unprotected
     /// `run_immut` call CAN legitimately hit "database is locked" under
     /// real concurrent write contention — exactly what surfaced as a CI-only

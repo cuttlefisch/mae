@@ -15,7 +15,7 @@ mae-core = { path = "../core" }
 # binary (mae-ai is already an unconditional dependency of it), matching
 # principle #12's "genuinely usable floor" requirement -- it must not be
 # gated behind an extra opt-in build flag.
-mae-kb = { path = "../../shared/kb", features = ["storage-sled", "crdt", "remote-hub"] }
+mae-kb = { path = "../../shared/kb", features = ["storage-sqlite", "storage-sled", "crdt", "remote-hub"] }
 mae-shell = { path = "../shell" }
 mae-sync = { path = "../../shared/sync" }
 # For kb_export_subgraph_html (#kb-export-html): mae-canvas bakes the
