@@ -551,7 +551,7 @@ fn broken_links_json(links: &[mae_core::BrokenLink]) -> serde_json::Value {
                 "target": b.target,
                 "display": b.display,
                 "kind": match b.kind {
-                    BrokenLinkKind::DeletedNode => "deleted_node",
+                    BrokenLinkKind::TargetNotFound => "target_not_found",
                     BrokenLinkKind::MalformedId => "malformed_id",
                     BrokenLinkKind::TemplatePlaceholder => "template_placeholder",
                 },
@@ -562,7 +562,7 @@ fn broken_links_json(links: &[mae_core::BrokenLink]) -> serde_json::Value {
     // Summary counts by kind.
     let deleted = links
         .iter()
-        .filter(|b| b.kind == BrokenLinkKind::DeletedNode)
+        .filter(|b| b.kind == BrokenLinkKind::TargetNotFound)
         .count();
     let malformed = links
         .iter()
@@ -576,7 +576,7 @@ fn broken_links_json(links: &[mae_core::BrokenLink]) -> serde_json::Value {
     serde_json::json!({
         "total": links.len(),
         "by_kind": {
-            "deleted_node": deleted,
+            "target_not_found": deleted,
             "malformed_id": malformed,
             "template_placeholder": placeholder,
         },
