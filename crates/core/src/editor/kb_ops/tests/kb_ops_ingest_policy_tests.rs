@@ -349,3 +349,35 @@ fn an_attached_instance_is_unaffected() {
         "an ordinary (attached) KB must keep today's behaviour exactly"
     );
 }
+
+/// **The second door into the same trap.** `kb-edit-source` opened a node's
+/// `.org` file just as link-follow did — and for a detached KB that is the worst
+/// outcome available: the file opens, the edit saves, and no ingest ever reads
+/// it, so the work is silently lost while looking successful.
+///
+/// Closing one door is not closing the trap, which is why both go through the
+/// same helper.
+#[test]
+fn editing_source_is_refused_for_a_detached_kb_with_an_actionable_message() {
+    let dir = TempDir::new().unwrap();
+    let mut editor = Editor::new();
+    let _tmp = with_test_dirs(&mut editor);
+    detached_instance_with_divergent_store(&mut editor, dir.path());
+
+    // Land in a KB view for the detached node, which is what `kb-edit-source`
+    // acts on.
+    editor.open_help_at("note-a");
+    editor.help_edit_source();
+
+    assert!(
+        editor.status_msg.contains("detached"),
+        "must say WHY, not just refuse: {:?}",
+        editor.status_msg
+    );
+    assert!(
+        editor.status_msg.contains("Edit the node here"),
+        "must say what to do INSTEAD -- a refusal with no alternative just moves \
+         the user's problem: {:?}",
+        editor.status_msg
+    );
+}

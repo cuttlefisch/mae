@@ -2730,9 +2730,9 @@
     },
     {
       "path": "crates/core/src/editor/help_ops.rs",
-      "lines": 3322,
+      "lines": 3338,
       "test_lines": 1640,
-      "code_lines": 1682,
+      "code_lines": 1698,
       "is_test_file": false,
       "max_fn_lines": 193,
       "max_fn_name": "kb_populate_buffer",
@@ -3050,8 +3050,8 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_ingest_policy_tests.rs",
-      "lines": 351,
-      "test_lines": 351,
+      "lines": 383,
+      "test_lines": 383,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 61,
@@ -3062,7 +3062,7 @@
       "max_nesting": 1,
       "use_count": 2,
       "pub_items": 0,
-      "test_count": 9
+      "test_count": 10
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_instance_matching_tests.rs",

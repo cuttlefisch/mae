@@ -1383,6 +1383,22 @@ impl Editor {
             }
         };
 
+        // Phase 5: a DETACHED KB has no editable source file, only a stale
+        // archive. Editing it is the worst outcome available — the file opens,
+        // the edit saves, and no ingest ever reads it, so the work is silently
+        // lost while looking successful.
+        //
+        // Same treatment `resolve_kb_link` gets, via the same helper: this is the
+        // second door into the same trap, and closing one is not closing it.
+        if self.kb_store_is_truth_for(&node_id) {
+            self.set_status(format!(
+                "'{node_id}' belongs to a detached KB — its store is the source of \
+                 truth, so there is no source file to edit. Edit the node here \
+                 instead; changes are saved to the store."
+            ));
+            return;
+        }
+
         match self.kb_node_source_file(&node_id) {
             Some(path) => {
                 let path_str = path.display().to_string();
