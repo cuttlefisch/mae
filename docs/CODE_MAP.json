@@ -737,6 +737,10 @@
           "kind": "mod"
         },
         {
+          "name": "capabilities",
+          "kind": "mod"
+        },
+        {
           "name": "data_dir",
           "kind": "mod"
         },
