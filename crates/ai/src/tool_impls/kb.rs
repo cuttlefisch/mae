@@ -2356,7 +2356,18 @@ pub fn execute_kb_view_query(editor: &Editor, args: &serde_json::Value) -> Resul
     // Get the view definition from the views relation
     let (_headers, rows) = store
         .raw_query(&format!(
-            "?[title, kind, query, display_config_json] := *views{{id, title, kind, query, display_config_json}}, id = \"{view_id}\""
+            // The equality precedes the relation atom deliberately: cozo only
+            // treats a key position as a seek when the variable is already
+            // bound (`compile.rs`'s `seen_variables` gate), so the post-filter
+            // form `*views{{id, ...}}, id = ...` compiles to a full scan of
+            // `views`. Same defect class as the sixteen sites fixed in
+            // `mae-kb`'s `cozo_store/` (#753); this one lives outside that
+            // module, so `query_plan_tests`' guard does not cover it.
+            // NOTE: the unescaped `{{view_id}}` interpolation here is a
+            // separate, tracked Datalog-injection defect (#752) and is
+            // deliberately left exactly as it was — moving the atom changes
+            // the plan, not the escaping.
+            "?[title, kind, query, display_config_json] := id = \"{view_id}\", *views{{id, title, kind, query, display_config_json}}"
         ))
         .map_err(|e| e.to_string())?;
 
