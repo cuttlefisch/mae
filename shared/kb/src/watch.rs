@@ -465,6 +465,10 @@ impl OrgDirWatcher {
 pub struct StoreWatcher {
     core: Arc<SharedDirWatcher>,
     id: RegId,
+    /// File name of the store itself, e.g. `kb.sqlite`. Events are filtered to
+    /// this name and its sidecars — see [`StoreWatcher::new`] for why the
+    /// registration is on the parent directory rather than the file.
+    stem: std::ffi::OsString,
 }
 
 impl Drop for StoreWatcher {
@@ -474,11 +478,29 @@ impl Drop for StoreWatcher {
 }
 
 impl StoreWatcher {
-    /// Start watching the store `file` (non-recursive). The file must exist.
+    /// Start watching the store `file` (non-recursive).
+    ///
+    /// @ai-caution: [storage] Registers the store's PARENT DIRECTORY, not the
+    /// store file. That is not incidental: MAE puts its sqlite stores into WAL
+    /// mode (`cozo_store::wal`), and **under WAL a commit writes to
+    /// `<store>-wal`, leaving the main file untouched until a checkpoint**. A
+    /// registration on the file itself therefore stops seeing writes entirely —
+    /// caught by `external_store_change_arms_a_background_reload`, which went red
+    /// the moment WAL was enabled.
+    ///
+    /// Events are filtered back down to the store and its `-wal`/`-shm`
+    /// sidecars in [`drain_changed`], so a directory that also holds unrelated
+    /// files does not produce spurious reloads.
     pub fn new(file: impl AsRef<Path>) -> notify::Result<Self> {
+        let file = file.as_ref();
         let core = SharedDirWatcher::get()?;
-        let id = core.register(file.as_ref(), false)?;
-        Ok(Self { core, id })
+        let stem = file
+            .file_name()
+            .map(|n| n.to_os_string())
+            .unwrap_or_default();
+        let dir = file.parent().unwrap_or(file);
+        let id = core.register(dir, false)?;
+        Ok(Self { core, id, stem })
     }
 
     /// Cumulative watcher errors since creation.
@@ -490,11 +512,24 @@ impl StoreWatcher {
     /// remove). Non-blocking. Always consumes the queued events so a caller that
     /// chooses NOT to act (e.g. within its own-write cooldown) doesn't reprocess them.
     pub fn drain_changed(&self) -> bool {
+        let stem = self.stem.as_os_str();
         self.core.take_events(self.id).into_iter().any(|ev| {
-            matches!(
+            if !matches!(
                 ev.kind,
                 EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-            )
+            ) {
+                return false;
+            }
+            // The store itself, or one of its WAL sidecars. Compared on the file
+            // NAME rather than the full path so this holds under macOS FSEvents'
+            // canonicalized paths too (see `normalize_path`).
+            ev.paths.iter().any(|p| {
+                p.file_name().is_some_and(|n| {
+                    n == stem
+                        || n.to_string_lossy()
+                            .starts_with(&format!("{}-", stem.to_string_lossy()))
+                })
+            })
         })
     }
 }

@@ -183,9 +183,50 @@ pub fn open_fresh_store(output_path: &Path, engine: &str) -> Result<CozoKbStore,
     Ok(store)
 }
 
+/// A sqlite store's WAL sidecars. Present only while a connection is open or
+/// after an unclean close; a clean close checkpoints and removes them.
+fn wal_sidecars(path: &Path) -> [std::path::PathBuf; 2] {
+    let mut wal = path.as_os_str().to_os_string();
+    wal.push("-wal");
+    let mut shm = path.as_os_str().to_os_string();
+    shm.push("-shm");
+    [wal.into(), shm.into()]
+}
+
+/// Fold a sqlite store's WAL back into the main database and empty it, so the
+/// store is a single self-contained file again.
+///
+/// Best-effort by design: a store that was never in WAL mode has nothing to
+/// checkpoint, and a store that cannot be opened here is one the caller is about
+/// to fail on anyway.
+fn checkpoint_wal(path: &Path) {
+    if !wal_sidecars(path).iter().any(|p| p.exists()) {
+        return;
+    }
+    #[cfg(feature = "storage-sqlite")]
+    if let Ok(conn) = sqlite::Connection::open(path) {
+        // TRUNCATE (not PASSIVE) so the -wal is emptied rather than merely
+        // checkpointed -- a non-empty -wal left beside a renamed database is the
+        // failure this exists to prevent.
+        let _ = conn.execute("PRAGMA wal_checkpoint(TRUNCATE);");
+    }
+    for side in wal_sidecars(path) {
+        let _ = std::fs::remove_file(side);
+    }
+}
+
 /// Delete whatever store currently sits at `path`, so a build starts fresh.
 /// sled is a directory and sqlite a file, hence the branch. Absent is success.
+///
+/// @ai-caution: [storage] Must also remove the `-wal`/`-shm` sidecars. MAE puts
+/// sqlite stores into WAL mode (`cozo_store::wal`), so a store is no longer a
+/// single file — and a build that fails *before* a clean close leaves those
+/// behind. Caught by `a_failed_build_leaves_no_store_and_no_staging_behind`,
+/// which went red on macOS the moment WAL was enabled.
 fn remove_store_path(path: &Path) -> Result<(), KbBuildError> {
+    for side in wal_sidecars(path) {
+        let _ = std::fs::remove_file(side);
+    }
     if !path.exists() {
         return Ok(());
     }
@@ -270,6 +311,24 @@ pub fn build_org_kb(
         // Never leave a failed build's staging store behind.
         let _ = remove_store_path(&staging);
     })?;
+
+    // @ai-caution: [storage] `rename` moves ONE path, so a staged store whose
+    // `-wal` still holds uncheckpointed pages would be published missing part of
+    // its own contents. Checkpoint them INTO the main file first.
+    //
+    // An earlier version of this refused to promote when a sidecar was present,
+    // on the reasoning that a clean close removes them so their presence means
+    // something is wrong. That was too strict and broke the guidance-KB build on
+    // macOS: whether a close unlinks the sidecars depends on platform timing and
+    // on being the last connection, so their presence is normal, not a fault.
+    // Refusing turned a recoverable state into a hard build failure.
+    //
+    // `wal_checkpoint(TRUNCATE)` is exactly the operation for this: it folds the
+    // WAL back into the database and empties it, after which the sidecars carry
+    // nothing and can be removed. Best-effort -- on a store that never went into
+    // WAL there is nothing to do, and a failure here leaves the sidecars in place
+    // where the check below still catches them.
+    checkpoint_wal(&staging);
 
     // `rename` refuses an existing destination on Windows, so the old store has
     // to go first. That leaves a brief window where the path is ABSENT, which is

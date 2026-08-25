@@ -12,7 +12,7 @@ storage-sled = ["cozo/storage-sled"]
 # readers + serialized writer). Compiled ALONGSIDE sled so the one-time sled→sqlite
 # migration can read the old store. Editor pulls no rusqlite, so cozo's sqlite3
 # native lib has no `links` conflict.
-storage-sqlite = ["cozo/storage-sqlite"]
+storage-sqlite = ["cozo/storage-sqlite", "dep:sqlite"]
 crdt = ["dep:mae-sync"]
 # ADR-062 Phase C/D: `RemoteHubQueryLayer`, a `KbQueryLayer` backed by blocking HTTP
 # calls to ADR-053's `kb/query.*` surface. Optional because it pulls a TLS+HTTP client
@@ -33,6 +33,11 @@ lru = "0.18"
 mae-sync = { path = "../sync", optional = true }
 mae-mcp = { path = "../mcp" }
 cozo = { version = "0.7", default-features = false, features = ["rayon"] }
+# Same crate cozo's own `storage-sqlite` uses, so the versions unify and there is
+# no second `links = "sqlite3"` native library (the conflict ADR-012 records
+# hitting with rusqlite). Used ONLY to set `journal_mode=WAL` out of band --
+# see `wal::ensure_wal`.
+sqlite = { version = "0.32", optional = true }
 sha2 = "0.11"
 # ADR-105 D4: `generate_uuid` mints KB instance ids and collab ids. Not a new
 # dependency in the tree — `mae-sync` and `mae-mcp`, both of which this crate
