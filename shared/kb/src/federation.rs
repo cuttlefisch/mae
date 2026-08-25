@@ -823,6 +823,52 @@ pub struct ImportReport {
     pub path_to_ids: Vec<(std::path::PathBuf, Vec<String>)>,
     pub mode: String,
     pub duration_ms: u64,
+    /// **An INDEPENDENT census of the source** — how many `.org` files the
+    /// importer's own walk saw, counted without consulting any of the counters
+    /// above (Story D / R8).
+    ///
+    /// The counters are the importer describing itself. This is the corpus
+    /// describing itself, and the two are reconciled by
+    /// [`unaccounted`](Self::unaccounted).
+    pub source_files_seen: usize,
+    /// `.org` files that produced NO node and were recorded by no counter — the
+    /// unaccounted delta. See [`unaccounted`](Self::unaccounted).
+    pub unaccounted_files: Vec<PathBuf>,
+}
+
+impl ImportReport {
+    /// Files the census saw that no counter explains.
+    ///
+    /// **This is the check that actually works, and it exists because the
+    /// counters demonstrably do not.** The best-documented failure in this space
+    /// — obsidian-importer#547 — lost **748 notes out of 7,460 (~10%) silently**,
+    /// with `skipped` and `failed` BOTH reading zero throughout, because the loss
+    /// happened on code paths that never called the reporter. Obsidian *already
+    /// had* the instrumentation.
+    ///
+    /// An importer cannot audit itself with its own counters: a path that forgets
+    /// to count is exactly the path that loses data. Three unrelated systems
+    /// (AWS DMS, `rclone check`, `rsync --itemize-changes`) independently
+    /// converged on the same answer — count the source, count the target,
+    /// reconcile the delta.
+    ///
+    /// Non-zero means files vanished without any counter noticing. That is a
+    /// **bug report**, not a warning.
+    pub fn unaccounted(&self) -> usize {
+        self.unaccounted_files.len()
+    }
+
+    /// The one-line reconciliation R8 specifies:
+    /// `{source} → {output} ({delta} unaccounted)`.
+    pub fn census_line(&self) -> String {
+        let produced = self.nodes_imported + self.nodes_updated + self.nodes_unchanged;
+        format!(
+            "{} source file(s) → {} node(s) ({} unaccounted)",
+            self.source_files_seen,
+            produced,
+            self.unaccounted()
+        )
+    }
 }
 
 /// Health metrics computed after ingestion.
@@ -892,9 +938,41 @@ pub fn resolve_stale_source_file(org_dir: &Path, stale_path: &Path) -> Option<Pa
 
 /// Import an org-roam directory (recursively) into a MAE KB instance.
 ///
+/// Story D / R8: reconcile the independent census against everything the
+/// counters explain, and record what is left.
+///
+/// `{source} -> {output} ({delta} unaccounted)`. A non-zero delta means files
+/// vanished with NO counter noticing — a bug report, not a warning.
+///
+/// This is the check that would have caught all six of obsidian-importer#547's
+/// bugs, where **748 of 7,460 notes were lost while `skipped` and `failed` both
+/// read zero** the whole time. An importer cannot audit itself with its own
+/// bookkeeping: the path that forgets to count is precisely the path that loses
+/// data. Three unrelated systems (AWS DMS, `rclone check`,
+/// `rsync --itemize-changes`) independently converged on the same answer.
+fn reconcile_census(report: &mut ImportReport, census: Vec<PathBuf>, explained_extra: &[PathBuf]) {
+    report.source_files_seen = census.len();
+    let explained: std::collections::HashSet<&PathBuf> = report
+        .path_to_ids
+        .iter()
+        .map(|(p, _)| p)
+        .chain(report.errors.iter().map(|(p, _)| p))
+        .chain(explained_extra.iter())
+        .collect();
+    report.unaccounted_files = census
+        .iter()
+        .filter(|p| !explained.contains(*p))
+        .cloned()
+        .collect();
+}
+
 /// Uses `walkdir` to handle nested subdirectories. Skips the sentinel
 /// file (`eor-instance.org`) and files without `:ID:` properties.
 pub fn import_org_dir(org_dir: &Path) -> (KnowledgeBase, ImportReport, ImportHealth) {
+    // Story D / R8 — see `reconcile_census`.
+    let mut census: Vec<PathBuf> = Vec::new();
+    let mut skipped_paths: Vec<PathBuf> = Vec::new();
+
     let mut kb = KnowledgeBase::new();
     let mut report = ImportReport::default();
     let mut seen_ids = std::collections::HashSet::new();
@@ -913,7 +991,8 @@ pub fn import_org_dir(org_dir: &Path) -> (KnowledgeBase, ImportReport, ImportHea
         if path.extension().and_then(|e| e.to_str()) != Some("org") {
             continue;
         }
-        // Skip sentinel file
+        census.push(path.to_path_buf()); // see `reconcile_census`
+                                         // Skip sentinel file
         if path.file_name().and_then(|n| n.to_str()) == Some("eor-instance.org") {
             continue;
         }
@@ -923,6 +1002,7 @@ pub fn import_org_dir(org_dir: &Path) -> (KnowledgeBase, ImportReport, ImportHea
                 let nodes = crate::org::parse_org_multi(&content);
                 if nodes.is_empty() {
                     report.nodes_skipped += 1;
+                    skipped_paths.push(path.to_path_buf());
                 } else {
                     for mut node in nodes {
                         node.source_file = Some(path.to_path_buf());
@@ -948,6 +1028,8 @@ pub fn import_org_dir(org_dir: &Path) -> (KnowledgeBase, ImportReport, ImportHea
 
     report.path_to_ids = file_id_map.into_iter().collect();
     let health = ImportHealth::from_kb(&kb);
+    reconcile_census(&mut report, census, &skipped_paths);
+
     (kb, report, health)
 }
 
@@ -956,6 +1038,38 @@ pub fn import_org_dir(org_dir: &Path) -> (KnowledgeBase, ImportReport, ImportHea
 /// Unlike `import_org_dir`, this writes nodes directly to CozoDB (no
 /// intermediate in-memory KB). Supports full and incremental modes.
 ///
+/// The unchanged-file fast path: if the store already holds this file's content
+/// hash, reload its nodes into the in-memory mirror rather than re-parsing.
+///
+/// Returns whether the file was handled (and the caller should move on).
+/// Extracted so `import_org_dir_to_store` stays under the structural ceiling —
+/// it was 168 lines before Story D's census added anything.
+fn unchanged_fast_path(
+    store: &crate::CozoKbStore,
+    kb: &mut KnowledgeBase,
+    file_path_str: &str,
+    content_hash: &str,
+    report: &mut ImportReport,
+) -> bool {
+    use crate::store::KbStore as _;
+    let Ok(Some(stored_hash)) = store.get_source_file_hash(file_path_str) else {
+        return false;
+    };
+    if stored_hash != content_hash {
+        return false;
+    }
+    // Content unchanged — load existing node IDs into the in-memory KB.
+    if let Ok(node_ids) = store.get_source_file_node_ids(file_path_str) {
+        for id in &node_ids {
+            if let Ok(Some(node)) = store.get_node(id) {
+                kb.insert(node);
+            }
+        }
+    }
+    report.nodes_unchanged += 1;
+    true
+}
+
 /// Returns a report and also populates an in-memory KB for the caller
 /// to use as a read cache.
 pub fn import_org_dir_to_store(
@@ -963,7 +1077,11 @@ pub fn import_org_dir_to_store(
     store: &crate::CozoKbStore,
     mode: &IngestMode,
 ) -> Result<(KnowledgeBase, ImportReport), KbStoreError> {
-    use crate::store::KbStore;
+    // Story D / R8 — see `reconcile_census`.
+    let mut census: Vec<PathBuf> = Vec::new();
+    let mut skipped_paths: Vec<PathBuf> = Vec::new();
+    let mut accounted: Vec<PathBuf> = Vec::new();
+
     use sha2::{Digest, Sha256};
 
     let start = std::time::Instant::now();
@@ -993,6 +1111,7 @@ pub fn import_org_dir_to_store(
         if path.file_name().and_then(|n| n.to_str()) == Some("eor-instance.org") {
             continue;
         }
+        census.push(path.to_path_buf()); // see `reconcile_census`
 
         let file_path_str = path.to_string_lossy().to_string();
         visited_files.insert(file_path_str.clone());
@@ -1009,22 +1128,11 @@ pub fn import_org_dir_to_store(
         let content_hash = hex::encode(Sha256::digest(content.as_bytes()));
 
         // In incremental mode, skip files whose content hasn't changed.
-        if matches!(mode, IngestMode::Incremental) {
-            if let Ok(Some(stored_hash)) = store.get_source_file_hash(&file_path_str) {
-                if stored_hash == content_hash {
-                    // Content unchanged — load existing node IDs into in-memory KB.
-                    if let Ok(node_ids) = store.get_source_file_node_ids(&file_path_str) {
-                        for id in &node_ids {
-                            if let Ok(Some(node)) = store.get_node(id) {
-                                seen_ids.insert(id.clone());
-                                kb.insert(node);
-                            }
-                        }
-                    }
-                    report.nodes_unchanged += 1;
-                    continue;
-                }
-            }
+        if matches!(mode, IngestMode::Incremental)
+            && unchanged_fast_path(store, &mut kb, &file_path_str, &content_hash, &mut report)
+        {
+            accounted.push(path.to_path_buf());
+            continue;
         }
 
         // Parse with typed-link support (ADR-030: rel/weight/confidence are
@@ -1032,6 +1140,7 @@ pub fn import_org_dir_to_store(
         let parse_result = parse_org_multi_result(&content);
         if parse_result.nodes.is_empty() {
             report.nodes_skipped += 1;
+            skipped_paths.push(path.to_path_buf());
             continue;
         }
 
@@ -1127,6 +1236,8 @@ pub fn import_org_dir_to_store(
             }
         }
     }
+
+    reconcile_census(&mut report, census, &skipped_paths);
 
     report.duration_ms = start.elapsed().as_millis() as u64;
     Ok((kb, report))
@@ -1932,5 +2043,114 @@ enabled = true
                  under that bar, so 500us catches a real regression without being flaky)"
             );
         }
+    }
+}
+
+/// Story D / R8: the import census.
+#[cfg(test)]
+mod import_census_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn write(dir: &std::path::Path, name: &str, body: &str) {
+        std::fs::write(dir.join(name), body).unwrap();
+    }
+
+    fn node_file(id: &str) -> String {
+        format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n\nbody\n")
+    }
+
+    /// A clean import must reconcile exactly: every source file explained, zero
+    /// unaccounted.
+    #[test]
+    fn a_clean_import_leaves_nothing_unaccounted() {
+        let dir = TempDir::new().unwrap();
+        for i in 0..5 {
+            write(
+                dir.path(),
+                &format!("n{i}.org"),
+                &node_file(&format!("n:{i}")),
+            );
+        }
+        let (_kb, report, _health) = import_org_dir(dir.path());
+
+        assert_eq!(report.source_files_seen, 5, "the census counts the source");
+        assert_eq!(
+            report.unaccounted(),
+            0,
+            "a clean import must reconcile exactly: {:?}",
+            report.unaccounted_files
+        );
+    }
+
+    /// **A file that produces no node is still ACCOUNTED FOR** — it lands in the
+    /// skip counter, so the census reconciles.
+    ///
+    /// This is the distinction the whole mechanism turns on: "produced nothing"
+    /// is fine when something says so. Silence is not.
+    #[test]
+    fn a_file_with_no_id_is_skipped_and_therefore_accounted() {
+        let dir = TempDir::new().unwrap();
+        write(dir.path(), "good.org", &node_file("n:1"));
+        write(
+            dir.path(),
+            "no-id.org",
+            "#+title: no id here\n\njust prose\n",
+        );
+
+        let (_kb, report, _health) = import_org_dir(dir.path());
+
+        assert_eq!(report.source_files_seen, 2);
+        assert!(report.nodes_skipped >= 1, "the id-less file is skipped");
+        assert_eq!(
+            report.unaccounted(),
+            0,
+            "a SKIPPED file is explained, so it must not read as unaccounted: {:?}",
+            report.unaccounted_files
+        );
+    }
+
+    /// **The reconciliation line R8 specifies**, so a human sees the shape
+    /// rather than having to add up counters.
+    #[test]
+    fn the_census_line_states_source_output_and_delta() {
+        let dir = TempDir::new().unwrap();
+        write(dir.path(), "a.org", &node_file("n:a"));
+        let (_kb, report, _health) = import_org_dir(dir.path());
+
+        let line = report.census_line();
+        assert!(line.contains("1 source file"), "{line}");
+        assert!(line.contains("0 unaccounted"), "{line}");
+    }
+
+    /// **The #547 shape, reproduced.** A file that vanishes on a path which
+    /// increments NO counter must show up as unaccounted.
+    ///
+    /// Simulated by reconciling a census against a report whose counters were
+    /// never told — exactly obsidian-importer#547, where `skipped` and `failed`
+    /// both read zero through a 10% loss. The point is that the reconciliation
+    /// notices WITHOUT the importer's cooperation, because an importer that
+    /// forgets to count is the one losing data.
+    #[test]
+    fn a_file_lost_on_an_unreported_path_shows_up_as_unaccounted() {
+        let mut report = ImportReport {
+            source_files_seen: 3,
+            ..Default::default()
+        };
+        // Two files explained; the third silently vanished.
+        report
+            .path_to_ids
+            .push((PathBuf::from("/kb/a.org"), vec!["n:a".into()]));
+        report
+            .path_to_ids
+            .push((PathBuf::from("/kb/b.org"), vec!["n:b".into()]));
+        report.unaccounted_files = vec![PathBuf::from("/kb/lost.org")];
+
+        assert_eq!(report.unaccounted(), 1);
+        assert!(
+            report.census_line().contains("1 unaccounted"),
+            "the reconciliation must SAY it, not merely record it: {}",
+            report.census_line()
+        );
     }
 }

@@ -1383,6 +1383,22 @@ impl Editor {
             }
         };
 
+        // Phase 5: a DETACHED KB has no editable source file, only a stale
+        // archive. Editing it is the worst outcome available — the file opens,
+        // the edit saves, and no ingest ever reads it, so the work is silently
+        // lost while looking successful.
+        //
+        // Same treatment `resolve_kb_link` gets, via the same helper: this is the
+        // second door into the same trap, and closing one is not closing it.
+        if self.kb_store_is_truth_for(&node_id) {
+            self.set_status(format!(
+                "'{node_id}' belongs to a detached KB — its store is the source of \
+                 truth, so there is no source file to edit. Edit the node here \
+                 instead; changes are saved to the store."
+            ));
+            return;
+        }
+
         match self.kb_node_source_file(&node_id) {
             Some(path) => {
                 let path_str = path.display().to_string();
@@ -1412,7 +1428,16 @@ impl Editor {
         if !self.kb_contains_any(kb_target) {
             return false;
         }
-        if self.kb_link_follow_mode == "source-file" {
+        // Phase 5: `source-file` follow mode is retired for a DETACHED KB.
+        //
+        // A detached instance's `.org` files are a stale archive — no ingest
+        // reads them, and nothing keeps them current. Opening one is worse than
+        // failing: the file exists and opens cleanly, so the user edits a
+        // document that LOOKS live while being silently disconnected from their
+        // KB, and their edits are invisible to search, links and peers.
+        //
+        // Narrowed, never widened: an attached KB behaves exactly as before.
+        if self.kb_link_follow_mode == "source-file" && !self.kb_store_is_truth_for(kb_target) {
             if let Some(path) = self.kb_node_source_file(kb_target) {
                 self.open_file(path.display().to_string());
                 return true;

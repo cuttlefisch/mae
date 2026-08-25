@@ -71,6 +71,20 @@ pub enum MembershipAction {
     /// who holds only the primary cannot forge it — they don't have the offline recovery key).
     /// Latest-wins per principal (a new registration supersedes a leaked recovery key).
     RegisterRecoveryKey,
+    /// **Node rebirth** (ADR-107). The KB owner re-emits one node as a fresh
+    /// single-client document whose content equals the current materialized
+    /// state, discarding the prior operation history — the growth bound the rest
+    /// of the field is told it "would need a consensus algorithm" for, and which
+    /// MAE has in ADR-026's signed log + ADR-023's epoch fence.
+    ///
+    /// `subject` carries the **node id**, not a principal (the same convention
+    /// `SetGovernance`/`SetEncryption` already use for a non-principal payload),
+    /// and `content_hash` carries the SHA-256 of the reborn state so a peer can
+    /// verify it adopted the content the owner signed rather than merely a
+    /// document bearing the right name.
+    ///
+    /// Inert to membership derivation; read by [`derive_rebirths`].
+    Rebirth,
 }
 
 /// ADR-067: whether a member may take a durable, offline, full local replica
@@ -114,6 +128,7 @@ impl MembershipAction {
             MembershipAction::SetEncryption => "set_encryption",
             MembershipAction::Rebind => "rebind",
             MembershipAction::RegisterRecoveryKey => "register_recovery_key",
+            MembershipAction::Rebirth => "rebirth",
         }
     }
     pub fn parse(s: &str) -> Option<MembershipAction> {
@@ -126,6 +141,7 @@ impl MembershipAction {
             "set_encryption" => Some(MembershipAction::SetEncryption),
             "rebind" => Some(MembershipAction::Rebind),
             "register_recovery_key" => Some(MembershipAction::RegisterRecoveryKey),
+            "rebirth" => Some(MembershipAction::Rebirth),
             _ => None,
         }
     }
@@ -193,6 +209,10 @@ pub struct MembershipOp {
     /// byte-identical `v1`/`v2`/`v3`/`v4` and every existing signature keeps verifying
     /// unmodified — a strictly additive schema change.
     pub replication: ReplicationPolicy,
+    /// ADR-107: SHA-256 (hex) of the reborn node's materialized content. Set only
+    /// on [`MembershipAction::Rebirth`]; `None` everywhere else, so every other
+    /// op's signed bytes are unchanged.
+    pub content_hash: Option<String>,
 }
 
 impl MembershipOp {
@@ -219,7 +239,14 @@ impl MembershipOp {
         // strict SUPERSET of v2's field (checked before v2 below, and its field-appending
         // arm below emits the wrapped_key bytes too, not just the replication marker) --
         // never a sibling version like v3/v4 are.
-        let version = if self.action == MembershipAction::Rebind {
+        let version = if self.action == MembershipAction::Rebirth {
+            // v6 (ADR-107). Disjoint like v3/v4: only a Rebirth carries a
+            // `content_hash`, and a Rebirth carries nothing else new. Every
+            // pre-ADR-107 op still emits byte-identical v1..v5, so every existing
+            // signature keeps verifying — the same strictly-additive discipline
+            // v2..v5 each followed.
+            "maememb/v6"
+        } else if self.action == MembershipAction::Rebind {
             "maememb/v3"
         } else if self.action == MembershipAction::RegisterRecoveryKey {
             "maememb/v4"
@@ -244,6 +271,12 @@ impl MembershipOp {
         );
         field(&mut b, &self.epoch.to_string());
         field(&mut b, &self.prev_hash);
+        if self.action == MembershipAction::Rebirth {
+            // Empty string for a malformed Rebirth missing its hash — it will
+            // fail to be honored in derivation regardless, and MUST still be
+            // covered by the signature so it cannot be added after signing.
+            field(&mut b, self.content_hash.as_deref().unwrap_or(""));
+        }
         if self.action == MembershipAction::Rebind {
             // Both new keys are part of the signed bytes — empty string for a malformed
             // Rebind missing one (it will fail to be honored in derivation regardless).
@@ -851,6 +884,21 @@ fn authorized(
         // Encryption mode is owner-managed (ADR-039 F2). Inert to the member map; kept in
         // the valid set when owner-authored so `derive_encryption` can read it.
         MembershipAction::SetEncryption => author.role == Role::Owner,
+        // Node rebirth is owner-only (ADR-107 D4) and never automatic: it
+        // DESTROYS operation history, which is a decision, not an optimisation.
+        // A scheduled or heuristic trigger would make data loss a background
+        // process. Inert to the member map; kept in the valid set when
+        // owner-authored so `derive_rebirths` can read it.
+        //
+        // A rebirth with no `content_hash` is refused outright rather than
+        // honored with an unverifiable payload -- a peer must be able to check it
+        // adopted the content the owner signed, not merely a document bearing the
+        // right name.
+        MembershipAction::Rebirth => {
+            author.role == Role::Owner
+                && op.content_hash.as_ref().is_some_and(|h| !h.is_empty())
+                && !op.subject.is_empty()
+        }
         // Identity rotation (ADR-040 §1): the author rotates THEIR OWN identity. The
         // `mp.get` above already confirmed the author is a current member; here we require
         // the op be well-formed and non-elevating:
@@ -1061,6 +1109,73 @@ pub fn derive_encryption(
     } else {
         crate::kb::Encryption::None
     }
+}
+
+/// ADR-107: the node rebirths this KB's owner has authored, newest per node.
+///
+/// Returns `node_id -> (epoch, content_hash)`. A peer uses it to decide whether a
+/// node document it holds is superseded: if it carries pre-rebirth operation
+/// history for a node that has been reborn at a later epoch, its lineage is stale
+/// and must be replaced by the reborn state rather than merged with it.
+///
+/// **Merging is what must not happen**, and is the reason this rides in the signed
+/// log rather than being a local decision: yrs would happily merge a stale lineage
+/// back in, resurrecting exactly the operation history the rebirth discarded.
+///
+/// Owner-authored only (enforced in `authorized`), and the owner is resolved
+/// across identity rotations the same way `derive_encryption` does — a rotated
+/// owner's rebirths still count.
+///
+/// Latest-epoch-wins per node: a node may be reborn more than once over its life,
+/// and only the most recent boundary matters. Ties break on `issued_at`, then on
+/// the op hash, so every peer picks the same one without coordination.
+pub fn derive_rebirths(
+    ops: &[SignedMembershipOp],
+    anchor_owner_pubkey: &[u8; 32],
+) -> BTreeMap<String, (u64, String)> {
+    let crypto: Vec<&SignedMembershipOp> = crypto_valid(ops);
+    let Some(genesis) = crypto.iter().find(|o| {
+        o.op.prev_hash.is_empty()
+            && o.op.action == MembershipAction::Admit
+            && o.op.subject == o.op.author
+            && &o.author_pubkey == anchor_owner_pubkey
+    }) else {
+        return BTreeMap::new();
+    };
+    let owners = owner_principal_chain(&crypto, &genesis.op.subject);
+
+    let mut out: BTreeMap<String, (u64, String)> = BTreeMap::new();
+    // @ai-caution: [security] `crypto_valid` checks SIGNATURES ONLY -- it does not
+    // consult `authorized`. So the owner check below is the ONLY thing standing
+    // between a signed op and an adopted rebirth, and `derive_encryption` /
+    // `derive_governance` rely on exactly the same discipline.
+    //
+    // This was verified by falsification rather than assumed: disabling
+    // `authorized`'s Rebirth arm did NOT fail the non-owner test, because this
+    // derive never reaches that arm. Do not remove the `owners.contains` check on
+    // the belief that `authorized` covers it.
+    for o in crypto
+        .iter()
+        .filter(|o| o.op.action == MembershipAction::Rebirth && owners.contains(&o.op.author))
+    {
+        let Some(hash) = o.op.content_hash.as_ref().filter(|h| !h.is_empty()) else {
+            continue;
+        };
+        let cand = (o.op.epoch, o.op.issued_at, o.op.chain_hash(&o.sig));
+        match out.get(&o.op.subject) {
+            Some((have_epoch, _)) if *have_epoch > cand.0 => {}
+            Some((have_epoch, have_hash)) if *have_epoch == cand.0 => {
+                // Deterministic tie-break so peers agree with no coordination.
+                if have_hash.as_str() > hash.as_str() {
+                    out.insert(o.op.subject.clone(), (cand.0, hash.clone()));
+                }
+            }
+            _ => {
+                out.insert(o.op.subject.clone(), (cand.0, hash.clone()));
+            }
+        }
+    }
+    out
 }
 
 /// ADR-037 §D2: recover **this peer's** per-KB content key from the signed op-log —
@@ -1457,6 +1572,7 @@ mod tests {
             new_wrap_pubkey: None,
             recovery_pubkey: None,
             replication: ReplicationPolicy::Full,
+            content_hash: None,
         }
     }
 
@@ -1631,6 +1747,7 @@ mod tests {
             new_wrap_pubkey: None,
             recovery_pubkey: None,
             replication: ReplicationPolicy::Full,
+            content_hash: None,
         };
         let sig = op.sign(&author.secret);
         SignedMembershipOp {
@@ -1663,6 +1780,7 @@ mod tests {
             new_wrap_pubkey: None,
             recovery_pubkey: None,
             replication: ReplicationPolicy::Full,
+            content_hash: None,
         };
         let sig = op.sign(&author.secret);
         SignedMembershipOp {
@@ -1701,6 +1819,7 @@ mod tests {
             new_wrap_pubkey: None,
             recovery_pubkey: None,
             replication,
+            content_hash: None,
         };
         let sig = op.sign(&author.secret);
         SignedMembershipOp {
@@ -1837,6 +1956,7 @@ mod tests {
             new_wrap_pubkey: None,
             recovery_pubkey: None,
             replication: ReplicationPolicy::QueryOnly,
+            content_hash: None,
         };
         let sig = op.sign(&owner.secret);
         let signed = SignedMembershipOp {
@@ -3457,6 +3577,7 @@ mod tests {
             new_wrap_pubkey: Some(new.wrap_pub()),
             recovery_pubkey: None,
             replication: ReplicationPolicy::Full,
+            content_hash: None,
         };
         let sig = op.sign(&old.secret);
         SignedMembershipOp {
@@ -3693,6 +3814,7 @@ mod tests {
             new_wrap_pubkey: Some(owner.wrap_pub()),
             recovery_pubkey: None,
             replication: ReplicationPolicy::Full,
+            content_hash: None,
         };
         let sig = op.sign(&bob.secret);
         let attack = SignedMembershipOp {
@@ -3747,6 +3869,7 @@ mod tests {
             new_wrap_pubkey: Some(actual.wrap_pub()),
             recovery_pubkey: None,
             replication: ReplicationPolicy::Full,
+            content_hash: None,
         };
         let sig = op.sign(&bob.secret);
         let bad = SignedMembershipOp {
@@ -4004,5 +4127,210 @@ mod tests {
                 "seed {seed}: causal_order must match the reference impl exactly"
             );
         }
+    }
+
+    /// ADR-107 test helper: a signed Rebirth op for `node_id` at `epoch`.
+    fn rebirth(
+        author: &Id,
+        node_id: &str,
+        content_hash: &str,
+        epoch: u64,
+        prev: &str,
+    ) -> SignedMembershipOp {
+        let op = MembershipOp {
+            kb_id: "KB".into(),
+            action: MembershipAction::Rebirth,
+            subject: node_id.into(),
+            role: None,
+            can_invite: false,
+            author: author.fp.clone(),
+            issued_at: 1,
+            expires_at: None,
+            epoch,
+            prev_hash: prev.into(),
+            wrapped_key: None,
+            new_pubkey: None,
+            new_wrap_pubkey: None,
+            recovery_pubkey: None,
+            replication: ReplicationPolicy::Full,
+            content_hash: Some(content_hash.into()),
+        };
+        let sig = op.sign(&author.secret);
+        SignedMembershipOp {
+            op,
+            sig,
+            author_pubkey: author.pubkey,
+        }
+    }
+
+    /// **ADR-107 D4: rebirth is owner-only.** It destroys operation history, so a
+    /// non-owner member authoring one is an attack, not a permission question --
+    /// it would discard another member's history under the owner's KB.
+    #[test]
+    fn a_non_owner_cannot_author_a_rebirth() {
+        let owner = id(1);
+        let member = id(2);
+        let g = genesis(&owner);
+        let admit = make(
+            &owner,
+            MembershipAction::Admit,
+            &member.fp,
+            Some(Role::Editor),
+            true,
+            None,
+            &g.chain_hash(),
+        );
+        // The member is a real, admitted Editor -- so this is not "an outsider was
+        // rejected", it is "a legitimate member cannot do THIS".
+        let hostile = rebirth(&member, "note:a", "deadbeef", 1, &admit.chain_hash());
+
+        let out = derive_rebirths(&[g, admit, hostile], &owner.pubkey);
+        assert!(
+            out.is_empty(),
+            "an Editor's rebirth must not be honored -- it discards history"
+        );
+    }
+
+    /// A rebirth with no content hash is refused rather than honored with an
+    /// unverifiable payload: a peer must be able to check it adopted the content
+    /// the owner signed, not merely a document bearing the right name.
+    #[test]
+    fn a_rebirth_without_a_content_hash_is_refused() {
+        let owner = id(1);
+        let g = genesis(&owner);
+        let mut op = rebirth(&owner, "note:a", "", 1, &g.chain_hash());
+        op.op.content_hash = None;
+        op.sig = op.op.sign(&owner.secret);
+
+        assert!(
+            derive_rebirths(&[g, op], &owner.pubkey).is_empty(),
+            "a hashless rebirth is unverifiable and must not be adopted"
+        );
+    }
+
+    /// The content hash is inside the SIGNED bytes, so a relay cannot substitute
+    /// the content a peer will adopt while keeping the op's signature valid.
+    ///
+    /// This is the attack the hash exists to stop: without it in `canonical_bytes`
+    /// a key-blind relay could point a legitimate rebirth at content of its own.
+    #[test]
+    fn tampering_with_the_content_hash_invalidates_the_signature() {
+        let owner = id(1);
+        let g = genesis(&owner);
+        let mut op = rebirth(&owner, "note:a", "aaaa", 1, &g.chain_hash());
+        // Signature stays; only the hash is swapped -- exactly what a relay can do.
+        op.op.content_hash = Some("bbbb".into());
+
+        assert!(
+            derive_rebirths(&[g, op], &owner.pubkey).is_empty(),
+            "a rebirth whose hash was altered after signing must be dropped"
+        );
+    }
+
+    /// Latest epoch wins: a node may be reborn more than once, and only the most
+    /// recent boundary is current.
+    #[test]
+    fn the_newest_rebirth_per_node_wins_and_nodes_are_independent() {
+        let owner = id(1);
+        let g = genesis(&owner);
+        let first = rebirth(&owner, "note:a", "1111", 1, &g.chain_hash());
+        let second = rebirth(&owner, "note:a", "2222", 7, &first.chain_hash());
+        let other = rebirth(&owner, "note:b", "3333", 2, &second.chain_hash());
+
+        let out = derive_rebirths(&[g, first, second, other], &owner.pubkey);
+        assert_eq!(
+            out.get("note:a"),
+            Some(&(7, "2222".to_string())),
+            "the later epoch supersedes the earlier rebirth of the SAME node"
+        );
+        assert_eq!(
+            out.get("note:b"),
+            Some(&(2, "3333".to_string())),
+            "a different node's rebirth is independent, not overwritten"
+        );
+    }
+
+    /// Every peer must derive the SAME answer with no coordination -- otherwise
+    /// two peers adopt different documents and the rebirth has forked the KB.
+    ///
+    /// Order-independence is the property, so this shuffles rather than asserting
+    /// one fixed sequence.
+    #[test]
+    fn derivation_is_order_independent_across_peers() {
+        let owner = id(1);
+        let g = genesis(&owner);
+        let a = rebirth(&owner, "note:a", "1111", 1, &g.chain_hash());
+        let b = rebirth(&owner, "note:a", "2222", 7, &a.chain_hash());
+        let c = rebirth(&owner, "note:b", "3333", 2, &b.chain_hash());
+
+        let canonical =
+            derive_rebirths(&[g.clone(), a.clone(), b.clone(), c.clone()], &owner.pubkey);
+        for perm in [
+            vec![c.clone(), b.clone(), a.clone(), g.clone()],
+            vec![b.clone(), g.clone(), c.clone(), a.clone()],
+            vec![a.clone(), c.clone(), g.clone(), b.clone()],
+        ] {
+            assert_eq!(
+                derive_rebirths(&perm, &owner.pubkey),
+                canonical,
+                "peers receiving ops in different orders must agree"
+            );
+        }
+    }
+
+    /// Two rebirths of one node at the SAME epoch is the ambiguous case. It must
+    /// still resolve identically everywhere rather than depending on arrival
+    /// order -- a coin-flip here forks the KB.
+    #[test]
+    fn a_same_epoch_tie_resolves_deterministically() {
+        let owner = id(1);
+        let g = genesis(&owner);
+        let x = rebirth(&owner, "note:a", "ffff", 3, &g.chain_hash());
+        let y = rebirth(&owner, "note:a", "0000", 3, &x.chain_hash());
+
+        let one = derive_rebirths(&[g.clone(), x.clone(), y.clone()], &owner.pubkey);
+        let other = derive_rebirths(&[g, y, x], &owner.pubkey);
+        assert_eq!(one, other, "a tie must not depend on order");
+        assert_eq!(
+            one.get("note:a").map(|(_, h)| h.as_str()),
+            Some("0000"),
+            "and it must break on a stated rule (lowest hash), not chance"
+        );
+    }
+
+    /// A KB with no rebirths derives nothing -- so every existing KB is
+    /// unaffected, and this is strictly additive.
+    #[test]
+    fn a_kb_that_has_never_been_reborn_derives_no_rebirths() {
+        let owner = id(1);
+        let g = genesis(&owner);
+        assert!(derive_rebirths(std::slice::from_ref(&g), &owner.pubkey).is_empty());
+    }
+
+    /// Adding the v6 field must not change any other op's signed bytes -- every
+    /// signature created before ADR-107 has to keep verifying.
+    #[test]
+    fn non_rebirth_ops_emit_byte_identical_canonical_bytes() {
+        let owner = id(1);
+        let g = genesis(&owner);
+        let admit = make(
+            &owner,
+            MembershipAction::Admit,
+            &id(2).fp,
+            Some(Role::Editor),
+            false,
+            None,
+            &g.chain_hash(),
+        );
+        let bytes = admit.op.canonical_bytes();
+        assert!(
+            bytes.starts_with(b"maememb/v1\0"),
+            "an ordinary Admit must still be v1, not silently bumped: {:?}",
+            String::from_utf8_lossy(&bytes[..12])
+        );
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains("content_hash"),
+            "no content_hash bytes may appear on a non-Rebirth op"
+        );
     }
 }

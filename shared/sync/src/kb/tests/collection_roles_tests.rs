@@ -468,3 +468,171 @@ fn update_new_op_authors_attributes_a_sealed_delete_to_the_seal_client() {
         "the prior op-set base is grandfathered, not re-reported as a new author"
     );
 }
+
+// ---------------------------------------------------------------------------
+// ADR-107 gates 2 and 3 — convergence and the adversarial replay.
+//
+// These are the gates that make rebirth SAFE rather than merely effective.
+// Gate 1 (growth is bounded) and gate 4 (content identity) live in
+// `kb::node::rebirth_tests`; these two are about what peers do at the boundary.
+// ---------------------------------------------------------------------------
+
+/// **ADR-107 gate 3, the attack.** A peer replaying **pre-rebirth** ops after the
+/// boundary must be **fenced, not merged**.
+///
+/// Merging is the failure mode the whole design guards against: it would
+/// resurrect exactly the operation history the rebirth discarded, silently
+/// undoing the growth bound.
+///
+/// **There are two distinct cases, and only measurement separated them.** My
+/// first version of this test asserted the fence catches a single replayed op.
+/// It does not — and does not need to:
+///
+/// 1. **A single stale op is neutralised by construction.** Its causal
+///    dependencies were discarded with the old lineage, so yrs *parks* it as a
+///    `PendingUpdate` rather than applying it. Verified below: content is
+///    unchanged, and the op's own state vector is EMPTY, which is why the fence
+///    sees no author to judge. Safe, but not by the fence.
+///
+/// 2. **Replaying the whole stale DOCUMENT does merge** — measured at 167 B →
+///    346 B, resurrecting the discarded history and the old body. **This is the
+///    real attack**, and it IS attributable to the stale client, so ADR-023's
+///    fence rejects it.
+///
+/// Both are asserted, because the safety argument needs both halves: the cheap
+/// attack cannot land, and the effective attack is caught.
+#[test]
+fn a_pre_rebirth_op_replayed_after_the_boundary_is_fenced_not_merged() {
+    let fp = "ed25519:carol";
+    let c_before = derive_kb_client_id(fp, 3); // the epoch the node lived under
+    let c_after = derive_kb_client_id(fp, 4); // the epoch the rebirth carries
+
+    let mut original = KbNodeDoc::new_with_client_id("n1", "Original", "body", &[], c_before);
+    for i in 0..20 {
+        let _ = original.set_body(&format!("revision {i}"));
+    }
+    let pre_state = original.encode_state();
+
+    let reborn = original.reborn(c_after);
+    let reborn_state = reborn.encode_state();
+
+    // --- Case 1: a single stale op cannot land at all. ---
+    let mut offline = KbNodeDoc::from_bytes_with_client_id(&pre_state, c_before).unwrap();
+    let replayed = offline.set_title("edit from before the rebirth");
+
+    let mut victim = KbNodeDoc::from_bytes(&reborn_state).unwrap();
+    victim
+        .apply_update(&replayed)
+        .expect("a stale update is parked, not an error");
+    assert_eq!(
+        victim.title(),
+        "Original",
+        "a single pre-rebirth op must NOT take effect -- its dependencies went          with the old lineage, so yrs parks it rather than applying it"
+    );
+
+    // --- Case 2: the whole stale document. This one WOULD merge. ---
+    let mut merged = KbNodeDoc::from_bytes(&reborn_state).unwrap();
+    let clean_size = merged.encode_state().len();
+    merged.apply_update(&pre_state).unwrap();
+    assert!(
+        merged.encode_state().len() > clean_size,
+        "replaying the whole stale document DOES resurrect the discarded history          ({clean_size} B -> {} B) -- which is exactly why the fence must catch it",
+        merged.encode_state().len()
+    );
+
+    // ...and the fence does, because every resurrected op carries the stale client.
+    let authors = update_new_op_authors(&pre_state, &reborn_state)
+        .expect("a stale state must be decodable -- it is rejected, not unparseable");
+    assert!(
+        authors.contains(&c_before),
+        "the replayed history must be attributable to the pre-rebirth client          {c_before} so the epoch fence can reject it: got {authors:?}"
+    );
+    assert!(
+        authors.iter().any(|a| *a != c_after),
+        "not every op is from the current epoch, so the fence rejects the write"
+    );
+}
+
+/// The other half: an edit authored **after** the rebirth, under the new epoch,
+/// is accepted. Without this the test above passes on an implementation that
+/// fences everything — which would make the KB read-only rather than safe.
+#[test]
+fn a_post_rebirth_edit_under_the_current_epoch_still_passes_the_fence() {
+    let fp = "ed25519:carol";
+    let c_after = derive_kb_client_id(fp, 4);
+
+    let original = KbNodeDoc::new_with_client_id("n1", "Original", "body", &[], 7);
+    let reborn = original.reborn(c_after);
+    let reborn_state = reborn.encode_state();
+
+    let mut current = KbNodeDoc::from_bytes_with_client_id(&reborn_state, c_after).unwrap();
+    let update = current.set_title("a legitimate edit after the rebirth");
+
+    let authors = update_new_op_authors(&update, &reborn_state).unwrap();
+    assert!(
+        authors.iter().all(|a| *a == c_after),
+        "every new op is authored under the current epoch: {authors:?}"
+    );
+}
+
+/// **ADR-107 gate 2: convergence across a rebirth.**
+///
+/// Three peers, one offline across the boundary. Every peer that adopts the
+/// reborn document must hold byte-identical content — a rebirth that left peers
+/// disagreeing would have forked the KB rather than compacted it.
+///
+/// Adoption is a REPLACEMENT, never a merge (the daemon's `share_doc` deletes and
+/// recreates for exactly this reason). This asserts the property that makes that
+/// the right primitive.
+#[test]
+fn peers_that_adopt_a_rebirth_converge_byte_identically() {
+    let mut origin = KbNodeDoc::new_with_client_id("n1", "Shared", "body", &["t".into()], 11);
+    // Enough edits for the accumulated history to be unmistakable -- 30 body-only
+    // edits grow the document by ~14 B, which is not a basis for any claim about
+    // discarded history.
+    for i in 0..200 {
+        let _ = origin.set_title(&format!("Shared {i}"));
+        let _ = origin.set_body(&format!("edit {i}"));
+    }
+
+    // The owner rebirths; two peers adopt by replacing their copy, as `share_doc`
+    // does. The third stays offline and keeps the old lineage.
+    let reborn = origin.reborn(4242);
+    let published = reborn.encode_state();
+
+    let peer_a = KbNodeDoc::from_bytes(&published).expect("peer A adopts");
+    let peer_b = KbNodeDoc::from_bytes(&published).expect("peer B adopts");
+
+    assert_eq!(
+        peer_a.rebirth_hash(),
+        peer_b.rebirth_hash(),
+        "two peers adopting the same rebirth must agree on content"
+    );
+    assert_eq!(
+        peer_a.rebirth_hash(),
+        reborn.rebirth_hash(),
+        "...and agree with the owner who authored it"
+    );
+    assert_eq!(
+        peer_a.materialize().body,
+        origin.materialize().body,
+        "the adopted content is the pre-rebirth content, not a truncation"
+    );
+
+    // The offline peer's copy is NOT silently equal — it still carries the old
+    // lineage, which is precisely why it must adopt rather than merge.
+    let offline = KbNodeDoc::from_bytes(&origin.encode_state()).unwrap();
+    assert_eq!(
+        offline.rebirth_hash(),
+        peer_a.rebirth_hash(),
+        "content matches (nothing was lost)..."
+    );
+    assert!(
+        origin.encode_state().len() > published.len() * 2,
+        "...but the offline peer's DOCUMENT still carries the discarded history \
+         ({} B vs {} B), so adopting means REPLACING its state, never merging \
+         into it",
+        origin.encode_state().len(),
+        published.len()
+    );
+}

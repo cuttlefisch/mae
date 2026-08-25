@@ -51,6 +51,7 @@ pub mod kb_build;
 pub mod kb_identity;
 pub mod migrate;
 pub mod org;
+pub mod project_identity;
 #[cfg(test)]
 mod storage_feature_guard_tests;
 pub mod store;

@@ -357,6 +357,53 @@ pub(super) async fn handle_kb_node_fetch(
 // relay forwarding content, can legitimately deliver a node update before its
 // manifest entry. It broke ten such flows in the daemon's own suite. Withdrawn;
 // see ADR-105 D6.
+/// The parsed, validated parameters of a `kb/node_update` call.
+///
+/// Extracted so `handle_kb_node_update` is about UPDATING a node rather than
+/// about reading JSON — it was 259 lines against an 80-line ceiling before
+/// ADR-107 added anything, and parameter parsing was a third of it.
+struct NodeUpdateParams {
+    kb_id: String,
+    node_id: String,
+    update_bytes: Vec<u8>,
+    /// ADR-037 #171: re-encrypt in place — PURGE the plaintext snapshot + WAL and
+    /// recreate from a ciphertext-only op, rather than stacking the op-set on top.
+    reseal: bool,
+    /// ADR-107: replace the node document with a fresh single-client lineage,
+    /// discarding its operation history. Structurally the same store operation as
+    /// a reseal (purge and replace, never merge), so it shares that path rather
+    /// than growing a second one (principle #8). What differs is the gate: a
+    /// rebirth must be BOUND to an owner-signed `Rebirth` op.
+    rebirth: bool,
+}
+
+impl NodeUpdateParams {
+    fn parse(params: &serde_json::Value, max_update: usize) -> Result<Self, McpError> {
+        let field = |name: &str| -> Result<String, McpError> {
+            params[name]
+                .as_str()
+                .map(|s| s.to_string())
+                .ok_or_else(|| McpError::parse_error(format!("missing '{name}' field")))
+        };
+        let kb_id = field("kb_id")?;
+        let node_id = field("node_id")?;
+        let update_bytes = base64_to_update(&field("update")?)
+            .map_err(|e| McpError::parse_error(format!("invalid 'update' base64: {e}")))?;
+        if update_bytes.len() > max_update {
+            return Err(McpError::internal_error(format!(
+                "node update exceeds {max_update} bytes"
+            )));
+        }
+        Ok(Self {
+            kb_id,
+            node_id,
+            update_bytes,
+            reseal: params["reseal"].as_bool().unwrap_or(false),
+            rebirth: params["rebirth"].as_bool().unwrap_or(false),
+        })
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_kb_node_update(
     doc_store: &DocStore,
@@ -368,77 +415,25 @@ pub(super) async fn handle_kb_node_update(
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
-    let kb_id = match params["kb_id"].as_str() {
-        Some(s) => s.to_string(),
-        None => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
-            );
-        }
+    let parsed = match NodeUpdateParams::parse(params, doc_store.max_update_size()) {
+        Ok(p) => p,
+        Err(e) => return JsonRpcResponse::error(id, e),
     };
-    let node_id = match params["node_id"].as_str() {
-        Some(s) => s.to_string(),
-        None => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::parse_error("missing 'node_id' field".to_string()),
-            );
-        }
-    };
-    let update_b64 = match params["update"].as_str() {
-        Some(s) => s,
-        None => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::parse_error("missing 'update' field".to_string()),
-            );
-        }
-    };
-    let update_bytes = match base64_to_update(update_b64) {
-        Ok(b) => b,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::parse_error(format!("invalid base64: {e}")),
-            );
-        }
-    };
-    // ADR-037 (#171) RESEAL-AS-REPLACE: when E2E is enabled on a
-    // previously-plaintext KB, the owner reseals each node as a FRESH op-set and
-    // sets `reseal:true` so we PURGE the pre-enable plaintext lineage — `share_doc`
-    // atomically deletes the `kb:{node}` snapshot+WAL and recreates it from this
-    // ciphertext-only op (vs `apply_update`, which would stack the op-set on top of
-    // the readable plaintext). It is OWNER-gated (Manage) and bypasses the epoch
-    // fence (a full-doc replace, not a merge against the daemon's node SV).
-    let reseal = params["reseal"].as_bool().unwrap_or(false);
-    // ADR-020 traceability: log on ENTRY so a received kb/node_update is
-    // greppable on the daemon (distinguishes "never arrived" from "rejected").
-    info!(
-        session = session_id,
-        kb_id = %kb_id,
-        node_id = %node_id,
-        update_len = update_bytes.len(),
-        "kb/node_update: received"
-    );
-    let max_update = doc_store.max_update_size();
-    if update_bytes.len() > max_update {
-        return JsonRpcResponse::error(
-            id,
-            McpError::parse_error(format!(
-                "update too large: {} bytes (max {})",
-                update_bytes.len(),
-                max_update
-            )),
-        );
-    }
-    info!(session = session_id, kb_id = %kb_id, node_id = %node_id, update_len = update_bytes.len(), "kb/node_update");
+    let NodeUpdateParams {
+        kb_id,
+        node_id,
+        update_bytes,
+        reseal,
+        rebirth,
+    } = parsed;
 
-    // ADR-018: editing a node requires editor/owner role. Viewers and
-    // non-members are denied (least privilege). A RESEAL replaces the whole node
-    // doc, so it requires Manage (owner-only) — a mere Editor cannot purge/replace
-    // another's node lineage.
-    let required_op = if reseal { KbOp::Manage } else { KbOp::Edit };
+    // Rebirth is owner-only (ADR-107 D4) for the same reason reseal is: it
+    // destroys state, and that is a decision rather than an edit.
+    let required_op = if reseal || rebirth {
+        KbOp::Manage
+    } else {
+        KbOp::Edit
+    };
     // Perf: the `kbc:{kb_id}` collection doc is NOT mutated by this handler
     // arm (only the `kb:{node}` doc is), so load it ONCE and share the
     // snapshot across all four gates below instead of re-encoding+decoding
@@ -594,9 +589,24 @@ pub(super) async fn handle_kb_node_update(
             .unwrap()
             .subscribe_doc(session_id, &node_doc);
     }
+    if let Some(resp) = gate_rebirth(RebirthGate {
+        doc_store,
+        kb_id: &kb_id,
+        node_id: &node_id,
+        state: &update_bytes,
+        pre_coll: pre_coll.as_ref(),
+        session_id,
+        id: id.clone(),
+        requested: rebirth,
+    })
+    .await
+    {
+        return resp;
+    }
+
     // #171: a reseal PURGES + replaces (delete plaintext snapshot+WAL, recreate
     // from this ciphertext-only op); an ordinary edit MERGES into the CRDT.
-    let applied = if reseal {
+    let applied = if reseal || rebirth {
         doc_store.share_doc(&node_doc, &update_bytes).await
     } else {
         doc_store.apply_update(&node_doc, &update_bytes, None).await
@@ -626,6 +636,110 @@ pub(super) async fn handle_kb_node_update(
             McpError::internal_error(format!("failed to apply node update: {e}")),
         ),
     }
+}
+
+/// Arguments to [`gate_rebirth`], grouped so the call site stays one statement.
+struct RebirthGate<'a> {
+    doc_store: &'a DocStore,
+    kb_id: &'a str,
+    node_id: &'a str,
+    state: &'a [u8],
+    pre_coll: Option<&'a KbCollectionDoc>,
+    session_id: u64,
+    id: serde_json::Value,
+    /// Whether the caller asked for a rebirth at all. `false` short-circuits, so
+    /// the ordinary edit path pays nothing.
+    requested: bool,
+}
+
+/// The ADR-107 rebirth gate. `Some(response)` means REFUSED.
+///
+/// Split out of `handle_kb_node_update` (already 259 lines) rather than blessed —
+/// and it reads better alone anyway, since the reasoning is about authority
+/// versus binding rather than about applying an update.
+async fn gate_rebirth(g: RebirthGate<'_>) -> Option<JsonRpcResponse> {
+    if !g.requested {
+        return None;
+    }
+    // @ai-caution: [security] This is the ONLY thing stopping a `rebirth: true`
+    // call from replacing a node with arbitrary content while destroying the
+    // history that would show what changed. `kb_access(Manage)` proves the caller
+    // may rebirth SOMETHING; this proves it is rebirthing what the owner actually
+    // signed. Both are required — authority without binding lets a compromised
+    // owner session rewrite silently, and a relay never sees the difference.
+    match verify_rebirth_binding(g.doc_store, g.kb_id, g.node_id, g.state, g.pre_coll).await {
+        Ok(()) => {
+            info!(
+                session = g.session_id, kb_id = %g.kb_id, node_id = %g.node_id,
+                "kb/node_update: rebirth verified against the signed op-log (ADR-107)"
+            );
+            None
+        }
+        Err(msg) => {
+            warn!(
+                session = g.session_id, kb_id = %g.kb_id, node_id = %g.node_id,
+                reason = %msg,
+                "kb/node_update: REBIRTH REJECTED (ADR-107)"
+            );
+            Some(JsonRpcResponse::error(g.id, McpError::internal_error(msg)))
+        }
+    }
+}
+
+/// ADR-107: does `state` match an owner-signed `Rebirth` op for this node?
+///
+/// Three things must hold, and each closes a distinct attack:
+///
+/// 1. **A `Rebirth` op for this node exists in the signed log** — so a rebirth
+///    cannot be performed without one, which is what makes it observable to
+///    peers rather than a silent local truncation.
+/// 2. **The op is owner-authored** — `derive_rebirths` enforces this, resolving
+///    the owner across identity rotations.
+/// 3. **The state hashes to what the op signed** — otherwise authority to
+///    rebirth becomes authority to substitute arbitrary content, and the
+///    destroyed history is exactly what would have revealed it.
+///
+/// The hash is `KbNodeDoc::rebirth_hash`, which covers every field a reborn node
+/// must reproduce — deliberately wider than `content_hash` (title+body+tags),
+/// since anything outside it is unverifiable once the history is gone.
+async fn verify_rebirth_binding(
+    doc_store: &DocStore,
+    kb_id: &str,
+    node_id: &str,
+    state: &[u8],
+    pre_coll: Option<&KbCollectionDoc>,
+) -> Result<(), String> {
+    let anchor = resolve_content_anchor_with_coll(doc_store, kb_id, pre_coll)
+        .await
+        .ok_or_else(|| {
+            format!("KB '{kb_id}' has no content anchor, so no rebirth can be verified")
+        })?;
+    let loaded;
+    let coll = match pre_coll {
+        Some(c) => c,
+        None => {
+            loaded = load_collection(doc_store, kb_id)
+                .await
+                .map_err(|e| format!("rebirth: could not load collection '{kb_id}': {e}"))?;
+            &loaded
+        }
+    };
+    let rebirths = mae_sync::membership::derive_rebirths(&coll.oplog_ops(), &anchor);
+    let (_epoch, signed_hash) = rebirths.get(node_id).ok_or_else(|| {
+        format!(
+            "rebirth: no owner-signed Rebirth op for node '{node_id}' in KB '{kb_id}'              -- author the op first, or this is not a rebirth"
+        )
+    })?;
+
+    let doc = mae_sync::kb::KbNodeDoc::from_bytes(state)
+        .map_err(|e| format!("rebirth: supplied state is not a decodable node doc: {e}"))?;
+    let actual = doc.rebirth_hash();
+    if &actual != signed_hash {
+        return Err(format!(
+            "rebirth: supplied state for '{node_id}' hashes to {actual} but the              owner signed {signed_hash} -- refusing to replace a node with content              the owner did not sign"
+        ));
+    }
+    Ok(())
 }
 
 pub(super) async fn handle_kb_collection_op(

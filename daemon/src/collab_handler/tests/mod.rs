@@ -26,6 +26,7 @@ mod collab_handler_n_way_convergence_tests;
 mod collab_handler_persist_failure_tests;
 mod collab_handler_protocol_dispatch_tests;
 mod collab_handler_rebind_gate_tests;
+mod collab_handler_rebirth_tests;
 mod collab_handler_recovery_key_tests;
 mod collab_handler_replication_policy_tests;
 mod collab_handler_same_node_id_isolation_tests;

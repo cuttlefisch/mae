@@ -869,6 +869,50 @@ impl Editor {
     /// a federated instance. Used so writes (update/delete) resolve nodes the
     /// same way reads do — i.e. across `primary` ∪ `instances` — instead of
     /// primary-only (I-9).
+    /// Is the STORE the source of truth for the instance owning `id`?
+    ///
+    /// True when that instance is detached (`IngestPolicy::StoreIsTruth`), which
+    /// means any `.org` file still on disk for it is a **stale archive** — no
+    /// ingest reads it, and nothing keeps it current.
+    ///
+    /// The distinction is what makes "open the source file" wrong for a detached
+    /// KB: the file exists and opens cleanly, so the user edits a document that
+    /// looks live and is silently disconnected from their KB.
+    ///
+    /// `None` owner = the primary; an unregistered id defaults to `false`
+    /// (today's behaviour), so this can only ever narrow.
+    pub(crate) fn kb_store_is_truth_for(&self, id: &str) -> bool {
+        let owner = self.kb_owner_of(id).unwrap_or(None);
+        let inst = match &owner {
+            Some(uuid) => self.kb.registry.find_by_uuid(uuid),
+            None => self.kb.registry.instances.iter().find(|i| i.primary),
+        };
+        inst.is_some_and(|i| !i.ingest_policy.allows_ingest())
+    }
+
+    /// If `path` lies inside a DETACHED instance's `.org` directory, the name of
+    /// that instance.
+    ///
+    /// Those files are a stale archive: no ingest reads them, and nothing keeps
+    /// them current. Reading one gets content that may be arbitrarily old while
+    /// looking authoritative — the failure mode Story C exists to close, because
+    /// an agent that reads a stale archive answers confidently and **wrongly**,
+    /// with nothing in the response to signal it.
+    ///
+    /// `None` for every attached KB, so this can only narrow.
+    pub fn kb_stale_archive_instance(&self, path: &std::path::Path) -> Option<String> {
+        self.kb
+            .registry
+            .instances
+            .iter()
+            .find(|i| {
+                !i.ingest_policy.allows_ingest()
+                    && !i.org_dir.as_os_str().is_empty()
+                    && path.starts_with(&i.org_dir)
+            })
+            .map(|i| i.name.clone())
+    }
+
     pub(crate) fn kb_owner_of(&self, id: &str) -> Option<Option<String>> {
         // #76: pre-ADR-019 KB joins dumped nodes straight into `primary`;
         // the ADR-019 join path (`kb_register_joined_instance`) now creates

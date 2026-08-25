@@ -18,6 +18,7 @@ mod kb_ops_read_clobber_tests;
 mod kb_ops_registry_tests;
 mod kb_ops_reimport_guard_tests;
 mod kb_ops_search_federation_tests;
+mod kb_ops_sole_mutator_tests;
 mod kb_ops_system_kb_tests;
 mod kb_ops_vector_blend_tests;
 mod kb_ops_watcher_misc_tests;
