@@ -20,6 +20,8 @@ mod graph_tests;
 mod health_tests;
 mod kb_store_impl_tests;
 mod links_tests;
+mod query_plan_guard_tests;
+mod query_plan_tests;
 mod schema_tests;
 mod source_files_tests;
 mod vector_tests;
