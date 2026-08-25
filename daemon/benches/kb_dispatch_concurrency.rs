@@ -160,7 +160,10 @@ fn bench_kb_dispatch_concurrency(c: &mut Criterion) {
 
     let mut levels: Vec<(usize, Duration, Duration)> = Vec::new(); // (n, p50, p99)
 
-    for &n in &[1usize, 4, 8, 16, 32, 64] {
+    // 20 and 24 added 2026-08-24: the stated target for the first multi-user
+    // release is ~20 concurrent / ~60 total, and the sweep bracketed it (16, 32)
+    // without ever measuring it.
+    for &n in &[1usize, 4, 8, 16, 20, 24, 32, 64] {
         let socket_path = daemon.socket_path.clone();
         let samples: Arc<Mutex<Vec<Duration>>> = Arc::new(Mutex::new(Vec::new()));
 

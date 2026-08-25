@@ -202,7 +202,7 @@ impl KbQueryLayer for CozoQueryLayer {
     }
 
     fn contains(&self, id: &str) -> bool {
-        matches!(self.store.get_node(id), Ok(Some(_)))
+        matches!(self.store.get_node_light(id), Ok(Some(_)))
     }
 
     fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, KbStoreError> {
