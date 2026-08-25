@@ -22,4 +22,16 @@
         (execute-ex "set ignorecase true")))
     (it-test "the editor is still usable afterwards"
       (lambda ()
-        (create-buffer "*guard-check*")))))
+        (create-buffer "*guard-check*")))
+
+    ;; A command that RUNS and then reports failure in its status must not read
+    ;; as ok either — the other half of #787, found by a Phase 7 rehearsal where
+    ;; `(execute-ex "kb-detach X")` passed while the detach found no such KB.
+    ;;
+    ;; Only the positive half is assertable from inside a scenario (a step naming
+    ;; a failing command must FAIL, and a failing step is not a passing test), so
+    ;; this pins that an ordinary informational status still passes — without
+    ;; which the guard could fire on innocent messages and get switched off.
+    (it-test "an informational status does not trip the failure guard"
+      (lambda ()
+        (execute-ex "nohlsearch")))))

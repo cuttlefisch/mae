@@ -289,14 +289,56 @@ fn report_tap_line(editor: &Editor, i: usize, name: &str, result: &str) -> bool 
 /// Read from the editor's status rather than threaded through the Scheme queue,
 /// because that is where the information already is.
 fn escalate_unknown_command(editor: &Editor, result: String) -> String {
-    if result != "PASS" || !editor.status_msg.starts_with("Unknown command:") {
+    if result != "PASS" {
         return result;
     }
+    let Some(why) = failed_status(&editor.status_msg) else {
+        return result;
+    };
     format!(
-        "FAIL:{} — the step reported no error, but the command was never \
-         dispatched. Check the name against `command_list`.",
+        "FAIL:{} — the step reported no error, but {why}",
         editor.status_msg
     )
+}
+
+/// Status-message prefixes that mean **the command did not do what was asked**.
+///
+/// #787 closed the *unknown command* half. This is the other half, found by a
+/// Phase 7 rehearsal: `(execute-ex "kb-detach X")` reported `ok` while the
+/// detach found no such KB and said so — in a free-text status nobody read.
+///
+/// **An allow-list of failure PREFIXES, not a heuristic**, and that is
+/// deliberate. Statuses are unstructured prose written for humans; guessing
+/// which ones mean failure would fire on innocent messages and get the whole
+/// guard switched off — the failure mode E1 documented for the file-size
+/// ratchet. Each entry here is a specific, checked message from a specific
+/// dispatch path.
+///
+/// The right long-term fix is for dispatch to return a typed outcome rather than
+/// prose. Until then this closes the cases that have actually bitten.
+const FAILURE_STATUS_PREFIXES: &[(&str, &str)] = &[
+    (
+        "Unknown command:",
+        "the command was never dispatched. Check the name against `command_list`.",
+    ),
+    (
+        "No such KB:",
+        "the KB was not found — check it is registered, and that the registry is \
+         at `$XDG_DATA_HOME/mae/kb-registry.toml` (NOT `mae/kb/registry.toml`, \
+         which is a legacy path).",
+    ),
+    (
+        "Usage:",
+        "the command rejected its arguments and printed usage instead of running.",
+    ),
+];
+
+/// Does this status mean the step's command failed? Returns why, if so.
+fn failed_status(status: &str) -> Option<&'static str> {
+    FAILURE_STATUS_PREFIXES
+        .iter()
+        .find(|(prefix, _)| status.starts_with(prefix))
+        .map(|(_, why)| *why)
 }
 
 /// snapshot before the first test and restored after the last — preventing
