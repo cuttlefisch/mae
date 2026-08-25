@@ -890,6 +890,29 @@ impl Editor {
         inst.is_some_and(|i| !i.ingest_policy.allows_ingest())
     }
 
+    /// If `path` lies inside a DETACHED instance's `.org` directory, the name of
+    /// that instance.
+    ///
+    /// Those files are a stale archive: no ingest reads them, and nothing keeps
+    /// them current. Reading one gets content that may be arbitrarily old while
+    /// looking authoritative — the failure mode Story C exists to close, because
+    /// an agent that reads a stale archive answers confidently and **wrongly**,
+    /// with nothing in the response to signal it.
+    ///
+    /// `None` for every attached KB, so this can only narrow.
+    pub fn kb_stale_archive_instance(&self, path: &std::path::Path) -> Option<String> {
+        self.kb
+            .registry
+            .instances
+            .iter()
+            .find(|i| {
+                !i.ingest_policy.allows_ingest()
+                    && !i.org_dir.as_os_str().is_empty()
+                    && path.starts_with(&i.org_dir)
+            })
+            .map(|i| i.name.clone())
+    }
+
     pub(crate) fn kb_owner_of(&self, id: &str) -> Option<Option<String>> {
         // #76: pre-ADR-019 KB joins dumped nodes straight into `primary`;
         // the ADR-019 join path (`kb_register_joined_instance`) now creates

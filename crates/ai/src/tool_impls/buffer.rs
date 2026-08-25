@@ -148,12 +148,36 @@ pub fn execute_cursor_info(editor: &Editor) -> Result<String, String> {
     Ok(info.to_string())
 }
 
-pub fn execute_file_read(args: &serde_json::Value) -> Result<String, String> {
+pub fn execute_file_read(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
     let raw_path = args
         .get("path")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'path' argument")?;
     let path = mae_core::file_picker::expand_tilde(raw_path);
+
+    // Story C (R10): refuse AT THE EFFECT for a detached KB's stale archive.
+    //
+    // Those `.org` files are no longer read by any ingest, so their content may
+    // be arbitrarily old while looking authoritative. An agent that reads one
+    // answers confidently and WRONGLY, with nothing in the response to signal it
+    // -- strictly worse than a refusal.
+    //
+    // Worded as a CONSEQUENCE, and granting the file tools jurisdiction
+    // elsewhere. R10 measured that aggressive prohibitions in tool DESCRIPTIONS
+    // roughly triple the wrong-tool rate (Grafema: 0.9 vs 2.8 MCP calls/question);
+    // the shape that works states the consequence and says where the tool IS
+    // right. This is an execution error, which the MCP spec says carries
+    // "actionable feedback that language models can use to self-correct".
+    if let Some(kb) = editor.kb_stale_archive_instance(std::path::Path::new(&path)) {
+        return Err(format!(
+            "'{path}' is inside KB '{kb}', which is detached: its store is the \
+             source of truth and these .org files are a stale archive no ingest \
+             reads. Reading it would return content that may be arbitrarily out \
+             of date. Use kb_search or kb_get for this KB's content; file_read \
+             remains correct for source code and files outside a detached KB."
+        ));
+    }
+
     let content = std::fs::read_to_string(&path).map_err(|e| {
         format!(
             "File read error: {} (path: {}). Hint: use absolute paths — call audit_configuration for correct config paths.",
@@ -306,5 +330,124 @@ mod buffer_write_tests {
         execute_buffer_write(&mut editor, &args).expect("first write must succeed");
         execute_buffer_write(&mut editor, &args)
             .expect("an identical second write to a writable buffer must still succeed");
+    }
+}
+
+/// Story C: `file_read` must refuse a DETACHED KB's stale archive.
+#[cfg(test)]
+mod stale_archive_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn instance(
+        name: &str,
+        dir: &std::path::Path,
+        policy: mae_kb::federation::IngestPolicy,
+    ) -> mae_kb::federation::KbInstance {
+        mae_kb::federation::KbInstance {
+            uuid: format!("uuid-{name}"),
+            name: name.into(),
+            org_dir: dir.to_path_buf(),
+            db_path: dir.join("kb.db"),
+            primary: false,
+            enabled: true,
+            last_import: None,
+            collab_id: None,
+            shared: false,
+            remote_peers: Vec::new(),
+            last_sync: None,
+            ai_residency: mae_kb::federation::AiResidency::default(),
+            project_root: None,
+            kind: mae_kb::federation::KbInstanceKind::default(),
+            ingest_policy: policy,
+            priority: 0,
+            remote_hub: None,
+        }
+    }
+
+    fn editor_with_detached_kb(dir: &std::path::Path) -> Editor {
+        let mut editor = Editor::new();
+        editor.kb.registry.instances.push(instance(
+            "Detached",
+            dir,
+            mae_kb::federation::IngestPolicy::StoreIsTruth,
+        ));
+        editor
+    }
+
+    /// **The failure this closes.** A detached KB's `.org` files are no longer
+    /// read by any ingest, so their content may be arbitrarily old while looking
+    /// authoritative. An agent that reads one answers confidently and WRONGLY,
+    /// with nothing in the response to signal it — strictly worse than a refusal.
+    #[test]
+    fn reading_a_detached_kbs_stale_archive_is_refused() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note.org");
+        std::fs::write(&path, "STALE CONTENT nobody updates").unwrap();
+        let editor = editor_with_detached_kb(dir.path());
+
+        let err = execute_file_read(
+            &editor,
+            &serde_json::json!({ "path": path.to_string_lossy() }),
+        )
+        .expect_err("a stale archive must not be read");
+
+        // The message has to be actionable, not merely a denial: R10 measured
+        // that a bare prohibition roughly TRIPLES the wrong-tool rate, and that
+        // the shape which works states the consequence AND grants the tool
+        // jurisdiction elsewhere.
+        assert!(err.contains("kb_search"), "must redirect: {err}");
+        assert!(
+            err.contains("stale archive"),
+            "must say WHY, not just no: {err}"
+        );
+        assert!(
+            err.contains("source code"),
+            "must grant file_read jurisdiction elsewhere: {err}"
+        );
+        assert!(
+            !err.contains("STALE CONTENT"),
+            "and must not leak the content it refused to serve"
+        );
+    }
+
+    /// The paired positive, without which the test above passes on an
+    /// implementation that refuses everything.
+    #[test]
+    fn an_ordinary_file_outside_any_detached_kb_still_reads() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("main.rs");
+        std::fs::write(&path, "fn main() {}").unwrap();
+        let editor = Editor::new(); // no detached instance at all
+
+        let out = execute_file_read(
+            &editor,
+            &serde_json::json!({ "path": path.to_string_lossy() }),
+        )
+        .expect("an ordinary file must still be readable");
+        assert!(out.contains("fn main()"));
+    }
+
+    /// An ATTACHED KB's files are still live — the ingest reads them — so they
+    /// must remain readable. Narrowed, never widened.
+    #[test]
+    fn an_attached_kbs_org_file_is_not_refused() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note.org");
+        std::fs::write(&path, "LIVE CONTENT").unwrap();
+        let mut editor = Editor::new();
+        // Same registration, but the default (attached) policy.
+        editor.kb.registry.instances.push(instance(
+            "Attached",
+            dir.path(),
+            mae_kb::federation::IngestPolicy::default(),
+        ));
+
+        let out = execute_file_read(
+            &editor,
+            &serde_json::json!({ "path": path.to_string_lossy() }),
+        )
+        .expect("an attached KB's files are live and must stay readable");
+        assert!(out.contains("LIVE CONTENT"));
     }
 }
