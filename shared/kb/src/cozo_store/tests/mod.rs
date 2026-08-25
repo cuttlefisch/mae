@@ -26,3 +26,5 @@ mod schema_tests;
 mod source_files_tests;
 mod vector_tests;
 mod versioning_tests;
+#[cfg(feature = "storage-sqlite")]
+mod wal_tests;
