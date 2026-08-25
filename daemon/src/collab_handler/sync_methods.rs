@@ -139,6 +139,38 @@ pub(super) async fn handle_sync_update(
         let node_id = &node_id;
         match params.get("kb_id").and_then(|v| v.as_str()) {
             Some(kb_id) => {
+                // Membership FIRST, and unconditionally. Everything below this
+                // point is conditional on a signature being present, and the hub
+                // accepts unsigned ops by design (`require_signed` is
+                // `matches!(transport, Transport::P2p)`), so before this check a
+                // non-member could write any KB node by simply omitting the
+                // header: `verify_relayed_content_op` returns `Ok(None)`,
+                // `sync_content_header` stays `None`, and the `if let
+                // Some(author)` fence block never runs. The write then reached
+                // the WAL and was replayed on every restart.
+                //
+                // @ai-caution: [dispatch-authz] This gate must NOT be folded into
+                // the signature branch, however tempting the symmetry. Signature
+                // verification answers "who wrote this"; `kb_access` answers "may
+                // they write here at all". They are different questions and the
+                // second one has no default answer. Regression:
+                // `collab_handler_unauthorized_surface_tests::
+                // unsigned_sync_update_from_a_non_member_cannot_write_a_kb_node`.
+                match kb_access(doc_store, kb_id, auth_principal, KbOp::Edit, transport).await {
+                    Ok(AccessDecision::Allow) => {}
+                    Ok(AccessDecision::Deny(m)) | Err(m) => {
+                        warn!(session = session_id, doc = %doc_name, kb_id = %kb_id, reason = %m,
+                              "sync/update: kb node write DENIED (not a member / insufficient role)");
+                        return JsonRpcResponse::error(id, McpError::internal_error(m));
+                    }
+                    Ok(_) => {
+                        return JsonRpcResponse::error(
+                            id,
+                            McpError::internal_error(format!("cannot write to KB '{kb_id}'")),
+                        );
+                    }
+                }
+
                 // Fence on the VERIFIED header author (a relayed op's true author —
                 // never the connection principal), mirroring the dialer's #157 N1 path.
                 if let Some(author) = sync_content_header
