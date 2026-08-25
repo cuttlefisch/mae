@@ -12826,19 +12826,19 @@
     },
     {
       "path": "shared/sync/src/kb/tests/collection_roles_tests.rs",
-      "lines": 470,
-      "test_lines": 470,
+      "lines": 638,
+      "test_lines": 638,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 44,
-      "max_fn_name": "member_epoch_advances_only_on_role_change",
+      "max_fn_lines": 50,
+      "max_fn_name": "peers_that_adopt_a_rebirth_converge_byte_identically",
       "max_match_arms": 0,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 2,
       "use_count": 3,
       "pub_items": 0,
-      "test_count": 21
+      "test_count": 24
     },
     {
       "path": "shared/sync/src/kb/tests/mod.rs",
