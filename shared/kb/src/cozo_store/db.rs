@@ -351,15 +351,19 @@ impl CozoKbStore {
         &self,
         prefix: Option<&str>,
     ) -> Result<Vec<(String, String)>, KbStoreError> {
-        let query = if let Some(p) = prefix {
-            format!(
-                "?[id, title] := *nodes{{id, title}}, title != '', starts_with(id, '{}')",
-                p.replace('\'', "")
+        // Bound, not interpolated. `p.replace('\'', "")` stripped single quotes
+        // only, and silently CHANGED the caller's prefix while doing so -- an id
+        // legitimately containing a quote would have matched the wrong set.
+        // See `mae_kb::ident` for the identifier-position counterpart.
+        let result = if let Some(p) = prefix {
+            self.run_immut_params(
+                "?[id, title] := *nodes{id, title}, title != '', starts_with(id, $prefix)",
+                btree_params([("prefix", dv_str(p))]),
             )
         } else {
-            "?[id, title] := *nodes{id, title}, title != ''".to_string()
-        };
-        let result = self.run_immut(&query).map_err(cozo_err)?;
+            self.run_immut("?[id, title] := *nodes{id, title}, title != ''")
+        }
+        .map_err(cozo_err)?;
         Ok(result
             .rows
             .iter()
@@ -377,25 +381,23 @@ impl CozoKbStore {
         prefix: Option<&str>,
         body_limit: usize,
     ) -> Result<Vec<(String, String, String)>, KbStoreError> {
-        let query = if body_limit == 0 {
-            // No body needed — same as id_title_pairs
-            if let Some(p) = prefix {
-                format!(
-                    "?[id, title, body] := *nodes{{id, title}}, title != '', starts_with(id, '{}'), body = ''",
-                    p.replace('\'', "")
-                )
-            } else {
-                "?[id, title, body] := *nodes{id, title}, title != '', body = ''".to_string()
+        // Same binding as `id_title_pairs` above, for the same reason.
+        let result = match (body_limit, prefix) {
+            // No body needed — same shape as id_title_pairs.
+            (0, Some(p)) => self.run_immut_params(
+                "?[id, title, body] := *nodes{id, title}, title != '', starts_with(id, $prefix), body = ''",
+                btree_params([("prefix", dv_str(p))]),
+            ),
+            (0, None) => {
+                self.run_immut("?[id, title, body] := *nodes{id, title}, title != '', body = ''")
             }
-        } else if let Some(p) = prefix {
-            format!(
-                "?[id, title, body] := *nodes{{id, title, body}}, title != '', starts_with(id, '{}')",
-                p.replace('\'', "")
-            )
-        } else {
-            "?[id, title, body] := *nodes{id, title, body}, title != ''".to_string()
-        };
-        let result = self.run_immut(&query).map_err(cozo_err)?;
+            (_, Some(p)) => self.run_immut_params(
+                "?[id, title, body] := *nodes{id, title, body}, title != '', starts_with(id, $prefix)",
+                btree_params([("prefix", dv_str(p))]),
+            ),
+            (_, None) => self.run_immut("?[id, title, body] := *nodes{id, title, body}, title != ''"),
+        }
+        .map_err(cozo_err)?;
         Ok(result
             .rows
             .iter()
