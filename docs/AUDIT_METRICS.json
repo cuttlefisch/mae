@@ -282,11 +282,11 @@
     },
     {
       "path": "crates/ai/src/executor/collab_exec.rs",
-      "lines": 1106,
-      "test_lines": 490,
+      "lines": 1107,
+      "test_lines": 491,
       "code_lines": 616,
       "is_test_file": false,
-      "max_fn_lines": 94,
+      "max_fn_lines": 95,
       "max_fn_name": "kb_share_primary_node_ids_exclude_federated_instance_nodes",
       "max_match_arms": 24,
       "max_struct_fields": 0,
@@ -602,11 +602,11 @@
     },
     {
       "path": "crates/ai/src/guidance.rs",
-      "lines": 719,
-      "test_lines": 426,
+      "lines": 721,
+      "test_lines": 428,
       "code_lines": 293,
       "is_test_file": false,
-      "max_fn_lines": 45,
+      "max_fn_lines": 46,
       "max_fn_name": "build_guidance_context_combines_both_sections",
       "max_match_arms": 5,
       "max_struct_fields": 0,
@@ -986,8 +986,8 @@
     },
     {
       "path": "crates/ai/src/tool_impls/introspect.rs",
-      "lines": 627,
-      "test_lines": 154,
+      "lines": 628,
+      "test_lines": 155,
       "code_lines": 473,
       "is_test_file": false,
       "max_fn_lines": 78,
@@ -1002,9 +1002,9 @@
     },
     {
       "path": "crates/ai/src/tool_impls/kb.rs",
-      "lines": 6493,
-      "test_lines": 3988,
-      "code_lines": 2505,
+      "lines": 6542,
+      "test_lines": 4003,
+      "code_lines": 2539,
       "is_test_file": false,
       "max_fn_lines": 183,
       "max_fn_name": "kb_search_context_dev_practices_shaped_kb_surfaces_all_six_originally_reported_queries",
@@ -1290,11 +1290,11 @@
     },
     {
       "path": "crates/ai/src/tools/kb_tools.rs",
-      "lines": 725,
+      "lines": 724,
       "test_lines": 0,
-      "code_lines": 725,
+      "code_lines": 724,
       "is_test_file": false,
-      "max_fn_lines": 719,
+      "max_fn_lines": 718,
       "max_fn_name": "kb_tool_definitions",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -1834,11 +1834,11 @@
     },
     {
       "path": "crates/core/src/ai_residency.rs",
-      "lines": 225,
-      "test_lines": 123,
+      "lines": 226,
+      "test_lines": 124,
       "code_lines": 102,
       "is_test_file": false,
-      "max_fn_lines": 41,
+      "max_fn_lines": 42,
       "max_fn_name": "filter_residency_exempt_only_affects_the_named_restricted_instance",
       "max_match_arms": 2,
       "max_struct_fields": 0,
@@ -2090,9 +2090,9 @@
     },
     {
       "path": "crates/core/src/editor/agenda_ops.rs",
-      "lines": 647,
+      "lines": 655,
       "test_lines": 354,
-      "code_lines": 293,
+      "code_lines": 301,
       "is_test_file": false,
       "max_fn_lines": 92,
       "max_fn_name": "build_agenda_view",
@@ -2186,13 +2186,13 @@
     },
     {
       "path": "crates/core/src/editor/command.rs",
-      "lines": 1574,
+      "lines": 1590,
       "test_lines": 212,
-      "code_lines": 1362,
+      "code_lines": 1378,
       "is_test_file": false,
-      "max_fn_lines": 1255,
+      "max_fn_lines": 1271,
       "max_fn_name": "execute_command",
-      "max_match_arms": 77,
+      "max_match_arms": 78,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 6,
@@ -2682,8 +2682,8 @@
     },
     {
       "path": "crates/core/src/editor/graph_view_ops.rs",
-      "lines": 8826,
-      "test_lines": 6267,
+      "lines": 8830,
+      "test_lines": 6271,
       "code_lines": 2559,
       "is_test_file": false,
       "max_fn_lines": 537,
@@ -2714,8 +2714,8 @@
     },
     {
       "path": "crates/core/src/editor/help_ops.rs",
-      "lines": 3308,
-      "test_lines": 1635,
+      "lines": 3313,
+      "test_lines": 1640,
       "code_lines": 1673,
       "is_test_file": false,
       "max_fn_lines": 193,
@@ -2874,25 +2874,25 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/registry.rs",
-      "lines": 1443,
-      "test_lines": 350,
-      "code_lines": 1093,
+      "lines": 1501,
+      "test_lines": 352,
+      "code_lines": 1149,
       "is_test_file": false,
-      "max_fn_lines": 129,
+      "max_fn_lines": 142,
       "max_fn_name": "kb_reimport",
       "max_match_arms": 2,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 4,
       "use_count": 5,
-      "pub_items": 16,
+      "pub_items": 17,
       "test_count": 12
     },
     {
       "path": "crates/core/src/editor/kb_ops/search.rs",
-      "lines": 695,
+      "lines": 701,
       "test_lines": 0,
-      "code_lines": 695,
+      "code_lines": 701,
       "is_test_file": false,
       "max_fn_lines": 189,
       "max_fn_name": "kb_federated_search_scoped_impl",
@@ -2906,11 +2906,11 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/sync.rs",
-      "lines": 762,
+      "lines": 763,
       "test_lines": 0,
-      "code_lines": 762,
+      "code_lines": 763,
       "is_test_file": false,
-      "max_fn_lines": 224,
+      "max_fn_lines": 225,
       "max_fn_name": "kb_register_joined_instance",
       "max_match_arms": 3,
       "max_struct_fields": 0,
@@ -2938,8 +2938,8 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_collab_sync_tests.rs",
-      "lines": 480,
-      "test_lines": 480,
+      "lines": 481,
+      "test_lines": 481,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 71,
@@ -2970,11 +2970,11 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_crud_tests.rs",
-      "lines": 384,
-      "test_lines": 384,
+      "lines": 386,
+      "test_lines": 386,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 54,
+      "max_fn_lines": 55,
       "max_fn_name": "kb_update_node_shared_instance_queues_crdt_update",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -3002,8 +3002,8 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_durability_tests.rs",
-      "lines": 985,
-      "test_lines": 985,
+      "lines": 986,
+      "test_lines": 986,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 85,
@@ -3017,12 +3017,28 @@
       "test_count": 24
     },
     {
-      "path": "crates/core/src/editor/kb_ops/tests/kb_ops_instance_matching_tests.rs",
-      "lines": 90,
-      "test_lines": 90,
+      "path": "crates/core/src/editor/kb_ops/tests/kb_ops_ingest_policy_tests.rs",
+      "lines": 313,
+      "test_lines": 313,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 59,
+      "max_fn_lines": 61,
+      "max_fn_name": "detaching_one_instance_does_not_stop_another_from_ingesting",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 2,
+      "pub_items": 0,
+      "test_count": 7
+    },
+    {
+      "path": "crates/core/src/editor/kb_ops/tests/kb_ops_instance_matching_tests.rs",
+      "lines": 91,
+      "test_lines": 91,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 60,
       "max_fn_name": "an_empty_org_dir_instance_does_not_claim_every_path",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -3066,8 +3082,8 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_read_clobber_tests.rs",
-      "lines": 195,
-      "test_lines": 195,
+      "lines": 196,
+      "test_lines": 196,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 45,
@@ -3098,11 +3114,11 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_reimport_guard_tests.rs",
-      "lines": 75,
-      "test_lines": 75,
+      "lines": 76,
+      "test_lines": 76,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 52,
+      "max_fn_lines": 53,
       "max_fn_name": "reimporting_a_dir_less_instance_does_not_blank_it",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -3114,11 +3130,11 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_search_federation_tests.rs",
-      "lines": 1005,
-      "test_lines": 1005,
+      "lines": 1007,
+      "test_lines": 1007,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 113,
+      "max_fn_lines": 114,
       "max_fn_name": "kb_federated_search_scope_project_never_leaks_across_projects",
       "max_match_arms": 0,
       "max_struct_fields": 5,
@@ -3130,8 +3146,8 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_system_kb_tests.rs",
-      "lines": 241,
-      "test_lines": 241,
+      "lines": 242,
+      "test_lines": 242,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 51,
@@ -3178,8 +3194,8 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/mod.rs",
-      "lines": 57,
-      "test_lines": 57,
+      "lines": 58,
+      "test_lines": 58,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 23,
@@ -6250,8 +6266,8 @@
     },
     {
       "path": "crates/mae/src/ai_residency.rs",
-      "lines": 1653,
-      "test_lines": 1007,
+      "lines": 1654,
+      "test_lines": 1008,
       "code_lines": 646,
       "is_test_file": false,
       "max_fn_lines": 143,
@@ -6346,11 +6362,11 @@
     },
     {
       "path": "crates/mae/src/bootstrap/mod.rs",
-      "lines": 2941,
+      "lines": 2942,
       "test_lines": 0,
-      "code_lines": 2941,
+      "code_lines": 2942,
       "is_test_file": false,
-      "max_fn_lines": 528,
+      "max_fn_lines": 529,
       "max_fn_name": "init_kb_federation",
       "max_match_arms": 10,
       "max_struct_fields": 1,
@@ -6362,11 +6378,11 @@
     },
     {
       "path": "crates/mae/src/bootstrap/tests/eviction.rs",
-      "lines": 137,
-      "test_lines": 137,
+      "lines": 139,
+      "test_lines": 139,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 74,
+      "max_fn_lines": 75,
       "max_fn_name": "init_kb_federation_evicts_mae_provisioned_rows_and_keeps_the_users_own",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -6778,11 +6794,11 @@
     },
     {
       "path": "crates/mae/src/collab_bridge/tests/collab_bridge_kb_sync_tests.rs",
-      "lines": 476,
-      "test_lines": 476,
+      "lines": 478,
+      "test_lines": 478,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 98,
+      "max_fn_lines": 99,
       "max_fn_name": "adr019_share_marker_survives_registry_reload",
       "max_match_arms": 2,
       "max_struct_fields": 0,
@@ -7738,8 +7754,8 @@
     },
     {
       "path": "crates/mae/tests/guidance_delivery_e2e.rs",
-      "lines": 325,
-      "test_lines": 325,
+      "lines": 326,
+      "test_lines": 326,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 43,
@@ -7850,8 +7866,8 @@
     },
     {
       "path": "crates/mae/tests/headless_test_support/mod.rs",
-      "lines": 303,
-      "test_lines": 303,
+      "lines": 324,
+      "test_lines": 324,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 52,
@@ -8874,8 +8890,8 @@
     },
     {
       "path": "crates/scheme/src/runtime_tests.rs",
-      "lines": 2620,
-      "test_lines": 2620,
+      "lines": 2621,
+      "test_lines": 2621,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 55,
@@ -9322,9 +9338,9 @@
     },
     {
       "path": "daemon/benches/kb_dispatch_concurrency.rs",
-      "lines": 497,
+      "lines": 500,
       "test_lines": 0,
-      "code_lines": 497,
+      "code_lines": 500,
       "is_test_file": false,
       "max_fn_lines": 96,
       "max_fn_name": "bench_kb_dispatch_multi_tenant_concurrency",
@@ -9338,16 +9354,16 @@
     },
     {
       "path": "daemon/build.rs",
-      "lines": 60,
+      "lines": 108,
       "test_lines": 0,
-      "code_lines": 60,
+      "code_lines": 108,
       "is_test_file": false,
-      "max_fn_lines": 50,
+      "max_fn_lines": 51,
       "max_fn_name": "main",
-      "max_match_arms": 2,
+      "max_match_arms": 3,
       "max_struct_fields": 0,
       "max_struct_name": "",
-      "max_nesting": 2,
+      "max_nesting": 3,
       "use_count": 1,
       "pub_items": 0,
       "test_count": 0
@@ -9386,19 +9402,35 @@
     },
     {
       "path": "daemon/src/checkpoint.rs",
-      "lines": 302,
-      "test_lines": 102,
-      "code_lines": 200,
+      "lines": 454,
+      "test_lines": 239,
+      "code_lines": 215,
       "is_test_file": false,
-      "max_fn_lines": 29,
-      "max_fn_name": "checkpoint_kb",
-      "max_match_arms": 0,
+      "max_fn_lines": 36,
+      "max_fn_name": "a_checkpoint_restores_content_that_was_destroyed_after_it_was_taken",
+      "max_match_arms": 2,
       "max_struct_fields": 4,
       "max_struct_name": "KbCheckpoint",
       "max_nesting": 1,
-      "use_count": 5,
+      "use_count": 7,
       "pub_items": 7,
-      "test_count": 4
+      "test_count": 8
+    },
+    {
+      "path": "daemon/src/checkpoint_cli.rs",
+      "lines": 121,
+      "test_lines": 0,
+      "code_lines": 121,
+      "is_test_file": false,
+      "max_fn_lines": 41,
+      "max_fn_name": "run_checkpoint",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 3,
+      "pub_items": 0,
+      "test_count": 0
     },
     {
       "path": "daemon/src/cli.rs",
@@ -9417,10 +9449,26 @@
       "test_count": 10
     },
     {
-      "path": "daemon/src/collab_handler/docs_methods.rs",
-      "lines": 193,
+      "path": "daemon/src/collab_handler/access.rs",
+      "lines": 447,
       "test_lines": 0,
-      "code_lines": 193,
+      "code_lines": 447,
+      "is_test_file": false,
+      "max_fn_lines": 157,
+      "max_fn_name": "verify_member_self_service_update",
+      "max_match_arms": 3,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 4,
+      "use_count": 1,
+      "pub_items": 1,
+      "test_count": 0
+    },
+    {
+      "path": "daemon/src/collab_handler/docs_methods.rs",
+      "lines": 202,
+      "test_lines": 0,
+      "code_lines": 202,
       "is_test_file": false,
       "max_fn_lines": 35,
       "max_fn_name": "handle_docs_save_committed",
@@ -9545,30 +9593,46 @@
       "test_count": 0
     },
     {
-      "path": "daemon/src/collab_handler/mod.rs",
-      "lines": 2398,
-      "test_lines": 0,
-      "code_lines": 2398,
+      "path": "daemon/src/collab_handler/method_authz.rs",
+      "lines": 357,
+      "test_lines": 52,
+      "code_lines": 305,
       "is_test_file": false,
-      "max_fn_lines": 477,
+      "max_fn_lines": 52,
+      "max_fn_name": "parse",
+      "max_match_arms": 45,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 2,
+      "pub_items": 0,
+      "test_count": 3
+    },
+    {
+      "path": "daemon/src/collab_handler/mod.rs",
+      "lines": 1986,
+      "test_lines": 0,
+      "code_lines": 1986,
+      "is_test_file": false,
+      "max_fn_lines": 498,
       "max_fn_name": "handle_doc_request_inner",
-      "max_match_arms": 38,
+      "max_match_arms": 37,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 4,
-      "use_count": 17,
-      "pub_items": 14,
+      "use_count": 19,
+      "pub_items": 13,
       "test_count": 0
     },
     {
       "path": "daemon/src/collab_handler/sync_methods.rs",
-      "lines": 502,
+      "lines": 534,
       "test_lines": 0,
-      "code_lines": 502,
+      "code_lines": 534,
       "is_test_file": false,
-      "max_fn_lines": 162,
+      "max_fn_lines": 194,
       "max_fn_name": "handle_sync_update",
-      "max_match_arms": 2,
+      "max_match_arms": 3,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 4,
@@ -10041,6 +10105,22 @@
       "test_count": 6
     },
     {
+      "path": "daemon/src/collab_handler/tests/collab_handler_unauthorized_surface_tests.rs",
+      "lines": 346,
+      "test_lines": 346,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 99,
+      "max_fn_name": "docs_content_cannot_read_a_kb_node_document",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 0,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 4
+    },
+    {
       "path": "daemon/src/collab_handler/tests/collab_handler_viewer_epoch_tests.rs",
       "lines": 360,
       "test_lines": 360,
@@ -10058,8 +10138,8 @@
     },
     {
       "path": "daemon/src/collab_handler/tests/mod.rs",
-      "lines": 461,
-      "test_lines": 461,
+      "lines": 462,
+      "test_lines": 462,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 33,
@@ -10186,8 +10266,8 @@
     },
     {
       "path": "daemon/src/handler.rs",
-      "lines": 2336,
-      "test_lines": 1151,
+      "lines": 2339,
+      "test_lines": 1154,
       "code_lines": 1185,
       "is_test_file": false,
       "max_fn_lines": 656,
@@ -10202,9 +10282,9 @@
     },
     {
       "path": "daemon/src/hygiene.rs",
-      "lines": 380,
+      "lines": 384,
       "test_lines": 130,
-      "code_lines": 250,
+      "code_lines": 254,
       "is_test_file": false,
       "max_fn_lines": 79,
       "max_fn_name": "run_hygiene_scan",
@@ -10298,13 +10378,13 @@
     },
     {
       "path": "daemon/src/main.rs",
-      "lines": 1715,
+      "lines": 1726,
       "test_lines": 0,
-      "code_lines": 1715,
+      "code_lines": 1726,
       "is_test_file": false,
       "max_fn_lines": 438,
       "max_fn_name": "spawn_collab_server",
-      "max_match_arms": 8,
+      "max_match_arms": 10,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 8,
@@ -10314,9 +10394,9 @@
     },
     {
       "path": "daemon/src/maintenance.rs",
-      "lines": 172,
+      "lines": 173,
       "test_lines": 81,
-      "code_lines": 91,
+      "code_lines": 92,
       "is_test_file": false,
       "max_fn_lines": 39,
       "max_fn_name": "run_maintenance_scan",
@@ -10410,9 +10490,9 @@
     },
     {
       "path": "daemon/src/projector.rs",
-      "lines": 653,
+      "lines": 658,
       "test_lines": 253,
-      "code_lines": 400,
+      "code_lines": 405,
       "is_test_file": false,
       "max_fn_lines": 68,
       "max_fn_name": "reconcile_kb",
@@ -10458,9 +10538,9 @@
     },
     {
       "path": "daemon/src/scheduler.rs",
-      "lines": 678,
-      "test_lines": 249,
-      "code_lines": 429,
+      "lines": 761,
+      "test_lines": 314,
+      "code_lines": 447,
       "is_test_file": false,
       "max_fn_lines": 189,
       "max_fn_name": "run_maintenance_tick",
@@ -10468,9 +10548,9 @@
       "max_struct_fields": 4,
       "max_struct_name": "DaemonScheduler",
       "max_nesting": 4,
-      "use_count": 14,
+      "use_count": 16,
       "pub_items": 4,
-      "test_count": 6
+      "test_count": 9
     },
     {
       "path": "daemon/src/storage.rs",
@@ -10794,11 +10874,11 @@
     },
     {
       "path": "daemon/tests/federated_instance_startup_e2e.rs",
-      "lines": 210,
-      "test_lines": 210,
+      "lines": 211,
+      "test_lines": 211,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 59,
+      "max_fn_lines": 60,
       "max_fn_name": "prepare_multi_instance_data_dir",
       "max_match_arms": 0,
       "max_struct_fields": 2,
@@ -11066,16 +11146,16 @@
     },
     {
       "path": "shared/kb/src/cozo_store/agenda.rs",
-      "lines": 80,
+      "lines": 104,
       "test_lines": 0,
-      "code_lines": 80,
+      "code_lines": 104,
       "is_test_file": false,
-      "max_fn_lines": 70,
+      "max_fn_lines": 63,
       "max_fn_name": "agenda_query",
       "max_match_arms": 10,
       "max_struct_fields": 0,
       "max_struct_name": "",
-      "max_nesting": 2,
+      "max_nesting": 1,
       "use_count": 2,
       "pub_items": 1,
       "test_count": 0
@@ -11098,9 +11178,9 @@
     },
     {
       "path": "shared/kb/src/cozo_store/db.rs",
-      "lines": 586,
+      "lines": 599,
       "test_lines": 0,
-      "code_lines": 586,
+      "code_lines": 599,
       "is_test_file": false,
       "max_fn_lines": 82,
       "max_fn_name": "retry_on_transient_sqlite_busy_with_deadline",
@@ -11146,11 +11226,11 @@
     },
     {
       "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-      "lines": 599,
+      "lines": 681,
       "test_lines": 0,
-      "code_lines": 599,
+      "code_lines": 681,
       "is_test_file": false,
-      "max_fn_lines": 114,
+      "max_fn_lines": 157,
       "max_fn_name": "fts_search",
       "max_match_arms": 3,
       "max_struct_fields": 0,
@@ -11162,9 +11242,9 @@
     },
     {
       "path": "shared/kb/src/cozo_store/links.rs",
-      "lines": 179,
+      "lines": 186,
       "test_lines": 0,
-      "code_lines": 179,
+      "code_lines": 186,
       "is_test_file": false,
       "max_fn_lines": 33,
       "max_fn_name": "seed_typed_relationships",
@@ -11178,9 +11258,9 @@
     },
     {
       "path": "shared/kb/src/cozo_store/mod.rs",
-      "lines": 59,
+      "lines": 61,
       "test_lines": 0,
-      "code_lines": 59,
+      "code_lines": 61,
       "is_test_file": false,
       "max_fn_lines": 4,
       "max_fn_name": "fmt",
@@ -11194,9 +11274,9 @@
     },
     {
       "path": "shared/kb/src/cozo_store/schema.rs",
-      "lines": 770,
+      "lines": 786,
       "test_lines": 0,
-      "code_lines": 770,
+      "code_lines": 786,
       "is_test_file": false,
       "max_fn_lines": 316,
       "max_fn_name": "ensure_schema",
@@ -11242,8 +11322,8 @@
     },
     {
       "path": "shared/kb/src/cozo_store/tests/agenda_tests.rs",
-      "lines": 205,
-      "test_lines": 205,
+      "lines": 274,
+      "test_lines": 274,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 85,
@@ -11251,10 +11331,10 @@
       "max_match_arms": 0,
       "max_struct_fields": 0,
       "max_struct_name": "",
-      "max_nesting": 0,
+      "max_nesting": 1,
       "use_count": 1,
       "pub_items": 0,
-      "test_count": 4
+      "test_count": 5
     },
     {
       "path": "shared/kb/src/cozo_store/tests/blocks_tests.rs",
@@ -11402,8 +11482,8 @@
     },
     {
       "path": "shared/kb/src/cozo_store/tests/mod.rs",
-      "lines": 26,
-      "test_lines": 26,
+      "lines": 30,
+      "test_lines": 30,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 5,
@@ -11415,6 +11495,38 @@
       "use_count": 1,
       "pub_items": 0,
       "test_count": 0
+    },
+    {
+      "path": "shared/kb/src/cozo_store/tests/query_plan_guard_tests.rs",
+      "lines": 312,
+      "test_lines": 312,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 120,
+      "max_fn_name": "scan_for_post_filtered_keys",
+      "max_match_arms": 0,
+      "max_struct_fields": 3,
+      "max_struct_name": "Offence",
+      "max_nesting": 5,
+      "use_count": 0,
+      "pub_items": 0,
+      "test_count": 2
+    },
+    {
+      "path": "shared/kb/src/cozo_store/tests/query_plan_tests.rs",
+      "lines": 236,
+      "test_lines": 236,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 52,
+      "max_fn_name": "get_node_on_a_missing_id_is_far_cheaper_than_a_relation_scan",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 4
     },
     {
       "path": "shared/kb/src/cozo_store/tests/schema_tests.rs",
@@ -11466,8 +11578,8 @@
     },
     {
       "path": "shared/kb/src/cozo_store/tests/versioning_tests.rs",
-      "lines": 249,
-      "test_lines": 249,
+      "lines": 297,
+      "test_lines": 297,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 44,
@@ -11478,7 +11590,23 @@
       "max_nesting": 1,
       "use_count": 1,
       "pub_items": 0,
-      "test_count": 7
+      "test_count": 8
+    },
+    {
+      "path": "shared/kb/src/cozo_store/tests/wal_tests.rs",
+      "lines": 79,
+      "test_lines": 79,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 31,
+      "max_fn_name": "a_fresh_store_is_created_in_wal_mode_and_stays_there",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 2
     },
     {
       "path": "shared/kb/src/cozo_store/util.rs",
@@ -11514,18 +11642,34 @@
     },
     {
       "path": "shared/kb/src/cozo_store/versioning.rs",
-      "lines": 214,
+      "lines": 222,
       "test_lines": 0,
-      "code_lines": 214,
+      "code_lines": 222,
       "is_test_file": false,
       "max_fn_lines": 65,
       "max_fn_name": "restore_version",
-      "max_match_arms": 2,
+      "max_match_arms": 3,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 1,
       "use_count": 2,
       "pub_items": 4,
+      "test_count": 0
+    },
+    {
+      "path": "shared/kb/src/cozo_store/wal.rs",
+      "lines": 82,
+      "test_lines": 0,
+      "code_lines": 82,
+      "is_test_file": false,
+      "max_fn_lines": 31,
+      "max_fn_name": "ensure_wal",
+      "max_match_arms": 2,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
       "test_count": 0
     },
     {
@@ -11594,18 +11738,18 @@
     },
     {
       "path": "shared/kb/src/federation.rs",
-      "lines": 1862,
-      "test_lines": 714,
-      "code_lines": 1148,
+      "lines": 1936,
+      "test_lines": 716,
+      "code_lines": 1220,
       "is_test_file": false,
       "max_fn_lines": 168,
       "max_fn_name": "import_org_dir_to_store",
       "max_match_arms": 5,
-      "max_struct_fields": 16,
+      "max_struct_fields": 17,
       "max_struct_name": "KbInstance",
       "max_nesting": 7,
       "use_count": 11,
-      "pub_items": 45,
+      "pub_items": 49,
       "test_count": 27
     },
     {
@@ -11657,10 +11801,26 @@
       "test_count": 0
     },
     {
+      "path": "shared/kb/src/ident.rs",
+      "lines": 122,
+      "test_lines": 64,
+      "code_lines": 58,
+      "is_test_file": false,
+      "max_fn_lines": 19,
+      "max_fn_name": "injection_attempts_are_rejected",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 2,
+      "test_count": 3
+    },
+    {
       "path": "shared/kb/src/kb_build.rs",
-      "lines": 476,
+      "lines": 515,
       "test_lines": 0,
-      "code_lines": 476,
+      "code_lines": 515,
       "is_test_file": false,
       "max_fn_lines": 81,
       "max_fn_name": "ingest_org_dir",
@@ -11706,8 +11866,8 @@
     },
     {
       "path": "shared/kb/src/kb_identity_tests.rs",
-      "lines": 269,
-      "test_lines": 269,
+      "lines": 270,
+      "test_lines": 270,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 25,
@@ -11722,19 +11882,19 @@
     },
     {
       "path": "shared/kb/src/lib.rs",
-      "lines": 5343,
-      "test_lines": 2641,
-      "code_lines": 2702,
+      "lines": 5477,
+      "test_lines": 2698,
+      "code_lines": 2779,
       "is_test_file": false,
       "max_fn_lines": 120,
       "max_fn_name": "extract_subgraph",
       "max_match_arms": 14,
-      "max_struct_fields": 13,
+      "max_struct_fields": 14,
       "max_struct_name": "Node",
       "max_nesting": 8,
       "use_count": 12,
-      "pub_items": 86,
-      "test_count": 119
+      "pub_items": 88,
+      "test_count": 120
     },
     {
       "path": "shared/kb/src/lru_query.rs",
@@ -11786,18 +11946,18 @@
     },
     {
       "path": "shared/kb/src/org.rs",
-      "lines": 2518,
+      "lines": 2567,
       "test_lines": 1164,
-      "code_lines": 1354,
+      "code_lines": 1403,
       "is_test_file": false,
-      "max_fn_lines": 105,
-      "max_fn_name": "parse_org_multi_with_types",
+      "max_fn_lines": 107,
+      "max_fn_name": "parse_org_multi_result",
       "max_match_arms": 5,
       "max_struct_fields": 7,
       "max_struct_name": "ParsedLink",
       "max_nesting": 6,
       "use_count": 6,
-      "pub_items": 16,
+      "pub_items": 17,
       "test_count": 59
     },
     {
@@ -11834,9 +11994,9 @@
     },
     {
       "path": "shared/kb/src/store.rs",
-      "lines": 610,
+      "lines": 630,
       "test_lines": 51,
-      "code_lines": 559,
+      "code_lines": 579,
       "is_test_file": false,
       "max_fn_lines": 27,
       "max_fn_name": "node_version_verify_integrity_detects_tampering",
@@ -11866,9 +12026,9 @@
     },
     {
       "path": "shared/kb/src/watch.rs",
-      "lines": 591,
+      "lines": 626,
       "test_lines": 0,
-      "code_lines": 591,
+      "code_lines": 626,
       "is_test_file": false,
       "max_fn_lines": 42,
       "max_fn_name": "pump",
@@ -11909,6 +12069,38 @@
       "max_struct_name": "",
       "max_nesting": 3,
       "use_count": 3,
+      "pub_items": 0,
+      "test_count": 1
+    },
+    {
+      "path": "shared/kb/tests/external_links_are_not_graph_edges.rs",
+      "lines": 99,
+      "test_lines": 99,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 31,
+      "max_fn_name": "ingest_creates_edges_only_for_internal_targets",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 3
+    },
+    {
+      "path": "shared/kb/tests/node_source_serialization.rs",
+      "lines": 35,
+      "test_lines": 35,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 24,
+      "max_fn_name": "an_unknown_provenance_value_is_not_coerced",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
       "pub_items": 0,
       "test_count": 1
     },
@@ -12362,18 +12554,18 @@
     },
     {
       "path": "shared/sync/src/kb/node.rs",
-      "lines": 653,
+      "lines": 736,
       "test_lines": 0,
-      "code_lines": 653,
+      "code_lines": 736,
       "is_test_file": false,
-      "max_fn_lines": 35,
+      "max_fn_lines": 31,
       "max_fn_name": "set_aliases",
       "max_match_arms": 2,
-      "max_struct_fields": 11,
+      "max_struct_fields": 13,
       "max_struct_name": "MaterializedNode",
       "max_nesting": 3,
-      "use_count": 5,
-      "pub_items": 42,
+      "use_count": 7,
+      "pub_items": 45,
       "test_count": 0
     },
     {
@@ -12697,6 +12889,38 @@
       "test_count": 7
     },
     {
+      "path": "shared/sync/tests/node_doc_growth.rs",
+      "lines": 119,
+      "test_lines": 119,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 29,
+      "max_fn_name": "setting_fields_to_their_current_values_does_not_grow_the_document",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 3
+    },
+    {
+      "path": "shared/sync/tests/node_provenance_survives_sync.rs",
+      "lines": 156,
+      "test_lines": 156,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 21,
+      "max_fn_name": "provenance_survives_concurrent_edits_from_two_peers",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 6
+    },
+    {
       "path": "shared/sync/tests/revocation_forward_secrecy.rs",
       "lines": 293,
       "test_lines": 293,
@@ -12901,6 +13125,11 @@
         "path": "crates/ai/src/tool_impls/git.rs",
         "line": 12,
         "category": "test-safety"
+      },
+      {
+        "path": "crates/ai/src/tool_impls/kb.rs",
+        "line": 2348,
+        "category": "datalog-injection"
       },
       {
         "path": "crates/ai/src/tools/authorization.rs",
@@ -13124,12 +13353,12 @@
       },
       {
         "path": "crates/core/src/editor/kb_ops/registry.rs",
-        "line": 825,
+        "line": 838,
         "category": "kb-provenance"
       },
       {
         "path": "crates/core/src/editor/kb_ops/registry.rs",
-        "line": 964,
+        "line": 977,
         "category": "correctness"
       },
       {
@@ -13448,6 +13677,11 @@
         "category": "permission"
       },
       {
+        "path": "crates/mae/tests/headless_test_support/mod.rs",
+        "line": 160,
+        "category": "test-timing"
+      },
+      {
         "path": "crates/renderer/src/buffer_render.rs",
         "line": 4,
         "category": "rendering"
@@ -13623,6 +13857,11 @@
         "category": "architecture-debt"
       },
       {
+        "path": "daemon/src/checkpoint_cli.rs",
+        "line": 24,
+        "category": "daemon-state"
+      },
+      {
         "path": "daemon/src/cli.rs",
         "line": 3,
         "category": "multi-instance"
@@ -13633,29 +13872,39 @@
         "category": "kb-scoping"
       },
       {
+        "path": "daemon/src/collab_handler/method_authz.rs",
+        "line": 4,
+        "category": "dispatch-authz"
+      },
+      {
         "path": "daemon/src/collab_handler/mod.rs",
         "line": 9,
         "category": "architecture-debt"
       },
       {
         "path": "daemon/src/collab_handler/mod.rs",
-        "line": 854,
+        "line": 858,
         "category": "kb-scoping"
       },
       {
         "path": "daemon/src/collab_handler/mod.rs",
-        "line": 946,
+        "line": 950,
         "category": "architecture-debt"
       },
       {
         "path": "daemon/src/collab_handler/mod.rs",
-        "line": 1664,
+        "line": 1231,
         "category": "kb-scoping"
       },
       {
         "path": "daemon/src/collab_handler/mod.rs",
-        "line": 1799,
+        "line": 1366,
         "category": "kb-scoping"
+      },
+      {
+        "path": "daemon/src/collab_handler/mod.rs",
+        "line": 1449,
+        "category": "dispatch-authz"
       },
       {
         "path": "daemon/src/collab_handler/sync_methods.rs",
@@ -13664,12 +13913,17 @@
       },
       {
         "path": "daemon/src/collab_handler/sync_methods.rs",
-        "line": 321,
+        "line": 152,
+        "category": "dispatch-authz"
+      },
+      {
+        "path": "daemon/src/collab_handler/sync_methods.rs",
+        "line": 353,
         "category": "security"
       },
       {
         "path": "daemon/src/collab_handler/sync_methods.rs",
-        "line": 386,
+        "line": 418,
         "category": "security"
       },
       {
@@ -13709,12 +13963,12 @@
       },
       {
         "path": "daemon/src/main.rs",
-        "line": 78,
+        "line": 79,
         "category": "multi-instance"
       },
       {
         "path": "daemon/src/main.rs",
-        "line": 318,
+        "line": 329,
         "category": "daemon-state"
       },
       {
@@ -13734,7 +13988,12 @@
       },
       {
         "path": "daemon/src/projector.rs",
-        "line": 362,
+        "line": 367,
+        "category": "kb-truth"
+      },
+      {
+        "path": "daemon/src/scheduler.rs",
+        "line": 431,
         "category": "kb-truth"
       },
       {
@@ -13748,28 +14007,48 @@
         "category": "test-safety"
       },
       {
+        "path": "shared/kb/src/cozo_store/agenda.rs",
+        "line": 77,
+        "category": "datalog-injection"
+      },
+      {
         "path": "shared/kb/src/cozo_store/db.rs",
         "line": 5,
         "category": "architecture-debt"
       },
       {
         "path": "shared/kb/src/cozo_store/db.rs",
-        "line": 509,
+        "line": 522,
         "category": "store-contention"
       },
       {
         "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-        "line": 202,
+        "line": 54,
+        "category": "kb-query"
+      },
+      {
+        "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
+        "line": 200,
+        "category": "kb-query"
+      },
+      {
+        "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
+        "line": 262,
         "category": "kb-search"
       },
       {
         "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-        "line": 385,
+        "line": 363,
+        "category": "kb-query"
+      },
+      {
+        "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
+        "line": 467,
         "category": "data-loss"
       },
       {
         "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-        "line": 441,
+        "line": 523,
         "category": "data-loss"
       },
       {
@@ -13793,14 +14072,39 @@
         "category": "kb-truth"
       },
       {
+        "path": "shared/kb/src/cozo_store/wal.rs",
+        "line": 3,
+        "category": "storage"
+      },
+      {
         "path": "shared/kb/src/federation.rs",
-        "line": 708,
+        "line": 136,
+        "category": "kb-truth"
+      },
+      {
+        "path": "shared/kb/src/federation.rs",
+        "line": 780,
         "category": "architecture-debt"
       },
       {
+        "path": "shared/kb/src/ident.rs",
+        "line": 3,
+        "category": "datalog-injection"
+      },
+      {
         "path": "shared/kb/src/kb_build.rs",
-        "line": 249,
+        "line": 199,
+        "category": "storage"
+      },
+      {
+        "path": "shared/kb/src/kb_build.rs",
+        "line": 268,
         "category": "kb-provenance"
+      },
+      {
+        "path": "shared/kb/src/kb_build.rs",
+        "line": 293,
+        "category": "storage"
       },
       {
         "path": "shared/kb/src/lib.rs",
@@ -13809,17 +14113,27 @@
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 256,
+        "line": 257,
         "category": "correctness"
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 423,
+        "line": 313,
+        "category": "kb-truth"
+      },
+      {
+        "path": "shared/kb/src/lib.rs",
+        "line": 466,
         "category": "crdt"
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 2196,
+        "line": 703,
+        "category": "health-reporting"
+      },
+      {
+        "path": "shared/kb/src/lib.rs",
+        "line": 2273,
         "category": "kb-provenance"
       },
       {
@@ -13828,14 +14142,24 @@
         "category": "kb-links"
       },
       {
+        "path": "shared/kb/src/org.rs",
+        "line": 958,
+        "category": "kb-links"
+      },
+      {
         "path": "shared/kb/src/store.rs",
-        "line": 308,
+        "line": 328,
         "category": "data-loss"
       },
       {
         "path": "shared/kb/src/watch.rs",
         "line": 37,
         "category": "resource-exhaustion"
+      },
+      {
+        "path": "shared/kb/src/watch.rs",
+        "line": 483,
+        "category": "storage"
       },
       {
         "path": "shared/mcp/src/auth.rs",
@@ -13869,17 +14193,32 @@
       },
       {
         "path": "shared/sync/src/kb/node.rs",
-        "line": 282,
+        "line": 45,
+        "category": "kb-truth"
+      },
+      {
+        "path": "shared/sync/src/kb/node.rs",
+        "line": 54,
+        "category": "kb-truth"
+      },
+      {
+        "path": "shared/sync/src/kb/node.rs",
+        "line": 318,
         "category": "crdt"
       },
       {
         "path": "shared/sync/src/kb/node.rs",
-        "line": 426,
+        "line": 362,
+        "category": "crdt-growth"
+      },
+      {
+        "path": "shared/sync/src/kb/node.rs",
+        "line": 515,
         "category": "crdt"
       },
       {
         "path": "shared/sync/src/kb/node.rs",
-        "line": 484,
+        "line": 569,
         "category": "crdt"
       },
       {

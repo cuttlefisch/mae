@@ -164,15 +164,31 @@ impl CozoKbStore {
         // an earlier concurrent caller of this same function) was mid-write-
         // transaction. This is NOT the same race the advisory lock above closes
         // (that one only serializes concurrent *entries into this function*) --
-        // ADR-004's assumed "SQLite WAL + busy-retry" safety net does not
-        // actually exist in cozo 0.7.6 (`journal_mode`/`busy_timeout` are never
-        // configured, confirmed by direct source read; corrected directly in
-        // `docs/adr/004-kb-scaling.md`'s Tier 1 section, not re-asserted here
-        // a second time). Since that gap lives in an external crate, MAE
+        // ADR-004's assumed "SQLite WAL + busy-retry" safety net did not exist
+        // in cozo 0.7.6 (`journal_mode`/`busy_timeout` are never configured,
+        // confirmed by direct source read). **Half of it exists now**: MAE sets
+        // WAL out of band above, since it is a file-header property rather than
+        // a connection one. `busy_timeout` is still absent, which is why the
+        // application-level retry in `db.rs` remains. Since that gap lives in an external crate, MAE
         // compensates here: a bounded
         // retry specifically for this transient, well-understood SQLite condition
         // (never for a genuinely corrupt store, which is a different panic
         // message and correctly still fails fast below).
+        // Put the file into WAL mode BEFORE cozo opens it. WAL is a header
+        // property, so this persists into every cozo connection thereafter --
+        // see `wal::ensure_wal`, which also explains why the pragma's own return
+        // value is the portable "can this filesystem do WAL" check. Best-effort:
+        // a store that stays in rollback-journal mode still works, just more
+        // slowly under cross-process contention.
+        // No `path.exists()` guard: `Connection::open` CREATES the file, so a
+        // brand-new store is born in WAL mode rather than converting on its
+        // second open. cozo's own bootstrap is `create table if not exists`, so
+        // an empty database file waiting for it is fine.
+        #[cfg(feature = "storage-sqlite")]
+        if engine == "sqlite" {
+            super::wal::ensure_wal(path.as_ref());
+        }
+
         let db = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             retry_on_transient_sqlite_busy(|| DbInstance::new(&engine_owned, &path_str, ""))
         }))
