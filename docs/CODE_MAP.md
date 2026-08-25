@@ -304,6 +304,7 @@ Source: `shared/kb/src/lib.rs`
 | `adr_kb` | mod |
 | `adr_parse` | mod |
 | `backup` | mod |
+| `capabilities` | mod |
 | `data_dir` | mod |
 | `embedding_client` | mod |
 | `enrichment` | mod |
