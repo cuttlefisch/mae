@@ -317,6 +317,7 @@ Source: `shared/kb/src/lib.rs`
 | `kb_identity` | mod |
 | `migrate` | mod |
 | `org` | mod |
+| `project_identity` | mod |
 | `store` | mod |
 | `system_kb` | mod |
 | `watch` | mod |
