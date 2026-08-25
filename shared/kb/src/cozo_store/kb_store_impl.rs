@@ -13,6 +13,54 @@ use super::*;
 // ---------------------------------------------------------------------------
 
 impl CozoKbStore {
+    /// Bulk-fetch the text the FTS index was built from, for a candidate set.
+    ///
+    /// Keyed by id, one query, no N+1 — see the `@ai-caution` on the query shape
+    /// below for the two simpler-looking forms that are both wrong.
+    fn fetch_indexed_text(
+        &self,
+        candidate_rows: Vec<DataValue>,
+    ) -> Result<std::collections::HashMap<String, String>, KbStoreError> {
+        let mut content: std::collections::HashMap<String, String> =
+            std::collections::HashMap::with_capacity(candidate_rows.len());
+        if !candidate_rows.is_empty() {
+            let fetched = self
+                .run_immut_params(
+                    "cand[id] <- $ids\n?[id, title, body, properties_json, aliases_json] := \
+                     cand[id], *nodes{id, title, body, properties_json, aliases_json}",
+                    btree_params([("ids", DataValue::List(candidate_rows))]),
+                )
+                .map_err(cozo_err)?;
+            for row in &fetched.rows {
+                let (Some(id), Some(title), Some(body), Some(props), Some(aliases)) = (
+                    row.first().and_then(|v| v.get_str()),
+                    row.get(1).and_then(|v| v.get_str()),
+                    row.get(2).and_then(|v| v.get_str()),
+                    row.get(3).and_then(|v| v.get_str()),
+                    row.get(4).and_then(|v| v.get_str()),
+                ) else {
+                    continue;
+                };
+                content.insert(id.to_string(), format!("{title} {body} {props} {aliases}"));
+            }
+        }
+
+        // Verification terms must be tokenized the SAME way the index tokenized
+        // the document, or this guard silently deletes correct results.
+        //
+        // @ai-caution: [kb-search] Do NOT revert this to
+        // `query.to_lowercase().split_whitespace()`. That treats FTS query
+        // syntax as literal text: the prefix query `buffer*` tokenizes to the
+        // single term `buffer*`, which no document text ever `contains`, so
+        // EVERY candidate the index correctly returned was dropped and the
+        // caller saw zero hits (verified: `buffer*` matched 1 row in
+        // `nodes:fts` and `fts_search` returned 0). Same for any query carrying
+        // `:`/`-`/`*` that cozo's parser does accept. Splitting on
+        // `!is_alphanumeric` mirrors cozo's `Simple` tokenizer, so the guard
+        // now checks exactly what was indexed.
+        Ok(content)
+    }
+
     /// Per-id fallback for [`KbStore::load_all`] when the bulk 13-column bind
     /// fails. Queries only `id` — a 1-column bind, which cannot hit the
     /// short-tuple error — then materialises each node individually via
@@ -235,40 +283,8 @@ impl KbStore for CozoKbStore {
             })
             .collect();
 
-        let mut content: std::collections::HashMap<String, (String, String)> =
-            std::collections::HashMap::with_capacity(candidate_rows.len());
-        if !candidate_rows.is_empty() {
-            let fetched = self
-                .run_immut_params(
-                    "cand[id] <- $ids\n?[id, title, body] := cand[id], *nodes{id, title, body}",
-                    btree_params([("ids", DataValue::List(candidate_rows))]),
-                )
-                .map_err(cozo_err)?;
-            for row in &fetched.rows {
-                let (Some(id), Some(title), Some(body)) = (
-                    row.first().and_then(|v| v.get_str()),
-                    row.get(1).and_then(|v| v.get_str()),
-                    row.get(2).and_then(|v| v.get_str()),
-                ) else {
-                    continue;
-                };
-                content.insert(id.to_string(), (title.to_string(), body.to_string()));
-            }
-        }
+        let content = self.fetch_indexed_text(candidate_rows)?;
 
-        // Verification terms must be tokenized the SAME way the index tokenized
-        // the document, or this guard silently deletes correct results.
-        //
-        // @ai-caution: [kb-search] Do NOT revert this to
-        // `query.to_lowercase().split_whitespace()`. That treats FTS query
-        // syntax as literal text: the prefix query `buffer*` tokenizes to the
-        // single term `buffer*`, which no document text ever `contains`, so
-        // EVERY candidate the index correctly returned was dropped and the
-        // caller saw zero hits (verified: `buffer*` matched 1 row in
-        // `nodes:fts` and `fts_search` returned 0). Same for any query carrying
-        // `:`/`-`/`*` that cozo's parser does accept. Splitting on
-        // `!is_alphanumeric` mirrors cozo's `Simple` tokenizer, so the guard
-        // now checks exactly what was indexed.
         let query_lower = query.to_lowercase();
         let query_terms: Vec<&str> = query_lower
             .split(|c: char| !c.is_alphanumeric())
@@ -297,11 +313,19 @@ impl KbStore for CozoKbStore {
             // sqlite therefore surfaces as a hard `KbStoreError`, not a
             // degraded result set — tracked separately; do not paper over it
             // here.
-            let Some((title, body)) = content.get(id) else {
+            let Some(indexed_text) = content.get(id) else {
                 continue;
             };
+            // @ai-caution: [kb-search] **This text must cover exactly what
+            // `NODES_FTS_DDL`'s extractor indexes.** The guard vetoes any
+            // candidate whose terms it cannot find, so a field that is indexed
+            // but not verified here is silently unsearchable — the failure its
+            // own doc comment warns about, and the one #655 walked into: adding
+            // `properties_json`/`aliases_json` to the extractor produced zero
+            // hits until they were added here too, because every correct hit
+            // was vetoed.
             let verified = query_terms.is_empty() || {
-                let text = format!("{title} {body}").to_lowercase();
+                let text = indexed_text.to_lowercase();
                 query_terms.iter().any(|term| text.contains(term))
             };
             if verified {

@@ -362,3 +362,52 @@ fn fts_shared_terms_return_every_owner() {
         "s4 does not contain 'gravity' and must not be returned (got {ids:?})"
     );
 }
+
+/// **#655's regression guard.** A property value must stay full-text searchable
+/// after the drawer stopped being duplicated into `body`.
+///
+/// Before #655 this worked by accident: `parse_org` put the whole org file --
+/// `:PROPERTIES:` drawer included -- into `body`, and the FTS extractor indexed
+/// `body`. Moving the drawer out (properties canonical, drawer a rendering)
+/// would have silently deleted the capability, which is the worst shape of
+/// regression: search returns fewer results and nothing errors.
+#[test]
+fn a_property_value_is_searchable_without_being_duplicated_into_the_body() {
+    let (_tmp, store) = make_store();
+    let mut node = Node::new(
+        "note:alpha",
+        "Alpha",
+        NodeKind::Note,
+        // Body deliberately does NOT mention the property value, so a hit can
+        // only come from the structured field.
+        "Prose that says nothing about who owns this.",
+    );
+    node.properties
+        .insert("assignee".into(), "quintessa".into());
+    node.aliases = vec!["alpha-prime".into()];
+    store.insert_node(&node).unwrap();
+
+    let by_property = store.fts_search("quintessa", 10).unwrap();
+    assert_eq!(
+        by_property
+            .iter()
+            .map(|h| h.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["note:alpha"],
+        "a property value must be findable from the structured field alone"
+    );
+
+    // Searched as a bare token, not as `alpha-prime`: `-` is FTS *query syntax*
+    // (the NOT operator), so the hyphenated form is a parse error rather than a
+    // miss. The `Simple` tokenizer splits the stored alias on non-alphanumerics,
+    // so `prime` is exactly what the index holds.
+    let by_alias = store.fts_search("prime", 10).unwrap();
+    assert!(
+        by_alias.iter().any(|h| h.id == "note:alpha"),
+        "an alias is a name users search by, so it must be indexed too"
+    );
+
+    // ...and the body still works, so the extractor change is additive.
+    let by_body = store.fts_search("prose", 10).unwrap();
+    assert!(by_body.iter().any(|h| h.id == "note:alpha"));
+}

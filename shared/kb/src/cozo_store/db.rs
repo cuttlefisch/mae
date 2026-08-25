@@ -17,8 +17,9 @@ impl CozoKbStore {
                 aliases_json, properties_json, crdt_doc, has_crdt, origin_instance, assignee, due_date, sprint,
                 created_at, updated_at] <- [[
                 $id, $title, $kind, $body, $tags_json, $todo_state, $priority, $source, $source_version,
-                $aliases_json, $properties_json, $crdt_doc, $has_crdt, "", "", 0, "",
-                $now, $now
+                $aliases_json, $properties_json, $crdt_doc, $has_crdt,
+                $origin_instance, $assignee, $due_date, $sprint,
+                $created_at, $now
             ]]
             :put nodes {
                 id => title, kind, body, tags_json, todo_state, priority, source, source_version,
@@ -34,8 +35,47 @@ impl CozoKbStore {
     /// `update_links_for_node`, which re-derives only body links as `related_to`).
     const LINK_BULK_SCRIPT: &'static str = r#"?[src, dst, rel_type, display, weight, confidence, created_at] <- $rows
             :put links {src, dst, rel_type => display, weight, confidence, created_at}"#;
+    /// The four `nodes` columns that are **derived from CRDT truth**, not stored
+    /// independently.
+    ///
+    /// All four shipped hardcoded to `""`/`0` (C3): declared in the schema, read
+    /// by the seeded stored views, and unreachable by any write path. So
+    /// `view:sprint` — which filters `sprint != ""` — returned the empty set for
+    /// every user, always, and `due_date`/`origin_instance` were unwritten *and*
+    /// unread.
+    ///
+    /// **Derived rather than four new CRDT keys, deliberately.** A derived column
+    /// is a pure function of CRDT state, so it survives `rebuild_kb` *by
+    /// construction* — which is exactly the field-authority rule ("a field not in
+    /// the CRDT does not survive") without four separate ADR-093 tolerant-reader
+    /// treatments, wire-payload changes and convergence tests to earn it.
+    ///
+    /// This depends on #655: deriving from `properties` is only sound now that
+    /// `props` is canonical and the drawer is a rendering of it, rather than the
+    /// two disagreeing.
+    fn derived_columns(&self, node: &Node) -> (String, String, i64, String) {
+        // Property keys are lowercased by the org parser; look up defensively so
+        // a node built in code (`Node::new(..).with_properties(..)`) behaves the
+        // same as one ingested from text.
+        let prop = |key: &str| -> String {
+            node.properties
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(key))
+                .map(|(_, v)| v.trim().to_string())
+                .unwrap_or_default()
+        };
+        let origin_instance = self.instance_id().unwrap_or_default();
+        (
+            origin_instance,
+            prop("assignee"),
+            parse_org_due_date(&prop("deadline")),
+            prop("sprint"),
+        )
+    }
+
     /// Positional column values for one `nodes` row, matching [`Self::NODE_BULK_SCRIPT`].
     fn node_row(&self, node: &Node, now: i64) -> Result<Vec<DataValue>, KbStoreError> {
+        let (origin_instance, assignee, due_date, sprint) = self.derived_columns(node);
         let tags_json =
             serde_json::to_string(&node.tags).map_err(|e| KbStoreError::Storage(e.to_string()))?;
         let aliases_json = serde_json::to_string(&node.aliases)
@@ -64,10 +104,10 @@ impl CozoKbStore {
             dv_str(&properties_json),
             DataValue::Bytes(crdt_bytes),
             DataValue::Bool(has_crdt),
-            dv_str(""),            // origin_instance
-            dv_str(""),            // assignee
-            DataValue::from(0i64), // due_date
-            dv_str(""),            // sprint
+            dv_str(&origin_instance),
+            dv_str(&assignee),
+            DataValue::from(due_date),
+            dv_str(&sprint),
             // Node age is a fact about the node. Using `now` here meant every
             // write reset it, so `created_at` recorded "last written" and a
             // re-ingest destroyed age outright — `view:backlog` has been
@@ -83,6 +123,7 @@ impl CozoKbStore {
         node: &Node,
     ) -> Result<BTreeMap<String, DataValue>, KbStoreError> {
         let now = self.now_epoch();
+        let (origin_instance, assignee, due_date, sprint) = self.derived_columns(node);
         let tags_json =
             serde_json::to_string(&node.tags).map_err(|e| KbStoreError::Storage(e.to_string()))?;
         let aliases_json = serde_json::to_string(&node.aliases)
@@ -90,16 +131,10 @@ impl CozoKbStore {
         let properties_json = serde_json::to_string(&node.properties)
             .map_err(|e| KbStoreError::Storage(e.to_string()))?;
         let pri_str = node.priority.map(|c| c.to_string()).unwrap_or_default();
-        let source_str = node
-            .source
-            .map(|s| match s {
-                crate::NodeSource::Seed => "seed",
-                crate::NodeSource::UserOrg => "user_org",
-                crate::NodeSource::Manual => "manual",
-                crate::NodeSource::Federation => "federation",
-                crate::NodeSource::Promoted => "promoted",
-            })
-            .unwrap_or("");
+        // `NodeSource::as_str` is the single source of truth for this mapping
+        // (#710). This was a second inline copy of it -- the exact drift #710's
+        // fix removed from `node_row` and left here (principle #8).
+        let source_str = node.source.map(|s| s.as_str()).unwrap_or("");
         let (crdt_bytes, has_crdt) = match &node.crdt_doc {
             Some(doc) => (doc.clone(), true),
             None => (vec![], false),
@@ -124,6 +159,19 @@ impl CozoKbStore {
             ("properties_json", dv_str(&properties_json)),
             ("crdt_doc", DataValue::Bytes(crdt_bytes)),
             ("has_crdt", DataValue::Bool(has_crdt)),
+            ("origin_instance", dv_str(&origin_instance)),
+            ("assignee", dv_str(&assignee)),
+            ("due_date", DataValue::from(due_date)),
+            ("sprint", dv_str(&sprint)),
+            // Node age is a fact about the node, so a write must not reset it.
+            // `node_row` already did this; this path did not, so `insert_node`
+            // destroyed age while `bulk_import` preserved it -- the same field
+            // meaning two different things depending on which door you came
+            // through.
+            (
+                "created_at",
+                DataValue::from(node.created_at.unwrap_or(now)),
+            ),
             ("now", DataValue::from(now)),
         ]))
     }
@@ -596,4 +644,33 @@ fn retry_on_transient_sqlite_busy_with_deadline<T, E: std::fmt::Display>(
             % (cap + 1);
         std::thread::sleep(std::time::Duration::from_micros(jitter));
     }
+}
+
+/// Parse an org `DEADLINE:`-style timestamp into epoch seconds at UTC midnight.
+///
+/// Accepts the shapes org actually writes -- `<2026-08-25 Tue>`, `[2026-08-25]`,
+/// `<2026-08-25 Tue 14:30>` -- plus a bare `2026-08-25`, by locating the first
+/// `YYYY-MM-DD` and ignoring the decoration. A time-of-day is deliberately
+/// discarded: the column records a *day*, and pretending to more precision than
+/// the field carries is worse than rounding to it.
+///
+/// **0 means "no deadline"**, which is also what the column held for every node
+/// before this. Unparseable input is treated as absent rather than as an error:
+/// a malformed timestamp in one node must not fail the write of the whole node.
+///
+/// Scope (#466): this reads the `:DEADLINE:` *property*. Org's planning LINES
+/// (`DEADLINE: <...>` on the line after a heading) are a separate syntax with no
+/// parser in this crate, and are follow-on work rather than cutover scope.
+fn parse_org_due_date(raw: &str) -> i64 {
+    let bytes = raw.as_bytes();
+    // Scan for the first `dddd-dd-dd`.
+    for start in 0..bytes.len().saturating_sub(9) {
+        let window = &raw[start..start + 10.min(raw.len() - start)];
+        if window.len() == 10 {
+            if let Some((y, m, d)) = crate::activity::parse_date(window) {
+                return crate::activity::epoch_seconds_utc_midnight(y, m, d);
+            }
+        }
+    }
+    0
 }

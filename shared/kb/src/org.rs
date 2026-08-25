@@ -65,6 +65,83 @@ pub struct IngestReport {
     pub ingested_ids: Vec<String>,
 }
 
+/// The file's content **after** its header — the prose, without the
+/// `:PROPERTIES:` drawer or the `#+keyword:` lines.
+///
+/// **#655.** `body` used to be the WHOLE file, including the drawer that was
+/// simultaneously parsed into `properties`. Two homes for one fact, and the
+/// duplication was observable rather than theoretical: an ingest → export round
+/// trip emitted the drawer *and* `#+title:` twice, growing the body by one more
+/// copy on every cycle.
+///
+/// The rule this follows is Automerge's, and it generalises beyond this one
+/// field: **attributes that scope to a RANGE belong in the text; attributes that
+/// scope to the DOCUMENT do not.** `:ID:`, `:ROLE:`, `#+title:`, `#+filetags:`
+/// are document-scoped, so they live in the structured fields and the drawer
+/// becomes a *rendering* of them (`export::node_to_org`), never parsed back.
+/// Inline links are range-scoped and correctly stay in the text (ADR-030).
+///
+/// Peritext is the reason this is not merely tidier: markup embedded in the
+/// character sequence merges badly, because the algorithm cannot distinguish
+/// control characters from content. Two peers concurrently editing a drawer
+/// produce interleaved drawer syntax, which the parser then feeds into the
+/// projection as garbage.
+pub(crate) fn body_after_header(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut i = 0;
+
+    // 1. An optional leading `:PROPERTIES: ... :END:` drawer.
+    if lines.first().is_some_and(|l| {
+        l.trim_start()
+            .to_ascii_uppercase()
+            .starts_with(":PROPERTIES:")
+    }) {
+        i = 1;
+        while i < lines.len() {
+            let done = lines[i]
+                .trim_start()
+                .to_ascii_uppercase()
+                .starts_with(":END:");
+            i += 1;
+            if done {
+                break;
+            }
+        }
+    }
+
+    // 2. `#+key: value` header keywords and the blank lines between them.
+    //
+    // Deliberately NOT every `#+` line: `#+begin_src` opens a babel block and is
+    // BODY. The discriminator mirrors `parse_file_header`'s own — it only reads a
+    // `#+` line when `split_once(':')` succeeds — so the two agree by
+    // construction rather than by coincidence.
+    while i < lines.len() {
+        let t = lines[i].trim_start();
+        let is_keyword = t
+            .strip_prefix("#+")
+            .and_then(|rest| rest.split_once(':'))
+            .is_some_and(|(k, _)| {
+                let k = k.to_ascii_lowercase();
+                !k.starts_with("begin") && !k.starts_with("end")
+            });
+        if is_keyword || t.is_empty() {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+
+    // A file that is nothing but a header has no body.
+    if i >= lines.len() {
+        return String::new();
+    }
+    let mut out = lines[i..].join("\n");
+    if content.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 /// Parse a single org file's text into a `Node` from the *file-level*
 /// `:ID:` drawer. Returns `None` if the file has no file-level id.
 /// Heading-level ids are parsed by `parse_org_multi`.
@@ -72,7 +149,7 @@ pub fn parse_org(content: &str) -> Option<Node> {
     let header = parse_file_header(content);
     let id = header.file_id?;
     let title = header.file_title.unwrap_or_else(|| id.clone());
-    let body = rewrite_links(content);
+    let body = rewrite_links(&body_after_header(content));
     let mut node = Node::new(id, title, NodeKind::Note, body).with_tags(header.file_tags);
     if !header.file_properties.is_empty() {
         node = node.with_properties(header.file_properties);
@@ -99,7 +176,7 @@ pub fn parse_org_multi(content: &str) -> Vec<Node> {
 
     if let Some(id) = header.file_id.clone() {
         let title = header.file_title.clone().unwrap_or_else(|| id.clone());
-        let body = rewrite_links(content);
+        let body = rewrite_links(&body_after_header(content));
         let mut node =
             Node::new(id, title, NodeKind::Note, body).with_tags(header.file_tags.clone());
         if !header.file_properties.is_empty() {

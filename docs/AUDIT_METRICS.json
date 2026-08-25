@@ -10346,11 +10346,11 @@
     },
     {
       "path": "daemon/src/kb_query.rs",
-      "lines": 728,
+      "lines": 746,
       "test_lines": 0,
-      "code_lines": 728,
+      "code_lines": 746,
       "is_test_file": false,
-      "max_fn_lines": 62,
+      "max_fn_lines": 73,
       "max_fn_name": "dispatch",
       "max_match_arms": 9,
       "max_struct_fields": 3,
@@ -10538,12 +10538,12 @@
     },
     {
       "path": "daemon/src/projector.rs",
-      "lines": 658,
+      "lines": 719,
       "test_lines": 253,
-      "code_lines": 405,
+      "code_lines": 466,
       "is_test_file": false,
       "max_fn_lines": 68,
-      "max_fn_name": "reconcile_kb",
+      "max_fn_name": "collection_change_projects_routes_and_deletes_nodes",
       "max_match_arms": 7,
       "max_struct_fields": 3,
       "max_struct_name": "DriftReport",
@@ -10554,8 +10554,8 @@
     },
     {
       "path": "daemon/src/projector_gate_c_tests.rs",
-      "lines": 422,
-      "test_lines": 422,
+      "lines": 537,
+      "test_lines": 537,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 90,
@@ -10566,7 +10566,7 @@
       "max_nesting": 2,
       "use_count": 5,
       "pub_items": 0,
-      "test_count": 5
+      "test_count": 8
     },
     {
       "path": "daemon/src/quota.rs",
@@ -11114,9 +11114,9 @@
     },
     {
       "path": "shared/kb/src/activity.rs",
-      "lines": 279,
-      "test_lines": 90,
-      "code_lines": 189,
+      "lines": 307,
+      "test_lines": 102,
+      "code_lines": 205,
       "is_test_file": false,
       "max_fn_lines": 25,
       "max_fn_name": "activity_score",
@@ -11125,8 +11125,8 @@
       "max_struct_name": "ActivityWeights",
       "max_nesting": 3,
       "use_count": 2,
-      "pub_items": 8,
-      "test_count": 12
+      "pub_items": 9,
+      "test_count": 13
     },
     {
       "path": "shared/kb/src/adr_kb.rs",
@@ -11242,16 +11242,16 @@
     },
     {
       "path": "shared/kb/src/cozo_store/db.rs",
-      "lines": 599,
+      "lines": 676,
       "test_lines": 0,
-      "code_lines": 599,
+      "code_lines": 676,
       "is_test_file": false,
       "max_fn_lines": 82,
       "max_fn_name": "retry_on_transient_sqlite_busy_with_deadline",
-      "max_match_arms": 5,
+      "max_match_arms": 4,
       "max_struct_fields": 0,
       "max_struct_name": "",
-      "max_nesting": 2,
+      "max_nesting": 3,
       "use_count": 2,
       "pub_items": 4,
       "test_count": 0
@@ -11290,11 +11290,11 @@
     },
     {
       "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-      "lines": 693,
+      "lines": 717,
       "test_lines": 0,
-      "code_lines": 693,
+      "code_lines": 717,
       "is_test_file": false,
-      "max_fn_lines": 157,
+      "max_fn_lines": 133,
       "max_fn_name": "fts_search",
       "max_match_arms": 3,
       "max_struct_fields": 0,
@@ -11338,9 +11338,9 @@
     },
     {
       "path": "shared/kb/src/cozo_store/schema.rs",
-      "lines": 803,
+      "lines": 817,
       "test_lines": 0,
-      "code_lines": 803,
+      "code_lines": 817,
       "is_test_file": false,
       "max_fn_lines": 314,
       "max_fn_name": "ensure_schema",
@@ -11434,8 +11434,8 @@
     },
     {
       "path": "shared/kb/src/cozo_store/tests/db_tests.rs",
-      "lines": 318,
-      "test_lines": 318,
+      "lines": 487,
+      "test_lines": 487,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 30,
@@ -11446,7 +11446,7 @@
       "max_nesting": 3,
       "use_count": 4,
       "pub_items": 0,
-      "test_count": 13
+      "test_count": 20
     },
     {
       "path": "shared/kb/src/cozo_store/tests/fts_migration_tests.rs",
@@ -11482,8 +11482,8 @@
     },
     {
       "path": "shared/kb/src/cozo_store/tests/fts_search_tests.rs",
-      "lines": 364,
-      "test_lines": 364,
+      "lines": 413,
+      "test_lines": 413,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 48,
@@ -11494,7 +11494,7 @@
       "max_nesting": 5,
       "use_count": 1,
       "pub_items": 0,
-      "test_count": 5
+      "test_count": 6
     },
     {
       "path": "shared/kb/src/cozo_store/tests/graph_tests.rs",
@@ -11802,19 +11802,19 @@
     },
     {
       "path": "shared/kb/src/export.rs",
-      "lines": 368,
-      "test_lines": 105,
-      "code_lines": 263,
+      "lines": 477,
+      "test_lines": 201,
+      "code_lines": 276,
       "is_test_file": false,
-      "max_fn_lines": 40,
-      "max_fn_name": "convert_links_to_org",
+      "max_fn_lines": 43,
+      "max_fn_name": "node_to_org",
       "max_match_arms": 3,
       "max_struct_fields": 3,
       "max_struct_name": "ExportReport",
       "max_nesting": 5,
-      "use_count": 4,
+      "use_count": 6,
       "pub_items": 6,
-      "test_count": 9
+      "test_count": 13
     },
     {
       "path": "shared/kb/src/federation.rs",
@@ -11962,9 +11962,9 @@
     },
     {
       "path": "shared/kb/src/lib.rs",
-      "lines": 5481,
+      "lines": 5574,
       "test_lines": 2698,
-      "code_lines": 2783,
+      "code_lines": 2876,
       "is_test_file": false,
       "max_fn_lines": 120,
       "max_fn_name": "extract_subgraph",
@@ -11972,9 +11972,9 @@
       "max_struct_fields": 14,
       "max_struct_name": "Node",
       "max_nesting": 8,
-      "use_count": 12,
+      "use_count": 13,
       "pub_items": 88,
-      "test_count": 120
+      "test_count": 123
     },
     {
       "path": "shared/kb/src/lru_query.rs",
@@ -12026,9 +12026,9 @@
     },
     {
       "path": "shared/kb/src/org.rs",
-      "lines": 2567,
+      "lines": 2644,
       "test_lines": 1164,
-      "code_lines": 1403,
+      "code_lines": 1480,
       "is_test_file": false,
       "max_fn_lines": 107,
       "max_fn_name": "parse_org_multi_result",
@@ -14131,7 +14131,12 @@
       },
       {
         "path": "daemon/src/projector.rs",
-        "line": 367,
+        "line": 280,
+        "category": "kb-projection"
+      },
+      {
+        "path": "daemon/src/projector.rs",
+        "line": 428,
         "category": "kb-truth"
       },
       {
@@ -14166,37 +14171,42 @@
       },
       {
         "path": "shared/kb/src/cozo_store/db.rs",
-        "line": 522,
+        "line": 570,
         "category": "store-contention"
       },
       {
         "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-        "line": 54,
-        "category": "kb-query"
-      },
-      {
-        "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-        "line": 200,
-        "category": "kb-query"
-      },
-      {
-        "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-        "line": 262,
+        "line": 51,
         "category": "kb-search"
       },
       {
         "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-        "line": 363,
+        "line": 102,
         "category": "kb-query"
       },
       {
         "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-        "line": 467,
+        "line": 248,
+        "category": "kb-query"
+      },
+      {
+        "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
+        "line": 319,
+        "category": "kb-search"
+      },
+      {
+        "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
+        "line": 387,
+        "category": "kb-query"
+      },
+      {
+        "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
+        "line": 491,
         "category": "data-loss"
       },
       {
         "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-        "line": 523,
+        "line": 547,
         "category": "data-loss"
       },
       {
@@ -14206,17 +14216,17 @@
       },
       {
         "path": "shared/kb/src/cozo_store/schema.rs",
-        "line": 64,
+        "line": 78,
         "category": "storage"
       },
       {
         "path": "shared/kb/src/cozo_store/schema.rs",
-        "line": 147,
+        "line": 161,
         "category": "architecture-debt"
       },
       {
         "path": "shared/kb/src/cozo_store/schema.rs",
-        "line": 157,
+        "line": 171,
         "category": "architecture-debt"
       },
       {
@@ -14291,17 +14301,17 @@
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 2277,
+        "line": 2295,
         "category": "kb-provenance"
       },
       {
         "path": "shared/kb/src/org.rs",
-        "line": 916,
+        "line": 993,
         "category": "kb-links"
       },
       {
         "path": "shared/kb/src/org.rs",
-        "line": 958,
+        "line": 1035,
         "category": "kb-links"
       },
       {

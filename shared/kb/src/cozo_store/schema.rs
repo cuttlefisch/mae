@@ -36,10 +36,24 @@ use super::*;
 /// literal backslash + `n`, and `n` IS alphanumeric — it would just glue a
 /// stray `n` onto the body's first token instead).
 ///
+/// **`properties_json` and `aliases_json` are indexed deliberately, and #655 is
+/// why.** Until then, `body` was the whole org file *including* its
+/// `:PROPERTIES:` drawer, so property values were full-text searchable purely as
+/// a side effect of being duplicated into the body text. #655 moved the drawer
+/// out of `body` (properties are canonical, the drawer is a rendering) — which
+/// would have silently deleted that search capability had the extractor not
+/// grown to cover the structured fields directly. Aliases join for the same
+/// reason: an alias is a name a user searches by.
+///
+/// Indexing the JSON encoding rather than a flattened string is deliberate: the
+/// `Simple` tokenizer splits on `!is_alphanumeric()`, so `{"role":"reference"}`
+/// tokenizes to `role`, `reference` — the punctuation falls out on its own, and
+/// no second serialization has to be kept in sync with the column (principle #8).
+///
 /// [`FTS_EXTRACTOR_VERSION`] must be bumped whenever this DDL changes, so that
 /// stores carrying an index built by the previous definition are rebuilt on open.
 const NODES_FTS_DDL: &str = r#"::fts create nodes:fts {
-                extractor: title ++ '.' ++ body,
+                extractor: title ++ '.' ++ body ++ '.' ++ properties_json ++ '.' ++ aliases_json,
                 tokenizer: Simple,
                 filters: [Lowercase]
             }"#;
@@ -52,7 +66,7 @@ const NODES_FTS_DDL: &str = r#"::fts create nodes:fts {
 /// manifest text keeps the migration bounded: matching against CozoDB's
 /// `Display` output would silently re-trigger a full reindex on every open if a
 /// CozoDB upgrade ever changed that formatting.
-const FTS_EXTRACTOR_VERSION: &str = "2";
+const FTS_EXTRACTOR_VERSION: &str = "3";
 
 /// `instance_meta` key holding the [`FTS_EXTRACTOR_VERSION`] the on-disk index
 /// was built with.
