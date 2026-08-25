@@ -321,34 +321,33 @@ impl Editor {
         // Extract edited content.
         let new_body = self.buffers[idx].text().to_string();
 
-        // Update the node in the primary KB.
-        if let Some(node) = self.kb.primary.get_mut(&member_id) {
-            node.body.clone_from(&new_body);
-        }
-
-        // Update in the CozoDB store if available.
+        // ADR-092 D1: persist through `kb_update_node_with`, the sole node-content
+        // mutator — NOT `store.update_node` directly.
+        //
+        // Routing here is not tidiness. That direct call bypassed
+        // `kb_write_blocked` (so a widen wrote to a read-only KB), the seed-node
+        // refusal (so it could overwrite protected built-in help), owner
+        // resolution across federated instances (so a member node owned by a
+        // federated KB was written to the PRIMARY store instead), and the
+        // `kb_sync_target` CRDT branch (so on a shared KB the edit never entered
+        // the CRDT and peers never saw it).
         //
         // @ai-caution: [data-loss] Widening CLOSES the narrowed buffer, so a
-        // failed persist takes the user's edits with it — there is no window
-        // left to retry from. The store result must therefore gate the "changes
-        // saved" claim (audit #605.3: this was `let _ = store.save_all(..)`
-        // followed by an unconditional success message, ADR-086 class).
-        let mut save_error: Option<String> = None;
-        if let Some(ref store) = self.kb.store {
-            if let Some(node) = self.kb.primary.get(&member_id) {
-                // @ai-caution: [data-loss] `update_node`, NOT `replace_all_nodes`
-                // (formerly `save_all`). This line called the whole-store replace
-                // with a single node, which destroyed every other node's content
-                // in place and left the store reading as EMPTY. One narrowed
-                // edit + `:kb-widen` was enough to lose the corpus.
-                if let Err(e) = store.update_node(node) {
-                    save_error = Some(e.to_string());
-                }
-            }
-            // Recompose the meta-node body.
-            if let Ok(composed) = store.compose_meta_body(&meta_id) {
-                if let Some(meta_node) = self.kb.primary.get_mut(&meta_id) {
-                    meta_node.body = composed;
+        // failed persist takes the user's edits with it — there is no window left
+        // to retry from. The result must therefore gate the "changes saved" claim
+        // (audit #605.3: this was `let _ = store.save_all(..)` followed by an
+        // unconditional success message, ADR-086 class).
+        let save_error: Option<String> = self
+            .kb_update_node_with(&member_id, |n| n.body.clone_from(&new_body))
+            .err();
+
+        // Recompose the meta-node body from its members' current content.
+        if save_error.is_none() {
+            if let Some(ref store) = self.kb.store {
+                if let Ok(composed) = store.compose_meta_body(&meta_id) {
+                    if let Some(meta_node) = self.kb.primary.get_mut(&meta_id) {
+                        meta_node.body = composed;
+                    }
                 }
             }
         }

@@ -2842,16 +2842,16 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/dispatch.rs",
-      "lines": 381,
+      "lines": 380,
       "test_lines": 0,
-      "code_lines": 381,
+      "code_lines": 380,
       "is_test_file": false,
       "max_fn_lines": 85,
       "max_fn_name": "dispatch_kb_agenda",
       "max_match_arms": 8,
       "max_struct_fields": 0,
       "max_struct_name": "",
-      "max_nesting": 3,
+      "max_nesting": 4,
       "use_count": 2,
       "pub_items": 6,
       "test_count": 0
@@ -3177,6 +3177,22 @@
       "test_count": 30
     },
     {
+      "path": "crates/core/src/editor/kb_ops/tests/kb_ops_sole_mutator_tests.rs",
+      "lines": 196,
+      "test_lines": 196,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 34,
+      "max_fn_name": "direct_node_writes",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 3,
+      "use_count": 0,
+      "pub_items": 0,
+      "test_count": 3
+    },
+    {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_system_kb_tests.rs",
       "lines": 242,
       "test_lines": 242,
@@ -3226,8 +3242,8 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/mod.rs",
-      "lines": 59,
-      "test_lines": 59,
+      "lines": 60,
+      "test_lines": 60,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 23,
@@ -13477,12 +13493,7 @@
       },
       {
         "path": "crates/core/src/editor/kb_ops/dispatch.rs",
-        "line": 331,
-        "category": "data-loss"
-      },
-      {
-        "path": "crates/core/src/editor/kb_ops/dispatch.rs",
-        "line": 339,
+        "line": 335,
         "category": "data-loss"
       },
       {
