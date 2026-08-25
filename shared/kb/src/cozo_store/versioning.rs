@@ -68,7 +68,7 @@ impl CozoKbStore {
         // Get current max version for this node
         let ver_result = self
             .run_immut_params(
-                "?[v] := *node_versions{id, version: v}, id = $id :order -v :limit 1",
+                "?[v] := id = $id, *node_versions{id, version: v} :order -v :limit 1",
                 btree_params([("id", dv_str(id))]),
             )
             .map_err(cozo_err)?;
@@ -125,7 +125,7 @@ impl CozoKbStore {
     pub fn node_history(&self, id: &str, limit: usize) -> Result<Vec<NodeVersion>, KbStoreError> {
         let result = self.run_immut_params(
             &format!(
-                "?[version, title, body, tags_json, todo_state, priority, properties_json, change_summary, author, content_hash, created_at] := *node_versions{{id, version, title, body, tags_json, todo_state, priority, properties_json, change_summary, author, content_hash, created_at}}, id = $id :order -version :limit {limit}"
+                "?[version, title, body, tags_json, todo_state, priority, properties_json, change_summary, author, content_hash, created_at] := id = $id, *node_versions{{id, version, title, body, tags_json, todo_state, priority, properties_json, change_summary, author, content_hash, created_at}} :order -version :limit {limit}"
             ),
             btree_params([("id", dv_str(id))]),
         ).map_err(cozo_err)?;
@@ -155,7 +155,7 @@ impl CozoKbStore {
     /// Returns `KbStoreError::Storage` if integrity check fails.
     pub fn restore_version(&self, id: &str, version: i64) -> Result<(), KbStoreError> {
         let result = self.run_immut_params(
-            "?[title, body, tags_json, todo_state, priority, content_hash] := *node_versions{id, version, title, body, tags_json, todo_state, priority, content_hash}, id = $id, version = $version",
+            "?[title, body, tags_json, todo_state, priority, content_hash] := id = $id, version = $version, *node_versions{id, version, title, body, tags_json, todo_state, priority, content_hash}",
             btree_params([
                 ("id", dv_str(id)),
                 ("version", DataValue::from(version)),

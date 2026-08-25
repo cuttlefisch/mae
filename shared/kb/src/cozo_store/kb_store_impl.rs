@@ -47,6 +47,34 @@ impl CozoKbStore {
     }
 }
 
+impl CozoKbStore {
+    /// Shared body of [`KbStore::get_node`] and [`KbStore::get_node_light`]:
+    /// run a single-key lookup and apply the ghost-row guard.
+    ///
+    /// @ai-caution: [kb-query] `query` MUST pre-bind `id` (`id = $id,
+    /// *nodes{id, ...}`), not post-filter it (`*nodes{id, ...}, id = $id`).
+    /// The post-filter form compiles to a full relation scan — measured at
+    /// 328 ms for one node against a 20,000-row store, identical for a
+    /// *missing* id. See `tests/query_plan_tests.rs`.
+    fn get_node_projecting(&self, id: &str, query: &str) -> Result<Option<Node>, KbStoreError> {
+        let result = self
+            .run_immut_params(query, btree_params([("id", dv_str(id))]))
+            .map_err(cozo_err)?;
+
+        if let Some(row) = result.rows.first() {
+            let node = row_to_node(row)?;
+            // Sled backend may leave ghost rows after :rm — treat as absent
+            if node.title.is_empty() && node.body.is_empty() && node.tags.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(node))
+            }
+        } else {
+            Ok(None)
+        }
+    }
+}
+
 impl KbStore for CozoKbStore {
     fn insert_node(&self, node: &Node) -> Result<(), KbStoreError> {
         self.run_mut_params(Self::NODE_PUT_SCRIPT, self.node_put_params(node)?)
@@ -73,7 +101,7 @@ impl KbStore for CozoKbStore {
 
         // Remove links from this node
         self.run_mut_params(
-            "?[src, dst, rel_type] := *links{src, dst, rel_type}, src = $id\n:rm links {src, dst, rel_type}",
+            "?[src, dst, rel_type] := src = $id, *links{src, dst, rel_type}\n:rm links {src, dst, rel_type}",
             btree_params([("id", dv_str(id))]),
         )
         .map_err(cozo_err)?;
@@ -82,28 +110,29 @@ impl KbStore for CozoKbStore {
     }
 
     fn get_node(&self, id: &str) -> Result<Option<Node>, KbStoreError> {
-        let result = self
-            .run_immut_params(
-                r#"?[id, title, kind, body, tags_json, todo_state, priority, source, source_version,
+        self.get_node_projecting(
+            id,
+            r#"?[id, title, kind, body, tags_json, todo_state, priority, source, source_version,
                     aliases_json, properties_json, crdt_doc, has_crdt]
-                    := *nodes{id, title, kind, body, tags_json, todo_state, priority, source, source_version,
-                              aliases_json, properties_json, crdt_doc, has_crdt},
-                    id = $id"#,
-                btree_params([("id", dv_str(id))]),
-            )
-            .map_err(cozo_err)?;
+                    := id = $id,
+                       *nodes{id, title, kind, body, tags_json, todo_state, priority, source, source_version,
+                              aliases_json, properties_json, crdt_doc, has_crdt}"#,
+        )
+    }
 
-        if let Some(row) = result.rows.first() {
-            let node = row_to_node(row)?;
-            // Sled backend may leave ghost rows after :rm — treat as absent
-            if node.title.is_empty() && node.body.is_empty() && node.tags.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(node))
-            }
-        } else {
-            Ok(None)
-        }
+    fn get_node_light(&self, id: &str) -> Result<Option<Node>, KbStoreError> {
+        // Same column ORDER as `get_node`, stopping before `crdt_doc`, so the
+        // shared `row_to_node` decoder works unchanged: it reads `has_crdt`
+        // from index 12 and the blob from index 11, both of which are simply
+        // absent here, yielding `has_crdt = false` / `crdt_doc = None`.
+        self.get_node_projecting(
+            id,
+            r#"?[id, title, kind, body, tags_json, todo_state, priority, source, source_version,
+                    aliases_json, properties_json]
+                    := id = $id,
+                       *nodes{id, title, kind, body, tags_json, todo_state, priority, source, source_version,
+                              aliases_json, properties_json}"#,
+        )
     }
 
     fn list_ids(&self, prefix: Option<&str>) -> Result<Vec<String>, KbStoreError> {
@@ -164,24 +193,55 @@ impl KbStore for CozoKbStore {
             .map_err(cozo_err)?;
 
         // Post-query verification: check each candidate's actual content still
-        // matches (defensive against stale FTS index entries). Previously this
-        // did one full `get_node` per candidate (N+1 — up to limit*3+10 full
-        // node deserializes just to read title+body). Instead bulk-fetch
+        // matches (defensive against stale FTS index entries). Bulk-fetch
         // title+body for all candidates in ONE query, then verify in Rust,
         // preserving the FTS score order.
-        let candidate_ids: Vec<DataValue> = result
+        //
+        // @ai-caution: [kb-query] The candidate ids drive a temp relation that
+        // is JOINED against `nodes` on its primary key. Two shapes that look
+        // simpler are both wrong:
+        //
+        //  - `*nodes{id, title, body}, is_in(id, $ids)` — the previous form,
+        //    and the single most expensive query in the KB. `is_in` is
+        //    `right.contains(left)` (`cozo-0.7.6/src/data/functions.rs`), a
+        //    linear `Vec` probe, and the relation atom is unbound, so cozo
+        //    scans every row and probes the candidate list once per row:
+        //    20,000 x 70 string comparisons to fetch 70 rows whose primary
+        //    keys were already in hand. Measured at ~113 ms of a 123 ms
+        //    search.
+        //  - collapsing this into the FTS query above as
+        //    `~nodes:fts{id, title, body | ...}` — tempting, because
+        //    `SearchInput::normalize_fts` does bind any base-relation column
+        //    named in the search head, and it costs no extra I/O. But it
+        //    destroys this guard on the exact case the guard exists for. When
+        //    an index posting outlives its base row, cozo's FTS operator does
+        //    `base_handle.get(...)` itself: on sqlite that is
+        //    `ok_or("corrupted index")`, so the WHOLE search fails; on sled the
+        //    ghost row yields a SHORT tuple and `bind_score` lands in the
+        //    `title` position, silently mis-assigning every projected column.
+        //    Verified both, by deleting a base row through
+        //    `DbInstance::import_relations`, which (unlike `:rm`) maintains
+        //    regular indices but never `fts_indices`. The join below has
+        //    neither failure mode: a candidate with no base row simply
+        //    produces no join row and is dropped, which is the documented
+        //    intent.
+        let candidate_rows: Vec<DataValue> = result
             .rows
             .iter()
-            .filter_map(|row| row.first().and_then(|v| v.get_str()).map(dv_str))
+            .filter_map(|row| {
+                row.first()
+                    .and_then(|v| v.get_str())
+                    .map(|id| DataValue::List(vec![dv_str(id)]))
+            })
             .collect();
 
         let mut content: std::collections::HashMap<String, (String, String)> =
-            std::collections::HashMap::with_capacity(candidate_ids.len());
-        if !candidate_ids.is_empty() {
+            std::collections::HashMap::with_capacity(candidate_rows.len());
+        if !candidate_rows.is_empty() {
             let fetched = self
                 .run_immut_params(
-                    "?[id, title, body] := *nodes{id, title, body}, is_in(id, $ids)",
-                    btree_params([("ids", DataValue::List(candidate_ids))]),
+                    "cand[id] <- $ids\n?[id, title, body] := cand[id], *nodes{id, title, body}",
+                    btree_params([("ids", DataValue::List(candidate_rows))]),
                 )
                 .map_err(cozo_err)?;
             for row in &fetched.rows {
@@ -225,6 +285,18 @@ impl KbStore for CozoKbStore {
             // present passes when it still contains a query term; a query with
             // no alphanumeric content leaves nothing to check, so trust the
             // index rather than vetoing every row.
+            //
+            // Scope correction (2026-08, verified rather than assumed): this
+            // branch does NOT catch every stale posting, and the comment above
+            // used to imply it did. Cozo dereferences the base row inside the
+            // FTS operator, so on the sqlite backend a posting whose base row
+            // was deleted aborts the query with "corrupted index" before
+            // control ever reaches here. The branch is reachable on sled, where
+            // `:rm` leaves a ghost row, and for any candidate the base relation
+            // legitimately no longer holds. A genuine index/base divergence on
+            // sqlite therefore surfaces as a hard `KbStoreError`, not a
+            // degraded result set — tracked separately; do not paper over it
+            // here.
             let Some((title, body)) = content.get(id) else {
                 continue;
             };
@@ -264,7 +336,7 @@ impl KbStore for CozoKbStore {
     fn remove_link(&self, src: &str, dst: &str) -> Result<(), KbStoreError> {
         self.run_mut_params(
             r#"
-            ?[src, dst, rel_type] := *links{src, dst, rel_type}, src = $src, dst = $dst
+            ?[src, dst, rel_type] := src = $src, dst = $dst, *links{src, dst, rel_type}
             :rm links {src, dst, rel_type}
             "#,
             btree_params([("src", dv_str(src)), ("dst", dv_str(dst))]),
@@ -276,7 +348,7 @@ impl KbStore for CozoKbStore {
     fn links_from(&self, id: &str) -> Result<Vec<Link>, KbStoreError> {
         let result = self
             .run_immut_params(
-                "?[src, dst, rel_type, display, weight, confidence] := *links{src, dst, rel_type, display, weight, confidence}, src = $id",
+                "?[src, dst, rel_type, display, weight, confidence] := src = $id, *links{src, dst, rel_type, display, weight, confidence}",
                 btree_params([("id", dv_str(id))]),
             )
             .map_err(cozo_err)?;
@@ -288,6 +360,16 @@ impl KbStore for CozoKbStore {
             .collect())
     }
 
+    /// @ai-caution: [kb-query] This is the ONE query in this module that
+    /// genuinely cannot be turned into a prefix seek by pre-binding, and it is
+    /// left in the post-filter form deliberately. `links` is keyed
+    /// `(src, dst, rel_type)`; `dst` sits at position 1, so binding it joins
+    /// position {1}, which `cozo-0.7.6/src/query/ra.rs:1509 join_is_prefix`
+    /// rejects (it requires exactly `0..n`) — the plan degrades to
+    /// `stored_mat_join`, which materialises the whole relation, i.e. the same
+    /// scan with extra allocation. Backlinks need a secondary index keyed on
+    /// `dst` (`links:by_dst`), tracked in #265 and #753; do not "fix" this by
+    /// moving the equality, which would make it slower, not faster.
     fn links_to(&self, id: &str) -> Result<Vec<Link>, KbStoreError> {
         let result = self
             .run_immut_params(
