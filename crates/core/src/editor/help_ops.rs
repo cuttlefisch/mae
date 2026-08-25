@@ -1412,7 +1412,16 @@ impl Editor {
         if !self.kb_contains_any(kb_target) {
             return false;
         }
-        if self.kb_link_follow_mode == "source-file" {
+        // Phase 5: `source-file` follow mode is retired for a DETACHED KB.
+        //
+        // A detached instance's `.org` files are a stale archive — no ingest
+        // reads them, and nothing keeps them current. Opening one is worse than
+        // failing: the file exists and opens cleanly, so the user edits a
+        // document that LOOKS live while being silently disconnected from their
+        // KB, and their edits are invisible to search, links and peers.
+        //
+        // Narrowed, never widened: an attached KB behaves exactly as before.
+        if self.kb_link_follow_mode == "source-file" && !self.kb_store_is_truth_for(kb_target) {
             if let Some(path) = self.kb_node_source_file(kb_target) {
                 self.open_file(path.display().to_string());
                 return true;

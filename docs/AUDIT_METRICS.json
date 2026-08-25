@@ -2730,9 +2730,9 @@
     },
     {
       "path": "crates/core/src/editor/help_ops.rs",
-      "lines": 3313,
+      "lines": 3322,
       "test_lines": 1640,
-      "code_lines": 1673,
+      "code_lines": 1682,
       "is_test_file": false,
       "max_fn_lines": 193,
       "max_fn_name": "kb_populate_buffer",
@@ -2890,9 +2890,9 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/registry.rs",
-      "lines": 1501,
+      "lines": 1522,
       "test_lines": 352,
-      "code_lines": 1149,
+      "code_lines": 1170,
       "is_test_file": false,
       "max_fn_lines": 142,
       "max_fn_name": "kb_reimport",
@@ -3050,8 +3050,8 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_ingest_policy_tests.rs",
-      "lines": 313,
-      "test_lines": 313,
+      "lines": 351,
+      "test_lines": 351,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 61,
@@ -3062,7 +3062,7 @@
       "max_nesting": 1,
       "use_count": 2,
       "pub_items": 0,
-      "test_count": 7
+      "test_count": 9
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_instance_matching_tests.rs",
@@ -13529,7 +13529,7 @@
       },
       {
         "path": "crates/core/src/editor/kb_ops/registry.rs",
-        "line": 977,
+        "line": 998,
         "category": "correctness"
       },
       {
