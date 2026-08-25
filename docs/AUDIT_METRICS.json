@@ -11417,6 +11417,22 @@
       "test_count": 3
     },
     {
+      "path": "shared/kb/src/cozo_store/tests/d4_bench.rs",
+      "lines": 139,
+      "test_lines": 139,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 42,
+      "max_fn_name": "bytes_per_node",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 3,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 2
+    },
+    {
       "path": "shared/kb/src/cozo_store/tests/db_tests.rs",
       "lines": 318,
       "test_lines": 318,
@@ -11546,8 +11562,8 @@
     },
     {
       "path": "shared/kb/src/cozo_store/tests/mod.rs",
-      "lines": 30,
-      "test_lines": 30,
+      "lines": 31,
+      "test_lines": 31,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 5,
