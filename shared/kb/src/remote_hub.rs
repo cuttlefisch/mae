@@ -471,16 +471,33 @@ impl KbQueryLayer for RemoteHubQueryLayer {
     ///
     /// **Shrinking this set to empty is the objective definition of "network
     /// parity"** — the gate D1 is measured against.
+    ///
+    /// ### Two of these can never be closed, and that is a finding, not a TODO
+    ///
+    /// **`History`** reads `node_versions`, which **ADR-106 makes a LOCAL audit
+    /// trail that does not sync** — it lives only in Cozo, appears nowhere in
+    /// `shared/sync/`, and is deliberately outside the checkpoint. A hub
+    /// therefore has no version history OF ANOTHER PEER'S EDITS to serve. This is
+    /// not an endpoint nobody wrote; it is a consequence of where history is
+    /// defined to live.
+    ///
+    /// **`NodeCrdtState`** hands back raw CRDT bytes, which is replication — the
+    /// exact thing ADR-067's `QueryOnly` policy exists to withhold. Serving it
+    /// here would let a query-only member reconstruct the full local replica they
+    /// were restricted from taking, defeating the control rather than completing
+    /// it (ADR-085: *not offered* beats offered-and-denied).
+    ///
+    /// So D1's gate is **six**, not eight. Recording that here rather than
+    /// leaving two permanent entries to read as unfinished work — a gap list
+    /// nobody can ever empty is a gap list people stop believing.
     fn capabilities(&self) -> crate::capabilities::QueryCapabilities {
         use crate::capabilities::QueryMethod as M;
         crate::capabilities::QueryCapabilities::all_except(&[
             M::HealthReport,
-            M::Related,
-            M::LinkedInDegree,
             M::TodoNodes,
             M::Agenda,
+            // STRUCTURAL, not unimplemented — see the doc comment above.
             M::History,
-            M::NamespacePrefixes,
             M::NodeCrdtState,
         ])
     }
@@ -514,6 +531,84 @@ impl KbQueryLayer for RemoteHubQueryLayer {
                     .collect()
             })
             .unwrap_or_default())
+    }
+
+    /// D1b: derived from the graph endpoint that already exists — the whole
+    /// subgraph in one call, then counted locally.
+    ///
+    /// No new server endpoint, and no N+1: `kb/query.graph` returns nodes AND
+    /// edges together, so in-degree is arithmetic over a response the client can
+    /// already fetch.
+    fn linked_in_degree(&self) -> Result<std::collections::HashMap<String, usize>, KbStoreError> {
+        let Some(result) = self.call("kb/query.graph", serde_json::json!({})) else {
+            return Ok(std::collections::HashMap::new());
+        };
+        if result
+            .get("edges_truncated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            // A truncated edge set yields UNDERCOUNTS, which read as "this node is
+            // barely linked" — a wrong answer, not a partial one (the same
+            // reasoning as the backlink cap in D1a).
+            self.set_outcome(LastOutcome::MalformedResponse(
+                "graph edges hit the hub's cap; in-degree counts are undercounts".to_string(),
+            ));
+        }
+        let mut out: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for e in result
+            .get("edges")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
+            if let Some(dst) = e.as_array().and_then(|a| a.get(1)).and_then(|v| v.as_str()) {
+                *out.entry(dst.to_string()).or_insert(0) += 1;
+            }
+        }
+        Ok(out)
+    }
+
+    /// D1b: nodes sharing a link with `id`, ranked by how many they share.
+    ///
+    /// Served by `kb/query.neighborhood` (D1a), so again no new endpoint. The
+    /// score is a shared-edge count, not the local store's relatedness metric —
+    /// stated here rather than passed off as equivalent, the same honesty
+    /// `search`'s synthetic score already applies.
+    fn related(&self, id: &str, limit: usize) -> Result<Vec<(String, f64)>, KbStoreError> {
+        let Some(sub) = self.neighborhood(id, 1)? else {
+            return Ok(Vec::new());
+        };
+        let mut scores: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+        for (src, dst, _rel) in &sub.edges {
+            for other in [src, dst] {
+                if other != id {
+                    *scores.entry(other.clone()).or_insert(0.0) += 1.0;
+                }
+            }
+        }
+        let mut out: Vec<(String, f64)> = scores.into_iter().collect();
+        // Deterministic: score desc, then id asc, so two clients agree.
+        out.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.cmp(&b.0))
+        });
+        out.truncate(limit);
+        Ok(out)
+    }
+
+    /// D1b: the id namespaces present in this KB, from the bulk title listing.
+    fn namespace_prefixes(&self) -> Result<Vec<String>, KbStoreError> {
+        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for (id, _title) in self.id_title_pairs_impl(None) {
+            if let Some((prefix, _)) = id.split_once(':') {
+                if !prefix.is_empty() {
+                    seen.insert(prefix.to_string());
+                }
+            }
+        }
+        Ok(seen.into_iter().collect())
     }
 
     fn health_report(&self) -> Result<Option<crate::store::HealthReport>, KbStoreError> {
@@ -1095,5 +1190,113 @@ mod tests {
         // honest inventory rather than an optimistic one.
         assert!(!caps.supports(M::HealthReport));
         assert!(!caps.supports(M::Agenda));
+    }
+
+    /// D1b: in-degree is counted from the graph endpoint's edges — no new server
+    /// call, no N+1.
+    #[test]
+    fn linked_in_degree_counts_incoming_edges_from_the_graph_response() {
+        let addr = spawn_one_shot_mock(
+            "HTTP/1.1 200 OK",
+            &rpc_body(serde_json::json!({
+                "kb_id": "k", "encryption": "none",
+                "nodes": ["a", "b", "c"],
+                "edges": [["a", "c"], ["b", "c"], ["a", "b"]],
+                "edges_truncated": false
+            })),
+        );
+        let layer = RemoteHubQueryLayer::with_timeout(
+            test_config(format!("http://{addr}")),
+            Duration::from_secs(5),
+        );
+        let deg = layer.linked_in_degree().unwrap();
+        assert_eq!(deg.get("c"), Some(&2), "c is pointed at twice");
+        assert_eq!(deg.get("b"), Some(&1));
+        assert_eq!(
+            deg.get("a"),
+            None,
+            "a is only ever a SOURCE -- counting it would invert the edge"
+        );
+    }
+
+    /// A truncated edge set produces UNDERCOUNTS, which read as "barely linked" —
+    /// a wrong answer, not a partial one. It must mark the layer degraded.
+    #[test]
+    fn a_truncated_edge_set_marks_in_degree_counts_degraded() {
+        let addr = spawn_one_shot_mock(
+            "HTTP/1.1 200 OK",
+            &rpc_body(serde_json::json!({
+                "kb_id": "k", "encryption": "none",
+                "nodes": ["a"], "edges": [["a", "b"]], "edges_truncated": true
+            })),
+        );
+        let layer = RemoteHubQueryLayer::with_timeout(
+            test_config(format!("http://{addr}")),
+            Duration::from_secs(5),
+        );
+        let _ = layer.linked_in_degree().unwrap();
+        assert!(matches!(
+            layer.last_outcome(),
+            LastOutcome::MalformedResponse(_)
+        ));
+    }
+
+    /// Namespaces come from the bulk title listing, deduplicated and sorted.
+    #[test]
+    fn namespace_prefixes_are_derived_from_node_ids() {
+        let addr = spawn_one_shot_mock(
+            "HTTP/1.1 200 OK",
+            &rpc_body(serde_json::json!({
+                "kb_id": "k", "encryption": "none",
+                "pairs": [["concept:a", "A"], ["cmd:b", "B"], ["concept:c", "C"], ["nocolon", "D"]],
+                "truncated": false
+            })),
+        );
+        let layer = RemoteHubQueryLayer::with_timeout(
+            test_config(format!("http://{addr}")),
+            Duration::from_secs(5),
+        );
+        assert_eq!(
+            layer.namespace_prefixes().unwrap(),
+            vec!["cmd".to_string(), "concept".to_string()],
+            "deduplicated, sorted, and an id with no namespace contributes none"
+        );
+    }
+
+    /// The gate D1 is measured against, stated as a countable set.
+    ///
+    /// Asserts what is CLOSED and what remains, and — crucially — that the two
+    /// structural gaps stay declared. `History` (ADR-106: version history is a
+    /// local audit trail that does not sync) and `NodeCrdtState` (serving raw
+    /// CRDT bytes IS replication, the thing ADR-067's QueryOnly withholds) can
+    /// never be closed. A gap list nobody can empty is a gap list people stop
+    /// believing.
+    #[test]
+    fn the_declared_gap_set_is_down_to_six_and_two_of_those_are_structural() {
+        use crate::capabilities::QueryMethod as M;
+        let layer = RemoteHubQueryLayer::with_timeout(
+            test_config("http://127.0.0.1:1".to_string()),
+            Duration::from_secs(1),
+        );
+        let caps = layer.capabilities();
+        for m in [M::LinkedInDegree, M::Related, M::NamespacePrefixes] {
+            assert!(
+                caps.supports(m),
+                "{m:?} is served now and must not be a gap"
+            );
+        }
+        for m in [M::History, M::NodeCrdtState] {
+            assert!(
+                !caps.supports(m),
+                "{m:?} is STRUCTURALLY unavailable and must stay declared -- \
+                 implementing it would defeat ADR-106 or ADR-067 respectively"
+            );
+        }
+        assert_eq!(
+            caps.gaps().len(),
+            5,
+            "expected 5 declared gaps (HealthReport, TodoNodes, Agenda + the two \
+             structural ones); update this count deliberately, not to make it pass"
+        );
     }
 }
