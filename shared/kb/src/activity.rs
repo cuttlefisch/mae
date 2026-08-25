@@ -58,6 +58,22 @@ fn to_day_number(y: i32, m: u32, d: u32) -> i64 {
     d + (153 * m2 + 2) / 5 + 365 * y2 + y2 / 4 - y2 / 100 + y2 / 400 - 32045
 }
 
+/// Epoch seconds at UTC midnight for a `(y, m, d)` date.
+///
+/// The `nodes.due_date` column is an `Int`, and "epoch seconds at midnight UTC"
+/// is the one reading of that with no timezone ambiguity — an org `DEADLINE:`
+/// names a *day*, not an instant, so anchoring it anywhere but midnight UTC
+/// would make the same deadline sort differently depending on where it was
+/// written.
+///
+/// Reuses `to_day_number` rather than adding a date library: this crate has
+/// deliberately had no chrono dependency, and the Julian-day algorithm already
+/// here is exactly the conversion needed. 2440588 is the Julian day number of
+/// 1970-01-01.
+pub fn epoch_seconds_utc_midnight(y: i32, m: u32, d: u32) -> i64 {
+    (to_day_number(y, m, d) - 2_440_588) * 86_400
+}
+
 /// Days between two dates. Returns absolute difference.
 pub fn days_between(a: (i32, u32, u32), b: (i32, u32, u32)) -> i64 {
     (to_day_number(b.0, b.1, b.2) - to_day_number(a.0, a.1, a.2)).abs()
@@ -275,5 +291,17 @@ mod tests {
         let content1 = ":PROPERTIES:\n:ID: abc\n:hash: old\n:END:\nBody\n";
         let content2 = ":PROPERTIES:\n:ID: abc\n:hash: new\n:END:\nBody\n";
         assert_eq!(body_hash(content1), body_hash(content2));
+    }
+
+    #[test]
+    fn epoch_seconds_matches_known_dates() {
+        // Anchors chosen because they are independently checkable, not because
+        // they make the implementation pass.
+        assert_eq!(epoch_seconds_utc_midnight(1970, 1, 1), 0);
+        assert_eq!(epoch_seconds_utc_midnight(1970, 1, 2), 86_400);
+        assert_eq!(epoch_seconds_utc_midnight(2000, 1, 1), 946_684_800);
+        assert_eq!(epoch_seconds_utc_midnight(2026, 8, 25), 1_787_616_000);
+        // Pre-epoch dates go negative rather than wrapping.
+        assert!(epoch_seconds_utc_midnight(1969, 12, 31) < 0);
     }
 }

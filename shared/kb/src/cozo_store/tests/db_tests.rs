@@ -316,3 +316,172 @@ fn lock_contention_is_classified_transient_and_corruption_is_not() {
         "the message must state retryability: {transient}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// D3 (#465/#466) — the four columns that could never hold a value.
+//
+// `origin_instance`, `assignee`, `due_date` and `sprint` were declared in the
+// schema, read by the seeded stored views, and hardcoded to ""/0 by BOTH write
+// paths. `view:sprint` filters `sprint != ""`, so it returned the empty set for
+// every user, always.
+// ---------------------------------------------------------------------------
+
+fn node_with_props(id: &str, props: &[(&str, &str)]) -> Node {
+    let mut n = Node::new(id, id, NodeKind::Task, "body");
+    for (k, v) in props {
+        n.properties.insert(k.to_string(), v.to_string());
+    }
+    n
+}
+
+fn column(store: &CozoKbStore, id: &str, col: &str) -> DataValue {
+    let rows = store
+        .run_immut_params(
+            &format!("?[v] := id = $id, *nodes{{id, {col}: v}}"),
+            super::super::util::btree_params([("id", super::super::util::dv_str(id))]),
+        )
+        .unwrap()
+        .rows;
+    rows.first().and_then(|r| r.first()).cloned().unwrap()
+}
+
+#[test]
+fn assignee_and_sprint_are_derived_from_properties() {
+    let (_tmp, store) = make_store();
+    store
+        .insert_node(&node_with_props(
+            "task:1",
+            &[("assignee", "quintessa"), ("sprint", "S-42")],
+        ))
+        .unwrap();
+
+    assert_eq!(
+        column(&store, "task:1", "assignee").get_str(),
+        Some("quintessa")
+    );
+    assert_eq!(column(&store, "task:1", "sprint").get_str(), Some("S-42"));
+}
+
+/// **The shipped view that never returned a row.**
+///
+/// A selective oracle: the assigned task must appear and the unassigned one must
+/// not, so the test fails both on the old always-empty behaviour and on a fix
+/// that returned everything.
+#[test]
+fn view_sprint_returns_rows_now_that_sprint_can_hold_a_value() {
+    let (_tmp, store) = make_store();
+    store
+        .insert_node(&node_with_props("task:in", &[("sprint", "S-1")]))
+        .unwrap();
+    store
+        .insert_node(&node_with_props("task:out", &[]))
+        .unwrap();
+
+    let rows = store
+        .run_immut(r#"?[id, sprint] := *nodes{id, sprint}, sprint != """#)
+        .unwrap()
+        .rows;
+    let ids: Vec<&str> = rows.iter().filter_map(|r| r.first()?.get_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["task:in"],
+        "only the node with a sprint may match -- this query returned NOTHING for \
+         every user before D3"
+    );
+}
+
+#[test]
+fn due_date_parses_the_org_timestamp_shapes_org_actually_writes() {
+    let (_tmp, store) = make_store();
+    let expected = crate::activity::epoch_seconds_utc_midnight(2026, 8, 25);
+    for (i, raw) in [
+        "<2026-08-25 Tue>",
+        "[2026-08-25]",
+        "<2026-08-25 Tue 14:30>",
+        "2026-08-25",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let id = format!("task:d{i}");
+        store
+            .insert_node(&node_with_props(&id, &[("deadline", raw)]))
+            .unwrap();
+        assert_eq!(
+            column(&store, &id, "due_date").get_int(),
+            Some(expected),
+            "{raw} must parse to the same day"
+        );
+    }
+}
+
+/// A malformed timestamp must not fail the write — the node still lands, with no
+/// deadline. Losing a whole node over one bad property value would be a far worse
+/// outcome than losing the date.
+#[test]
+fn an_unparseable_deadline_is_absent_not_an_error() {
+    let (_tmp, store) = make_store();
+    for (i, raw) in ["<not a date>", "", "2026-13-45", "tomorrow"]
+        .iter()
+        .enumerate()
+    {
+        let id = format!("task:bad{i}");
+        store
+            .insert_node(&node_with_props(&id, &[("deadline", raw)]))
+            .expect("a bad deadline must not fail the node write");
+        assert_eq!(column(&store, &id, "due_date").get_int(), Some(0), "{raw}");
+    }
+}
+
+#[test]
+fn origin_instance_records_which_replica_holds_the_node() {
+    let (_tmp, store) = make_store();
+    store.insert_node(&node_with_props("task:o", &[])).unwrap();
+    let got = column(&store, "task:o", "origin_instance");
+    assert_eq!(
+        got.get_str(),
+        Some(store.instance_id().unwrap().as_str()),
+        "origin_instance is not node content -- it is WHICH REPLICA holds this"
+    );
+}
+
+/// The derived columns must be a pure function of CRDT truth, so a rebuild
+/// reproduces them. This is the property that made "derive" the right answer
+/// rather than four new CRDT keys.
+#[test]
+fn the_derived_columns_survive_a_rewrite_from_the_same_node() {
+    let (_tmp, store) = make_store();
+    let node = node_with_props("task:r", &[("assignee", "kit"), ("sprint", "S-9")]);
+    store.insert_node(&node).unwrap();
+    // Re-project the identical node, as `rebuild_kb` would.
+    store.insert_node(&node).unwrap();
+    assert_eq!(column(&store, "task:r", "assignee").get_str(), Some("kit"));
+    assert_eq!(column(&store, "task:r", "sprint").get_str(), Some("S-9"));
+}
+
+/// **`created_at` must not be reset by a write, through EITHER door.**
+///
+/// `node_row` (bulk) already preserved it; `node_put_params` (single) did not, so
+/// the same field meant different things depending on which path wrote it, and
+/// `insert_node` destroyed node age outright.
+#[test]
+fn created_at_survives_a_rewrite_through_the_single_insert_path() {
+    let (_tmp, store) = make_store();
+    let mut node = Node::new("task:age", "Age", NodeKind::Task, "body");
+    node.created_at = Some(1_000_000);
+    store.insert_node(&node).unwrap();
+    assert_eq!(
+        column(&store, "task:age", "created_at").get_int(),
+        Some(1_000_000)
+    );
+
+    // A later write must not move it.
+    let mut edited = node.clone();
+    edited.title = "Age edited".into();
+    store.insert_node(&edited).unwrap();
+    assert_eq!(
+        column(&store, "task:age", "created_at").get_int(),
+        Some(1_000_000),
+        "an edit must not reset node age -- view:backlog orders by this"
+    );
+}

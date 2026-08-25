@@ -987,6 +987,33 @@ pub struct ReconcileOutcome {
     pub local_ahead: Option<Vec<u8>>,
 }
 
+/// A brand-new `KbNodeDoc` carrying **every** field of `node`, not just the text.
+///
+/// **#656.** `KbNodeDoc::new_with_client_id` writes id/title/body/tags — the v1
+/// schema. The existing-lineage branch of `upsert_with_crdt` then called
+/// `write_v2_fields` to add `kind`/`todo`/`prio`/`aliases`/`props`/`src_v`/
+/// `source`; the two FRESH-lineage branches did not, so a node that has v2 fields
+/// minted a **v1 document** and every structured field was silently dropped.
+///
+/// That is the field-authority rule biting: a field that is not in the CRDT does
+/// not survive, and these fields were not making it in at all on this path.
+///
+/// Reached whenever a node has no CRDT bytes yet (first share of an existing KB,
+/// lazy migration) or its bytes are unreadable — i.e. exactly the cases where
+/// there is no prior lineage to inherit the fields from.
+#[cfg(feature = "crdt")]
+fn fresh_v2_doc(node: &Node, client_id: u64) -> mae_sync::kb::KbNodeDoc {
+    let mut doc = mae_sync::kb::KbNodeDoc::new_with_client_id(
+        &node.id,
+        &node.title,
+        &node.body,
+        &node.tags,
+        client_id,
+    );
+    node.write_v2_fields(&mut doc);
+    doc
+}
+
 impl KnowledgeBase {
     pub fn new() -> Self {
         Self::default()
@@ -1184,22 +1211,13 @@ impl KnowledgeBase {
                     node.write_v2_fields(&mut doc);
                     doc
                 }
-                Err(_) => mae_sync::kb::KbNodeDoc::new_with_client_id(
-                    &node.id,
-                    &node.title,
-                    &node.body,
-                    &node.tags,
-                    client_id,
-                ),
+                // Unreadable prior bytes: start a fresh lineage rather than
+                // failing the write. See `fresh_v2_doc` for why the v2 fields
+                // must be written here too (#656).
+                Err(_) => fresh_v2_doc(&node, client_id),
             }
         } else {
-            mae_sync::kb::KbNodeDoc::new_with_client_id(
-                &node.id,
-                &node.title,
-                &node.body,
-                &node.tags,
-                client_id,
-            )
+            fresh_v2_doc(&node, client_id)
         };
 
         let update_bytes = crdt_doc.encode_state();
@@ -5477,5 +5495,80 @@ mod tests {
             .agenda_query_in_memory(&AgendaFilter::Todo(None))
             .unwrap();
         assert!(out.is_empty(), "{out:?}");
+    }
+}
+
+/// #656 — the fresh-lineage branches of `upsert_with_crdt` must not mint a v1
+/// document for a node that has v2 fields.
+#[cfg(all(test, feature = "crdt"))]
+mod fresh_lineage_v2_tests {
+    use super::*;
+
+    fn v2_node() -> Node {
+        let mut n = Node::new("task:1", "Ship it", NodeKind::Task, "body");
+        n.todo_state = Some("TODO".into());
+        n.priority = Some('A');
+        n.aliases = vec!["shipit".into()];
+        n.properties.insert("role".into(), "owner".into());
+        n.source = Some(NodeSource::UserOrg);
+        n.source_version = Some(7);
+        n
+    }
+
+    /// A node with **no prior CRDT bytes** — first share, or lazy migration.
+    ///
+    /// This is the common path, not an edge case: every node in an existing KB
+    /// takes it the first time the KB is shared.
+    #[test]
+    fn a_node_with_no_prior_crdt_doc_still_carries_its_v2_fields() {
+        let mut kb = KnowledgeBase::new();
+        let bytes = kb.upsert_with_crdt(v2_node(), 1).expect("returns state");
+
+        let doc = mae_sync::kb::KbNodeDoc::from_bytes(&bytes).expect("decodes");
+        assert_eq!(
+            doc.schema_version(),
+            2,
+            "a fresh doc for a node with v2 fields must be schema v2, not v1"
+        );
+        assert_eq!(doc.todo_state().as_deref(), Some("TODO"));
+        assert_eq!(doc.priority().as_deref(), Some("A"));
+        assert_eq!(doc.aliases(), vec!["shipit".to_string()]);
+        assert_eq!(
+            doc.properties().get("role").map(String::as_str),
+            Some("owner")
+        );
+    }
+
+    /// The other fresh branch: prior bytes exist but are unreadable, so the
+    /// lineage restarts. The fields must survive that too — a corrupt-bytes
+    /// recovery that silently drops metadata is a data-loss path wearing the
+    /// costume of resilience.
+    #[test]
+    fn an_unreadable_prior_doc_restarts_the_lineage_without_dropping_v2_fields() {
+        let mut kb = KnowledgeBase::new();
+        let mut node = v2_node();
+        node.crdt_doc = Some(b"not a valid yrs update at all".to_vec());
+        let bytes = kb.upsert_with_crdt(node, 1).expect("returns state");
+
+        let doc = mae_sync::kb::KbNodeDoc::from_bytes(&bytes).expect("decodes");
+        assert_eq!(doc.schema_version(), 2);
+        assert_eq!(doc.todo_state().as_deref(), Some("TODO"));
+        assert_eq!(
+            doc.properties().get("role").map(String::as_str),
+            Some("owner")
+        );
+    }
+
+    /// A node that genuinely has no v2 content stays v1 — the fix must not
+    /// stamp v2 onto documents that carry nothing to justify it, or every
+    /// tolerant reader gains work for no reason (ADR-093: no upcast-on-read).
+    #[test]
+    fn a_plain_node_is_not_gratuitously_upgraded() {
+        let mut kb = KnowledgeBase::new();
+        let plain = Node::new("note:1", "Plain", NodeKind::Note, "just prose");
+        let bytes = kb.upsert_with_crdt(plain, 1).expect("returns state");
+        let doc = mae_sync::kb::KbNodeDoc::from_bytes(&bytes).expect("decodes");
+        assert_eq!(doc.title(), "Plain");
+        assert!(doc.todo_state().is_none());
     }
 }

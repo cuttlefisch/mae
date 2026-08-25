@@ -11114,9 +11114,9 @@
     },
     {
       "path": "shared/kb/src/activity.rs",
-      "lines": 279,
-      "test_lines": 90,
-      "code_lines": 189,
+      "lines": 307,
+      "test_lines": 102,
+      "code_lines": 205,
       "is_test_file": false,
       "max_fn_lines": 25,
       "max_fn_name": "activity_score",
@@ -11125,8 +11125,8 @@
       "max_struct_name": "ActivityWeights",
       "max_nesting": 3,
       "use_count": 2,
-      "pub_items": 8,
-      "test_count": 12
+      "pub_items": 9,
+      "test_count": 13
     },
     {
       "path": "shared/kb/src/adr_kb.rs",
@@ -11242,16 +11242,16 @@
     },
     {
       "path": "shared/kb/src/cozo_store/db.rs",
-      "lines": 599,
+      "lines": 676,
       "test_lines": 0,
-      "code_lines": 599,
+      "code_lines": 676,
       "is_test_file": false,
       "max_fn_lines": 82,
       "max_fn_name": "retry_on_transient_sqlite_busy_with_deadline",
-      "max_match_arms": 5,
+      "max_match_arms": 4,
       "max_struct_fields": 0,
       "max_struct_name": "",
-      "max_nesting": 2,
+      "max_nesting": 3,
       "use_count": 2,
       "pub_items": 4,
       "test_count": 0
@@ -11434,8 +11434,8 @@
     },
     {
       "path": "shared/kb/src/cozo_store/tests/db_tests.rs",
-      "lines": 318,
-      "test_lines": 318,
+      "lines": 487,
+      "test_lines": 487,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 30,
@@ -11446,7 +11446,7 @@
       "max_nesting": 3,
       "use_count": 4,
       "pub_items": 0,
-      "test_count": 13
+      "test_count": 20
     },
     {
       "path": "shared/kb/src/cozo_store/tests/fts_migration_tests.rs",
@@ -14166,7 +14166,7 @@
       },
       {
         "path": "shared/kb/src/cozo_store/db.rs",
-        "line": 522,
+        "line": 570,
         "category": "store-contention"
       },
       {
