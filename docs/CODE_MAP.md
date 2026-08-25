@@ -311,6 +311,7 @@ Source: `shared/kb/src/lib.rs`
 | `federation` | mod |
 | `fuzzy` | mod |
 | `graph_query` | mod |
+| `ident` | mod |
 | `kb_build` | mod |
 | `kb_identity` | mod |
 | `migrate` | mod |
