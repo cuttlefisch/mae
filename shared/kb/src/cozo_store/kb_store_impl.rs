@@ -674,8 +674,4 @@ impl KbStore for CozoKbStore {
     fn backend_name(&self) -> &str {
         "cozo"
     }
-
-    fn db_path(&self) -> &Path {
-        &self.path
-    }
 }

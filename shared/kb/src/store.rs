@@ -238,10 +238,34 @@ pub struct ReimportStaleFile {
 pub enum KbStoreError {
     /// Operation not supported by this backend (e.g., graph algorithms on SQLite).
     NotSupported(String),
-    /// Underlying storage error.
+    /// Underlying storage error — durable, and retrying will not help.
     Storage(String),
     /// Node not found.
     NotFound(String),
+    /// A **transient** failure: lock contention, a busy store, or (for a
+    /// networked backing) a partition. Retrying may succeed.
+    ///
+    /// @ai-caution: [error-classification] This distinction is not cosmetic.
+    /// Without it a network partition is indistinguishable from disk corruption,
+    /// so nothing above the store can retry intelligently — and the caller's
+    /// only options are to treat every failure as fatal or to retry every
+    /// failure, including the ones that will never succeed.
+    ///
+    /// The classifier lives in `cozo_store::db::is_busy`, which is deliberately
+    /// conservative: a genuinely fatal write (disk full, corruption) must NOT
+    /// land here, because it would then be retried until a deadline instead of
+    /// failing fast.
+    Transient(String),
+}
+
+impl KbStoreError {
+    /// Whether retrying this operation could plausibly succeed.
+    ///
+    /// The point of the [`KbStoreError::Transient`] variant: a caller can back
+    /// off and retry, or degrade, instead of guessing from an error string.
+    pub fn is_transient(&self) -> bool {
+        matches!(self, KbStoreError::Transient(_))
+    }
 }
 
 impl std::fmt::Display for KbStoreError {
@@ -250,6 +274,7 @@ impl std::fmt::Display for KbStoreError {
             Self::NotSupported(msg) => write!(f, "not supported: {msg}"),
             Self::Storage(msg) => write!(f, "storage error: {msg}"),
             Self::NotFound(id) => write!(f, "node not found: {id}"),
+            Self::Transient(msg) => write!(f, "transient storage error (retry may help): {msg}"),
         }
     }
 }
@@ -573,7 +598,11 @@ pub trait KbStore: Send + Sync {
     // --- Lifecycle ---
 
     fn backend_name(&self) -> &str;
-    fn db_path(&self) -> &std::path::Path;
+    // `db_path()` was removed here (C2): it forced every implementation to claim
+    // a LOCAL FILESYSTEM PATH, which a networked or in-memory backing has no
+    // honest answer for -- and it had **zero callers** across the whole
+    // workspace, so the constraint bought nothing. `CozoKbStore` keeps its own
+    // inherent `db_path()` for the callers that genuinely want the sqlite file.
 }
 
 #[cfg(test)]
