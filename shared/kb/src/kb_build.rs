@@ -183,9 +183,28 @@ pub fn open_fresh_store(output_path: &Path, engine: &str) -> Result<CozoKbStore,
     Ok(store)
 }
 
+/// A sqlite store's WAL sidecars. Present only while a connection is open or
+/// after an unclean close; a clean close checkpoints and removes them.
+fn wal_sidecars(path: &Path) -> [std::path::PathBuf; 2] {
+    let mut wal = path.as_os_str().to_os_string();
+    wal.push("-wal");
+    let mut shm = path.as_os_str().to_os_string();
+    shm.push("-shm");
+    [wal.into(), shm.into()]
+}
+
 /// Delete whatever store currently sits at `path`, so a build starts fresh.
 /// sled is a directory and sqlite a file, hence the branch. Absent is success.
+///
+/// @ai-caution: [storage] Must also remove the `-wal`/`-shm` sidecars. MAE puts
+/// sqlite stores into WAL mode (`cozo_store::wal`), so a store is no longer a
+/// single file — and a build that fails *before* a clean close leaves those
+/// behind. Caught by `a_failed_build_leaves_no_store_and_no_staging_behind`,
+/// which went red on macOS the moment WAL was enabled.
 fn remove_store_path(path: &Path) -> Result<(), KbBuildError> {
+    for side in wal_sidecars(path) {
+        let _ = std::fs::remove_file(side);
+    }
     if !path.exists() {
         return Ok(());
     }
@@ -270,6 +289,26 @@ pub fn build_org_kb(
         // Never leave a failed build's staging store behind.
         let _ = remove_store_path(&staging);
     })?;
+
+    // @ai-caution: [storage] A staged sqlite store must have NO WAL sidecar at
+    // this point. `rename` moves one path, so promoting a store whose `-wal`
+    // still holds uncheckpointed pages would publish a store missing part of its
+    // own contents -- silent data loss, not a failed build. `build_into` drops
+    // the store before returning, and a clean close checkpoints and unlinks the
+    // sidecars, so their presence here means the close was NOT clean. Refuse
+    // rather than promote.
+    for side in wal_sidecars(&staging) {
+        if side.exists() {
+            let _ = remove_store_path(&staging);
+            return Err(KbBuildError::Io(
+                staging.clone(),
+                std::io::Error::other(
+                    "staged store still has a WAL sidecar (unclean close) — refusing to \
+                     promote a store that would be missing uncheckpointed pages",
+                ),
+            ));
+        }
+    }
 
     // `rename` refuses an existing destination on Windows, so the old store has
     // to go first. That leaves a brief window where the path is ABSENT, which is
