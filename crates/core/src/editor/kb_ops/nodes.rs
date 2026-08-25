@@ -842,8 +842,31 @@ impl Editor {
             self.set_status(status);
             Ok((id, Some(path)))
         } else {
-            // Ephemeral in-memory node (fallback)
+            // Phase 3: no `notes_dir` -- the store IS the note.
+            //
+            // This branch used to create the node and then simply return: no
+            // buffer opened, no capture mode entered, no status. So `SPC n c` on
+            // a fresh install (or any detached KB) appeared to do NOTHING, while
+            // silently leaving a titled empty node behind. The plan called this
+            // branch "the shape to generalise"; generalising it means giving it
+            // the same three affordances the file branch has.
             self.kb_create_node(&id, title, "", mae_kb::NodeKind::Note)?;
+            let return_idx = self.active_buffer_idx();
+
+            // Open the node itself for editing -- the store-backed equivalent of
+            // opening the freshly-written file.
+            self.open_help_at(&id);
+
+            self.kb.capture_state = Some(crate::CaptureState {
+                node_id: id.clone(),
+                // No file, and that is the point: finishing a capture must not
+                // look for one. `Option` already models it.
+                file_path: None,
+                return_buffer_idx: return_idx,
+            });
+            self.set_status(format!(
+                "Capture: {title} — SPC n s to finish | SPC n k to abort"
+            ));
             Ok((id, None))
         }
     }
