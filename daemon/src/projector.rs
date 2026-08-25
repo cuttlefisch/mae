@@ -249,6 +249,76 @@ impl Projector {
     /// Deliberately compares **materialized content**, not encoded bytes: two stores can
     /// hold the same node with different internal representation, and a byte comparison
     /// would report drift that does not exist.
+    /// Nodes the projection holds that CRDT truth no longer lists.
+    ///
+    /// Split out of `reconcile_kb` to stay under the structural ceiling, and
+    /// because the C6 reasoning below deserves to be readable on its own.
+    async fn reconcile_extra(
+        &self,
+        kb_id: &str,
+        store: &CozoKbStore,
+        truth: &HashSet<String>,
+        heal: bool,
+        report: &mut DriftReport,
+    ) {
+        // Nodes the projection holds that CRDT truth no longer lists.
+        //
+        // **C6.** `heal` used to delete every one of these unconditionally, and
+        // "absent from the manifest" does NOT mean "removed". It has two causes
+        // that need opposite handling:
+        //
+        //   * the node WAS in the collection and was removed -> deleting the
+        //     projection row is the whole point of healing;
+        //   * the node was never CRDT-managed at all -- locally authored in an
+        //     unshared KB, which is how every node in every un-shared KB looks,
+        //     since they persist with `crdt_doc = None` and appear in no `kbc:`
+        //     manifest. Deleting those is not reconciliation, it is data loss.
+        //
+        // The discriminator is whether the node's own `kbn:` document exists: a
+        // removal leaves the document behind, a never-synced node never had one.
+        //
+        // @ai-caution: [kb-projection] Do not "simplify" this back to deleting
+        // everything absent from the manifest. It is latent today only because
+        // `reconcile_kb` has test-only callers; ADR-092 wires it, and the first
+        // KB it runs against unshared would be emptied.
+        if heal && truth.is_empty() {
+            // A manifest that lists nothing is far more likely to be a doc that
+            // failed to load or was addressed by the wrong name (the C4 defect:
+            // `spawn_projector` read `kbc:{registry name}` instead of
+            // `kbc:{collab_id}`, and silently got an empty doc) than a KB whose
+            // every node was genuinely deleted. Refuse to heal rather than
+            // interpret it as "delete everything".
+            tracing::warn!(
+                kb_id,
+                extra = store.list_ids(None).map(|v| v.len()).unwrap_or(0),
+                "reconcile: collection manifest lists no nodes; refusing to \
+                 heal-delete the projection. This usually means the manifest \
+                 doc is missing or misaddressed, not that the KB is empty."
+            );
+        } else if let Ok(ids) = store.list_ids(None) {
+            for id in ids {
+                if truth.contains(&id) {
+                    continue;
+                }
+                report.extra.push(id.clone());
+                if !heal {
+                    continue;
+                }
+                let node_doc = mae_sync::kb_node_doc_name(kb_id, &id);
+                if self.doc_store.has_doc(&node_doc).await {
+                    let _ = store.delete_node(&id);
+                } else {
+                    tracing::debug!(
+                        kb_id,
+                        node = %id,
+                        "reconcile: node is absent from the manifest but has no CRDT \
+                         document either -- never synced, so keeping it"
+                    );
+                }
+            }
+        }
+    }
+
     pub async fn reconcile_kb(&self, kb_id: &str, heal: bool) -> Result<DriftReport, String> {
         let (coll_state, _sv) = self
             .doc_store
@@ -301,17 +371,8 @@ impl Projector {
             }
         }
 
-        // Nodes the projection holds that CRDT truth no longer lists.
-        if let Ok(ids) = store.list_ids(None) {
-            for id in ids {
-                if !truth.contains(&id) {
-                    report.extra.push(id.clone());
-                    if heal {
-                        let _ = store.delete_node(&id);
-                    }
-                }
-            }
-        }
+        self.reconcile_extra(kb_id, &store, &truth, heal, &mut report)
+            .await;
 
         report.missing.sort();
         report.differing.sort();

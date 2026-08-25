@@ -10538,12 +10538,12 @@
     },
     {
       "path": "daemon/src/projector.rs",
-      "lines": 658,
+      "lines": 719,
       "test_lines": 253,
-      "code_lines": 405,
+      "code_lines": 466,
       "is_test_file": false,
       "max_fn_lines": 68,
-      "max_fn_name": "reconcile_kb",
+      "max_fn_name": "collection_change_projects_routes_and_deletes_nodes",
       "max_match_arms": 7,
       "max_struct_fields": 3,
       "max_struct_name": "DriftReport",
@@ -10554,8 +10554,8 @@
     },
     {
       "path": "daemon/src/projector_gate_c_tests.rs",
-      "lines": 422,
-      "test_lines": 422,
+      "lines": 537,
+      "test_lines": 537,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 90,
@@ -10566,7 +10566,7 @@
       "max_nesting": 2,
       "use_count": 5,
       "pub_items": 0,
-      "test_count": 5
+      "test_count": 8
     },
     {
       "path": "daemon/src/quota.rs",
@@ -11962,9 +11962,9 @@
     },
     {
       "path": "shared/kb/src/lib.rs",
-      "lines": 5481,
+      "lines": 5574,
       "test_lines": 2698,
-      "code_lines": 2783,
+      "code_lines": 2876,
       "is_test_file": false,
       "max_fn_lines": 120,
       "max_fn_name": "extract_subgraph",
@@ -11972,9 +11972,9 @@
       "max_struct_fields": 14,
       "max_struct_name": "Node",
       "max_nesting": 8,
-      "use_count": 12,
+      "use_count": 13,
       "pub_items": 88,
-      "test_count": 120
+      "test_count": 123
     },
     {
       "path": "shared/kb/src/lru_query.rs",
@@ -14131,7 +14131,12 @@
       },
       {
         "path": "daemon/src/projector.rs",
-        "line": 367,
+        "line": 280,
+        "category": "kb-projection"
+      },
+      {
+        "path": "daemon/src/projector.rs",
+        "line": 428,
         "category": "kb-truth"
       },
       {
@@ -14296,7 +14301,7 @@
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 2277,
+        "line": 2295,
         "category": "kb-provenance"
       },
       {

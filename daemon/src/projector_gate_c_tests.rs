@@ -204,8 +204,18 @@ async fn reconciliation_detects_and_heals_every_drift_class() {
     let mut tampered = store.get_node("concept:b").unwrap().unwrap();
     tampered.body = "TAMPERED — not what the CRDT says".to_string();
     store.insert_node(&tampered).unwrap(); // differing
+                                           // "extra" = a node the collection REMOVED, which is what this class means.
+                                           // Its `kbn:` doc therefore exists while the manifest no longer lists it --
+                                           // C6's discriminator. A row with no node doc at all is a different thing (a
+                                           // node the CRDT never knew about, e.g. every node in an unshared KB) and is
+                                           // deliberately NOT deleted; see `heal_keeps_a_node_that_was_never_crdt_managed`.
     let ghost = mae_kb::Node::new("concept:ghost", "Ghost", NodeKind::Note, "not in the CRDT");
     store.insert_node(&ghost).unwrap(); // extra
+    let ghost_doc = mae_sync::kb::KbNodeDoc::new("concept:ghost", "Ghost", "not in the CRDT", &[]);
+    doc_store
+        .apply_update("kbn:kb1:concept:ghost", &ghost_doc.encode(), None)
+        .await
+        .unwrap();
 
     // Detection, without healing.
     let drift = projector.reconcile_kb("kb1", false).await.unwrap();
@@ -419,4 +429,109 @@ async fn rebuild_is_keyed_on_the_minted_id_not_the_display_name() {
             "node '{id}' must be present in the Cozo projection after rebuild"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// C6 — `heal` must not delete what the CRDT never knew about.
+// ---------------------------------------------------------------------------
+
+/// **The data-loss case.** A node in the projection with no `kbn:` document was
+/// never CRDT-managed — which is how EVERY node in an un-shared KB looks, since
+/// they persist with `crdt_doc = None` and appear in no manifest.
+///
+/// Healing used to delete all of them. That is not reconciliation, it is
+/// emptying the user's KB the first time ADR-092 wires this call.
+#[tokio::test]
+async fn heal_keeps_a_node_that_was_never_crdt_managed() {
+    let doc_store = mem_store();
+    seed(&doc_store, "kb1", &[("synced", "Synced", "body")]).await;
+    let stores = MemStores::new();
+    let projector = Projector::new(Arc::clone(&doc_store), stores.clone());
+    projector.reconcile_kb("kb1", true).await.unwrap();
+
+    // A locally-authored node: in the store, in no manifest, with no node doc.
+    let store = stores.store_for("kb1").await.unwrap();
+    store
+        .insert_node(&mae_kb::Node::new(
+            "local-only",
+            "Local only",
+            mae_kb::NodeKind::Note,
+            "never shared",
+        ))
+        .unwrap();
+
+    let report = projector.reconcile_kb("kb1", true).await.unwrap();
+    assert!(
+        report.extra.contains(&"local-only".to_string()),
+        "it is still REPORTED as extra -- the operator should see it"
+    );
+    assert!(
+        store.get_node("local-only").unwrap().is_some(),
+        "...but it must not be DELETED: no CRDT document means the collection \
+         never knew about it, not that it was removed"
+    );
+}
+
+/// The other half: a node that WAS in the collection and was removed still gets
+/// healed away, so the fix did not simply disable reconciliation.
+#[tokio::test]
+async fn heal_still_deletes_a_node_that_was_genuinely_removed() {
+    let doc_store = mem_store();
+    seed(&doc_store, "kb1", &[("a", "A", "body"), ("b", "B", "body")]).await;
+    let stores = MemStores::new();
+    let projector = Projector::new(Arc::clone(&doc_store), stores.clone());
+    projector.reconcile_kb("kb1", true).await.unwrap();
+    let store = stores.store_for("kb1").await.unwrap();
+    assert!(store.get_node("b").unwrap().is_some());
+
+    // Remove `b` from the manifest, leaving its node doc behind (what a real
+    // removal looks like).
+    let (state, _) = doc_store.encode_state_and_sv("kbc:kb1").await.unwrap();
+    let mut coll = mae_sync::kb::KbCollectionDoc::from_bytes(&state).unwrap();
+    coll.remove_node("b");
+    doc_store
+        .apply_update("kbc:kb1", &coll.encode_state(), None)
+        .await
+        .unwrap();
+
+    let report = projector.reconcile_kb("kb1", true).await.unwrap();
+    assert_eq!(report.extra, vec!["b".to_string()]);
+    assert!(
+        store.get_node("b").unwrap().is_none(),
+        "a genuinely removed node must still be healed away"
+    );
+    assert!(
+        store.get_node("a").unwrap().is_some(),
+        "and `a` must survive"
+    );
+}
+
+/// **The C4 blast radius.** An empty manifest is far more likely to be a doc
+/// that failed to load or was addressed by the wrong name than a KB whose every
+/// node was deleted — that exact defect shipped once, silently.
+///
+/// Heal must refuse rather than interpret it as "delete everything".
+#[tokio::test]
+async fn heal_refuses_to_empty_a_projection_when_the_manifest_lists_nothing() {
+    let doc_store = mem_store();
+    seed(&doc_store, "kb1", &[("a", "A", "body"), ("b", "B", "body")]).await;
+    let stores = MemStores::new();
+    let projector = Projector::new(Arc::clone(&doc_store), stores.clone());
+    projector.reconcile_kb("kb1", true).await.unwrap();
+    let store = stores.store_for("kb1").await.unwrap();
+
+    // Wipe the manifest's node list, as a mis-addressed or unloadable doc would.
+    let mut empty = mae_sync::kb::KbCollectionDoc::new("kb1", "owner");
+    let _ = empty.add_node("placeholder", "p");
+    empty.remove_node("placeholder");
+    doc_store
+        .apply_update("kbc:kb1", &empty.encode_state(), None)
+        .await
+        .unwrap();
+
+    projector.reconcile_kb("kb1", true).await.unwrap();
+    assert!(
+        store.get_node("a").unwrap().is_some() && store.get_node("b").unwrap().is_some(),
+        "an empty manifest must never be read as an instruction to delete the KB"
+    );
 }
