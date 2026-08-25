@@ -174,6 +174,49 @@ pub fn is_authorization_change(name: &str) -> bool {
     AUTHORIZATION_CHANGE_OPS.contains(&normalized.as_str())
 }
 
+/// Ex-commands that hand the caller **arbitrary Datalog** against the KB store.
+///
+/// ADR-085 moved `kb_raw_query` out of the `Knowledge` category and up to
+/// `Privileged` because arbitrary Datalog reaches every relation in the store,
+/// bypassing every per-tool result filter. That raised the **tool**. It did not
+/// raise the **command of the same name**, and a command is reachable two other
+/// ways: `execute_command {"command": "kb-raw-query …"}`, and the generated
+/// `command_kb_raw_query` mirror. Both classified `Write` via
+/// `classify_command_permission`'s `_ => Write` default.
+///
+/// This is the same defect `categories.rs` already documents for `kb-share`
+/// ("a Write-tier path to the exact effect `kb_share` was raised to Privileged to
+/// gate") — fixed there for authorization changes, and left open for Datalog.
+const RAW_DATALOG_OPS: &[&str] = &["kb_raw_query"];
+
+/// Is `name` — in any of its surface spellings — a path to arbitrary Datalog?
+pub fn is_raw_datalog_op(name: &str) -> bool {
+    RAW_DATALOG_OPS.contains(&normalize_op(name).as_str())
+}
+
+/// Does this ex-line reach arbitrary Datalog *through an argument* rather than
+/// through its command name?
+///
+/// `:kb-agenda todo` is an ordinary read. `:kb-agenda custom <datalog>` builds
+/// `AgendaFilter::Custom`, which is executed verbatim — the exact capability A5
+/// removed from the `kb_agenda` MCP tool, still reachable here because the
+/// command keeps it deliberately (principle #16: the human keeps it, the agent
+/// does not, and *that asymmetry is the control*). An agent driving the command
+/// surface erases the asymmetry unless the argument is inspected.
+fn ex_line_reaches_raw_datalog(line: &str) -> bool {
+    let mut parts = line.split_whitespace();
+    let Some(cmd) = parts.next() else {
+        return false;
+    };
+    if is_raw_datalog_op(cmd) {
+        return true;
+    }
+    normalize_op(cmd) == "kb_agenda"
+        && parts
+            .next()
+            .is_some_and(|a| a.eq_ignore_ascii_case("custom"))
+}
+
 /// Is `name` the option that carries the permission tier? Matches both the
 /// registry spelling (`ai_tier`) and its documented alias (`ai-tier`), since
 /// `OptionRegistry` accepts either.
@@ -240,8 +283,15 @@ pub fn effective_tier(
             // `dispatch_builtin` matches whole command names, but an
             // argument-bearing ex line (`set ai-tier privileged`) would be
             // routed by its first token, so classify on that token.
-            .and_then(|c| c.split_whitespace().next())
-            .is_some_and(|cmd| is_authorization_change(cmd) || is_permission_tier_command(cmd)),
+            .is_some_and(|line| {
+                // Argument-sensitive checks see the WHOLE line; name-only checks
+                // classify on the first token, since an argument-bearing ex line
+                // (`set ai-tier privileged`) is routed by its first word.
+                ex_line_reaches_raw_datalog(line)
+                    || line.split_whitespace().next().is_some_and(|cmd| {
+                        is_authorization_change(cmd) || is_permission_tier_command(cmd)
+                    })
+            }),
         _ => false,
     };
     if escalated {

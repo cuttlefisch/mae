@@ -17,7 +17,7 @@
 //! entry point.
 
 use crate::federation::{residency_permits_provider, AiResidency};
-use crate::store::{KbStore, VectorHit};
+use crate::store::{KbStore, KbStoreError, VectorHit};
 
 /// One node whose current content has no cached embedding under
 /// `(content_hash, model, chunk_version)` — a genuine cache miss the caller
@@ -122,65 +122,66 @@ pub fn apply_enrichment_results(
     store: &dyn KbStore,
     model: &str,
     chunk_version: i64,
-    results: &[(String, Vec<f32>)],
+    results: &[(String, String, Vec<f32>)],
 ) -> Vec<String> {
     let mut errors = Vec::new();
-    for (content_hash, vec) in results {
+    for (node_id, content_hash, vec) in results {
+        // TWO relations, two jobs -- D2. `embedding_cache` is content-addressed and
+        // answers "have we already paid to embed this exact content?", so it is
+        // looked up by exact key and never scanned. `embeddings` is keyed by NODE
+        // and is what semantic search scans, so it carries a fixed-width vector
+        // column. Conflating them is what made search slow: ADR-061 Phase F pointed
+        // the search at the CACHE, and a content-addressed cache cannot be searched
+        // without re-hashing every node body -- which is exactly what it did, at
+        // 2 queries per node.
         if let Err(e) = store.put_cached_embedding(content_hash, model, chunk_version, vec) {
             errors.push(format!("{content_hash}: cache write failed: {e}"));
+        }
+        if let Err(e) = store.store_embedding(node_id, model, content_hash, vec) {
+            errors.push(format!("{node_id}: embedding write failed: {e}"));
         }
     }
     errors
 }
 
-/// ADR-061 Phase F1: brute-force cosine k-NN over the `embedding_cache`
-/// relation `plan_enrichment_scan`/`apply_enrichment_results` already
-/// populate — NOT the fixed `<F32; 384>`-typed HNSW `embeddings` relation
-/// (`CozoKbStore::vector_search`), which is hardcoded to one dimensionality
-/// and cannot be coupled to the user-configurable `ai_embedding_model`
-/// option. KB sizes here are in the thousands of nodes at most, so a linear
-/// scan is single-digit-millisecond — no index needed for this to be usable.
+/// Brute-force cosine k-NN over the per-node `embeddings` a prior `kb_enrich`
+/// sweep stored under the SAME `(model)` pin. A node that has never been embedded
+/// is silently absent rather than an error, matching enrichment's own
+/// "absence just means embed it later" contract.
 ///
-/// Reuses `body_hash`/`get_cached_embedding` exactly as `plan_enrichment_scan`
-/// does, so a node is only a hit here if it was already embedded by a prior
-/// `kb_enrich` sweep under the SAME `(model, chunk_version)` pin — a cache
-/// miss is silently skipped (not an error), matching the cache's own
-/// "absence just means recompute/rescan later" contract.
+/// **D2 rewrote what this scans, and the measurements are why.** It used to walk
+/// the content-addressed `embedding_cache`: `list_ids`, then per node a `get_node`
+/// and a `get_cached_embedding` -- **2N Datalog queries** to answer one search,
+/// because a cache keyed by content hash can only be mapped back to nodes by
+/// re-hashing every body. Measured on this path: **72ms at 500 nodes, 221ms at
+/// 2,000, 1,287ms at 8,000** -- against ADR-061 Phase F's claim that "a linear scan
+/// is single-digit-millisecond", which was never measured.
+///
+/// Neither the cosine arithmetic nor the `crdt_doc` column was the cost (swapping
+/// `get_node` for `get_node_light` changed nothing measurable); per-query overhead
+/// was, at roughly 80us x 16,000. Bulk-fetching alone did not fix it either --
+/// pulling 8,000 x 768 values out of the cache's `[Float]` column still took 507ms.
+/// The same vectors in a fixed-width `<F32; 768>` column: **26ms**.
+///
+/// Hence the split: the cache keeps `[Float]` (it is never scanned, so width does
+/// not matter and dimension-agnosticism is a virtue there), and `embeddings` is
+/// fixed-width, pinned lazily to whatever the configured model emits.
 pub fn search_cached_embeddings(
     store: &dyn KbStore,
     model: &str,
-    chunk_version: i64,
+    _chunk_version: i64,
     query_vec: &[f32],
     k: usize,
 ) -> Result<Vec<VectorHit>, String> {
-    let ids = store.list_ids(None).map_err(|e| e.to_string())?;
-
-    let mut hits: Vec<VectorHit> = Vec::new();
-    for id in ids {
-        let node = match store.get_node(&id) {
-            Ok(Some(n)) => n,
-            Ok(None) => continue,
-            Err(_) => continue, // one bad row must not abort the whole scan
-        };
-        if node.body.trim().is_empty() {
-            continue;
-        }
-        let content_hash = crate::activity::body_hash(&node.body);
-        let Ok(Some(vec)) = store.get_cached_embedding(&content_hash, model, chunk_version) else {
-            continue; // no cached embedding under this pin -- not a hit
-        };
-        if let Some(distance) = cosine_distance(query_vec, &vec) {
-            hits.push(VectorHit { id, distance });
-        }
+    match store.vector_search(model, query_vec, k) {
+        Ok(hits) => Ok(hits),
+        // A declared gap, not a failure: a backend with no embeddings relation has
+        // nothing to search, which is observably the same as an un-enriched KB --
+        // and the caller (`kb_federated_search_scoped_with_vector`) already treats
+        // "no vector hits" as "return the lexical ranking unblended".
+        Err(KbStoreError::NotSupported(_)) => Ok(Vec::new()),
+        Err(e) => Err(e.to_string()),
     }
-
-    hits.sort_by(|a, b| {
-        a.distance
-            .partial_cmp(&b.distance)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    hits.truncate(k);
-    Ok(hits)
 }
 
 /// Cosine distance (`1.0 - cosine_similarity`, lower = more similar) —
@@ -189,7 +190,7 @@ pub fn search_cached_embeddings(
 /// index returns. `None` on a dimension mismatch (should not happen under a
 /// correctly pinned model, but a stale/corrupt cache entry must not panic or
 /// silently return a meaningless score) or a zero-magnitude vector.
-fn cosine_distance(a: &[f32], b: &[f32]) -> Option<f64> {
+pub(crate) fn cosine_distance(a: &[f32], b: &[f32]) -> Option<f64> {
     if a.len() != b.len() || a.is_empty() {
         return None;
     }
@@ -364,10 +365,10 @@ mod tests {
         let plan = plan_enrichment_scan(&store, AiResidency::Open, "ollama", "m", 1);
         assert_eq!(plan.targets.len(), 2);
 
-        let results: Vec<(String, Vec<f32>)> = plan
+        let results: Vec<(String, String, Vec<f32>)> = plan
             .targets
             .iter()
-            .map(|t| (t.content_hash.clone(), vec![0.42]))
+            .map(|t| (t.node_id.clone(), t.content_hash.clone(), vec![0.42]))
             .collect();
         let errors = apply_enrichment_results(&store, "m", 1, &results);
         assert!(errors.is_empty());
@@ -397,7 +398,11 @@ mod tests {
             &store,
             "m",
             1,
-            &[(succeeded.content_hash.clone(), vec![9.9])],
+            &[(
+                succeeded.node_id.clone(),
+                succeeded.content_hash.clone(),
+                vec![9.9],
+            )],
         );
 
         let rescanned = plan_enrichment_scan(&store, AiResidency::Open, "ollama", "m", 1);
@@ -424,7 +429,13 @@ mod tests {
                 .insert_node(&Node::new(id, id, NodeKind::Note, body))
                 .unwrap();
             let hash = crate::activity::body_hash(body);
-            store.put_cached_embedding(&hash, "m", 1, &vec).unwrap();
+            // Seed through the production apply path, not a bare cache write: the
+            // searchable `embeddings` relation is what a search now scans, and a
+            // test that seeded only the cache would pass while the real sweep
+            // wrote nothing findable.
+            assert!(
+                apply_enrichment_results(&store, "m", 1, &[(id.to_string(), hash, vec)]).is_empty()
+            );
         }
 
         let hits = search_cached_embeddings(&store, "m", 1, &[1.0, 0.0, 0.0], 10).unwrap();
@@ -463,14 +474,28 @@ mod tests {
             .insert_node(&Node::new("n:1", "One", NodeKind::Note, "body"))
             .unwrap();
         let hash = crate::activity::body_hash("body");
-        store
-            .put_cached_embedding(&hash, "model-a", 1, &[1.0, 0.0])
-            .unwrap();
+        assert!(apply_enrichment_results(
+            &store,
+            "model-a",
+            1,
+            &[("n:1".to_string(), hash, vec![1.0, 0.0])]
+        )
+        .is_empty());
+
+        // model-a IS findable -- so the empty model-b result below proves the PIN
+        // excludes it, not that the store was simply never populated. Without this
+        // the assertion passes vacuously.
+        assert_eq!(
+            search_cached_embeddings(&store, "model-a", 1, &[1.0, 0.0], 10)
+                .unwrap()
+                .len(),
+            1
+        );
 
         let hits = search_cached_embeddings(&store, "model-b", 1, &[1.0, 0.0], 10).unwrap();
         assert!(
             hits.is_empty(),
-            "a cache entry under a different model pin must not be treated as interchangeable"
+            "an entry under a different model pin must not be treated as interchangeable"
         );
     }
 
@@ -486,7 +511,9 @@ mod tests {
                 .insert_node(&Node::new(id, id, NodeKind::Note, body))
                 .unwrap();
             let hash = crate::activity::body_hash(body);
-            store.put_cached_embedding(&hash, "m", 1, &vec).unwrap();
+            assert!(
+                apply_enrichment_results(&store, "m", 1, &[(id.to_string(), hash, vec)]).is_empty()
+            );
         }
 
         let hits = search_cached_embeddings(&store, "m", 1, &[1.0, 0.0], 2).unwrap();

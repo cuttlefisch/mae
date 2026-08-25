@@ -308,8 +308,54 @@ pub fn request_tools_definition() -> ToolDefinition {
     .build()
 }
 
+/// The tier of the hand-authored tool that mirrors this command, if any.
+///
+/// `kb-raw-query` <-> `kb_raw_query`, `git-push` <-> `git_push`. Built once and
+/// cached: `ai_specific_tools` allocates the whole tool table.
+fn mirrored_tool_tier(command: &str) -> Option<PermissionTier> {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+    static MAP: OnceLock<HashMap<String, PermissionTier>> = OnceLock::new();
+    MAP.get_or_init(|| {
+        super::ai_specific_tools(&mae_core::OptionRegistry::new())
+            .into_iter()
+            .filter_map(|t| Some((t.name.replace('_', "-"), t.permission?)))
+            .collect()
+    })
+    .get(command)
+    .copied()
+}
+
 /// Classify a command's permission tier based on its name.
+///
+/// **A command may never be a weaker route than the tool that mirrors it.**
+/// Most commands reach the agent three ways -- the hand-authored MCP tool, the
+/// generated `command_<name>` mirror, and `execute_command` -- and the last two
+/// both take their tier from here. So raising a *tool* did nothing on its own,
+/// and that has been the defect three times:
+///
+/// * `kb_share` raised to Privileged, its command left at Write. Fixed by the
+///   `is_authorization_change` arm below.
+/// * `kb_raw_query` raised to Privileged by ADR-085 (arbitrary Datalog reaches
+///   every relation, bypassing every per-tool result filter), its command left at
+///   Write.
+/// * `git_push`/`git_pull` are Shell tools -- `dispatch_builtin` runs
+///   `self.git_push()` directly, so a Write-tier agent could push to a remote.
+///
+/// Three instances of one shape is a mechanism problem, so the rule is
+/// **inverted**, the same way [`ORDINARY_AI_OPTIONS`] inverts the option rule:
+/// a command inherits its mirroring tool's tier automatically, and the match
+/// below can only ever raise it further. Nobody has to remember to add a name.
+/// `command_mirror_tier_parity` asserts the property holds.
+///
+/// Raising is always the safe direction -- it restricts the agent, never the
+/// human, since keybindings and `:` lines do not consult this.
 pub fn classify_command_permission(name: &str) -> PermissionTier {
+    let floor = mirrored_tool_tier(name).unwrap_or(PermissionTier::ReadOnly);
+    classify_command_permission_by_name(name).max(floor)
+}
+
+fn classify_command_permission_by_name(name: &str) -> PermissionTier {
     match name {
         // Movement and read-only state changes
         n if n.starts_with("move-") => PermissionTier::ReadOnly,
@@ -346,6 +392,12 @@ pub fn classify_command_permission(name: &str) -> PermissionTier {
         // exact effect `kb_share` was raised to Privileged to gate, and it
         // needs no arguments: it shares the *active* KB.
         n if super::authorization::is_authorization_change(n) => PermissionTier::Privileged,
+
+        // Same reasoning one door over: arbitrary Datalog reaches every relation
+        // in the store, which is why ADR-085 raised the `kb_raw_query` TOOL to
+        // Privileged. Its generated `command_kb_raw_query` mirror inherited
+        // `_ => Write` below and was a weaker route to the identical effect.
+        n if super::authorization::is_raw_datalog_op(n) => PermissionTier::Privileged,
 
         // Default to Write for unknown commands
         _ => PermissionTier::Write,

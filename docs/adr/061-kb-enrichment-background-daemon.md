@@ -683,7 +683,41 @@ is wired to a NEW `mae_kb::enrichment::search_cached_embeddings` (`shared/kb/src
 a brute-force cosine k-NN scan directly over the `embedding_cache` relation Phase B/C already
 populate — not the fixed-width HNSW index at all. KB sizes here are in the thousands of nodes at
 most, so a linear scan is single-digit-millisecond; no index-dimension coupling to the
-user-configurable `ai_embedding_model` option is needed. Reuses `body_hash`/`get_cached_embedding`
+user-configurable `ai_embedding_model` option is needed.
+
+> ### ⚠ Correction (D2, principle #17): the latency sentence above was never measured, and is wrong
+>
+> **Measured on that path:** 72ms at 500 nodes, 221ms at 2,000, **1,287ms at 8,000** — not
+> "single-digit-millisecond". The mechanism, also measured: the scan issued **2N Datalog queries**
+> (`get_node` then `get_cached_embedding`, per node) to answer one search. Neither the cosine
+> arithmetic nor the `crdt_doc` column was the cost — swapping `get_node` for `get_node_light`
+> changed nothing measurable — it was per-query overhead at roughly 80µs × 16,000.
+>
+> **The deeper error is architectural, and it is what "route around the index" cost.**
+> `embedding_cache` is *content-addressed*: it answers "have we already paid to embed this exact
+> content?", which is an exact-key question. A content-addressed cache **cannot be searched** without
+> re-hashing every node body to map hashes back to nodes — which is precisely why the scan had to
+> fetch every node. Phase F used a cache as an index.
+>
+> Bulk-fetching alone does not rescue it: pulling 8,000 × 768 values out of the cache's `[Float]`
+> column still measures **507ms**, because every element is a boxed `DataValue`. The same vectors in
+> a fixed-width `<F32; 768>` column: **26ms** — a **19× difference** that is the whole reason
+> semantic search was slow.
+>
+> **D2's resolution keeps both relations, each doing its own job.** `embedding_cache` stays
+> content-addressed and `[Float]` (never scanned, so width is irrelevant and dimension-agnosticism is
+> a virtue there). The searchable `embeddings` relation — which this note correctly identified as
+> unusable, but for the wrong reason — is **not** deleted; its real defect was the *hardcoded* width,
+> not fixed width as such. It is now created **lazily, at the width of the first vector written**, so
+> it follows whatever `ai_embedding_model` emits and re-pins when that changes. Re-pinning is
+> lossless in network terms because `embedding_cache` still holds every vector ever computed.
+>
+> The HNSW index is dropped rather than re-dimensioned: an ANN index is what forces a compile-time
+> width, and it is the wrong structure for a corpus that mutates on every edit (HNSW deletion is
+> awkward; its graph overhead of `M × 8–10` bytes/element is ~3× a quantized vector). A brute-force
+> scan of a fixed-width column at 26ms/8,000 nodes is ample.
+>
+> **After D2:** 3.5ms at 500 nodes, 18ms at 2,000, 146ms at 8,000 — **8.8–20× faster**. Reuses `body_hash`/`get_cached_embedding`
 exactly as `plan_enrichment_scan` already does (principle #8) — a node is a hit only if a prior
 `kb_enrich` sweep already embedded it under the SAME `(model, chunk_version)` pin; a mismatch is a
 silent miss, not an error, matching the cache's own contract.

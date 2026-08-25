@@ -12,7 +12,7 @@
     "crates/ai/src/session/tests.rs": 2123,
     "crates/ai/src/tool_impls/dap.rs": 811,
     "crates/ai/src/tool_impls/editor_tools.rs": 1566,
-    "crates/ai/src/tool_impls/kb.rs": 6542,
+    "crates/ai/src/tool_impls/kb.rs": 6548,
     "crates/ai/src/tool_impls/kb_export_html.rs": 1330,
     "crates/babel/src/lib.rs": 915,
     "crates/canvas/src/kb_graph.rs": 1510,
@@ -103,7 +103,7 @@
     "crates/scheme/src/compiler.rs": 3112,
     "crates/scheme/src/lsp.rs": 902,
     "crates/scheme/src/parity_tests.rs": 901,
-    "crates/scheme/src/permission_tests.rs": 617,
+    "crates/scheme/src/permission_tests.rs": 677,
     "crates/scheme/src/reader.rs": 1347,
     "crates/scheme/src/runtime.rs": 1242,
     "crates/scheme/src/runtime/state_sync_apply.rs": 821,
@@ -131,14 +131,15 @@
     "daemon/tests/collab_e2e.rs": 2649,
     "daemon/tests/collab_stress.rs": 553,
     "daemon/tests/network_e2e.rs": 527,
-    "daemon/tests/oauth_e2e.rs": 794,
+    "daemon/tests/oauth_e2e.rs": 790,
+    "shared/kb/src/cozo_store/schema.rs": 803,
     "shared/kb/src/federation.rs": 1936,
-    "shared/kb/src/lib.rs": 5477,
+    "shared/kb/src/lib.rs": 5481,
     "shared/kb/src/org.rs": 2567,
-    "shared/kb/src/query.rs": 2015,
+    "shared/kb/src/query.rs": 2031,
     "shared/mcp/src/auth.rs": 1201,
     "shared/mcp/src/identity.rs": 1225,
-    "shared/mcp/src/lib.rs": 3457,
+    "shared/mcp/src/lib.rs": 3458,
     "shared/sync/src/membership.rs": 4008,
     "shared/sync/src/text.rs": 2252
   },
@@ -458,10 +459,6 @@
     "crates/core/src/editor/kb_ops/tests/kb_ops_search_federation_tests.rs": {
       "max_fn_lines": 114,
       "max_nesting": 2
-    },
-    "crates/core/src/editor/kb_ops/tests/kb_ops_vector_blend_tests.rs": {
-      "max_fn_lines": 83,
-      "max_nesting": 1
     },
     "crates/core/src/editor/kb_ops/watchers.rs": {
       "max_fn_lines": 133,
@@ -924,7 +921,7 @@
       "max_nesting": 2
     },
     "crates/scheme/src/runtime/io_packages.rs": {
-      "max_fn_lines": 514,
+      "max_fn_lines": 515,
       "max_nesting": 3
     },
     "crates/scheme/src/runtime/kb_crud.rs": {
@@ -1185,15 +1182,15 @@
     },
     "daemon/tests/config_change_contract_e2e.rs": {
       "max_fn_lines": 97,
-      "max_nesting": 2
+      "max_nesting": 1
     },
     "daemon/tests/oauth_e2e.rs": {
       "max_fn_lines": 106,
       "max_nesting": 3
     },
     "daemon/tests/self_issued_token_e2e.rs": {
-      "max_fn_lines": 108,
-      "max_nesting": 2
+      "max_fn_lines": 106,
+      "max_nesting": 1
     },
     "shared/kb/examples/org_parse_latency.rs": {
       "max_fn_lines": 102,
@@ -1212,7 +1209,7 @@
       "max_nesting": 3
     },
     "shared/kb/src/cozo_store/schema.rs": {
-      "max_fn_lines": 316,
+      "max_fn_lines": 314,
       "max_nesting": 2
     },
     "shared/kb/src/cozo_store/tests/agenda_tests.rs": {

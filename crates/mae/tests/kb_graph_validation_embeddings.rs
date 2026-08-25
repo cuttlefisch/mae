@@ -77,23 +77,27 @@ fn view_queries_are_executable() {
 }
 
 // ============================================================
-// Category 9: Embeddings (HNSW Index)
+// Category 9: Embeddings (fixed-width vector column, brute-force cosine k-NN)
 // ============================================================
 
 #[test]
 fn embedding_store_and_search_with_seed_nodes() {
     let (_tmp, store) = make_seeded_store();
 
-    // Generate synthetic embeddings for a few concept nodes
-    // In production, these would come from a model like all-MiniLM-L6-v2
+    // Synthetic embeddings at the SHIPPED DEFAULT model's width. This used to be
+    // 384 (all-MiniLM-L6-v2), which is the width the relation was hardcoded to and
+    // therefore the only width that could ever pass -- a value chosen around the
+    // defect rather than one a real install produces (principle #14).
     let concept_ids = ["concept:buffer", "concept:mode", "concept:command"];
-    let dim = 384;
+    let dim = 768; // nomic-embed-text, the default `ai_embedding_model`
 
     for (i, id) in concept_ids.iter().enumerate() {
         let mut vec = vec![0.0f32; dim];
         // Make each vector point in a different direction
         vec[i] = 1.0;
-        store.store_embedding(id, "test-synthetic", &vec).unwrap();
+        store
+            .store_embedding(id, "test-synthetic", &format!("h{i}"), &vec)
+            .unwrap();
     }
 
     // Search for vector closest to concept:buffer's direction
@@ -101,7 +105,7 @@ fn embedding_store_and_search_with_seed_nodes() {
     query[0] = 0.9;
     query[1] = 0.1;
 
-    let hits = store.vector_search(&query, 3).unwrap();
+    let hits = store.vector_search("test-synthetic", &query, 3).unwrap();
     assert!(!hits.is_empty(), "vector search should return results");
     assert_eq!(
         hits[0].id, "concept:buffer",
@@ -114,28 +118,19 @@ fn graphrag_with_seed_nodes() {
     let (_tmp, store) = make_seeded_store();
 
     // Embed concept:buffer — its graph neighbors should appear in GraphRAG results
-    let mut v_buffer = vec![0.0f32; 384];
+    let mut v_buffer = vec![0.0f32; 768];
     v_buffer[0] = 1.0;
     store
-        .store_embedding("concept:buffer", "test-synthetic", &v_buffer)
+        .store_embedding("concept:buffer", "test-synthetic", "hb", &v_buffer)
         .unwrap();
 
-    // CozoDB sled backend may panic on HNSW vector search (known limitation).
-    // Catch the panic and gracefully skip.
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        store.graphrag_search(&v_buffer, 3)
-    }));
-    let hits = match result {
-        Ok(Ok(hits)) => hits,
-        Ok(Err(e)) => {
-            eprintln!("GraphRAG not supported on this backend (expected): {e}");
-            return;
-        }
-        Err(_) => {
-            eprintln!("GraphRAG panicked on this backend (known sled HNSW limitation)");
-            return;
-        }
-    };
+    // The `catch_unwind` that used to wrap this call is gone with the HNSW index it
+    // was defending against ("CozoDB sled backend may panic on HNSW vector search").
+    // There is no HNSW index any more, and sled is retired (#770) -- so a panic here
+    // is a real failure and must surface as one rather than being skipped past.
+    let hits = store
+        .graphrag_search("test-synthetic", &v_buffer, 3)
+        .unwrap();
 
     let hit_ids: HashSet<&str> = hits.iter().map(|h| h.id.as_str()).collect();
     eprintln!("GraphRAG hits: {:?}", hit_ids);
