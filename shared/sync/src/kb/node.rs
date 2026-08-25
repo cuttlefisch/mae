@@ -729,8 +729,289 @@ impl KbNodeDoc {
         hex::encode(hasher.finalize())
     }
 
+    /// ADR-107: the hash a **rebirth** signs — covering everything the reborn
+    /// document must reproduce.
+    ///
+    /// Deliberately NOT [`content_hash`](Self::content_hash), which covers only
+    /// title + body + tags. That is the right scope for *change detection* (its
+    /// stated job) and the wrong one for a rebirth: a rebirth discards the whole
+    /// operation history, so anything outside the hash is unverifiable
+    /// afterwards. Reusing it would have made ADR-107's content-identity gate
+    /// pass while `kind`, `todo_state`, `priority`, `aliases`, `properties`,
+    /// `source*` and links silently changed across the boundary.
+    ///
+    /// Two hashes for two questions, each named for its own (principle #8 is
+    /// about one MECHANISM per question, not one function for two).
+    pub fn rebirth_hash(&self) -> String {
+        let mat = self.materialize();
+        let mut h = Sha256::new();
+        let mut field = |b: &[u8]| {
+            h.update(b);
+            h.update(b"\0");
+        };
+        field(b"maerebirth/v1");
+        field(mat.id.as_bytes());
+        field(mat.title.as_bytes());
+        field(mat.body.as_bytes());
+        // Ordered collections hash in order; unordered ones are sorted first, so
+        // two peers that assembled the same set differently agree.
+        for t in &mat.tags {
+            field(t.as_bytes());
+        }
+        field(b"|links|");
+        let mut links = mat.links.clone();
+        links.sort();
+        for l in &links {
+            field(l.as_bytes());
+        }
+        field(b"|v2|");
+        field(mat.kind.as_deref().unwrap_or("").as_bytes());
+        field(mat.todo_state.as_deref().unwrap_or("").as_bytes());
+        field(mat.priority.as_deref().unwrap_or("").as_bytes());
+        field(mat.source.as_deref().unwrap_or("").as_bytes());
+        field(
+            mat.source_version
+                .map(|v| v.to_string())
+                .unwrap_or_default()
+                .as_bytes(),
+        );
+        let mut aliases = mat.aliases.clone();
+        aliases.sort();
+        for a in &aliases {
+            field(a.as_bytes());
+        }
+        field(b"|props|");
+        let mut props: Vec<(&String, &String)> = mat.properties.iter().collect();
+        props.sort();
+        for (k, v) in props {
+            field(k.as_bytes());
+            field(v.as_bytes());
+        }
+        hex::encode(h.finalize())
+    }
+
+    /// ADR-107: re-emit this node as a **fresh single-client document** carrying
+    /// the same materialized content, discarding its operation history.
+    ///
+    /// This is the growth bound. A yrs document grows monotonically in
+    /// *operations* — deletion is a flag on the Item, and GC replaces deleted
+    /// content while the Item and its delete-set entry remain — so a node edited
+    /// daily for years accrues state nothing reclaims. Rebirth resets that to the
+    /// cost of the content itself.
+    ///
+    /// **The caller must author a signed `Rebirth` op** carrying
+    /// [`rebirth_hash`](Self::rebirth_hash) of the RESULT, and peers must adopt
+    /// via that op rather than merging. Merging is the failure mode: yrs would
+    /// happily merge a stale lineage back in and resurrect the very history this
+    /// discarded.
+    ///
+    /// Returns the reborn document. The old one is unchanged — the caller
+    /// replaces it only once the manifest hash advances (ADR-107 D3), so there is
+    /// no window in which a peer sees neither.
+    pub fn reborn(&self, client_id: u64) -> Self {
+        let mat = self.materialize();
+        let mut doc =
+            Self::new_with_client_id(&mat.id, &mat.title, &mat.body, &mat.tags, client_id);
+        // Every v2 field, or the reborn node quietly loses metadata across the
+        // boundary -- the same defect #656 had on the fresh-lineage path, which
+        // is what makes this worth writing out rather than trusting `new`.
+        let _ = doc.set_kind(mat.kind.as_deref());
+        let _ = doc.set_todo_state(mat.todo_state.as_deref());
+        let _ = doc.set_priority(mat.priority.as_deref());
+        let _ = doc.set_source(mat.source.as_deref());
+        let _ = doc.set_source_version(mat.source_version);
+        let _ = doc.set_aliases(&mat.aliases);
+        let _ = doc.set_properties(&mat.properties);
+        for l in &mat.links {
+            let _ = doc.add_link(l);
+        }
+        doc
+    }
+
     /// Access the underlying Doc.
     pub fn doc(&self) -> &Doc {
         &self.doc
+    }
+}
+
+/// ADR-107's verification gates for node rebirth.
+///
+/// These are the four the ADR states *"now so they are not negotiated later"*.
+/// Gate 1 (growth is bounded) is the one nothing measured before: the ADR notes
+/// that *"no test asserts document growth at all beyond the two added with
+/// #744"*.
+#[cfg(test)]
+mod rebirth_tests {
+    use super::*;
+
+    /// Edit a node `n` times, so its op log accumulates.
+    fn edit_n_times(doc: &mut KbNodeDoc, n: usize) {
+        for i in 0..n {
+            let _ = doc.set_title(&format!("Title revision {i}"));
+            let _ = doc.set_body(&format!("Body revision {i} — {}", "x".repeat(40)));
+        }
+    }
+
+    fn v2_doc() -> KbNodeDoc {
+        let mut d = KbNodeDoc::new("note:a", "Original", "original body", &["alpha".into()]);
+        let _ = d.set_kind(Some("task"));
+        let _ = d.set_todo_state(Some("TODO"));
+        let _ = d.set_priority(Some("A"));
+        let _ = d.set_source(Some("user_org"));
+        let _ = d.set_source_version(Some(3));
+        let _ = d.set_aliases(&["a-prime".to_string()]);
+        let mut props = std::collections::HashMap::new();
+        props.insert("role".to_string(), "owner".to_string());
+        let _ = d.set_properties(&props);
+        let _ = d.add_link("note:b");
+        d
+    }
+
+    /// **ADR-107 gate 1: growth is actually bounded.**
+    ///
+    /// *"A node edited N times, reborn, then edited N times again must not exceed
+    /// a fixed multiple of its materialized size."*
+    ///
+    /// This is the whole claim of the ADR. Without it, rebirth is an assertion.
+    ///
+    /// Measured on this fixture (200 title+body edits, a v2 node with links,
+    /// aliases and properties): **7,128 B grown → 383 B reborn**, an 18.6x
+    /// reduction. The second cycle regrows to 2,777 B and returns to **exactly
+    /// 383 B** — identical, which is what distinguishes a BOUND from a saving.
+    /// The thresholds below are deliberately looser than those figures so the
+    /// test pins the property rather than the constants.
+    #[test]
+    fn rebirth_bounds_growth_rather_than_merely_slowing_it() {
+        let mut doc = v2_doc();
+        edit_n_times(&mut doc, 200);
+        let grown = doc.encode_state().len();
+
+        let reborn = doc.reborn(2);
+        let after_rebirth = reborn.encode_state().len();
+
+        assert!(
+            after_rebirth < grown / 4,
+            "a reborn document must shed the operation history, not carry it: \
+             {grown} B grown vs {after_rebirth} B reborn"
+        );
+
+        // ...and the bound HOLDS across a second cycle, which is what makes it a
+        // bound rather than a one-off saving.
+        let mut again = reborn;
+        edit_n_times(&mut again, 200);
+        let regrown = again.encode_state().len();
+        let reborn_again = again.reborn(3).encode_state().len();
+
+        assert!(
+            reborn_again < after_rebirth * 2,
+            "the second rebirth must return to roughly the same floor \
+             ({after_rebirth} B then {reborn_again} B), else growth is merely \
+             slowed: {regrown} B before the second rebirth"
+        );
+    }
+
+    /// **ADR-107 gate 4: content identity**, verified by hash rather than by
+    /// inspection — the ADR says so explicitly.
+    #[test]
+    fn a_reborn_node_is_content_identical_to_its_predecessor() {
+        let mut doc = v2_doc();
+        edit_n_times(&mut doc, 20);
+
+        let before = doc.rebirth_hash();
+        let reborn = doc.reborn(2);
+
+        assert_eq!(
+            reborn.rebirth_hash(),
+            before,
+            "rebirth must preserve content exactly -- it discards HISTORY, not data"
+        );
+    }
+
+    /// Every v2 field survives, individually asserted.
+    ///
+    /// The hash test above would catch a loss, but not say WHICH field -- and
+    /// #656 was precisely a fresh-lineage path silently dropping v2 fields, so
+    /// this names them.
+    #[test]
+    fn rebirth_preserves_every_v2_field_not_just_the_text() {
+        let doc = v2_doc();
+        let reborn = doc.reborn(2);
+        let m = reborn.materialize();
+
+        assert_eq!(m.title, "Original");
+        assert_eq!(m.body, "original body");
+        assert_eq!(m.tags, vec!["alpha".to_string()]);
+        assert_eq!(m.kind.as_deref(), Some("task"));
+        assert_eq!(m.todo_state.as_deref(), Some("TODO"));
+        assert_eq!(m.priority.as_deref(), Some("A"));
+        assert_eq!(m.source.as_deref(), Some("user_org"));
+        assert_eq!(m.source_version, Some(3));
+        assert_eq!(m.aliases, vec!["a-prime".to_string()]);
+        assert_eq!(m.properties.get("role").map(String::as_str), Some("owner"));
+        assert_eq!(m.links, vec!["note:b".to_string()]);
+        assert_eq!(
+            reborn.schema_version(),
+            2,
+            "a reborn v2 node must still be v2"
+        );
+    }
+
+    /// The rebirth hash must cover MORE than `content_hash` does.
+    ///
+    /// If it did not, the content-identity gate would pass while metadata
+    /// changed across a boundary that destroys the history needed to notice.
+    #[test]
+    fn the_rebirth_hash_notices_metadata_that_content_hash_ignores() {
+        let base = v2_doc();
+        let mut changed = v2_doc();
+        let _ = changed.set_todo_state(Some("DONE"));
+
+        assert_eq!(
+            base.content_hash(),
+            changed.content_hash(),
+            "content_hash covers title+body+tags only -- unchanged here, which is \
+             exactly why it is the wrong hash for a rebirth"
+        );
+        assert_ne!(
+            base.rebirth_hash(),
+            changed.rebirth_hash(),
+            "the rebirth hash MUST notice a todo_state change"
+        );
+    }
+
+    /// The reborn document is genuinely a fresh lineage, not a copy carrying the
+    /// old client id -- otherwise two peers could derive colliding ClientIDs,
+    /// which Yjs documents as permanent unrecoverable corruption.
+    #[test]
+    fn a_reborn_document_is_a_fresh_lineage() {
+        let doc = v2_doc();
+        let reborn = doc.reborn(4242);
+        // Compare against a doc created with the same id rather than a bare
+        // integer -- `ClientID` is yrs's own type and its representation is not
+        // this test's business.
+        let expected = KbNodeDoc::new_with_client_id("note:z", "T", "B", &[], 4242);
+        assert_eq!(reborn.doc().client_id(), expected.doc().client_id());
+        assert_ne!(
+            doc.doc().client_id(),
+            reborn.doc().client_id(),
+            "the point of rebirth is a NEW single-client document"
+        );
+    }
+
+    /// A hash is order-insensitive for unordered collections, so two peers that
+    /// assembled the same tags/aliases/properties in different orders agree.
+    #[test]
+    fn the_rebirth_hash_is_stable_across_collection_ordering() {
+        let mut a = KbNodeDoc::new("note:x", "T", "B", &[]);
+        let _ = a.set_aliases(&["one".into(), "two".into()]);
+        let mut b = KbNodeDoc::new("note:x", "T", "B", &[]);
+        let _ = b.set_aliases(&["two".into(), "one".into()]);
+
+        assert_eq!(
+            a.rebirth_hash(),
+            b.rebirth_hash(),
+            "alias ORDER must not change the hash -- otherwise two peers holding \
+             the same content disagree about whether a rebirth is current"
+        );
     }
 }

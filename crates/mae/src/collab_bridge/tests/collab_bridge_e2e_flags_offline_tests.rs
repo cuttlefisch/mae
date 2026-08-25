@@ -76,6 +76,7 @@ fn injected_genesis_records_cannot_promote_a_plain_kb_to_e2e() {
         new_wrap_pubkey: None,
         recovery_pubkey: None,
         replication: Default::default(),
+        content_hash: None,
     };
     coll.append_signed_op(&op, &op.sign(&msec), &mpk);
 

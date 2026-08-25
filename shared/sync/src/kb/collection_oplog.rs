@@ -83,6 +83,11 @@ impl KbCollectionDoc {
                 replication: get(OP_REPLICATION_KEY)
                     .and_then(|s| ReplicationPolicy::parse(&s))
                     .unwrap_or_default(),
+                // ADR-107: present only on Rebirth. A missing/empty value decodes
+                // to None, which `authorized` refuses outright -- and because the
+                // hash is inside the v6 signed bytes, a relay cannot add or alter
+                // one without breaking the signature.
+                content_hash: get(OP_CONTENT_HASH_KEY).filter(|s| !s.is_empty()),
             },
             sig,
             author_pubkey: pubkey,
@@ -191,6 +196,7 @@ impl KbCollectionDoc {
             // restricting a member to QueryOnly; every other flow leaves it at the
             // default Full (v1/v2/v3/v4, unchanged).
             replication: ReplicationPolicy::default(),
+            content_hash: None,
         }
     }
 
@@ -257,6 +263,11 @@ impl KbCollectionDoc {
         // ADR-040 §Recovery: only written for a RegisterRecoveryKey (absent ⇒ unchanged).
         if let Some(rpk) = &op.recovery_pubkey {
             rec.insert(&mut txn, OP_RECOVERY_PUBKEY_KEY, hex::encode(rpk));
+        }
+        // ADR-107: only written on a Rebirth (absent everywhere else, so no other
+        // op's wire bytes change).
+        if let Some(ch) = op.content_hash.as_deref().filter(|h| !h.is_empty()) {
+            rec.insert(&mut txn, OP_CONTENT_HASH_KEY, ch);
         }
         // ADR-067: only written when QueryOnly (absent ⇒ decodes back to Full, unchanged).
         if op.replication == ReplicationPolicy::QueryOnly {
