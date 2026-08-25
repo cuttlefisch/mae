@@ -177,7 +177,7 @@ install: build
 ## Conditional because `assets/mae-adr.cozo` is untracked — it appears only
 ## after `make adr-kb` or `make fetch-adr-kb`, and `make install` must not
 ## fail for a contributor who has run neither.
-	@if [ -d assets/mae-adr.cozo ]; then \
+	@if [ -e assets/mae-adr.cozo ]; then \
 		rm -rf $(DATADIR)/mae/mae-adr.cozo; \
 		cp -r assets/mae-adr.cozo $(DATADIR)/mae/mae-adr.cozo; \
 		[ -f assets/mae-adr.cozo.sha256 ] && cp assets/mae-adr.cozo.sha256 $(DATADIR)/mae/mae-adr.cozo.sha256 || true; \
@@ -331,7 +331,7 @@ uninstall:
 	@echo "Removed $(DATADIR)/mae/modules/"
 ##
 ## The ADR store is MAE's own and IS installed by this Makefile, so it goes.
-	@if [ -d $(DATADIR)/mae/mae-adr.cozo ]; then \
+	@if [ -e $(DATADIR)/mae/mae-adr.cozo ]; then \
 		rm -rf $(DATADIR)/mae/mae-adr.cozo $(DATADIR)/mae/mae-adr.cozo.sha256; \
 		echo "Removed $(DATADIR)/mae/mae-adr.cozo"; \
 	fi

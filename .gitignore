@@ -82,7 +82,11 @@ deploy/ansible/tests/preflight-tests.log
 # A downloaded artifact is verified against the release's SHA256SUMS instead.
 #
 # Build it with `make adr-kb`, or fetch it with `make fetch-adr-kb`.
-assets/mae-adr.cozo/
+assets/mae-adr.cozo
+# No trailing slash on the four patterns above: a sqlite store is a FILE, not a
+# directory (ADR-108), and `foo/` matches only directories -- so the built store
+# stopped being ignored the moment RELEASE_ASSET_ENGINE flipped, and was one
+# `git add -A` away from committing a binary database.
 
 # The same reasoning applies to the other three bundled KBs (ADR-076), which
 # #673 left tracked: ~58 MB of binary that is REBUILT, never read from git.
@@ -111,9 +115,9 @@ assets/mae-adr.cozo/
 #
 # NOTE: this stops the BLEEDING. Reclaiming the existing history is #674 and
 # needs a rewrite at a release boundary.
-assets/mae-manual.cozo/
+assets/mae-manual.cozo
 assets/mae-manual.cozo.sha256
-assets/mae-practices.cozo/
+assets/mae-practices.cozo
 assets/mae-practices.cozo.sha256
-assets/mae-devpractices.cozo/
+assets/mae-devpractices.cozo
 assets/mae-devpractices.cozo.sha256
