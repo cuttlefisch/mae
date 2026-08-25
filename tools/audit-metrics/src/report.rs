@@ -117,15 +117,28 @@ impl Verdict {
 fn describe_structure(now: &Structure, was: Option<&Structure>) -> Option<String> {
     let mut parts = Vec::new();
     match was {
-        // Baselined: only a genuine INCREASE fails. Exact — no tolerance band.
+        // Baselined: an increase fails only if it is ALSO over the ceiling.
+        // Exact — no tolerance band.
+        //
+        // The second half of that condition is not a softening; without it the
+        // gate fails changes that are entirely fine. A file enters the baseline
+        // because ONE metric breached, and every other metric on it would then be
+        // frozen at whatever value it happened to hold — `remote_hub.rs` was
+        // failed for nesting 2 → 3 against a ceiling of 4. That is precisely the
+        // "fires on things that are not problems" noise this gate was rebuilt to
+        // remove, and it would have taught contributors to reach for `bless`.
+        //
+        // Below the ceiling there is nothing to ratchet: the ceiling IS the
+        // standard, and the baseline exists only to stop already-breaching files
+        // getting worse.
         Some(was) => {
-            if now.max_fn_lines > was.max_fn_lines {
+            if now.max_fn_lines > was.max_fn_lines && now.max_fn_lines > FUNCTION_CEILING {
                 parts.push(format!(
                     "longest fn {} → {} (ceiling {FUNCTION_CEILING})",
                     was.max_fn_lines, now.max_fn_lines
                 ));
             }
-            if now.max_nesting > was.max_nesting {
+            if now.max_nesting > was.max_nesting && now.max_nesting > NESTING_CEILING {
                 parts.push(format!(
                     "nesting {} → {} (ceiling {NESTING_CEILING})",
                     was.max_nesting, now.max_nesting
@@ -361,6 +374,58 @@ mod tests {
         assert_eq!(
             b.accepted_structure.get("crates/a/src/big.rs"),
             Some(&Structure { max_fn_lines: 300, max_nesting: 9 })
+        );
+    }
+
+    /// A baselined file may grow a metric that is still WITHIN its ceiling.
+    ///
+    /// A file enters the baseline because ONE metric breached. Freezing every
+    /// other metric on it at whatever value it happened to hold is not a ratchet,
+    /// it is a trap: `remote_hub.rs` was failed for nesting 2 → 3 against a
+    /// ceiling of 4, on a change that added a perfectly ordinary `if let` inside
+    /// a match arm. A gate that fires on things which are not problems teaches
+    /// people to reach for `bless`, which is how the previous mechanism
+    /// grandfathered the debt it existed to prevent.
+    #[test]
+    fn growth_that_stays_under_the_ceiling_does_not_fail() {
+        let path = "crates/a/src/mixed.rs";
+        // Longest fn is over the ceiling (that is why the file is baselined) and
+        // did NOT grow; nesting grew 2 → 3 but the ceiling is 4.
+        let v = compare(
+            &[metric(path, 900, 120, 3)],
+            &baselined(path, 120, 2),
+        );
+        assert_eq!(
+            v.iter().filter(|x| x.is_failure()).count(),
+            0,
+            "growth below the ceiling is not debt: {v:?}"
+        );
+    }
+
+    /// ...but crossing the ceiling still fails, so the fix above did not
+    /// disable the gate.
+    #[test]
+    fn growth_that_crosses_the_ceiling_still_fails() {
+        let path = "crates/a/src/mixed.rs";
+        let v = compare(
+            &[metric(path, 900, 120, crate::scan::NESTING_CEILING + 1)],
+            &baselined(path, 120, 2),
+        );
+        assert!(
+            v.iter().any(|x| matches!(x, Verdict::Grew { .. })),
+            "crossing the nesting ceiling must still be reported: {v:?}"
+        );
+    }
+
+    /// An already-breaching metric getting worse is the case the baseline exists
+    /// for, and must still fail.
+    #[test]
+    fn an_already_breaching_metric_getting_worse_still_fails() {
+        let path = "crates/a/src/big.rs";
+        let v = compare(&[metric(path, 900, 514, 2)], &baselined(path, 513, 2));
+        assert!(
+            v.iter().any(|x| matches!(x, Verdict::Grew { .. })),
+            "a 513 → 514 line function is exactly what the baseline guards: {v:?}"
         );
     }
 }

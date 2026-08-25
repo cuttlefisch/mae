@@ -83,11 +83,7 @@ pub async fn dispatch(
     match method {
         "kb/query.capabilities" => capabilities(doc_store, &kb_id, principal).await,
         "kb/query.get" => {
-            let node_id = params
-                .get("node_id")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| McpError::invalid_request("missing 'node_id'".to_string()))?
-                .to_string();
+            let node_id = required_node_id(params)?;
             get(
                 doc_store,
                 &kb_id,
@@ -108,19 +104,43 @@ pub async fn dispatch(
                 .and_then(|v| v.as_u64())
                 .map(|n| n as usize)
                 .unwrap_or(limits.max_search_results)
+                // `.min().max()`, NOT `.clamp(1, max)`: clamp PANICS when
+                // min > max, so a config with `max_search_results = 0` would
+                // abort the daemon instead of returning one result.
                 .min(limits.max_search_results)
                 .max(1);
-            search(
-                doc_store,
-                &kb_id,
-                &query,
-                limit,
-                principal,
-                limits.max_scan_nodes,
-            )
-            .await
+            let n = limits.max_scan_nodes;
+            search(doc_store, &kb_id, &query, limit, principal, n).await
         }
         "kb/query.graph" => graph(doc_store, &kb_id, principal, limits.max_scan_nodes).await,
+        "kb/query.links" => {
+            let node_id = required_node_id(params)?;
+            // Default `both`: a caller asking for "this node's links" almost
+            // always means the neighbourhood, and one round trip beats two.
+            let direction = params
+                .get("direction")
+                .and_then(|v| v.as_str())
+                .unwrap_or("both")
+                .to_string();
+            let n = limits.max_scan_nodes;
+            links(doc_store, &kb_id, &node_id, &direction, principal, n).await
+        }
+        "kb/query.titles" => {
+            let prefix = params.get("prefix").and_then(|v| v.as_str());
+            titles(doc_store, &kb_id, prefix, principal, limits.max_scan_nodes).await
+        }
+        "kb/query.neighborhood" => {
+            let node_id = required_node_id(params)?;
+            // Clamped to 3: each hop is a full backlink scan, so depth is a
+            // multiplier on the most expensive operation this surface has.
+            let depth = params
+                .get("depth")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(1)
+                .clamp(1, 3) as u32;
+            let n = limits.max_scan_nodes;
+            neighborhood(doc_store, &kb_id, &node_id, depth, principal, n).await
+        }
         "kb/query.my_wrapped_key" => my_wrapped_key(doc_store, &kb_id, principal).await,
         other => Err(McpError::method_not_found(format!(
             "unknown kb/query method '{other}'"
@@ -367,6 +387,296 @@ async fn my_wrapped_key(
         "applicable": true,
         "wrapped_key": wrapped.map(hex::encode),
         "epoch": coll.epoch_of(principal),
+    }))
+}
+
+/// Outgoing links for one node, read from that node's own document.
+///
+/// **O(1) in corpus size** -- edges live on the source node, so this needs one
+/// document, not a scan. That asymmetry with `links_to` below is the same one
+/// `links:by_dst` records on the Cozo side (#265): a link is stored under its
+/// source, so following it forwards is a lookup and backwards is a search.
+/// The `node_id` every per-node `kb/query.*` method requires.
+fn required_node_id(params: &Value) -> Result<String, McpError> {
+    Ok(params
+        .get("node_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| McpError::invalid_request("missing 'node_id'".to_string()))?
+        .to_string())
+}
+
+async fn links_from_node(doc_store: &DocStore, kb_id: &str, node_id: &str) -> Vec<String> {
+    let node_doc = mae_sync::kb_node_doc_name(kb_id, node_id);
+    match doc_store.encode_state_and_sv(&node_doc).await {
+        Ok((state, _sv)) => KbNodeDoc::from_bytes(&state)
+            .map(|d| d.links())
+            .unwrap_or_default(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Incoming links for one node.
+///
+/// **O(N), and therefore capped.** Edges are stored on the source, so finding what
+/// points AT a node means reading every node. `max_scan_nodes` bounds it and the
+/// response says plainly when it truncated -- a silently-short backlink list reads
+/// as "nothing links here", which is a wrong answer rather than a partial one.
+async fn links_to_node(
+    doc_store: &DocStore,
+    kb_id: &str,
+    node_id: &str,
+    candidates: &[String],
+    max_scan_nodes: usize,
+) -> (Vec<String>, bool) {
+    let mut out = Vec::new();
+    let mut truncated = false;
+    for (scanned, id) in candidates.iter().enumerate() {
+        if scanned >= max_scan_nodes {
+            truncated = true;
+            break;
+        }
+        if id == node_id {
+            continue;
+        }
+        if links_from_node(doc_store, kb_id, id)
+            .await
+            .iter()
+            .any(|l| l == node_id)
+        {
+            out.push(id.clone());
+        }
+    }
+    (out, truncated)
+}
+
+/// ADR-053 / D1: `kb/query.links` -- the backlink and forward-link surface a
+/// `QueryOnly` member had no way to reach.
+///
+/// Without this, `RemoteHubQueryLayer::links_from`/`links_to` returned an empty
+/// vec, which a caller could not distinguish from "this node genuinely has no
+/// links". That is the class of silent give-up C1's capability model exists to
+/// make countable.
+async fn links(
+    doc_store: &DocStore,
+    kb_id: &str,
+    node_id: &str,
+    direction: &str,
+    principal: Option<&str>,
+    max_scan_nodes: usize,
+) -> Result<Value, McpError> {
+    let (coll, encryption) = load_gated(doc_store, kb_id, principal).await?;
+    if !coll.has_node(node_id) {
+        return Err(McpError::invalid_request(format!(
+            "node '{node_id}' is not in KB '{kb_id}'"
+        )));
+    }
+    if matches!(encryption, Encryption::E2e) {
+        // `links` lives inside the same encrypted KbNodeDoc schema as
+        // title/body, so the daemon has no plaintext link registry to read --
+        // the identical structural refusal `graph` already makes. Said out loud
+        // rather than returned as an empty list, so a caller can tell "the
+        // server cannot answer this" from "this node has no links".
+        return Ok(json!({
+            "kb_id": kb_id,
+            "node_id": node_id,
+            "encryption": "e2e",
+            "links_from": [],
+            "links_to": [],
+            "truncated": false,
+            "unavailable_reason":
+                "links are inside the encrypted node document; the daemon is key-blind (ADR-037)",
+        }));
+    }
+
+    let want_from = matches!(direction, "from" | "both");
+    let want_to = matches!(direction, "to" | "both");
+    if !want_from && !want_to {
+        return Err(McpError::invalid_request(format!(
+            "unknown direction '{direction}' (expected 'from', 'to' or 'both')"
+        )));
+    }
+
+    let from = if want_from {
+        links_from_node(doc_store, kb_id, node_id).await
+    } else {
+        Vec::new()
+    };
+    let (to, truncated) = if want_to {
+        let candidates: Vec<String> = coll.list_nodes().into_iter().map(|(id, _)| id).collect();
+        links_to_node(doc_store, kb_id, node_id, &candidates, max_scan_nodes).await
+    } else {
+        (Vec::new(), false)
+    };
+
+    Ok(json!({
+        "kb_id": kb_id,
+        "node_id": node_id,
+        "encryption": "none",
+        "links_from": from,
+        "links_to": to,
+        "truncated": truncated,
+    }))
+}
+
+/// The BFS behind `kb/query.neighborhood`.
+///
+/// One shared `max_scan_nodes` budget across the WHOLE traversal, not per hop:
+/// each hop runs a backlink scan, so a per-hop budget would multiply the most
+/// expensive operation on this surface by the depth.
+async fn walk_neighborhood(
+    doc_store: &DocStore,
+    kb_id: &str,
+    root: &str,
+    depth: u32,
+    candidates: &[String],
+    max_scan_nodes: usize,
+) -> (std::collections::HashSet<String>, Vec<Value>, bool) {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    seen.insert(root.to_string());
+    let mut frontier = vec![root.to_string()];
+    let mut edges: Vec<Value> = Vec::new();
+    let mut budget = max_scan_nodes;
+    let mut truncated = false;
+
+    for _ in 0..depth {
+        let mut next = Vec::new();
+        for id in &frontier {
+            if budget == 0 {
+                truncated = true;
+                break;
+            }
+            for dst in links_from_node(doc_store, kb_id, id).await {
+                if edges.len() >= max_scan_nodes {
+                    truncated = true;
+                    break;
+                }
+                edges.push(json!([id, dst]));
+                if seen.insert(dst.clone()) {
+                    next.push(dst);
+                }
+            }
+            let (back, t) = links_to_node(doc_store, kb_id, id, candidates, budget).await;
+            truncated |= t;
+            budget = budget.saturating_sub(candidates.len().min(budget));
+            for src in back {
+                if edges.len() >= max_scan_nodes {
+                    truncated = true;
+                    break;
+                }
+                edges.push(json!([src.clone(), id]));
+                if seen.insert(src.clone()) {
+                    next.push(src);
+                }
+            }
+        }
+        if next.is_empty() || truncated {
+            break;
+        }
+        frontier = next;
+    }
+    (seen, edges, truncated)
+}
+
+/// ADR-053 / D1: `kb/query.titles` -- every (id, title) pair in one call.
+///
+/// `RemoteHubQueryLayer::id_title_pairs` refused to implement this by looping the
+/// `get` endpoint, calling that "an N+1 network-call performance trap". It was
+/// right, and the answer it named was a bulk endpoint. This is that endpoint, and
+/// it is nearly free: titles live in the collection manifest, which every gated
+/// read already loads, so no per-node document fetch happens at all.
+///
+/// Titles are manifest metadata, not node body content -- but they are still
+/// content, so an E2E KB gets ids only, matching what `graph` already discloses.
+async fn titles(
+    doc_store: &DocStore,
+    kb_id: &str,
+    prefix: Option<&str>,
+    principal: Option<&str>,
+    max_scan_nodes: usize,
+) -> Result<Value, McpError> {
+    let (coll, encryption) = load_gated(doc_store, kb_id, principal).await?;
+    let all = coll.list_nodes();
+    let total = all.len();
+    let pairs: Vec<Value> = all
+        .into_iter()
+        .filter(|(id, _)| prefix.is_none_or(|p| id.starts_with(p)))
+        .take(max_scan_nodes)
+        .map(|(id, title)| match encryption {
+            Encryption::None => json!([id, title]),
+            Encryption::E2e => json!([id, ""]),
+        })
+        .collect();
+    Ok(json!({
+        "kb_id": kb_id,
+        "encryption": match encryption { Encryption::None => "none", Encryption::E2e => "e2e" },
+        "pairs": pairs,
+        "truncated": total > max_scan_nodes,
+    }))
+}
+
+/// ADR-053 / D1: `kb/query.neighborhood` -- the subgraph around a node, which is
+/// what the graph view and `kb_related` need.
+///
+/// Depth is clamped by the caller (1..=3) because each hop runs a backlink scan.
+/// The whole traversal shares ONE `max_scan_nodes` budget rather than spending it
+/// afresh per hop, so total work is bounded by the cap regardless of depth.
+async fn neighborhood(
+    doc_store: &DocStore,
+    kb_id: &str,
+    node_id: &str,
+    depth: u32,
+    principal: Option<&str>,
+    max_scan_nodes: usize,
+) -> Result<Value, McpError> {
+    let (coll, encryption) = load_gated(doc_store, kb_id, principal).await?;
+    if !coll.has_node(node_id) {
+        return Err(McpError::invalid_request(format!(
+            "node '{node_id}' is not in KB '{kb_id}'"
+        )));
+    }
+    if matches!(encryption, Encryption::E2e) {
+        return Ok(json!({
+            "kb_id": kb_id,
+            "root": node_id,
+            "encryption": "e2e",
+            "nodes": [node_id],
+            "edges": [],
+            "truncated": false,
+            "unavailable_reason":
+                "links are inside the encrypted node document; the daemon is key-blind (ADR-037)",
+        }));
+    }
+
+    let candidates: Vec<String> = coll.list_nodes().into_iter().map(|(id, _)| id).collect();
+    let (seen, edges, truncated) = walk_neighborhood(
+        doc_store,
+        kb_id,
+        node_id,
+        depth,
+        &candidates,
+        max_scan_nodes,
+    )
+    .await;
+
+    // Titles come from the collection manifest, which is already loaded -- so the
+    // subgraph carries (id, title) without the per-node fetch that would make this
+    // an N+1.
+    let titles: std::collections::HashMap<String, String> = coll.list_nodes().into_iter().collect();
+    let mut nodes: Vec<Value> = seen
+        .into_iter()
+        .map(|id| {
+            let title = titles.get(&id).cloned().unwrap_or_default();
+            json!([id, title])
+        })
+        .collect();
+    nodes.sort_by(|a, b| a[0].as_str().unwrap_or("").cmp(b[0].as_str().unwrap_or("")));
+    Ok(json!({
+        "kb_id": kb_id,
+        "root": node_id,
+        "encryption": "none",
+        "nodes": nodes,
+        "edges": edges,
+        "truncated": truncated,
     }))
 }
 

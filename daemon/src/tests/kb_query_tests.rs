@@ -935,3 +935,366 @@ fn mae_mcp_test_principal(principal: &str) -> crate::oauth::ValidatedPrincipal {
         expires_at: 9_999_999_999,
     }
 }
+
+// ---------------------------------------------------------------------------
+// D1 -- network-surface parity: links, neighborhood, titles.
+//
+// These four gaps (`LinksFrom`, `LinksTo`, `Neighborhood`, `IdTitlePairs`) were
+// silent give-ups in `RemoteHubQueryLayer`: `Ok(Vec::new())` / `Ok(None)`, so a
+// caller could not tell "this node has no backlinks" from "the surface cannot
+// answer that". A QueryOnly member consequently had no backlinks and no graph
+// view at all. C1's capability model made the gaps countable; these close four.
+// ---------------------------------------------------------------------------
+
+/// Seed a KB whose manifest holds several nodes, each with its own document.
+///
+/// `seed_unencrypted_kb` seeds exactly one node, which cannot exercise a
+/// BACKLINK -- that needs a second node pointing at the first.
+async fn seed_multi_node_kb(
+    doc_store: &DocStore,
+    owner: &Arc<Identity>,
+    kb_id: &str,
+    principal: &str,
+    nodes: &[(&str, &str, &[&str])],
+) {
+    doc_store.set_signer(Arc::clone(owner));
+    let mut coll = KbCollectionDoc::new_owned(kb_id, &owner.fingerprint(), "owner");
+    coll.set_transport_policy(TransportPolicy::Hub);
+    coll.upsert_member(principal, "member", Role::Viewer);
+    for (id, title, _) in nodes {
+        let _ = coll.add_node(id, title);
+    }
+    doc_store
+        .share_doc(&format!("kbc:{kb_id}"), &coll.encode_state())
+        .await
+        .unwrap();
+    for (id, title, links) in nodes {
+        let mut node = KbNodeDoc::new(id, title, "body", &[]);
+        for l in *links {
+            let _ = node.add_link(l);
+        }
+        doc_store
+            .share_doc(&mae_sync::kb_node_doc_name(kb_id, id), &node.encode_state())
+            .await
+            .unwrap();
+    }
+}
+
+fn wide_limits() -> KbQueryLimits {
+    KbQueryLimits {
+        max_body_bytes: 65_536,
+        max_scan_nodes: 500,
+        max_search_results: 20,
+    }
+}
+
+/// The capability that did not exist: backlinks.
+///
+/// A selective oracle -- it pins that `c` (which points at `b`) is found while
+/// `a` (which `b` points at) is NOT. A test that only asserted "non-empty" would
+/// pass on an implementation that returned every node in the KB.
+#[tokio::test]
+async fn links_reports_both_directions_and_does_not_confuse_them() {
+    let doc_store = fresh_doc_store().await;
+    let owner = Arc::new(Identity::generate("owner"));
+    let principal = "oauth:viewer@example.com";
+    seed_multi_node_kb(
+        &doc_store,
+        &owner,
+        "link-kb",
+        principal,
+        &[("a", "A", &[]), ("b", "B", &["a"]), ("c", "C", &["b"])],
+    )
+    .await;
+
+    let result = extract_result(
+        kb_query::dispatch(
+            "kb/query.links",
+            &json!({"kb_id": "link-kb", "node_id": "b"}),
+            &doc_store,
+            Some(principal),
+            wide_limits(),
+        )
+        .await,
+    );
+
+    let from: Vec<&str> = result["links_from"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    let to: Vec<&str> = result["links_to"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(from, vec!["a"], "b links out to a");
+    assert_eq!(to, vec!["c"], "c links in to b");
+    assert!(
+        !to.contains(&"a"),
+        "a is b's TARGET, not its source -- reporting it as a backlink would invert the edge"
+    );
+}
+
+/// The attacker's case for a capped scan: a truncated backlink list must SAY it
+/// is truncated.
+///
+/// Silence here is not a partial answer, it is a wrong one -- an empty
+/// `links_to` reads as "nothing links here", which is exactly the conclusion a
+/// caller would act on.
+#[tokio::test]
+async fn a_truncated_backlink_scan_says_so_rather_than_reading_as_no_backlinks() {
+    let doc_store = fresh_doc_store().await;
+    let owner = Arc::new(Identity::generate("owner"));
+    let principal = "oauth:viewer@example.com";
+
+    // Many nodes, and the ONE that links to the target is seeded last so a
+    // truncated scan is guaranteed to miss it.
+    let mut spec: Vec<(String, String, Vec<String>)> = (0..60)
+        .map(|i| (format!("n{i}"), format!("N{i}"), Vec::new()))
+        .collect();
+    spec.push(("target".into(), "Target".into(), Vec::new()));
+    spec.push(("pointer".into(), "Pointer".into(), vec!["target".into()]));
+    let borrowed: Vec<(&str, &str, Vec<&str>)> = spec
+        .iter()
+        .map(|(a, b, c)| {
+            (
+                a.as_str(),
+                b.as_str(),
+                c.iter().map(|s| s.as_str()).collect(),
+            )
+        })
+        .collect();
+    let as_slices: Vec<(&str, &str, &[&str])> = borrowed
+        .iter()
+        .map(|(a, b, c)| (*a, *b, c.as_slice()))
+        .collect();
+    seed_multi_node_kb(&doc_store, &owner, "cap-kb", principal, &as_slices).await;
+
+    let tight = KbQueryLimits {
+        max_body_bytes: 65_536,
+        max_scan_nodes: 5, // « the node count
+        max_search_results: 20,
+    };
+    let result = extract_result(
+        kb_query::dispatch(
+            "kb/query.links",
+            &json!({"kb_id": "cap-kb", "node_id": "target", "direction": "to"}),
+            &doc_store,
+            Some(principal),
+            tight,
+        )
+        .await,
+    );
+    assert_eq!(
+        result["truncated"], true,
+        "a scan that stopped at the cap MUST report it -- an unflagged empty backlink \
+         list is indistinguishable from a node that genuinely has none"
+    );
+}
+
+/// An E2E KB cannot answer this server-side, and must say so rather than
+/// returning an empty list that looks like a real answer.
+#[tokio::test]
+async fn an_e2e_kb_refuses_links_explicitly_instead_of_returning_empty() {
+    let doc_store = fresh_doc_store().await;
+    let owner = Arc::new(Identity::generate("owner"));
+    let member = Identity::generate("member");
+    let principal = "oauth:member@example.com";
+    seed_e2e_kb(
+        &doc_store,
+        &owner,
+        "e2e-kb",
+        principal,
+        &member,
+        "n1",
+        "Secret",
+        "secret body",
+    )
+    .await;
+
+    let result = extract_result(
+        kb_query::dispatch(
+            "kb/query.links",
+            &json!({"kb_id": "e2e-kb", "node_id": "n1"}),
+            &doc_store,
+            Some(principal),
+            wide_limits(),
+        )
+        .await,
+    );
+    assert_eq!(result["encryption"], "e2e");
+    assert!(
+        result["unavailable_reason"].is_string(),
+        "the refusal must be stated (ADR-037's key-blind daemon), not implied by emptiness"
+    );
+    assert_eq!(result["links_from"].as_array().unwrap().len(), 0);
+}
+
+/// Node ids in the neighbourhood of `a` at a given depth, for `nb-kb`.
+async fn neighborhood_ids(doc_store: &DocStore, principal: &str, depth: u64) -> Vec<String> {
+    let v = extract_result(
+        kb_query::dispatch(
+            "kb/query.neighborhood",
+            &json!({"kb_id": "nb-kb", "node_id": "a", "depth": depth}),
+            doc_store,
+            Some(principal),
+            wide_limits(),
+        )
+        .await,
+    );
+    v["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n[0].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// Depth is a multiplier on the most expensive operation the surface has, so it
+/// is clamped -- and the clamp is asserted, not assumed.
+#[tokio::test]
+async fn neighborhood_walks_outward_and_clamps_depth() {
+    let doc_store = fresh_doc_store().await;
+    let owner = Arc::new(Identity::generate("owner"));
+    let principal = "oauth:viewer@example.com";
+    seed_multi_node_kb(
+        &doc_store,
+        &owner,
+        "nb-kb",
+        principal,
+        &[
+            ("a", "A", &["b"]),
+            ("b", "B", &["c"]),
+            ("c", "C", &["d"]),
+            ("d", "D", &[]),
+            ("far", "Far", &[]),
+        ],
+    )
+    .await;
+
+    let at_1 = neighborhood_ids(&doc_store, principal, 1).await;
+    assert!(
+        at_1.contains(&"b".to_string()),
+        "depth 1 reaches b: {at_1:?}"
+    );
+    assert!(
+        !at_1.contains(&"far".to_string()),
+        "an unconnected node must never appear: {at_1:?}"
+    );
+
+    let at_2 = neighborhood_ids(&doc_store, principal, 2).await;
+    assert!(
+        at_2.contains(&"c".to_string()),
+        "depth 2 reaches c: {at_2:?}"
+    );
+    assert!(
+        at_2.len() > at_1.len(),
+        "a deeper walk must see more, or the depth parameter is decorative"
+    );
+
+    // An absurd depth is clamped rather than honoured.
+    assert!(
+        neighborhood_ids(&doc_store, principal, 99).await.len() <= 5,
+        "depth must be clamped -- it multiplies a full backlink scan per hop"
+    );
+}
+
+/// The bulk endpoint whose absence `RemoteHubQueryLayer::id_title_pairs`
+/// correctly refused to work around with an N+1 loop.
+#[tokio::test]
+async fn titles_returns_the_manifest_in_one_call_and_caps_it() {
+    let doc_store = fresh_doc_store().await;
+    let owner = Arc::new(Identity::generate("owner"));
+    let principal = "oauth:viewer@example.com";
+    seed_multi_node_kb(
+        &doc_store,
+        &owner,
+        "t-kb",
+        principal,
+        &[("a", "Alpha", &[]), ("b", "Beta", &[]), ("zz", "Zeta", &[])],
+    )
+    .await;
+
+    let all = extract_result(
+        kb_query::dispatch(
+            "kb/query.titles",
+            &json!({"kb_id": "t-kb"}),
+            &doc_store,
+            Some(principal),
+            wide_limits(),
+        )
+        .await,
+    );
+    let pairs = all["pairs"].as_array().unwrap();
+    assert_eq!(pairs.len(), 3);
+    assert!(
+        pairs.iter().any(|p| p[0] == "a" && p[1] == "Alpha"),
+        "titles must come back with their ids, not just ids: {pairs:?}"
+    );
+
+    // A prefix filter, and a cap that reports itself.
+    let tight = KbQueryLimits {
+        max_body_bytes: 65_536,
+        max_scan_nodes: 1,
+        max_search_results: 20,
+    };
+    let capped = extract_result(
+        kb_query::dispatch(
+            "kb/query.titles",
+            &json!({"kb_id": "t-kb"}),
+            &doc_store,
+            Some(principal),
+            tight,
+        )
+        .await,
+    );
+    assert_eq!(capped["pairs"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        capped["truncated"], true,
+        "a capped listing must say so rather than looking like a complete KB"
+    );
+}
+
+/// Access control is not bypassed by the new methods -- the whole point of
+/// routing them through `load_gated`.
+#[tokio::test]
+async fn the_new_endpoints_refuse_a_non_member() {
+    let doc_store = fresh_doc_store().await;
+    let owner = Arc::new(Identity::generate("owner"));
+    seed_multi_node_kb(
+        &doc_store,
+        &owner,
+        "priv-kb",
+        "oauth:member@example.com",
+        &[("a", "A", &["b"]), ("b", "B", &[])],
+    )
+    .await;
+
+    for (method, params) in [
+        (
+            "kb/query.links",
+            json!({"kb_id": "priv-kb", "node_id": "a"}),
+        ),
+        (
+            "kb/query.neighborhood",
+            json!({"kb_id": "priv-kb", "node_id": "a"}),
+        ),
+        ("kb/query.titles", json!({"kb_id": "priv-kb"})),
+    ] {
+        let outcome = kb_query::dispatch(
+            method,
+            &params,
+            &doc_store,
+            Some("oauth:stranger@example.com"),
+            wide_limits(),
+        )
+        .await;
+        assert!(
+            outcome.is_err(),
+            "{method} must refuse a principal with no membership"
+        );
+    }
+}

@@ -197,6 +197,31 @@ done
 # before it, both resolved to one `kb:note:tenant-canary` and the second tenant's
 # share silently landed on the first's content.
 A_DOC="kbn:$A_ID:note:tenant-canary"; B_DOC="kbn:$B_ID:note:tenant-canary"
+# Wait for the docs to ARRIVE rather than assuming the scenario's `(sleep-ms
+# 2500)` was long enough (#762).
+#
+# The collab-id poll above already learned this -- its own comment says "a race
+# that only loses under CI load, which is why this passed locally and on most
+# runs" -- and the lesson stopped one assertion short. This is the same shape:
+# propagation time depends on how loaded the machine is, so a fixed budget
+# expires under contention and the failure lands on whoever shared a runner.
+#
+# Observed exactly that way: the daemon log held each tenant's SEEDED nodes
+# (`option:*`, `guide:*`, `cmd:*`) and not the canary, i.e. "not yet", not
+# "broken". Bounded by wall clock, so a genuinely-never-synced node still fails
+# rather than hanging.
+wait_for_log_docs() {
+  local deadline=$(( $(date +%s) + ${E2E_SYNC_TIMEOUT_SECS:-30} ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    sed 's/\x1b\[[0-9;]*m//g' "$WORK/daemon.log" > "$LOG"
+    if grep -q "$A_DOC" "$LOG" && grep -q "$B_DOC" "$LOG"; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+wait_for_log_docs || true
 grep -q "$A_DOC" "$LOG" || { echo "FAIL: alice's canary node never reached the daemon as $A_DOC"; fail=1; }
 grep -q "$B_DOC" "$LOG" || { echo "FAIL: bob's canary node never reached the daemon as $B_DOC"; fail=1; }
 [ "$A_DOC" != "$B_DOC" ] || { echo "FAIL: both tenants' canary nodes are the SAME document"; fail=1; }
