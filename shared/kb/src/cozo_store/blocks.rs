@@ -10,7 +10,7 @@ impl CozoKbStore {
     pub fn meta_members(&self, meta_id: &str) -> Result<Vec<MetaMember>, KbStoreError> {
         let result = self
             .run_immut_params(
-                "?[member_id, position, role] := *meta_members{meta_id, member_id, position, role}, meta_id = $id :order position",
+                "?[member_id, position, role] := meta_id = $id, *meta_members{meta_id, member_id, position, role} :order position",
                 btree_params([("id", dv_str(meta_id))]),
             )
             .map_err(cozo_err)?;
@@ -51,7 +51,7 @@ impl CozoKbStore {
     /// Remove a member from a meta-node.
     pub fn remove_meta_member(&self, meta_id: &str, member_id: &str) -> Result<(), KbStoreError> {
         self.run_mut_params(
-            r#"?[meta_id, member_id, position] := *meta_members{meta_id, member_id, position}, meta_id = $meta_id, member_id = $member_id
+            r#"?[meta_id, member_id, position] := meta_id = $meta_id, member_id = $member_id, *meta_members{meta_id, member_id, position}
             :rm meta_members {meta_id, member_id, position}"#,
             btree_params([
                 ("meta_id", dv_str(meta_id)),
@@ -71,7 +71,7 @@ impl CozoKbStore {
         members: &[(String, String)],
     ) -> Result<(), KbStoreError> {
         self.run_mut_params(
-            r#"?[meta_id, member_id, position] := *meta_members{meta_id, member_id, position}, meta_id = $id
+            r#"?[meta_id, member_id, position] := meta_id = $id, *meta_members{meta_id, member_id, position}
                :rm meta_members {meta_id, member_id, position}"#,
             btree_params([("id", dv_str(meta_id))]),
         )
@@ -126,7 +126,7 @@ impl CozoKbStore {
         let now = self.now_epoch();
         // Remove existing blocks
         self.run_mut_params(
-            "?[parent_id, block_idx] := *blocks{parent_id, block_idx}, parent_id = $id\n:rm blocks {parent_id, block_idx}",
+            "?[parent_id, block_idx] := parent_id = $id, *blocks{parent_id, block_idx}\n:rm blocks {parent_id, block_idx}",
             btree_params([("id", dv_str(parent_id))]),
         )
         .map_err(cozo_err)?;
@@ -161,7 +161,7 @@ impl CozoKbStore {
     pub fn get_blocks(&self, parent_id: &str) -> Result<Vec<Block>, KbStoreError> {
         let result = self
             .run_immut_params(
-                "?[block_idx, content, block_type] := *blocks{parent_id, block_idx, content, block_type}, parent_id = $id :order block_idx",
+                "?[block_idx, content, block_type] := parent_id = $id, *blocks{parent_id, block_idx, content, block_type} :order block_idx",
                 btree_params([("id", dv_str(parent_id))]),
             )
             .map_err(cozo_err)?;
@@ -182,7 +182,7 @@ impl CozoKbStore {
     pub fn get_block(&self, parent_id: &str, idx: usize) -> Result<Option<Block>, KbStoreError> {
         let result = self
             .run_immut_params(
-                "?[block_idx, content, block_type] := *blocks{parent_id, block_idx, content, block_type}, parent_id = $id, block_idx = $idx",
+                "?[block_idx, content, block_type] := parent_id = $id, block_idx = $idx, *blocks{parent_id, block_idx, content, block_type}",
                 btree_params([
                     ("id", dv_str(parent_id)),
                     ("idx", DataValue::from(idx as i64)),

@@ -91,7 +91,7 @@ impl CozoKbStore {
         links: &[(String, String, f64, f64)],
     ) -> Result<(), KbStoreError> {
         self.run_mut_params(
-            r#"?[src, dst, rel_type] := *links{src, dst, rel_type}, src = $id
+            r#"?[src, dst, rel_type] := src = $id, *links{src, dst, rel_type}
                :rm links {src, dst, rel_type}"#,
             btree_params([("id", dv_str(src))]),
         )
@@ -105,7 +105,14 @@ impl CozoKbStore {
     pub fn links_typed(&self, id: &str, rel_type: &str) -> Result<Vec<Link>, KbStoreError> {
         let result = self
             .run_immut_params(
-                "?[src, dst, rel_type, display, weight, confidence] := *links{src, dst, rel_type, display, weight, confidence}, src = $id, rel_type = $rel_type",
+                // `rel_type` deliberately stays a POST-filter while `src` is
+                // pre-bound. `links` is keyed `(src, dst, rel_type)`; binding
+                // src and rel_type but not dst joins positions {0, 2}, which
+                // `ra.rs:1509 join_is_prefix` rejects, and cozo falls back to
+                // `stored_mat_join` — a full scan. Binding the shorter,
+                // contiguous prefix and filtering the rest seeks. See
+                // `tests/query_plan_tests.rs::links_typed_binds_only_the_contiguous_key_prefix`.
+                "?[src, dst, rel_type, display, weight, confidence] := src = $id, *links{src, dst, rel_type, display, weight, confidence}, rel_type = $rel_type",
                 btree_params([("id", dv_str(id)), ("rel_type", dv_str(rel_type))]),
             )
             .map_err(cozo_err)?;
