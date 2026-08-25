@@ -1130,9 +1130,9 @@
     },
     {
       "path": "crates/ai/src/tools/authorization.rs",
-      "lines": 564,
+      "lines": 614,
       "test_lines": 303,
-      "code_lines": 261,
+      "code_lines": 311,
       "is_test_file": false,
       "max_fn_lines": 45,
       "max_fn_name": "authorization_change_ops_are_privileged_on_every_surface",
@@ -1141,22 +1141,22 @@
       "max_struct_name": "",
       "max_nesting": 2,
       "use_count": 5,
-      "pub_items": 5,
+      "pub_items": 6,
       "test_count": 11
     },
     {
       "path": "crates/ai/src/tools/categories.rs",
-      "lines": 550,
+      "lines": 602,
       "test_lines": 0,
-      "code_lines": 550,
+      "code_lines": 602,
       "is_test_file": false,
       "max_fn_lines": 92,
       "max_fn_name": "classify_tool_category",
-      "max_match_arms": 13,
+      "max_match_arms": 14,
       "max_struct_fields": 4,
       "max_struct_name": "PermissionPolicy",
       "max_nesting": 2,
-      "use_count": 2,
+      "use_count": 4,
       "pub_items": 17,
       "test_count": 0
     },
@@ -1479,6 +1479,22 @@
       "use_count": 1,
       "pub_items": 3,
       "test_count": 4
+    },
+    {
+      "path": "crates/ai/tests/command_mirror_tier_parity.rs",
+      "lines": 141,
+      "test_lines": 141,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 37,
+      "max_fn_name": "kb_agenda_custom_escalates_but_ordinary_filters_do_not",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 3,
+      "pub_items": 0,
+      "test_count": 3
     },
     {
       "path": "crates/babel/src/backend/compiled.rs",
@@ -8570,8 +8586,8 @@
     },
     {
       "path": "crates/scheme/src/permission_tests.rs",
-      "lines": 617,
-      "test_lines": 617,
+      "lines": 677,
+      "test_lines": 677,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 94,
@@ -8582,7 +8598,7 @@
       "max_nesting": 4,
       "use_count": 4,
       "pub_items": 0,
-      "test_count": 14
+      "test_count": 16
     },
     {
       "path": "crates/scheme/src/reader.rs",
@@ -8634,11 +8650,11 @@
     },
     {
       "path": "crates/scheme/src/runtime/io_packages.rs",
-      "lines": 538,
+      "lines": 570,
       "test_lines": 0,
-      "code_lines": 538,
+      "code_lines": 570,
       "is_test_file": false,
-      "max_fn_lines": 514,
+      "max_fn_lines": 515,
       "max_fn_name": "register_io_package_fns",
       "max_match_arms": 3,
       "max_struct_fields": 0,
@@ -13239,37 +13255,37 @@
       },
       {
         "path": "crates/ai/src/tools/authorization.rs",
-        "line": 197,
+        "line": 240,
         "category": "permission"
       },
       {
         "path": "crates/ai/src/tools/authorization.rs",
-        "line": 223,
+        "line": 266,
         "category": "permission"
       },
       {
         "path": "crates/ai/src/tools/categories.rs",
-        "line": 327,
+        "line": 373,
         "category": "permission"
       },
       {
         "path": "crates/ai/src/tools/categories.rs",
-        "line": 454,
+        "line": 506,
         "category": "permission"
       },
       {
         "path": "crates/ai/src/tools/categories.rs",
-        "line": 483,
+        "line": 535,
         "category": "permission"
       },
       {
         "path": "crates/ai/src/tools/categories.rs",
-        "line": 497,
+        "line": 549,
         "category": "security"
       },
       {
         "path": "crates/ai/src/tools/categories.rs",
-        "line": 502,
+        "line": 554,
         "category": "permission"
       },
       {
@@ -13840,6 +13856,16 @@
       {
         "path": "crates/scheme/src/runtime/editor_ops.rs",
         "line": 135,
+        "category": "permission"
+      },
+      {
+        "path": "crates/scheme/src/runtime/io_packages.rs",
+        "line": 476,
+        "category": "permission"
+      },
+      {
+        "path": "crates/scheme/src/runtime/io_packages.rs",
+        "line": 544,
         "category": "permission"
       },
       {

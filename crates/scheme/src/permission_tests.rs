@@ -219,6 +219,66 @@ fn a_denied_dispatcher_never_reaches_the_editors_queue() {
     }
 }
 
+/// `(kb-agenda "custom" …)` is arbitrary Datalog and must carry the same tier as
+/// `(kb-raw-query …)`.
+///
+/// Both primitives reach the SAME executor: they push an ex line onto
+/// `pending_ex_commands`, which is dispatched "through the ex-command parser
+/// (supports args)". So `kb-agenda custom <datalog>` and `kb-raw-query <datalog>`
+/// execute identically -- yet `kb-raw-query` was `PRIVILEGED` and `kb-agenda` was
+/// `READ`, two tiers lower, for the identical capability.
+///
+/// That gap is the Scheme-surface twin of the defect A5 closed on the MCP surface,
+/// where `kb_agenda`'s `custom` filter was left behind when ADR-085 raised
+/// `kb_raw_query` to Privileged. Closing it there and not here just moved the door.
+///
+/// The other filters must stay READ: `kb-agenda` is a core read primitive, and a
+/// fix that escalated the whole thing would break it (principle #14's "the fix must
+/// not be worse than the bug", and G3's correction to the original A5 plan).
+#[test]
+fn kb_agenda_custom_is_refused_below_the_tier_kb_raw_query_requires() {
+    let mut rt = new_runtime();
+    let err = rt
+        .with_ambient_tier(PermissionTier::Write, |rt| {
+            rt.eval(r#"(kb-agenda "custom" "?[id] := *node_versions{id}")"#)
+        })
+        .expect_err("arbitrary Datalog must not be reachable at Write, as kb-raw-query is not");
+    // Refused at the ARGUMENT, not by the primitive's tier -- the tier is
+    // per-primitive and escalating all of `kb-agenda` would break a core read.
+    // The message must point at the primitive that offers this legitimately,
+    // so a refusal reads as redirection rather than malfunction (ADR-084).
+    assert!(
+        err.message.contains("kb-raw-query") && err.message.contains("PRIVILEGED"),
+        "the refusal must name the privileged primitive that offers this: {}",
+        err.message
+    );
+    assert!(
+        rt.shared.lock().pending_ex_commands.is_empty(),
+        "the ex queue was populated despite the denial -- it would drain into the \
+         effect one loop iteration later"
+    );
+}
+
+/// ...and the ordinary filters keep working at READ, so the fix above did not
+/// simply disable a core read primitive.
+#[test]
+fn ordinary_kb_agenda_filters_still_run_at_read_tier() {
+    for code in [
+        r#"(kb-agenda "orphan")"#,
+        r#"(kb-agenda "todo" "TODO")"#,
+        r#"(kb-agenda "stale" 30)"#,
+    ] {
+        let mut rt = new_runtime();
+        rt.with_ambient_tier(PermissionTier::ReadOnly, |rt| rt.eval(code))
+            .unwrap_or_else(|e| panic!("{code} must remain a ReadOnly primitive: {}", e.message));
+        assert_eq!(
+            rt.shared.lock().pending_ex_commands.len(),
+            1,
+            "{code} should have enqueued its ex line"
+        );
+    }
+}
+
 /// Registry-driven, so it cannot fall behind what ships: at the lowest tier,
 /// *every* primitive classified above ReadOnly is refused. Only the ones that
 /// must be refused are actually invoked, so no permitted primitive is executed

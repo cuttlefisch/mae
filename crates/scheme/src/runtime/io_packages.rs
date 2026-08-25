@@ -473,6 +473,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         tier::READ,
         move |args: &[Value]| {
             let filter = arg_string(args, 0, "kb-agenda")?;
+            reject_arbitrary_datalog_filter(&filter)?; // @ai-caution: [permission]
             let extra = args.get(1).map(|v| format!("{}", v)).unwrap_or_default();
             let cmd = if extra.is_empty() {
                 format!("kb-agenda {}", filter)
@@ -535,4 +536,35 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
             Ok(Value::Void)
         },
     );
+}
+
+/// `(kb-agenda "custom" ...)` is arbitrary Datalog and must not be reachable at
+/// this primitive's tier.
+///
+/// @ai-caution: [permission] `custom` reaches the SAME executor `(kb-raw-query)`
+/// does -- both push an ex line onto `pending_ex_commands`, dispatched through the
+/// ex parser -- yet `kb-agenda` is registered `READ` while `kb-raw-query` is
+/// `PRIVILEGED`. The VM runs at the agent's ambient tier, so that let a Write-tier
+/// agent reach every relation in the store through `eval_scheme`, bypassing the
+/// gate ADR-085 built. This is the Scheme twin of the MCP defect A5 closed on
+/// `kb_agenda`; closing one surface only moved the door.
+///
+/// Refused at the ARGUMENT, not by raising the primitive's tier: the tier is
+/// per-primitive and the capability is per-argument, so escalating all of
+/// `kb-agenda` would break a core read (G3's correction to the original plan).
+/// Nothing is lost to the human -- `:kb-agenda custom <datalog>` still works on the
+/// ex-command surface, and `(kb-raw-query ...)` offers the identical capability at
+/// the tier it warrants.
+///
+/// Enforced by
+/// `permission_tests::kb_agenda_custom_is_refused_below_the_tier_kb_raw_query_requires`.
+fn reject_arbitrary_datalog_filter(filter: &str) -> Result<(), LispError> {
+    if filter.eq_ignore_ascii_case("custom") {
+        return Err(LispError::user(
+            "kb-agenda does not accept \"custom\" - arbitrary Datalog is available \
+             through (kb-raw-query ...), which is PRIVILEGED for that reason",
+            vec![],
+        ));
+    }
+    Ok(())
 }
