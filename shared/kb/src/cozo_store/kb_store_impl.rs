@@ -628,16 +628,32 @@ impl KbStore for CozoKbStore {
         CozoKbStore::restore_version(self, id, version)
     }
 
-    fn store_embedding(&self, id: &str, model: &str, vec: &[f32]) -> Result<(), KbStoreError> {
-        CozoKbStore::store_embedding(self, id, model, vec)
+    fn store_embedding(
+        &self,
+        id: &str,
+        model: &str,
+        content_hash: &str,
+        vec: &[f32],
+    ) -> Result<(), KbStoreError> {
+        CozoKbStore::store_embedding(self, id, model, content_hash, vec)
     }
 
-    fn vector_search(&self, vec: &[f32], k: usize) -> Result<Vec<VectorHit>, KbStoreError> {
-        CozoKbStore::vector_search(self, vec, k)
+    fn vector_search(
+        &self,
+        model: &str,
+        vec: &[f32],
+        k: usize,
+    ) -> Result<Vec<VectorHit>, KbStoreError> {
+        CozoKbStore::vector_search_for_model(self, model, vec, k)
     }
 
-    fn graphrag_search(&self, vec: &[f32], k: usize) -> Result<Vec<VectorHit>, KbStoreError> {
-        CozoKbStore::graphrag_search(self, vec, k)
+    fn graphrag_search(
+        &self,
+        model: &str,
+        vec: &[f32],
+        k: usize,
+    ) -> Result<Vec<VectorHit>, KbStoreError> {
+        CozoKbStore::graphrag_search(self, model, vec, k)
     }
 
     fn get_cached_embedding(

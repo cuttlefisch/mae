@@ -20,10 +20,7 @@ fn rrf_blend_surfaces_both_a_lexical_match_and_a_semantically_close_but_lexicall
         "This document explains the zorbatron in detail.",
     );
     store.insert_node(&lex_node).unwrap();
-    let lex_hash = mae_kb::activity::body_hash(&lex_node.body);
-    store
-        .put_cached_embedding(&lex_hash, "m", 1, &[0.0, 1.0, 0.0])
-        .unwrap();
+    seed_embedding(&store, &lex_node, &[0.0, 1.0, 0.0]);
 
     // Lexically distant (no mention of "zorbatron" anywhere), vector close to the query.
     let sem_node = mae_kb::Node::new(
@@ -33,10 +30,7 @@ fn rrf_blend_surfaces_both_a_lexical_match_and_a_semantically_close_but_lexicall
         "Completely unrelated body content about gearboxes.",
     );
     store.insert_node(&sem_node).unwrap();
-    let sem_hash = mae_kb::activity::body_hash(&sem_node.body);
-    store
-        .put_cached_embedding(&sem_hash, "m", 1, &[1.0, 0.0, 0.0])
-        .unwrap();
+    seed_embedding(&store, &sem_node, &[1.0, 0.0, 0.0]);
 
     // Neither lexically nor semantically related to the query -- must not appear.
     let noise_node = mae_kb::Node::new(
@@ -46,10 +40,7 @@ fn rrf_blend_surfaces_both_a_lexical_match_and_a_semantically_close_but_lexicall
         "Nothing to do with anything relevant here.",
     );
     store.insert_node(&noise_node).unwrap();
-    let noise_hash = mae_kb::activity::body_hash(&noise_node.body);
-    store
-        .put_cached_embedding(&noise_hash, "m", 1, &[0.0, 0.0, 1.0])
-        .unwrap();
+    seed_embedding(&store, &noise_node, &[0.0, 0.0, 1.0]);
 
     editor.kb.store = Some(std::sync::Arc::new(store));
     // Also present in the in-memory mirror `kb_federated_search_scoped` searches
@@ -138,4 +129,20 @@ fn mae_core_query_vector(vec: &[f32]) -> crate::editor::kb_ops::QueryVector<'_> 
         model: "m",
         chunk_version: 1,
     }
+}
+
+/// Seed one node's embedding through the PRODUCTION apply path.
+///
+/// Not a bare `put_cached_embedding`: since D2 a search scans the per-node
+/// `embeddings` relation, so a test that wrote only the content-addressed cache
+/// would pass while the real sweep wrote nothing findable.
+fn seed_embedding(store: &mae_kb::CozoKbStore, node: &mae_kb::Node, vec: &[f32]) {
+    let hash = mae_kb::activity::body_hash(&node.body);
+    assert!(mae_kb::enrichment::apply_enrichment_results(
+        store,
+        "m",
+        1,
+        &[(node.id.clone(), hash, vec.to_vec())]
+    )
+    .is_empty());
 }

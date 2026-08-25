@@ -460,32 +460,30 @@ impl CozoKbStore {
             }"#,
         )?;
 
-        // HNSW vector embeddings (schema ready, populated in v0.13.0)
-        // vec type is <F32; 384> — 384-dim vectors for all-MiniLM-L6-v2
-        self.create_if_absent(
-            r#":create embeddings {
-                id: String,
-                model: String
-                =>
-                vec: <F32; 384>
-            }"#,
-        )?;
-
-        // HNSW index on embeddings for vector search.
-        // Uses Cosine distance, dim=384 (all-MiniLM-L6-v2 default).
-        // Index creation is idempotent — silently ignored if already exists.
-        self.create_if_absent(
-            r#"::hnsw create embeddings:semantic {
-                dim: 384,
-                m: 16,
-                dtype: F32,
-                fields: [vec],
-                distance: Cosine,
-                ef_construction: 100,
-                extend_candidates: true,
-                keep_pruned_connections: false
-            }"#,
-        )?;
+        // ADR-061 Phase F / D2: the SEARCHABLE per-node embedding relation is
+        // created LAZILY, at the width of the first vector written to it
+        // (`CozoKbStore::ensure_embeddings_relation`), not eagerly here at a
+        // hardcoded width.
+        //
+        // It used to be created here as `<F32; 384>` with an
+        // `::hnsw create embeddings:semantic` index, pinned to all-MiniLM-L6-v2's
+        // dimensionality. That was unusable and measurably so: the shipped default
+        // `ai_embedding_model` is `nomic-embed-text` (768-dim), and storing a
+        // 768-dim vector returned
+        // `Err(Storage("CozoDB: when executing against relation 'embeddings'"))`.
+        // The relation had ZERO production writers for its whole life; its tests
+        // passed only because they hand-picked 384-dim vectors, which is precisely
+        // the "unicorn value chosen around the defect" principle #14 warns about.
+        //
+        // Dropping the eager create is a lossless migration for existing stores:
+        // because nothing ever wrote the relation, any on-disk copy is provably
+        // empty. `ensure_embeddings_relation` removes a legacy/mis-dimensioned one
+        // rather than trying to migrate its contents.
+        //
+        // No HNSW index: the index is what forces a compile-time-fixed width, and
+        // a brute-force scan over a fixed-width column measures 26ms at 8,000
+        // nodes x 768 dims -- ample at this scale, and free of HNSW's awkward
+        // deletion story for a corpus that mutates on every edit.
 
         // ADR-061 Phase B: content-addressed embedding cache -- deliberately a
         // SEPARATE relation from `embeddings` above, not an extra key column on it.
@@ -544,18 +542,38 @@ impl CozoKbStore {
     /// Runs at most once per version bump: the stamp is written after a
     /// successful rebuild, so an interrupted rebuild retries on the next open
     /// rather than being recorded as done.
-    fn ensure_fts_index_current(&self) -> Result<(), KbStoreError> {
-        let stamped = self
+    /// Read one `instance_meta` value. `None` = never stamped.
+    ///
+    /// Extracted rather than inlined a second time: `ensure_fts_index_current`
+    /// and `ensure_embeddings_relation` both stamp a schema-version-ish key into
+    /// this relation, and principle #8 says one mechanism, not two copies of a
+    /// five-line query.
+    pub(crate) fn get_meta(&self, key: &str) -> Result<Option<String>, KbStoreError> {
+        Ok(self
             .run_immut_params(
                 "?[val] := *instance_meta{key: $key, val}",
-                btree_params([("key", dv_str(FTS_VERSION_KEY))]),
+                btree_params([("key", dv_str(key))]),
             )
             .map_err(cozo_err)?
             .rows
             .first()
             .and_then(|r| r.first())
             .and_then(|v| v.get_str())
-            .map(|s| s.to_string());
+            .map(|s| s.to_string()))
+    }
+
+    /// Stamp one `instance_meta` value.
+    pub(crate) fn set_meta(&self, key: &str, val: &str) -> Result<(), KbStoreError> {
+        self.run_mut_params(
+            r#"?[key, val] <- [[$key, $val]] :put instance_meta {key => val}"#,
+            btree_params([("key", dv_str(key)), ("val", dv_str(val))]),
+        )
+        .map_err(cozo_err)?;
+        Ok(())
+    }
+
+    fn ensure_fts_index_current(&self) -> Result<(), KbStoreError> {
+        let stamped = self.get_meta(FTS_VERSION_KEY)?;
 
         if stamped.as_deref() == Some(FTS_EXTRACTOR_VERSION) {
             return Ok(());
@@ -577,14 +595,7 @@ impl CozoKbStore {
             );
             return Ok(());
         }
-        self.run_mut_params(
-            r#"?[key, val] <- [[$key, $ver]] :put instance_meta {key => val}"#,
-            btree_params([
-                ("key", dv_str(FTS_VERSION_KEY)),
-                ("ver", dv_str(FTS_EXTRACTOR_VERSION)),
-            ]),
-        )
-        .map_err(cozo_err)?;
+        self.set_meta(FTS_VERSION_KEY, FTS_EXTRACTOR_VERSION)?;
         Ok(())
     }
     /// Create a relation if it doesn't already exist.

@@ -147,13 +147,13 @@ pub async fn run_enrichment_sweep(
         return result;
     }
 
-    let mut embedded: Vec<(String, Vec<f32>)> = Vec::with_capacity(plan.targets.len());
+    let mut embedded: Vec<(String, String, Vec<f32>)> = Vec::with_capacity(plan.targets.len());
     for batch in plan.targets.chunks(cfg.batch_size.max(1)) {
         let inputs: Vec<String> = batch.iter().map(|t| t.body.clone()).collect();
         match backend.embed(&cfg.model, &inputs).await {
             Ok(vecs) => {
                 for (target, vec) in batch.iter().zip(vecs) {
-                    embedded.push((target.content_hash.clone(), vec));
+                    embedded.push((target.node_id.clone(), target.content_hash.clone(), vec));
                 }
             }
             Err(e) => {

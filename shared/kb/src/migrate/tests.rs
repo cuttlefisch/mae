@@ -195,6 +195,7 @@ fn migrate_between_cozo_stores() {
     assert_eq!(pending[0].update_bytes, vec![10, 20]);
 }
 
+#[cfg(feature = "storage-sled")]
 fn seed_sled(path: &Path, n_nodes: usize) {
     let sled = crate::CozoKbStore::open_with_engine(path, "sled").unwrap();
     sled.seed_type_system().unwrap();
@@ -224,6 +225,7 @@ fn seed_sled(path: &Path, n_nodes: usize) {
 // Gating on the feature makes the standalone run honest. Note the same
 // asymmetry is why `kb_build`'s round-trip test selects its engine rather
 // than hardcoding one.
+#[cfg(feature = "storage-sled")]
 #[test]
 #[cfg_attr(
     not(feature = "storage-sqlite"),
@@ -305,6 +307,7 @@ fn bulk_migration_is_fast_not_per_commit() {
     );
 }
 
+#[cfg(feature = "storage-sled")]
 #[test]
 #[cfg_attr(
     not(feature = "storage-sqlite"),

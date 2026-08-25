@@ -136,7 +136,10 @@ fn schema_creates_all_relations() {
         "views",
         "hygiene_suggestions",
         "instance_meta",
-        "embeddings",
+        // NOT "embeddings": it is created lazily, at the width of the first vector
+        // written (D2), because Cozo fixes a vector column's dimension at relation
+        // creation and the dimension is a property of the configured embedding
+        // model. `embeddings_is_created_lazily_at_the_models_width` covers it.
     ];
     // Verify all Phase B relations exist by doing a count query on each.
     // Each relation has a different key column, so use :columns introspection.
@@ -212,4 +215,37 @@ fn seed_views_creates_view_nodes() {
 
     // Idempotent: seeding again should not error
     store.seed_views().unwrap();
+}
+
+/// D2: `embeddings` must NOT exist until something writes a vector, and must then
+/// exist at that vector's width.
+///
+/// It used to be created eagerly at `<F32; 384>`, which meant every store on every
+/// disk carried a relation that no shipped configuration could ever write to.
+#[test]
+fn embeddings_is_created_lazily_at_the_models_width() {
+    let (_tmp, store) = make_store();
+    assert!(
+        store.run_immut("::columns embeddings").is_err(),
+        "a fresh store must not carry an embeddings relation at a guessed width"
+    );
+
+    store
+        .insert_node(&Node::new("n:1", "N", NodeKind::Note, "b"))
+        .unwrap();
+    let mut v = vec![0.0f32; 768];
+    v[0] = 1.0;
+    store
+        .store_embedding("n:1", "nomic-embed-text", "h", &v)
+        .unwrap();
+
+    assert!(
+        store.run_immut("::columns embeddings").is_ok(),
+        "the first write must create the relation"
+    );
+    assert_eq!(
+        store.get_meta("embeddings_dim").unwrap().as_deref(),
+        Some("768"),
+        "the pinned width must be recorded so a later model change can re-pin"
+    );
 }

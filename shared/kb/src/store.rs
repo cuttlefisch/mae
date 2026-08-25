@@ -523,15 +523,36 @@ pub trait KbStore: Send + Sync {
 
     // --- Embeddings / Vector search (Phase G) ---
 
-    /// Store an embedding vector for a node.
-    fn store_embedding(&self, _id: &str, _model: &str, _vec: &[f32]) -> Result<(), KbStoreError> {
+    /// Store a searchable embedding for a node under a model pin.
+    ///
+    /// `content_hash` is the `body_hash` of the body the vector was computed from,
+    /// so a reader can tell a fresh hit from one whose node has been edited since.
+    fn store_embedding(
+        &self,
+        _id: &str,
+        _model: &str,
+        _content_hash: &str,
+        _vec: &[f32],
+    ) -> Result<(), KbStoreError> {
         Err(KbStoreError::NotSupported(
             "embeddings require CozoDB backend".into(),
         ))
     }
 
-    /// Search for nearest neighbors by vector similarity (HNSW).
-    fn vector_search(&self, _vec: &[f32], _k: usize) -> Result<Vec<VectorHit>, KbStoreError> {
+    /// Brute-force cosine k-NN over the embeddings stored under `model`.
+    ///
+    /// Deliberately not an ANN index. A KB mutates on every edit, HNSW deletion is
+    /// awkward, and its graph overhead (`M * 8-10` bytes/element) is around 3x a
+    /// quantized vector -- while one scan of a fixed-width column measures 26ms at
+    /// 8,000 nodes x 768 dims. The `model` argument is load-bearing rather than
+    /// cosmetic: vectors from different models are not comparable, so a search
+    /// that did not filter by pin would silently mix incomparable spaces.
+    fn vector_search(
+        &self,
+        _model: &str,
+        _vec: &[f32],
+        _k: usize,
+    ) -> Result<Vec<VectorHit>, KbStoreError> {
         Err(KbStoreError::NotSupported(
             "vector search requires CozoDB backend".into(),
         ))
@@ -540,7 +561,12 @@ pub trait KbStore: Send + Sync {
     /// GraphRAG query: vector-nearest neighbors expanded by 1 hop of graph links.
     /// Returns node IDs with scores (vector hits get their distance score,
     /// graph-expanded nodes get score 0.0).
-    fn graphrag_search(&self, _vec: &[f32], _k: usize) -> Result<Vec<VectorHit>, KbStoreError> {
+    fn graphrag_search(
+        &self,
+        _model: &str,
+        _vec: &[f32],
+        _k: usize,
+    ) -> Result<Vec<VectorHit>, KbStoreError> {
         Err(KbStoreError::NotSupported(
             "GraphRAG requires CozoDB backend".into(),
         ))

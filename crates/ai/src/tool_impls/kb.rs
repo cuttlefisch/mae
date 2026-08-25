@@ -965,7 +965,9 @@ pub fn execute_kb_enrich(editor: &Editor, args: &serde_json::Value) -> Result<St
     }
 
     let client = reqwest::blocking::Client::new();
-    let mut embedded: Vec<(String, Vec<f32>)> = Vec::with_capacity(targets.len());
+    // (node_id, content_hash, vector) -- the node id is what makes the searchable
+    // `embeddings` relation writable; the cache is keyed by content hash alone.
+    let mut embedded: Vec<(String, String, Vec<f32>)> = Vec::with_capacity(targets.len());
     let mut embed_errors: Vec<String> = Vec::new();
     for target in &targets {
         match mae_kb::embedding_client::ollama_embed_blocking(
@@ -976,7 +978,11 @@ pub fn execute_kb_enrich(editor: &Editor, args: &serde_json::Value) -> Result<St
             std::slice::from_ref(&target.body),
         ) {
             Ok(mut vecs) if !vecs.is_empty() => {
-                embedded.push((target.content_hash.clone(), vecs.remove(0)));
+                embedded.push((
+                    target.node_id.clone(),
+                    target.content_hash.clone(),
+                    vecs.remove(0),
+                ));
             }
             Ok(_) => embed_errors.push(format!("{}: empty embedding returned", target.node_id)),
             Err(e) => embed_errors.push(format!("{}: {e}", target.node_id)),

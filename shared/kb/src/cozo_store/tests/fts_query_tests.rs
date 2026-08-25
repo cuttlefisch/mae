@@ -290,11 +290,13 @@ fn fts_updates_on_node_change() {
     assert_eq!(hits[0].id, "u1");
 }
 
+/// CozoDB's native Tantivy FTS index. Opened **sled** until D2 despite its name,
+/// passing only via workspace feature unification (ADR-108/C6 makes sqlite THE backend).
 #[test]
 fn tantivy_fts_on_sqlite() {
-    // Test CozoDB's native Tantivy FTS index on sled backend
     let tmp = tempfile::tempdir().unwrap();
-    let db = DbInstance::new("sled", tmp.path().join("fts_test").to_str().unwrap(), "").unwrap();
+    let p = tmp.path().join("fts_test.db");
+    let db = DbInstance::new("sqlite", p.to_str().unwrap(), "").unwrap();
 
     db.run_script(
         ":create docs { id: String => title: String, body: String }",

@@ -1002,9 +1002,9 @@
     },
     {
       "path": "crates/ai/src/tool_impls/kb.rs",
-      "lines": 6542,
+      "lines": 6548,
       "test_lines": 4003,
-      "code_lines": 2539,
+      "code_lines": 2545,
       "is_test_file": false,
       "max_fn_lines": 183,
       "max_fn_name": "kb_search_context_dev_practices_shaped_kb_surfaces_all_six_originally_reported_queries",
@@ -3162,11 +3162,11 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_vector_blend_tests.rs",
-      "lines": 141,
-      "test_lines": 141,
+      "lines": 148,
+      "test_lines": 148,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 83,
+      "max_fn_lines": 74,
       "max_fn_name": "rrf_blend_surfaces_both_a_lexical_match_and_a_semantically_close_but_lexically_distant_hit",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -7882,13 +7882,13 @@
     },
     {
       "path": "crates/mae/tests/kb_graph_validation_embeddings.rs",
-      "lines": 276,
-      "test_lines": 276,
+      "lines": 271,
+      "test_lines": 271,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 56,
+      "max_fn_lines": 47,
       "max_fn_name": "graphrag_with_seed_nodes",
-      "max_match_arms": 3,
+      "max_match_arms": 2,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 2,
@@ -11274,9 +11274,9 @@
     },
     {
       "path": "shared/kb/src/cozo_store/kb_store_impl.rs",
-      "lines": 677,
+      "lines": 693,
       "test_lines": 0,
-      "code_lines": 677,
+      "code_lines": 693,
       "is_test_file": false,
       "max_fn_lines": 157,
       "max_fn_name": "fts_search",
@@ -11322,11 +11322,11 @@
     },
     {
       "path": "shared/kb/src/cozo_store/schema.rs",
-      "lines": 792,
+      "lines": 803,
       "test_lines": 0,
-      "code_lines": 792,
+      "code_lines": 803,
       "is_test_file": false,
-      "max_fn_lines": 316,
+      "max_fn_lines": 314,
       "max_fn_name": "ensure_schema",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -11434,8 +11434,8 @@
     },
     {
       "path": "shared/kb/src/cozo_store/tests/fts_query_tests.rs",
-      "lines": 387,
-      "test_lines": 387,
+      "lines": 389,
+      "test_lines": 389,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 93,
@@ -11578,8 +11578,8 @@
     },
     {
       "path": "shared/kb/src/cozo_store/tests/schema_tests.rs",
-      "lines": 215,
-      "test_lines": 215,
+      "lines": 251,
+      "test_lines": 251,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 55,
@@ -11590,7 +11590,7 @@
       "max_nesting": 4,
       "use_count": 1,
       "pub_items": 0,
-      "test_count": 6
+      "test_count": 7
     },
     {
       "path": "shared/kb/src/cozo_store/tests/source_files_tests.rs",
@@ -11610,8 +11610,8 @@
     },
     {
       "path": "shared/kb/src/cozo_store/tests/vector_tests.rs",
-      "lines": 162,
-      "test_lines": 162,
+      "lines": 302,
+      "test_lines": 302,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 45,
@@ -11622,7 +11622,7 @@
       "max_nesting": 1,
       "use_count": 1,
       "pub_items": 0,
-      "test_count": 5
+      "test_count": 10
     },
     {
       "path": "shared/kb/src/cozo_store/tests/versioning_tests.rs",
@@ -11674,18 +11674,18 @@
     },
     {
       "path": "shared/kb/src/cozo_store/vector.rs",
-      "lines": 147,
+      "lines": 294,
       "test_lines": 0,
-      "code_lines": 147,
+      "code_lines": 294,
       "is_test_file": false,
-      "max_fn_lines": 28,
-      "max_fn_name": "graphrag_search",
-      "max_match_arms": 0,
+      "max_fn_lines": 34,
+      "max_fn_name": "store_embedding",
+      "max_match_arms": 2,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 3,
       "use_count": 2,
-      "pub_items": 5,
+      "pub_items": 6,
       "test_count": 0
     },
     {
@@ -11754,9 +11754,9 @@
     },
     {
       "path": "shared/kb/src/enrichment.rs",
-      "lines": 495,
-      "test_lines": 290,
-      "code_lines": 205,
+      "lines": 522,
+      "test_lines": 316,
+      "code_lines": 206,
       "is_test_file": false,
       "max_fn_lines": 48,
       "max_fn_name": "plan_enrichment_scan",
@@ -11978,8 +11978,8 @@
     },
     {
       "path": "shared/kb/src/migrate/tests.rs",
-      "lines": 335,
-      "test_lines": 335,
+      "lines": 338,
+      "test_lines": 338,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 40,
@@ -12058,9 +12058,9 @@
     },
     {
       "path": "shared/kb/src/store.rs",
-      "lines": 659,
+      "lines": 685,
       "test_lines": 51,
-      "code_lines": 608,
+      "code_lines": 634,
       "is_test_file": false,
       "max_fn_lines": 27,
       "max_fn_name": "node_version_verify_integrity_detects_tampering",
@@ -13224,7 +13224,7 @@
       },
       {
         "path": "crates/ai/src/tool_impls/kb.rs",
-        "line": 2348,
+        "line": 2354,
         "category": "datalog-injection"
       },
       {
