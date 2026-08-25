@@ -142,8 +142,29 @@ echo "--- bob TAP ---";   grep -E '^(ok|not ok|#)' "$WORK/bob.tap" || true
 
 # The id each tenant actually shared under, read from its own durable registry —
 # where D4 persists the mint.
-reg_id() { grep -oE 'primary_collab_id = "[^"]+"' "$WORK/$1/.local/share/mae/kb-registry.toml" 2>/dev/null | head -1 | cut -d'"' -f2; }
-A_ID="$(reg_id alice)"; B_ID="$(reg_id bob)"
+# `|| true` is load-bearing, not defensive noise. Under `set -euo pipefail` a
+# `grep` that matches nothing exits 1, `pipefail` propagates that through the
+# pipeline, and the command substitution below then aborts the whole script --
+# BEFORE the `[ -n "$A_ID" ] || { echo "FAIL: alice never persisted..." }` guard
+# a few lines down, which exists for exactly this case and could never run.
+# The observable symptom was a CI failure with no FAIL line at all: the TAP said
+# "5 passed, 0 failed", then the harness's cleanup kill, then exit 1.
+reg_id() {
+  grep -oE 'primary_collab_id = "[^"]+"' \
+    "$WORK/$1/.local/share/mae/kb-registry.toml" 2>/dev/null \
+    | head -1 | cut -d'"' -f2 || true
+}
+
+# And wait for the mint to be durable rather than assuming it already is. The
+# editor persists `primary_collab_id` asynchronously after `kb/share`, so
+# reading immediately after `wait` is a race that only loses under CI load --
+# which is why this passed locally and on most runs. Bounded, so a genuine
+# never-persisted stays a failure rather than a hang.
+for _ in $(seq 1 50); do
+  A_ID="$(reg_id alice)"; B_ID="$(reg_id bob)"
+  [ -n "$A_ID" ] && [ -n "$B_ID" ] && break
+  sleep 0.2
+done
 echo "--- collab ids ---"
 echo "alice primary → ${A_ID:-<none>}"
 echo "bob   primary → ${B_ID:-<none>}"
