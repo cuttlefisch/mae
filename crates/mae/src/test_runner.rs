@@ -231,6 +231,74 @@ impl EditorStateSnapshot {
 /// so that buffer mutations from one test are visible in subsequent tests.
 ///
 /// At file boundaries (tracked by `file_boundaries`), global editor state is
+/// Emit one TAP line for a finished step. Returns whether it passed.
+///
+/// Extracted so `run_tests_iteratively` is about RUNNING tests rather than about
+/// formatting output — it was 191 lines against an 80-line ceiling before #787
+/// added anything, and the failure diagnostics are a third of it.
+fn report_tap_line(editor: &Editor, i: usize, name: &str, result: &str) -> bool {
+    let test_num = i + 1;
+    if result == "PASS" {
+        println!("ok {} - {}", test_num, name);
+        return true;
+    } else {
+        let msg = result.strip_prefix("FAIL:").unwrap_or(result);
+        println!("not ok {} - {}", test_num, name);
+        println!("  ---");
+        println!("  message: {}", msg);
+        // Dump active buffer state on failure for diagnostics.
+        let ab = editor.active_buffer();
+        println!("  active_buffer: {}", ab.name);
+        println!("  text_len: {}", ab.text().len());
+        println!(
+            "  text_preview: {:?}",
+            ab.text().chars().take(200).collect::<String>()
+        );
+        println!("  sync_enabled: {}", ab.sync_doc.is_some());
+        println!("  collab_doc_id: {:?}", ab.collab_doc_id);
+        println!("  buffer_count: {}", editor.buffers.len());
+        for (bi, b) in editor.buffers.iter().enumerate() {
+            println!(
+                "  buf[{}]: name={:?} text_len={} sync={} collab_id={:?}",
+                bi,
+                b.name,
+                b.text().len(),
+                b.sync_doc.is_some(),
+                b.collab_doc_id
+            );
+        }
+        println!("  ...");
+    }
+    false
+}
+
+/// #787: a step that dispatched an UNKNOWN command must not report `ok`.
+///
+/// `(execute-ex "…")` is how a scenario reaches any editor command with no
+/// Scheme primitive, so it is the backbone of this suite — and an unknown name
+/// was **indistinguishable from success**. `Editor::execute_command` returns
+/// `false` AND sets an "Unknown command: …" status; both were discarded one
+/// frame from where they could be reported.
+///
+/// Caught by a real dogfood: `(execute-ex "kb-daily-today")` reported `ok` while
+/// doing nothing, because the command is actually `daily-goto-today`. Six steps
+/// "passed" that way. Same shape as #781's vacuous KB assertions, one layer up —
+/// and it matters most for Phase 5, where a command RENAME would leave every
+/// scenario green while testing nothing.
+///
+/// Read from the editor's status rather than threaded through the Scheme queue,
+/// because that is where the information already is.
+fn escalate_unknown_command(editor: &Editor, result: String) -> String {
+    if result != "PASS" || !editor.status_msg.starts_with("Unknown command:") {
+        return result;
+    }
+    format!(
+        "FAIL:{} — the step reported no error, but the command was never \
+         dispatched. Check the name against `command_list`.",
+        editor.status_msg
+    )
+}
+
 /// snapshot before the first test and restored after the last — preventing
 /// cross-file pollution from mode, flavor, or option changes.
 async fn run_tests_iteratively(
@@ -355,39 +423,13 @@ async fn run_tests_iteratively(
             return code;
         }
 
-        // Print TAP line.
-        let test_num = i + 1;
-        if result == "PASS" {
+        // #787: a step whose command was never dispatched must not report `ok`
+        // — see `escalate_unknown_command`.
+        let result = escalate_unknown_command(editor, result);
+        if report_tap_line(editor, i, &name, &result) {
             pass_count += 1;
-            println!("ok {} - {}", test_num, name);
         } else {
             fail_count += 1;
-            let msg = result.strip_prefix("FAIL:").unwrap_or(&result);
-            println!("not ok {} - {}", test_num, name);
-            println!("  ---");
-            println!("  message: {}", msg);
-            // Dump active buffer state on failure for diagnostics.
-            let ab = editor.active_buffer();
-            println!("  active_buffer: {}", ab.name);
-            println!("  text_len: {}", ab.text().len());
-            println!(
-                "  text_preview: {:?}",
-                ab.text().chars().take(200).collect::<String>()
-            );
-            println!("  sync_enabled: {}", ab.sync_doc.is_some());
-            println!("  collab_doc_id: {:?}", ab.collab_doc_id);
-            println!("  buffer_count: {}", editor.buffers.len());
-            for (bi, b) in editor.buffers.iter().enumerate() {
-                println!(
-                    "  buf[{}]: name={:?} text_len={} sync={} collab_id={:?}",
-                    bi,
-                    b.name,
-                    b.text().len(),
-                    b.sync_doc.is_some(),
-                    b.collab_doc_id
-                );
-            }
-            println!("  ...");
         }
     }
 
