@@ -849,7 +849,7 @@ impl ImportHealth {
             broken_link_deleted: report
                 .broken_links
                 .iter()
-                .filter(|b| b.kind == crate::BrokenLinkKind::DeletedNode)
+                .filter(|b| b.kind == crate::BrokenLinkKind::TargetNotFound)
                 .count(),
             broken_link_malformed: report
                 .broken_links

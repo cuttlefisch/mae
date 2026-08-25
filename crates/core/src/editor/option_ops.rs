@@ -2204,7 +2204,7 @@ impl super::Editor {
                 let mut deleted: Vec<_> = report
                     .broken_links
                     .iter()
-                    .filter(|b| b.reason == BrokenLinkReason::DeletedNode)
+                    .filter(|b| b.reason == BrokenLinkReason::TargetNotFound)
                     .collect();
                 let mut malformed: Vec<_> = report
                     .broken_links

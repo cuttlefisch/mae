@@ -110,7 +110,7 @@ impl CozoKbStore {
                 let dst = row.get(1)?.get_str()?.to_string();
                 let rt = row.get(2)?.get_str()?.to_string();
                 let reason = if dst.contains(':') || dst.len() > 3 {
-                    BrokenLinkReason::DeletedNode
+                    BrokenLinkReason::TargetNotFound
                 } else {
                     BrokenLinkReason::MalformedId
                 };

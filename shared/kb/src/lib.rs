@@ -696,8 +696,20 @@ pub fn compute_code_block_ranges(body: &str) -> Vec<(usize, usize)> {
 /// Classification of a broken link — why it's broken.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrokenLinkKind {
-    /// Target UUID is well-formed but no node with that ID exists (deleted file).
-    DeletedNode,
+    /// Target is a well-formed id that was **not found in the corpus that was
+    /// searched**.
+    ///
+    /// @ai-caution: [health-reporting] This does NOT mean the node was deleted,
+    /// and must not be reported as if it were. `health_report` builds its id set
+    /// from ONE in-memory `KnowledgeBase`, so a link to a node that lives in a
+    /// federated instance, on a hub, or in a KB this replica simply does not
+    /// hold lands here too. Distinguishing "gone" from "not here" needs an
+    /// existence oracle this type does not have -- see the module note and
+    /// `NotHeldLocally`.
+    ///
+    /// Previously named `DeletedNode`, which asserted more than the evidence
+    /// supports; the MCP `kb_health` tool exported that name to the model.
+    TargetNotFound,
     /// Target is not a valid UUID (elisp code, prose, malformed markup).
     MalformedId,
     /// Target is a template placeholder like `%s` or `UUID`.
@@ -720,7 +732,7 @@ impl BrokenLink {
         if t == "%s" || t.eq_ignore_ascii_case("uuid") || t == "..." {
             BrokenLinkKind::TemplatePlaceholder
         } else if is_uuid_like(t) {
-            BrokenLinkKind::DeletedNode
+            BrokenLinkKind::TargetNotFound
         } else {
             BrokenLinkKind::MalformedId
         }
@@ -3474,6 +3486,53 @@ mod tests {
         assert_eq!(report.broken_links[0].kind, BrokenLinkKind::MalformedId);
     }
 
+    /// The evidence a `TargetNotFound` classification actually has is "absent
+    /// from the id set I searched" -- nothing more.
+    ///
+    /// This test documents the LIMITATION rather than asserting it away: a node
+    /// that genuinely exists elsewhere (another federated instance, a hub, a KB
+    /// this replica does not hold) is still reported broken, because
+    /// `health_report` builds `all_ids` from one in-memory `KnowledgeBase` and
+    /// has no existence oracle to consult.
+    ///
+    /// That is why the variant is no longer called `DeletedNode`: the old name
+    /// -- and the `"deleted_node"` string the MCP `kb_health` tool exported to
+    /// the model -- asserted the node had been deleted, on evidence that only
+    /// supports "not here". When the oracle lands, this test should gain a
+    /// `NotHeldLocally` case and stop being a limitation note.
+    #[test]
+    fn a_link_to_a_node_this_replica_does_not_hold_is_not_reported_as_deleted() {
+        // Two KBs, as a federation would have. `other` holds the target.
+        let other = kb_with(vec![Node::new(
+            "concept:remote",
+            "Remote",
+            NodeKind::Note,
+            "body",
+        )]);
+        assert!(
+            other.get("concept:remote").is_some(),
+            "fixture: the target genuinely exists in the other instance"
+        );
+
+        let local = kb_with(vec![Node::new(
+            "a",
+            "A",
+            NodeKind::Note,
+            "[[concept:remote]]",
+        )]);
+        let report = local.health_report();
+
+        assert_eq!(report.broken_links.len(), 1);
+        assert_eq!(report.broken_links[0].target, "concept:remote");
+        // The selective oracle: the CLASSIFICATION, not the count. A count-only
+        // assertion passes under both the old and new naming and proves nothing.
+        assert_ne!(
+            format!("{:?}", report.broken_links[0].kind),
+            "DeletedNode",
+            "a node held by another instance must never be classified as deleted"
+        );
+    }
+
     #[test]
     fn health_report_classifies_broken_links() {
         let kb = kb_with(vec![Node::new(
@@ -3486,7 +3545,7 @@ mod tests {
         let kinds: Vec<_> = report.broken_links.iter().map(|b| &b.kind).collect();
         assert!(kinds.contains(&&BrokenLinkKind::TemplatePlaceholder)); // %s
         assert!(kinds.contains(&&BrokenLinkKind::TemplatePlaceholder)); // UUID
-        assert!(kinds.contains(&&BrokenLinkKind::DeletedNode)); // valid UUID format
+        assert!(kinds.contains(&&BrokenLinkKind::TargetNotFound)); // valid UUID format
         assert!(kinds.contains(&&BrokenLinkKind::MalformedId)); // not a uuid
     }
 
