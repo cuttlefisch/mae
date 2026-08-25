@@ -267,7 +267,7 @@ impl CozoKbStore {
     /// storage-op wrapper as retryable contention. A genuinely fatal write (disk full,
     /// corruption) still returns after the bounded retries. On sled the write path
     /// does not produce this wrapper, so retries never fire there.
-    fn is_busy(e: &cozo::Error) -> bool {
+    pub(super) fn is_busy(e: &cozo::Error) -> bool {
         let s = e.to_string().to_ascii_lowercase();
         s.contains("locked") || s.contains("busy") || s.contains("executing against relation")
     }

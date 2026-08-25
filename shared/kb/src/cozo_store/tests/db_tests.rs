@@ -290,3 +290,29 @@ mod retry_on_transient_sqlite_busy_tests {
         );
     }
 }
+
+/// A busy store must be reported as **transient**, not as a durable storage
+/// failure — that distinction is what lets a caller retry or degrade instead of
+/// treating lock contention like disk corruption.
+///
+/// Without it, `KbStoreError` had three variants and a network partition was
+/// indistinguishable from a corrupt file (C2).
+#[test]
+fn lock_contention_is_classified_transient_and_corruption_is_not() {
+    // The conservative half matters most: a fatal error must NOT be transient,
+    // or it would be retried to a deadline instead of failing fast.
+    let durable = KbStoreError::Storage("CozoDB: disk I/O error".to_string());
+    assert!(
+        !durable.is_transient(),
+        "a durable failure must never be retryable, or callers will retry forever"
+    );
+
+    let transient = KbStoreError::Transient("CozoDB: database is locked".to_string());
+    assert!(transient.is_transient());
+
+    // And it must say so in its own message, since that is what reaches a log.
+    assert!(
+        transient.to_string().contains("retry may help"),
+        "the message must state retryability: {transient}"
+    );
+}

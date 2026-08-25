@@ -83,8 +83,25 @@ pub(super) fn generate_uuid_v4() -> String {
     )
 }
 
-pub(super) fn cozo_err(e: impl std::fmt::Display) -> KbStoreError {
-    KbStoreError::Storage(format!("CozoDB: {e}"))
+/// Convert a cozo error, **classifying lock contention as transient**.
+///
+/// @ai-caution: [error-classification] The classification happens HERE, in the
+/// one conversion every one of ~88 call sites already goes through, rather than
+/// in a second constructor callers must remember to prefer. A variant nothing
+/// produces is worse than no variant at all, and a variant only *some* paths
+/// produce is worse still — the caller cannot tell whether `Storage` means
+/// "durable failure" or "this path forgot to classify".
+///
+/// Reuses `CozoKbStore::is_busy` rather than re-deriving the predicate. That
+/// predicate is deliberately conservative: a genuinely fatal write (disk full,
+/// corruption) must NOT be classified transient, or it would be retried to a
+/// deadline instead of failing fast.
+pub(super) fn cozo_err(e: cozo::Error) -> KbStoreError {
+    if super::CozoKbStore::is_busy(&e) {
+        KbStoreError::Transient(format!("CozoDB: {e}"))
+    } else {
+        KbStoreError::Storage(format!("CozoDB: {e}"))
+    }
 }
 
 pub(super) fn btree_params<const N: usize>(
