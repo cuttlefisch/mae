@@ -11834,19 +11834,19 @@
     },
     {
       "path": "shared/kb/src/federation.rs",
-      "lines": 1936,
-      "test_lines": 716,
-      "code_lines": 1220,
+      "lines": 2156,
+      "test_lines": 822,
+      "code_lines": 1334,
       "is_test_file": false,
-      "max_fn_lines": 168,
+      "max_fn_lines": 165,
       "max_fn_name": "import_org_dir_to_store",
       "max_match_arms": 5,
       "max_struct_fields": 17,
       "max_struct_name": "KbInstance",
-      "max_nesting": 7,
-      "use_count": 11,
-      "pub_items": 49,
-      "test_count": 27
+      "max_nesting": 5,
+      "use_count": 13,
+      "pub_items": 51,
+      "test_count": 31
     },
     {
       "path": "shared/kb/src/fuzzy.rs",
