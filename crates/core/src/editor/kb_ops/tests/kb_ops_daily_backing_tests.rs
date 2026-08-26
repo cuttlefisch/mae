@@ -211,3 +211,154 @@ fn finalizing_a_store_backed_capture_leaves_the_node_intact() {
         "the captured node must survive finalization -- it was already persisted"
     );
 }
+
+// -- Navigation, which had no Store path at all -------------------------------
+
+/// **`daily-prev`/`daily-next` could not identify the current daily.**
+///
+/// `kb_daily_date_from_buffer` probed the buffer's file-path stem and a
+/// `#+title:` line. A store-backed daily is a `BufferKind::Kb` buffer with no
+/// file path, and the KB renderer strips `#+` lines — so neither probe matched
+/// and every navigation failed with "Current buffer is not a daily note".
+#[test]
+fn the_current_daily_is_identifiable_from_a_store_backed_buffer() {
+    let (_tmp, mut editor) = editor_with_no_notes_dir();
+    editor.kb_daily_ensure(2026, 8, 26).unwrap();
+    editor.kb_daily_open(2026, 8, 26).unwrap();
+
+    assert_eq!(
+        editor.kb_daily_date_from_buffer(),
+        Ok((2026, 8, 26)),
+        "a store-backed daily's KB buffer must identify its own date"
+    );
+}
+
+/// **The four navigation commands had no Store path.** Each resolved a file path
+/// and called `open_file_at_path`, so on a store backing they failed with
+/// "No dailies directory" — after `daily-goto-date` had already created and
+/// chain-linked nodes, leaving it half-succeeded with a failure on the status
+/// line.
+#[test]
+fn daily_navigation_works_on_a_store_backing() {
+    let (_tmp, mut editor) = editor_with_no_notes_dir();
+    editor.kb_daily_ensure(2026, 8, 25).unwrap();
+    editor.kb_daily_ensure(2026, 8, 26).unwrap();
+    editor.kb_daily_open(2026, 8, 26).unwrap();
+
+    editor.kb_daily_prev().expect("daily-prev must work");
+    assert_eq!(editor.kb_daily_date_from_buffer(), Ok((2026, 8, 25)));
+
+    editor.kb_daily_next().expect("daily-next must work");
+    assert_eq!(editor.kb_daily_date_from_buffer(), Ok((2026, 8, 26)));
+}
+
+/// `daily-goto-date` must not report failure after having already done its work.
+#[test]
+fn goto_daily_date_succeeds_on_a_store_backing() {
+    let (_tmp, mut editor) = editor_with_no_notes_dir();
+
+    editor
+        .kb_goto_daily_date("2026-08-26")
+        .expect("goto-date must not fail after chain-filling");
+
+    assert!(
+        editor.kb_daily_exists(2026, 8, 26),
+        "and the node it created must be there"
+    );
+    assert_eq!(editor.kb_daily_date_from_buffer(), Ok((2026, 8, 26)));
+}
+
+// -- Capture: the one seam that was never built --------------------------------
+
+/// **Capture wrote `.org` into a detached KB's stale archive.**
+///
+/// `kb_create_note_from_title` branched on `self.kb.notes_dir`, not on ingest
+/// policy — so every existing user who detaches (they all have `notes_dir` set)
+/// got a file written into a directory no ingest reads, a file buffer opened on
+/// it, and `capture-finalize` saving it again. The node did reach the store, so
+/// nothing was lost; the user was editing a dead file that looked live.
+///
+/// Dailies got a `DailyBacking` seam for exactly this. Capture never did.
+#[test]
+fn capture_writes_no_file_when_the_primary_is_detached() {
+    let tmp = TempDir::new().unwrap();
+    let mut editor = Editor::new();
+    let _dirs = with_test_dirs(&mut editor);
+    editor.kb.notes_dir = Some(tmp.path().to_path_buf());
+
+    editor
+        .kb
+        .registry
+        .set_ingest_policy("primary", mae_kb::federation::IngestPolicy::StoreIsTruth);
+
+    let (id, path) = editor
+        .kb_create_note_from_title("Detached capture")
+        .unwrap();
+
+    assert!(
+        path.is_none(),
+        "a detached KB must not get a file written into its stale archive: {path:?}"
+    );
+    assert!(
+        editor.kb.primary.get(&id).is_some(),
+        "and the node must still be created in the store"
+    );
+    let stray: Vec<_> = std::fs::read_dir(tmp.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name())
+        .collect();
+    assert!(stray.is_empty(), "no file may be written at all: {stray:?}");
+}
+
+/// An attached KB keeps writing the file — the positive control, without which
+/// the assertion above is satisfied by capture being broken generally.
+#[test]
+fn capture_still_writes_a_file_when_attached() {
+    let tmp = TempDir::new().unwrap();
+    let mut editor = Editor::new();
+    let _dirs = with_test_dirs(&mut editor);
+    editor.kb.notes_dir = Some(tmp.path().to_path_buf());
+
+    let (_id, path) = editor
+        .kb_create_note_from_title("Attached capture")
+        .unwrap();
+
+    assert!(
+        path.is_some_and(|p| p.exists()),
+        "an attached KB must keep today's behaviour exactly"
+    );
+}
+
+/// **Aborting a store-backed capture left the node in the durable store.**
+///
+/// `kb_capture_abort` removed the node from the in-memory mirrors and deleted
+/// the file — but `kb_create_node` had already persisted it, and abort never
+/// called the owner-aware `kb_delete_node`. So the aborted note came back on the
+/// next restart. Invisible while capture was file-backed, because the mirror
+/// removal plus the file delete was the whole story.
+#[test]
+fn aborting_a_store_backed_capture_removes_the_node_from_the_store() {
+    let (_tmp, mut editor) = editor_with_no_notes_dir();
+    let primary = std::sync::Arc::new(mae_kb::CozoKbStore::open_mem().unwrap());
+    primary.seed_type_system().unwrap();
+    editor.kb.store = Some(primary.clone());
+    editor.kb.primary_cozo = Some(primary.clone());
+
+    let (id, _) = editor.kb_create_note_from_title("Abort me").unwrap();
+    assert!(
+        editor.kb.capture_state.is_some(),
+        "sanity: capture mode is active"
+    );
+    assert!(
+        primary.get_node(&id).unwrap().is_some(),
+        "sanity: capture persisted the node"
+    );
+
+    editor.dispatch_builtin("capture-abort");
+
+    assert!(
+        primary.get_node(&id).unwrap().is_none(),
+        "an aborted capture must not survive in the durable store"
+    );
+}
