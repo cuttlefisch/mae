@@ -203,6 +203,7 @@ fn seed_system_kb_row(editor: &mut Editor, name: &str) -> String {
             last_sync: None,
             ai_residency: mae_kb::federation::AiResidency::default(),
             project_root: None,
+            project_key: None,
             kind: mae_kb::federation::KbInstanceKind::Guidance,
             ingest_policy: Default::default(),
             priority: 0,

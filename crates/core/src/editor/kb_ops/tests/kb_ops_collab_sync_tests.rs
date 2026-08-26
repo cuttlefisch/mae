@@ -17,6 +17,7 @@ fn shared_ct_instance() -> mae_kb::federation::KbInstance {
         last_sync: None,
         ai_residency: mae_kb::federation::AiResidency::default(),
         project_root: None,
+        project_key: None,
         kind: mae_kb::federation::KbInstanceKind::default(),
         ingest_policy: Default::default(),
         priority: 0,

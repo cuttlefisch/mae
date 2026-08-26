@@ -737,7 +737,7 @@ Source: `shared/sync/src/lib.rs`
 | `which-key-open?` | `scheme/src/runtime/test_primitives.rs` |
 | `write-file` | `scheme/src/runtime/test_primitives.rs` |
 
-## Commands (561 built-in)
+## Commands (562 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -1296,6 +1296,7 @@ Source: `shared/sync/src/lib.rs`
 | `kb-import-verify` | Reconcile a KB's org directory against what its store holds (reads only) |
 | `kb-instances` | List all registered KB instances |
 | `kb-init-project` | Register a Project-kind KB instance for the current project (ADR-058) |
+| `kb-relink` | Re-mint this project's KB identity after a move or a clone (ADR-058, repair verb) |
 | `kb-decline-project-provisioning` | Don't ask again to register a KB for the current project (ADR-058) |
 | `kb-promote` | Promote the current KB-view node from a federated instance into the primary KB (#303) |
 | `move-down` | Move cursor down |

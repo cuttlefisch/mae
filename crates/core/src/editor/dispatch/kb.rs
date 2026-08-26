@@ -175,6 +175,9 @@ impl Editor {
             // Story D / R8 — the import audit. Both take an argument, so the
             // no-arg dispatch prefills command mode the same way `kb-reimport`
             // does rather than silently doing nothing.
+            "kb-relink" => match self.kb_relink_project(None) {
+                Ok(msg) | Err(msg) => self.set_status(msg),
+            },
             "kb-import-plan" | "kb-import-verify" => {
                 self.set_mode(Mode::Command);
                 self.vi.command_line = format!("{name} ");

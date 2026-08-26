@@ -259,3 +259,116 @@ impl Editor {
         true
     }
 }
+
+impl Editor {
+    /// Adopt an already-registered project KB for `canonical_root`, repairing a
+    /// stale `project_root` when the project has moved (Story B / R11).
+    ///
+    /// Returns `None` when no instance matches — the caller then provisions one.
+    pub(super) fn kb_adopt_project(
+        &mut self,
+        canonical_root: &Path,
+        key: Option<&str>,
+    ) -> Option<super::KbImportResult> {
+        let (uuid, repaired) = self.kb.registry.adopt_moved_project(canonical_root, key)?;
+        if repaired {
+            if let Some(data_dir) = self.mae_data_dir() {
+                let root = canonical_root.to_path_buf();
+                let uuid_for_write = uuid.clone();
+                let (registry, (), saved) =
+                    mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+                        if let Some(i) = reg.instances.iter_mut().find(|i| i.uuid == uuid_for_write)
+                        {
+                            i.project_root = Some(root.clone());
+                        }
+                    });
+                if let Err(e) = saved {
+                    tracing::warn!(error = %e, "could not persist the repaired project root");
+                }
+                self.kb.registry = registry;
+            }
+        }
+        let name = self
+            .kb
+            .registry
+            .instances
+            .iter()
+            .find(|i| i.uuid == uuid)
+            .map(|i| i.name.clone())
+            .unwrap_or_default();
+        Some(super::KbImportResult {
+            name,
+            uuid,
+            report: Default::default(),
+            health: Default::default(),
+        })
+    }
+
+    /// `:kb-relink` — re-mint this project's KB identity and re-point the
+    /// registered instance at it.
+    ///
+    /// Git itself ships `git worktree repair` for the same reason: a
+    /// path-independent identity is unachievable in general, so a repair verb is
+    /// not a defeat — it is what every system in this space needed and most
+    /// lacked, leaving users to delete state and start over.
+    pub fn kb_relink_project(&mut self, root: Option<PathBuf>) -> Result<String, String> {
+        let root = root
+            .or_else(|| self.active_project_root().map(|p| p.to_path_buf()))
+            .ok_or_else(|| "No project root detected".to_string())?;
+        let canonical = root
+            .canonicalize()
+            .map_err(|e| format!("cannot resolve {}: {e}", root.display()))?;
+        let identity = mae_kb::project_identity::relink(&canonical)
+            .map_err(|e| format!("could not re-mint an identity: {e:?}"))?;
+        let key = identity.key();
+
+        let Some(uuid) = self
+            .kb
+            .registry
+            .instances
+            .iter()
+            .find(|i| i.project_root.as_deref() == Some(canonical.as_path()))
+            .map(|i| i.uuid.clone())
+        else {
+            return Err(format!(
+                "no project KB registered for {} — run :kb-init-project first",
+                canonical.display()
+            ));
+        };
+        let data_dir = self
+            .mae_data_dir()
+            .ok_or_else(|| "cannot determine data directory".to_string())?;
+        let key_for_write = key.clone();
+        let (registry, (), saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+            if let Some(i) = reg.instances.iter_mut().find(|i| i.uuid == uuid) {
+                i.project_key = Some(key_for_write.clone());
+            }
+        });
+        saved.map_err(|e| format!("could not persist the relink: {e}"))?;
+        self.kb.registry = registry;
+        Ok(format!(
+            "relinked {} to {}{}",
+            canonical.display(),
+            key,
+            if identity.is_stable() {
+                ""
+            } else {
+                " (path fallback — not a git repo, so this does NOT survive a move)"
+            }
+        ))
+    }
+}
+
+impl Editor {
+    /// `:kb-relink [dir]` — the ex-command arm, extracted so the ex dispatcher
+    /// does not grow (it is ~1,270 lines against an 80-line ceiling).
+    pub(crate) fn dispatch_kb_relink(&mut self, args: Option<&str>) {
+        let root = args
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from);
+        match self.kb_relink_project(root) {
+            Ok(msg) | Err(msg) => self.set_status(msg),
+        }
+    }
+}

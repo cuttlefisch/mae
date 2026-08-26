@@ -669,6 +669,7 @@ mod tests {
             last_sync: None,
             ai_residency: mae_kb::federation::AiResidency::Open,
             project_root: None,
+            project_key: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
             ingest_policy: Default::default(),
             priority: 0,

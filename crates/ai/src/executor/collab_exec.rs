@@ -884,25 +884,12 @@ mod tests {
             .kb
             .registry
             .instances
-            .push(mae_kb::federation::KbInstance {
-                uuid: "uuid-other".into(),
-                name: "OtherKb".into(),
-                org_dir: std::path::PathBuf::new(),
-                db_path: std::path::PathBuf::new(),
-                primary: false,
-                enabled: true,
-                last_import: None,
-                collab_id: None,
-                shared: false,
-                remote_peers: Vec::new(),
-                last_sync: None,
-                ai_residency: mae_kb::federation::AiResidency::default(),
-                project_root: None,
-                kind: mae_kb::federation::KbInstanceKind::default(),
-                ingest_policy: Default::default(),
-                priority: 0,
-                remote_hub: None,
-            });
+            .push(mae_kb::federation::KbInstance::local(
+                "uuid-other".into(),
+                "OtherKb".into(),
+                std::path::PathBuf::new(),
+                std::path::PathBuf::new(),
+            ));
         editor.kb.rebuild_query_layer();
         assert!(
             editor.kb.query_layer().is_some(),

@@ -4430,6 +4430,10 @@
       "doc": "Register a Project-kind KB instance for the current project (ADR-058)"
     },
     {
+      "name": "kb-relink",
+      "doc": "Re-mint this project's KB identity after a move or a clone (ADR-058, repair verb)"
+    },
+    {
       "name": "kb-decline-project-provisioning",
       "doc": "Don't ask again to register a KB for the current project (ADR-058)"
     },

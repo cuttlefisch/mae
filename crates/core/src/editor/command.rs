@@ -287,6 +287,10 @@ impl Editor {
                 self.dispatch_kb_ingest_policy(command, args);
                 true
             }
+            "kb-relink" => {
+                self.dispatch_kb_relink(args);
+                true
+            }
             "kb-import-plan" | "kb-import-verify" => {
                 self.dispatch_kb_import_audit(command, args);
                 true

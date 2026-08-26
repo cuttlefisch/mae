@@ -14,6 +14,7 @@ mod kb_ops_import_audit_tests;
 mod kb_ops_ingest_policy_tests;
 mod kb_ops_instance_matching_tests;
 mod kb_ops_primary_naming_tests;
+mod kb_ops_project_identity_tests;
 mod kb_ops_provenance_tests;
 mod kb_ops_read_clobber_tests;
 mod kb_ops_registry_tests;

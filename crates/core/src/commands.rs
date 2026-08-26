@@ -1536,6 +1536,10 @@ fn register_kb_federation_commands(reg: &mut CommandRegistry) {
         "Register a Project-kind KB instance for the current project (ADR-058)",
     );
     reg.register_builtin(
+        "kb-relink",
+        "Re-mint this project's KB identity after a move or a clone (ADR-058, repair verb)",
+    );
+    reg.register_builtin(
         "kb-decline-project-provisioning",
         "Don't ask again to register a KB for the current project (ADR-058)",
     );

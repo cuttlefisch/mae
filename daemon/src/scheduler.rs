@@ -713,6 +713,7 @@ mod ingest_policy_tests {
             last_sync: None,
             ai_residency: AiResidency::default(),
             project_root: None,
+            project_key: None,
             kind: KbInstanceKind::default(),
             ingest_policy: policy,
             priority: 0,
