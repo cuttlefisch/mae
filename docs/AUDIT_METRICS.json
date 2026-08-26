@@ -1946,11 +1946,11 @@
     },
     {
       "path": "crates/core/src/commands.rs",
-      "lines": 1991,
+      "lines": 2008,
       "test_lines": 460,
-      "code_lines": 1531,
+      "code_lines": 1548,
       "is_test_file": false,
-      "max_fn_lines": 1349,
+      "max_fn_lines": 1333,
       "max_fn_name": "with_builtins",
       "max_match_arms": 2,
       "max_struct_fields": 3,
@@ -2202,13 +2202,13 @@
     },
     {
       "path": "crates/core/src/editor/command.rs",
-      "lines": 1590,
+      "lines": 1583,
       "test_lines": 212,
-      "code_lines": 1378,
+      "code_lines": 1371,
       "is_test_file": false,
-      "max_fn_lines": 1271,
+      "max_fn_lines": 1264,
       "max_fn_name": "execute_command",
-      "max_match_arms": 78,
+      "max_match_arms": 79,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 6,
@@ -2458,13 +2458,13 @@
     },
     {
       "path": "crates/core/src/editor/dispatch/kb.rs",
-      "lines": 373,
+      "lines": 381,
       "test_lines": 0,
-      "code_lines": 373,
+      "code_lines": 381,
       "is_test_file": false,
-      "max_fn_lines": 266,
+      "max_fn_lines": 274,
       "max_fn_name": "dispatch_kb",
-      "max_match_arms": 49,
+      "max_match_arms": 50,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 4,
@@ -2857,10 +2857,26 @@
       "test_count": 0
     },
     {
-      "path": "crates/core/src/editor/kb_ops/mod.rs",
-      "lines": 256,
+      "path": "crates/core/src/editor/kb_ops/import_audit.rs",
+      "lines": 261,
       "test_lines": 0,
-      "code_lines": 256,
+      "code_lines": 261,
+      "is_test_file": false,
+      "max_fn_lines": 27,
+      "max_fn_name": "kb_import_verify",
+      "max_match_arms": 5,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 5,
+      "pub_items": 4,
+      "test_count": 0
+    },
+    {
+      "path": "crates/core/src/editor/kb_ops/mod.rs",
+      "lines": 257,
+      "test_lines": 0,
+      "code_lines": 257,
       "is_test_file": false,
       "max_fn_lines": 40,
       "max_fn_name": "to_json",
@@ -2890,11 +2906,11 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/registry.rs",
-      "lines": 1545,
+      "lines": 1557,
       "test_lines": 352,
-      "code_lines": 1193,
+      "code_lines": 1205,
       "is_test_file": false,
-      "max_fn_lines": 142,
+      "max_fn_lines": 133,
       "max_fn_name": "kb_reimport",
       "max_match_arms": 2,
       "max_struct_fields": 0,
@@ -3049,6 +3065,22 @@
       "test_count": 24
     },
     {
+      "path": "crates/core/src/editor/kb_ops/tests/kb_ops_import_audit_tests.rs",
+      "lines": 184,
+      "test_lines": 184,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 43,
+      "max_fn_name": "verify_reports_a_node_the_destination_no_longer_holds",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 6
+    },
+    {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_ingest_policy_tests.rs",
       "lines": 383,
       "test_lines": 383,
@@ -3178,8 +3210,8 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_sole_mutator_tests.rs",
-      "lines": 196,
-      "test_lines": 196,
+      "lines": 205,
+      "test_lines": 205,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 34,
@@ -3242,8 +3274,8 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/mod.rs",
-      "lines": 60,
-      "test_lines": 60,
+      "lines": 61,
+      "test_lines": 61,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 23,
@@ -11945,6 +11977,22 @@
       "test_count": 3
     },
     {
+      "path": "shared/kb/src/import_plan.rs",
+      "lines": 1022,
+      "test_lines": 296,
+      "code_lines": 726,
+      "is_test_file": false,
+      "max_fn_lines": 42,
+      "max_fn_name": "loss_report_node",
+      "max_match_arms": 4,
+      "max_struct_fields": 3,
+      "max_struct_name": "PlannedFile",
+      "max_nesting": 3,
+      "use_count": 6,
+      "pub_items": 28,
+      "test_count": 12
+    },
+    {
       "path": "shared/kb/src/kb_build.rs",
       "lines": 535,
       "test_lines": 0,
@@ -12010,9 +12058,9 @@
     },
     {
       "path": "shared/kb/src/lib.rs",
-      "lines": 5575,
+      "lines": 5576,
       "test_lines": 2698,
-      "code_lines": 2877,
+      "code_lines": 2878,
       "is_test_file": false,
       "max_fn_lines": 120,
       "max_fn_name": "extract_subgraph",
@@ -13540,12 +13588,12 @@
       },
       {
         "path": "crates/core/src/editor/kb_ops/registry.rs",
-        "line": 838,
+        "line": 850,
         "category": "kb-provenance"
       },
       {
         "path": "crates/core/src/editor/kb_ops/registry.rs",
-        "line": 1021,
+        "line": 1033,
         "category": "correctness"
       },
       {
@@ -14345,27 +14393,27 @@
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 262,
+        "line": 263,
         "category": "correctness"
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 318,
+        "line": 319,
         "category": "kb-truth"
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 471,
+        "line": 472,
         "category": "crdt"
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 708,
+        "line": 709,
         "category": "health-reporting"
       },
       {
         "path": "shared/kb/src/lib.rs",
-        "line": 2296,
+        "line": 2297,
         "category": "kb-provenance"
       },
       {

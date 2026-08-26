@@ -638,6 +638,10 @@ impl Editor {
                 }
                 let mode = mode.unwrap_or_default();
 
+                if self.kb_refuse_stale_plan(&instance) {
+                    return None;
+                }
+
                 // Reuse the already-open store handle if this instance's store
                 // was opened at startup (or a prior register/reimport) — sled is
                 // single-writer with an exclusive dir lock, so opening a second
@@ -683,22 +687,9 @@ impl Editor {
                     self.kb.instance_stores.insert(instance.uuid.clone(), store);
                 }
 
-                // Update timestamp and persist.
-                if let Some(data_dir) = self.mae_data_dir() {
-                    let (registry, (), saved) =
-                        mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
-                            if let Some(reg_inst) =
-                                reg.instances.iter_mut().find(|i| i.uuid == instance.uuid)
-                            {
-                                reg_inst.last_import = Some(chrono_now());
-                            }
-                        });
-                    if let Err(e) = saved {
-                        tracing::warn!(error = %e, "failed to persist KB registry");
-                    }
-                    self.kb.registry = registry;
-                    self.kb.last_local_registry_write = Some(std::time::Instant::now());
-                }
+                self.kb_write_loss_report(&instance, &report);
+
+                self.kb_stamp_last_import(&instance.uuid);
 
                 // Rebuild the query layer so kb-find and other query-layer
                 // consumers see the reimported nodes immediately (matches
@@ -730,6 +721,27 @@ impl Editor {
                 None
             }
         }
+    }
+
+    /// Record that this instance was just imported, and persist the registry.
+    ///
+    /// Extracted from `kb_reimport` to keep that function off the structural
+    /// gate's function-length ceiling — the gate is per-function so the remedy
+    /// is local (CLAUDE.md, 2026-08-25 amendment).
+    pub(super) fn kb_stamp_last_import(&mut self, uuid: &str) {
+        let Some(data_dir) = self.mae_data_dir() else {
+            return;
+        };
+        let (registry, (), saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+            if let Some(reg_inst) = reg.instances.iter_mut().find(|i| i.uuid == uuid) {
+                reg_inst.last_import = Some(chrono_now());
+            }
+        });
+        if let Err(e) = saved {
+            tracing::warn!(error = %e, "failed to persist KB registry");
+        }
+        self.kb.registry = registry;
+        self.kb.last_local_registry_write = Some(std::time::Instant::now());
     }
 
     /// Persist a node to the backing store (if present). Best-effort — logs errors.

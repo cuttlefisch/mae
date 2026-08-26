@@ -24,6 +24,15 @@ const ALLOWED_DIRECT_WRITERS: &[(&str, &str)] = &[
          re-author CRDT ops for content that came FROM the CRDT — a loop, not a fix.",
     ),
     (
+        "kb_ops/import_audit.rs",
+        "writes the import's OWN audit artifact (the loss report) as part of an \
+         import, not an edit to authored content. The report is derived output \
+         about a completed import — routing it through the mutator would give a \
+         machine-generated record the authorship, blocking and seed-refusal \
+         semantics that exist for a human editing a node, and `kb_write_blocked` \
+         could then suppress the one artifact that says what the import lost.",
+    ),
+    (
         "kb_ops/registry.rs",
         "bulk ingest/import of a whole instance, which is a store-level replace \
          rather than an edit to one node's content",

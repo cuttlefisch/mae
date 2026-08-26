@@ -172,6 +172,14 @@ impl Editor {
                 self.vi.command_line = "kb-reimport ".to_string();
                 self.vi.command_cursor = self.vi.command_line.len();
             }
+            // Story D / R8 — the import audit. Both take an argument, so the
+            // no-arg dispatch prefills command mode the same way `kb-reimport`
+            // does rather than silently doing nothing.
+            "kb-import-plan" | "kb-import-verify" => {
+                self.set_mode(Mode::Command);
+                self.vi.command_line = format!("{name} ");
+                self.vi.command_cursor = self.vi.command_line.len();
+            }
             "kb-instances" => {
                 self.show_kb_instances();
             }

@@ -858,23 +858,7 @@ impl CommandRegistry {
             "org-to-markdown",
             "Convert current Org buffer to Markdown (in-buffer)",
         );
-        // KB federation
-        reg.register_builtin("kb-register", "Register org-roam directory as KB instance");
-        reg.register_builtin("kb-unregister", "Remove a registered KB instance");
-        reg.register_builtin("kb-reimport", "Re-import KB instance from org files");
-        reg.register_builtin("kb-instances", "List all registered KB instances");
-        reg.register_builtin(
-            "kb-init-project",
-            "Register a Project-kind KB instance for the current project (ADR-058)",
-        );
-        reg.register_builtin(
-            "kb-decline-project-provisioning",
-            "Don't ask again to register a KB for the current project (ADR-058)",
-        );
-        reg.register_builtin(
-            "kb-promote",
-            "Promote the current KB-view node from a federated instance into the primary KB (#303)",
-        );
+        register_kb_federation_commands(&mut reg);
         reg.register_builtin(
             "insert-newline-smart",
             "Insert newline with list continuation",
@@ -1526,6 +1510,39 @@ impl CommandRegistry {
 
         reg
     }
+}
+
+/// KB federation + import-audit registrations.
+///
+/// Extracted so the builtin-registration function does not grow further — it is
+/// already far past the 80-line ceiling the structural gate enforces, and the
+/// gate is per-function precisely so the remedy is local (CLAUDE.md's
+/// 2026-08-25 amendment).
+fn register_kb_federation_commands(reg: &mut CommandRegistry) {
+    reg.register_builtin("kb-register", "Register org-roam directory as KB instance");
+    reg.register_builtin("kb-unregister", "Remove a registered KB instance");
+    reg.register_builtin("kb-reimport", "Re-import KB instance from org files");
+    reg.register_builtin(
+        "kb-import-plan",
+        "Assess an org directory before importing it (pre-flight, reads only)",
+    );
+    reg.register_builtin(
+        "kb-import-verify",
+        "Reconcile a KB's org directory against what its store holds (reads only)",
+    );
+    reg.register_builtin("kb-instances", "List all registered KB instances");
+    reg.register_builtin(
+        "kb-init-project",
+        "Register a Project-kind KB instance for the current project (ADR-058)",
+    );
+    reg.register_builtin(
+        "kb-decline-project-provisioning",
+        "Don't ask again to register a KB for the current project (ADR-058)",
+    );
+    reg.register_builtin(
+        "kb-promote",
+        "Promote the current KB-view node from a federated instance into the primary KB (#303)",
+    );
 }
 
 #[cfg(test)]
