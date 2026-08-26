@@ -7,6 +7,7 @@ use mae_kb::KbStore;
 
 use super::Editor;
 
+pub use node_buffer::EditSurface;
 pub use registry::{open_instance_store_with_engine, KbResolution};
 pub use search::QueryVector;
 
@@ -186,6 +187,7 @@ mod collab_id;
 mod daily;
 mod dispatch;
 mod import_audit;
+pub(crate) mod node_buffer;
 mod nodes;
 pub(crate) mod registry;
 mod search;

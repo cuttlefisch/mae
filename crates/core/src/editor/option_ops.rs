@@ -85,6 +85,7 @@ impl super::Editor {
             "theme" => self.theme.name.clone(),
             "keymap_flavor" => self.keymap_flavor.clone(),
             "kb_link_follow_mode" => self.kb_link_follow_mode.clone(),
+            "kb_edit_surface" => self.kb.edit_surface.clone(),
             "default_mode" => self.default_mode.clone(),
             "splash_art" => self.splash_art.clone().unwrap_or_default(),
             "splash_image_width" => self.splash_image_width.to_string(),
@@ -521,17 +522,9 @@ impl super::Editor {
                     ))
                 }
             },
-            "kb_link_follow_mode" => match value {
-                "kb-view" | "source-file" => {
-                    self.kb_link_follow_mode = value.to_string();
-                }
-                _ => {
-                    return Err(format!(
-                        "Invalid kb_link_follow_mode: '{}' (expected kb-view or source-file)",
-                        value
-                    ))
-                }
-            },
+            "kb_edit_surface" | "kb_link_follow_mode" => {
+                self.set_kb_enum_option(name, value)?
+            }
             "ai_editor" => {
                 self.ai.editor_name = value.to_string();
             }
@@ -4136,5 +4129,32 @@ mod ai_option_tests {
 
         editor.set_option("ai_agent_login_shell", "true").unwrap();
         assert!(editor.ai.agent_login_shell);
+    }
+}
+
+impl crate::Editor {
+    /// The KB options whose values are a small fixed vocabulary.
+    ///
+    /// Extracted from `set_option`'s match, which is ~1,370 lines against an
+    /// 80-line ceiling — the structural gate is per-function so that the remedy
+    /// for touching it is local rather than architectural.
+    fn set_kb_enum_option(&mut self, name: &str, value: &str) -> Result<(), String> {
+        match (name, value) {
+            ("kb_edit_surface", "auto" | "file" | "node") => {
+                self.kb.edit_surface = value.to_string();
+                Ok(())
+            }
+            ("kb_edit_surface", _) => Err(format!(
+                "Invalid kb_edit_surface: '{value}' (expected auto, file or node)"
+            )),
+            ("kb_link_follow_mode", "kb-view" | "source-file") => {
+                self.kb_link_follow_mode = value.to_string();
+                Ok(())
+            }
+            ("kb_link_follow_mode", _) => Err(format!(
+                "Invalid kb_link_follow_mode: '{value}' (expected kb-view or source-file)"
+            )),
+            _ => Err(format!("not a KB enum option: {name}")),
+        }
     }
 }

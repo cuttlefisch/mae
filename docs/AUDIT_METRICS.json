@@ -2682,9 +2682,9 @@
     },
     {
       "path": "crates/core/src/editor/file_ops.rs",
-      "lines": 2248,
+      "lines": 2256,
       "test_lines": 664,
-      "code_lines": 1584,
+      "code_lines": 1592,
       "is_test_file": false,
       "max_fn_lines": 281,
       "max_fn_name": "start_self_debug",
@@ -2746,9 +2746,9 @@
     },
     {
       "path": "crates/core/src/editor/help_ops.rs",
-      "lines": 3343,
-      "test_lines": 1645,
-      "code_lines": 1698,
+      "lines": 3385,
+      "test_lines": 1654,
+      "code_lines": 1731,
       "is_test_file": false,
       "max_fn_lines": 193,
       "max_fn_name": "kb_populate_buffer",
@@ -2756,7 +2756,7 @@
       "max_struct_fields": 2,
       "max_struct_name": "NeighborLink",
       "max_nesting": 6,
-      "use_count": 23,
+      "use_count": 24,
       "pub_items": 20,
       "test_count": 66
     },
@@ -2890,9 +2890,9 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/mod.rs",
-      "lines": 257,
+      "lines": 259,
       "test_lines": 0,
-      "code_lines": 257,
+      "code_lines": 259,
       "is_test_file": false,
       "max_fn_lines": 40,
       "max_fn_name": "to_json",
@@ -2900,8 +2900,24 @@
       "max_struct_fields": 12,
       "max_struct_name": "KbWatcherStats",
       "max_nesting": 1,
-      "use_count": 9,
+      "use_count": 10,
       "pub_items": 8,
+      "test_count": 0
+    },
+    {
+      "path": "crates/core/src/editor/kb_ops/node_buffer.rs",
+      "lines": 190,
+      "test_lines": 0,
+      "code_lines": 190,
+      "is_test_file": false,
+      "max_fn_lines": 35,
+      "max_fn_name": "kb_save_node_buffer",
+      "max_match_arms": 3,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 2,
+      "use_count": 1,
+      "pub_items": 6,
       "test_count": 0
     },
     {
@@ -3098,8 +3114,8 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_ingest_policy_tests.rs",
-      "lines": 385,
-      "test_lines": 385,
+      "lines": 395,
+      "test_lines": 395,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 62,
@@ -3127,6 +3143,22 @@
       "use_count": 1,
       "pub_items": 0,
       "test_count": 1
+    },
+    {
+      "path": "crates/core/src/editor/kb_ops/tests/kb_ops_node_buffer_tests.rs",
+      "lines": 304,
+      "test_lines": 304,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 34,
+      "max_fn_name": "every_field_in_the_source_text_reaches_the_stored_node",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 0,
+      "use_count": 1,
+      "pub_items": 0,
+      "test_count": 12
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_primary_naming_tests.rs",
@@ -3306,8 +3338,8 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/mod.rs",
-      "lines": 62,
-      "test_lines": 62,
+      "lines": 63,
+      "test_lines": 63,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 23,
@@ -3370,14 +3402,14 @@
     },
     {
       "path": "crates/core/src/editor/kb_state.rs",
-      "lines": 785,
+      "lines": 794,
       "test_lines": 77,
-      "code_lines": 708,
+      "code_lines": 717,
       "is_test_file": false,
       "max_fn_lines": 69,
       "max_fn_name": "rebuild_query_layer",
       "max_match_arms": 5,
-      "max_struct_fields": 52,
+      "max_struct_fields": 53,
       "max_struct_name": "KbContext",
       "max_nesting": 3,
       "use_count": 8,
@@ -3594,13 +3626,13 @@
     },
     {
       "path": "crates/core/src/editor/option_ops.rs",
-      "lines": 4140,
+      "lines": 4160,
       "test_lines": 1233,
-      "code_lines": 2907,
+      "code_lines": 2927,
       "is_test_file": false,
-      "max_fn_lines": 1368,
+      "max_fn_lines": 1360,
       "max_fn_name": "set_option",
-      "max_match_arms": 232,
+      "max_match_arms": 233,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 4,
@@ -4842,11 +4874,11 @@
     },
     {
       "path": "crates/core/src/options.rs",
-      "lines": 1686,
+      "lines": 1705,
       "test_lines": 331,
-      "code_lines": 1355,
+      "code_lines": 1374,
       "is_test_file": false,
-      "max_fn_lines": 1128,
+      "max_fn_lines": 1126,
       "max_fn_name": "new",
       "max_match_arms": 5,
       "max_struct_fields": 7,
@@ -13671,12 +13703,12 @@
       },
       {
         "path": "crates/core/src/editor/option_ops.rs",
-        "line": 1768,
+        "line": 1761,
         "category": "security"
       },
       {
         "path": "crates/core/src/editor/option_ops.rs",
-        "line": 1783,
+        "line": 1776,
         "category": "test-safety"
       },
       {
@@ -13741,12 +13773,12 @@
       },
       {
         "path": "crates/core/src/options.rs",
-        "line": 538,
+        "line": 554,
         "category": "guidance-delivery"
       },
       {
         "path": "crates/core/src/options.rs",
-        "line": 1328,
+        "line": 1347,
         "category": "config-corruption"
       },
       {

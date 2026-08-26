@@ -1390,23 +1390,56 @@ impl Editor {
         //
         // Same treatment `resolve_kb_link` gets, via the same helper: this is the
         // second door into the same trap, and closing one is not closing it.
-        if self.kb_store_is_truth_for(&node_id) {
-            self.set_status(format!(
-                "'{node_id}' belongs to a detached KB — its store is the source of \
-                 truth, so there is no source file to edit. Edit the node here \
-                 instead; changes are saved to the store."
-            ));
+        use crate::editor::kb_ops::EditSurface;
+        let surface = self.kb_edit_surface();
+
+        // ADR-092 D5: the default reproduces today's behaviour EXACTLY — a
+        // file-backed node in a KB that still ingests from disk opens its file,
+        // byte-identical. The node buffer fills the gap where there is no file,
+        // or where the file is a stale archive of a detached KB.
+        //
+        // A detached KB's archive is the worst outcome available if opened: the
+        // file opens, the edit saves, and no ingest ever reads it, so the work is
+        // silently lost while looking successful. Until this existed, that case
+        // could only be REFUSED; now it has somewhere to go.
+        let detached = self.kb_store_is_truth_for(&node_id);
+        let file = (!detached)
+            .then(|| self.kb_node_source_file(&node_id))
+            .flatten();
+
+        // A seed node is protected content: `kb_update_node_with` refuses to
+        // modify it. Opening an edit buffer that can only ever fail on save is a
+        // worse answer than saying so now, so `auto` never routes a seed node to
+        // the node buffer. An explicit `kb-edit-surface = node` still does —
+        // the refusal then comes from the one place that owns it.
+        let seed = self
+            .kb_resolve_node_source(&node_id)
+            .is_some_and(|src| src == mae_kb::NodeSource::Seed);
+
+        let use_node_buffer = match surface {
+            EditSurface::Node => true,
+            EditSurface::File => false,
+            EditSurface::Auto => file.is_none() && !seed,
+        };
+
+        if use_node_buffer {
+            if let Err(e) = self.kb_edit_node(&node_id) {
+                self.set_status(e);
+            }
             return;
         }
 
-        match self.kb_node_source_file(&node_id) {
+        match file {
             Some(path) => {
                 let path_str = path.display().to_string();
                 self.open_file(&path_str);
             }
-            None => {
-                self.set_status(format!("No source file for '{}'", node_id));
-            }
+            None if detached => self.set_status(format!(
+                "'{node_id}' belongs to a detached KB — its store is the source of \
+                 truth, so there is no source file to edit. Set \
+                 `:set kb-edit-surface node` to edit the node's org source directly."
+            )),
+            None => self.set_status(format!("No source file for '{node_id}'")),
         }
     }
 
@@ -2815,12 +2848,18 @@ mod tests {
     }
 
     #[test]
-    fn help_edit_source_after_promotion_shows_no_source() {
-        // #303's concrete regression test: once a federated node has been
-        // promoted to primary (kb_promote_node), it no longer carries
-        // `source_file` at all — `help_edit_source` must report an honest
-        // "No source file" instead of the ENOENT that used to occur when a
-        // *stale* source_file path was trusted verbatim.
+    fn help_edit_source_after_promotion_edits_the_node_not_a_stale_path() {
+        // #303's concrete regression test, updated for ADR-092 D5.
+        //
+        // Once a federated node has been promoted to primary (`kb_promote_node`)
+        // it no longer carries `source_file` at all. The invariant #303 filed is
+        // that this must NOT surface as the ENOENT that used to occur when a
+        // *stale* source_file path was trusted verbatim — and that still holds.
+        //
+        // What changed is the answer: a file-less node used to be a dead end
+        // ("No source file"), and is now editable as its org source text. That is
+        // the whole point of D5's edit surface, so this test asserts the better
+        // outcome rather than pinning the dead end.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("note1.org"),
@@ -2837,9 +2876,12 @@ mod tests {
         e.open_help_at("promote-src-test");
         e.help_edit_source();
 
-        assert!(
-            e.status_msg.contains("No source file"),
-            "expected an honest 'no source file' status, got: {}",
+        let name = e.buffers[e.active_buffer_idx()].name.clone();
+        assert_eq!(
+            crate::editor::kb_ops::node_buffer::node_id_from_buffer_name(&name).as_deref(),
+            Some("promote-src-test"),
+            "a promoted, file-less node must open as an editable node buffer, got \
+             buffer {name:?} (status: {})",
             e.status_msg
         );
         assert!(

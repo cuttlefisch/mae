@@ -314,6 +314,14 @@ pub struct KbContext {
     pub daemon_restart_failures: u32,
 
     // --- Options ---
+    /// KB option (ADR-092 D5): which surface `:kb-edit-source` opens for a node
+    /// — `auto` (default, reproduces today's behaviour exactly), `file`, `node`.
+    ///
+    /// Lives here rather than on `Editor` because it is KB state, and because
+    /// `Editor::new`'s initializer is 270 lines against an 80-line ceiling —
+    /// every new top-level field pushes it further past a gate whose remedy is
+    /// meant to be local.
+    pub edit_surface: String,
     /// KB option: enable/disable file watchers.
     pub watcher_enabled: bool,
     /// KB option: debounce interval in ms between watcher drains.
@@ -684,6 +692,7 @@ impl KbContext {
             daemon_socket: default_daemon_socket(),
             daemon_cache_size: 200,
             daemon_restart_failures: 0,
+            edit_surface: "auto".to_string(),
             watcher_enabled: true,
             watcher_debounce_ms: 500,
             max_drain_events: 100,

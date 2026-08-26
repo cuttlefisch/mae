@@ -359,8 +359,14 @@ fn an_attached_instance_is_unaffected() {
 ///
 /// Closing one door is not closing the trap, which is why both go through the
 /// same helper.
+///
+/// **Updated for ADR-092 D5.** This used to assert a refusal whose message told
+/// the user to "edit the node here instead" — advice that was *not true*, because
+/// the KB view is read-only and no node edit surface existed. Now it does, so the
+/// detached node opens as editable org source text. The invariant this test was
+/// filed for is unchanged and still asserted: **the stale archive is not opened.**
 #[test]
-fn editing_source_is_refused_for_a_detached_kb_with_an_actionable_message() {
+fn editing_a_detached_kbs_node_opens_the_node_not_its_stale_archive() {
     let dir = TempDir::new().unwrap();
     let mut editor = Editor::new();
     let _tmp = with_test_dirs(&mut editor);
@@ -371,15 +377,19 @@ fn editing_source_is_refused_for_a_detached_kb_with_an_actionable_message() {
     editor.open_help_at("note-a");
     editor.help_edit_source();
 
-    assert!(
-        editor.status_msg.contains("detached"),
-        "must say WHY, not just refuse: {:?}",
+    let name = editor.buffers[editor.active_buffer_idx()].name.clone();
+    assert_eq!(
+        crate::editor::kb_ops::node_buffer::node_id_from_buffer_name(&name).as_deref(),
+        Some("note-a"),
+        "expected an editable node buffer, got {name:?} (status: {:?})",
         editor.status_msg
     );
     assert!(
-        editor.status_msg.contains("Edit the node here"),
-        "must say what to do INSTEAD -- a refusal with no alternative just moves \
-         the user's problem: {:?}",
-        editor.status_msg
+        !editor
+            .buffers
+            .iter()
+            .any(|b| b.file_path().is_some_and(|p| p.starts_with(dir.path()))),
+        "the stale .org archive must NOT be opened — that is the trap this test \
+         was filed for"
     );
 }
