@@ -49,13 +49,7 @@ impl Editor {
     /// no ingest will ever read is worse than not writing one, because it looks
     /// like it worked.
     pub(super) fn kb_daily_backing(&self) -> DailyBacking {
-        let store_is_truth = self
-            .kb
-            .registry
-            .instances
-            .iter()
-            .find(|i| i.primary)
-            .is_some_and(|i| !i.ingest_policy.allows_ingest());
+        let store_is_truth = self.kb.primary_store_is_truth();
         match self.kb_dailies_dir() {
             Some(dir) if !store_is_truth => DailyBacking::Files(dir),
             _ => DailyBacking::Store,

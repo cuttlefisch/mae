@@ -737,7 +737,7 @@ Source: `shared/sync/src/lib.rs`
 | `which-key-open?` | `scheme/src/runtime/test_primitives.rs` |
 | `write-file` | `scheme/src/runtime/test_primitives.rs` |
 
-## Commands (562 built-in)
+## Commands (564 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -1294,6 +1294,8 @@ Source: `shared/sync/src/lib.rs`
 | `kb-reimport` | Re-import KB instance from org files |
 | `kb-import-plan` | Assess an org directory before importing it (pre-flight, reads only) |
 | `kb-import-verify` | Reconcile a KB's org directory against what its store holds (reads only) |
+| `kb-detach` | Make a KB's store the source of truth; its .org dir becomes a stale archive (KB cutover) |
+| `kb-attach` | Resume ingesting a KB from its .org directory (undoes :kb-detach) |
 | `kb-instances` | List all registered KB instances |
 | `kb-init-project` | Register a Project-kind KB instance for the current project (ADR-058) |
 | `kb-relink` | Re-mint this project's KB identity after a move or a clone (ADR-058, repair verb) |

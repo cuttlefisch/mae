@@ -1962,9 +1962,9 @@
     },
     {
       "path": "crates/core/src/commands.rs",
-      "lines": 2012,
+      "lines": 2020,
       "test_lines": 460,
-      "code_lines": 1552,
+      "code_lines": 1560,
       "is_test_file": false,
       "max_fn_lines": 1333,
       "max_fn_name": "with_builtins",
@@ -2218,11 +2218,11 @@
     },
     {
       "path": "crates/core/src/editor/command.rs",
-      "lines": 1587,
+      "lines": 1565,
       "test_lines": 212,
-      "code_lines": 1375,
+      "code_lines": 1353,
       "is_test_file": false,
-      "max_fn_lines": 1268,
+      "max_fn_lines": 1246,
       "max_fn_name": "execute_command",
       "max_match_arms": 80,
       "max_struct_fields": 0,
@@ -2474,13 +2474,13 @@
     },
     {
       "path": "crates/core/src/editor/dispatch/kb.rs",
-      "lines": 384,
+      "lines": 391,
       "test_lines": 0,
-      "code_lines": 384,
+      "code_lines": 391,
       "is_test_file": false,
-      "max_fn_lines": 277,
+      "max_fn_lines": 284,
       "max_fn_name": "dispatch_kb",
-      "max_match_arms": 51,
+      "max_match_arms": 52,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 4,
@@ -2842,9 +2842,9 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/daily.rs",
-      "lines": 414,
+      "lines": 408,
       "test_lines": 0,
-      "code_lines": 414,
+      "code_lines": 408,
       "is_test_file": false,
       "max_fn_lines": 54,
       "max_fn_name": "kb_daily_chain_fill",
@@ -2874,9 +2874,9 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/import_audit.rs",
-      "lines": 374,
+      "lines": 416,
       "test_lines": 0,
-      "code_lines": 374,
+      "code_lines": 416,
       "is_test_file": false,
       "max_fn_lines": 45,
       "max_fn_name": "kb_relink_project",
@@ -2938,9 +2938,9 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/registry.rs",
-      "lines": 1557,
+      "lines": 1636,
       "test_lines": 354,
-      "code_lines": 1203,
+      "code_lines": 1282,
       "is_test_file": false,
       "max_fn_lines": 133,
       "max_fn_name": "kb_reimport",
@@ -2954,9 +2954,9 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/search.rs",
-      "lines": 701,
+      "lines": 708,
       "test_lines": 0,
-      "code_lines": 701,
+      "code_lines": 708,
       "is_test_file": false,
       "max_fn_lines": 189,
       "max_fn_name": "kb_federated_search_scoped_impl",
@@ -3114,8 +3114,8 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_ingest_policy_tests.rs",
-      "lines": 395,
-      "test_lines": 395,
+      "lines": 693,
+      "test_lines": 693,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 62,
@@ -3123,10 +3123,10 @@
       "max_match_arms": 0,
       "max_struct_fields": 0,
       "max_struct_name": "",
-      "max_nesting": 1,
-      "use_count": 2,
+      "max_nesting": 2,
+      "use_count": 3,
       "pub_items": 0,
-      "test_count": 10
+      "test_count": 16
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_instance_matching_tests.rs",
@@ -3354,9 +3354,9 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/watchers.rs",
-      "lines": 508,
+      "lines": 553,
       "test_lines": 0,
-      "code_lines": 508,
+      "code_lines": 553,
       "is_test_file": false,
       "max_fn_lines": 133,
       "max_fn_name": "drain_kb_watchers",
@@ -3402,9 +3402,9 @@
     },
     {
       "path": "crates/core/src/editor/kb_state.rs",
-      "lines": 794,
+      "lines": 812,
       "test_lines": 77,
-      "code_lines": 717,
+      "code_lines": 735,
       "is_test_file": false,
       "max_fn_lines": 69,
       "max_fn_name": "rebuild_query_layer",
@@ -3413,7 +3413,7 @@
       "max_struct_name": "KbContext",
       "max_nesting": 3,
       "use_count": 8,
-      "pub_items": 27,
+      "pub_items": 28,
       "test_count": 4
     },
     {
@@ -10730,14 +10730,14 @@
     },
     {
       "path": "daemon/src/scheduler.rs",
-      "lines": 762,
+      "lines": 803,
       "test_lines": 315,
-      "code_lines": 447,
+      "code_lines": 488,
       "is_test_file": false,
       "max_fn_lines": 189,
       "max_fn_name": "run_maintenance_tick",
       "max_match_arms": 3,
-      "max_struct_fields": 4,
+      "max_struct_fields": 5,
       "max_struct_name": "DaemonScheduler",
       "max_nesting": 4,
       "use_count": 16,
@@ -13668,13 +13668,23 @@
       },
       {
         "path": "crates/core/src/editor/kb_ops/registry.rs",
-        "line": 848,
+        "line": 160,
+        "category": "kb-truth"
+      },
+      {
+        "path": "crates/core/src/editor/kb_ops/registry.rs",
+        "line": 907,
         "category": "kb-provenance"
       },
       {
         "path": "crates/core/src/editor/kb_ops/registry.rs",
-        "line": 1031,
+        "line": 1094,
         "category": "correctness"
+      },
+      {
+        "path": "crates/core/src/editor/kb_ops/search.rs",
+        "line": 306,
+        "category": "kb-truth"
       },
       {
         "path": "crates/core/src/editor/kb_ops/tests/kb_ops_registry_tests.rs",
@@ -13682,8 +13692,18 @@
         "category": "test-safety"
       },
       {
+        "path": "crates/core/src/editor/kb_ops/watchers.rs",
+        "line": 251,
+        "category": "kb-truth"
+      },
+      {
         "path": "crates/core/src/editor/kb_state.rs",
         "line": 118,
+        "category": "kb-truth"
+      },
+      {
+        "path": "crates/core/src/editor/kb_state.rs",
+        "line": 373,
         "category": "kb-truth"
       },
       {
@@ -14333,7 +14353,12 @@
       },
       {
         "path": "daemon/src/scheduler.rs",
-        "line": 431,
+        "line": 175,
+        "category": "kb-truth"
+      },
+      {
+        "path": "daemon/src/scheduler.rs",
+        "line": 472,
         "category": "kb-truth"
       },
       {

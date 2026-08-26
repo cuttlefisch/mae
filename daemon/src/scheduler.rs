@@ -21,6 +21,9 @@ pub struct DaemonScheduler {
     /// registered and torn down when they're unregistered — `run()` only
     /// borrows `&self`, hence the `Mutex` for interior mutability.
     watchers: Arc<Mutex<HashMap<String, mae_kb::watch::OrgDirWatcher>>>,
+    /// Last-seen mtime of `kb-registry.toml`, so the reload is one `stat` in
+    /// the common case rather than a TOML parse every tick.
+    registry_mtime: Arc<Mutex<Option<std::time::SystemTime>>>,
 }
 
 /// Mutable state accessed by scheduler tasks.
@@ -37,12 +40,40 @@ pub struct SchedulerState {
 }
 
 impl DaemonScheduler {
+    /// Reload `kb-registry.toml` into `DaemonState` when its mtime has moved.
+    ///
+    /// The editor and the daemon are separate processes sharing one registry
+    /// file; the editor is the only writer for ingest policy. Without this the
+    /// daemon's view is frozen at startup — see the `@ai-caution` at the call
+    /// site.
+    async fn reload_registry_if_changed(&self) {
+        let data_dir = self.config.effective_data_dir();
+        let path = data_dir.join("kb-registry.toml");
+        let Ok(mtime) = std::fs::metadata(&path).and_then(|m| m.modified()) else {
+            return;
+        };
+        {
+            let last = self.registry_mtime.lock().await;
+            if *last == Some(mtime) {
+                return;
+            }
+        }
+        let registry = mae_kb::federation::KbRegistry::load(&data_dir);
+        {
+            let mut ds = self.daemon_state.lock().await;
+            ds.registry = registry;
+        }
+        *self.registry_mtime.lock().await = Some(mtime);
+        tracing::info!("kb-registry.toml changed on disk — daemon view reloaded");
+    }
+
     pub fn new(config: DaemonConfig, daemon_state: Arc<Mutex<DaemonState>>) -> Self {
         Self {
             config,
             state: Arc::new(Mutex::new(SchedulerState::default())),
             daemon_state,
             watchers: Arc::new(Mutex::new(HashMap::new())),
+            registry_mtime: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -138,6 +169,16 @@ impl DaemonScheduler {
             let mut s = state.lock().await;
             s.drain_cycles += 1;
         }
+
+        // Re-read `kb-registry.toml` when it has changed on disk.
+        //
+        // @ai-caution: [kb-truth] The daemon used to load the registry exactly
+        // once, at startup. An editor-side `:kb-detach` writes the FILE, so a
+        // running daemon never saw it and kept reimporting with the pre-detach
+        // policy — `IngestMode::Full`, which deletes nodes whose source file is
+        // gone. The detach was cosmetic for the life of the daemon process.
+        // mtime-guarded so the common case is one `stat`, not a TOML parse.
+        self.reload_registry_if_changed().await;
 
         // Snapshot (uuid, org_dir, store) triples without holding the
         // daemon_state lock across the blocking reimport below.
