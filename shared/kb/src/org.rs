@@ -142,19 +142,41 @@ pub(crate) fn body_after_header(content: &str) -> String {
     out
 }
 
+/// Build the file-level node from a parsed header (ADR-092 D3, principle #8).
+///
+/// **There were three copies of this and they had drifted.**
+/// `parse_org_multi_with_types` applied `:KIND:` and `:ALIASES:`;
+/// `parse_org`/`parse_org_multi` — the pair the *ingest* path actually uses —
+/// silently dropped both, and none of the three applied `#+TODO_STATE:` or
+/// `#+PRIORITY:`, which `node_to_org` has always emitted. So a node could lose
+/// its kind, aliases, todo state and priority by being exported and re-imported,
+/// or simply by being ingested at all.
+///
+/// One construction now, so the next field added to `FileHeader` cannot reach
+/// two of three call sites.
+fn file_level_node(header: &FileHeader, id: String, body: String) -> Node {
+    let title = header.file_title.clone().unwrap_or_else(|| id.clone());
+    let kind = header.kind.unwrap_or(NodeKind::Note);
+    let mut node = Node::new(id, title, kind, body).with_tags(header.file_tags.clone());
+    if !header.aliases.is_empty() {
+        node = node.with_aliases(header.aliases.iter().map(|s| s.as_str()));
+    }
+    if !header.file_properties.is_empty() {
+        node = node.with_properties(header.file_properties.clone());
+    }
+    node.todo_state = header.todo_state.clone();
+    node.priority = header.priority;
+    node
+}
+
 /// Parse a single org file's text into a `Node` from the *file-level*
 /// `:ID:` drawer. Returns `None` if the file has no file-level id.
 /// Heading-level ids are parsed by `parse_org_multi`.
 pub fn parse_org(content: &str) -> Option<Node> {
     let header = parse_file_header(content);
-    let id = header.file_id?;
-    let title = header.file_title.unwrap_or_else(|| id.clone());
+    let id = header.file_id.clone()?;
     let body = rewrite_links(&body_after_header(content));
-    let mut node = Node::new(id, title, NodeKind::Note, body).with_tags(header.file_tags);
-    if !header.file_properties.is_empty() {
-        node = node.with_properties(header.file_properties);
-    }
-    Some(node)
+    Some(file_level_node(&header, id, body))
 }
 
 /// Parse an org file into zero or more nodes: the file itself (if it
@@ -175,14 +197,8 @@ pub fn parse_org_multi(content: &str) -> Vec<Node> {
     let mut out: Vec<Node> = Vec::new();
 
     if let Some(id) = header.file_id.clone() {
-        let title = header.file_title.clone().unwrap_or_else(|| id.clone());
         let body = rewrite_links(&body_after_header(content));
-        let mut node =
-            Node::new(id, title, NodeKind::Note, body).with_tags(header.file_tags.clone());
-        if !header.file_properties.is_empty() {
-            node = node.with_properties(header.file_properties.clone());
-        }
-        out.push(node);
+        out.push(file_level_node(&header, id, body));
     }
 
     // Heading nodes. Find heading boundaries; for each heading with an
@@ -264,6 +280,67 @@ struct FileHeader {
     kind: Option<NodeKind>,
     /// Aliases from `:ALIASES:` or `#+ALIASES:` property.
     aliases: Vec<String>,
+    /// TODO state from `#+TODO_STATE:` (ADR-092 D3).
+    ///
+    /// A file-level node has no heading to carry org's own `* TODO` syntax, so
+    /// the keyword is where it lives. `node_to_org` has always *emitted* this
+    /// line; nothing read it back, so opening a node and saving it unchanged
+    /// silently cleared its todo state — the worst failure available, because it
+    /// looks like nothing happened.
+    todo_state: Option<String>,
+    /// Priority from `#+PRIORITY:` (ADR-092 D3). Same story as `todo_state`.
+    priority: Option<char>,
+}
+
+/// The header fields a `#+keyword:` line can set.
+///
+/// A struct rather than six `&mut` arguments so adding a keyword does not grow
+/// the parameter list — and so `parse_file_header` stays off the structural
+/// gate's per-function ceiling, which is per-item precisely so the remedy is
+/// local (CLAUDE.md, 2026-08-25 amendment).
+struct KeywordSink<'a> {
+    file_title: &'a mut Option<String>,
+    file_tags: &'a mut Vec<String>,
+    kind: &'a mut Option<NodeKind>,
+    aliases: &'a mut Vec<String>,
+    todo_state: &'a mut Option<String>,
+    priority: &'a mut Option<char>,
+}
+
+fn apply_keyword(key: &str, value: &str, sink: KeywordSink<'_>) {
+    match key.to_ascii_lowercase().as_str() {
+        "title" => *sink.file_title = Some(value.trim().to_string()),
+        "filetags" | "tags" => {
+            for t in value.split(':') {
+                let t = t.trim();
+                if !t.is_empty() {
+                    sink.file_tags.push(t.to_string());
+                }
+            }
+        }
+        "kind" => *sink.kind = Some(NodeKind::from_str_lossy(value.trim())),
+        "aliases" => *sink.aliases = split_commas(value),
+        // ADR-092 D3: `node_to_org` emits both of these, and until now nothing
+        // read either back — so a node lost its todo state and priority simply
+        // by being exported and re-imported.
+        "todo_state" => {
+            let v = value.trim();
+            if !v.is_empty() {
+                *sink.todo_state = Some(v.to_string());
+            }
+        }
+        "priority" => *sink.priority = value.trim().chars().next(),
+        _ => {}
+    }
+}
+
+fn split_commas(value: &str) -> Vec<String> {
+    value
+        .trim()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn parse_file_header(content: &str) -> FileHeader {
@@ -276,6 +353,8 @@ fn parse_file_header(content: &str) -> FileHeader {
     let mut file_header_end = 0;
     let mut kind = None;
     let mut aliases = Vec::new();
+    let mut todo_state = None;
+    let mut priority = None;
 
     for (i, line) in lines.iter().enumerate() {
         if heading_level(line).is_some() {
@@ -288,6 +367,8 @@ fn parse_file_header(content: &str) -> FileHeader {
                 file_properties,
                 kind,
                 aliases,
+                todo_state,
+                priority,
             };
         }
         file_header_end = i + 1;
@@ -326,29 +407,18 @@ fn parse_file_header(content: &str) -> FileHeader {
         }
         if let Some(rest) = trimmed.strip_prefix("#+") {
             if let Some((key, value)) = rest.split_once(':') {
-                match key.to_ascii_lowercase().as_str() {
-                    "title" => file_title = Some(value.trim().to_string()),
-                    "filetags" | "tags" => {
-                        for t in value.split(':') {
-                            let t = t.trim();
-                            if !t.is_empty() {
-                                file_tags.push(t.to_string());
-                            }
-                        }
-                    }
-                    "kind" => {
-                        kind = Some(NodeKind::from_str_lossy(value.trim()));
-                    }
-                    "aliases" => {
-                        aliases = value
-                            .trim()
-                            .split(',')
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty())
-                            .collect();
-                    }
-                    _ => {}
-                }
+                apply_keyword(
+                    key,
+                    value,
+                    KeywordSink {
+                        file_title: &mut file_title,
+                        file_tags: &mut file_tags,
+                        kind: &mut kind,
+                        aliases: &mut aliases,
+                        todo_state: &mut todo_state,
+                        priority: &mut priority,
+                    },
+                );
             }
         }
     }
@@ -361,6 +431,8 @@ fn parse_file_header(content: &str) -> FileHeader {
         file_properties,
         kind,
         aliases,
+        todo_state,
+        priority,
     }
 }
 
@@ -1227,17 +1299,8 @@ fn parse_org_multi_with_types(content: &str) -> Vec<Node> {
     let mut out: Vec<Node> = Vec::new();
 
     if let Some(id) = header.file_id.clone() {
-        let title = header.file_title.clone().unwrap_or_else(|| id.clone());
         let body = rewrite_links_with_types(content);
-        let kind = header.kind.unwrap_or(NodeKind::Note);
-        let mut node = Node::new(id, title, kind, body).with_tags(header.file_tags.clone());
-        if !header.aliases.is_empty() {
-            node = node.with_aliases(header.aliases.iter().map(|s| s.as_str()));
-        }
-        if !header.file_properties.is_empty() {
-            node = node.with_properties(header.file_properties.clone());
-        }
-        out.push(node);
+        out.push(file_level_node(&header, id, body));
     }
 
     // Heading nodes (same logic as parse_org_multi)

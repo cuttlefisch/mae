@@ -11930,19 +11930,19 @@
     },
     {
       "path": "shared/kb/src/export.rs",
-      "lines": 577,
-      "test_lines": 278,
-      "code_lines": 299,
+      "lines": 739,
+      "test_lines": 416,
+      "code_lines": 323,
       "is_test_file": false,
-      "max_fn_lines": 51,
-      "max_fn_name": "convert_links_to_org",
+      "max_fn_lines": 61,
+      "max_fn_name": "node_to_org",
       "max_match_arms": 3,
       "max_struct_fields": 3,
       "max_struct_name": "ExportReport",
       "max_nesting": 5,
-      "use_count": 7,
+      "use_count": 9,
       "pub_items": 6,
-      "test_count": 15
+      "test_count": 21
     },
     {
       "path": "shared/kb/src/federation.rs",
@@ -12170,15 +12170,15 @@
     },
     {
       "path": "shared/kb/src/org.rs",
-      "lines": 2644,
+      "lines": 2707,
       "test_lines": 1164,
-      "code_lines": 1480,
+      "code_lines": 1543,
       "is_test_file": false,
       "max_fn_lines": 107,
       "max_fn_name": "parse_org_multi_result",
-      "max_match_arms": 5,
-      "max_struct_fields": 7,
-      "max_struct_name": "ParsedLink",
+      "max_match_arms": 7,
+      "max_struct_fields": 9,
+      "max_struct_name": "FileHeader",
       "max_nesting": 6,
       "use_count": 6,
       "pub_items": 17,
@@ -14466,12 +14466,12 @@
       },
       {
         "path": "shared/kb/src/org.rs",
-        "line": 993,
+        "line": 1065,
         "category": "kb-links"
       },
       {
         "path": "shared/kb/src/org.rs",
-        "line": 1035,
+        "line": 1107,
         "category": "kb-links"
       },
       {

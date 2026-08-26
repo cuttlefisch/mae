@@ -86,7 +86,18 @@ pub fn node_to_org(node: &Node) -> String {
     // Properties drawer
     out.push_str(":PROPERTIES:\n");
     out.push_str(&format!(":ID: {}\n", node.id));
-    for (k, v) in &node.properties {
+    // `:KIND:` is what `parse_file_header` reads back. Without it, exporting a
+    // `concept:` node and re-importing it made it a `Note` — the kind was parsed
+    // IN and never written OUT.
+    out.push_str(&format!(":KIND: {}\n", node.kind.as_str()));
+    // **Sorted, because `properties` is a `HashMap`.** Unordered iteration made
+    // the serialized form nondeterministic: two saves of an unmodified node
+    // produced different text, which for the ADR-092 D3 edit surface means a
+    // spurious diff and — since that text drives a character-level CRDT diff —
+    // a spurious edit broadcast to every peer.
+    let mut props: Vec<(&String, &String)> = node.properties.iter().collect();
+    props.sort_by(|a, b| a.0.cmp(b.0));
+    for (k, v) in props {
         out.push_str(&format!(":{}: {}\n", k.to_uppercase(), v));
     }
     out.push_str(":END:\n");
@@ -97,6 +108,13 @@ pub fn node_to_org(node: &Node) -> String {
     // Tags as filetags
     if !node.tags.is_empty() {
         out.push_str(&format!("#+filetags: :{}: \n", node.tags.join(":")));
+    }
+
+    // Aliases. Emitted as `#+aliases:` because that is the form the parser
+    // reads back (`parse_file_header`); until ADR-092 D3's round trip was
+    // measured, they were emitted NOWHERE and simply vanished on export.
+    if !node.aliases.is_empty() {
+        out.push_str(&format!("#+aliases: {}\n", node.aliases.join(", ")));
     }
 
     // TODO state + priority would go on heading lines, but these are file-level nodes
@@ -160,54 +178,46 @@ pub fn node_to_markdown(node: &Node) -> String {
 /// Convert `[[id|display]]` and `[[id]]` to org-mode `[[id][display]]`.
 fn convert_links_to_org(body: &str) -> String {
     let mut result = String::with_capacity(body.len());
-    let mut chars = body.chars().peekable();
+    let mut rest = body;
 
-    while let Some(ch) = chars.next() {
-        if ch == '[' && chars.peek() == Some(&'[') {
-            chars.next(); // consume second '['
-            let mut link_content = String::new();
-            let mut depth = 0;
-            for ch in chars.by_ref() {
-                if ch == ']' {
-                    if depth > 0 {
-                        depth -= 1;
-                        link_content.push(ch);
-                    } else {
-                        // Consume trailing ']'
-                        let _ = chars.next();
-                        break;
-                    }
-                } else if ch == '[' {
-                    depth += 1;
-                    link_content.push(ch);
-                } else {
-                    link_content.push(ch);
-                }
-            }
-            // Parse id|display or just id, and emit org's `id:` link scheme.
-            //
-            // **The `id:` prefix is load-bearing, not decoration.** Without it the
-            // export round trip DESTROYS every internal link: `parse_org` treats a
-            // prefix-less `[[n:1][one]]` as an EXTERNAL link and flattens it to
-            // plain text (`one (n:1)`), so re-importing an export left a corpus
-            // with no graph at all.
-            //
-            // Measured, not theorised — `round_trip_identity_tests` fails on the
-            // prior behaviour with exactly that transformation. It is also the
-            // concrete answer to whether the org export can serve as a RECOVERY
-            // path (ADR-092 D3 / R1): it could not, and this is why.
-            if let Some(pipe) = link_content.find('|') {
-                let id = &link_content[..pipe];
-                let display = &link_content[pipe + 1..];
-                result.push_str(&format!("[[id:{id}][{display}]]"));
-            } else {
-                result.push_str(&format!("[[id:{link_content}]]"));
-            }
+    while let Some(open) = rest.find("[[") {
+        result.push_str(&rest[..open]);
+        let after = &rest[open + 2..];
+        let Some(close) = after.find("]]") else {
+            // An unterminated `[[` is ordinary text, not a link. Emit the
+            // remainder verbatim rather than swallowing it — the previous
+            // char-scanner consumed to EOF here and silently deleted it.
+            result.push_str(&rest[open..]);
+            return result;
+        };
+        let content = &after[..close];
+        rest = &after[close + 2..];
+
+        // **Idempotent.** A body is normally in MAE's internal
+        // `[[id|display]]` form, because ingest rewrites org links into it. But
+        // a node authored through `kb_create`/`kb_update` can carry a literal
+        // org link, and running the internal-form converter over
+        // `[[id:x][y]]` produced `[[id:id:x]]y]]` — silent corruption of the
+        // user's own text.
+        //
+        // **The `id:` prefix is load-bearing, not decoration.** Without it the
+        // export round trip DESTROYS every internal link: `parse_org` treats a
+        // prefix-less `[[n:1][one]]` as an EXTERNAL link and flattens it to
+        // plain text (`one (n:1)`), so re-importing an export left a corpus
+        // with no graph at all. Measured, not theorised.
+        if content.starts_with("id:") {
+            result.push_str("[[");
+            result.push_str(content);
+            result.push_str("]]");
+        } else if let Some(pipe) = content.find('|') {
+            let id = &content[..pipe];
+            let display = &content[pipe + 1..];
+            result.push_str(&format!("[[id:{id}][{display}]]"));
         } else {
-            result.push(ch);
+            result.push_str(&format!("[[id:{content}]]"));
         }
     }
-
+    result.push_str(rest);
     result
 }
 
@@ -573,5 +583,157 @@ mod round_trip_identity_tests {
             vec!["n:2".to_string()],
             "and resolve to the real id"
         );
+    }
+}
+
+/// ADR-092 D3 — the serialize/parse round trip the node edit surface rests on.
+///
+/// **The human edit surface for a KB node is its normalized org source text**,
+/// so `parse_org(node_to_org(n))` must return `n`. Anything it drops is a field
+/// a user loses by opening a node and saving it unchanged — the worst failure
+/// available, because it looks like nothing happened.
+///
+/// The round trip is stated as **`parse(serialize(parse(x))) == parse(x)`**,
+/// the standard formulation: a hand-built `Node` can hold shapes ingest never
+/// produces (uppercase property keys, org-form links in `body`), and asserting
+/// against those tests the fixture rather than the code. Anchoring on a *parsed*
+/// node fixes the canonical form as the one the corpus actually contains.
+#[cfg(test)]
+mod org_round_trip_tests {
+    use crate::org::{parse_org, parse_org_multi};
+    use crate::{Node, NodeKind};
+
+    /// A file whose header exercises every field the serializer emits.
+    fn source() -> String {
+        "\
+:PROPERTIES:
+:ID: note:round-trip
+:KIND: concept
+:ASSIGNEE: hayden
+:ROLE: reference
+:END:
+#+title: A title with: a colon
+#+filetags: :alpha:beta:
+#+aliases: nickname, other name
+#+todo_state: TODO
+#+priority: A
+
+Body line one.
+
+Body line two with a [[id:note:other][link]].
+"
+        .to_string()
+    }
+
+    fn assert_same(a: &Node, b: &Node, what: &str) {
+        assert_eq!(a.id, b.id, "{what}: id");
+        assert_eq!(a.title, b.title, "{what}: title");
+        assert_eq!(a.body.trim(), b.body.trim(), "{what}: body");
+        assert_eq!(a.tags, b.tags, "{what}: tags");
+        assert_eq!(a.kind, b.kind, "{what}: kind");
+        assert_eq!(a.todo_state, b.todo_state, "{what}: todo_state");
+        assert_eq!(a.priority, b.priority, "{what}: priority");
+        assert_eq!(a.aliases, b.aliases, "{what}: aliases");
+        assert_eq!(a.properties, b.properties, "{what}: properties");
+    }
+
+    /// **The property.** Serializing a parsed node and re-parsing returns it.
+    #[test]
+    fn serialize_then_parse_is_identity_on_a_parsed_node() {
+        let once = parse_org(&source()).expect("the fixture has a file-level :ID:");
+        let text = super::node_to_org(&once);
+        let twice = parse_org(&text).expect("serialized org must parse back");
+
+        assert_same(&once, &twice, "round trip");
+    }
+
+    /// And it is **stable**, not merely equal once — a converter that mangles on
+    /// each pass can still look right after one.
+    #[test]
+    fn a_second_round_trip_changes_nothing_further() {
+        let once = parse_org(&source()).unwrap();
+        let text_a = super::node_to_org(&once);
+        let text_b = super::node_to_org(&parse_org(&text_a).unwrap());
+
+        assert_eq!(
+            text_a, text_b,
+            "the serialized form must reach a fixed point on the first pass"
+        );
+    }
+
+    /// The fields the round trip used to lose, named individually so a
+    /// regression says *which* one went.
+    #[test]
+    fn the_previously_lost_fields_survive() {
+        let node = parse_org(&super::node_to_org(&parse_org(&source()).unwrap())).unwrap();
+
+        assert_eq!(node.todo_state.as_deref(), Some("TODO"), "todo_state");
+        assert_eq!(node.priority, Some('A'), "priority");
+        assert_eq!(node.aliases, vec!["nickname", "other name"], "aliases");
+        assert_eq!(node.kind, NodeKind::Concept, "kind");
+        assert_eq!(
+            node.properties.get("assignee").map(String::as_str),
+            Some("hayden"),
+            "drawer properties"
+        );
+    }
+
+    /// **The ingest path is the one that matters**, and it was the one dropping
+    /// `:KIND:` and `:ALIASES:` — three copies of the file-level construction had
+    /// drifted, and the two used by import were the poorer pair.
+    #[test]
+    fn the_ingest_parser_keeps_what_the_typed_parser_kept() {
+        let multi = parse_org_multi(&source());
+        let file_level = multi.first().expect("the file-level node");
+
+        assert_eq!(file_level.kind, NodeKind::Concept, "kind reached ingest");
+        assert_eq!(file_level.aliases, vec!["nickname", "other name"]);
+        assert_eq!(file_level.todo_state.as_deref(), Some("TODO"));
+        assert_eq!(file_level.priority, Some('A'));
+    }
+
+    /// **The link converter must be idempotent.** A node authored through
+    /// `kb_create`/`kb_update` can carry a literal org link, and running the
+    /// internal-form converter over it produced `[[id:id:x]]y]]` — silent
+    /// corruption of the user's own text.
+    #[test]
+    fn an_already_org_form_link_is_not_converted_twice() {
+        let mut node = Node::new(
+            "note:literal",
+            "Literal",
+            NodeKind::Note,
+            "See [[id:note:other][the other]] and [[id:note:bare]].\n",
+        );
+        node.tags = vec![];
+
+        let once = super::node_to_org(&node);
+        assert!(
+            once.contains("[[id:note:other][the other]]"),
+            "an org-form link must survive verbatim: {once}"
+        );
+        assert!(
+            once.contains("[[id:note:bare]]"),
+            "including the display-less form: {once}"
+        );
+        assert!(
+            !once.contains("id:id:"),
+            "and must not be double-prefixed: {once}"
+        );
+    }
+
+    /// The internal form still converts — without this, the idempotence fix
+    /// could have been "convert nothing" and every test above would pass.
+    #[test]
+    fn the_internal_link_form_is_still_converted() {
+        let node = Node::new(
+            "note:internal",
+            "Internal",
+            NodeKind::Note,
+            "See [[note:other|the other]] and [[note:bare]].\n",
+        );
+
+        let out = super::node_to_org(&node);
+        assert!(out.contains("[[id:note:other][the other]]"), "{out}");
+        assert!(out.contains("[[id:note:bare]]"), "{out}");
     }
 }
