@@ -1430,10 +1430,17 @@ mod tests {
     #[test]
     fn tool_dispatch_cannot_reach_the_shell_escape() {
         let mut editor = Editor::new();
-        let marker = std::env::temp_dir().join("mae-shell-escape-must-not-run");
+        // Per-test filename: the suite runs in parallel and a shared path
+        // would make this test's oracle depend on another test's timing.
+        let marker = std::env::temp_dir().join(format!(
+            "mae-shell-escape-must-not-run-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&marker);
         let line = format!("!touch {}", marker.display());
 
+        // The guard itself holds on every platform: a `!` line is not a
+        // command name, so tool dispatch must not accept it at all.
         assert!(
             !editor.dispatch_ex_command(&line, None),
             "a `!` line is not a command name and must not dispatch"
@@ -1443,13 +1450,19 @@ mod tests {
             "the tool path SHELLED OUT -- this is the bypass, not a nicety"
         );
 
-        // The human path is what legitimately owns this form. If this half
-        // ever fails, the test above has stopped proving anything.
-        editor.execute_command(&line);
-        assert!(
-            marker.exists(),
-            "the typed `:!` line must still work; otherwise the guard above is vacuous"
-        );
+        // The falsification half is Unix-only: `:!` runs `sh -c`, and Windows
+        // has neither `sh` nor `touch`, so on Windows the marker cannot appear
+        // for either path and asserting it would fail for a reason that has
+        // nothing to do with the guard (principle #13 -- a check that can only
+        // pass on one developer's platform is not a check).
+        #[cfg(unix)]
+        {
+            editor.execute_command(&line);
+            assert!(
+                marker.exists(),
+                "the typed `:!` line must still work; otherwise the guard above is vacuous"
+            );
+        }
         let _ = std::fs::remove_file(&marker);
     }
 
