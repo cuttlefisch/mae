@@ -1530,6 +1530,14 @@ fn register_kb_federation_commands(reg: &mut CommandRegistry) {
         "kb-import-verify",
         "Reconcile a KB's org directory against what its store holds (reads only)",
     );
+    reg.register_builtin(
+        "kb-detach",
+        "Make a KB's store the source of truth; its .org dir becomes a stale archive (KB cutover)",
+    );
+    reg.register_builtin(
+        "kb-attach",
+        "Resume ingesting a KB from its .org directory (undoes :kb-detach)",
+    );
     reg.register_builtin("kb-instances", "List all registered KB instances");
     reg.register_builtin(
         "kb-init-project",

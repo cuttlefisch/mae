@@ -363,6 +363,24 @@ pub struct KbContext {
 }
 
 impl KbContext {
+    /// Is the **primary** KB's store the source of truth (KB cutover, Phase 1)?
+    ///
+    /// The primary's policy lives on the registry itself — `primary_ingest_policy`
+    /// — because the machine-global primary has **no `KbInstance` row**, and
+    /// `KbRegistry::set_ingest_policy` writes exactly that field when
+    /// `:kb-detach primary` runs.
+    ///
+    /// @ai-caution: [kb-truth] Do NOT reimplement this as
+    /// `instances.iter().find(|i| i.primary)`. That flag means "the first row
+    /// ever registered on this machine" — an artifact of registration order, as
+    /// `KbInstance`'s own doc says — so reading policy off it made
+    /// `:kb-detach primary` a no-op for dailies and the edit surface, while
+    /// detaching one unrelated user KB flipped both **for the primary**. Two
+    /// call sites had drifted this way; there is one answer and this is it.
+    pub fn primary_store_is_truth(&self) -> bool {
+        !self.registry.primary_ingest_policy.allows_ingest()
+    }
+
     /// Name of the currently active KB instance for collab operations.
     ///
     /// Returns the first registered instance name, or None (caller should

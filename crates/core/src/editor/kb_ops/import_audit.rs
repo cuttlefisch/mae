@@ -372,3 +372,45 @@ impl Editor {
         }
     }
 }
+
+impl Editor {
+    /// `:kb-ingest <dir>` — index an org directory into the primary KB.
+    ///
+    /// Extracted from the ex dispatcher, which is ~1,270 lines against an
+    /// 80-line ceiling.
+    pub(crate) fn dispatch_kb_ingest(&mut self, args: Option<&str>) {
+        let Some(dir) = args.map(str::trim).filter(|s| !s.is_empty()) else {
+            self.set_status("Usage: :kb-ingest <directory>");
+            return;
+        };
+        // KB cutover, Phase 1: the explicit-intent twin of `:kb-reimport`, which
+        // is already refused for a detached primary. Refusing here too keeps the
+        // two consistent — otherwise the safer-looking command is the one that
+        // overwrites the store.
+        if self.kb.primary_store_is_truth() {
+            self.set_status(
+                "the primary KB is detached — its store is the source of truth, so \
+                 ingesting an org directory over it would overwrite it (re-attach \
+                 with :kb-attach to allow ingest)",
+            );
+            return;
+        }
+        // Expand a leading `~` to $HOME — parity with `kb-register`/`kb-reimport`,
+        // which expand tilde before touching the filesystem. Without this,
+        // `:kb-ingest ~/Notes` reads a literal `~/Notes` (never exists) and
+        // silently indexes 0 files.
+        let dir = crate::file_picker::expand_tilde(dir);
+        let report = self.kb.primary.ingest_org_dir(&dir);
+        // `ingest_org_dir` only fills the in-memory mirror; write the nodes
+        // through to the durable store so the import survives a restart
+        // (daemon-less primary — nothing else snapshots it).
+        let persisted = self.kb_persist_ingested(&report.ingested_ids);
+        self.set_status(format!(
+            "kb: indexed {}, persisted {}, skipped {} (no :ID:), errors {}",
+            report.indexed,
+            persisted,
+            report.skipped_no_id,
+            report.read_errors.len()
+        ));
+    }
+}

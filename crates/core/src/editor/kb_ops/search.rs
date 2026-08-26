@@ -300,9 +300,16 @@ impl Editor {
             .filter(|i| !i.org_dir.as_os_str().is_empty())
             // Phase 1 (KB cutover): a detached instance's store is the truth, so
             // no `.org` file may write it. This is the chokepoint for every
-            // path-driven ingest — buffer save, the watcher drain, and anything
-            // else that reaches a file inside a KB directory — so a new caller
-            // gets the policy for free rather than having to remember it.
+            // ingest that routes through `kb_reimport_file` — buffer save and
+            // the daily reimport.
+            //
+            // @ai-caution: [kb-truth] It is NOT the chokepoint for every
+            // path-driven ingest, and this comment used to claim it was — naming
+            // "the watcher drain" specifically, which does not call this function
+            // at all. That false claim is why `drain_kb_watchers` went ungated
+            // long enough for deleting a detached KB's archive to delete its
+            // nodes. A new ingest path does NOT get the policy for free; it has
+            // its own gate, or it is a hole.
             .filter(|i| i.allows_ingest())
             .map(|i| (i.uuid.clone(), i.org_dir.clone()))
         {

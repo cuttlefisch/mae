@@ -4422,6 +4422,14 @@
       "doc": "Reconcile a KB's org directory against what its store holds (reads only)"
     },
     {
+      "name": "kb-detach",
+      "doc": "Make a KB's store the source of truth; its .org dir becomes a stale archive (KB cutover)"
+    },
+    {
+      "name": "kb-attach",
+      "doc": "Resume ingesting a KB from its .org directory (undoes :kb-detach)"
+    },
+    {
       "name": "kb-instances",
       "doc": "List all registered KB instances"
     },

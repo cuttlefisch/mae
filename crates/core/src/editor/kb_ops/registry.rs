@@ -98,6 +98,46 @@ impl Editor {
         open_instance_store_with_engine(path, &self.kb.storage_engine)
     }
 
+    /// Adopt a DETACHED instance: load its store, attach no org watcher.
+    ///
+    /// Returns empty reports — nothing was imported, which is the point. A
+    /// detached instance has no org ingest and therefore no import to report on.
+    fn kb_adopt_detached_instance(
+        &mut self,
+        uuid: &str,
+        db_path: Option<&Path>,
+    ) -> (ImportReport, ImportHealth) {
+        let mut kb = mae_kb::KnowledgeBase::new();
+        if let Some(db_path) = db_path {
+            match self.kb_open_instance_store(db_path) {
+                Ok(store) => {
+                    match store.load_all() {
+                        Ok(nodes) => {
+                            for node in nodes {
+                                kb.insert(node);
+                            }
+                        }
+                        Err(e) => tracing::warn!(
+                            uuid = %uuid, error = %e,
+                            "detached instance: could not load its store"
+                        ),
+                    }
+                    self.kb
+                        .instance_stores
+                        .insert(uuid.to_string(), std::sync::Arc::new(store));
+                }
+                Err(e) => tracing::warn!(
+                    uuid = %uuid, error = %e,
+                    "detached instance: could not open its store"
+                ),
+            }
+        }
+        let health = mae_kb::ImportHealth::from_kb(&kb);
+        self.kb.instances.insert(uuid.to_string(), kb);
+        self.kb.rebuild_query_layer();
+        (ImportReport::default(), health)
+    }
+
     /// Open the durable store for a registered org-dir KB instance, import
     /// its org files, insert it into `self.kb.instances`, and start a file
     /// watcher for live updates — the common "adopt this instance" tail
@@ -112,6 +152,25 @@ impl Editor {
         org_dir: &Path,
         db_path: Option<&Path>,
     ) -> (ImportReport, ImportHealth) {
+        // KB cutover, Phase 1: a detached instance's store is the truth. Adopt it
+        // by LOADING that store, never by importing its org dir — which
+        // `IngestMode::Full` would reset to the stale archive, deleting every
+        // store-only node.
+        //
+        // @ai-caution: [kb-truth] This is the path `:kb-register <name> <dir>` on
+        // an already-registered dir takes: `KbRegistry::register` returns the
+        // EXISTING uuid, so the policy survives while the content would not. It
+        // is also the path `drain_kb_registry_watch` takes when another mae
+        // process touches the registry.
+        if self
+            .kb
+            .registry
+            .find_by_uuid(uuid)
+            .is_some_and(|i| !i.allows_ingest())
+        {
+            return self.kb_adopt_detached_instance(uuid, db_path);
+        }
+
         let (kb, report, health) = if let Some(db_path) = db_path {
             match self.kb_open_instance_store(db_path) {
                 Ok(store) => {
@@ -892,12 +951,16 @@ impl Editor {
     /// `None` owner = the primary; an unregistered id defaults to `false`
     /// (today's behaviour), so this can only ever narrow.
     pub(crate) fn kb_store_is_truth_for(&self, id: &str) -> bool {
-        let owner = self.kb_owner_of(id).unwrap_or(None);
-        let inst = match &owner {
-            Some(uuid) => self.kb.registry.find_by_uuid(uuid),
-            None => self.kb.registry.instances.iter().find(|i| i.primary),
-        };
-        inst.is_some_and(|i| !i.ingest_policy.allows_ingest())
+        match self.kb_owner_of(id).unwrap_or(None) {
+            Some(uuid) => self
+                .kb
+                .registry
+                .find_by_uuid(&uuid)
+                .is_some_and(|i| !i.ingest_policy.allows_ingest()),
+            // The primary owns it — its policy lives on the registry, not on any
+            // row. See `KbContext::primary_store_is_truth`'s `@ai-caution`.
+            None => self.kb.primary_store_is_truth(),
+        }
     }
 
     /// If `path` lies inside a DETACHED instance's `.org` directory, the name of
@@ -1531,6 +1594,22 @@ impl Editor {
         name_or_uuid: &str,
         policy: mae_kb::federation::IngestPolicy,
     ) -> Result<String, String> {
+        // A system KB's truth is the binary, not an org dir — so "detached" is
+        // not a state it can be in. It has no `KbInstance` and therefore nowhere
+        // to record a policy, and the corpus is rebuilt from the embedded
+        // sources on the next version bump regardless.
+        //
+        // Refused by name rather than falling through to "No such KB", which is
+        // what it used to say — indistinguishable from a typo. `kb_is_system`'s
+        // own doc asks that every lifecycle operation route through it "so a
+        // fourth one cannot be added without the check"; this was that fourth
+        // one, added without it.
+        if let Some(name) = self.kb_is_system(name_or_uuid) {
+            return Err(format!(
+                "'{name}' is a MAE system KB — its content comes from the binary, \
+                 not from an org directory, so there is nothing to detach from"
+            ));
+        }
         let changed = if let Some(data_dir) = self.mae_data_dir() {
             let (registry, changed, saved) =
                 mae_kb::federation::KbRegistry::update(&data_dir, |reg| {

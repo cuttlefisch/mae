@@ -224,6 +224,51 @@ impl Editor {
     ///
     /// Hardened with: debounce (skip if too recent), drain cap (max N events),
     /// time-boxing (50ms deadline), error tracking, and enable/disable toggle.
+    /// Has this instance been drained too recently to drain again?
+    ///
+    /// Extracted alongside `kb_drop_detached_events` so the drain loop stays off
+    /// the structural gate's per-function ceiling — both are self-contained
+    /// skip-this-instance decisions.
+    fn kb_debounced(&mut self, uuid: &str, debounce: std::time::Duration) -> bool {
+        let too_recent = self
+            .kb
+            .last_drain
+            .get(uuid)
+            .is_some_and(|last| last.elapsed() < debounce);
+        if too_recent {
+            self.kb.watcher_stats.suppressed_debounce += 1;
+        }
+        too_recent
+    }
+
+    /// Drop a detached instance's watcher events instead of applying them.
+    ///
+    /// KB cutover, Phase 1: a detached instance's store IS the truth, so no
+    /// `.org` event may write it. The events are still drained by the caller —
+    /// dropping them here rather than skipping the instance keeps the watcher's
+    /// queue from growing without bound while it is detached.
+    ///
+    /// @ai-caution: [kb-truth] This gate is the reason deleting a detached KB's
+    /// stale archive is safe. Without it the drain's `Removed` arm reaches
+    /// `kb_persist_instance_delete`, so the obvious post-cutover cleanup — "the
+    /// archive is stale now, let me delete it" — silently destroyed the KB.
+    /// `kb_reimport_file`'s chokepoint does NOT cover this path; its comment
+    /// used to claim otherwise.
+    fn kb_drop_detached_events(&mut self, uuid: &str, count: usize) -> bool {
+        let detached = self
+            .kb
+            .registry
+            .find_by_uuid(uuid)
+            .is_some_and(|i| !i.allows_ingest());
+        if detached {
+            self.kb.watcher_stats.events_suppressed += count as u64;
+            self.kb
+                .last_drain
+                .insert(uuid.to_string(), std::time::Instant::now());
+        }
+        detached
+    }
+
     pub fn drain_kb_watchers(&mut self) {
         // Early return if watchers disabled
         if !self.kb.watcher_enabled {
@@ -240,12 +285,8 @@ impl Editor {
         let mut total_processed: usize = 0;
 
         for uuid in uuids {
-            // Debounce: skip if last drain was too recent
-            if let Some(last) = self.kb.last_drain.get(&uuid) {
-                if last.elapsed() < debounce_dur {
-                    self.kb.watcher_stats.suppressed_debounce += 1;
-                    continue;
-                }
+            if self.kb_debounced(&uuid, debounce_dur) {
+                continue;
             }
 
             let changes = match self.kb.watchers.get(&uuid) {
@@ -260,6 +301,10 @@ impl Editor {
                 None => continue,
             };
             if changes.is_empty() {
+                continue;
+            }
+
+            if self.kb_drop_detached_events(&uuid, changes.len()) {
                 continue;
             }
 

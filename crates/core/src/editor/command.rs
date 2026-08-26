@@ -181,29 +181,7 @@ impl Editor {
                 true
             }
             "kb-ingest" | "kb-ingest-dir" => {
-                match args.map(str::trim).filter(|s| !s.is_empty()) {
-                    None => self.set_status("Usage: :kb-ingest <directory>"),
-                    Some(dir) => {
-                        // Expand a leading `~` to $HOME — parity with `kb-register`
-                        // / `kb-reimport`, which expand tilde before touching the
-                        // filesystem. Without this, `:kb-ingest ~/Notes` reads a
-                        // literal `~/Notes` directory (never exists) and silently
-                        // indexes 0 files.
-                        let dir = crate::file_picker::expand_tilde(dir);
-                        let report = self.kb.primary.ingest_org_dir(&dir);
-                        // ingest_org_dir only fills the in-memory mirror; write the
-                        // nodes through to the durable store so the import survives a
-                        // restart (daemon-less primary — nothing else snapshots it).
-                        let persisted = self.kb_persist_ingested(&report.ingested_ids);
-                        self.set_status(format!(
-                            "kb: indexed {}, persisted {}, skipped {} (no :ID:), errors {}",
-                            report.indexed,
-                            persisted,
-                            report.skipped_no_id,
-                            report.read_errors.len()
-                        ));
-                    }
-                }
+                self.dispatch_kb_ingest(args);
                 true
             }
             "kb-create" => {
