@@ -331,6 +331,22 @@ const FAILURE_STATUS_PREFIXES: &[(&str, &str)] = &[
         "Usage:",
         "the command rejected its arguments and printed usage instead of running.",
     ),
+    (
+        "No dailies directory",
+        "the command needs a dailies directory and found none. On a store-backed \
+         KB this is a bug in the command, not in the fixture — every dailies \
+         operation is supposed to have a `DailyBacking::Store` path.",
+    ),
+    (
+        "No previous daily",
+        "there was no earlier daily to navigate to — the fixture did not create \
+         one, so the step asserted nothing.",
+    ),
+    (
+        "No next daily",
+        "there was no later daily to navigate to — the fixture did not create \
+         one, so the step asserted nothing.",
+    ),
 ];
 
 /// Does this status mean the step's command failed? Returns why, if so.

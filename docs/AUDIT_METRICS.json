@@ -7722,9 +7722,9 @@
     },
     {
       "path": "crates/mae/src/test_runner.rs",
-      "lines": 938,
+      "lines": 954,
       "test_lines": 17,
-      "code_lines": 921,
+      "code_lines": 937,
       "is_test_file": false,
       "max_fn_lines": 165,
       "max_fn_name": "run_tests_iteratively",
