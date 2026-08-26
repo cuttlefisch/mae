@@ -318,6 +318,14 @@ impl Editor {
             self.set_status(e);
             return;
         }
+        // ADR-092 D3: a `*kb-node:ID*` buffer has no file. Its content IS the
+        // node's org source text, and saving it routes through the sole node
+        // mutator rather than the filesystem. Checked after the config refusal
+        // above so a refused save still has no side effects, and before
+        // `before-save` fires for the same reason.
+        if self.kb_save_node_buffer(idx) {
+            return;
+        }
         self.fire_hook("before-save");
         match self.buffers[idx].save() {
             Ok(()) => {

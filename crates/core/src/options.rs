@@ -105,6 +105,27 @@ macro_rules! opt {
 }
 
 impl OptionRegistry {
+    /// KB maintenance options, held out of the (very large) option vector so it
+    /// does not grow further.
+    ///
+    /// `OptionRegistry::new` is ~1,130 lines against an 80-line ceiling. The
+    /// structural gate is per-function precisely so the remedy for touching it is
+    /// local — moving a group out — rather than architectural (CLAUDE.md,
+    /// 2026-08-25 amendment).
+    fn kb_maintenance_options() -> Vec<OptionDef> {
+        vec![
+            opt!("kb_daily_chain_gap_max", &["kb-daily-chain-gap-max"],
+                "Max days to walk backwards when chain-filling daily notes",
+                OptionKind::Int, "90", Some("kb.daily_chain_gap_max"), &[]),
+            opt!("kb_backup_interval", &["kb-backup-interval"],
+                "RESERVED (not yet wired — no automatic-backup task exists; see issue #263). Minutes between automatic KB backups (0 to disable)",
+                OptionKind::Int, "1440", Some("kb.backup_interval"), &[]),
+            opt!("kb_backup_retention", &["kb-backup-retention"],
+                "RESERVED (not yet wired — see issue #263). Number of KB backup snapshots to retain",
+                OptionKind::Int, "7", Some("kb.backup_retention"), &[]),
+        ]
+    }
+
     pub fn new() -> Self {
         OptionRegistry {
             options: vec![
@@ -499,15 +520,10 @@ impl OptionRegistry {
                     "Following a KB-graph link (gx/Enter) outside the *KB* view: kb-view opens the rendered, federation-aware *KB* view (default); source-file jumps straight to the node's raw .org source file instead (#293)",
                     OptionKind::String, "kb-view", Some("kb.link_follow_mode"),
                     &["kb-view", "source-file"]),
-                opt!("kb_daily_chain_gap_max", &["kb-daily-chain-gap-max"],
-                    "Max days to walk backwards when chain-filling daily notes",
-                    OptionKind::Int, "90", Some("kb.daily_chain_gap_max"), &[]),
-                opt!("kb_backup_interval", &["kb-backup-interval"],
-                    "RESERVED (not yet wired — no automatic-backup task exists; see issue #263). Minutes between automatic KB backups (0 to disable)",
-                    OptionKind::Int, "1440", Some("kb.backup_interval"), &[]),
-                opt!("kb_backup_retention", &["kb-backup-retention"],
-                    "RESERVED (not yet wired — see issue #263). Number of KB backup snapshots to retain",
-                    OptionKind::Int, "7", Some("kb.backup_retention"), &[]),
+                opt!("kb_edit_surface", &["kb-edit-surface"],
+                    "Which surface :kb-edit-source opens for a KB node (ADR-092 D5): auto reproduces today's behaviour exactly — the source file when the node has one and its KB still ingests from disk, the node's org source text in a *kb-node:ID* buffer otherwise; file always uses the source file (and refuses when there is none); node always uses the buffer, even for a file-backed node",
+                    OptionKind::String, "auto", Some("kb.edit_surface"),
+                    &["auto", "file", "node"]),
                 opt!("format_on_save", &["format-on-save"],
                     "Run formatter before saving buffers",
                     OptionKind::Bool, "false", Some("format.on_save"), &[]),
@@ -1230,7 +1246,10 @@ impl OptionRegistry {
                 opt!("daemon_default", &["daemon-default"],
                     "EXPERIMENTAL (Phase D, ADR-029): when a local daemon hosts the primary KB, host + thin-start it on the daemon (CRDT source of truth) instead of the editor's on-disk store. Default off. Known gaps until the thin-client ADR: agenda + ranked KB search are not yet daemon-routed and read empty under a thin mirror.",
                     OptionKind::Bool, "false", Some("daemon.host_primary"), &[]),
-            ],
+            ]
+            .into_iter()
+            .chain(Self::kb_maintenance_options())
+            .collect(),
             dynamic_values: std::collections::HashMap::new(),
         }
     }
