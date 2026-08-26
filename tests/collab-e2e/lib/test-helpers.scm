@@ -60,6 +60,19 @@
                 (else (loop (cdr lst))))))))
     timeout-ms))
 
+;; (wait-for-file PATH TIMEOUT-MS) — wait until PATH exists on disk.
+;;
+;; For handing control back to the driving SHELL SCRIPT. A scenario that ends
+;; with a fixed `(sleep-ms N)` is asserting that N ms is enough for whatever the
+;; script still needs the editor alive for — and once the editor exits, nothing
+;; the script waits for afterwards can still happen, so a longer wait on the
+;; script side cannot rescue it. Let the script signal instead, bounded so a
+;; signal that never comes fails rather than hangs.
+(define (wait-for-file path timeout-ms)
+  (wait-until
+    (lambda () (file-exists? path))
+    timeout-ms))
+
 ;; (wait-buffer-exists BUFFER-NAME TIMEOUT-MS) — wait until buffer exists.
 (define (wait-buffer-exists buffer-name timeout-ms)
   (wait-until
