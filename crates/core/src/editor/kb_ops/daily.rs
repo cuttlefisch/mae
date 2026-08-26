@@ -298,11 +298,7 @@ impl Editor {
         if !self.kb_daily_exists(py, pm, pd) {
             self.kb_daily_ensure(py, pm, pd)?;
         }
-        let path = self
-            .kb_daily_path(py, pm, pd)
-            .ok_or("No dailies directory")?;
-        self.open_file_at_path(&path);
-        Ok(())
+        self.kb_daily_open(py, pm, pd)
     }
 
     /// Navigate to previous daily from current buffer's date.
@@ -311,11 +307,7 @@ impl Editor {
         let (py, pm, pd) = self
             .kb_daily_find_nearest(y, m, d, -1)
             .ok_or("No previous daily found")?;
-        let path = self
-            .kb_daily_path(py, pm, pd)
-            .ok_or("No dailies directory")?;
-        self.open_file_at_path(&path);
-        Ok(())
+        self.kb_daily_open(py, pm, pd)
     }
 
     /// Navigate to next daily from current buffer's date.
@@ -324,11 +316,7 @@ impl Editor {
         let (ny, nm, nd) = self
             .kb_daily_find_nearest(y, m, d, 1)
             .ok_or("No next daily found")?;
-        let path = self
-            .kb_daily_path(ny, nm, nd)
-            .ok_or("No dailies directory")?;
-        self.open_file_at_path(&path);
-        Ok(())
+        self.kb_daily_open(ny, nm, nd)
     }
 
     /// Open a daily for a specific date string (YYYY-MM-DD).
@@ -336,14 +324,23 @@ impl Editor {
         let (y, m, d) = mae_kb::activity::parse_date(date_str)
             .ok_or_else(|| format!("Invalid date: '{}' (expected YYYY-MM-DD)", date_str))?;
         self.kb_daily_chain_fill(y, m, d)?;
-        let path = self.kb_daily_path(y, m, d).ok_or("No dailies directory")?;
-        self.open_file_at_path(&path);
-        Ok(())
+        self.kb_daily_open(y, m, d)
     }
 
     /// Extract a date from the current buffer's filename or title.
     pub(super) fn kb_daily_date_from_buffer(&self) -> Result<(i32, u32, u32), String> {
         let buf = &self.buffers[self.active_buffer_idx()];
+        // A store-backed daily is a `BufferKind::Kb` view with no file path, and
+        // the KB renderer strips `#+` lines — so neither probe below can see it.
+        // Its node id carries the date, which is the authoritative answer for
+        // that backing.
+        if let Some(date) = buf
+            .kb_view()
+            .and_then(|v| v.current.strip_prefix("daily:"))
+            .and_then(mae_kb::activity::parse_date)
+        {
+            return Ok(date);
+        }
         // Try filename: YYYY-MM-DD.org
         if let Some(fp) = buf.file_path() {
             if let Some(stem) = fp.file_stem().and_then(|s| s.to_str()) {

@@ -795,7 +795,21 @@ impl Editor {
         let timestamp = mae_kb::timestamp_id();
         let id = format!("user:{}-{}", timestamp, slug);
 
-        if let Some(dir) = self.kb.notes_dir.clone() {
+        // KB cutover, Phase 1: capture is the one backing seam dailies got and
+        // capture never did. A detached KB's `.org` dir is a stale archive no
+        // ingest reads, so writing a note into it — and opening a file buffer on
+        // it — hands the user a document that looks live and is not. The node
+        // itself still reaches the store below either way.
+        //
+        // Branching on `notes_dir` alone was the bug: every existing user who
+        // detaches still has one set.
+        let notes_dir = self
+            .kb
+            .notes_dir
+            .clone()
+            .filter(|_| !self.kb.primary_store_is_truth());
+
+        if let Some(dir) = notes_dir {
             // Ensure directory exists
             std::fs::create_dir_all(&dir)
                 .map_err(|e| format!("Cannot create kb-notes-dir: {}", e))?;

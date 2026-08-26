@@ -86,7 +86,13 @@ impl Editor {
             if let Some(ref path) = cap.file_path {
                 let _ = std::fs::remove_file(path);
             }
-            // Remove node from KB
+            // Remove node from the KB — including the DURABLE store.
+            //
+            // `kb_create_node` already persisted it, so removing only the
+            // in-memory mirrors left an aborted capture to reappear on the next
+            // restart. Invisible while capture was file-backed, because deleting
+            // the file was the whole story then.
+            let _ = self.kb_delete_node(&cap.node_id);
             self.kb.primary.remove(&cap.node_id);
             for kb in self.kb.instances.values_mut() {
                 kb.remove(&cap.node_id);
