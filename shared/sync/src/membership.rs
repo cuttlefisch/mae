@@ -1349,6 +1349,41 @@ pub fn had_full_replication_window_self_anchored(
     had_full_replication_window(ops, &anchor, principal)
 }
 
+/// A principal's **current** replication policy, from the op-log's own
+/// self-consistent genesis.
+///
+/// The introspection counterpart to [`had_full_replication_window_self_anchored`],
+/// and it exists because ADR-067's whole policy axis was **invisible** in the
+/// snapshot that `kb_sharing_status`, the Scheme primitive and the `*KB Sharing*`
+/// buffer all read. `residual_replica_risk` was the only trace of it, and it is a
+/// *risk* signal rather than a policy one: `Some(_)` does imply `QueryOnly`, but
+/// `None` is ambiguous — it means `Full` **or** a legacy KB with no op-log to
+/// derive from. Asking "is this member restricted?" of a field that cannot
+/// distinguish those is exactly the inference that goes wrong quietly.
+///
+/// Same scope caveat as its sibling, for the same reason: this self-anchors, so
+/// it is a soft, informational, owner-facing signal read from local trusted
+/// state — **never an access-control decision**. The daemon's gate threads a
+/// securely pre-established anchor from `kb_anchor` precisely to defend against a
+/// relay's forged second genesis.
+///
+/// `None` when the principal has no anchored history at all (never a member, or a
+/// legacy KB with no signed op-log) — deliberately distinct from
+/// `Some(ReplicationPolicy::Full)`, which is a policy the log actually states.
+pub fn current_replication_self_anchored(
+    ops: &[SignedMembershipOp],
+    principal: &str,
+) -> Option<ReplicationPolicy> {
+    let crypto = crypto_valid(ops);
+    let genesis = crypto.iter().find(|o| {
+        o.op.prev_hash.is_empty()
+            && o.op.action == MembershipAction::Admit
+            && o.op.subject == o.op.author
+    })?;
+    let anchor = genesis.author_pubkey;
+    replication_history(ops, &anchor, principal).last().copied()
+}
+
 /// Membership as of one op's causal position — the final member map over just the
 /// **valid ancestors** of that op (its causal past, a linear chain). Used to judge
 /// capability (b). Passes the full `anc` map through so removal-dominance and

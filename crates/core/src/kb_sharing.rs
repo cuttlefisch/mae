@@ -83,6 +83,21 @@ pub struct MemberView {
     /// no signed op-log to derive history from at all (a legacy/un-anchored KB —
     /// the same named scope boundary as Phase B's own `kb_access` gate).
     pub residual_replica_risk: Option<bool>,
+    /// ADR-067: this member's **current replication policy** — `"full"` or
+    /// `"query_only"` — derived from the signed op-log.
+    ///
+    /// The policy axis was previously invisible in this snapshot, which is the
+    /// one thing `kb_sharing_status` (MCP), `(kb-sharing-status)` (Scheme) and the
+    /// `*KB Sharing*` buffer all read. `residual_replica_risk` was its only trace,
+    /// and it is a *risk* signal rather than a policy one: `Some(_)` implies
+    /// `QueryOnly`, but `None` means `Full` **or** a legacy KB with no op-log —
+    /// so "is this member restricted?" could not be answered from the snapshot at
+    /// all without an inference that is wrong for legacy KBs.
+    ///
+    /// `None` here means the same thing it means there: no anchored history to
+    /// derive from. Deliberately distinct from `Some("full")`, which is a policy
+    /// the log actually states.
+    pub replication: Option<String>,
 }
 
 /// A pending join request (invite policy) awaiting owner approval.
@@ -258,6 +273,11 @@ pub fn build_snapshot(collab: &CollabState) -> KbSharingSnapshot {
                                 &oplog_ops,
                                 &m.fingerprint,
                             ),
+                        replication: mae_sync::membership::current_replication_self_anchored(
+                            &oplog_ops,
+                            &m.fingerprint,
+                        )
+                        .map(|r| r.as_str().to_string()),
                         fingerprint: m.fingerprint,
                         label: m.label,
                         role: m.role.as_str().to_string(),
@@ -481,6 +501,36 @@ impl KbSharingView {
 ///     Pending (1):
 ///       carol (SHA256:c1…f2)  — requested 2026-06-23
 /// ```
+/// One member's row in the `*KB Sharing*` buffer.
+///
+/// Extracted from `build_view` to keep it off the structural gate's per-function
+/// ceiling — the gate is per-item so the remedy is local.
+///
+/// **Both ADR-067 annotations are decided here, together, because they interact.**
+/// `residual_replica_risk` only ever adds text for the real-risk case, so a
+/// restricted-but-never-replicated member reads as no false alarm; and the plain
+/// `[query-only]` label is suppressed when that richer one already says it, so the
+/// two never stack into a redundant double label — which reads as a rendering bug
+/// and trains the owner to skim past exactly the row that matters most.
+fn member_row(m: &MemberView) -> String {
+    let you = if m.is_me { "  (you)" } else { "" };
+    let residual_risk = match m.residual_replica_risk {
+        Some(true) => "  [query-only; may hold a pre-restriction local copy]",
+        _ => "",
+    };
+    // A restriction the owner cannot SEE is a control they cannot audit. Shown
+    // only when it IS a restriction: `full` is the default and stays quiet, so
+    // the exception is what stands out.
+    let replication = match m.replication.as_deref() {
+        Some("query_only") if residual_risk.is_empty() => "  [query-only]",
+        _ => "",
+    };
+    format!(
+        "      {} — {}{you}{replication}{residual_risk}",
+        m.display, m.role
+    )
+}
+
 pub fn build_view(
     snapshot: &KbSharingSnapshot,
     collapsed: &HashMap<CollapseKey, bool>,
@@ -591,18 +641,10 @@ pub fn build_view(
         );
         if !members_collapsed {
             for m in &kb.members {
-                let you = if m.is_me { "  (you)" } else { "" };
-                // ADR-067 Phase E: only ever adds text for the real-risk case — a
-                // restricted-but-never-replicated member gets no extra annotation at
-                // all, so this never reads as a false alarm.
-                let residual_risk = match m.residual_replica_risk {
-                    Some(true) => "  [query-only; may hold a pre-restriction local copy]",
-                    _ => "",
-                };
                 push(
                     &mut view,
                     KbSharingLine {
-                        text: format!("      {} — {}{you}{residual_risk}", m.display, m.role),
+                        text: member_row(m),
                         kind: KbSharingLineKind::Member {
                             kb_id: kb.id.clone(),
                             fingerprint: m.fingerprint.clone(),

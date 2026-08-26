@@ -4666,11 +4666,11 @@
     },
     {
       "path": "crates/core/src/kb_sharing.rs",
-      "lines": 689,
+      "lines": 731,
       "test_lines": 0,
-      "code_lines": 689,
+      "code_lines": 731,
       "is_test_file": false,
-      "max_fn_lines": 198,
+      "max_fn_lines": 190,
       "max_fn_name": "build_view",
       "max_match_arms": 5,
       "max_struct_fields": 11,
@@ -4682,8 +4682,8 @@
     },
     {
       "path": "crates/core/src/kb_sharing_tests.rs",
-      "lines": 422,
-      "test_lines": 422,
+      "lines": 667,
+      "test_lines": 667,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 152,
@@ -4692,9 +4692,9 @@
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 1,
-      "use_count": 5,
+      "use_count": 7,
       "pub_items": 0,
-      "test_count": 12
+      "test_count": 15
     },
     {
       "path": "crates/core/src/kb_view.rs",
@@ -13082,9 +13082,9 @@
     },
     {
       "path": "shared/sync/src/membership.rs",
-      "lines": 4336,
+      "lines": 4371,
       "test_lines": 2782,
-      "code_lines": 1554,
+      "code_lines": 1589,
       "is_test_file": false,
       "max_fn_lines": 139,
       "max_fn_name": "derive_valid_members_governed",
@@ -13093,7 +13093,7 @@
       "max_struct_name": "MembershipOp",
       "max_nesting": 5,
       "use_count": 11,
-      "pub_items": 38,
+      "pub_items": 39,
       "test_count": 71
     },
     {
@@ -13763,7 +13763,7 @@
       },
       {
         "path": "crates/core/src/kb_sharing.rs",
-        "line": 123,
+        "line": 138,
         "category": "text-index"
       },
       {
