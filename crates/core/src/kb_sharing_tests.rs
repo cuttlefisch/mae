@@ -261,6 +261,39 @@ fn members_header_is_a_fold_key() {
     );
 }
 
+/// Sign and append one membership op — the four-line ceremony every signed-op
+/// fixture in this file repeats.
+///
+/// Extracted so the fixtures stay off the structural gate's per-function ceiling,
+/// and so a change to the op-building signature edits one place rather than a
+/// dozen (principle #8).
+#[allow(clippy::too_many_arguments)]
+fn append_op(
+    coll: &mut KbCollectionDoc,
+    kb_id: &str,
+    action: mae_sync::membership::MembershipAction,
+    subject: &str,
+    role: Option<Role>,
+    is_self: bool,
+    owner_fp: &str,
+    owner_secret: &[u8; 32],
+    owner_pubkey: &[u8; 32],
+    ts: u64,
+    replication: Option<mae_sync::membership::ReplicationPolicy>,
+    genesis: bool,
+) {
+    let mut op =
+        coll.build_membership_op(kb_id, action, subject, role, is_self, owner_fp, ts, None, 0);
+    if genesis {
+        op.prev_hash = String::new();
+    }
+    if let Some(r) = replication {
+        op.replication = r;
+    }
+    let sig = op.sign(owner_secret);
+    coll.append_signed_op(&op, &sig, owner_pubkey);
+}
+
 /// ADR-067 Phase E: a real signed-op-log timeline distinguishing "joined then
 /// later restricted" (residual replica risk) from "restricted before ever
 /// joining" (no residual risk) — the exact fixture the ADR's own Verification
@@ -418,5 +451,217 @@ fn owner_sees_residual_replica_risk_only_for_a_member_who_had_a_prior_full_windo
     assert!(
         !carol_line.contains("may hold a pre-restriction local copy"),
         "carol's row must NOT carry the annotation -- not applicable to a Full member: {carol_line}"
+    );
+}
+
+/// The three-member signed op-log both replication tests read.
+///
+/// Bob is restricted from his first Admit; Carol is plain Full; **Alice was
+/// admitted Full and later restricted**, which is the only member for whom
+/// "current" differs from "first" — without her, `.last()` and `.first()` are
+/// indistinguishable and the currency assertion is vacuous.
+fn replication_fixture() -> (String, KbCollectionDoc) {
+    use mae_mcp::identity::Identity;
+    use mae_sync::membership::{MembershipAction, ReplicationPolicy};
+
+    let owner = Identity::generate("owner");
+    let owner_fp = owner.fingerprint();
+    let owner_secret = owner.secret_bytes();
+    let owner_pubkey = owner.public().to_bytes();
+
+    let mut coll = KbCollectionDoc::new_owned("Team Notes", &owner_fp, "owner");
+    let mut op = |action, subject: &str, role, is_self, ts, repl, genesis| {
+        append_op(
+            &mut coll,
+            "team",
+            action,
+            subject,
+            role,
+            is_self,
+            &owner_fp,
+            &owner_secret,
+            &owner_pubkey,
+            ts,
+            repl,
+            genesis,
+        )
+    };
+    op(
+        MembershipAction::Admit,
+        &owner_fp,
+        Some(Role::Owner),
+        true,
+        1000,
+        None,
+        true,
+    );
+    // Bob: restricted from his first Admit — the case `residual_replica_risk`
+    // reports as `Some(false)`, i.e. "no risk", which reads nothing like
+    // "restricted".
+    let bob_fp = "SHA256:bob";
+    op(
+        MembershipAction::Admit,
+        bob_fp,
+        Some(Role::Viewer),
+        false,
+        1001,
+        Some(ReplicationPolicy::QueryOnly),
+        false,
+    );
+    // Carol: a plain Full editor, never restricted.
+    op(
+        MembershipAction::Admit,
+        "carolfp",
+        Some(Role::Editor),
+        false,
+        1002,
+        None,
+        false,
+    );
+    // Alice: admitted **Full**, later restricted. Without a member whose policy
+    // CHANGED, "current" is untestable — first and last coincide for everyone
+    // else, and falsifying `.last()` to `.first()` passed on the first attempt
+    // precisely because of that.
+    let alice_fp = "SHA256:alice";
+    op(
+        MembershipAction::Admit,
+        alice_fp,
+        Some(Role::Viewer),
+        false,
+        1003,
+        None,
+        false,
+    );
+    op(
+        MembershipAction::SetRole,
+        alice_fp,
+        Some(Role::Viewer),
+        false,
+        1004,
+        Some(ReplicationPolicy::QueryOnly),
+        false,
+    );
+    coll.upsert_member(bob_fp, "bob", Role::Viewer);
+    coll.upsert_member("carolfp", "carol", Role::Editor);
+    coll.upsert_member(alice_fp, "alice", Role::Viewer);
+
+    (owner_fp, coll)
+}
+
+/// ADR-067: the **policy** axis, not the risk signal.
+///
+/// `residual_replica_risk` was the only trace of `ReplicationPolicy` in the
+/// snapshot every surface reads — and it cannot answer "is this member
+/// restricted?", because `None` means *both* `Full` and "legacy KB with no
+/// op-log". Carol (Full) and a legacy KB both read `None` there, and they are not
+/// the same thing. A restriction the owner cannot see is a control they cannot
+/// audit.
+#[test]
+fn the_snapshot_reports_each_members_current_replication_policy() {
+    let (owner_fp, coll) = replication_fixture();
+    let bob_fp = "SHA256:bob";
+    let alice_fp = "SHA256:alice";
+    let state = state_with(&owner_fp, "team", &coll);
+    let snap = build_snapshot(&state);
+    let kb = &snap.kbs[0];
+    let member = |fp: &str| {
+        kb.members
+            .iter()
+            .find(|m| m.fingerprint == fp)
+            .unwrap_or_else(|| panic!("{fp} present"))
+            .clone()
+    };
+
+    assert_eq!(
+        member(bob_fp).replication.as_deref(),
+        Some("query_only"),
+        "a restricted member's POLICY must be readable, not inferred from a risk signal"
+    );
+    assert_eq!(
+        member("carolfp").replication.as_deref(),
+        Some("full"),
+        "and an unrestricted member's must say so — `Some(\"full\")` is a policy the \
+         log states, deliberately distinct from the `None` a legacy KB gives"
+    );
+    assert_eq!(
+        member(alice_fp).replication.as_deref(),
+        Some("query_only"),
+        "alice was admitted FULL and later restricted — the CURRENT policy is what \
+         matters, not the one she started with"
+    );
+    assert_eq!(
+        member(alice_fp).residual_replica_risk,
+        Some(true),
+        "sanity: alice is the member with a real prior-Full window"
+    );
+    assert_eq!(
+        member(bob_fp).residual_replica_risk,
+        Some(false),
+        "sanity: the risk signal says 'no risk' for exactly this member, which is \
+         why it cannot double as the policy"
+    );
+}
+
+/// The buffer surfaces the restriction, and only the restriction.
+#[test]
+fn the_sharing_buffer_annotates_a_restricted_member_exactly_once() {
+    let (owner_fp, coll) = replication_fixture();
+    let snap = build_snapshot(&state_with(&owner_fp, "team", &coll));
+    let (_view, text) = build_view(&snap, &HashMap::new());
+    let bob_line = text
+        .lines()
+        .find(|l| l.contains("bob ("))
+        .expect("bob's row");
+    assert!(
+        bob_line.contains("[query-only]"),
+        "a restriction the owner cannot see is a control they cannot audit: {bob_line}"
+    );
+    let carol_line = text
+        .lines()
+        .find(|l| l.contains("carol ("))
+        .expect("carol's row");
+    assert!(
+        !carol_line.contains("query-only"),
+        "the default must stay quiet so the exception stands out: {carol_line}"
+    );
+
+    // Alice is BOTH restricted and at residual risk. Her row must carry the
+    // richer annotation once, not two labels saying "query-only" back to back —
+    // a redundant double label reads as a rendering bug and trains the owner to
+    // skim past exactly the row that matters most.
+    let alice_line = text
+        .lines()
+        .find(|l| l.contains("alice ("))
+        .expect("alice's row");
+    assert!(
+        alice_line.contains("may hold a pre-restriction local copy"),
+        "alice's row must carry the residual-risk annotation: {alice_line}"
+    );
+    assert_eq!(
+        alice_line.matches("query-only").count(),
+        1,
+        "and must not stack a second query-only label: {alice_line}"
+    );
+}
+
+/// A legacy/un-anchored KB has no signed op-log to derive from, and must report
+/// **`None`** rather than guessing `full`. Guessing would tell an owner their
+/// members are unrestricted when the truth is that nothing is known.
+#[test]
+fn a_kb_with_no_signed_oplog_reports_an_unknown_replication_policy() {
+    let mut coll = KbCollectionDoc::new_owned("Legacy", "SHA256:owner", "owner");
+    coll.upsert_member("SHA256:dave", "dave", Role::Viewer);
+
+    let state = state_with("SHA256:owner", "legacy", &coll);
+    let snap = build_snapshot(&state);
+    let dave = snap.kbs[0]
+        .members
+        .iter()
+        .find(|m| m.fingerprint == "SHA256:dave")
+        .expect("dave present");
+
+    assert_eq!(
+        dave.replication, None,
+        "no op-log means the policy is UNKNOWN, which is not the same as 'full'"
     );
 }
