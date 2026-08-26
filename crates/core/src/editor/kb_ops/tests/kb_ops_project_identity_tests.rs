@@ -22,6 +22,25 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(out.status.success(), "git {args:?}: {out:?}");
 }
 
+/// An editor whose KB watchers are OFF.
+///
+/// **Not a convenience — a Windows correctness requirement.** A registered org
+/// dir gets an inotify/`ReadDirectoryChangesW` watcher, and Windows refuses to
+/// rename a directory any process holds a handle inside: CI's Windows leg failed
+/// these tests with `PermissionDenied (os error 5)` on the `fs::rename`, not on
+/// anything about identity. Linux happily renames a watched directory, so this
+/// is precisely the class of thing one platform cannot measure (principle #13).
+///
+/// It is also honest about the product: moving a project while MAE holds its
+/// in-tree KB open is a Windows-unsupported operation, and the tests should not
+/// pretend otherwise.
+fn editor_without_watchers() -> (Editor, TempDir) {
+    let mut editor = Editor::new();
+    let dirs = with_test_dirs(&mut editor);
+    editor.kb.watcher_enabled = false;
+    (editor, dirs)
+}
+
 fn git_project(parent: &Path, name: &str) -> std::path::PathBuf {
     let root = parent.join(name);
     std::fs::create_dir_all(&root).unwrap();
@@ -42,8 +61,7 @@ fn git_project(parent: &Path, name: &str) -> std::path::PathBuf {
 #[test]
 fn an_out_of_tree_project_kb_survives_the_project_being_moved() {
     let home = TempDir::new().unwrap();
-    let mut editor = Editor::new();
-    let _dirs = with_test_dirs(&mut editor);
+    let (mut editor, _dirs) = editor_without_watchers();
 
     let project = git_project(home.path(), "widget");
     let out_of_tree = home.path().join("kb-content");
@@ -125,8 +143,7 @@ fn an_out_of_tree_project_kb_survives_the_project_being_moved() {
 #[test]
 fn a_project_kb_survives_the_project_being_moved() {
     let home = TempDir::new().unwrap();
-    let mut editor = Editor::new();
-    let _dirs = with_test_dirs(&mut editor);
+    let (mut editor, _dirs) = editor_without_watchers();
 
     let original = git_project(home.path(), "widget");
     let first = editor.kb_init_project(Some(original.clone())).unwrap();
@@ -170,8 +187,7 @@ fn a_project_kb_survives_the_project_being_moved() {
 #[test]
 fn adopting_a_moved_project_repairs_the_stale_root_on_disk() {
     let home = TempDir::new().unwrap();
-    let mut editor = Editor::new();
-    let _dirs = with_test_dirs(&mut editor);
+    let (mut editor, _dirs) = editor_without_watchers();
 
     let original = git_project(home.path(), "widget");
     let result = editor.kb_init_project(Some(original.clone())).unwrap();
@@ -206,8 +222,7 @@ fn adopting_a_moved_project_repairs_the_stale_root_on_disk() {
 #[test]
 fn two_projects_get_distinct_identities_and_distinct_kbs() {
     let home = TempDir::new().unwrap();
-    let mut editor = Editor::new();
-    let _dirs = with_test_dirs(&mut editor);
+    let (mut editor, _dirs) = editor_without_watchers();
 
     let a = git_project(&home.path().join("one"), "widget");
     let b = git_project(&home.path().join("two"), "widget");
@@ -283,8 +298,7 @@ fn a_non_git_project_gets_a_path_fallback_that_says_so() {
 #[test]
 fn a_moved_org_dir_repoints_its_row_instead_of_appending_a_duplicate_uuid() {
     let home = TempDir::new().unwrap();
-    let mut editor = Editor::new();
-    let _dirs = with_test_dirs(&mut editor);
+    let (mut editor, _dirs) = editor_without_watchers();
 
     let first_dir = home.path().join("notes");
     std::fs::create_dir_all(&first_dir).unwrap();

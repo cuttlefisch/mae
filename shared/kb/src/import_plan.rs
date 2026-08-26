@@ -796,38 +796,72 @@ mod tests {
         );
     }
 
-    /// The hazard that lost 748 notes, and it **cannot reproduce on Linux** —
-    /// so it is detected by comparison rather than by waiting for a
-    /// case-insensitive filesystem to demonstrate it (principle #13).
-    #[test]
-    fn case_folding_collisions_are_detected_on_every_platform() {
-        let d = TempDir::new().unwrap();
-        write(d.path(), "Sales.org", &node_file("n1", "Sales"));
-        write(d.path(), "sales.org", &node_file("n2", "sales"));
-
-        let plan = ImportPlan::assess(d.path());
-
-        let found = plan
-            .hazards
-            .iter()
-            .any(|h| matches!(h, ImportHazard::CaseFoldCollision { .. }));
-        assert!(found, "hazards were {:?}", plan.hazards);
+    /// A planned file whose node id is derived from its path, so two fixtures
+    /// never collide on `:ID:` by accident — the negative-control test below
+    /// caught exactly that on the first attempt.
+    fn planned(path: &str) -> PlannedFile {
+        PlannedFile {
+            path: PathBuf::from(path),
+            content_hash: "h".to_string(),
+            disposition: FileDisposition::Import {
+                node_ids: vec![format!("id-for{path}")],
+            },
+        }
     }
 
-    /// The macOS/Linux normalization twin of the case-fold trap.
+    /// The hazard that lost 748 notes.
+    ///
+    /// **Driven from constructed paths, not from the filesystem, and that is the
+    /// point.** On a case-insensitive filesystem — Windows NTFS, macOS APFS by
+    /// default — `Sales.org` and `sales.org` *cannot both exist*: writing the
+    /// second overwrites the first, which is the data loss itself, happening
+    /// before MAE ever sees it. A test that created both files would therefore
+    /// pass on Linux and fail everywhere the bug actually bites. (It did: CI's
+    /// Windows leg caught exactly that on the first push.)
+    ///
+    /// The detector's contract is over the path SET, so the test is too
+    /// (principle #13 — one platform's filesystem behaviour is not a property).
+    #[test]
+    fn case_folding_collisions_are_detected_by_comparison_not_by_filesystem() {
+        let files = [planned("/kb/Sales.org"), planned("/kb/sales.org")];
+
+        let hazards = detect_hazards(&files);
+
+        assert!(
+            hazards
+                .iter()
+                .any(|h| matches!(h, ImportHazard::CaseFoldCollision { .. })),
+            "hazards were {hazards:?}"
+        );
+    }
+
+    /// Paths that differ only by case are a collision; paths that differ by more
+    /// than case are not. Without this the detector could pass the test above by
+    /// flagging everything.
+    #[test]
+    fn ordinary_distinct_paths_raise_no_collision_hazard() {
+        let files = [planned("/kb/sales.org"), planned("/kb/marketing.org")];
+
+        let hazards = detect_hazards(&files);
+
+        assert!(hazards.is_empty(), "hazards were {hazards:?}");
+    }
+
+    /// The NFC/NFD twin of the case-fold trap: macOS historically normalizes
+    /// filenames, Linux does not. Same reasoning as above for driving it from
+    /// constructed paths.
     #[test]
     fn unicode_normalization_collisions_are_detected() {
-        let d = TempDir::new().unwrap();
-        write(d.path(), "cafe\u{0301}.org", &node_file("n1", "NFD"));
-        write(d.path(), "café.org", &node_file("n2", "NFC"));
+        let files = [planned("/kb/cafe\u{0301}.org"), planned("/kb/café.org")];
 
-        let plan = ImportPlan::assess(d.path());
+        let hazards = detect_hazards(&files);
 
-        let found = plan
-            .hazards
-            .iter()
-            .any(|h| matches!(h, ImportHazard::UnicodeCollision { .. }));
-        assert!(found, "hazards were {:?}", plan.hazards);
+        assert!(
+            hazards
+                .iter()
+                .any(|h| matches!(h, ImportHazard::UnicodeCollision { .. })),
+            "hazards were {hazards:?}"
+        );
     }
 
     /// Two files claiming one `:ID:` means one of them loses, silently.

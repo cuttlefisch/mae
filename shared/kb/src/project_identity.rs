@@ -94,10 +94,46 @@ impl std::fmt::Display for IdentityError {
 }
 
 /// Read `mae.kb-id` from the repo's local config, if this is a git repo.
+/// The form of `root` to hand to `git -C`.
+///
+/// **Windows only, and it is not cosmetic.** `Path::canonicalize` returns a
+/// *verbatim* path (`\\?\C:\src\project`), and Git for Windows does not accept
+/// one — `git -C '\\?\C:\…'` fails. Every call here canonicalizes first (R11's
+/// standing rule: never compare or hash a path that has not been through
+/// `realpath`), so without this strip the whole minted-id tier silently
+/// degrades to the weaker path fallback **on Windows only** — the shape
+/// principle #13 exists to catch, where a fix verified on one developer's
+/// machine quietly does nothing on the other platform.
+fn git_path(root: &Path) -> PathBuf {
+    #[cfg(windows)]
+    if let Some(plain) = strip_verbatim(&root.to_string_lossy()) {
+        return PathBuf::from(plain);
+    }
+    root.to_path_buf()
+}
+
+/// The string half of [`git_path`], split out so it is **compiled and tested on
+/// every platform**.
+///
+/// Behind `#[cfg(windows)]` it would be exercised only by the one CI leg that
+/// cannot be run locally — and a Windows-only code path that no other platform
+/// even type-checks is precisely how a cross-platform fix rots (principle #13).
+///
+/// Returns `None` when there is no verbatim prefix to strip.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn strip_verbatim(path: &str) -> Option<String> {
+    let stripped = path.strip_prefix(r"\\?\")?;
+    // UNC verbatim (`\\?\UNC\server\share`) maps back to `\\server\share`.
+    Some(match stripped.strip_prefix(r"UNC\") {
+        Some(unc) => format!(r"\\{unc}"),
+        None => stripped.to_string(),
+    })
+}
+
 fn read_minted_id(root: &Path) -> Option<String> {
     let out = std::process::Command::new("git")
         .arg("-C")
-        .arg(root)
+        .arg(git_path(root))
         .args(["config", "--local", "--get", "mae.kb-id"])
         .output()
         .ok()?;
@@ -115,7 +151,7 @@ fn mint_id(root: &Path) -> Option<String> {
     let id = crate::federation::generate_uuid();
     let out = std::process::Command::new("git")
         .arg("-C")
-        .arg(root)
+        .arg(git_path(root))
         .args(["config", "--local", "mae.kb-id", &id])
         .output()
         .ok()?;
@@ -126,7 +162,7 @@ fn mint_id(root: &Path) -> Option<String> {
 fn is_git_repo(root: &Path) -> bool {
     std::process::Command::new("git")
         .arg("-C")
-        .arg(root)
+        .arg(git_path(root))
         .args(["rev-parse", "--is-inside-work-tree"])
         .output()
         .map(|o| o.status.success() && o.stdout.starts_with(b"true"))
@@ -194,6 +230,37 @@ mod tests {
         let d = TempDir::new().unwrap();
         git(d.path(), &["init", "-q"]);
         d
+    }
+
+    /// **The Windows-only defect, tested on every platform.**
+    ///
+    /// `Path::canonicalize` returns a verbatim path on Windows, and Git for
+    /// Windows rejects one — so without stripping it, the whole minted-id tier
+    /// silently degrades to the weaker path fallback on Windows ONLY, which is
+    /// exactly the "works on my machine, silently no-ops on yours" shape
+    /// principle #13 exists to prevent.
+    #[test]
+    fn a_verbatim_windows_path_is_reduced_to_the_form_git_accepts() {
+        assert_eq!(
+            strip_verbatim(r"\\?\C:\src\project").as_deref(),
+            Some(r"C:\src\project")
+        );
+        assert_eq!(
+            strip_verbatim(r"\\?\UNC\server\share\project").as_deref(),
+            Some(r"\\server\share\project"),
+            "a UNC verbatim path maps back to the plain UNC form, not to a \
+             drive-letter path that does not exist"
+        );
+        assert_eq!(
+            strip_verbatim("/home/user/project"),
+            None,
+            "an ordinary path must be left exactly alone"
+        );
+        assert_eq!(
+            strip_verbatim(r"C:\src\project"),
+            None,
+            "and so must a non-verbatim Windows path"
+        );
     }
 
     #[test]

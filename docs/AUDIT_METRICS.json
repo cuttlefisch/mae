@@ -3130,11 +3130,11 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_project_identity_tests.rs",
-      "lines": 323,
-      "test_lines": 323,
+      "lines": 337,
+      "test_lines": 337,
       "code_lines": 0,
       "is_test_file": true,
-      "max_fn_lines": 77,
+      "max_fn_lines": 76,
       "max_fn_name": "an_out_of_tree_project_kb_survives_the_project_being_moved",
       "max_match_arms": 0,
       "max_struct_fields": 0,
@@ -12010,8 +12010,8 @@
     },
     {
       "path": "shared/kb/src/import_plan.rs",
-      "lines": 1022,
-      "test_lines": 296,
+      "lines": 1056,
+      "test_lines": 330,
       "code_lines": 726,
       "is_test_file": false,
       "max_fn_lines": 42,
@@ -12022,7 +12022,7 @@
       "max_nesting": 3,
       "use_count": 6,
       "pub_items": 28,
-      "test_count": 12
+      "test_count": 13
     },
     {
       "path": "shared/kb/src/kb_build.rs",
@@ -12170,9 +12170,9 @@
     },
     {
       "path": "shared/kb/src/project_identity.rs",
-      "lines": 336,
-      "test_lines": 158,
-      "code_lines": 178,
+      "lines": 403,
+      "test_lines": 189,
+      "code_lines": 214,
       "is_test_file": false,
       "max_fn_lines": 31,
       "max_fn_name": "all_worktrees_of_one_clone_share_the_id",
@@ -12182,7 +12182,7 @@
       "max_nesting": 2,
       "use_count": 3,
       "pub_items": 6,
-      "test_count": 8
+      "test_count": 9
     },
     {
       "path": "shared/kb/src/query.rs",
