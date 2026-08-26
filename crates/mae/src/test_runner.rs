@@ -187,6 +187,30 @@ impl EditorStateSnapshot {
     fn restore(&self, editor: &mut Editor, scheme: &mut SchemeRuntime) -> Vec<String> {
         let mut dirty = Vec::new();
 
+        // Transient input-capturing overlays. These are NOT part of the
+        // snapshot because a file has no business ending inside one -- but if
+        // it does, every later file's keys are silently rerouted into the
+        // leaked overlay instead of the keymap. That is not hypothetical: a
+        // test calling `:daily-goto-date <date>` left an unanswered
+        // mini-dialog open, and the next file's `SPC` went into the dialog, so
+        // four leader-keypad assertions failed in a file that had nothing to
+        // do with the KB. Restoring `mode` alone did not help -- the overlay
+        // outranks the mode. Clear them and say so.
+        for (name, present) in [
+            ("mini_dialog", editor.mini_dialog.is_some()),
+            ("file_picker", editor.file_picker.is_some()),
+            ("file_browser", editor.file_browser.is_some()),
+            ("command_palette", editor.command_palette.is_some()),
+        ] {
+            if present {
+                dirty.push(format!("{name} left open"));
+            }
+        }
+        editor.mini_dialog = None;
+        editor.file_picker = None;
+        editor.file_browser = None;
+        editor.command_palette = None;
+
         if editor.mode != self.mode {
             dirty.push(format!("mode: {:?} → {:?}", self.mode, editor.mode));
             editor.set_mode(self.mode);
@@ -330,6 +354,22 @@ const FAILURE_STATUS_PREFIXES: &[(&str, &str)] = &[
     (
         "Usage:",
         "the command rejected its arguments and printed usage instead of running.",
+    ),
+    (
+        "No dailies directory",
+        "the command needs a dailies directory and found none. On a store-backed \
+         KB this is a bug in the command, not in the fixture — every dailies \
+         operation is supposed to have a `DailyBacking::Store` path.",
+    ),
+    (
+        "No previous daily",
+        "there was no earlier daily to navigate to — the fixture did not create \
+         one, so the step asserted nothing.",
+    ),
+    (
+        "No next daily",
+        "there was no later daily to navigate to — the fixture did not create \
+         one, so the step asserted nothing.",
     ),
 ];
 
