@@ -479,6 +479,107 @@ fn detaching_an_unrelated_instance_does_not_flip_the_primarys_dailies() {
     );
 }
 
+/// **The other half of the same cross-talk, which the test above did not
+/// cover.** Its sibling proves that detaching an *unrelated* instance leaves
+/// the primary's dailies alone. This one proves the converse: when the
+/// detached instance is the one that actually **owns** the dailies directory,
+/// the backing must flip — even though the primary is still attached.
+///
+/// Before the fix, `kb_daily_backing` asked `primary_store_is_truth()`, so it
+/// answered about the primary regardless of who owned the directory. The daily
+/// kept being written as a `.org` file into a detached instance's stale
+/// archive, and `kb_reimport_file` filters detached instances, so the
+/// reconcile-on-save reached nothing. The write appeared to succeed and the
+/// content existed nowhere the KB could see.
+#[test]
+fn detaching_the_instance_that_owns_the_dailies_dir_flips_the_backing() {
+    let tmp = TempDir::new().unwrap();
+    let owned = tmp.path().join("project-notes");
+    std::fs::create_dir_all(owned.join("daily")).unwrap();
+
+    let mut editor = Editor::new();
+    let _dirs = with_test_dirs(&mut editor);
+    // The dailies dir lives INSIDE this instance's org dir -- the arrangement
+    // `kb_insert_to_notes_instance` treats as the normal case.
+    editor.kb.notes_dir = Some(owned.clone());
+
+    let mut owner = KbInstance::local(
+        "uuid-owner".into(),
+        "ProjectNotes".into(),
+        owned.clone(),
+        tmp.path().join("owner.db"),
+    );
+    owner.kind = KbInstanceKind::UserRegistered;
+    editor.kb.registry.instances.push(owner);
+
+    // Baseline: attached, so files back the dailies.
+    assert!(
+        matches!(editor.kb_daily_backing(), DailyBacking::Files(_)),
+        "an attached owner must still be file-backed"
+    );
+
+    editor
+        .kb
+        .registry
+        .set_ingest_policy("ProjectNotes", IngestPolicy::StoreIsTruth);
+
+    assert!(
+        !editor.kb.primary_store_is_truth(),
+        "the primary must stay ATTACHED -- otherwise this passes for the wrong reason"
+    );
+    assert!(
+        matches!(editor.kb_daily_backing(), DailyBacking::Store),
+        "the dailies dir's OWNER is detached, so the store must back it -- \
+         asking the primary's policy is what made this write into a stale archive"
+    );
+}
+
+/// The same defect on the capture path, which branched on `notes_dir` being
+/// present rather than on whose policy governs it.
+#[test]
+fn capture_does_not_write_org_into_a_detached_owners_notes_dir() {
+    let tmp = TempDir::new().unwrap();
+    let owned = tmp.path().join("project-notes");
+    std::fs::create_dir_all(&owned).unwrap();
+
+    let mut editor = Editor::new();
+    let _dirs = with_test_dirs(&mut editor);
+    editor.kb.notes_dir = Some(owned.clone());
+
+    let mut owner = KbInstance::local(
+        "uuid-owner".into(),
+        "ProjectNotes".into(),
+        owned.clone(),
+        tmp.path().join("owner.db"),
+    );
+    owner.kind = KbInstanceKind::UserRegistered;
+    editor.kb.registry.instances.push(owner);
+    editor
+        .kb
+        .registry
+        .set_ingest_policy("ProjectNotes", IngestPolicy::StoreIsTruth);
+
+    let before: Vec<_> = std::fs::read_dir(&owned)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .collect();
+
+    let _ = editor.kb_create_note_from_title("A Captured Thought");
+
+    let after: Vec<_> = std::fs::read_dir(&owned)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .collect();
+    assert_eq!(
+        before.len(),
+        after.len(),
+        "capture wrote a file into a DETACHED owner's archive: {:?}",
+        after
+    );
+}
+
 // -- The watcher drain: the obvious post-cutover cleanup was the loss path ----
 
 /// Register a real org dir so a live `OrgDirWatcher` is attached and its

@@ -963,6 +963,37 @@ impl Editor {
         }
     }
 
+    /// Is the STORE the source of truth for whichever KB owns `dir`?
+    ///
+    /// The directory-addressed twin of [`Editor::kb_store_is_truth_for`], which
+    /// answers the same question for a node id. Capture and dailies need this
+    /// one, because what they hold is a PATH (`kb_notes_dir` /
+    /// `kb_dailies_dir`), not an id.
+    ///
+    /// @ai-caution: [kb-policy] Both callers previously asked
+    /// `primary_store_is_truth()` instead — the policy of the *primary*, not of
+    /// the KB that actually owns the directory. Those are routinely different:
+    /// `kb_insert_to_notes_instance` treats "a registered instance covers
+    /// `kb_notes_dir`" as the normal case, not an edge case. Detaching that
+    /// instance while the primary stayed attached left capture writing `.org`
+    /// into a stale archive, and the edit reached nothing — `kb_reimport_file`
+    /// filters detached instances, so the reconcile-on-save silently did
+    /// nothing. Ask about the OWNER of the directory, never about the primary.
+    pub(crate) fn kb_dir_store_is_truth(&self, dir: &std::path::Path) -> bool {
+        match self
+            .kb
+            .registry
+            .instances
+            .iter()
+            .find(|i| !i.org_dir.as_os_str().is_empty() && dir.starts_with(&i.org_dir))
+        {
+            Some(inst) => !inst.ingest_policy.allows_ingest(),
+            // No registered instance covers it, so it belongs to the primary,
+            // whose policy lives on the registry rather than on any row.
+            None => self.kb.primary_store_is_truth(),
+        }
+    }
+
     /// If `path` lies inside a DETACHED instance's `.org` directory, the name of
     /// that instance.
     ///
