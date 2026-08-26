@@ -691,3 +691,48 @@ fn re_registering_a_detached_dir_does_not_reset_its_store() {
         "a store-only node must survive re-registering a detached dir"
     );
 }
+
+// -- A store read that FAILS must not read as "no results" --------------------
+
+/// **Post-cutover, an empty result and a failed read are indistinguishable.**
+///
+/// Six sites in `search.rs` turned a store error into `Vec::new()` plus a
+/// `tracing::warn!` the user never sees. While `.org` files were the truth that
+/// meant "degraded"; once the store IS the truth it means the entire KB reads as
+/// empty. `watchers.rs` already does this correctly on the write side — *"A
+/// storage failure is surfaced to the user, not silently rendered as 'no broken
+/// links'"* — and names this the read-side twin.
+#[test]
+fn a_failed_store_read_reaches_the_user_instead_of_reading_as_empty() {
+    let mut editor = Editor::new();
+    let _dirs = with_test_dirs(&mut editor);
+
+    editor.kb.note_read_error("search", "database is locked");
+
+    assert!(
+        editor.on_idle_tick(u64::MAX),
+        "surfacing a read failure must request a redraw"
+    );
+    assert!(
+        editor.status_msg.contains("database is locked"),
+        "the user must see the failure, not an empty result: {:?}",
+        editor.status_msg
+    );
+    assert!(
+        editor.kb.take_read_error().is_none(),
+        "and it must be drained, not repeated on every idle tick"
+    );
+}
+
+/// An idle tick with no failure recorded must stay quiet — otherwise the signal
+/// is noise and gets ignored.
+#[test]
+fn an_idle_tick_with_no_read_failure_says_nothing() {
+    let mut editor = Editor::new();
+    let _dirs = with_test_dirs(&mut editor);
+    editor.set_status("unchanged");
+
+    editor.on_idle_tick(u64::MAX);
+
+    assert_eq!(editor.status_msg, "unchanged");
+}

@@ -268,6 +268,55 @@ fn goto_daily_date_succeeds_on_a_store_backing() {
     assert_eq!(editor.kb_daily_date_from_buffer(), Ok((2026, 8, 26)));
 }
 
+/// **`:daily-goto-date <date>` silently discarded its argument.** There was no
+/// `daily-goto-date` arm in `execute_command`'s arg-carrying match, so the
+/// command fell through to the no-arg dispatcher, which opens a *prompt* for
+/// the date. A caller that passed one got an unanswered mini-dialog and the
+/// editor parked in Command mode -- while believing it had navigated.
+///
+/// This was not a cosmetic leak: an input-capturing overlay swallows every
+/// subsequent key. It surfaced as four failures in the leader-keypad e2e file,
+/// which has nothing to do with dailies -- the leaked dialog ate its `SPC`.
+#[test]
+fn goto_daily_date_honours_an_inline_argument() {
+    let (_tmp, mut editor) = editor_with_no_notes_dir();
+
+    assert!(
+        editor.execute_command("daily-goto-date 2026-08-26"),
+        "the arg form must be handled by the arg-carrying dispatcher"
+    );
+    assert!(
+        editor.mini_dialog.is_none(),
+        "an inline date must NOT open the date prompt"
+    );
+    assert_ne!(
+        editor.mode,
+        crate::Mode::Command,
+        "and must not park the editor in Command mode behind that prompt"
+    );
+    assert_eq!(
+        editor.kb_daily_date_from_buffer(),
+        Ok((2026, 8, 26)),
+        "it must actually navigate to the date it was given"
+    );
+}
+
+/// The other half of the same contract: bound to a key (`SPC n d d`) there is
+/// no argument to carry, and the date PROMPT is the right behaviour -- so the
+/// fix must not remove it. `dispatch_builtin` is that path; `execute_command`
+/// is the ex path the arm above serves.
+#[test]
+fn goto_daily_date_without_an_argument_still_prompts() {
+    let (_tmp, mut editor) = editor_with_no_notes_dir();
+
+    editor.dispatch_builtin("daily-goto-date");
+
+    assert!(
+        editor.mini_dialog.is_some(),
+        "the keybinding path must still open the date prompt"
+    );
+}
+
 // -- Capture: the one seam that was never built --------------------------------
 
 /// **Capture wrote `.org` into a detached KB's stale archive.**

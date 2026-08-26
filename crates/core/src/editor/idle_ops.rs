@@ -26,6 +26,15 @@ impl Editor {
     /// redraw this tick (idle work otherwise never triggers one).
     pub fn on_idle_tick(&mut self, idle_ms: u64) -> bool {
         let mut needs_redraw = false;
+        // Surface a store-read failure recorded by a `&self` read path. Those
+        // paths cannot call `set_status` themselves, which is why six of them
+        // rendered a storage error as an empty result plus a `tracing::warn!`
+        // nobody sees. Once the store is the source of truth, an empty result
+        // and a failed read are indistinguishable to the user.
+        if let Some(msg) = self.kb.take_read_error() {
+            self.set_status(msg);
+            needs_redraw = true;
+        }
         if idle_ms >= self.which_key_idle_delay {
             needs_redraw |= self.maybe_show_which_key_popup();
         }
