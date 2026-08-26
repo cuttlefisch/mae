@@ -1113,6 +1113,22 @@
       "test_count": 4
     },
     {
+      "path": "crates/ai/src/tools/advertised_surface_tests.rs",
+      "lines": 180,
+      "test_lines": 180,
+      "code_lines": 0,
+      "is_test_file": true,
+      "max_fn_lines": 18,
+      "max_fn_name": "the_default_advertised_tool_list_does_not_grow",
+      "max_match_arms": 0,
+      "max_struct_fields": 0,
+      "max_struct_name": "",
+      "max_nesting": 1,
+      "use_count": 4,
+      "pub_items": 0,
+      "test_count": 5
+    },
+    {
       "path": "crates/ai/src/tools/ai_tools.rs",
       "lines": 92,
       "test_lines": 0,
@@ -1146,9 +1162,9 @@
     },
     {
       "path": "crates/ai/src/tools/categories.rs",
-      "lines": 602,
+      "lines": 613,
       "test_lines": 0,
-      "code_lines": 602,
+      "code_lines": 613,
       "is_test_file": false,
       "max_fn_lines": 92,
       "max_fn_name": "classify_tool_category",
@@ -1354,9 +1370,9 @@
     },
     {
       "path": "crates/ai/src/tools/mod.rs",
-      "lines": 643,
+      "lines": 645,
       "test_lines": 457,
-      "code_lines": 186,
+      "code_lines": 188,
       "is_test_file": false,
       "max_fn_lines": 43,
       "max_fn_name": "scheme_tools_to_definitions",
@@ -13425,27 +13441,27 @@
       },
       {
         "path": "crates/ai/src/tools/categories.rs",
-        "line": 373,
+        "line": 384,
         "category": "permission"
       },
       {
         "path": "crates/ai/src/tools/categories.rs",
-        "line": 506,
+        "line": 517,
         "category": "permission"
       },
       {
         "path": "crates/ai/src/tools/categories.rs",
-        "line": 535,
+        "line": 546,
         "category": "permission"
       },
       {
         "path": "crates/ai/src/tools/categories.rs",
-        "line": 549,
+        "line": 560,
         "category": "security"
       },
       {
         "path": "crates/ai/src/tools/categories.rs",
-        "line": 554,
+        "line": 565,
         "category": "permission"
       },
       {
