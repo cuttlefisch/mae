@@ -272,32 +272,76 @@ pub fn effective_tier(
     args: &serde_json::Value,
     declared: PermissionTier,
 ) -> PermissionTier {
+    // The two command-dispatch surfaces resolve to a tier computed from the
+    // command they name plus its argument; everything else keeps the simple
+    // boolean escalation.
+    match tool_name {
+        "execute_command" => {
+            let field = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            return declared.max(ex_call_tier(field, arg_string(args)));
+        }
+        name if name.starts_with("command_") => {
+            let command = crate::executor::unsanitize_command_name(&name["command_".len()..]);
+            return declared.max(ex_call_tier(&command, arg_string(args)));
+        }
+        _ => {}
+    }
     let escalated = match tool_name {
         "set_option" => args
             .get("option")
             .and_then(|v| v.as_str())
             .is_some_and(is_agent_authority_option),
-        "execute_command" => args
-            .get("command")
-            .and_then(|v| v.as_str())
-            // `dispatch_builtin` matches whole command names, but an
-            // argument-bearing ex line (`set ai-tier privileged`) would be
-            // routed by its first token, so classify on that token.
-            .is_some_and(|line| {
-                // Argument-sensitive checks see the WHOLE line; name-only checks
-                // classify on the first token, since an argument-bearing ex line
-                // (`set ai-tier privileged`) is routed by its first word.
-                ex_line_reaches_raw_datalog(line)
-                    || line.split_whitespace().next().is_some_and(|cmd| {
-                        is_authorization_change(cmd) || is_permission_tier_command(cmd)
-                    })
-            }),
         _ => false,
     };
     if escalated {
         declared.max(PermissionTier::Privileged)
     } else {
         declared
+    }
+}
+
+fn arg_string(args: &serde_json::Value) -> Option<&str> {
+    args.get("args")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+/// The tier a command-dispatch call actually needs.
+///
+/// Two things are folded together here, and both matter:
+///
+/// 1. **The command's own tier.** `execute_command` declares `Write` and used
+///    to keep it whatever command it was handed — so
+///    `{"command": "terminal"}` reached a `Shell` effect at `Write`, while the
+///    generated `command_terminal` mirror was correctly `Shell`. That is the
+///    weaker-route shape ADR-085 exists to prevent, on the surface that is
+///    hardest to notice because its declared tier looks fixed.
+/// 2. **The argument.** `set` is ordinary until its argument is `ai-tier`, and
+///    a raw-Datalog line is ordinary until you read the line. Both surfaces
+///    can now carry an argument, so both must be classified with it.
+///
+/// `command_field` may itself be a whole line (`execute_command` historically
+/// accepted `"set ai-tier privileged"` in one string), so the name is always
+/// its first token while the argument-sensitive checks see the joined line.
+///
+/// @ai-caution: [permission] Never lowers -- callers `max` this against the
+/// declared tier. Adding a surface that dispatches a command by name means
+/// routing it through here, not re-deriving the rule.
+fn ex_call_tier(command_field: &str, args: Option<&str>) -> PermissionTier {
+    let name = command_field.split_whitespace().next().unwrap_or("");
+    let line = match args {
+        Some(a) => format!("{command_field} {a}"),
+        None => command_field.to_string(),
+    };
+    let tier = crate::tools::classify_command_permission(name);
+    if ex_line_reaches_raw_datalog(&line)
+        || is_authorization_change(name)
+        || is_permission_tier_command(name)
+    {
+        tier.max(PermissionTier::Privileged)
+    } else {
+        tier
     }
 }
 
@@ -542,6 +586,114 @@ mod tests {
                 "execute_command {{command: {line:?}}} must require Privileged"
             );
         }
+    }
+
+    // -- ADVERSARIAL: the two command-dispatch surfaces --------------------
+
+    /// **The bypass this change closes.** `execute_command` declares `Write`
+    /// and dispatches whatever command it is handed, so a `Shell`-tier effect
+    /// was reachable at `Write` — while the generated mirror for the SAME
+    /// command was correctly `Shell`. A weaker route to an identical effect
+    /// is exactly ADR-085's shape, on the surface whose declared tier looks
+    /// fixed and therefore never gets re-read.
+    #[test]
+    fn execute_command_inherits_the_tier_of_the_command_it_names() {
+        for cmd in ["terminal", "send-to-shell", "babel-execute", "kb-register"] {
+            let via_execute = effective_tier(
+                "execute_command",
+                &json!({ "command": cmd }),
+                PermissionTier::Write,
+            );
+            assert_eq!(
+                via_execute,
+                PermissionTier::Shell,
+                "execute_command {{command: {cmd:?}}} must not be a Write-tier route to a Shell effect"
+            );
+            assert_eq!(
+                via_execute,
+                crate::tools::classify_command_permission(cmd),
+                "and it must agree with the mirror's tier for the same command"
+            );
+        }
+        // `quit` is Privileged by the same table — check a second tier so this
+        // is not pinned to one value.
+        assert_eq!(
+            effective_tier(
+                "execute_command",
+                &json!({"command": "quit"}),
+                PermissionTier::Write
+            ),
+            PermissionTier::Privileged,
+        );
+    }
+
+    /// A mirror's ARGUMENT is now attacker-controlled too. `command_set` is an
+    /// ordinary tool until its argument is `ai-tier`, at which point it is the
+    /// permission-tier escalation principle #16 exists to prevent.
+    #[test]
+    fn a_mirror_argument_escalates_the_same_way_the_ex_line_does() {
+        for args in ["ai-tier privileged", "ai_tier Privileged"] {
+            assert_eq!(
+                effective_tier(
+                    "command_set",
+                    &json!({ "args": args }),
+                    PermissionTier::Write
+                ),
+                PermissionTier::Privileged,
+                "command_set {{args: {args:?}}} must require Privileged"
+            );
+        }
+        // `:set` escalates on the COMMAND NAME, not on which option it names —
+        // deliberately conservative, and the pre-existing rule for the ex-line
+        // surface (`is_permission_tier_command`). Precision lives on
+        // `set_option`, where the option name is a field rather than something
+        // to be parsed out of a line. Pinned here so the next reader does not
+        // "fix" the imprecision by relaxing it: narrowing this would LOWER a
+        // control, which is the direction that opens holes.
+        assert_eq!(
+            effective_tier(
+                "command_set",
+                &json!({"args": "line-numbers true"}),
+                PermissionTier::Write
+            ),
+            PermissionTier::Privileged,
+            "every `:set` spelling escalates, by name -- narrowing this is a relaxation"
+        );
+
+        // The negative control that keeps the above from being a blanket
+        // raise: an ordinary command carrying an argument stays put.
+        assert_eq!(
+            effective_tier(
+                "command_undo",
+                &json!({"args": "whatever"}),
+                PermissionTier::Write
+            ),
+            PermissionTier::Write,
+            "an ordinary command must not be escalated merely for carrying an argument"
+        );
+    }
+
+    /// The argument now travels on `execute_command` too, in its own field
+    /// rather than folded into the command string. Both spellings must
+    /// classify identically — otherwise the new field is a way around the old
+    /// check.
+    #[test]
+    fn execute_command_args_field_classifies_like_the_folded_line() {
+        let folded = effective_tier(
+            "execute_command",
+            &json!({ "command": "set ai-tier privileged" }),
+            PermissionTier::Write,
+        );
+        let split = effective_tier(
+            "execute_command",
+            &json!({ "command": "set", "args": "ai-tier privileged" }),
+            PermissionTier::Write,
+        );
+        assert_eq!(folded, PermissionTier::Privileged);
+        assert_eq!(
+            split, folded,
+            "splitting the line into command+args must not lower the tier"
+        );
     }
 
     /// Escalation must be monotone — it may add a requirement, never remove

@@ -41,10 +41,35 @@ fn execute_command_dispatch(
         .get("command")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'command' argument")?;
-    if editor.dispatch_builtin(cmd) {
-        Ok(format!("Executed: {}", cmd))
+    let cmd_args = args
+        .get("args")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    // `dispatch_ex_command`, NOT `execute_command`: the latter parses a whole
+    // ex LINE, and a line can be `!rm -rf`. This one is addressed by command
+    // name, so the raw-line forms are structurally unreachable.
+    if editor.dispatch_ex_command(cmd, cmd_args) {
+        Ok(command_outcome(editor, cmd))
     } else {
         Err(format!("Unknown command: {}", cmd))
+    }
+}
+
+/// What actually happened, not merely that dispatch returned.
+///
+/// Most commands report a refusal or an error on the STATUS LINE and still
+/// return `true` from dispatch, so `Executed: {cmd}` told the caller nothing:
+/// success, refusal and silent no-op were one string. ADR-086 requires the
+/// result to state whether the caller's requested postcondition holds, and
+/// `execute_dispatch_command` below already did this -- one surface had it and
+/// the other did not (principle #8).
+pub(super) fn command_outcome(editor: &Editor, cmd: &str) -> String {
+    let status = editor.status_msg.clone();
+    if status.is_empty() {
+        format!("Executed: {}", cmd)
+    } else {
+        status
     }
 }
 
@@ -52,12 +77,7 @@ fn execute_command_dispatch(
 /// `execute_command_dispatch`'s doc comment -- same reasoning applies.
 fn execute_dispatch_command(editor: &mut Editor, cmd: &str) -> Result<String, String> {
     if editor.dispatch_builtin(cmd) {
-        let status = editor.status_msg.clone();
-        if status.is_empty() {
-            Ok(format!("Executed: {}", cmd))
-        } else {
-            Ok(status)
-        }
+        Ok(command_outcome(editor, cmd))
     } else {
         Err(format!("Unknown command: {}", cmd))
     }
