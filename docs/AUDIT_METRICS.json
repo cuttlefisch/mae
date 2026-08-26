@@ -2218,13 +2218,13 @@
     },
     {
       "path": "crates/core/src/editor/command.rs",
-      "lines": 1565,
+      "lines": 1580,
       "test_lines": 212,
-      "code_lines": 1353,
+      "code_lines": 1368,
       "is_test_file": false,
-      "max_fn_lines": 1246,
+      "max_fn_lines": 1261,
       "max_fn_name": "execute_command",
-      "max_match_arms": 80,
+      "max_match_arms": 81,
       "max_struct_fields": 0,
       "max_struct_name": "",
       "max_nesting": 6,
@@ -3066,8 +3066,8 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_daily_backing_tests.rs",
-      "lines": 364,
-      "test_lines": 364,
+      "lines": 413,
+      "test_lines": 413,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 29,
@@ -3078,7 +3078,7 @@
       "max_nesting": 0,
       "use_count": 2,
       "pub_items": 0,
-      "test_count": 15
+      "test_count": 17
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_durability_tests.rs",
@@ -7722,9 +7722,9 @@
     },
     {
       "path": "crates/mae/src/test_runner.rs",
-      "lines": 954,
+      "lines": 978,
       "test_lines": 17,
-      "code_lines": 937,
+      "code_lines": 961,
       "is_test_file": false,
       "max_fn_lines": 165,
       "max_fn_name": "run_tests_iteratively",

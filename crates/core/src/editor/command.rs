@@ -269,6 +269,21 @@ impl Editor {
                 self.dispatch_kb_relink(args);
                 true
             }
+            // `:daily-goto-date 2026-08-26` — honour an inline date. This arm did
+            // not exist, so an argument was silently discarded and the command
+            // fell through to the no-arg date PROMPT: the caller believed it had
+            // navigated while the editor sat in Command mode behind an open
+            // mini-dialog. Returning `false` with no argument preserves that
+            // prompt, which is the correct interactive behaviour.
+            "daily-goto-date" => match args.map(str::trim).filter(|s| !s.is_empty()) {
+                None => false,
+                Some(date) => {
+                    if let Err(e) = self.kb_goto_daily_date(date) {
+                        self.set_status(format!("Daily: {}", e));
+                    }
+                    true
+                }
+            },
             "kb-import-plan" | "kb-import-verify" => {
                 self.dispatch_kb_import_audit(command, args);
                 true
