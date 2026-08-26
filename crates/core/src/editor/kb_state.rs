@@ -165,6 +165,25 @@ impl NodeActivity {
 }
 
 pub struct KbContext {
+    /// Last store-read failure seen by a `&self` read path, awaiting surfacing.
+    ///
+    /// The KB read surface (`kb_all_node_pairs`, `kb_find_candidates`, the
+    /// federated search passes) takes `&self`, so it cannot call `set_status` —
+    /// which is why six sites rendered a storage error as `Vec::new()` plus a
+    /// `tracing::warn!` nobody sees. `watchers.rs`'s link validation already
+    /// does this correctly on the write side (*"A storage failure is surfaced to
+    /// the user, not silently rendered as 'no broken links'"*); this is the
+    /// read-side twin it names.
+    ///
+    /// Interior mutability follows `RemoteHubQueryLayer::set_outcome`, the same
+    /// shape for the same reason. Drained by `on_idle_tick`.
+    ///
+    /// @ai-caution: [kb-truth] Post-cutover this matters far more than it used
+    /// to: a store error used to mean "degraded", because the `.org` files were
+    /// still the truth. Once the store IS the truth it means the entire KB reads
+    /// as empty — and an empty result is indistinguishable from a KB with
+    /// nothing in it.
+    pub(crate) read_error: std::sync::Mutex<Option<String>>,
     /// Primary knowledge base instance (manual + user notes + AI-facing kb_* tools).
     pub primary: mae_kb::KnowledgeBase,
     /// Persistent backing store (CozoDB). When present, all KB mutations
@@ -377,6 +396,20 @@ impl KbContext {
     /// `:kb-detach primary` a no-op for dailies and the edit surface, while
     /// detaching one unrelated user KB flipped both **for the primary**. Two
     /// call sites had drifted this way; there is one answer and this is it.
+    /// Record a store-read failure from a `&self` path. First one wins — the
+    /// user needs to know reads are failing, not to watch a counter.
+    pub(crate) fn note_read_error(&self, what: &str, e: impl std::fmt::Display) {
+        tracing::warn!(error = %e, what, "KB store read failed");
+        if let Ok(mut slot) = self.read_error.lock() {
+            slot.get_or_insert_with(|| format!("KB read failed ({what}): {e}"));
+        }
+    }
+
+    /// Take the pending read failure, if any.
+    pub(crate) fn take_read_error(&self) -> Option<String> {
+        self.read_error.lock().ok().and_then(|mut s| s.take())
+    }
+
     pub fn primary_store_is_truth(&self) -> bool {
         !self.registry.primary_ingest_policy.allows_ingest()
     }
@@ -675,6 +708,7 @@ impl KbContext {
 
     pub fn new(primary: mae_kb::KnowledgeBase) -> Self {
         Self {
+            read_error: std::sync::Mutex::new(None),
             primary,
             store: None,
             primary_cozo: None,

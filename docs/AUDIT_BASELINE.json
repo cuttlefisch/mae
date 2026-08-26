@@ -3,7 +3,7 @@
   "accepted": {
     "crates/agent-cli/src/main.rs": 1383,
     "crates/ai/src/context_limits.rs": 807,
-    "crates/ai/src/executor/collab_exec.rs": 1107,
+    "crates/ai/src/executor/collab_exec.rs": 1094,
     "crates/ai/src/executor/mod_tests.rs": 1702,
     "crates/ai/src/executor/model_exam.rs": 817,
     "crates/ai/src/executor/self_test.rs": 1347,
@@ -12,36 +12,38 @@
     "crates/ai/src/session/tests.rs": 2123,
     "crates/ai/src/tool_impls/dap.rs": 811,
     "crates/ai/src/tool_impls/editor_tools.rs": 1566,
-    "crates/ai/src/tool_impls/kb.rs": 6548,
+    "crates/ai/src/tool_impls/kb.rs": 6563,
     "crates/ai/src/tool_impls/kb_export_html.rs": 1330,
     "crates/babel/src/lib.rs": 915,
     "crates/canvas/src/kb_graph.rs": 1510,
     "crates/core/src/buffer.rs": 4064,
     "crates/core/src/command_palette.rs": 1065,
-    "crates/core/src/commands.rs": 1991,
+    "crates/core/src/commands.rs": 2020,
     "crates/core/src/conversation.rs": 1780,
     "crates/core/src/display_region.rs": 1263,
-    "crates/core/src/editor/command.rs": 1590,
+    "crates/core/src/editor/command.rs": 1580,
     "crates/core/src/editor/dap_ops.rs": 1675,
     "crates/core/src/editor/debug_panel_ops.rs": 856,
-    "crates/core/src/editor/file_ops.rs": 2248,
+    "crates/core/src/editor/file_ops.rs": 2256,
     "crates/core/src/editor/git_ops.rs": 1400,
-    "crates/core/src/editor/graph_view_ops.rs": 8830,
+    "crates/core/src/editor/graph_view_ops.rs": 8834,
     "crates/core/src/editor/heading_ops.rs": 1178,
-    "crates/core/src/editor/help_ops.rs": 3313,
-    "crates/core/src/editor/kb_ops/nodes.rs": 904,
-    "crates/core/src/editor/kb_ops/registry.rs": 1501,
-    "crates/core/src/editor/kb_ops/tests/kb_ops_durability_tests.rs": 986,
+    "crates/core/src/editor/help_ops.rs": 3385,
+    "crates/core/src/editor/kb_ops/nodes.rs": 941,
+    "crates/core/src/editor/kb_ops/registry.rs": 1636,
+    "crates/core/src/editor/kb_ops/tests/kb_ops_durability_tests.rs": 987,
+    "crates/core/src/editor/kb_ops/tests/kb_ops_ingest_policy_tests.rs": 738,
     "crates/core/src/editor/kb_ops/tests/kb_ops_registry_tests.rs": 670,
-    "crates/core/src/editor/kb_ops/tests/kb_ops_search_federation_tests.rs": 1007,
+    "crates/core/src/editor/kb_ops/tests/kb_ops_search_federation_tests.rs": 1021,
     "crates/core/src/editor/kb_ops/tests/kb_ops_watcher_misc_tests.rs": 668,
+    "crates/core/src/editor/kb_state.rs": 846,
     "crates/core/src/editor/keymaps.rs": 1023,
     "crates/core/src/editor/lsp_ops.rs": 1063,
     "crates/core/src/editor/mod.rs": 1960,
     "crates/core/src/editor/mouse_ops.rs": 948,
     "crates/core/src/editor/multicursor.rs": 827,
     "crates/core/src/editor/notify_ops.rs": 853,
-    "crates/core/src/editor/option_ops.rs": 4140,
+    "crates/core/src/editor/option_ops.rs": 4160,
     "crates/core/src/editor/tests/buffer_tests.rs": 887,
     "crates/core/src/editor/tests/command_tests.rs": 1401,
     "crates/core/src/editor/tests/misc_tests.rs": 1053,
@@ -57,8 +59,9 @@
     "crates/core/src/kb_seed/lessons.rs": 862,
     "crates/core/src/kb_seed/mod.rs": 1721,
     "crates/core/src/kb_seed/scheme_api.rs": 2397,
+    "crates/core/src/kb_sharing_tests.rs": 667,
     "crates/core/src/keymap.rs": 1152,
-    "crates/core/src/options.rs": 1686,
+    "crates/core/src/options.rs": 1705,
     "crates/core/src/project.rs": 833,
     "crates/core/src/render_common/status.rs": 1108,
     "crates/core/src/syntax/markup.rs": 1225,
@@ -81,9 +84,9 @@
     "crates/lsp/src/manager.rs": 987,
     "crates/lsp/src/protocol.rs": 1941,
     "crates/mae/src/ai_event_handler.rs": 1793,
-    "crates/mae/src/ai_residency.rs": 1654,
-    "crates/mae/src/bootstrap/mod.rs": 2942,
-    "crates/mae/src/cli.rs": 894,
+    "crates/mae/src/ai_residency.rs": 1655,
+    "crates/mae/src/bootstrap/mod.rs": 2966,
+    "crates/mae/src/cli.rs": 935,
     "crates/mae/src/collab_bridge/mod.rs": 5868,
     "crates/mae/src/collab_bridge/tests/collab_bridge_write_failure_tests.rs": 547,
     "crates/mae/src/config.rs": 2168,
@@ -94,7 +97,7 @@
     "crates/mae/src/main.rs": 1524,
     "crates/mae/src/pkg/cli.rs": 880,
     "crates/mae/src/terminal_loop.rs": 972,
-    "crates/mae/src/test_runner.rs": 854,
+    "crates/mae/src/test_runner.rs": 978,
     "crates/mae/src/upgrade.rs": 1105,
     "crates/mae/tests/kb_graph_validation_support/mod.rs": 578,
     "crates/mae/tests/mcp_event_loop_integration.rs": 615,
@@ -107,7 +110,7 @@
     "crates/scheme/src/reader.rs": 1347,
     "crates/scheme/src/runtime.rs": 1242,
     "crates/scheme/src/runtime/state_sync_apply.rs": 821,
-    "crates/scheme/src/runtime_tests.rs": 2621,
+    "crates/scheme/src/runtime_tests.rs": 2622,
     "crates/scheme/src/stdlib/base.rs": 2612,
     "crates/scheme/src/stdlib/io.rs": 2048,
     "crates/scheme/src/stdlib/libraries.rs": 928,
@@ -119,28 +122,35 @@
     "crates/scheme/tests/scheme_programs.rs": 955,
     "crates/scheme/tests/scheme_torture.rs": 1625,
     "crates/shell/src/terminal.rs": 907,
-    "daemon/src/collab_handler/kb_content.rs": 855,
+    "daemon/src/collab_handler/kb_content.rs": 969,
     "daemon/src/collab_handler/mod.rs": 1990,
     "daemon/src/config.rs": 1057,
     "daemon/src/dialer.rs": 1184,
     "daemon/src/doc_store.rs": 1920,
-    "daemon/src/handler.rs": 2339,
+    "daemon/src/handler.rs": 2342,
+    "daemon/src/kb_query.rs": 1000,
     "daemon/src/main.rs": 1753,
+    "daemon/src/projector_gate_c_tests.rs": 537,
+    "daemon/src/scheduler.rs": 803,
     "daemon/src/storage.rs": 926,
-    "daemon/src/tests/kb_query_tests.rs": 937,
+    "daemon/src/tests/kb_query_tests.rs": 1300,
     "daemon/tests/collab_e2e.rs": 2649,
     "daemon/tests/collab_stress.rs": 553,
     "daemon/tests/network_e2e.rs": 527,
     "daemon/tests/oauth_e2e.rs": 790,
-    "shared/kb/src/cozo_store/schema.rs": 803,
-    "shared/kb/src/federation.rs": 1936,
-    "shared/kb/src/lib.rs": 5481,
-    "shared/kb/src/org.rs": 2567,
+    "shared/kb/src/cozo_store/schema.rs": 817,
+    "shared/kb/src/federation.rs": 2438,
+    "shared/kb/src/import_plan.rs": 1056,
+    "shared/kb/src/lib.rs": 5576,
+    "shared/kb/src/org.rs": 2707,
     "shared/kb/src/query.rs": 2031,
+    "shared/kb/src/remote_hub.rs": 1655,
     "shared/mcp/src/auth.rs": 1201,
     "shared/mcp/src/identity.rs": 1225,
     "shared/mcp/src/lib.rs": 3458,
-    "shared/sync/src/membership.rs": 4008,
+    "shared/sync/src/kb/node.rs": 1017,
+    "shared/sync/src/kb/tests/collection_roles_tests.rs": 638,
+    "shared/sync/src/membership.rs": 4371,
     "shared/sync/src/text.rs": 2252
   },
   "accepted_structure": {
@@ -161,7 +171,7 @@
       "max_nesting": 3
     },
     "crates/ai/src/executor/collab_exec.rs": {
-      "max_fn_lines": 95,
+      "max_fn_lines": 82,
       "max_nesting": 2
     },
     "crates/ai/src/executor/grading.rs": {
@@ -301,7 +311,7 @@
       "max_nesting": 4
     },
     "crates/core/src/commands.rs": {
-      "max_fn_lines": 1349,
+      "max_fn_lines": 1333,
       "max_nesting": 2
     },
     "crates/core/src/conversation.rs": {
@@ -325,7 +335,7 @@
       "max_nesting": 2
     },
     "crates/core/src/editor/command.rs": {
-      "max_fn_lines": 1271,
+      "max_fn_lines": 1261,
       "max_nesting": 6
     },
     "crates/core/src/editor/debug_panel_ops.rs": {
@@ -365,8 +375,8 @@
       "max_nesting": 3
     },
     "crates/core/src/editor/dispatch/kb.rs": {
-      "max_fn_lines": 332,
-      "max_nesting": 5
+      "max_fn_lines": 284,
+      "max_nesting": 4
     },
     "crates/core/src/editor/dispatch/lsp.rs": {
       "max_fn_lines": 129,
@@ -428,28 +438,24 @@
       "max_fn_lines": 110,
       "max_nesting": 5
     },
-    "crates/core/src/editor/kb_ops/daily.rs": {
-      "max_fn_lines": 90,
-      "max_nesting": 5
-    },
     "crates/core/src/editor/kb_ops/dispatch.rs": {
       "max_fn_lines": 85,
-      "max_nesting": 3
+      "max_nesting": 4
     },
     "crates/core/src/editor/kb_ops/nodes.rs": {
       "max_fn_lines": 131,
       "max_nesting": 5
     },
     "crates/core/src/editor/kb_ops/registry.rs": {
-      "max_fn_lines": 142,
+      "max_fn_lines": 133,
       "max_nesting": 4
     },
     "crates/core/src/editor/kb_ops/search.rs": {
-      "max_fn_lines": 189,
+      "max_fn_lines": 188,
       "max_nesting": 6
     },
     "crates/core/src/editor/kb_ops/sync.rs": {
-      "max_fn_lines": 225,
+      "max_fn_lines": 212,
       "max_nesting": 6
     },
     "crates/core/src/editor/kb_ops/tests/kb_ops_durability_tests.rs": {
@@ -457,7 +463,7 @@
       "max_nesting": 1
     },
     "crates/core/src/editor/kb_ops/tests/kb_ops_search_federation_tests.rs": {
-      "max_fn_lines": 114,
+      "max_fn_lines": 89,
       "max_nesting": 2
     },
     "crates/core/src/editor/kb_ops/watchers.rs": {
@@ -485,7 +491,7 @@
       "max_nesting": 3
     },
     "crates/core/src/editor/option_ops.rs": {
-      "max_fn_lines": 1368,
+      "max_fn_lines": 1360,
       "max_nesting": 4
     },
     "crates/core/src/editor/render_ops.rs": {
@@ -537,7 +543,7 @@
       "max_nesting": 1
     },
     "crates/core/src/kb_sharing.rs": {
-      "max_fn_lines": 198,
+      "max_fn_lines": 190,
       "max_nesting": 4
     },
     "crates/core/src/kb_sharing_tests.rs": {
@@ -553,7 +559,7 @@
       "max_nesting": 5
     },
     "crates/core/src/options.rs": {
-      "max_fn_lines": 1128,
+      "max_fn_lines": 1126,
       "max_nesting": 2
     },
     "crates/core/src/render_common/status.rs": {
@@ -689,7 +695,7 @@
       "max_nesting": 2
     },
     "crates/mae/src/bootstrap/mod.rs": {
-      "max_fn_lines": 529,
+      "max_fn_lines": 515,
       "max_nesting": 6
     },
     "crates/mae/src/cli.rs": {
@@ -733,7 +739,7 @@
       "max_nesting": 2
     },
     "crates/mae/src/collab_bridge/tests/collab_bridge_kb_sync_tests.rs": {
-      "max_fn_lines": 99,
+      "max_fn_lines": 86,
       "max_nesting": 0
     },
     "crates/mae/src/config.rs": {
@@ -829,7 +835,7 @@
       "max_nesting": 6
     },
     "crates/mae/src/test_runner.rs": {
-      "max_fn_lines": 191,
+      "max_fn_lines": 165,
       "max_nesting": 5
     },
     "crates/mae/src/upgrade.rs": {
@@ -1033,7 +1039,7 @@
       "max_nesting": 1
     },
     "daemon/src/collab_handler/kb_content.rs": {
-      "max_fn_lines": 259,
+      "max_fn_lines": 223,
       "max_nesting": 5
     },
     "daemon/src/collab_handler/kb_membership.rs": {
@@ -1133,7 +1139,7 @@
       "max_nesting": 4
     },
     "daemon/src/kb_query.rs": {
-      "max_fn_lines": 62,
+      "max_fn_lines": 68,
       "max_nesting": 6
     },
     "daemon/src/main.rs": {
@@ -1198,14 +1204,14 @@
     },
     "shared/kb/src/cozo_store/db.rs": {
       "max_fn_lines": 82,
-      "max_nesting": 2
+      "max_nesting": 3
     },
     "shared/kb/src/cozo_store/health.rs": {
       "max_fn_lines": 107,
       "max_nesting": 3
     },
     "shared/kb/src/cozo_store/kb_store_impl.rs": {
-      "max_fn_lines": 157,
+      "max_fn_lines": 133,
       "max_nesting": 3
     },
     "shared/kb/src/cozo_store/schema.rs": {
@@ -1237,12 +1243,12 @@
       "max_nesting": 2
     },
     "shared/kb/src/export.rs": {
-      "max_fn_lines": 40,
+      "max_fn_lines": 61,
       "max_nesting": 5
     },
     "shared/kb/src/federation.rs": {
-      "max_fn_lines": 168,
-      "max_nesting": 7
+      "max_fn_lines": 165,
+      "max_nesting": 5
     },
     "shared/kb/src/fuzzy.rs": {
       "max_fn_lines": 103,
@@ -1270,7 +1276,7 @@
     },
     "shared/kb/src/remote_hub.rs": {
       "max_fn_lines": 102,
-      "max_nesting": 2
+      "max_nesting": 3
     },
     "shared/kb/src/watch.rs": {
       "max_fn_lines": 42,

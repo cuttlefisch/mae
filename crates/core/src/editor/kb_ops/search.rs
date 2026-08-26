@@ -35,7 +35,7 @@ impl Editor {
     pub fn kb_all_node_pairs(&self) -> Vec<(String, String)> {
         if let Some(q) = self.kb.query_layer() {
             let mut pairs = q.id_title_pairs(None).unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "kb id_title_pairs failed");
+                self.kb.note_read_error("listing nodes", e);
                 Vec::new()
             });
             pairs.sort_by(|a, b| a.0.cmp(&b.0));
@@ -64,7 +64,7 @@ impl Editor {
         // Body truncated to 500 chars — only used for fuzzy search, not display.
         let mut triples: Vec<(String, String, String)> = if let Some(q) = self.kb.query_layer() {
             q.id_title_body_triples(None, 500).unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "kb id_title_body_triples failed");
+                self.kb.note_read_error("listing node bodies", e);
                 Vec::new()
             })
         } else {
@@ -155,7 +155,7 @@ impl Editor {
         if self.kb.primary_thin() {
             if let Some(ql) = self.kb.query_layer() {
                 let hits = ql.search(query, limit).unwrap_or_else(|e| {
-                    tracing::warn!(error = %e, query, "kb search failed in kb_find_candidates");
+                    self.kb.note_read_error("search", e);
                     Vec::new()
                 });
                 for hit in hits {
@@ -508,10 +508,12 @@ impl Editor {
                 // scoring, so it degrades to relevance here (honest, not silent: the
                 // daemon-hosted primary has no local activity log).
                 if let Some(ql) = self.kb.query_layer() {
-                    let hits = ql.search(query, self.kb.search_max_results).unwrap_or_else(|e| {
-                        tracing::warn!(error = %e, query, "kb search failed in kb_federated_search");
-                        Vec::new()
-                    });
+                    let hits = ql
+                        .search(query, self.kb.search_max_results)
+                        .unwrap_or_else(|e| {
+                            self.kb.note_read_error("federated search", e);
+                            Vec::new()
+                        });
                     for hit in hits {
                         if let Some(node) = ql.get(&hit.id) {
                             if seen_ids.insert(node.id.clone()) {
@@ -586,15 +588,12 @@ impl Editor {
                     }
                 }
                 let layer = mae_kb::CozoQueryLayer::new(store.clone());
-                let hits = mae_kb::query::KbQueryLayer::search(
-                    &layer,
-                    query,
-                    self.kb.search_max_results,
-                )
-                .unwrap_or_else(|e| {
-                    tracing::warn!(error = %e, query, kb = %name, "system KB search failed");
-                    Vec::new()
-                });
+                let hits =
+                    mae_kb::query::KbQueryLayer::search(&layer, query, self.kb.search_max_results)
+                        .unwrap_or_else(|e| {
+                            self.kb.note_read_error(&format!("search in {name}"), e);
+                            Vec::new()
+                        });
                 for hit in hits {
                     if let Some(node) = mae_kb::query::KbQueryLayer::get(&layer, &hit.id) {
                         if seen_ids.insert(node.id.clone()) {
