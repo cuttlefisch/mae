@@ -2778,9 +2778,9 @@
     },
     {
       "path": "crates/core/src/editor/idle_ops.rs",
-      "lines": 190,
+      "lines": 199,
       "test_lines": 82,
-      "code_lines": 108,
+      "code_lines": 117,
       "is_test_file": false,
       "max_fn_lines": 26,
       "max_fn_name": "on_idle_tick_forces_redraw_exactly_once_per_activation",
@@ -2954,11 +2954,11 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/search.rs",
-      "lines": 708,
+      "lines": 707,
       "test_lines": 0,
-      "code_lines": 708,
+      "code_lines": 707,
       "is_test_file": false,
-      "max_fn_lines": 189,
+      "max_fn_lines": 188,
       "max_fn_name": "kb_federated_search_scoped_impl",
       "max_match_arms": 5,
       "max_struct_fields": 3,
@@ -3114,8 +3114,8 @@
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_ingest_policy_tests.rs",
-      "lines": 693,
-      "test_lines": 693,
+      "lines": 738,
+      "test_lines": 738,
       "code_lines": 0,
       "is_test_file": true,
       "max_fn_lines": 62,
@@ -3126,7 +3126,7 @@
       "max_nesting": 2,
       "use_count": 3,
       "pub_items": 0,
-      "test_count": 16
+      "test_count": 18
     },
     {
       "path": "crates/core/src/editor/kb_ops/tests/kb_ops_instance_matching_tests.rs",
@@ -3402,14 +3402,14 @@
     },
     {
       "path": "crates/core/src/editor/kb_state.rs",
-      "lines": 812,
+      "lines": 846,
       "test_lines": 77,
-      "code_lines": 735,
+      "code_lines": 769,
       "is_test_file": false,
       "max_fn_lines": 69,
       "max_fn_name": "rebuild_query_layer",
       "max_match_arms": 5,
-      "max_struct_fields": 53,
+      "max_struct_fields": 54,
       "max_struct_name": "KbContext",
       "max_nesting": 3,
       "use_count": 8,
@@ -13643,7 +13643,7 @@
       },
       {
         "path": "crates/core/src/editor/idle_ops.rs",
-        "line": 59,
+        "line": 68,
         "category": "docs-drift"
       },
       {
@@ -13703,7 +13703,12 @@
       },
       {
         "path": "crates/core/src/editor/kb_state.rs",
-        "line": 373,
+        "line": 181,
+        "category": "kb-truth"
+      },
+      {
+        "path": "crates/core/src/editor/kb_state.rs",
+        "line": 392,
         "category": "kb-truth"
       },
       {
