@@ -2,6 +2,159 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.115] - 2026-08-26
+
+
+
+
+### Security
+
+- *(security)* Close the yrs length-prefix allocation bomb on the sync/diff read path ([91419f8](https://github.com/cuttlefisch/mae/commit/91419f86b19a1001e8839b9adf9cfedc76105929))
+- *(security)* Carry y-crdt PR #644 to close the decoder's UTF-8 UB, and scan the daemon workspace ([b300172](https://github.com/cuttlefisch/mae/commit/b300172650674d779518ab41aee31818bcf067d6))
+
+### Features
+
+- *(kb)* Give KB identity a real predicate, not a name comparison (ADR-105 D4) ([6335063](https://github.com/cuttlefisch/mae/commit/63350634f569d4f8f3400e77dfa15805a4bdd390))
+- *(kb)* A KB syncs under its own minted id, not its display name (ADR-105 D4) ([d04cf8b](https://github.com/cuttlefisch/mae/commit/d04cf8b4cc316860cc7a374db79478a52f594bde))
+- *(daemon)* Migrate legacy kb: node documents to per-KB addresses (ADR-105 Stage 4) ([09c782e](https://github.com/cuttlefisch/mae/commit/09c782e019ea614502e73e49423d20fd07ce5626))
+- *(kb)* Give snapshot_version its first production caller, and settle node_versions residency (ADR-106) ([a7b8a1c](https://github.com/cuttlefisch/mae/commit/a7b8a1c8fa475aaebe1a09612d7f9f16fd442738))
+- *(kb)* Per-instance ingest policy — a detached KB's store is the source of truth (Phase 1) ([06cad3d](https://github.com/cuttlefisch/mae/commit/06cad3d647475b019631baaf51689055763e7832))
+- *(daemon)* Wire ADR-032 checkpoints to a real surface, and prove rollback (#632) ([28d6fa1](https://github.com/cuttlefisch/mae/commit/28d6fa1aaa8515436e3c9f399f360b1af0641bd4))
+- *(kb)* Put sqlite stores into WAL mode, out of band ([096441c](https://github.com/cuttlefisch/mae/commit/096441ce8dac2129ef6ce142cf968b15d9917662))
+- *(daemon)* Give the unsigned-content-op migration a lever and an exit criterion ([3f2847d](https://github.com/cuttlefisch/mae/commit/3f2847d3c18be64a9899878cd41be01d3b3eb382))
+- *(kb)* Retire sled as a default — sqlite is the backend (ADR-108, C6) ([9deed9c](https://github.com/cuttlefisch/mae/commit/9deed9c2a01722ed5fd7941da795b42c50637e29))
+- *(kb)* One capability model, and the conformance suite it makes writable (C1) ([6c51822](https://github.com/cuttlefisch/mae/commit/6c51822d70968b31e0bcb1c4952833a3cbbaa98f))
+- *(daemon)* Close four network-surface gaps — links, neighborhood, titles (D1a) ([a03d618](https://github.com/cuttlefisch/mae/commit/a03d618fdb0e31e78b60b7f48cb31ee7a9b40a23))
+- *(kb)* Dailies and capture work with no .org directory (Phase 3) ([16b9a6f](https://github.com/cuttlefisch/mae/commit/16b9a6f7227545c5dfe9ce591f676a16f352403e))
+- *(sync)* The node-rebirth op — a signed, owner-only growth bound (ADR-107) ([01473a6](https://github.com/cuttlefisch/mae/commit/01473a6e96a84dbdfb3de2bc160352c17f3cda05))
+- *(sync)* Rebirth a node, and MEASURE the growth bound it claims (ADR-107) ([4e5eb83](https://github.com/cuttlefisch/mae/commit/4e5eb83d5b5634a13f576a07d42c1105049c51ac))
+- *(daemon)* The rebirth adoption path — replace, never merge (ADR-107) ([e3805d5](https://github.com/cuttlefisch/mae/commit/e3805d5678c052ed7cdaea8f7fb9f662b1fcabcd))
+- *(kb)* Close three network gaps with no new endpoints, and name the two that never close (D1b) ([7ab04fd](https://github.com/cuttlefisch/mae/commit/7ab04fd109bd28cb394239fca69c82d0d358846d))
+- *(ai)* File_read refuses a detached KB's stale archive (Story C) ([757342a](https://github.com/cuttlefisch/mae/commit/757342a914df4ba0ec397ddcbdc03f5a04514fbc))
+- *(kb)* An independent import census, because counters demonstrably lie (Story D) ([449b540](https://github.com/cuttlefisch/mae/commit/449b540e43d1521d4da937e6bf6788f8e36ddd38))
+- *(kb)* Stable project-KB identity — mint an opaque id, derive nothing (Story B) ([ad9f623](https://github.com/cuttlefisch/mae/commit/ad9f623ff2ce4ff68c12e58617c2419044248a05))
+- *(kb)* The import audit — assess before, reconcile after, report into the destination (Story D / R8) ([8a12d9a](https://github.com/cuttlefisch/mae/commit/8a12d9aabe766f201c151b6856554a09f825b69d))
+- *(kb)* A project KB is keyed on a durable identity, not a path (Story B / R11) ([182bdbc](https://github.com/cuttlefisch/mae/commit/182bdbccbf2a9b6fb303ea25a1efb438f5a86361))
+- *(kb)* Close the last three closeable network-parity gaps (D1b) ([ccc2d46](https://github.com/cuttlefisch/mae/commit/ccc2d46e6ae5b406d5e6ade034cb62cd13d5198b))
+- *(kb)* Edit a KB node as its org source text (ADR-092 D3/D5) ([7579daa](https://github.com/cuttlefisch/mae/commit/7579daa9b588ea578660c46e463b866c8811e010))
+- *(kb)* Surface a member's replication policy, not just its risk signal (ADR-067) ([d904078](https://github.com/cuttlefisch/mae/commit/d904078990af342b46132913b0f61f3f279594d6))
+
+### Bug Fixes
+
+- *(daemon)* Kb/list must not enumerate KBs the caller cannot read (#653) ([650d086](https://github.com/cuttlefisch/mae/commit/650d086eb39716966dd7d87eec39c710d4292748))
+- *(daemon)* Enforce per-tenant quotas on the collab and OAuth listeners (#456) ([7e3276d](https://github.com/cuttlefisch/mae/commit/7e3276db86f8bf6820e6fa99527382580c3a8589))
+- *(kb)* Address KB node documents per-KB (ADR-105 Stage 2, closes #718) ([51a673d](https://github.com/cuttlefisch/mae/commit/51a673d04a0e50f8052ef61fb30dc20a2aa8dc96))
+- *(test)* Repair two more assertions ADR-105 Stage 2 left stale ([b45d532](https://github.com/cuttlefisch/mae/commit/b45d5328f21de2d3b177b4dd913a79660ea0476c))
+- *(kb)* Enforce that a KB id is addressable (ADR-105 D3) ([478fbba](https://github.com/cuttlefisch/mae/commit/478fbbacaf0127f362c183276333d0e814d60a6e))
+- *(kb)* A KB id belongs to whoever shared it first (ADR-105 D5) ([7e7a81d](https://github.com/cuttlefisch/mae/commit/7e7a81d87f973dced54e7915b074c4ec1a580536))
+- *(kb)* Make a colliding KB collab id recoverable, not permanent (ADR-105 D4/D5) ([ce3b30d](https://github.com/cuttlefisch/mae/commit/ce3b30df501094358d82e3ddff2220c54bd4754f))
+- *(kb)* Resolve a typed KB name to its collab id, and stop reads creating KBs ([4d81f91](https://github.com/cuttlefisch/mae/commit/4d81f914a091ef4843f000447ae2e2f6acb7cfee))
+- *(kb)* The must-exist guard must not mistake an evicted KB for a missing one ([22e418a](https://github.com/cuttlefisch/mae/commit/22e418a4b96a42ed1d30e528ae2ece6a81d60637))
+- Arm the watchdog on the event loop, and stop reads creating durable docs ([759852e](https://github.com/cuttlefisch/mae/commit/759852e76a54af44079019f140174e4a2bbd0745))
+- *(kb)* Reading a node no longer reverts it to its .org file (#729) ([f8ec1d0](https://github.com/cuttlefisch/mae/commit/f8ec1d0b242ea27a9ed1f0cfd09d2e788340b035))
+- *(kb)* Make projection drift detectable and stop two silent KB-blanking paths ([0ee720f](https://github.com/cuttlefisch/mae/commit/0ee720f10c43aa13abd819da820225b6a8c0a74b))
+- *(kb)* Do not snapshot when an ingest overwrites SEEDED content ([507c867](https://github.com/cuttlefisch/mae/commit/507c86705b96466f9366518d58981a12de90324b))
+- *(test)* The headless socket wait had negative margin against its own operation ([09a7615](https://github.com/cuttlefisch/mae/commit/09a7615b7b4938639bf55b4b9fe34ca6579c0e16))
+- *(daemon)* Doctor reported a hardcoded yrs version that had drifted to a lie ([bfa9ffc](https://github.com/cuttlefisch/mae/commit/bfa9ffc0a79a6325829d49da1d1bef3f19a61a04))
+- *(sync)* Stop rewriting the constant schema_v key on every field change ([c1c54a7](https://github.com/cuttlefisch/mae/commit/c1c54a794ff932f18d6156b39334a3ce746cfe80))
+- *(kb)* Carry NodeSource in the CRDT payload so provenance survives sync (#710) ([2501d4a](https://github.com/cuttlefisch/mae/commit/2501d4aacfffefb88e42f8de8d6707564b37ae3f))
+- *(kb)* Stamp created_at once in the node document instead of resetting it on every write ([f6551ba](https://github.com/cuttlefisch/mae/commit/f6551bac33c0e2ffd6d51a876a50bf504cd0e73a))
+- *(kb)* External URLs are links in the text, not edges in the graph ([9aae036](https://github.com/cuttlefisch/mae/commit/9aae036e1f5db34e17e4880d6a6506892045f7aa))
+- *(e2e)* Stop three scripts aborting before the guard written for that case ([b2312c5](https://github.com/cuttlefisch/mae/commit/b2312c57b2c4f98c1cdc27c47567817e0fa38de8))
+- *(daemon)* Route dispatch through a typed Method so authorization cannot be forgotten ([39a14f8](https://github.com/cuttlefisch/mae/commit/39a14f8ce8218e4bcc55403ef09564597ffd4165))
+- *(kb)* Close the two Datalog injections reachable at ReadOnly tier ([7114df7](https://github.com/cuttlefisch/mae/commit/7114df7771dc1c521c33e684e1c0b7af8fe6ed39))
+- *(kb)* Stop reporting "deleted" for a node this replica merely does not hold ([9bb120e](https://github.com/cuttlefisch/mae/commit/9bb120e36b6b54dc02e0f5ec83cd941aa237f83b))
+- *(kb)* Bind agenda and prefix filter values instead of escaping them by hand ([9eef8ab](https://github.com/cuttlefisch/mae/commit/9eef8ab6ea59c26777f70225b60c10c5696d5e18))
+- *(kb)* Clean up and refuse to promote WAL sidecars ([10b686e](https://github.com/cuttlefisch/mae/commit/10b686ef46440983318a9314f55a0162ba7a2ae1))
+- *(kb)* Checkpoint a staged store's WAL instead of refusing to promote it ([e52e0f5](https://github.com/cuttlefisch/mae/commit/e52e0f5e08d878ba7ccc582ca9b6afbe08918201))
+- *(kb)* Make the vector path work at the shipped model's dimension (D2) ([6becfc4](https://github.com/cuttlefisch/mae/commit/6becfc4545c69bc671590ea52bbd0fb0851145d6))
+- *(ai)* A command mirror may never be a weaker route than its tool (C3) ([f9825c1](https://github.com/cuttlefisch/mae/commit/f9825c17414f3498d37e6db289d23b97516689e5))
+- *(e2e)* Wait for the canary docs to arrive, and stop clamp from panicking ([8c86450](https://github.com/cuttlefisch/mae/commit/8c86450a41d12975893bec4b576c589fc80c5cb4))
+- *(kb)* Properties are stored once — the drawer is a rendering (#655) ([84713da](https://github.com/cuttlefisch/mae/commit/84713dac37bb3b24151dfc4cc21ca88d26067a8e))
+- *(kb)* The four dead columns become derived, and a fresh CRDT doc keeps its v2 fields (D3, #656) ([a0b9ca0](https://github.com/cuttlefisch/mae/commit/a0b9ca0b1c79015416804476e9c5cda6585a8bd5))
+- *(daemon)* Heal must not delete what the CRDT never knew about (C6) ([e057654](https://github.com/cuttlefisch/mae/commit/e057654abbf8abd1cc51ef425d4e5a3fa1bdd856))
+- *(test)* The Scheme harness can finally verify KB persistence (#781) ([1c90b92](https://github.com/cuttlefisch/mae/commit/1c90b92166fc976991e768485bea496ba8c3d86d))
+- *(kb)* Route meta-widen through the sole node mutator, and guard the rule (ADR-092 D1) ([ccc8cc0](https://github.com/cuttlefisch/mae/commit/ccc8cc0a133382d058c73bca137a86abf3a40345))
+- *(kb)* The org export destroyed every link it wrote (ADR-092 D3) ([9f38210](https://github.com/cuttlefisch/mae/commit/9f38210fd896acd8b5732ea18beab4daed53f2e0))
+- *(test)* A scenario step whose command was never dispatched must not report ok (#787) ([caf321c](https://github.com/cuttlefisch/mae/commit/caf321cf396c7673d16f95252bcb33148956cda7))
+- *(kb)* Stop following links into a detached KB's stale archive (Phase 4/5) ([591feb8](https://github.com/cuttlefisch/mae/commit/591feb8f526d842d77205045be2bedf0abc84ab1))
+- *(kb)* Kb-edit-source is the second door into the stale-archive trap (Phase 5) ([f11a752](https://github.com/cuttlefisch/mae/commit/f11a7524dbefd7f1bbcbf6184a6ceb013afe7d20))
+- *(test)* A command that RUNS and fails must not report ok either (#787, part 2) ([ea9123b](https://github.com/cuttlefisch/mae/commit/ea9123b0501c460f1ee1c0ea725b1abc980257ba))
+- *(kb)* Adopt a legacy-path KB registry instead of loading empty (#798) ([2aece30](https://github.com/cuttlefisch/mae/commit/2aece30af8543ff01cb2da92b46d89f285c622a7))
+- *(kb)* The move tests were measuring Linux, not identity (CI Windows leg) ([ad4268a](https://github.com/cuttlefisch/mae/commit/ad4268a7db91ba3bf97a27cc59244aadcd814693))
+- *(kb)* The org round trip lost six things, and ingest was one of them (ADR-092 D3) ([3a37d0a](https://github.com/cuttlefisch/mae/commit/3a37d0a0b191a8bfb9e19eb5127f274e116bd5ea))
+- *(kb)* The cutover's detach was half-wired, and cleanup destroyed the KB ([8bb47c7](https://github.com/cuttlefisch/mae/commit/8bb47c7ec7a258f4c42850eb102a7374e68b4139))
+- *(kb)* Dailies navigation and capture had no store backing (KB cutover) ([eeae8ce](https://github.com/cuttlefisch/mae/commit/eeae8ce67380f027ec296559f73dcc374bd7c6d4))
+- *(kb)* A failed store read must not read as "no results" (KB cutover) ([3da2161](https://github.com/cuttlefisch/mae/commit/3da2161274a5d7dc5ee8f829609b0a15fabdae7a))
+- *(kb)* Honour :daily-goto-date's argument, and stop a leaked dialog poisoning later tests ([bb51d59](https://github.com/cuttlefisch/mae/commit/bb51d59c2057a9b00c39b71b0b6d0495d2059c22))
+- *(ai)* Let a tool pass an argument to a command, and report what happened (#808) ([492a975](https://github.com/cuttlefisch/mae/commit/492a9758d44b00a44d94a129079c33717b117225))
+- *(build)* An untracked file is not an uncommitted change ([f304fc1](https://github.com/cuttlefisch/mae/commit/f304fc17c3f7e3acf21edeafa40f4231285e3074))
+- *(kb)* Correct chrono_now()'s calendar arithmetic, and make the shell-escape test portable ([914ee4b](https://github.com/cuttlefisch/mae/commit/914ee4be2c9aff5884e81a043153866050b7137a))
+
+### Performance
+
+- *(kb)* Stop compiling keyed lookups to full relation scans ([2bbc0b8](https://github.com/cuttlefisch/mae/commit/2bbc0b8850d50440db7791b6ce2f2aac8a4c2d4d))
+
+### Refactor
+
+- *(daemon)* Guard KB documents by address type, not string prefix (ADR-105 Stage 1) ([b43608a](https://github.com/cuttlefisch/mae/commit/b43608a455a4a98e2c684964e56f2ee02fd8b9b2))
+- Complete the doc-address sweep — one place spells the name form ([3411755](https://github.com/cuttlefisch/mae/commit/3411755dd1f37afc4484eb694271f903ba215d54))
+- *(daemon)* Split the authorization decision out of the dispatcher ([6b22e5c](https://github.com/cuttlefisch/mae/commit/6b22e5c72badb5c23b94b7e53b6e1afa10e31fb5))
+- *(daemon)* Split OAuth config out of config.rs ([0e4f305](https://github.com/cuttlefisch/mae/commit/0e4f30596e881c642e7911b9dc99fe7cf70bf826))
+- *(kb)* Classify transient store errors, and drop the db_path trait leak (C2) ([0f4cc33](https://github.com/cuttlefisch/mae/commit/0f4cc33a6dedad52c0e6ed8857549c024dc4cff9))
+- *(cli)* Extract the test-mode store opener ([730d96b](https://github.com/cuttlefisch/mae/commit/730d96bc447d4e8b7d2e113efe54773516a01d76))
+
+### Documentation
+
+- *(adr)* ADR-107 — node rebirth bounds CRDT growth using the consensus primitive MAE already has ([fcc48a6](https://github.com/cuttlefisch/mae/commit/fcc48a631e6b56e668f7181a7bdcc989dda3dbe1))
+- *(adr)* ADR-108 -- one storage backend, and correct ADR-102's false premise ([b82b451](https://github.com/cuttlefisch/mae/commit/b82b451da062e3cc85a914d41e6952f4c78e6800))
+- *(adr)* Restore the ADR-102 correction after the back-merge reverted it ([1e96b53](https://github.com/cuttlefisch/mae/commit/1e96b5346e0fe3d2ac2988936e2c5c15abeceeb0))
+- *(adr)* Record the post-fix benchmark — the scaling risk was ours, not Cozo's ([781d990](https://github.com/cuttlefisch/mae/commit/781d99012f06d979d499d7b4f7eb1ce59cde1989))
+- *(adr)* Price the hosted deployment before launch, not after (ADR-109, D4) ([fa7c160](https://github.com/cuttlefisch/mae/commit/fa7c1606c450c76d62cca5803676877ad0758ff8))
+
+### Testing
+
+- *(daemon)* Scope the auth-mode e2e's kb/node_crdt calls to a KB (ADR-105 Stage 2) ([a3d780a](https://github.com/cuttlefisch/mae/commit/a3d780a034e2d3e2b167945ea997fb1a0c146afa))
+- *(collab)* Two tenants must both be able to share their primary KB (ADR-105 F) ([8722dd9](https://github.com/cuttlefisch/mae/commit/8722dd9f8791b8db7407cf0910fa0aa50a5ba64c))
+- *(sync)* Reproduce the yrs v1 decoder's UTF-8 undefined behaviour (y-crdt#415) ([0078847](https://github.com/cuttlefisch/mae/commit/0078847a4ade75f5e0e71035c663cd8266f014be))
+- *(daemon)* Prove the docs/* and sync/update authorization holes (ADVERSARIAL) ([084146b](https://github.com/cuttlefisch/mae/commit/084146b34ece66e8abbea8a6bbdb22c99c2612dc))
+- Bound e2e readiness waits by wall-clock, not iteration count (#769) ([a8d7a6c](https://github.com/cuttlefisch/mae/commit/a8d7a6c2b56f848d405af12bfc2d3bf2a6bcdf7a))
+- *(sync)* ADR-107 gates 2 and 3 — convergence, and the replay attack (ADR-107) ([32cf3b6](https://github.com/cuttlefisch/mae/commit/32cf3b67fc88ae6cbcc13a30198ecfbd0d4474a0))
+- *(kb)* Story A — the day-one experience, proven end to end (Phase 6) ([9f165cc](https://github.com/cuttlefisch/mae/commit/9f165cc8e2673dec362ef0395da450ad2119956d))
+- *(ai)* Measure and ratchet the advertised tool surface (Story C / R10) ([d605ab9](https://github.com/cuttlefisch/mae/commit/d605ab9dd6da2ec8cf3133fa991ebc9fed2e136e))
+- *(kb)* Drive a detached KB end to end, and widen the silent-status net ([1d9e42c](https://github.com/cuttlefisch/mae/commit/1d9e42ccae7ea1147e08cd8651473070959b1c3a))
+
+### Build System
+
+- *(audit)* Gate function length and nesting, stop gating file size ([b88c28f](https://github.com/cuttlefisch/mae/commit/b88c28ffe1738140133d0d9792ed6c7867c7eb13))
+
+### CI
+
+- Supersede a PR's own in-flight run when it is pushed again ([af72dfc](https://github.com/cuttlefisch/mae/commit/af72dfcbb75e99c63313af6590646ae557100028))
+
+### Styling
+
+- *(daemon)* Apply daemon-workspace rustfmt ([2832dc0](https://github.com/cuttlefisch/mae/commit/2832dc0a620f0e7e2ff628545c4fb812b805cfaa))
+- *(core)* Reattach dispatch_kb's doc comment to dispatch_kb ([302fd98](https://github.com/cuttlefisch/mae/commit/302fd98f35445ba2ea3e8d4e9699831d0d83a4f2))
+
+### Miscellaneous
+
+- *(daemon)* Confirm the ADR-105 migration ran, at debug level ([15e4289](https://github.com/cuttlefisch/mae/commit/15e428931200404bb05c5e9b4eda3703329cdc05))
+- Bump version to 0.14.115 ([432e68d](https://github.com/cuttlefisch/mae/commit/432e68d14b97098e7b3a4f56a6e3d88044c60358))
+- Satisfy the structural-ceiling ratchet, and record why registry.rs was re-blessed ([8cdc46c](https://github.com/cuttlefisch/mae/commit/8cdc46cf3d34002d735216d300111503bdae16af))
+- *(adr)* Regenerate ADR KB asset after back-merging main ([c70bea2](https://github.com/cuttlefisch/mae/commit/c70bea202feac7213a19a98ea3e6b1c9946fc59b))
+- Keep the ADR-108 work out of the security PR ([57fa7be](https://github.com/cuttlefisch/mae/commit/57fa7be9ee1fa81a7eac7ea77d6bae296c129268))
+- *(adr)* Regenerate the ADR KB asset after the back-merge ([59578e9](https://github.com/cuttlefisch/mae/commit/59578e9a9ab87677dce226bf0fd41919a20005a8))
+- *(deps)* Bump the rust-dependencies group in /daemon with 19 updates ([16e7535](https://github.com/cuttlefisch/mae/commit/16e7535c454574279b80b8f09ad141c01ea65bc1))
+- *(deps)* Bump the rust-dependencies group across 1 directory with 5 updates ([6810090](https://github.com/cuttlefisch/mae/commit/68100905fbf1f6b36c156880aa9869222670d583))
+- *(deps)* Land both dependency bumps, with the rand 0.10 API break fixed ([431eb65](https://github.com/cuttlefisch/mae/commit/431eb650eb7900d128ca5ff4a2dee2ae7b89fbc4))
+- Regenerate audit metrics for the consolidated branch ([7529c8b](https://github.com/cuttlefisch/mae/commit/7529c8b43e97d7118084193530af158bf19dd633))
+- Regenerate audit metrics after rebase onto #776 ([1d601ed](https://github.com/cuttlefisch/mae/commit/1d601edb86340c7b898d6b780583d6413eb0c393))
+- *(adr)* Regenerate the ADR KB checksum for ADR-109 ([ad3a377](https://github.com/cuttlefisch/mae/commit/ad3a3770c174b7179e104ea31d7644fe4cd14511))
+- Regenerate audit metrics after rebase ([4768d3e](https://github.com/cuttlefisch/mae/commit/4768d3ec54499ebf3182a338498eec47b3fb2e05))
+- Regenerate audit metrics after rebase ([092e05c](https://github.com/cuttlefisch/mae/commit/092e05cd5b350c857b4cd7605086e5224b2c9d9f))
+- Regenerate audit metrics and code map for the consolidated branch ([56895c9](https://github.com/cuttlefisch/mae/commit/56895c9945ff89464acda5c3a93b6f673ab55387))
+
 ## [0.14.114] - 2026-08-14
 
 
@@ -10,6 +163,10 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 
 - *(collab)* Bind the owner test inside the E2E anchor search (#573) ([6dcc339](https://github.com/cuttlefisch/mae/commit/6dcc3399bda1639b8f8a9f98483619796d9c2122))
+
+### Miscellaneous
+
+- Bump version to 0.14.114 ([9934c70](https://github.com/cuttlefisch/mae/commit/9934c702c17d754dafa067bbc1b9d3930a02dc55))
 
 ## [0.14.113] - 2026-08-13
 
