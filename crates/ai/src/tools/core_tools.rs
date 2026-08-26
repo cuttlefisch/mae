@@ -23,6 +23,21 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             items.join(", ")
         )
     };
+    let mut defs = buffer_project_and_option_tools(option_names, option_desc);
+    defs.extend(agent_and_introspection_tools());
+    defs
+}
+
+/// Buffers, cursor, files, windows, project, and the option accessors.
+///
+/// Split from [`core_tool_definitions`] purely for length: one `vec!` of every
+/// core tool was a single 650-line function against an 80-line ceiling, so any
+/// new tool tripped the structural ratchet on an item nobody could shorten.
+/// The boundary is the one the file already marked with a comment.
+fn buffer_project_and_option_tools(
+    option_names: Vec<String>,
+    option_desc: String,
+) -> Vec<ToolDefinition> {
     vec![
         // --- Buffer tools ---
         ToolDefBuilder::new("buffer_read", "Read buffer contents. Returns text with line numbers.")
@@ -116,6 +131,11 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             "command",
             "string",
             "The command name to execute (e.g. 'move-to-last-line', 'scroll-down-line')",
+        )
+        .prop(
+            "args",
+            "string",
+            "Optional argument string for commands that take one, exactly as it would follow the command on the ':' line (e.g. command='kb-detach', args='MyKb'). Omit for commands that take none.",
         )
         .required(["command"])
         .permission(PermissionTier::Write)
@@ -233,6 +253,12 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             .required(["option", "value"])
             .permission(PermissionTier::Write)
             .build(),
+    ]
+}
+
+/// Agent UX, session/state, introspection, packages, and the tooling helpers.
+fn agent_and_introspection_tools() -> Vec<ToolDefinition> {
+    vec![
         // --- Agent UX tools ---
         ToolDefBuilder::new(
             "ask_user",
