@@ -746,7 +746,7 @@ fn dispatch_tool(
 
     // Registry commands (command_* prefix)
     if let Some(cmd_name) = call.name.strip_prefix("command_") {
-        return execute_registry_command(editor, cmd_name);
+        return execute_registry_command(editor, cmd_name, &call.arguments);
     }
 
     // Scheme-registered AI tools
@@ -804,10 +804,23 @@ pub(crate) fn unsanitize_command_name(tool_suffix: &str) -> String {
 /// redirection needed locally) -- the enclosing `with_ai_dispatch_scope`
 /// call in `execute_tool_with_requester` has already focused the companion
 /// window, if one was needed, before this ever runs (issue #372).
-fn execute_registry_command(editor: &mut Editor, tool_suffix: &str) -> Result<String, String> {
+fn execute_registry_command(
+    editor: &mut Editor,
+    tool_suffix: &str,
+    args: &serde_json::Value,
+) -> Result<String, String> {
     let cmd_name = unsanitize_command_name(tool_suffix);
-    if editor.dispatch_builtin(&cmd_name) {
-        Ok(format!("Executed: {}", cmd_name))
+    let cmd_args = args
+        .get("args")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    // The command NAME comes from the tool name, never from the arguments, so
+    // an argument cannot redirect this to a different command. See
+    // `Editor::dispatch_ex_command` for why the raw-line forms stay out of
+    // reach.
+    if editor.dispatch_ex_command(&cmd_name, cmd_args) {
+        Ok(super::core_exec::command_outcome(editor, &cmd_name))
     } else {
         Err(format!("Unknown command: {}", cmd_name))
     }

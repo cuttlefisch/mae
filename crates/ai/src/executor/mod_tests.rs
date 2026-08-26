@@ -62,6 +62,57 @@ fn make_call(name: &str, args: serde_json::Value) -> ToolCall {
     }
 }
 
+/// **ADR-086.** `execute_command` returned `Executed: {cmd}` unconditionally,
+/// so success, refusal and silent no-op were one indistinguishable string —
+/// while its sibling in the same file already returned the status line. Most
+/// commands report a refusal ON THE STATUS LINE and still return `true` from
+/// dispatch, so this was not a rare corner: it was the normal way a caller
+/// learned nothing.
+#[test]
+fn execute_command_reports_the_outcome_not_merely_that_it_dispatched() {
+    let mut editor = Editor::new();
+    // `:ai-save` with no path refuses with a usage message on the status line
+    // and still dispatches successfully.
+    let call = make_call("execute_command", serde_json::json!({"command": "ai-save"}));
+    let result = unwrap_immediate(execute_tool(
+        &mut editor,
+        &call,
+        &all_tools(),
+        &tool_behaviour_policy(),
+    ));
+    assert!(
+        result.output.to_lowercase().contains("usage"),
+        "the refusal must reach the caller; got {:?}",
+        result.output
+    );
+    assert!(
+        !result.output.starts_with("Executed:"),
+        "`Executed:` here is the defect -- it reports dispatch, not outcome"
+    );
+}
+
+/// The other half: a command that says nothing still gets an acknowledgement,
+/// so the fix above did not turn quiet success into an empty result.
+#[test]
+fn a_silent_command_still_acknowledges() {
+    let mut editor = make_editor_with_text("a\nb\nc\n");
+    let call = make_call(
+        "execute_command",
+        serde_json::json!({"command": "move-to-last-line"}),
+    );
+    let result = unwrap_immediate(execute_tool(
+        &mut editor,
+        &call,
+        &all_tools(),
+        &tool_behaviour_policy(),
+    ));
+    assert!(result.success);
+    assert!(
+        !result.output.is_empty(),
+        "a quiet command must still return something"
+    );
+}
+
 #[test]
 fn buffer_read_full() {
     let mut editor = make_editor_with_text("hello\nworld\n");
