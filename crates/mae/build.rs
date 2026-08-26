@@ -20,7 +20,14 @@ fn main() {
     let build = match sha {
         Some(sha) => {
             let dirty = Command::new("git")
-                .args(["status", "--porcelain"])
+                // `--untracked-files=no` matches what `git describe --dirty`
+                // means by dirty: MODIFIED tracked files. Without it any
+                // untracked file stamps the binary `-dirty`, claiming
+                // uncommitted changes that do not exist -- and MAE generates
+                // one of those itself: `ai_guidance_export_live_sync` writes
+                // `AGENTS.md` into the project root, so running MAE in its own
+                // repo permanently dirtied every later build stamp.
+                .args(["status", "--porcelain", "--untracked-files=no"])
                 .output()
                 .ok()
                 .filter(|o| o.status.success())

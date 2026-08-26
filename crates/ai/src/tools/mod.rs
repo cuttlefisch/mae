@@ -113,7 +113,26 @@ pub fn tools_from_registry(registry: &CommandRegistry) -> Vec<ToolDefinition> {
                 description: cmd.doc.clone(),
                 parameters: ToolParameters {
                     schema_type: "object".into(),
-                    properties: HashMap::new(),
+                    // Every mirror accepts the same optional argument string
+                    // the command would take after `:`. Without it a mirror
+                    // could only ever invoke the command's NO-ARGUMENT form,
+                    // which for several commands means "open a prompt" -- so
+                    // the call reported success while doing nothing asked of
+                    // it. The command name is fixed by the tool name, so an
+                    // argument cannot redirect the call elsewhere.
+                    properties: HashMap::from([(
+                        "args".to_string(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description:
+                                "Optional argument string, exactly as it would follow the command on the ':' line. Omit for commands that take none."
+                                    .into(),
+                            enum_values: None,
+                            items: None,
+                            properties: None,
+                            object_required: None,
+                        },
+                    )]),
                     required: vec![],
                 },
                 permission: Some(classify_command_permission(&cmd.name)),

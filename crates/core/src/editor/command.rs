@@ -30,6 +30,21 @@ impl Editor {
             return self.execute_write_quit(&actions);
         }
 
+        self.dispatch_ex(command, args, Some(cmd))
+    }
+
+    /// The ex-command table, addressed by command NAME plus its argument.
+    ///
+    /// Split out of [`Editor::execute_command`] so a caller that has a name
+    /// and an argument -- an MCP tool, not a human typing a line -- can reach
+    /// the same commands without going through line parsing. `raw_line` is
+    /// `Some` only for the human path; see the `_` arm.
+    pub fn dispatch_ex(
+        &mut self,
+        command: &str,
+        args: Option<&str>,
+        raw_line: Option<&str>,
+    ) -> bool {
         match command {
             "e" => {
                 if let Some(path) = args {
@@ -1125,50 +1140,21 @@ impl Editor {
                 true
             }
             _ => {
-                // Shell escape: :!cmd
-                if let Some(shell_cmd) = cmd.strip_prefix('!') {
-                    let shell_cmd = shell_cmd.trim();
-                    if shell_cmd.is_empty() {
-                        self.set_status("Usage: :!<command>");
-                        return true;
-                    }
-                    match std::process::Command::new("sh")
-                        .arg("-c")
-                        .arg(shell_cmd)
-                        .output()
-                    {
-                        Ok(output) => {
-                            let stdout = String::from_utf8_lossy(&output.stdout);
-                            let stderr = String::from_utf8_lossy(&output.stderr);
-                            let result = if !stdout.is_empty() {
-                                stdout.trim().to_string()
-                            } else if !stderr.is_empty() {
-                                stderr.trim().to_string()
-                            } else {
-                                format!("(exit {})", output.status.code().unwrap_or(-1))
-                            };
-                            self.set_status(result);
-                        }
-                        Err(e) => {
-                            self.set_status(format!("Shell error: {}", e));
-                        }
-                    }
-                    return true;
-                }
-                // Global commands: :g/pattern/cmd and :v/pattern/cmd
-                if cmd.starts_with("g/") || cmd.starts_with("v/") {
-                    self.execute_global_command(cmd);
-                    return true;
-                }
-                // Check for substitute commands: s/.../.../  or %s/.../.../ or range s/
-                if cmd.starts_with("s/") || cmd.starts_with("%s/") {
-                    self.execute_substitute_command(cmd);
-                    return true;
-                }
-                // Range-prefixed substitute: .,+5s/...  1,10s/...  $s/...
-                if cmd.contains("s/") {
-                    if let Some((start, end, sub_cmd)) = self.parse_ex_range(cmd) {
-                        self.execute_substitute_with_range(sub_cmd, Some((start, end)));
+                // The RAW-LINE forms -- `:!cmd`, `:g/`, `:v/`, `:s/` and a
+                // range-prefixed substitute. They are the only branches that
+                // ever looked at the whole typed line rather than at the
+                // command name, and one of them shells out.
+                //
+                // @ai-caution: [permission] `raw_line` is `None` on every
+                // non-human caller (see `dispatch_ex_command`). That makes
+                // `sh -c` *unreachable* from a tool rather than reachable and
+                // then denied -- ADR-085's "not offered beats offered and
+                // denied". A tool path that reconstructs a line and re-enters
+                // the parser puts the shell escape straight back: with a
+                // reconstructed line, `args` of `s/a/b/` satisfies the
+                // `contains("s/")` range check below. Do not do that.
+                if let Some(raw) = raw_line {
+                    if self.try_ex_line_form(raw) {
                         return true;
                     }
                 }
@@ -1270,6 +1256,70 @@ impl Editor {
         }
     }
 
+    /// The raw-line ex forms, reachable only from a human-typed line.
+    ///
+    /// @ai-caution: [permission] This contains a `sh -c`. Its single caller
+    /// guards it behind `raw_line`, which no tool path supplies.
+    fn try_ex_line_form(&mut self, cmd: &str) -> bool {
+        // Shell escape: :!cmd
+        if let Some(shell_cmd) = cmd.strip_prefix('!') {
+            let shell_cmd = shell_cmd.trim();
+            if shell_cmd.is_empty() {
+                self.set_status("Usage: :!<command>");
+                return true;
+            }
+            match std::process::Command::new("sh")
+                .arg("-c")
+                .arg(shell_cmd)
+                .output()
+            {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let result = if !stdout.is_empty() {
+                        stdout.trim().to_string()
+                    } else if !stderr.is_empty() {
+                        stderr.trim().to_string()
+                    } else {
+                        format!("(exit {})", output.status.code().unwrap_or(-1))
+                    };
+                    self.set_status(result);
+                }
+                Err(e) => {
+                    self.set_status(format!("Shell error: {}", e));
+                }
+            }
+            return true;
+        }
+        // Global commands: :g/pattern/cmd and :v/pattern/cmd
+        if cmd.starts_with("g/") || cmd.starts_with("v/") {
+            self.execute_global_command(cmd);
+            return true;
+        }
+        // Check for substitute commands: s/.../.../  or %s/.../.../ or range s/
+        if cmd.starts_with("s/") || cmd.starts_with("%s/") {
+            self.execute_substitute_command(cmd);
+            return true;
+        }
+        // Range-prefixed substitute: .,+5s/...  1,10s/...  $s/...
+        if cmd.contains("s/") {
+            if let Some((start, end, sub_cmd)) = self.parse_ex_range(cmd) {
+                self.execute_substitute_with_range(sub_cmd, Some((start, end)));
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Run a registered ex command by NAME with an optional argument, with
+    /// the raw-line forms structurally out of reach.
+    ///
+    /// This is the entry point for MCP tool dispatch. It is deliberately not
+    /// `execute_command`: that one parses a line, and a line can be `!rm -rf`.
+    pub fn dispatch_ex_command(&mut self, command: &str, args: Option<&str>) -> bool {
+        self.dispatch_ex(command, args, None)
+    }
+
     /// Execute a parsed write/quit compound command.
     fn execute_write_quit(&mut self, actions: &[ExWriteQuit]) -> bool {
         for action in actions {
@@ -1368,6 +1418,105 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- ADVERSARIAL: the tool path must not reach the raw-line forms --------
+    //
+    // Each of these pairs the ATTACK with the same input on the human path, so
+    // a passing test cannot mean "the feature is simply broken everywhere".
+
+    /// `:!cmd` shells out. `dispatch_ex_command` is what MCP tool dispatch
+    /// calls, and it must not be able to get there -- not "must be denied",
+    /// must not be able to REACH it.
+    #[test]
+    fn tool_dispatch_cannot_reach_the_shell_escape() {
+        let mut editor = Editor::new();
+        // Per-test filename: the suite runs in parallel and a shared path
+        // would make this test's oracle depend on another test's timing.
+        let marker = std::env::temp_dir().join(format!(
+            "mae-shell-escape-must-not-run-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&marker);
+        let line = format!("!touch {}", marker.display());
+
+        // The guard itself holds on every platform: a `!` line is not a
+        // command name, so tool dispatch must not accept it at all.
+        assert!(
+            !editor.dispatch_ex_command(&line, None),
+            "a `!` line is not a command name and must not dispatch"
+        );
+        assert!(
+            !marker.exists(),
+            "the tool path SHELLED OUT -- this is the bypass, not a nicety"
+        );
+
+        // The falsification half is Unix-only: `:!` runs `sh -c`, and Windows
+        // has neither `sh` nor `touch`, so on Windows the marker cannot appear
+        // for either path and asserting it would fail for a reason that has
+        // nothing to do with the guard (principle #13 -- a check that can only
+        // pass on one developer's platform is not a check).
+        #[cfg(unix)]
+        {
+            editor.execute_command(&line);
+            assert!(
+                marker.exists(),
+                "the typed `:!` line must still work; otherwise the guard above is vacuous"
+            );
+        }
+        let _ = std::fs::remove_file(&marker);
+    }
+
+    /// The other raw-line form, and the one an agent most plainly controls:
+    /// the `command` field is a free string, so it can be handed a substitute
+    /// instead of a command name.
+    ///
+    /// This is the test that fails if anyone "simplifies" the tool path by
+    /// reconstructing a line and re-entering `execute_command` -- the shape
+    /// that looks harmless and reopens every line form at once.
+    #[test]
+    fn tool_dispatch_cannot_reach_a_substitute() {
+        let mut editor = Editor::new();
+        let idx = editor.active_buffer_idx();
+        editor.buffers[idx].replace_contents("keep-me");
+
+        assert!(
+            !editor.dispatch_ex_command("%s/keep-me/clobbered/", None),
+            "a substitute is not a command name and must not dispatch"
+        );
+        assert_eq!(
+            editor.buffers[idx].text().trim(),
+            "keep-me",
+            "the tool path ran a SUBSTITUTE -- the raw-line forms are reachable"
+        );
+
+        // Falsification half: the typed form still substitutes, so a pass
+        // above cannot mean the feature is simply broken.
+        editor.execute_command("%s/keep-me/clobbered/");
+        assert!(
+            editor.buffers[idx].text().contains("clobbered"),
+            "the typed substitute must still work; otherwise the guard is vacuous"
+        );
+    }
+
+    /// The point of the whole change: a command that takes an argument gets
+    /// it, instead of the argument being dropped and the no-arg form running.
+    #[test]
+    fn tool_dispatch_delivers_an_argument_to_the_command() {
+        let mut editor = Editor::new();
+
+        assert!(
+            editor.dispatch_ex_command("kb-detach", Some("no-such-kb-anywhere")),
+            "an arg-carrying command must be handled"
+        );
+        assert!(
+            editor.mini_dialog.is_none() && editor.mode != crate::Mode::Command,
+            "it must ACT on the argument, not fall back to prompting for one"
+        );
+        assert!(
+            !editor.status_msg.is_empty(),
+            "and it must say what happened"
+        );
+    }
 
     #[test]
     fn debug_start_command_without_args_shows_usage() {
