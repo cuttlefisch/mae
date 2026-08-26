@@ -53,6 +53,7 @@ fn reimporting_a_dir_less_instance_does_not_blank_it() {
             last_sync: None,
             ai_residency: mae_kb::federation::AiResidency::default(),
             project_root: None,
+            project_key: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
             ingest_policy: Default::default(),
             priority: 0,

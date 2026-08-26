@@ -2827,6 +2827,7 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
                         last_sync,
                         ai_residency: mae_kb::federation::AiResidency::default(),
                         project_root: None,
+                        project_key: None,
                         kind: mae_kb::federation::KbInstanceKind::default(),
                         ingest_policy: Default::default(),
                         priority: 0,

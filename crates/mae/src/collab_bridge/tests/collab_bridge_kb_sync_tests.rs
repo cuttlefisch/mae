@@ -164,25 +164,12 @@ fn collab_kb_shared_named_instance_tracks_nodes_by_uuid() {
         .kb
         .registry
         .instances
-        .push(mae_kb::federation::KbInstance {
-            uuid: uuid.clone(),
-            name: "collabtest".into(),
-            org_dir: std::path::PathBuf::from("/tmp/collabtest"),
-            db_path: std::path::PathBuf::from("/tmp/collabtest.db"),
-            primary: false,
-            enabled: true,
-            last_import: None,
-            collab_id: None,
-            shared: false,
-            remote_peers: Vec::new(),
-            last_sync: None,
-            ai_residency: mae_kb::federation::AiResidency::default(),
-            project_root: None,
-            kind: mae_kb::federation::KbInstanceKind::default(),
-            ingest_policy: Default::default(),
-            priority: 0,
-            remote_hub: None,
-        });
+        .push(mae_kb::federation::KbInstance::local(
+            uuid.clone(),
+            "collabtest".into(),
+            std::path::PathBuf::from("/tmp/collabtest"),
+            std::path::PathBuf::from("/tmp/collabtest.db"),
+        ));
     // The handler now reloads the registry fresh from disk before stamping
     // the durable marker (KbRegistry::update) — persist the fixture instance
     // first so it's actually there to find, matching the real precondition
@@ -243,25 +230,12 @@ fn adr019_share_marker_survives_registry_reload() {
         .kb
         .registry
         .instances
-        .push(mae_kb::federation::KbInstance {
-            uuid: "uuid-ct".into(),
-            name: "collabtest".into(),
-            org_dir: std::path::PathBuf::new(),
-            db_path: std::path::PathBuf::new(),
-            primary: false,
-            enabled: true,
-            last_import: None,
-            collab_id: None,
-            shared: false,
-            remote_peers: Vec::new(),
-            last_sync: None,
-            ai_residency: mae_kb::federation::AiResidency::default(),
-            project_root: None,
-            kind: mae_kb::federation::KbInstanceKind::default(),
-            ingest_policy: Default::default(),
-            priority: 0,
-            remote_hub: None,
-        });
+        .push(mae_kb::federation::KbInstance::local(
+            "uuid-ct".into(),
+            "collabtest".into(),
+            std::path::PathBuf::new(),
+            std::path::PathBuf::new(),
+        ));
     // The handler reloads the registry fresh from disk before stamping the
     // durable marker (KbRegistry::update) — persist the fixture instance
     // first so it's actually there to find (an instance can only be shared

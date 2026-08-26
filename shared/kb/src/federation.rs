@@ -197,6 +197,22 @@ pub struct KbInstance {
     /// registered before this field existed, and for non-project-scoped kinds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_root: Option<PathBuf>,
+    /// The project's **durable identity** (ADR-058 / Story B, R11) — the opaque
+    /// key from [`crate::project_identity::ProjectIdentity::key`].
+    ///
+    /// `project_root` above is a path, and a path is not an identity: a rename, a
+    /// move, a `cp -r`, a container rebuild or a cloud-sync redirection all break
+    /// it, which is the VS Code `workspaceStorage` bug reproduced. This field is
+    /// what actually keys the project; `project_root` demotes to a **repairable
+    /// cache** of where that project was last seen, and is corrected in place by
+    /// [`KbRegistry::adopt_moved_project`] when the two disagree.
+    ///
+    /// `#[serde(default)]` — `None` for every instance registered before this
+    /// field existed, and for anything that is not a project KB. Matching falls
+    /// back to path equality in that case, so no existing registry changes
+    /// behaviour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_key: Option<String>,
     /// This instance's role (ADR-058 Phase A). Prefer `effective_kind()` over reading this
     /// field directly — see that method's doc comment for why.
     #[serde(default)]
@@ -267,9 +283,88 @@ impl KbInstance {
         self.ingest_policy.allows_ingest()
     }
 
+    /// A plain local instance: registered from an org dir, not shared, no project
+    /// scoping.
+    ///
+    /// The counterpart to [`KbInstance::joined`], and it exists for the same
+    /// reason — every `KbInstance` literal has to spell out all eighteen fields,
+    /// so **adding one field edits every call site**, which is both a merge
+    /// hazard and (measurably) enough to push several already-oversized
+    /// functions past the structural ceiling for no behavioural reason.
+    pub fn local(uuid: String, name: String, org_dir: PathBuf, db_path: PathBuf) -> Self {
+        KbInstance {
+            uuid,
+            name,
+            org_dir,
+            db_path,
+            primary: false,
+            enabled: true,
+            last_import: None,
+            collab_id: None,
+            shared: false,
+            remote_peers: Vec::new(),
+            last_sync: None,
+            ai_residency: AiResidency::default(),
+            project_root: None,
+            project_key: None,
+            kind: KbInstanceKind::default(),
+            ingest_policy: IngestPolicy::default(),
+            priority: 0,
+            remote_hub: None,
+        }
+    }
+
+    /// A KB joined from a peer/hub, as a first-class registry row.
+    ///
+    /// A constructor rather than a struct literal at the call site: every new
+    /// `KbInstance` field has to be spelled out at every literal, and the one in
+    /// `kb_ops/sync.rs` is where `project_key` was silently forgotten until the
+    /// compiler caught it. One place to update beats four (principle #8).
+    pub fn joined(uuid: String, kb_id: &str, db_path: PathBuf, now: String) -> Self {
+        KbInstance {
+            uuid,
+            name: kb_id.to_string(),
+            org_dir: PathBuf::new(),
+            db_path,
+            primary: false,
+            enabled: true,
+            last_import: None,
+            collab_id: Some(kb_id.to_string()),
+            shared: true,
+            remote_peers: Vec::new(),
+            last_sync: Some(now),
+            ai_residency: AiResidency::default(),
+            project_root: None,
+            project_key: None,
+            kind: KbInstanceKind::default(),
+            ingest_policy: IngestPolicy::default(),
+            priority: 0,
+            remote_hub: None,
+        }
+    }
+
     pub fn matches_project_root(&self, root: &Path) -> bool {
         self.effective_kind() == KbInstanceKind::Project
             && self.project_root.as_deref() == Some(root)
+    }
+
+    /// Identity-first project matching (Story B / R11).
+    ///
+    /// A path is where a project *was*; `project_key` is what it *is*. When both
+    /// sides carry a key, the key decides and the path is irrelevant — which is
+    /// exactly the case a rename or a move produces, and the case every
+    /// path-keyed system in the survey gets wrong.
+    ///
+    /// With no key on either side this is plain path equality, so a registry
+    /// written before this field existed behaves precisely as it did.
+    pub fn matches_project(&self, root: &Path, key: Option<&str>) -> bool {
+        if self.effective_kind() != KbInstanceKind::Project {
+            return false;
+        }
+        match (self.project_key.as_deref(), key) {
+            (Some(mine), Some(theirs)) => mine == theirs,
+            _ => self.project_root.as_deref() == Some(root),
+        }
     }
 }
 
@@ -378,6 +473,40 @@ impl KbRegistry {
 
     /// Record a decline for `root` (idempotent — declining an already-declined root is a
     /// no-op, not a duplicate entry).
+    /// Find the project KB for `root`, repairing a stale `project_root` when the
+    /// project has moved (Story B / R11).
+    ///
+    /// **This is the fix for the bug VS Code classified as a backlog feature
+    /// request**: rename or move a project and its per-project state is
+    /// permanently orphaned, because the state is keyed on the path. Here the key
+    /// is the durable identity, so the path is corrected rather than the KB lost.
+    ///
+    /// Returns the matching instance's uuid, and whether a stale path was
+    /// repaired — the caller persists the registry when it was.
+    pub fn adopt_moved_project(
+        &mut self,
+        canonical_root: &Path,
+        key: Option<&str>,
+    ) -> Option<(String, bool)> {
+        let idx = self
+            .instances
+            .iter()
+            .position(|i| i.matches_project(canonical_root, key))?;
+        let inst = &mut self.instances[idx];
+        let stale = inst.project_root.as_deref() != Some(canonical_root);
+        if stale {
+            tracing::info!(
+                from = ?inst.project_root,
+                to = %canonical_root.display(),
+                kb = %inst.name,
+                "project KB matched by durable identity at a new path — repairing the \
+                 stale project_root rather than orphaning the KB"
+            );
+            inst.project_root = Some(canonical_root.to_path_buf());
+        }
+        Some((inst.uuid.clone(), stale))
+    }
+
     pub fn decline_project(&mut self, root: PathBuf) {
         if !self.has_declined_project(&root) {
             self.declined_project_provisioning.push(root);
@@ -534,6 +663,30 @@ impl KbRegistry {
         // Check for sentinel file with existing UUID
         let uuid = read_sentinel_uuid(&org_dir).unwrap_or_else(generate_uuid);
 
+        // The sentinel travels WITH the directory, so a moved/copied org dir
+        // hands back a uuid the registry already holds. Appending would create
+        // two rows with one uuid — and every uuid lookup in the tree is a
+        // `find(|i| i.uuid == …)`, i.e. FIRST match wins, so a later
+        // `KbRegistry::update` silently patches the wrong row while `find()`
+        // returns the other.
+        //
+        // Found by falsifying the project-identity move test: the test passed on
+        // uuid equality while the registry underneath it was corrupt. Adopt the
+        // existing row and correct its path instead.
+        if let Some(existing) = self.instances.iter_mut().find(|i| i.uuid == uuid) {
+            if existing.org_dir != org_dir {
+                tracing::info!(
+                    from = %existing.org_dir.display(),
+                    to = %org_dir.display(),
+                    kb = %existing.name,
+                    "org dir moved (matched by its instance sentinel) — repointing the \
+                     existing registry row rather than appending a duplicate uuid"
+                );
+                existing.org_dir = org_dir;
+            }
+            return Ok(uuid);
+        }
+
         let slug = crate::data_dir::slugify(&name);
         let db_path = if let Some(kdd) = kb_data_dir {
             // Standardized layout: kb/local/{slug}/kb.sqlite
@@ -575,6 +728,7 @@ impl KbRegistry {
             last_sync: None,
             ai_residency: AiResidency::default(),
             project_root: None,
+            project_key: None,
             kind: KbInstanceKind::default(),
             ingest_policy: Default::default(),
             priority: 0,
@@ -622,6 +776,7 @@ impl KbRegistry {
             last_sync: None,
             ai_residency: AiResidency::default(),
             project_root: None,
+            project_key: None,
             kind: KbInstanceKind::RemoteHub,
             ingest_policy: Default::default(),
             priority: 0,
@@ -1461,6 +1616,7 @@ mod tests {
             last_sync: None,
             ai_residency: AiResidency::default(),
             project_root: None,
+            project_key: None,
             kind: KbInstanceKind::default(),
             ingest_policy: Default::default(),
             priority: 0,
@@ -2061,6 +2217,7 @@ enabled = true
                     last_sync: None,
                     ai_residency: AiResidency::default(),
                     project_root: None,
+                    project_key: None,
                     kind: KbInstanceKind::default(),
                     ingest_policy: Default::default(),
                     priority: 0,

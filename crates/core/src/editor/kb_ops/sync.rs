@@ -223,25 +223,12 @@ impl Editor {
                         inst.last_sync = Some(now);
                     }
                     None => {
-                        reg.instances.push(mae_kb::federation::KbInstance {
-                            uuid: uuid.clone(),
-                            name: kb_id.to_string(),
-                            org_dir: std::path::PathBuf::new(),
+                        reg.instances.push(mae_kb::federation::KbInstance::joined(
+                            uuid.clone(),
+                            kb_id,
                             db_path,
-                            primary: false,
-                            enabled: true,
-                            last_import: None,
-                            collab_id: Some(kb_id.to_string()),
-                            shared: true,
-                            remote_peers: Vec::new(),
-                            last_sync: Some(now),
-                            ai_residency: mae_kb::federation::AiResidency::default(),
-                            project_root: None,
-                            kind: mae_kb::federation::KbInstanceKind::default(),
-                            ingest_policy: Default::default(),
-                            priority: 0,
-                            remote_hub: None,
-                        });
+                            now,
+                        ));
                     }
                 }
             });

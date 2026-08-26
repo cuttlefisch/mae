@@ -313,6 +313,7 @@ Source: `shared/kb/src/lib.rs`
 | `fuzzy` | mod |
 | `graph_query` | mod |
 | `ident` | mod |
+| `import_plan` | mod |
 | `kb_build` | mod |
 | `kb_identity` | mod |
 | `migrate` | mod |
@@ -736,7 +737,7 @@ Source: `shared/sync/src/lib.rs`
 | `which-key-open?` | `scheme/src/runtime/test_primitives.rs` |
 | `write-file` | `scheme/src/runtime/test_primitives.rs` |
 
-## Commands (559 built-in)
+## Commands (562 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -1063,13 +1064,6 @@ Source: `shared/sync/src/lib.rs`
 | `org-export-subtree` | Export subtree at cursor (SPC m e s) |
 | `markdown-to-org` | Convert current Markdown buffer to Org format |
 | `org-to-markdown` | Convert current Org buffer to Markdown (in-buffer) |
-| `kb-register` | Register org-roam directory as KB instance |
-| `kb-unregister` | Remove a registered KB instance |
-| `kb-reimport` | Re-import KB instance from org files |
-| `kb-instances` | List all registered KB instances |
-| `kb-init-project` | Register a Project-kind KB instance for the current project (ADR-058) |
-| `kb-decline-project-provisioning` | Don't ask again to register a KB for the current project (ADR-058) |
-| `kb-promote` | Promote the current KB-view node from a federated instance into the primary KB (#303) |
 | `insert-newline-smart` | Insert newline with list continuation |
 | `table-next-cell` | Move to next table cell (Tab) |
 | `table-prev-cell` | Move to previous table cell (S-Tab) |
@@ -1295,6 +1289,16 @@ Source: `shared/sync/src/lib.rs`
 | `kb-sharing-status` | Show this peer's KB-sharing status in the *KB Sharing* buffer (:kb-sharing-status) |
 | `kb-set-ai-residency` | Set a KB's AI-residency policy (ADR-048): open | local_models_only (:kb-set-ai-residency <kb-id|primary> <policy>) |
 | `kb-set-role` | Set a KB node's molecular-note role: source | atom | molecule | hub (:kb-set-role <node-id> <role>) |
+| `kb-register` | Register org-roam directory as KB instance |
+| `kb-unregister` | Remove a registered KB instance |
+| `kb-reimport` | Re-import KB instance from org files |
+| `kb-import-plan` | Assess an org directory before importing it (pre-flight, reads only) |
+| `kb-import-verify` | Reconcile a KB's org directory against what its store holds (reads only) |
+| `kb-instances` | List all registered KB instances |
+| `kb-init-project` | Register a Project-kind KB instance for the current project (ADR-058) |
+| `kb-relink` | Re-mint this project's KB identity after a move or a clone (ADR-058, repair verb) |
+| `kb-decline-project-provisioning` | Don't ask again to register a KB for the current project (ADR-058) |
+| `kb-promote` | Promote the current KB-view node from a federated instance into the primary KB (#303) |
 | `move-down` | Move cursor down |
 | `move-down` | Move down |
 | `zzz` | Last |

@@ -917,6 +917,7 @@ fn kb_prepare_share_lineage_mints_fresh_lineage_for_promoted_node() {
             last_sync: None,
             ai_residency: mae_kb::federation::AiResidency::default(),
             project_root: None,
+            project_key: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
             ingest_policy: Default::default(),
             priority: 0,

@@ -92,6 +92,7 @@ fn prepare_multi_instance_data_dir() -> (tempfile::TempDir, String) {
             last_sync: None,
             ai_residency: Default::default(),
             project_root: None,
+            project_key: None,
             kind: Default::default(),
             ingest_policy: Default::default(),
             priority: 0,

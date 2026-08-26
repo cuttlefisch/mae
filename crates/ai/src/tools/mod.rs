@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod advertised_surface_tests;
 mod ai_tools;
 pub mod authorization;
 mod categories;

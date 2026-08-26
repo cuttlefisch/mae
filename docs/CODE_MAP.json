@@ -773,6 +773,10 @@
           "kind": "mod"
         },
         {
+          "name": "import_plan",
+          "kind": "mod"
+        },
+        {
           "name": "kb_build",
           "kind": "mod"
         },
@@ -3502,34 +3506,6 @@
       "doc": "Convert current Org buffer to Markdown (in-buffer)"
     },
     {
-      "name": "kb-register",
-      "doc": "Register org-roam directory as KB instance"
-    },
-    {
-      "name": "kb-unregister",
-      "doc": "Remove a registered KB instance"
-    },
-    {
-      "name": "kb-reimport",
-      "doc": "Re-import KB instance from org files"
-    },
-    {
-      "name": "kb-instances",
-      "doc": "List all registered KB instances"
-    },
-    {
-      "name": "kb-init-project",
-      "doc": "Register a Project-kind KB instance for the current project (ADR-058)"
-    },
-    {
-      "name": "kb-decline-project-provisioning",
-      "doc": "Don't ask again to register a KB for the current project (ADR-058)"
-    },
-    {
-      "name": "kb-promote",
-      "doc": "Promote the current KB-view node from a federated instance into the primary KB (#303)"
-    },
-    {
       "name": "insert-newline-smart",
       "doc": "Insert newline with list continuation"
     },
@@ -4424,6 +4400,46 @@
     {
       "name": "kb-set-role",
       "doc": "Set a KB node's molecular-note role: source | atom | molecule | hub (:kb-set-role <node-id> <role>)"
+    },
+    {
+      "name": "kb-register",
+      "doc": "Register org-roam directory as KB instance"
+    },
+    {
+      "name": "kb-unregister",
+      "doc": "Remove a registered KB instance"
+    },
+    {
+      "name": "kb-reimport",
+      "doc": "Re-import KB instance from org files"
+    },
+    {
+      "name": "kb-import-plan",
+      "doc": "Assess an org directory before importing it (pre-flight, reads only)"
+    },
+    {
+      "name": "kb-import-verify",
+      "doc": "Reconcile a KB's org directory against what its store holds (reads only)"
+    },
+    {
+      "name": "kb-instances",
+      "doc": "List all registered KB instances"
+    },
+    {
+      "name": "kb-init-project",
+      "doc": "Register a Project-kind KB instance for the current project (ADR-058)"
+    },
+    {
+      "name": "kb-relink",
+      "doc": "Re-mint this project's KB identity after a move or a clone (ADR-058, repair verb)"
+    },
+    {
+      "name": "kb-decline-project-provisioning",
+      "doc": "Don't ask again to register a KB for the current project (ADR-058)"
+    },
+    {
+      "name": "kb-promote",
+      "doc": "Promote the current KB-view node from a federated instance into the primary KB (#303)"
     },
     {
       "name": "move-down",

@@ -284,18 +284,15 @@ impl Editor {
             }
             // KB cutover, Phase 1: flip which side of a KB is authoritative.
             "kb-detach" | "kb-attach" => {
-                let policy = if command == "kb-detach" {
-                    mae_kb::federation::IngestPolicy::StoreIsTruth
-                } else {
-                    mae_kb::federation::IngestPolicy::FromOrgDir
-                };
-                match args.map(str::trim).filter(|s| !s.is_empty()) {
-                    None => self.set_status(format!("Usage: :{command} <name|primary>")),
-                    Some(name) => match self.kb_set_ingest_policy(name, policy) {
-                        Ok(msg) => self.set_status(msg),
-                        Err(e) => self.set_status(e),
-                    },
-                }
+                self.dispatch_kb_ingest_policy(command, args);
+                true
+            }
+            "kb-relink" => {
+                self.dispatch_kb_relink(args);
+                true
+            }
+            "kb-import-plan" | "kb-import-verify" => {
+                self.dispatch_kb_import_audit(command, args);
                 true
             }
             "kb-reimport" => {

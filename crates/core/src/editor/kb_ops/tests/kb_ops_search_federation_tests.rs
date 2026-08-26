@@ -260,18 +260,11 @@ fn resolve_kb_scope_project_token_resolves_current_root_or_falls_back_to_all() {
 /// (e.g. if the filter only happened to work for exactly two); this exercises several.
 #[test]
 fn kb_federated_search_scope_project_never_leaks_across_projects() {
-    use mae_kb::federation::{KbInstance, KbInstanceKind};
+    use mae_kb::federation::KbInstanceKind;
     use mae_kb::KbScope;
 
     let mut editor = Editor::new();
 
-    struct Fixture {
-        uuid: &'static str,
-        name: &'static str,
-        root: Option<&'static str>,
-        kind: KbInstanceKind,
-        node_id: &'static str,
-    }
     let fixtures = [
         Fixture {
             uuid: "u-alpha",
@@ -315,25 +308,7 @@ fn kb_federated_search_scope_project_never_leaks_across_projects() {
             "shared widget vocabulary present in every fixture",
         ));
         editor.kb.instances.insert(f.uuid.to_string(), kb);
-        editor.kb.registry.instances.push(KbInstance {
-            uuid: f.uuid.to_string(),
-            name: f.name.to_string(),
-            org_dir: std::path::PathBuf::from(format!("/tmp/mae-adr058-fixture/{}", f.name)),
-            db_path: std::path::PathBuf::from(format!("/tmp/mae-adr058-fixture/{}.db", f.name)),
-            primary: false,
-            enabled: true,
-            last_import: None,
-            collab_id: None,
-            shared: false,
-            remote_peers: Vec::new(),
-            last_sync: None,
-            ai_residency: mae_kb::federation::AiResidency::default(),
-            project_root: f.root.map(std::path::PathBuf::from),
-            kind: f.kind,
-            ingest_policy: Default::default(),
-            priority: 0,
-            remote_hub: None,
-        });
+        editor.kb.registry.instances.push(fixture_instance(f));
     }
 
     let all = editor.kb_federated_search_scoped("widget", &KbScope::All);
@@ -430,6 +405,7 @@ fn kb_scope_project_path_identity_not_string_equality() {
         last_sync: None,
         ai_residency: mae_kb::federation::AiResidency::default(),
         project_root: Some(canonical_a.clone()),
+        project_key: None,
         kind: KbInstanceKind::Project,
         ingest_policy: Default::default(),
         priority: 0,
@@ -1004,4 +980,42 @@ fn kb_path_in_instance_false_for_a_real_but_unrelated_directory() {
         "a genuinely unrelated real directory must never be treated as inside the \
          registered instance"
     );
+}
+
+/// One ADR-058 scope fixture: a KB instance plus the node it owns.
+use mae_kb::federation::{KbInstance, KbInstanceKind};
+
+struct Fixture {
+    uuid: &'static str,
+    name: &'static str,
+    root: Option<&'static str>,
+    kind: KbInstanceKind,
+    node_id: &'static str,
+}
+
+/// One ADR-058 scope fixture as a registry row.
+///
+/// Extracted from the test body so adding a `KbInstance` field does not push
+/// that function further past the structural gate's per-function ceiling.
+fn fixture_instance(f: &Fixture) -> KbInstance {
+    KbInstance {
+        uuid: f.uuid.to_string(),
+        name: f.name.to_string(),
+        org_dir: std::path::PathBuf::from(format!("/tmp/mae-adr058-fixture/{}", f.name)),
+        db_path: std::path::PathBuf::from(format!("/tmp/mae-adr058-fixture/{}.db", f.name)),
+        primary: false,
+        enabled: true,
+        last_import: None,
+        collab_id: None,
+        shared: false,
+        remote_peers: Vec::new(),
+        last_sync: None,
+        ai_residency: mae_kb::federation::AiResidency::default(),
+        project_root: f.root.map(std::path::PathBuf::from),
+        project_key: None,
+        kind: f.kind,
+        ingest_policy: Default::default(),
+        priority: 0,
+        remote_hub: None,
+    }
 }

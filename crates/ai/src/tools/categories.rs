@@ -2,9 +2,20 @@ use super::decision::{Decision, DenyReason, HardCeiling};
 use crate::types::*;
 
 /// Tool tiers for payload optimization — only core tools are sent by default.
+///
+/// **The size of the Core tier is measured, not asserted here.** This comment
+/// read "~15 tools" while the real figure was **67** — a hand-maintained number
+/// in prose, drifted more than fourfold, in exactly the way CLAUDE.md records
+/// that a moving number cannot survive in prose. The figure and its ratchet live
+/// in `advertised_surface_tests.rs`, next to the code that measures them.
+///
+/// Do not restore a count here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolTier {
-    /// Always sent (~15 tools). Essential for basic editing workflows.
+    /// Always sent. Intended to be the small set essential for basic editing
+    /// workflows — see the ratchet in `advertised_surface_tests.rs` for what it
+    /// actually is, and for why the gap to the published degradation threshold
+    /// is recorded rather than closed by judgement.
     Core,
     /// Sent on request via `request_tools` meta-tool.
     Extended,

@@ -131,6 +131,36 @@ impl RemoteHubQueryLayer {
     ///
     /// It used to return empty and say so in a comment -- *"an N+1 network-call
     /// performance trap"* -- which was a correct diagnosis of the wrong fix
+    /// The shared body behind `todo_nodes` and `agenda`.
+    ///
+    /// Returns `Node`s carrying only what the hub's agenda endpoint knows —
+    /// id/title/tags/todo/priority. Bodies are deliberately not fetched: doing so
+    /// would be one network call per matched node, the same N+1 trap
+    /// `id_title_pairs` refuses. A caller that needs a body calls `get`.
+    fn agenda_impl(&self, filter: &str, value: Option<&str>) -> Vec<Node> {
+        let mut params = serde_json::json!({"filter": filter});
+        if let Some(v) = value {
+            params["value"] = serde_json::Value::String(v.to_string());
+        }
+        let Some(result) = self.call("kb/query.agenda", params) else {
+            return Vec::new();
+        };
+        if let Some(reason) = result.get("unavailable_reason").and_then(|v| v.as_str()) {
+            self.set_outcome(LastOutcome::MalformedResponse(reason.to_string()));
+            return Vec::new();
+        }
+        if truncated(&result) {
+            self.set_outcome(LastOutcome::MalformedResponse(format!(
+                "agenda '{filter}' hit the hub's max_scan_nodes cap; the result is partial"
+            )));
+        }
+        result
+            .get("nodes")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(agenda_node).collect())
+            .unwrap_or_default()
+    }
+
     /// (looping `get`). Titles live in the collection manifest the hub already
     /// loads for any gated read, so this is one call and no per-node fetch.
     fn id_title_pairs_impl(&self, prefix: Option<&str>) -> Vec<(String, String)> {
@@ -493,10 +523,10 @@ impl KbQueryLayer for RemoteHubQueryLayer {
     fn capabilities(&self) -> crate::capabilities::QueryCapabilities {
         use crate::capabilities::QueryMethod as M;
         crate::capabilities::QueryCapabilities::all_except(&[
-            M::HealthReport,
-            M::TodoNodes,
-            M::Agenda,
             // STRUCTURAL, not unimplemented — see the doc comment above.
+            // **This is the whole remaining set.** D1b closed HealthReport,
+            // TodoNodes and Agenda; what is left cannot be closed without
+            // defeating the ADR that defines it.
             M::History,
             M::NodeCrdtState,
         ])
@@ -611,10 +641,71 @@ impl KbQueryLayer for RemoteHubQueryLayer {
         Ok(seen.into_iter().collect())
     }
 
+    /// D1b: served by `kb/query.health`.
+    ///
+    /// Scoped honestly — this is **the shape of the corpus the hub holds**, not
+    /// the health of the hub process. Orphan and broken-link detection needs the
+    /// whole link graph, so the hub withholds both rather than reporting them
+    /// from a partial scan: a node whose only backlink lies past the cap is not
+    /// an orphan, and saying it is would be a wrong answer rather than a partial
+    /// one. A truncated response is surfaced through `degraded()`.
     fn health_report(&self) -> Result<Option<crate::store::HealthReport>, KbStoreError> {
-        // No health endpoint on ADR-053's surface; a hub's health is the hub operator's
-        // concern, not something a read-through client can meaningfully report.
-        Ok(None)
+        let Some(result) = self.call("kb/query.health", serde_json::json!({})) else {
+            return Ok(None);
+        };
+        if let Some(reason) = result.get("unavailable_reason").and_then(|v| v.as_str()) {
+            self.set_outcome(LastOutcome::MalformedResponse(reason.to_string()));
+            return Ok(None);
+        }
+        if truncated(&result) {
+            self.set_outcome(LastOutcome::MalformedResponse(
+                "health report hit the hub's max_scan_nodes cap; orphan and broken-link \
+                 detection were withheld rather than computed from a partial scan"
+                    .to_string(),
+            ));
+        }
+        Ok(Some(crate::store::HealthReport {
+            total_nodes: usize_at(&result, "total_nodes"),
+            total_links: usize_at(&result, "total_links"),
+            namespace_counts: count_map(&result, "namespace_counts"),
+            by_kind: count_map(&result, "by_kind"),
+            by_rel_type: std::collections::HashMap::new(),
+            orphan_ids: string_list(&result, "orphan_ids"),
+            broken_links: Vec::new(),
+            hub_nodes: hub_pairs(&result),
+            by_instance: std::collections::HashMap::new(),
+        }))
+    }
+
+    /// D1b: served by `kb/query.agenda` with `filter=todo`.
+    fn todo_nodes(&self) -> Result<Vec<Node>, KbStoreError> {
+        Ok(self.agenda_impl("todo", None))
+    }
+
+    /// D1b: served by `kb/query.agenda`.
+    ///
+    /// **`AgendaFilter::Custom` is not sent**, and that is a decision rather than
+    /// an omission: the hub's agenda endpoint is served from the CRDT DocStore,
+    /// which has no Datalog engine behind it, and C3 established that arbitrary
+    /// Datalog is a privileged capability. ADR-085's rule applies — *not offered*
+    /// beats offered-and-denied — so the unsupported filters return empty with
+    /// `degraded()` set, never a fabricated result.
+    fn agenda(&self, filter: &crate::AgendaFilter) -> Result<Vec<Node>, KbStoreError> {
+        use crate::AgendaFilter as F;
+        let (name, value) = match filter {
+            F::Todo(state) => ("todo", state.clone()),
+            F::Priority(p) => ("priority", Some(p.to_string())),
+            F::Tag(t) => ("tag", Some(t.clone())),
+            F::Orphan => ("orphan", None),
+            F::DeadEnd => ("dead-end", None),
+            other => {
+                self.set_outcome(LastOutcome::MalformedResponse(format!(
+                    "agenda filter {other:?} is not served over ADR-053's query surface"
+                )));
+                return Ok(Vec::new());
+            }
+        };
+        Ok(self.agenda_impl(name, value.as_deref()))
     }
 
     fn id_title_pairs(&self, prefix: Option<&str>) -> Result<Vec<(String, String)>, KbStoreError> {
@@ -685,6 +776,84 @@ impl KbQueryLayer for RemoteHubQueryLayer {
             .unwrap_or_default();
         Ok(Some(crate::store::SubGraph { nodes, edges }))
     }
+}
+
+/// Response helpers shared by the D1b endpoints.
+fn truncated(v: &serde_json::Value) -> bool {
+    v.get("truncated")
+        .and_then(|t| t.as_bool())
+        .unwrap_or(false)
+}
+
+fn usize_at(v: &serde_json::Value, key: &str) -> usize {
+    v.get(key).and_then(|x| x.as_u64()).unwrap_or(0) as usize
+}
+
+fn string_list(v: &serde_json::Value, key: &str) -> Vec<String> {
+    v.get(key)
+        .and_then(|x| x.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn count_map(v: &serde_json::Value, key: &str) -> std::collections::HashMap<String, usize> {
+    v.get(key)
+        .and_then(|x| x.as_object())
+        .map(|o| {
+            o.iter()
+                .filter_map(|(k, n)| n.as_u64().map(|n| (k.clone(), n as usize)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn hub_pairs(v: &serde_json::Value) -> Vec<(String, usize)> {
+    v.get("hub_nodes")
+        .and_then(|x| x.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|h| {
+                    Some((
+                        h.get("id")?.as_str()?.to_string(),
+                        h.get("in_degree")?.as_u64()? as usize,
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// One agenda row from the hub as a `Node`.
+fn agenda_node(v: &serde_json::Value) -> Option<Node> {
+    let id = v.get("id")?.as_str()?.to_string();
+    let title = v
+        .get("title")
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .to_string();
+    let mut node = Node::new(id, title, NodeKind::Note, String::new());
+    node.tags = v
+        .get("tags")
+        .and_then(|t| t.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    node.todo_state = v
+        .get("todo_state")
+        .and_then(|t| t.as_str())
+        .map(str::to_string);
+    node.priority = v
+        .get("priority")
+        .and_then(|t| t.as_str())
+        .and_then(|p| p.chars().next());
+    Some(node)
 }
 
 #[cfg(test)]
@@ -1186,10 +1355,185 @@ mod tests {
                 "{m:?} is served by a real endpoint now and must not be declared a gap"
             );
         }
-        // ...and the ones still genuinely missing stay declared, so the set is an
-        // honest inventory rather than an optimistic one.
-        assert!(!caps.supports(M::HealthReport));
-        assert!(!caps.supports(M::Agenda));
+        // ...and the ones that stay declared are the STRUCTURAL pair, so the set
+        // is an honest inventory rather than an optimistic one. (HealthReport and
+        // Agenda moved to the supported side in D1b — see the gap-count test.)
+        assert!(!caps.supports(M::History));
+        assert!(!caps.supports(M::NodeCrdtState));
+    }
+
+    // -- D1b: the last three closeable gaps ---------------------------------
+
+    /// `todo_nodes` is `kb/query.agenda` with `filter=todo`, and it must come back
+    /// as real `Node`s carrying the fields an agenda is *for* — a row whose
+    /// `todo_state` was dropped in translation is indistinguishable from a node
+    /// with no todo state.
+    #[test]
+    fn todo_nodes_decode_with_their_state_priority_and_tags() {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1,
+            "result": {
+                "kb_id": "test-kb", "filter": "todo", "scanned": 2, "truncated": false,
+                "nodes": [
+                    {"id": "task:1", "title": "Ship it", "kind": "task",
+                     "todo_state": "TODO", "priority": "A", "tags": ["release"]},
+                    {"id": "task:2", "title": "Later", "kind": "task",
+                     "todo_state": "WAITING", "priority": null, "tags": []}
+                ]
+            }
+        })
+        .to_string();
+        let addr = spawn_one_shot_mock("HTTP/1.1 200 OK", &body);
+        let layer = RemoteHubQueryLayer::with_timeout(
+            test_config(format!("http://{addr}")),
+            Duration::from_secs(5),
+        );
+
+        let nodes = layer.todo_nodes().unwrap();
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].todo_state.as_deref(), Some("TODO"));
+        assert_eq!(nodes[0].priority, Some('A'));
+        assert_eq!(nodes[0].tags, vec!["release".to_string()]);
+        assert_eq!(nodes[1].todo_state.as_deref(), Some("WAITING"));
+        assert_eq!(nodes[1].priority, None);
+        assert_eq!(layer.last_outcome(), LastOutcome::Ok);
+    }
+
+    /// **A capped agenda that reads as complete is a wrong answer**, not a partial
+    /// one: "nothing is due" is what a silently-short list says.
+    #[test]
+    fn a_truncated_agenda_marks_the_layer_degraded() {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1,
+            "result": {
+                "kb_id": "test-kb", "filter": "todo", "scanned": 500, "truncated": true,
+                "nodes": [{"id": "task:1", "title": "One", "kind": null,
+                           "todo_state": "TODO", "priority": null, "tags": []}]
+            }
+        })
+        .to_string();
+        let addr = spawn_one_shot_mock("HTTP/1.1 200 OK", &body);
+        let layer = RemoteHubQueryLayer::with_timeout(
+            test_config(format!("http://{addr}")),
+            Duration::from_secs(5),
+        );
+
+        let nodes = layer.todo_nodes().unwrap();
+        assert_eq!(nodes.len(), 1, "the rows that WERE found still come back");
+        assert!(
+            layer.degraded(),
+            "but the caller must be able to tell the list is partial"
+        );
+    }
+
+    /// **`Custom` Datalog is never sent to the hub.** C3 established that
+    /// arbitrary Datalog is a privileged capability, and this endpoint has no
+    /// Datalog engine behind it at all. Refused locally — ADR-085's *not offered*
+    /// beats offered-and-denied — so no request is made and no result is invented.
+    #[test]
+    fn a_custom_datalog_agenda_is_refused_locally_and_never_reaches_the_hub() {
+        // Port 1 is unbound: if this made a network call the test would hang or
+        // fail on connect. Reaching a clean empty result proves it did not.
+        let layer = RemoteHubQueryLayer::with_timeout(
+            test_config("http://127.0.0.1:1".to_string()),
+            Duration::from_secs(1),
+        );
+
+        let out = layer
+            .agenda(&crate::AgendaFilter::Custom("?[x] := *nodes{id: x}".into()))
+            .unwrap();
+
+        assert!(out.is_empty(), "no result may be fabricated");
+        assert!(
+            layer.degraded(),
+            "and the caller must be told the filter was not served, not handed a              confident empty agenda"
+        );
+    }
+
+    /// The health report decodes, and the fields the hub CAN answer are populated.
+    #[test]
+    fn health_report_decodes_counts_and_hub_nodes() {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1,
+            "result": {
+                "kb_id": "test-kb", "total_nodes": 3, "scanned": 3, "total_links": 2,
+                "by_kind": {"note": 3},
+                "namespace_counts": {"note": 3},
+                "orphan_ids": ["note:lonely"],
+                "broken_links": [],
+                "hub_nodes": [{"id": "note:hub", "in_degree": 2}],
+                "truncated": false
+            }
+        })
+        .to_string();
+        let addr = spawn_one_shot_mock("HTTP/1.1 200 OK", &body);
+        let layer = RemoteHubQueryLayer::with_timeout(
+            test_config(format!("http://{addr}")),
+            Duration::from_secs(5),
+        );
+
+        let report = layer.health_report().unwrap().expect("a report is served");
+        assert_eq!(report.total_nodes, 3);
+        assert_eq!(report.total_links, 2);
+        assert_eq!(report.orphan_ids, vec!["note:lonely".to_string()]);
+        assert_eq!(report.hub_nodes, vec![("note:hub".to_string(), 2)]);
+        assert_eq!(report.namespace_counts.get("note"), Some(&3));
+        assert!(!layer.degraded());
+    }
+
+    /// **A truncated health report withholds orphans rather than inventing them.**
+    /// A node whose only backlink lies past the cap is not an orphan, and naming
+    /// it one is a confidently wrong answer.
+    #[test]
+    fn a_truncated_health_report_is_degraded_and_names_no_orphans() {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1,
+            "result": {
+                "kb_id": "test-kb", "total_nodes": 9000, "scanned": 500,
+                "total_links": 120, "by_kind": {}, "namespace_counts": {},
+                "orphan_ids": [], "broken_links": [], "hub_nodes": [],
+                "truncated": true
+            }
+        })
+        .to_string();
+        let addr = spawn_one_shot_mock("HTTP/1.1 200 OK", &body);
+        let layer = RemoteHubQueryLayer::with_timeout(
+            test_config(format!("http://{addr}")),
+            Duration::from_secs(5),
+        );
+
+        let report = layer.health_report().unwrap().unwrap();
+        assert_eq!(report.total_nodes, 9000);
+        assert!(report.orphan_ids.is_empty());
+        assert!(
+            layer.degraded(),
+            "the caller must know the scan did not cover the corpus"
+        );
+    }
+
+    /// An E2E KB's agenda is structurally unanswerable — the daemon is key-blind
+    /// (ADR-037). Surfaced as a refusal, never as an empty agenda.
+    #[test]
+    fn an_e2e_agenda_refusal_is_surfaced_rather_than_read_as_nothing_due() {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1,
+            "result": {
+                "kb_id": "test-kb", "filter": "todo", "nodes": [], "truncated": false,
+                "unavailable_reason": "todo state lives inside the encrypted node document"
+            }
+        })
+        .to_string();
+        let addr = spawn_one_shot_mock("HTTP/1.1 200 OK", &body);
+        let layer = RemoteHubQueryLayer::with_timeout(
+            test_config(format!("http://{addr}")),
+            Duration::from_secs(5),
+        );
+
+        assert!(layer.todo_nodes().unwrap().is_empty());
+        assert!(
+            layer.degraded(),
+            "an empty agenda and 'the server cannot answer' must not look alike"
+        );
     }
 
     /// D1b: in-degree is counted from the graph endpoint's edges — no new server
@@ -1279,7 +1623,14 @@ mod tests {
             Duration::from_secs(1),
         );
         let caps = layer.capabilities();
-        for m in [M::LinkedInDegree, M::Related, M::NamespacePrefixes] {
+        for m in [
+            M::LinkedInDegree,
+            M::Related,
+            M::NamespacePrefixes,
+            M::HealthReport,
+            M::TodoNodes,
+            M::Agenda,
+        ] {
             assert!(
                 caps.supports(m),
                 "{m:?} is served now and must not be a gap"
@@ -1294,9 +1645,11 @@ mod tests {
         }
         assert_eq!(
             caps.gaps().len(),
-            5,
-            "expected 5 declared gaps (HealthReport, TodoNodes, Agenda + the two \
-             structural ones); update this count deliberately, not to make it pass"
+            2,
+            "D1b closed HealthReport, TodoNodes and Agenda, so the ONLY remaining \
+             gaps are the two structural ones — the declared-gap set is now as \
+             empty as it can be made. Update this count deliberately, not to make \
+             it pass."
         );
     }
 }

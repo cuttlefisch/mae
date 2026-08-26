@@ -358,6 +358,7 @@ mod stale_archive_tests {
             last_sync: None,
             ai_residency: mae_kb::federation::AiResidency::default(),
             project_root: None,
+            project_key: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
             ingest_policy: policy,
             priority: 0,

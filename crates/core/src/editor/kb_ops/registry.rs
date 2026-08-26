@@ -336,19 +336,16 @@ impl Editor {
             .canonicalize()
             .map_err(|e| format!("cannot resolve project root {}: {e}", root.display()))?;
 
-        if let Some(existing) = self
-            .kb
-            .registry
-            .instances
-            .iter()
-            .find(|i| i.matches_project_root(&canonical_root))
-        {
-            return Ok(KbImportResult {
-                name: existing.name.clone(),
-                uuid: existing.uuid.clone(),
-                report: ImportReport::default(),
-                health: ImportHealth::default(),
-            });
+        // Story B / R11: resolve the project's DURABLE identity, not its path.
+        // A rename or a move leaves `project_root` stale; matching on the minted
+        // key finds the existing KB anyway and repairs the path, instead of
+        // provisioning a second KB for the same project — which is the VS Code
+        // `workspaceStorage` failure, and which Microsoft classified as a backlog
+        // feature request rather than a bug.
+        let identity = mae_kb::project_identity::resolve(&canonical_root).ok();
+        let key = identity.as_ref().map(|i| i.key());
+        if let Some(existing) = self.kb_adopt_project(&canonical_root, key.as_deref()) {
+            return Ok(existing);
         }
 
         let project_name = canonical_root
@@ -372,6 +369,7 @@ impl Editor {
             if let Some(inst) = reg.instances.iter_mut().find(|i| i.uuid == uuid) {
                 inst.kind = mae_kb::federation::KbInstanceKind::Project;
                 inst.project_root = Some(canonical_root.clone());
+                inst.project_key = key.clone();
             }
         });
         if let Err(e) = saved {
@@ -638,6 +636,10 @@ impl Editor {
                 }
                 let mode = mode.unwrap_or_default();
 
+                if self.kb_refuse_stale_plan(&instance) {
+                    return None;
+                }
+
                 // Reuse the already-open store handle if this instance's store
                 // was opened at startup (or a prior register/reimport) — sled is
                 // single-writer with an exclusive dir lock, so opening a second
@@ -683,22 +685,9 @@ impl Editor {
                     self.kb.instance_stores.insert(instance.uuid.clone(), store);
                 }
 
-                // Update timestamp and persist.
-                if let Some(data_dir) = self.mae_data_dir() {
-                    let (registry, (), saved) =
-                        mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
-                            if let Some(reg_inst) =
-                                reg.instances.iter_mut().find(|i| i.uuid == instance.uuid)
-                            {
-                                reg_inst.last_import = Some(chrono_now());
-                            }
-                        });
-                    if let Err(e) = saved {
-                        tracing::warn!(error = %e, "failed to persist KB registry");
-                    }
-                    self.kb.registry = registry;
-                    self.kb.last_local_registry_write = Some(std::time::Instant::now());
-                }
+                self.kb_write_loss_report(&instance, &report);
+
+                self.kb_stamp_last_import(&instance.uuid);
 
                 // Rebuild the query layer so kb-find and other query-layer
                 // consumers see the reimported nodes immediately (matches
@@ -730,6 +719,27 @@ impl Editor {
                 None
             }
         }
+    }
+
+    /// Record that this instance was just imported, and persist the registry.
+    ///
+    /// Extracted from `kb_reimport` to keep that function off the structural
+    /// gate's function-length ceiling — the gate is per-function so the remedy
+    /// is local (CLAUDE.md, 2026-08-25 amendment).
+    pub(super) fn kb_stamp_last_import(&mut self, uuid: &str) {
+        let Some(data_dir) = self.mae_data_dir() else {
+            return;
+        };
+        let (registry, (), saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+            if let Some(reg_inst) = reg.instances.iter_mut().find(|i| i.uuid == uuid) {
+                reg_inst.last_import = Some(chrono_now());
+            }
+        });
+        if let Err(e) = saved {
+            tracing::warn!(error = %e, "failed to persist KB registry");
+        }
+        self.kb.registry = registry;
+        self.kb.last_local_registry_write = Some(std::time::Instant::now());
     }
 
     /// Persist a node to the backing store (if present). Best-effort — logs errors.
@@ -1183,6 +1193,7 @@ mod scoped_owner_tests {
                 last_sync: None,
                 ai_residency: mae_kb::federation::AiResidency::default(),
                 project_root: None,
+                project_key: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
                 ingest_policy: Default::default(),
                 priority: 0,
@@ -1275,6 +1286,7 @@ mod partition_boundary_links_by_instance_tests {
                 last_sync: None,
                 ai_residency: mae_kb::federation::AiResidency::default(),
                 project_root: None,
+                project_key: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
                 ingest_policy: Default::default(),
                 priority: 0,
