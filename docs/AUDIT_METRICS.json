@@ -7626,9 +7626,9 @@
     },
     {
       "path": "crates/mae/src/test_runner.rs",
-      "lines": 896,
+      "lines": 938,
       "test_lines": 17,
-      "code_lines": 879,
+      "code_lines": 921,
       "is_test_file": false,
       "max_fn_lines": 165,
       "max_fn_name": "run_tests_iteratively",
@@ -11866,9 +11866,9 @@
     },
     {
       "path": "shared/kb/src/federation.rs",
-      "lines": 2156,
-      "test_lines": 822,
-      "code_lines": 1334,
+      "lines": 2281,
+      "test_lines": 900,
+      "code_lines": 1381,
       "is_test_file": false,
       "max_fn_lines": 165,
       "max_fn_name": "import_org_dir_to_store",
@@ -11876,9 +11876,9 @@
       "max_struct_fields": 17,
       "max_struct_name": "KbInstance",
       "max_nesting": 5,
-      "use_count": 13,
+      "use_count": 15,
       "pub_items": 51,
-      "test_count": 31
+      "test_count": 35
     },
     {
       "path": "shared/kb/src/fuzzy.rs",
@@ -14315,7 +14315,7 @@
       },
       {
         "path": "shared/kb/src/federation.rs",
-        "line": 780,
+        "line": 824,
         "category": "architecture-debt"
       },
       {
