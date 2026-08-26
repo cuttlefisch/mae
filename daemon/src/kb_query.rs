@@ -35,6 +35,7 @@ use mae_sync::encoding::update_to_base64;
 use mae_sync::kb::{Encryption, KbCollectionDoc, KbNodeDoc, Transport};
 use mae_sync::membership;
 use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 
 /// Per-call caps (ADR-053 decision 3) — config-driven (principle #7), never
 /// hardcoded; threaded in from `OAuthConfig`'s `kb_query_*` fields.
@@ -113,6 +114,26 @@ pub async fn dispatch(
             search(doc_store, &kb_id, &query, limit, principal, n).await
         }
         "kb/query.graph" => graph(doc_store, &kb_id, principal, limits.max_scan_nodes).await,
+        "kb/query.my_wrapped_key" => my_wrapped_key(doc_store, &kb_id, principal).await,
+        other => dispatch_scanning(other, params, doc_store, &kb_id, principal, limits).await,
+    }
+}
+
+/// The D1 methods that walk the corpus rather than answering from the manifest.
+///
+/// Split out of `dispatch` so that surface can keep growing — every one of these
+/// is O(N) and capped, and they share that shape rather than sharing anything
+/// with `get`/`search`/`capabilities`.
+async fn dispatch_scanning(
+    method: &str,
+    params: &Value,
+    doc_store: &DocStore,
+    kb_id: &str,
+    principal: Option<&str>,
+    limits: KbQueryLimits,
+) -> Result<Value, McpError> {
+    let n = limits.max_scan_nodes;
+    match method {
         "kb/query.links" => {
             let node_id = required_node_id(params)?;
             // Default `both`: a caller asking for "this node's links" almost
@@ -122,12 +143,11 @@ pub async fn dispatch(
                 .and_then(|v| v.as_str())
                 .unwrap_or("both")
                 .to_string();
-            let n = limits.max_scan_nodes;
-            links(doc_store, &kb_id, &node_id, &direction, principal, n).await
+            links(doc_store, kb_id, &node_id, &direction, principal, n).await
         }
         "kb/query.titles" => {
             let prefix = params.get("prefix").and_then(|v| v.as_str());
-            titles(doc_store, &kb_id, prefix, principal, limits.max_scan_nodes).await
+            titles(doc_store, kb_id, prefix, principal, n).await
         }
         "kb/query.neighborhood" => {
             let node_id = required_node_id(params)?;
@@ -138,10 +158,17 @@ pub async fn dispatch(
                 .and_then(|v| v.as_u64())
                 .unwrap_or(1)
                 .clamp(1, 3) as u32;
-            let n = limits.max_scan_nodes;
-            neighborhood(doc_store, &kb_id, &node_id, depth, principal, n).await
+            neighborhood(doc_store, kb_id, &node_id, depth, principal, n).await
         }
-        "kb/query.my_wrapped_key" => my_wrapped_key(doc_store, &kb_id, principal).await,
+        "kb/query.agenda" => {
+            let filter = params
+                .get("filter")
+                .and_then(|v| v.as_str())
+                .unwrap_or("todo");
+            let value = params.get("value").and_then(|v| v.as_str());
+            agenda(doc_store, kb_id, filter, value, principal, n).await
+        }
+        "kb/query.health" => health(doc_store, kb_id, principal, n).await,
         other => Err(McpError::method_not_found(format!(
             "unknown kb/query method '{other}'"
         ))),
@@ -743,4 +770,231 @@ async fn graph(
             }))
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// D1b: the last three CLOSEABLE declared gaps — Agenda, TodoNodes, HealthReport.
+// ---------------------------------------------------------------------------
+
+/// One node's agenda-relevant fields, read from its CRDT document.
+struct AgendaNode {
+    id: String,
+    title: String,
+    kind: Option<String>,
+    todo_state: Option<String>,
+    priority: Option<String>,
+    tags: Vec<String>,
+    links: Vec<String>,
+}
+
+/// Read up to `max_scan_nodes` nodes' agenda fields.
+///
+/// **A capped scan, and it says so.** Every method here is O(N) in the corpus
+/// because the fields live inside per-node CRDT documents — there is no index on
+/// this surface. A silently-short agenda reads as "nothing is due", which is a
+/// wrong answer rather than a partial one.
+async fn scan_agenda_nodes(
+    doc_store: &DocStore,
+    kb_id: &str,
+    coll: &KbCollectionDoc,
+    max_scan_nodes: usize,
+) -> (Vec<AgendaNode>, bool) {
+    let ids: Vec<String> = coll.list_nodes().into_iter().map(|(id, _)| id).collect();
+    let truncated = ids.len() > max_scan_nodes;
+    let mut out = Vec::new();
+    for id in ids.into_iter().take(max_scan_nodes) {
+        let node_doc = mae_sync::kb_node_doc_name(kb_id, &id);
+        let Ok((state, _sv)) = doc_store.encode_state_and_sv(&node_doc).await else {
+            continue;
+        };
+        let Ok(doc) = KbNodeDoc::from_bytes(&state) else {
+            continue;
+        };
+        out.push(AgendaNode {
+            id,
+            title: doc.title(),
+            kind: doc.kind(),
+            todo_state: doc.todo_state(),
+            priority: doc.priority(),
+            tags: doc.tags(),
+            links: doc.links(),
+        });
+    }
+    (out, truncated)
+}
+
+fn agenda_matches(
+    n: &AgendaNode,
+    filter: &str,
+    value: Option<&str>,
+    linked: &HashSet<&str>,
+) -> bool {
+    match filter {
+        "todo" => match value {
+            Some(state) => n.todo_state.as_deref() == Some(state),
+            None => n.todo_state.is_some(),
+        },
+        // Org priority ordering is A > B > C, i.e. ASCII-ascending is
+        // descending urgency — so "priority >= B" means the char is <= 'B'.
+        "priority" => match (n.priority.as_deref(), value) {
+            (Some(p), Some(want)) => p <= want,
+            (Some(_), None) => true,
+            _ => false,
+        },
+        "tag" => value.is_some_and(|t| n.tags.iter().any(|x| x == t)),
+        "dead-end" => n.links.is_empty(),
+        "orphan" => n.links.is_empty() && !linked.contains(n.id.as_str()),
+        _ => false,
+    }
+}
+
+fn agenda_node_json(n: &AgendaNode) -> Value {
+    json!({
+        "id": n.id,
+        "title": n.title,
+        "kind": n.kind,
+        "todo_state": n.todo_state,
+        "priority": n.priority,
+        "tags": n.tags,
+    })
+}
+
+/// ADR-053 / D1b: `kb/query.agenda` — the agenda surface a `QueryOnly` member
+/// had no way to reach.
+///
+/// **`custom` Datalog is deliberately NOT offered here**, and that is a decision
+/// rather than an omission. This surface is served from the CRDT DocStore, not
+/// from Cozo, so there is no Datalog engine behind it at all — and C3 established
+/// that arbitrary Datalog is a privileged capability. ADR-085's rule applies:
+/// *not offered* beats *offered and denied*.
+async fn agenda(
+    doc_store: &DocStore,
+    kb_id: &str,
+    filter: &str,
+    value: Option<&str>,
+    principal: Option<&str>,
+    max_scan_nodes: usize,
+) -> Result<Value, McpError> {
+    const SUPPORTED: &[&str] = &["todo", "priority", "tag", "orphan", "dead-end"];
+    if !SUPPORTED.contains(&filter) {
+        return Err(McpError::invalid_request(format!(
+            "unsupported agenda filter '{filter}' (this surface serves {SUPPORTED:?}; \
+             'custom' Datalog is not served over the network at all — there is no \
+             Datalog engine behind this endpoint)"
+        )));
+    }
+    let (coll, encryption) = load_gated(doc_store, kb_id, principal).await?;
+    if matches!(encryption, Encryption::E2e) {
+        return Ok(json!({
+            "kb_id": kb_id,
+            "filter": filter,
+            "nodes": [],
+            "truncated": false,
+            "unavailable_reason":
+                "todo state, tags and links live inside the encrypted node document; \
+                 the daemon is key-blind (ADR-037)",
+        }));
+    }
+
+    let (nodes, truncated) = scan_agenda_nodes(doc_store, kb_id, &coll, max_scan_nodes).await;
+    let linked: HashSet<&str> = nodes
+        .iter()
+        .flat_map(|n| n.links.iter().map(|s| s.as_str()))
+        .collect();
+    let matched: Vec<Value> = nodes
+        .iter()
+        .filter(|n| agenda_matches(n, filter, value, &linked))
+        .map(agenda_node_json)
+        .collect();
+
+    Ok(json!({
+        "kb_id": kb_id,
+        "filter": filter,
+        "nodes": matched,
+        "scanned": nodes.len(),
+        "truncated": truncated,
+    }))
+}
+
+/// ADR-053 / D1b: `kb/query.health` — a structural health report over the hub's
+/// own copy.
+///
+/// Scoped honestly: this reports **the shape of the corpus the hub holds**, not
+/// the health of the hub process. Orphan and hub-node detection needs the whole
+/// link graph, so it is capped like every other scan here and reports
+/// `truncated` — an orphan list computed from a partial scan would name nodes
+/// that are not orphans at all, which is worse than declining.
+async fn health(
+    doc_store: &DocStore,
+    kb_id: &str,
+    principal: Option<&str>,
+    max_scan_nodes: usize,
+) -> Result<Value, McpError> {
+    let (coll, encryption) = load_gated(doc_store, kb_id, principal).await?;
+    if matches!(encryption, Encryption::E2e) {
+        return Ok(json!({
+            "kb_id": kb_id,
+            "total_nodes": coll.list_nodes().len(),
+            "truncated": false,
+            "unavailable_reason":
+                "link structure lives inside the encrypted node documents; the daemon \
+                 is key-blind (ADR-037), so only the node count is knowable here",
+        }));
+    }
+
+    let (nodes, truncated) = scan_agenda_nodes(doc_store, kb_id, &coll, max_scan_nodes).await;
+    let present: HashSet<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
+    let mut in_degree: HashMap<&str, usize> = HashMap::new();
+    let mut broken: Vec<Value> = Vec::new();
+    let mut total_links = 0usize;
+    for n in &nodes {
+        for target in &n.links {
+            total_links += 1;
+            *in_degree.entry(target.as_str()).or_default() += 1;
+            if !present.contains(target.as_str()) && !truncated {
+                broken.push(json!({"from": n.id, "to": target}));
+            }
+        }
+    }
+
+    let mut by_kind: HashMap<String, usize> = HashMap::new();
+    let mut namespaces: HashMap<String, usize> = HashMap::new();
+    for n in &nodes {
+        *by_kind
+            .entry(n.kind.clone().unwrap_or_else(|| "unknown".to_string()))
+            .or_default() += 1;
+        if let Some((prefix, _)) = n.id.split_once(':') {
+            *namespaces.entry(prefix.to_string()).or_default() += 1;
+        }
+    }
+
+    let orphans: Vec<&str> = nodes
+        .iter()
+        .filter(|n| n.links.is_empty() && !in_degree.contains_key(n.id.as_str()))
+        .map(|n| n.id.as_str())
+        .collect();
+    let mut hubs: Vec<(&str, usize)> = in_degree
+        .iter()
+        .filter(|(id, _)| present.contains(*id))
+        .map(|(id, d)| (*id, *d))
+        .collect();
+    hubs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    hubs.truncate(10);
+
+    Ok(json!({
+        "kb_id": kb_id,
+        "total_nodes": coll.list_nodes().len(),
+        "scanned": nodes.len(),
+        "total_links": total_links,
+        "by_kind": by_kind,
+        "namespace_counts": namespaces,
+        // Orphans and broken links are only meaningful over a COMPLETE scan: a
+        // node whose only backlink lives beyond the cap looks orphaned, and a
+        // link into the unscanned tail looks broken. Withheld rather than
+        // reported wrongly.
+        "orphan_ids": if truncated { Vec::new() } else { orphans },
+        "broken_links": broken,
+        "hub_nodes": hubs.iter().map(|(id, d)| json!({"id": id, "in_degree": d})).collect::<Vec<_>>(),
+        "truncated": truncated,
+    }))
 }
