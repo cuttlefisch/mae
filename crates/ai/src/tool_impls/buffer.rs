@@ -362,6 +362,77 @@ mod stale_archive_tests {
         );
     }
 
+    /// **The regression this guard shipped with, and the reason it had to be
+    /// narrowed.**
+    ///
+    /// A KB's `org_dir` is routinely a whole PROJECT REPO — on a real machine
+    /// `jenkins`'s org_dir is `~/Projects/jenkins`, holding 20 files of which
+    /// only 5 are `.org`. The first version of this guard matched on the
+    /// directory prefix alone, so it refused `ansible.cfg`, `requirements.yml`
+    /// and `.gitignore` in those repos and told the caller to use `kb_search`.
+    /// An agent could not read a Terraform file in its own project.
+    #[test]
+    fn a_non_kb_file_in_the_same_directory_still_reads() {
+        let dir = TempDir::new().unwrap();
+        // The KB imported exactly one file from this directory...
+        let imported = dir.path().join("README.org");
+        std::fs::write(&imported, "KB SOURCE").unwrap();
+        // ...and these are ordinary project files that live beside it.
+        let mut neighbours = Vec::new();
+        for name in ["ansible.cfg", "main.tf", "requirements.yml", ".gitignore"] {
+            let p = dir.path().join(name);
+            std::fs::write(&p, format!("contents of {name}")).unwrap();
+            neighbours.push(p);
+        }
+        let editor = super::super::stale_archive::test_support::editor_with_detached_kb_recording(
+            dir.path(),
+            &[&imported],
+        );
+
+        for p in &neighbours {
+            let out =
+                execute_file_read(&editor, &serde_json::json!({ "path": p.to_string_lossy() }))
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "{} is not KB source and must still read; got refusal: {e}",
+                            p.display()
+                        )
+                    });
+            assert!(out.contains("contents of"), "must return the real content");
+        }
+
+        // The imported file IS still refused — otherwise this test would pass
+        // against a guard that had simply been deleted.
+        execute_file_read(
+            &editor,
+            &serde_json::json!({ "path": imported.to_string_lossy() }),
+        )
+        .expect_err("the imported .org file must still be refused");
+    }
+
+    /// A `.org` file in the same directory that the KB never imported is
+    /// deliberately NOT claimed: it genuinely is not in the KB, so editing it
+    /// loses nothing. `:kb-retire-archive`'s gate is what surfaces those.
+    #[test]
+    fn an_org_file_the_kb_never_imported_is_not_claimed() {
+        let dir = TempDir::new().unwrap();
+        let imported = dir.path().join("imported.org");
+        let never = dir.path().join("never-imported.org");
+        std::fs::write(&imported, "IMPORTED").unwrap();
+        std::fs::write(&never, "NEVER IMPORTED").unwrap();
+        let editor = super::super::stale_archive::test_support::editor_with_detached_kb_recording(
+            dir.path(),
+            &[&imported],
+        );
+
+        let out = execute_file_read(
+            &editor,
+            &serde_json::json!({ "path": never.to_string_lossy() }),
+        )
+        .expect("an un-imported .org file is not this KB's source");
+        assert!(out.contains("NEVER IMPORTED"));
+    }
+
     /// The paired positive, without which the test above passes on an
     /// implementation that refuses everything.
     #[test]

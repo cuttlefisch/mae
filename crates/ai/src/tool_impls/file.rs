@@ -403,7 +403,7 @@ mod tests {
 mod stale_archive_write_tests {
     use super::*;
     use crate::tool_impls::stale_archive::test_support::{
-        editor_with_attached_kb, editor_with_detached_kb,
+        editor_with_attached_kb, editor_with_detached_kb, editor_with_detached_kb_recording,
     };
     use tempfile::TempDir;
 
@@ -423,7 +423,10 @@ mod stale_archive_write_tests {
     fn creating_a_file_inside_a_detached_kbs_archive_is_refused_and_writes_nothing() {
         let dir = TempDir::new().unwrap();
         let target = dir.path().join("sub").join("note.org");
-        let mut editor = editor_with_detached_kb(dir.path());
+        // The KB imported this path, so a write to it is a write into the
+        // archive. (The file itself need not exist — `source_files` is a
+        // record of what was imported, and this one is about to be created.)
+        let mut editor = editor_with_detached_kb_recording(dir.path(), &[&target]);
 
         let err = execute_create_file(
             &mut editor,

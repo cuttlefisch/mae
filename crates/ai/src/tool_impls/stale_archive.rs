@@ -94,14 +94,39 @@ pub(crate) mod test_support {
         }
     }
 
-    pub(crate) fn editor_with_detached_kb(dir: &std::path::Path) -> Editor {
+    /// A detached KB whose store records `recorded` as imported source files.
+    ///
+    /// Recording is not optional decoration: the guard only claims a file the
+    /// KB actually imported, because a KB's `org_dir` is often a whole project
+    /// repo. A fixture that skips this models a KB that imported nothing, and
+    /// every "is refused" assertion would pass vacuously.
+    pub(crate) fn editor_with_detached_kb_recording(
+        dir: &std::path::Path,
+        recorded: &[&std::path::Path],
+    ) -> Editor {
         let mut editor = Editor::new();
-        editor.kb.registry.instances.push(instance(
+        let inst = instance(
             "Detached",
             dir,
             mae_kb::federation::IngestPolicy::StoreIsTruth,
-        ));
+        );
+        let store = mae_kb::CozoKbStore::open_mem().expect("in-memory store");
+        for p in recorded {
+            store
+                .record_source_file(&p.to_string_lossy(), "hash-for-test", 0, &[])
+                .expect("record source file");
+        }
         editor
+            .kb
+            .instance_stores
+            .insert(inst.uuid.clone(), std::sync::Arc::new(store));
+        editor.kb.registry.instances.push(inst);
+        editor
+    }
+
+    /// Convenience for the common single-file case.
+    pub(crate) fn editor_with_detached_kb(dir: &std::path::Path) -> Editor {
+        editor_with_detached_kb_recording(dir, &[&dir.join("note.org")])
     }
 
     pub(crate) fn editor_with_attached_kb(dir: &std::path::Path) -> Editor {

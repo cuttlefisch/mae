@@ -1005,16 +1005,43 @@ impl Editor {
     ///
     /// `None` for every attached KB, so this can only narrow.
     pub fn kb_stale_archive_instance(&self, path: &std::path::Path) -> Option<String> {
-        self.kb
-            .registry
-            .instances
-            .iter()
-            .find(|i| {
-                !i.ingest_policy.allows_ingest()
-                    && !i.org_dir.as_os_str().is_empty()
-                    && path.starts_with(&i.org_dir)
-            })
-            .map(|i| i.name.clone())
+        let inst = self.kb.registry.instances.iter().find(|i| {
+            !i.ingest_policy.allows_ingest()
+                && !i.org_dir.as_os_str().is_empty()
+                && path.starts_with(&i.org_dir)
+        })?;
+
+        // @ai-caution: [kb-truth] The directory prefix is NOT sufficient, and
+        // assuming it was shipped a real regression. A KB's `org_dir` is
+        // frequently a whole PROJECT REPO -- on a real machine `jenkins`'s
+        // org_dir is `~/Projects/jenkins`, holding 20 files of which 5 are
+        // `.org`. Matching on the prefix alone claimed every `.tf`, `.yml`,
+        // `ansible.cfg` and `.gitignore` in those repos as KB source and
+        // refused to read them, telling the caller to use `kb_search`.
+        //
+        // A file is this KB's source only if the KB actually IMPORTED it, and
+        // `source_files` records exactly that set. The lookup is keyed on a
+        // single path (`get_source_file_hash`), not a table scan, so it is
+        // cheap enough for a file-open path.
+        //
+        // A `.org` file sitting in the directory that was never imported (no
+        // `:ID:`, so ingest skipped it before recording) is deliberately NOT
+        // claimed: it genuinely is not in the KB, so editing it loses nothing.
+        // `:kb-retire-archive`'s gate is what surfaces those.
+        let store = self.kb.instance_stores.get(&inst.uuid)?;
+        let recorded = |p: &std::path::Path| {
+            matches!(
+                store.get_source_file_hash(&p.to_string_lossy()),
+                Ok(Some(_))
+            )
+        };
+        // Ingest records `path.to_string_lossy()` as walked from a canonicalised
+        // `org_dir`; a path arriving here may not be canonical (symlink, `..`),
+        // so try both rather than miss.
+        if recorded(path) || path.canonicalize().is_ok_and(|c| recorded(&c)) {
+            return Some(inst.name.clone());
+        }
+        None
     }
 
     pub(crate) fn kb_owner_of(&self, id: &str) -> Option<Option<String>> {
