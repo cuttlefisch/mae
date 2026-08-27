@@ -110,6 +110,28 @@ fn retiring_a_verified_archive_moves_the_files_and_makes_the_kb_native() {
     assert!(msg.contains("native"), "{msg}");
 }
 
+/// MAE's own instance marker goes with the archive. The gate skips it (ingest
+/// never records it), but once `org_dir` is cleared nothing reads it — leaving
+/// it behind litters a project directory with a stale marker per retired KB.
+/// Observed on the first real retirement.
+#[test]
+fn retirement_takes_maes_own_instance_sentinel_with_it() {
+    let tmp = TempDir::new().unwrap();
+    let (mut editor, _dirs) = detached_kb(tmp.path(), &[("a.org", "AAA")]);
+    let sentinel = tmp.path().join(mae_kb::federation::INSTANCE_SENTINEL);
+    std::fs::write(&sentinel, ":PROPERTIES:\n:ID: x\n:END:\n").unwrap();
+
+    // It must not block the gate...
+    let plan = editor.kb_retire_plan("Retiring").unwrap();
+    assert!(plan.is_clean(), "{}", plan.describe());
+
+    editor.kb_retire_archive("Retiring").expect("retire");
+    assert!(
+        !sentinel.exists(),
+        "the orphaned marker must not be left behind in the project directory"
+    );
+}
+
 /// **The blocker that matters most.** A file with no `:ID:` is skipped by
 /// ingest BEFORE `record_source_file`, so it is absent from `source_files` —
 /// exactly how a whole daily note sat invisible in a real primary KB. Moving

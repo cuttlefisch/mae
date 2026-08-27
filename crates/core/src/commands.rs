@@ -1539,6 +1539,10 @@ fn register_kb_federation_commands(reg: &mut CommandRegistry) {
         "Resume ingesting a KB from its .org directory (undoes :kb-detach)",
     );
     reg.register_builtin(
+        "kb-new",
+        "Create a native KB — a store with no org directory (:kb-new <name>)",
+    );
+    reg.register_builtin(
         "kb-retire-archive",
         "Move a detached KB's verified .org archive aside, making the KB native (dry run without 'confirm')",
     );

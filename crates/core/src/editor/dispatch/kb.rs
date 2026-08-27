@@ -183,7 +183,7 @@ impl Editor {
             // does rather than silently doing nothing.
             // Both take a KB name, so the no-arg dispatch prefills command mode
             // the way `kb-reimport` does rather than silently doing nothing.
-            "kb-detach" | "kb-attach" | "kb-retire-archive" => {
+            "kb-detach" | "kb-attach" | "kb-retire-archive" | "kb-new" => {
                 self.set_mode(Mode::Command);
                 self.vi.command_line = format!("{name} ");
                 self.vi.command_cursor = self.vi.command_line.len();
