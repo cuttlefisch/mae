@@ -75,6 +75,18 @@ enum CollabAuth {
     },
 }
 
+/// Are these two paths the same store file?
+///
+/// Canonicalises when both sides resolve (so a symlinked or `..`-containing
+/// data dir still matches), and falls back to plain equality when either does
+/// not exist yet.
+fn same_store_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // @ai-caution: [multi-instance] Global flags are parsed ONCE, up front, and
@@ -218,9 +230,26 @@ async fn main() {
         let registry = mae_kb::federation::KbRegistry::load(&data_dir);
         let mut s = state.lock().await;
         for inst in &registry.instances {
-            if inst.primary || !inst.enabled {
-                // The primary is already opened above via --data-dir; opening
-                // it a second time here would double-open the same file.
+            if !inst.enabled {
+                continue;
+            }
+            // Skip only the instance whose store IS this daemon's own store —
+            // opening the same file twice is the thing to avoid.
+            //
+            // @ai-caution: [kb-truth] This used to test `inst.primary`, which
+            // is NOT that question: the flag means "first row ever registered
+            // on this machine" (see `resolve_kb_store`). On any machine where
+            // the first-registered KB is an ordinary user KB, its real store
+            // was never opened here, and `resolve_kb_store` then handed out
+            // the daemon's own store in its place — so the daemon reimported
+            // that KB into the wrong file, indefinitely and silently.
+            if same_store_file(&inst.db_path, &db_path) {
+                // It genuinely is this daemon's store. Register the handle we
+                // already have under its uuid so `resolve_kb_store` stays a
+                // plain uuid lookup with no special case.
+                if let Some(primary) = s.store.clone() {
+                    s.instance_stores.insert(inst.uuid.clone(), primary);
+                }
                 continue;
             }
             if !inst.db_path.exists() {

@@ -318,7 +318,7 @@ fn assess_file(path: &Path) -> PlannedFile {
 }
 
 fn disposition_for(path: &Path, bytes: Vec<u8>) -> FileDisposition {
-    if path.file_name().and_then(|n| n.to_str()) == Some("eor-instance.org") {
+    if crate::federation::is_instance_sentinel(path) {
         return FileDisposition::Skipped {
             reason: "instance sentinel file".to_string(),
         };

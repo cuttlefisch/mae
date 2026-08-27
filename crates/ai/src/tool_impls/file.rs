@@ -9,6 +9,13 @@ pub fn execute_open_file(editor: &mut Editor, args: &serde_json::Value) -> Resul
         .ok_or("Missing 'path' argument")?;
     let path = mae_core::file_picker::expand_tilde(raw_path);
 
+    // A detached KB's `.org` file opened as an EDITABLE buffer is both halves of
+    // the problem at once: the content shown is stale, and anything typed into
+    // it is saved somewhere no ingest reads.
+    if let Some(msg) = super::stale_archive::refuse_read(editor, &path, "open_file") {
+        return Err(msg);
+    }
+
     // Check if file is already open in a buffer
     let file_path = PathBuf::from(&path);
     let canonical = file_path.canonicalize().ok();
@@ -193,6 +200,11 @@ pub fn execute_rename_file(
         }
     }
 
+    // An archived KB source file is the only copy of what the store lost at
+    // ingest — see `kb_archive_removal_refusal`.
+    if let Some(msg) = editor.kb_archive_removal_refusal(&old_path, "rename_file") {
+        return Err(msg);
+    }
     std::fs::rename(&old_path, &new).map_err(|e| format!("Rename failed: {}", e))?;
 
     editor.buffers[idx].set_file_path(new.clone());
@@ -233,6 +245,14 @@ pub fn execute_create_file(
         ));
     }
 
+    // A write into a detached KB's stale archive reports success -- byte count
+    // and all -- while the content stays invisible to every KB surface. Checked
+    // after the config guard above and before any directory is created, so a
+    // refused write leaves nothing behind.
+    if let Some(msg) = super::stale_archive::refuse_write(editor, &path, "create_file") {
+        return Err(msg);
+    }
+
     // Create parent directories if needed
     if let Some(parent) = file_path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -244,6 +264,23 @@ pub fn execute_create_file(
     // Write the file
     std::fs::write(file_path, content).map_err(|e| format!("Failed to create file: {}", e))?;
 
+    surface_created_file(editor, &path, file_path, content.len())
+}
+
+/// Reflect a freshly created file into the editor: reload an already-open
+/// buffer, then open it.
+///
+/// Split out of [`execute_create_file`] for length only — the ceiling is
+/// per-function, and adding the stale-archive guard pushed the original over
+/// it. Behaviour is unchanged, including ADR-086 D5's rule that a partial
+/// success (file written, buffer step failed) reports BOTH halves rather than
+/// collapsing into a bare error or a bare success.
+fn surface_created_file(
+    editor: &mut Editor,
+    path: &str,
+    file_path: &Path,
+    written: usize,
+) -> Result<String, String> {
     // If a buffer already has this file open, reload it from disk so
     // the editor sees the freshly written content (not stale buffer state).
     // A failed reload must not be silently swallowed (ADR-086): the open step
@@ -253,17 +290,14 @@ pub fn execute_create_file(
     let file_name = file_path
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or(&path)
+        .unwrap_or(path)
         .to_string();
     if let Some(existing) = editor.find_buffer_by_name(&file_name) {
         if let Err(e) = editor.buffers[existing].reload_from_disk() {
             return Err(format!(
                 "Created '{}' ({} bytes) on disk, but the already-open buffer '{}' failed to \
                  reload the new content: {}",
-                path,
-                content.len(),
-                file_name,
-                e
+                path, written, file_name, e
             ));
         }
     }
@@ -273,18 +307,14 @@ pub fn execute_create_file(
     // success: report both halves rather than a bare error that loses the fact the
     // write happened, and rather than a bare success that hides the open failed
     // (ADR-086 D5 — no partial success collapsed into unqualified prose).
-    match editor.open_file_non_conversation(&path) {
+    match editor.open_file_non_conversation(path) {
         Ok(new_idx) => Ok(format!(
             "Created '{}' ({} bytes) and opened as buffer '{}'",
-            path,
-            content.len(),
-            editor.buffers[new_idx].name
+            path, written, editor.buffers[new_idx].name
         )),
         Err(e) => Err(format!(
             "Created '{}' ({} bytes) on disk, but failed to open it as a buffer: {}",
-            path,
-            content.len(),
-            e
+            path, written, e
         )),
     }
 }
@@ -371,5 +401,126 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod stale_archive_write_tests {
+    use super::*;
+    use crate::tool_impls::stale_archive::test_support::{
+        editor_with_attached_kb, editor_with_detached_kb, editor_with_detached_kb_recording,
+    };
+    use tempfile::TempDir;
+
+    /// **The failure this closes, and the one that made it worth finding.**
+    ///
+    /// `create_file` had no KB awareness at all: it called `std::fs::write` and
+    /// reported `Created '{path}' ({n} bytes)`. Inside a DETACHED KB that is a
+    /// write into a directory no ingest reads — invisible to `kb_search`,
+    /// `kb_get`, the graph and the agenda — reported as a success, byte count
+    /// and all. `federation.rs`'s own `@ai-caution` names this exact shape: "a
+    /// path that skips this check silently reverts a detached KB to text."
+    ///
+    /// The load-bearing assertion is not the error string, it is that **nothing
+    /// reached the disk**. A refusal that still wrote the file would satisfy a
+    /// message-only oracle while doing the precise damage this guards.
+    #[test]
+    fn creating_a_file_inside_a_detached_kbs_archive_is_refused_and_writes_nothing() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("sub").join("note.org");
+        // The KB imported this path, so a write to it is a write into the
+        // archive. (The file itself need not exist — `source_files` is a
+        // record of what was imported, and this one is about to be created.)
+        let mut editor = editor_with_detached_kb_recording(dir.path(), &[&target]);
+
+        let err = execute_create_file(
+            &mut editor,
+            &serde_json::json!({
+                "path": target.to_string_lossy(),
+                "content": "CONTENT THAT WOULD VANISH",
+            }),
+        )
+        .expect_err("a write into a detached KB's stale archive must be refused");
+
+        assert!(
+            !target.exists(),
+            "the file was WRITTEN despite the refusal -- the guard runs too late"
+        );
+        assert!(
+            !target.parent().unwrap().exists(),
+            "the refusal still created parent directories -- it must leave nothing behind"
+        );
+        // Actionable, per the same R10 reasoning as the read side: say the
+        // consequence, redirect, and grant jurisdiction elsewhere.
+        assert!(err.contains("kb_create"), "must redirect: {err}");
+        assert!(
+            err.contains("report success"),
+            "must name the consequence -- a silent success is the whole bug: {err}"
+        );
+        assert!(
+            err.contains("source code"),
+            "must grant create_file jurisdiction elsewhere: {err}"
+        );
+    }
+
+    /// The paired positive. Without it the test above passes just as well
+    /// against a `create_file` that refuses everything.
+    #[test]
+    fn creating_a_file_inside_an_attached_kb_still_works() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("note.org");
+        let mut editor = editor_with_attached_kb(dir.path());
+
+        execute_create_file(
+            &mut editor,
+            &serde_json::json!({ "path": target.to_string_lossy(), "content": "LIVE" }),
+        )
+        .expect("an attached KB's org dir is still writable");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "LIVE");
+    }
+
+    /// And a path with no KB anywhere near it must be untouched by all of this.
+    #[test]
+    fn creating_an_ordinary_file_outside_any_kb_still_works() {
+        let kb_dir = TempDir::new().unwrap();
+        let other = TempDir::new().unwrap();
+        let target = other.path().join("main.rs");
+        let mut editor = editor_with_detached_kb(kb_dir.path());
+
+        execute_create_file(
+            &mut editor,
+            &serde_json::json!({ "path": target.to_string_lossy(), "content": "fn main() {}" }),
+        )
+        .expect("a file outside every KB must still be creatable");
+        assert!(target.exists());
+    }
+
+    /// `open_file` is both halves at once: the content shown is stale, and
+    /// anything typed into the buffer is saved somewhere no ingest reads.
+    #[test]
+    fn opening_a_detached_kbs_stale_archive_is_refused() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("note.org");
+        std::fs::write(&path, "STALE CONTENT nobody updates").unwrap();
+        let mut editor = editor_with_detached_kb(dir.path());
+
+        let err = execute_open_file(
+            &mut editor,
+            &serde_json::json!({ "path": path.to_string_lossy() }),
+        )
+        .expect_err("a stale archive must not be opened as an editable buffer");
+
+        assert!(err.contains("kb_search"), "must redirect: {err}");
+        assert!(
+            !editor
+                .buffers
+                .iter()
+                .any(|b| b.file_path().map(|p| p == path).unwrap_or(false)),
+            "the refusal still opened a buffer on the stale file"
+        );
+        assert!(
+            !err.contains("STALE CONTENT"),
+            "and must not leak the content it refused to serve"
+        );
     }
 }

@@ -12,6 +12,7 @@ mod kb_export_html;
 pub(crate) mod lsp;
 mod project;
 mod shell;
+mod stale_archive;
 mod syntax;
 
 pub use buffer::{

@@ -803,11 +803,13 @@ impl Editor {
         //
         // Branching on `notes_dir` alone was the bug: every existing user who
         // detaches still has one set.
+        // Ask the policy of the KB that OWNS the notes dir, not the primary's —
+        // they are routinely different. See `kb_dir_store_is_truth`.
         let notes_dir = self
             .kb
             .notes_dir
             .clone()
-            .filter(|_| !self.kb.primary_store_is_truth());
+            .filter(|d| !self.kb_dir_store_is_truth(d));
 
         if let Some(dir) = notes_dir {
             // Ensure directory exists

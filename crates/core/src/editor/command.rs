@@ -280,6 +280,32 @@ impl Editor {
                 self.dispatch_kb_ingest_policy(command, args);
                 true
             }
+            // Dry run unless the caller says `confirm`. Moving files is the one
+            // irreversible-looking step in the cutover, so the default is to
+            // show exactly what would move and what blocks it.
+            "kb-retire-archive" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status("Usage: :kb-retire-archive <name> [confirm]"),
+                    Some(rest) => {
+                        let (name, tail) = rest.split_once(' ').unwrap_or((rest, ""));
+                        let confirmed = tail.trim() == "confirm";
+                        let outcome = if confirmed {
+                            self.kb_retire_archive(name)
+                        } else {
+                            self.kb_retire_plan(name).map(|p| {
+                                format!(
+                                    "{}\nRun `:kb-retire-archive {name} confirm` to proceed.",
+                                    p.describe()
+                                )
+                            })
+                        };
+                        match outcome {
+                            Ok(msg) | Err(msg) => self.set_status(msg),
+                        }
+                    }
+                }
+                true
+            }
             "kb-relink" => {
                 self.dispatch_kb_relink(args);
                 true

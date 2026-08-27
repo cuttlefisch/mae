@@ -757,6 +757,7 @@ mod ingest_policy_tests {
             project_key: None,
             kind: KbInstanceKind::default(),
             ingest_policy: policy,
+            import_record: None,
             priority: 0,
             remote_hub: None,
         }

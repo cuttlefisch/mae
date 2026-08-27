@@ -206,6 +206,7 @@ fn seed_system_kb_row(editor: &mut Editor, name: &str) -> String {
             project_key: None,
             kind: mae_kb::federation::KbInstanceKind::Guidance,
             ingest_policy: Default::default(),
+            import_record: None,
             priority: 0,
             remote_hub: None,
         });

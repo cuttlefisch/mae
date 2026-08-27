@@ -32,6 +32,7 @@ fn instance(reg: &mut KbRegistry, name: &str) -> String {
         project_key: None,
         kind: KbInstanceKind::UserRegistered,
         ingest_policy: Default::default(),
+        import_record: None,
         priority: 0,
         remote_hub: None,
     });

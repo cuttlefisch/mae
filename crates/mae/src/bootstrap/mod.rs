@@ -2809,30 +2809,9 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
                         .kb
                         .instance_stores
                         .insert(uuid.clone(), std::sync::Arc::new(store));
-                    recovered_instances.push(mae_kb::federation::KbInstance {
-                        uuid,
-                        name: if name.is_empty() {
-                            collab_id.clone()
-                        } else {
-                            name.clone()
-                        },
-                        org_dir: std::path::PathBuf::new(),
-                        db_path,
-                        primary: false,
-                        enabled: true,
-                        last_import: None,
-                        collab_id: Some(collab_id.clone()),
-                        shared: true,
-                        remote_peers: Vec::new(),
-                        last_sync,
-                        ai_residency: mae_kb::federation::AiResidency::default(),
-                        project_root: None,
-                        project_key: None,
-                        kind: mae_kb::federation::KbInstanceKind::default(),
-                        ingest_policy: Default::default(),
-                        priority: 0,
-                        remote_hub: None,
-                    });
+                    recovered_instances.push(recovered_instance(
+                        uuid, &name, &collab_id, db_path, last_sync,
+                    ));
                     info!(kb = %collab_id, nodes = count, "recovered shared KB instance from disk (registry rescan)");
                 }
             }
@@ -2959,6 +2938,45 @@ pub(crate) fn init_daemon_connection(editor: &mut Editor) {
                 );
             }
         }
+    }
+}
+
+/// Build the `KbInstance` for an ADR-020 stranded-instance recovery.
+///
+/// Extracted from `init_kb_federation` purely for length: that function is far
+/// over the per-function ceiling already, so adding a field to `KbInstance`
+/// would otherwise have grown it further.
+fn recovered_instance(
+    uuid: String,
+    name: &str,
+    collab_id: &str,
+    db_path: std::path::PathBuf,
+    last_sync: Option<String>,
+) -> mae_kb::federation::KbInstance {
+    mae_kb::federation::KbInstance {
+        uuid,
+        name: if name.is_empty() {
+            collab_id.to_string()
+        } else {
+            name.to_string()
+        },
+        org_dir: std::path::PathBuf::new(),
+        db_path,
+        primary: false,
+        enabled: true,
+        last_import: None,
+        collab_id: Some(collab_id.to_string()),
+        shared: true,
+        remote_peers: Vec::new(),
+        last_sync,
+        ai_residency: mae_kb::federation::AiResidency::default(),
+        project_root: None,
+        project_key: None,
+        kind: mae_kb::federation::KbInstanceKind::default(),
+        ingest_policy: Default::default(),
+        import_record: None,
+        priority: 0,
+        remote_hub: None,
     }
 }
 

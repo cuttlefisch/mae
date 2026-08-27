@@ -47,6 +47,7 @@ fn an_empty_org_dir_instance_does_not_claim_every_path() {
             project_key: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
             ingest_policy: Default::default(),
+            import_record: None,
             priority: 0,
             remote_hub: None,
         }
