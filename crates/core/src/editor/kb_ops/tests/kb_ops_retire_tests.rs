@@ -32,7 +32,15 @@ fn detached_kb(dir: &std::path::Path, imported: &[(&str, &str)]) -> (Editor, Tem
 
     let store = CozoKbStore::open_mem().unwrap();
     for (rel, content) in imported {
-        let p = dir.join(rel);
+        // Build the path COMPONENT-WISE. `dir.join("sub/b.org")` embeds a
+        // forward slash on Windows, producing `…\\sub/b.org`, while the gate's
+        // `read_dir` walk yields `…\\sub\\b.org` — and the `source_files` key is
+        // a string compare, so the lookup misses and the file looks
+        // never-imported. Real ingest walks the directory too, so both sides
+        // are OS-native there; only a hand-built test path can diverge.
+        let p = rel
+            .split('/')
+            .fold(dir.to_path_buf(), |acc, part| acc.join(part));
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
@@ -79,7 +87,7 @@ fn retiring_a_verified_archive_moves_the_files_and_makes_the_kb_native() {
         "origin file must be gone"
     );
     assert!(
-        !tmp.path().join("sub/b.org").exists(),
+        !tmp.path().join("sub").join("b.org").exists(),
         "nested origin file must be gone"
     );
     let inst = editor.kb.registry.find("Retiring").unwrap();
@@ -96,7 +104,7 @@ fn retiring_a_verified_archive_moves_the_files_and_makes_the_kb_native() {
         "the archive must be recoverable from the holding dir"
     );
     assert_eq!(
-        std::fs::read_to_string(dest.join("sub/b.org")).unwrap(),
+        std::fs::read_to_string(dest.join("sub").join("b.org")).unwrap(),
         "BBB"
     );
     assert!(msg.contains("native"), "{msg}");
