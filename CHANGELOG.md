@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.116] - 2026-08-27
+
+
+
+
+### Features
+
+- *(kb)* Guard the HUMAN paths into a detached KB's archive, from one place ([1755ae2](https://github.com/cuttlefisch/mae/commit/1755ae28a6e28b68f8f022dee0e94661597b53ce))
+- *(kb)* `:kb-retire-archive` — the step that finishes a cutover ([6551457](https://github.com/cuttlefisch/mae/commit/6551457e5a80f86c57c916785b2f972dcfaf1a43))
+
+### Bug Fixes
+
+- *(kb)* Stop two write paths from silently writing into a detached KB's stale archive ([7bba114](https://github.com/cuttlefisch/mae/commit/7bba114c2537f5eb77c18e62bc9c599cfd4676a3))
+- *(e2e)* Release the two-tenant editors on a condition, not a fixed sleep ([cf08915](https://github.com/cuttlefisch/mae/commit/cf08915f06c02b69064c8626a758a130d74e256a))
+- *(daemon)* Route a KB's store by uuid, not by the `primary` flag ([26f283f](https://github.com/cuttlefisch/mae/commit/26f283fc718c8f283133d9c0caddcb3be10cf6bb))
+- *(kb)* A KB's org dir is often a whole repo — claim only files it imported ([e6959ba](https://github.com/cuttlefisch/mae/commit/e6959ba608552c8e3a75c12445ebc917ce7688fd))
+- *(test)* Build the retirement fixture's paths component-wise (Windows) ([817514e](https://github.com/cuttlefisch/mae/commit/817514e2de7a127ba2e8e6c24ba1ac0d8fe12003))
+- *(kb)* Close three paths the first pass missed ([5dbd6e7](https://github.com/cuttlefisch/mae/commit/5dbd6e797556f32fc5c7402972761967ea1d2a98))
+
 ## [0.14.115] - 2026-08-26
 
 
@@ -154,6 +173,7 @@ All notable changes to this project will be documented in this file.
 - Regenerate audit metrics after rebase ([4768d3e](https://github.com/cuttlefisch/mae/commit/4768d3ec54499ebf3182a338498eec47b3fb2e05))
 - Regenerate audit metrics after rebase ([092e05c](https://github.com/cuttlefisch/mae/commit/092e05cd5b350c857b4cd7605086e5224b2c9d9f))
 - Regenerate audit metrics and code map for the consolidated branch ([56895c9](https://github.com/cuttlefisch/mae/commit/56895c9945ff89464acda5c3a93b6f673ab55387))
+- Bump version to 0.14.115 ([3eda486](https://github.com/cuttlefisch/mae/commit/3eda48669f669c313815cdb17964d92174e42eff))
 
 ## [0.14.114] - 2026-08-14
 
