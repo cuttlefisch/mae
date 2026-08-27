@@ -91,6 +91,17 @@ impl Editor {
 
         let mut buf = crate::Buffer::new();
         buf.name = name;
+        // Resolve images against the owning KB's directory while one exists, so
+        // a migrating KB's relative embeds still preview; fall back to the data
+        // dir so an ABSOLUTE path previews for a native KB too. Without either,
+        // `compute_image_regions` sees no base and returns nothing at all.
+        buf.image_base_dir = self
+            .kb_owner_of(node_id)
+            .unwrap_or(None)
+            .and_then(|uuid| self.kb.registry.find_by_uuid(&uuid).cloned())
+            .map(|i| i.org_dir)
+            .filter(|d| !d.as_os_str().is_empty())
+            .or_else(|| self.mae_data_dir());
         buf.insert_text_at(0, &text);
         buf.modified = false;
         self.buffers.push(buf);

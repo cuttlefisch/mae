@@ -283,6 +283,15 @@ impl Editor {
             // Dry run unless the caller says `confirm`. Moving files is the one
             // irreversible-looking step in the cutover, so the default is to
             // show exactly what would move and what blocks it.
+            "kb-new" => {
+                match args.map(str::trim).filter(|s| !s.is_empty()) {
+                    None => self.set_status("Usage: :kb-new <name>"),
+                    Some(name) => match self.kb_new(name) {
+                        Ok(msg) | Err(msg) => self.set_status(msg),
+                    },
+                }
+                true
+            }
             "kb-retire-archive" => {
                 match args.map(str::trim).filter(|s| !s.is_empty()) {
                     None => self.set_status("Usage: :kb-retire-archive <name> [confirm]"),

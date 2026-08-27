@@ -318,6 +318,15 @@ pub struct Buffer {
     pub display_regions_gen: u64,
     /// Set of line indices where images are individually collapsed (Tab toggle).
     pub collapsed_images: HashSet<usize>,
+    /// Where to resolve image paths from when this buffer has no `file_path`.
+    ///
+    /// A KB node buffer deliberately has no file (ADR-092: its content is the
+    /// node, not a file), and image resolution keyed on `file_path.parent()` —
+    /// so `compute_image_regions` returned nothing and **no image ever
+    /// previewed while editing a node**, not even one referenced by absolute
+    /// path. This is the fallback, not an override: a real file's own directory
+    /// still wins.
+    pub image_base_dir: Option<PathBuf>,
     /// Cached degradation status. Set on file open; avoids re-scanning every frame.
     /// `None` = not yet evaluated, `Some(true)` = large file mode.
     pub degraded: Option<bool>,
@@ -430,6 +439,7 @@ impl Buffer {
             display_regions: Vec::new(),
             display_regions_gen: u64::MAX, // force initial compute
             collapsed_images: HashSet::new(),
+            image_base_dir: None,
             degraded: None,
             display_regions_dirty_since: None,
             display_reveal_cursor: None,
@@ -483,7 +493,11 @@ impl Buffer {
         // default (that silently ignored the `inline_images` global/
         // `:set`/`:setl` entirely).
         if inline_images {
-            let base_dir = self.file_path.as_ref().and_then(|p| p.parent());
+            let base_dir = self
+                .file_path
+                .as_ref()
+                .and_then(|p| p.parent())
+                .or(self.image_base_dir.as_deref());
             let image_regions = crate::display_region::compute_image_regions(
                 &source,
                 ext,

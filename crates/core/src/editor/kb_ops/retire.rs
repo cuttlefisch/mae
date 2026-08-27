@@ -292,6 +292,20 @@ impl Editor {
 
         let moved = move_verified(&plan.files, &plan.origin, &dest_root)?;
 
+        // MAE's own instance marker goes too. It is not KB content — the gate
+        // skips it precisely because ingest never records it — but once
+        // `org_dir` is cleared nothing reads it, so leaving it behind litters a
+        // project directory with a stale marker per retired KB. Observed on the
+        // first real retirement. Best-effort: a marker that will not move is
+        // not worth failing a verified retirement over.
+        let sentinel = plan.origin.join(mae_kb::federation::INSTANCE_SENTINEL);
+        if sentinel.is_file() {
+            let dest = dest_root.join(mae_kb::federation::INSTANCE_SENTINEL);
+            if std::fs::copy(&sentinel, &dest).is_ok() {
+                let _ = std::fs::remove_file(&sentinel);
+            }
+        }
+
         // Clearing `org_dir` is what makes the KB native: every guard already
         // tests `!org_dir.is_empty()`, so they all go quiet without a new
         // state flag that could drift from what is on disk.
