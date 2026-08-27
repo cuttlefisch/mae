@@ -942,13 +942,27 @@ type SeededCollection = (mae_sync::kb::KbCollectionDoc, Vec<(String, Vec<u8>)>);
 /// store, or a named instance's store. `None` when the name isn't registered with
 /// this daemon — the share still proceeds at collection level, just without seeded
 /// node content.
+/// The store that holds `kb_id`'s content, addressed by instance uuid.
+///
+/// @ai-caution: [kb-truth] This used to branch on `inst.primary`, handing back
+/// the DAEMON's own store (`daemon-kb.cozo`) for any instance carrying that
+/// flag. `primary: bool` does not mean "the machine's primary KB" — its own
+/// doc in `federation.rs` says it means *"this was the first-ever `KbInstance`
+/// row registered on this machine — an artifact of registration order"*, and
+/// that *"the real, machine-global primary KB has no `KbInstance` row at
+/// all"*. So the first KB a user ever registered had every write routed into
+/// the daemon's store while its own store went untouched: the watcher reported
+/// `updated=198 errors=0` on each tick and the instance's `kb.sqlite` mtime
+/// never moved. Measured on a real machine, that KB's store was days stale
+/// while the daemon insisted it had just reimported it.
+///
+/// The editor had the identical defect and it was fixed there; this was the
+/// unfixed copy. Route by uuid, and never read `primary` to pick a store.
+/// `None` (no store open) is deliberate: a *wrong* store is far worse than a
+/// visible absence, which is exactly how the original bug stayed invisible.
 pub(crate) fn resolve_kb_store(st: &DaemonState, kb_id: &str) -> Option<Arc<CozoKbStore>> {
     let inst = st.registry.find(kb_id)?;
-    if inst.primary {
-        st.store.clone()
-    } else {
-        st.instance_stores.get(&inst.uuid).cloned()
-    }
+    st.instance_stores.get(&inst.uuid).cloned()
 }
 
 /// ADR-061 Phase D3: the production `mae_daemon::artifact_store::ArtifactStore` —
@@ -1612,7 +1626,11 @@ mod tests {
         let (state, _owner) = share_kb_state();
         {
             let mut st = state.lock().await;
-            st.store = Some(Arc::new(store));
+            // Registered under its uuid, not reached via the `primary` flag --
+            // see `resolve_kb_store` for why that flag never meant this.
+            let store = Arc::new(store);
+            st.store = Some(Arc::clone(&store));
+            st.instance_stores.insert("u1".to_string(), store);
             st.registry.instances.push(mae_kb::federation::KbInstance {
                 uuid: "u1".to_string(),
                 name: "collabtest".to_string(),
@@ -1630,6 +1648,7 @@ mod tests {
                 project_key: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
                 ingest_policy: Default::default(),
+                import_record: None,
                 priority: 0,
                 remote_hub: None,
             });
@@ -1721,7 +1740,20 @@ mod tests {
         let uuid_c = "uuid-team-c".to_string();
 
         let mut st = DaemonState::new();
-        st.store = Some(Arc::new(primary_store));
+        // Team A's store is registered under its uuid exactly like B and C.
+        //
+        // It used to be reachable only as `st.store`, relying on its
+        // `primary: true` flag to route there. That flag means "first row ever
+        // registered" (see `resolve_kb_store`), not "lives in the daemon's own
+        // store", and routing on it sent a real user's KB writes into
+        // `daemon-kb.cozo` while its own store was never opened. With the
+        // routing fixed, an instance is addressable iff its store is in the
+        // map -- so the fixture registers all three the same way, which is also
+        // what makes this an honest three-way isolation test rather than one
+        // where a single tenant is special.
+        let primary_store = Arc::new(primary_store);
+        st.store = Some(Arc::clone(&primary_store));
+        st.instance_stores.insert(uuid_a.clone(), primary_store);
         st.instance_stores
             .insert(uuid_b.clone(), Arc::new(team_b_store));
         st.instance_stores
@@ -1744,6 +1776,7 @@ mod tests {
             project_key: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
             ingest_policy: Default::default(),
+            import_record: None,
             priority: 0,
             remote_hub: None,
         };
@@ -2086,7 +2119,12 @@ mod tests {
         let uuid_c = "uuid-fast-tenant-c".to_string();
 
         let mut st = DaemonState::new();
-        st.store = Some(Arc::new(slow_store));
+        // Registered under its uuid like the other two -- see
+        // `three_instance_state` for why the `primary` flag is not a store
+        // address.
+        let slow_store = Arc::new(slow_store);
+        st.store = Some(Arc::clone(&slow_store));
+        st.instance_stores.insert(uuid_a.clone(), slow_store);
         st.instance_stores
             .insert(uuid_b.clone(), Arc::new(fast_store_b));
         st.instance_stores
@@ -2108,6 +2146,7 @@ mod tests {
             project_key: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
             ingest_policy: Default::default(),
+            import_record: None,
             priority: 0,
             remote_hub: None,
         };

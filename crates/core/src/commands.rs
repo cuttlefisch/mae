@@ -1538,6 +1538,10 @@ fn register_kb_federation_commands(reg: &mut CommandRegistry) {
         "kb-attach",
         "Resume ingesting a KB from its .org directory (undoes :kb-detach)",
     );
+    reg.register_builtin(
+        "kb-retire-archive",
+        "Move a detached KB's verified .org archive aside, making the KB native (dry run without 'confirm')",
+    );
     reg.register_builtin("kb-instances", "List all registered KB instances");
     reg.register_builtin(
         "kb-init-project",

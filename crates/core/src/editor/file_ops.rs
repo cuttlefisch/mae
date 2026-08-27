@@ -66,6 +66,13 @@ impl Editor {
         let mut errors = Vec::new();
         for i in 0..self.buffers.len() {
             if self.buffers[i].modified && self.buffers[i].file_path().is_some() {
+                // Autosave must refuse exactly what `:w` refuses. Without this
+                // it silently does, on a timer and with no user action, the
+                // thing an explicit save is stopped from doing.
+                if let Err(e) = self.refuse_save_into_stale_archive(i) {
+                    errors.push(format!("{}: {}", self.buffers[i].name, e));
+                    continue;
+                }
                 match self.buffers[i].save() {
                     Ok(()) => saved += 1,
                     Err(e) => errors.push(format!("{}: {}", self.buffers[i].name, e)),
@@ -324,6 +331,14 @@ impl Editor {
         // above so a refused save still has no side effects, and before
         // `before-save` fires for the same reason.
         if self.kb_save_node_buffer(idx) {
+            return;
+        }
+        // A save into a DETACHED KB's stale archive writes bytes nothing will
+        // ever read, and reports `"written"`. Refused here, before
+        // `before-save` fires, for the same no-side-effects reason as the
+        // config refusal above.
+        if let Err(e) = self.refuse_save_into_stale_archive(idx) {
+            self.set_status(e);
             return;
         }
         self.fire_hook("before-save");
@@ -1360,7 +1375,7 @@ impl Editor {
         }
 
         match Buffer::from_file(path) {
-            Ok(buf) => {
+            Ok(mut buf) => {
                 let name = buf.name.clone();
                 let detected_lang = buf
                     .file_path()
@@ -1404,8 +1419,28 @@ impl Editor {
                     }
                 }
 
+                // A DETACHED KB's source file is a stale archive: nothing
+                // reads it, and nothing keeps it current. It stays READABLE —
+                // it is still the only copy of things the store lost at ingest
+                // (external link markup) — but read-only, so an edit cannot be
+                // silently stranded somewhere the KB will never see. The
+                // notification is durable rather than a status line that
+                // scrolls away, which is how this class of thing hides.
+                let archive_kb = self.kb_stale_archive_instance(path);
+                if archive_kb.is_some() {
+                    buf.read_only = true;
+                }
+
                 self.buffers.push(buf);
                 let new_idx = self.buffers.len() - 1;
+
+                if let Some(kb) = &archive_kb {
+                    self.notify(
+                        crate::notifications::Notification::warning("kb", "Not the KB")
+                            .body(Self::kb_archive_banner(kb))
+                            .key(format!("kb-archive-open:{kb}")),
+                    );
+                }
 
                 if let Some(lang) = detected_lang {
                     self.syntax.set_language(new_idx, lang);
@@ -1455,6 +1490,11 @@ impl Editor {
                 self.fire_hook("buffer-open");
                 if let Some(lang) = detected_lang {
                     self.fire_hook(&format!("buffer-open:{}", lang.id()));
+                }
+                // Last, so the ordinary `"x" opened` status cannot overwrite
+                // it. Which it did, on the first attempt.
+                if let Some(kb) = &archive_kb {
+                    self.set_status(Self::kb_archive_banner(kb));
                 }
                 Ok(new_idx)
             }

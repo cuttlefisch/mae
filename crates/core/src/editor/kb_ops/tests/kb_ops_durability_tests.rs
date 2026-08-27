@@ -920,6 +920,7 @@ fn kb_prepare_share_lineage_mints_fresh_lineage_for_promoted_node() {
             project_key: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
             ingest_policy: Default::default(),
+            import_record: None,
             priority: 0,
             remote_hub: None,
         });

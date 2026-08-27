@@ -314,6 +314,7 @@ fn kb_update_node_shared_instance_queues_crdt_update() {
             project_key: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
             ingest_policy: Default::default(),
+            import_record: None,
             priority: 0,
             remote_hub: None,
         });
@@ -369,6 +370,7 @@ fn kb_update_node_unshared_instance_does_not_queue() {
             project_key: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
             ingest_policy: Default::default(),
+            import_record: None,
             priority: 0,
             remote_hub: None,
         });

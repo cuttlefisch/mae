@@ -34,6 +34,7 @@ mod hook_ops;
 mod idle_ops;
 mod jumps;
 pub(crate) mod kb_ops;
+pub use kb_ops::stale_archive::ArchiveAccess;
 mod kb_preview_ops;
 mod kb_sharing_ops;
 pub mod kb_state;

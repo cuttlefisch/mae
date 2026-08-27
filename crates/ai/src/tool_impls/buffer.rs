@@ -157,25 +157,10 @@ pub fn execute_file_read(editor: &Editor, args: &serde_json::Value) -> Result<St
 
     // Story C (R10): refuse AT THE EFFECT for a detached KB's stale archive.
     //
-    // Those `.org` files are no longer read by any ingest, so their content may
-    // be arbitrarily old while looking authoritative. An agent that reads one
-    // answers confidently and WRONGLY, with nothing in the response to signal it
-    // -- strictly worse than a refusal.
-    //
-    // Worded as a CONSEQUENCE, and granting the file tools jurisdiction
-    // elsewhere. R10 measured that aggressive prohibitions in tool DESCRIPTIONS
-    // roughly triple the wrong-tool rate (Grafema: 0.9 vs 2.8 MCP calls/question);
-    // the shape that works states the consequence and says where the tool IS
-    // right. This is an execution error, which the MCP spec says carries
-    // "actionable feedback that language models can use to self-correct".
-    if let Some(kb) = editor.kb_stale_archive_instance(std::path::Path::new(&path)) {
-        return Err(format!(
-            "'{path}' is inside KB '{kb}', which is detached: its store is the \
-             source of truth and these .org files are a stale archive no ingest \
-             reads. Reading it would return content that may be arbitrarily out \
-             of date. Use kb_search or kb_get for this KB's content; file_read \
-             remains correct for source code and files outside a detached KB."
-        ));
+    // See `stale_archive` for why this refuses rather than returns stale
+    // content, and why the wording is shaped the way it is.
+    if let Some(msg) = super::stale_archive::refuse_read(editor, &path, "file_read") {
+        return Err(msg);
     }
 
     let content = std::fs::read_to_string(&path).map_err(|e| {
@@ -339,42 +324,7 @@ mod stale_archive_tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn instance(
-        name: &str,
-        dir: &std::path::Path,
-        policy: mae_kb::federation::IngestPolicy,
-    ) -> mae_kb::federation::KbInstance {
-        mae_kb::federation::KbInstance {
-            uuid: format!("uuid-{name}"),
-            name: name.into(),
-            org_dir: dir.to_path_buf(),
-            db_path: dir.join("kb.db"),
-            primary: false,
-            enabled: true,
-            last_import: None,
-            collab_id: None,
-            shared: false,
-            remote_peers: Vec::new(),
-            last_sync: None,
-            ai_residency: mae_kb::federation::AiResidency::default(),
-            project_root: None,
-            project_key: None,
-            kind: mae_kb::federation::KbInstanceKind::default(),
-            ingest_policy: policy,
-            priority: 0,
-            remote_hub: None,
-        }
-    }
-
-    fn editor_with_detached_kb(dir: &std::path::Path) -> Editor {
-        let mut editor = Editor::new();
-        editor.kb.registry.instances.push(instance(
-            "Detached",
-            dir,
-            mae_kb::federation::IngestPolicy::StoreIsTruth,
-        ));
-        editor
-    }
+    use super::super::stale_archive::test_support::editor_with_detached_kb;
 
     /// **The failure this closes.** A detached KB's `.org` files are no longer
     /// read by any ingest, so their content may be arbitrarily old while looking
@@ -412,6 +362,77 @@ mod stale_archive_tests {
         );
     }
 
+    /// **The regression this guard shipped with, and the reason it had to be
+    /// narrowed.**
+    ///
+    /// A KB's `org_dir` is routinely a whole PROJECT REPO — on a real machine
+    /// `jenkins`'s org_dir is `~/Projects/jenkins`, holding 20 files of which
+    /// only 5 are `.org`. The first version of this guard matched on the
+    /// directory prefix alone, so it refused `ansible.cfg`, `requirements.yml`
+    /// and `.gitignore` in those repos and told the caller to use `kb_search`.
+    /// An agent could not read a Terraform file in its own project.
+    #[test]
+    fn a_non_kb_file_in_the_same_directory_still_reads() {
+        let dir = TempDir::new().unwrap();
+        // The KB imported exactly one file from this directory...
+        let imported = dir.path().join("README.org");
+        std::fs::write(&imported, "KB SOURCE").unwrap();
+        // ...and these are ordinary project files that live beside it.
+        let mut neighbours = Vec::new();
+        for name in ["ansible.cfg", "main.tf", "requirements.yml", ".gitignore"] {
+            let p = dir.path().join(name);
+            std::fs::write(&p, format!("contents of {name}")).unwrap();
+            neighbours.push(p);
+        }
+        let editor = super::super::stale_archive::test_support::editor_with_detached_kb_recording(
+            dir.path(),
+            &[&imported],
+        );
+
+        for p in &neighbours {
+            let out =
+                execute_file_read(&editor, &serde_json::json!({ "path": p.to_string_lossy() }))
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "{} is not KB source and must still read; got refusal: {e}",
+                            p.display()
+                        )
+                    });
+            assert!(out.contains("contents of"), "must return the real content");
+        }
+
+        // The imported file IS still refused — otherwise this test would pass
+        // against a guard that had simply been deleted.
+        execute_file_read(
+            &editor,
+            &serde_json::json!({ "path": imported.to_string_lossy() }),
+        )
+        .expect_err("the imported .org file must still be refused");
+    }
+
+    /// A `.org` file in the same directory that the KB never imported is
+    /// deliberately NOT claimed: it genuinely is not in the KB, so editing it
+    /// loses nothing. `:kb-retire-archive`'s gate is what surfaces those.
+    #[test]
+    fn an_org_file_the_kb_never_imported_is_not_claimed() {
+        let dir = TempDir::new().unwrap();
+        let imported = dir.path().join("imported.org");
+        let never = dir.path().join("never-imported.org");
+        std::fs::write(&imported, "IMPORTED").unwrap();
+        std::fs::write(&never, "NEVER IMPORTED").unwrap();
+        let editor = super::super::stale_archive::test_support::editor_with_detached_kb_recording(
+            dir.path(),
+            &[&imported],
+        );
+
+        let out = execute_file_read(
+            &editor,
+            &serde_json::json!({ "path": never.to_string_lossy() }),
+        )
+        .expect("an un-imported .org file is not this KB's source");
+        assert!(out.contains("NEVER IMPORTED"));
+    }
+
     /// The paired positive, without which the test above passes on an
     /// implementation that refuses everything.
     #[test]
@@ -436,13 +457,8 @@ mod stale_archive_tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("note.org");
         std::fs::write(&path, "LIVE CONTENT").unwrap();
-        let mut editor = Editor::new();
         // Same registration, but the default (attached) policy.
-        editor.kb.registry.instances.push(instance(
-            "Attached",
-            dir.path(),
-            mae_kb::federation::IngestPolicy::default(),
-        ));
+        let editor = super::super::stale_archive::test_support::editor_with_attached_kb(dir.path());
 
         let out = execute_file_read(
             &editor,
