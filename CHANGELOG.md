@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.117] - 2026-08-27
+
+
+
+
+### Features
+
+- *(kb)* `:kb-new` — create a KB that never had an org directory ([c906e27](https://github.com/cuttlefisch/mae/commit/c906e2786d13a1b307890962b4e18c03072282a8))
+- *(kb)* Images resolve in a node buffer, and the audit commands stop lying ([a78341b](https://github.com/cuttlefisch/mae/commit/a78341bd01d5de6e5c74656f02573ad1008045ee))
+
 ## [0.14.116] - 2026-08-27
 
 
@@ -20,6 +30,10 @@ All notable changes to this project will be documented in this file.
 - *(kb)* A KB's org dir is often a whole repo — claim only files it imported ([e6959ba](https://github.com/cuttlefisch/mae/commit/e6959ba608552c8e3a75c12445ebc917ce7688fd))
 - *(test)* Build the retirement fixture's paths component-wise (Windows) ([817514e](https://github.com/cuttlefisch/mae/commit/817514e2de7a127ba2e8e6c24ba1ac0d8fe12003))
 - *(kb)* Close three paths the first pass missed ([5dbd6e7](https://github.com/cuttlefisch/mae/commit/5dbd6e797556f32fc5c7402972761967ea1d2a98))
+
+### Miscellaneous
+
+- Bump version to 0.14.116 ([a68eb78](https://github.com/cuttlefisch/mae/commit/a68eb78190ad581ac9098965dee7fdbf68f75a0e))
 
 ## [0.14.115] - 2026-08-26
 
