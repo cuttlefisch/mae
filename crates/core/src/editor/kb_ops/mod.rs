@@ -191,6 +191,7 @@ pub(crate) mod node_buffer;
 mod nodes;
 pub(crate) mod registry;
 mod search;
+pub(crate) mod stale_archive;
 mod sync;
 mod watchers;
 

@@ -24,6 +24,7 @@
 //!
 //! @stability: experimental
 
+use mae_core::ArchiveAccess;
 use mae_core::Editor;
 use std::path::Path;
 
@@ -36,29 +37,12 @@ use std::path::Path;
 /// which the MCP spec says carries "actionable feedback that language models
 /// can use to self-correct".
 pub(crate) fn refuse_read(editor: &Editor, path: &str, tool: &str) -> Option<String> {
-    let kb = editor.kb_stale_archive_instance(Path::new(path))?;
-    Some(format!(
-        "'{path}' is inside KB '{kb}', which is detached: its store is the source \
-         of truth and these .org files are a stale archive no ingest reads. \
-         Reading it would return content that may be arbitrarily out of date. Use \
-         kb_search or kb_get for this KB's content; {tool} remains correct for \
-         source code and files outside a detached KB."
-    ))
+    editor.kb_archive_refusal(Path::new(path), ArchiveAccess::Read, tool)
 }
 
 /// Refuse a WRITE into a detached KB's stale archive.
-///
-/// Same shape as [`refuse_read`], but the consequence is different and worth
-/// stating plainly: the write would *appear* to succeed.
 pub(crate) fn refuse_write(editor: &Editor, path: &str, tool: &str) -> Option<String> {
-    let kb = editor.kb_stale_archive_instance(Path::new(path))?;
-    Some(format!(
-        "'{path}' is inside KB '{kb}', which is detached: its store is the source \
-         of truth and these .org files are a stale archive no ingest reads. Writing \
-         here would report success while the content stayed invisible to kb_search, \
-         kb_get and the graph. Use kb_create or kb_update to add content to this KB; \
-         {tool} remains correct for source code and files outside a detached KB."
-    ))
+    editor.kb_archive_refusal(Path::new(path), ArchiveAccess::Write, tool)
 }
 
 /// Fixtures shared by every stale-archive test, in one place so a second test

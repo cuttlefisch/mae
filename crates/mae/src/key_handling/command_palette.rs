@@ -467,19 +467,7 @@ fn apply_mini_dialog(editor: &mut Editor, dialog: mae_core::command_palette::Min
             }
         }
         MiniDialogContext::FileCopy { src_path } => {
-            let dst_str = &dialog.fields[0].value;
-            if dst_str.is_empty() {
-                editor.set_status("Copy cancelled");
-                return;
-            }
-            let dst = std::path::PathBuf::from(dst_str);
-            match std::fs::copy(src_path, &dst) {
-                Ok(_) => {
-                    editor.open_file(&dst);
-                    editor.set_status(format!("Copied to {}", dst.display()));
-                }
-                Err(e) => editor.set_status(format!("Copy failed: {}", e)),
-            }
+            apply_file_copy(editor, src_path, &dialog.fields[0].value);
         }
         MiniDialogContext::FileSaveAs => {
             let path_str = &dialog.fields[0].value;
@@ -525,35 +513,7 @@ fn apply_mini_dialog(editor: &mut Editor, dialog: mae_core::command_palette::Min
             }
         }
         MiniDialogContext::FileTreeCreate { parent } => {
-            let name = &dialog.fields[0].value;
-            if name.is_empty() {
-                editor.set_status("Create cancelled");
-                return;
-            }
-            let target = parent.join(name);
-            let result = if name.ends_with('/') {
-                std::fs::create_dir_all(&target)
-            } else {
-                if let Some(p) = target.parent() {
-                    let _ = std::fs::create_dir_all(p);
-                }
-                std::fs::write(&target, "")
-            };
-            match result {
-                Ok(()) => {
-                    let tree_idx = editor
-                        .buffers
-                        .iter()
-                        .position(|b| b.kind == mae_core::BufferKind::FileTree);
-                    if let Some(ti) = tree_idx {
-                        if let Some(ft) = editor.buffers[ti].file_tree_mut() {
-                            ft.refresh();
-                        }
-                    }
-                    editor.set_status(format!("Created {}", name));
-                }
-                Err(e) => editor.set_status(format!("Create failed: {}", e)),
-            }
+            apply_file_tree_create(editor, parent, &dialog.fields[0].value);
         }
         MiniDialogContext::OrgSetTags { heading_line } => {
             let tag_input = dialog.fields[0].value.trim().to_string();
@@ -798,6 +758,70 @@ fn rewrite_heading_tags(line: &str, tag_input: &str) -> String {
     } else {
         let tags: Vec<&str> = tag_input.split(':').filter(|t| !t.is_empty()).collect();
         format!("{} :{}:\n", base, tags.join(":"))
+    }
+}
+
+/// Copy a file from the file-tree dialog.
+///
+/// Split out of `apply_mini_dialog` for length only — the ceiling is
+/// per-function and the KB guard pushed it over.
+fn apply_file_copy(editor: &mut Editor, src_path: &std::path::Path, dst_str: &str) {
+    if dst_str.is_empty() {
+        editor.set_status("Copy cancelled");
+        return;
+    }
+    let dst = std::path::PathBuf::from(dst_str);
+    // Copying a note INTO a detached KB's directory produces a file no
+    // ingest will read, reported as a success.
+    if let Some(msg) = editor.kb_orphan_org_target(&dst) {
+        editor.set_status(msg);
+        return;
+    }
+    match std::fs::copy(src_path, &dst) {
+        Ok(_) => {
+            editor.open_file(&dst);
+            editor.set_status(format!("Copied to {}", dst.display()));
+        }
+        Err(e) => editor.set_status(format!("Copy failed: {}", e)),
+    }
+}
+
+/// Create a file or directory from the file-tree dialog. Split for the same
+/// reason as `apply_file_copy`.
+fn apply_file_tree_create(editor: &mut Editor, parent: &std::path::Path, name: &str) {
+    if name.is_empty() {
+        editor.set_status("Create cancelled");
+        return;
+    }
+    let target = parent.join(name);
+    // Same for a new note: it would look like adding to the KB and
+    // would never reach it.
+    if let Some(msg) = editor.kb_orphan_org_target(&target) {
+        editor.set_status(msg);
+        return;
+    }
+    let result = if name.ends_with('/') {
+        std::fs::create_dir_all(&target)
+    } else {
+        if let Some(p) = target.parent() {
+            let _ = std::fs::create_dir_all(p);
+        }
+        std::fs::write(&target, "")
+    };
+    match result {
+        Ok(()) => {
+            let tree_idx = editor
+                .buffers
+                .iter()
+                .position(|b| b.kind == mae_core::BufferKind::FileTree);
+            if let Some(ti) = tree_idx {
+                if let Some(ft) = editor.buffers[ti].file_tree_mut() {
+                    ft.refresh();
+                }
+            }
+            editor.set_status(format!("Created {}", name));
+        }
+        Err(e) => editor.set_status(format!("Create failed: {}", e)),
     }
 }
 
