@@ -40,6 +40,32 @@ impl Editor {
         if !dir.is_dir() {
             return Err(format!("not a directory: {org_dir}"));
         }
+        // Assessing a DETACHED KB's directory reads a frozen archive as though
+        // it were a live source. Every "would import" line is then a claim
+        // about content the store already holds and no ingest will ever read
+        // again.
+        // A DIRECTORY-level question, so not `kb_stale_archive_instance` —
+        // that one asks whether a specific FILE was imported, and a directory
+        // never is.
+        let archived = self
+            .kb
+            .registry
+            .instances
+            .iter()
+            .find(|i| {
+                !i.ingest_policy.allows_ingest()
+                    && !i.org_dir.as_os_str().is_empty()
+                    && (dir.starts_with(&i.org_dir) || i.org_dir.starts_with(dir))
+            })
+            .map(|i| i.name.clone());
+        if let Some(kb) = archived {
+            return Err(format!(
+                "{} is the archived source of KB '{kb}', which is detached — assessing it \
+                 would describe an import that can never happen. To check the store really \
+                 holds every file, use :kb-retire-archive {kb} (a dry run by default).",
+                dir.display()
+            ));
+        }
         let plan = ImportPlan::assess(dir);
         let saved = match self.kb_import_plan_path(dir) {
             Some(path) => match plan.save(&path) {
@@ -86,6 +112,19 @@ impl Editor {
                 "'{}' has no org directory — its content lives in the store, so there is \
                  nothing to reconcile against",
                 instance.name
+            ));
+        }
+        // A detached instance still HAS an org dir, but it is a frozen archive.
+        // Reconciling against it reports the divergence that detaching created
+        // as though it were loss — "source-only" for a node deleted in the
+        // store, "differ" for one edited there. Both are correct and expected.
+        if !instance.ingest_policy.allows_ingest() {
+            return Err(format!(
+                "'{}' is detached: its org directory is a frozen archive, so reconciling \
+                 against it reports expected post-detach divergence as loss. Use \
+                 :kb-retire-archive {} to check the store holds every file (dry run by \
+                 default).",
+                instance.name, instance.name
             ));
         }
         let ids = self.kb_known_ids(&instance.uuid);

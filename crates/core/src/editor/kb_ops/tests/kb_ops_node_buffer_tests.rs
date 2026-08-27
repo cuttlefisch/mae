@@ -302,3 +302,38 @@ fn the_file_surface_still_refuses_a_node_with_no_file() {
         editor.status_msg
     );
 }
+
+/// **No image ever previewed while editing a node.** A node buffer has no
+/// `file_path` by design (ADR-092: its content is the node, not a file), and
+/// image resolution keyed on `file_path.parent()` — so `compute_image_regions`
+/// got `None` for its base and returned nothing, even for an absolute path that
+/// worked fine when the same content was opened as a file.
+#[test]
+fn a_node_buffer_has_an_image_base_dir_so_images_can_resolve() {
+    let tmp = TempDir::new().unwrap();
+    let mut editor = Editor::new();
+    let _dirs = with_test_dirs(&mut editor);
+    editor.kb.primary.insert(mae_kb::Node::new(
+        "note:with-image",
+        "With Image",
+        mae_kb::NodeKind::Note,
+        "[[file:diagram.png]]",
+    ));
+
+    editor.kb_edit_node("note:with-image").expect("edit opens");
+    let idx = editor
+        .buffers
+        .iter()
+        .position(|b| b.name.contains("with-image"))
+        .expect("node buffer");
+
+    assert!(
+        editor.buffers[idx].file_path().is_none(),
+        "a node buffer must still have no file — that is the ADR-092 design"
+    );
+    assert!(
+        editor.buffers[idx].image_base_dir.is_some(),
+        "but it must have SOMEWHERE to resolve images from, or none ever render"
+    );
+    let _ = tmp;
+}
