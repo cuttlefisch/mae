@@ -95,6 +95,7 @@ fn prepare_multi_instance_data_dir() -> (tempfile::TempDir, String) {
             project_key: None,
             kind: Default::default(),
             ingest_policy: Default::default(),
+            import_record: None,
             priority: 0,
             remote_hub: None,
         }],

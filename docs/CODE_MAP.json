@@ -4430,6 +4430,10 @@
       "doc": "Resume ingesting a KB from its .org directory (undoes :kb-detach)"
     },
     {
+      "name": "kb-retire-archive",
+      "doc": "Move a detached KB's verified .org archive aside, making the KB native (dry run without 'confirm')"
+    },
+    {
       "name": "kb-instances",
       "doc": "List all registered KB instances"
     },

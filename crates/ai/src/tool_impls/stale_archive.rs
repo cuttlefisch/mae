@@ -73,6 +73,7 @@ pub(crate) mod test_support {
             project_key: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
             ingest_policy: policy,
+            import_record: None,
             priority: 0,
             remote_hub: None,
         }

@@ -22,6 +22,7 @@ mod kb_ops_provenance_tests;
 mod kb_ops_read_clobber_tests;
 mod kb_ops_registry_tests;
 mod kb_ops_reimport_guard_tests;
+mod kb_ops_retire_tests;
 mod kb_ops_search_federation_tests;
 mod kb_ops_sole_mutator_tests;
 mod kb_ops_system_kb_tests;

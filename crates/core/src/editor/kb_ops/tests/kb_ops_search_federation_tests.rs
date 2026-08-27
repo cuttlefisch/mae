@@ -408,6 +408,7 @@ fn kb_scope_project_path_identity_not_string_equality() {
         project_key: None,
         kind: KbInstanceKind::Project,
         ingest_policy: Default::default(),
+        import_record: None,
         priority: 0,
         remote_hub: None,
     });
@@ -1015,6 +1016,7 @@ fn fixture_instance(f: &Fixture) -> KbInstance {
         project_key: None,
         kind: f.kind,
         ingest_policy: Default::default(),
+        import_record: None,
         priority: 0,
         remote_hub: None,
     }

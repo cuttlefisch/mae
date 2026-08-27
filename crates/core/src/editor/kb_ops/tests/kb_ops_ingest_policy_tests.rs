@@ -66,6 +66,7 @@ fn detached_instance_with_divergent_store(editor: &mut Editor, dir: &std::path::
         project_key: None,
         kind: KbInstanceKind::default(),
         ingest_policy: IngestPolicy::StoreIsTruth,
+        import_record: None,
         priority: 0,
         remote_hub: None,
     });
@@ -186,6 +187,7 @@ fn detaching_one_instance_does_not_stop_another_from_ingesting() {
         project_key: None,
         kind: KbInstanceKind::default(),
         ingest_policy: IngestPolicy::FromOrgDir,
+        import_record: None,
         priority: 0,
         remote_hub: None,
     });

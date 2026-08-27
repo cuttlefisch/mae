@@ -1317,6 +1317,7 @@ mod scoped_owner_tests {
                 project_key: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
                 ingest_policy: Default::default(),
+                import_record: None,
                 priority: 0,
                 remote_hub: None,
             });
@@ -1410,6 +1411,7 @@ mod partition_boundary_links_by_instance_tests {
                 project_key: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
                 ingest_policy: Default::default(),
+                import_record: None,
                 priority: 0,
                 remote_hub: None,
             });
