@@ -69,6 +69,7 @@ fn seed_guidance_kb(xdg_data: &Path, kb_name: &str, index_body: &str) {
                 project_key: None,
                 kind: mae_kb::federation::KbInstanceKind::UserRegistered,
                 ingest_policy: Default::default(),
+                import_record: None,
                 priority: 0,
                 remote_hub: None,
             });

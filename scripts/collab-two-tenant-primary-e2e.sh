@@ -112,8 +112,8 @@ tenant_scenario() {
     (it-test "shares its PRIMARY (no argument — the KB everyone calls 'default')"
       (lambda () (execute-ex "kb-share") (sleep-ms 2500)))
     (it-test "signals shared" (lambda () (write-file "$WORK/sync/$who-shared" "1")))
-    (it-test "stays alive while the other tenant shares"
-      (lambda () (sleep-ms 6000)))))
+    (it-test "stays alive until the driver has seen both docs"
+      (lambda () (wait-for-file "$WORK/sync/docs-seen" 180000)))))
 EOF
 }
 tenant_scenario alice ALICE-ONLY-MARKER
@@ -124,21 +124,6 @@ harness_spawn_daemon DAEMON_PID "$WORK/daemon.log" -- env \
   MAE_LOG=info "$MAE_DAEMON_BIN"
 for _ in $(seq 1 40); do port_listening "$PORT" && break; sleep 0.25; done
 port_listening "$PORT" || { echo "ERROR: daemon not listening"; cat "$WORK/daemon.log"; exit 1; }
-
-harness_spawn APID "$WORK/alice.tap" -- env \
-  HOME="$WORK/alice" XDG_CONFIG_HOME="$WORK/alice/.config" XDG_DATA_HOME="$WORK/alice/.local/share" \
-  MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 MAE_LOG=warn \
-  ${TIMEOUT_BIN:+$TIMEOUT_BIN 180} "$MAE_BIN" --test "$WORK/scen/alice.scm"
-sleep 3
-harness_spawn BPID "$WORK/bob.tap" -- env \
-  HOME="$WORK/bob" XDG_CONFIG_HOME="$WORK/bob/.config" XDG_DATA_HOME="$WORK/bob/.local/share" \
-  MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 MAE_LOG=warn \
-  ${TIMEOUT_BIN:+$TIMEOUT_BIN 180} "$MAE_BIN" --test "$WORK/scen/bob.scm"
-wait "$APID" 2>/dev/null || true
-wait "$BPID" 2>/dev/null || true
-
-echo "--- alice TAP ---"; grep -E '^(ok|not ok|#)' "$WORK/alice.tap" || true
-echo "--- bob TAP ---";   grep -E '^(ok|not ok|#)' "$WORK/bob.tap" || true
 
 # The id each tenant actually shared under, read from its own durable registry —
 # where D4 persists the mint.
@@ -154,6 +139,64 @@ reg_id() {
     "$WORK/$1/.local/share/mae/kb-registry.toml" 2>/dev/null \
     | head -1 | cut -d'"' -f2 || true
 }
+
+harness_spawn APID "$WORK/alice.tap" -- env \
+  HOME="$WORK/alice" XDG_CONFIG_HOME="$WORK/alice/.config" XDG_DATA_HOME="$WORK/alice/.local/share" \
+  MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 MAE_LOG=warn \
+  ${TIMEOUT_BIN:+$TIMEOUT_BIN 180} "$MAE_BIN" --test "$WORK/scen/alice.scm"
+sleep 3
+harness_spawn BPID "$WORK/bob.tap" -- env \
+  HOME="$WORK/bob" XDG_CONFIG_HOME="$WORK/bob/.config" XDG_DATA_HOME="$WORK/bob/.local/share" \
+  MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 MAE_LOG=warn \
+  ${TIMEOUT_BIN:+$TIMEOUT_BIN 180} "$MAE_BIN" --test "$WORK/scen/bob.scm"
+# Observe the docs and release the editors WHILE THEY ARE STILL ALIVE.
+#
+# This has to run before the `wait` below, and that is the whole point. The
+# scenario's final step used to be a fixed `(sleep-ms 6000)`, so six seconds was
+# the real deadline for the canary node to reach the daemon; the 30s
+# `wait_for_log_docs` further down runs only AFTER both editors have exited, and
+# once an editor is gone no amount of waiting can make its sync happen. On a
+# loaded runner where connect->share took 47s, that budget was never going to
+# hold, and the failure looked like "the node never synced" rather than "we
+# stopped waiting too early".
+#
+# The editors now park on `$WORK/sync/docs-seen` instead of sleeping, and this
+# observer writes it once both documents are visible -- or once it gives up, so
+# a genuinely-never-synced doc still reaches the assertions below instead of
+# hanging both editors out to the harness TTL.
+observe_and_release() {
+  # Deliberately id-AGNOSTIC. The obvious version polls `reg_id` for each
+  # tenant's collab id and greps for that exact doc — but `primary_collab_id` is
+  # persisted asynchronously and in practice is not durable in
+  # `kb-registry.toml` until the editor exits (which is why the assertions below
+  # read it only after `wait`). An observer that needs the ids therefore cannot
+  # get them while the editors are alive, and would deadlock until its own
+  # timeout: measured, both ids stayed empty for the full 120s window while the
+  # documents themselves had been on the daemon since the first second.
+  #
+  # Counting DISTINCT canary documents needs no ids at all, and two distinct
+  # ones is exactly the property the assertions check anyway.
+  local deadline=$(( $(date +%s) + ${E2E_SYNC_TIMEOUT_SECS:-120} ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if [ "$(sed 's/\x1b\[[0-9;]*m//g' "$WORK/daemon.log" 2>/dev/null \
+             | grep -oE 'kbn:[0-9a-f-]+:note:tenant-canary' \
+             | sort -u | wc -l)" -ge 2 ]; then
+      break
+    fi
+    sleep 0.25
+  done
+  : > "$WORK/sync/docs-seen"
+}
+observe_and_release &
+OBSERVER_PID=$!
+
+wait "$APID" 2>/dev/null || true
+wait "$BPID" 2>/dev/null || true
+wait "$OBSERVER_PID" 2>/dev/null || true
+
+echo "--- alice TAP ---"; grep -E '^(ok|not ok|#)' "$WORK/alice.tap" || true
+echo "--- bob TAP ---";   grep -E '^(ok|not ok|#)' "$WORK/bob.tap" || true
+
 
 # And wait for the mint to be durable rather than assuming it already is. The
 # editor persists `primary_collab_id` asynchronously after `kb/share`, so
@@ -221,6 +264,9 @@ wait_for_log_docs() {
   done
   return 1
 }
+# A cheap re-check: `observe_and_release` above already waited with the editors
+# alive, so this normally returns immediately. Kept so the refreshed `$LOG` the
+# assertions grep is written exactly once, here.
 wait_for_log_docs || true
 grep -q "$A_DOC" "$LOG" || { echo "FAIL: alice's canary node never reached the daemon as $A_DOC"; fail=1; }
 grep -q "$B_DOC" "$LOG" || { echo "FAIL: bob's canary node never reached the daemon as $B_DOC"; fail=1; }

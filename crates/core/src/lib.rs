@@ -99,13 +99,14 @@ pub use debug::{
 };
 pub use debug_view::{DebugLineItem, DebugView};
 pub use editor::{
-    is_builtin_node, BlameEntry, BlameOverlay, CaptureState, CodeActionItem, CodeActionMenu,
-    CollabIntent, CollabStatus, CompletionItem, DaemonControl, DaemonMode, Diagnostic,
-    DiagnosticSeverity, DiagnosticStore, DocumentHighlightRange, EditRecord, Editor, HighlightKind,
-    HoverPopup, InputLock, JoinedNode, KbCollabAction, KbResolution, LspLocation, LspRange,
-    LspServerInfo, LspServerStatus, PeekReferenceLocation, PeekReferencesState, PeekState,
-    QueryVector, SignatureHelpInfo, SignatureHelpState, SymbolOutlineEntry, SymbolOutlineState,
-    DEFAULT_COLLAB_ADDRESS, DEFAULT_COLLAB_PORT, KB_DEFAULT_NAME, KB_SYNC_MODE_DEFAULT,
+    is_builtin_node, ArchiveAccess, BlameEntry, BlameOverlay, CaptureState, CodeActionItem,
+    CodeActionMenu, CollabIntent, CollabStatus, CompletionItem, DaemonControl, DaemonMode,
+    Diagnostic, DiagnosticSeverity, DiagnosticStore, DocumentHighlightRange, EditRecord, Editor,
+    HighlightKind, HoverPopup, InputLock, JoinedNode, KbCollabAction, KbResolution, LspLocation,
+    LspRange, LspServerInfo, LspServerStatus, PeekReferenceLocation, PeekReferencesState,
+    PeekState, QueryVector, SignatureHelpInfo, SignatureHelpState, SymbolOutlineEntry,
+    SymbolOutlineState, DEFAULT_COLLAB_ADDRESS, DEFAULT_COLLAB_PORT, KB_DEFAULT_NAME,
+    KB_SYNC_MODE_DEFAULT,
 };
 pub use file_browser::{Activation as BrowserActivation, BrowserEntry, FileBrowser};
 pub use file_picker::FilePicker;

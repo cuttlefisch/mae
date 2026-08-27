@@ -963,6 +963,37 @@ impl Editor {
         }
     }
 
+    /// Is the STORE the source of truth for whichever KB owns `dir`?
+    ///
+    /// The directory-addressed twin of [`Editor::kb_store_is_truth_for`], which
+    /// answers the same question for a node id. Capture and dailies need this
+    /// one, because what they hold is a PATH (`kb_notes_dir` /
+    /// `kb_dailies_dir`), not an id.
+    ///
+    /// @ai-caution: [kb-policy] Both callers previously asked
+    /// `primary_store_is_truth()` instead — the policy of the *primary*, not of
+    /// the KB that actually owns the directory. Those are routinely different:
+    /// `kb_insert_to_notes_instance` treats "a registered instance covers
+    /// `kb_notes_dir`" as the normal case, not an edge case. Detaching that
+    /// instance while the primary stayed attached left capture writing `.org`
+    /// into a stale archive, and the edit reached nothing — `kb_reimport_file`
+    /// filters detached instances, so the reconcile-on-save silently did
+    /// nothing. Ask about the OWNER of the directory, never about the primary.
+    pub(crate) fn kb_dir_store_is_truth(&self, dir: &std::path::Path) -> bool {
+        match self
+            .kb
+            .registry
+            .instances
+            .iter()
+            .find(|i| !i.org_dir.as_os_str().is_empty() && dir.starts_with(&i.org_dir))
+        {
+            Some(inst) => !inst.ingest_policy.allows_ingest(),
+            // No registered instance covers it, so it belongs to the primary,
+            // whose policy lives on the registry rather than on any row.
+            None => self.kb.primary_store_is_truth(),
+        }
+    }
+
     /// If `path` lies inside a DETACHED instance's `.org` directory, the name of
     /// that instance.
     ///
@@ -974,16 +1005,43 @@ impl Editor {
     ///
     /// `None` for every attached KB, so this can only narrow.
     pub fn kb_stale_archive_instance(&self, path: &std::path::Path) -> Option<String> {
-        self.kb
-            .registry
-            .instances
-            .iter()
-            .find(|i| {
-                !i.ingest_policy.allows_ingest()
-                    && !i.org_dir.as_os_str().is_empty()
-                    && path.starts_with(&i.org_dir)
-            })
-            .map(|i| i.name.clone())
+        let inst = self.kb.registry.instances.iter().find(|i| {
+            !i.ingest_policy.allows_ingest()
+                && !i.org_dir.as_os_str().is_empty()
+                && path.starts_with(&i.org_dir)
+        })?;
+
+        // @ai-caution: [kb-truth] The directory prefix is NOT sufficient, and
+        // assuming it was shipped a real regression. A KB's `org_dir` is
+        // frequently a whole PROJECT REPO -- on a real machine `jenkins`'s
+        // org_dir is `~/Projects/jenkins`, holding 20 files of which 5 are
+        // `.org`. Matching on the prefix alone claimed every `.tf`, `.yml`,
+        // `ansible.cfg` and `.gitignore` in those repos as KB source and
+        // refused to read them, telling the caller to use `kb_search`.
+        //
+        // A file is this KB's source only if the KB actually IMPORTED it, and
+        // `source_files` records exactly that set. The lookup is keyed on a
+        // single path (`get_source_file_hash`), not a table scan, so it is
+        // cheap enough for a file-open path.
+        //
+        // A `.org` file sitting in the directory that was never imported (no
+        // `:ID:`, so ingest skipped it before recording) is deliberately NOT
+        // claimed: it genuinely is not in the KB, so editing it loses nothing.
+        // `:kb-retire-archive`'s gate is what surfaces those.
+        let store = self.kb.instance_stores.get(&inst.uuid)?;
+        let recorded = |p: &std::path::Path| {
+            matches!(
+                store.get_source_file_hash(&p.to_string_lossy()),
+                Ok(Some(_))
+            )
+        };
+        // Ingest records `path.to_string_lossy()` as walked from a canonicalised
+        // `org_dir`; a path arriving here may not be canonical (symlink, `..`),
+        // so try both rather than miss.
+        if recorded(path) || path.canonicalize().is_ok_and(|c| recorded(&c)) {
+            return Some(inst.name.clone());
+        }
+        None
     }
 
     pub(crate) fn kb_owner_of(&self, id: &str) -> Option<Option<String>> {
@@ -1259,6 +1317,7 @@ mod scoped_owner_tests {
                 project_key: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
                 ingest_policy: Default::default(),
+                import_record: None,
                 priority: 0,
                 remote_hub: None,
             });
@@ -1352,6 +1411,7 @@ mod partition_boundary_links_by_instance_tests {
                 project_key: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
                 ingest_policy: Default::default(),
+                import_record: None,
                 priority: 0,
                 remote_hub: None,
             });

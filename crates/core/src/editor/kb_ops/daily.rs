@@ -49,9 +49,11 @@ impl Editor {
     /// no ingest will ever read is worse than not writing one, because it looks
     /// like it worked.
     pub(super) fn kb_daily_backing(&self) -> DailyBacking {
-        let store_is_truth = self.kb.primary_store_is_truth();
+        // The dailies dir's OWNER decides, not the primary — see
+        // `kb_dir_store_is_truth`. Asking the primary made a detached
+        // instance that owns the dailies dir keep writing `.org`.
         match self.kb_dailies_dir() {
-            Some(dir) if !store_is_truth => DailyBacking::Files(dir),
+            Some(dir) if !self.kb_dir_store_is_truth(&dir) => DailyBacking::Files(dir),
             _ => DailyBacking::Store,
         }
     }

@@ -48,6 +48,7 @@ fn register(editor: &mut Editor, dir: &std::path::Path) {
         project_key: None,
         kind: KbInstanceKind::default(),
         ingest_policy: Default::default(),
+        import_record: None,
         priority: 0,
         remote_hub: None,
     });

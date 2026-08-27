@@ -157,6 +157,56 @@ impl IngestPolicy {
     }
 }
 
+/// What a KB was built from, kept so mae can tell the KB apart from the text
+/// it came from — and can say so to a user poking around in the old files.
+///
+/// Populated at import. `retired_*` are set when `:kb-retire-archive` moves the
+/// source out, which is what turns a *migrating* KB into a *native* one.
+///
+/// @ai-caution: [kb-truth] `KbInstance` had no record of where its content came
+/// from, so mae could not distinguish "these files ARE the KB's former source"
+/// from "these files merely sit in the same directory" — and on a real machine
+/// a KB's `org_dir` is frequently a whole project repo. Keep this accurate:
+/// it is what a retirement is verified and reported against.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KbImportRecord {
+    /// The directory the content was imported from.
+    #[serde(default)]
+    pub origin: PathBuf,
+    /// When, as `YYYY-MM-DD`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported_at: Option<String>,
+    /// How many `.org` files were seen at import.
+    #[serde(default)]
+    pub file_count: usize,
+    /// The origin's git remote, when it lives in a tracked repo. Retiring such
+    /// an archive removes files someone else may be relying on, so a plan must
+    /// be able to say that out loud.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_remote: Option<String>,
+    /// Set when the archive was retired.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_at: Option<String>,
+    /// Where the retired files were moved to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_to: Option<PathBuf>,
+}
+
+/// The filename that marks a directory as a MAE KB instance.
+pub const INSTANCE_SENTINEL: &str = "eor-instance.org";
+
+/// Is `path` MAE's own instance sentinel?
+///
+/// @ai-caution: [kb-truth] Ingest SKIPS this file, so it is never recorded in
+/// `source_files`. Anything that verifies an archive against `source_files`
+/// must skip it the same way — otherwise every KB looks like it has one
+/// unrepresented file and can never be retired. That was found by running the
+/// retirement dry run against a real KB, where it was the sole blocker.
+/// The literal was open-coded in six places before this existed.
+pub fn is_instance_sentinel(path: &Path) -> bool {
+    path.file_name().and_then(|n| n.to_str()) == Some(INSTANCE_SENTINEL)
+}
+
 /// A registered KB instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KbInstance {
@@ -221,6 +271,10 @@ pub struct KbInstance {
     /// is `FromOrgDir`, so every pre-existing registry entry is unchanged.
     #[serde(default)]
     pub ingest_policy: IngestPolicy,
+    /// What this KB was built from. `None` for a KB that never had an org
+    /// source -- i.e. a natively-created one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_record: Option<KbImportRecord>,
     /// Federated search priority (ADR-062 Phase B). Higher wins when two instances'
     /// results collide on the same node id — replaces the previous implicit "whichever
     /// instance was registered/iterated first" rule with an explicit, user-controllable
@@ -309,6 +363,7 @@ impl KbInstance {
             project_key: None,
             kind: KbInstanceKind::default(),
             ingest_policy: IngestPolicy::default(),
+            import_record: None,
             priority: 0,
             remote_hub: None,
         }
@@ -338,6 +393,7 @@ impl KbInstance {
             project_key: None,
             kind: KbInstanceKind::default(),
             ingest_policy: IngestPolicy::default(),
+            import_record: None,
             priority: 0,
             remote_hub: None,
         }
@@ -731,6 +787,7 @@ impl KbRegistry {
             project_key: None,
             kind: KbInstanceKind::default(),
             ingest_policy: Default::default(),
+            import_record: None,
             priority: 0,
             remote_hub: None,
         };
@@ -779,6 +836,7 @@ impl KbRegistry {
             project_key: None,
             kind: KbInstanceKind::RemoteHub,
             ingest_policy: Default::default(),
+            import_record: None,
             priority: 0,
             remote_hub: Some(RemoteHubConfig {
                 base_url,
@@ -1192,7 +1250,7 @@ pub fn import_org_dir(org_dir: &Path) -> (KnowledgeBase, ImportReport, ImportHea
         }
         census.push(path.to_path_buf()); // see `reconcile_census`
                                          // Skip sentinel file
-        if path.file_name().and_then(|n| n.to_str()) == Some("eor-instance.org") {
+        if is_instance_sentinel(path) {
             continue;
         }
 
@@ -1307,7 +1365,7 @@ pub fn import_org_dir_to_store(
         if path.extension().and_then(|e| e.to_str()) != Some("org") {
             continue;
         }
-        if path.file_name().and_then(|n| n.to_str()) == Some("eor-instance.org") {
+        if is_instance_sentinel(path) {
             continue;
         }
         census.push(path.to_path_buf()); // see `reconcile_census`
@@ -1444,7 +1502,7 @@ pub fn import_org_dir_to_store(
 
 /// Read UUID from sentinel file in org directory.
 fn read_sentinel_uuid(org_dir: &Path) -> Option<String> {
-    let sentinel = org_dir.join("eor-instance.org");
+    let sentinel = org_dir.join(INSTANCE_SENTINEL);
     if !sentinel.exists() {
         return None;
     }
@@ -1459,7 +1517,7 @@ fn read_sentinel_uuid(org_dir: &Path) -> Option<String> {
 
 /// Write sentinel file to org directory (idempotent).
 fn write_sentinel(org_dir: &Path, uuid: &str, name: &str) -> io::Result<()> {
-    let sentinel = org_dir.join("eor-instance.org");
+    let sentinel = org_dir.join(INSTANCE_SENTINEL);
     if sentinel.exists() {
         return Ok(()); // Don't overwrite
     }
@@ -1619,6 +1677,7 @@ mod tests {
             project_key: None,
             kind: KbInstanceKind::default(),
             ingest_policy: Default::default(),
+            import_record: None,
             priority: 0,
             remote_hub: None,
         };
@@ -2220,6 +2279,7 @@ enabled = true
                     project_key: None,
                     kind: KbInstanceKind::default(),
                     ingest_policy: Default::default(),
+                    import_record: None,
                     priority: 0,
                     remote_hub: None,
                 });

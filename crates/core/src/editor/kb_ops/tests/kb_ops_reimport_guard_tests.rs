@@ -56,6 +56,7 @@ fn reimporting_a_dir_less_instance_does_not_blank_it() {
             project_key: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
             ingest_policy: Default::default(),
+            import_record: None,
             priority: 0,
             remote_hub: None,
         });
