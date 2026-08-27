@@ -737,7 +737,7 @@ Source: `shared/sync/src/lib.rs`
 | `which-key-open?` | `scheme/src/runtime/test_primitives.rs` |
 | `write-file` | `scheme/src/runtime/test_primitives.rs` |
 
-## Commands (565 built-in)
+## Commands (566 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -1296,6 +1296,7 @@ Source: `shared/sync/src/lib.rs`
 | `kb-import-verify` | Reconcile a KB's org directory against what its store holds (reads only) |
 | `kb-detach` | Make a KB's store the source of truth; its .org dir becomes a stale archive (KB cutover) |
 | `kb-attach` | Resume ingesting a KB from its .org directory (undoes :kb-detach) |
+| `kb-new` | Create a native KB — a store with no org directory (:kb-new <name>) |
 | `kb-retire-archive` | Move a detached KB's verified .org archive aside, making the KB native (dry run without 'confirm') |
 | `kb-instances` | List all registered KB instances |
 | `kb-init-project` | Register a Project-kind KB instance for the current project (ADR-058) |
