@@ -182,3 +182,61 @@ fn the_pre_flight_plan_is_persisted_where_the_import_will_look_for_it() {
         "and be re-readable by the import that follows"
     );
 }
+
+/// **The audit commands were actively misleading on a detached KB.** Neither
+/// checked ingest policy, so pointed at a frozen archive they described an
+/// import that can never happen, and reported the divergence detaching created
+/// as though it were loss.
+#[test]
+fn import_plan_refuses_a_detached_kbs_archive() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(tmp.path().join("a.org"), ":PROPERTIES:\n:ID: x\n:END:\n").unwrap();
+    let mut editor = Editor::new();
+    let mut inst = mae_kb::federation::KbInstance::local(
+        "uuid-detached".into(),
+        "Detached".into(),
+        tmp.path().to_path_buf(),
+        tmp.path().join("kb.sqlite"),
+    );
+    inst.ingest_policy = mae_kb::federation::IngestPolicy::StoreIsTruth;
+    let store = mae_kb::CozoKbStore::open_mem().unwrap();
+    store
+        .record_source_file(&tmp.path().join("a.org").to_string_lossy(), "hash", 0, &[])
+        .unwrap();
+    editor
+        .kb
+        .instance_stores
+        .insert(inst.uuid.clone(), std::sync::Arc::new(store));
+    editor.kb.registry.instances.push(inst);
+
+    let err = editor
+        .kb_import_plan(&tmp.path().to_string_lossy())
+        .expect_err("must refuse a frozen archive");
+    assert!(err.contains("kb-retire-archive"), "must redirect: {err}");
+
+    let err = editor
+        .kb_import_verify("Detached")
+        .expect_err("must refuse to reconcile against a frozen archive");
+    assert!(err.contains("expected post-detach divergence"), "{err}");
+}
+
+/// The control: an ATTACHED KB's directory is exactly what these commands are
+/// for, and must still work.
+#[test]
+fn the_audit_commands_still_work_on_an_attached_kb() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(tmp.path().join("a.org"), ":PROPERTIES:\n:ID: x\n:END:\n").unwrap();
+    let mut editor = Editor::new();
+    let _dirs = with_test_dirs(&mut editor);
+    let mut inst = mae_kb::federation::KbInstance::local(
+        "uuid-attached".into(),
+        "Attached".into(),
+        tmp.path().to_path_buf(),
+        tmp.path().join("kb.sqlite"),
+    );
+    inst.ingest_policy = mae_kb::federation::IngestPolicy::FromOrgDir;
+    editor.kb.registry.instances.push(inst);
+
+    assert!(editor.kb_import_plan(&tmp.path().to_string_lossy()).is_ok());
+    assert!(editor.kb_import_verify("Attached").is_ok());
+}

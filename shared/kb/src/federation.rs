@@ -672,6 +672,73 @@ impl KbRegistry {
     /// If a `KbDataDir` is provided, the SQLite database is placed in the
     /// standardized `kb/local/{slug}/kb.sqlite` layout. Otherwise falls back
     /// to the legacy `{data_dir}/{uuid}.db` flat layout.
+    /// Register a **native** KB: a store with no org directory behind it.
+    ///
+    /// The counterpart to [`KbRegistry::register`], which imports an existing
+    /// org directory. Without this there is no way to create a KB at all
+    /// except from files or by joining a peer — so "start native and never see
+    /// an org directory" was not actually possible.
+    ///
+    /// @ai-caution: [kb-truth] Deliberately does NOT reuse `register`'s
+    /// duplicate check, which matches on `org_dir`. A native KB's is empty and
+    /// a RETIRED KB's is cleared to empty, so that check would treat every
+    /// native KB as a duplicate of the first one and silently hand back its
+    /// uuid. Identity for a KB with no directory is its NAME.
+    pub fn register_native(
+        &mut self,
+        name: String,
+        data_dir: &Path,
+        kb_data_dir: Option<&crate::data_dir::KbDataDir>,
+    ) -> Result<String, String> {
+        if crate::system_kb::is_reserved_name(&name) {
+            return Err(format!(
+                "'{name}' is a reserved MAE system KB name. Use a different name."
+            ));
+        }
+        // Names are the identity here, so a clash with ANY existing instance is
+        // a refusal rather than a silent adoption — including one that still
+        // has an org dir, where "the same KB" would be a different claim.
+        if let Some(existing) = self.instances.iter().find(|i| i.name == name) {
+            if existing.org_dir.as_os_str().is_empty() {
+                return Ok(existing.uuid.clone());
+            }
+            return Err(format!(
+                "'{name}' already exists and is backed by {}. Pick a different name.",
+                existing.org_dir.display()
+            ));
+        }
+
+        let uuid = generate_uuid();
+        let slug = crate::data_dir::slugify(&name);
+        let db_path = if let Some(kdd) = kb_data_dir {
+            let meta = crate::data_dir::LocalKbMeta {
+                name: name.clone(),
+                uuid: uuid.clone(),
+                created_at: crate::data_dir::chrono_now_iso(),
+                node_count: 0,
+                org_dir: None,
+            };
+            match kdd.init_local_kb(&slug, &meta) {
+                Ok(path) => path,
+                Err(e) => {
+                    tracing::warn!(error = %e, slug, "failed to init local KB dir, using legacy path");
+                    data_dir.join(format!("{}.db", uuid))
+                }
+            }
+        } else {
+            data_dir.join(format!("{}.db", uuid))
+        };
+
+        // No sentinel: there is no directory to mark.
+        let mut inst = KbInstance::local(uuid.clone(), name, PathBuf::new(), db_path);
+        // Native by definition — StoreIsTruth with an empty org_dir is exactly
+        // what the three-state model calls native, so it is not a migration
+        // waiting to happen.
+        inst.ingest_policy = IngestPolicy::StoreIsTruth;
+        self.instances.push(inst);
+        Ok(uuid)
+    }
+
     pub fn register(
         &mut self,
         name: String,

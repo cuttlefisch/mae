@@ -280,6 +280,42 @@ impl Editor {
     ///
     /// Recursively imports all `.org` files, computes health metrics,
     /// and reports results via the status bar.
+    /// Create a **native** KB — a store with no org directory.
+    ///
+    /// `kb_register` requires an existing directory to import, and the only
+    /// other way to get a KB was to join a peer's. So a new user could not
+    /// start from a native KB at all, which is the whole point of the cutover.
+    /// Reuses `kb_adopt_detached_instance` (opens the store, no org import)
+    /// rather than a second adoption path.
+    pub fn kb_new(&mut self, name: &str) -> Result<String, String> {
+        let data_dir = self
+            .mae_data_dir()
+            .ok_or("cannot determine the MAE data directory")?;
+        let _ = std::fs::create_dir_all(&data_dir);
+
+        // `KbDataDir` is not `Clone`, so borrow it for the closure instead —
+        // `update` runs the closure synchronously, so a borrow is fine.
+        let kb_data_dir = self.kb.data_dir.as_ref();
+        let (registry, uuid, saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+            reg.register_native(name.to_string(), &data_dir, kb_data_dir)
+        });
+        let uuid = uuid?;
+        if let Err(e) = saved {
+            tracing::warn!(error = %e, "failed to persist KB registry");
+        }
+        self.kb.registry = registry;
+        self.kb.last_local_registry_write = Some(std::time::Instant::now());
+
+        let db_path = self.kb.registry.find(&uuid).map(|i| i.db_path.clone());
+        self.kb_adopt_detached_instance(&uuid, db_path.as_deref());
+        self.kb.rebuild_query_layer();
+
+        Ok(format!(
+            "Created native KB '{name}' — its store is the source of truth and there is no \
+             org directory. Add notes with :kb-create."
+        ))
+    }
+
     pub fn kb_register(&mut self, name: &str, org_dir: &Path) -> Option<KbImportResult> {
         if !org_dir.exists() {
             self.set_status(format!(
