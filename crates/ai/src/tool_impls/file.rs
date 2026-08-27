@@ -200,6 +200,11 @@ pub fn execute_rename_file(
         }
     }
 
+    // An archived KB source file is the only copy of what the store lost at
+    // ingest — see `kb_archive_removal_refusal`.
+    if let Some(msg) = editor.kb_archive_removal_refusal(&old_path, "rename_file") {
+        return Err(msg);
+    }
     std::fs::rename(&old_path, &new).map_err(|e| format!("Rename failed: {}", e))?;
 
     editor.buffers[idx].set_file_path(new.clone());

@@ -118,6 +118,25 @@ impl Editor {
         ))
     }
 
+    /// Refuse removing or renaming a detached KB's archived source file.
+    ///
+    /// Not because the KB would break — the watcher is already gated, so the
+    /// node survives — but because that file is the archive, and the archive is
+    /// currently the ONLY copy of what the store lost at ingest (external link
+    /// markup is flattened and unrecoverable). `:kb-retire-archive` is the
+    /// sanctioned way to remove it: it verifies the store represents every file
+    /// first, and moves rather than deletes.
+    pub fn kb_archive_removal_refusal(&self, path: &Path, surface: &str) -> Option<String> {
+        let kb = self.kb_stale_archive_instance(path)?;
+        Some(format!(
+            "'{}' is an archived source file of KB '{kb}'. It is the only copy of what the \
+             store lost at ingest, so {surface} will not remove it. Use \
+             :kb-retire-archive {kb} — it verifies the store holds every file first, and \
+             moves the archive aside instead of deleting it.",
+            path.display()
+        ))
+    }
+
     /// Refuse a save that would land in a detached KB's archive.
     ///
     /// Shared by `save_current_buffer` and `save_all_modified_buffers` so
@@ -126,9 +145,19 @@ impl Editor {
         let Some(path) = self.buffers[idx].file_path().map(|p| p.to_path_buf()) else {
             return Ok(());
         };
-        match self.kb_archive_refusal(&path, ArchiveAccess::Write, ":w") {
-            Some(msg) => Err(msg),
-            None => Ok(()),
+        // TWO rules, because a save can be either shape and only one of them
+        // was covered. `kb_archive_refusal` asks "is this the KB's former
+        // source?", answered from `source_files` — which a brand-new file is
+        // never in. So `:e newnote.org` inside a detached KB's directory,
+        // typed into and saved, wrote an orphan the KB would never see and
+        // reported success. `kb_orphan_org_target` is the rule for that shape,
+        // and it was only wired into the file-tree dialogs.
+        if let Some(msg) = self.kb_archive_refusal(&path, ArchiveAccess::Write, ":w") {
+            return Err(msg);
         }
+        if let Some(msg) = self.kb_orphan_org_target(&path) {
+            return Err(msg);
+        }
+        Ok(())
     }
 }

@@ -216,3 +216,34 @@ fn creating_a_new_org_file_in_an_attached_kbs_dir_is_allowed() {
         "an attached KB still ingests new .org files"
     );
 }
+
+/// **A NEW file created inside a detached KB's directory and then saved.**
+///
+/// The save guard asks `kb_stale_archive_instance`, which requires a
+/// `source_files` row — and a brand-new file has none. So `:e newnote.org` in a
+/// detached KB's directory, type, `:w` writes an orphan the KB will never see,
+/// and reports success. The create-side rule (`kb_orphan_org_target`) exists for
+/// exactly this shape but was only wired into the file-tree dialogs.
+#[test]
+fn saving_a_brand_new_org_file_into_a_detached_kbs_dir_is_refused() {
+    let tmp = TempDir::new().unwrap();
+    let mut editor = editor_with_archive(tmp.path(), &[]);
+    let fresh = tmp.path().join("brand-new.org");
+
+    // A buffer pointed at a path that does not exist yet — what `:e newnote.org`
+    // gives you.
+    editor.buffers.push(crate::Buffer::new());
+    let idx = editor.buffers.len() - 1;
+    editor.buffers[idx].set_file_path(fresh.clone());
+    editor.buffers[idx].replace_contents("A NOTE THE KB WILL NEVER SEE");
+    editor.buffers[idx].modified = true;
+    editor.display_buffer(idx);
+
+    editor.save_current_buffer();
+
+    assert!(
+        !fresh.exists(),
+        "a new .org saved into a detached KB's directory is invisible to the KB \
+         and must be refused, not written"
+    );
+}

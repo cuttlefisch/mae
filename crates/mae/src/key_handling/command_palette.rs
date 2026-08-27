@@ -419,6 +419,10 @@ fn apply_mini_dialog(editor: &mut Editor, dialog: mae_core::command_palette::Min
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
+            if let Some(msg) = editor.kb_archive_removal_refusal(path, "delete") {
+                editor.set_status(msg);
+                return;
+            }
             let result = if path.is_dir() {
                 std::fs::remove_dir_all(path)
             } else {
@@ -448,6 +452,10 @@ fn apply_mini_dialog(editor: &mut Editor, dialog: mae_core::command_palette::Min
             let new_path_str = &dialog.fields[0].value;
             if new_path_str.is_empty() {
                 editor.set_status("Rename cancelled");
+                return;
+            }
+            if let Some(msg) = editor.kb_archive_removal_refusal(old_path, "rename") {
+                editor.set_status(msg);
                 return;
             }
             let new_path = std::path::PathBuf::from(new_path_str);
