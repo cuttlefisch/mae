@@ -20,6 +20,10 @@ All notable changes to this project will be documented in this file.
 - *(adr)* Record the KB cutover (ADR-110), and fix the checksum that could not attest it ([81cb5f1](https://github.com/cuttlefisch/mae/commit/81cb5f1f61b571211e3e6b8d060aa2089baa933b))
 - *(manual)* The shipped corpus said the store was disposable — it is now the KB ([62bcdef](https://github.com/cuttlefisch/mae/commit/62bcdef0299d6d71f075a01397f388555b41d514))
 
+### Miscellaneous
+
+- Bump version to 0.14.119 ([e82fb87](https://github.com/cuttlefisch/mae/commit/e82fb87621101c75f643f9f7e9ec6f8dcd36d711))
+
 ## [0.14.118] - 2026-08-28
 
 
@@ -27,6 +31,7 @@ All notable changes to this project will be documented in this file.
 
 ### Miscellaneous
 
+- *(deps)* Bump the rust-dependencies group in /daemon with 3 updates ([6861f3e](https://github.com/cuttlefisch/mae/commit/6861f3e583fb6fd7406221b90b1a37aa7459fa9c))
 - Bump version to 0.14.118 ([50f91ca](https://github.com/cuttlefisch/mae/commit/50f91ca8196c96aced45348326ee6c847d04cbc0))
 
 ## [0.14.117] - 2026-08-27
@@ -218,7 +223,7 @@ All notable changes to this project will be documented in this file.
 - Regenerate audit metrics after rebase ([4768d3e](https://github.com/cuttlefisch/mae/commit/4768d3ec54499ebf3182a338498eec47b3fb2e05))
 - Regenerate audit metrics after rebase ([092e05c](https://github.com/cuttlefisch/mae/commit/092e05cd5b350c857b4cd7605086e5224b2c9d9f))
 - Regenerate audit metrics and code map for the consolidated branch ([56895c9](https://github.com/cuttlefisch/mae/commit/56895c9945ff89464acda5c3a93b6f673ab55387))
-- *(deps)* Bump the rust-dependencies group in /daemon with 3 updates ([6861f3e](https://github.com/cuttlefisch/mae/commit/6861f3e583fb6fd7406221b90b1a37aa7459fa9c))
+- *(deps)* Bump the rust-dependencies group with 3 updates ([8cbb955](https://github.com/cuttlefisch/mae/commit/8cbb955fe2982d83dbc9f71f26b8e354c8a7d85a))
 - Bump version to 0.14.115 ([3eda486](https://github.com/cuttlefisch/mae/commit/3eda48669f669c313815cdb17964d92174e42eff))
 
 ## [0.14.114] - 2026-08-14
