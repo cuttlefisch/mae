@@ -12,6 +12,10 @@ All notable changes to this project will be documented in this file.
 - *(kb)* `:kb-new` — create a KB that never had an org directory ([c906e27](https://github.com/cuttlefisch/mae/commit/c906e2786d13a1b307890962b4e18c03072282a8))
 - *(kb)* Images resolve in a node buffer, and the audit commands stop lying ([a78341b](https://github.com/cuttlefisch/mae/commit/a78341bd01d5de6e5c74656f02573ad1008045ee))
 
+### Miscellaneous
+
+- Bump version to 0.14.117 ([8f05112](https://github.com/cuttlefisch/mae/commit/8f05112b9b0b81f3df73e92f5c3ecaff33f80249))
+
 ## [0.14.116] - 2026-08-27
 
 
@@ -187,6 +191,7 @@ All notable changes to this project will be documented in this file.
 - Regenerate audit metrics after rebase ([4768d3e](https://github.com/cuttlefisch/mae/commit/4768d3ec54499ebf3182a338498eec47b3fb2e05))
 - Regenerate audit metrics after rebase ([092e05c](https://github.com/cuttlefisch/mae/commit/092e05cd5b350c857b4cd7605086e5224b2c9d9f))
 - Regenerate audit metrics and code map for the consolidated branch ([56895c9](https://github.com/cuttlefisch/mae/commit/56895c9945ff89464acda5c3a93b6f673ab55387))
+- *(deps)* Bump the rust-dependencies group in /daemon with 3 updates ([6861f3e](https://github.com/cuttlefisch/mae/commit/6861f3e583fb6fd7406221b90b1a37aa7459fa9c))
 - Bump version to 0.14.115 ([3eda486](https://github.com/cuttlefisch/mae/commit/3eda48669f669c313815cdb17964d92174e42eff))
 
 ## [0.14.114] - 2026-08-14

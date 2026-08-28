@@ -2770,7 +2770,7 @@ checksum = "d3d25b0e0b648a86960ac23b7ad4abb9717601dec6f66c165f5b037f3f03065f"
 
 [[package]]
 name = "mae-daemon"
-version = "0.14.117"
+version = "0.14.118"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2809,11 +2809,11 @@ dependencies = [
 
 [[package]]
 name = "mae-effect-sandbox"
-version = "0.14.117"
+version = "0.14.118"
 
 [[package]]
 name = "mae-kb"
-version = "0.14.117"
+version = "0.14.118"
 dependencies = [
  "cozo",
  "hex",
@@ -2835,7 +2835,7 @@ dependencies = [
 
 [[package]]
 name = "mae-mcp"
-version = "0.14.117"
+version = "0.14.118"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2862,7 +2862,7 @@ dependencies = [
 
 [[package]]
 name = "mae-sync"
-version = "0.14.117"
+version = "0.14.118"
 dependencies = [
  "base64 0.23.1",
  "chacha20poly1305",
