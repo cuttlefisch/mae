@@ -43,9 +43,14 @@ When you edit org files externally, refresh the graph:
 #+end_example
 
 *** Data safety
-- MAE *never writes* to your org directory (except ~eor-instance.org~ sentinel).
-- Your org files are the source of truth. The index is always re-derivable.
-- Back up your org files with git. The SQLite cache is disposable.
+*While the KB stays attached* -- which is how it starts, and what this lesson describes:
+- MAE *never writes* to your org directory (except the ~eor-instance.org~ sentinel).
+- Your org files are the source of truth. The store is always re-derivable.
+- Back up your org files with git; the store is disposable and rebuilt by ~:kb-reimport~.
+
+*This reverses if you later run ~:kb-detach~.* The store becomes the source of truth, your org
+files become a frozen archive, and *the store is then the thing to back up* -- deleting it would
+destroy the KB. See [[concept:kb-federation]] for the three states.
 
 *** Unregister
 #+begin_example
