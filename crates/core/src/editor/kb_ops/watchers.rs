@@ -180,7 +180,24 @@ impl Editor {
         let Some(data_dir) = self.mae_data_dir() else {
             return;
         };
-        let fresh = mae_kb::federation::KbRegistry::load(&data_dir);
+        // @ai-caution: [kb-truth] Must be `load_checked`, not `load`. Below, every
+        // instance absent from `fresh` is deleted as "unregistered by another
+        // process" — so a `load` that quietly returned an empty registry because
+        // it caught a writer mid-write deleted the user's entire KB federation.
+        // Observed live: 9 instances to 0, no log line, the file on disk intact,
+        // recovered only by restarting. `save` is atomic now, which removes the
+        // race; this refuses to act on a bad read even if one occurs.
+        let fresh = match mae_kb::federation::KbRegistry::load_checked(&data_dir) {
+            Ok(fresh) => fresh,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "KB registry reload failed; keeping the registry already loaded \
+                     rather than treating every instance as unregistered"
+                );
+                return;
+            }
+        };
 
         let mut changed_any = false;
         for inst in fresh.instances.clone() {
