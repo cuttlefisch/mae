@@ -75,6 +75,28 @@
   register: _mae_daemon_doctor
   changed_when: false
   check_mode: false
+  # Not allowed to fail the play by itself: doctor's non-zero exit is more
+  # useful once its own report has been captured, so the assertion below can
+  # quote it. Without this, Ansible aborts on the rc with a generic message and
+  # the operator never sees which check failed.
+  failed_when: false
+
+- name: Verify | Assert doctor's own verdict
+  # doctor exits non-zero when it reports something that stops the instance
+  # working. Asserting on rc rather than only on scraped stdout means a NEW
+  # failure mode it learns to detect is caught here for free, instead of
+  # needing another string match added to this file.
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+    fail_msg: |-
+      doctor reports '{{ item.item.name }}' as unhealthy (rc={{ item.rc }}):
+
+      {{ item.stdout }}
+    success_msg: "doctor verdict OK for {{ item.item.name }}"
+  loop: "{{ _mae_daemon_doctor.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
 
 - name: Verify | Assert doctor reported this instance's own socket
   # Guards against the pre-v0.15 bug where every subcommand read the DEFAULT
