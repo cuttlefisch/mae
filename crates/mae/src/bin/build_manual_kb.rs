@@ -63,6 +63,8 @@ fn main() {
     store.seed_views().expect("failed to seed views");
     eprintln!("  Views seeded");
 
+    // Close the store before hashing — see `compute_db_checksum`.
+    drop(store);
     let checksum = kb_build::compute_db_checksum(&output_path);
     kb_build::write_checksum_sidecar(&output_path, &checksum);
 
