@@ -621,6 +621,32 @@ registration. It marks the directory as a MAE KB instance.\n\n\
 - `:kb-health` — health report (orphans, broken links, namespace counts).\n\
 - `:kb-promote` — promote a node from a federated instance into the primary,\n\
   CozoDB-backed KB (SPC n p), severing its dependency on the origin org file.\n\n\
+** Source of truth: the three states (ADR-110)\n\
+A KB is in exactly one of three states, and which one decides whether your\n\
+`.org` files still matter.\n\n\
+- *Attached* — the `.org` directory is authoritative and ingest overwrites the\n\
+  store. This is how a KB starts when imported from an existing org corpus.\n\
+- *Migrating* — the store is authoritative and the `.org` files remain on disk\n\
+  as a *stale archive*: nothing reads them, and MAE opens them read-only with a\n\
+  banner so an edit cannot be silently stranded somewhere the KB never sees.\n\
+- *Native* — the store is authoritative and there are no files at all.\n\n\
+- `:kb-detach <name>` — attached → migrating. The store becomes the truth.\n\
+- `:kb-attach <name>` — migrating → attached. Undoes a detach; ingest resumes\n\
+  and will overwrite the store from the files.\n\
+- `:kb-retire-archive <name>` — migrating → native. A DRY RUN by default,\n\
+  listing exactly what would move; add `confirm` to proceed. It refuses unless\n\
+  every `.org` file is genuinely represented in the store, and it is\n\
+  all-or-nothing: one unrepresented file blocks the whole retirement. Files are\n\
+  MOVED to `~/.local/share/mae/retired/<kb>/<date>/`, never deleted, and MAE\n\
+  never touches git — a tracked file leaving the tree shows up as an ordinary\n\
+  deletion for you to review.\n\
+- `:kb-new <name>` — create a native KB directly, with no org directory.\n\n\
+Each is also a Scheme primitive — `(kb-detach NAME)`, `(kb-attach NAME)`,\n\
+`(kb-new NAME)`, `(kb-retire-archive NAME)` for the dry run and\n\
+`(kb-retire-archive! NAME)` to move the files.\n\n\
+*Keep a retired archive.* Non-`id:` links (images, `file:`, external URLs) are\n\
+flattened to plain text at import and cannot be reconstructed, so once a KB is\n\
+native the archive is the only surviving copy of that markup.\n\n\
 See also: [[concept:knowledge-base]], [[concept:kb-workflows]], [[lesson:kb-import-roam]]\n";
 
 pub(super) const CONCEPT_KB_WORKFLOWS: &str = "\

@@ -57,6 +57,7 @@ pub(super) fn register_kb_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedSt
         },
     );
 
+    register_cutover_lifecycle(vm, shared);
     // --- KB collaboration lifecycle (first-class, route through CollabIntent) ---
 
     // (kb-share [KB-NAME]) — share a KB (default = primary).
@@ -551,6 +552,95 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
         },
     );
 
+    register_meta_node_fns(vm, shared);
+    // --- Relationship type management ---
+
+    // (kb-add-rel-type! NAME LABEL DESCRIPTION INVERSE DIRECTED)
+    let s = shared.clone();
+    vm.register_fn(
+        "kb-add-rel-type!",
+        "Add a custom relationship type to the KB",
+        Arity::Fixed(5),
+        tier::WRITE,
+        move |args: &[Value]| {
+            let name = arg_string(args, 0, "kb-add-rel-type!")?;
+            let label = arg_string(args, 1, "kb-add-rel-type!")?;
+            let desc = arg_string(args, 2, "kb-add-rel-type!")?;
+            let inverse = arg_string(args, 3, "kb-add-rel-type!")?;
+            let directed = match &args[4] {
+                Value::Bool(b) => *b,
+                _ => true,
+            };
+            s.lock().pending_ex_commands.push(format!(
+                "kb-add-rel-type {} {} {} {} {}",
+                name, label, desc, inverse, directed
+            ));
+            Ok(Value::Void)
+        },
+    );
+}
+
+/// The KB cutover lifecycle primitives (ADR-110), split out for length.
+fn register_cutover_lifecycle(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>) {
+    // --- KB cutover lifecycle (ADR-110) ---
+    //
+    // Same code path as the `:kb-*` ex-commands and the generated MCP mirrors,
+    // per principle #3. Without these the cutover was reachable by a human and
+    // by an agent but NOT scriptable, while `kb-register` — its opposite
+    // number — had a primitive all along.
+    for (name, doc, tier_v, op) in [
+        (
+            "kb-detach",
+            "Make KB NAME's store the source of truth; its .org dir becomes a stale archive",
+            tier::SHELL,
+            "detach",
+        ),
+        (
+            "kb-attach",
+            "Resume ingesting KB NAME from its .org directory (undoes kb-detach)",
+            tier::SHELL,
+            "attach",
+        ),
+        (
+            "kb-new",
+            "Create a native KB NAME — a store with no org directory",
+            tier::SHELL,
+            "new",
+        ),
+        (
+            "kb-retire-archive",
+            "Dry-run retiring KB NAME's verified .org archive (see kb-retire-archive!)",
+            tier::SHELL,
+            "retire-plan",
+        ),
+        (
+            // The `!` marks the one that moves files, matching Scheme's own
+            // convention for a mutating operation.
+            "kb-retire-archive!",
+            "Retire KB NAME's archive: verify, then MOVE the files aside and make the KB native",
+            tier::PRIVILEGED,
+            "retire-confirm",
+        ),
+    ] {
+        let s = shared.clone();
+        let op = op.to_string();
+        vm.register_fn(
+            name,
+            doc,
+            Arity::Fixed(1),
+            tier_v,
+            move |args: &[Value]| {
+                let kb = arg_string(args, 0, "kb lifecycle")?;
+                s.lock().pending_kb_lifecycle.push((op.clone(), kb));
+                Ok(Value::Void)
+            },
+        );
+    }
+}
+
+/// Meta-node primitives, split out to keep `register_kb_primitive_fns` from
+/// growing further — it is far over the per-function ceiling already.
+fn register_meta_node_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>) {
     // --- Meta-node functions ---
 
     // (kb-add-meta-member! META-ID MEMBER-ID ROLE)
@@ -596,32 +686,6 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             s.lock()
                 .pending_ex_commands
                 .push(format!("kb-compose-meta {}", id));
-            Ok(Value::Void)
-        },
-    );
-
-    // --- Relationship type management ---
-
-    // (kb-add-rel-type! NAME LABEL DESCRIPTION INVERSE DIRECTED)
-    let s = shared.clone();
-    vm.register_fn(
-        "kb-add-rel-type!",
-        "Add a custom relationship type to the KB",
-        Arity::Fixed(5),
-        tier::WRITE,
-        move |args: &[Value]| {
-            let name = arg_string(args, 0, "kb-add-rel-type!")?;
-            let label = arg_string(args, 1, "kb-add-rel-type!")?;
-            let desc = arg_string(args, 2, "kb-add-rel-type!")?;
-            let inverse = arg_string(args, 3, "kb-add-rel-type!")?;
-            let directed = match &args[4] {
-                Value::Bool(b) => *b,
-                _ => true,
-            };
-            s.lock().pending_ex_commands.push(format!(
-                "kb-add-rel-type {} {} {} {} {}",
-                name, label, desc, inverse, directed
-            ));
             Ok(Value::Void)
         },
     );
