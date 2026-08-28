@@ -16,7 +16,12 @@ Workflows for exploring, authoring, migrating, and maintaining your knowledge ba
 - ~C-o~ -- jump back in help history.
 
 ** Authoring
-- Create ~.org~ files in ~~/.config/mae/help/~ with ~:ID:~ properties.
+- ~:kb-create~ / ~(kb-create ...)~ / the ~kb_create~ tool -- the store-first path, and the only one
+  that works for a KB whose store is authoritative. Edit an existing node with ~:kb-edit-source~
+  (~SPC n e~), which opens the NODE, not a file.
+- Creating ~.org~ files by hand only reaches a KB that is *attached*. Inside a detached KB's
+  directory MAE refuses the write, because no ingest would ever read it.
+- Create ~.org~ files in ~~/.config/mae/help/~ with ~:ID:~ properties (user help nodes).
 - ~:help-edit <topic>~ -- open/create a user help node for editing.
 - User-authored nodes are loaded on startup alongside seed nodes.
 
@@ -25,12 +30,26 @@ See [[lesson:kb-import-roam]] for step-by-step instructions.
 Quick version: ~:kb-register MyNotes ~/org-roam~
 
 ** Backup and restore
-*Your org files ARE the backup.* They're plain text on disk -- version them with git, sync them with any tool you like.
-- The SQLite cache is disposable: delete it and reimport, zero data loss.
-- ~:kb-save <path>~ exports a SQLite snapshot (useful for sharing the index).
-- ~:kb-load <path>~ imports a snapshot.
-- ~:kb-reimport <name>~ rebuilds from org source.
-- *There is no new data format to manage.* Your existing org files + git workflow = complete data lifecycle.
+*Which thing is the backup depends on the KB's state.* See [[concept:kb-federation]] for the three
+states; the answer is different for each, and getting it wrong loses data.
+
+*Attached* (the ~.org~ directory is authoritative):
+- Your org files ARE the backup. Version them with git, sync them however you like.
+- The store is a projection: delete it and ~:kb-reimport~, no data loss.
+
+*Migrating or native* (the store is authoritative):
+- *The STORE is the backup.* Deleting it destroys the KB -- the org files, if any remain, are a
+  frozen archive that stops at the moment you detached.
+- Back it up with ~sqlite3 <store> ".backup <dest>"~, never ~cp~: WAL mode means a store is not one
+  file, and a plain copy can be torn.
+- ~:kb-retire-archive <name>~ moves a verified archive to ~~/.local/share/mae/retired/~ rather than
+  deleting it -- keep that copy, because non-~id:~ links (images, ~file:~, external URLs) are
+  flattened at import and the archive is their only surviving form.
+
+Either state:
+- ~:kb-save <path>~ / ~:kb-load <path>~ -- export/import a store snapshot.
+- ~:kb-reimport <name>~ rebuilds from org source, and is *refused* for a detached KB: there is no
+  source to rebuild from that would not overwrite the truth.
 
 ** Health monitoring
 - ~:kb-health~ -- orphan nodes, broken links, namespace distribution.

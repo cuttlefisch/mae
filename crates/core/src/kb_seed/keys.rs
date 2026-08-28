@@ -186,6 +186,10 @@ Quick shortcut for `project-search` (ripgrep in project root).\n\n\
 | `s` | [[cmd:capture-finalize]] | Finish a capture note |\n\
 | `k` | [[cmd:capture-abort]] | Abort a capture note |\n\
 | `C` | [[cmd:kb-cleanup-orphans]] | Remove orphaned KB nodes |\n\
+| `t d` | [[cmd:kb-detach]] | Make the store the source of truth |\n\
+| `t a` | [[cmd:kb-attach]] | Resume ingesting from the org directory |\n\
+| `t n` | [[cmd:kb-new]] | Create a native KB (no org directory) |\n\
+| `t r` | [[cmd:kb-retire-archive]] | Retire a verified archive (dry run) |\n\
 | `I` | [[cmd:kb-instances]] | List registered KB instances |\n\
 | `h` | [[cmd:kb-health]] | KB health report |\n\
 | `N` | [[cmd:kb-narrow]] | Narrow KB search scope |\n\
