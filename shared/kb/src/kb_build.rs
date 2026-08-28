@@ -485,6 +485,14 @@ pub fn require_index_node(store: &CozoKbStore, src_dir: &Path) -> Result<(), KbB
 ///
 /// For sled (directory-based), hashes all files in sorted order for
 /// determinism. For single-file backends, hashes the file directly.
+/// @ai-caution: [kb-truth] CLOSE the store before calling this. In WAL mode a
+/// sqlite-backed store's committed data lives in the `-wal` sidecar until
+/// checkpoint, so hashing while a handle is open reads a main file that barely
+/// changes — the checksum then does not depend on the content it is supposed to
+/// attest. Measured: adding a whole ADR left the recorded SHA-256
+/// byte-identical, which made `verify-adr-kb-sync` unsatisfiable by
+/// `make adr-kb`, and the recorded value disagreed with `sha256sum` of the same
+/// file. This function hashes the path it is given and cannot see the sidecars.
 pub fn compute_db_checksum(path: &Path) -> String {
     let mut hasher = Sha256::new();
 

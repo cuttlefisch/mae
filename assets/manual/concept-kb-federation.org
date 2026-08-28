@@ -54,6 +54,28 @@ When you register a directory, MAE creates ~eor-instance.org~ with the instance 
 5. Duplicate ~:ID:~ values are detected and reported.
 6. Health metrics (orphans, broken links, namespaces) computed automatically.
 
+** Source of truth: the three states
+A KB is in exactly one of three states, and which one decides whether your ~.org~ files still
+matter. See ADR-110.
+
+- *Attached* -- the ~.org~ directory is authoritative and ingest overwrites the store.
+- *Migrating* -- the store is authoritative and the ~.org~ files remain as a *stale archive*:
+  nothing reads them, and MAE opens them read-only with a banner so an edit cannot be silently
+  stranded.
+- *Native* -- the store is authoritative and there are no files at all.
+
+- ~:kb-detach <name>~ -- attached to migrating. The store becomes the truth.
+- ~:kb-attach <name>~ -- migrating back to attached; ingest resumes and overwrites the store.
+- ~:kb-retire-archive <name>~ -- migrating to native. A DRY RUN by default; add ~confirm~ to
+  proceed. Refuses unless every ~.org~ file is genuinely represented in the store, and is
+  all-or-nothing. Files are MOVED to ~~/.local/share/mae/retired/<kb>/<date>/~, never deleted, and
+  MAE never touches git.
+- ~:kb-new <name>~ -- create a native KB directly, with no org directory.
+
+Also available as Scheme: ~(kb-detach NAME)~, ~(kb-attach NAME)~, ~(kb-new NAME)~,
+~(kb-retire-archive NAME)~ for the dry run and ~(kb-retire-archive! NAME)~ to move the files.
+Keybindings live under ~SPC n t~ (+truth).
+
 ** Commands
 - ~:kb-register <name> <path>~ -- register and import.
 - ~:kb-unregister <name>~ -- remove instance.

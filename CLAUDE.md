@@ -750,6 +750,21 @@ is to shipping *sled* (a directory, rewritten on first open so never checksum-ve
 unopenable by the sqlite-only daemon), not to pre-built stores in general, so a future single-file
 sqlite store is deliberately left open.
 
+Finally, the **post-cutover set ADR-105–110**: **ADR-105** (KB identity and node-document
+addressing on a multi-tenant daemon), **ADR-106** (node version history is a local audit trail, not
+projected state), **ADR-107** (node rebirth — bounding CRDT growth with the consensus primitive we
+already have), **ADR-108** (SQLite is the *embedded* KB storage backend), **ADR-109** (the hosted
+deployment has a resource budget, set before launch), and **ADR-110** (*accepted and implemented*)
+— **the KB cutover: the store is truth, and a KB has three states**. 110 settles whether the `.org`
+files on disk are authoritative at all, which ADR-029 does not address: a KB is **attached**
+(`FromOrgDir`), **migrating** (`StoreIsTruth` with an archive still on disk, read-only and labelled),
+or **native** (`StoreIsTruth` with an empty `org_dir` — derived, not a stored flag, so no second
+piece of state can disagree with the disk). `:kb-detach`/`:kb-attach` move between the first two,
+`:kb-retire-archive` completes the third behind a three-part gate, and `:kb-new` starts there. Its
+D7 is worth reading before touching any KB code: **never read `primary: bool` to select a store, a
+policy or a directory** — it means "first row ever registered", and reading it otherwise silently
+misrouted an entire user KB into the daemon's own store while every layer reported success.
+
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
 > from it entirely until 2026-08-04, i.e. every ADR from the KB-visualization arc and the whole
 > pre-v0.15 audit set, so agents rediscovered decisions that already existed. `docs/adr/` is the

@@ -298,13 +298,68 @@ impl Default for AuthConfig {
     }
 }
 
+/// Configured paths that will never resolve, named rather than left to surface
+/// later as a missing file.
+fn unresolvable_path_issues(c: &CollabConfig) -> Vec<String> {
+    let mut issues = Vec::new();
+    for (label, raw) in [
+        (
+            "collab.auth.authorized_keys",
+            c.auth.authorized_keys.as_deref(),
+        ),
+        ("collab.auth.keystore", c.auth.keystore.as_deref()),
+        ("collab.auth.identity_dir", c.auth.identity_dir.as_deref()),
+    ] {
+        let Some(raw) = raw else { continue };
+        if unexpanded_variable(&expand_config_path(raw).to_string_lossy()) {
+            issues.push(format!(
+                "{label} = '{raw}' still contains an unexpanded variable after expanding ~ \
+                 and $HOME — it will never resolve. Use an absolute path."
+            ));
+        }
+    }
+    issues
+}
+
+/// Expand `~`, `$HOME` and `${HOME}` in a configured path.
+///
+/// @ai-caution: [config] TOML does no interpolation, and these fields were
+/// consumed as bare `PathBuf::from`. A `daemon.toml` written with
+/// `"${HOME}/.local/share/..."` — which reads perfectly naturally, and which a
+/// real deployment used — produced a path with a LITERAL `${HOME}` component
+/// that can never exist. The daemon then reported "authorized_keys is empty"
+/// and disabled collab, describing the symptom and not the cause. Expand here,
+/// and let `unexpanded_variable` below turn anything still unresolved into a
+/// config error rather than a mystery.
+pub(crate) fn expand_config_path(raw: &str) -> std::path::PathBuf {
+    let home = std::env::var("HOME").ok();
+    let mut out = raw.to_string();
+    if let Some(h) = home.as_deref() {
+        out = out.replace("${HOME}", h).replace("$HOME", h);
+        if out == "~" {
+            out = h.to_string();
+        } else if let Some(rest) = out.strip_prefix("~/") {
+            out = format!("{h}/{rest}");
+        }
+    }
+    std::path::PathBuf::from(out)
+}
+
+/// The first unexpanded `$VAR`/`~` left in `raw`, if any.
+///
+/// A path that still contains one will not resolve, so it is a configuration
+/// error worth naming rather than a file that mysteriously does not exist.
+pub(crate) fn unexpanded_variable(raw: &str) -> bool {
+    raw.contains('$') || raw == "~" || raw.starts_with("~/")
+}
+
 impl AuthConfig {
     /// Resolve the keystore path: the configured override, else the shared
     /// default (`$XDG_DATA_HOME/mae/collab/trusted_keys`).
     pub fn keystore_path(&self) -> Option<std::path::PathBuf> {
         self.keystore
             .as_ref()
-            .map(std::path::PathBuf::from)
+            .map(|p| expand_config_path(p))
             .or_else(mae_mcp::keystore::default_keystore_path)
     }
 
@@ -320,7 +375,7 @@ impl AuthConfig {
     pub fn identity_dir(&self) -> Option<std::path::PathBuf> {
         self.identity_dir
             .as_ref()
-            .map(std::path::PathBuf::from)
+            .map(|p| expand_config_path(p))
             .or_else(mae_mcp::identity::default_collab_dir)
     }
 
@@ -328,7 +383,7 @@ impl AuthConfig {
     pub fn authorized_keys_path(&self) -> Option<std::path::PathBuf> {
         self.authorized_keys
             .as_ref()
-            .map(std::path::PathBuf::from)
+            .map(|p| expand_config_path(p))
             .or_else(|| mae_mcp::identity::default_collab_dir().map(|d| d.join("authorized_keys")))
     }
 
@@ -720,6 +775,8 @@ impl DaemonConfig {
 
         issues.extend(crate::config_guards::unauthenticated_bind_issues(c));
 
+        issues.extend(unresolvable_path_issues(c));
+
         if c.storage.compact_threshold == 0 {
             issues.push("collab.storage.compact_threshold must be > 0".to_string());
         }
@@ -1053,5 +1110,102 @@ idle_evict_secs = 1800
         assert_eq!(t.quota.max_result_bytes, 4_194_304);
         assert_eq!(t.quota.idle_evict_secs, 1800);
         assert!(config.check_tenants().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod path_expansion_tests {
+    use super::*;
+
+    /// **The bug this closes.** TOML does no interpolation, and these fields
+    /// were consumed as bare `PathBuf::from`, so a `daemon.toml` written with
+    /// `"${HOME}/..."` — which reads perfectly naturally — produced a path with
+    /// a literal `${HOME}` component that can never exist. The daemon then
+    /// reported "authorized_keys is empty" and disabled collab, naming the
+    /// symptom and not the cause. Observed on a real deployment.
+    #[test]
+    fn home_forms_expand_in_configured_paths() {
+        let home = std::env::var("HOME").expect("HOME set in tests");
+        for raw in [
+            "${HOME}/.local/share/mae/x/authorized_keys",
+            "$HOME/.local/share/mae/x/authorized_keys",
+            "~/.local/share/mae/x/authorized_keys",
+        ] {
+            let got = expand_config_path(raw);
+            assert!(
+                got.starts_with(&home),
+                "{raw} must expand to an absolute path under $HOME, got {}",
+                got.display()
+            );
+            assert!(
+                !got.to_string_lossy().contains('$') && !got.to_string_lossy().contains('~'),
+                "{raw} left an unexpanded marker: {}",
+                got.display()
+            );
+        }
+    }
+
+    /// **The wiring, not just the helper.** An earlier version of these tests
+    /// called `expand_config_path` directly, so removing its use from the
+    /// getters left every test green — the helper was correct and unreached.
+    /// These go through the accessors the daemon actually calls.
+    #[test]
+    fn the_path_accessors_expand_what_the_daemon_reads() {
+        let home = std::env::var("HOME").expect("HOME set in tests");
+        let auth = AuthConfig {
+            authorized_keys: Some("${HOME}/mae/authorized_keys".to_string()),
+            keystore: Some("$HOME/mae/trusted_keys".to_string()),
+            identity_dir: Some("~/mae/collab".to_string()),
+            ..AuthConfig::default()
+        };
+
+        for (label, got) in [
+            ("authorized_keys", auth.authorized_keys_path()),
+            ("keystore", auth.keystore_path()),
+            ("identity_dir", auth.identity_dir()),
+        ] {
+            let p = got.unwrap_or_else(|| panic!("{label} must resolve"));
+            assert!(
+                p.starts_with(&home),
+                "{label} was not expanded by the accessor: {}",
+                p.display()
+            );
+        }
+    }
+
+    /// An absolute path is passed through untouched — expansion must not
+    /// rewrite a path that was already correct.
+    #[test]
+    fn an_absolute_path_is_unchanged() {
+        let raw = "/etc/mae/authorized_keys";
+        assert_eq!(expand_config_path(raw), std::path::PathBuf::from(raw));
+    }
+
+    /// A `~` that is not a home prefix is not a home reference — `~backup/x` is
+    /// a real relative directory name and must not be mangled.
+    #[test]
+    fn a_tilde_that_is_not_a_home_prefix_is_left_alone() {
+        assert_eq!(
+            expand_config_path("~backup/keys"),
+            std::path::PathBuf::from("~backup/keys")
+        );
+    }
+
+    /// A variable we cannot expand becomes a NAMED config error instead of a
+    /// file that mysteriously does not exist.
+    #[test]
+    fn an_unexpandable_variable_is_reported_as_a_config_issue() {
+        let mut config = DaemonConfig::default();
+        config.collab.auth.mode = "key".to_string();
+        config.collab.auth.authorized_keys = Some("$XDG_DATA_HOME/mae/authorized_keys".to_string());
+
+        let issues = config.check_collab();
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.contains("unexpanded variable")
+                    && i.contains("collab.auth.authorized_keys")),
+            "an unresolvable path must be named, got: {issues:?}"
+        );
     }
 }

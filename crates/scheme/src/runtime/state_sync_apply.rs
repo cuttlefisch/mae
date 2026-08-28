@@ -74,6 +74,7 @@ impl SchemeRuntime {
         Self::apply_hooks(&mut state, editor);
         Self::apply_display_policy(&mut state, editor);
         Self::apply_kb_mutations(&mut state, editor);
+        Self::apply_kb_lifecycle(&mut state, editor);
         Self::apply_async_tool_requests(&mut state, editor);
         Self::apply_options_status_theme(&mut state, editor);
         Self::apply_live_editing(&mut state, editor);
@@ -815,6 +816,29 @@ impl SchemeRuntime {
                 let prev = editor.active_buffer_idx();
                 editor.vi.alternate_buffer_idx = Some(prev);
                 editor.display_buffer(idx);
+            }
+        }
+    }
+}
+
+/// Drain the KB cutover lifecycle queue (ADR-110).
+///
+/// A helper rather than an inline loop because its caller is far over the
+/// per-function ceiling already, and a new inline block would push it further.
+impl SchemeRuntime {
+    fn apply_kb_lifecycle(state: &mut SharedState, editor: &mut Editor) {
+        for (op, kb) in state.pending_kb_lifecycle.drain(..) {
+            use mae_kb::federation::IngestPolicy;
+            let outcome = match op.as_str() {
+                "detach" => editor.kb_set_ingest_policy(&kb, IngestPolicy::StoreIsTruth),
+                "attach" => editor.kb_set_ingest_policy(&kb, IngestPolicy::FromOrgDir),
+                "new" => editor.kb_new(&kb),
+                "retire-plan" => editor.kb_retire_plan(&kb).map(|p| p.describe()),
+                "retire-confirm" => editor.kb_retire_archive(&kb),
+                _ => continue,
+            };
+            match outcome {
+                Ok(msg) | Err(msg) => editor.set_status(msg),
             }
         }
     }

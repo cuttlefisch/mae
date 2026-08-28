@@ -124,14 +124,22 @@ fn main() {
     store.seed_views().expect("failed to seed views");
     eprintln!("  Views seeded");
 
-    let checksum = kb_build::compute_db_checksum(&output_path);
-    kb_build::write_checksum_sidecar(&output_path, &checksum);
-
-    eprintln!("Done.");
-    eprintln!("  Output: {}", output_path.display());
-    eprintln!("  SHA-256: {checksum}");
+    finish(store, &output_path);
     eprintln!(
         "  Checksum: {}",
         output_path.with_extension("cozo.sha256").display()
     );
+}
+
+/// Close the store, checksum the finished artifact, and report.
+///
+/// Split out for length, but the ORDER is the point: `compute_db_checksum` must
+/// run after the handle is dropped — see its doc comment.
+fn finish(store: mae_kb::CozoKbStore, output_path: &std::path::Path) {
+    drop(store);
+    let checksum = kb_build::compute_db_checksum(output_path);
+    kb_build::write_checksum_sidecar(output_path, &checksum);
+    eprintln!("Done.");
+    eprintln!("  Output: {}", output_path.display());
+    eprintln!("  SHA-256: {checksum}");
 }

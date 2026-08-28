@@ -181,6 +181,10 @@ pub struct SharedState {
     /// instance), so it doesn't fit the synchronous-return primitive shape
     /// either, same as `pending_kb_nodes`'s own reasoning.
     pending_kb_register_requests: Vec<(String, String)>,
+    /// KB lifecycle requests as `(op, argument)` — one queue for detach/attach/
+    /// new/retire rather than four, since they differ only in which editor
+    /// method runs.
+    pending_kb_lifecycle: Vec<(String, String)>,
     /// Pending KB node CRUD ops from `(kb-create)`/`(kb-update)`/`(kb-delete)`
     /// — drained in order into the matching `Editor::kb_*_node` method (the
     /// same one the `kb_create`/`kb_update`/`kb_delete` MCP tools call), so

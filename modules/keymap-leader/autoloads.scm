@@ -174,6 +174,15 @@
 (define-key "leader" "n k" "capture-abort")
 (define-key "leader" "n C" "kb-cleanup-orphans")
 (define-key "leader" "n I" "kb-instances")
+
+;; KB source of truth (ADR-110). Grouped under `n t` because these are
+;; deliberate, infrequent lifecycle operations, not daily note-taking — and
+;; because a mis-keyed `kb-detach` changes which side of a KB is authoritative.
+(set-group-name "leader" "n t" "+truth")
+(define-key "leader" "n t d" "kb-detach")
+(define-key "leader" "n t a" "kb-attach")
+(define-key "leader" "n t n" "kb-new")
+(define-key "leader" "n t r" "kb-retire-archive")
 (define-key "leader" "n h" "kb-health")
 (define-key "leader" "n N" "kb-narrow")
 (define-key "leader" "n W" "kb-widen")
