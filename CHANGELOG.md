@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.119] - 2026-08-28
+
+
+
+
+### Features
+
+- *(kb)* Give the cutover commands Scheme, keymap and help parity ([6092a3c](https://github.com/cuttlefisch/mae/commit/6092a3cbd9483a6e2a4e3868b31afa0c31c5b302))
+
+### Bug Fixes
+
+- *(daemon)* Expand ~ and $HOME in configured paths, and name one that cannot resolve ([8a338a8](https://github.com/cuttlefisch/mae/commit/8a338a8b6f209c739205200ab4acea7aa921f4b0))
+
+### Documentation
+
+- *(adr)* Record the KB cutover (ADR-110), and fix the checksum that could not attest it ([81cb5f1](https://github.com/cuttlefisch/mae/commit/81cb5f1f61b571211e3e6b8d060aa2089baa933b))
+- *(manual)* The shipped corpus said the store was disposable — it is now the KB ([62bcdef](https://github.com/cuttlefisch/mae/commit/62bcdef0299d6d71f075a01397f388555b41d514))
+
+## [0.14.118] - 2026-08-28
+
+
+
+
+### Miscellaneous
+
+- Bump version to 0.14.118 ([50f91ca](https://github.com/cuttlefisch/mae/commit/50f91ca8196c96aced45348326ee6c847d04cbc0))
+
 ## [0.14.117] - 2026-08-27
 
 
