@@ -15,7 +15,7 @@
 //!   failure mode `federation.rs`'s own `@ai-caution` warns about: *"a path
 //!   that skips this check silently reverts a detached KB to text."*
 //!
-//! @ai-caution: [architecture-debt] `Editor::kb_stale_archive_instance` had
+//! @ai-caution: [kb-truth] `Editor::kb_stale_archive_instance` had
 //! exactly ONE consumer for the whole read side and none at all on the write
 //! side. Any NEW tool that reads or writes a filesystem path must call one of
 //! the two helpers here — not re-derive the rule, and not skip it because the
