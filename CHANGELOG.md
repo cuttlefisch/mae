@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.122] - 2026-09-07
+
+
+
+
+### Miscellaneous
+
+- *(deps)* Bump the rust-dependencies group in /daemon with 4 updates ([c0a5dc8](https://github.com/cuttlefisch/mae/commit/c0a5dc8c91499019cd9906df8fe39129f8e0be5b))
+
 ## [0.14.121] - 2026-09-07
 
 
@@ -11,6 +20,10 @@ All notable changes to this project will be documented in this file.
 
 - *(daemon)* Resolve a KB store by collab_id, not name/uuid alone ([182b8c5](https://github.com/cuttlefisch/mae/commit/182b8c5bad89274d317526275a9a42e8b6e08862))
 - *(kb)* Stop a registry read racing a write from deleting every KB instance ([3f73131](https://github.com/cuttlefisch/mae/commit/3f7313165e49b395cf0ed958345f0d15c2f40ea6))
+
+### Miscellaneous
+
+- Bump version to 0.14.121 ([197d5aa](https://github.com/cuttlefisch/mae/commit/197d5aa683318dad9cab85cb1edef5c13c2f5847))
 
 ## [0.14.120] - 2026-08-28
 
