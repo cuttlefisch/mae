@@ -618,11 +618,48 @@ impl KbRegistry {
         Self::read_or_default(&path)
     }
 
-    fn read_or_default(path: &Path) -> Self {
-        match std::fs::read_to_string(path) {
-            Ok(content) => toml::from_str(&content).unwrap_or_default(),
-            Err(_) => Self::default(),
+    /// [`load`], but a present-yet-unreadable registry is an `Err` rather than an
+    /// empty registry.
+    ///
+    /// Callers that *replace* live state from the result must use this: `load`
+    /// cannot distinguish "no KBs registered" from "the read failed", and any
+    /// caller that deletes what is missing from the result will delete everything
+    /// on a transient failure. `kb_ops::watchers` is exactly that caller.
+    pub fn load_checked(data_dir: &Path) -> Result<Self, String> {
+        let path = data_dir.join("kb-registry.toml");
+        if !path.exists() {
+            // Absent is legitimately empty (or the legacy adoption path) — defer
+            // to `load` so the adoption logic has exactly one implementation.
+            return Ok(Self::load(data_dir));
         }
+        Self::read_checked(&path)
+    }
+
+    fn read_or_default(path: &Path) -> Self {
+        Self::read_checked(path).unwrap_or_else(|e| {
+            tracing::error!(
+                path = %path.display(), error = %e,
+                "KB registry could not be read; continuing with an EMPTY registry. \
+                 Every registered KB will appear to be gone until this is resolved \
+                 (the file on disk is not modified by this)."
+            );
+            Self::default()
+        })
+    }
+
+    /// Read a registry file, distinguishing "unreadable/unparseable" from "empty".
+    ///
+    /// @ai-caution: [kb-truth] The `Err` case used to be `unwrap_or_default()`, and
+    /// that single call silently converted a transient read failure into "this user
+    /// has no KBs". Combined with the non-atomic `save` below and the reload watcher
+    /// in `kb_ops::watchers` — which deletes every instance absent from a freshly
+    /// loaded registry — a reader that caught a writer mid-truncate lost its entire
+    /// KB federation, with no log line and an intact file on disk. Observed live: 9
+    /// instances to 0, recovered only by restarting. Never reintroduce a silent
+    /// default here; an absent file is empty, an unreadable one is an error.
+    fn read_checked(path: &Path) -> Result<Self, String> {
+        let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        toml::from_str(&content).map_err(|e| e.to_string())
     }
 
     /// Save registry to `~/.local/share/mae/kb-registry.toml`.
@@ -632,7 +669,25 @@ impl KbRegistry {
             std::fs::create_dir_all(parent)?;
         }
         let content = toml::to_string_pretty(self).map_err(|e| io::Error::other(e.to_string()))?;
-        std::fs::write(&path, content)
+
+        // @ai-caution: [kb-truth] Write atomically. `std::fs::write` truncates the
+        // file and then fills it, so any concurrent reader — another `mae`, the
+        // daemon, or this process's own registry watcher reacting to the change
+        // event — can read a partial or empty file and conclude the user has no
+        // KBs. Writers coordinate through `with_locked_update`; readers take no
+        // lock at all, so the write itself has to be indivisible. The temp file
+        // must live in the SAME directory as the target: `rename` is only atomic
+        // within a filesystem, and `data_dir` is routinely a different mount from
+        // any system temp dir.
+        let tmp = path.with_extension(format!("toml.tmp.{}", std::process::id()));
+        std::fs::write(&tmp, content)?;
+        match std::fs::rename(&tmp, &path) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                Err(e)
+            }
+        }
     }
 
     /// Reload-fresh -> mutate -> save, under a cross-process advisory lock
@@ -2023,6 +2078,109 @@ enabled = true
         // Cleanup
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&data);
+    }
+
+    /// A registry file that exists but cannot be parsed must be an ERROR, never
+    /// an empty registry.
+    ///
+    /// `read_or_default` used to be `toml::from_str(..).unwrap_or_default()`, which
+    /// made "I could not read this" indistinguishable from "you have no KBs". The
+    /// reload watcher deletes every instance missing from a freshly loaded
+    /// registry, so that one call could wipe a live federation.
+    #[test]
+    fn an_unparseable_registry_is_an_error_not_an_empty_registry() {
+        let data = tempfile::tempdir().unwrap();
+        let path = data.path().join("kb-registry.toml");
+
+        // Exactly what a reader catching a non-atomic writer mid-truncate sees.
+        for corrupt in ["", "[[instances]]\nuuid = \"half-writ", "\0\0\0"] {
+            std::fs::write(&path, corrupt).unwrap();
+            let r = KbRegistry::load_checked(data.path());
+            assert!(
+                r.is_err(),
+                "a present-but-unparseable registry ({corrupt:?}) must be Err, got {:?} instances",
+                r.map(|x| x.instances.len())
+            );
+        }
+
+        // An ABSENT file is genuinely empty — the distinction this test exists for.
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            KbRegistry::load_checked(data.path())
+                .unwrap()
+                .instances
+                .len(),
+            0,
+            "an absent registry is legitimately empty, not an error"
+        );
+    }
+
+    /// `save` must be atomic: a concurrent reader must never observe a partial
+    /// file. With the previous `std::fs::write` (truncate, then fill) a reader
+    /// racing a writer saw an empty or half-written file and concluded the user
+    /// had no KBs.
+    #[test]
+    fn a_concurrent_reader_never_observes_a_partially_written_registry() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let data = tempfile::tempdir().unwrap();
+        let dir = data.path().to_path_buf();
+
+        let mut reg = KbRegistry::default();
+        for i in 0..9 {
+            reg.instances.push(KbInstance {
+                uuid: format!("uuid-{i}"),
+                name: format!("kb-{i}"),
+                org_dir: std::path::PathBuf::from(format!("/tmp/org-{i}")),
+                db_path: std::path::PathBuf::from(format!("/tmp/db-{i}")),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: AiResidency::default(),
+                project_root: None,
+                project_key: None,
+                kind: KbInstanceKind::default(),
+                ingest_policy: Default::default(),
+                import_record: None,
+                priority: 0,
+                remote_hub: None,
+            });
+        }
+        reg.save(&dir).unwrap();
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let (dir, reg, stop) = (dir.clone(), reg.clone(), Arc::clone(&stop));
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    reg.save(&dir).unwrap();
+                }
+            })
+        };
+
+        // The oracle is the exact count, not "non-empty": a torn read that happened
+        // to parse would still be wrong, and 0 is the specific value that caused
+        // the live incident.
+        let mut observed_bad = 0usize;
+        for _ in 0..3_000 {
+            match KbRegistry::load_checked(&dir) {
+                Ok(r) if r.instances.len() == 9 => {}
+                _ => observed_bad += 1,
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        writer.join().unwrap();
+
+        assert_eq!(
+            observed_bad, 0,
+            "{observed_bad} reads saw a torn or empty registry while a writer was \
+             running — `save` is not atomic"
+        );
     }
 
     #[test]
