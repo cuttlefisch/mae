@@ -121,6 +121,27 @@
   when: item.collab_auth_mode == 'key'
   register: _mae_daemon_identity
 
+- name: Configure | Authorize each instance's declared clients
+  # Additive and idempotent: `authorize` reports "Already authorized" for a key
+  # it already trusts, which is what keeps `changed` truthful. It never removes
+  # a key — revocation is a deliberate `mae-daemon revoke`, not a side effect of
+  # an inventory edit. Run as the service account so authorized_keys keeps the
+  # owner the daemon reads it as (the file is re-read on every handshake, so no
+  # restart is needed).
+  ansible.builtin.command:
+    cmd: >-
+      {{ _mae_daemon_current_bin }} authorize
+      --config {{ mae_daemon_config_dir }}/daemon-{{ item.0.name }}.toml
+      {{ item.1.key | quote }} {{ item.1.label | quote }}
+  become: true
+  become_user: "{{ mae_daemon_user }}"
+  loop: "{{ _mae_daemon_resolved_instances | subelements('collab_authorized_keys', skip_missing=True) }}"
+  loop_control:
+    label: "{{ item.0.name }}: {{ item.1.label }}"
+  when: item.0.collab_auth_mode == 'key'
+  register: _mae_daemon_authorize
+  changed_when: "'Already authorized' not in _mae_daemon_authorize.stdout"
+
 - name: Configure | Report each instance's collaboration identity
   # Printed on EVERY run, not only when newly created: the fingerprint is what
   # an operator hands to `mae-daemon authorize` on the peer side, so having it

@@ -1536,7 +1536,21 @@ fn run_revoke(config: &DaemonConfig, target: Option<&str>) -> i32 {
 /// the two instances share. Everything else `doctor` reports is advisory — this
 /// one is a hard "these two cannot both run", so it must be scriptable in a
 /// deploy gate rather than something an operator has to eyeball.
+/// Diagnose an instance. Returns the process exit code: 0 when everything it
+/// checked is healthy, 1 when it reported something that stops this instance
+/// working.
+///
+/// @ai-caution: [deploy] A diagnostic that reports problems and exits 0 cannot
+/// be used by anything automated. This one printed `collab config: 1 issue(s) —
+/// no client can connect` and still exited 0, so `HEALTHCHECK` treated the
+/// container as healthy and Ansible's `command` module — which fails on a
+/// non-zero rc for free — had to assert on scraped stdout instead. Anything
+/// added here that means "this instance will not work" must increment
+/// `problems`; anything advisory must not.
 fn run_doctor(config: &DaemonConfig, compare_with: Option<&DaemonConfig>) -> i32 {
+    // Counted, not returned early: doctor's whole value is printing the FULL
+    // picture, so a failure must not cut the report short.
+    let mut problems: usize = 0;
     println!("mae-daemon doctor");
     println!("  version: {VERSION} ({BUILD_SHA})");
 
@@ -1569,6 +1583,7 @@ fn run_doctor(config: &DaemonConfig, compare_with: Option<&DaemonConfig>) -> i32
             println!("  collab config: OK");
         } else {
             println!("  collab config: {} issue(s)", issues.len());
+            problems += issues.len();
             for issue in &issues {
                 println!("    - {issue}");
             }
@@ -1586,7 +1601,10 @@ fn run_doctor(config: &DaemonConfig, compare_with: Option<&DaemonConfig>) -> i32
                 db_path.display(),
                 config.collab.storage.shard_count
             ),
-            Err(e) => println!("  collab sqlite: FAILED ({e})"),
+            Err(e) => {
+                println!("  collab sqlite: FAILED ({e})");
+                problems += 1;
+            }
         }
 
         if config.collab.auth.mode == "none" {
@@ -1624,14 +1642,14 @@ fn run_doctor(config: &DaemonConfig, compare_with: Option<&DaemonConfig>) -> i32
     println!("  yrs version: {}", env!("MAE_YRS_VERSION"));
 
     let Some(other) = compare_with else {
-        return 0;
+        return doctor_exit(problems);
     };
     let conflicts = config
         .instance_paths()
         .conflicts_with(&other.instance_paths());
     if conflicts.is_empty() {
         println!("  side-by-side: OK — shares no resource with the compared instance");
-        return 0;
+        return doctor_exit(problems);
     }
     println!("  side-by-side: {} SHARED resource(s):", conflicts.len());
     for c in &conflicts {
@@ -1642,7 +1660,21 @@ fn run_doctor(config: &DaemonConfig, compare_with: Option<&DaemonConfig>) -> i32
          identity_dir/authorized_keys/keystore do NOT follow data_dir — set them \
          explicitly per instance (see docs/DAEMON_ADMIN.md §1)."
     );
-    1
+    doctor_exit(problems + conflicts.len())
+}
+
+/// Print the verdict and map it to an exit code.
+///
+/// The line is printed unconditionally so that a reader (and a CI log) sees a
+/// verdict rather than having to re-derive one from the report above it.
+fn doctor_exit(problems: usize) -> i32 {
+    if problems == 0 {
+        println!("  verdict: OK");
+        0
+    } else {
+        println!("  verdict: {problems} problem(s) — this instance will not work as configured");
+        1
+    }
 }
 
 /// Accept loop: spawn a task per KB client connection.

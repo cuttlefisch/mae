@@ -46,6 +46,7 @@ mod scrollbar;
 mod shell_render;
 mod splash_render;
 mod status_render;
+mod svg;
 pub mod text;
 pub mod theme;
 
