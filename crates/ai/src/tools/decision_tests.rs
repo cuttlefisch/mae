@@ -464,3 +464,32 @@ fn an_ask_denial_reads_differently_from_a_real_denial() {
     assert!(asked.contains("no human to confirm"), "{asked}");
     assert!(asked.contains("--prompt mode"), "{asked}");
 }
+
+/// #623: the denial must name WHERE the ceiling is and the value to set, or a
+/// client looks in its own settings, finds nothing, and concludes MAE cannot
+/// be written to at all.
+#[test]
+fn an_ask_denial_names_the_knob_and_the_value() {
+    let asked = ask_denied_message(
+        "open_file",
+        PermissionTier::Write,
+        PermissionTier::ReadOnly,
+        "external MCP dispatch",
+    );
+    assert!(
+        asked.contains(r#"(set-option! "ai-tier" "write")"#),
+        "{asked}"
+    );
+    assert!(asked.contains("MAE_AI_PERMISSIONS=write"), "{asked}");
+    assert!(asked.contains("allow-list does not govern"), "{asked}");
+    let shell = ask_denied_message(
+        "shell_exec",
+        PermissionTier::Shell,
+        PermissionTier::Write,
+        "x",
+    );
+    assert!(
+        shell.contains(r#""ai-tier" "shell""#),
+        "the value tracks the tier: {shell}"
+    );
+}
