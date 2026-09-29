@@ -287,6 +287,28 @@ impl Editor {
     /// start from a native KB at all, which is the whole point of the cutover.
     /// Reuses `kb_adopt_detached_instance` (opens the store, no org import)
     /// rather than a second adoption path.
+    /// `base`, or the first free `base-N`, such that no registered KB already
+    /// maps to the same store directory.
+    ///
+    /// A KB's store directory derives from its NAME, so two projects sharing a
+    /// folder name used to share one SQLite store — hidden because the test
+    /// compared only uuids. `register` now refuses a taken store name; a
+    /// genuinely different project gets the next free name instead.
+    fn kb_free_instance_name(&self, base: &str) -> String {
+        let taken = |n: &str| {
+            let slug = mae_kb::data_dir::slugify(n);
+            self.kb
+                .registry
+                .instances
+                .iter()
+                .any(|i| mae_kb::data_dir::slugify(&i.name) == slug)
+        };
+        std::iter::once(base.to_string())
+            .chain((2..).map(|n| format!("{base}-{n}")))
+            .find(|n| !taken(n))
+            .expect("an unbounded sequence has a free name")
+    }
+
     pub fn kb_new(&mut self, name: &str) -> Result<String, String> {
         let data_dir = self
             .mae_data_dir()
@@ -447,25 +469,7 @@ impl Editor {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("project");
-        // A KB's store directory derives from its NAME, so two projects that
-        // share a folder name used to share one SQLite store — the
-        // identically-named-folder case this module's identity work exists for,
-        // hidden because the test compared only uuids. `register` now refuses
-        // a taken store name, so a genuinely different project gets the next
-        // free `name-N` instead. (A re-init of the SAME project never reaches
-        // here: `kb_adopt_project` above matched it.)
-        let taken = |n: &str| {
-            let slug = mae_kb::data_dir::slugify(n);
-            self.kb
-                .registry
-                .instances
-                .iter()
-                .any(|i| mae_kb::data_dir::slugify(&i.name) == slug)
-        };
-        let project_name = std::iter::once(base_name.to_string())
-            .chain((2..).map(|n| format!("{base_name}-{n}")))
-            .find(|n| !taken(n))
-            .expect("an unbounded sequence has a free name");
+        let project_name = self.kb_free_instance_name(base_name);
         let org_dir = canonical_root.join(".mae-kb");
         std::fs::create_dir_all(&org_dir)
             .map_err(|e| format!("failed to create {}: {e}", org_dir.display()))?;
@@ -733,18 +737,15 @@ impl Editor {
                 // reverting the user's store to a stale archive.
                 if !instance.allows_ingest() {
                     self.set_status(format!(
-                        "'{}' is detached — its store is the source of truth, so \
-                         re-importing the org directory would overwrite it. \
-                         :kb-attach compares the directory with the store first and \
-                         refuses if ingest would change anything.",
+                        "'{}' is detached — its store is the source of truth, so re-importing \
+                         would overwrite it. :kb-attach first checks what ingest would change.",
                         instance.name
                     ));
                     return None;
                 }
                 if instance.org_dir.as_os_str().is_empty() {
                     self.set_status(format!(
-                        "'{}' has no org directory — its content lives in the store, \
-                         so there is nothing to reimport",
+                        "'{}' has no org directory — its content lives in the store",
                         instance.name
                     ));
                     return None;

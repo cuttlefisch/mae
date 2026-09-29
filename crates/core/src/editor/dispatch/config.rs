@@ -414,9 +414,7 @@ impl Editor {
                     .kb
                     .registry
                     .instances
-                    .iter()
-                    // Every registered KB — including the one whose row
-                    // happens to carry `primary` (ADR-110 D7, #814).
+                    .iter() // every KB, incl. the `primary`-flagged row (#814)
                     .map(|i| i.name.as_str())
                     .collect();
                 self.command_palette = Some(

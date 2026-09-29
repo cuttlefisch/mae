@@ -438,8 +438,8 @@ impl Editor {
         if self.kb.primary_store_is_truth() {
             self.set_status(
                 "the primary KB is detached — its store is the source of truth, so \
-                 ingesting an org directory over it would overwrite it (re-attach \
-                 with :kb-attach to allow ingest)",
+                 ingesting an org directory over it would overwrite it (it cannot be \
+                 verified: `:kb-attach primary confirm` allows ingest)",
             );
             return;
         }
