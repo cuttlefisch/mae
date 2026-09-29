@@ -76,6 +76,20 @@ mae_daemon_instances: []
 mae_daemon_instance_defaults:
   collab_enabled: true
   collab_auth_mode: key
+  # Clients trusted by this instance (key mode only), provisioned with
+  # `mae-daemon authorize` on every run — additive: a key authorized out of band
+  # is left alone. Each entry is the client's public key line (what
+  # `mae --collab-identity` prints, WITHOUT its trailing label) plus a label
+  # unique within the instance:
+  #
+  #   collab_authorized_keys:
+  #     - key: "mae-ed25519 AAAAC3Nza..."
+  #       label: alice-laptop
+  #
+  # Key mode with NO authorized key is an instance no client can reach, and
+  # `doctor` — the verify gate — fails it. Declaring the first key here is what
+  # lets a fresh deploy pass verify.
+  collab_authorized_keys: []
   collab_auth_tls: true
   collab_max_connections: 256
   oauth_enabled: false

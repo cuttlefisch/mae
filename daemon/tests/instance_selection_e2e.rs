@@ -38,7 +38,33 @@ fn run(home: &Path, args: &[&str]) -> String {
     stdout
 }
 
+/// A *valid* key-mode instance: one real, freshly generated peer is authorized.
+///
+/// `key` mode with an empty `authorized_keys` is a genuine misconfiguration —
+/// no client can connect — and `doctor` exits non-zero for it. These tests are
+/// about WHICH instance a subcommand reads, so their fixture must not also be
+/// broken in an unrelated way: an instance that fails doctor for its own reasons
+/// would make "doctor --config X succeeded" untestable.
 fn instance_config(dir: &Path, name: &str, port: u16) -> PathBuf {
+    let path = instance_config_without_peers(dir, name, port);
+    let root = dir.join(name);
+    let peer = mae_mcp::identity::Identity::load_or_generate(
+        &dir.join(format!("{name}-peer")),
+        &format!("{name}-peer"),
+    )
+    .expect("generate peer identity");
+    std::fs::create_dir_all(root.join("collab")).expect("mkdir collab dir");
+    std::fs::write(
+        root.join("collab/authorized_keys"),
+        format!("{}\n", peer.public().to_line()),
+    )
+    .expect("write authorized_keys");
+    path
+}
+
+/// The same instance with an EMPTY trust store — valid TOML, but no client can
+/// ever connect. Used where the test is about the empty trust store itself.
+fn instance_config_without_peers(dir: &Path, name: &str, port: u16) -> PathBuf {
     let root = dir.join(name);
     std::fs::create_dir_all(&root).expect("mkdir instance root");
     let toml = format!(
@@ -199,8 +225,10 @@ fn authorize_writes_into_the_instance_its_config_names() {
     // name. The oracle is the file on disk, not the command's exit status.
     let tmp = tempfile::tempdir().expect("tempdir");
     let home = home_with_default_config(tmp.path());
-    let staging = instance_config(tmp.path(), "staging", 19473);
-    let prod = instance_config(tmp.path(), "prod", 19475);
+    // Peerless: the oracle below is "prod ends up with ZERO keys", which only
+    // means something if neither instance started with one.
+    let staging = instance_config_without_peers(tmp.path(), "staging", 19473);
+    let prod = instance_config_without_peers(tmp.path(), "prod", 19475);
 
     // A real key, generated rather than hand-picked (principle #14).
     let peer_dir = tmp.path().join("peer");
@@ -312,6 +340,16 @@ fn doctor_compare_with_flags_a_shared_resource_and_exits_nonzero() {
     // identity/authorized_keys/keystore, and the check must SAY so and FAIL.
     let c = instance_config_sharing_identity(tmp.path(), "shared-a", 19477);
     let d = instance_config_sharing_identity(tmp.path(), "shared-b", 19479);
+
+    // Premise: each of the pair is healthy ON ITS OWN. Without this, the
+    // non-zero exit below could come from any per-instance problem doctor
+    // reports, and the test would pass without the comparison doing anything.
+    let alone = run(&home, &["doctor", "--config", &c.display().to_string()]);
+    assert!(
+        alone.contains("verdict: OK"),
+        "premise: shared-a must pass doctor on its own.\n{alone}"
+    );
+
     let out = Command::new(env!("CARGO_BIN_EXE_mae-daemon"))
         .args([
             "doctor",

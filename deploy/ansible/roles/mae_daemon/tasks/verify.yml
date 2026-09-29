@@ -93,6 +93,12 @@
       doctor reports '{{ item.item.name }}' as unhealthy (rc={{ item.rc }}):
 
       {{ item.stdout }}
+      {% if 'authorized_keys is empty' in item.stdout %}
+
+      Key mode with no authorized client: declare at least one entry in this
+      instance's `collab_authorized_keys` (see the role defaults), or run
+      `mae-daemon authorize` on the host, then re-run the play.
+      {% endif %}
     success_msg: "doctor verdict OK for {{ item.item.name }}"
   loop: "{{ _mae_daemon_doctor.results }}"
   loop_control:
