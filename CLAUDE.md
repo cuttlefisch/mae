@@ -64,7 +64,7 @@ direction **backwards** for five leaf crates.
 |---|---|---|
 | `mae-core` | Buffer management (rope), event loop, core primitives | `ropey`, `crossbeam`; also depends on 10 intra-repo crates incl. `mae-canvas`/`mae-kb`/`mae-export` |
 | `mae-renderer` | Display/rendering — `Renderer` trait + terminal backend | `ratatui`, `crossterm` |
-| `mae-gui` | GUI rendering backend — winit window + Skia 2D + native SVG | `winit`, `skia-safe` (features: `svg`) |
+| `mae-gui` | GUI rendering backend — winit window + Skia 2D (CPU raster) + SVG via resvg | `winit`, `skia-safe` (default features only — see `crates/gui/src/svg.rs` for why not `svg`), `resvg` |
 | `mae-scheme` | Embedded Scheme runtime for configuration and packages | purpose-built R7RS-small |
 | `mae-lsp` | LSP client — types, references, diagnostics exposed to Scheme + AI | `tower-lsp` or `lsp-types` |
 | `mae-dap` | DAP client — breakpoints, call stacks, variables exposed to Scheme + AI | `dap-types` |

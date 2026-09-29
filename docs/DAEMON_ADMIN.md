@@ -332,6 +332,23 @@ journalctl --user -u mae-daemon   # logs (or the file you redirect to)
 ss -tln | grep 9473               # is the collab port listening?  (lsof/netstat fallback)
 ```
 
+### `doctor`'s exit code is a readiness verdict, not a liveness probe
+
+`doctor` ends with `verdict: OK` (exit 0) or `verdict: N problem(s) — this instance
+will not work as configured` (exit 1). Every problem it prints counts, including
+`collab.auth.mode = 'key'` with an **empty** `authorized_keys` — an instance no client
+can connect to. A collab port already bound does **not** count, so doctor can run
+against a live instance.
+
+Use it where the question is *"is this instance configured to work?"*: a deploy gate
+(the Ansible role's verify step asserts on it), CI, or a pre-flight before restarting.
+Do **not** use it as a container `HEALTHCHECK` / liveness probe on its own: a freshly
+deployed instance whose first client has not been authorized yet is correctly
+reported as not ready, and a liveness probe that fails there would restart a process
+that is running fine. Authorize the first client as part of the deploy (the role's
+`collab_authorized_keys`, or `mae-daemon authorize`) so readiness is reached before
+anything gates on it.
+
 ### How many clients are connected?
 
 `daemon/status` (on the KB Unix socket) reports live connection counts per
