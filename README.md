@@ -462,7 +462,7 @@ suppression.
 | Core | Rust | Eliminates GC problem, ownership model for concurrency |
 | Extensions | Scheme R7RS-small (mae-scheme) | Runtime redefinability, hygienic macros, tail calls |
 | Terminal UI | ratatui + crossterm | Platform-specific code in the library, not us |
-| GUI | winit + skia-safe | Hardware-accelerated 2D, mouse, fonts, inline images |
+| GUI | winit + skia-safe (+ resvg for SVG) | CPU-raster 2D, mouse, fonts, inline images |
 | Terminal emulator | alacritty_terminal | Full VT100/VT500, same engine as Alacritty |
 | AI | Claude / OpenAI / Gemini / DeepSeek | Tool-calling maps 1:1 to command API |
 | Protocols | LSP + DAP | First-class — exposed to Scheme and AI |
