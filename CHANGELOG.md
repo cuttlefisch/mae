@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.123] - 2026-09-29
+
+
+
+
+### Bug Fixes
+
+- *(daemon)* Make `doctor`'s exit code mean something ([56e6a89](https://github.com/cuttlefisch/mae/commit/56e6a89e353c9c9ae87ec6228049a3ad53b5fd0e))
+- *(daemon,deploy)* Give doctor's new exit code a valid fixture and a first key ([5fd9bef](https://github.com/cuttlefisch/mae/commit/5fd9bef087c10a7e9efd88c223ee4dad8191b181))
+- *(deps)* Rustls 0.23.45 for RUSTSEC-2026-0285, in both workspaces ([9cd4d91](https://github.com/cuttlefisch/mae/commit/9cd4d9146516f09b0cc442579eaa50f28c1ec4dd))
+- *(gui)* Skia 0.153 on a feature set with a published binary; SVG via resvg ([b4f393f](https://github.com/cuttlefisch/mae/commit/b4f393f84bc386d0f22c66db9ab494e93bc87649))
+
+### Refactor
+
+- *(gui)* One ImageCaches struct, so SkiaCanvas::new does not grow ([0c675c8](https://github.com/cuttlefisch/mae/commit/0c675c878e533571574189542219461ad618dffe))
+
 ## [0.14.122] - 2026-09-07
 
 
@@ -10,6 +26,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - *(deps)* Bump the rust-dependencies group in /daemon with 4 updates ([c0a5dc8](https://github.com/cuttlefisch/mae/commit/c0a5dc8c91499019cd9906df8fe39129f8e0be5b))
+- Bump version to 0.14.122 ([8c8e1be](https://github.com/cuttlefisch/mae/commit/8c8e1be66a0fa1b03d7cc06a78b4f69a5ea54d2b))
 
 ## [0.14.121] - 2026-09-07
 
