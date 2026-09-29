@@ -254,17 +254,26 @@ impl Editor {
     /// (KB cutover, Phase 1). Extracted alongside the arms above for the same
     /// reason.
     pub(crate) fn dispatch_kb_ingest_policy(&mut self, command: &str, args: Option<&str>) {
-        let policy = if command == "kb-detach" {
-            mae_kb::federation::IngestPolicy::StoreIsTruth
-        } else {
-            mae_kb::federation::IngestPolicy::FromOrgDir
+        let mut words = args.unwrap_or_default().split_whitespace();
+        let Some(name) = words.next() else {
+            let usage = if command == "kb-detach" {
+                "<name|primary>"
+            } else {
+                "<name|primary> [confirm]"
+            };
+            self.set_status(format!("Usage: :{command} {usage}"));
+            return;
         };
-        match args.map(str::trim).filter(|s| !s.is_empty()) {
-            None => self.set_status(format!("Usage: :{command} <name|primary>")),
-            Some(name) => match self.kb_set_ingest_policy(name, policy) {
-                Ok(msg) => self.set_status(msg),
-                Err(e) => self.set_status(e),
-            },
+        let result = if command == "kb-detach" {
+            self.kb_set_ingest_policy(name, mae_kb::federation::IngestPolicy::StoreIsTruth)
+        } else {
+            // Not symmetric with detach: attaching removes a protection, so it
+            // is verified and takes an explicit `confirm` to proceed over a
+            // difference — the `:kb-retire-archive` contract (#825).
+            self.kb_attach(name, words.next() == Some("confirm"))
+        };
+        match result {
+            Ok(msg) | Err(msg) => self.set_status(msg),
         }
     }
 }

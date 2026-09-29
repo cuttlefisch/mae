@@ -866,6 +866,33 @@ impl KbRegistry {
         }
 
         let slug = crate::data_dir::slugify(&name);
+        // @ai-caution: [kb-truth] The store directory is derived from the NAME
+        // (`kb/local/{slug}/`), and `init_local_kb` reuses an existing one. The
+        // duplicate check above matches only `org_dir`, and a retired KB has
+        // none — so registering a retired KB's name again appended a fresh
+        // `FromOrgDir` row pointing at the SAME live store, and the adoption
+        // that follows imported the directory straight over it: a second route
+        // to #825's overwrite that `:kb-attach`'s verification never saw.
+        // Refuse any registration whose store directory is already a KB's.
+        if let Some(existing) = self
+            .instances
+            .iter()
+            .find(|i| crate::data_dir::slugify(&i.name) == slug)
+        {
+            let remedy = if existing.ingest_policy.allows_ingest() {
+                "Pick a different name."
+            } else {
+                "To make its org directory authoritative again use :kb-attach, which \
+                 compares the directory with the store first."
+            };
+            return Err(format!(
+                "'{name}' would share a store with the registered KB '{}' (both map to \
+                 `{slug}`), so registering {} would import it into that KB's live store. \
+                 {remedy}",
+                existing.name,
+                org_dir.display()
+            ));
+        }
         let db_path = if let Some(kdd) = kb_data_dir {
             // Standardized layout: kb/local/{slug}/kb.sqlite
             let meta = crate::data_dir::LocalKbMeta {

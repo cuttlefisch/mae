@@ -222,6 +222,17 @@ fn detach_then_attach_round_trips_and_takes_effect() {
     let mut editor = Editor::new();
     let _tmp = with_test_dirs(&mut editor);
     detached_instance_with_divergent_store(&mut editor, dir.path());
+    // A durable store holding the same nodes as the mirror, as production always
+    // has: `:kb-attach` compares the directory against the STORE and refuses to
+    // attach blind when there is none (#825).
+    let store = mae_kb::CozoKbStore::open_mem().unwrap();
+    for (_, node) in editor.kb.instances[UUID].iter() {
+        mae_kb::KbStore::insert_node(&store, node).unwrap();
+    }
+    editor
+        .kb
+        .instance_stores
+        .insert(UUID.into(), std::sync::Arc::new(store));
     // The setter goes through `KbRegistry::update`, which reads the registry
     // from DISK — that is the point (the policy must survive a restart, since
     // the startup agenda ingest is one of the paths it stops). So the instance
@@ -233,10 +244,9 @@ fn detach_then_attach_round_trips_and_takes_effect() {
         .registry
         .save(&data_dir)
         .expect("persist registry");
-    // Start attached so the transition under test is real.
-    editor
-        .kb_set_ingest_policy("detached", IngestPolicy::FromOrgDir)
-        .unwrap();
+    // Start attached so the transition under test is real. The fixture's store
+    // deliberately differs from its archive, so this needs `confirm` (#825).
+    editor.kb_attach("detached", true).unwrap();
 
     editor
         .kb_set_ingest_policy("detached", IngestPolicy::StoreIsTruth)
@@ -244,10 +254,22 @@ fn detach_then_attach_round_trips_and_takes_effect() {
     editor.kb_reimport_file(&dir.path().join("note.org"));
     assert_store_intact(&editor, "after :kb-detach");
 
-    // Re-attaching restores ingest — otherwise detach would be a one-way door.
-    editor
-        .kb_set_ingest_policy("detached", IngestPolicy::FromOrgDir)
-        .unwrap();
+    // Re-attaching over a store that differs from the archive is REFUSED by
+    // default (#825) — through the plain setter too, which is the route Scheme
+    // `(kb-attach)` takes — and refusing must leave the store untouched.
+    let refused = editor.kb_set_ingest_policy("detached", IngestPolicy::FromOrgDir);
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|e| e.contains("Refusing to attach")),
+        "an unconfirmed attach over a divergent store must refuse: {refused:?}"
+    );
+    editor.kb_reimport_file(&dir.path().join("note.org"));
+    assert_store_intact(&editor, "after a refused :kb-attach");
+
+    // With `confirm` it proceeds and ingest resumes — otherwise detach would be
+    // a one-way door.
+    editor.kb_attach("detached", true).unwrap();
     editor.kb_reimport_file(&dir.path().join("note.org"));
     // Containment for the same reason as above (#655): an ingested body is
     // currently the whole file. The claim under test is that the ARCHIVE won —

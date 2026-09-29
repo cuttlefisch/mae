@@ -443,11 +443,29 @@ impl Editor {
             return Ok(existing);
         }
 
-        let project_name = canonical_root
+        let base_name = canonical_root
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("project")
-            .to_string();
+            .unwrap_or("project");
+        // A KB's store directory derives from its NAME, so two projects that
+        // share a folder name used to share one SQLite store — the
+        // identically-named-folder case this module's identity work exists for,
+        // hidden because the test compared only uuids. `register` now refuses
+        // a taken store name, so a genuinely different project gets the next
+        // free `name-N` instead. (A re-init of the SAME project never reaches
+        // here: `kb_adopt_project` above matched it.)
+        let taken = |n: &str| {
+            let slug = mae_kb::data_dir::slugify(n);
+            self.kb
+                .registry
+                .instances
+                .iter()
+                .any(|i| mae_kb::data_dir::slugify(&i.name) == slug)
+        };
+        let project_name = std::iter::once(base_name.to_string())
+            .chain((2..).map(|n| format!("{base_name}-{n}")))
+            .find(|n| !taken(n))
+            .expect("an unbounded sequence has a free name");
         let org_dir = canonical_root.join(".mae-kb");
         std::fs::create_dir_all(&org_dir)
             .map_err(|e| format!("failed to create {}: {e}", org_dir.display()))?;
@@ -716,15 +734,17 @@ impl Editor {
                 if !instance.allows_ingest() {
                     self.set_status(format!(
                         "'{}' is detached — its store is the source of truth, so \
-                         re-importing the org directory would overwrite it \
-                         (re-attach with :kb-attach to allow ingest)",
+                         re-importing the org directory would overwrite it. \
+                         :kb-attach compares the directory with the store first and \
+                         refuses if ingest would change anything.",
                         instance.name
                     ));
                     return None;
                 }
                 if instance.org_dir.as_os_str().is_empty() {
                     self.set_status(format!(
-                        "'{}' has no org directory — its content lives in the store,                          so there is nothing to reimport",
+                        "'{}' has no org directory — its content lives in the store, \
+                         so there is nothing to reimport",
                         instance.name
                     ));
                     return None;
@@ -1657,6 +1677,24 @@ impl Editor {
         name_or_uuid: &str,
         policy: mae_kb::federation::IngestPolicy,
     ) -> Result<String, String> {
+        // Attaching REMOVES a protection, so it is never a plain flag flip: it
+        // is verified against the store and refused on any difference unless
+        // confirmed (#825, `attach.rs`). Every route that attaches — the ex
+        // command, Scheme `(kb-attach)` — comes through here, so the check
+        // cannot be walked past by picking a different surface.
+        if policy.allows_ingest() {
+            return self.kb_attach(name_or_uuid, false);
+        }
+        self.kb_set_ingest_policy_unverified(name_or_uuid, policy)
+    }
+
+    /// The raw flag flip. Only `kb_attach` may call it with `FromOrgDir`, after
+    /// verifying or being confirmed.
+    pub(crate) fn kb_set_ingest_policy_unverified(
+        &mut self,
+        name_or_uuid: &str,
+        policy: mae_kb::federation::IngestPolicy,
+    ) -> Result<String, String> {
         // A system KB's truth is the binary, not an org dir — so "detached" is
         // not a state it can be in. It has no `KbInstance` and therefore nowhere
         // to record a policy, and the corpus is rebuilt from the embedded
@@ -1693,7 +1731,11 @@ impl Editor {
         Ok(if policy.allows_ingest() {
             format!("'{name_or_uuid}' attached — its org directory is authoritative and will overwrite the store on ingest")
         } else {
-            format!("'{name_or_uuid}' detached — its store is now the source of truth; no org ingest will overwrite it")
+            format!(
+                "'{name_or_uuid}' detached — its store is now the source of truth; no org \
+                 ingest will overwrite it. Re-attaching later verifies the directory against \
+                 the store first (:kb-attach)."
+            )
         })
     }
 }

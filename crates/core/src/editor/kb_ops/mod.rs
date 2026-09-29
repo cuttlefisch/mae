@@ -183,6 +183,7 @@ impl KbImportResult {
 }
 
 mod activity;
+pub(crate) mod attach;
 mod collab_id;
 mod daily;
 pub(crate) mod dir_owner;
