@@ -438,7 +438,8 @@ pub enum KbScope {
     LocalOnly,
     /// Only shared/remote (collaborative) instances; skip the primary.
     RemoteOnly,
-    /// A single instance addressed by name (matches the primary's name too).
+    /// A single instance addressed by name. `primary` / `default` address the
+    /// machine-global local store instead (`PRIMARY_NAME_ALIASES`).
     Named(String),
     /// Only `Project`-kind instances whose `project_root` equals the given, already-resolved
     /// path (ADR-058 Phase C). Excludes the primary — narrowing to "just this project" is the
@@ -453,6 +454,39 @@ pub enum KbScope {
 }
 
 impl KbScope {
+    /// Does the machine-global local store (`primary.cozo`) participate?
+    ///
+    /// @ai-caution: [kb-identity] This and [`KbScope::includes_instance`] are
+    /// the ONLY places scope membership is decided. Health, agenda, search and
+    /// `node_matches_scope` each used to decide it inline, and every copy read
+    /// `KbInstance.primary` — "first row ever registered" (ADR-110 D7) — as if
+    /// it meant "the local store". After the KB cutover the two are different
+    /// stores, so the primary-flagged KB was silently dropped from `all`
+    /// health and agenda, and scoping to it by NAME returned the local store's
+    /// nodes instead of its own (#814). The copies also disagreed on what
+    /// `remote` means; it means `is_remote()`, as documented to callers.
+    pub fn includes_local(&self) -> bool {
+        match self {
+            KbScope::All | KbScope::LocalOnly => true,
+            KbScope::Named(n) => crate::kb_identity::PRIMARY_NAME_ALIASES
+                .iter()
+                .any(|a| n.eq_ignore_ascii_case(a)),
+            KbScope::RemoteOnly | KbScope::Project(_) => false,
+        }
+    }
+
+    /// Does the registered instance `inst` participate? Never consults
+    /// `inst.primary` — see [`KbScope::includes_local`].
+    pub fn includes_instance(&self, inst: &KbInstance) -> bool {
+        match self {
+            KbScope::All => true,
+            KbScope::LocalOnly => false,
+            KbScope::RemoteOnly => inst.is_remote(),
+            KbScope::Named(n) => &inst.name == n,
+            KbScope::Project(root) => inst.matches_project_root(root),
+        }
+    }
+
     /// Parse a scope token from config / AI-tool input.
     /// `"" | "all"` → All, `"local"` → LocalOnly, `"remote"` → RemoteOnly,
     /// anything else → `Named(<trimmed>)`. Does NOT handle the `"project"` token — that
@@ -770,7 +804,6 @@ impl KbRegistry {
                 name: name.clone(),
                 uuid: uuid.clone(),
                 created_at: crate::data_dir::chrono_now_iso(),
-                node_count: 0,
                 org_dir: None,
             };
             match kdd.init_local_kb(&slug, &meta) {
@@ -899,7 +932,6 @@ impl KbRegistry {
                 name: name.clone(),
                 uuid: uuid.clone(),
                 created_at: crate::data_dir::chrono_now_iso(),
-                node_count: 0,
                 org_dir: Some(org_dir.clone()),
             };
             match kdd.init_local_kb(&slug, &meta) {

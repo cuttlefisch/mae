@@ -195,7 +195,6 @@ mod tests {
             name: "Test KB".to_string(),
             uuid: "test-uuid".to_string(),
             created_at: "2026-01-01".to_string(),
-            node_count: 10,
             org_dir: None,
         };
         let db_path = dir.init_local_kb(slug, &meta).unwrap();
