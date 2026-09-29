@@ -713,21 +713,18 @@ pub fn compute_layout(
 /// Uses Skia's image decoding to avoid an extra dependency. Returns `(0.0, 0.0)`
 /// on any error (file not found, unsupported format, I/O failure).
 fn image_natural_size(path: &std::path::Path) -> (f32, f32) {
-    // Handle SVG via skia's native SVG DOM parser.
+    // SVG: the same parser the canvas draws with (`crate::svg`).
     if path
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.eq_ignore_ascii_case("svg"))
         .unwrap_or(false)
     {
-        if let Ok(bytes) = std::fs::read(path) {
-            if let Ok(dom) = skia_safe::svg::Dom::from_bytes(&bytes, skia_safe::FontMgr::default())
-            {
-                let size = dom.root().intrinsic_size();
-                return (size.width, size.height);
-            }
-        }
-        return (0.0, 0.0);
+        return std::fs::read(path)
+            .ok()
+            .and_then(|bytes| crate::svg::parse(&bytes))
+            .map(|tree| crate::svg::intrinsic_size(&tree))
+            .unwrap_or((0.0, 0.0));
     }
     // Raster path: decode with Skia.
     let data = match std::fs::read(path) {

@@ -18,12 +18,26 @@ use winit::window::Window;
 
 use crate::theme::{self, fill_paint, DEFAULT_BG};
 
-/// A cached image: either a raster bitmap or an SVG DOM for vector rendering.
+/// A cached image: a raster bitmap, or a parsed SVG rasterized per display size.
 #[derive(Clone)]
 pub enum CachedImage {
     Raster(skia_safe::Image),
-    Svg(skia_safe::svg::Dom),
+    Svg(crate::svg::SvgTree),
 }
+
+/// Inline-image caches, kept together because they are one concern.
+#[derive(Default)]
+struct ImageCaches {
+    /// Decoded images by absolute path. `None` if the image failed to load or
+    /// exceeded the 10MB size limit.
+    decoded: HashMap<PathBuf, Option<CachedImage>>,
+    /// SVGs rasterized at a given device size — see `crate::svg`.
+    svg_rasters: HashMap<(PathBuf, u32, u32), skia_safe::Image>,
+}
+
+/// How many (svg, size) rasters to keep before starting over — a resize storm
+/// must not grow the cache without bound, and a re-rasterize is cheap enough.
+const SVG_RASTER_CACHE_MAX: usize = 64;
 
 /// Skia rendering surface, font state, and softbuffer presentation.
 pub struct SkiaCanvas {
@@ -61,9 +75,7 @@ pub struct SkiaCanvas {
     /// Cached glyph advance widths for scaled fonts. Key = `(scale * 1000.0) as u32`.
     /// Avoids cloning the Skia Font and calling `measure_str("M")` every frame.
     scaled_advance_cache: HashMap<u32, f32>,
-    /// Decoded image cache. Key = absolute path. Value = `None` if the image
-    /// failed to load or exceeded the 10MB size limit.
-    image_cache: HashMap<PathBuf, Option<CachedImage>>,
+    images: ImageCaches,
 }
 
 /// System monospace families to fall back to when no preferred font is found.
@@ -131,7 +143,7 @@ fn bundled_font_file(style: FontStyle) -> &'static str {
 /// Load the bundled JetBrains Mono typeface for `style` from `dir`, if present.
 fn load_bundled_typeface(font_mgr: &FontMgr, dir: &Path, style: FontStyle) -> Option<Typeface> {
     let bytes = std::fs::read(dir.join(bundled_font_file(style))).ok()?;
-    font_mgr.new_from_data(&bytes, None)
+    font_mgr.new_from_data(skia_safe::Data::new_copy(&bytes), None)
 }
 
 /// Resolve a typeface for `style`, never failing on a present font manager:
@@ -284,7 +296,7 @@ impl SkiaCanvas {
             scaled_fonts: HashMap::new(),
             scaled_bold_fonts: HashMap::new(),
             scaled_advance_cache: HashMap::new(),
-            image_cache: HashMap::new(),
+            images: ImageCaches::default(),
         })
     }
 
@@ -1192,31 +1204,30 @@ impl SkiaCanvas {
     fn load_cached_image(&mut self, path: &Path) -> Option<&CachedImage> {
         const MAX_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 
-        if !self.image_cache.contains_key(path) {
+        if !self.images.decoded.contains_key(path) {
             let result = (|| -> Option<CachedImage> {
                 let meta = std::fs::metadata(path).ok()?;
                 if meta.len() > MAX_BYTES {
                     return None;
                 }
                 let bytes = std::fs::read(path).ok()?;
-                // SVG: parse into skia's native SVG DOM for vector rendering.
+                // SVG: parse once; rasterized per display size at draw time.
                 if path
                     .extension()
                     .and_then(|e| e.to_str())
                     .map(|e| e.eq_ignore_ascii_case("svg"))
                     .unwrap_or(false)
                 {
-                    let dom = skia_safe::svg::Dom::from_bytes(&bytes, FontMgr::default()).ok()?;
-                    return Some(CachedImage::Svg(dom));
+                    return crate::svg::parse(&bytes).map(CachedImage::Svg);
                 }
                 // Raster: decode with Skia.
                 let data = skia_safe::Data::new_copy(&bytes);
                 let img = skia_safe::Image::from_encoded(data)?;
                 Some(CachedImage::Raster(img))
             })();
-            self.image_cache.insert(path.to_path_buf(), result);
+            self.images.decoded.insert(path.to_path_buf(), result);
         }
-        self.image_cache.get(path).and_then(|v| v.as_ref())
+        self.images.decoded.get(path).and_then(|v| v.as_ref())
     }
 
     /// Query the natural (pixel) dimensions of a cached raster image.
@@ -1225,7 +1236,7 @@ impl SkiaCanvas {
     /// Returns `None` for SVG (no intrinsic pixel size) or load failure.
     pub fn image_natural_size(&mut self, path: &Path) -> Option<(u32, u32)> {
         self.load_cached_image(path);
-        match self.image_cache.get(path).and_then(|v| v.as_ref()) {
+        match self.images.decoded.get(path).and_then(|v| v.as_ref()) {
             Some(CachedImage::Raster(img)) => Some((img.width() as u32, img.height() as u32)),
             _ => None,
         }
@@ -1238,7 +1249,7 @@ impl SkiaCanvas {
     pub fn draw_image_from_cache(&mut self, path: &Path, x: f32, y: f32, w: f32, h: f32) -> bool {
         // Load into cache first, then clone the ref-counted handle to avoid borrow conflict.
         self.load_cached_image(path);
-        let cached = match self.image_cache.get(path).and_then(|v| v.as_ref()) {
+        let cached = match self.images.decoded.get(path).and_then(|v| v.as_ref()) {
             Some(c) => c.clone(),
             None => return false,
         };
@@ -1257,13 +1268,22 @@ impl SkiaCanvas {
                     &paint,
                 );
             }
-            CachedImage::Svg(mut dom) => {
-                let canvas = self.surface.canvas();
-                canvas.save();
-                canvas.translate((x, y));
-                dom.set_container_size((w, h));
-                dom.render(canvas);
-                canvas.restore();
+            CachedImage::Svg(ref tree) => {
+                let (pw, ph) = (w.round().max(0.0) as u32, h.round().max(0.0) as u32);
+                let key = (path.to_path_buf(), pw, ph);
+                if !self.images.svg_rasters.contains_key(&key) {
+                    let Some(img) = crate::svg::rasterize(tree, pw, ph) else {
+                        return false;
+                    };
+                    if self.images.svg_rasters.len() >= SVG_RASTER_CACHE_MAX {
+                        self.images.svg_rasters.clear();
+                    }
+                    self.images.svg_rasters.insert(key.clone(), img);
+                }
+                if let Some(img) = self.images.svg_rasters.get(&key) {
+                    let paint = skia_safe::Paint::default();
+                    self.surface.canvas().draw_image(img, (x, y), Some(&paint));
+                }
             }
         }
         true
