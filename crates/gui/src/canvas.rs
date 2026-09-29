@@ -18,12 +18,16 @@ use winit::window::Window;
 
 use crate::theme::{self, fill_paint, DEFAULT_BG};
 
-/// A cached image: either a raster bitmap or an SVG DOM for vector rendering.
+/// A cached image: a raster bitmap, or a parsed SVG rasterized per display size.
 #[derive(Clone)]
 pub enum CachedImage {
     Raster(skia_safe::Image),
-    Svg(skia_safe::svg::Dom),
+    Svg(crate::svg::SvgTree),
 }
+
+/// How many (svg, size) rasters to keep before starting over — a resize storm
+/// must not grow the cache without bound, and a re-rasterize is cheap enough.
+const SVG_RASTER_CACHE_MAX: usize = 64;
 
 /// Skia rendering surface, font state, and softbuffer presentation.
 pub struct SkiaCanvas {
@@ -64,6 +68,8 @@ pub struct SkiaCanvas {
     /// Decoded image cache. Key = absolute path. Value = `None` if the image
     /// failed to load or exceeded the 10MB size limit.
     image_cache: HashMap<PathBuf, Option<CachedImage>>,
+    /// SVGs rasterized at a given device size — see `crate::svg`.
+    svg_raster_cache: HashMap<(PathBuf, u32, u32), skia_safe::Image>,
 }
 
 /// System monospace families to fall back to when no preferred font is found.
@@ -131,7 +137,7 @@ fn bundled_font_file(style: FontStyle) -> &'static str {
 /// Load the bundled JetBrains Mono typeface for `style` from `dir`, if present.
 fn load_bundled_typeface(font_mgr: &FontMgr, dir: &Path, style: FontStyle) -> Option<Typeface> {
     let bytes = std::fs::read(dir.join(bundled_font_file(style))).ok()?;
-    font_mgr.new_from_data(&bytes, None)
+    font_mgr.new_from_data(skia_safe::Data::new_copy(&bytes), None)
 }
 
 /// Resolve a typeface for `style`, never failing on a present font manager:
@@ -285,6 +291,7 @@ impl SkiaCanvas {
             scaled_bold_fonts: HashMap::new(),
             scaled_advance_cache: HashMap::new(),
             image_cache: HashMap::new(),
+            svg_raster_cache: HashMap::new(),
         })
     }
 
@@ -1199,15 +1206,14 @@ impl SkiaCanvas {
                     return None;
                 }
                 let bytes = std::fs::read(path).ok()?;
-                // SVG: parse into skia's native SVG DOM for vector rendering.
+                // SVG: parse once; rasterized per display size at draw time.
                 if path
                     .extension()
                     .and_then(|e| e.to_str())
                     .map(|e| e.eq_ignore_ascii_case("svg"))
                     .unwrap_or(false)
                 {
-                    let dom = skia_safe::svg::Dom::from_bytes(&bytes, FontMgr::default()).ok()?;
-                    return Some(CachedImage::Svg(dom));
+                    return crate::svg::parse(&bytes).map(CachedImage::Svg);
                 }
                 // Raster: decode with Skia.
                 let data = skia_safe::Data::new_copy(&bytes);
@@ -1257,13 +1263,22 @@ impl SkiaCanvas {
                     &paint,
                 );
             }
-            CachedImage::Svg(mut dom) => {
-                let canvas = self.surface.canvas();
-                canvas.save();
-                canvas.translate((x, y));
-                dom.set_container_size((w, h));
-                dom.render(canvas);
-                canvas.restore();
+            CachedImage::Svg(ref tree) => {
+                let (pw, ph) = (w.round().max(0.0) as u32, h.round().max(0.0) as u32);
+                let key = (path.to_path_buf(), pw, ph);
+                if !self.svg_raster_cache.contains_key(&key) {
+                    let Some(img) = crate::svg::rasterize(tree, pw, ph) else {
+                        return false;
+                    };
+                    if self.svg_raster_cache.len() >= SVG_RASTER_CACHE_MAX {
+                        self.svg_raster_cache.clear();
+                    }
+                    self.svg_raster_cache.insert(key.clone(), img);
+                }
+                if let Some(img) = self.svg_raster_cache.get(&key) {
+                    let paint = skia_safe::Paint::default();
+                    self.surface.canvas().draw_image(img, (x, y), Some(&paint));
+                }
             }
         }
         true
