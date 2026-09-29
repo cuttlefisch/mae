@@ -960,8 +960,25 @@ type SeededCollection = (mae_sync::kb::KbCollectionDoc, Vec<(String, Vec<u8>)>);
 /// unfixed copy. Route by uuid, and never read `primary` to pick a store.
 /// `None` (no store open) is deliberate: a *wrong* store is far worse than a
 /// visible absence, which is exactly how the original bug stayed invisible.
+///
+/// The same family bit twice. The first was resolving by the wrong *flag*
+/// (`primary`); the second was resolving by an incomplete *identifier set* —
+/// name/uuid only, missing the `collab_id` that every shared KB is addressed by
+/// on the wire. When touching this function, enumerate the identifier spaces a
+/// caller can arrive with before assuming `find` covers them.
 pub(crate) fn resolve_kb_store(st: &DaemonState, kb_id: &str) -> Option<Arc<CozoKbStore>> {
-    let inst = st.registry.find(kb_id)?;
+    // Three identifiers can arrive here and only two of them are the same space.
+    // `find` covers the local ones (name, instance uuid). Everything arriving
+    // over the wire — the `kbn:`/`kbc:` document names the projector derives its
+    // `kb_id` from — carries the instance's `collab_id`, which is minted at share
+    // time and is NOT the uuid. Resolving only via `find` meant a shared KB never
+    // resolved to a store, so `projector` failed every projection with "no cozo
+    // store registered" and the daemon's Cozo view of every shared KB stayed
+    // empty while the CRDT documents themselves synced fine.
+    let inst = st
+        .registry
+        .find(kb_id)
+        .or_else(|| st.registry.find_by_collab_id(kb_id))?;
     st.instance_stores.get(&inst.uuid).cloned()
 }
 
@@ -1792,6 +1809,79 @@ mod tests {
         st.rebuild_query_layer();
 
         (Arc::new(Mutex::new(st)), uuid_a, uuid_b, uuid_c)
+    }
+
+    #[tokio::test]
+    async fn resolve_kb_store_accepts_the_wire_collab_id_not_only_the_local_uuid() {
+        // A shared KB is addressed over the wire by its `collab_id` — minted at
+        // share time, and NOT the instance uuid. `projector` derives its `kb_id`
+        // from the `kbc:`/`kbn:` document name, so what arrives here for any
+        // shared KB is always the collab_id. Resolving by name/uuid alone made
+        // every projection fail with "no cozo store registered": the CRDT
+        // documents synced fine while the daemon's Cozo view of that KB stayed
+        // empty. Observed against a real daemon, not constructed here.
+        let (state, uuid_a, uuid_b, uuid_c) = three_instance_state();
+        let collab_a = "6d5d595b-6db5-40bb-b711-312a0baf0128".to_string();
+        let collab_b = "0f0f0f0f-1111-4222-8333-444444444444".to_string();
+        {
+            let mut st = state.lock().await;
+            st.registry.find_mut(&uuid_a).unwrap().collab_id = Some(collab_a.clone());
+            st.registry.find_mut(&uuid_b).unwrap().collab_id = Some(collab_b.clone());
+            // C deliberately keeps `collab_id: None` — an unshared KB must not
+            // become reachable by anyone else's identifier.
+        }
+        let st = state.lock().await;
+
+        let by_uuid_a = resolve_kb_store(&st, &uuid_a).expect("uuid must still resolve");
+        let by_collab_a = resolve_kb_store(&st, &collab_a)
+            .expect("a shared KB's collab_id must resolve to its store");
+        let by_uuid_b = resolve_kb_store(&st, &uuid_b).expect("uuid must still resolve");
+        let by_collab_b = resolve_kb_store(&st, &collab_b)
+            .expect("a shared KB's collab_id must resolve to its store");
+
+        // Identity, not mere Some-ness: an `Arc` being returned proves nothing
+        // about WHICH tenant's data it holds, and handing back the wrong store
+        // is precisely how the `primary` bug stayed invisible for so long.
+        assert!(
+            Arc::ptr_eq(&by_collab_a, &by_uuid_a),
+            "collab_id must reach the same store as its own instance uuid"
+        );
+        assert!(
+            Arc::ptr_eq(&by_collab_b, &by_uuid_b),
+            "collab_id must reach the same store as its own instance uuid"
+        );
+        // The property that actually matters: one KB's wire id must never reach
+        // another KB's store.
+        assert!(
+            !Arc::ptr_eq(&by_collab_a, &by_uuid_b),
+            "A's collab_id resolved to B's store — cross-tenant leak"
+        );
+        assert!(
+            !Arc::ptr_eq(&by_collab_b, &by_uuid_a),
+            "B's collab_id resolved to A's store — cross-tenant leak"
+        );
+
+        // Negatives: an unknown collab_id is an absence, never a fallback to
+        // whichever store happens to be at hand.
+        assert!(
+            resolve_kb_store(&st, "99999999-0000-4000-8000-000000000000").is_none(),
+            "an unknown collab_id must resolve to None, not some other store"
+        );
+        // C is unshared; its uuid still resolves, but no collab_id reaches it.
+        assert!(
+            resolve_kb_store(&st, &uuid_c).is_some(),
+            "an unshared instance must still resolve by uuid"
+        );
+
+        // Precedence guard: adding the collab_id arm must not disturb the
+        // name/uuid space that every local caller uses.
+        assert!(
+            Arc::ptr_eq(
+                &resolve_kb_store(&st, "team-a").expect("name must still resolve"),
+                &by_uuid_a
+            ),
+            "name resolution regressed"
+        );
     }
 
     #[tokio::test]
