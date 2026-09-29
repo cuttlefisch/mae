@@ -112,6 +112,13 @@ async fn main() {
         return;
     }
 
+    if let Some(code) = cli
+        .subcommand
+        .as_deref()
+        .and_then(|sub| run_admin_subcommand(sub, &cli.rest, &config))
+    {
+        std::process::exit(code);
+    }
     match cli.subcommand.as_deref() {
         Some("doctor") => {
             let other = match &cli.compare_with {
@@ -128,19 +135,6 @@ async fn main() {
                 None => None,
             };
             std::process::exit(run_doctor(&config, other.as_ref()));
-        }
-        // Symmetric keystore (psk mode): `keygen [name]`, `keys`.
-        Some("keygen") => {
-            std::process::exit(run_keygen(&config, cli.rest.first().map(|s| s.as_str())))
-        }
-        Some("keys") => std::process::exit(run_keys_list(&config)),
-        // Asymmetric key mode (ADR-017/018): `identity`, `authorized`,
-        // `authorize <pubkey-line>` (labels must be unique), `revoke <label|SHA256:fp>`.
-        Some("identity") => std::process::exit(run_identity(&config)),
-        Some("authorized") => std::process::exit(run_authorized_list(&config)),
-        Some("authorize") => std::process::exit(run_authorize(&config, &cli.rest)),
-        Some("revoke") => {
-            std::process::exit(run_revoke(&config, cli.rest.first().map(|s| s.as_str())))
         }
         // ADR-032 checkpoints: the CRDT-truth backup/rollback artifact. Wired to a
         // real surface because until now it had ZERO production callers (#632) —
@@ -1240,10 +1234,19 @@ fn run_check_config(config: &DaemonConfig) {
                     "plaintext JSON KeyAuth"
                 }
             );
+            // #652: a CHECK must not mutate. `load_or_generate` wrote a private
+            // key as whoever ran the check — as root under Ansible's
+            // `validate=`, leaving the service unable to read its own identity.
             if let Some(dir) = config.collab.auth.identity_dir() {
-                match mae_mcp::identity::Identity::load_or_generate(&dir, "daemon") {
-                    Ok(id) => println!("  auth.identity: {}", id.fingerprint()),
-                    Err(e) => println!("  auth.identity: <error: {e}>"),
+                match mae_mcp::identity::Identity::load_secret(&dir, "daemon") {
+                    Some(id) => println!("  auth.identity: {}", id.fingerprint()),
+                    None if dir.join("id_ed25519").exists() => println!(
+                        "  auth.identity: <unreadable or malformed at {}>",
+                        dir.join("id_ed25519").display()
+                    ),
+                    None => println!(
+                        "  auth.identity: <none yet — generated on first start, or by `mae-daemon identity`>"
+                    ),
                 }
             }
             println!(
@@ -1485,6 +1488,56 @@ fn run_authorize(config: &DaemonConfig, rest: &[String]) -> i32 {
         }
         Err(e) => {
             eprintln!("error: failed to authorize: {e}");
+            1
+        }
+    }
+}
+
+/// The synchronous administrative subcommands; `None` if `sub` is not one.
+///
+/// Symmetric keystore (psk mode): `keygen [name]`, `keys`. Asymmetric key mode
+/// (ADR-017/018): `identity`, `authorized`, `authorize <pubkey-line>` (labels
+/// must be unique), `revoke <label|SHA256:fp>`. And `ping`, the liveness probe.
+fn run_admin_subcommand(sub: &str, rest: &[String], config: &DaemonConfig) -> Option<i32> {
+    let first = rest.first().map(|s| s.as_str());
+    Some(match sub {
+        "keygen" => run_keygen(config, first),
+        "keys" => run_keys_list(config),
+        "identity" => run_identity(config),
+        "authorized" => run_authorized_list(config),
+        "authorize" => run_authorize(config, rest),
+        "revoke" => run_revoke(config, first),
+        "ping" => run_ping(config),
+        _ => return None,
+    })
+}
+
+/// `mae-daemon ping` — exit 0 iff the running instance answers `daemon/status`
+/// on its KB socket within a few seconds. The container HEALTHCHECK.
+///
+/// Liveness, not readiness: "is this process serving?". `doctor` answers "is
+/// it configured to work?" and must not be the liveness probe — a fresh
+/// instance with no client authorized yet is correctly not ready, and
+/// restarting it would fix nothing.
+fn run_ping(config: &DaemonConfig) -> i32 {
+    let mut client = mae_mcp::daemon_client::DaemonClient::new(&config.socket);
+    client.set_timeout(std::time::Duration::from_secs(3));
+    let answer = client.connect().map_err(|e| e.to_string()).and_then(|()| {
+        client
+            .call("daemon/status", serde_json::json!({}))
+            .map_err(|e| e.to_string())
+    });
+    match answer {
+        Ok(status) => {
+            let version = status["version"].as_str().unwrap_or("?");
+            println!(
+                "ok: mae-daemon {version} answering on {}",
+                config.socket.display()
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("not answering on {}: {e}", config.socket.display());
             1
         }
     }

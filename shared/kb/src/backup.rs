@@ -1,12 +1,21 @@
 //! KB backup and restore — periodic SQLite snapshots with retention.
 //!
 //! Backups are stored as `backups/{slug}/{timestamp}.sqlite` under the KB
-//! data directory. Each backup is a simple copy of the live `kb.sqlite`.
+//! data directory, each a self-contained snapshot made with `VACUUM INTO`.
 //!
-//! - Periodic: configurable interval (default: daily, option `kb_backup_interval`)
-//! - Retention: keep last N (default: 7, option `kb_backup_retention`)
-//! - Pre-sync: auto-backup before first remote sync of a local KB
-//! - Recovery: `:kb-restore {slug} {timestamp}` replaces the live DB
+//! NOT YET WIRED (#263): no task calls this module, and the options named for
+//! it (`kb_backup_interval`, `kb_backup_retention`) are registered as RESERVED.
+//! There is no `:kb-restore` command — an earlier version of this comment said
+//! there was.
+//!
+//! @ai-caution: [kb-truth] A KB store is SQLite in WAL mode, so it is NOT one
+//! file: recent commits live in `kb.sqlite-wal` until a checkpoint. This module
+//! used `fs::copy` of `kb.sqlite` alone, which silently drops every
+//! uncheckpointed write — a backup that looks complete and is not (the same
+//! "a store is not one file" failure that has broken other things in this
+//! tree). `VACUUM INTO` asks SQLite itself for a consistent, WAL-free copy.
+//! Restoring snapshots the live DB first, which recovers any stale WAL into
+//! it, so no old WAL is left to be replayed over the restored file.
 
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
@@ -52,7 +61,7 @@ fn create_backup_from(
     let timestamp = iso_timestamp();
     let backup_path = backup_dir.join(format!("{timestamp}.sqlite"));
 
-    std::fs::copy(source_db, &backup_path)?;
+    snapshot(source_db, &backup_path)?;
     let size = std::fs::metadata(&backup_path)?.len();
 
     info!(slug, timestamp, size_bytes = size, "created KB backup");
@@ -159,7 +168,7 @@ pub fn restore_backup(
         std::fs::create_dir_all(&pre_restore_dir)?;
         let pre_restore_path =
             pre_restore_dir.join(format!("{}-pre-restore.sqlite", iso_timestamp()));
-        std::fs::copy(&target, &pre_restore_path)?;
+        snapshot(&target, &pre_restore_path)?;
         info!(
             slug,
             path = %pre_restore_path.display(),
@@ -167,9 +176,24 @@ pub fn restore_backup(
         );
     }
 
+    // No stale WAL can survive to be replayed over the restored file: the
+    // pre-restore snapshot above OPENS the live DB, so SQLite recovers any WAL
+    // into it (the pre-restore backup therefore holds even uncheckpointed
+    // writes) and removes it on close. The KB must not be open elsewhere while
+    // restoring — a live connection would write a new WAL after this point.
     std::fs::copy(&backup_path, &target)?;
     info!(slug, timestamp, "restored KB from backup");
     Ok(target)
+}
+
+/// A consistent, self-contained copy of the SQLite database at `src`,
+/// including writes still in its WAL. `dst` must not exist.
+pub fn snapshot(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let to_io = |e: sqlite::Error| std::io::Error::other(e.to_string());
+    let conn = sqlite::open(src).map_err(to_io)?;
+    let quoted = dst.to_string_lossy().replace('\'', "''");
+    conn.execute(format!("VACUUM INTO '{quoted}'"))
+        .map_err(to_io)
 }
 
 fn iso_timestamp() -> String {
@@ -198,8 +222,50 @@ mod tests {
             org_dir: None,
         };
         let db_path = dir.init_local_kb(slug, &meta).unwrap();
-        std::fs::write(&db_path, b"fake sqlite content").unwrap();
+        // A real SQLite database: `snapshot` asks SQLite for the copy, so a
+        // file of arbitrary bytes is (correctly) rejected.
+        let conn = sqlite::open(&db_path).unwrap();
+        conn.execute("CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('live');")
+            .unwrap();
         (dir, slug.to_string())
+    }
+
+    fn count_rows(db: &Path) -> i64 {
+        let conn = sqlite::open(db).unwrap();
+        let mut st = conn.prepare("SELECT count(*) FROM t").unwrap();
+        st.next().unwrap();
+        st.read::<i64, _>(0).unwrap()
+    }
+
+    /// The failure this module had: rows committed but still in the WAL (no
+    /// checkpoint yet — the writer is still open) must be IN the backup. A
+    /// plain file copy of `kb.sqlite` loses them and still looks like a backup.
+    #[test]
+    fn a_backup_includes_writes_still_in_the_wal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (dir, slug) = setup_test_kb(tmp.path());
+        let db = dir.local_kb_db(&slug);
+        let writer = sqlite::open(&db).unwrap();
+        writer
+            .execute("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")
+            .unwrap();
+        for i in 0..50 {
+            writer
+                .execute(format!("INSERT INTO t VALUES ('wal-{i}')"))
+                .unwrap();
+        }
+        let wal = PathBuf::from(format!("{}-wal", db.display()));
+        assert!(
+            std::fs::metadata(&wal)
+                .map(|m| m.len() > 0)
+                .unwrap_or(false),
+            "premise: the new rows are in the WAL, not yet checkpointed"
+        );
+
+        let backup = create_backup(&dir, &slug).unwrap();
+        drop(writer);
+
+        assert_eq!(count_rows(&backup), 51, "1 checkpointed + 50 WAL-only rows");
     }
 
     #[test]
@@ -245,12 +311,47 @@ mod tests {
         std::fs::create_dir_all(&backup_dir).unwrap();
         let backup_ts = "1234567890";
         let backup_path = backup_dir.join(format!("{backup_ts}.sqlite"));
-        std::fs::write(&backup_path, b"backup data").unwrap();
+        snapshot(&dir.local_kb_db(&slug), &backup_path).unwrap();
+        // Leave a VALID stale WAL beside the live DB, holding a write made
+        // after the backup — what a store that crashed mid-session has. (Junk
+        // bytes would prove nothing: SQLite discards an invalid WAL itself.)
+        let live = dir.local_kb_db(&slug);
+        let live_wal = PathBuf::from(format!("{}-wal", live.display()));
+        let writer = sqlite::open(&live).unwrap();
+        writer
+            .execute("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")
+            .unwrap();
+        writer
+            .execute("INSERT INTO t VALUES ('after-backup')")
+            .unwrap();
+        let stale = std::fs::read(&live_wal).unwrap();
+        drop(writer); // checkpoints and removes the WAL...
+        std::fs::write(&live_wal, &stale).unwrap(); // ...which a crash would not have
 
         // Restore it
         let target = restore_backup(&dir, &slug, backup_ts).unwrap();
         assert!(target.exists());
-        assert_eq!(std::fs::read(&target).unwrap(), b"backup data");
+        assert!(
+            !live_wal.exists(),
+            "no stale WAL is left beside the restore"
+        );
+        assert_eq!(
+            count_rows(&target),
+            1,
+            "the backup's content, not the live one's"
+        );
+
+        // The write that was only in the stale WAL is not lost: the
+        // pre-restore snapshot recovered it.
+        let pre = list_backups(&dir, &slug)
+            .into_iter()
+            .find(|b| b.timestamp.ends_with("-pre-restore"))
+            .expect("a pre-restore backup");
+        assert_eq!(
+            count_rows(&pre.path),
+            2,
+            "pre-restore holds the WAL-only write"
+        );
 
         // Should have created a pre-restore backup
         let backups = list_backups(&dir, &slug);
