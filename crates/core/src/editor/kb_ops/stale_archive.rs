@@ -102,11 +102,9 @@ impl Editor {
         if path.extension().and_then(|e| e.to_str()) != Some("org") {
             return None;
         }
-        let inst = self.kb.registry.instances.iter().find(|i| {
-            !i.ingest_policy.allows_ingest()
-                && !i.org_dir.as_os_str().is_empty()
-                && path.starts_with(&i.org_dir)
-        })?;
+        let inst = self
+            .kb_dir_owner(path, super::dir_owner::DirOwnership::Source)
+            .filter(|i| !i.ingest_policy.allows_ingest())?;
         Some(format!(
             "'{}' would be created inside KB '{}', which is detached: its store is \
              the source of truth and no ingest reads this directory. The file would \

@@ -185,6 +185,7 @@ impl KbImportResult {
 mod activity;
 mod collab_id;
 mod daily;
+pub(crate) mod dir_owner;
 mod dispatch;
 mod import_audit;
 pub(crate) mod node_buffer;

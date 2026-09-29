@@ -16,7 +16,7 @@ fn hash_of(s: &str) -> String {
 
 /// A detached KB with a real store. `imported` are written to disk AND
 /// recorded with a matching hash and a real node, i.e. genuinely represented.
-fn detached_kb(dir: &std::path::Path, imported: &[(&str, &str)]) -> (Editor, TempDir) {
+pub(super) fn detached_kb(dir: &std::path::Path, imported: &[(&str, &str)]) -> (Editor, TempDir) {
     let mut editor = Editor::new();
     // Persist the instance the way a real one is: `KbRegistry::update` reloads
     // from disk, so an in-memory-only fixture vanishes the moment retirement
