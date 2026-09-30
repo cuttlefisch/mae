@@ -72,7 +72,19 @@ pub const AUTHORIZATION_CHANGE_OPS: &[&str] = &[
     // Relaxes the ADR-048 residency restriction, i.e. re-permits hosted
     // providers to read a KB the operator restricted to local models.
     "kb_set_ai_residency",
+    // Registers a remote hub KB (ADR-111 P1). Not an inbound `kb_join`: the
+    // hub's URL then receives every `kb_search` query ("where its prompts go",
+    // the reason `ai_base_url` is protected) and its answers enter the agent's
+    // context through ordinary searches.
+    "kb_register_hub",
 ];
+
+/// Authorization changes that deliberately have NO direct MCP tool — they exist
+/// only as a human command (and its generated mirror, which the tier gate
+/// refuses below Privileged). Not offered beats offered-and-denied (ADR-085's
+/// shape): the tests assert the direct tool is ABSENT for these, which is a
+/// stronger property than asserting it refuses.
+pub const COMMAND_ONLY_AUTHORIZATION_OPS: &[&str] = &["kb_register_hub"];
 
 /// Deliberately *not* authorization changes, recorded so the omissions are
 /// reviewable rather than looking like oversights. Used by the tests, and by

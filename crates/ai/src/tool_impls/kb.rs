@@ -149,7 +149,16 @@ pub fn execute_kb_search(
             })
         })
         .collect();
-    serde_json::to_string_pretty(&objs).map_err(|e| e.to_string())
+    // ADR-111 P1: a remote hub that could not give a complete answer must not
+    // leave the caller believing it saw everything. Shape only changes when there
+    // is something to say, so every result without a hub is byte-identical.
+    let incomplete = editor.kb.last_search_incomplete();
+    let out = if incomplete.is_empty() {
+        serde_json::Value::Array(objs)
+    } else {
+        serde_json::json!({"results": objs, "partial": true, "incomplete": incomplete})
+    };
+    serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
 }
 
 /// First non-empty line of `body`, trimmed and truncated to `max` chars (on a

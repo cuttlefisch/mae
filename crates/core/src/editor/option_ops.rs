@@ -186,6 +186,7 @@ impl super::Editor {
             "kb_federated_max_fanout_instances" => {
                 self.kb.federated_max_fanout_instances.to_string()
             }
+            "kb_remote_hub_timeout_ms" => self.kb.remote_hub_timeout_ms.to_string(),
             "kb_dailies_dir" => self
                 .kb
                 .dailies_dir
@@ -391,6 +392,25 @@ impl super::Editor {
     }
 
     /// Set an option by name or alias, returning a confirmation message.
+    /// KB federation option setters, out of `set_option` to keep it from growing.
+    fn set_kb_federation_option(&mut self, name: &str, value: &str) -> Result<(), String> {
+        let v: u64 = value
+            .parse()
+            .map_err(|_| format!("Invalid integer: '{}'", value))?;
+        match name {
+            "kb_federated_max_fanout_instances" => {
+                self.kb.federated_max_fanout_instances = v.clamp(1, 100_000) as usize;
+            }
+            _ => {
+                self.kb.remote_hub_timeout_ms = v.clamp(100, 120_000);
+                // The timeout is baked into each hub's client: rebuild now rather
+                // than leaving the old value live until some unrelated rebuild.
+                self.kb.rebuild_query_layer();
+            }
+        }
+        Ok(())
+    }
+
     pub fn set_option(&mut self, name: &str, value: &str) -> Result<String, String> {
         let def_name = self
             .option_registry
@@ -1007,11 +1027,8 @@ impl super::Editor {
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.kb.daily_chain_gap_max = v.clamp(1, 365);
             }
-            "kb_federated_max_fanout_instances" => {
-                let v: usize = value
-                    .parse()
-                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
-                self.kb.federated_max_fanout_instances = v.clamp(1, 100_000);
+            "kb_federated_max_fanout_instances" | "kb_remote_hub_timeout_ms" => {
+                self.set_kb_federation_option(name, value)?
             }
             "format_on_save" => {
                 self.format_on_save = parse_option_bool(value)?;

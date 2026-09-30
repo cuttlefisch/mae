@@ -11,7 +11,8 @@ use mae_core::{CommandRegistry, Editor, OptionRegistry};
 
 use crate::executor::{execute_tool, ExecuteResult};
 use crate::tools::{
-    ai_specific_tools, authorization::DELIBERATELY_NOT_AUTHORIZATION_CHANGES,
+    ai_specific_tools,
+    authorization::{COMMAND_ONLY_AUTHORIZATION_OPS, DELIBERATELY_NOT_AUTHORIZATION_CHANGES},
     sanitize_command_name, tools_from_registry, PermissionPolicy, AUTHORIZATION_CHANGE_OPS,
 };
 use crate::types::{PermissionTier, ToolCall, ToolDefinition};
@@ -83,6 +84,19 @@ fn args_for(op: &str) -> serde_json::Value {
     }
 }
 
+/// The surface an op is actually reached through: its direct tool, or — for a
+/// command-only op, which has none — `execute_command`.
+fn reachable_surface(op: &str) -> (String, serde_json::Value) {
+    if COMMAND_ONLY_AUTHORIZATION_OPS.contains(&op) {
+        (
+            "execute_command".to_string(),
+            serde_json::json!({ "command": op.replace('_', "-") }),
+        )
+    } else {
+        (op.to_string(), args_for(op))
+    }
+}
+
 /// The attacker's case. A `Write`-tier session is exactly the configuration an
 /// operator picks to allow buffer edits while withholding shell access — and it
 /// must not be able to grant a third party access to a knowledge base, through
@@ -106,6 +120,14 @@ fn a_write_tier_session_is_refused_every_authorization_change_on_every_surface()
             // commands; skip the ones that are not, rather than asserting a
             // vacuous pass on an unknown tool.
             if surface == "command mirror" && !all_tools().iter().any(|t| t.name == name) {
+                continue;
+            }
+            // A command-only op must not be offered as a direct tool at all.
+            if surface == "direct tool" && COMMAND_ONLY_AUTHORIZATION_OPS.contains(op) {
+                assert!(
+                    !all_tools().iter().any(|t| t.name == name),
+                    "{op} is command-only, yet a direct tool '{name}' is offered"
+                );
                 continue;
             }
             let (success, output) = run(&name, args, PermissionTier::Write);
@@ -132,7 +154,8 @@ fn a_write_tier_session_is_refused_every_authorization_change_on_every_surface()
 #[test]
 fn a_shell_tier_policy_is_also_refused() {
     for op in AUTHORIZATION_CHANGE_OPS {
-        let (success, output) = run(op, args_for(op), PermissionTier::Shell);
+        let (name, args) = reachable_surface(op);
+        let (success, output) = run(&name, args, PermissionTier::Shell);
         assert!(!success, "{op} succeeded at Shell tier");
         assert!(
             output.contains("Permission denied"),
@@ -154,7 +177,8 @@ fn a_shell_tier_policy_is_also_refused() {
 #[test]
 fn a_privileged_session_passes_the_tier_gate() {
     for op in AUTHORIZATION_CHANGE_OPS {
-        let (_success, output) = run(op, args_for(op), PermissionTier::Privileged);
+        let (name, args) = reachable_surface(op);
+        let (_success, output) = run(&name, args, PermissionTier::Privileged);
         assert!(
             !output.contains("Permission denied"),
             "{op} was still refused at Privileged tier: {output}"
@@ -372,4 +396,24 @@ fn ordinary_options_are_still_settable_at_write_tier() {
         checked += 1;
     }
     assert!(checked > 100, "sanity: only {checked} options exercised");
+}
+
+/// Pinned independently of `AUTHORIZATION_CHANGE_OPS`: the sweeps above only
+/// cover an op because it is ON that list, so deleting the entry would silently
+/// drop the protection and every sweep would stay green. Registering a hub
+/// sends every later `kb_search` to the hub's URL (ADR-111 P1).
+#[test]
+fn registering_a_hub_is_refused_below_privileged_through_execute_command() {
+    let cmd = serde_json::json!({
+        "command": "kb-register-hub Hub https://kb.example.org team hub-token"
+    });
+    for tier in [PermissionTier::Write, PermissionTier::Shell] {
+        let (success, output) = run("execute_command", cmd.clone(), tier);
+        assert!(!success, "{tier:?}: hub registration succeeded");
+        assert!(output.contains("Permission denied"), "{tier:?}: {output}");
+    }
+    assert!(
+        !all_tools().iter().any(|t| t.name == "kb_register_hub"),
+        "no direct tool may be offered for it"
+    );
 }

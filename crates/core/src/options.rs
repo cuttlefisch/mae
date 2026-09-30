@@ -113,7 +113,9 @@ impl OptionRegistry {
     /// local — moving a group out — rather than architectural (CLAUDE.md,
     /// 2026-08-25 amendment).
     fn kb_maintenance_options() -> Vec<OptionDef> {
-        vec![
+        // Chained from here, not from `new`, so `new` does not grow a line.
+        let mut v = Self::kb_remote_hub_options();
+        v.extend([
             opt!("kb_daily_chain_gap_max", &["kb-daily-chain-gap-max"],
                 "Max days to walk backwards when chain-filling daily notes",
                 OptionKind::Int, "90", Some("kb.daily_chain_gap_max"), &[]),
@@ -123,7 +125,16 @@ impl OptionRegistry {
             opt!("kb_backup_retention", &["kb-backup-retention"],
                 "RESERVED (not yet wired — see issue #263). Number of KB backup snapshots to retain",
                 OptionKind::Int, "7", Some("kb.backup_retention"), &[]),
-        ]
+        ]);
+        v
+    }
+
+    /// Remote KB hub options (ADR-111 P1), held out of the large option vector
+    /// for the same reason as `kb_maintenance_options`.
+    fn kb_remote_hub_options() -> Vec<OptionDef> {
+        vec![opt!("kb_remote_hub_timeout_ms", &["kb-remote-hub-timeout-ms"],
+            "Per-request timeout, in milliseconds, for queries to a registered remote KB hub (ADR-111). A hub that does not answer in time is skipped and the result is reported as partial, never as complete. Takes effect immediately.",
+            OptionKind::Int, "1500", Some("kb.remote_hub_timeout_ms"), &[])]
     }
 
     pub fn new() -> Self {

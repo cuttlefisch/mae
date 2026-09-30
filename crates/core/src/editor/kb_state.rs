@@ -289,6 +289,18 @@ pub struct KbContext {
     /// LRU-cached query layer backed by daemon RPC.
     /// When set, `effective_query_layer()` returns this instead of the local query layer.
     daemon_query: Option<Arc<dyn KbQueryLayer>>,
+    /// `daemon_query` federated with every remote hub, so a daemon-hosted
+    /// primary does not hide the hubs from `query_layer()` (ADR-111 P1). `None`
+    /// when there is no daemon layer or no hub; see `recompose_daemon_layer`.
+    daemon_federated: Option<Arc<dyn KbQueryLayer>>,
+    /// One off-thread query layer per enabled `RemoteHub` registry row, by
+    /// instance name. Rebuilt by `rebuild_query_layer`.
+    remote_hubs: Vec<(String, Arc<dyn KbQueryLayer>)>,
+    /// Remote hubs whose answer to the most recent federated search was incomplete
+    /// (unreachable, timed out, refused, or truncated at the hub) —
+    /// read back by the `kb_search` tool so a partial result never reads as a
+    /// complete one.
+    last_search_incomplete: std::sync::Mutex<Vec<String>>,
     /// The configured editor↔daemon relationship (ADR-035): the canonical,
     /// `:set-save`-persisted source of truth for *whether/how* the editor attaches
     /// to a daemon. `Off` is the in-process floor. Drives `daemon_enabled` at
@@ -371,6 +383,8 @@ pub struct KbContext {
     /// KB option: max federated instances queried per search/agenda/list fan-out
     /// (ADR-062 Phase B).
     pub federated_max_fanout_instances: usize,
+    /// KB option: per-request timeout for remote hub queries (ADR-111 P1).
+    pub remote_hub_timeout_ms: u64,
     /// KB option: dailies directory (explicit setting or derived from notes_dir/daily).
     pub dailies_dir: Option<PathBuf>,
     /// KB option: max days to walk backwards when chain-filling dailies (default 90).
@@ -437,7 +451,10 @@ impl KbContext {
 
     /// Return the effective query layer: daemon LRU if connected, else local.
     pub fn query_layer(&self) -> Option<&dyn KbQueryLayer> {
-        self.daemon_query.as_deref().or(self.query.as_deref())
+        self.daemon_federated
+            .as_deref()
+            .or(self.daemon_query.as_deref())
+            .or(self.query.as_deref())
     }
 
     /// Whether `id` belongs to the primary KB specifically. Handles the thin-
@@ -492,6 +509,7 @@ impl KbContext {
     /// Set the daemon-backed LRU query layer.
     pub fn set_daemon_query_layer(&mut self, layer: Option<Arc<dyn KbQueryLayer>>) {
         self.daemon_query = layer;
+        self.recompose_daemon_layer();
     }
 
     /// Inject the daemon control channel (binary-provided, `DaemonClient`-backed).
@@ -595,6 +613,9 @@ impl KbContext {
     /// Build or rebuild the federated query layer from current stores.
     /// Call after store/instance_store changes (register, unregister, reimport).
     pub fn rebuild_query_layer(&mut self) {
+        // Hubs first and unconditionally: they need no local store, so a thin
+        // (daemon-hosted) primary must not leave them out.
+        self.remote_hubs = self.build_remote_hub_layers();
         // Determine the primary query layer: prefer the user's primary CozoDB
         // store, falling back to the manual system store when there is none.
         let primary_arc = self
@@ -642,27 +663,92 @@ impl KbContext {
                 federated.add_instance(name.clone(), priority, layer);
             }
 
-            // ADR-062 Phase D: `RemoteHub`-kind registry entries have no local Cozo
-            // store (nothing in `self.instance_stores`) — they're queried live via
-            // `RemoteHubQueryLayer` instead. Feature-gated (`remote-hub`, off by
-            // default — see `crates/core/Cargo.toml`): with the feature disabled, a
-            // registered `RemoteHub` instance simply doesn't participate in federated
-            // queries, a graceful no-op rather than a build error, matching how an
-            // unrecognized future `KbInstanceKind` would degrade.
-            #[cfg(feature = "remote-hub")]
-            for inst in &self.registry.instances {
-                if inst.kind != mae_kb::federation::KbInstanceKind::RemoteHub {
-                    continue;
-                }
-                let Some(config) = inst.remote_hub.clone() else {
-                    continue;
-                };
-                let layer = Arc::new(mae_kb::remote_hub::RemoteHubQueryLayer::new(config));
-                federated.add_instance(inst.name.clone(), inst.priority, layer);
+            // ADR-062 Phase D: `RemoteHub` registry entries have no local store —
+            // they are queried live, through `self.remote_hubs`.
+            for (name, layer) in &self.remote_hubs {
+                federated.add_instance(name.clone(), self.hub_priority(name), layer.clone());
             }
 
             self.query = Some(Arc::new(federated));
         }
+        self.recompose_daemon_layer();
+    }
+
+    /// One off-thread layer per enabled `RemoteHub` registry row.
+    ///
+    /// @ai-caution: [runtime] Never hand the editor a bare `RemoteHubQueryLayer`:
+    /// its blocking HTTP client panics when dropped inside the event loop's
+    /// `block_on`, and this function's result replaces the previous one on every
+    /// rebuild. `OffThreadQueryLayer` builds, queries and drops it on its own
+    /// thread (see that module's `@ai-caution`).
+    #[cfg(feature = "remote-hub")]
+    fn build_remote_hub_layers(&self) -> Vec<(String, Arc<dyn KbQueryLayer>)> {
+        let timeout = std::time::Duration::from_millis(self.remote_hub_timeout_ms);
+        self.registry
+            .instances
+            .iter()
+            .filter(|i| i.enabled && i.kind == mae_kb::federation::KbInstanceKind::RemoteHub)
+            .filter_map(|inst| {
+                let config = inst.remote_hub.clone()?;
+                let layer = mae_kb::OffThreadQueryLayer::spawn(&inst.name, move || {
+                    mae_kb::remote_hub::RemoteHubQueryLayer::with_timeout(config, timeout)
+                });
+                match layer {
+                    Ok(l) => Some((inst.name.clone(), Arc::new(l) as Arc<dyn KbQueryLayer>)),
+                    Err(e) => {
+                        tracing::warn!(hub = %inst.name, error = %e, "could not start the hub query thread");
+                        None
+                    }
+                }
+            })
+            .collect()
+    }
+
+    #[cfg(not(feature = "remote-hub"))]
+    fn build_remote_hub_layers(&self) -> Vec<(String, Arc<dyn KbQueryLayer>)> {
+        Vec::new()
+    }
+
+    fn hub_priority(&self, name: &str) -> u32 {
+        self.registry.find(name).map(|i| i.priority).unwrap_or(0)
+    }
+
+    /// With a daemon-hosted primary, `query_layer()` answers from the daemon's
+    /// LRU layer, which knows nothing about remote hubs. Federate the two so a
+    /// registered hub is reachable from every read, not only from search.
+    /// Purely additive: with no hub registered nothing changes.
+    fn recompose_daemon_layer(&mut self) {
+        self.daemon_federated = match &self.daemon_query {
+            Some(daemon) if !self.remote_hubs.is_empty() => {
+                let mut f = mae_kb::FederatedQuery::new(daemon.clone());
+                f.set_max_fanout_instances(self.federated_max_fanout_instances);
+                for (name, layer) in &self.remote_hubs {
+                    f.add_instance(name.clone(), self.hub_priority(name), layer.clone());
+                }
+                Some(Arc::new(f))
+            }
+            _ => None,
+        };
+    }
+
+    /// The remote hubs' query layers, by instance name.
+    pub fn remote_hubs(&self) -> &[(String, Arc<dyn KbQueryLayer>)] {
+        &self.remote_hubs
+    }
+
+    /// Record which hubs answered the latest federated search incompletely.
+    pub fn set_last_search_incomplete(&self, names: Vec<String>) {
+        if let Ok(mut g) = self.last_search_incomplete.lock() {
+            *g = names;
+        }
+    }
+
+    /// Hubs whose answer to the latest federated search was incomplete (empty = complete).
+    pub fn last_search_incomplete(&self) -> Vec<String> {
+        self.last_search_incomplete
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default()
     }
 
     /// Return all available CozoDB store handles (primary + instances).
@@ -706,6 +792,9 @@ impl KbContext {
             write_guard: HashSet::new(),
             query: None,
             daemon_query: None,
+            daemon_federated: None,
+            remote_hubs: Vec::new(),
+            last_search_incomplete: std::sync::Mutex::new(Vec::new()),
             daemon_mode: DaemonMode::Off,
             daemon_enabled: false,
             daemon_default: false,
@@ -730,6 +819,7 @@ impl KbContext {
             search_sort: "relevance".to_string(),
             search_scope: "all".to_string(),
             federated_max_fanout_instances: 128,
+            remote_hub_timeout_ms: 1500,
             dailies_dir: None,
             daily_chain_gap_max: 90,
             storage_engine: "sqlite".to_string(),

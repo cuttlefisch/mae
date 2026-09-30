@@ -20,7 +20,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .build(),
         ToolDefBuilder::new(
             "kb_search",
-            "Search all knowledge base nodes (MAE manual + user + federated). Orderless, field-weighted relevance ranking over titles, ids, bodies, tags, and aliases (multi-word queries are AND-matched, order-independent). Returns an array of objects {id, title, kind, instance, excerpt} in relevance order; `instance` is null for local nodes. Returns up to `limit` results (default kb_search_max_results); use kb_list to enumerate every node id.",
+            "Search all knowledge base nodes (MAE manual + user + federated). Orderless, field-weighted relevance ranking over titles, ids, bodies, tags, and aliases (multi-word queries are AND-matched, order-independent). Returns an array of objects {id, title, kind, instance, excerpt} in relevance order; `instance` is null for local nodes. Returns up to `limit` results (default kb_search_max_results); use kb_list to enumerate every node id. If a registered remote hub's answer was incomplete (unreachable, timed out, refused, or truncated at the hub), returns instead an object {results: [...same array...], partial: true, incomplete: [hub instance names]} — never a silently partial array.",
         )
         .prop("query", "string", "Search terms (case-insensitive, order-independent)")
         .prop(

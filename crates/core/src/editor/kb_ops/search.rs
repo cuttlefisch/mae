@@ -448,6 +448,45 @@ impl Editor {
         self.kb_federated_search_scoped_impl(query, scope, Some(query_vector))
     }
 
+    /// Search every remote hub the scope admits, appending hits labelled with
+    /// the hub's instance name. A hub that times out, refuses or is unreachable
+    /// contributes nothing and is recorded in `last_search_incomplete`, so the
+    /// caller can say the result is partial instead of presenting it as complete.
+    ///
+    /// Each hit costs one more round trip for its node (`SearchHit` carries only
+    /// the id), bounded by `search_max_results` per hub and by the hub timeout.
+    fn kb_search_remote_hubs(
+        &self,
+        query: &str,
+        scope: &mae_kb::KbScope,
+        results: &mut Vec<(Option<String>, mae_kb::Node)>,
+        seen_ids: &mut std::collections::HashSet<String>,
+    ) {
+        let mut incomplete = Vec::new();
+        for (name, layer) in self.kb.remote_hubs() {
+            let Some(inst) = self.kb.registry.find(name) else {
+                continue;
+            };
+            if !scope.includes_instance(inst) {
+                continue;
+            }
+            let hits = layer
+                .search(query, self.kb.search_max_results)
+                .unwrap_or_default();
+            if layer.degraded() {
+                incomplete.push(name.clone());
+            }
+            for hit in hits {
+                if let Some(node) = layer.get(&hit.id) {
+                    if seen_ids.insert(node.id.clone()) {
+                        results.push((Some(name.clone()), node));
+                    }
+                }
+            }
+        }
+        self.kb.set_last_search_incomplete(incomplete);
+    }
+
     fn kb_federated_search_scoped_impl(
         &self,
         query: &str,
@@ -586,6 +625,9 @@ impl Editor {
                 }
             }
         }
+
+        // ADR-111 P1: live remote hubs, after every local source.
+        self.kb_search_remote_hubs(query, scope, &mut results, &mut seen_ids);
 
         // ADR-061 Phase F2: fuse in semantic hits BEFORE the alpha/recency
         // resort below, so relevance-mode RRF fusion composes with the same
