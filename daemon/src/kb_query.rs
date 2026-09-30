@@ -335,12 +335,14 @@ async fn search(
 
     let needle = query.to_lowercase();
     let nodes = coll.list_nodes(); // Vec<(node_id, title)>
-    let scanned = nodes.len().min(max_scan_nodes);
+    let total = nodes.len();
+    let mut scanned = 0usize;
     let mut results = Vec::new();
     for (node_id, _manifest_title) in nodes.into_iter().take(max_scan_nodes) {
         if results.len() >= limit {
             break;
         }
+        scanned += 1;
         let node_doc = mae_sync::kb_node_doc_name(kb_id, &node_id);
         let Ok((state, _sv)) = doc_store.encode_state_and_sv(&node_doc).await else {
             continue; // a manifest entry with no materialized doc yet -- skip, not an error
@@ -360,10 +362,17 @@ async fn search(
         }
     }
 
+    // ADR-111 P1: say when the CAP -- not the caller's `limit` -- ended the scan.
+    // A search that found `limit` hits answered the question asked; one that ran
+    // out of scan budget with nodes left unexamined did not, and without this
+    // flag its "no hits" reads exactly like "no hits in this KB".
+    let truncated = results.len() < limit && scanned < total;
     Ok(json!({
         "kb_id": kb_id,
         "results": results,
         "scanned": scanned,
+        "total": total,
+        "truncated": truncated,
     }))
 }
 
