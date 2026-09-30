@@ -120,11 +120,19 @@ pub fn ask_denied_message(
     auto_approve_up_to: PermissionTier,
     surface: &str,
 ) -> String {
+    // Name the knob. "Raise the ceiling" alone sent a real client to look in
+    // its OWN settings (allow-lists at two scopes, auto-approve mode) and
+    // conclude there was no way to write at all (#623). The ceiling lives in
+    // the editor the client is connected to.
+    let want = format!("{tier:?}").to_lowercase();
     format!(
         "Permission denied: {tool_name} requires {tier:?} tier, above the auto-approval \
          ceiling ({auto_approve_up_to:?}). There is no human to confirm this on {surface}, \
-         so the call is denied rather than queued for approval — raise the ceiling \
-         explicitly if this call is expected."
+         so the call is denied rather than queued for approval. If this call is expected, \
+         raise the ceiling in the MAE editor this client is connected to: \
+         (set-option! \"ai-tier\" \"{want}\") in its init.scm, or MAE_AI_PERMISSIONS={want} \
+         in its environment. The client's own tool allow-list does not govern this; \
+         MAE_MCP_PERMISSION_CEILING on the client can only narrow it."
     )
 }
 

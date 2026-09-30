@@ -203,6 +203,35 @@ impl Editor {
         body: &str,
         kind: mae_kb::NodeKind,
     ) -> Result<(), String> {
+        // #165: route by the id's instance prefix (`collabtest:foo` → the registered
+        // `collabtest` federated instance), else the primary KB. A NEW node can't be
+        // resolved with `kb_owner_of` (nothing exists yet), so route by the instance-name
+        // prefix that federated-instance node ids follow — the prefix only diverts to an
+        // instance that is actually REGISTERED (a primary-namespace prefix like `concept:`
+        // with no matching instance stays in primary). Without this, every create fell to
+        // owner=None → primary, so a node added to a shared instance never resolved its
+        // collab_id, never fired the broadcast gate, and never synced.
+        let owner: Option<String> = id
+            .split_once(':')
+            .and_then(|(prefix, _)| self.kb.registry.find(prefix).map(|i| i.uuid.clone()));
+        self.kb_create_node_in(owner, id, title, body, kind)
+    }
+
+    /// [`Editor::kb_create_node`] with the owning KB named by the caller rather
+    /// than inferred from the id's prefix.
+    ///
+    /// For a node whose id does not say where it belongs — a daily is
+    /// `daily:YYYY-MM-DD` in every KB — the caller knows better: dailies belong
+    /// to the KB that owns the dailies directory. Inferring from the prefix sent
+    /// every one of them to the primary store instead (`None` owner).
+    pub(crate) fn kb_create_node_in(
+        &mut self,
+        owner: Option<String>,
+        id: &str,
+        title: &str,
+        body: &str,
+        kind: mae_kb::NodeKind,
+    ) -> Result<(), String> {
         self.kb_write_blocked()?;
         // Guard: refuse to overwrite seed nodes
         if let Some(existing) = self.kb.primary.get(id) {
@@ -215,17 +244,6 @@ impl Editor {
         }
         let node =
             mae_kb::Node::new(id, title, kind, body).with_source(mae_kb::NodeSource::Manual, 0);
-        // #165: route by the id's instance prefix (`collabtest:foo` → the registered
-        // `collabtest` federated instance), else the primary KB. A NEW node can't be
-        // resolved with `kb_owner_of` (nothing exists yet), so route by the instance-name
-        // prefix that federated-instance node ids follow — the prefix only diverts to an
-        // instance that is actually REGISTERED (a primary-namespace prefix like `concept:`
-        // with no matching instance stays in primary). Without this, every create fell to
-        // owner=None → primary, so a node added to a shared instance never resolved its
-        // collab_id, never fired the broadcast gate, and never synced.
-        let owner: Option<String> = id
-            .split_once(':')
-            .and_then(|(prefix, _)| self.kb.registry.find(prefix).map(|i| i.uuid.clone()));
         // Persist to the OWNING store (primary or the matching instance store).
         self.kb_persist_node_in(&owner, &node);
         // Phase D1.1 (ADR-029): a created node on a daemon-hosted (or shared) KB must reach
@@ -866,7 +884,20 @@ impl Editor {
             // silently leaving a titled empty node behind. The plan called this
             // branch "the shape to generalise"; generalising it means giving it
             // the same three affordances the file branch has.
-            self.kb_create_node(&id, title, "", mae_kb::NodeKind::Note)?;
+            // Into the KB that owns the notes dir when one does — a retired KB's
+            // origin included — rather than wherever the `user:` prefix routes
+            // (the primary store, which is not that KB).
+            match self
+                .kb
+                .notes_dir
+                .clone()
+                .and_then(|d| self.kb_dir_write_owner(&d))
+            {
+                Some(owner) => {
+                    self.kb_create_node_in(Some(owner), &id, title, "", mae_kb::NodeKind::Note)?
+                }
+                None => self.kb_create_node(&id, title, "", mae_kb::NodeKind::Note)?,
+            }
             let return_idx = self.active_buffer_idx();
 
             // Open the node itself for editing -- the store-backed equivalent of
@@ -908,30 +939,24 @@ impl Editor {
             .with_source(mae_kb::NodeSource::UserOrg, 0)
             .with_source_file(path);
 
-        // Match by canonicalized path, not raw PathBuf equality -- a trailing
-        // slash, a symlink, or a relative-vs-absolute kb_notes_dir would
-        // otherwise silently fail to match a genuinely-covering instance.
-        let notes_dir = self.kb.notes_dir.clone();
-        if let Some(ref dir) = notes_dir {
-            let dir_canon = dir.canonicalize().unwrap_or_else(|_| dir.clone());
-            let matched_uuid = self.kb.registry.instances.iter().find_map(|inst| {
-                let inst_canon = inst
-                    .org_dir
-                    .canonicalize()
-                    .unwrap_or_else(|_| inst.org_dir.clone());
-                (inst_canon == dir_canon).then(|| inst.uuid.clone())
-            });
-            if let Some(uuid) = matched_uuid {
-                if let Some(kb) = self.kb.instances.get_mut(&uuid) {
-                    kb.insert(node.clone());
-                }
-                if let Some(store) = self.kb.instance_stores.get(&uuid) {
-                    if let Err(e) = store.update_node(&node) {
-                        tracing::warn!(node_id = %id, error = %e, "KB instance store write-through (note capture) failed");
-                    }
-                }
-                return true;
+        // The owner comes from the one path-ownership resolver (`dir_owner.rs`),
+        // which canonicalises and — unlike the equality match this replaced —
+        // still finds a RETIRED KB whose origin is the notes dir.
+        let matched_uuid = self
+            .kb
+            .notes_dir
+            .clone()
+            .and_then(|dir| self.kb_dir_write_owner(&dir));
+        if let Some(uuid) = matched_uuid {
+            if let Some(kb) = self.kb.instances.get_mut(&uuid) {
+                kb.insert(node.clone());
             }
+            if let Some(store) = self.kb.instance_stores.get(&uuid) {
+                if let Err(e) = store.update_node(&node) {
+                    tracing::warn!(node_id = %id, error = %e, "KB instance store write-through (note capture) failed");
+                }
+            }
+            return true;
         }
 
         // Fallback: no registered instance covers kb_notes_dir -- insert into

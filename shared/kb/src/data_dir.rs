@@ -8,7 +8,7 @@
 //!   local/                     # Local-only KBs
 //!     {kb-slug}/
 //!       kb.sqlite              # Node storage
-//!       meta.toml              # Name, UUID, node count, timestamps
+//!       meta.toml              # Name, UUID, timestamps, registered org dir
 //!   shared/                    # Collaborative KBs
 //!     {kb-slug}/
 //!       kb.sqlite              # Local CRDT-enabled storage
@@ -33,7 +33,11 @@ pub struct LocalKbMeta {
     pub name: String,
     pub uuid: String,
     pub created_at: String,
-    pub node_count: usize,
+    // `node_count` was removed (2026-09): it was written once, as 0, at
+    // registration and never updated, so every `meta.toml` said 0 regardless
+    // of content — a real reader took that as evidence every KB was empty.
+    // Count nodes from the store. Old files still parse: unknown keys are
+    // ignored.
     pub org_dir: Option<PathBuf>,
 }
 
@@ -284,7 +288,6 @@ pub fn migrate_legacy_layout(data_home: &Path) -> std::io::Result<usize> {
             name: inst.name.clone(),
             uuid: inst.uuid.clone(),
             created_at: inst.last_import.clone().unwrap_or_else(|| now.clone()),
-            node_count: 0,
             org_dir: Some(inst.org_dir.clone()),
         };
         data_dir.write_local_meta(&slug, &meta)?;
@@ -363,6 +366,22 @@ mod tests {
         );
     }
 
+    /// A `meta.toml` written before `node_count` was removed must still load —
+    /// otherwise the removal would orphan every existing local KB's metadata.
+    #[test]
+    fn a_legacy_meta_with_node_count_still_parses() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = KbDataDir::from_root(tmp.path().join("kb")).unwrap();
+        std::fs::create_dir_all(dir.local_kb_dir("legacy")).unwrap();
+        std::fs::write(
+            dir.local_kb_dir("legacy").join("meta.toml"),
+            "name = \"Legacy\"\nuuid = \"u-1\"\ncreated_at = \"2026-07-07\"\nnode_count = 0\n",
+        )
+        .unwrap();
+        let meta = dir.read_local_meta("legacy").expect("legacy meta parses");
+        assert_eq!(meta.name, "Legacy");
+    }
+
     #[test]
     fn init_and_read_local_meta() {
         let tmp = tempfile::tempdir().unwrap();
@@ -372,7 +391,6 @@ mod tests {
             name: "My Notes".to_string(),
             uuid: "abc-123".to_string(),
             created_at: "2026-05-28T12:00:00Z".to_string(),
-            node_count: 42,
             org_dir: Some(PathBuf::from("/home/user/notes")),
         };
 
@@ -382,7 +400,6 @@ mod tests {
         let read_back = dir.read_local_meta("my-notes").unwrap();
         assert_eq!(read_back.name, "My Notes");
         assert_eq!(read_back.uuid, "abc-123");
-        assert_eq!(read_back.node_count, 42);
     }
 
     #[test]

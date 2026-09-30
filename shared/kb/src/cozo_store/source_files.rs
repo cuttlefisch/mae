@@ -90,9 +90,23 @@ impl CozoKbStore {
         }
         Ok(Vec::new())
     }
-    /// Remove a source file record and its associated nodes.
-    pub fn remove_source_file(&self, file_path: &str) -> Result<Vec<String>, KbStoreError> {
-        let node_ids = self.get_source_file_node_ids(file_path)?;
+    /// Remove a source file record and the nodes it produced — except any in
+    /// `still_produced`, which another file (or the same file under another path
+    /// spelling) produced in the current pass. Returns the ids actually deleted.
+    ///
+    /// @ai-caution: [kb-truth] Never delete without the exception set. A renamed
+    /// file, or a directory walked under a new spelling, re-imports the SAME ids
+    /// under a new key; deleting by the stale key alone wiped them.
+    pub fn remove_source_file(
+        &self,
+        file_path: &str,
+        still_produced: &std::collections::HashSet<String>,
+    ) -> Result<Vec<String>, KbStoreError> {
+        let node_ids: Vec<String> = self
+            .get_source_file_node_ids(file_path)?
+            .into_iter()
+            .filter(|id| !still_produced.contains(id))
+            .collect();
         for id in &node_ids {
             self.delete_node(id)?;
         }

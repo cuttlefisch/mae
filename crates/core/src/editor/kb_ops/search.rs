@@ -481,24 +481,8 @@ impl Editor {
         let mut results: Vec<(Option<String>, mae_kb::Node)> = Vec::new();
         let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        // Does the primary participate under this scope? The primary's registry
-        // name is matched for the Named case.
-        let primary_name = self
-            .kb
-            .registry
-            .instances
-            .iter()
-            .find(|i| i.primary)
-            .map(|i| i.name.as_str());
-        let include_primary = match scope {
-            KbScope::All | KbScope::LocalOnly => true,
-            KbScope::RemoteOnly => false,
-            KbScope::Named(n) => primary_name == Some(n.as_str()),
-            // Project scope excludes the primary (ADR-058 Phase C/D) — narrowing to "just
-            // this project's registered instance(s)" is the point, mirroring RemoteOnly's
-            // existing precedent for scopes orthogonal to the machine-global primary.
-            KbScope::Project(_) => false,
-        };
+        // Does the local store participate under this scope? (`KbScope::includes_local`)
+        let include_primary = scope.includes_local();
 
         if include_primary {
             if self.kb.primary_thin() {
@@ -536,12 +520,11 @@ impl Editor {
         // Then each federated instance permitted by the scope (skip if seen).
         for (uuid, kb) in &self.kb.instances {
             let inst = self.kb.registry.find_by_uuid(uuid);
-            let include = match scope {
-                KbScope::All => true,
-                KbScope::LocalOnly => false,
-                KbScope::RemoteOnly => inst.is_some_and(|i| i.is_remote()),
-                KbScope::Named(n) => inst.is_some_and(|i| &i.name == n),
-                KbScope::Project(root) => inst.is_some_and(|i| i.matches_project_root(root)),
+            // A mirror with no registry row (mid-join, just unregistered) was
+            // always searched under `All` and nowhere else; keep that exactly.
+            let include = match inst {
+                Some(i) => scope.includes_instance(i),
+                None => matches!(scope, KbScope::All),
             };
             if !include {
                 continue;
