@@ -13,6 +13,7 @@
 //! CozoDB. The daemon is an upgrade that provides persistent SQLite KB,
 //! collaboration, and services that outlive the editor session.
 
+mod backup;
 mod checkpoint_cli;
 mod cli;
 mod config;
@@ -82,7 +83,7 @@ enum CollabAuth {
 /// Canonicalises when both sides resolve (so a symlinked or `..`-containing
 /// data dir still matches), and falls back to plain equality when either does
 /// not exist yet.
-fn same_store_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+pub(crate) fn same_store_file(a: &std::path::Path, b: &std::path::Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(x), Ok(y)) => x == y,
         _ => a == b,
@@ -148,6 +149,9 @@ async fn main() {
         Some("restore") => {
             std::process::exit(checkpoint_cli::run_restore(&config, &cli.rest).await);
         }
+        // Whole-instance backup (every store, registry, collab store, identity)
+        // with a manifest a restore rehearsal can check against. See backup/mod.rs.
+        Some("backup") => std::process::exit(backup::run(&config, &cli.rest)),
         _ => {}
     }
 

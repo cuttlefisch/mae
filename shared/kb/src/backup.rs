@@ -3,10 +3,11 @@
 //! Backups are stored as `backups/{slug}/{timestamp}.sqlite` under the KB
 //! data directory, each a self-contained snapshot made with `VACUUM INTO`.
 //!
-//! NOT YET WIRED (#263): no task calls this module, and the options named for
-//! it (`kb_backup_interval`, `kb_backup_retention`) are registered as RESERVED.
-//! There is no `:kb-restore` command — an earlier version of this comment said
-//! there was.
+//! The per-KB half is NOT YET WIRED (#263): no task calls `create_backup` /
+//! `restore_backup`, and the options named for them (`kb_backup_interval`,
+//! `kb_backup_retention`) are registered as RESERVED. There is no `:kb-restore`
+//! command — an earlier version of this comment said there was. [`snapshot`]
+//! IS used: `mae-daemon backup create` copies every store with it.
 //!
 //! @ai-caution: [kb-truth] A KB store is SQLite in WAL mode, so it is NOT one
 //! file: recent commits live in `kb.sqlite-wal` until a checkpoint. This module

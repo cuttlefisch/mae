@@ -143,7 +143,8 @@ image and its compose service must get right:
 
 - **Identity in a named volume, never in an image layer.** `id_ed25519` is generated on first start
   (or by `mae-daemon identity`) and **cannot be recovered**: losing it loses every KB the instance
-  shares. Mount `identity_dir` from a named volume (mode 0700) and back it up (§7). `--check-config`
+  shares. Mount `identity_dir` from a named volume (mode 0700) and back it up (§7: a backup
+  sidecar running `mae-daemon backup create` against the same volumes covers it). `--check-config`
   does not create it, so validating a config as root cannot leave a root-owned key behind.
 - **Run as a non-root user**, with `data_dir`, `identity_dir` and the KB socket inside volumes it
   owns. Logs go to stdout/stderr.
@@ -500,6 +501,61 @@ From the editor: `collab-status` / `collab-doctor`, and `kb_health` for KB-level
 
 ## 7. Backup & restore
 
+### A whole daemon instance: `mae-daemon backup`
+
+```bash
+mae-daemon backup create /backups/mae-$(date +%F).tar   # safe while the daemon runs
+mae-daemon backup restore /backups/mae-2026-06-30.tar /tmp/mae-restore   # into an EMPTY dir
+mae-daemon backup verify /tmp/mae-restore               # key=number lines; exit 1 on any mismatch
+```
+
+`create` writes ONE archive holding every KB store (the daemon's own `daemon-kb.cozo` and every
+store `kb-registry.toml` names), the collab store `state.db`, the registry, and the identity
+(`id_ed25519`, `id_ed25519.pub`, `known_hosts`, `authorized_keys`, `trusted_keys`). It also writes a
+`manifest.json` with every file's SHA-256 and each store's KB node count. Every SQLite file is
+copied with `VACUUM INTO`, which reads inside one transaction and includes writes still in the WAL,
+so no daemon downtime is needed. The archive is written as `<out>.parcial` and renamed, so a reader
+never sees half of one; an existing `<out>` is never overwritten.
+
+`restore` extracts only what the manifest lists: regular files, each once, all of them, never a
+`-wal`/`-shm`, a symlink or a path outside the directory. `verify` re-hashes every file, runs
+SQLite's `integrity_check`, re-counts each store's nodes, and prints
+
+```
+kb.<name>=<nodes>     one line per store (the daemon's own store is kb.daemon unless a registry row names it)
+identity=<0|1>        1 when the private key loads and matches id_ed25519.pub
+```
+
+It exits non-zero if any hash, count or integrity check disagrees with the manifest. The lines are
+printed even then, so a failure shows what WAS restored. This is the shape a scheduled restore
+rehearsal can check (`validar`-style `key=number` output, a minimum of `identity=1`).
+
+> **The archive contains the daemon's private key, unencrypted.** It is written mode 0600, but
+> whatever stores the archive holds the key. Encrypt it before it leaves the host if the storage is
+> not trusted to that level.
+
+**To restore for real:** stop the daemon, `backup restore` into a staging directory, `backup verify`
+it, then put each file back where the manifest's layout says. Delete any `-wal`/`-shm` beside a
+store BEFORE copying it in (a stale WAL is replayed over the restored file on the next open,
+silently re-applying writes the backup did not contain):
+
+| In the archive | Goes to |
+|---|---|
+| `stores/daemon-kb.cozo` | `<data_dir>/daemon-kb.cozo` |
+| `stores/<uuid>.sqlite` | the `db_path` of that uuid's row in the archived `kb-registry.toml` |
+| `kb-registry.toml` | `<data_dir>/kb-registry.toml` |
+| `collab/state.db` | `<collab data_dir>/state.db` |
+| `identity/*` | the identity dir / `authorized_keys` / `keystore` paths from `daemon.toml` |
+
+What it does **not** contain: the editor-side recovery material (`collections/`, `content_keys/`,
+`recovery/`, below), which the daemon never reads; `daemon.toml` itself; the TLS certificate and key
+for the HTTPS listener. Keep those in your configuration management.
+
+`backup` is not `checkpoint`/`restore`: those export and replay ONE KB's CRDT documents (ADR-032),
+not an instance.
+
+### By hand
+
 The SQLite store has live `-wal` / `-shm` sidecars and `secure_delete` churn, so **never `cp` the
 live DB file** — you can capture a torn/stale state. Use SQLite's consistent online copy:
 
@@ -508,8 +564,7 @@ live DB file** — you can capture a torn/stale state. Use SQLite's consistent o
 sqlite3 ~/.local/share/mae/<store>.cozo ".backup '/backups/mae-$(date +%F).cozo'"
 # or:  sqlite3 <store>.cozo "VACUUM INTO '/backups/mae.cozo'"
 
-# Back up the collab trust material too — these are NOT in the DB. `cp -a` of the whole dir
-# captures everything that matters for identity + recovery:
+# The collab trust material is NOT in the DB. What lives in the collab dir:
 #   id_ed25519            — your identity seed (the root of all access; losing it = losing every KB)
 #   authorized_keys       — the daemon's trust allow-list (key mode)
 #   known_hosts           — host keys this peer has pinned (TOFU)
@@ -518,18 +573,22 @@ sqlite3 ~/.local/share/mae/<store>.cozo ".backup '/backups/mae-$(date +%F).cozo'
 #                           against these without re-fetching from the daemon)
 #   content_keys/         — recovered per-KB content keys (re-derivable from the op-log, but cached)
 #   recovery/             — your registered OFFLINE recovery key, if you ran collab-register-recovery-key
-cp -a ~/.local/share/mae/collab/ /backups/mae-collab-$(date +%F)/
+#   state.db (+ -wal/-shm) — the collab store, when `collab.storage.data_dir` is unset (the default is
+#                           <data_dir>/collab, the SAME directory). It is a live SQLite database:
+#                           snapshot it like the store above, never copy it with the directory.
+rsync -a --exclude 'state.db*' ~/.local/share/mae/collab/ /backups/mae-collab-$(date +%F)/
+sqlite3 ~/.local/share/mae/collab/state.db "VACUUM INTO '/backups/mae-collab-$(date +%F)/state.db'"
 # NOTE: for real key separation, keep `recovery/` on SEPARATE offline media from this backup —
 # a backup holding BOTH your primary and your recovery key gives a thief either path in. The
 # recovery key's purpose is to survive loss/compromise of the primary; co-locating them defeats it.
 
 # Restore: stop the daemon, replace the store file + the collab dir, restart.
-# Remove the store's leftover -wal/-shm FIRST: a stale WAL beside the restored file is replayed
-# over it on the next open, silently re-applying writes the backup did not contain.
+# Remove the leftover -wal/-shm FIRST (store AND state.db), for the reason given above.
 systemctl --user stop mae-daemon
 rm -f ~/.local/share/mae/<store>.cozo-wal ~/.local/share/mae/<store>.cozo-shm
+rm -f ~/.local/share/mae/collab/state.db-wal ~/.local/share/mae/collab/state.db-shm
 cp /backups/mae-2026-06-30.cozo ~/.local/share/mae/<store>.cozo
-cp -a /backups/mae-collab-2026-06-30/ ~/.local/share/mae/collab/
+cp -a /backups/mae-collab-2026-06-30/. ~/.local/share/mae/collab/
 systemctl --user start mae-daemon
 ```
 
