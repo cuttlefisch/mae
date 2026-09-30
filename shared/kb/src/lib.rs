@@ -65,6 +65,7 @@ pub mod cozo_store;
 pub mod hygiene;
 pub mod lru_query;
 pub mod query;
+pub mod query_off_thread;
 #[cfg(feature = "remote-hub")]
 pub mod remote_hub;
 
@@ -85,6 +86,7 @@ pub use federation::{
 pub use kb_identity::{KbTarget, PRIMARY_NAME_ALIASES};
 pub use org::{IngestReport, OrgParseResult, ParsedLink};
 pub use query::{CozoQueryLayer, FederatedQuery, InMemoryQueryLayer, KbQueryLayer};
+pub use query_off_thread::OffThreadQueryLayer;
 pub use store::{
     AgendaFilter, Block, BrokenLinkInfo, BrokenLinkReason, HealthReport, IntegrityError, KbStore,
     KbStoreError, Link, MetaMember, NodeVersion, ReimportStaleFile, SubGraph, VectorHit,

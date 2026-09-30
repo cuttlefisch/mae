@@ -989,14 +989,31 @@ impl KbRegistry {
         base_url: String,
         hub_kb_id: String,
         auth: RemoteHubAuth,
-    ) -> String {
+    ) -> Result<String, String> {
         if let Some(existing) = self.instances.iter().find(|i| {
             i.kind == KbInstanceKind::RemoteHub
                 && i.remote_hub
                     .as_ref()
                     .is_some_and(|r| r.base_url == base_url && r.hub_kb_id == hub_kb_id)
         }) {
-            return existing.uuid.clone();
+            return Ok(existing.uuid.clone());
+        }
+        // Same name rules as `register`: a reserved system-KB name answers to
+        // MAE's own corpus, and a second row with a taken name (or slug) makes
+        // `find(name)` and a name-scoped search pick one of the two silently.
+        if crate::system_kb::is_reserved_name(&name) {
+            return Err(format!("'{name}' is a reserved MAE system KB name."));
+        }
+        let slug = crate::data_dir::slugify(&name);
+        if let Some(existing) = self
+            .instances
+            .iter()
+            .find(|i| crate::data_dir::slugify(&i.name) == slug)
+        {
+            return Err(format!(
+                "'{name}' is already taken by the registered KB '{}'. Pick a different name.",
+                existing.name
+            ));
         }
 
         let uuid = generate_uuid();
@@ -1026,7 +1043,7 @@ impl KbRegistry {
             }),
         };
         self.instances.push(instance);
-        uuid
+        Ok(uuid)
     }
 
     /// Unregister an instance by name or UUID.
@@ -1970,12 +1987,14 @@ enabled = true
     #[test]
     fn register_remote_hub_is_idempotent_per_hub_and_distinguishes_kb_id() {
         let mut reg = KbRegistry::default();
-        let uuid1 = reg.register_remote_hub(
-            "Team Hub".to_string(),
-            "https://kb.example.org:8443".to_string(),
-            "team-notes".to_string(),
-            RemoteHubAuth::KeystoreKey("team-hub-token".to_string()),
-        );
+        let uuid1 = reg
+            .register_remote_hub(
+                "Team Hub".to_string(),
+                "https://kb.example.org:8443".to_string(),
+                "team-notes".to_string(),
+                RemoteHubAuth::KeystoreKey("team-hub-token".to_string()),
+            )
+            .expect("register");
         assert!(!uuid1.is_empty());
         assert_eq!(reg.instances.len(), 1);
 
@@ -2001,12 +2020,14 @@ enabled = true
         );
 
         // Same hub registered again: idempotent, no duplicate row.
-        let uuid1_again = reg.register_remote_hub(
-            "Team Hub (renamed locally)".to_string(),
-            "https://kb.example.org:8443".to_string(),
-            "team-notes".to_string(),
-            RemoteHubAuth::Command("op read op://vault/team-hub-token".to_string()),
-        );
+        let uuid1_again = reg
+            .register_remote_hub(
+                "Team Hub (renamed locally)".to_string(),
+                "https://kb.example.org:8443".to_string(),
+                "team-notes".to_string(),
+                RemoteHubAuth::Command("op read op://vault/team-hub-token".to_string()),
+            )
+            .expect("re-register is idempotent, not a refusal");
         assert_eq!(
             uuid1, uuid1_again,
             "same (base_url, hub_kb_id) must not duplicate"
@@ -2014,14 +2035,52 @@ enabled = true
         assert_eq!(reg.instances.len(), 1);
 
         // A different kb_id on the SAME hub daemon is a genuinely distinct instance.
-        let uuid2 = reg.register_remote_hub(
-            "Team Hub — Archive".to_string(),
-            "https://kb.example.org:8443".to_string(),
-            "team-archive".to_string(),
-            RemoteHubAuth::KeystoreKey("team-hub-token".to_string()),
-        );
+        let uuid2 = reg
+            .register_remote_hub(
+                "Team Hub — Archive".to_string(),
+                "https://kb.example.org:8443".to_string(),
+                "team-archive".to_string(),
+                RemoteHubAuth::KeystoreKey("team-hub-token".to_string()),
+            )
+            .expect("register");
         assert_ne!(uuid1, uuid2);
         assert_eq!(reg.instances.len(), 2);
+    }
+
+    /// A hub must not take a name another row answers to: `find(name)` and a
+    /// name-scoped search would silently pick one of the two. Same rules as
+    /// `register`, including the reserved system-KB names.
+    #[test]
+    fn register_remote_hub_refuses_reserved_and_taken_names() {
+        let mut reg = KbRegistry::default();
+        let local = KbInstance::local(
+            "u-local".into(),
+            "Team Notes".into(),
+            PathBuf::from("/nonexistent/team-notes"),
+            PathBuf::from("/nonexistent/team-notes.db"),
+        );
+        reg.instances.push(local);
+        let reserved = crate::system_kb::SYSTEM_KBS
+            .first()
+            .map(|k| k.name)
+            .expect("at least one system KB");
+
+        for name in [
+            reserved.to_string(),
+            "Team Notes".into(),
+            "team-notes".into(),
+        ] {
+            let err = reg
+                .register_remote_hub(
+                    name.clone(),
+                    "https://kb.example.org:8443".into(),
+                    "some-kb".into(),
+                    RemoteHubAuth::KeystoreKey("k".into()),
+                )
+                .expect_err(&format!("'{name}' must be refused"));
+            assert!(!err.is_empty());
+        }
+        assert_eq!(reg.instances.len(), 1, "no refused hub left a row behind");
     }
 
     /// ADR-062 Phase C: a `RemoteHub` instance (including the new nested
@@ -2038,7 +2097,8 @@ enabled = true
             "https://kb.example.org:8443".to_string(),
             "team-notes".to_string(),
             RemoteHubAuth::Command("op read op://vault/team-hub-token".to_string()),
-        );
+        )
+        .expect("register");
 
         let toml_str = toml::to_string_pretty(&reg).expect("serialize");
         let reparsed: KbRegistry = toml::from_str(&toml_str).expect("deserialize");
