@@ -176,11 +176,21 @@ pub fn restore_backup(
         );
     }
 
-    // No stale WAL can survive to be replayed over the restored file: the
-    // pre-restore snapshot above OPENS the live DB, so SQLite recovers any WAL
-    // into it (the pre-restore backup therefore holds even uncheckpointed
-    // writes) and removes it on close. The KB must not be open elsewhere while
-    // restoring — a live connection would write a new WAL after this point.
+    // A stale WAL beside the restored file would be replayed over it on the next
+    // open. The pre-restore snapshot above OPENS the live DB, so SQLite recovers
+    // any WAL into it first — the pre-restore backup holds even uncheckpointed
+    // writes — and only then are the sidecars removed. Removed EXPLICITLY:
+    // "SQLite deletes the WAL on close" is a build option, not a property, and
+    // the macOS system SQLite keeps it (this test went red there when it relied
+    // on that). The KB must not be open elsewhere while restoring — a live
+    // connection would write a new WAL after this point.
+    for side in crate::kb_build::wal_sidecars(&target) {
+        match std::fs::remove_file(&side) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+    }
     std::fs::copy(&backup_path, &target)?;
     info!(slug, timestamp, "restored KB from backup");
     Ok(target)

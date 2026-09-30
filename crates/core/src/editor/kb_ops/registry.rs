@@ -728,33 +728,8 @@ impl Editor {
         let inst = self.kb.registry.find(name_or_uuid).cloned();
         match inst {
             Some(instance) => {
-                // #631: an empty `org_dir` is the documented convention for any
-                // instance whose content does not come from disk — every joined
-                // collab KB uses it (`federation.rs`). Walking "" yields nothing,
-                // and the empty result was then written straight back over the
-                // live in-memory KB, silently emptying it until restart. The
-                // system-KB guard above covers only one user of that convention.
-                //
-                // Every other org-dir consumer already filters these out
-                // (`kb_reimport_file`, `kb_path_in_instance`, the watcher drain,
-                // the daemon scheduler); this was the one that did not.
-                // Phase 1 (KB cutover): a detached instance's store IS the
-                // truth. Re-importing text over it is precisely the clobber the
-                // cutover exists to stop, so refuse rather than silently
-                // reverting the user's store to a stale archive.
-                if !instance.allows_ingest() {
-                    self.set_status(format!(
-                        "'{}' is detached — its store is the source of truth, so re-importing \
-                         would overwrite it. :kb-attach first checks what ingest would change.",
-                        instance.name
-                    ));
-                    return None;
-                }
-                if instance.org_dir.as_os_str().is_empty() {
-                    self.set_status(format!(
-                        "'{}' has no org directory — its content lives in the store",
-                        instance.name
-                    ));
+                if let Some(refusal) = kb_reimport_refusal(&instance) {
+                    self.set_status(refusal);
                     return None;
                 }
                 let mode = mode.unwrap_or_default();
@@ -1746,4 +1721,47 @@ impl Editor {
             )
         })
     }
+}
+
+/// Why `:kb-reimport` must not run on `instance`, if it must not.
+///
+/// #631: an empty `org_dir` is the documented convention for any instance whose
+/// content does not come from disk — every joined collab KB uses it
+/// (`federation.rs`). Walking "" yields nothing, and the empty result was then
+/// written straight back over the live in-memory KB, silently emptying it until
+/// restart. Every other org-dir consumer already filters these out
+/// (`kb_reimport_file`, `kb_path_in_instance`, the watcher drain, the daemon
+/// scheduler); reimport was the one that did not.
+///
+/// Phase 1 (KB cutover): a detached instance's store IS the truth. Re-importing
+/// text over it is precisely the clobber the cutover exists to stop.
+///
+/// A directory that no longer exists (moved project, unmounted disk) would make
+/// the Full ingest treat every tracked file as deleted and empty the store; the
+/// ingest itself refuses too, but its error path falls back to an in-memory
+/// import that would empty the mirror, so refuse here with a clear message.
+fn kb_reimport_refusal(instance: &mae_kb::federation::KbInstance) -> Option<String> {
+    if !instance.allows_ingest() {
+        return Some(format!(
+            "'{}' is detached — its store is the source of truth, so re-importing \
+             would overwrite it. :kb-attach first checks what ingest would change.",
+            instance.name
+        ));
+    }
+    if instance.org_dir.as_os_str().is_empty() {
+        return Some(format!(
+            "'{}' has no org directory — its content lives in the store",
+            instance.name
+        ));
+    }
+    if !instance.org_dir.is_dir() {
+        return Some(format!(
+            "'{}': {} does not exist — not re-importing (a full ingest of a \
+             missing directory would delete every node). Moved it? Register \
+             the new location.",
+            instance.name,
+            instance.org_dir.display()
+        ));
+    }
+    None
 }

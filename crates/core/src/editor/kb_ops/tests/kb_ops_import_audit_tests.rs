@@ -240,3 +240,30 @@ fn the_audit_commands_still_work_on_an_attached_kb() {
     assert!(editor.kb_import_plan(&tmp.path().to_string_lossy()).is_ok());
     assert!(editor.kb_import_verify("Attached").is_ok());
 }
+
+/// `:kb-reimport` of a KB whose directory is gone (a moved project, an
+/// unmounted disk) must refuse — a full ingest of nothing deletes every node.
+#[test]
+fn reimporting_a_kb_whose_directory_is_gone_is_refused_and_keeps_its_nodes() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("a.org"),
+        ":PROPERTIES:\n:ID: gone-dir-a\n:END:\n#+title: A\n\nBody.\n",
+    )
+    .unwrap();
+    let mut editor = Editor::new();
+    let _t = with_test_dirs(&mut editor);
+    editor.kb_register("GoneDir", dir.path()).expect("register");
+    let uuid = editor.kb.registry.find("GoneDir").unwrap().uuid.clone();
+    drop(dir);
+
+    assert!(editor.kb_reimport("GoneDir", None).is_none(), "must refuse");
+    let store = editor.kb.instance_stores.get(&uuid).expect("store").clone();
+    assert!(
+        matches!(
+            mae_kb::KbStore::get_node(&*store, "gone-dir-a"),
+            Ok(Some(_))
+        ),
+        "the store keeps the node"
+    );
+}
