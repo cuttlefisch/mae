@@ -327,7 +327,7 @@ impl Editor {
                     mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
                         if let Some(i) = reg.instances.iter_mut().find(|i| i.uuid == uuid_for_write)
                         {
-                            i.project_root = Some(root.clone());
+                            repoint_moved_project(i, &root);
                         }
                     });
                 if let Err(e) = saved {
@@ -460,5 +460,16 @@ impl Editor {
             report.skipped_no_id,
             report.read_errors.len()
         ));
+    }
+}
+
+/// A moved project repoints everything that names it (#832 rule 4). An in-tree
+/// KB's `org_dir` lives under the project root, so it moves with it — repairing
+/// the root alone left `org_dir` naming a missing directory.
+fn repoint_moved_project(inst: &mut mae_kb::federation::KbInstance, root: &Path) {
+    if let Some(old) = inst.project_root.replace(root.to_path_buf()) {
+        if let Ok(rel) = inst.org_dir.strip_prefix(&old) {
+            inst.org_dir = root.join(rel);
+        }
     }
 }

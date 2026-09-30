@@ -313,7 +313,7 @@ impl Editor {
         let apply = |reg: &mut mae_kb::federation::KbRegistry| {
             if let Some(i) = reg.instances.iter_mut().find(|i| i.uuid == uuid) {
                 if let Some(dir) = restore_org_dir {
-                    i.org_dir = dir.clone();
+                    i.org_dir = mae_kb::paths::canonical_lenient(dir);
                 }
                 i.ingest_policy = mae_kb::federation::IngestPolicy::FromOrgDir;
             }

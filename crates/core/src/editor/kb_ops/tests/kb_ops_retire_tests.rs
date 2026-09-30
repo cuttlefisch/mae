@@ -232,3 +232,82 @@ fn a_kb_registered_through_a_symlink_can_be_retired() {
     editor.kb_retire_archive("Linked").expect("retire");
     assert!(!real.path().join("a.org").exists(), "the file moved out");
 }
+
+/// A KB whose `source_files` keys were recorded under another spelling of its
+/// directory (a symlink here; on macOS the `/var` → `/private/var` link; any KB
+/// keyed before canonicalisation). The registry repairs `org_dir` to the
+/// canonical spelling on load (#832 rule 1), so every walk now yields canonical
+/// paths — and an exact-string key lookup misses every file.
+#[cfg(unix)]
+fn legacy_keyed_kb(files: &[(&str, &str)]) -> (Editor, TempDir, TempDir, TempDir) {
+    let real = TempDir::new().unwrap();
+    let links = TempDir::new().unwrap();
+    let alias = links.path().join("notes");
+    std::os::unix::fs::symlink(real.path(), &alias).unwrap();
+    let (mut editor, dirs) = detached_kb(&alias, files);
+    let data_dir = editor.mae_data_dir().unwrap();
+    editor.kb.registry = mae_kb::federation::KbRegistry::load(&data_dir);
+    assert_eq!(
+        editor.kb.registry.find("Retiring").unwrap().org_dir,
+        real.path().canonicalize().unwrap(),
+        "premise: the loaded row is canonical while the keys are symlink-spelled"
+    );
+    (editor, dirs, real, links)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_kb_keyed_under_another_spelling_can_still_be_retired() {
+    let (editor, _d, _real, _links) = legacy_keyed_kb(&[("a.org", "AAA"), ("sub/b.org", "BBB")]);
+    let plan = editor.kb_retire_plan("Retiring").expect("plan");
+    assert!(plan.is_clean(), "{}", plan.describe());
+    assert_eq!(plan.files.len(), 2);
+}
+
+/// The fail-OPEN twin: the stale-archive guard must still recognise an
+/// imported file reached through the canonical path.
+#[cfg(unix)]
+#[test]
+fn the_stale_archive_guard_recognises_a_file_keyed_under_another_spelling() {
+    let (editor, _d, real, _links) = legacy_keyed_kb(&[("a.org", "AAA")]);
+    let canonical_file = real.path().canonicalize().unwrap().join("a.org");
+    assert_eq!(
+        editor.kb_stale_archive_instance(&canonical_file),
+        Some("Retiring".to_string()),
+        "an imported file of a detached KB is a stale archive whatever its spelling"
+    );
+}
+
+/// Retire → attach → move → retire: the second retirement must record the
+/// directory it actually retired. It used to keep the FIRST origin forever, so
+/// the retired-origin write guard (#825) then protected a directory the KB had
+/// long left, and dailies aimed at the real one wrote files again (#832).
+#[test]
+fn retirement_records_the_directory_it_retires_not_an_earlier_origin() {
+    let dir = TempDir::new().unwrap();
+    let earlier = TempDir::new().unwrap();
+    let (mut editor, _dirs) = detached_kb(dir.path(), &[("a.org", "AAA")]);
+    let data_dir = editor.mae_data_dir().unwrap();
+    let stale = earlier.path().to_path_buf();
+    let (reg, (), saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+        let i = reg
+            .instances
+            .iter_mut()
+            .find(|i| i.name == "Retiring")
+            .unwrap();
+        i.import_record
+            .get_or_insert_with(mae_kb::federation::KbImportRecord::default)
+            .origin = stale.clone();
+    });
+    saved.unwrap();
+    editor.kb.registry = reg;
+
+    editor.kb_retire_archive("Retiring").expect("retire");
+
+    let origin = editor
+        .kb
+        .registry
+        .find("Retiring")
+        .and_then(|i| i.import_record.as_ref().map(|r| r.origin.clone()));
+    assert_eq!(origin, Some(dir.path().canonicalize().unwrap()));
+}

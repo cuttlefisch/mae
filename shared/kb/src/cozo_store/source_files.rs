@@ -150,6 +150,49 @@ impl CozoKbStore {
         Ok(map)
     }
     /// List all tracked source files with their content hashes.
+    /// Every tracked key, by the canonical spelling of its path. Build it ONCE
+    /// for an operation that looks up many files (retirement's gate).
+    pub fn source_files_by_canonical_path(
+        &self,
+    ) -> Result<HashMap<std::path::PathBuf, String>, KbStoreError> {
+        Ok(self
+            .list_source_files()?
+            .into_iter()
+            .map(|(key, _, _)| {
+                (
+                    crate::paths::canonical_lenient(std::path::Path::new(&key)),
+                    key,
+                )
+            })
+            .collect())
+    }
+
+    /// The `source_files` key under which `path` was recorded, whatever
+    /// spelling of its directory the key used (#832).
+    ///
+    /// Ingest keys a file by the path it walked, so a KB imported through a
+    /// symlink, a `..` path, or before canonicalisation carries keys an exact
+    /// lookup never matches — retirement then called every file
+    /// never-imported, and the stale-archive guard failed OPEN. Exact spelling
+    /// first (one keyed query, the normal case), then the canonical one; only
+    /// when both miss, and only for an `.org` file (the only kind a KB
+    /// imports), the canonical index — a scan of the tracked keys.
+    pub fn source_file_key(&self, path: &std::path::Path) -> Result<Option<String>, KbStoreError> {
+        let raw = path.to_string_lossy().into_owned();
+        if self.get_source_file_hash(&raw)?.is_some() {
+            return Ok(Some(raw));
+        }
+        let canon = crate::paths::canonical_lenient(path);
+        let canon_key = canon.to_string_lossy().into_owned();
+        if canon_key != raw && self.get_source_file_hash(&canon_key)?.is_some() {
+            return Ok(Some(canon_key));
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("org") {
+            return Ok(None);
+        }
+        Ok(self.source_files_by_canonical_path()?.remove(&canon))
+    }
+
     pub fn list_source_files(&self) -> Result<Vec<(String, String, i64)>, KbStoreError> {
         let result = self
             .run_immut(

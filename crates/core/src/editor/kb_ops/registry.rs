@@ -1035,19 +1035,9 @@ impl Editor {
         // claimed: it genuinely is not in the KB, so editing it loses nothing.
         // `:kb-retire-archive`'s gate is what surfaces those.
         let store = self.kb.instance_stores.get(&inst.uuid)?;
-        let recorded = |p: &std::path::Path| {
-            matches!(
-                store.get_source_file_hash(&p.to_string_lossy()),
-                Ok(Some(_))
-            )
-        };
-        // Ingest records `path.to_string_lossy()` as walked from a canonicalised
-        // `org_dir`; a path arriving here may not be canonical (symlink, `..`),
-        // so try both rather than miss.
-        if recorded(path) || path.canonicalize().is_ok_and(|c| recorded(&c)) {
-            return Some(inst.name.clone());
-        }
-        None
+        // Keyed on whatever spelling ingest walked, which need not be the one
+        // this path arrives in — `source_file_key` matches any (#832).
+        matches!(store.source_file_key(path), Ok(Some(_))).then(|| inst.name.clone())
     }
 
     pub(crate) fn kb_owner_of(&self, id: &str) -> Option<Option<String>> {

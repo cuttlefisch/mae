@@ -149,6 +149,9 @@ fn verify_archive_files(
 ) -> (Vec<PathBuf>, Vec<RetireBlocker>) {
     let mut files = Vec::new();
     let mut blockers = Vec::new();
+    // Keys may be spelled through another path to this directory (#832); look
+    // each walked file up by its canonical path, building the index once.
+    let by_canon = store.source_files_by_canonical_path().unwrap_or_default();
     for path in org_files_under(org_dir) {
         // MAE's own instance marker. Ingest skips it, so it is never in
         // `source_files` — without this every KB has one permanent blocker and
@@ -156,7 +159,10 @@ fn verify_archive_files(
         if mae_kb::federation::is_instance_sentinel(&path) {
             continue;
         }
-        let key = path.to_string_lossy().to_string();
+        let key = by_canon
+            .get(&mae_kb::paths::canonical_lenient(&path))
+            .cloned()
+            .unwrap_or_else(|| path.to_string_lossy().to_string());
         let Ok(Some(recorded)) = store.get_source_file_hash(&key) else {
             blockers.push(RetireBlocker {
                 path,
@@ -321,9 +327,11 @@ impl Editor {
             let rec = inst
                 .import_record
                 .get_or_insert_with(mae_kb::federation::KbImportRecord::default);
-            if rec.origin.as_os_str().is_empty() {
-                rec.origin = origin.clone();
-            }
+            // Always the directory being retired NOW, never a first-retirement
+            // value kept forever: retire → attach → move → retire must record
+            // the second directory, or the retired-origin write guard (#825)
+            // protects the wrong one (#832).
+            rec.origin = mae_kb::paths::canonical_lenient(&origin);
             if rec.file_count == 0 {
                 rec.file_count = count;
             }
