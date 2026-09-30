@@ -765,6 +765,16 @@ D7 is worth reading before touching any KB code: **never read `primary: bool` to
 policy or a directory** — it means "first row ever registered", and reading it otherwise silently
 misrouted an entire user KB into the daemon's own store while every layer reported success.
 
+
+**ADR-111** (*accepted, design; phased*) — **remote clients reach the daemon over HTTPS and prove
+identity at the application layer.** Raw-TCP mTLS collab (whose key fingerprint *is* the principal)
+cannot cross a TLS-terminating proxy, has no SSO and cannot serve browsers; so native, headless and
+browser clients all use the ADR-052 listener, identity is an OIDC session plus a device key bound to
+it (ADR-098), the hub must verify every op signature (#727 — the prerequisite for any write over this
+path), E2E per KB covers confidentiality from the proxy, and ADR-099's WebSocket is extended to every
+remote client with a server-enforced token-refresh deadline. Raw-TCP collab and iroh stay for the P2P
+mesh and private links. Read its "What exists" section: an MCP client cannot yet search a hub at all.
+
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
 > from it entirely until 2026-08-04, i.e. every ADR from the KB-visualization arc and the whole
 > pre-v0.15 audit set, so agents rediscovered decisions that already existed. `docs/adr/` is the
