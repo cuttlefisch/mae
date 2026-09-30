@@ -398,8 +398,15 @@ impl Editor {
         // Import org files, open the durable store, start a watcher — shared
         // with `drain_kb_registry_watch` (an instance appearing via another
         // process's registration goes through the exact same adoption path).
-        let db_path = self.kb.registry.find(&uuid).map(|i| i.db_path.clone());
-        let (report, health) = self.kb_adopt_instance(&uuid, org_dir, db_path.as_deref());
+        // Ingest from the REGISTERED `org_dir`, which `register` canonicalized —
+        // not the caller's spelling. `source_files` keys are the walked paths, so
+        // ingesting a symlink/`..`/non-canonical temp spelling recorded keys no
+        // later reader walks, and retirement refused every file as never imported.
+        let (db_path, org_dir) = match self.kb.registry.find(&uuid) {
+            Some(i) => (Some(i.db_path.clone()), i.org_dir.clone()),
+            None => (None, org_dir.to_path_buf()),
+        };
+        let (report, health) = self.kb_adopt_instance(&uuid, &org_dir, db_path.as_deref());
 
         // Update last_import timestamp and persist.
         let (registry, (), saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
