@@ -790,18 +790,19 @@ fn reimport_stale_files_json(store: Option<&dyn mae_kb::KbStore>) -> serde_json:
 /// since it last drained a real change.
 pub fn execute_kb_sync_status(editor: &Editor) -> Result<String, String> {
     let notes_dir = editor.kb.notes_dir.clone();
-    let notes_dir_canon = notes_dir
+    // Answer with the SAME resolver dailies and capture use, so the diagnosis
+    // cannot disagree with where writes actually go (#832): a subdirectory of
+    // a KB's org dir, and a retired KB's origin, both belong to that KB.
+    let notes_dir_resolves_to = notes_dir
         .as_ref()
-        .map(|d| d.canonicalize().unwrap_or_else(|_| d.clone()));
-    let notes_dir_resolves_to = notes_dir_canon.as_ref().and_then(|dir_canon| {
-        editor.kb.registry.instances.iter().find_map(|inst| {
-            let inst_canon = inst
-                .org_dir
-                .canonicalize()
-                .unwrap_or_else(|_| inst.org_dir.clone());
-            (&inst_canon == dir_canon).then(|| inst.name.clone())
-        })
-    });
+        .and_then(|d| editor.kb_dir_write_owner(d))
+        .and_then(|uuid| {
+            editor
+                .kb
+                .registry
+                .find_by_uuid(&uuid)
+                .map(|i| i.name.clone())
+        });
 
     let instances: Vec<serde_json::Value> = editor
         .kb

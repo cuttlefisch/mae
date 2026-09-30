@@ -220,6 +220,34 @@ fn import_plan_refuses_a_detached_kbs_archive() {
     assert!(err.contains("expected post-detach divergence"), "{err}");
 }
 
+/// #832: the guard compared the caller's RAW directory with the registry's
+/// canonical `org_dir`, so the same archive reached through another spelling —
+/// a symlink here; on macOS any `/var` path; on Windows any path, since only
+/// `canonicalize()` adds `\\?\` — was assessed as if it were a live source.
+#[cfg(unix)]
+#[test]
+fn import_plan_refuses_a_detached_archive_reached_through_a_symlink() {
+    let real = TempDir::new().unwrap();
+    std::fs::write(real.path().join("a.org"), ":PROPERTIES:\n:ID: x\n:END:\n").unwrap();
+    let links = TempDir::new().unwrap();
+    let alias = links.path().join("notes");
+    std::os::unix::fs::symlink(real.path(), &alias).unwrap();
+    let mut editor = Editor::new();
+    let mut inst = mae_kb::federation::KbInstance::local(
+        "uuid-detached".into(),
+        "Detached".into(),
+        real.path().canonicalize().unwrap(),
+        real.path().join("kb.sqlite"),
+    );
+    inst.ingest_policy = mae_kb::federation::IngestPolicy::StoreIsTruth;
+    editor.kb.registry.instances.push(inst);
+
+    let err = editor
+        .kb_import_plan(&alias.to_string_lossy())
+        .expect_err("the same archive under another name is still the archive");
+    assert!(err.contains("kb-retire-archive"), "{err}");
+}
+
 /// The control: an ATTACHED KB's directory is exactly what these commands are
 /// for, and must still work.
 #[test]

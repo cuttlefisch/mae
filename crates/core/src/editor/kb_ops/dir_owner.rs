@@ -97,7 +97,7 @@ impl Editor {
     }
 
     /// The uuid of the KB that a MAE-originated write into `dir` belongs to.
-    pub(crate) fn kb_dir_write_owner(&self, dir: &Path) -> Option<String> {
+    pub fn kb_dir_write_owner(&self, dir: &Path) -> Option<String> {
         self.kb_dir_owner(dir, DirOwnership::SourceOrRetiredOrigin)
             .map(|i| i.uuid.clone())
     }

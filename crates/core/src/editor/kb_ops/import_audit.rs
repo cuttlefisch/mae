@@ -36,10 +36,14 @@ impl Editor {
 
     /// `:kb-import-plan <dir>` — assess without importing, and persist the plan.
     pub fn kb_import_plan(&mut self, org_dir: &str) -> Result<String, String> {
-        let dir = Path::new(org_dir);
-        if !dir.is_dir() {
+        if !Path::new(org_dir).is_dir() {
             return Err(format!("not a directory: {org_dir}"));
         }
+        // One spelling for everything below: the archive check compares with
+        // the registry's canonical `org_dir`, and the saved plan's root must
+        // not depend on the caller's cwd or a symlink (#832).
+        let canon = mae_kb::paths::canonical_lenient(Path::new(org_dir));
+        let dir = canon.as_path();
         // Assessing a DETACHED KB's directory reads a frozen archive as though
         // it were a live source. Every "would import" line is then a claim
         // about content the store already holds and no ingest will ever read

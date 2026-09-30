@@ -1597,8 +1597,6 @@ pub fn import_org_dir_to_store(
     let mut skipped_paths: Vec<PathBuf> = Vec::new();
     let mut accounted: Vec<PathBuf> = Vec::new();
 
-    use sha2::{Digest, Sha256};
-
     let start = std::time::Instant::now();
     let mut kb = KnowledgeBase::new();
     let mut report = ImportReport {
@@ -1640,7 +1638,7 @@ pub fn import_org_dir_to_store(
         };
 
         // Compute content hash for change detection.
-        let content_hash = hex::encode(Sha256::digest(content.as_bytes()));
+        let content_hash = source_content_hash(&content);
 
         // In incremental mode, skip files whose content hasn't changed.
         if matches!(mode, IngestMode::Incremental)
@@ -1727,13 +1725,12 @@ pub fn import_org_dir_to_store(
         }
 
         // Record source file metadata for incremental reimport.
-        let mtime = std::fs::metadata(path)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        store.record_source_file(&file_path_str, &content_hash, mtime, &file_node_ids)?;
+        store.record_source_file(
+            &file_path_str,
+            &content_hash,
+            source_mtime_secs(path),
+            &file_node_ids,
+        )?;
 
         report.path_to_ids.push((path.to_path_buf(), file_node_ids));
     }
@@ -1781,6 +1778,44 @@ fn refuse_sentinel_hijack(existing: &KbInstance, org_dir: &Path) -> Result<(), S
         ));
     }
     Ok(())
+}
+
+/// The content hash every ingest path records for a source file. One
+/// definition, so a file tracked by a full import and one tracked by an editor
+/// save or the watcher compare equal (#832).
+pub fn source_content_hash(content: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(content.as_bytes()))
+}
+
+/// A source file's modification time in whole seconds, 0 when unreadable.
+pub fn source_mtime_secs(path: &Path) -> i64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Record that `path` produced `ids` — the `source_files` row a full import
+/// writes, for the ingest paths that bypass `import_org_dir_to_store` (an
+/// editor save, the watcher). Without it those files were in the store but
+/// invisible to retirement, the stale-archive guard, and a full ingest's
+/// deletion step (#832).
+pub fn record_ingested_file(
+    store: &crate::CozoKbStore,
+    path: &Path,
+    ids: &[String],
+) -> Result<(), KbStoreError> {
+    let content =
+        std::fs::read_to_string(path).map_err(|e| KbStoreError::Storage(e.to_string()))?;
+    store.record_source_file(
+        &path.to_string_lossy(),
+        &source_content_hash(&content),
+        source_mtime_secs(path),
+        ids,
+    )
 }
 
 /// Read UUID from sentinel file in org directory.

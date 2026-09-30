@@ -122,12 +122,19 @@ fn org_files_under(dir: &Path) -> Vec<PathBuf> {
         };
         for e in entries.flatten() {
             let p = e.path();
-            if p.is_dir() {
+            // `DirEntry::file_type` does not follow symlinks, matching ingest's
+            // `walkdir` with `follow_links(false)`: a symlinked file or
+            // directory was never imported, so it must not be walked here
+            // either, or retirement calls it "never imported" forever (#832).
+            let Ok(kind) = e.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
                 if p.file_name().is_some_and(|n| n == ".git") {
                     continue;
                 }
                 walk(&p, out);
-            } else if p.extension().and_then(|x| x.to_str()) == Some("org") {
+            } else if kind.is_file() && p.extension().and_then(|x| x.to_str()) == Some("org") {
                 out.push(p);
             }
         }

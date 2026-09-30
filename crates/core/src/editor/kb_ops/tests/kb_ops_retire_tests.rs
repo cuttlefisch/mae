@@ -311,3 +311,84 @@ fn retirement_records_the_directory_it_retires_not_an_earlier_origin() {
         .and_then(|i| i.import_record.as_ref().map(|r| r.origin.clone()));
     assert_eq!(origin, Some(dir.path().canonicalize().unwrap()));
 }
+
+/// A note created after registration and saved through the editor
+/// (`kb_reimport_file`) was persisted as nodes but never recorded in
+/// `source_files` — the table retirement, the stale-archive guard and a full
+/// ingest's deletion step all read. So after detaching, retirement refused it as
+/// "never imported" although its node was in the store (#832).
+#[test]
+fn a_note_saved_through_the_editor_is_tracked_like_an_imported_one() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("a.org"),
+        ":PROPERTIES:\n:ID: n-a\n:END:\n#+title: A\n\nfirst\n",
+    )
+    .unwrap();
+    let mut editor = Editor::new();
+    let _d = with_test_dirs(&mut editor);
+    editor.kb.watcher_enabled = false;
+    editor.kb_register("Tracked", dir.path()).expect("register");
+    let uuid = editor.kb.registry.find("Tracked").unwrap().uuid.clone();
+
+    let later = dir.path().join("b.org");
+    let text = ":PROPERTIES:\n:ID: n-b\n:END:\n#+title: B\n\nwritten later\n";
+    std::fs::write(&later, text).unwrap();
+    editor.kb_reimport_file(&later);
+
+    let store = editor.kb.instance_stores.get(&uuid).unwrap().clone();
+    let key = store.source_file_key(&later).unwrap().expect("tracked");
+    assert_eq!(
+        store.get_source_file_hash(&key).unwrap(),
+        Some(hash_of(text)),
+        "with the hash of what was saved"
+    );
+
+    editor
+        .kb_set_ingest_policy("Tracked", IngestPolicy::StoreIsTruth)
+        .expect("detach");
+    let plan = editor.kb_retire_plan("Tracked").expect("plan");
+    assert!(plan.is_clean(), "{}", plan.describe());
+}
+
+/// Ingest walks without following symlinks, so a symlinked subdirectory's
+/// notes are never imported. Retirement's walk DID follow them, found files the
+/// store never saw, and refused forever. The two walks must agree (#832).
+#[cfg(unix)]
+#[test]
+fn a_symlinked_subdirectory_does_not_block_retirement() {
+    let dir = TempDir::new().unwrap();
+    let elsewhere = TempDir::new().unwrap();
+    std::fs::write(elsewhere.path().join("linked.org"), "LINKED").unwrap();
+    let (editor, _d) = detached_kb(dir.path(), &[("a.org", "AAA")]);
+    std::os::unix::fs::symlink(elsewhere.path(), dir.path().join("shared")).unwrap();
+
+    let plan = editor.kb_retire_plan("Retiring").expect("plan");
+    assert!(plan.is_clean(), "{}", plan.describe());
+    assert_eq!(
+        plan.files.len(),
+        1,
+        "only the file ingest could have imported"
+    );
+}
+
+/// Rule 3 of #832: containment compares canonical to canonical on BOTH sides,
+/// so it does not depend on the row having been repaired by a registry load.
+#[cfg(unix)]
+#[test]
+fn a_file_is_inside_its_kb_whichever_spelling_the_row_holds() {
+    let real = TempDir::new().unwrap();
+    let links = TempDir::new().unwrap();
+    let alias = links.path().join("notes");
+    std::os::unix::fs::symlink(real.path(), &alias).unwrap();
+    let mut editor = Editor::new();
+    let _d = with_test_dirs(&mut editor);
+    editor.kb.registry.instances.push(KbInstance::local(
+        "u-spelled".into(),
+        "Spelled".into(),
+        alias.clone(),
+        alias.join("kb.sqlite"),
+    ));
+    let file = real.path().canonicalize().unwrap().join("a.org");
+    assert!(editor.kb_path_in_instance(&file));
+}

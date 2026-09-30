@@ -13,7 +13,7 @@ use super::*;
 /// normalize_path`), so a hypothetical/not-yet-saved path never fails
 /// closed.
 fn canonicalize_for_instance_match(path: &std::path::Path) -> std::path::PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    mae_kb::paths::canonical_lenient(path)
 }
 
 /// A pre-embedded query vector for RRF-blending semantic search into
@@ -311,7 +311,7 @@ impl Editor {
             // nodes. A new ingest path does NOT get the policy for free; it has
             // its own gate, or it is a hole.
             .filter(|i| i.allows_ingest())
-            .map(|i| (i.uuid.clone(), i.org_dir.clone()))
+            .map(|i| (i.uuid.clone(), canonicalize_for_instance_match(&i.org_dir)))
         {
             if path.starts_with(&inst) {
                 // Issue #498/#502 (drift, principle #15): retraction used to depend
@@ -353,7 +353,7 @@ impl Editor {
                 // Phase 0b: persist the reimported nodes to the durable instance
                 // store — parity with the watcher drain (0a); otherwise a save-driven
                 // reimport is lost on restart.
-                self.kb_persist_instance_ids(&uuid, &ids);
+                self.kb_persist_file_ingest(&uuid, path, &ids);
                 // Keep the watcher's own path->ids map in sync too, so a subsequent
                 // watcher-driven event for this same path diffs against the truth
                 // rather than a stale pre-save mapping.
@@ -373,7 +373,7 @@ impl Editor {
             .instances
             .iter()
             .filter(|i| !i.org_dir.as_os_str().is_empty())
-            .any(|i| canonical.starts_with(&i.org_dir))
+            .any(|i| canonical.starts_with(canonicalize_for_instance_match(&i.org_dir)))
     }
 
     /// Resolve a `kb_search_scope` option value / AI-tool `scope` argument to a `KbScope`
