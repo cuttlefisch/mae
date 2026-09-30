@@ -37,8 +37,8 @@ fn retired_kb_with_notes_dir_at_origin(origin: &std::path::Path) -> (Editor, Tem
     );
     assert_eq!(
         inst.import_record.as_ref().map(|r| r.origin.clone()),
-        Some(origin.to_path_buf()),
-        "premise: retirement records where the KB came from"
+        Some(origin.canonicalize().unwrap()),
+        "premise: retirement records where the KB came from, canonical (#832)"
     );
     // Load the in-memory mirror from the store, as `kb_adopt_detached_instance`
     // does at every startup. The shared `detached_kb` fixture only installs the

@@ -240,11 +240,22 @@ fn import_plan_refuses_a_detached_archive_reached_through_a_symlink() {
         real.path().join("kb.sqlite"),
     );
     inst.ingest_policy = mae_kb::federation::IngestPolicy::StoreIsTruth;
-    editor.kb.registry.instances.push(inst);
+    editor.kb.registry.instances.push(inst.clone());
 
+    // The caller's spelling differs from the row's…
     let err = editor
         .kb_import_plan(&alias.to_string_lossy())
         .expect_err("the same archive under another name is still the archive");
+    assert!(err.contains("kb-retire-archive"), "{err}");
+
+    // …and so may the ROW's, when it never went through a registry load. This
+    // is the half the first version of the fix missed: macOS and Windows CI
+    // failed on a row holding a raw temp path while Linux passed.
+    inst.org_dir = alias.clone();
+    editor.kb.registry.instances = vec![inst];
+    let err = editor
+        .kb_import_plan(&real.path().canonicalize().unwrap().to_string_lossy())
+        .expect_err("a row spelled through a symlink still guards its archive");
     assert!(err.contains("kb-retire-archive"), "{err}");
 }
 

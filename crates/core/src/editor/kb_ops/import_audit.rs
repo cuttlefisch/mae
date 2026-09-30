@@ -57,9 +57,12 @@ impl Editor {
             .instances
             .iter()
             .find(|i| {
+                // Both sides canonical (#832 rule 3): a row need not have been
+                // repaired by a registry load to be compared correctly.
+                let org = mae_kb::paths::canonical_lenient(&i.org_dir);
                 !i.ingest_policy.allows_ingest()
                     && !i.org_dir.as_os_str().is_empty()
-                    && (dir.starts_with(&i.org_dir) || i.org_dir.starts_with(dir))
+                    && (dir.starts_with(&org) || org.starts_with(dir))
             })
             .map(|i| i.name.clone());
         if let Some(kb) = archived {
