@@ -76,7 +76,10 @@
 # here must include this exact value in its `aud` claim.
 # canonical_resource_uri = "https://mae.example.com:9474"
 
-# URL to fetch the authorization server's JWKS from.
+# URL to fetch an external authorization server's JWKS from. OPTIONAL when
+# this daemon's own self-issued tokens are the only ones in use (ADR-111 P1):
+# unset, external tokens are refused with 401. The listener does not start
+# with neither this nor self-issued tokens available.
 # jwks_url = "https://idp.example.com/.well-known/jwks.json"
 
 # The authorization server's issuer, checked against each token's `iss`.
@@ -86,6 +89,8 @@
 # principal_claim = "sub"
 
 # PEM-encoded TLS certificate chain + private key for the HTTPS listener.
+# Re-read when either file changes (a renewal needs no restart); a pair that
+# fails to load is ignored with a warning and the previous one stays in use.
 # cert_path = "/etc/mae/oauth-tls.crt"
 # key_path = "/etc/mae/oauth-tls.key"
 
@@ -111,6 +116,18 @@
 
 # Cap on the number of results a single kb/query.search call returns.
 # kb_query_max_search_results = 20
+
+# Accept (and let `mae-daemon token mint` issue) this daemon's own EdDSA
+# tokens. Needs [collab] enabled with auth.mode = "key".
+# self_issued_tokens_enabled = false
+
+# Default lifetime of a self-issued token, seconds.
+# self_issued_token_ttl_secs = 3600
+
+# Ceiling on `mae-daemon token mint --ttl`, seconds -- refused, not clamped,
+# above this. Self-issued tokens cannot be revoked individually (only by
+# expiry or by rotating the daemon identity), so keep it short.
+# self_issued_token_max_ttl_secs = 86400
 
 # ========================================================================
 # KB Unix socket connection hardening (ADR-054). This is the local,

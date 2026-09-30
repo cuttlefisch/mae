@@ -1298,3 +1298,113 @@ async fn the_new_endpoints_refuse_a_non_member() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// ADR-111 P1: search truncation is reported.
+//
+// `kb/query.search` scans at most `max_scan_nodes` nodes. Before this, a scan
+// that stopped at the cap returned `{results, scanned}` with nothing saying
+// the KB was larger than what was looked at -- so "no hits" from a partial
+// scan read exactly like "no hits in this KB". `links`/`titles`/`agenda`/
+// `health` already carried `truncated`; search was the odd one out.
+// ---------------------------------------------------------------------------
+
+/// Seed `n` nodes that ALL match `"needle"`, so every node the scan skips is a
+/// hit the caller did not get -- truncation here genuinely hides results.
+async fn seed_n_matching_nodes(doc_store: &DocStore, kb_id: &str, principal: &str, n: usize) {
+    let owner = Arc::new(Identity::generate("owner"));
+    let ids: Vec<String> = (0..n).map(|i| format!("m{i}")).collect();
+    let spec: Vec<(&str, &str, &[&str])> = ids
+        .iter()
+        .map(|id| (id.as_str(), "needle title", &[] as &[&str]))
+        .collect();
+    seed_multi_node_kb(doc_store, &owner, kb_id, principal, &spec).await;
+}
+
+async fn search_with(
+    doc_store: &DocStore,
+    kb_id: &str,
+    principal: &str,
+    max_scan_nodes: usize,
+    limit: usize,
+) -> serde_json::Value {
+    let limits = KbQueryLimits {
+        max_body_bytes: 65_536,
+        max_scan_nodes,
+        max_search_results: 1_000,
+    };
+    extract_result(
+        kb_query::dispatch(
+            "kb/query.search",
+            &json!({"kb_id": kb_id, "query": "needle", "limit": limit}),
+            doc_store,
+            Some(principal),
+            limits,
+        )
+        .await,
+    )
+}
+
+/// The attacker's case: a KB larger than the scan cap must SAY the answer is
+/// partial. Several (size, cap) pairs, including both sides of the boundary
+/// (`n == cap` is complete, `n == cap + 1` is not), so the flag cannot be
+/// satisfied by a constant or by an off-by-one comparison.
+#[tokio::test]
+async fn a_search_that_stops_at_the_scan_cap_reports_truncated() {
+    let principal = "oauth:viewer@example.com";
+    for (n, cap, want_truncated) in [
+        (7usize, 3usize, true),
+        (5, 4, true),
+        (5, 5, false),
+        (4, 9, false),
+        (12, 11, true),
+    ] {
+        let doc_store = fresh_doc_store().await;
+        seed_n_matching_nodes(&doc_store, "cap-kb", principal, n).await;
+        let result = search_with(&doc_store, "cap-kb", principal, cap, 1_000).await;
+        let hits = result["results"].as_array().unwrap().len();
+        assert_eq!(
+            result["truncated"],
+            json!(want_truncated),
+            "n={n} cap={cap}: every node matches, so {hits} hit(s) of {n} is {} -- got {result}",
+            if want_truncated {
+                "partial"
+            } else {
+                "complete"
+            }
+        );
+        assert_eq!(
+            hits,
+            n.min(cap),
+            "n={n} cap={cap}: the flag must describe the real result"
+        );
+        assert_eq!(
+            result["total"],
+            json!(n),
+            "n={n} cap={cap}: total is the manifest size"
+        );
+    }
+}
+
+/// A search that stopped because it had found `limit` hits is COMPLETE for the
+/// question asked, even when the KB is larger than the cap -- flagging it would
+/// mark every well-served query on a big KB as degraded and teach callers to
+/// ignore the flag.
+#[tokio::test]
+async fn a_search_satisfied_by_its_limit_is_not_truncated() {
+    let principal = "oauth:viewer@example.com";
+    let doc_store = fresh_doc_store().await;
+    seed_n_matching_nodes(&doc_store, "big-kb", principal, 9).await;
+    let result = search_with(&doc_store, "big-kb", principal, 4, 2).await;
+    assert_eq!(result["results"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        result["truncated"],
+        json!(false),
+        "limit reached inside the cap: {result}"
+    );
+    assert_eq!(
+        result["scanned"],
+        json!(2),
+        "scanned must count nodes actually examined, not min(total, cap): {result}"
+    );
+}

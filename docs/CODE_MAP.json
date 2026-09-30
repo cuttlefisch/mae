@@ -829,6 +829,10 @@
           "kind": "mod"
         },
         {
+          "name": "query_off_thread",
+          "kind": "mod"
+        },
+        {
           "name": "remote_hub",
           "kind": "mod"
         },
@@ -4428,6 +4432,10 @@
     {
       "name": "kb-attach",
       "doc": "Make a KB's .org directory authoritative again (:kb-attach <name> [confirm]) — compares it with the store first and refuses if ingest would change anything, unless confirmed"
+    },
+    {
+      "name": "kb-register-hub",
+      "doc": "Query a remote hub's KB live (:kb-register-hub <name> <https-url> <hub-kb-id> <keystore-key>) — never copied locally; the token comes from the named keystore entry"
     },
     {
       "name": "kb-new",

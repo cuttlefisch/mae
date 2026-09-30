@@ -327,6 +327,7 @@ Source: `shared/kb/src/lib.rs`
 | `hygiene` | mod |
 | `lru_query` | mod |
 | `query` | mod |
+| `query_off_thread` | mod |
 | `remote_hub` | mod |
 | `NodeKind` | enum |
 | `SubgraphSpec` | struct |
@@ -737,7 +738,7 @@ Source: `shared/sync/src/lib.rs`
 | `which-key-open?` | `scheme/src/runtime/test_primitives.rs` |
 | `write-file` | `scheme/src/runtime/test_primitives.rs` |
 
-## Commands (566 built-in)
+## Commands (567 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -1296,6 +1297,7 @@ Source: `shared/sync/src/lib.rs`
 | `kb-import-verify` | Reconcile a KB's org directory against what its store holds (reads only) |
 | `kb-detach` | Make a KB's store the source of truth; its .org dir becomes a stale archive (KB cutover) |
 | `kb-attach` | Make a KB's .org directory authoritative again (:kb-attach <name> [confirm]) — compares it with the store first and refuses if ingest would change anything, unless confirmed |
+| `kb-register-hub` | Query a remote hub's KB live (:kb-register-hub <name> <https-url> <hub-kb-id> <keystore-key>) — never copied locally; the token comes from the named keystore entry |
 | `kb-new` | Create a native KB — a store with no org directory (:kb-new <name>) |
 | `kb-retire-archive` | Move a detached KB's verified .org archive aside, making the KB native (dry run without 'confirm') |
 | `kb-instances` | List all registered KB instances |

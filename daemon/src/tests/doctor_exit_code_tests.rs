@@ -7,11 +7,45 @@
 
 use crate::config::DaemonConfig;
 use crate::run_doctor;
+use std::path::Path;
+
+/// A config whose every path is inside `tmp`.
+///
+/// `DaemonConfig::default()` resolves socket, data dirs, identity, keystore and
+/// authorized_keys from the real HOME/XDG, and `doctor` OPENS the collab SQLite
+/// store it finds there. These tests therefore ran against the CI runner's —
+/// and on a workstation, the live daemon's — store; one failed in CI with
+/// "database is locked" while a parallel test held it. The isolation is
+/// asserted, not assumed, so a new ambient path fails here instead of flaking.
+fn isolated(tmp: &Path) -> DaemonConfig {
+    let mut c = DaemonConfig::default();
+    let s = |rel: &str| tmp.join(rel).to_string_lossy().into_owned();
+    c.socket = tmp.join("daemon.sock");
+    c.data_dir = Some(tmp.join("data"));
+    c.collab.storage.data_dir = Some(tmp.join("collab"));
+    c.collab.auth.identity_dir = Some(s("collab"));
+    c.collab.auth.authorized_keys = Some(s("collab/authorized_keys"));
+    c.collab.auth.keystore = Some(s("collab/trusted_keys"));
+    let p = c.instance_paths();
+    let mut touched = vec![p.socket, p.data_dir, p.collab_data_dir];
+    touched.extend(p.identity_dir);
+    touched.extend(p.authorized_keys);
+    touched.extend(p.keystore);
+    for path in touched {
+        assert!(
+            path.starts_with(tmp),
+            "doctor would touch {} — outside the test's temp dir",
+            path.display()
+        );
+    }
+    c
+}
 
 /// A configuration that cannot serve a client must exit non-zero.
 #[test]
 fn doctor_fails_when_the_configuration_stops_clients_connecting() {
-    let mut config = DaemonConfig::default();
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = isolated(tmp.path());
     // Two independently invalid settings, so the assertion cannot pass on a
     // single hard-coded branch.
     config.collab.storage.compact_threshold = 0;
@@ -34,7 +68,8 @@ fn doctor_fails_when_the_configuration_stops_clients_connecting() {
 /// direction: a gate that always fails gets disabled.
 #[test]
 fn doctor_succeeds_on_a_configuration_with_no_problems() {
-    let config = DaemonConfig::default();
+    let tmp = tempfile::TempDir::new().unwrap();
+    let config = isolated(tmp.path());
     assert!(config.check_collab().is_empty(), "fixture assumption");
     assert_eq!(run_doctor(&config, None), 0);
 }
@@ -52,7 +87,8 @@ fn a_port_already_bound_is_not_a_problem() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a throwaway port");
     let taken = listener.local_addr().unwrap();
 
-    let mut config = DaemonConfig::default();
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut config = isolated(tmp.path());
     config.collab.bind = taken;
     assert!(config.check_collab().is_empty(), "fixture assumption");
 

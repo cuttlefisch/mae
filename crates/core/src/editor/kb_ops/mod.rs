@@ -192,6 +192,7 @@ mod import_audit;
 pub(crate) mod node_buffer;
 mod nodes;
 pub(crate) mod registry;
+mod remote_hub;
 pub(crate) mod retire;
 mod search;
 pub(crate) mod stale_archive;

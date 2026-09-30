@@ -71,9 +71,8 @@ hex = "0.4"
 
 [features]
 gui = ["dep:mae-gui", "dep:winit"]
-# ADR-062 Phase D: enable RemoteHub-kind KB instances (live query against a remote hub's
-# ADR-053 surface, no local replication). Off by default — pulls a TLS+HTTP client into
-# the binary only when opted in.
+# ADR-062 Phase D / ADR-111 P1: RemoteHub-kind KB instances. Kept as a passthrough
+# name; `mae-core` now enables it by default.
 remote-hub = ["mae-core/remote-hub"]
 # Issue #521: compile in additional out-of-tree Scheme kernel primitives
 # via crates/scheme-extra (a downstream fork's own extension point) — see

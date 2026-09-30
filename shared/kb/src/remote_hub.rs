@@ -462,6 +462,14 @@ impl KbQueryLayer for RemoteHubQueryLayer {
             ));
             return Ok(Vec::new());
         };
+        // ADR-111 P1: the hub scans at most `max_scan_nodes` nodes and says so when
+        // that cap -- not `limit` -- ended the scan. The hits still come back; the
+        // layer is marked degraded so the merged result reads as partial.
+        if truncated(&result) {
+            self.set_outcome(LastOutcome::MalformedResponse(
+                "search hit the hub's max_scan_nodes cap; the result is partial".to_string(),
+            ));
+        }
         // The hub's `kb/query.search` response carries no numeric relevance score (see
         // `daemon/src/kb_query.rs::search` — it returns `{id, title, excerpt}`, ranked by
         // scan order, not scored). A monotonically decreasing synthetic score preserves
@@ -953,6 +961,39 @@ mod tests {
             hits[0].score > hits[1].score,
             "rank order must be preserved via a monotonically decreasing synthetic score"
         );
+    }
+
+    /// ADR-111 P1: a hub search that stopped at its scan cap returns the hits it
+    /// found AND leaves the layer degraded, so `FederatedQuery` flags the merged
+    /// result as partial instead of presenting a short list as the whole answer.
+    /// The control case (same body, `truncated: false`) must stay clean -- a layer
+    /// that is always degraded after a search would satisfy the first half alone.
+    #[test]
+    fn a_truncated_search_returns_its_hits_and_marks_the_layer_degraded() {
+        for (flag, want_degraded) in [(true, true), (false, false)] {
+            let body = serde_json::json!({
+                "jsonrpc": "2.0", "id": 1,
+                "result": {
+                    "kb_id": "test-kb",
+                    "results": [{"id": "note:only", "title": "Only", "excerpt": "..."}],
+                    "scanned": 500, "total": 1800, "truncated": flag
+                }
+            })
+            .to_string();
+            let addr = spawn_one_shot_mock("HTTP/1.1 200 OK", &body);
+            let layer = RemoteHubQueryLayer::with_timeout(
+                test_config(format!("http://{addr}")),
+                Duration::from_secs(5),
+            );
+
+            let hits = layer.search("anything", 10).unwrap();
+            assert_eq!(hits.len(), 1, "the hits that WERE found still come back");
+            assert_eq!(
+                layer.degraded(),
+                want_degraded,
+                "truncated={flag}: degraded() must follow the hub's flag"
+            );
+        }
     }
 
     /// Translation-boundary hardening (ADR-062 Phase D adversarial test): a malformed

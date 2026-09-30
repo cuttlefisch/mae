@@ -1539,6 +1539,10 @@ fn register_kb_federation_commands(reg: &mut CommandRegistry) {
         "Make a KB's .org directory authoritative again (:kb-attach <name> [confirm]) — compares it with the store first and refuses if ingest would change anything, unless confirmed",
     );
     reg.register_builtin(
+        "kb-register-hub",
+        "Query a remote hub's KB live (:kb-register-hub <name> <https-url> <hub-kb-id> <keystore-key>) — never copied locally; the token comes from the named keystore entry",
+    );
+    reg.register_builtin(
         "kb-new",
         "Create a native KB — a store with no org directory (:kb-new <name>)",
     );

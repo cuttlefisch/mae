@@ -275,6 +275,18 @@ impl Editor {
                 }
                 true
             }
+            "kb-register-hub" => {
+                let parts: Vec<&str> = args.unwrap_or("").split_whitespace().collect();
+                match parts.as_slice() {
+                    [name, url, kb_id, key] => match self.kb_register_hub(name, url, kb_id, key) {
+                        Ok(msg) | Err(msg) => self.set_status(msg),
+                    },
+                    _ => self.set_status(
+                        "Usage: :kb-register-hub <name> <https-url> <hub-kb-id> <keystore-key>",
+                    ),
+                }
+                true
+            }
             // KB cutover, Phase 1: flip which side of a KB is authoritative.
             "kb-detach" | "kb-attach" => {
                 self.dispatch_kb_ingest_policy(command, args);
