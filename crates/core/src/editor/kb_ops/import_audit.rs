@@ -36,10 +36,14 @@ impl Editor {
 
     /// `:kb-import-plan <dir>` — assess without importing, and persist the plan.
     pub fn kb_import_plan(&mut self, org_dir: &str) -> Result<String, String> {
-        let dir = Path::new(org_dir);
-        if !dir.is_dir() {
+        if !Path::new(org_dir).is_dir() {
             return Err(format!("not a directory: {org_dir}"));
         }
+        // One spelling for everything below: the archive check compares with
+        // the registry's canonical `org_dir`, and the saved plan's root must
+        // not depend on the caller's cwd or a symlink (#832).
+        let canon = mae_kb::paths::canonical_lenient(Path::new(org_dir));
+        let dir = canon.as_path();
         // Assessing a DETACHED KB's directory reads a frozen archive as though
         // it were a live source. Every "would import" line is then a claim
         // about content the store already holds and no ingest will ever read
@@ -53,9 +57,12 @@ impl Editor {
             .instances
             .iter()
             .find(|i| {
+                // Both sides canonical (#832 rule 3): a row need not have been
+                // repaired by a registry load to be compared correctly.
+                let org = mae_kb::paths::canonical_lenient(&i.org_dir);
                 !i.ingest_policy.allows_ingest()
                     && !i.org_dir.as_os_str().is_empty()
-                    && (dir.starts_with(&i.org_dir) || i.org_dir.starts_with(dir))
+                    && (dir.starts_with(&org) || org.starts_with(dir))
             })
             .map(|i| i.name.clone());
         if let Some(kb) = archived {
@@ -327,7 +334,7 @@ impl Editor {
                     mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
                         if let Some(i) = reg.instances.iter_mut().find(|i| i.uuid == uuid_for_write)
                         {
-                            i.project_root = Some(root.clone());
+                            repoint_moved_project(i, &root);
                         }
                     });
                 if let Err(e) = saved {
@@ -460,5 +467,16 @@ impl Editor {
             report.skipped_no_id,
             report.read_errors.len()
         ));
+    }
+}
+
+/// A moved project repoints everything that names it (#832 rule 4). An in-tree
+/// KB's `org_dir` lives under the project root, so it moves with it — repairing
+/// the root alone left `org_dir` naming a missing directory.
+fn repoint_moved_project(inst: &mut mae_kb::federation::KbInstance, root: &Path) {
+    if let Some(old) = inst.project_root.replace(root.to_path_buf()) {
+        if let Ok(rel) = inst.org_dir.strip_prefix(&old) {
+            inst.org_dir = root.join(rel);
+        }
     }
 }

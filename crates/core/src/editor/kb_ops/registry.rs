@@ -892,6 +892,30 @@ impl Editor {
     /// the in-memory instance mirror, so without this the watcher/reimport edits are
     /// lost on restart — the same class of bug as the `:kb-ingest` durability gap.
     /// Returns the count persisted; counts failures into `watcher_stats`.
+    /// What every path-driven ingest (editor save, watcher) must do after
+    /// parsing a file: persist its nodes AND record the file as their source, as
+    /// a full import does. One call, so a new ingest path cannot do half (#832).
+    pub(super) fn kb_persist_file_ingest(
+        &mut self,
+        uuid: &str,
+        path: &std::path::Path,
+        ids: &[String],
+    ) {
+        self.kb_persist_instance_ids(uuid, ids);
+        self.kb_record_source_file(uuid, path, ids);
+    }
+
+    /// Track `path` as the source of `ids` in `uuid`'s durable store, as a full
+    /// import does.
+    fn kb_record_source_file(&self, uuid: &str, path: &std::path::Path, ids: &[String]) {
+        let Some(store) = self.kb.instance_stores.get(uuid) else {
+            return;
+        };
+        if let Err(e) = mae_kb::federation::record_ingested_file(store, path, ids) {
+            tracing::warn!(path = %path.display(), error = %e, "could not record the source file");
+        }
+    }
+
     pub(super) fn kb_persist_instance_ids(&mut self, uuid: &str, ids: &[String]) -> usize {
         let Some(store) = self.kb.instance_stores.get(uuid).cloned() else {
             return 0;
@@ -1035,19 +1059,9 @@ impl Editor {
         // claimed: it genuinely is not in the KB, so editing it loses nothing.
         // `:kb-retire-archive`'s gate is what surfaces those.
         let store = self.kb.instance_stores.get(&inst.uuid)?;
-        let recorded = |p: &std::path::Path| {
-            matches!(
-                store.get_source_file_hash(&p.to_string_lossy()),
-                Ok(Some(_))
-            )
-        };
-        // Ingest records `path.to_string_lossy()` as walked from a canonicalised
-        // `org_dir`; a path arriving here may not be canonical (symlink, `..`),
-        // so try both rather than miss.
-        if recorded(path) || path.canonicalize().is_ok_and(|c| recorded(&c)) {
-            return Some(inst.name.clone());
-        }
-        None
+        // Keyed on whatever spelling ingest walked, which need not be the one
+        // this path arrives in — `source_file_key` matches any (#832).
+        matches!(store.source_file_key(path), Ok(Some(_))).then(|| inst.name.clone())
     }
 
     pub(crate) fn kb_owner_of(&self, id: &str) -> Option<Option<String>> {

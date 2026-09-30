@@ -326,6 +326,7 @@ Source: `shared/kb/src/lib.rs`
 | `cozo_store` | mod |
 | `hygiene` | mod |
 | `lru_query` | mod |
+| `paths` | mod |
 | `query` | mod |
 | `query_off_thread` | mod |
 | `remote_hub` | mod |

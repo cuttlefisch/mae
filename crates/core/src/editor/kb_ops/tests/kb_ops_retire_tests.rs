@@ -232,3 +232,163 @@ fn a_kb_registered_through_a_symlink_can_be_retired() {
     editor.kb_retire_archive("Linked").expect("retire");
     assert!(!real.path().join("a.org").exists(), "the file moved out");
 }
+
+/// A KB whose `source_files` keys were recorded under another spelling of its
+/// directory (a symlink here; on macOS the `/var` → `/private/var` link; any KB
+/// keyed before canonicalisation). The registry repairs `org_dir` to the
+/// canonical spelling on load (#832 rule 1), so every walk now yields canonical
+/// paths — and an exact-string key lookup misses every file.
+#[cfg(unix)]
+fn legacy_keyed_kb(files: &[(&str, &str)]) -> (Editor, TempDir, TempDir, TempDir) {
+    let real = TempDir::new().unwrap();
+    let links = TempDir::new().unwrap();
+    let alias = links.path().join("notes");
+    std::os::unix::fs::symlink(real.path(), &alias).unwrap();
+    let (mut editor, dirs) = detached_kb(&alias, files);
+    let data_dir = editor.mae_data_dir().unwrap();
+    editor.kb.registry = mae_kb::federation::KbRegistry::load(&data_dir);
+    assert_eq!(
+        editor.kb.registry.find("Retiring").unwrap().org_dir,
+        real.path().canonicalize().unwrap(),
+        "premise: the loaded row is canonical while the keys are symlink-spelled"
+    );
+    (editor, dirs, real, links)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_kb_keyed_under_another_spelling_can_still_be_retired() {
+    let (editor, _d, _real, _links) = legacy_keyed_kb(&[("a.org", "AAA"), ("sub/b.org", "BBB")]);
+    let plan = editor.kb_retire_plan("Retiring").expect("plan");
+    assert!(plan.is_clean(), "{}", plan.describe());
+    assert_eq!(plan.files.len(), 2);
+}
+
+/// The fail-OPEN twin: the stale-archive guard must still recognise an
+/// imported file reached through the canonical path.
+#[cfg(unix)]
+#[test]
+fn the_stale_archive_guard_recognises_a_file_keyed_under_another_spelling() {
+    let (editor, _d, real, _links) = legacy_keyed_kb(&[("a.org", "AAA")]);
+    let canonical_file = real.path().canonicalize().unwrap().join("a.org");
+    assert_eq!(
+        editor.kb_stale_archive_instance(&canonical_file),
+        Some("Retiring".to_string()),
+        "an imported file of a detached KB is a stale archive whatever its spelling"
+    );
+}
+
+/// Retire → attach → move → retire: the second retirement must record the
+/// directory it actually retired. It used to keep the FIRST origin forever, so
+/// the retired-origin write guard (#825) then protected a directory the KB had
+/// long left, and dailies aimed at the real one wrote files again (#832).
+#[test]
+fn retirement_records_the_directory_it_retires_not_an_earlier_origin() {
+    let dir = TempDir::new().unwrap();
+    let earlier = TempDir::new().unwrap();
+    let (mut editor, _dirs) = detached_kb(dir.path(), &[("a.org", "AAA")]);
+    let data_dir = editor.mae_data_dir().unwrap();
+    let stale = earlier.path().to_path_buf();
+    let (reg, (), saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+        let i = reg
+            .instances
+            .iter_mut()
+            .find(|i| i.name == "Retiring")
+            .unwrap();
+        i.import_record
+            .get_or_insert_with(mae_kb::federation::KbImportRecord::default)
+            .origin = stale.clone();
+    });
+    saved.unwrap();
+    editor.kb.registry = reg;
+
+    editor.kb_retire_archive("Retiring").expect("retire");
+
+    let origin = editor
+        .kb
+        .registry
+        .find("Retiring")
+        .and_then(|i| i.import_record.as_ref().map(|r| r.origin.clone()));
+    assert_eq!(origin, Some(dir.path().canonicalize().unwrap()));
+}
+
+/// A note created after registration and saved through the editor
+/// (`kb_reimport_file`) was persisted as nodes but never recorded in
+/// `source_files` — the table retirement, the stale-archive guard and a full
+/// ingest's deletion step all read. So after detaching, retirement refused it as
+/// "never imported" although its node was in the store (#832).
+#[test]
+fn a_note_saved_through_the_editor_is_tracked_like_an_imported_one() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("a.org"),
+        ":PROPERTIES:\n:ID: n-a\n:END:\n#+title: A\n\nfirst\n",
+    )
+    .unwrap();
+    let mut editor = Editor::new();
+    let _d = with_test_dirs(&mut editor);
+    editor.kb.watcher_enabled = false;
+    editor.kb_register("Tracked", dir.path()).expect("register");
+    let uuid = editor.kb.registry.find("Tracked").unwrap().uuid.clone();
+
+    let later = dir.path().join("b.org");
+    let text = ":PROPERTIES:\n:ID: n-b\n:END:\n#+title: B\n\nwritten later\n";
+    std::fs::write(&later, text).unwrap();
+    editor.kb_reimport_file(&later);
+
+    let store = editor.kb.instance_stores.get(&uuid).unwrap().clone();
+    let key = store.source_file_key(&later).unwrap().expect("tracked");
+    assert_eq!(
+        store.get_source_file_hash(&key).unwrap(),
+        Some(hash_of(text)),
+        "with the hash of what was saved"
+    );
+
+    editor
+        .kb_set_ingest_policy("Tracked", IngestPolicy::StoreIsTruth)
+        .expect("detach");
+    let plan = editor.kb_retire_plan("Tracked").expect("plan");
+    assert!(plan.is_clean(), "{}", plan.describe());
+}
+
+/// Ingest walks without following symlinks, so a symlinked subdirectory's
+/// notes are never imported. Retirement's walk DID follow them, found files the
+/// store never saw, and refused forever. The two walks must agree (#832).
+#[cfg(unix)]
+#[test]
+fn a_symlinked_subdirectory_does_not_block_retirement() {
+    let dir = TempDir::new().unwrap();
+    let elsewhere = TempDir::new().unwrap();
+    std::fs::write(elsewhere.path().join("linked.org"), "LINKED").unwrap();
+    let (editor, _d) = detached_kb(dir.path(), &[("a.org", "AAA")]);
+    std::os::unix::fs::symlink(elsewhere.path(), dir.path().join("shared")).unwrap();
+
+    let plan = editor.kb_retire_plan("Retiring").expect("plan");
+    assert!(plan.is_clean(), "{}", plan.describe());
+    assert_eq!(
+        plan.files.len(),
+        1,
+        "only the file ingest could have imported"
+    );
+}
+
+/// Rule 3 of #832: containment compares canonical to canonical on BOTH sides,
+/// so it does not depend on the row having been repaired by a registry load.
+#[cfg(unix)]
+#[test]
+fn a_file_is_inside_its_kb_whichever_spelling_the_row_holds() {
+    let real = TempDir::new().unwrap();
+    let links = TempDir::new().unwrap();
+    let alias = links.path().join("notes");
+    std::os::unix::fs::symlink(real.path(), &alias).unwrap();
+    let mut editor = Editor::new();
+    let _d = with_test_dirs(&mut editor);
+    editor.kb.registry.instances.push(KbInstance::local(
+        "u-spelled".into(),
+        "Spelled".into(),
+        alias.clone(),
+        alias.join("kb.sqlite"),
+    ));
+    let file = real.path().canonicalize().unwrap().join("a.org");
+    assert!(editor.kb_path_in_instance(&file));
+}

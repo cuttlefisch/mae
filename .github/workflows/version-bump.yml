@@ -185,7 +185,7 @@ jobs:
           SHA=$(git rev-parse HEAD)
           echo "Waiting for CI on commit $SHA..."
 
-          # Poll for up to 60 minutes. Was 35 (CI "typically" 20-25 min) --
+          # Poll for up to 90 minutes (history below). Was 35 (CI "typically" 20-25 min) --
           # raised after a real, confirmed miss: the CI run for the v0.14.55
           # bump commit genuinely passed but took 37.5 minutes wall-clock
           # (21:10:51-21:48:27), 2.5 min past the old budget, skipping the
@@ -195,7 +195,16 @@ jobs:
           # second, independent way this same symptom (bump commit lands,
           # tag never does) can happen). 60 min gives real headroom above
           # the worst genuinely-observed duration, not just past it.
-          for i in $(seq 1 120); do
+          #
+          # Raised to 90 (2026-09): the budget is not one CI run but TWO. The
+          # merge commit's own CI is already running in ci.yml's never-
+          # cancelled `ci-refs/heads/main` group, so this bump commit's CI
+          # queues behind it; the slowest legs took up to ~34 min each in a
+          # 25-run sample, so back-to-back runs can pass 60 with nothing
+          # wrong. ci.yml's per-job timeouts now bound a HUNG predecessor;
+          # before them, one stuck lint job held the group and this wait
+          # expired with the bump commit's CI never having started.
+          for i in $(seq 1 180); do
             # Gate ONLY on the "CI" workflow run for this commit -- not on
             # check-suites broadly, which used to fold in every OTHER
             # github-actions workflow that also happens to run on push to
@@ -229,7 +238,7 @@ jobs:
           done
 
           if [ "$CONCLUSION" != "success" ]; then
-            echo "::error::CI did not complete within 35 minutes — skipping tag"
+            echo "::error::CI did not complete within 90 minutes — skipping tag"
             exit 1
           fi
 

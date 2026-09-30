@@ -217,6 +217,33 @@ fn adopting_a_moved_project_repairs_the_stale_root_on_disk() {
     );
 }
 
+/// #832 rule 4: a move repoints EVERYTHING that names the directory. An
+/// in-tree project KB's `org_dir` is `<root>/.mae-kb`; repairing `project_root`
+/// alone left it naming the old, now-missing location — and a reimport of a
+/// missing directory is exactly the "delete every node" case #828 had to guard.
+#[test]
+fn adopting_a_moved_project_repoints_its_org_dir_too() {
+    let home = TempDir::new().unwrap();
+    let (mut editor, _dirs) = editor_without_watchers();
+
+    let original = git_project(home.path(), "widget");
+    let result = editor.kb_init_project(Some(original.clone())).unwrap();
+    let moved = home.path().join("elsewhere");
+    std::fs::rename(&original, &moved).unwrap();
+    editor.kb_init_project(Some(moved.clone())).unwrap();
+
+    let want = moved.canonicalize().unwrap().join(".mae-kb");
+    let inst = editor.kb.registry.find(&result.uuid).unwrap();
+    assert_eq!(inst.org_dir, want, "org_dir follows the project");
+    assert!(inst.org_dir.is_dir(), "and names a directory that exists");
+    let reloaded = mae_kb::federation::KbRegistry::load(&editor.mae_data_dir().unwrap());
+    assert_eq!(
+        reloaded.find(&result.uuid).unwrap().org_dir,
+        want,
+        "durably"
+    );
+}
+
 /// **Two different projects must never collide**, which is the sibling risk of
 /// path keying and the reason VS Code's identically-named-folder case was a
 /// *security* bug rather than a correctness one.

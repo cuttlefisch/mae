@@ -375,7 +375,7 @@ impl Editor {
                         // handing ownership of `ids` to the watcher record. Without this
                         // the watcher-ingested nodes live only in the in-memory mirror
                         // and are lost on restart (same class as the :kb-ingest bug).
-                        self.kb_persist_instance_ids(&uuid, &ids);
+                        self.kb_persist_file_ingest(&uuid, &path, &ids);
                         if let Some(w) = self.kb.watchers.get(&uuid) {
                             w.record_ids(path, ids);
                         }

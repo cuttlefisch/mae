@@ -360,6 +360,54 @@ fn kb_sync_status_returns_valid_json() {
     );
 }
 
+/// `kb_sync_status` must answer "which KB does the notes dir belong to" the
+/// way dailies and capture actually decide it (`kb_dir_write_owner`): a subdir
+/// of an attached KB, and a retired KB's origin, both belong to that KB. It
+/// used canonical EQUALITY against `org_dir` only, so it reported "none" in
+/// exactly the case that wrote stub files into a retired origin (#825, #832).
+#[test]
+fn kb_sync_status_resolves_the_notes_dir_the_way_writes_do() {
+    use mae_kb::federation::{IngestPolicy, KbImportRecord, KbInstance};
+    let attached = tempfile::TempDir::new().unwrap();
+    let retired_origin = tempfile::TempDir::new().unwrap();
+    let mut editor = Editor::new();
+    editor.kb.registry.instances.push(KbInstance::local(
+        "u-attached".into(),
+        "Attached".into(),
+        attached.path().canonicalize().unwrap(),
+        attached.path().join("kb.sqlite"),
+    ));
+    let mut retired = KbInstance::local(
+        "u-retired".into(),
+        "Retired".into(),
+        std::path::PathBuf::new(),
+        retired_origin.path().join("kb.sqlite"),
+    );
+    retired.ingest_policy = IngestPolicy::StoreIsTruth;
+    retired.import_record = Some(KbImportRecord {
+        origin: retired_origin.path().canonicalize().unwrap(),
+        ..Default::default()
+    });
+    editor.kb.registry.instances.push(retired);
+
+    for (notes_dir, want) in [
+        (attached.path().join("notes"), "Attached"),
+        (retired_origin.path().to_path_buf(), "Retired"),
+    ] {
+        std::fs::create_dir_all(&notes_dir).unwrap();
+        editor.kb.notes_dir = Some(notes_dir.clone());
+        let out: serde_json::Value =
+            serde_json::from_str(&crate::tool_impls::execute_kb_sync_status(&editor).unwrap())
+                .unwrap();
+        assert_eq!(
+            out["kb_notes_dir_resolves_to_instance"],
+            want,
+            "{}",
+            notes_dir.display()
+        );
+    }
+}
+
 #[test]
 fn window_layout_flags_windows_sharing_a_buffer() {
     // ADR/bug fix regression: two windows pointing at the same buffer_idx

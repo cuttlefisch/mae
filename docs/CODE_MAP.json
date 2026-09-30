@@ -825,6 +825,10 @@
           "kind": "mod"
         },
         {
+          "name": "paths",
+          "kind": "mod"
+        },
+        {
           "name": "query",
           "kind": "mod"
         },

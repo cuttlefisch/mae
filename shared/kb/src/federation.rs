@@ -693,7 +693,27 @@ impl KbRegistry {
     /// default here; an absent file is empty, an unreadable one is an error.
     fn read_checked(path: &Path) -> Result<Self, String> {
         let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-        toml::from_str(&content).map_err(|e| e.to_string())
+        let mut reg: Self = toml::from_str(&content).map_err(|e| e.to_string())?;
+        reg.canonicalize_paths();
+        Ok(reg)
+    }
+
+    /// #832 rule 1: stored directories have one spelling. Applied to every
+    /// read, so rows written before canonicalization — or edited by hand — are
+    /// repaired here and written back canonical on the next save, and no reader
+    /// has to cope with a second spelling. An empty path means "none" and stays
+    /// empty.
+    fn canonicalize_paths(&mut self) {
+        for inst in &mut self.instances {
+            if !inst.org_dir.as_os_str().is_empty() {
+                inst.org_dir = crate::paths::canonical_lenient(&inst.org_dir);
+            }
+            if let Some(rec) = inst.import_record.as_mut() {
+                if !rec.origin.as_os_str().is_empty() {
+                    rec.origin = crate::paths::canonical_lenient(&rec.origin);
+                }
+            }
+        }
     }
 
     /// Save registry to `~/.local/share/mae/kb-registry.toml`.
@@ -864,7 +884,7 @@ impl KbRegistry {
         // back to the given path if it doesn't exist yet (canonicalize
         // requires the path to exist) — registration shouldn't hard-fail on
         // a not-yet-existing directory.
-        let org_dir = org_dir.canonicalize().unwrap_or(org_dir);
+        let org_dir = crate::paths::canonical_lenient(&org_dir);
 
         // Check for existing registration with same path
         if let Some(existing) = self.instances.iter().find(|i| i.org_dir == org_dir) {
@@ -885,6 +905,7 @@ impl KbRegistry {
         // uuid equality while the registry underneath it was corrupt. Adopt the
         // existing row and correct its path instead.
         if let Some(existing) = self.instances.iter_mut().find(|i| i.uuid == uuid) {
+            refuse_sentinel_hijack(existing, &org_dir)?;
             if existing.org_dir != org_dir {
                 tracing::info!(
                     from = %existing.org_dir.display(),
@@ -1576,8 +1597,6 @@ pub fn import_org_dir_to_store(
     let mut skipped_paths: Vec<PathBuf> = Vec::new();
     let mut accounted: Vec<PathBuf> = Vec::new();
 
-    use sha2::{Digest, Sha256};
-
     let start = std::time::Instant::now();
     let mut kb = KnowledgeBase::new();
     let mut report = ImportReport {
@@ -1619,7 +1638,7 @@ pub fn import_org_dir_to_store(
         };
 
         // Compute content hash for change detection.
-        let content_hash = hex::encode(Sha256::digest(content.as_bytes()));
+        let content_hash = source_content_hash(&content);
 
         // In incremental mode, skip files whose content hasn't changed.
         if matches!(mode, IngestMode::Incremental)
@@ -1706,13 +1725,12 @@ pub fn import_org_dir_to_store(
         }
 
         // Record source file metadata for incremental reimport.
-        let mtime = std::fs::metadata(path)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        store.record_source_file(&file_path_str, &content_hash, mtime, &file_node_ids)?;
+        store.record_source_file(
+            &file_path_str,
+            &content_hash,
+            source_mtime_secs(path),
+            &file_node_ids,
+        )?;
 
         report.path_to_ids.push((path.to_path_buf(), file_node_ids));
     }
@@ -1725,6 +1743,79 @@ pub fn import_org_dir_to_store(
 
     report.duration_ms = start.elapsed().as_millis() as u64;
     Ok((kb, report))
+}
+
+/// The instance sentinel travels with a directory, so a copy of a KB's
+/// directory — or a checkout of an old revision that still tracks it — carries
+/// that KB's uuid. Re-pointing the row is right only for a real MOVE, where the
+/// old directory is gone; otherwise it would silently swap the KB's source for
+/// the copy's content (#832). A row with no directory at all (a native or
+/// retired KB) is never given one here: making a directory authoritative again
+/// is `:kb-attach`'s job, because it compares the content first (#825).
+fn refuse_sentinel_hijack(existing: &KbInstance, org_dir: &Path) -> Result<(), String> {
+    if existing.org_dir == org_dir {
+        return Ok(());
+    }
+    if existing.org_dir.as_os_str().is_empty() {
+        return Err(format!(
+            "{} carries the instance marker of '{}', which is store-authoritative. To make \
+             this directory its source again use :kb-attach, which compares the content \
+             first; to register it as a separate KB, delete {} from it.",
+            org_dir.display(),
+            existing.name,
+            INSTANCE_SENTINEL
+        ));
+    }
+    if existing.org_dir.exists() {
+        return Err(format!(
+            "{} carries the instance marker of '{}', whose directory still exists at {} — \
+             this is a copy or another checkout, not a move. To register it as a separate \
+             KB, delete {} from it.",
+            org_dir.display(),
+            existing.name,
+            existing.org_dir.display(),
+            INSTANCE_SENTINEL
+        ));
+    }
+    Ok(())
+}
+
+/// The content hash every ingest path records for a source file. One
+/// definition, so a file tracked by a full import and one tracked by an editor
+/// save or the watcher compare equal (#832).
+pub fn source_content_hash(content: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(content.as_bytes()))
+}
+
+/// A source file's modification time in whole seconds, 0 when unreadable.
+pub fn source_mtime_secs(path: &Path) -> i64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Record that `path` produced `ids` — the `source_files` row a full import
+/// writes, for the ingest paths that bypass `import_org_dir_to_store` (an
+/// editor save, the watcher). Without it those files were in the store but
+/// invisible to retirement, the stale-archive guard, and a full ingest's
+/// deletion step (#832).
+pub fn record_ingested_file(
+    store: &crate::CozoKbStore,
+    path: &Path,
+    ids: &[String],
+) -> Result<(), KbStoreError> {
+    let content =
+        std::fs::read_to_string(path).map_err(|e| KbStoreError::Storage(e.to_string()))?;
+    store.record_source_file(
+        &path.to_string_lossy(),
+        &source_content_hash(&content),
+        source_mtime_secs(path),
+        ids,
+    )
 }
 
 /// Read UUID from sentinel file in org directory.
@@ -2681,6 +2772,10 @@ enabled = true
 }
 
 /// Story D / R8: the import census.
+#[cfg(test)]
+#[path = "federation_path_tests.rs"]
+mod path_tests;
+
 #[cfg(test)]
 mod import_census_tests {
     use super::*;

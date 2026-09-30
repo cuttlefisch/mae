@@ -64,6 +64,7 @@ pub mod cache;
 pub mod cozo_store;
 pub mod hygiene;
 pub mod lru_query;
+pub mod paths;
 pub mod query;
 pub mod query_off_thread;
 #[cfg(feature = "remote-hub")]

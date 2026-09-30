@@ -24,6 +24,17 @@ concurrency:
   # badge/release jobs read, and each merged commit deserves its own — the same
   # reasoning that makes `version-bump.yml` use `cancel-in-progress: false`.
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+#
+# Because a main run is never cancelled, ONE hung job holds this group for
+# GitHub's default job timeout of 6 hours, and every later main commit queues
+# behind it. That skipped a release: a merge commit's lint job hung in
+# `apt-get`/`pip`, the bump commit's CI sat pending behind it, and
+# version-bump.yml's CI wait expired, so the version landed on main untagged.
+# So every job carries `timeout-minutes`, in three tiers set at roughly twice
+# the slowest successful run in a 25-run sample (2026-09): 60 for the ~34-min
+# test legs, 40 for the <=18-min integration jobs, 15 for the rest. Raise a
+# tier with a measurement, not a guess; a job that times out fails like any
+# other and says so.
 
 env:
   CARGO_TERM_COLOR: always
@@ -80,6 +91,7 @@ jobs:
   changes:
     name: detect changed paths
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     outputs:
       headless: ${{ steps.filter.outputs.headless }}
       containers: ${{ steps.filter.outputs.containers }}
@@ -144,6 +156,7 @@ jobs:
   check:
     name: stable / ${{ matrix.step }}
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: changes
     strategy:
       fail-fast: false
@@ -347,6 +360,7 @@ jobs:
   windows:
     name: stable / test (windows)
     runs-on: windows-latest
+    timeout-minutes: 60
     needs: changes
     if: needs.changes.outputs.version-bump-only != 'true'
     # ADR-066 Phase C: the editor workspace's Windows CI leg. Hard-blocking from day
@@ -439,6 +453,7 @@ jobs:
   windows-remote-e2e:
     name: ADR-066 Phase E / windows remote daemon verification
     runs-on: windows-latest
+    timeout-minutes: 60
     needs: changes
     if: needs.changes.outputs.version-bump-only != 'true'
     # First iteration of genuinely new CI infrastructure (a Windows-BUILT
@@ -594,6 +609,7 @@ jobs:
   windows-gui-spike:
     name: ADR-066 Phase D / windows GUI build + input spike
     runs-on: windows-latest
+    timeout-minutes: 60
     needs: changes
     if: needs.changes.outputs.version-bump-only != 'true'
     # First iteration of genuinely new CI infrastructure -- skia-safe/
@@ -659,6 +675,7 @@ jobs:
   daemon:
     name: daemon / check + test
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     needs: changes
     if: needs.changes.outputs.version-bump-only != 'true'
     steps:
@@ -706,6 +723,7 @@ jobs:
     # scan, and cargo-deny walks up for config, so both legs share one policy.
     name: cargo-deny (${{ matrix.workspace }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -723,6 +741,7 @@ jobs:
   export-js-check:
     name: kb-export-subgraph-html graph.js syntax check
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: changes
     if: needs.changes.outputs.export-js == 'true'
     # crates/export/assets/graph.js is a real, checked-in JS file (extracted
@@ -741,6 +760,7 @@ jobs:
   lint-nonrust:
     name: shell + yaml + ansible lint
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # Everything in this repo that is executed but is not Rust: 18 shell
     # scripts (including the installer every user runs), the CI/release
     # workflows, and the deployment role. None of it had ANY linting until
@@ -789,6 +809,7 @@ jobs:
   msrv:
     name: MSRV / 1.95 build + test
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     needs: changes
     if: needs.changes.outputs.version-bump-only != 'true'
     # Keep "1.95" in sync with Cargo.toml's `rust-version = "1.95"` by hand --
@@ -824,6 +845,7 @@ jobs:
   server-client:
     name: Server-Client Integration
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     needs: changes
     if: needs.changes.outputs.version-bump-only != 'true'
     steps:
@@ -911,6 +933,7 @@ jobs:
   containers:
     name: container / smoke + new-user
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     needs: changes
     if: needs.changes.outputs.containers == 'true' && needs.changes.outputs.version-bump-only != 'true'
     steps:
@@ -925,6 +948,7 @@ jobs:
   e2e:
     name: e2e / scheme + packages
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [check, daemon, changes]
     if: needs.changes.outputs.version-bump-only != 'true'
     steps:
@@ -1056,6 +1080,7 @@ jobs:
   scheme-runtime:
     name: scheme / R7RS compliance
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: changes
     if: needs.changes.outputs.version-bump-only != 'true'
     steps:
@@ -1091,6 +1116,7 @@ jobs:
   collab-e2e:
     name: collab / docker e2e
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     needs: changes
     if: needs.changes.outputs.version-bump-only != 'true'
     steps:
@@ -1102,6 +1128,7 @@ jobs:
   headless-e2e:
     name: headless / docker e2e
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     needs: changes
     if: needs.changes.outputs.headless == 'true' && needs.changes.outputs.version-bump-only != 'true'
     steps:
@@ -1113,6 +1140,7 @@ jobs:
   install-test:
     name: install / script validation
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [check, daemon, changes]
     if: needs.changes.outputs.version-bump-only != 'true'
     steps:
@@ -1240,6 +1268,7 @@ jobs:
   macos:
     name: macOS / build + test + install + collab e2e
     runs-on: macos-latest
+    timeout-minutes: 60
     needs: changes
     if: needs.changes.outputs.version-bump-only != 'true'
     # First-appearance posture, matching windows-remote-e2e/msrv's own
@@ -1341,6 +1370,7 @@ jobs:
   code-map:
     name: code-map freshness
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -1360,6 +1390,7 @@ jobs:
   audit-metrics:
     name: structural ceilings (ratchet)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -1385,6 +1416,7 @@ jobs:
   adr-kb-sync:
     name: ADR KB staleness gate (ADR-059 Phase E)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     needs: changes
