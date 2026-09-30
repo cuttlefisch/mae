@@ -250,28 +250,11 @@ use mae_daemon::doc_store::DocStore;
 
 use crate::conn_limit::ConnLimiter;
 
-/// Load a PEM certificate chain + private key into a rustls server config.
-/// Supports PKCS8 and PKCS1 (RSA) private keys — whichever `rustls-pemfile`
-/// finds first in the key file, matching how most CAs/`certbot`/`mkcert`
-/// output either shape.
+/// Build the listener's rustls server config around a certificate that follows
+/// its files on disk (`oauth_tls::ReloadingCertResolver`, ADR-111 P1), so a
+/// renewed certificate is presented without a restart. The INITIAL pair must
+/// load; a later bad write keeps the previous certificate in service.
 fn load_tls_config(cert_path: &Path, key_path: &Path) -> Result<rustls::ServerConfig, String> {
-    let cert_bytes =
-        std::fs::read(cert_path).map_err(|e| format!("reading {}: {e}", cert_path.display()))?;
-    let key_bytes =
-        std::fs::read(key_path).map_err(|e| format!("reading {}: {e}", key_path.display()))?;
-
-    let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
-        rustls_pemfile::certs(&mut cert_bytes.as_slice())
-            .collect::<Result<_, _>>()
-            .map_err(|e| format!("parsing cert chain: {e}"))?;
-    if certs.is_empty() {
-        return Err(format!("no certificates found in {}", cert_path.display()));
-    }
-
-    let key = rustls_pemfile::private_key(&mut key_bytes.as_slice())
-        .map_err(|e| format!("parsing private key: {e}"))?
-        .ok_or_else(|| format!("no private key found in {}", key_path.display()))?;
-
     // Explicit `ring` provider (matching shared/mcp/src/tls.rs's identical
     // pattern) rather than the ambiguous default builder: both `ring` (this
     // crate's own rustls feature) and `aws-lc-rs` (transitively, via
@@ -280,12 +263,13 @@ fn load_tls_config(cert_path: &Path, key_path: &Path) -> Result<rustls::ServerCo
     // rather than silently guessing, and `builder_with_provider` sidesteps
     // needing a global `CryptoProvider::install_default()` call at all.
     let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
-    rustls::ServerConfig::builder_with_provider(provider)
+    let resolver =
+        crate::oauth_tls::ReloadingCertResolver::new(cert_path, key_path, provider.clone())?;
+    Ok(rustls::ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .map_err(|e| format!("configuring TLS protocol versions: {e}"))?
         .with_no_client_auth()
-        .with_single_cert(certs, key)
-        .map_err(|e| format!("building TLS server config: {e}"))
+        .with_cert_resolver(Arc::new(resolver)))
 }
 
 /// Extract a bearer token from an `Authorization: Bearer <token>` header.

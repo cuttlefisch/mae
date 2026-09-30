@@ -29,6 +29,7 @@ mod lazy_fetch_client;
 pub mod maintenance;
 mod oauth;
 mod oauth_config;
+mod oauth_tls;
 mod p2p;
 mod projection_stores;
 mod scheduler;
