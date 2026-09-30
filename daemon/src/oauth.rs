@@ -396,7 +396,7 @@ async fn authenticate(
     config: &ResourceServerConfig,
     jwks: Option<&JwksCache>,
     self_issue: Option<&oauth_self_issue::SelfIssueConfig>,
-) -> Result<ValidatedPrincipal, Response<Full<Bytes>>> {
+) -> Result<ValidatedPrincipal, Box<Response<Full<Bytes>>>> {
     // ADR-067 Phase D3: a cheap, unauthenticated header PEEK (never the
     // signature -- that's still verified below, by the real validator for
     // whichever population this token claims membership in) decides which
@@ -419,7 +419,7 @@ async fn authenticate(
         return oauth_self_issue::validate_self_issued_token(token, &daemon_pubkey, &si.audience)
             .map_err(|e| {
                 tracing::debug!(?e, "self-issued bearer token rejected");
-                unauthorized(config, &format!("{e:?}"))
+                Box::new(unauthorized(config, &format!("{e:?}")))
             });
     }
 
@@ -427,22 +427,22 @@ async fn authenticate(
     // an AUTH failure (401), never as the 503 a failed JWKS fetch produces --
     // nothing is temporarily unavailable, and a client would retry a 503.
     let Some(jwks) = jwks else {
-        return Err(unauthorized(
+        return Err(Box::new(unauthorized(
             config,
             "no external token issuer is configured on this daemon (oauth.jwks_url is \
              unset); only its own self-issued tokens are accepted",
-        ));
+        )));
     };
     let keys = jwks.get().await.map_err(|e| {
         tracing::warn!(error = %e, "failed to fetch JWKS");
-        json_response(
+        Box::new(json_response(
             StatusCode::SERVICE_UNAVAILABLE,
             serde_json::json!({"error": "temporarily_unavailable"}),
-        )
+        ))
     })?;
     validate_bearer_token(token, &keys, config).map_err(|e| {
         tracing::debug!(?e, "bearer token rejected");
-        unauthorized(config, &format!("{e:?}"))
+        Box::new(unauthorized(config, &format!("{e:?}")))
     })
 }
 
@@ -477,7 +477,7 @@ async fn handle_request(
     .await
     {
         Ok(p) => p,
-        Err(resp) => return Ok(resp),
+        Err(resp) => return Ok(*resp),
     };
 
     // Read the body (never done before this phase) to see if this is a

@@ -11,7 +11,8 @@ license.workspace = true
 # a TLS+HTTP client into the binary") stopped being true when `mae-ai` began
 # enabling `mae-kb/remote-hub` unconditionally — the client was compiled into
 # every binary while the code that used it was compiled out, so CI never built
-# it and nobody noticed that using it panicked (see `mae_kb::query_off_thread`).
+# it and nobody noticed that it drove a blocking client from inside the event
+# loop's runtime — a panic in debug builds (see `mae_kb::query_off_thread`).
 default = ["remote-hub"]
 remote-hub = ["mae-kb/remote-hub"]
 

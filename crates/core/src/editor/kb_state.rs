@@ -677,10 +677,11 @@ impl KbContext {
     /// One off-thread layer per enabled `RemoteHub` registry row.
     ///
     /// @ai-caution: [runtime] Never hand the editor a bare `RemoteHubQueryLayer`:
-    /// its blocking HTTP client panics when dropped inside the event loop's
-    /// `block_on`, and this function's result replaces the previous one on every
-    /// rebuild. `OffThreadQueryLayer` builds, queries and drops it on its own
-    /// thread (see that module's `@ai-caution`).
+    /// its blocking HTTP client must not be driven from inside the event loop's
+    /// `block_on` (reqwest panics on it in debug builds and silently allows the
+    /// misuse in release), and this function's result is used and replaced
+    /// there on every rebuild. `OffThreadQueryLayer` builds, queries and drops it
+    /// on its own thread (see that module's `@ai-caution`).
     #[cfg(feature = "remote-hub")]
     fn build_remote_hub_layers(&self) -> Vec<(String, Arc<dyn KbQueryLayer>)> {
         let timeout = std::time::Duration::from_millis(self.remote_hub_timeout_ms);

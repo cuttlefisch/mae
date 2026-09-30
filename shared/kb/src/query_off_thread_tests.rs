@@ -158,8 +158,12 @@ mod blocking_layer_in_a_runtime {
     }
 
     /// Control, so the next test is not vacuous: in this exact harness the BARE
-    /// layer does panic. If this ever stops failing, re-check whether the
-    /// wrapper is still needed rather than deleting the assertion.
+    /// layer does panic — via reqwest's runtime check, which exists only under
+    /// `debug_assertions`. Release builds (CI runs tests with `--release`) skip
+    /// that check, so the control would be a false failure there. If this stops
+    /// failing in a debug build, re-check whether the wrapper is still needed
+    /// rather than deleting the assertion.
+    #[cfg(debug_assertions)]
     #[test]
     fn a_bare_blocking_layer_panics_when_dropped_in_a_runtime() {
         let outcome = std::panic::catch_unwind(|| {

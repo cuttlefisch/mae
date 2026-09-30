@@ -1,14 +1,16 @@
 //! A query layer served from its own plain OS thread.
 //!
 //! @ai-caution: [runtime] Wrap every layer that does BLOCKING I/O — today
-//! `RemoteHubQueryLayer`, whose `reqwest::blocking::Client` owns a private tokio
-//! runtime — before handing it to the editor. The editor's event loop runs inside
-//! `Runtime::block_on`, and dropping a blocking client there panics ("Cannot drop
-//! a runtime in a context where blocking is not allowed"). `rebuild_query_layer`
-//! replaces the query layer on every register/reimport, so an unwrapped hub layer
-//! crashes the editor the first time it is rebuilt. Reproduced standalone before
-//! this module existed; `a_bare_blocking_layer_panics_when_dropped_in_a_runtime`
-//! keeps that control honest.
+//! `RemoteHubQueryLayer`, whose `reqwest::blocking::Client` must not be driven
+//! from inside a tokio runtime — before handing it to the editor, whose event
+//! loop runs inside `Runtime::block_on`. reqwest enforces that contract with a
+//! check compiled only under `debug_assertions` (`blocking::wait::enter` builds
+//! and drops a throwaway runtime, which panics "Cannot drop a runtime in a
+//! context where blocking is not allowed"): debug builds and tests PANIC on the
+//! first hub call or rebuild; release builds skip the check and run the misuse
+//! the check exists to catch. Found by reproducing it standalone; the control
+//! `a_bare_blocking_layer_panics_when_dropped_in_a_runtime` runs only where that
+//! check is compiled in (CI tests in `--release`, where it is not).
 //!
 //! The inner layer is constructed, queried and dropped on the worker thread and
 //! nowhere else. Callers block on a reply channel, which is the same synchronous
