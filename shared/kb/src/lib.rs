@@ -36,6 +36,7 @@ use std::collections::{HashMap, HashSet};
 pub mod activity;
 pub mod adr_kb;
 pub mod adr_parse;
+#[cfg(feature = "storage-sqlite")]
 pub mod backup;
 pub mod capabilities;
 pub mod data_dir;

@@ -610,19 +610,7 @@ pub fn execute_kb_health(
         .and_then(|v| v.as_str())
         .map(|s| editor.resolve_kb_scope(s))
         .unwrap_or_else(|| editor.resolve_kb_scope(&editor.kb.search_scope));
-    let primary_name = editor
-        .kb
-        .registry
-        .instances
-        .iter()
-        .find(|i| i.primary)
-        .map(|i| i.name.as_str());
-    let include_local = match &scope {
-        mae_kb::KbScope::All | mae_kb::KbScope::LocalOnly => true,
-        mae_kb::KbScope::RemoteOnly => false,
-        mae_kb::KbScope::Named(n) => primary_name == Some(n.as_str()),
-        mae_kb::KbScope::Project(_) => false,
-    };
+    let include_local = scope.includes_local();
 
     let local_bypass = requester_provider.is_some_and(mae_core::ai_residency::is_local_provider);
     let is_visible = |restricted: bool| {
@@ -642,22 +630,14 @@ pub fn execute_kb_health(
         None
     };
 
-    // Federated instance health summaries — with full broken link detail.
-    // Filtered to the instances this scope actually includes: All/RemoteOnly
-    // include every non-primary instance, Named includes only the one match
-    // (or none, if the name is the primary's — that's `include_local` above,
-    // not this loop), LocalOnly includes none.
+    // Federated instance health summaries — with full broken link detail,
+    // for exactly the instances this scope includes (`KbScope::includes_instance`).
     let instances: Vec<serde_json::Value> = editor
         .kb
         .registry
         .instances
         .iter()
-        .filter(|inst| match &scope {
-            mae_kb::KbScope::All | mae_kb::KbScope::RemoteOnly => !inst.primary,
-            mae_kb::KbScope::LocalOnly => false,
-            mae_kb::KbScope::Named(n) => &inst.name == n,
-            mae_kb::KbScope::Project(root) => inst.matches_project_root(root),
-        })
+        .filter(|inst| scope.includes_instance(inst))
         .map(|inst| {
             let inst_restricted = !local_bypass
                 && inst.ai_residency == mae_kb::federation::AiResidency::LocalModelsOnly;
@@ -2176,19 +2156,7 @@ pub fn execute_kb_agenda(
     // Same include_local / per-instance-scope-filter shape execute_kb_health
     // already establishes (ADR-083 mirrors it exactly rather than inventing
     // a second scope-resolution convention).
-    let primary_name = editor
-        .kb
-        .registry
-        .instances
-        .iter()
-        .find(|i| i.primary)
-        .map(|i| i.name.as_str());
-    let include_local = match &scope {
-        mae_kb::KbScope::All | mae_kb::KbScope::LocalOnly => true,
-        mae_kb::KbScope::RemoteOnly => false,
-        mae_kb::KbScope::Named(n) => primary_name == Some(n.as_str()),
-        mae_kb::KbScope::Project(_) => false,
-    };
+    let include_local = scope.includes_local();
 
     let mut results: Vec<(Option<String>, mae_kb::Node)> = Vec::new();
     let mut skipped_instances: Vec<String> = Vec::new();
@@ -2211,12 +2179,7 @@ pub fn execute_kb_agenda(
         .registry
         .instances
         .iter()
-        .filter(|inst| match &scope {
-            mae_kb::KbScope::All | mae_kb::KbScope::RemoteOnly => !inst.primary,
-            mae_kb::KbScope::LocalOnly => false,
-            mae_kb::KbScope::Named(n) => &inst.name == n,
-            mae_kb::KbScope::Project(root) => inst.matches_project_root(root),
-        })
+        .filter(|inst| scope.includes_instance(inst))
     {
         if let Some(store) = editor.kb.instance_stores.get(&inst.uuid) {
             let nodes = store.agenda_query(&filter).map_err(|e| e.to_string())?;

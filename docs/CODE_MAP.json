@@ -4427,7 +4427,7 @@
     },
     {
       "name": "kb-attach",
-      "doc": "Resume ingesting a KB from its .org directory (undoes :kb-detach)"
+      "doc": "Make a KB's .org directory authoritative again (:kb-attach <name> [confirm]) — compares it with the store first and refuses if ingest would change anything, unless confirmed"
     },
     {
       "name": "kb-new",

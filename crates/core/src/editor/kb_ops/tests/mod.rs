@@ -4,6 +4,7 @@ pub(crate) use super::*;
 pub(crate) use tempfile::TempDir;
 
 mod kb_ops_activity_tests;
+mod kb_ops_attach_tests;
 mod kb_ops_civil_date_tests;
 mod kb_ops_collab_sync_tests;
 mod kb_ops_concurrency_tests;
@@ -24,6 +25,7 @@ mod kb_ops_read_clobber_tests;
 mod kb_ops_registry_tests;
 mod kb_ops_reimport_guard_tests;
 mod kb_ops_retire_tests;
+mod kb_ops_retired_origin_tests;
 mod kb_ops_search_federation_tests;
 mod kb_ops_sole_mutator_tests;
 mod kb_ops_system_kb_tests;
@@ -64,4 +66,16 @@ pub(crate) fn with_test_dirs(editor: &mut Editor) -> TempDir {
     editor.config_dir_override = Some(tmp.path().join("config"));
     editor.data_dir_override = Some(tmp.path().join("data"));
     tmp
+}
+
+/// Lay KB stores out as production does: `kb/local/{name-slug}/kb.sqlite`.
+///
+/// Without it a registered KB's store is `{data}/{uuid}.db` — unique per uuid,
+/// so two KBs can NEVER share a store in a test, while in production (bootstrap
+/// sets `kb.data_dir`) the path derives from the NAME and two same-named KBs
+/// did. A test whose oracle is "these do not share a store" is vacuous without
+/// this; one was, until a falsification pass showed it passing against the bug.
+pub(crate) fn with_production_kb_layout(editor: &mut Editor) {
+    let data = editor.mae_data_dir().expect("with_test_dirs first");
+    editor.kb.data_dir = Some(mae_kb::data_dir::KbDataDir::new(&data).expect("kb data dir"));
 }

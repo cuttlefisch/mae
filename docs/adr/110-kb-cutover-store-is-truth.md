@@ -60,7 +60,8 @@ them all go quiet at once, and there is no stored state that can disagree with w
 separate `is_native` field would be a second thing to keep true.
 
 `:kb-detach` and `:kb-attach` move between the first two; `:kb-retire-archive` completes the third;
-`:kb-new` starts there.
+`:kb-new` starts there. (Amended 2026-09-29: `:kb-attach` is verified, and also leads from native
+back to attached — D8, D9.)
 
 ### D2. The rule lives where both audiences reach it, and reads stay possible
 
@@ -137,10 +138,71 @@ policy lives on `KbRegistry` (`primary_ingest_policy`), not on any row. This is 
 because documenting it in `federation.rs` did not stop it being violated twice, in two crates, with
 the daemon instance silently misrouting a user's entire KB.
 
+## Amendment (2026-09-29): attaching is verified, and a native KB can go back
+
+Recorded per principle #17. Three gaps surfaced when a real deployment tried to use this lifecycle,
+and one of them had already begun destroying data.
+
+### D8. `:kb-attach` is verified on content, and proceeds over a difference only on `confirm`
+
+D1 treated `:kb-detach` and `:kb-attach` as mirror images. They are not: detaching adds a
+protection, attaching removes one, and a KB is typically detached *because* its directory stopped
+being maintained — so a blind re-attach is most destructive exactly when it is most likely (#825).
+On a real machine a detached KB's directory held ~100 hollow stub files carrying the same ids as
+~200 real nodes; attach-then-ingest would have replaced the notes with the stubs.
+
+Attach now parses the directory with the importer ingest uses, in memory, and compares it with the
+store node by node. Nodes ingest would **overwrite** with different content, or that only the store
+holds, refuse the attach unless the caller says `confirm` — `:kb-retire-archive`'s contract.
+Additions do not block. The route through the plain policy setter (Scheme `(kb-attach)`) is verified
+too, and the command is Shell tier, like `kb-reimport`, whose effect it enables.
+
+Two design points were measured, not assumed:
+
+- **Compare content, not ids.** Reusing `kb_import_verify` would have asked only whether each file's
+  `:ID:` is in the store — a stub with the right id "matches" the note it destroys.
+- **Normalise the header, not the prose.** The store keeps the `:PROPERTIES:` drawer and file-level
+  `#+` keywords in the body text; a fresh parse lifts them out (#655). On a real 151-node corpus in
+  which git showed exactly three content edits, a raw comparison flagged 143. A check that refuses
+  everything is confirmed past reflexively, which is the same as no check. With the leading header
+  stripped it flagged exactly the three.
+
+### D9. Native → attached exists, and goes back to the recorded origin
+
+D1 had no way back from native. A corpus whose authority returns to git-reviewed files needs one.
+`:kb-attach` on a native KB attaches to `import_record.origin` (retirement records it) and restores
+`org_dir`, under D8's verification. A native KB with no recorded origin — created in MAE — has
+nothing to attach to and is refused.
+
+### D10. Which KB owns a path is answered in one place, and a retired origin counts for MAE's own writes
+
+Four call sites each matched "an instance whose non-empty `org_dir` prefixes this path". Retirement
+clears `org_dir`, so all four went blind to a retired KB. With `kb-notes-dir` still pointing at a
+retired origin, dailies concluded nobody owned the directory, fell back to the primary's file-backed
+policy, and chain-fill wrote ~100 stub files into the origin over three weeks — the very stubs D8
+refuses.
+
+One resolver now answers it, with an explicit scope. **Writes MAE originates** (dailies, capture)
+treat a retired KB's recorded origin as that KB's, and create their nodes in its store. **Guards on
+a person's own file edits** keep the narrower scope — a retired origin may be an ordinary project
+repo, and refusing edits there is not this ADR's call.
+
+### D11. Registration refuses a name whose store directory is already a KB's
+
+A KB's store directory derives from its name, and the directory is reused if it exists. D6 covered
+`register_native`; `register` still deduplicated only on `org_dir`, which a retired KB lacks. So
+registering a retired KB's name again appended a `FromOrgDir` row over the same live store, and
+adoption imported the directory straight into it — a route to D8's overwrite that attach's
+verification never saw. `register` now refuses when the slug of the new name is already taken.
+
+**Not closed by this amendment:** a hand-edited registry row with no `ingest_policy` still
+deserialises as `FromOrgDir`; and the daemon's watcher ingests an attached KB on its own schedule, so
+a directory changed *between* verification and ingest is not re-checked. Both are tracked on #825.
+
 ## Consequences
 
 - A migrating KB's archive is read-only in MAE until retired. Other editors are unaffected. That is
-  deliberate pressure to finish a migration, and reversible with `:kb-attach`.
+  deliberate pressure to finish a migration, and reversible with `:kb-attach` — verified (D8).
 - `kb-import-plan` and `kb-import-verify` refuse on a detached KB rather than reporting expected
   post-detach divergence as loss.
 - A KB can now exist that no filesystem path describes. Anything keyed on `org_dir` must tolerate an
