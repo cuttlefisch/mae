@@ -14,7 +14,8 @@
 //! A retired KB still records where it came from (`import_record.origin`), so
 //! the ownership is not lost, only unasked. Ask here, and say how far to look.
 
-use std::path::{Path, PathBuf};
+use mae_kb::paths::canonical_lenient;
+use std::path::Path;
 
 use super::*;
 
@@ -32,29 +33,6 @@ pub(crate) enum DirOwnership {
     /// is a retired KB's former home, the note belongs to that KB, in its store
     /// — never in a file no ingest will read.
     SourceOrRetiredOrigin,
-}
-
-/// `path` with every existing prefix canonicalised, so a symlinked or `..`
-/// spelling of a directory matches its real location even when the tail does
-/// not exist yet (a dailies dir is routinely created on first use).
-fn canonical_lenient(path: &Path) -> PathBuf {
-    let mut tail = Vec::new();
-    let mut cur = path;
-    loop {
-        if let Ok(c) = cur.canonicalize() {
-            return tail
-                .iter()
-                .rev()
-                .fold(c, |acc: PathBuf, part| acc.join(part));
-        }
-        match (cur.parent(), cur.file_name()) {
-            (Some(parent), Some(name)) => {
-                tail.push(name.to_os_string());
-                cur = parent;
-            }
-            _ => return path.to_path_buf(),
-        }
-    }
 }
 
 /// Is `path` at or under `root`? False for an empty root — an empty `org_dir`
