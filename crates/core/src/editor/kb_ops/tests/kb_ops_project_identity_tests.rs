@@ -37,6 +37,7 @@ fn git(dir: &Path, args: &[&str]) {
 fn editor_without_watchers() -> (Editor, TempDir) {
     let mut editor = Editor::new();
     let dirs = with_test_dirs(&mut editor);
+    with_production_kb_layout(&mut editor);
     editor.kb.watcher_enabled = false;
     (editor, dirs)
 }
@@ -243,6 +244,16 @@ fn two_projects_get_distinct_identities_and_distinct_kbs() {
         .collect();
     assert_eq!(keys.len(), 2);
     assert_ne!(keys[0], keys[1], "and their minted keys must differ");
+
+    // The oracle this test was missing: distinct ids over ONE store is still a
+    // collision. A KB's store directory derives from its name, so two
+    // same-named projects used to share a single SQLite file.
+    let db = |uuid: &str| editor.kb.registry.find(uuid).map(|i| i.db_path.clone());
+    assert_ne!(
+        db(&ra.uuid),
+        db(&rb.uuid),
+        "two projects must not share a store"
+    );
 }
 
 /// A registry row written before `project_key` existed must behave exactly as it

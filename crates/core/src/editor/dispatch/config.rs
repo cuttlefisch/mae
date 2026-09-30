@@ -414,8 +414,7 @@ impl Editor {
                     .kb
                     .registry
                     .instances
-                    .iter()
-                    .filter(|i| !i.primary)
+                    .iter() // every KB, incl. the `primary`-flagged row (#814)
                     .map(|i| i.name.as_str())
                     .collect();
                 self.command_palette = Some(

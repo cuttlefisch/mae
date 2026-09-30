@@ -438,7 +438,8 @@ pub enum KbScope {
     LocalOnly,
     /// Only shared/remote (collaborative) instances; skip the primary.
     RemoteOnly,
-    /// A single instance addressed by name (matches the primary's name too).
+    /// A single instance addressed by name. `primary` / `default` address the
+    /// machine-global local store instead (`PRIMARY_NAME_ALIASES`).
     Named(String),
     /// Only `Project`-kind instances whose `project_root` equals the given, already-resolved
     /// path (ADR-058 Phase C). Excludes the primary — narrowing to "just this project" is the
@@ -453,6 +454,39 @@ pub enum KbScope {
 }
 
 impl KbScope {
+    /// Does the machine-global local store (`primary.cozo`) participate?
+    ///
+    /// @ai-caution: [kb-identity] This and [`KbScope::includes_instance`] are
+    /// the ONLY places scope membership is decided. Health, agenda, search and
+    /// `node_matches_scope` each used to decide it inline, and every copy read
+    /// `KbInstance.primary` — "first row ever registered" (ADR-110 D7) — as if
+    /// it meant "the local store". After the KB cutover the two are different
+    /// stores, so the primary-flagged KB was silently dropped from `all`
+    /// health and agenda, and scoping to it by NAME returned the local store's
+    /// nodes instead of its own (#814). The copies also disagreed on what
+    /// `remote` means; it means `is_remote()`, as documented to callers.
+    pub fn includes_local(&self) -> bool {
+        match self {
+            KbScope::All | KbScope::LocalOnly => true,
+            KbScope::Named(n) => crate::kb_identity::PRIMARY_NAME_ALIASES
+                .iter()
+                .any(|a| n.eq_ignore_ascii_case(a)),
+            KbScope::RemoteOnly | KbScope::Project(_) => false,
+        }
+    }
+
+    /// Does the registered instance `inst` participate? Never consults
+    /// `inst.primary` — see [`KbScope::includes_local`].
+    pub fn includes_instance(&self, inst: &KbInstance) -> bool {
+        match self {
+            KbScope::All => true,
+            KbScope::LocalOnly => false,
+            KbScope::RemoteOnly => inst.is_remote(),
+            KbScope::Named(n) => &inst.name == n,
+            KbScope::Project(root) => inst.matches_project_root(root),
+        }
+    }
+
     /// Parse a scope token from config / AI-tool input.
     /// `"" | "all"` → All, `"local"` → LocalOnly, `"remote"` → RemoteOnly,
     /// anything else → `Named(<trimmed>)`. Does NOT handle the `"project"` token — that
@@ -770,7 +804,6 @@ impl KbRegistry {
                 name: name.clone(),
                 uuid: uuid.clone(),
                 created_at: crate::data_dir::chrono_now_iso(),
-                node_count: 0,
                 org_dir: None,
             };
             match kdd.init_local_kb(&slug, &meta) {
@@ -866,13 +899,39 @@ impl KbRegistry {
         }
 
         let slug = crate::data_dir::slugify(&name);
+        // @ai-caution: [kb-truth] The store directory is derived from the NAME
+        // (`kb/local/{slug}/`), and `init_local_kb` reuses an existing one. The
+        // duplicate check above matches only `org_dir`, and a retired KB has
+        // none — so registering a retired KB's name again appended a fresh
+        // `FromOrgDir` row pointing at the SAME live store, and the adoption
+        // that follows imported the directory straight over it: a second route
+        // to #825's overwrite that `:kb-attach`'s verification never saw.
+        // Refuse any registration whose store directory is already a KB's.
+        if let Some(existing) = self
+            .instances
+            .iter()
+            .find(|i| crate::data_dir::slugify(&i.name) == slug)
+        {
+            let remedy = if existing.ingest_policy.allows_ingest() {
+                "Pick a different name."
+            } else {
+                "To make its org directory authoritative again use :kb-attach, which \
+                 compares the directory with the store first."
+            };
+            return Err(format!(
+                "'{name}' would share a store with the registered KB '{}' (both map to \
+                 `{slug}`), so registering {} would import it into that KB's live store. \
+                 {remedy}",
+                existing.name,
+                org_dir.display()
+            ));
+        }
         let db_path = if let Some(kdd) = kb_data_dir {
             // Standardized layout: kb/local/{slug}/kb.sqlite
             let meta = crate::data_dir::LocalKbMeta {
                 name: name.clone(),
                 uuid: uuid.clone(),
                 created_at: crate::data_dir::chrono_now_iso(),
-                node_count: 0,
                 org_dir: Some(org_dir.clone()),
             };
             match kdd.init_local_kb(&slug, &meta) {
@@ -1449,6 +1508,44 @@ fn unchanged_fast_path(
     true
 }
 
+/// A Full ingest deletes the nodes of every tracked file it does not find. A
+/// directory that is gone (moved project, unmounted disk) finds none, so it
+/// would empty the store. Refused here because every Full caller — reimport,
+/// the daemon's watcher, adoption — goes through `import_org_dir_to_store`.
+fn refuse_full_ingest_of_missing_dir(
+    org_dir: &Path,
+    mode: &IngestMode,
+) -> Result<(), KbStoreError> {
+    if matches!(mode, IngestMode::Full) && !org_dir.is_dir() {
+        return Err(KbStoreError::NotFound(format!(
+            "org directory {} does not exist — refusing a full ingest that would \
+             delete every node it tracks",
+            org_dir.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Full-mode deletion: drop every tracked file this pass did not visit, and the
+/// nodes it produced — except ids this same pass re-imported from another key
+/// (a renamed file, or the directory walked under another spelling). Returns
+/// the number of nodes removed.
+fn remove_vanished_files(
+    store: &crate::CozoKbStore,
+    visited_files: &std::collections::HashSet<String>,
+    seen_ids: &std::collections::HashSet<String>,
+) -> usize {
+    let Ok(tracked_files) = store.list_source_files() else {
+        return 0;
+    };
+    tracked_files
+        .into_iter()
+        .filter(|(path, _, _)| !visited_files.contains(path))
+        .filter_map(|(path, _, _)| store.remove_source_file(&path, seen_ids).ok())
+        .map(|removed| removed.len())
+        .sum()
+}
+
 /// Returns a report and also populates an in-memory KB for the caller
 /// to use as a read cache.
 pub fn import_org_dir_to_store(
@@ -1456,6 +1553,7 @@ pub fn import_org_dir_to_store(
     store: &crate::CozoKbStore,
     mode: &IngestMode,
 ) -> Result<(KnowledgeBase, ImportReport), KbStoreError> {
+    refuse_full_ingest_of_missing_dir(org_dir, mode)?;
     // Story D / R8 — see `reconcile_census`.
     let mut census: Vec<PathBuf> = Vec::new();
     let mut skipped_paths: Vec<PathBuf> = Vec::new();
@@ -1602,18 +1700,8 @@ pub fn import_org_dir_to_store(
         report.path_to_ids.push((path.to_path_buf(), file_node_ids));
     }
 
-    // In full mode, detect deleted files and remove their nodes.
     if matches!(mode, IngestMode::Full) {
-        if let Ok(tracked_files) = store.list_source_files() {
-            for (tracked_path, _, _) in tracked_files {
-                if !visited_files.contains(&tracked_path) {
-                    // File was deleted — remove its nodes.
-                    if let Ok(removed_ids) = store.remove_source_file(&tracked_path) {
-                        report.nodes_removed += removed_ids.len();
-                    }
-                }
-            }
-        }
+        report.nodes_removed += remove_vanished_files(store, &visited_files, &seen_ids);
     }
 
     reconcile_census(&mut report, census, &skipped_paths);
@@ -2719,5 +2807,122 @@ mod legacy_registry_path_tests {
     fn no_registry_anywhere_is_still_empty() {
         let d = TempDir::new().unwrap();
         assert!(KbRegistry::load(d.path()).instances.is_empty());
+    }
+}
+
+/// A Full ingest removes the nodes of files that vanished — and must not remove
+/// a node it just re-imported from somewhere else in the same pass.
+///
+/// The deletion step deleted every node id recorded under a key this pass did
+/// not visit. When the same notes are found under a DIFFERENT key — a renamed
+/// file, or the whole directory walked under a different spelling (symlink,
+/// macOS `/var` vs `/private/var`, Windows `\\?\`) — those are the ids this pass
+/// had just upserted, so the store lost them. The in-memory mirror hid it until
+/// the next restart.
+#[cfg(test)]
+mod full_ingest_deletion_tests {
+    use super::*;
+    use crate::KbStore;
+    use tempfile::TempDir;
+
+    fn note(id: &str) -> String {
+        format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n\nbody of {id}\n")
+    }
+
+    fn full(dir: &Path, store: &crate::CozoKbStore) -> ImportReport {
+        import_org_dir_to_store(dir, store, &IngestMode::Full)
+            .expect("ingest")
+            .1
+    }
+
+    fn in_store(store: &crate::CozoKbStore, id: &str) -> bool {
+        matches!(store.get_node(id), Ok(Some(_)))
+    }
+
+    /// The everyday trigger: `git mv a.org b.org`, then a Full reimport.
+    #[test]
+    fn a_renamed_file_keeps_its_node() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("a.org"), note("n:moved")).unwrap();
+        std::fs::write(dir.path().join("keep.org"), note("n:keep")).unwrap();
+        let store = crate::CozoKbStore::open_mem().unwrap();
+        full(dir.path(), &store);
+
+        std::fs::rename(dir.path().join("a.org"), dir.path().join("b.org")).unwrap();
+        let report = full(dir.path(), &store);
+
+        assert!(in_store(&store, "n:moved"), "the renamed note must survive");
+        assert!(in_store(&store, "n:keep"));
+        assert_eq!(report.nodes_removed, 0, "nothing was deleted from disk");
+        let keys: Vec<String> = store
+            .list_source_files()
+            .unwrap()
+            .into_iter()
+            .map(|(k, _, _)| k)
+            .collect();
+        assert!(
+            !keys.iter().any(|k| k.ends_with("a.org")),
+            "the vanished file's key is still dropped: {keys:?}"
+        );
+    }
+
+    /// The same notes walked under another spelling of the same directory.
+    #[cfg(unix)]
+    #[test]
+    fn a_respelled_directory_keeps_every_node() {
+        let real = TempDir::new().unwrap();
+        for i in 0..4 {
+            std::fs::write(
+                real.path().join(format!("n{i}.org")),
+                note(&format!("n:{i}")),
+            )
+            .unwrap();
+        }
+        let links = TempDir::new().unwrap();
+        let alias = links.path().join("notes");
+        std::os::unix::fs::symlink(real.path(), &alias).unwrap();
+        let store = crate::CozoKbStore::open_mem().unwrap();
+        full(&alias, &store);
+
+        full(&real.path().canonicalize().unwrap(), &store);
+
+        for i in 0..4 {
+            assert!(in_store(&store, &format!("n:{i}")), "n:{i} was wiped");
+        }
+    }
+
+    /// A directory that is gone (moved, unmounted) finds no files, so a Full
+    /// ingest would treat every tracked file as deleted and empty the store.
+    #[test]
+    fn a_full_ingest_of_a_missing_directory_is_refused_and_deletes_nothing() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("a.org"), note("n:a")).unwrap();
+        let store = crate::CozoKbStore::open_mem().unwrap();
+        full(dir.path(), &store);
+        let gone = dir.path().to_path_buf();
+        drop(dir);
+
+        let res = import_org_dir_to_store(&gone, &store, &IngestMode::Full);
+
+        assert!(res.is_err(), "a missing directory must be refused");
+        assert!(in_store(&store, "n:a"), "…and the store left as it was");
+    }
+
+    /// Control: the fix must not neuter deletion. A file really removed from
+    /// disk still takes its node with it.
+    #[test]
+    fn a_deleted_file_still_removes_its_node() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("gone.org"), note("n:gone")).unwrap();
+        std::fs::write(dir.path().join("stay.org"), note("n:stay")).unwrap();
+        let store = crate::CozoKbStore::open_mem().unwrap();
+        full(dir.path(), &store);
+
+        std::fs::remove_file(dir.path().join("gone.org")).unwrap();
+        let report = full(dir.path(), &store);
+
+        assert!(!in_store(&store, "n:gone"));
+        assert!(in_store(&store, "n:stay"));
+        assert_eq!(report.nodes_removed, 1);
     }
 }

@@ -25,7 +25,19 @@ pub fn execute_buffer_read(editor: &Editor, args: &serde_json::Value) -> Result<
     Ok(output)
 }
 
+/// Edit a buffer's text; see [`unsaved_note`] for what the result promises.
 pub fn execute_buffer_write(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let msg = buffer_write_unsaved_unaware(editor, args)?;
+    let note = resolve_buffer_idx(editor, args)
+        .map(|idx| unsaved_note(&editor.buffers[idx]))
+        .unwrap_or_default();
+    Ok(format!("{msg}{note}"))
+}
+
+fn buffer_write_unsaved_unaware(
     editor: &mut Editor,
     args: &serde_json::Value,
 ) -> Result<String, String> {
@@ -88,7 +100,7 @@ pub fn execute_buffer_write(
         editor.recompute_search_matches();
         editor.clamp_all_cursors();
         Ok(format!(
-            "Replaced lines {}-{} ({} chars written)",
+            "Replaced lines {}-{} ({} chars)",
             start_line,
             end,
             content.len()
@@ -109,6 +121,25 @@ pub fn execute_buffer_write(
             start_line,
             content.len()
         ))
+    }
+}
+
+/// Say so when an edit landed in a FILE-BACKED buffer without reaching disk.
+///
+/// ADR-086: a result states whether the caller's requested postcondition
+/// holds. An agent calling `buffer_write` on a file very often means "change
+/// the file"; the old result said "N chars written", which reads as a disk
+/// write, and an agent in the field concluded the tool was broken and that
+/// MCP could not save at all. It can — `save` is a command. Scratch buffers
+/// have nothing to save and get no note.
+fn unsaved_note(buf: &mae_core::Buffer) -> String {
+    match buf.file_path() {
+        Some(path) if buf.modified => format!(
+            " — in the buffer only, NOT yet saved to {}. Save with \
+             execute_command {{\"command\": \"save\"}} (Write tier).",
+            path.display()
+        ),
+        _ => String::new(),
     }
 }
 
@@ -209,6 +240,47 @@ pub fn execute_list_buffers(editor: &Editor) -> Result<String, String> {
 mod buffer_write_tests {
     use super::*;
     use mae_core::redraw::RedrawLevel;
+
+    /// ADR-086: on a FILE-backed buffer the result must say the edit did not
+    /// reach disk, and on the file itself nothing may have changed — an agent
+    /// read "chars written" as a disk write and concluded MCP could not save.
+    #[test]
+    fn a_file_backed_edit_says_it_is_unsaved_and_the_file_is_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.org");
+        std::fs::write(&path, "one\ntwo\n").unwrap();
+        let mut editor = Editor::new();
+        editor.buffers[0] = mae_core::Buffer::from_file(&path).unwrap();
+
+        for args in [
+            serde_json::json!({"start_line": 1, "end_line": 1, "content": "ONE\n"}),
+            serde_json::json!({"start_line": 2, "content": "inserted\n"}),
+        ] {
+            let out = execute_buffer_write(&mut editor, &args).unwrap();
+            assert!(out.contains("NOT yet saved"), "{out}");
+            assert!(
+                out.contains("\"command\": \"save\""),
+                "names the route: {out}"
+            );
+            assert!(
+                !out.contains("written"),
+                "must not read as a disk write: {out}"
+            );
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "one\ntwo\n");
+    }
+
+    /// Scratch buffers have nowhere to save to; a note would be noise.
+    #[test]
+    fn a_scratch_buffer_edit_carries_no_save_note() {
+        let mut editor = Editor::new();
+        let out = execute_buffer_write(
+            &mut editor,
+            &serde_json::json!({"start_line": 1, "content": "x\n"}),
+        )
+        .unwrap();
+        assert!(!out.contains("saved"), "{out}");
+    }
 
     /// #355: `buffer_write` mutates the rope directly (bumping `generation`)
     /// but previously never escalated `redraw_level` -- leaving a stale

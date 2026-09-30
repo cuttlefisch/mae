@@ -135,6 +135,26 @@ Each instance's own resources are listed by `mae-daemon doctor` and
 
 ---
 
+### Running in a container (one instance)
+
+MAE publishes a static musl `mae-daemon` in each release tarball (`mae-linux-x86_64.tar.gz` +
+`.sha256`); a container image is a thin wrapper around it, built and deployed by digest. What the
+image and its compose service must get right:
+
+- **Identity in a named volume, never in an image layer.** `id_ed25519` is generated on first start
+  (or by `mae-daemon identity`) and **cannot be recovered**: losing it loses every KB the instance
+  shares. Mount `identity_dir` from a named volume (mode 0700) and back it up (§7). `--check-config`
+  does not create it, so validating a config as root cannot leave a root-owned key behind.
+- **Run as a non-root user**, with `data_dir`, `identity_dir` and the KB socket inside volumes it
+  owns. Logs go to stdout/stderr.
+- **Key-mode auth, explicitly.** A non-loopback `collab.bind` requires it anyway; say so in config.
+- **Health:** `mae-daemon ping --config …` is the liveness probe (exit 0 iff the instance answers on
+  its KB socket) — use it as the `HEALTHCHECK`. `mae-daemon doctor` is the **readiness** gate for a
+  deploy step, not a liveness probe (§6).
+- **Exposure:** remote clients reach the daemon through its HTTPS listener (ADR-052), which may sit
+  behind a TLS-terminating proxy with the upstream re-encrypted; keep the collab port on the
+  stack's private network (§5, ADR-111).
+
 ## 2. Configuration (`~/.config/mae/daemon.toml`)
 
 TOML, XDG-compliant. Legacy: auto-reads `state-server.toml` if `daemon.toml` is absent. Start from
@@ -321,6 +341,10 @@ mae-daemon --bind 0.0.0.0:9473   # all interfaces — ONLY with key mode + a fir
 - Firewall the port from untrusted networks. Never bind `0.0.0.0` on a public IP without a firewall
   rule or VPN.
 - `mae-daemon doctor` runs connectivity diagnostics.
+- **Behind a TLS-terminating reverse proxy** the collab port cannot work: it authenticates by the
+  client's certificate, which a terminating proxy consumes. Expose the HTTPS listener instead
+  (ADR-052; re-encrypt upstream) and keep collab private — ADR-111 records why remote clients
+  authenticate at the application layer rather than by mutual TLS.
 
 ---
 
@@ -342,7 +366,8 @@ against a live instance.
 
 Use it where the question is *"is this instance configured to work?"*: a deploy gate
 (the Ansible role's verify step asserts on it), CI, or a pre-flight before restarting.
-Do **not** use it as a container `HEALTHCHECK` / liveness probe on its own: a freshly
+Use `mae-daemon ping` as the liveness probe. Do **not** use doctor as a container
+`HEALTHCHECK` / liveness probe on its own: a freshly
 deployed instance whose first client has not been authorized yet is correctly
 reported as not ready, and a liveness probe that fails there would restart a process
 that is running fine. Authorize the first client as part of the deploy (the role's
@@ -410,7 +435,10 @@ cp -a ~/.local/share/mae/collab/ /backups/mae-collab-$(date +%F)/
 # recovery key's purpose is to survive loss/compromise of the primary; co-locating them defeats it.
 
 # Restore: stop the daemon, replace the store file + the collab dir, restart.
+# Remove the store's leftover -wal/-shm FIRST: a stale WAL beside the restored file is replayed
+# over it on the next open, silently re-applying writes the backup did not contain.
 systemctl --user stop mae-daemon
+rm -f ~/.local/share/mae/<store>.cozo-wal ~/.local/share/mae/<store>.cozo-shm
 cp /backups/mae-2026-06-30.cozo ~/.local/share/mae/<store>.cozo
 cp -a /backups/mae-collab-2026-06-30/ ~/.local/share/mae/collab/
 systemctl --user start mae-daemon

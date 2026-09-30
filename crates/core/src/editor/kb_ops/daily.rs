@@ -157,7 +157,23 @@ impl Editor {
                 Ok(())
             }
             DailyBacking::Store => {
-                self.kb_create_node(&id, &date_str, "", mae_kb::NodeKind::Note)?;
+                // A daily's id (`daily:YYYY-MM-DD`) says nothing about which KB it
+                // belongs to, so the prefix routing inside `kb_create_node` sent
+                // every one to the primary store. It belongs to the KB that owns
+                // the dailies directory — a retired KB's origin included.
+                match self
+                    .kb_dailies_dir()
+                    .and_then(|d| self.kb_dir_write_owner(&d))
+                {
+                    Some(owner) => self.kb_create_node_in(
+                        Some(owner),
+                        &id,
+                        &date_str,
+                        "",
+                        mae_kb::NodeKind::Note,
+                    )?,
+                    None => self.kb_create_node(&id, &date_str, "", mae_kb::NodeKind::Note)?,
+                }
                 Ok(())
             }
         }

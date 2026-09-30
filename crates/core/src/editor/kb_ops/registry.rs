@@ -287,6 +287,28 @@ impl Editor {
     /// start from a native KB at all, which is the whole point of the cutover.
     /// Reuses `kb_adopt_detached_instance` (opens the store, no org import)
     /// rather than a second adoption path.
+    /// `base`, or the first free `base-N`, such that no registered KB already
+    /// maps to the same store directory.
+    ///
+    /// A KB's store directory derives from its NAME, so two projects sharing a
+    /// folder name used to share one SQLite store — hidden because the test
+    /// compared only uuids. `register` now refuses a taken store name; a
+    /// genuinely different project gets the next free name instead.
+    fn kb_free_instance_name(&self, base: &str) -> String {
+        let taken = |n: &str| {
+            let slug = mae_kb::data_dir::slugify(n);
+            self.kb
+                .registry
+                .instances
+                .iter()
+                .any(|i| mae_kb::data_dir::slugify(&i.name) == slug)
+        };
+        std::iter::once(base.to_string())
+            .chain((2..).map(|n| format!("{base}-{n}")))
+            .find(|n| !taken(n))
+            .expect("an unbounded sequence has a free name")
+    }
+
     pub fn kb_new(&mut self, name: &str) -> Result<String, String> {
         let data_dir = self
             .mae_data_dir()
@@ -376,8 +398,15 @@ impl Editor {
         // Import org files, open the durable store, start a watcher — shared
         // with `drain_kb_registry_watch` (an instance appearing via another
         // process's registration goes through the exact same adoption path).
-        let db_path = self.kb.registry.find(&uuid).map(|i| i.db_path.clone());
-        let (report, health) = self.kb_adopt_instance(&uuid, org_dir, db_path.as_deref());
+        // Ingest from the REGISTERED `org_dir`, which `register` canonicalized —
+        // not the caller's spelling. `source_files` keys are the walked paths, so
+        // ingesting a symlink/`..`/non-canonical temp spelling recorded keys no
+        // later reader walks, and retirement refused every file as never imported.
+        let (db_path, org_dir) = match self.kb.registry.find(&uuid) {
+            Some(i) => (Some(i.db_path.clone()), i.org_dir.clone()),
+            None => (None, org_dir.to_path_buf()),
+        };
+        let (report, health) = self.kb_adopt_instance(&uuid, &org_dir, db_path.as_deref());
 
         // Update last_import timestamp and persist.
         let (registry, (), saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
@@ -443,11 +472,11 @@ impl Editor {
             return Ok(existing);
         }
 
-        let project_name = canonical_root
+        let base_name = canonical_root
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("project")
-            .to_string();
+            .unwrap_or("project");
+        let project_name = self.kb_free_instance_name(base_name);
         let org_dir = canonical_root.join(".mae-kb");
         std::fs::create_dir_all(&org_dir)
             .map_err(|e| format!("failed to create {}: {e}", org_dir.display()))?;
@@ -699,34 +728,8 @@ impl Editor {
         let inst = self.kb.registry.find(name_or_uuid).cloned();
         match inst {
             Some(instance) => {
-                // #631: an empty `org_dir` is the documented convention for any
-                // instance whose content does not come from disk — every joined
-                // collab KB uses it (`federation.rs`). Walking "" yields nothing,
-                // and the empty result was then written straight back over the
-                // live in-memory KB, silently emptying it until restart. The
-                // system-KB guard above covers only one user of that convention.
-                //
-                // Every other org-dir consumer already filters these out
-                // (`kb_reimport_file`, `kb_path_in_instance`, the watcher drain,
-                // the daemon scheduler); this was the one that did not.
-                // Phase 1 (KB cutover): a detached instance's store IS the
-                // truth. Re-importing text over it is precisely the clobber the
-                // cutover exists to stop, so refuse rather than silently
-                // reverting the user's store to a stale archive.
-                if !instance.allows_ingest() {
-                    self.set_status(format!(
-                        "'{}' is detached — its store is the source of truth, so \
-                         re-importing the org directory would overwrite it \
-                         (re-attach with :kb-attach to allow ingest)",
-                        instance.name
-                    ));
-                    return None;
-                }
-                if instance.org_dir.as_os_str().is_empty() {
-                    self.set_status(format!(
-                        "'{}' has no org directory — its content lives in the store,                          so there is nothing to reimport",
-                        instance.name
-                    ));
+                if let Some(refusal) = kb_reimport_refusal(&instance) {
+                    self.set_status(refusal);
                     return None;
                 }
                 let mode = mode.unwrap_or_default();
@@ -999,37 +1002,6 @@ impl Editor {
         }
     }
 
-    /// Is the STORE the source of truth for whichever KB owns `dir`?
-    ///
-    /// The directory-addressed twin of [`Editor::kb_store_is_truth_for`], which
-    /// answers the same question for a node id. Capture and dailies need this
-    /// one, because what they hold is a PATH (`kb_notes_dir` /
-    /// `kb_dailies_dir`), not an id.
-    ///
-    /// @ai-caution: [kb-policy] Both callers previously asked
-    /// `primary_store_is_truth()` instead — the policy of the *primary*, not of
-    /// the KB that actually owns the directory. Those are routinely different:
-    /// `kb_insert_to_notes_instance` treats "a registered instance covers
-    /// `kb_notes_dir`" as the normal case, not an edge case. Detaching that
-    /// instance while the primary stayed attached left capture writing `.org`
-    /// into a stale archive, and the edit reached nothing — `kb_reimport_file`
-    /// filters detached instances, so the reconcile-on-save silently did
-    /// nothing. Ask about the OWNER of the directory, never about the primary.
-    pub(crate) fn kb_dir_store_is_truth(&self, dir: &std::path::Path) -> bool {
-        match self
-            .kb
-            .registry
-            .instances
-            .iter()
-            .find(|i| !i.org_dir.as_os_str().is_empty() && dir.starts_with(&i.org_dir))
-        {
-            Some(inst) => !inst.ingest_policy.allows_ingest(),
-            // No registered instance covers it, so it belongs to the primary,
-            // whose policy lives on the registry rather than on any row.
-            None => self.kb.primary_store_is_truth(),
-        }
-    }
-
     /// If `path` lies inside a DETACHED instance's `.org` directory, the name of
     /// that instance.
     ///
@@ -1041,11 +1013,9 @@ impl Editor {
     ///
     /// `None` for every attached KB, so this can only narrow.
     pub fn kb_stale_archive_instance(&self, path: &std::path::Path) -> Option<String> {
-        let inst = self.kb.registry.instances.iter().find(|i| {
-            !i.ingest_policy.allows_ingest()
-                && !i.org_dir.as_os_str().is_empty()
-                && path.starts_with(&i.org_dir)
-        })?;
+        let inst = self
+            .kb_dir_owner(path, super::dir_owner::DirOwnership::Source)
+            .filter(|i| !i.ingest_policy.allows_ingest())?;
 
         // @ai-caution: [kb-truth] The directory prefix is NOT sufficient, and
         // assuming it was shipped a real regression. A KB's `org_dir` is
@@ -1690,6 +1660,24 @@ impl Editor {
         name_or_uuid: &str,
         policy: mae_kb::federation::IngestPolicy,
     ) -> Result<String, String> {
+        // Attaching REMOVES a protection, so it is never a plain flag flip: it
+        // is verified against the store and refused on any difference unless
+        // confirmed (#825, `attach.rs`). Every route that attaches — the ex
+        // command, Scheme `(kb-attach)` — comes through here, so the check
+        // cannot be walked past by picking a different surface.
+        if policy.allows_ingest() {
+            return self.kb_attach(name_or_uuid, false);
+        }
+        self.kb_set_ingest_policy_unverified(name_or_uuid, policy)
+    }
+
+    /// The raw flag flip. Only `kb_attach` may call it with `FromOrgDir`, after
+    /// verifying or being confirmed.
+    pub(crate) fn kb_set_ingest_policy_unverified(
+        &mut self,
+        name_or_uuid: &str,
+        policy: mae_kb::federation::IngestPolicy,
+    ) -> Result<String, String> {
         // A system KB's truth is the binary, not an org dir — so "detached" is
         // not a state it can be in. It has no `KbInstance` and therefore nowhere
         // to record a policy, and the corpus is rebuilt from the embedded
@@ -1726,7 +1714,54 @@ impl Editor {
         Ok(if policy.allows_ingest() {
             format!("'{name_or_uuid}' attached — its org directory is authoritative and will overwrite the store on ingest")
         } else {
-            format!("'{name_or_uuid}' detached — its store is now the source of truth; no org ingest will overwrite it")
+            format!(
+                "'{name_or_uuid}' detached — its store is now the source of truth; no org \
+                 ingest will overwrite it. Re-attaching later verifies the directory against \
+                 the store first (:kb-attach)."
+            )
         })
     }
+}
+
+/// Why `:kb-reimport` must not run on `instance`, if it must not.
+///
+/// #631: an empty `org_dir` is the documented convention for any instance whose
+/// content does not come from disk — every joined collab KB uses it
+/// (`federation.rs`). Walking "" yields nothing, and the empty result was then
+/// written straight back over the live in-memory KB, silently emptying it until
+/// restart. Every other org-dir consumer already filters these out
+/// (`kb_reimport_file`, `kb_path_in_instance`, the watcher drain, the daemon
+/// scheduler); reimport was the one that did not.
+///
+/// Phase 1 (KB cutover): a detached instance's store IS the truth. Re-importing
+/// text over it is precisely the clobber the cutover exists to stop.
+///
+/// A directory that no longer exists (moved project, unmounted disk) would make
+/// the Full ingest treat every tracked file as deleted and empty the store; the
+/// ingest itself refuses too, but its error path falls back to an in-memory
+/// import that would empty the mirror, so refuse here with a clear message.
+fn kb_reimport_refusal(instance: &mae_kb::federation::KbInstance) -> Option<String> {
+    if !instance.allows_ingest() {
+        return Some(format!(
+            "'{}' is detached — its store is the source of truth, so re-importing \
+             would overwrite it. :kb-attach first checks what ingest would change.",
+            instance.name
+        ));
+    }
+    if instance.org_dir.as_os_str().is_empty() {
+        return Some(format!(
+            "'{}' has no org directory — its content lives in the store",
+            instance.name
+        ));
+    }
+    if !instance.org_dir.is_dir() {
+        return Some(format!(
+            "'{}': {} does not exist — not re-importing (a full ingest of a \
+             missing directory would delete every node). Moved it? Register \
+             the new location.",
+            instance.name,
+            instance.org_dir.display()
+        ));
+    }
+    None
 }

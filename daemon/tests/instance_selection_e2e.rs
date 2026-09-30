@@ -188,6 +188,47 @@ fn check_config_validates_the_instance_named_by_config() {
     assert!(out.contains("Config OK"), "{out}");
 }
 
+/// #652: `--check-config` is a check, so it must not write a private key. It
+/// used to generate one as whoever ran it — under Ansible's `validate=` that is
+/// root, and the unprivileged service then cannot read its own identity.
+#[test]
+fn check_config_does_not_create_an_identity() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let home = home_with_default_config(tmp.path());
+    let prod = instance_config(tmp.path(), "prod", 19475);
+    let key = tmp.path().join("prod/collab/id_ed25519");
+    assert!(!key.exists(), "premise: no identity yet");
+
+    let out = run(
+        &home,
+        &["--check-config", "--config", &prod.display().to_string()],
+    );
+
+    assert!(
+        !key.exists(),
+        "--check-config wrote {}:\n{out}",
+        key.display()
+    );
+    assert!(out.contains("generated on first start"), "{out}");
+
+    // Once one exists, the check reports it rather than regenerating.
+    run(
+        &home,
+        &["identity", "--config", &prod.display().to_string()],
+    );
+    let before = std::fs::read(&key).expect("identity now exists");
+    let out = run(
+        &home,
+        &["--check-config", "--config", &prod.display().to_string()],
+    );
+    assert!(out.contains("auth.identity: SHA256:"), "{out}");
+    assert_eq!(
+        std::fs::read(&key).unwrap(),
+        before,
+        "and does not rewrite it"
+    );
+}
+
 #[test]
 fn identity_is_generated_in_the_instance_its_config_names() {
     // The sharpest case: `identity` has a SIDE EFFECT (it generates a keypair on
