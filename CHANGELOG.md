@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.14.126] - 2026-09-30
+## [0.14.127] - 2026-09-30
 
 
 
@@ -20,10 +20,26 @@ All notable changes to this project will be documented in this file.
 - *(daemon)* HTTPS listener — token-free webview, /api/health, optional jwks_url ([792fd2c](https://github.com/cuttlefisch/mae/commit/792fd2c84c3a94f9d1781883ad13e1ef256ce826))
 - The three CI failures on #834, and an overstated claim corrected ([c96590c](https://github.com/cuttlefisch/mae/commit/c96590c7f73f140d2cba4e7f665a259381924d0f))
 - *(daemon)* The doctor exit-code tests no longer open the real data directory ([9ca0374](https://github.com/cuttlefisch/mae/commit/9ca037432bb356c358423f887f07078eed417f31))
+- *(kb)* Stored KB directories have one canonical spelling; a copied marker cannot hijack a KB (#832) ([9180eae](https://github.com/cuttlefisch/mae/commit/9180eaeac03b9ad40b475c12df50181fcad013c9))
+- *(kb)* Legacy-spelled source keys still match; writers store canonical paths; a moved project repoints its KB (#832) ([ea4617c](https://github.com/cuttlefisch/mae/commit/ea4617c73e0436e8c6b679ed57f3eefd072222c1))
+- *(kb)* Comparisons, walks and ingest paths agree on one spelling; saved notes are tracked (#832) ([827d735](https://github.com/cuttlefisch/mae/commit/827d735668d92bde231db9eafc4971b395d44b1b))
+- *(kb)* The import-plan archive guard canonicalises the ROW side too (#832 rule 3) ([bf427e9](https://github.com/cuttlefisch/mae/commit/bf427e96e1c6e11308201132fe318b9b4ffe6f82))
 
 ### Documentation
 
 - *(daemon)* The HTTPS listener — config, token mint, health, cert reload ([c95e9ef](https://github.com/cuttlefisch/mae/commit/c95e9ef0aa84bf3b1f2e3cad9717e1a3d5e1f1f7))
+
+### Testing
+
+- *(kb)* The project-scope test expects the canonical root (#832) ([3b618b8](https://github.com/cuttlefisch/mae/commit/3b618b8064599a21d8e1e923bb35e62f4a825cc0))
+
+### CI
+
+- Every job has a timeout; the bump's CI wait covers two queued runs ([a024347](https://github.com/cuttlefisch/mae/commit/a024347cd40cd2c6b671da0614908383bcfdb765))
+
+### Miscellaneous
+
+- Bump version to 0.14.126 ([8e863b3](https://github.com/cuttlefisch/mae/commit/8e863b3ef78c1da78f12c67b69979c8e96b84708))
 
 ## [0.14.125] - 2026-09-30
 
