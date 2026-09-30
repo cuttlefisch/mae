@@ -1,6 +1,6 @@
 [package]
 name = "mae-daemon"
-version = "0.14.123"
+version = "0.14.124"
 edition = "2021"
 license = "GPL-3.0-or-later"
 description = "MAE daemon — background KB persistence, maintenance, collaboration, and services"
@@ -53,7 +53,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-dirs = "6"
+dirs = "7"
 toml = "1.1"
 sha2 = "0.11"
 hex = "0.4"
