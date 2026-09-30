@@ -1146,10 +1146,6 @@
       "max_fn_lines": 446,
       "max_nesting": 8
     },
-    "daemon/src/oauth.rs": {
-      "max_fn_lines": 136,
-      "max_nesting": 3
-    },
     "daemon/src/p2p.rs": {
       "max_fn_lines": 89,
       "max_nesting": 3
@@ -1172,10 +1168,6 @@
     },
     "daemon/src/tests/kb_socket_malformed_and_disconnect_tests.rs": {
       "max_fn_lines": 86,
-      "max_nesting": 1
-    },
-    "daemon/src/webview.rs": {
-      "max_fn_lines": 129,
       "max_nesting": 1
     },
     "daemon/tests/collab_e2e.rs": {

@@ -390,69 +390,13 @@ async fn main() {
     }
 
     // --- OAuth 2.1 resource-server listener (ADR-052); kb/query.* (ADR-053/Phase G) ---
-    if config.oauth.enabled {
-        if config.oauth.canonical_resource_uri.is_empty() || config.oauth.jwks_url.is_empty() {
-            error!("oauth.enabled is true but canonical_resource_uri/jwks_url are not set — OAuth listener disabled");
-        } else {
-            let server_config = oauth::ResourceServerConfig {
-                canonical_resource_uri: config.oauth.canonical_resource_uri.clone(),
-                principal_claim: config.oauth.principal_claim.clone(),
-                jwks_url: config.oauth.jwks_url.clone(),
-                issuer: config.oauth.issuer.clone(),
-                kb_query_enabled: config.oauth.kb_query_enabled,
-                max_request_body_bytes: config.oauth.max_request_body_bytes,
-                kb_query_max_body_bytes: config.oauth.kb_query_max_body_bytes,
-                kb_query_max_scan_nodes: config.oauth.kb_query_max_scan_nodes,
-                kb_query_max_search_results: config.oauth.kb_query_max_search_results,
-                webview_enabled: config.oauth.webview_enabled,
-            };
-            let bind = config.oauth.bind;
-            let cert_path = config.oauth.cert_path.clone();
-            let key_path = config.oauth.key_path.clone();
-            let doc_store = doc_store_for_query.clone();
-            let oauth_limiter = conn_limit::ConnLimiter::new(config.oauth.max_connections);
-            // ADR-060 Phase C (#456): the OAuth listener charges against the same
-            // per-tenant budget as the collab listener, keyed on the token's mapped
-            // principal.
-            let oauth_quota: Arc<dyn mae_daemon::quota::QuotaCharger> =
-                Arc::new(tenant::TenantQuota(Arc::clone(&state.lock().await.tenants)));
-            // ADR-067 Phase D3: `None` unless BOTH the operator opted in AND
-            // this daemon actually has a key-mode identity to validate
-            // against (see `daemon_identity_for_oauth`'s own doc comment) —
-            // a `kid: "self"` token on any other daemon just falls through
-            // to the ordinary JWKS path (`oauth::handle_request`), where it
-            // fails as an unknown key like any other bogus `kid`.
-            let self_issue = if config.oauth.self_issued_tokens_enabled {
-                daemon_identity_for_oauth.clone().map(|identity| {
-                    mae_daemon::oauth_self_issue::SelfIssueConfig {
-                        identity,
-                        audience: config.oauth.canonical_resource_uri.clone(),
-                        ttl_secs: config.oauth.self_issued_token_ttl_secs,
-                    }
-                })
-            } else {
-                None
-            };
-            tokio::spawn(async move {
-                if let Err(e) = oauth::run_oauth_listener(
-                    server_config,
-                    bind,
-                    &cert_path,
-                    &key_path,
-                    doc_store,
-                    oauth_limiter,
-                    self_issue,
-                    oauth_quota,
-                )
-                .await
-                {
-                    error!(error = %e, "OAuth listener failed to start");
-                }
-            });
-        }
-    } else {
-        info!("OAuth resource-server listener disabled in config (default)");
-    }
+    spawn_oauth_listener(
+        &config,
+        &state,
+        doc_store_for_query.clone(),
+        daemon_identity_for_oauth.clone(),
+    )
+    .await;
 
     // KB accept loop
     let accept_state = Arc::clone(&state);
@@ -528,6 +472,88 @@ async fn main() {
     .await;
 
     tracing::info!("mae-daemon stopped");
+}
+
+/// Start the OAuth 2.1 resource-server HTTPS listener (ADR-052; `kb/query.*`,
+/// ADR-053/Phase G) when configured. Split out of `main` so the serve path
+/// reads as a sequence of listeners rather than one function holding each.
+async fn spawn_oauth_listener(
+    config: &DaemonConfig,
+    state: &Arc<Mutex<DaemonState>>,
+    doc_store: Option<Arc<doc_store::DocStore>>,
+    daemon_identity: Option<Arc<mae_mcp::identity::Identity>>,
+) {
+    if !config.oauth.enabled {
+        info!("OAuth resource-server listener disabled in config (default)");
+        return;
+    }
+    if config.oauth.canonical_resource_uri.is_empty() {
+        error!(
+            "oauth.enabled is true but canonical_resource_uri is not set — OAuth listener disabled"
+        );
+        return;
+    }
+    // ADR-067 Phase D3: `None` unless BOTH the operator opted in AND this
+    // daemon actually has a key-mode identity to validate against (see
+    // `daemon_identity_for_oauth`'s own doc comment) — a `kid: "self"` token on
+    // any other daemon just falls through to the ordinary JWKS path
+    // (`oauth::handle_request`), where it fails as an unknown key like any
+    // other bogus `kid`.
+    let self_issue = if config.oauth.self_issued_tokens_enabled {
+        daemon_identity.map(|identity| mae_daemon::oauth_self_issue::SelfIssueConfig {
+            identity,
+            audience: config.oauth.canonical_resource_uri.clone(),
+            ttl_secs: config.oauth.self_issued_token_ttl_secs,
+        })
+    } else {
+        None
+    };
+    // ADR-111 P1: `jwks_url` is optional when self-issued tokens are the only
+    // ones in use. With NEITHER, no token could ever validate — a listener that
+    // refuses everyone is a misconfiguration, reported rather than started.
+    if config.oauth.jwks_url.is_empty() && self_issue.is_none() {
+        error!(
+            "oauth.enabled is true but no token could ever validate: jwks_url is unset and              self-issued tokens are unavailable (they need oauth.self_issued_tokens_enabled =              true and collab.auth.mode = \"key\") — OAuth listener disabled"
+        );
+        return;
+    }
+    let server_config = oauth::ResourceServerConfig {
+        canonical_resource_uri: config.oauth.canonical_resource_uri.clone(),
+        principal_claim: config.oauth.principal_claim.clone(),
+        jwks_url: config.oauth.jwks_url.clone(),
+        issuer: config.oauth.issuer.clone(),
+        kb_query_enabled: config.oauth.kb_query_enabled,
+        max_request_body_bytes: config.oauth.max_request_body_bytes,
+        kb_query_max_body_bytes: config.oauth.kb_query_max_body_bytes,
+        kb_query_max_scan_nodes: config.oauth.kb_query_max_scan_nodes,
+        kb_query_max_search_results: config.oauth.kb_query_max_search_results,
+        webview_enabled: config.oauth.webview_enabled,
+    };
+    let bind = config.oauth.bind;
+    let cert_path = config.oauth.cert_path.clone();
+    let key_path = config.oauth.key_path.clone();
+    let oauth_limiter = conn_limit::ConnLimiter::new(config.oauth.max_connections);
+    // ADR-060 Phase C (#456): the OAuth listener charges against the same
+    // per-tenant budget as the collab listener, keyed on the token's mapped
+    // principal.
+    let oauth_quota: Arc<dyn mae_daemon::quota::QuotaCharger> =
+        Arc::new(tenant::TenantQuota(Arc::clone(&state.lock().await.tenants)));
+    tokio::spawn(async move {
+        if let Err(e) = oauth::run_oauth_listener(
+            server_config,
+            bind,
+            &cert_path,
+            &key_path,
+            doc_store,
+            oauth_limiter,
+            self_issue,
+            oauth_quota,
+        )
+        .await
+        {
+            error!(error = %e, "OAuth listener failed to start");
+        }
+    });
 }
 
 /// Spawn the collab TCP server (absorbed from mae-state-server).

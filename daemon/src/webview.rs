@@ -5,11 +5,11 @@
 //! Deliberately dependency-free of `mae-canvas`/`mae-core`/`mae-gui` (ADR-073
 //! D2) — this module only generates text. All data access goes through the
 //! EXISTING `kb/query.*` surface (ADR-053, `mae_daemon::kb_query`) unchanged; the
-//! page's own client-side JS polls it on an interval using the same bearer
-//! token the page itself was fetched with (D3). This is v1's whole "live"
-//! story — poll-based, not push (see ADR-074 for the deferred SSE upgrade) —
-//! and the page says so explicitly, never implying otherwise (tracker gate
-//! G1: no silent capability overstatement).
+//! page's own client-side JS polls it on an interval, presenting the bearer
+//! token it took from the URL fragment (ADR-111 P1 -- see `render_page`).
+//! This is v1's whole "live" story — poll-based, not push (see ADR-074 for the
+//! deferred SSE upgrade) — and the page says so explicitly, never implying
+//! otherwise (tracker gate G1: no silent capability overstatement).
 //!
 //! Per explicit product decision (ADR-073 D4), this ships a lighter-polish
 //! subset than the native editor's chord diagram: a node list + a content
@@ -28,23 +28,24 @@ pub fn parse_view_path(path: &str) -> Option<&str> {
     }
 }
 
-/// Render the self-contained HTML page for `kb_id`. `token` is embedded as a
-/// JSON-escaped JS string literal (never raw-interpolated) so the page's own
-/// `fetch()` polling calls can present it as a real `Authorization: Bearer`
-/// header — `kb/query.*` itself stays header-only; only THIS route's initial
-/// GET accepts the token via query-string fallback (see
-/// `oauth::extract_view_bearer_token`'s doc comment for why a plain browser
-/// navigation has no other way to present it).
+/// Render the self-contained HTML page SHELL for `kb_id`.
 ///
-/// `kb_id` and `token` are both passed through `serde_json::to_string` before
-/// embedding — never manually string-interpolated into the `<script>` body —
-/// so neither can break out of its JS string literal regardless of content
-/// (defense in depth: `kb_id` reaches here only after `parse_view_path`'s
-/// no-`/` check and the caller's own access gate, but this function makes no
-/// assumption about that and is safe on its own).
-pub fn render_page(kb_id: &str, token: &str) -> String {
+/// ADR-111 P1: the page carries no credential. Its script takes the bearer
+/// token from the URL fragment (`#access_token=…`) -- which a browser never
+/// sends to a server, so it cannot reach an access log -- strips the fragment
+/// from the address bar, and presents the token as an `Authorization: Bearer`
+/// header on its own `kb/query.*` requests. Its first request is
+/// `kb/query.capabilities`: a caller with no access sees that refusal and no
+/// node list. The page used to embed the token the server had received via
+/// `?access_token=`, which put a live credential in proxy logs.
+///
+/// `kb_id` is passed through `js_string_literal` before embedding — never
+/// manually string-interpolated into the `<script>` body — so it cannot break
+/// out of its JS string literal regardless of content (defense in depth:
+/// `kb_id` reaches here only after `parse_view_path`'s no-`/` check, but this
+/// function makes no assumption about that and is safe on its own).
+pub fn render_page(kb_id: &str) -> String {
     let kb_id_js = js_string_literal(kb_id);
-    let token_js = js_string_literal(token);
     let kb_id_html = html_escape(kb_id);
 
     format!(
@@ -55,29 +56,7 @@ pub fn render_page(kb_id: &str, token: &str) -> String {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{kb_id_html} — MAE KB view</title>
 <style>
-  :root {{ color-scheme: light dark; }}
-  * {{ box-sizing: border-box; }}
-  body {{
-    margin: 0; display: flex; height: 100vh; font-family: system-ui, sans-serif;
-    background: Canvas; color: CanvasText;
-  }}
-  #sidebar {{
-    flex: 0 0 300px; overflow-y: auto; border-right: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
-    padding: 0.5rem;
-  }}
-  #sidebar h2 {{ font-size: 0.85rem; text-transform: uppercase; opacity: 0.6; margin: 0.5rem 0.25rem; }}
-  #node-list {{ list-style: none; margin: 0; padding: 0; }}
-  #node-list li {{
-    padding: 0.4rem 0.5rem; border-radius: 6px; cursor: pointer; font-size: 0.9rem;
-  }}
-  #node-list li:hover {{ background: color-mix(in srgb, CanvasText 8%, transparent); }}
-  #node-list li.selected {{ background: color-mix(in srgb, CanvasText 15%, transparent); font-weight: 600; }}
-  #main {{ flex: 1 1 auto; overflow-y: auto; padding: 1.5rem 2rem; }}
-  #main h1 {{ margin-top: 0; }}
-  #main pre {{ white-space: pre-wrap; word-break: break-word; font-family: inherit; }}
-  #status {{ font-size: 0.75rem; opacity: 0.55; padding: 0.5rem; border-top: 1px solid color-mix(in srgb, CanvasText 20%, transparent); }}
-  #empty {{ opacity: 0.6; padding: 1rem; }}
-</style>
+{style}</style>
 </head>
 <body>
   <div id="sidebar">
@@ -96,82 +75,151 @@ pub fn render_page(kb_id: &str, token: &str) -> String {
 (function() {{
   "use strict";
   var KB_ID = {kb_id_js};
-  var TOKEN = {token_js};
   var POLL_MS = {poll_ms};
-  var selected = null;
-
-  function rpc(method, params) {{
-    return fetch("/", {{
-      method: "POST",
-      headers: {{
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + TOKEN
-      }},
-      body: JSON.stringify({{jsonrpc: "2.0", id: 1, method: method, params: params}})
-    }}).then(function(r) {{ return r.json(); }});
-  }}
-
-  function renderNodeList(nodes) {{
-    var ul = document.getElementById("node-list");
-    ul.innerHTML = "";
-    nodes.forEach(function(id) {{
-      var li = document.createElement("li");
-      li.textContent = id;
-      li.dataset.nodeId = id;
-      if (id === selected) li.className = "selected";
-      li.addEventListener("click", function() {{ selectNode(id); }});
-      ul.appendChild(li);
-    }});
-  }}
-
-  function renderNode(node) {{
-    document.getElementById("empty").style.display = "none";
-    document.getElementById("node-content").style.display = "";
-    document.getElementById("node-title").textContent = node.title || node.node_id;
-    if (node.encryption === "e2e") {{
-      document.getElementById("node-body").textContent =
-        "(this KB is end-to-end encrypted — this lightweight view cannot decrypt it; " +
-        "use a full MAE client with your member key instead)";
-    }} else {{
-      document.getElementById("node-body").textContent = node.body || "";
-    }}
-  }}
-
-  function selectNode(id) {{
-    selected = id;
-    Array.prototype.forEach.call(document.querySelectorAll("#node-list li"), function(li) {{
-      li.className = (li.dataset.nodeId === id) ? "selected" : "";
-    }});
-    rpc("kb/query.get", {{kb_id: KB_ID, node_id: id}}).then(function(resp) {{
-      if (resp.result) renderNode(resp.result);
-    }});
-  }}
-
-  function refreshGraph() {{
-    rpc("kb/query.graph", {{kb_id: KB_ID}}).then(function(resp) {{
-      if (resp.result && resp.result.nodes) renderNodeList(resp.result.nodes);
-    }});
-    if (selected) {{
-      rpc("kb/query.get", {{kb_id: KB_ID, node_id: selected}}).then(function(resp) {{
-        if (resp.result) renderNode(resp.result);
-      }});
-    }}
-  }}
-
-  refreshGraph();
-  setInterval(refreshGraph, POLL_MS);
-}})();
+{script}}})();
 </script>
 </body>
 </html>
 "##,
         kb_id_html = kb_id_html,
         kb_id_js = kb_id_js,
-        token_js = token_js,
+        style = PAGE_STYLE,
+        script = PAGE_SCRIPT,
         poll_secs = POLL_INTERVAL_SECS,
         poll_ms = POLL_INTERVAL_SECS * 1000,
     )
 }
+
+/// The page's stylesheet -- static, so it lives outside `render_page`'s
+/// `format!` template (no brace-doubling, and the template stays readable).
+const PAGE_STYLE: &str = r##"  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; display: flex; height: 100vh; font-family: system-ui, sans-serif;
+    background: Canvas; color: CanvasText;
+  }
+  #sidebar {
+    flex: 0 0 300px; overflow-y: auto; border-right: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+    padding: 0.5rem;
+  }
+  #sidebar h2 { font-size: 0.85rem; text-transform: uppercase; opacity: 0.6; margin: 0.5rem 0.25rem; }
+  #node-list { list-style: none; margin: 0; padding: 0; }
+  #node-list li {
+    padding: 0.4rem 0.5rem; border-radius: 6px; cursor: pointer; font-size: 0.9rem;
+  }
+  #node-list li:hover { background: color-mix(in srgb, CanvasText 8%, transparent); }
+  #node-list li.selected { background: color-mix(in srgb, CanvasText 15%, transparent); font-weight: 600; }
+  #main { flex: 1 1 auto; overflow-y: auto; padding: 1.5rem 2rem; }
+  #main h1 { margin-top: 0; }
+  #main pre { white-space: pre-wrap; word-break: break-word; font-family: inherit; }
+  #status { font-size: 0.75rem; opacity: 0.55; padding: 0.5rem; border-top: 1px solid color-mix(in srgb, CanvasText 20%, transparent); }
+  #empty { opacity: 0.6; padding: 1rem; }
+"##;
+
+/// The page's script body, run inside an IIFE that `render_page` opens after
+/// defining `KB_ID` and `POLL_MS` -- the only two per-page values. Static for
+/// the same reason as [`PAGE_STYLE`]; nothing caller-supplied is spliced in.
+const PAGE_SCRIPT: &str = r##"  var selected = null;
+
+  // The credential arrives in the fragment, which the browser never sends to
+  // the server. Take it, then drop it from the address bar so it is not kept
+  // in history, bookmarks or a shared screen.
+  var TOKEN = null;
+  var frag = (window.location.hash || "").replace(/^#/, "");
+  frag.split("&").forEach(function(pair) {
+    var i = pair.indexOf("=");
+    if (i > 0 && pair.slice(0, i) === "access_token") {
+      TOKEN = decodeURIComponent(pair.slice(i + 1));
+    }
+  });
+  if (window.location.hash && window.history && window.history.replaceState) {
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  }
+
+  function showError(msg) {
+    document.getElementById("empty").textContent = msg;
+  }
+
+  function errorText(resp) {
+    if (!resp || !resp.error) return "";
+    if (typeof resp.error === "string") return resp.error_description || resp.error;
+    return resp.error.message || "request refused";
+  }
+
+  function rpc(method, params) {
+    return fetch("/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + TOKEN
+      },
+      body: JSON.stringify({jsonrpc: "2.0", id: 1, method: method, params: params})
+    }).then(function(r) { return r.json(); });
+  }
+
+  function renderNodeList(nodes) {
+    var ul = document.getElementById("node-list");
+    ul.innerHTML = "";
+    nodes.forEach(function(id) {
+      var li = document.createElement("li");
+      li.textContent = id;
+      li.dataset.nodeId = id;
+      if (id === selected) li.className = "selected";
+      li.addEventListener("click", function() { selectNode(id); });
+      ul.appendChild(li);
+    });
+  }
+
+  function renderNode(node) {
+    document.getElementById("empty").style.display = "none";
+    document.getElementById("node-content").style.display = "";
+    document.getElementById("node-title").textContent = node.title || node.node_id;
+    if (node.encryption === "e2e") {
+      document.getElementById("node-body").textContent =
+        "(this KB is end-to-end encrypted — this lightweight view cannot decrypt it; " +
+        "use a full MAE client with your member key instead)";
+    } else {
+      document.getElementById("node-body").textContent = node.body || "";
+    }
+  }
+
+  function selectNode(id) {
+    selected = id;
+    Array.prototype.forEach.call(document.querySelectorAll("#node-list li"), function(li) {
+      li.className = (li.dataset.nodeId === id) ? "selected" : "";
+    });
+    rpc("kb/query.get", {kb_id: KB_ID, node_id: id}).then(function(resp) {
+      if (resp.result) renderNode(resp.result);
+    });
+  }
+
+  function refreshGraph() {
+    rpc("kb/query.graph", {kb_id: KB_ID}).then(function(resp) {
+      if (resp.result && resp.result.nodes) renderNodeList(resp.result.nodes);
+    });
+    if (selected) {
+      rpc("kb/query.get", {kb_id: KB_ID, node_id: selected}).then(function(resp) {
+        if (resp.result) renderNode(resp.result);
+      });
+    }
+  }
+
+  if (!TOKEN) {
+    showError("No access token. Open this view as …/view#access_token=<token>.");
+    return;
+  }
+  // The access gate: nothing is listed until the KB answers for this token.
+  rpc("kb/query.capabilities", {kb_id: KB_ID}).then(function(resp) {
+    if (!resp.result) {
+      showError("Access refused: " + errorText(resp));
+      return;
+    }
+    refreshGraph();
+    setInterval(refreshGraph, POLL_MS);
+  }, function() {
+    showError("Could not reach the server.");
+  });
+"##;
 
 /// How often the served page's client-side JS re-polls `kb/query.graph`/
 /// `.get`. Not yet a `kb_graph_wedge_*`-style `OptionRegistry` knob (this
@@ -250,10 +298,31 @@ mod tests {
     }
 
     #[test]
-    fn render_page_embeds_kb_id_and_token_as_safe_js_string_literals() {
-        let html = render_page("my-kb", "secret-token-abc");
+    fn render_page_embeds_kb_id_as_a_safe_js_string_literal() {
+        let html = render_page("my-kb");
         assert!(html.contains("var KB_ID = \"my-kb\";"));
-        assert!(html.contains("var TOKEN = \"secret-token-abc\";"));
+    }
+
+    /// ADR-111 P1: the page reads its credential from the fragment, sends it
+    /// only as a header, strips it from the address bar, and gates on
+    /// `kb/query.capabilities` before listing anything. Pinned as source
+    /// because there is no JS engine in this test suite; the real-wire tests in
+    /// `daemon/tests/oauth_e2e.rs` pin that the SERVER never sees or echoes it.
+    #[test]
+    fn render_page_takes_the_token_from_the_fragment_and_gates_on_capabilities() {
+        let html = render_page("kb");
+        assert!(html.contains("window.location.hash"));
+        assert!(html.contains("replaceState"));
+        assert!(html.contains("\"Authorization\": \"Bearer \" + TOKEN"));
+        let gate = html
+            .find("rpc(\"kb/query.capabilities\"")
+            .expect("capabilities gate");
+        let first_list = html.rfind("refreshGraph();").unwrap();
+        assert!(
+            gate < first_list,
+            "nothing may be listed before the capabilities answer"
+        );
+        assert!(!html.contains("location.search.") && !html.contains("URLSearchParams"));
     }
 
     /// Adversarial (principle #14): a kb_id or token containing characters
@@ -263,7 +332,7 @@ mod tests {
     #[test]
     fn render_page_neutralizes_script_breakout_attempts_in_kb_id() {
         let hostile = "\"; alert(1); //</script><script>alert(2)</script>";
-        let html = render_page(hostile, "tok");
+        let html = render_page(hostile);
         assert!(
             !html.contains("<script>alert(2)</script>"),
             "a raw, unescaped </script><script> tag must never appear in the output: {html}"
@@ -280,7 +349,7 @@ mod tests {
 
     #[test]
     fn render_page_escapes_html_special_characters_in_the_visible_title() {
-        let html = render_page("<b>evil</b>", "tok");
+        let html = render_page("<b>evil</b>");
         assert!(!html.contains("<title><b>evil</b>"));
         assert!(html.contains("&lt;b&gt;evil&lt;/b&gt;"));
     }
@@ -290,14 +359,14 @@ mod tests {
         // Gate G1: no silent capability overstatement -- the page must say
         // it polls, never imply a push/live-streaming guarantee it doesn't
         // provide in v1.
-        let html = render_page("kb", "tok");
+        let html = render_page("kb");
         assert!(html.to_lowercase().contains("poll"));
     }
 
     #[test]
     fn render_page_is_deterministic() {
-        let a = render_page("kb-1", "tok-1");
-        let b = render_page("kb-1", "tok-1");
+        let a = render_page("kb-1");
+        let b = render_page("kb-1");
         assert_eq!(a, b);
     }
 

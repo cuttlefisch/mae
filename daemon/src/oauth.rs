@@ -40,7 +40,9 @@ pub struct ResourceServerConfig {
     /// (ADR-018). Config-driven, not hardcoded to `sub` — different
     /// authorization servers use different claim conventions.
     pub principal_claim: String,
-    /// URL to fetch the JWKS from.
+    /// URL to fetch the external issuer's JWKS from. Empty means there is no
+    /// external issuer (ADR-111 P1): only self-issued tokens can validate, and
+    /// no JWKS client is built at all.
     pub jwks_url: String,
     /// The authorization server's issuer, checked against the token's `iss`
     /// claim. `None` skips issuer validation (not recommended, but some
@@ -294,44 +296,29 @@ fn extract_bearer_token(req: &Request<Incoming>) -> Option<&str> {
         .and_then(|v| v.strip_prefix("Bearer "))
 }
 
-/// Extract a bearer token for `GET /kb/{kb_id}/view` specifically: header
-/// first (unchanged precedence), falling back to an `?access_token=`
-/// query-string parameter (RFC 6750 §2.3's URI-query bearer convention) ONLY
-/// for this route. A plain browser address-bar navigation cannot set a
-/// custom `Authorization` header at all — this is the sole practical way a
-/// human can open a shared link and have the page itself authenticate,
-/// mirroring how e.g. Grafana/Datadog shared-snapshot links work. Every
-/// OTHER route on this listener (including the `kb/query.*` JSON-RPC POST
-/// endpoint this page's own polling JS calls) stays header-only —
-/// `extract_bearer_token` is untouched and this function is never consulted
-/// for them. No percent-decoding is performed: a compact JWT's charset
-/// (`[A-Za-z0-9._-]`, RFC 7515) never requires it.
-fn extract_view_bearer_token(req: &Request<Incoming>) -> Option<String> {
-    if let Some(t) = extract_bearer_token(req) {
-        return Some(t.to_string());
-    }
-    let query = req.uri().query()?;
-    for pair in query.split('&') {
-        // `continue`, not `?` -- a malformed pair (no `=`) must be skipped,
-        // never abort scanning the rest of the query string for a valid
-        // `access_token` that could appear later.
-        let Some((key, val)) = pair.split_once('=') else {
-            continue;
-        };
-        if key == "access_token" && !val.is_empty() {
-            return Some(val.to_string());
-        }
-    }
-    None
+/// Does the request carry an `access_token` query parameter at all?
+///
+/// ADR-111 P1 removed the webview's `?access_token=` fallback: a credential in
+/// the query string is written to every proxy access log, browser history entry
+/// and `Referer` it passes through. It is not merely ignored now but REFUSED
+/// (`public_response`), so an old shared link fails loudly and says what to use
+/// instead rather than rendering a page that silently cannot authenticate. The
+/// value is never read -- only the key's presence matters.
+fn has_query_access_token(req: &Request<Incoming>) -> bool {
+    req.uri().query().is_some_and(|q| {
+        q.split('&')
+            .any(|pair| pair.split('=').next() == Some("access_token"))
+    })
 }
 
 /// Apply the no-caching headers every response from this listener needs.
 ///
 /// @ai-caution: [security] EVERY response builder in this module must go
 /// through here (audit #588.3). This listener serves bearer-token-authenticated
-/// KB content, and the webview response embeds a live access token directly in
-/// its HTML — without `no-store` a browser writes that token to its on-disk
-/// cache and an intermediary proxy may retain the KB content. `no-store` is
+/// KB content. (The webview page no longer embeds a token -- ADR-111 P1 -- but
+/// the kb/query responses its script fetches carry KB content, and without
+/// `no-store` a browser writes them to its on-disk cache and an intermediary
+/// proxy may retain them.) `no-store` is
 /// mandated for token-bearing responses by RFC 6749 §5.1, which OAuth 2.1
 /// carries forward; `Pragma: no-cache` covers HTTP/1.0 intermediaries.
 fn with_no_store(builder: hyper::http::response::Builder) -> hyper::http::response::Builder {
@@ -364,47 +351,68 @@ fn unauthorized(config: &ResourceServerConfig, reason: &str) -> Response<Full<By
     resp
 }
 
-/// Per-request handler: serves the PRM document unauthenticated, gates
-/// everything else on a valid bearer token. Once a token validates: if the
-/// request carries a parseable JSON-RPC body AND `kb_query_enabled` AND a
-/// `DocStore` is available, dispatch it as a `kb/query.*` call
-/// (ADR-053/Phase G); otherwise fall back to the plain diagnostic response
-/// (ADR-052) — keeps `mae-daemon doctor`-style bare bearer-verification
-/// working unchanged for callers that never send a body.
-async fn handle_request(
-    req: Request<Incoming>,
-    config: Arc<ResourceServerConfig>,
-    jwks: Arc<JwksCache>,
-    doc_store: Option<Arc<DocStore>>,
-    self_issue: Arc<Option<oauth_self_issue::SelfIssueConfig>>,
-    quota: Arc<dyn mae_daemon::quota::QuotaCharger>,
-) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
-    if req.uri().path() == "/.well-known/oauth-protected-resource" {
-        return Ok(json_response(
+/// The unauthenticated surface, in full: the PRM document, `GET /api/health`,
+/// and (when enabled) the webview's token-free page shell. `None` means the
+/// request is not one of these and must authenticate.
+///
+/// @ai-caution: [security] Everything returned from here is served to ANY
+/// caller that can reach the port. Nothing added here may carry KB content, a
+/// credential, or anything that identifies this daemon (version, fingerprint,
+/// KB names) -- `health_opens_nothing_else` and
+/// `webview_shell_is_token_free_and_identical_for_every_caller` pin that.
+fn public_response(
+    req: &Request<Incoming>,
+    config: &ResourceServerConfig,
+    doc_store: Option<&Arc<DocStore>>,
+) -> Option<Response<Full<Bytes>>> {
+    let path = req.uri().path();
+    if path == "/.well-known/oauth-protected-resource" {
+        return Some(json_response(
             StatusCode::OK,
-            protected_resource_metadata(&config),
+            protected_resource_metadata(config),
         ));
     }
+    // The platform health contract (ADR-111 P1): liveness of THIS listener,
+    // status only. Exactly one path and only the read methods -- a POST here
+    // falls through to authentication like any other request, so a KB query
+    // aimed at the health path cannot ride its exemption.
+    if path == "/api/health" && matches!(*req.method(), hyper::Method::GET | hyper::Method::HEAD) {
+        return Some(json_response(
+            StatusCode::OK,
+            serde_json::json!({"status": "ok"}),
+        ));
+    }
+    // ADR-073/Phase E (#547): only when `webview_enabled` AND the path matches
+    // `/kb/{kb_id}/view` -- otherwise the pre-existing authenticated path runs
+    // unchanged (a disabled view falls through to the bare diagnostic).
+    let kb_id = config
+        .webview_enabled
+        .then(|| crate::webview::parse_view_path(path))
+        .flatten()?;
+    if has_query_access_token(req) {
+        return Some(json_response(
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({
+                "error": "invalid_request",
+                "error_description": "access tokens are not accepted in the query string, \
+                    which is written to access logs; open the view as \
+                    /kb/<kb_id>/view#access_token=<token> instead",
+            }),
+        ));
+    }
+    Some(render_webview_response(kb_id, doc_store))
+}
 
-    // ADR-073/Phase E (#547): only ever `Some` when `webview_enabled` AND the
-    // path genuinely matches `/kb/{kb_id}/view` — every other path (still
-    // the overwhelming majority) takes the exact pre-existing codepath below
-    // unchanged, including header-only bearer extraction.
-    let view_kb_id = if config.webview_enabled {
-        crate::webview::parse_view_path(req.uri().path()).map(|s| s.to_string())
-    } else {
-        None
-    };
-
-    let token = if view_kb_id.is_some() {
-        extract_view_bearer_token(&req)
-    } else {
-        extract_bearer_token(&req).map(|s| s.to_string())
-    };
-    let Some(token) = token else {
-        return Ok(unauthorized(&config, "missing bearer token"));
-    };
-
+/// Validate `token` against whichever population it claims membership in:
+/// this daemon's own self-issued tokens (ADR-067 D3), or the external issuer's
+/// JWKS -- which exists only when `jwks_url` is configured (ADR-111 P1). `Err`
+/// is the complete response to send.
+async fn authenticate(
+    token: &str,
+    config: &ResourceServerConfig,
+    jwks: Option<&JwksCache>,
+    self_issue: Option<&oauth_self_issue::SelfIssueConfig>,
+) -> Result<ValidatedPrincipal, Response<Full<Bytes>>> {
     // ADR-067 Phase D3: a cheap, unauthenticated header PEEK (never the
     // signature -- that's still verified below, by the real validator for
     // whichever population this token claims membership in) decides which
@@ -415,54 +423,78 @@ async fn handle_request(
     // token on a daemon that never opted in just falls through to the
     // ordinary JWKS path below, where it fails as an unknown key like any
     // other bogus `kid`.
-    let self_issue_ctx = self_issue.as_ref().as_ref().filter(|_| {
-        jsonwebtoken::decode_header(&token)
+    let self_issue_ctx = self_issue.filter(|_| {
+        jsonwebtoken::decode_header(token)
             .ok()
             .and_then(|h| h.kid)
             .as_deref()
             == Some(oauth_self_issue::SELF_ISSUED_KID)
     });
-
-    let principal = if let Some(si) = self_issue_ctx {
+    if let Some(si) = self_issue_ctx {
         let daemon_pubkey = si.identity.public().to_bytes();
-        match oauth_self_issue::validate_self_issued_token(&token, &daemon_pubkey, &si.audience) {
-            Ok(p) => p,
-            Err(e) => {
+        return oauth_self_issue::validate_self_issued_token(token, &daemon_pubkey, &si.audience)
+            .map_err(|e| {
                 tracing::debug!(?e, "self-issued bearer token rejected");
-                return Ok(unauthorized(&config, &format!("{e:?}")));
-            }
-        }
-    } else {
-        let keys = match jwks.get().await {
-            Ok(keys) => keys,
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to fetch JWKS");
-                return Ok(json_response(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    serde_json::json!({"error": "temporarily_unavailable"}),
-                ));
-            }
-        };
-
-        match validate_bearer_token(&token, &keys, &config) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::debug!(?e, "bearer token rejected");
-                return Ok(unauthorized(&config, &format!("{e:?}")));
-            }
-        }
-    };
-
-    if let Some(kb_id) = view_kb_id {
-        return Ok(render_webview_response(
-            &kb_id,
-            &token,
-            &config,
-            doc_store.as_ref(),
-            &principal,
-        )
-        .await);
+                unauthorized(config, &format!("{e:?}"))
+            });
     }
+
+    // No external issuer configured: a self-issued-only deployment. Refused as
+    // an AUTH failure (401), never as the 503 a failed JWKS fetch produces --
+    // nothing is temporarily unavailable, and a client would retry a 503.
+    let Some(jwks) = jwks else {
+        return Err(unauthorized(
+            config,
+            "no external token issuer is configured on this daemon (oauth.jwks_url is \
+             unset); only its own self-issued tokens are accepted",
+        ));
+    };
+    let keys = jwks.get().await.map_err(|e| {
+        tracing::warn!(error = %e, "failed to fetch JWKS");
+        json_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            serde_json::json!({"error": "temporarily_unavailable"}),
+        )
+    })?;
+    validate_bearer_token(token, &keys, config).map_err(|e| {
+        tracing::debug!(?e, "bearer token rejected");
+        unauthorized(config, &format!("{e:?}"))
+    })
+}
+
+/// Per-request handler: serves the public surface (`public_response`)
+/// unauthenticated, gates everything else on a valid bearer token. Once a token
+/// validates: if the request carries a parseable JSON-RPC body AND
+/// `kb_query_enabled` AND a `DocStore` is available, dispatch it as a
+/// `kb/query.*` call (ADR-053/Phase G); otherwise fall back to the plain
+/// diagnostic response (ADR-052) — keeps `mae-daemon doctor`-style bare
+/// bearer-verification working unchanged for callers that never send a body.
+async fn handle_request(
+    req: Request<Incoming>,
+    config: Arc<ResourceServerConfig>,
+    jwks: Option<Arc<JwksCache>>,
+    doc_store: Option<Arc<DocStore>>,
+    self_issue: Arc<Option<oauth_self_issue::SelfIssueConfig>>,
+    quota: Arc<dyn mae_daemon::quota::QuotaCharger>,
+) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
+    if let Some(resp) = public_response(&req, &config, doc_store.as_ref()) {
+        return Ok(resp);
+    }
+
+    let Some(token) = extract_bearer_token(&req).map(str::to_string) else {
+        return Ok(unauthorized(&config, "missing bearer token"));
+    };
+    let principal = match authenticate(
+        &token,
+        &config,
+        jwks.as_deref(),
+        self_issue.as_ref().as_ref(),
+    )
+    .await
+    {
+        Ok(p) => p,
+        Err(resp) => return Ok(resp),
+    };
 
     // Read the body (never done before this phase) to see if this is a
     // kb/query.* JSON-RPC call. An empty/unparseable body is not an error —
@@ -516,26 +548,27 @@ async fn handle_request(
     Ok(json_response(StatusCode::OK, body))
 }
 
-/// Build the response for a validated `GET /kb/{kb_id}/view` request
-/// (ADR-073/Phase E, #547) — split out for the same unit-testability reason
-/// as `route_authenticated_request` (no real HTTP connection needed to
-/// construct these already-parsed pieces).
+/// Build the response for `GET /kb/{kb_id}/view` (ADR-073/Phase E, #547):
+/// the page SHELL, identical for every caller.
 ///
-/// Gated by `kb/query.capabilities` FIRST (the same Read-access check every
-/// other `kb/query.*` method already goes through) so a principal without
-/// access to `kb_id` gets a real, immediate error here — never a page that
-/// renders successfully and only fails on its first background poll. This
-/// is a genuinely new consumer of the existing gated surface (ADR-073 D3),
-/// not a new access path: the page itself carries zero KB content, only the
-/// `kb_id`/token needed for the client's OWN subsequent `kb/query.*` calls.
-pub(crate) async fn render_webview_response(
+/// ADR-111 P1 changed what this is. It used to be gated on the caller's token
+/// -- read from the header or `?access_token=` -- and embedded that token in the
+/// HTML for the page's own polling. The query string is written to access logs,
+/// so the token now travels in the URL FRAGMENT, which a browser never sends to
+/// a server. The server therefore cannot know the principal when it serves this
+/// page and does not try: the shell carries no KB content and no credential,
+/// and the access gate ADR-073 put here is the page's FIRST request,
+/// `kb/query.capabilities`, which refuses a non-member before any node is
+/// listed. ADR-073's gate G5 ("never a page that renders and only fails on its
+/// first poll") holds in substance -- nothing renders before that answer -- but
+/// no longer server-side.
+pub(crate) fn render_webview_response(
     kb_id: &str,
-    token: &str,
-    config: &ResourceServerConfig,
     doc_store: Option<&Arc<DocStore>>,
-    principal: &ValidatedPrincipal,
 ) -> Response<Full<Bytes>> {
-    let Some(store) = doc_store else {
+    // A configuration fact, not a per-caller one, so reporting it to an
+    // unauthenticated caller discloses nothing about any principal or KB.
+    if doc_store.is_none() {
         return json_response(
             StatusCode::SERVICE_UNAVAILABLE,
             serde_json::json!({
@@ -543,32 +576,8 @@ pub(crate) async fn render_webview_response(
                           (collab.enabled is false)"
             }),
         );
-    };
-
-    let limits = mae_daemon::kb_query::KbQueryLimits {
-        max_body_bytes: config.kb_query_max_body_bytes,
-        max_scan_nodes: config.kb_query_max_scan_nodes,
-        max_search_results: config.kb_query_max_search_results,
-    };
-    let params = serde_json::json!({"kb_id": kb_id});
-    if let Err(e) = mae_daemon::kb_query::dispatch(
-        "kb/query.capabilities",
-        &params,
-        store,
-        Some(&principal.principal),
-        limits,
-    )
-    .await
-    {
-        return json_response(
-            StatusCode::FORBIDDEN,
-            serde_json::json!({"error": "access_denied", "error_description": e.message}),
-        );
     }
-
-    let html = crate::webview::render_page(kb_id, token);
-    // This page embeds `token` verbatim — it is the single most important
-    // response on this listener to keep out of any cache (see `with_no_store`).
+    let html = crate::webview::render_page(kb_id);
     with_no_store(
         Response::builder()
             .status(StatusCode::OK)
@@ -693,7 +702,10 @@ pub async fn run_oauth_listener(
     tracing::info!(%bind, resource = %server_config.canonical_resource_uri, "OAuth HTTPS listener started");
 
     let config = Arc::new(server_config);
-    let jwks = Arc::new(JwksCache::new(config.jwks_url.clone()));
+    // ADR-111 P1: the external-issuer path exists only when an issuer is
+    // configured. A self-issued-only deployment builds no JWKS client at all.
+    let jwks =
+        (!config.jwks_url.is_empty()).then(|| Arc::new(JwksCache::new(config.jwks_url.clone())));
     let self_issue = Arc::new(self_issue);
 
     loop {
