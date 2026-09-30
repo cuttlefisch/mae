@@ -1295,7 +1295,7 @@ Source: `shared/sync/src/lib.rs`
 | `kb-import-plan` | Assess an org directory before importing it (pre-flight, reads only) |
 | `kb-import-verify` | Reconcile a KB's org directory against what its store holds (reads only) |
 | `kb-detach` | Make a KB's store the source of truth; its .org dir becomes a stale archive (KB cutover) |
-| `kb-attach` | Resume ingesting a KB from its .org directory (undoes :kb-detach) |
+| `kb-attach` | Make a KB's .org directory authoritative again (:kb-attach <name> [confirm]) — compares it with the store first and refuses if ingest would change anything, unless confirmed |
 | `kb-new` | Create a native KB — a store with no org directory (:kb-new <name>) |
 | `kb-retire-archive` | Move a detached KB's verified .org archive aside, making the KB native (dry run without 'confirm') |
 | `kb-instances` | List all registered KB instances |

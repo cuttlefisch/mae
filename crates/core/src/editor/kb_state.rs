@@ -468,49 +468,20 @@ impl KbContext {
     /// as a real blocker: no way to run kb_health against one federated
     /// instance without scanning every other registered KB too).
     pub fn node_matches_scope(&self, id: &str, scope: &mae_kb::KbScope) -> bool {
-        use mae_kb::KbScope;
-        match scope {
-            KbScope::All => true,
-            KbScope::LocalOnly => self.primary_contains(id),
-            KbScope::RemoteOnly => self
-                .registry
-                .instances
-                .iter()
-                .filter(|inst| !inst.primary)
-                .any(|inst| {
-                    self.instances
-                        .get(&inst.uuid)
-                        .is_some_and(|kb| kb.contains(id))
-                }),
-            KbScope::Named(name) => {
-                let primary_name = self
-                    .registry
-                    .instances
-                    .iter()
-                    .find(|i| i.primary)
-                    .map(|i| i.name.as_str());
-                if primary_name == Some(name.as_str()) {
-                    return self.primary_contains(id);
-                }
-                self.registry
-                    .instances
-                    .iter()
-                    .find(|inst| &inst.name == name)
-                    .and_then(|inst| self.instances.get(&inst.uuid))
-                    .is_some_and(|kb| kb.contains(id))
-            }
-            // Excludes the primary, mirroring RemoteOnly above (ADR-058 Phase C/D).
-            KbScope::Project(root) => self
-                .registry
-                .instances
-                .iter()
-                .filter(|inst| inst.matches_project_root(root))
-                .any(|inst| {
-                    self.instances
-                        .get(&inst.uuid)
-                        .is_some_and(|kb| kb.contains(id))
-                }),
+        if matches!(scope, mae_kb::KbScope::All) {
+            return true;
         }
+        (scope.includes_local() && self.primary_contains(id))
+            || self
+                .registry
+                .instances
+                .iter()
+                .filter(|inst| scope.includes_instance(inst))
+                .any(|inst| {
+                    self.instances
+                        .get(&inst.uuid)
+                        .is_some_and(|kb| kb.contains(id))
+                })
     }
 
     /// Return the local-only query layer (bypasses daemon).

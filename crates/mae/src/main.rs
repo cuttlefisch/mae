@@ -232,6 +232,17 @@ fn daemon_version_skew(editor_version: &str, daemon_status: &serde_json::Value) 
     ))
 }
 
+/// Appended to MCP `initialize` instructions when the tool list is tiered: a
+/// fresh client sees only the Core tier, so name the escalation path — and the
+/// one route to ANY editor command, which an agent in the field never found
+/// (it concluded MCP could not save).
+const MCP_TIERED_TOOLS_NOTE: &str = "Only a curated core set of tools is listed here. Call \
+     search_tools to find additional tools by keyword, then request_tools (by category or \
+     exact name) to get full definitions for tools not shown above -- once you have a \
+     tool's name you can call it directly, whether or not it appeared in this list. Any \
+     editor command -- including `save` after a buffer_write -- runs through \
+     execute_command {\"command\": \"<name>\"}.";
+
 /// Entry point for the MAE editor.
 ///
 /// Plain `fn main()` — the tokio runtime is constructed manually so that
@@ -988,14 +999,7 @@ fn main() -> io::Result<()> {
                         // so the escalation path is discoverable from the
                         // very first handshake, not just from
                         // request_tools' own tool description.
-                        s.push_str(
-                            "Only a curated core set of tools is listed here. Call \
-                             search_tools to find additional tools by keyword, then \
-                             request_tools (by category or exact name) to get full \
-                             definitions for tools not shown above -- once you have a \
-                             tool's name you can call it directly, whether or not it \
-                             appeared in this list.",
-                        );
+                        s.push_str(MCP_TIERED_TOOLS_NOTE);
                     }
                     Some(s)
                 }

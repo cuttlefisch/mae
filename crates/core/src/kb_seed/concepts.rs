@@ -631,8 +631,12 @@ A KB is in exactly one of three states, and which one decides whether your\n\
   banner so an edit cannot be silently stranded somewhere the KB never sees.\n\
 - *Native* — the store is authoritative and there are no files at all.\n\n\
 - `:kb-detach <name>` — attached → migrating. The store becomes the truth.\n\
-- `:kb-attach <name>` — migrating → attached. Undoes a detach; ingest resumes\n\
-  and will overwrite the store from the files.\n\
+- `:kb-attach <name> [confirm]` — migrating (or native) → attached. First it\n\
+  compares what ingest WOULD produce from the files with what the store holds,\n\
+  and REFUSES if any node would be overwritten or lost — listing how many, and\n\
+  flagging files much smaller than the note they would replace as likely stubs.\n\
+  Add `confirm` to proceed anyway. On a native KB it re-attaches to the\n\
+  directory the KB was originally imported from.\n\
 - `:kb-retire-archive <name>` — migrating → native. A DRY RUN by default,\n\
   listing exactly what would move; add `confirm` to proceed. It refuses unless\n\
   every `.org` file is genuinely represented in the store, and it is\n\

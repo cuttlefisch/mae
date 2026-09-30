@@ -183,9 +183,13 @@ pub fn open_fresh_store(output_path: &Path, engine: &str) -> Result<CozoKbStore,
     Ok(store)
 }
 
-/// A sqlite store's WAL sidecars. Present only while a connection is open or
-/// after an unclean close; a clean close checkpoints and removes them.
-fn wal_sidecars(path: &Path) -> [std::path::PathBuf; 2] {
+/// A sqlite store's WAL sidecars.
+///
+/// Do not assume a clean close removes them: that is SQLite's default, but it is
+/// a build option, and the macOS system SQLite (which the unbundled `sqlite`
+/// crate links there) keeps them after close. Code that needs them gone must
+/// remove them itself — as this module and `backup::restore_backup` both do.
+pub(crate) fn wal_sidecars(path: &Path) -> [std::path::PathBuf; 2] {
     let mut wal = path.as_os_str().to_os_string();
     wal.push("-wal");
     let mut shm = path.as_os_str().to_os_string();

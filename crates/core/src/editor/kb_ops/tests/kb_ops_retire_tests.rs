@@ -16,7 +16,7 @@ fn hash_of(s: &str) -> String {
 
 /// A detached KB with a real store. `imported` are written to disk AND
 /// recorded with a matching hash and a real node, i.e. genuinely represented.
-fn detached_kb(dir: &std::path::Path, imported: &[(&str, &str)]) -> (Editor, TempDir) {
+pub(super) fn detached_kb(dir: &std::path::Path, imported: &[(&str, &str)]) -> (Editor, TempDir) {
     let mut editor = Editor::new();
     // Persist the instance the way a real one is: `KbRegistry::update` reloads
     // from disk, so an in-memory-only fixture vanishes the moment retirement
@@ -196,4 +196,39 @@ fn an_attached_kb_cannot_be_retired() {
 
     let err = editor.kb_retire_plan("Retiring").expect_err("must refuse");
     assert!(err.contains("still attached"), "{err}");
+}
+
+/// Registered through a spelling that is not the canonical path, then retired.
+///
+/// `KbRegistry::register` canonicalizes `org_dir` (#303), but registration
+/// ingested from the CALLER's spelling, so every `source_files` key was recorded
+/// under a path no later reader walks — and retirement refused every file as
+/// "never imported". Only macOS (`/var` → `/private/var`) and Windows (`\\?\`)
+/// CI saw it, because their temp dirs are not canonical; on Linux a symlinked
+/// notes directory is the same bug. Goes through real registration and the real
+/// detach setter, since a hand-built store records whatever the test says.
+#[cfg(unix)]
+#[test]
+fn a_kb_registered_through_a_symlink_can_be_retired() {
+    let real = TempDir::new().unwrap();
+    std::fs::write(
+        real.path().join("a.org"),
+        ":PROPERTIES:\n:ID: note-a\n:END:\n#+title: A\n\nProse.\n",
+    )
+    .unwrap();
+    let links = TempDir::new().unwrap();
+    let alias = links.path().join("notes");
+    std::os::unix::fs::symlink(real.path(), &alias).unwrap();
+
+    let mut editor = Editor::new();
+    let _dirs = with_test_dirs(&mut editor);
+    editor.kb_register("Linked", &alias).expect("register");
+    editor
+        .kb_set_ingest_policy("Linked", IngestPolicy::StoreIsTruth)
+        .expect("detach");
+
+    let plan = editor.kb_retire_plan("Linked").expect("plan");
+    assert!(plan.is_clean(), "{}", plan.describe());
+    editor.kb_retire_archive("Linked").expect("retire");
+    assert!(!real.path().join("a.org").exists(), "the file moved out");
 }

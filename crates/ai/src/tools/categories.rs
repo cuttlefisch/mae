@@ -390,6 +390,10 @@ fn classify_command_permission_by_name(name: &str) -> PermissionTier {
         "send-to-shell" | "send-region-to-shell" => PermissionTier::Shell,
         "babel-execute" | "babel-execute-all" | "babel-tangle" => PermissionTier::Shell,
         "kb-register" | "kb-reimport" => PermissionTier::Shell,
+        // Re-arms ingest over a store (#825): with `confirm` it is the same
+        // effect as `kb-reimport`, so it cannot sit at a weaker tier than it.
+        // The Scheme primitive is already Shell.
+        "kb-attach" => PermissionTier::Shell,
         n if n.starts_with("org-export") => PermissionTier::Shell,
 
         // Dangerous operations

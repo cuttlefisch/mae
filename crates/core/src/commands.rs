@@ -1536,7 +1536,7 @@ fn register_kb_federation_commands(reg: &mut CommandRegistry) {
     );
     reg.register_builtin(
         "kb-attach",
-        "Resume ingesting a KB from its .org directory (undoes :kb-detach)",
+        "Make a KB's .org directory authoritative again (:kb-attach <name> [confirm]) — compares it with the store first and refuses if ingest would change anything, unless confirmed",
     );
     reg.register_builtin(
         "kb-new",
