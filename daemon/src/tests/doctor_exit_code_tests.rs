@@ -5,41 +5,8 @@
 //! container healthy, and Ansible's `command` module — which fails on a
 //! non-zero rc for free — has to scrape stdout instead.
 
-use crate::config::DaemonConfig;
+use super::isolated;
 use crate::run_doctor;
-use std::path::Path;
-
-/// A config whose every path is inside `tmp`.
-///
-/// `DaemonConfig::default()` resolves socket, data dirs, identity, keystore and
-/// authorized_keys from the real HOME/XDG, and `doctor` OPENS the collab SQLite
-/// store it finds there. These tests therefore ran against the CI runner's —
-/// and on a workstation, the live daemon's — store; one failed in CI with
-/// "database is locked" while a parallel test held it. The isolation is
-/// asserted, not assumed, so a new ambient path fails here instead of flaking.
-fn isolated(tmp: &Path) -> DaemonConfig {
-    let mut c = DaemonConfig::default();
-    let s = |rel: &str| tmp.join(rel).to_string_lossy().into_owned();
-    c.socket = tmp.join("daemon.sock");
-    c.data_dir = Some(tmp.join("data"));
-    c.collab.storage.data_dir = Some(tmp.join("collab"));
-    c.collab.auth.identity_dir = Some(s("collab"));
-    c.collab.auth.authorized_keys = Some(s("collab/authorized_keys"));
-    c.collab.auth.keystore = Some(s("collab/trusted_keys"));
-    let p = c.instance_paths();
-    let mut touched = vec![p.socket, p.data_dir, p.collab_data_dir];
-    touched.extend(p.identity_dir);
-    touched.extend(p.authorized_keys);
-    touched.extend(p.keystore);
-    for path in touched {
-        assert!(
-            path.starts_with(tmp),
-            "doctor would touch {} — outside the test's temp dir",
-            path.display()
-        );
-    }
-    c
-}
 
 /// A configuration that cannot serve a client must exit non-zero.
 #[test]

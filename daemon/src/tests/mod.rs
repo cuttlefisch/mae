@@ -19,6 +19,39 @@ use std::time::Duration;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Mutex;
 
+/// A config whose every path is inside `tmp`.
+///
+/// `crate::config::DaemonConfig::default()` resolves socket, data dirs, identity, keystore and
+/// authorized_keys from the real HOME/XDG, and `doctor` (and `backup`) OPEN the stores
+/// they find there. The doctor tests once ran against the CI runner's —
+/// and on a workstation, the live daemon's — store; one failed in CI with
+/// "database is locked" while a parallel test held it. The isolation is
+/// asserted, not assumed, so a new ambient path fails here instead of flaking.
+pub(crate) fn isolated(tmp: &std::path::Path) -> crate::config::DaemonConfig {
+    let mut c = crate::config::DaemonConfig::default();
+    let s = |rel: &str| tmp.join(rel).to_string_lossy().into_owned();
+    c.socket = tmp.join("daemon.sock");
+    c.data_dir = Some(tmp.join("data"));
+    c.collab.storage.data_dir = Some(tmp.join("collab"));
+    c.collab.auth.identity_dir = Some(s("collab"));
+    c.collab.auth.authorized_keys = Some(s("collab/authorized_keys"));
+    c.collab.auth.keystore = Some(s("collab/trusted_keys"));
+    let p = c.instance_paths();
+    let mut touched = vec![p.socket, p.data_dir, p.collab_data_dir];
+    touched.extend(p.identity_dir);
+    touched.extend(p.authorized_keys);
+    touched.extend(p.keystore);
+    for path in touched {
+        assert!(
+            path.starts_with(tmp),
+            "a test would touch {} — outside the test's temp dir",
+            path.display()
+        );
+    }
+    c
+}
+
+mod backup_tests;
 mod connection_observability_tests;
 mod doctor_exit_code_tests;
 mod kb_query_agenda_health_tests;
