@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.124] - 2026-09-30
+
+
+
+
+### Bug Fixes
+
+- *(kb)* A retired KB still owns its origin — mae wrote stub files into it daily ([50fca7f](https://github.com/cuttlefisch/mae/commit/50fca7f7a5f28db68c8ea481c7dfb3ab1a9693fa))
+- *(kb)* :kb-attach is verified on content and refuses by default (#825) ([c8e17b0](https://github.com/cuttlefisch/mae/commit/c8e17b088c56706c2e956844cc18f0e3cea58f8d))
+- *(kb)* Scope membership is decided by KbScope, never by the `primary` flag (#814) ([2fffcb8](https://github.com/cuttlefisch/mae/commit/2fffcb84adbc364c60abc211cdced8c071956f01))
+- *(kb)* Keep the ratchet flat, and say what :kb-attach now does ([a5ce72c](https://github.com/cuttlefisch/mae/commit/a5ce72cc563dbaa8fe6b059c227245afa73bdfd9))
+- *(ai)* An MCP client can tell how to write, save, and raise the ceiling (#623) ([f17bb19](https://github.com/cuttlefisch/mae/commit/f17bb19b62a6bb979cb75428361cd6ddfe1cb4b0))
+- *(daemon,kb)* Container readiness — no key minted by a check, a liveness probe, WAL-safe backups ([00f7747](https://github.com/cuttlefisch/mae/commit/00f7747d1a9ea53b4ce5236c55aeb9bb38eda8d7))
+- *(kb)* Registration ingests from the canonical org_dir, not the caller's spelling ([fc28a26](https://github.com/cuttlefisch/mae/commit/fc28a26608a8bcf3347ad1aa4f1f510c666bf528))
+- *(kb)* A full ingest no longer deletes notes it just re-imported; restore removes WAL itself ([4bfd00c](https://github.com/cuttlefisch/mae/commit/4bfd00c65ec967e1223ea84667bcb7980c350739))
+
+### Documentation
+
+- *(adr)* ADR-111 — remote clients reach the daemon over HTTPS, identity at the app layer ([c36c95f](https://github.com/cuttlefisch/mae/commit/c36c95f7faa87b4d4d4c20538596a0bd1bba25a6))
+
+### Miscellaneous
+
+- *(deps)* Bump the rust-dependencies group across 1 directory with 10 updates ([83d7d1b](https://github.com/cuttlefisch/mae/commit/83d7d1bb537b3dd0cd80f2bb1db3dc201da6cf97))
+
 ## [0.14.123] - 2026-09-29
 
 
@@ -17,6 +41,10 @@ All notable changes to this project will be documented in this file.
 ### Refactor
 
 - *(gui)* One ImageCaches struct, so SkiaCanvas::new does not grow ([0c675c8](https://github.com/cuttlefisch/mae/commit/0c675c878e533571574189542219461ad618dffe))
+
+### Miscellaneous
+
+- Bump version to 0.14.123 ([62b9ac2](https://github.com/cuttlefisch/mae/commit/62b9ac2adf42fa4575cc1dacd6d3d9c352021cd6))
 
 ## [0.14.122] - 2026-09-07
 
