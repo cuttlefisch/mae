@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.125] - 2026-09-30
+
+
+
+
+### Miscellaneous
+
+- *(deps)* Bump the rust-dependencies group across 1 directory with 9 updates ([88c7266](https://github.com/cuttlefisch/mae/commit/88c726612f8454cf1b93f4d551f046a8738b867e))
+
 ## [0.14.124] - 2026-09-30
 
 
@@ -25,6 +34,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - *(deps)* Bump the rust-dependencies group across 1 directory with 10 updates ([83d7d1b](https://github.com/cuttlefisch/mae/commit/83d7d1bb537b3dd0cd80f2bb1db3dc201da6cf97))
+- Bump version to 0.14.124 ([fa612da](https://github.com/cuttlefisch/mae/commit/fa612da6bd471d740a1df58f38102d7544c5dd1e))
 
 ## [0.14.123] - 2026-09-29
 
