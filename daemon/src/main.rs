@@ -37,6 +37,7 @@ mod tenant;
 #[cfg(test)]
 mod tests;
 mod ticket;
+mod token_cli;
 mod webview;
 
 use config::DaemonConfig;
@@ -1524,7 +1525,8 @@ fn run_authorize(config: &DaemonConfig, rest: &[String]) -> i32 {
 ///
 /// Symmetric keystore (psk mode): `keygen [name]`, `keys`. Asymmetric key mode
 /// (ADR-017/018): `identity`, `authorized`, `authorize <pubkey-line>` (labels
-/// must be unique), `revoke <label|SHA256:fp>`. And `ping`, the liveness probe.
+/// must be unique), `revoke <label|SHA256:fp>`. `token mint --sub <principal>
+/// [--ttl <duration>]` (ADR-111 P1, `token_cli`). And `ping`, the liveness probe.
 fn run_admin_subcommand(sub: &str, rest: &[String], config: &DaemonConfig) -> Option<i32> {
     let first = rest.first().map(|s| s.as_str());
     Some(match sub {
@@ -1535,6 +1537,7 @@ fn run_admin_subcommand(sub: &str, rest: &[String], config: &DaemonConfig) -> Op
         "authorize" => run_authorize(config, rest),
         "revoke" => run_revoke(config, first),
         "ping" => run_ping(config),
+        "token" => token_cli::run_token(config, rest),
         _ => return None,
     })
 }

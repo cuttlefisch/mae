@@ -106,6 +106,14 @@ pub struct OAuthConfig {
     /// integration may want longer than the default; one running a
     /// short-lived CLI probe may want shorter.
     pub self_issued_token_ttl_secs: u64,
+    /// Ceiling on the lifetime `mae-daemon token mint --ttl` will issue,
+    /// seconds (ADR-111 P1). A self-issued token cannot be revoked
+    /// individually -- it lives until it expires or the daemon's identity key
+    /// is rotated -- so the operator command refuses, rather than clamps, a
+    /// request above this. Also bounds the default above: a configured
+    /// `self_issued_token_ttl_secs` greater than this makes `token mint`
+    /// without `--ttl` refuse too.
+    pub self_issued_token_max_ttl_secs: u64,
 }
 
 impl Default for OAuthConfig {
@@ -128,6 +136,7 @@ impl Default for OAuthConfig {
             webview_enabled: false,
             self_issued_tokens_enabled: false,
             self_issued_token_ttl_secs: 3600,
+            self_issued_token_max_ttl_secs: 86_400,
         }
     }
 }
