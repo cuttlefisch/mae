@@ -230,16 +230,26 @@ fn resolve_kb_scope_project_token_resolves_current_root_or_falls_back_to_all() {
     // never an unusable/empty scope, and never a panic.
     assert_eq!(editor.resolve_kb_scope("project"), mae_kb::KbScope::All);
 
-    // A project IS set: "project"/"project-only" resolve to Project(root).
-    let root = std::path::PathBuf::from("/tmp/mae-adr058-resolve-test");
-    editor.project = Some(crate::project::Project::from_root(root.clone()));
+    // A project IS set: "project"/"project-only" resolve to Project(root) under the
+    // CANONICAL spelling, because registry org_dirs are stored canonical (#832) and the
+    // scope is compared against them. The root is reached through a `..` detour so the
+    // raw and canonical spellings differ on every platform (not only where the temp dir
+    // itself is a symlink, as on macOS); the oracle is std's canonicalize, not the code
+    // under test.
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("proj");
+    std::fs::create_dir(&real).unwrap();
+    let detour = real.join("..").join("proj");
+    let canonical = real.canonicalize().unwrap();
+    assert_ne!(detour, canonical, "the fixture must exercise a re-spelling");
+    editor.project = Some(crate::project::Project::from_root(detour));
     assert_eq!(
         editor.resolve_kb_scope("project"),
-        mae_kb::KbScope::Project(root.clone())
+        mae_kb::KbScope::Project(canonical.clone())
     );
     assert_eq!(
         editor.resolve_kb_scope("PROJECT-ONLY"),
-        mae_kb::KbScope::Project(root)
+        mae_kb::KbScope::Project(canonical)
     );
 
     // Every other token still delegates to KbScope::parse unaffected.
