@@ -643,118 +643,164 @@ async fn webview_route_is_inert_when_disabled_by_default() {
     );
 }
 
-/// Real-wire proof that `handle_request`'s response-building path genuinely
-/// stops hardcoding `Content-Type: application/json` for this route (ADR-073
-/// D2's literal requirement) -- reaches the real
-/// `render_webview_response`/`kb_query::dispatch` chain over TLS for a KB
-/// that doesn't exist (no wire seeding -- see this module's own doc comment
-/// for why), so the response is the FORBIDDEN/JSON access-denied branch, not
-/// the 200/HTML branch. The 200/HTML branch itself is proven in-process by
-/// `webview_tests.rs::a_member_with_access_gets_a_real_html_page`; this test
-/// proves the SAME chain is genuinely reachable over a real connection.
+/// ADR-111 P1: the view is a token-free shell. A browser navigation cannot
+/// send an `Authorization` header, and the old answer -- `?access_token=` --
+/// put a live credential in every proxy access log, browser history entry and
+/// `Referer` on the way. The page now reads the token from the URL FRAGMENT,
+/// which a browser never sends to the server, so the server cannot and does not
+/// gate the shell by principal: it is the same bytes for every caller, and it
+/// holds no KB content and no credential.
+///
+/// Selective oracle: the shell fetched WITH a valid bearer header is
+/// byte-identical to the one fetched with none -- the proof that no credential
+/// was echoed into it -- and neither contains the token.
 #[tokio::test]
-async fn webview_route_reaches_the_real_access_gate_over_a_real_tls_connection() {
+async fn webview_shell_is_token_free_and_identical_for_every_caller() {
     let (private_key_pem, jwks) = generate_key_material();
     let jwks_addr = spawn_mock_jwks_server(&jwks).await;
     let daemon = spawn_daemon_with_oauth_and_webview(jwks_addr).await;
     let base_url = format!("https://{}", daemon.oauth_addr);
     let client = insecure_https_client();
-
     let token = sign_token(&private_key_pem, &valid_claims());
-    let resp = client
-        .get(format!("{base_url}/kb/nonexistent-kb/view"))
+    let view_url = format!("{base_url}/kb/some-kb/view");
+
+    let with_header = client
+        .get(&view_url)
         .bearer_auth(&token)
         .send()
         .await
-        .expect("GET /kb/nonexistent-kb/view with webview enabled");
+        .unwrap();
+    assert_eq!(with_header.status(), 200);
+    let content_type = with_header
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(content_type.starts_with("text/html"), "got {content_type}");
+    let with_header = with_header.text().await.unwrap();
+
+    let anonymous = client.get(&view_url).send().await.unwrap();
+    assert_eq!(anonymous.status(), 200, "the shell carries nothing to gate");
+    let anonymous = anonymous.text().await.unwrap();
 
     assert_eq!(
-        resp.status(),
-        403,
-        "a validly-signed token for a KB with no access must reach the real access gate \
-         (FORBIDDEN), never a 401 (that would mean auth itself failed) or a 200"
+        with_header, anonymous,
+        "no caller-specific byte may enter the shell"
+    );
+    assert!(
+        !with_header.contains(&token),
+        "the shell must never carry the credential"
+    );
+    assert!(
+        with_header.contains("location.hash"),
+        "the page takes its token from the fragment"
     );
 }
 
-/// Adversarial (the literal ADR-073 "Definition of done" requirement):
-/// wrong-audience/expired/forged/missing tokens against `/kb/{id}/view` get
-/// IDENTICAL rejection behavior to the exact same cases against every other
-/// route on this listener (`oauth_and_kb_query_over_a_real_tls_connection`'s
-/// cases 2/4/5, `forged_signature_token_is_rejected_over_the_real_wire`) --
-/// asserted here as a direct comparison against those same real responses,
-/// not a separate assumption that the shared code path makes this true.
+/// The access gate moved, it did not disappear: the shell's first request is
+/// `kb/query.capabilities`, and that is where a principal with no access to
+/// the KB is refused -- before any node is listed. Driven here exactly as the
+/// page drives it, over the real wire.
 #[tokio::test]
-async fn webview_route_auth_rejection_is_identical_to_every_other_route() {
+async fn the_shells_first_request_is_where_access_is_refused() {
     let (private_key_pem, jwks) = generate_key_material();
     let jwks_addr = spawn_mock_jwks_server(&jwks).await;
     let daemon = spawn_daemon_with_oauth_and_webview(jwks_addr).await;
     let base_url = format!("https://{}", daemon.oauth_addr);
     let client = insecure_https_client();
-    let view_url = format!("{base_url}/kb/some-kb/view");
-    let plain_url = base_url.clone();
+    let token = sign_token(&private_key_pem, &valid_claims());
 
-    // Missing token.
-    for url in [&view_url, &plain_url] {
-        let resp = client.get(url).send().await.expect("missing-token request");
-        assert_eq!(resp.status(), 401, "missing token on {url}");
+    let shell = client
+        .get(format!("{base_url}/kb/nonexistent-kb/view"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        shell.contains("kb/query.capabilities"),
+        "the page must ask for capabilities before anything else"
+    );
+
+    let resp = client
+        .post(&base_url)
+        .bearer_auth(&token)
+        .json(&serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "kb/query.capabilities",
+            "params": {"kb_id": "nonexistent-kb"}
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "authenticated: the refusal is an access decision"
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body.get("error").is_some() && body.get("result").is_none(),
+        "a principal with no access to the KB is refused at the first request: {body}"
+    );
+}
+
+/// Adversarial: every bad credential the page could present on its data
+/// requests is refused exactly as on every other route -- the shell being
+/// public widens nothing.
+#[tokio::test]
+async fn the_views_data_requests_reject_bad_tokens_like_every_other_route() {
+    let (private_key_pem, jwks) = generate_key_material();
+    let jwks_addr = spawn_mock_jwks_server(&jwks).await;
+    let daemon = spawn_daemon_with_oauth_and_webview(jwks_addr).await;
+    let base_url = format!("https://{}", daemon.oauth_addr);
+    let client = insecure_https_client();
+    let rpc = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "kb/query.graph",
+        "params": {"kb_id": "some-kb"}
+    });
+
+    let mut wrong_aud_claims = valid_claims();
+    wrong_aud_claims["aud"] = serde_json::json!("https://a-different-mcp-server.example.com/mcp");
+    let mut expired_claims = valid_claims();
+    expired_claims["exp"] = serde_json::json!(now_unix().saturating_sub(3600));
+    let (forger_pem, _unused) = generate_key_material();
+    let cases = [
+        ("missing", None),
+        (
+            "wrong audience",
+            Some(sign_token(&private_key_pem, &wrong_aud_claims)),
+        ),
+        (
+            "expired",
+            Some(sign_token(&private_key_pem, &expired_claims)),
+        ),
+        ("forged", Some(sign_token(&forger_pem, &valid_claims()))),
+    ];
+    for (label, token) in cases {
+        let mut req = client.post(&base_url).json(&rpc);
+        if let Some(t) = &token {
+            req = req.bearer_auth(t);
+        }
+        let resp = req.send().await.unwrap();
+        assert_eq!(resp.status(), 401, "{label} token on the view's data path");
         assert!(
             resp.headers()
                 .get(reqwest::header::WWW_AUTHENTICATE)
                 .is_some(),
-            "missing WWW-Authenticate on {url}"
+            "{label}: missing WWW-Authenticate"
         );
-    }
-
-    // Wrong audience.
-    let mut wrong_aud_claims = valid_claims();
-    wrong_aud_claims["aud"] = serde_json::json!("https://a-different-mcp-server.example.com/mcp");
-    let wrong_aud_token = sign_token(&private_key_pem, &wrong_aud_claims);
-    for url in [&view_url, &plain_url] {
-        let resp = client
-            .get(url)
-            .bearer_auth(&wrong_aud_token)
-            .send()
-            .await
-            .expect("wrong-audience request");
-        assert_eq!(resp.status(), 401, "wrong audience on {url}");
-    }
-
-    // Expired token.
-    let mut expired_claims = valid_claims();
-    expired_claims["exp"] = serde_json::json!(now_unix().saturating_sub(3600));
-    let expired_token = sign_token(&private_key_pem, &expired_claims);
-    for url in [&view_url, &plain_url] {
-        let resp = client
-            .get(url)
-            .bearer_auth(&expired_token)
-            .send()
-            .await
-            .expect("expired-token request");
-        assert_eq!(resp.status(), 401, "expired token on {url}");
-    }
-
-    // Forged signature (a second, unregistered keypair).
-    let (forger_pem, _unused) = generate_key_material();
-    let forged_token = sign_token(&forger_pem, &valid_claims());
-    for url in [&view_url, &plain_url] {
-        let resp = client
-            .get(url)
-            .bearer_auth(&forged_token)
-            .send()
-            .await
-            .expect("forged-signature request");
-        assert_eq!(resp.status(), 401, "forged signature on {url}");
     }
 }
 
-/// The `?access_token=` query-string fallback (this route's own addition,
-/// needed because a plain browser navigation cannot set an `Authorization`
-/// header) works over a real connection, AND is genuinely scoped to only
-/// this route -- the same query-param-only request against the plain JSON
-/// RPC endpoint must still be rejected (proving `extract_bearer_token`,
-/// used everywhere else, was never silently loosened by this change).
+/// ADR-111 P1: the `?access_token=` fallback is REMOVED. A query-string token
+/// is refused outright -- not silently ignored, so an old shared link fails
+/// loudly with a pointer to the fragment form -- and the response never
+/// echoes it. The same request against the JSON route stays a 401: that route
+/// never accepted one.
 #[tokio::test]
-async fn webview_route_accepts_a_query_string_bearer_token_but_no_other_route_does() {
+async fn a_query_string_token_is_refused_on_every_route() {
     let (private_key_pem, jwks) = generate_key_material();
     let jwks_addr = spawn_mock_jwks_server(&jwks).await;
     let daemon = spawn_daemon_with_oauth_and_webview(jwks_addr).await;
@@ -763,17 +809,23 @@ async fn webview_route_accepts_a_query_string_bearer_token_but_no_other_route_do
     let token = sign_token(&private_key_pem, &valid_claims());
 
     let view_resp = client
-        .get(format!(
-            "{base_url}/kb/nonexistent-kb/view?access_token={token}"
-        ))
+        .get(format!("{base_url}/kb/some-kb/view?access_token={token}"))
         .send()
         .await
         .expect("query-string-token view request");
     assert_eq!(
         view_resp.status(),
-        403,
-        "a query-string token must authenticate on the view route (reaching the real access \
-         gate -- FORBIDDEN for a nonexistent KB, not a 401)"
+        400,
+        "a query-string credential must be refused, never accepted or silently dropped"
+    );
+    let view_body = view_resp.text().await.unwrap();
+    assert!(
+        !view_body.contains(&token),
+        "the refusal must not echo the credential"
+    );
+    assert!(
+        view_body.contains("#access_token="),
+        "the refusal must say how to open the view instead: {view_body}"
     );
 
     let plain_resp = client
@@ -781,10 +833,82 @@ async fn webview_route_accepts_a_query_string_bearer_token_but_no_other_route_do
         .send()
         .await
         .expect("query-string-token plain-route request");
-    assert_eq!(
-        plain_resp.status(),
-        401,
-        "the query-string fallback must be scoped to the view route only -- every other route \
-         stays header-only"
+    assert_eq!(plain_resp.status(), 401);
+}
+
+// --- GET /api/health (ADR-111 P1) -----------------------------------------
+
+/// The platform health contract: unauthenticated, 200, JSON, status ONLY.
+/// Exact-shape oracle -- a body that also carried a version, an identity or a
+/// KB name would fail, and so would a 401.
+#[tokio::test]
+async fn health_is_unauthenticated_and_discloses_only_status() {
+    let (_private_key_pem, jwks) = generate_key_material();
+    let jwks_addr = spawn_mock_jwks_server(&jwks).await;
+    let daemon = spawn_daemon_with_oauth(jwks_addr).await;
+    let base_url = format!("https://{}", daemon.oauth_addr);
+    let client = insecure_https_client();
+
+    let resp = client
+        .get(format!("{base_url}/api/health"))
+        .send()
+        .await
+        .expect("health request");
+    assert_eq!(resp.status(), 200);
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        content_type.starts_with("application/json"),
+        "got {content_type}"
     );
+    let text = resp.text().await.unwrap();
+    let body: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(body, serde_json::json!({"status": "ok"}), "exact shape");
+    for leak in [
+        env!("CARGO_PKG_VERSION"),
+        CANONICAL_RESOURCE,
+        "SHA256:",
+        "mae",
+    ] {
+        assert!(
+            !text.contains(leak),
+            "health must not disclose {leak:?}: {text}"
+        );
+    }
+}
+
+/// Adversarial: `/api/health` is a hole in authentication for exactly ONE
+/// method on exactly ONE path. A KB query sent to it, or anywhere else without
+/// a token, is still a 401.
+#[tokio::test]
+async fn health_opens_nothing_else() {
+    let (_private_key_pem, jwks) = generate_key_material();
+    let jwks_addr = spawn_mock_jwks_server(&jwks).await;
+    let daemon = spawn_daemon_with_oauth(jwks_addr).await;
+    let base_url = format!("https://{}", daemon.oauth_addr);
+    let client = insecure_https_client();
+    let rpc = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "kb/query.capabilities",
+        "params": {"kb_id": "any-kb"}
+    });
+
+    for url in [
+        format!("{base_url}/"),
+        format!("{base_url}/api/health"),
+        format!("{base_url}/api/health/"),
+        format!("{base_url}/api/healthz"),
+    ] {
+        let resp = client.post(&url).json(&rpc).send().await.unwrap();
+        assert_eq!(resp.status(), 401, "unauthenticated KB query to {url}");
+    }
+    let resp = client
+        .get(format!("{base_url}/api/health/extra"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401, "only the exact path is public");
 }

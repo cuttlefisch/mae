@@ -33,7 +33,7 @@ mae-daemon --version
 
 `--config` applies to **every** subcommand, not just to starting the daemon —
 `doctor`, `--check-config`, `keygen`, `keys`, `identity`, `authorized`,
-`authorize` and `revoke` all operate on the instance it names:
+`authorize`, `revoke` and `token mint` all operate on the instance it names:
 
 ```bash
 mae-daemon doctor      --config ~/.config/mae/daemon-prod.toml
@@ -150,7 +150,8 @@ image and its compose service must get right:
 - **Key-mode auth, explicitly.** A non-loopback `collab.bind` requires it anyway; say so in config.
 - **Health:** `mae-daemon ping --config …` is the liveness probe (exit 0 iff the instance answers on
   its KB socket) — use it as the `HEALTHCHECK`. `mae-daemon doctor` is the **readiness** gate for a
-  deploy step, not a liveness probe (§6).
+  deploy step, not a liveness probe (§6). A proxy or platform that probes over HTTPS uses the
+  listener's unauthenticated `GET /api/health` instead (§6).
 - **Exposure:** remote clients reach the daemon through its HTTPS listener (ADR-052), which may sit
   behind a TLS-terminating proxy with the upstream re-encrypted; keep the collab port on the
   stack's private network (§5, ADR-111).
@@ -225,6 +226,82 @@ max_document_size_bytes = 10485760              # 10 MB — WARN-only (CRDT conv
 
 `none`/`psk` are **plaintext on the wire** — keep them on a trusted LAN or behind a VPN. Never put a
 secret in `daemon.toml`; use `psk_command` / a keystore.
+
+### The HTTPS listener (`[oauth]`, ADR-052/053/111)
+
+The listener remote clients reach — the read-only `kb/query.*` surface, the optional HTML KB view,
+and `GET /api/health`. Off by default. The keys operators touch:
+
+```toml
+[oauth]
+enabled = true
+bind = "127.0.0.1:9474"                         # also --oauth-bind
+canonical_resource_uri = "https://mae.example.com"   # REQUIRED — every token's `aud`
+cert_path = "/etc/mae/tls/tls.crt"              # PEM chain; re-read when it changes (below)
+key_path  = "/etc/mae/tls/tls.key"
+kb_query_enabled = true                         # the kb/query.* surface (needs [collab] enabled)
+# jwks_url = "https://idp.example.com/jwks.json" # external issuer — OPTIONAL (below)
+# issuer = "https://idp.example.com"
+self_issued_tokens_enabled = true               # accept this daemon's own tokens (key mode only)
+self_issued_token_ttl_secs = 3600               # default lifetime of `token mint`
+self_issued_token_max_ttl_secs = 86400          # ceiling `token mint --ttl` refuses to exceed
+# kb_query_max_scan_nodes = 500                 # search/agenda/health scan cap — see below
+# webview_enabled = false                       # GET /kb/<id>/view
+```
+
+- **`jwks_url` is optional** when the daemon's own self-issued tokens are the only ones in use.
+  With it unset no JWKS client exists: a token from an external issuer is refused with `401` and a
+  reason naming `jwks_url` (not a `503` — nothing is temporarily unavailable). With **neither**
+  `jwks_url` nor self-issued tokens available (they need `self_issued_tokens_enabled = true` and
+  `collab.auth.mode = "key"`), no token could ever validate, and the listener is not started — the
+  log says why.
+- **Certificates are reloaded without a restart.** The listener stats `cert_path`/`key_path` on each
+  TLS handshake and re-reads them when either file's mtime or size changes, so a renewal (atomic
+  replace, symlink swap or in-place write) is served on the next connection. A pair that does not
+  load — unparseable, empty, or a certificate that does not match the key, as mid-renewal — is
+  **ignored with a warning** and the previous certificate stays in service; handshakes never fail
+  because of it. The initial pair at startup must load.
+- **Scan caps are reported, not hidden.** `kb/query.search` (like `links`, `titles`, `agenda` and
+  `health`) examines at most `kb_query_max_scan_nodes` nodes and answers `"truncated": true` (plus
+  the KB's `"total"`) when that cap, rather than the caller's result limit, ended the scan. A
+  `RemoteHub` client reports such a result as partial. Raise the cap for KBs larger than it.
+- **The HTML KB view takes its token in the URL fragment**:
+  `https://<host>/kb/<kb_id>/view#access_token=<token>`. The fragment is never sent to the server,
+  so it cannot land in a proxy access log; the page moves it into an `Authorization` header and
+  removes it from the address bar. The old `?access_token=` form is refused with `400`. The page
+  itself is a content-free shell; access is checked by its first request (`kb/query.capabilities`),
+  and a principal without access sees that refusal and no node list.
+
+#### Issuing a token: `mae-daemon token mint`
+
+For a client without collab mTLS — a headless service account, a script, a person handed a view
+link — the operator mints a self-issued token (EdDSA, signed by this daemon's identity, `aud` =
+`canonical_resource_uri`):
+
+```bash
+mae-daemon token mint --config /etc/mae/daemon.toml --sub svc:indexer --ttl 8h \
+  | pass insert -e mae/hub-token          # stdout is the token and nothing else
+```
+
+- `--sub` (required) is the principal the token maps to; `kb/query.*` authorizes it against each
+  KB's membership exactly like any other principal. Add that principal to the KBs it should read.
+- `--ttl` takes seconds or `s`/`m`/`h`/`d` (`900`, `15m`, `8h`, `1d`). Default:
+  `self_issued_token_ttl_secs`. Above `self_issued_token_max_ttl_secs` the command **refuses**
+  rather than clamping.
+- It refuses — and prints nothing on stdout — when the listener would not accept the result
+  (`oauth.enabled`, `self_issued_tokens_enabled`, `canonical_resource_uri`, key-mode collab), and
+  when the daemon has no identity yet. It **never creates** an identity (start the daemon once, or
+  run `mae-daemon identity`, first). Diagnostics go to stderr.
+- It reads the daemon's private key, so it is an operator command only: it is deliberately not an
+  MCP tool or an RPC. Over mTLS, a member can still obtain a token for **its own** fingerprint
+  (`kb/query.self_token`).
+
+**Revocation, honestly:** there is no per-token revocation list. A self-issued token is valid until
+its `exp`, or until the daemon's identity key is replaced (§3, *Key rotation*) — which invalidates
+**every** self-issued token at once and is a heavyweight operation in its own right, since every
+client has pinned that key. Removing the `--sub` principal from a KB's membership stops that KB
+being readable with the token immediately, but the token still authenticates. Keep lifetimes short
+and re-mint on a schedule; that is what the maximum is for.
 
 ---
 
@@ -355,6 +432,18 @@ mae-daemon doctor                 # diagnostics (config, resources, port, store,
 journalctl --user -u mae-daemon   # logs (or the file you redirect to)
 ss -tln | grep 9473               # is the collab port listening?  (lsof/netstat fallback)
 ```
+
+### Liveness, readiness and HTTP health
+
+| Probe | Answers | Use |
+|---|---|---|
+| `mae-daemon ping` | Is the process serving its KB socket? (exit 0/1) | Container `HEALTHCHECK` / liveness |
+| `mae-daemon doctor` | Is this instance configured to work? (exit 0/1) | Deploy gate / readiness |
+| `GET /api/health` on the HTTPS listener | Is the HTTPS listener up? `200 {"status":"ok"}` | Proxy / platform HTTP probe |
+
+`/api/health` is **unauthenticated** and returns the status and nothing else — no version, identity,
+fingerprint or KB names. Only `GET`/`HEAD` on that exact path are exempt from authentication; every
+other request to the listener still needs a bearer token.
 
 ### `doctor`'s exit code is a readiness verdict, not a liveness probe
 
