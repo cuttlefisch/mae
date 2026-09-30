@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.126] - 2026-09-30
+
+
+
+
+### Features
+
+- *(kb)* A registered remote hub is searchable and readable from the editor (ADR-111 P1) ([c67d4cc](https://github.com/cuttlefisch/mae/commit/c67d4cc9b7159c7aa16b9fa22d32c66a6ddac317))
+- *(daemon)* The HTTPS listener presents a renewed certificate without a restart ([a9eda77](https://github.com/cuttlefisch/mae/commit/a9eda77f7dc69fcaaa2b000d5da13df5c8ffd6bc))
+- *(daemon)* `mae-daemon token mint` — an operator-issued, expiring bearer token ([7fb5d47](https://github.com/cuttlefisch/mae/commit/7fb5d47029c41cc59ac4cfbff99475e7ee2e4272))
+
+### Bug Fixes
+
+- *(kb)* Serve blocking query layers off the runtime; hub names follow register's rules ([6875d04](https://github.com/cuttlefisch/mae/commit/6875d0420dd3cc3d4b8f9212bf89fc318d0c199d))
+- *(daemon,kb)* Kb/query.search reports when its scan cap truncated the answer ([5334c70](https://github.com/cuttlefisch/mae/commit/5334c705af01ebd1b1fb207c74258337bd969edb))
+- *(daemon)* HTTPS listener — token-free webview, /api/health, optional jwks_url ([792fd2c](https://github.com/cuttlefisch/mae/commit/792fd2c84c3a94f9d1781883ad13e1ef256ce826))
+- The three CI failures on #834, and an overstated claim corrected ([c96590c](https://github.com/cuttlefisch/mae/commit/c96590c7f73f140d2cba4e7f665a259381924d0f))
+- *(daemon)* The doctor exit-code tests no longer open the real data directory ([9ca0374](https://github.com/cuttlefisch/mae/commit/9ca037432bb356c358423f887f07078eed417f31))
+
+### Documentation
+
+- *(daemon)* The HTTPS listener — config, token mint, health, cert reload ([c95e9ef](https://github.com/cuttlefisch/mae/commit/c95e9ef0aa84bf3b1f2e3cad9717e1a3d5e1f1f7))
+
 ## [0.14.125] - 2026-09-30
 
 
@@ -10,6 +33,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - *(deps)* Bump the rust-dependencies group across 1 directory with 9 updates ([88c7266](https://github.com/cuttlefisch/mae/commit/88c726612f8454cf1b93f4d551f046a8738b867e))
+- Bump version to 0.14.125 ([9e8a115](https://github.com/cuttlefisch/mae/commit/9e8a1151e49f6944b132a331ae0abbd5720e4a69))
 
 ## [0.14.124] - 2026-09-30
 
