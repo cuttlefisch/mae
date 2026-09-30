@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.128] - 2026-09-30
+
+
+
+
+### Features
+
+- *(daemon)* `mae-daemon backup create|restore|verify` for a whole instance ([e57e185](https://github.com/cuttlefisch/mae/commit/e57e1854f4afd9c8074a469b6c623f25cbfa5cd3))
+
 ## [0.14.127] - 2026-09-30
 
 
@@ -40,6 +49,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - Bump version to 0.14.126 ([8e863b3](https://github.com/cuttlefisch/mae/commit/8e863b3ef78c1da78f12c67b69979c8e96b84708))
+- Bump version to 0.14.127 ([5734424](https://github.com/cuttlefisch/mae/commit/57344241ba11a939592e5341b16d520c5bc9ac2e))
 
 ## [0.14.125] - 2026-09-30
 
