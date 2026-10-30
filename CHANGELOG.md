@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.130] - 2026-10-30
+
+
+
+
+### Bug Fixes
+
+- *(kb)* The registry never loses KBs, and a node write is atomic ([1eb110d](https://github.com/cuttlefisch/mae/commit/1eb110db0f7c9c176d21dd7c65b7588cef24df33))
+- *(release)* Ship a raster AppImage icon and pin appimagetool ([af7d956](https://github.com/cuttlefisch/mae/commit/af7d9568891e303a836dbd3775f688ad18ecbd19))
+
 ## [0.14.129] - 2026-10-30
 
 
@@ -10,6 +20,10 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 
 - *(deps)* Clear the October RustSec advisories in both workspaces ([3090fc0](https://github.com/cuttlefisch/mae/commit/3090fc03bddbee4465085f11919bb00cc28dda7b))
+
+### Miscellaneous
+
+- Bump version to 0.14.129 ([4684574](https://github.com/cuttlefisch/mae/commit/4684574ffc570ca0ebf0914f5ecaa98b05319ef9))
 
 ## [0.14.128] - 2026-09-30
 
