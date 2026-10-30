@@ -6,22 +6,98 @@ use super::util::{btree_params, cozo_err, dv_str, parse_link_row};
 use super::*;
 
 impl CozoKbStore {
-    /// Insert or replace node links by parsing the body (ADR-030: text is truth, this is
-    /// the derived projection). Uses the same typed parse + `replace_node_links` the
-    /// daemon projector uses (`daemon/src/projector.rs::project_node`) — previously this
-    /// called the older untyped `parse_links`, which doesn't strip a link's `?query`
-    /// string and hardcoded every edge to `rel_type="related_to"`, so an AI-authored
-    /// typed link (`[[id?rel=X&w=Y][display]]`) written via `kb_update` in ordinary
-    /// single-user usage produced a dangling/mistyped graph edge. ADR-031 §5 already
-    /// states enrichment is supposed to work in-process without a daemon — this closes
-    /// that conformance gap rather than adding new design.
-    pub(super) fn update_links_for_node(&self, node: &Node) -> Result<(), KbStoreError> {
-        let links: Vec<(String, String, f64, f64)> =
-            crate::org::parse_typed_links(&node.body, &node.id)
-                .into_iter()
-                .map(|l| (l.target, l.rel_type, l.weight, l.confidence))
-                .collect();
-        self.replace_node_links(&node.id, &links)
+    /// Links are parsed from the body with the same typed parser the daemon
+    /// projector uses (`daemon/src/projector.rs::project_node`): ADR-030 text is
+    /// truth and the `links` rows are its projection, `?rel=&w=&c=` honoured
+    /// rather than every edge hardcoded to `related_to`.
+    ///
+    /// The graph edges a node's body declares — the ONE derivation every write
+    /// path stores (the editor's `insert_node` and the daemon projector, which
+    /// used to filter differently, principle #8):
+    /// - typed links parsed per ADR-030 (`?rel=&w=&c=`);
+    /// - external URLs dropped: a link in the TEXT, not an edge in the GRAPH (an
+    ///   edge to a node that cannot exist is a permanent "broken link" in
+    ///   kb_health);
+    /// - one edge per `(dst, rel_type)`, the LAST in body order — what the old
+    ///   per-link `:put`s left behind, kept so stored graphs do not change.
+    pub fn derived_links(node: &Node) -> Vec<(String, String, f64, f64)> {
+        let mut out: Vec<(String, String, f64, f64)> = Vec::new();
+        for l in crate::org::parse_typed_links(&node.body, &node.id) {
+            if crate::org::is_external_link_target(&l.target) {
+                continue;
+            }
+            match out
+                .iter_mut()
+                .find(|(d, r, _, _)| *d == l.target && *r == l.rel_type)
+            {
+                Some(existing) => *existing = (l.target, l.rel_type, l.weight, l.confidence),
+                None => out.push((l.target, l.rel_type, l.weight, l.confidence)),
+            }
+        }
+        out
+    }
+
+    /// The body of [`KbStore::insert_node`]: the node row, its link
+    /// replacement and its meta-member replacement in one write transaction,
+    /// retried as a whole on SQLite busy contention. Derived rows are computed
+    /// with the same parsers the separate `update_*_for_node` helpers use, so
+    /// what is stored does not change — only that it is stored together.
+    pub(super) fn write_node_atomically(&self, node: &Node) -> Result<(), KbStoreError> {
+        let node_params = self.node_put_params(node)?;
+        let now = DataValue::from(self.now_epoch());
+        let link_rows: Vec<DataValue> = Self::derived_links(node)
+            .into_iter()
+            .map(|(dst, rel_type, weight, confidence)| {
+                DataValue::List(vec![
+                    dv_str(&node.id),
+                    dv_str(&dst),
+                    dv_str(&rel_type),
+                    dv_str(""),
+                    DataValue::from(weight),
+                    DataValue::from(confidence),
+                    now.clone(),
+                ])
+            })
+            .collect();
+        let member_rows: Vec<DataValue> = crate::org::parse_transclusion_directives(&node.body)
+            .into_iter()
+            .enumerate()
+            .map(|(position, (member_id, role))| {
+                DataValue::List(vec![
+                    dv_str(&node.id),
+                    dv_str(&member_id),
+                    DataValue::from(position as i64),
+                    dv_str(&role),
+                ])
+            })
+            .collect();
+        let mut params = node_params;
+        params.insert("link_rows".into(), DataValue::List(link_rows));
+        params.insert("member_rows".into(), DataValue::List(member_rows));
+        // One script, one transaction (cozo runs the `{…}` blocks of a chained
+        // script atomically). Deliberately NOT `DbInstance::multi_transaction`:
+        // its commit replies before its background task releases the connection
+        // and the store's write lock, so a store dropped right after a write
+        // could still be held — a file opened next (backup, restore, migration)
+        // then saw "database is locked".
+        #[allow(unused_mut)]
+        let mut script = format!(
+            "{{ {} }}\n{{ {} }}\n{{ {} }}\n{{ {} }}\n{{ {} }}",
+            Self::NODE_PUT_SCRIPT,
+            Self::LINKS_FROM_RM_SCRIPT,
+            Self::LINK_BULK_SCRIPT.replace("$rows", "$link_rows"),
+            Self::META_MEMBERS_RM_SCRIPT,
+            Self::META_MEMBER_BULK_SCRIPT.replace("$rows", "$member_rows"),
+        );
+        #[cfg(test)]
+        if super::test_hooks::fail_after_node_row() {
+            // A block that fails at RUN time (not when the script is compiled —
+            // that would roll back before anything ran and prove nothing), after
+            // the node row was written: the whole script must roll back.
+            script.push_str("\n{ ?[x] <- [[1]] :assert none }");
+        }
+        self.run_mut_params(&script, params).map_err(cozo_err)?;
+        Ok(())
     }
 }
 

@@ -33,8 +33,17 @@ impl CozoKbStore {
     /// Bulk upsert into `links` from a `$rows` list, preserving ALL fields
     /// (rel_type/display/weight/confidence) — links are migrated verbatim (unlike
     /// `update_links_for_node`, which re-derives only body links as `related_to`).
-    const LINK_BULK_SCRIPT: &'static str = r#"?[src, dst, rel_type, display, weight, confidence, created_at] <- $rows
+    pub(super) const LINK_BULK_SCRIPT: &'static str = r#"?[src, dst, rel_type, display, weight, confidence, created_at] <- $rows
             :put links {src, dst, rel_type => display, weight, confidence, created_at}"#;
+    /// Remove every outgoing link of node `$id`.
+    pub(super) const LINKS_FROM_RM_SCRIPT: &'static str = r#"?[src, dst, rel_type] := src = $id, *links{src, dst, rel_type}
+            :rm links {src, dst, rel_type}"#;
+    /// Remove every meta-member row of meta-node `$id`.
+    pub(super) const META_MEMBERS_RM_SCRIPT: &'static str = r#"?[meta_id, member_id, position] := meta_id = $id, *meta_members{meta_id, member_id, position}
+            :rm meta_members {meta_id, member_id, position}"#;
+    /// Insert meta-member rows `[meta_id, member_id, position, role]` from `$rows`.
+    pub(super) const META_MEMBER_BULK_SCRIPT: &'static str = r#"?[meta_id, member_id, position, role] <- $rows
+            :put meta_members {meta_id, member_id, position => role}"#;
     /// The four `nodes` columns that are **derived from CRDT truth**, not stored
     /// independently.
     ///
@@ -288,7 +297,7 @@ impl CozoKbStore {
     /// documented) stacked with in-process contention, while staying finite —
     /// a genuinely stuck/deadlocked writer still surfaces as a real failure,
     /// just after exhausting a reasonable budget instead of an arbitrary count.
-    fn run_with_busy_retry<F>(&self, mut op: F) -> Result<NamedRows, cozo::Error>
+    pub(super) fn run_with_busy_retry<F>(&self, mut op: F) -> Result<NamedRows, cozo::Error>
     where
         F: FnMut() -> Result<NamedRows, cozo::Error>,
     {

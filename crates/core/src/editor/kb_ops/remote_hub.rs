@@ -29,18 +29,17 @@ impl Editor {
             .mae_data_dir()
             .ok_or("cannot determine the MAE data directory")?;
         let _ = std::fs::create_dir_all(&data_dir);
-        let (registry, uuid, saved) = KbRegistry::update(&data_dir, |reg| {
+        let (registry, uuid) = KbRegistry::update(&data_dir, |reg| {
             reg.register_remote_hub(
                 name.to_string(),
                 base_url.clone(),
                 hub_kb_id.to_string(),
                 RemoteHubAuth::KeystoreKey(keystore_key.to_string()),
             )
-        });
+        })
+        .map_err(super::registry::registry_error)?;
         let uuid = uuid?;
-        saved.map_err(|e| format!("could not save the KB registry: {e}"))?;
-        self.kb.registry = registry;
-        self.kb.last_local_registry_write = Some(std::time::Instant::now());
+        self.kb_adopt_registry(registry);
         self.kb.rebuild_query_layer();
         let registered = self
             .kb

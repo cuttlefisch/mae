@@ -2352,6 +2352,44 @@ pub(crate) fn open_and_seed_primary_store(
     Ok(std::sync::Arc::new(store))
 }
 
+/// System KBs no longer live in `kb-registry.toml`. Evict the rows MAE itself
+/// wrote there before that change, so every registry consumer (`kb_health`,
+/// `kb_agenda`, federated search, backup) sees only the user's own KBs.
+/// Idempotent, and never touches a reserved-name row that turned out to hold
+/// the user's own content. A registry it cannot update is reported in
+/// *Messages* (every later registry write will fail the same way) and left as is.
+fn evict_system_rows_at_startup(editor: &mut Editor, data_dir: &std::path::Path) {
+    let (evicted, kept_user_rows) =
+        match crate::guidance_kb_engine::evict_system_rows_from_registry(data_dir) {
+            Ok(rows) => rows,
+            Err(e) => {
+                editor.message_log.push(
+                    mae_core::messages::MessageLevel::Error,
+                    "kb",
+                    format!("startup could not update the KB registry: {e}"),
+                );
+                return;
+            }
+        };
+    if !evicted.is_empty() {
+        info!(kbs = ?evicted, "evicted MAE-provisioned system KB rows from the registry");
+    }
+    for name in kept_user_rows {
+        editor.notify(
+            mae_core::notifications::Notification::warning(
+                "kb",
+                format!("'{name}' is a reserved MAE system KB name"),
+            )
+            .body(format!(
+                "A KB of yours is registered as '{name}', which is now one of MAE's own \
+                 corpora. MAE's takes precedence. Re-register yours under a different name \
+                 and point `ai_guidance_kb` at it."
+            ))
+            .key(format!("kb-reserved-name-{name}")),
+        );
+    }
+}
+
 pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
     // Load KB federation registry and import enabled instances.
     if !clean_mode {
@@ -2611,30 +2649,7 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
                 info!("migrated kb-registry.toml from config to data directory");
             }
         }
-        // System KBs no longer live in `kb-registry.toml`. Evict the rows MAE
-        // itself wrote there before this change, so every registry consumer
-        // (`kb_health`, `kb_agenda`, federated search, backup) sees only the
-        // user's own KBs. Idempotent, and never touches a reserved-name row
-        // that turned out to hold the user's own content.
-        let (evicted, kept_user_rows) =
-            crate::guidance_kb_engine::evict_system_rows_from_registry(&data_dir);
-        if !evicted.is_empty() {
-            info!(kbs = ?evicted, "evicted MAE-provisioned system KB rows from the registry");
-        }
-        for name in kept_user_rows {
-            editor.notify(
-                mae_core::notifications::Notification::warning(
-                    "kb",
-                    format!("'{name}' is a reserved MAE system KB name"),
-                )
-                .body(format!(
-                    "A KB of yours is registered as '{name}', which is now one of MAE's own \
-                     corpora. MAE's takes precedence. Re-register yours under a different name \
-                     and point `ai_guidance_kb` at it."
-                ))
-                .key(format!("kb-reserved-name-{name}")),
-            );
-        }
+        evict_system_rows_at_startup(editor, &data_dir);
 
         // Open MAE's own bundled corpora into `kb.system_stores` — outside the
         // registry, read-mostly, and labelled by catalog name in the query
@@ -2817,8 +2832,8 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
             }
         }
         if !recovered_instances.is_empty() {
-            let (registry, (), saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
-                for inst in recovered_instances {
+            let adopt = |reg: &mut mae_kb::federation::KbRegistry| {
+                for inst in recovered_instances.iter().cloned() {
                     // Re-check against the freshly-reloaded registry: another
                     // process may have already added this collab_id since we
                     // loaded ours at the top of this function.
@@ -2829,12 +2844,26 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
                         reg.instances.push(inst);
                     }
                 }
-            });
-            if let Err(e) = saved {
-                warn!(error = %e, "failed to persist recovered shared-KB registry");
+            };
+            match mae_kb::federation::KbRegistry::update(&data_dir, adopt) {
+                Ok((registry, ())) => {
+                    editor.kb.registry = registry;
+                    editor.kb.last_local_registry_write = Some(std::time::Instant::now());
+                }
+                Err(e) => {
+                    // The stores are open and serving this session; only their
+                    // registry rows are missing. Keep them in memory and say the
+                    // recovery is not durable.
+                    adopt(&mut editor.kb.registry);
+                    editor.message_log.push(
+                        mae_core::messages::MessageLevel::Error,
+                        "kb-recovery",
+                        format!(
+                            "recovered shared KB(s) NOT saved — lost at the next registry reload or restart: KB registry {e}"
+                        ),
+                    );
+                }
             }
-            editor.kb.registry = registry;
-            editor.kb.last_local_registry_write = Some(std::time::Instant::now());
         }
 
         // Build the CozoDB-first query layer AFTER all stores are loaded

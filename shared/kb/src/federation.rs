@@ -516,6 +516,11 @@ impl KbScope {
     }
 }
 
+/// Why [`KbRegistry::update`] changed nothing. Displays as a sentence that
+/// completes "KB registry …" (e.g. "KB registry could not be read (…); nothing
+/// was changed").
+pub type RegistryUpdateError = mae_mcp::file_lock::LockedUpdateError<String>;
+
 /// Registry of all known KB instances. Persisted as TOML.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KbRegistry {
@@ -631,7 +636,21 @@ impl KbRegistry {
                     "KB registry found at the LEGACY path; adopting it. Move or \
                      delete the legacy file to silence this."
                 );
-                let adopted = Self::read_or_default(&legacy);
+                // Promote only what was actually READ. Promoting the empty
+                // registry an unreadable legacy file degrades to would create
+                // the live file empty — after which the legacy file is
+                // "ignored" for good and its KBs are unreachable.
+                let adopted = match Self::read_checked(&legacy) {
+                    Ok(reg) => reg,
+                    Err(e) => {
+                        tracing::error!(
+                            legacy = %legacy.display(), error = %e,
+                            "the LEGACY KB registry could not be read; continuing with an \
+                             EMPTY registry and NOT promoting it (the file is left as is)"
+                        );
+                        return Self::default();
+                    }
+                };
                 // Best-effort promotion, so the next load is unambiguous. A
                 // failure here is not fatal: the registry is already loaded.
                 if let Err(e) = adopted.save(data_dir) {
@@ -662,8 +681,15 @@ impl KbRegistry {
     pub fn load_checked(data_dir: &Path) -> Result<Self, String> {
         let path = data_dir.join("kb-registry.toml");
         if !path.exists() {
-            // Absent is legitimately empty (or the legacy adoption path) — defer
-            // to `load` so the adoption logic has exactly one implementation.
+            // Absent is legitimately empty — unless a LEGACY registry is there to
+            // adopt. That one must be read checked too: `load` would turn an
+            // unreadable legacy file into an empty registry and promote it over
+            // the live path, losing every KB the legacy file listed.
+            let legacy = data_dir.join("kb").join("registry.toml");
+            if legacy.exists() {
+                Self::read_checked(&legacy)
+                    .map_err(|e| format!("legacy registry {}: {e}", legacy.display()))?;
+            }
             return Ok(Self::load(data_dir));
         }
         Self::read_checked(&path)
@@ -744,8 +770,8 @@ impl KbRegistry {
         }
     }
 
-    /// Reload-fresh -> mutate -> save, under a cross-process advisory lock
-    /// (see `mae_mcp::file_lock::with_locked_update`).
+    /// Reload-fresh -> mutate -> save, under a cross-process advisory lock, and
+    /// only under it (`mae_mcp::file_lock::locked_update`).
     ///
     /// Multiple `mae` processes commonly run concurrently (one per project
     /// directory). Calling `load()` once at startup and blindly `save()`-ing
@@ -758,19 +784,25 @@ impl KbRegistry {
     /// in-memory registry with the returned value so it also absorbs any
     /// concurrent additions from other processes.
     ///
-    /// Returns the merged registry, whatever `mutate` returned, and the save
-    /// outcome as a separate `Result` — a save failure does NOT discard the
-    /// in-memory mutation (matches the pre-existing best-effort persistence
-    /// semantics: callers always apply the change in memory, and log rather
-    /// than abort on a disk-write failure).
+    /// @ai-caution: [kb-truth] The registry is the only record of which KBs
+    /// exist, so every failure is an `Err` with nothing saved and `mutate` not
+    /// run: another process holding the lock past its wait, a registry that
+    /// cannot be read (corrupt, truncated, or holding a value this build does
+    /// not know — saving "empty + my change" over it dropped every KB), or a
+    /// failed save. NOT detected: a newer MAE's unknown FIELDS, which serde
+    /// ignores and a save then drops — there is no registry schema version yet. On
+    /// `Err` the caller keeps its previous in-memory registry and reports the
+    /// failure; it must not apply the change in memory and report success,
+    /// which is what the old `(Self, R, io::Result<()>)` shape invited.
+    /// Contract tests: `federation_durability_tests.rs`.
     pub fn update<R>(
         data_dir: &Path,
         mutate: impl FnOnce(&mut Self) -> R,
-    ) -> (Self, R, io::Result<()>) {
+    ) -> Result<(Self, R), RegistryUpdateError> {
         let path = data_dir.join("kb-registry.toml");
-        mae_mcp::file_lock::with_locked_update(
+        mae_mcp::file_lock::locked_update(
             &path,
-            || Self::load(data_dir),
+            || Self::load_checked(data_dir),
             mutate,
             |reg| reg.save(data_dir),
         )
@@ -2455,7 +2487,7 @@ enabled = true
         let _stale_b = KbRegistry::load(data.path());
 
         // "Process A" registers via the locked-update path.
-        let (_, uuid_a, saved_a) = KbRegistry::update(data.path(), |reg| {
+        let (_, uuid_a) = KbRegistry::update(data.path(), |reg| {
             reg.register(
                 "A".to_string(),
                 org_a.path().to_path_buf(),
@@ -2463,13 +2495,13 @@ enabled = true
                 None,
             )
             .expect("'A' is not a reserved system-KB name")
-        });
-        saved_a.unwrap();
+        })
+        .unwrap();
 
         // "Process B" registers next — even though ITS OWN in-memory copy
         // (_stale_b) never saw A's write, update() reloads fresh internally,
         // so A's registration must survive.
-        let (final_reg, uuid_b, saved_b) = KbRegistry::update(data.path(), |reg| {
+        let (final_reg, uuid_b) = KbRegistry::update(data.path(), |reg| {
             reg.register(
                 "B".to_string(),
                 org_b.path().to_path_buf(),
@@ -2477,8 +2509,8 @@ enabled = true
                 None,
             )
             .expect("'B' is not a reserved system-KB name")
-        });
-        saved_b.unwrap();
+        })
+        .unwrap();
 
         assert!(
             final_reg.find(&uuid_a).is_some(),
@@ -2522,7 +2554,7 @@ enabled = true
                 let data_dir = data_dir.clone();
                 let canonical_org_dir = canonical_org_dir.clone();
                 std::thread::spawn(move || {
-                    let (_, uuid, saved) = KbRegistry::update(&data_dir, |reg| {
+                    let (_, uuid) = KbRegistry::update(&data_dir, |reg| {
                         reg.register(
                             "project".to_string(),
                             canonical_org_dir.clone(),
@@ -2530,8 +2562,8 @@ enabled = true
                             None,
                         )
                         .expect("'project' is not a reserved system-KB name")
-                    });
-                    saved.unwrap();
+                    })
+                    .unwrap();
                     uuid
                 })
             })
@@ -2775,6 +2807,10 @@ enabled = true
 #[cfg(test)]
 #[path = "federation_path_tests.rs"]
 mod path_tests;
+
+#[cfg(test)]
+#[path = "federation_durability_tests.rs"]
+mod durability_tests;
 
 #[cfg(test)]
 mod import_census_tests {

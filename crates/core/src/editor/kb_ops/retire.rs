@@ -351,14 +351,12 @@ impl Editor {
             true
         };
         if let Some(dir) = self.mae_data_dir() {
-            let (registry, _changed, saved) = mae_kb::federation::KbRegistry::update(&dir, apply);
-            if let Err(e) = saved {
-                return Err(format!(
-                    "moved {moved} file(s) but could not persist the registry: {e}"
-                ));
-            }
-            self.kb.registry = registry;
-            self.kb.last_local_registry_write = Some(std::time::Instant::now());
+            // @ai-caution: [kb-truth] The files are already moved when this runs;
+            // a failure here leaves the registry pointing at the emptied origin.
+            // Reported, not hidden — persisting before moving is tracked as a
+            // follow-up (review finding retire-moves-before-registry-write).
+            self.kb_registry_update(&dir, apply)
+                .map_err(|e| format!("moved {moved} file(s) but could not persist: {e}"))?;
         }
 
         Ok(format!(

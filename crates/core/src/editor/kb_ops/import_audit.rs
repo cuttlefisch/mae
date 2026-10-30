@@ -330,17 +330,23 @@ impl Editor {
             if let Some(data_dir) = self.mae_data_dir() {
                 let root = canonical_root.to_path_buf();
                 let uuid_for_write = uuid.clone();
-                let (registry, (), saved) =
-                    mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
-                        if let Some(i) = reg.instances.iter_mut().find(|i| i.uuid == uuid_for_write)
-                        {
-                            repoint_moved_project(i, &root);
-                        }
-                    });
-                if let Err(e) = saved {
-                    tracing::warn!(error = %e, "could not persist the repaired project root");
+                match mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+                    if let Some(i) = reg.instances.iter_mut().find(|i| i.uuid == uuid_for_write) {
+                        repoint_moved_project(i, &root);
+                    }
+                }) {
+                    Ok((registry, ())) => self.kb_adopt_registry(registry),
+                    // The repair already applies in memory (above) and is idempotent,
+                    // so the next start repeats it; say that it did not persist.
+                    Err(e) => self.message_log.push(
+                        crate::messages::MessageLevel::Warn,
+                        "kb-project",
+                        format!(
+                            "repaired the moved project's KB root in memory only (redone at next start): {}",
+                            super::registry::registry_error(e)
+                        ),
+                    ),
                 }
-                self.kb.registry = registry;
             }
         }
         let name = self
@@ -394,13 +400,18 @@ impl Editor {
             .mae_data_dir()
             .ok_or_else(|| "cannot determine data directory".to_string())?;
         let key_for_write = key.clone();
-        let (registry, (), saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+        let (registry, ()) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
             if let Some(i) = reg.instances.iter_mut().find(|i| i.uuid == uuid) {
                 i.project_key = Some(key_for_write.clone());
             }
-        });
-        saved.map_err(|e| format!("could not persist the relink: {e}"))?;
-        self.kb.registry = registry;
+        })
+        .map_err(|e| {
+            format!(
+                "could not persist the relink: {}",
+                super::registry::registry_error(e)
+            )
+        })?;
+        self.kb_adopt_registry(registry);
         Ok(format!(
             "relinked {} to {}{}",
             canonical.display(),

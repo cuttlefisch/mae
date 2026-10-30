@@ -318,6 +318,210 @@ pub fn with_locked_update<T, R>(
     (value, result, saved)
 }
 
+/// How long [`locked_update`] waits for a contended lock before failing.
+///
+/// An update holds the lock for one load + mutate + save of a small file
+/// (milliseconds). Five seconds outlasts any realistic burst of concurrent
+/// updates (ADR-058's three-way race) while still surfacing a lock that is
+/// never going to be released.
+pub const LOCKED_UPDATE_WAIT: Duration = Duration::from_secs(5);
+
+/// Why a [`locked_update`] did not happen. Nothing was saved in any case.
+#[derive(Debug)]
+pub enum LockedUpdateError<E> {
+    /// Another holder kept the lock past [`LOCKED_UPDATE_WAIT`]. `holder` is
+    /// what its lock file says (`None` if it could not be read), `lock_file`
+    /// where it is.
+    Contended {
+        holder: Option<LockInfo>,
+        lock_file: PathBuf,
+    },
+    /// The current state could not be loaded. Saving "nothing + my change"
+    /// over it would destroy it, so nothing is saved.
+    Load(E),
+    /// The mutated state could not be saved.
+    Save(io::Error),
+    /// The lock itself could not be taken (an I/O error, not contention).
+    Lock(io::Error),
+}
+
+impl<E: std::fmt::Display + std::fmt::Debug> std::error::Error for LockedUpdateError<E> {}
+
+impl<E: std::fmt::Display> std::fmt::Display for LockedUpdateError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Contended { holder, lock_file } => {
+                match holder {
+                    Some(h) => {
+                        let now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        write!(
+                            f,
+                            "locked by another MAE process (pid {} on {}, for {}s)",
+                            h.pid,
+                            h.hostname,
+                            now.saturating_sub(h.timestamp)
+                        )?;
+                    }
+                    None => write!(f, "locked by another MAE process")?,
+                }
+                write!(
+                    f,
+                    "; nothing was changed — try again ({})",
+                    lock_file.display()
+                )
+            }
+            Self::Load(e) => write!(f, "could not be read ({e}); nothing was changed"),
+            Self::Save(e) => write!(f, "could not be saved: {e}"),
+            Self::Lock(e) => write!(f, "could not be locked ({e}); nothing was changed"),
+        }
+    }
+}
+
+/// Reload-fresh → mutate → save under the advisory lock, and ONLY under it.
+///
+/// The strict sibling of [`with_locked_update`], for state whose loss is not
+/// "a rare lost update" but data loss — the KB registry is the only record of
+/// which KBs exist. It differs in exactly the two places that lost data:
+/// - contention past [`LOCKED_UPDATE_WAIT`] is an error, never an unlocked
+///   write (`with_locked_update` writes anyway after ~600 ms);
+/// - a state that cannot be loaded is an error, never "default + my change"
+///   saved over the unreadable file.
+///
+/// On any error nothing is saved and `mutate` has not run, so the caller can
+/// keep its previous in-memory state and report the failure.
+///
+/// The lock is [`UpdateLock`]: an OS file lock, which the kernel releases when
+/// its holder dies (so a crash never leaves it held), layered over the legacy
+/// PID file that older MAE versions still honour.
+pub fn locked_update<T, R, E>(
+    lock_target: &Path,
+    load: impl FnOnce() -> Result<T, E>,
+    mutate: impl FnOnce(&mut T) -> R,
+    save: impl FnOnce(&T) -> io::Result<()>,
+) -> Result<(T, R), LockedUpdateError<E>> {
+    locked_update_waiting(LOCKED_UPDATE_WAIT, lock_target, load, mutate, save)
+}
+
+fn locked_update_waiting<T, R, E>(
+    wait: Duration,
+    lock_target: &Path,
+    load: impl FnOnce() -> Result<T, E>,
+    mutate: impl FnOnce(&mut T) -> R,
+    save: impl FnOnce(&T) -> io::Result<()>,
+) -> Result<(T, R), LockedUpdateError<E>> {
+    let deadline = std::time::Instant::now() + wait;
+    let mut backoff = Duration::from_millis(5);
+    let _guard = loop {
+        if let Some(guard) =
+            UpdateLock::try_acquire(lock_target).map_err(LockedUpdateError::Lock)?
+        {
+            break guard;
+        }
+        if std::time::Instant::now() >= deadline {
+            let lock_file = lock_path(lock_target);
+            return Err(LockedUpdateError::Contended {
+                holder: read_lock(&lock_file),
+                lock_file,
+            });
+        }
+        std::thread::sleep(backoff);
+        backoff = (backoff * 2).min(Duration::from_millis(100));
+    };
+    let mut value = load().map_err(LockedUpdateError::Load)?;
+    let result = mutate(&mut value);
+    save(&value).map_err(LockedUpdateError::Save)?;
+    Ok((value, result))
+}
+
+/// The exclusive lock [`locked_update`] holds for one update.
+///
+/// Two layers, because the two kinds of contender honour different things:
+/// - an OS lock (`File::try_lock`) on `.<name>.mae.oslock`, a file that is never
+///   deleted: every current MAE process serializes on it, and the kernel
+///   releases it when the holder exits or crashes — no stale state, no PID
+///   reuse, no empty-file-after-crash;
+/// - the legacy PID file (`.<name>.mae.lock`, [`acquire_lock`]) that OLDER MAE
+///   versions check. It is created while holding the OS lock, so they still back
+///   off. Holding the OS lock also makes reclaiming a stale legacy file safe: no
+///   current-version process can be mid-acquire, so a legacy file that is empty,
+///   unreadable, names a dead PID, or names THIS process's PID (a previous
+///   incarnation with the same PID — routine in containers) is leftover, not a
+///   holder. Only a live FOREIGN PID (an older version) means contention.
+///
+/// Any I/O error is an error, never "acquired".
+struct UpdateLock {
+    _os: std::fs::File,
+    legacy: PathBuf,
+}
+
+impl UpdateLock {
+    /// `Ok(None)` when another process holds it.
+    fn try_acquire(target: &Path) -> io::Result<Option<Self>> {
+        let legacy = lock_path(target);
+        if let Some(parent) = legacy.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let os_path = legacy.with_extension("oslock");
+        let os = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&os_path)?;
+        match os.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
+            Err(std::fs::TryLockError::Error(e)) => return Err(e),
+        }
+        // Holding the OS lock: settle the legacy PID file.
+        for _ in 0..2 {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&legacy)
+            {
+                Ok(mut f) => {
+                    use std::io::Write;
+                    let json = serde_json::to_string(&LockInfo::current())
+                        .map_err(|e| io::Error::other(e.to_string()))?;
+                    if let Err(e) = f.write_all(json.as_bytes()).and_then(|()| f.sync_all()) {
+                        let _ = std::fs::remove_file(&legacy);
+                        return Err(e);
+                    }
+                    return Ok(Some(UpdateLock { _os: os, legacy }));
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                    match read_lock(&legacy) {
+                        Some(h) if h.pid != std::process::id() && is_process_alive(h.pid) => {
+                            // An older MAE version holds it.
+                            return Ok(None);
+                        }
+                        // Leftover (see the type doc): reclaim and retry once.
+                        _ => match std::fs::remove_file(&legacy) {
+                            Ok(()) => continue,
+                            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                            Err(e) => return Err(e),
+                        },
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        // An older version re-created it between our reclaim and retry.
+        Ok(None)
+    }
+}
+
+impl Drop for UpdateLock {
+    fn drop(&mut self) {
+        // Remove the legacy file before the OS lock is released (when `_os`
+        // drops right after), so no current-version process sees it as ours.
+        let _ = std::fs::remove_file(&self.legacy);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,5 +775,212 @@ mod tests {
         );
         assert!(final_on_disk.contains("B"));
         assert_eq!(final_on_disk.len(), 2);
+    }
+
+    /// `locked_update` saves only what it loaded and mutated, under the lock.
+    #[test]
+    fn locked_update_loads_mutates_and_saves() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("state.txt");
+        std::fs::write(&file, "1").unwrap();
+        let (value, doubled) = locked_update_waiting(
+            Duration::from_millis(50),
+            &file,
+            || std::fs::read_to_string(&file).map(|s| s.trim().parse::<u32>().unwrap()),
+            |v| {
+                *v += 1;
+                *v * 2
+            },
+            |v| std::fs::write(&file, v.to_string()),
+        )
+        .expect("uncontended update");
+        assert_eq!((value, doubled), (2, 4));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "2");
+        assert!(!lock_path(&file).exists(), "the lock was not released");
+    }
+
+    /// A state that cannot be loaded is never replaced: `mutate` does not run
+    /// and nothing is saved (the old helper saved "default + my change").
+    #[test]
+    fn locked_update_saves_nothing_when_the_state_cannot_be_loaded() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("state.txt");
+        std::fs::write(&file, "unparseable").unwrap();
+        let mut mutated = false;
+        let mut saved = false;
+        let r = locked_update_waiting(
+            Duration::from_millis(50),
+            &file,
+            || Err::<u32, _>("bad state".to_string()),
+            |_| mutated = true,
+            |_| {
+                saved = true;
+                Ok(())
+            },
+        );
+        assert!(matches!(r, Err(LockedUpdateError::Load(_))), "{r:?}");
+        assert!(!mutated && !saved, "mutated={mutated} saved={saved}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "unparseable");
+        assert!(!lock_path(&file).exists(), "the lock was not released");
+    }
+
+    /// Runs a tiny `locked_update` on `file` (containing "1") with a short wait;
+    /// returns the result and whether `save` ran.
+    fn try_update(file: &Path) -> (Result<(u32, ()), LockedUpdateError<String>>, bool) {
+        let mut saved = false;
+        let r = locked_update_waiting(
+            Duration::from_millis(100),
+            file,
+            || Ok::<u32, String>(1),
+            |v| *v += 1,
+            |_| {
+                saved = true;
+                Ok(())
+            },
+        );
+        (r, saved)
+    }
+
+    fn state_file() -> (TempDir, PathBuf) {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("state.txt");
+        std::fs::write(&file, "1").unwrap();
+        (tmp, file)
+    }
+
+    /// A current-version holder (the OS lock) blocks the update: it fails after
+    /// the wait, saves nothing, and names the lock file.
+    #[test]
+    fn locked_update_fails_closed_while_another_update_holds_the_lock() {
+        let (_tmp, file) = state_file();
+        let held = UpdateLock::try_acquire(&file)
+            .unwrap()
+            .expect("fixture: lock taken");
+        let (r, saved) = try_update(&file);
+        let err = r.expect_err("a contended update must fail, not write unlocked");
+        assert!(
+            matches!(err, LockedUpdateError::Contended { .. }),
+            "{err:?}"
+        );
+        assert!(
+            err.to_string()
+                .contains(&lock_path(&file).display().to_string()),
+            "the error must name the lock file: {err}"
+        );
+        assert!(!saved, "a contended update saved");
+        drop(held);
+        let (r, saved) = try_update(&file);
+        assert!(
+            r.is_ok() && saved,
+            "after release the update must run: {r:?}"
+        );
+    }
+
+    /// An OLDER MAE version honours only the legacy PID file. A live foreign PID
+    /// in it is a holder: the update fails closed and leaves its file alone.
+    #[cfg(unix)]
+    #[test]
+    fn locked_update_respects_an_older_versions_live_legacy_lock() {
+        let (_tmp, file) = state_file();
+        let foreign = LockInfo {
+            pid: std::os::unix::process::parent_id(),
+            ..LockInfo::current()
+        };
+        assert!(
+            is_process_alive(foreign.pid),
+            "fixture: the parent process is alive"
+        );
+        std::fs::write(lock_path(&file), serde_json::to_string(&foreign).unwrap()).unwrap();
+        let (r, saved) = try_update(&file);
+        assert!(
+            matches!(
+                r,
+                Err(LockedUpdateError::Contended {
+                    holder: Some(_),
+                    ..
+                })
+            ),
+            "{r:?}"
+        );
+        assert!(!saved, "saved while an older version held the lock");
+        assert!(
+            lock_path(&file).exists(),
+            "the older version's lock was removed"
+        );
+    }
+
+    /// Leftovers from a crash are reclaimed, not reported as holders: a legacy
+    /// file naming THIS process's PID (a restarted container reuses PIDs), an
+    /// empty one (a crash between create and write, or a full disk), and one
+    /// naming a dead PID. Each used to block every update (the first two
+    /// forever).
+    #[test]
+    fn locked_update_reclaims_leftover_legacy_lock_files() {
+        let own = serde_json::to_string(&LockInfo::current()).unwrap();
+        let dead = serde_json::to_string(&LockInfo {
+            pid: dead_pid(),
+            ..LockInfo::current()
+        })
+        .unwrap();
+        for (label, content) in [
+            ("own pid", own),
+            ("empty", String::new()),
+            ("dead pid", dead),
+        ] {
+            let (_tmp, file) = state_file();
+            std::fs::write(lock_path(&file), &content).unwrap();
+            let (r, saved) = try_update(&file);
+            assert!(
+                r.is_ok() && saved,
+                "{label}: a leftover lock blocked the update: {r:?}"
+            );
+            assert!(
+                !lock_path(&file).exists(),
+                "{label}: the legacy lock was not released"
+            );
+        }
+    }
+
+    /// A PID that is not running: spawn a process and wait for it to exit.
+    fn dead_pid() -> u32 {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--list")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        assert!(!is_process_alive(pid), "fixture: pid {pid} still alive");
+        pid
+    }
+
+    /// An I/O error while locking is an error, never "acquired": the old lock
+    /// treated any create error other than AlreadyExists as success.
+    #[cfg(unix)]
+    #[test]
+    fn locked_update_fails_when_the_lock_cannot_be_created() {
+        use std::os::unix::fs::PermissionsExt;
+        if unsafe { libc::geteuid() } == 0 {
+            return; // root ignores directory permissions; nothing to test
+        }
+        // Two places it can fail: creating the OS lock file, or (with that file
+        // already present from an earlier update) creating the legacy one.
+        for os_lock_exists in [false, true] {
+            let (tmp, file) = state_file();
+            if os_lock_exists {
+                std::fs::write(lock_path(&file).with_extension("oslock"), b"").unwrap();
+            }
+            std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+            let (r, saved) = try_update(&file);
+            std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert!(
+                matches!(r, Err(LockedUpdateError::Lock(_))),
+                "os lock file present: {os_lock_exists}: {r:?}"
+            );
+            assert!(
+                !saved,
+                "os lock file present: {os_lock_exists}: saved without a lock"
+            );
+        }
     }
 }
