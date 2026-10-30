@@ -69,7 +69,8 @@ fn init_kb_federation_evicts_mae_provisioned_rows_and_keeps_the_users_own() {
     ));
     registry.save(data_dir).unwrap();
 
-    let (removed, kept) = crate::guidance_kb_engine::evict_system_rows_from_registry(data_dir);
+    let (removed, kept) =
+        crate::guidance_kb_engine::evict_system_rows_from_registry(data_dir).expect("eviction");
 
     assert_eq!(removed.len(), 2, "both MAE-provisioned rows: {removed:?}");
     assert!(
@@ -87,7 +88,8 @@ fn init_kb_federation_evicts_mae_provisioned_rows_and_keeps_the_users_own() {
     assert_eq!(after.instances.len(), 1);
 
     // Idempotent: a second pass removes nothing and still leaves the user's.
-    let (again, _) = crate::guidance_kb_engine::evict_system_rows_from_registry(data_dir);
+    let (again, _) =
+        crate::guidance_kb_engine::evict_system_rows_from_registry(data_dir).expect("eviction");
     assert!(again.is_empty(), "second pass must be a no-op: {again:?}");
     assert_eq!(
         mae_kb::federation::KbRegistry::load(data_dir)
@@ -130,7 +132,8 @@ fn eviction_never_removes_a_reserved_name_that_holds_the_users_own_content() {
     });
     registry.save(tmp.path()).unwrap();
 
-    let (removed, kept) = crate::guidance_kb_engine::evict_system_rows_from_registry(tmp.path());
+    let (removed, kept) =
+        crate::guidance_kb_engine::evict_system_rows_from_registry(tmp.path()).expect("eviction");
 
     assert!(
         removed.is_empty(),
@@ -140,4 +143,23 @@ fn eviction_never_removes_a_reserved_name_that_holds_the_users_own_content() {
     assert!(mae_kb::federation::KbRegistry::load(tmp.path())
         .find("DevPractices")
         .is_some());
+}
+
+/// Startup eviction runs on every start. A registry it cannot read is left
+/// byte-identical and reported, never replaced by "empty minus system rows" —
+/// which would have wiped every KB on the next start after a bad write.
+#[test]
+fn eviction_leaves_an_unreadable_registry_untouched() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("kb-registry.toml");
+    let damaged = b"[[instances]]\nname = \"mine\"\nthis is not toml".to_vec();
+    std::fs::write(&path, &damaged).unwrap();
+    let r = crate::guidance_kb_engine::evict_system_rows_from_registry(tmp.path());
+    let err = r.expect_err("eviction must report an unreadable registry");
+    assert!(err.contains("could not be read"), "{err}");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        damaged,
+        "the registry was rewritten"
+    );
 }

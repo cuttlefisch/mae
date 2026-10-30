@@ -262,7 +262,7 @@ impl Editor {
             ));
         }
 
-        self.kb_apply_attach(&inst.uuid, from_origin.then_some(&dir));
+        self.kb_apply_attach(&inst.uuid, from_origin.then_some(&dir))?;
         let mut msg = format!(
             "'{}' attached to {} — the directory is now authoritative. Run :kb-reimport {} \
              to ingest it now.",
@@ -308,8 +308,13 @@ impl Editor {
     }
 
     /// Persist the attach: policy to `FromOrgDir`, and `org_dir` restored when
-    /// re-attaching a retired KB to its origin.
-    fn kb_apply_attach(&mut self, uuid: &str, restore_org_dir: Option<&PathBuf>) {
+    /// re-attaching a retired KB to its origin. An `Err` means nothing changed:
+    /// the KB stays detached, in memory and on disk.
+    fn kb_apply_attach(
+        &mut self,
+        uuid: &str,
+        restore_org_dir: Option<&PathBuf>,
+    ) -> Result<(), String> {
         let apply = |reg: &mut mae_kb::federation::KbRegistry| {
             if let Some(i) = reg.instances.iter_mut().find(|i| i.uuid == uuid) {
                 if let Some(dir) = restore_org_dir {
@@ -319,14 +324,12 @@ impl Editor {
             }
         };
         if let Some(data_dir) = self.mae_data_dir() {
-            let (registry, (), saved) = mae_kb::federation::KbRegistry::update(&data_dir, apply);
-            if let Err(e) = saved {
-                tracing::warn!(error = %e, "failed to persist KB registry");
-            }
-            self.kb.registry = registry;
-            self.kb.last_local_registry_write = Some(std::time::Instant::now());
+            let (registry, ()) = mae_kb::federation::KbRegistry::update(&data_dir, apply)
+                .map_err(super::registry::registry_error)?;
+            self.kb_adopt_registry(registry);
         } else {
             apply(&mut self.kb.registry);
         }
+        Ok(())
     }
 }

@@ -22,6 +22,7 @@ mod kb_ops_primary_naming_tests;
 mod kb_ops_project_identity_tests;
 mod kb_ops_provenance_tests;
 mod kb_ops_read_clobber_tests;
+mod kb_ops_registry_failure_tests;
 mod kb_ops_registry_tests;
 mod kb_ops_reimport_guard_tests;
 mod kb_ops_remote_hub_tests;

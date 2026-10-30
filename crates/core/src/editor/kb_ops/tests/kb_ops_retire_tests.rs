@@ -289,7 +289,7 @@ fn retirement_records_the_directory_it_retires_not_an_earlier_origin() {
     let (mut editor, _dirs) = detached_kb(dir.path(), &[("a.org", "AAA")]);
     let data_dir = editor.mae_data_dir().unwrap();
     let stale = earlier.path().to_path_buf();
-    let (reg, (), saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+    let (reg, ()) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
         let i = reg
             .instances
             .iter_mut()
@@ -298,8 +298,8 @@ fn retirement_records_the_directory_it_retires_not_an_earlier_origin() {
         i.import_record
             .get_or_insert_with(mae_kb::federation::KbImportRecord::default)
             .origin = stale.clone();
-    });
-    saved.unwrap();
+    })
+    .unwrap();
     editor.kb.registry = reg;
 
     editor.kb_retire_archive("Retiring").expect("retire");
