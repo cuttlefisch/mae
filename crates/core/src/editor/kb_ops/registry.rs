@@ -318,15 +318,12 @@ impl Editor {
         // `KbDataDir` is not `Clone`, so borrow it for the closure instead —
         // `update` runs the closure synchronously, so a borrow is fine.
         let kb_data_dir = self.kb.data_dir.as_ref();
-        let (registry, uuid, saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+        let (registry, uuid) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
             reg.register_native(name.to_string(), &data_dir, kb_data_dir)
-        });
+        })
+        .map_err(registry_error)?;
         let uuid = uuid?;
-        if let Err(e) = saved {
-            tracing::warn!(error = %e, "failed to persist KB registry");
-        }
-        self.kb.registry = registry;
-        self.kb.last_local_registry_write = Some(std::time::Instant::now());
+        self.kb_adopt_registry(registry);
 
         let db_path = self.kb.registry.find(&uuid).map(|i| i.db_path.clone());
         self.kb_adopt_detached_instance(&uuid, db_path.as_deref());
@@ -371,7 +368,7 @@ impl Editor {
             return None;
         }
 
-        let (registry, uuid, saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+        let updated = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
             reg.register(
                 name.to_string(),
                 org_dir.to_path_buf(),
@@ -379,6 +376,13 @@ impl Editor {
                 self.kb.data_dir.as_ref(),
             )
         });
+        let (registry, uuid) = match updated {
+            Ok(done) => done,
+            Err(e) => {
+                self.set_status(format!("KB register error: {}", registry_error(e)));
+                return None;
+            }
+        };
         // The reserved-name check above already returned, so the only way this
         // errors is a future refusal added to `register` — surface it rather
         // than proceeding with an unusable uuid.
@@ -389,11 +393,7 @@ impl Editor {
                 return None;
             }
         };
-        if let Err(e) = saved {
-            tracing::warn!(error = %e, "failed to persist KB registry");
-        }
-        self.kb.registry = registry;
-        self.kb.last_local_registry_write = Some(std::time::Instant::now());
+        self.kb_adopt_registry(registry);
 
         // Import org files, open the durable store, start a watcher — shared
         // with `drain_kb_registry_watch` (an instance appearing via another
@@ -408,17 +408,9 @@ impl Editor {
         };
         let (report, health) = self.kb_adopt_instance(&uuid, &org_dir, db_path.as_deref());
 
-        // Update last_import timestamp and persist.
-        let (registry, (), saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
-            if let Some(inst) = reg.instances.iter_mut().find(|i| i.uuid == uuid) {
-                inst.last_import = Some(chrono_now());
-            }
-        });
-        if let Err(e) = saved {
-            tracing::warn!(error = %e, "failed to persist KB registry");
-        }
-        self.kb.registry = registry;
-        self.kb.last_local_registry_write = Some(std::time::Instant::now());
+        // Update last_import timestamp and persist. The KB is registered and
+        // imported by now; a failed stamp is reported, not fatal.
+        self.kb_stamp_last_import(&uuid);
 
         let result = KbImportResult {
             name: name.to_string(),
@@ -489,17 +481,24 @@ impl Editor {
             return Err("cannot determine data directory".to_string());
         };
         let uuid = result.uuid.clone();
-        let (registry, _, saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+        // The KB is already registered; if marking it as THIS project's KB
+        // cannot be saved, say so rather than report a project KB that a
+        // restart will not find.
+        let (registry, _) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
             if let Some(inst) = reg.instances.iter_mut().find(|i| i.uuid == uuid) {
                 inst.kind = mae_kb::federation::KbInstanceKind::Project;
                 inst.project_root = Some(canonical_root.clone());
                 inst.project_key = key.clone();
             }
-        });
-        if let Err(e) = saved {
-            tracing::warn!(error = %e, "failed to persist KB registry (kind/project_root patch)");
-        }
-        self.kb.registry = registry;
+        })
+        .map_err(|e| {
+            format!(
+                "registered KB '{}' but could not mark it as this project's KB: {}",
+                result.name,
+                registry_error(e)
+            )
+        })?;
+        self.kb_adopt_registry(registry);
 
         Ok(result)
     }
@@ -518,13 +517,11 @@ impl Editor {
         let Some(data_dir) = self.mae_data_dir() else {
             return Err("cannot determine data directory".to_string());
         };
-        let (registry, _, saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+        let (registry, _) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
             reg.decline_project(canonical_root.clone());
-        });
-        if let Err(e) = saved {
-            tracing::warn!(error = %e, "failed to persist declined-project-provisioning marker");
-        }
-        self.kb.registry = registry;
+        })
+        .map_err(registry_error)?;
+        self.kb_adopt_registry(registry);
         Ok(())
     }
 
@@ -629,22 +626,27 @@ impl Editor {
         let found = self.kb.registry.find(name_or_uuid).map(|i| i.uuid.clone());
         match found {
             Some(uuid) => {
-                self.kb.instances.remove(&uuid);
-                self.kb.instance_stores.remove(&uuid);
-                self.kb.watchers.remove(&uuid);
+                // Persist first: dropping the instance in memory and then failing
+                // to save left a KB gone from this editor but still registered.
                 if let Some(data_dir) = self.mae_data_dir() {
-                    let (registry, (), saved) =
-                        mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
-                            reg.unregister(name_or_uuid)
-                        });
-                    if let Err(e) = saved {
-                        tracing::warn!(error = %e, "failed to persist KB registry");
+                    match mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+                        reg.unregister(name_or_uuid)
+                    }) {
+                        Ok((registry, ())) => self.kb_adopt_registry(registry),
+                        Err(e) => {
+                            self.set_status(format!(
+                                "KB unregister '{name_or_uuid}' failed: {}",
+                                registry_error(e)
+                            ));
+                            return;
+                        }
                     }
-                    self.kb.registry = registry;
-                    self.kb.last_local_registry_write = Some(std::time::Instant::now());
                 } else {
                     self.kb.registry.unregister(name_or_uuid);
                 }
+                self.kb.instances.remove(&uuid);
+                self.kb.instance_stores.remove(&uuid);
+                self.kb.watchers.remove(&uuid);
                 // Rebuild query layer without the removed instance.
                 self.kb.rebuild_query_layer();
                 self.set_status(format!("KB instance '{}' unregistered", name_or_uuid));
@@ -677,15 +679,11 @@ impl Editor {
             name_or_uuid.to_string()
         };
         let changed = if let Some(data_dir) = self.mae_data_dir() {
-            let (registry, changed, saved) =
-                mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
-                    reg.set_ai_residency(name_or_uuid, policy)
-                });
-            if let Err(e) = saved {
-                tracing::warn!(error = %e, "failed to persist KB registry");
-            }
-            self.kb.registry = registry;
-            self.kb.last_local_registry_write = Some(std::time::Instant::now());
+            let (registry, changed) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+                reg.set_ai_residency(name_or_uuid, policy)
+            })
+            .map_err(|e| format!("KB set-ai-residency: {}", registry_error(e)))?;
+            self.kb_adopt_registry(registry);
             changed
         } else {
             self.kb.registry.set_ai_residency(name_or_uuid, policy)
@@ -828,16 +826,20 @@ impl Editor {
         let Some(data_dir) = self.mae_data_dir() else {
             return;
         };
-        let (registry, (), saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+        match mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
             if let Some(reg_inst) = reg.instances.iter_mut().find(|i| i.uuid == uuid) {
                 reg_inst.last_import = Some(chrono_now());
             }
-        });
-        if let Err(e) = saved {
-            tracing::warn!(error = %e, "failed to persist KB registry");
+        }) {
+            Ok((registry, ())) => self.kb_adopt_registry(registry),
+            // Bookkeeping only: the import itself happened. Logged where the user
+            // can see it, and the in-memory registry is left as it was.
+            Err(e) => self.message_log.push(
+                crate::messages::MessageLevel::Warn,
+                "kb-import",
+                format!("could not record the import time: {}", registry_error(e)),
+            ),
         }
-        self.kb.registry = registry;
-        self.kb.last_local_registry_write = Some(std::time::Instant::now());
     }
 
     /// Persist a node to the backing store (if present). Best-effort — logs errors.
@@ -1709,15 +1711,11 @@ impl Editor {
             ));
         }
         let changed = if let Some(data_dir) = self.mae_data_dir() {
-            let (registry, changed, saved) =
-                mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
-                    reg.set_ingest_policy(name_or_uuid, policy)
-                });
-            if let Err(e) = saved {
-                tracing::warn!(error = %e, "failed to persist KB registry");
-            }
-            self.kb.registry = registry;
-            self.kb.last_local_registry_write = Some(std::time::Instant::now());
+            let (registry, changed) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+                reg.set_ingest_policy(name_or_uuid, policy)
+            })
+            .map_err(registry_error)?;
+            self.kb_adopt_registry(registry);
             changed
         } else {
             self.kb.registry.set_ingest_policy(name_or_uuid, policy)
@@ -1778,4 +1776,34 @@ fn kb_reimport_refusal(instance: &mae_kb::federation::KbInstance) -> Option<Stri
         ));
     }
     None
+}
+
+/// A failed [`mae_kb::federation::KbRegistry::update`] as a user-facing sentence.
+/// Nothing was saved and the in-memory registry was not touched.
+pub(super) fn registry_error(e: mae_kb::federation::RegistryUpdateError) -> String {
+    format!("KB registry {e}")
+}
+
+impl Editor {
+    /// Adopt the registry a successful `KbRegistry::update` returned — it is the
+    /// freshest on-disk state plus this process's change — and note that this
+    /// process wrote it (so the registry watcher does not treat it as foreign).
+    pub(super) fn kb_adopt_registry(&mut self, registry: mae_kb::federation::KbRegistry) {
+        self.kb.registry = registry;
+        self.kb.last_local_registry_write = Some(std::time::Instant::now());
+    }
+
+    /// [`mae_kb::federation::KbRegistry::update`] and adopt the result. `Err` is
+    /// a user-facing sentence ("KB registry …"): nothing was saved and the
+    /// in-memory registry is unchanged.
+    pub fn kb_registry_update<R>(
+        &mut self,
+        data_dir: &Path,
+        mutate: impl FnOnce(&mut mae_kb::federation::KbRegistry) -> R,
+    ) -> Result<R, String> {
+        let (registry, r) =
+            mae_kb::federation::KbRegistry::update(data_dir, mutate).map_err(registry_error)?;
+        self.kb_adopt_registry(registry);
+        Ok(r)
+    }
 }

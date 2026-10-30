@@ -401,25 +401,15 @@ pub fn project_node(store: &CozoKbStore, node_id: &str, state: &[u8]) -> Result<
     // Kind is a cozo-only projection field (the CRDT carries only content); derive it
     // deterministically from the id namespace.
     let node = Node::from_crdt_doc(&doc, kind_from_id(node_id), NodeSource::Federation);
+    // One transaction: the row, its typed links (ADR-030: rel/weight/confidence
+    // from each link's inline `?query`, external URLs dropped) and its
+    // `#+TRANSCLUDE` members — `CozoKbStore::derived_links` is the single
+    // derivation. A second link-replacement step here used to run as separate
+    // transactions, so an editor write landing between them left this node's
+    // body with links from another version of it.
     store
         .insert_node(&node)
         .map_err(|e| format!("project node '{node_id}': {e}"))?;
-
-    // Replace insert_node's generic links with the typed parse (ADR-030 / Phase C):
-    // rel/weight/confidence come from each link's inline `?query`.
-    let links: Vec<(String, String, f64, f64)> =
-        mae_kb::org::parse_typed_links(&node.body, &node.id)
-            .into_iter()
-            // An external URL is a link in the TEXT, not an edge in the GRAPH.
-            // Projecting one creates an edge to a node that cannot exist, which
-            // `kb_health` then reports as broken, permanently, once per external
-            // link in the corpus.
-            .filter(|l| !mae_kb::org::is_external_link_target(&l.target))
-            .map(|l| (l.target, l.rel_type, l.weight, l.confidence))
-            .collect();
-    store
-        .replace_node_links(&node.id, &links)
-        .map_err(|e| format!("project links for '{node_id}': {e}"))?;
     Ok(())
 }
 
