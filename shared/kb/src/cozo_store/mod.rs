@@ -58,4 +58,6 @@ impl std::fmt::Debug for CozoKbStore {
 }
 
 #[cfg(test)]
+pub(crate) mod test_hooks;
+#[cfg(test)]
 mod tests;

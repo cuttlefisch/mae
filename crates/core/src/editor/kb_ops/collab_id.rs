@@ -37,20 +37,27 @@ impl Editor {
     }
 
     pub fn kb_collab_id_for_share(&mut self, target: &mae_kb::KbTarget) -> Option<String> {
+        // Already minted: no registry write (this runs on every collab connect,
+        // and a write is a lock round-trip that can fail for no reason).
+        if let Some(id) = self.kb.registry.collab_id_of_target(target) {
+            return Some(id);
+        }
         match self.mae_data_dir() {
             Some(dir) => {
-                let (registry, id, saved) = mae_kb::federation::KbRegistry::update(&dir, |reg| {
+                match mae_kb::federation::KbRegistry::update(&dir, |reg| {
                     reg.collab_id_for_share(target)
-                });
-                if let Err(e) = saved {
-                    // An unpersisted mint yields a DIFFERENT id next time, orphaning
-                    // this share's collection and membership on the daemon.
-                    tracing::error!(error = %e, "failed to persist KB collab id");
-                    return None;
+                }) {
+                    Ok((registry, id)) => {
+                        self.kb_adopt_registry(registry);
+                        Some(id)
+                    }
+                    Err(e) => {
+                        // An unpersisted mint yields a DIFFERENT id next time, orphaning
+                        // this share's collection and membership on the daemon.
+                        tracing::error!(error = %e, "failed to persist KB collab id");
+                        None
+                    }
                 }
-                self.kb.registry = registry;
-                self.kb.last_local_registry_write = Some(std::time::Instant::now());
-                Some(id)
             }
             // No data dir (headless/test): mint in memory so the session still
             // works. Nothing durable is written, so nothing can be orphaned.

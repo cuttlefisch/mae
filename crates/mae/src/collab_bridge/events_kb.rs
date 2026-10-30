@@ -127,7 +127,7 @@ pub(super) fn handle_kb_shared_event(
         // only a cache; the emit gate now reads these markers). Persisted to
         // the XDG-first registry. Only on a confirmed share.
         if let Some(dir) = editor.mae_data_dir() {
-            let (registry, (), saved) = mae_kb::federation::KbRegistry::update(&dir, |reg| {
+            let mark = |reg: &mut mae_kb::federation::KbRegistry| {
                 let now = mae_kb::data_dir::chrono_now_iso();
                 // ADR-105 D4: stamp the KB `target` names, not the one whose NAME
                 // happens to equal this id. The old comparison answered `false` for
@@ -156,12 +156,32 @@ pub(super) fn handle_kb_shared_event(
                         );
                     }
                 }
-            });
-            if let Err(e) = saved {
-                warn!(kb = %kb_id, error = %e, "failed to persist shared-KB registry marker");
+            };
+            match mae_kb::federation::KbRegistry::update(&dir, mark) {
+                Ok((registry, ())) => {
+                    editor.kb.registry = registry;
+                    editor.kb.last_local_registry_write = Some(std::time::Instant::now());
+                }
+                Err(e) => {
+                    // The share is confirmed by the daemon; only the durable marker
+                    // is missing. Kept in memory until the registry is next reloaded
+                    // or MAE restarts — then edits stop broadcasting.
+                    mark(&mut editor.kb.registry);
+                    editor.message_log.push(
+                        mae_core::messages::MessageLevel::Error,
+                        "kb-share",
+                        format!(
+                            "KB '{kb_id}' is shared, but its share marker was NOT saved — sync \
+                             stops at the next registry reload or restart: KB registry {e}"
+                        ),
+                    );
+                    editor.set_status(format!(
+                        "KB '{kb_id}' shared but NOT saved (registry error) → *Messages*"
+                    ));
+                    refresh_collab_status_if_open(editor);
+                    return;
+                }
             }
-            editor.kb.registry = registry;
-            editor.kb.last_local_registry_write = Some(std::time::Instant::now());
         }
         tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_count, "share: durable marker stamped");
         editor.set_status(format!("KB '{}' shared ({} nodes)", kb_id, node_count));

@@ -214,29 +214,20 @@ impl Editor {
 
         // Durable registry marker (idempotent).
         if let Some(dir) = self.mae_data_dir() {
-            let (registry, (), saved) = mae_kb::federation::KbRegistry::update(&dir, |reg| {
-                let now = mae_kb::data_dir::chrono_now_iso();
-                match reg.find_mut(&uuid) {
-                    Some(inst) => {
-                        inst.shared = true;
-                        inst.collab_id = Some(kb_id.to_string());
-                        inst.last_sync = Some(now);
-                    }
-                    None => {
-                        reg.instances.push(mae_kb::federation::KbInstance::joined(
-                            uuid.clone(),
-                            kb_id,
-                            db_path,
-                            now,
-                        ));
-                    }
-                }
-            });
-            if let Err(e) = saved {
-                tracing::warn!(kb = %kb_id, error = %e, "failed to persist joined-KB registry marker");
+            let mark =
+                |reg: &mut mae_kb::federation::KbRegistry| mark_joined(reg, &uuid, kb_id, &db_path);
+            // On failure the join itself still happened (the store exists), so
+            // keep it in memory — but only until the registry is next reloaded
+            // from disk (the registry watcher, any other KB update) or MAE
+            // restarts. Say exactly that where the user sees it.
+            if let Err(e) = self.kb_registry_update(&dir, mark) {
+                mark(&mut self.kb.registry);
+                let msg = format!(
+                    "joined KB '{kb_id}' NOT saved — lost at next registry reload or restart: {e}"
+                );
+                self.message_log
+                    .push(crate::messages::MessageLevel::Error, "kb-sync", msg);
             }
-            self.kb.registry = registry;
-            self.kb.last_local_registry_write = Some(std::time::Instant::now());
         }
         self.kb.rebuild_query_layer();
         tracing::debug!(target: "kb_sync", kb_id = %kb_id, uuid = %uuid, node_count = nodes.len(), merged = merged.len(), "join: registered first-class instance (reconciled)");
@@ -746,5 +737,29 @@ impl Editor {
                 tracing::warn!(node_id = %id, error = %e, "KB store delete failed");
             }
         }
+    }
+}
+
+/// Stamp `uuid` as a joined, shared instance of collab KB `kb_id` (ADR-019's
+/// durable marker), adding its registry row if it has none yet.
+fn mark_joined(
+    reg: &mut mae_kb::federation::KbRegistry,
+    uuid: &str,
+    kb_id: &str,
+    db_path: &std::path::Path,
+) {
+    let now = mae_kb::data_dir::chrono_now_iso();
+    match reg.find_mut(uuid) {
+        Some(inst) => {
+            inst.shared = true;
+            inst.collab_id = Some(kb_id.to_string());
+            inst.last_sync = Some(now);
+        }
+        None => reg.instances.push(mae_kb::federation::KbInstance::joined(
+            uuid.to_string(),
+            kb_id,
+            db_path.to_path_buf(),
+            now,
+        )),
     }
 }

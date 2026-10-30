@@ -124,36 +124,36 @@ impl CozoKbStore {
 }
 
 impl KbStore for CozoKbStore {
+    /// Write a node and everything derived from its body — its outgoing typed
+    /// links (ADR-030) and its `#+TRANSCLUDE:` members (ADR-065 item 4) — as
+    /// ONE transaction.
+    ///
+    /// These used to be separate scripts, each its own transaction. Two writers
+    /// on one SQLite file (the editor and the daemon do exactly this) could then
+    /// interleave them and leave a node whose stored links came from another
+    /// writer's version of its body (`tests/atomicity_tests.rs`). A failure part
+    /// way through likewise left the node row updated with stale links.
     fn insert_node(&self, node: &Node) -> Result<(), KbStoreError> {
-        self.run_mut_params(Self::NODE_PUT_SCRIPT, self.node_put_params(node)?)
-            .map_err(cozo_err)?;
-        self.update_links_for_node(node)?;
-        // ADR-065 item 4: same write-path-independence fix as the typed-link
-        // call above, for the sibling `#+TRANSCLUDE:` directive — see
-        // `update_meta_members_for_node`'s doc comment.
-        self.update_meta_members_for_node(node)?;
-        Ok(())
+        self.write_node_atomically(node)
     }
 
     fn update_node(&self, node: &Node) -> Result<(), KbStoreError> {
         self.insert_node(node)
     }
 
+    /// Remove a node and everything derived from its body (its outgoing links
+    /// and its `#+TRANSCLUDE` members) in ONE transaction — the mirror of
+    /// `write_node_atomically`. These were two scripts, and members were never
+    /// removed at all.
     fn delete_node(&self, id: &str) -> Result<(), KbStoreError> {
-        // Use :rm (not :delete) — :rm removes entire rows, :delete only clears values
-        self.run_mut_params(
-            "?[id] <- [[$id]]\n:rm nodes {id}",
-            btree_params([("id", dv_str(id))]),
-        )
-        .map_err(cozo_err)?;
-
-        // Remove links from this node
-        self.run_mut_params(
-            "?[src, dst, rel_type] := src = $id, *links{src, dst, rel_type}\n:rm links {src, dst, rel_type}",
-            btree_params([("id", dv_str(id))]),
-        )
-        .map_err(cozo_err)?;
-
+        // `:rm` (not `:delete`): `:rm` removes whole rows.
+        let script = format!(
+            "{{ ?[id] <- [[$id]]\n:rm nodes {{id}} }}\n{{ {} }}\n{{ {} }}",
+            Self::LINKS_FROM_RM_SCRIPT,
+            Self::META_MEMBERS_RM_SCRIPT,
+        );
+        self.run_mut_params(&script, btree_params([("id", dv_str(id))]))
+            .map_err(cozo_err)?;
         Ok(())
     }
 

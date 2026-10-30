@@ -88,20 +88,16 @@ pub(super) fn handle_kb_share_id_conflict(editor: &mut Editor, kb_id: String, de
 
     let reminted = match editor.mae_data_dir() {
         Some(dir) => {
-            let (registry, id, saved) = mae_kb::federation::KbRegistry::update(&dir, |reg| {
-                reg.remint_unconfirmed_collab_id(&target)
-            });
-            if let Err(e) = saved {
-                error!(kb = %kb_id, error = %e, "failed to persist re-minted KB collab id");
-                editor.set_status(format!(
-                    "Share refused for '{kb_id}' and the new id \
-                                           could not be saved: {e}"
-                ));
-                return;
+            match editor.kb_registry_update(&dir, |reg| reg.remint_unconfirmed_collab_id(&target)) {
+                Ok(id) => id,
+                Err(e) => {
+                    error!(kb = %kb_id, error = %e, "failed to persist re-minted KB collab id");
+                    editor.set_status(format!(
+                        "Share refused for '{kb_id}'; new id not saved: {e}"
+                    ));
+                    return;
+                }
             }
-            editor.kb.registry = registry;
-            editor.kb.last_local_registry_write = Some(std::time::Instant::now());
-            id
         }
         None => editor.kb.registry.remint_unconfirmed_collab_id(&target),
     };

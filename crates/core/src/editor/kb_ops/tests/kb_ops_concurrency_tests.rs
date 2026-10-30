@@ -268,7 +268,7 @@ fn external_registry_change_adopts_new_instance() {
     // "Another process" registers a KB directly against the same data dir
     // — this editor's in-memory registry never saw it.
     let org_dir = tempfile::tempdir().unwrap();
-    let (_, uuid, saved) = mae_kb::federation::KbRegistry::update(data_dir.path(), |reg| {
+    let (_, uuid) = mae_kb::federation::KbRegistry::update(data_dir.path(), |reg| {
         reg.register(
             "External".to_string(),
             org_dir.path().to_path_buf(),
@@ -276,8 +276,8 @@ fn external_registry_change_adopts_new_instance() {
             None,
         )
         .expect("'External' is not a reserved system-KB name")
-    });
-    saved.unwrap();
+    })
+    .unwrap();
 
     // Poll: the external change must get adopted (notify is async).
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
@@ -317,7 +317,7 @@ fn registry_watch_reload_suppressed_within_local_write_cooldown() {
     editor.kb.last_local_registry_write = Some(std::time::Instant::now());
 
     let org_dir = tempfile::tempdir().unwrap();
-    let (_, uuid, saved) = mae_kb::federation::KbRegistry::update(data_dir.path(), |reg| {
+    let (_, uuid) = mae_kb::federation::KbRegistry::update(data_dir.path(), |reg| {
         reg.register(
             "External".to_string(),
             org_dir.path().to_path_buf(),
@@ -325,8 +325,8 @@ fn registry_watch_reload_suppressed_within_local_write_cooldown() {
             None,
         )
         .expect("'External' is not a reserved system-KB name")
-    });
-    saved.unwrap();
+    })
+    .unwrap();
 
     for _ in 0..20 {
         editor.drain_kb_registry_watch();

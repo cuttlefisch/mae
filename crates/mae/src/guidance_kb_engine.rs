@@ -151,13 +151,18 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
 /// Classification is [`mae_kb::system_kb::classify_reserved_row`] — keyed on
 /// the row's *shape*, deliberately not on `KbInstanceKind`. See that function
 /// for why `kind` cannot be trusted here.
-pub fn evict_system_rows_from_registry(data_dir: &Path) -> (Vec<String>, Vec<String>) {
+///
+/// `Err` (a sentence completing "KB registry …") means nothing was evicted
+/// and nothing was saved — an unreadable registry is never replaced at startup.
+pub fn evict_system_rows_from_registry(
+    data_dir: &Path,
+) -> Result<(Vec<String>, Vec<String>), String> {
     use mae_kb::system_kb::{classify_reserved_row, ReservedRow};
 
     let mut removed = Vec::new();
     let mut kept = Vec::new();
 
-    let (_registry, (), saved) = mae_kb::federation::KbRegistry::update(data_dir, |reg| {
+    let evicted = mae_kb::federation::KbRegistry::update(data_dir, |reg| {
         removed.clear();
         kept.clear();
         reg.instances.retain(|inst| {
@@ -175,9 +180,7 @@ pub fn evict_system_rows_from_registry(data_dir: &Path) -> (Vec<String>, Vec<Str
             }
         });
     });
-    if let Err(e) = saved {
-        tracing::warn!(error = %e, "failed to persist registry after system-KB eviction");
-    }
+    evicted.map_err(|e| format!("KB registry {e}"))?;
 
     for name in &removed {
         tracing::info!(kb = %name, "removed MAE-provisioned system KB row from kb-registry.toml");
@@ -190,5 +193,5 @@ pub fn evict_system_rows_from_registry(data_dir: &Path) -> (Vec<String>, Vec<Str
              name and point `ai_guidance_kb` at it."
         );
     }
-    (removed, kept)
+    Ok((removed, kept))
 }
