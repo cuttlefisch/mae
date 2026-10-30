@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.129] - 2026-10-30
+
+
+
+
+### Bug Fixes
+
+- *(deps)* Clear the October RustSec advisories in both workspaces ([3090fc0](https://github.com/cuttlefisch/mae/commit/3090fc03bddbee4465085f11919bb00cc28dda7b))
+
 ## [0.14.128] - 2026-09-30
 
 
@@ -10,6 +19,10 @@ All notable changes to this project will be documented in this file.
 ### Features
 
 - *(daemon)* `mae-daemon backup create|restore|verify` for a whole instance ([e57e185](https://github.com/cuttlefisch/mae/commit/e57e1854f4afd9c8074a469b6c623f25cbfa5cd3))
+
+### Miscellaneous
+
+- Bump version to 0.14.128 ([6dea743](https://github.com/cuttlefisch/mae/commit/6dea7430eaaba7fea4bb707a0fcf6cce7e5c989e))
 
 ## [0.14.127] - 2026-09-30
 
