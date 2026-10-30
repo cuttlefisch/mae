@@ -43,11 +43,12 @@ ignore = [
     # (decryption/signing). The daemon is an OAuth *resource server*: `oauth.rs`
     # only ever calls `decode` with `Algorithm::RS256`, a public-key verification,
     # and it holds no RSA private key. Self-issued tokens sign with
-    # `Algorithm::EdDSA` (`oauth_self_issue.rs`), not RSA. So the vulnerable code
-    # path is linked but unreachable. Pulled in by jsonwebtoken 10.x, which has no
-    # RSA-free build. Re-evaluate immediately if the daemon ever gains an RSA
-    # signing or decryption path.
-    { id = "RUSTSEC-2023-0071", reason = "rsa via jsonwebtoken; daemon only VERIFIES RS256 (public key) and signs EdDSA — no private-key RSA op exists, so the Marvin sidechannel is unreachable" },
+    # `Algorithm::EdDSA` (`oauth_self_issue.rs`), not RSA. Since jsonwebtoken moved
+    # to its `aws_lc_rs` backend (RUSTSEC-2026-0387, Oct 2026) the `rsa` crate is no
+    # longer linked into any shipped binary at all; it remains only as a daemon
+    # dev-dependency that generates test keys. Re-evaluate immediately if `rsa`
+    # ever returns as a normal dependency.
+    { id = "RUSTSEC-2023-0071", reason = "rsa is a mae-daemon DEV-dependency only (generates test RSA keys for the RS256 tests); no shipped binary links it since jsonwebtoken moved to its aws_lc_rs backend" },
     # paste: build-time proc-macro, unmaintained with no upstream fix.
     # iroh → netwatch → netdev → netlink-packet-core → paste (Linux netlink only).
     { id = "RUSTSEC-2024-0436", reason = "iroh transitive build-time proc-macro, no upstream fix" },

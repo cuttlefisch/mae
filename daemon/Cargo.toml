@@ -69,7 +69,12 @@ data-encoding = "2"
 # evaluated choice over the third-party `rmcp-server-kit` wrapper (see the
 # ADR's "Alternatives rejected"). `jsonwebtoken` itself is the widely-used,
 # well-established Keats crate, not a new/unproven dependency.
-jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "rust_crypto"] }
+# Backend `aws_lc_rs`, not `rust_crypto`: the RustCrypto backend links p256/p384
+# (elliptic-curve 0.13 -> crypto-bigint 0.5), which carry RUSTSEC-2026-0387 with no
+# 0.5.x fix. The daemon only signs/verifies EdDSA and verifies RS256, but
+# removing the code beats arguing it is unreachable. aws-lc-rs is already in this
+# binary through rustls/iroh/reqwest, so this adds no new native build dependency.
+jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "aws_lc_rs"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "logging"] }
 tokio-rustls = "0.26"
