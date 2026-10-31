@@ -154,6 +154,13 @@ const FAMILIES: &[Family] = &[
     ("<1 run", |n| "<1".repeat(n), 30_000),
     ("[1 run", |n| "[1".repeat(n), 30_000),
     ("unclosed timestamps", |n| "<2026-01-01 a ".repeat(n), 5_000),
+    // Repeater candidates sharing one far `>` after a long digit run (review
+    // finding: each candidate rescanned the run backwards, x30-x60).
+    (
+        "repeater candidates, one far >",
+        |n| format!("{} {}d>", "<1-1-1".repeat(n), "9".repeat(6 * n)),
+        3_000,
+    ),
     ("[fn: unclosed", |n| "[fn:a: ".repeat(n), 10_000),
     ("src_x[ unclosed", |n| "src_x[a ".repeat(n), 10_000),
     ("call_x( unclosed", |n| "call_x(a ".repeat(n), 10_000),

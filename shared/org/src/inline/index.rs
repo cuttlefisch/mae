@@ -104,6 +104,10 @@ pub(crate) struct InlineIndex {
     needles: [Vec<usize>; NEEDLES],
     /// Per bracket kind, every matched pair, sorted by opening position.
     pairs: [Vec<Pair>; 3],
+    /// For the `k`th `>`: how many ASCII digits end just before the char
+    /// that precedes it (the `[0-9]+` of a repeater's `+[0-9]+[dwmy]>`).
+    /// Runs before distinct `>`s are disjoint, so this is one pass.
+    gt_digits: Vec<u32>,
 }
 
 /// The closer's post set: `(any space ?- ?. ?, ?\; ?: ?! ?? ?' ?\" ?\) ?\} ?\\ ?\[)`.
@@ -182,8 +186,20 @@ impl InlineIndex {
             double_close,
             needles: Default::default(),
             pairs: Default::default(),
+            gt_digits: Vec::new(),
         };
         ix.index_bytes(text, src.eol);
+        ix.gt_digits = ix.needles[Needle::Gt.slot()]
+            .iter()
+            .map(|&g| {
+                let run = text.as_bytes()[..g.saturating_sub(1)]
+                    .iter()
+                    .rev()
+                    .take_while(|c| c.is_ascii_digit())
+                    .count();
+                u32::try_from(run).unwrap_or(u32::MAX)
+            })
+            .collect();
         ix.index_cite_keys(text);
         ix
     }
@@ -260,6 +276,15 @@ impl InlineIndex {
         k.checked_sub(1)
             .map(|k| v[k])
             .filter(|&p| p >= from && p + n.len() <= before)
+    }
+
+    /// How many ASCII digits end at `gt - 1`, where `gt` holds a `>`: the run
+    /// just before the char that precedes the `>`.
+    pub fn digits_before_gt_unit(&self, gt: usize) -> usize {
+        let v = &self.needles[Needle::Gt.slot()];
+        v.binary_search(&gt)
+            .ok()
+            .map_or(0, |k| self.gt_digits[k] as usize)
     }
 
     /// The bracket opening at `open`, if it is closed by `end` (`scan-lists`

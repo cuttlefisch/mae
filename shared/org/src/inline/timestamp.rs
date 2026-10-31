@@ -97,14 +97,15 @@ fn repeater(cx: &InlineCx, i: usize, end: usize) -> bool {
     {
         return false;
     }
-    let run = b[third..gt - 1]
-        .iter()
-        .rev()
-        .take_while(|c| c.is_ascii_digit())
-        .count();
+    // The run is indexed once per `>`: rescanning it per candidate is
+    // quadratic when many candidates share one far `>`. A run that reaches
+    // back before `third` fails the bound below, as the rescan's did.
+    let run = cx.ix.digits_before_gt_unit(gt);
     // The digits start at `first`; the `+` before them must leave the third
     // number one digit and the lazy middle one char: `+` at `third + 2` or later.
-    let first = gt - 1 - run;
+    let Some(first) = (gt - 1).checked_sub(run) else {
+        return false;
+    };
     run > 0 && first >= third + 3 && b[first - 1] == b'+'
 }
 
