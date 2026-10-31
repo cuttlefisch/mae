@@ -157,7 +157,7 @@ code's NILP case, which the Rust side does not model)."
 
 (defun gct--rust-category-list (name doc lst)
   (concat (format "/// `%s`: %s\n" (replace-regexp-in-string "_" "-" (downcase name)) doc)
-          (format "pub(crate) const %s: &[(Option<char>, Option<char>)] = &[\n" name)
+          (format "#[rustfmt::skip]\npub(crate) const %s: &[(Option<char>, Option<char>)] = &[\n" name)
           (mapconcat (lambda (p)
                        (format "    (%s, %s),\n"
                                (if (car p) (format "Some('%c')" (car p)) "None")

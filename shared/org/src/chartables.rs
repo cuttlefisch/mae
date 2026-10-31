@@ -944,6 +944,7 @@ pub(crate) const SCRIPTS: &[(u32, u32, u16)] = &[
 ];
 
 /// `word-combining-categories`: between chars of different scripts, a pair here means no boundary.
+#[rustfmt::skip]
 pub(crate) const WORD_COMBINING_CATEGORIES: &[(Option<char>, Option<char>)] = &[
     (None, Some('^')),
     (Some('^'), None),
@@ -952,8 +953,10 @@ pub(crate) const WORD_COMBINING_CATEGORIES: &[(Option<char>, Option<char>)] = &[
 ];
 
 /// `word-separating-categories`: between chars of one script, a pair here means a boundary.
-pub(crate) const WORD_SEPARATING_CATEGORIES: &[(Option<char>, Option<char>)] =
-    &[(Some('H'), Some('K'))];
+#[rustfmt::skip]
+pub(crate) const WORD_SEPARATING_CATEGORIES: &[(Option<char>, Option<char>)] = &[
+    (Some('H'), Some('K')),
+];
 
 /// For each category the two lists name, the chars that have it.
 pub(crate) const CATEGORIES: &[(char, &[(u32, u32)])] = &[
