@@ -17,6 +17,12 @@ Second line \\ not a break here
 
 After a blank line
 #+end_verse
+#+begin_verse
+   
+last line ends in a break \\
+#+end_verse
+
+
 * Code
 #+CAPTION: A caption with =code=
 #+begin_src emacs-lisp :results silent

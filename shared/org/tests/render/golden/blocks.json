@@ -162,6 +162,37 @@
             },
             "tagName": "p",
             "type": "element"
+          },
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "   "
+              },
+              {
+                "children": [],
+                "properties": {},
+                "tagName": "br",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": "\nlast line ends in a break "
+              },
+              {
+                "children": [],
+                "properties": {},
+                "tagName": "br",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-verse"
+              ]
+            },
+            "tagName": "p",
+            "type": "element"
           }
         ],
         "properties": {

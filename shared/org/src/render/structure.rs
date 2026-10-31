@@ -273,9 +273,21 @@ impl Builder<'_> {
     pub fn verse(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
         let parts: Vec<_> = n
             .children_with_tokens()
-            .filter(|e| !matches!(e.kind(), BLOCK_BEGIN | BLOCK_END | AFFILIATED_KEYWORD))
+            .filter(|e| {
+                // The blank lines after the closing line are the block's
+                // post-blank, not verse.
+                !matches!(
+                    e.kind(),
+                    BLOCK_BEGIN | BLOCK_END | AFFILIATED_KEYWORD | BLANK_LINE
+                )
+            })
             .collect();
-        let last_newline = parts.iter().rposition(|e| e.kind() == NEWLINE);
+        // The verse's own final line ending is not a break; one before
+        // more content is.
+        let last_newline = parts
+            .last()
+            .filter(|e| e.kind() == NEWLINE)
+            .map(|_| parts.len() - 1);
         let mut inner = Vec::new();
         let mut at_bol = true;
         for (i, part) in parts.into_iter().enumerate() {
@@ -297,6 +309,7 @@ impl Builder<'_> {
                 }
             }
         }
+        trim_text(&mut inner);
         let p = Element::new(Tag::P).class("org-verse").with(inner);
         push(out, p.into());
     }
