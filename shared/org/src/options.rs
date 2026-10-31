@@ -80,14 +80,30 @@ pub struct ParseOptions {
     pub max_depth: usize,
     /// Registered link types (`org-link-types`): they decide which
     /// `type:path` text is a plain or angle link, and a bracket link's type.
-    /// Declared data (ADR-112 D4); the default is what `emacs -Q` registers,
-    /// the conformance oracle's set. `id` is NOT in it: `[[id:x]]` is then a
-    /// fuzzy link to Org, though `classify_link` still reads it as a KB link.
+    /// Declared data (ADR-112 D4); the default is what `emacs -Q` registers
+    /// once an Org buffer exists, the conformance oracle's set ([`DEFAULT_LINK_TYPES`]).
     pub link_types: Vec<String>,
 }
 
-/// `(org-link-types)` in `emacs -Q` with Org 9.7.11.
-pub const DEFAULT_LINK_TYPES: [&str; 11] = [
+/// `(org-link-types)` in `emacs -Q` with Org 9.7.11 once `org-mode` has run
+/// in some buffer, which is when the oracle parses: the first `org-mode` call
+/// loads `org-modules` (`ol-info`, `ol-doi`, …) and registers `id` too, so
+/// `id:`, `info:` and `doi:` text is a plain link to Org. Measured with
+/// `(with-temp-buffer (org-mode)) (org-link-types)`; before that call the list
+/// is the last eleven only. In Emacs's order.
+pub const DEFAULT_LINK_TYPES: [&str; 23] = [
+    "id",
+    "eww",
+    "rmail",
+    "mhe",
+    "irc",
+    "info",
+    "gnus",
+    "docview",
+    "bibtex",
+    "bbdb",
+    "w3m",
+    "doi",
     "file+sys",
     "file+emacs",
     "shell",

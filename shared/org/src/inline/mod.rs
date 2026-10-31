@@ -10,17 +10,23 @@
 //! makes is a lookup in [`InlineIndex`], so hostile text cannot make the
 //! search quadratic the way it does in Emacs.
 
+mod babel;
+mod cite;
 mod emphasis;
 mod index;
+mod latex;
+mod lex;
 mod link;
 mod objects;
+pub(crate) mod radio;
+mod script;
+mod timestamp;
 
 pub(crate) use index::InlineIndex;
 
-use crate::chars::{is_space, is_word};
 use crate::kind::SyntaxKind::{self, *};
 use crate::span::{ContentsTable, Span};
-use crate::text::Source;
+use crate::text::{LineEnding, Source};
 use crate::tokens::Event;
 
 /// A set of object kinds allowed in a container (`org-element-object-restrictions`).
@@ -131,20 +137,68 @@ impl Restriction {
     }
 }
 
-/// An object found at a position: its extent and how to cut it into tokens.
-/// `head` covers `[begin, contents.0)` (or `[begin, end)` when there are no
-/// contents), `tail` covers `[contents.1, end)`; both list `(kind, start, end)`.
+/// One piece of an object, in order: a token, or a region parsed as the
+/// objects of a container of the given kind (an object's contents, or a
+/// citation's prefix and suffix, which Org parses but keeps outside them).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Part {
+    Tok(SyntaxKind, usize, usize),
+    Objects(usize, usize, SyntaxKind),
+}
+
+/// An object found at a position: its extent, its contents range as Org
+/// reports it (possibly empty, as in `[fn::]`), and its parts, which tile
+/// `[begin, end)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Obj {
     pub kind: SyntaxKind,
     pub begin: usize,
     pub end: usize,
     pub contents: Option<(usize, usize)>,
-    pub head: Vec<(SyntaxKind, usize, usize)>,
-    pub tail: Vec<(SyntaxKind, usize, usize)>,
+    pub parts: Vec<Part>,
 }
 
 impl Obj {
+    /// An object with no contents; add its parts with [`Obj::tok`].
+    pub fn new(kind: SyntaxKind, begin: usize, end: usize) -> Obj {
+        Obj {
+            kind,
+            begin,
+            end,
+            contents: None,
+            parts: Vec::new(),
+        }
+    }
+
+    /// Appends a token (empty ones are dropped).
+    pub fn tok(mut self, kind: SyntaxKind, a: usize, b: usize) -> Obj {
+        if a < b {
+            self.parts.push(Part::Tok(kind, a, b));
+        }
+        self
+    }
+
+    /// Appends a region parsed as the objects of a `container`.
+    pub fn objects(mut self, a: usize, b: usize, container: SyntaxKind) -> Obj {
+        if a < b {
+            self.parts.push(Part::Objects(a, b, container));
+        }
+        self
+    }
+
+    /// Appends the object's own contents (recorded even when empty).
+    pub fn contents(mut self, a: usize, b: usize) -> Obj {
+        self.contents = Some((a, b));
+        let kind = self.kind;
+        self.objects(a, b, kind)
+    }
+
+    /// The post-blank `[a, end)` as a final `WHITESPACE` token.
+    pub fn blank(self, a: usize) -> Obj {
+        let end = self.end;
+        self.tok(WHITESPACE, a, end)
+    }
+
     /// An object whose text between `value` bounds is opaque, delimited by
     /// markup, followed by post-blank up to `end`.
     pub fn opaque(
@@ -154,21 +208,11 @@ impl Obj {
         value_end: usize,
         end: usize,
     ) -> Obj {
-        let mut head = vec![
-            (MARKUP, begin, value.0),
-            (TEXT, value.0, value.1),
-            (MARKUP, value.1, value_end),
-        ];
-        head.push((WHITESPACE, value_end, end));
-        head.retain(|t| t.1 < t.2);
-        Obj {
-            kind,
-            begin,
-            end,
-            contents: None,
-            head,
-            tail: Vec::new(),
-        }
+        Obj::new(kind, begin, end)
+            .tok(MARKUP, begin, value.0)
+            .tok(TEXT, value.0, value.1)
+            .tok(MARKUP, value.1, value_end)
+            .blank(value_end)
     }
 
     /// An object with parsed contents between `open` and `close` markup.
@@ -179,29 +223,23 @@ impl Obj {
         value_end: usize,
         end: usize,
     ) -> Obj {
-        let head = vec![(MARKUP, begin, contents.0)];
-        let mut tail = vec![
-            (MARKUP, contents.1, value_end),
-            (WHITESPACE, value_end, end),
-        ];
-        tail.retain(|t| t.1 < t.2);
-        Obj {
-            kind,
-            begin,
-            end,
-            contents: (contents.0 < contents.1).then_some(contents),
-            head,
-            tail,
-        }
+        Obj::new(kind, begin, end)
+            .tok(MARKUP, begin, contents.0)
+            .contents(contents.0, contents.1)
+            .tok(MARKUP, contents.1, value_end)
+            .blank(value_end)
     }
 }
 
 /// Document-wide inputs to inline parsing.
+#[derive(Clone, Copy)]
 pub(crate) struct InlineCx<'a> {
     pub src: &'a Source<'a>,
     pub ix: &'a InlineIndex,
     /// Registered link types (`org-link-types`), longest first.
     pub link_types: &'a [String],
+    /// The document's radio targets (`org-target-link-regexp`), if any.
+    pub radio: Option<&'a radio::Radio>,
 }
 
 impl InlineCx<'_> {
@@ -220,12 +258,62 @@ impl InlineCx<'_> {
             .flatten()
     }
 
+    /// Length of the line ending starting at `i` (0 if there is none).
+    pub fn eol_len(&self, i: usize) -> usize {
+        let b = self.bytes();
+        match (self.src.eol, b.get(i)) {
+            (LineEnding::Lf, Some(b'\n')) | (LineEnding::Cr, Some(b'\r')) => 1,
+            (LineEnding::CrLf, Some(b'\n')) => 1,
+            (LineEnding::CrLf, Some(b'\r')) if b.get(i + 1) == Some(&b'\n') => 2,
+            _ => 0,
+        }
+    }
+
+    /// The char at `i` as Emacs's buffer holds it — a line ending is one
+    /// `\n` — or `None` at or past `end`.
+    pub fn ch(&self, i: usize, end: usize) -> Option<char> {
+        if i >= end {
+            None
+        } else if self.eol_len(i) > 0 {
+            Some('\n')
+        } else {
+            self.char_at(i)
+        }
+    }
+
+    /// Where the char at `i` (as [`InlineCx::ch`] reads it) ends.
+    pub fn step(&self, i: usize) -> usize {
+        match self.eol_len(i) {
+            0 => i + self.char_at(i).map_or(1, char::len_utf8),
+            n => i + n,
+        }
+    }
+
+    /// The char before `i` as Emacs's buffer holds it, `None` at `floor`.
+    pub fn ch_before(&self, i: usize, floor: usize) -> Option<char> {
+        if i <= floor {
+            return None;
+        }
+        let b = self.bytes();
+        let eol = match self.src.eol {
+            LineEnding::Cr => b[i - 1] == b'\r',
+            _ => b[i - 1] == b'\n',
+        };
+        if eol {
+            Some('\n')
+        } else {
+            self.char_before(i, floor)
+        }
+    }
+
+    /// `$` at `i` in a region ending at `end`: a line end or the region's end.
+    pub fn at_eol(&self, i: usize, end: usize) -> bool {
+        i >= end || self.eol_len(i) > 0
+    }
+
     /// `(bolp)` within a region starting at `floor`.
     pub fn at_bol(&self, i: usize, floor: usize) -> bool {
-        i == floor
-            || self.bytes().get(i.wrapping_sub(1)) == Some(&b'\n')
-            || (self.src.eol == crate::text::LineEnding::Cr
-                && self.bytes().get(i.wrapping_sub(1)) == Some(&b'\r'))
+        i == floor || self.ch_before(i, floor) == Some('\n')
     }
 
     /// End of the line containing `i`, not past `end` (`line-end-position`).
@@ -243,20 +331,56 @@ impl InlineCx<'_> {
         }
         q
     }
+
+    /// Does the region text at `i` start with ASCII `lit`, ignoring ASCII
+    /// case (`case-fold-search`; no non-ASCII char folds to ASCII)?
+    pub fn starts_ci(&self, i: usize, end: usize, lit: &str) -> bool {
+        let r = self.bytes().get(i..end).unwrap_or_default();
+        r.len() >= lit.len() && r[..lit.len()].eq_ignore_ascii_case(lit.as_bytes())
+    }
+
+    /// Does the region text at `i` start with `lit` exactly?
+    pub fn starts(&self, i: usize, end: usize, lit: &str) -> bool {
+        self.bytes()
+            .get(i..end)
+            .is_some_and(|r| r.starts_with(lit.as_bytes()))
+    }
 }
 
-struct Frame {
-    end: usize,
-    restriction: Restriction,
-    cursor: usize,
-    /// Tokens to emit after the contents, then a `Finish`; `None` for the root.
-    tail: Option<Vec<(SyntaxKind, usize, usize)>>,
+pub(crate) struct Frame {
+    pub end: usize,
+    pub restriction: Restriction,
+    pub cursor: usize,
     /// Where the region starts (for `bolp`).
-    floor: usize,
+    pub floor: usize,
+    /// The rest of the object this region belongs to, emitted when the
+    /// region is done; `None` for the root.
+    rest: Option<std::vec::IntoIter<Part>>,
+    pub radio: radio::Cursor,
+}
+
+impl Frame {
+    fn new(
+        beg: usize,
+        end: usize,
+        container: SyntaxKind,
+        rest: Option<std::vec::IntoIter<Part>>,
+    ) -> Frame {
+        Frame {
+            end,
+            restriction: Restriction::for_container(container),
+            cursor: beg,
+            floor: beg,
+            rest,
+            radio: radio::Cursor::default(),
+        }
+    }
 }
 
 /// Parses `[beg, end)` as the contents of a `container`, appending events.
-/// `budget` is how many more nesting levels may be opened.
+/// `budget` is how many levels of objects may be opened: deeper regions are
+/// plain text, so the tree stays within the nesting cap however deeply the
+/// input nests, and the parse never recurses.
 pub(crate) fn parse(
     cx: &InlineCx,
     beg: usize,
@@ -266,24 +390,26 @@ pub(crate) fn parse(
     out: &mut Vec<Event>,
     contents: &mut ContentsTable,
 ) {
-    let root = Frame {
-        end,
-        restriction: Restriction::for_container(container),
-        cursor: beg,
-        tail: None,
-        floor: beg,
+    // A CAPTION value sits inside its keyword line node, one level deeper
+    // than a title or a tag inside their element.
+    let budget = match container {
+        AFFILIATED_VALUE => budget.saturating_sub(1),
+        _ => budget,
     };
-    let mut stack = vec![root];
-    while let Some(top) = stack.last_mut() {
-        let found = if top.cursor < top.end {
-            next_object(cx, top.cursor, top.end, top.floor, top.restriction)
+    let mut stack = vec![Frame::new(beg, end, container, None)];
+    loop {
+        // Objects at this depth would pass the nesting cap: plain text.
+        let room = stack.len() <= budget;
+        let Some(top) = stack.last_mut() else { break };
+        let found = if top.cursor < top.end && room {
+            lex::next_object(cx, top)
         } else {
             None
         };
         let Some(obj) = found else {
             text_run(cx.src, top.cursor, top.end, out);
-            if let Some(f) = stack.pop() {
-                close(f, out);
+            if let Some(rest) = stack.pop().and_then(|f| f.rest) {
+                emit_parts(cx, rest, &mut stack, out);
             }
             continue;
         };
@@ -293,55 +419,33 @@ pub(crate) fn parse(
             contents.push(obj.kind, obj.begin, obj.end, Span::new(a, b));
         }
         out.push(Event::Start(obj.kind));
-        tokens(cx.src, &obj.head, out);
-        match obj.contents {
-            Some((a, b)) if stack.len() <= budget => {
-                let restriction = Restriction::for_container(obj.kind);
-                stack.push(Frame {
-                    end: b,
-                    restriction,
-                    cursor: a,
-                    tail: Some(obj.tail),
-                    floor: a,
-                });
-            }
-            Some((a, b)) => {
-                out.push(Event::Token(OPAQUE, a, b));
-                tokens(cx.src, &obj.tail, out);
-                out.push(Event::Finish);
-            }
-            None => {
-                tokens(cx.src, &obj.tail, out);
-                out.push(Event::Finish);
+        emit_parts(cx, obj.parts.into_iter(), &mut stack, out);
+    }
+}
+
+/// Emits an object's parts until one is a region to parse: that region is
+/// pushed as a frame holding the remaining parts. When the parts run out, the
+/// object is finished.
+fn emit_parts(
+    cx: &InlineCx,
+    mut parts: std::vec::IntoIter<Part>,
+    stack: &mut Vec<Frame>,
+    out: &mut Vec<Event>,
+) {
+    while let Some(p) = parts.next() {
+        match p {
+            Part::Tok(k, a, b) => token(cx.src, k, a, b, out),
+            Part::Objects(a, b, container) => {
+                stack.push(Frame::new(a, b, container, Some(parts)));
+                return;
             }
         }
     }
+    out.push(Event::Finish);
 }
 
-fn close(f: Frame, out: &mut Vec<Event>) {
-    if let Some(tail) = f.tail {
-        let _ = f.end;
-        out.extend(
-            tail.iter()
-                .filter(|t| t.1 < t.2)
-                .map(|&(k, a, b)| Event::Token(k, a, b)),
-        );
-        out.push(Event::Finish);
-    }
-}
-
-fn tokens(src: &Source, parts: &[(SyntaxKind, usize, usize)], out: &mut Vec<Event>) {
-    for &(k, a, b) in parts.iter().filter(|t| t.1 < t.2) {
-        if k == TEXT {
-            text_run(src, a, b, out);
-        } else {
-            out.push(Event::Token(k, a, b));
-        }
-    }
-}
-
-/// Plain text `[a, b)`: `TEXT` per line, `NEWLINE` for line endings.
-pub(crate) fn text_run(src: &Source, a: usize, b: usize, out: &mut Vec<Event>) {
+/// A token `[a, b)` of `kind`, cut at line endings like plain text.
+fn token(src: &Source, kind: SyntaxKind, a: usize, b: usize, out: &mut Vec<Event>) {
     let mut pos = a;
     while pos < b {
         let Some(&l) = src.lines.get(src.line_of(pos)) else {
@@ -349,212 +453,21 @@ pub(crate) fn text_run(src: &Source, a: usize, b: usize, out: &mut Vec<Event>) {
         };
         let content_end = l.end.clamp(pos, b);
         if pos < content_end {
-            out.push(Event::Token(TEXT, pos, content_end));
+            out.push(Event::Token(kind, pos, content_end));
         }
         let next = l.next.min(b).max(content_end);
         if content_end < next {
             out.push(Event::Token(NEWLINE, content_end, next));
         }
         if next <= pos {
-            out.push(Event::Token(TEXT, pos, b));
+            out.push(Event::Token(kind, pos, b));
             break;
         }
         pos = next;
     }
 }
 
-/// `org-element--object-lex`: the first object at or after `from`.
-fn next_object(
-    cx: &InlineCx,
-    from: usize,
-    end: usize,
-    floor: usize,
-    r: Restriction,
-) -> Option<Obj> {
-    if r.allows(TABLE_CELL) {
-        return objects::table_cell(cx, from, end);
-    }
-    if r.allows(CITATION_REFERENCE) {
-        return objects::citation_reference(cx, from, end);
-    }
-    let b = cx.bytes();
-    let mut i = from;
-    while i < end {
-        if is_candidate(cx, i, end, floor) {
-            if let Some(o) = dispatch(cx, i, end, floor, r) {
-                return Some(o);
-            }
-        }
-        i += utf8_len(b[i]);
-    }
-    None
-}
-
-fn utf8_len(b: u8) -> usize {
-    match b {
-        0x00..=0x7f => 1,
-        0xc0..=0xdf => 2,
-        0xe0..=0xef => 3,
-        _ => 4,
-    }
-}
-
-/// Does `org-element--object-regexp` match at `i`?
-fn is_candidate(cx: &InlineCx, i: usize, end: usize, floor: usize) -> bool {
-    let b = cx.bytes();
-    let next = |k: usize| if i + k < end { Some(b[i + k]) } else { None };
-    let next_char = || if i + 1 < end { cx.char_at(i + 1) } else { None };
-    match b[i] {
-        b'_' | b'^'
-            if next_char().is_some_and(|c| "-{(*+.,".contains(c) || crate::chars::is_alnum(c)) =>
-        {
-            true
-        }
-        b'*' | b'~' | b'=' | b'+' | b'_' | b'/' if next_char().is_some_and(|c| !is_space(c)) => {
-            true
-        }
-        b'[' => matches!(next(1), Some(b'[' | b'0'..=b'9')) || bracket_candidate(cx, i, end),
-        b'@' => next(1) == Some(b'@'),
-        b'{' => next(1) == Some(b'{') && next(2) == Some(b'{'),
-        b'<' => {
-            matches!(next(1), Some(b'%' | b'<' | b'0'..=b'9'))
-                && (next(1) != Some(b'%') || next(2) == Some(b'%'))
-                || link::type_at(cx, i + 1, end).is_some()
-        }
-        b'$' => true,
-        b'\\' => backslash_candidate(cx, i, end),
-        b'c' | b'C' | b's' | b'S' => {
-            babel_candidate(cx, i, end) || plain_link_candidate(cx, i, end, floor)
-        }
-        _ => plain_link_candidate(cx, i, end, floor),
-    }
-}
-
-fn bracket_candidate(cx: &InlineCx, i: usize, end: usize) -> bool {
-    let r = &cx.src.text[i + 1..end];
-    let starts_ci =
-        |p: &str| r.len() >= p.len() && r.as_bytes()[..p.len()].eq_ignore_ascii_case(p.as_bytes());
-    if starts_ci("cite:") || starts_ci("cite/") || starts_ci("fn:") || r.starts_with("%]") {
-        return true;
-    }
-    // `/[0-9]*]`
-    r.strip_prefix('/').is_some_and(|s| {
-        s.trim_start_matches(|c: char| c.is_ascii_digit())
-            .starts_with(']')
-    })
-}
-
-fn backslash_candidate(cx: &InlineCx, i: usize, end: usize) -> bool {
-    let b = cx.bytes();
-    let Some(&c) = b.get(i + 1).filter(|_| i + 1 < end) else {
-        return false;
-    };
-    if c.is_ascii_alphabetic() || c == b'[' || c == b'(' {
-        return true;
-    }
-    if c == b'\\' {
-        // `\\\\[ \t]*$`: only blanks up to the end of the line.
-        let le = cx.line_end(i, end);
-        return cx.src.text[i + 2..le]
-            .bytes()
-            .all(|x| x == b' ' || x == b'\t');
-    }
-    // `\_ +`
-    c == b'_' && b.get(i + 2) == Some(&b' ') && i + 2 < end
-}
-
-fn babel_candidate(cx: &InlineCx, i: usize, end: usize) -> bool {
-    let r = &cx.src.text[i..end];
-    let starts_ci =
-        |p: &str| r.len() >= p.len() && r.as_bytes()[..p.len()].eq_ignore_ascii_case(p.as_bytes());
-    starts_ci("call_") || starts_ci("src_")
-}
-
-/// `\<TYPE:` — a word start followed by a registered link type and a colon.
-fn plain_link_candidate(cx: &InlineCx, i: usize, end: usize, floor: usize) -> bool {
-    let word_start =
-        cx.char_at(i).is_some_and(is_word) && !cx.char_before(i, floor).is_some_and(is_word);
-    word_start && link::type_at(cx, i, end).is_some()
-}
-
-/// The parsers tried at a candidate, in `org-element--object-lex`'s order.
-fn dispatch(cx: &InlineCx, i: usize, end: usize, floor: usize, r: Restriction) -> Option<Obj> {
-    let try_ = |k: SyntaxKind, f: &dyn Fn() -> Option<Obj>| if r.allows(k) { f() } else { None };
-    if babel_candidate(cx, i, end) {
-        let lower = cx.bytes()[i].to_ascii_lowercase();
-        return if lower == b'c' {
-            try_(INLINE_BABEL_CALL, &|| {
-                objects::inline_babel_call(cx, i, end)
-            })
-        } else {
-            try_(INLINE_SRC_BLOCK, &|| objects::inline_src_block(cx, i, end))
-        };
-    }
-    let b = cx.bytes();
-    let second = b.get(i + 1).copied().filter(|_| i + 1 < end);
-    match b[i] {
-        b'^' => try_(SUPERSCRIPT, &|| objects::superscript(cx, i, end, floor)),
-        b'_' => try_(UNDERLINE, &|| {
-            emphasis::emphasis(cx, i, end, floor, UNDERLINE)
-        })
-        .or_else(|| try_(SUBSCRIPT, &|| objects::subscript(cx, i, end, floor))),
-        b'*' => try_(BOLD, &|| emphasis::emphasis(cx, i, end, floor, BOLD)),
-        b'/' => try_(ITALIC, &|| emphasis::emphasis(cx, i, end, floor, ITALIC)),
-        b'~' => try_(CODE, &|| emphasis::emphasis(cx, i, end, floor, CODE)),
-        b'=' => try_(VERBATIM, &|| {
-            emphasis::emphasis(cx, i, end, floor, VERBATIM)
-        }),
-        b'+' => try_(STRIKE_THROUGH, &|| {
-            emphasis::emphasis(cx, i, end, floor, STRIKE_THROUGH)
-        }),
-        b'@' => try_(EXPORT_SNIPPET, &|| objects::export_snippet(cx, i, end)),
-        b'{' => try_(MACRO, &|| objects::macro_(cx, i, end)),
-        b'$' => try_(LATEX_FRAGMENT, &|| {
-            objects::latex_fragment(cx, i, end, floor)
-        }),
-        b'<' if second == Some(b'<') => try_(RADIO_TARGET, &|| objects::radio_target(cx, i, end))
-            .or_else(|| try_(TARGET, &|| objects::target(cx, i, end))),
-        b'<' => try_(TIMESTAMP, &|| objects::timestamp(cx, i, end))
-            .or_else(|| try_(LINK, &|| link::link(cx, i, end, floor))),
-        b'\\' if second == Some(b'\\') => try_(LINE_BREAK, &|| objects::line_break(cx, i, end)),
-        b'\\' => try_(ENTITY, &|| objects::entity(cx, i, end)).or_else(|| {
-            try_(LATEX_FRAGMENT, &|| {
-                objects::latex_fragment(cx, i, end, floor)
-            })
-        }),
-        b'[' => bracket_dispatch(cx, i, end, floor, r, second),
-        _ => try_(LINK, &|| link::link(cx, i, end, floor)),
-    }
-}
-
-/// `pcase` on the char after `[`: each branch is guarded by the
-/// restriction, and a failed guard falls through to the default branch.
-fn bracket_dispatch(
-    cx: &InlineCx,
-    i: usize,
-    end: usize,
-    floor: usize,
-    r: Restriction,
-    second: Option<u8>,
-) -> Option<Obj> {
-    match second {
-        Some(b'[') if r.allows(LINK) => link::link(cx, i, end, floor),
-        Some(b'f') if r.allows(FOOTNOTE_REFERENCE) => objects::footnote_reference(cx, i, end),
-        Some(b'c') if r.allows(CITATION) => objects::citation(cx, i, end),
-        Some(b'%' | b'/') if r.allows(STATISTICS_COOKIE) => objects::statistics_cookie(cx, i, end),
-        _ => {
-            let ts = if r.allows(TIMESTAMP) {
-                objects::timestamp(cx, i, end)
-            } else {
-                None
-            };
-            ts.or_else(|| {
-                if r.allows(STATISTICS_COOKIE) {
-                    objects::statistics_cookie(cx, i, end)
-                } else {
-                    None
-                }
-            })
-        }
-    }
+/// Plain text `[a, b)`: `TEXT` per line, `NEWLINE` for line endings.
+pub(crate) fn text_run(src: &Source, a: usize, b: usize, out: &mut Vec<Event>) {
+    token(src, TEXT, a, b, out);
 }

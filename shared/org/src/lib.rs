@@ -38,6 +38,7 @@ mod chars;
 mod chartables;
 mod diagnostic;
 mod element;
+mod entities;
 mod green;
 mod headline;
 mod index;
@@ -134,13 +135,14 @@ fn parse_with(src: text::Source, options: &ParseOptions, start: builder::Start) 
     let declared = !built.in_file_todo.is_empty();
     let todo =
         options::TodoKeywords::resolve(declared, &built.in_file_todo, &options.todo_sequences);
-    let ix = inline::InlineIndex::build(text);
+    let ix = inline::InlineIndex::build(&src);
     let mut link_types = options.link_types.clone();
     link_types.sort_by_key(|t| std::cmp::Reverse(t.len()));
     let cx = inline::InlineCx {
         src: &src,
         ix: &ix,
         link_types: &link_types,
+        radio: None,
     };
     let mut contents = built.contents;
     let green = green::to_green(&cx, &built.events, &todo, &mut contents);

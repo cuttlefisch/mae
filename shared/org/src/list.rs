@@ -291,7 +291,8 @@ fn tag_split(s: &str) -> Option<(usize, usize)> {
         let after = at + 2;
         let after_ok = after == s.len() || matches!(b[after], b' ' | b'\t');
         if before_ws && after_ok {
-            let tag_end = s[..at].trim_end_matches([' ', '\t']).len();
+            // `(.*)` is greedy: only the last blank before `::` is outside the tag.
+            let tag_end = at - 1;
             return Some((tag_end, after + ws_len(&s[after..])));
         }
         k = at;

@@ -6,7 +6,7 @@
 //! (a no-break space is whitespace to Emacs, so a property key containing
 //! one is not a property; a ß and ẞ fold together, SS does not).
 
-use crate::chartables::{ALNUM, CANON, WHITESPACE, WORD};
+use crate::chartables::{ALNUM, ALPHA, CANON, DELIM, LINEBREAK, WHITESPACE, WORD};
 
 fn in_ranges(table: &[(u32, u32)], c: char) -> bool {
     let c = c as u32;
@@ -27,6 +27,21 @@ pub(crate) fn is_word(c: char) -> bool {
 /// Emacs `[[:alnum:]]`.
 pub(crate) fn is_alnum(c: char) -> bool {
     in_ranges(ALNUM, c)
+}
+
+/// Emacs `[[:alpha:]]` (rx `letter`).
+pub(crate) fn is_alpha(c: char) -> bool {
+    in_ranges(ALPHA, c)
+}
+
+/// Punctuation, paren or string-quote syntax: `\s.`, `\s(`, `\s)`, `\s"`.
+pub(crate) fn is_delim(c: char) -> bool {
+    in_ranges(DELIM, c)
+}
+
+/// Category `|` (`\c|`): characters a line may break after.
+pub(crate) fn is_linebreak(c: char) -> bool {
+    in_ranges(LINEBREAK, c)
 }
 
 /// The char `c` folds to under `case-fold-search`: two chars match iff
@@ -52,7 +67,7 @@ mod tests {
 
     #[test]
     fn tables_are_sorted_and_disjoint() {
-        for t in [WHITESPACE, WORD, ALNUM] {
+        for t in [WHITESPACE, WORD, ALNUM, DELIM, ALPHA, LINEBREAK] {
             assert!(
                 t.windows(2).all(|w| w[0].1 < w[1].0),
                 "ranges overlap or are unsorted"
@@ -98,5 +113,15 @@ mod tests {
         assert_ne!(canon('\u{17f}'), canon('s'));
         assert_ne!(canon('\u{131}'), canon('i'));
         assert_eq!(canon('S'), 's');
+        // Syntax delimiters: `"` is string syntax, `(` and `]` parens, `,` and
+        // `«` punctuation; `'` and `$` are WORD syntax in Org, so not delimiters.
+        for c in ['"', '(', ']', ',', '\u{ab}', ':'] {
+            assert!(is_delim(c), "{c:?}");
+        }
+        for c in ['\'', '$', 'a', ' ', '\u{a0}'] {
+            assert!(!is_delim(c), "{c:?}");
+        }
+        assert!(is_alpha('\u{e9}') && is_alpha('\u{301}') && !is_alpha('1') && !is_alpha('_'));
+        assert!(is_linebreak('\u{4e2d}') && !is_linebreak('a'));
     }
 }

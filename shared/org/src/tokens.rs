@@ -181,7 +181,9 @@ pub(crate) fn keyword_line(em: &mut Emitter, start: usize, end: usize, affiliate
         let rest = &s[key_end + 1..];
         let lead = rest.len() - rest.trim_start_matches(is_trim).len();
         c.to(WHITESPACE, key_end + 1 + lead);
-        if parsed {
+        // A CAPTION value node sits two levels inside its element (in the
+        // keyword line node): past the nesting cap it stays a plain value.
+        if parsed && c.em.budget > 0 {
             // `org-element-parsed-keywords`: CAPTION values hold objects.
             c.objects(AFFILIATED_VALUE, s.trim_end_matches(is_trim).len());
         } else {

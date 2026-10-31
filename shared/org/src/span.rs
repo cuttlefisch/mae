@@ -62,6 +62,14 @@ impl ContentsTable {
         self.rows.push((s.start, s.end, kind as u16, contents));
     }
 
+    /// The contents of every node of `kind`, in the order they were pushed.
+    pub fn spans_of(&self, kind: SyntaxKind) -> impl Iterator<Item = Span> + '_ {
+        self.rows
+            .iter()
+            .filter(move |r| r.2 == kind as u16)
+            .map(|r| r.3)
+    }
+
     pub fn finish(&mut self) {
         self.rows.sort_unstable_by_key(|r| (r.0, r.1, r.2));
     }

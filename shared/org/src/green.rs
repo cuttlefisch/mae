@@ -2,7 +2,7 @@
 //! document's TODO keywords are known, and inline objects are parsed here.
 
 use crate::headline;
-use crate::inline::{self, InlineCx};
+use crate::inline::{self, radio::Radio, InlineCx};
 use crate::kind::{OrgLanguage, SyntaxKind};
 use crate::options::TodoKeywords;
 use crate::span::ContentsTable;
@@ -15,7 +15,32 @@ pub(crate) fn to_green(
     todo: &TodoKeywords,
     contents: &mut ContentsTable,
 ) -> GreenNode {
+    // Radio targets are found with no radio links active, as Org finds them
+    // when the buffer is set up; then every container is parsed with them.
+    let radio = Radio::find(cx, |cx, table| {
+        expand(cx, events, todo, table, &mut |_| {});
+    });
+    let cx = &InlineCx {
+        radio: radio.as_ref(),
+        ..*cx
+    };
     let mut b = GreenNodeBuilder::new();
+    let text = cx.src.text;
+    expand(cx, events, todo, contents, &mut |ev| {
+        simple(&mut b, text, ev)
+    });
+    b.finish()
+}
+
+/// The events with every headline line cut and every object container
+/// parsed, handed to `sink` in order.
+fn expand(
+    cx: &InlineCx,
+    events: &[Event],
+    todo: &TodoKeywords,
+    contents: &mut ContentsTable,
+    sink: &mut dyn FnMut(&Event),
+) {
     let text = cx.src.text;
     let mut objects = Vec::new();
     for ev in events {
@@ -35,21 +60,20 @@ pub(crate) fn to_green(
                             contents,
                         );
                         objects.push(Event::Finish);
-                        objects.iter().for_each(|o| simple(&mut b, text, o));
+                        objects.iter().for_each(&mut *sink);
                     } else {
-                        simple(&mut b, text, &Event::Token(k, s + a, s + z));
+                        sink(&Event::Token(k, s + a, s + z));
                     }
                 }
             }
             Event::Inline(s, e, container, budget) => {
                 objects.clear();
                 inline::parse(cx, s, e, container, budget, &mut objects, contents);
-                objects.iter().for_each(|o| simple(&mut b, text, o));
+                objects.iter().for_each(&mut *sink);
             }
-            ref other => simple(&mut b, text, other),
+            ref other => sink(other),
         }
     }
-    b.finish()
 }
 
 fn simple(b: &mut GreenNodeBuilder, text: &str, ev: &Event) {

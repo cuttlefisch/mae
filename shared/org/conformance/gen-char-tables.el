@@ -14,6 +14,11 @@
 ;;   WHITESPACE  chars matching "\\s-"          (`\S-' in Org's regexps)
 ;;   WORD        chars matching "\\w"           (`[[:word:]]', rx `word')
 ;;   ALNUM       chars matching "[[:alnum:]]"   (headline tags)
+;;   DELIM       chars matching "\\s.\\|\\s(\\|\\s)\\|\\s\""  (punctuation,
+;;               paren or string-quote syntax: what may follow a `$...$'
+;;               LaTeX fragment)
+;;   ALPHA       chars matching "[[:alpha:]]"   (rx `letter': entities)
+;;   LINEBREAK   chars of category `|' ("\\c|", line breakable: radio links)
 ;;   CANON       char -> canonical char, from the case table's canonicalize
 ;;               slot: under `case-fold-search' two chars match iff their
 ;;               canonical chars are equal (verified against `string-match').
@@ -81,9 +86,12 @@
            (ws (gct--ranges (gct--matches "\\s-")))
            (word (gct--ranges (gct--matches "\\w")))
            (alnum (gct--ranges (gct--matches "[[:alnum:]]")))
-           (pairs (gct--canon-pairs canon)))
+           (pairs (gct--canon-pairs canon))
+           (delim (gct--ranges (gct--matches "\\s.\\|\\s(\\|\\s)\\|\\s\"")))
+           (alpha (gct--ranges (gct--matches "[[:alpha:]]")))
+           (linebreak (gct--ranges (gct--matches "\\c|"))))
       (gct--check-facts canon)
-      (list ws word alnum pairs))))
+      (list ws word alnum pairs delim alpha linebreak))))
 
 (defun gct--write-rust (file tables)
   (with-temp-file file
@@ -94,7 +102,10 @@
             (gct--rust-pairs "WHITESPACE" "Chars with whitespace syntax (`\\s-`)." (nth 0 tables)) "\n"
             (gct--rust-pairs "WORD" "Chars with word syntax (`\\w`)." (nth 1 tables)) "\n"
             (gct--rust-pairs "ALNUM" "Chars matching `[[:alnum:]]`." (nth 2 tables)) "\n"
-            (gct--rust-pairs "CANON" "(char, canonical char) wherever they differ." (nth 3 tables)))))
+            (gct--rust-pairs "CANON" "(char, canonical char) wherever they differ." (nth 3 tables)) "\n"
+            (gct--rust-pairs "DELIM" "Chars with punctuation, paren or string-quote syntax (`\\s.`, `\\s(`, `\\s)`, `\\s\"`)." (nth 4 tables)) "\n"
+            (gct--rust-pairs "ALPHA" "Chars matching `[[:alpha:]]` (rx `letter`)." (nth 5 tables)) "\n"
+            (gct--rust-pairs "LINEBREAK" "Chars of category `|` (`\\c|`, line breakable)." (nth 6 tables)))))
 
 ;;;; Per-class fixtures: a deterministic sample at every range boundary.
 

@@ -363,6 +363,11 @@ fn check_node(node: &mae_org::SyntaxNode) -> Result<(), String> {
     check_parent(node)
 }
 
+/// Objects (inline) are numbered from 2000.
+pub fn is_object(kind: SyntaxKind) -> bool {
+    kind as u16 >= 2000
+}
+
 /// Where each element kind may appear.
 fn check_parent(node: &mae_org::SyntaxNode) -> Result<(), String> {
     let kind = node.kind();
@@ -378,6 +383,19 @@ fn check_parent(node: &mae_org::SyntaxNode) -> Result<(), String> {
         BLOCK_BEGIN | BLOCK_END | AFFILIATED_KEYWORD => {
             parent.is_some_and(|p| p != DOCUMENT && p != SECTION)
         }
+        HEADLINE_TITLE => parent == Some(HEADLINE),
+        ITEM_TAG_CONTENT => parent == Some(ITEM),
+        AFFILIATED_VALUE => parent == Some(AFFILIATED_KEYWORD),
+        TABLE_CELL => parent == Some(TABLE_ROW),
+        CITATION_REFERENCE => parent == Some(CITATION),
+        // Any other object sits in an object container or another object.
+        k if is_object(k) => parent.is_some_and(|p| {
+            is_object(p)
+                || matches!(
+                    p,
+                    PARAGRAPH | VERSE_BLOCK | HEADLINE_TITLE | ITEM_TAG_CONTENT | AFFILIATED_VALUE
+                )
+        }),
         _ => !matches!(
             parent,
             None | Some(HEADLINE | PARAGRAPH | PLAIN_LIST | TABLE | PROPERTY_DRAWER)
