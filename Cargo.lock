@@ -3302,6 +3302,7 @@ dependencies = [
 name = "mae-org"
 version = "0.14.131"
 dependencies = [
+ "mae-kb",
  "proptest",
  "rowan",
  "serde_json",

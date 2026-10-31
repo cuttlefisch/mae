@@ -103,7 +103,7 @@ impl Link {
 
     /// The text from the first `LINK_PATH` token to the last, line endings
     /// read as `\n` (as Emacs's buffer holds them).
-    fn path_text(&self) -> String {
+    pub(crate) fn path_text(&self) -> String {
         let mut out = String::new();
         let mut pending = String::new();
         let mut started = false;
@@ -255,7 +255,8 @@ fn typed<S: AsRef<str>>(
 /// `[[PATH]]`: unescaped, newlines (with surrounding blanks) as one space,
 /// then a file, a registered type, a coderef, a custom id or fuzzy.
 fn bracket_info<S: AsRef<str>>(raw: &str, link_types: &[S], abbrevs: &LinkAbbrevs) -> LinkInfo {
-    let raw_link = abbrevs.expand(&unescape(&strip_breaks(raw, " ")));
+    // One normaliser for link paths (principle #8): the link grammar's.
+    let raw_link = abbrevs.expand(&crate::link_grammar::normalize_path(raw));
     let format = LinkFormat::Bracket;
     let absolute = raw_link.starts_with('/') || raw_link == "~" || raw_link.starts_with("~/");
     if absolute || raw_link.starts_with("./") || raw_link.starts_with("../") {
@@ -297,28 +298,6 @@ fn strip_breaks(s: &str, with: &str) -> String {
         rest = rest[k + 1..].trim_start_matches([' ', '\t']);
     }
     out.push_str(rest);
-    out
-}
-
-/// `org-link-unescape`: each run of backslashes before a bracket or the end
-/// of the string is halved.
-fn unescape(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = String::with_capacity(s.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] != b'\\' {
-            let c = s[i..].chars().next().unwrap_or('\0');
-            out.push(c);
-            i += c.len_utf8().max(1);
-            continue;
-        }
-        let n = b[i..].iter().take_while(|&&c| c == b'\\').count();
-        let at_bracket = matches!(b.get(i + n), None | Some(b'[' | b']'));
-        let keep = if at_bracket { n / 2 } else { n };
-        out.extend(std::iter::repeat_n('\\', keep));
-        i += n;
-    }
     out
 }
 

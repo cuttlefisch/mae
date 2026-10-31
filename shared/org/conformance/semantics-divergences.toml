@@ -1,0 +1,207 @@
+# Intended differences between mae-org's semantics() and mae-kb's org parser
+# (parse_org_multi_result), the projection it replaces (ADR-112 D2, D5).
+#
+# tests/semantics_differential.rs gives every difference a CLASS by a
+# mechanical check (see its classify_* functions), then requires an entry
+# here for it. It fails on a difference no entry covers, on an entry that
+# covers nothing, and on an entry whose pinning test does not exist.
+#
+# Fields: what   = node | title | tags | kind | aliases | properties | todo |
+#                  priority | link | transclusion
+#         class  = the classifier's class, or "unclassified" (then name the
+#                  file and a detail: a class-wide entry must explain WHY by
+#                  a mechanical check, not by listing)
+#         file   = repo-relative path; a trailing * makes it a prefix
+#         detail = optional substring of the difference's text
+#         reason, test = why it is intended, and the test that pins mae-org
+
+# ---------------------------------------------------------------- whole corpus
+
+[[divergence]]
+what = "properties"
+class = "property_key_case"
+file = "*"
+reason = "Property keys are canonical (Emacs case folding, ASCII shown upper case: Property::key); mae-kb lower-cased them. Same equivalence, different spelling; the key as written stays in the tree."
+test = "property_keys_are_canonical_and_repeats_resolve_like_org"
+
+[[divergence]]
+what = "title"
+class = "title_plain_text"
+file = "*"
+reason = "Titles are plain text: emphasis delimiters dropped, a link reads as its description or path. mae-kb kept the raw markup. The bundled manual's scheme-star-*.org titles (`Scheme: *buffer-count*`) are bold in Org, so they read `Scheme: buffer-count`: the corpus should write =*buffer-count*= (open question in the O2 report)."
+test = "titles_are_plain_text"
+
+[[divergence]]
+what = "link"
+class = "plain_link"
+file = "*"
+reason = "A plain link (`type:path` in prose, no brackets) is a link in Org, and Org registers `id` (org-modules), so prose such as `id:`-prefixed in two DevPractices notes is an id link to `-prefixed`; mae-kb read bracket links only. Org's reading is canonical; the corpus should write =id:= there (open question in the O2 report)."
+test = "plain_id_links_are_links"
+
+[[divergence]]
+what = "transclusion"
+class = "verbatim_block"
+file = "*"
+reason = "A #+TRANSCLUDE line inside an example or src block is example text, not a directive; mae-kb scanned every line of the file."
+test = "verbatim_text_holds_no_links_or_directives"
+
+# ---------------------------------------------------------------- synthetic fixtures (tests/semantics/)
+
+[[divergence]]
+what = "link"
+class = "verbatim_block"
+file = "shared/org/tests/semantics/unrendered.org"
+reason = "A link in a fixed-width line is verbatim text in Org; mae-kb's code-range scan only knew src/example/export blocks."
+test = "verbatim_text_holds_no_links_or_directives"
+
+[[divergence]]
+what = "node"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/*"
+reason = "An id only in an unrendered region (comment block or line, COMMENT or noexport subtree, a drawer Org does not read as properties) is not a node, only a diagnostic (D2, consumer note a). mae-kb read every :PROPERTIES: line it found."
+test = "unrendered_regions_yield_only_diagnostics"
+
+[[divergence]]
+what = "link"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/unrendered.org"
+reason = "A link in an unrendered region is no edge, only a diagnostic (D2)."
+test = "unrendered_regions_yield_only_diagnostics"
+
+[[divergence]]
+what = "link"
+class = "ancestor_double_count"
+file = "shared/org/tests/semantics/*"
+reason = "A link belongs to the innermost node only. mae-kb's headline body ran to the next headline of the same level, so a child's links were also its parent's."
+test = "a_link_belongs_to_the_innermost_node_only"
+
+[[divergence]]
+what = "link"
+class = "file_link_dedup"
+file = "shared/org/tests/semantics/parent-child-links.org"
+reason = "The file's own link is the file's even when a headline links the same target. mae-kb scanned the whole file for the file node, then dropped every file edge whose target a headline also had."
+test = "a_link_belongs_to_the_innermost_node_only"
+
+[[divergence]]
+what = "transclusion"
+class = "innermost_node"
+file = "shared/org/tests/semantics/transclusions.org"
+reason = "A #+TRANSCLUDE under a headline node belongs to that node; mae-kb gave every directive in the file to the file node."
+test = "a_link_belongs_to_the_innermost_node_only"
+
+[[divergence]]
+what = "transclusion"
+class = "keyword_case"
+file = "shared/org/tests/semantics/transclusions.org"
+reason = "Org keywords are case-insensitive (#+Transclude:); mae-kb matched only TRANSCLUDE and transclude."
+test = "transclude_keywords_are_case_insensitive"
+
+[[divergence]]
+what = "transclusion"
+class = "verbatim_block"
+file = "shared/org/tests/semantics/transclusions.org"
+reason = "A #+TRANSCLUDE line inside an example block is example text."
+test = "verbatim_text_holds_no_links_or_directives"
+
+[[divergence]]
+what = "link"
+class = "source_not_a_node"
+file = "shared/org/tests/semantics/*"
+reason = "When mae-kb's source is not a node in Org's reading (an indented-star line, a drawer after a blank line), the link belongs to the node around it."
+test = "indented_stars_are_never_headlines"
+
+[[divergence]]
+what = "link"
+class = "duplicate_id"
+file = "shared/org/tests/semantics/duplicates.org"
+reason = "A repeated id is a diagnostic, not a second node; its content belongs to the node around it."
+test = "duplicate_ids_are_diagnosed_and_not_nodes"
+
+[[divergence]]
+what = "link"
+class = "external_classifier"
+file = "shared/org/tests/semantics/external-links.org"
+reason = "help:, file+sys: and file+emacs: are Org link types that can never be node ids; mae-kb's exclude list lacked them."
+test = "external_classifier_is_an_exclude_list"
+
+[[divergence]]
+what = "link"
+class = "keyword_value"
+file = "shared/org/tests/semantics/titles.org"
+reason = "A keyword value (#+title) is not a link source; mae-kb's whole-file scan read links anywhere, keyword lines included."
+test = "keyword_values_are_not_link_sources"
+
+[[divergence]]
+what = "title"
+class = "title_plain_text"
+file = "shared/org/tests/semantics/titles.org"
+reason = "Plain-text titles, and the last #+title wins (as in mae-kb)."
+test = "titles_are_plain_text"
+
+[[divergence]]
+what = "title"
+class = "in_file_todo"
+file = "shared/org/tests/semantics/todo-in-file.org"
+reason = "TODO keywords are declared data (D4): an in-file #+TODO replaces the configured ones, as in Org. mae-kb hard-coded six keywords."
+test = "todo_keywords_are_declared_data"
+
+[[divergence]]
+what = "todo"
+class = "in_file_todo"
+file = "shared/org/tests/semantics/todo-in-file.org"
+reason = "As above: OPEN is a keyword in this file, NEXT is not."
+test = "todo_keywords_are_declared_data"
+
+[[divergence]]
+what = "priority"
+class = "in_file_todo"
+file = "shared/org/tests/semantics/todo-in-file.org"
+reason = "As above: mae-kb did not see the keyword, so it did not reach the priority cookie after it."
+test = "todo_keywords_are_declared_data"
+
+[[divergence]]
+what = "link"
+class = "unclassified"
+file = "shared/org/tests/semantics/indented-stars.org"
+detail = "sem-indented-text"
+reason = "mae-kb read `  * x` and `  ** y` as nested headlines, so `y`'s link was counted for both; in Org neither is a headline and the link is the file's (paired with one of the two by source_not_a_node)."
+test = "indented_stars_are_never_headlines"
+
+[[divergence]]
+what = "tags"
+class = "unclassified"
+file = "shared/org/tests/semantics/file-tags.org"
+reason = "#+tags declares the allowed tag set, not file tags (mae-kb read it as file tags); a tag is listed once even when a headline repeats a file tag."
+test = "filetags_split_like_org_and_tags_appear_once"
+
+[[divergence]]
+what = "properties"
+class = "unclassified"
+file = "shared/org/tests/semantics/properties.org"
+detail = "sem-props-heading"
+reason = "KEY+ appends to KEY and an empty value is kept, as in Org; mae-kb stored `multi+` as its own key and dropped empty values. (Key case as everywhere.)"
+test = "property_keys_are_canonical_and_repeats_resolve_like_org"
+
+[[divergence]]
+what = "link"
+class = "unclassified"
+file = "shared/org/tests/semantics/split-orders.org"
+detail = "sem-split-a"
+reason = "In [[a|b][c]] the tree's path is `a|b` and the store form's `|` ends the target: `a`. mae-kb took `a|b`, an id that can never exist."
+test = "the_three_old_split_orders_and_the_chosen_one"
+
+[[divergence]]
+what = "node"
+class = "unclassified"
+file = "shared/org/tests/semantics/zeroth-section-drawers.org"
+detail = "sem-zeroth-file"
+reason = "Only the zeroth section's leading property drawer is the file's. mae-kb's header scan read every PROPERTIES drawer before the first headline, so a list item's drawer replaced the file's id and the file node vanished."
+test = "only_the_leading_property_drawer_is_the_files"
+
+[[divergence]]
+what = "title"
+class = "unclassified"
+file = "shared/org/tests/semantics/zeroth-section-drawers.org"
+detail = "sem-zeroth-item"
+reason = "As above: mae-kb gave the item the file's title."
+test = "only_the_leading_property_drawer_is_the_files"

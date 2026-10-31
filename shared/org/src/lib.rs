@@ -46,10 +46,12 @@ mod index;
 mod inline;
 mod kind;
 mod leaf;
+mod link_grammar;
 mod list;
 mod options;
 mod paragraph;
 mod scan;
+mod semantics;
 mod span;
 mod text;
 mod tokens;
@@ -60,6 +62,7 @@ mod views;
 pub use chartables::EMACS_VERSION as CHAR_TABLES_EMACS_VERSION;
 pub use diagnostic::{Diagnostic, DiagnosticKind};
 pub use kind::{OrgLanguage, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
+pub use link_grammar::{classify_link, LinkClass, LinkKind, DEFAULT_REL, OTHER_SCHEMES};
 pub use options::{
     ParseOptions, TodoSequence, DEFAULT_LINK_TYPES, DEFAULT_MAX_DEPTH, MAX_DEPTH_CEILING,
 };
@@ -68,6 +71,10 @@ pub use options::{
 /// (diagnostics, contents) use [`Span`] instead, so a JSON/WASM consumer never
 /// needs rowan.
 pub use rowan;
+pub use semantics::{
+    semantics, semantics_with, NodeOrigin, Region, SemanticDiagnostic, SemanticLink, SemanticNode,
+    Semantics, SemanticsOptions, Transclusion,
+};
 pub use span::Span;
 pub use text::LineEnding;
 pub use views::{

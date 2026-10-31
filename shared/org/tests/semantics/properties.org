@@ -1,0 +1,20 @@
+:PROPERTIES:
+:ID: sem-props-file
+:Last-Accessed: 2026-10-31
+:KIND: concept
+:ALIASES: first, second ,, third
+:END:
+#+title: Property keys, repeats and appends
+
+* Heading with every property shape
+:PROPERTIES:
+:ID: sem-props-heading
+:custom_key: lower
+:Custom_Key: last wins
+:MULTI: one
+:MULTI+: two
+:EMPTY:
+:KIND: task
+:ALIASES: alias-a, alias-b
+:END:
+Body.

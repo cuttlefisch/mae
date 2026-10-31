@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc bd836eed0e7f216169b50de5f2142bf5d38efa10196e2bdfca175ddd8c64053b # shrinks to raw = "|"
+cc f0464ca5a8a22b5de756553eb207fc013da54d2420b6191c8330bc02d081dadb # shrinks to raw = "|#"
+cc 54342e771426cabd579b8847392a9f5d6a980665a6f5e978b72b77e8c2a71505 # shrinks to id = "k-", frag = None, pairs = [("w", "0"), ("w", "NaN")]
+cc 5027ac3d78782224065a5e5738b6f4ec88fe98b6bfc9e1a551d6691d2b4cb630 # shrinks to id = "k-", frag = None, pairs = [("w", "NaN")]
+cc a844a059dae0c4f47cb8dbcd334b767b4b860e3f364b986d0d562c40af10d28d # shrinks to id = "k-", frag = None, pairs = [("rel", "")]

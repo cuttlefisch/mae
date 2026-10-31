@@ -48,7 +48,38 @@ pub fn bundled_corpus() -> Vec<PathBuf> {
     let root = repo_root();
     let mut v = org_files(&root.join("assets"));
     v.extend(org_files(&root.join("tests")));
+    // Only files git tracks: `tests/fixtures/kb/collabtest/*-instance.org` is
+    // gitignored and written by `:kb-register`, so a walk alone would make
+    // the corpus (and every count) differ between machines.
+    let ignored = git_ignored(&root, &v);
+    v.retain(|p| !ignored.contains(p));
     v
+}
+
+/// The paths among `files` that git ignores (none when git is unavailable:
+/// a source tarball has no ignored files to leak).
+fn git_ignored(root: &Path, files: &[PathBuf]) -> Vec<PathBuf> {
+    use std::io::Write;
+    let child = std::process::Command::new("git")
+        .args(["check-ignore", "--stdin"])
+        .current_dir(root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn();
+    let Ok(mut child) = child else {
+        return Vec::new();
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let list: String = files.iter().map(|f| format!("{}\n", f.display())).collect();
+        let _ = stdin.write_all(list.as_bytes());
+    }
+    let Ok(out) = child.wait_with_output() else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(PathBuf::from)
+        .collect()
 }
 
 /// The synthetic adversarial fixtures of this crate.

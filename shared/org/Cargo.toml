@@ -16,3 +16,9 @@ rowan = "0.17"
 proptest = "1"
 # Reads the Emacs goldens (JSON lines) in the conformance test only.
 serde_json = "1"
+# The semantics differential (tests/semantics_differential.rs) compares
+# `semantics()` with mae-kb's org parser, the projection it replaces. A
+# dev-dependency only: mae-org itself stays rowan-only (ADR-112 D1). Once
+# mae-kb depends on mae-org (O4) this edge would be a cycle, so the
+# differential moves into mae-kb then.
+mae-kb = { path = "../kb" }

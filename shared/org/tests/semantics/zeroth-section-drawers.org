@@ -1,0 +1,13 @@
+:PROPERTIES:
+:ID: sem-zeroth-file
+:END:
+#+title: A drawer later in the zeroth section
+
+mae-kb's header scan read every PROPERTIES drawer before the first headline,
+so this item's id replaced the file's.
+
+- An item in the zeroth section
+  :PROPERTIES:
+  :ID: sem-zeroth-item
+  :END:
+  Item body [[id:sem-zeroth-item-link]].

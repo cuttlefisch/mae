@@ -1,0 +1,15 @@
+:PROPERTIES:
+:ID: sem-todo-file
+:END:
+#+title: In-file TODO keywords
+#+TODO: OPEN | CLOSED
+
+* OPEN [#B] A task with an in-file keyword
+:PROPERTIES:
+:ID: sem-todo-open
+:END:
+
+* NEXT A keyword the file does not declare
+:PROPERTIES:
+:ID: sem-todo-next
+:END:

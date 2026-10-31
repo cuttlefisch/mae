@@ -1,0 +1,12 @@
+:PROPERTIES:
+:ID: sem-tags-file
+:END:
+#+title: File tags
+#+filetags: :alpha:beta: gamma
+#+filetags: :delta:
+#+tags: declared-tag-set not-filetags
+
+* Heading repeating a file tag :beta:own:
+:PROPERTIES:
+:ID: sem-tags-heading
+:END:

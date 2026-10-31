@@ -148,7 +148,7 @@ impl Property {
 /// Folding maps ASCII letters to lower case and never maps anything else to
 /// ASCII (checked when the tables are generated), so upper-casing the ASCII
 /// afterwards keeps that equivalence and reads naturally (`ID`, `CUSTOM_ID`).
-fn canonical_key(written: &str) -> String {
+pub(crate) fn canonical_key(written: &str) -> String {
     crate::chars::fold(written).to_ascii_uppercase()
 }
 

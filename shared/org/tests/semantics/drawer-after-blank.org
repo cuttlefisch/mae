@@ -1,0 +1,11 @@
+:PROPERTIES:
+:ID: sem-blank-file
+:END:
+#+title: A property drawer after a blank line
+
+* Heading whose drawer Org does not read
+
+:PROPERTIES:
+:ID: sem-blank-heading
+:END:
+Text with [[id:sem-blank-target]].
