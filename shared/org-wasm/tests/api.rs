@@ -78,4 +78,5 @@ fn bad_requests_are_error_responses() {
     assert!(err(5, "{}").contains("path"));
     assert!(err(99, "{}").contains("unknown operation"));
     assert!(err(1, "[]").contains("object"));
+    assert!(err(1, r##"{"parse": {"todo": "TODO DONE"}}"##).contains("parse.todo"));
 }

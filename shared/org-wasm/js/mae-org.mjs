@@ -31,23 +31,33 @@ export function instantiate(bytes) {
 export class MaeOrg {
   constructor(instance) {
     this.exports = instance.exports;
+    this.broken = null;
   }
 
   /** Runs operation `op` on a request string; returns the response string. */
   callRaw(op, request) {
     const code = OPS[op];
     if (code === undefined) throw new Error(`unknown operation ${op}`);
+    // A trap (a panic, or the stack exhausted) leaves the module's memory
+    // in whatever state it reached: the instance is not used again.
+    if (this.broken) throw new Error(`mae-org instance unusable after a trap: ${this.broken.message}`);
     const e = this.exports;
     const input = encoder.encode(request);
-    const ptr = e.mae_org_alloc(input.length);
-    // Views are taken after every call into the module: memory may grow.
-    new Uint8Array(e.memory.buffer, ptr, input.length).set(input);
-    const len = e.mae_org_call(code, ptr, input.length);
     try {
-      const at = e.mae_org_result_ptr();
-      return decoder.decode(new Uint8Array(e.memory.buffer, at, len));
-    } finally {
-      e.mae_org_result_free();
+      // Pointers and lengths are u32: `>>> 0` reads them unsigned past 2 GiB.
+      const ptr = e.mae_org_alloc(input.length) >>> 0;
+      // Views are taken after every call into the module: memory may grow.
+      new Uint8Array(e.memory.buffer, ptr, input.length).set(input);
+      const len = e.mae_org_call(code, ptr, input.length) >>> 0;
+      try {
+        const at = e.mae_org_result_ptr() >>> 0;
+        return decoder.decode(new Uint8Array(e.memory.buffer, at, len));
+      } finally {
+        e.mae_org_result_free();
+      }
+    } catch (err) {
+      if (err instanceof WebAssembly.RuntimeError) this.broken = err;
+      throw err;
     }
   }
 

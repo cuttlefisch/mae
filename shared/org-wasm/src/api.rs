@@ -226,6 +226,10 @@ fn parse_options(j: Option<&Json>) -> Result<ParseOptions, String> {
         return Ok(o);
     };
     known_keys(j, &["todo", "max_depth", "link_types"], "parse")?;
+    match j.get("todo") {
+        None | Some(Json::Null) | Some(Json::Arr(_)) => {}
+        Some(_) => return Err("parse.todo must be an array".into()),
+    }
     if let Some(Json::Arr(seqs)) = j.get("todo") {
         o.todo_sequences = seqs
             .iter()

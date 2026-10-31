@@ -82,6 +82,11 @@ export interface LinkClass {
 
 export type Op = 'semantics' | 'renderHast' | 'renderHtml' | 'text' | 'classifyLink' | 'version';
 
+/**
+ * One module instance. Not re-entrant; calls are synchronous. If a call
+ * traps (WebAssembly.RuntimeError), the instance throws on every later
+ * call: instantiate a new one.
+ */
 export declare class MaeOrg {
   callRaw(op: Op, request: string): string;
   call(op: Op, request?: Request): unknown;

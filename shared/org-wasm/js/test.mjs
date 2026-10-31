@@ -13,15 +13,15 @@
 // 4. the module loads synchronously and imports nothing; a deep document
 //    renders without exhausting its stack; errors are responses.
 
-import { instantiate } from './mae-org.mjs';
+import { instantiate, MaeOrg } from './mae-org.mjs';
 import { readFileSync, writeFileSync, mkdtempSync, statSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-// Measured with rustc 1.98, `--profile wasm` (opt-level "s"): 607,475 bytes
-// on 2026-10-31. The budget leaves ~15% for growth; raising it is a
+// Measured with rustc 1.98, `--profile wasm` (opt-level "s"): 611,525 bytes
+// on 2026-11-01. The budget leaves ~15% for growth; raising it is a
 // decision to record in ADR-112's O3 note, not a number to bump.
 const SIZE_BUDGET = 700_000;
 const OPS = { semantics: 1, renderHast: 2, renderHtml: 3, text: 4, classifyLink: 5, version: 6 };
@@ -112,6 +112,23 @@ const rendered = wasmOut.filter((_, i) => requests[i][0] === OPS.renderHast || r
 if (rendered.some((r) => /href[^,}]*javascript:/i.test(r))) fail('a hostile href reached a rendering');
 const v = org.version();
 console.log(`version: api ${v.api}, crate ${v.crate}`);
+
+// 4. An instance that trapped is not used again (a stub that traps).
+const trapping = new MaeOrg({
+  exports: {
+    memory: new WebAssembly.Memory({ initial: 1 }),
+    mae_org_alloc: () => 0,
+    mae_org_call: () => { throw new WebAssembly.RuntimeError('unreachable'); },
+    mae_org_result_ptr: () => 0,
+    mae_org_result_free: () => {},
+    mae_org_live_bytes: () => 0,
+  },
+});
+let trapped = 0;
+for (let i = 0; i < 2; i++) {
+  try { trapping.callRaw('text', '{}'); } catch (e) { trapped += /unusable/.test(e.message) ? 1 : 0; }
+}
+if (trapped !== 1) fail('a trapped instance was used again');
 
 // 4. A deep document (the parse cap raised to its ceiling) renders.
 const deep = Array.from({ length: 1000 }, (_, i) => ' '.repeat(i) + '- *x /y/*\n').join('');
