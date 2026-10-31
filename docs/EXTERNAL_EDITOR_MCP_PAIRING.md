@@ -407,6 +407,7 @@ restriction, fail-closed. See
 - **Tools listed but every call needs confirmation**: you're likely on a MAE build
   predating [ADR-050 D2](adr/050-external-editor-mcp-pairing.md)'s tool annotations
   (check `mae --version`; annotations shipped alongside this doc) — rebuild.
-- **Debug logging**: set `MAE_MCP_SHIM_LOG=/path/to/log` before launching your editor to
-  trace all shim traffic (all clients share the process-wide default,
-  `/tmp/mae-shim.log`, if unset — expect it to be noisy with multiple clients connected).
+- **Debug logging**: off by default. Set `MAE_MCP_SHIM_LOG=/path/to/log` before launching
+  your editor to trace all shim traffic. The log holds tool arguments and results in full
+  (including KB content), so it is created owner-only; prefer a path under your home
+  directory and delete it when done.

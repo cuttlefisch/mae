@@ -54,6 +54,7 @@ pub(super) fn shell_tool_definitions() -> Vec<ToolDefinition> {
         )
         .prop("name", "string", "Optional name for the terminal buffer (e.g. '*build*')")
         .prop("command", "string", "Initial command to run in the terminal (optional)")
+        .prop("cwd", "string", "Working directory for the shell (optional; ~ is expanded)")
         .permission(PermissionTier::Shell)
         .build(),
         ToolDefBuilder::new(

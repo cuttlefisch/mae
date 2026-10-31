@@ -491,16 +491,12 @@ fn execute_tool_dispatch_body(
 
     // 4d2. Handle request_tools for a generic MCP client. The embedded agent
     // (crates/ai/src/session/handle_prompt.rs) intercepts `request_tools`
-    // earlier, in-session, mutating its own live `self.tools` set -- that
-    // mechanism only exists for `AgentSession`, not for an external MCP
-    // client dispatching through this chokepoint. `tools/call` dispatch is
-    // never restricted to what `tools/list` advertised (K2's tiered
-    // `mcp_tools` in crates/mae/src/main.rs only filters the wire-visible
-    // list, never what's callable) -- so what actually unlocks an
-    // Extended-tier tool for an external client is returning its full
-    // definition (name + input schema) here; the client can then call it
-    // directly by name with no server-side session-tool-list mutation
-    // needed or possible.
+    // earlier, in-session, mutating its own live `self.tools` set. For an
+    // external client this returns the full definitions; mae-mcp then adds
+    // them to that session's `tools/list` (`ClientSession::
+    // unlocked_extended_tools`) and sends `notifications/tools/list_changed`,
+    // which is what lets a client that only calls listed tools (Claude Code
+    // refuses an unlisted name) call them at all.
     if call.name == "request_tools" {
         let categories = crate::tools::parse_categories(
             call.arguments
@@ -547,7 +543,11 @@ fn execute_tool_dispatch_body(
                 })
             })
             .collect();
-        let output = if json_results.is_empty() {
+        let output = if categories.is_empty() && requested_names.is_empty() {
+            "Nothing requested: pass `tools` (comma-separated names) and/or `categories` \
+             (comma-separated), each as a string."
+                .to_string()
+        } else if json_results.is_empty() {
             "No tools matched the given categories/names.".to_string()
         } else {
             serde_json::to_string_pretty(&json_results).unwrap_or_default()
@@ -830,8 +830,46 @@ fn execute_registry_command(
 // Argument validation
 // ---------------------------------------------------------------------------
 
+/// Argument names a tool still reads for compatibility, though its schema
+/// advertises the canonical name. Accepted, never advertised.
+const LEGACY_ARG_ALIASES: &[(&str, &str)] = &[
+    ("kb_share", "kb_name"),     // canonical: kb_id
+    ("kb_approve", "principal"), // canonical: member
+];
+
+fn is_legacy_arg_alias(tool: &str, key: &str) -> bool {
+    LEGACY_ARG_ALIASES.contains(&(tool, key))
+}
+
+fn unknown_param_error(tool_def: &ToolDefinition, key: &str) -> String {
+    let mut valid: Vec<&str> = tool_def
+        .parameters
+        .properties
+        .keys()
+        .map(String::as_str)
+        .collect();
+    valid.sort_unstable();
+    let valid = if valid.is_empty() {
+        "none".to_string()
+    } else {
+        valid.join(", ")
+    };
+    format!(
+        "Unknown parameter '{key}' for tool '{}' (nothing was done). Valid parameters: {valid}.",
+        tool_def.name
+    )
+}
+
 /// Validate tool arguments against the schema defined in `ToolDefinition`.
-/// Catches type mismatches and missing required params before dispatch.
+/// Catches type mismatches, missing required params and unknown params before
+/// dispatch.
+///
+/// @ai-caution: [dispatch] Unknown params are an ERROR, not ignored. Ignoring
+/// them was "forward-compatible" in name only: a guessed name (`incremental:
+/// true` for `mode`, `kb` for `scope`) silently selected the default, which ran
+/// a blocking full re-import or widened a search to every KB, and the result
+/// did not say so. If a tool reads a name its schema does not declare, declare
+/// it (or list it in `LEGACY_ARG_ALIASES`).
 fn validate_tool_args(tool_def: &ToolDefinition, args: &serde_json::Value) -> Result<(), String> {
     let obj = args.as_object();
 
@@ -855,10 +893,11 @@ fn validate_tool_args(tool_def: &ToolDefinition, args: &serde_json::Value) -> Re
             if value.is_null() {
                 continue;
             }
-            if let Some(prop) = tool_def.parameters.properties.get(key.as_str()) {
-                validate_json_type(&tool_def.name, key, value, prop)?;
+            match tool_def.parameters.properties.get(key.as_str()) {
+                Some(prop) => validate_json_type(&tool_def.name, key, value, prop)?,
+                None if is_legacy_arg_alias(&tool_def.name, key) => {}
+                None => return Err(unknown_param_error(tool_def, key)),
             }
-            // Unknown params are silently ignored (forward-compatible)
         }
     }
     Ok(())
@@ -1032,11 +1071,61 @@ mod tests {
         assert!(err.contains("not in"));
     }
 
+    /// A guessed parameter name used to be dropped silently, so the call ran
+    /// with the default (a full re-import instead of an incremental one; every
+    /// KB instead of one). It is now refused, and the error names the valid set
+    /// so the caller can correct itself.
     #[test]
-    fn validate_ignores_unknown_params() {
-        let tool = make_tool("buffer_read", vec![("start_line", "integer")], vec![]);
-        let args = serde_json::json!({"start_line": 1, "extra_param": "whatever"});
-        assert!(validate_tool_args(&tool, &args).is_ok());
+    fn validate_rejects_unknown_params_and_names_the_valid_ones() {
+        let tool = make_tool(
+            "kb_reimport",
+            vec![("name", "string"), ("mode", "string")],
+            vec!["name"],
+        );
+        let args = serde_json::json!({"name": "k", "incremental": "true"});
+        let err = validate_tool_args(&tool, &args).unwrap_err();
+        assert!(err.contains("'incremental'"), "{err}");
+        assert!(err.contains("mode, name"), "{err}");
+    }
+
+    /// The same check against the REAL schemas, for the two names clients
+    /// actually guessed (31 Oct field report), so a schema change that drops
+    /// the check cannot pass on the synthetic fixture alone.
+    #[test]
+    fn real_schemas_refuse_the_guessed_names() {
+        let tools = crate::tools::ai_specific_tools(&mae_core::OptionRegistry::new());
+        let def = |n: &str| tools.iter().find(|t| t.name == n).unwrap().clone();
+        for (tool, args) in [
+            (
+                "kb_reimport",
+                serde_json::json!({"name": "k", "incremental": "true"}),
+            ),
+            ("kb_reimport", serde_json::json!({"kb": "k"})),
+            (
+                "kb_search_context",
+                serde_json::json!({"query": "q", "kb": "k"}),
+            ),
+        ] {
+            assert!(
+                validate_tool_args(&def(tool), &args).is_err(),
+                "{tool} accepted {args}"
+            );
+        }
+        // ...while the declared spellings still pass.
+        assert!(validate_tool_args(
+            &def("kb_search_context"),
+            &serde_json::json!({"query": "q", "scope": "k", "context_budget_pct": 50})
+        )
+        .is_ok());
+    }
+
+    /// A legacy alias is accepted only by the tool that still reads it.
+    #[test]
+    fn a_legacy_alias_is_accepted_only_where_it_is_read() {
+        let share = make_tool("kb_share", vec![("kb_id", "string")], vec![]);
+        assert!(validate_tool_args(&share, &serde_json::json!({"kb_name": "k"})).is_ok());
+        let other = make_tool("kb_leave", vec![("kb_id", "string")], vec![]);
+        assert!(validate_tool_args(&other, &serde_json::json!({"kb_name": "k"})).is_err());
     }
 
     #[test]

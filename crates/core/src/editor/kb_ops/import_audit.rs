@@ -357,11 +357,13 @@ impl Editor {
             .find(|i| i.uuid == uuid)
             .map(|i| i.name.clone())
             .unwrap_or_default();
+        let watched = self.kb.watchers.contains_key(&uuid);
         Some(super::KbImportResult {
             name,
             uuid,
             report: Default::default(),
             health: Default::default(),
+            watched,
         })
     }
 

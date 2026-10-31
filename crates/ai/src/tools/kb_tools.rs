@@ -265,13 +265,13 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .build(),
         ToolDefBuilder::new(
             "kb_reimport",
-            "Re-import a registered KB instance from its org directory. Use after editing org files to refresh the graph. Returns updated import stats and health metrics.",
+            "Re-import a registered file-source KB from its org directory. This is a RECOVERY step, not routine: an editor that watches the KB (kb_sync_status `watcher_attached`, or this result's `watched`) already picks up file edits. Re-import when the editor does not watch it, or after git checkout/pull/rebase/revert (an incremental run skips files whose bytes match the last import). Both modes block the editor while they run. Result: `mode`; `watched`; `files_seen` / `files_reparsed` / `files_unchanged` (skipped by content hash); `nodes_imported` = new nodes, `nodes_rewritten` = nodes of re-parsed known files, `nodes_removed` (full mode only); `links_created` counts the links in re-parsed nodes, not new links.",
         )
         .prop("name", "string", "Name or UUID of the instance to reimport")
         .prop_enum(
             "mode",
             "string",
-            "Ingest mode (default: full). \"incremental\" only re-parses files whose content hash changed since the last import — it will NOT pick up a per-node metadata fix (e.g. a newly-added source_file stamp) for files whose content is unchanged. Use \"full\" (the default) after any ingestion-logic change, not just after editing org files.",
+            "Ingest mode (default: full). \"incremental\" re-parses only files whose content hash changed since the last import and never removes nodes: fast, and enough after edits that deleted no file. \"full\" re-parses every file and removes the nodes of deleted files: use it after checkout/pull/rebase/revert or an ingestion-logic change.",
             ["full", "incremental"],
         )
         .required(["name"])
@@ -335,6 +335,11 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "Which KBs to search: 'all' (default), 'local' (primary only), 'remote' (shared/collaborative instances only), or a specific instance name.",
         )
         .prop("limit", "integer", "Max results (default 5, max 20)")
+        .prop(
+            "context_budget_pct",
+            "integer",
+            "Optional: how full your context window is, 0-100. Above 85 results shrink (at most 3, shorter excerpts); above 92 only ids are returned.",
+        )
         .required(["query"])
         .permission(PermissionTier::ReadOnly)
         .build(),

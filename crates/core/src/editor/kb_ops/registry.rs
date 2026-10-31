@@ -412,11 +412,13 @@ impl Editor {
         // imported by now; a failed stamp is reported, not fatal.
         self.kb_stamp_last_import(&uuid);
 
+        let watched = self.kb.watchers.contains_key(&uuid);
         let result = KbImportResult {
             name: name.to_string(),
             uuid,
             report,
             health,
+            watched,
         };
 
         // Rebuild the query layer to include the new instance.
@@ -797,6 +799,7 @@ impl Editor {
                     uuid: instance.uuid.clone(),
                     report,
                     health,
+                    watched: self.kb.watchers.contains_key(&instance.uuid),
                 };
 
                 let msg = format!(

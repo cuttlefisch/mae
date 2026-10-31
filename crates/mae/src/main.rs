@@ -237,9 +237,9 @@ fn daemon_version_skew(editor_version: &str, daemon_status: &serde_json::Value) 
 /// one route to ANY editor command, which an agent in the field never found
 /// (it concluded MCP could not save).
 const MCP_TIERED_TOOLS_NOTE: &str = "Only a curated core set of tools is listed here. Call \
-     search_tools to find additional tools by keyword, then request_tools (by category or \
-     exact name) to get full definitions for tools not shown above -- once you have a \
-     tool's name you can call it directly, whether or not it appeared in this list. Any \
+     search_tools to find more by keyword, then request_tools {\"tools\": \"name1,name2\"} \
+     (a comma-separated string) to add them to your tool list; the server then announces the \
+     new tools. Unknown or misspelt arguments are refused with the list of valid ones. Any \
      editor command -- including `save` after a buffer_write -- runs through \
      execute_command {\"command\": \"<name>\"}.";
 
@@ -1296,7 +1296,7 @@ mod tests {
     use super::display_available_from_env;
     use super::{
         daemon_version_skew, effective_guidance_live_sync, guidance_instructions_fragment,
-        parse_truthy, should_use_gui,
+        parse_truthy, should_use_gui, MCP_TIERED_TOOLS_NOTE,
     };
 
     // --- daemon_version_skew (ADR-035 version-pin) ------------------------
@@ -1404,6 +1404,39 @@ mod tests {
     /// references it contains. The KB's index node is a navigation menu; without
     /// naming the retrieval tool, an agent has to guess that `kb_get` resolves
     /// them — and nothing measured whether any agent ever did.
+    /// Every tool the MCP instructions tell an agent to call must be in the
+    /// Core list a tiered client actually receives. `kb_get` was named by the
+    /// guidance preamble but Extended, so clients that only call listed tools
+    /// got "No such tool available" on the first guidance link they followed.
+    #[test]
+    fn every_tool_the_instructions_name_is_advertised_as_core() {
+        let mut names: Vec<String> = mae_ai::ai_specific_tools(&mae_core::OptionRegistry::new())
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        names.push("request_tools".into());
+        let frag = guidance_instructions_fragment("DevPractices", Some("[[id:x]]"), None, 8000);
+        let text = format!("{MCP_TIERED_TOOLS_NOTE}\n{frag}");
+        let words: std::collections::HashSet<&str> = text
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .collect();
+        let named: Vec<&String> = names
+            .iter()
+            .filter(|n| words.contains(n.as_str()))
+            .collect();
+        assert!(
+            named.iter().any(|n| *n == "kb_get") && named.iter().any(|n| *n == "execute_command"),
+            "fixture: the instructions should name kb_get and execute_command: {named:?}"
+        );
+        for n in named {
+            assert_eq!(
+                mae_ai::classify_tool_tier(n),
+                mae_ai::ToolTier::Core,
+                "the instructions name `{n}`, but a tiered client is not given it"
+            );
+        }
+    }
+
     #[test]
     fn guidance_fragment_names_the_tool_that_resolves_kb_references() {
         let kb = "Start at [[id:hub:start-here][Start Here]]";

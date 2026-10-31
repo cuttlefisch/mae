@@ -16,8 +16,11 @@
 //! codebase). Stdin EOF is the shim's actual terminal-shutdown signal: the
 //! MCP host closed the pipe, so the process exits instead of reconnecting.
 //!
-//! Set `MAE_MCP_SHIM_LOG=/path/to/file.log` to override the default log path.
-//! Default log: `/tmp/mae-shim.log`.
+//! Logging is OFF unless `MAE_MCP_SHIM_LOG=/path/to/file.log` is set. The log
+//! holds every relayed message in full (tool arguments and results, KB note
+//! bodies), so it is created owner-only (0600 on Unix). There is no default
+//! path: a shared default under `/tmp` collected every session's traffic in
+//! one file other local users could read.
 //!
 //! Set `MAE_MCP_PERMISSION_CEILING=<ReadOnly|Write|Shell|Privileged>` to have
 //! the shim forward a `permissionCeiling` in its `initialize` request params
@@ -139,13 +142,32 @@ fn chrono_now() -> String {
 }
 
 fn open_log() -> LogHandle {
-    let path = env::var("MAE_MCP_SHIM_LOG").unwrap_or_else(|_| "/tmp/mae-shim.log".to_string());
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .ok()
-        .map(|f| Arc::new(Mutex::new(f)))
+    open_log_at(env::var_os("MAE_MCP_SHIM_LOG").as_deref())
+}
+
+/// The debug log at `path`, or none when no path was given (the default).
+///
+/// @ai-caution: [security] Opt-in and owner-only. The log is a full transcript
+/// of tool traffic, including KB content the user may keep private; do not
+/// restore a default path or widen the mode.
+fn open_log_at(path: Option<&std::ffi::OsStr>) -> LogHandle {
+    let path = path.filter(|p| !p.is_empty())?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let file = opts.open(path).ok()?;
+    // `mode` applies only when the file is created; an existing log keeps its
+    // old permissions, so tighten it too.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+    }
+    Some(Arc::new(Mutex::new(file)))
 }
 
 /// Write a newline-delimited JSON message (for the stdio side to Claude Code).
@@ -475,6 +497,33 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use tokio::net::UnixListener;
+
+    /// No path, no log: nothing is written anywhere by default.
+    #[test]
+    fn logging_is_off_unless_a_path_is_given() {
+        assert!(open_log_at(None).is_none());
+        assert!(open_log_at(Some(std::ffi::OsStr::new(""))).is_none());
+    }
+
+    /// The log is a transcript of tool traffic, so only its owner may read it:
+    /// both when the shim creates it and when it reuses one left world-readable.
+    #[cfg(unix)]
+    #[test]
+    fn the_log_is_owner_only_whether_created_or_reused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let fresh = dir.path().join("fresh.log");
+        let reused = dir.path().join("reused.log");
+        std::fs::write(&reused, b"old\n").unwrap();
+        std::fs::set_permissions(&reused, std::fs::Permissions::from_mode(0o644)).unwrap();
+        for path in [&fresh, &reused] {
+            let handle = open_log_at(Some(path.as_os_str()));
+            assert!(handle.is_some(), "{}", path.display());
+            log(&handle, "relayed message");
+            let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{} is {mode:o}", path.display());
+        }
+    }
 
     fn test_socket_path(dir: &tempfile::TempDir, name: &str) -> String {
         dir.path().join(name).to_string_lossy().to_string()
