@@ -1080,6 +1080,20 @@
         }
       ]
     },
+    "mae-org": {
+      "path": "shared/org/src/lib.rs",
+      "dependencies": [],
+      "public_items": [
+        {
+          "name": "Document",
+          "kind": "struct"
+        },
+        {
+          "name": "parse",
+          "kind": "fn"
+        }
+      ]
+    },
     "mae-renderer": {
       "path": "crates/renderer/src/lib.rs",
       "dependencies": [

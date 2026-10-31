@@ -1,0 +1,18 @@
+[package]
+name = "mae-org"
+description = "MAE's org-mode parser: a lossless syntax tree with typed views (ADR-112)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# ADR-112 D1: rowan is the ONLY dependency. No I/O, no regex engine, nothing
+# that would stop a `wasm32-unknown-unknown` build. Adding a dependency here is
+# an ADR-level decision, not a convenience.
+[dependencies]
+rowan = "0.17"
+
+[dev-dependencies]
+proptest = "1"
+# Reads the Emacs goldens (JSON lines) in the conformance test only.
+serde_json = "1"

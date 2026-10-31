@@ -23,6 +23,7 @@ members = [
     "shared/sync",
     "shared/mcp",
     "shared/effect-sandbox",
+    "shared/org",
 ]
 exclude = ["tools/code-map", "tools/audit-metrics", "daemon"]
 resolver = "2"

@@ -57,6 +57,7 @@ graph TD
     mae_lsp[mae-lsp]
     mae_make[mae-make]
     mae_mcp --> mae_effect_sandbox
+    mae_org[mae-org]
     mae_renderer --> mae_core
     mae_renderer --> mae_shell
     mae_scheme --> mae_ai
@@ -411,6 +412,15 @@ Source: `shared/mcp/src/lib.rs`
 | `write_framed` | fn |
 | `read_message` | fn |
 | `handle_request` | fn |
+
+## mae-org
+
+Source: `shared/org/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `Document` | struct |
+| `parse` | fn |
 
 ## mae-renderer
 
