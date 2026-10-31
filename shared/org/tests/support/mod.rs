@@ -293,6 +293,20 @@ pub fn is_nonterminating(jsonl: &str) -> bool {
     jsonl.starts_with("{\"type\":\"#nonterminating\"")
 }
 
+/// Why a golden holds no oracle parse, if it holds none: Emacs did not
+/// terminate under the caps, or signalled an error on the file (e.g. "Not
+/// an Org time string"). Such a file's differences are every mae-org
+/// element, and the conformance gate requires the file to be registered.
+pub fn oracle_failure(jsonl: &str) -> Option<&'static str> {
+    if is_nonterminating(jsonl) {
+        Some("Emacs did not terminate")
+    } else if jsonl.starts_with("{\"type\":\"#error\"") {
+        Some("Emacs signalled an error")
+    } else {
+        None
+    }
+}
+
 /// What one bounded Emacs run ended with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmacsExit {

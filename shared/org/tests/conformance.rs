@@ -109,7 +109,15 @@ fn goldens_agree_with_emacs_except_registered_divergences() {
     for rel in corpus_list() {
         let text = read(&repo_root().join(&rel));
         let golden = golden_for(&rel);
-        check_golden_header(&golden, &text).unwrap_or_else(|e| panic!("{rel}: {e}"));
+        if let Some(why) = oracle_failure(&golden) {
+            // No oracle parse: the whole file must be registered.
+            match register.iter().position(|d| d.kind == "*" && d.file == rel) {
+                Some(i) => used[i] = true,
+                None => unlisted.push(format!("{rel}: {why}, and no `*` entry registers it")),
+            }
+        } else {
+            check_golden_header(&golden, &text).unwrap_or_else(|e| panic!("{rel}: {e}"));
+        }
         let oracle: Vec<El> = golden_elements(&golden)
             .into_iter()
             .map(|(e, _)| e)

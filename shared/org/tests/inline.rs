@@ -193,6 +193,107 @@ fn a_timestamp_org_cannot_read_keeps_the_extent_its_regexp_gives() {
     assert_eq!(ts, ["<2026-3-4 x +1d> "]);
 }
 
+/// `(kind, begin, end)` of every object mae-org finds in a fixture.
+fn objects_of(fixture: &str) -> Vec<(String, usize, usize)> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(fixture);
+    let text = read(&path);
+    let doc = parse_default(&text);
+    check_tree(&doc, &text, mae_org::DEFAULT_MAX_DEPTH).unwrap();
+    assert!(doc.diagnostics().is_empty(), "{:?}", doc.diagnostics());
+    let spans: Vec<(usize, usize)> = doc
+        .syntax()
+        .descendants()
+        .filter(|n| is_object(n.kind()))
+        .map(|n| {
+            let r = n.text_range();
+            (usize::from(r.start()), usize::from(r.end()))
+        })
+        .collect();
+    mae_elements(&doc)
+        .into_iter()
+        .filter(|e| spans.contains(&(e.begin, e.end)) && !e.kind.contains("paragraph"))
+        .map(|e| (e.kind, e.begin, e.end))
+        .collect()
+}
+
+fn o(kind: &str, begin: usize, end: usize) -> (String, usize, usize) {
+    (kind.to_string(), begin, end)
+}
+
+/// Emacs never finishes these (it allocates until killed; regen.sh records
+/// them as "did not terminate"). In each, a radio link `x` is followed by a
+/// `[`: the object lexer, one char past the link, backs up to the line start
+/// to match the regexp's `^` and gets back an EMPTY radio link at point,
+/// which it parses again forever. org-element's intended rule is that the
+/// radio branch finds a link STARTING at point (it backs up one char only
+/// so the bordering char can match `[^[:alnum:]]`); a match beginning
+/// before point is not a link at point. So mae-org makes the radio link
+/// `x`, then parses the `[` as anything else would be parsed there: a
+/// bracket link `[[x]]` in the first file, nothing in the others.
+#[test]
+fn emacs_does_not_terminate_on_a_radio_link_before_a_bracket() {
+    assert_eq!(
+        objects_of("objects-emacs-nonterminating.org"),
+        [o("radio-target", 0, 7), o("link", 9, 10), o("link", 10, 15)]
+    );
+    assert_eq!(
+        objects_of("objects-emacs-nonterminating-tag.org"),
+        [o("radio-target", 0, 7), o("link", 18, 19)]
+    );
+    assert_eq!(
+        objects_of("objects-emacs-nonterminating-verse.org"),
+        [
+            o("radio-target", 0, 7),
+            o("link", 23, 24),
+            o("subscript", 43, 45),
+            o("statistics-cookie", 56, 59),
+            o("entity", 62, 65),
+            o("statistics-cookie", 86, 89)
+        ]
+    );
+    // Linear on the shape repeated (the scaling gate times it in release).
+    let text = format!("<<<x>>>\n\n{}\n", "x[[x]] x[[/^\n".repeat(2_000));
+    let doc = parse_default(&text);
+    check_tree(&doc, &text, mae_org::DEFAULT_MAX_DEPTH).unwrap();
+    assert_eq!(count(&doc, LINK), 6_000);
+}
+
+/// Targets `a b` and `b-c` over `a\nb-c`: the first link is `a\nb`, ending
+/// one char into the line. The next lex, from there, backs up to the line
+/// start, matches `b-c` with `^`, and Emacs returns a link that BEGINS
+/// before point — two overlapping objects (oracle: links 21..24 and
+/// 23..26). A tree cannot hold objects that overlap, and the second starts
+/// inside the first, so mae-org keeps the first only.
+#[test]
+fn a_radio_link_never_overlaps_the_object_before_it() {
+    assert_eq!(
+        objects_of("objects-radio-overlap.org"),
+        [
+            o("radio-target", 0, 10),
+            o("radio-target", 10, 19),
+            o("link", 21, 24)
+        ]
+    );
+}
+
+/// Org splits its radio regexp into several above
+/// `org-target-link-regexp-limit` (8192 chars) and then takes, among the
+/// regexps' matches, the one that ENDS first (`org--re-list-search-forward`)
+/// — not the leftmost match of one alternation. In the fixture the split
+/// falls between `foo y… bar zz` and `bar`, so Emacs links `bar` (8277..8281)
+/// instead of the long target. The limit is a constant of Org's
+/// implementation (a regexp-engine size limit), not a property of the
+/// document or a declared setting (ADR-112 D4), so mae-org matches as one
+/// regexp at any size: the long target, as Emacs does below the limit.
+#[test]
+fn radio_targets_match_as_one_regexp_however_many_there_are() {
+    let objects = objects_of("objects-radio-split-regexp.org");
+    assert_eq!(objects.last(), Some(&o("link", 8172, 8284)));
+    assert_eq!(objects.iter().filter(|x| x.0 == "link").count(), 1);
+}
+
 fn links(text: &str) -> Vec<Link> {
     parse_default(text)
         .syntax()

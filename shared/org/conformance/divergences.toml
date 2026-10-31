@@ -29,3 +29,62 @@ kind = "*"
 file = "shared/org/tests/fixtures/list-block-name-regex.org"
 reason = "list scanner: Emacs reads the block name a.b as a regexp (closed by end_aXb); mae-org reads names literally"
 test = "inside_a_list_block_names_are_literal_not_regexps"
+
+# Emacs does not terminate on these (it allocates until the oracle's memory
+# cap kills it; the goldens are #nonterminating). A radio link `x` followed
+# by `[`: one char past the link, org-element--object-lex backs up to the
+# line start, the regexp matches with `^`, and the link parser returns an
+# EMPTY radio link at point, forever. org-element's intended rule is a radio
+# link starting at point; mae-org makes the link and parses the `[` as it
+# would anywhere. There is no oracle parse, so every element is listed.
+[[divergence]]
+kind = "*"
+file = "shared/org/tests/fixtures/objects-emacs-nonterminating.org"
+reason = "Emacs does not terminate (radio link x before [[x]]); mae-org: link x, then the bracket link"
+test = "emacs_does_not_terminate_on_a_radio_link_before_a_bracket"
+
+[[divergence]]
+kind = "*"
+file = "shared/org/tests/fixtures/objects-emacs-nonterminating-tag.org"
+reason = "Emacs does not terminate (radio link x before [[ in an item); mae-org: the link x"
+test = "emacs_does_not_terminate_on_a_radio_link_before_a_bracket"
+
+[[divergence]]
+kind = "*"
+file = "shared/org/tests/fixtures/objects-emacs-nonterminating-verse.org"
+reason = "Emacs does not terminate (radio link x before < in a verse block, from the reviewer's fuzzing); mae-org: the link x and the objects after it"
+test = "emacs_does_not_terminate_on_a_radio_link_before_a_bracket"
+
+# Targets `a b` and `b-c` over `a\nb-c`: after the link `a\nb` the next
+# lex backs up to the line start and Emacs returns a second link that
+# begins INSIDE the first (21..24 and 23..26). A tree cannot hold
+# overlapping objects; mae-org keeps the first.
+[[divergence]]
+kind = "link"
+file = "shared/org/tests/fixtures/objects-radio-overlap.org"
+begin = 23
+reason = "Emacs emits a radio link overlapping the previous one; a tree cannot hold it, mae-org keeps only the first"
+test = "a_radio_link_never_overlaps_the_object_before_it"
+
+# Above org-target-link-regexp-limit (8192 chars of regexp) Org splits the
+# radio regexp and takes the match that ENDS first across the parts, so
+# which link wins depends on where the split falls. The limit is a size
+# constant of Org's regexp engine, not the document's text or declared
+# configuration (ADR-112 D4); mae-org matches as one regexp at any size.
+[[divergence]]
+kind = "link"
+file = "shared/org/tests/fixtures/objects-radio-split-regexp.org"
+reason = "Org splits its radio regexp above 8192 chars and picks the earliest-ending match; mae-org matches as one regexp (the long target, not bar)"
+test = "radio_targets_match_as_one_regexp_however_many_there_are"
+
+# `<2024-1-1 x+1d>` matches org-element--timestamp-regexp's repeater
+# alternative (any digit counts), then org-parse-time-string signals "Not an
+# Org time string" and Org's parse of the whole buffer fails (the golden is
+# #error). The regexp is org-element's own definition of a timestamp's
+# extent; the error comes from a later, stricter reading of its fields, so
+# mae-org keeps the object with the extent the regexp gives.
+[[divergence]]
+kind = "*"
+file = "shared/org/tests/fixtures/objects-timestamp-not-org.org"
+reason = "Emacs signals Not an Org time string and parses nothing; mae-org keeps the timestamp the regexp delimits"
+test = "a_timestamp_org_cannot_read_keeps_the_extent_its_regexp_gives"

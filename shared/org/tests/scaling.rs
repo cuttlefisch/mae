@@ -209,6 +209,12 @@ const FAMILIES: &[Family] = &[
         mixed_failing_late,
         4_000,
     ),
+    // The shape on which Emacs never terminates, repeated.
+    (
+        "radio link before [[ (Emacs loops)",
+        |n| format!("<<<x>>>\n\n{}\n", "x[[x]] x[[/^\n".repeat(n)),
+        3_000,
+    ),
 ];
 
 /// Mixed targets whose last stretch fails at every word: bounded by the
