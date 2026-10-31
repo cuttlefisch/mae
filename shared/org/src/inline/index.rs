@@ -92,6 +92,9 @@ pub(crate) struct Pair {
     pub open: usize,
     pub close: usize,
     pub depth: u32,
+    /// Do its direct children (pairs of its kind) all have the same depth?
+    /// True when it has none.
+    pub uniform: bool,
 }
 
 pub(crate) struct InlineIndex {
@@ -206,7 +209,9 @@ impl InlineIndex {
 
     fn index_bytes(&mut self, text: &str, eol: LineEnding) {
         let b = text.as_bytes();
-        let mut stacks: [Vec<(usize, u32)>; 3] = Default::default();
+        // Per open bracket: its position, and the greatest and least depth
+        // of its direct children so far (0 and u32::MAX: none yet).
+        let mut stacks: [Vec<(usize, u32, u32)>; 3] = Default::default();
         let mut found = Vec::with_capacity(4);
         for (i, &c) in b.iter().enumerate() {
             found.clear();
@@ -217,16 +222,18 @@ impl InlineIndex {
             if let Some((kind, open)) = Bracket::of(c) {
                 let stack = &mut stacks[kind as usize];
                 if open {
-                    stack.push((i, 0));
-                } else if let Some((o, inner)) = stack.pop() {
-                    let depth = inner + 1;
+                    stack.push((i, 0, u32::MAX));
+                } else if let Some((o, max, min)) = stack.pop() {
+                    let depth = max + 1;
                     if let Some(parent) = stack.last_mut() {
                         parent.1 = parent.1.max(depth);
+                        parent.2 = parent.2.min(depth);
                     }
                     self.pairs[kind as usize].push(Pair {
                         open: o,
                         close: i,
                         depth,
+                        uniform: min == u32::MAX || min == max,
                     });
                 }
             }

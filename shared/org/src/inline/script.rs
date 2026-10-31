@@ -1,10 +1,16 @@
 //! Subscripts and superscripts: `org-match-substring-regexp`, which Org
 //! matches from the character BEFORE the `_`/`^` (it must not be whitespace).
 //!
-//! `\(\S-\)\([_^]\)\(` then one of: `{…}` with braces nested at most
-//! `org-match-sexp-depth` (3) deep, contents inside the braces; `(…)` the same
-//! with parentheses, contents INCLUDING them; `*`; or
-//! `[+-]?[[:alnum:].,\\]*[[:alnum:]]` (greedy, ending at an alnum).
+//! `\(\S-\)\([_^]\)\(` then one of: `{…}` as `org-create-multibrace-regexp`
+//! builds it, contents inside the braces; `(…)` the same with parentheses,
+//! contents INCLUDING them; `*`; or `[+-]?[[:alnum:].,\\]*[[:alnum:]]`
+//! (greedy, ending at an alnum).
+//!
+//! The multibrace regexp for depth 3 is `L\(N\|(?:N L N R)+N\|(?:N L
+//! (?:N L N R)+N R)+N\)R` with `N` = `[^LR]*?`: the contents hold no group,
+//! or only flat groups, or only groups that each hold flat groups. So the
+//! pair nests at most 3 deep AND its direct child groups all have the same
+//! depth: `x_{a{b}c{d{e}}}` mixes depths 1 and 2 and is no subscript.
 
 use super::index::Bracket;
 use super::{InlineCx, Obj};
@@ -60,7 +66,7 @@ fn body(cx: &InlineCx, g: usize, end: usize) -> Option<((usize, usize), usize, b
     let nested = |kind: Bracket| {
         cx.ix
             .pair(kind, g, end)
-            .filter(|p| p.depth <= SEXP_DEPTH)
+            .filter(|p| p.depth <= SEXP_DEPTH && p.uniform)
             .map(|p| p.close)
     };
     match b.get(g).filter(|_| g < end)? {

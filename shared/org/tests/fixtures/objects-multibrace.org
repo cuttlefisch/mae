@@ -1,0 +1,12 @@
+# Sub/superscript braces as org-create-multibrace-regexp matches them:
+# at most 3 deep, and the direct child groups all of one depth.
+
+x_{a} y x_{a{b}c{d}} y x_{{a}{b}} y x_{{{a}}} y x_{{{a}}{{b}}} y
+
+x_{a{b}c{d{e}}} y x_{{{a}}b{c}} y x_{{a}b{{c}}} y x_{{{{a}}}} y
+
+x^(a) y x^(a(b)c(d)) y x^((a(b))) y x^((a)(b)) y
+
+x^(a(b)c(d(e))) y x^((((a)))) y x^(a(b)(c(d))) y
+
+x^{a{b}c{d{e}}}z x^{a}{b{c}} y
