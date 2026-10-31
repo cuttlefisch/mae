@@ -240,3 +240,44 @@ proptest! {
         prop_assert!(check_all(&doc).is_ok(), "{:?}: {:?}", doc, check_all(&doc));
     }
 }
+
+/// Nesting past the renderer's depth cap degrades to a diagnostic, never
+/// to a stack overflow: the parse cap raised to its ceiling, a list and a
+/// run of emphasis nested far past RENDER_MAX_DEPTH, rendered on a test
+/// thread's 2 MiB stack in a debug build.
+#[test]
+fn deep_nesting_degrades_to_a_diagnostic() {
+    let list: String = (0..1000)
+        .map(|i| format!("{}- *a /b/*\n", " ".repeat(i)))
+        .collect();
+    // Distinct names: a same-name block ends at its first end line.
+    let open: String = (0..1000).map(|i| format!("#+begin_b{i}\n")).collect();
+    let close: String = (0..1000).rev().map(|i| format!("#+end_b{i}\n")).collect();
+    let quotes = format!("{open}x\n{close}");
+    let emph = format!("{}x{}\n", "*/_+".repeat(300), "+_/*".repeat(300));
+    let opts = ParseOptions {
+        max_depth: mae_org::MAX_DEPTH_CEILING,
+        ..ParseOptions::default()
+    };
+    for text in [list, quotes, emph] {
+        let doc = parse(&text, &opts);
+        let sem = semantics(&doc);
+        let out = render(&doc, &sem, &RenderOptions::default(), &Resolver::default());
+        let deep = out
+            .diagnostics
+            .iter()
+            .any(|d| matches!(d, mae_org::RenderDiagnostic::TooDeep(_)))
+            || doc
+                .diagnostics()
+                .iter()
+                .any(|d| d.kind == mae_org::DiagnosticKind::DepthLimit);
+        assert!(deep, "no depth diagnostic for {:.40}", text);
+        check(
+            &from_tree(&out.body),
+            &Contract::new(&Resolver::default(), false),
+        )
+        .unwrap();
+        let _ = (mae_org::to_html(&out.body), mae_org::to_hast(&out.body));
+        let _ = mae_org::text(&doc, &sem);
+    }
+}
