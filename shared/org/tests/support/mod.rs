@@ -253,6 +253,11 @@ pub fn parse_default(text: &str) -> Document {
 pub fn check_golden_header(jsonl: &str, text: &str) -> Result<(), String> {
     let first = jsonl.lines().next().ok_or("empty golden")?;
     let v: serde_json::Value = serde_json::from_str(first).map_err(|e| e.to_string())?;
+    if is_nonterminating(jsonl) {
+        // Emacs hit the runner's memory or time cap: there is no oracle
+        // parse, so every mae-org element differs and must be registered.
+        return Ok(());
+    }
     if v["type"] != "#file" {
         return Err("golden has no #file self-check line".into());
     }
@@ -280,6 +285,89 @@ pub fn check_golden_header(jsonl: &str, text: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// The golden of a file on which Emacs did not terminate under the runner's
+/// caps (`conformance/regen.sh`, `tests/oracle_external.rs`).
+pub fn is_nonterminating(jsonl: &str) -> bool {
+    jsonl.starts_with("{\"type\":\"#nonterminating\"")
+}
+
+/// What one bounded Emacs run ended with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmacsExit {
+    Ok,
+    /// Emacs reported memory exhausted (it then exits 3 from
+    /// `org-element-dump.el`, or 1 or 255 when the exhaustion strikes outside
+    /// it: measured, the status is not reliable, the message is).
+    OutOfMemory,
+    /// Killed at the wall-clock limit.
+    TimedOut,
+    /// Killed by a signal, or another nonzero status.
+    Failed(Option<i32>),
+}
+
+/// Runs `emacs ARGS` under a virtual-memory cap (`ulimit -v`, through `sh`,
+/// so no `unsafe` pre-exec hook) and a wall-clock limit, with stdout to
+/// `stdout`. On some inputs org-element never terminates, allocating without
+/// bound (`<<<x>>>\n\nx[[x]]`), so the oracle must never run unbounded.
+pub fn run_emacs_bounded(
+    args: &[std::ffi::OsString],
+    vmem_kb: u64,
+    limit: std::time::Duration,
+    stdout: std::process::Stdio,
+) -> EmacsExit {
+    let err = std::env::temp_dir().join(format!(
+        "mae-org-emacs-{}-{:?}.err",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let status = run_bounded_raw(args, vmem_kb, limit, stdout, &err);
+    let log = std::fs::read_to_string(&err).unwrap_or_default();
+    let _ = std::fs::remove_file(&err);
+    match status {
+        EmacsExit::Failed(_) if log.contains("Memory exhausted") => EmacsExit::OutOfMemory,
+        s => s,
+    }
+}
+
+fn run_bounded_raw(
+    args: &[std::ffi::OsString],
+    vmem_kb: u64,
+    limit: std::time::Duration,
+    stdout: std::process::Stdio,
+    err: &Path,
+) -> EmacsExit {
+    use std::process::{Command, Stdio};
+    let stderr = std::fs::File::create(err).expect("stderr file");
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(
+            "kb=$1; shift; ulimit -v \"$kb\" 2>/dev/null \
+             || echo 'oracle: no ulimit -v here; Emacs has no memory cap' >&2; \
+             exec emacs \"$@\"",
+        )
+        .arg("sh")
+        .arg(vmem_kb.to_string())
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr)
+        .spawn()
+        .expect("sh runs");
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        match child.try_wait().expect("wait for emacs") {
+            Some(s) if s.success() => return EmacsExit::Ok,
+            Some(s) => return EmacsExit::Failed(s.code()),
+            None if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return EmacsExit::TimedOut;
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(20)),
+        }
+    }
 }
 
 /// The oracle's elements from a golden (JSON lines), without the self-check.

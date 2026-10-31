@@ -12,10 +12,15 @@
 ;; (begin/end, contents_begin/contents_end), plus the properties mae-org's
 ;; typed views must agree on.
 ;;
-;; Decoding is what `find-file' does: UTF-8 with the line-ending convention
-;; detected from the whole file (dos only if every LF follows a CR; mac if
-;; there is no LF but a CR; otherwise unix, where a CR is content) and a
-;; leading BOM stripped. Offsets are then mapped back to the file's bytes: the
+;; Decoding is what `find-file' does: `insert-file-contents' with no coding
+;; system bound runs the same detection, here with UTF-8 preferred (as for
+;; a user in a UTF-8 locale; `emacs -Q' in a C locale would not prefer it):
+;; the line-ending convention detected from the whole file (dos only if
+;; every LF follows a CR; mac if there is no LF but a CR; otherwise unix,
+;; where a CR is content) and a leading BOM stripped. Binding
+;; `coding-system-for-read' to `utf-8-auto' instead is NOT the same: it
+;; decodes `\303\251\r\n' (non-ASCII before the first CRLF) as unix,
+;; where `find-file' sees dos. Offsets are then mapped back to the file's bytes: the
 ;; BOM's 3 bytes, plus, in a dos file, one CR per line ending before the
 ;; offset. So the oracle sees what an Org user sees, and its numbers are still
 ;; exact bytes. The first output line is a self-check (see `mae-dump-file').
@@ -29,6 +34,11 @@
 ;; either, or a setup file's `#+TODO' would make it disagree for a reason
 ;; mae-org cannot see. Org reads setup files through `org-file-contents'.
 (advice-add 'org-file-contents :override (lambda (&rest _) ""))
+
+;; What `find-file' prefers in a UTF-8 locale (see `mae-dump--decode').
+(prefer-coding-system 'utf-8)
+;; A file-local `coding:' cookie is honoured, as `find-file' honours it; other
+;; file-local variables are not read (`org-mode' below is called directly).
 
 (defvar mae-dump--bom 0 "Bytes of BOM stripped from the current file.")
 (defvar mae-dump--crs nil
@@ -96,7 +106,7 @@
 (defun mae-dump--decode (file)
   "Insert FILE as `find-file' decodes it; set the offset-mapping state.
 Returns the line-ending convention: 0 unix, 1 dos, 2 mac."
-  (let ((coding-system-for-read 'utf-8-auto))
+  (let ((coding-system-for-read nil))
     (insert-file-contents file))
   ;; An eol type that is still a vector means the decoder never had to
   ;; decide (e.g. no line ending at all), so nothing was converted: unix.
@@ -140,14 +150,25 @@ something other than the file cannot pass."
                 "\n"
                 (apply #'concat (nreverse out)))))))
 
+(defconst mae-dump-exit-memory 3
+  "Exit status when Emacs ran out of memory. The runners read the message
+(\"Memory exhausted\", printed to stderr) rather than the status: when the
+exhaustion strikes outside this handler Emacs exits 1 or 255.")
+
 (defun mae-dump-file-safely (file)
   "Like `mae-dump-file', but an error becomes a #error line, so one bad
-file cannot abort a manifest run."
+file cannot abort a manifest run. Running out of memory is not an error of
+the file: Emacs exits with `mae-dump-exit-memory' at once, writing nothing,
+since after `memory-full' it may not be able to continue reliably."
   (condition-case err
       (mae-dump-file file)
-    (error (concat (json-encode (list (cons 'type "#error")
-                                      (cons 'message (error-message-string err))))
-                   "\n"))))
+    (error
+     (let ((msg (error-message-string err)))
+       (when (string-prefix-p "Memory exhausted" msg)
+         (message "%s" msg)
+         (kill-emacs mae-dump-exit-memory))
+       (concat (json-encode (list (cons 'type "#error") (cons 'message msg)))
+               "\n")))))
 
 (defun mae-dump-manifest (manifest)
   "Dump every SOURCE<TAB>DESTINATION pair listed in MANIFEST."
@@ -157,8 +178,12 @@ file cannot abort a manifest run."
       (let* ((pair (split-string line "\t"))
              (json (mae-dump-file-safely (car pair))))
         (make-directory (file-name-directory (cadr pair)) t)
-        (let ((coding-system-for-write 'utf-8-unix))
-          (with-temp-file (cadr pair) (insert json)))))))
+        ;; Written whole and renamed: a run killed by its limits leaves no
+        ;; partial golden, so the runner retries exactly the missing files.
+        (let ((coding-system-for-write 'utf-8-unix)
+              (tmp (concat (cadr pair) ".tmp")))
+          (with-temp-file tmp (insert json))
+          (rename-file tmp (cadr pair) t))))))
 
 (let ((args command-line-args-left))
   (setq command-line-args-left nil)
