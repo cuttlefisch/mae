@@ -31,6 +31,36 @@ fn deep_inputs(n: usize) -> Vec<String> {
     ]
 }
 
+/// Oracle (Emacs 30.2, `* h http:x^2\r\nb\n* t2 http:a\r :tag:\n`, decoded
+/// unix): a headline title's objects run to the last char that is not a
+/// space or tab, so a content CR ends a plain link there; `:raw-value` is
+/// `org-trim`med. Pinned here rather than in a corpus fixture because
+/// semantics() still drops that CR from the link's span (its corpus walk
+/// asserts the span holds the path).
+#[test]
+fn a_content_cr_ends_a_plain_link_in_a_headline_title() {
+    let text = "* h http:x^2\r\nb\n* t2 http:a\r :tag:\n";
+    let doc = parse(text, &ParseOptions::default());
+    let spans: Vec<(usize, usize)> = mae_elements(&doc)
+        .into_iter()
+        .filter(|e| e.kind == "link")
+        .map(|e| (e.begin, e.end))
+        .collect();
+    assert_eq!(spans, [(4, 13), (21, 28)]);
+    let titles: Vec<String> = doc
+        .syntax()
+        .descendants()
+        .filter_map(mae_org::Headline::cast)
+        .map(|h| h.title())
+        .collect();
+    assert_eq!(titles, ["h http:x^2", "t2 http:a"]);
+    let paths: Vec<String> = links(text)
+        .iter()
+        .map(|l| l.info(&ParseOptions::default().link_types).path)
+        .collect();
+    assert_eq!(paths, ["x^2\r", "a\r"]);
+}
+
 #[test]
 fn objects_nested_5000_deep_parse_on_a_small_stack_within_the_cap() {
     for text in deep_inputs(5_000) {

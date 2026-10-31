@@ -49,6 +49,7 @@ shared/org/tests/fixtures/nested-quotes-same-name.org
 shared/org/tests/fixtures/no-final-newline.org
 shared/org/tests/fixtures/objects-adversarial.org
 shared/org/tests/fixtures/objects-citations.org
+shared/org/tests/fixtures/objects-content-cr.org
 shared/org/tests/fixtures/objects-emphasis.org
 shared/org/tests/fixtures/objects-entities-latex.org
 shared/org/tests/fixtures/objects-eol-mac.org

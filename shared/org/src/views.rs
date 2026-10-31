@@ -84,7 +84,10 @@ impl Headline {
 
     /// The title as written (its objects' text, markup included).
     pub fn title(&self) -> String {
-        child(&self.0, HEADLINE_TITLE).map_or_else(String::new, |t| t.to_string())
+        // `:raw-value` is `org-trim`med; the title node keeps a content CR.
+        child(&self.0, HEADLINE_TITLE).map_or_else(String::new, |t| {
+            t.to_string().trim_matches(crate::text::is_trim).to_string()
+        })
     }
 
     /// The tags, in order, as written. Like `org-split-string` on `:`, an
