@@ -32,13 +32,7 @@ pub(super) fn lsp_tool_definitions() -> Vec<ToolDefinition> {
         .prop("buffer_name", "string", "Buffer name (default: active buffer)")
         .permission(PermissionTier::ReadOnly)
         .build(),
-        ToolDefBuilder::new(
-            "lsp_diagnostics",
-            "Get LSP diagnostics (errors, warnings) for a buffer. Returns JSON array of {line, character, severity, message, source}. Lines are 1-indexed.",
-        )
-        .prop("buffer_name", "string", "Buffer name (default: active buffer)")
-        .permission(PermissionTier::ReadOnly)
-        .build(),
+        lsp_diagnostics_def(),
         ToolDefBuilder::new(
             "lsp_workspace_symbol",
             "Search for symbols across the workspace by name. Returns JSON array of {name, kind, location}.",
@@ -107,4 +101,21 @@ pub(super) fn lsp_tool_definitions() -> Vec<ToolDefinition> {
         .permission(PermissionTier::Write)
         .build(),
     ]
+}
+
+/// `lsp_diagnostics`: one buffer, or every file with diagnostics (`scope`).
+fn lsp_diagnostics_def() -> ToolDefinition {
+    ToolDefBuilder::new(
+        "lsp_diagnostics",
+        "Get LSP diagnostics (errors, warnings) for a buffer. Returns JSON array of {line, character, severity, message, source}. Lines are 1-indexed.",
+    )
+    .prop("buffer_name", "string", "Buffer name (default: active buffer)")
+    .prop_enum(
+        "scope",
+        "string",
+        "\"buffer\" (default): one buffer; \"all\": every file with diagnostics",
+        ["buffer", "all"],
+    )
+    .permission(PermissionTier::ReadOnly)
+    .build()
 }

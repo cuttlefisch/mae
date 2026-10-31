@@ -183,7 +183,8 @@ Event types: `buffer_edit`, `cursor_move`, `diagnostics`, `mode_change`, `buffer
    assumed live because the socket file accepted a connection
 3. **Bidirectional relay**: stdin → socket, socket → stdout
 4. **Framing**: uses `read_message()` / `write_framed()` for Content-Length framing on both sides
-5. **Debug logging**: set `MAE_MCP_SHIM_LOG=/path/to/log` to trace all traffic
+5. **Debug logging**: off by default; set `MAE_MCP_SHIM_LOG=/path/to/log` to trace all
+   traffic (full message bodies, created owner-only)
 6. **Reconnect on socket drop, exit on stdin EOF** (#356): stdin is read on its own long-lived task,
    independent of the socket connection, so it survives across reconnects. If the editor-side
    socket drops or errors, the shim rediscovers a live socket and reconnects with bounded

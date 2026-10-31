@@ -135,14 +135,27 @@ pub fn is_protected_config_path(path: &Path) -> bool {
     }
 
     // Any `.mae` directory anywhere in the resolved chain — project-local config.
-    resolved
-        .components()
-        .any(|c| c.as_os_str() == std::ffi::OsStr::new(".mae"))
+    // Case-blind: on a case-insensitive filesystem (macOS, Windows) `.MAE/` IS
+    // `.mae/`, and a not-yet-existing path cannot be resolved to its real case.
+    resolved.components().any(|c| {
+        c.as_os_str()
+            .to_str()
+            .is_some_and(|s| s.eq_ignore_ascii_case(".mae"))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `.MAE/init.scm` is `.mae/init.scm` on a case-insensitive filesystem.
+    #[test]
+    fn project_local_config_is_matched_case_blind() {
+        for p in ["/proj/.mae/init.scm", "/proj/.MAE/init.scm", "/proj/.Mae/x"] {
+            assert!(is_protected_config_path(Path::new(p)), "{p}");
+        }
+        assert!(!is_protected_config_path(Path::new("/proj/.maeve/x")));
+    }
 
     /// Point config resolution at a scratch dir for the duration of the closure.
     ///

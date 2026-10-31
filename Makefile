@@ -99,7 +99,7 @@ ICON_FILE    := assets/mae.svg
 	ci ci-all ci-extended ci-docker-e2e ci-complete audit \
 	lint-shell lint-yaml lint-deploy lint-all \
 	clean clean-cache prune-artifacts disk-report \
-	code-map code-map-check heavy-e2e-check \
+	code-map code-map-check heavy-e2e-check tool-args-check \
 	audit-metrics audit-metrics-check audit-metrics-bless \
 	manual-kb install-manual practices-kb install-practices kb-provisioning-cost backup-kbs \
 	devpractices-kb install-devpractices adr-kb fetch-adr-kb install-adr \
@@ -503,7 +503,7 @@ clippy-daemon:
 ## the hook, the Makefile and CI had drifted into three disagreeing definitions
 ## of "what must pass", and the daemon workspace fell through the gap between
 ## them. Anything added here is picked up by the hook automatically.
-pre-commit: fmt-check clippy clippy-daemon code-map-check heavy-e2e-check
+pre-commit: fmt-check clippy clippy-daemon code-map-check heavy-e2e-check tool-args-check
 	@$(MAKE) --no-print-directory verify-adr-kb-sync
 	@echo "✅ pre-commit gate passed"
 
@@ -617,6 +617,12 @@ code-map-check:
 ## intermittent 30s socket-bind timeout, usually in a DIFFERENT test.
 heavy-e2e-check:
 	./scripts/check-heavy-e2e-lists.sh
+
+## tool-args-check: every argument an AI tool implementation reads is declared in
+## its schema. Undeclared arguments are refused before the tool runs, so a read
+## the schema leaves out is dead code a client cannot reach.
+tool-args-check:
+	python3 scripts/check-tool-args-declared.py .
 
 ## audit-metrics: regenerate docs/AUDIT_METRICS.json (structural metrics + marker cross-refs)
 audit-metrics:

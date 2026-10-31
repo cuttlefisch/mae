@@ -576,13 +576,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("headless").join("stale.sock");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        // Simulate an orphaned socket file: bind a listener, then drop it
-        // WITHOUT removing the file, matching what a kill -9'd process
-        // leaves behind on disk (a Unix listener does not unlink on drop).
-        {
-            let listener = tokio::net::UnixListener::bind(&path).unwrap();
-            drop(listener);
-        }
+        // Simulate an orphaned socket file: a socket file nothing listens on,
+        // as a kill -9'd process leaves behind. Made from a datagram socket,
+        // which never listens: a dropped stream LISTENER is not stale inside a
+        // test binary, because a subprocess another test is spawning holds a
+        // copy of every fd between fork and exec, and the probe connected to
+        // it (failed 1 run in 4 of the full suite, never alone).
+        drop(std::os::unix::net::UnixDatagram::bind(&path).unwrap());
         assert!(
             path.exists(),
             "the stale file must still be present after drop"

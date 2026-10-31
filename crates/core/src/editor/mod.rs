@@ -80,7 +80,9 @@ pub use git_ops::{BlameEntry, BlameOverlay, PendingGitDiff};
 pub use help_ops::is_builtin_node;
 pub use jumps::{JumpEntry, JUMP_LIST_CAP};
 pub use kb_ops::open_instance_store_with_engine;
-pub use kb_ops::{KbPromoteResult, KbResolution, KbWatcherStats, PromoteDedup, QueryVector};
+pub use kb_ops::{
+    KbPromoteResult, KbResolution, KbWatcherStats, PromoteDedup, QueryVector, ScopedNode,
+};
 pub use kb_state::{DaemonControl, DaemonMode, KbContext};
 pub use lsp_state::{
     CodeActionItem, CodeActionMenu, CompletionItem, HoverPopup, LspContext, LspServerInfo,

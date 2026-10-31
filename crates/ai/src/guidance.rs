@@ -258,9 +258,28 @@ pub fn read_guidance_kb_context(data_dir: &Path, guidance_kb: &str) -> Option<St
         .ok()?;
     let node = store.get_node("index").ok().flatten()?;
     Some(format!(
-        "\n## Required Practices (KB: {guidance_kb})\n{}\n",
+        "\n## Required Practices (KB: {guidance_kb})\n{}\n{}\n",
+        guidance_link_instruction(guidance_kb),
         node.body
     ))
+}
+
+/// How an agent must follow the links in a guidance KB: scoped to that KB,
+/// under its canonical name. One sentence shared by every delivery path (MCP
+/// instructions, the embedded agent, mae-agent, exported AGENTS.md).
+///
+/// @ai-caution: [security] The scope is what keeps a node in the user's own
+/// stores (read first by an unscoped `kb_get`) from standing in for a shipped
+/// practice. A system KB is named by its catalog spelling, which is what
+/// `kb_get`'s `kb` resolves; `ai_guidance_kb` itself is matched case-blind.
+pub fn guidance_link_instruction(guidance_kb: &str) -> String {
+    let name = mae_kb::system_kb::find(guidance_kb)
+        .map(|k| k.name)
+        .unwrap_or(guidance_kb);
+    format!(
+        "Links here (`[[...]]`) name nodes of KB '{name}': fetch one with the `kb_get` tool as \
+         {{\"id\": \"<link target>\", \"kb\": \"{name}\"}}."
+    )
 }
 
 /// Build the full guidance-context block (project files + designated
@@ -291,6 +310,17 @@ pub fn build_guidance_context(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The instruction names the KB as `kb_get`'s `kb` resolves it: the
+    /// catalog spelling for a system KB, whatever case the option used.
+    #[test]
+    fn the_link_instruction_scopes_reads_to_the_canonical_kb_name() {
+        let s = guidance_link_instruction("devpractices");
+        assert!(s.contains(r#""kb": "DevPractices""#), "{s}");
+        assert!(s.contains("kb_get"), "{s}");
+        // A user KB name is passed through unchanged.
+        assert!(guidance_link_instruction("TeamPractices").contains(r#""kb": "TeamPractices""#));
+    }
 
     #[test]
     fn default_data_dir_prefers_xdg_data_home() {

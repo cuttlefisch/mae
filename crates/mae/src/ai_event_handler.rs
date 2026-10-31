@@ -222,7 +222,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 }
             };
             // Drain any pending Scheme evals queued by the tool (e.g. eval_scheme).
-            let scheme_output = drain_pending_scheme_evals(
+            let scheme_output = drain_ai_scheme_evals(
                 editor,
                 ctx.scheme,
                 ctx.permission_policy.ambient_scheme_tier(),
@@ -1211,7 +1211,7 @@ pub fn handle_mcp_request(
     };
     // Drain any pending Scheme evals queued by the tool (e.g. eval_scheme).
     let scheme_output =
-        drain_pending_scheme_evals(editor, scheme, effective_policy.ambient_scheme_tier());
+        drain_ai_scheme_evals(editor, scheme, effective_policy.ambient_scheme_tier());
     match exec_result {
         ExecuteResult::Immediate(mut result) => {
             // If the tool queued a Scheme eval, replace the output with the
@@ -1655,6 +1655,56 @@ pub fn timeout_deferred_dap_reply(editor: &mut Editor, deferred_dap_reply: &mut 
         }
     }
 }
+
+/// [`drain_pending_scheme_evals`] for Scheme an AI tool queued (`eval_scheme`):
+/// the evaluation and every effect it applies count as AI-originated.
+///
+/// @ai-caution: [security] The drain runs AFTER the tool's
+/// `with_ai_dispatch_scope`, so without this mark an agent's `eval_scheme` reached
+/// effects with `is_ai_originated_dispatch() == false` — the AI-origin guards
+/// (protected-config saves, system-node shadowing) treated it as the human.
+/// The human keypress path calls `drain_pending_scheme_evals` directly.
+///
+/// Not covered (principle #6's known tension): a hook or redefinition the
+/// agent installs here runs later, unmarked, when the human's action fires it.
+pub fn drain_ai_scheme_evals(
+    editor: &mut Editor,
+    scheme: &mut mae_scheme::SchemeRuntime,
+    ambient_tier: PermissionTier,
+) -> Option<(String, bool)> {
+    // Same unwind direction as `with_ai_dispatch_scope_for_session`: a leaked
+    // increment is more restrictive, never less.
+    editor.ai.ai_dispatch_depth = editor.ai.ai_dispatch_depth.saturating_add(1);
+    // Code the agent's code queued while it ran (`(run-command "eval-buffer")`)
+    // is the agent's too: drain it here, inside the mark, instead of leaving it
+    // for the human keypress path to run unmarked at the human's tier.
+    let mut out: Option<(String, bool)> = None;
+    for _ in 0..AI_DRAIN_MAX_ROUNDS {
+        let Some((text, ok)) = drain_pending_scheme_evals(editor, scheme, ambient_tier) else {
+            break;
+        };
+        out = Some(match out {
+            Some((prev, prev_ok)) => (format!("{prev}\n{text}"), prev_ok && ok),
+            None => (text, ok),
+        });
+    }
+    if !editor.pending_scheme_eval.is_empty() {
+        // Still queueing after the bound: drop it rather than hand it to the
+        // human path. Reported as a failure so the agent sees it.
+        let dropped = std::mem::take(&mut editor.pending_scheme_eval).len();
+        let note = format!("; error: {dropped} Scheme evaluation(s) still queued after {AI_DRAIN_MAX_ROUNDS} rounds were dropped");
+        out = Some(match out {
+            Some((prev, _)) => (format!("{prev}\n{note}"), false),
+            None => (note, false),
+        });
+    }
+    editor.ai.ai_dispatch_depth = editor.ai.ai_dispatch_depth.saturating_sub(1);
+    out
+}
+
+/// How many times [`drain_ai_scheme_evals`] re-drains code that the drained
+/// code itself queued. A program that keeps queueing more is a loop, not work.
+const AI_DRAIN_MAX_ROUNDS: usize = 8;
 
 /// Drain any pending Scheme evaluations queued by AI tools (e.g. `eval_scheme`).
 /// Returns `Some(output)` if any expressions were evaluated, `None` otherwise.
