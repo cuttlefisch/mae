@@ -7,6 +7,6 @@ license.workspace = true
 
 [dependencies]
 mae-scheme = { path = "../scheme" }
-parking_lot = "0.12"
+parking_lot = "0.13"
 # Downstream forks: add your own crate(s) here, e.g.:
 # mae-html-export = { path = "../../../mae-html-export" }

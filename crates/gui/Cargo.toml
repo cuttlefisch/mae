@@ -15,7 +15,7 @@ winit = "0.30"
 # `gl` + `x11`; a set with no published binary falls back to a source build that
 # is not viable (see `src/svg.rs`). Inline SVG goes through `resvg` instead.
 skia-safe = "0.153"
-resvg = "0.48"
+resvg = "0.49"
 softbuffer = "0.4"
 tracing = { workspace = true }
 # ADR-087 Rule 7: no direct unicode-width dependency -- width goes through
