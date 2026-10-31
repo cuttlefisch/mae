@@ -1,0 +1,24 @@
+:PROPERTIES:
+:ID: sem-pc-file
+:END:
+#+title: Links belong to the innermost node
+
+File text links [[id:sem-pc-a]] and [[id:sem-pc-shared]].
+
+* Parent
+:PROPERTIES:
+:ID: sem-pc-parent
+:END:
+Parent links [[id:sem-pc-b]].
+
+** Child
+:PROPERTIES:
+:ID: sem-pc-child
+:END:
+Child links [[id:sem-pc-c]] and [[id:sem-pc-shared]].
+
+** Child without an id
+Its link [[id:sem-pc-d]] belongs to the parent.
+
+* Top heading without an id
+Its link [[id:sem-pc-e]] belongs to the file.

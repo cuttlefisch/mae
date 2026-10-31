@@ -1,0 +1,17 @@
+:PROPERTIES:
+:ID: sem-tr-file
+:END:
+#+title: Transclusions
+#+TRANSCLUDE: sem-tr-member-a
+#+transclude: sem-tr-member-b reference
+#+Transclude: sem-tr-member-c   transclusion
+
+#+begin_example
+#+TRANSCLUDE: sem-tr-in-example content
+#+end_example
+
+* Heading
+:PROPERTIES:
+:ID: sem-tr-heading
+:END:
+#+TRANSCLUDE: sem-tr-member-d content

@@ -52,6 +52,42 @@ pub(crate) fn to_green(
     b.finish()
 }
 
+/// `text` parsed as the objects of a `container` (as `org-element` parses a
+/// secondary string such as a keyword value), under a node of that kind.
+/// Link types are the default ones: they only decide which `type:path` text
+/// is a plain link, so the plain-text reading of the result is the same for
+/// any set (a plain link reads as its path either way).
+pub(crate) fn objects(text: &str, container: SyntaxKind) -> crate::SyntaxNode {
+    let src = crate::text::Source::new(text);
+    let ix = inline::InlineIndex::build(text);
+    let mut link_types: Vec<String> = crate::DEFAULT_LINK_TYPES
+        .iter()
+        .map(|t| t.to_string())
+        .collect();
+    link_types.sort_by_key(|t| std::cmp::Reverse(t.len()));
+    let cx = InlineCx {
+        src: &src,
+        ix: &ix,
+        link_types: &link_types,
+    };
+    let mut events = vec![Event::Start(container)];
+    let mut contents = ContentsTable::default();
+    let budget = crate::DEFAULT_MAX_DEPTH;
+    inline::parse(
+        &cx,
+        0,
+        text.len(),
+        container,
+        budget,
+        &mut events,
+        &mut contents,
+    );
+    events.push(Event::Finish);
+    let mut b = GreenNodeBuilder::new();
+    events.iter().for_each(|e| simple(&mut b, text, e));
+    crate::SyntaxNode::new_root(b.finish())
+}
+
 fn simple(b: &mut GreenNodeBuilder, text: &str, ev: &Event) {
     let raw = OrgLanguage::kind_to_raw;
     match *ev {
