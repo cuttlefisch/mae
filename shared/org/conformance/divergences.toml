@@ -1,0 +1,29 @@
+# Intended differences between mae-org and Emacs org-element (ADR-112 D5).
+#
+# tests/conformance.rs fails on any difference NOT covered here, and on any
+# entry that no longer matches a difference. Each entry names the pinning
+# test that fixes mae-org's behaviour, so the divergence cannot drift silently.
+#
+# Fields: kind  = org-element type, or "*" for every kind
+#         file  = repo-relative path (a trailing * makes it a prefix)
+#         begin = optional byte offset of the differing element
+#         reason, test = why, and the test that pins mae-org's side
+
+# The oracle reads `utf-8-unix` so its byte offsets are exact, which makes
+# Emacs see a stored BOM as a character (so `* ` is not at column 0) and a
+# CR as line content (so `\r\n`-only lines are not blank and tags before
+# `\r` are not tags). An Org user's Emacs strips the BOM and decodes CRLF
+# as a line end; mae-org does the same. The CRLF and BOM variants of every
+# LF file are checked against the shifted LF golden by
+# `crlf_and_bom_variants_agree_with_the_lf_goldens`, with no exceptions.
+[[divergence]]
+kind = "*"
+file = "shared/org/tests/fixtures/bom.org"
+reason = "stored BOM: the oracle sees U+FEFF as content; mae-org treats it as trivia, as Emacs's default decoding does"
+test = "bom_is_trivia_so_the_first_line_stays_at_column_0"
+
+[[divergence]]
+kind = "*"
+file = "shared/org/tests/fixtures/crlf.org"
+reason = "stored CRLF: the oracle sees CR as content; mae-org treats CRLF as a line end, as Emacs's DOS decoding does"
+test = "crlf_is_one_line_ending_and_a_lone_cr_is_content"

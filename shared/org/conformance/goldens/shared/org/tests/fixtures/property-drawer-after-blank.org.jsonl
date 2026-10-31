@@ -1,0 +1,15 @@
+{"type":"#file","bytes":171,"unmodified":true}
+{"type":"section","begin":0,"end":55,"contents_begin":0,"contents_end":55}
+{"type":"comment","begin":0,"end":19,"contents_begin":null,"contents_end":null}
+{"type":"drawer","begin":19,"end":55,"contents_begin":32,"contents_end":49,"name":"PROPERTIES"}
+{"type":"paragraph","begin":32,"end":49,"contents_begin":32,"contents_end":49}
+{"type":"headline","begin":55,"end":114,"contents_begin":59,"contents_end":114,"level":1,"raw_title":"H","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":59,"end":114,"contents_begin":59,"contents_end":114}
+{"type":"planning","begin":59,"end":88,"contents_begin":null,"contents_end":null}
+{"type":"drawer","begin":88,"end":114,"contents_begin":101,"contents_end":108,"name":"PROPERTIES"}
+{"type":"paragraph","begin":101,"end":108,"contents_begin":101,"contents_end":108}
+{"type":"headline","begin":114,"end":171,"contents_begin":118,"contents_end":171,"level":1,"raw_title":"G","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":118,"end":171,"contents_begin":118,"contents_end":171}
+{"type":"planning","begin":118,"end":145,"contents_begin":null,"contents_end":null}
+{"type":"property-drawer","begin":145,"end":171,"contents_begin":158,"contents_end":165}
+{"type":"node-property","begin":158,"end":165,"contents_begin":null,"contents_end":null,"key":"ID","value":"y"}

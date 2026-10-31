@@ -1,0 +1,5 @@
+* LF heading
+line
+lonecr in content
+
+* Next

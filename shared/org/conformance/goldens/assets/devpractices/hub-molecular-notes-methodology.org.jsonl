@@ -1,0 +1,62 @@
+{"type":"#file","bytes":2294,"unmodified":true}
+{"type":"section","begin":0,"end":315,"contents_begin":0,"contents_end":315}
+{"type":"property-drawer","begin":0,"end":83,"contents_begin":13,"contents_end":77}
+{"type":"node-property","begin":13,"end":50,"contents_begin":null,"contents_end":null,"key":"ID","value":"hub:molecular-notes-methodology"}
+{"type":"node-property","begin":50,"end":61,"contents_begin":null,"contents_end":null,"key":"ROLE","value":"hub"}
+{"type":"node-property","begin":61,"end":77,"contents_begin":null,"contents_end":null,"key":"KIND","value":"category"}
+{"type":"keyword","begin":83,"end":120,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"Molecular Notes Methodology"}
+{"type":"keyword","begin":120,"end":167,"contents_begin":null,"contents_end":null,"key":"FILETAGS","value":":hub:molecular-notes:devpractice:"}
+{"type":"paragraph","begin":167,"end":315,"contents_begin":167,"contents_end":314}
+{"type":"headline","begin":315,"end":550,"contents_begin":330,"contents_end":550,"level":1,"raw_title":"Fundamentals","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":330,"end":550,"contents_begin":330,"contents_end":550}
+{"type":"plain-list","begin":330,"end":550,"contents_begin":330,"contents_end":549}
+{"type":"item","begin":330,"end":415,"contents_begin":332,"contents_end":415,"bullet":"- "}
+{"type":"paragraph","begin":332,"end":415,"contents_begin":332,"contents_end":415}
+{"type":"item","begin":415,"end":490,"contents_begin":417,"contents_end":490,"bullet":"- "}
+{"type":"paragraph","begin":417,"end":490,"contents_begin":417,"contents_end":490}
+{"type":"item","begin":490,"end":549,"contents_begin":492,"contents_end":549,"bullet":"- "}
+{"type":"paragraph","begin":492,"end":549,"contents_begin":492,"contents_end":549}
+{"type":"headline","begin":550,"end":832,"contents_begin":562,"contents_end":832,"level":1,"raw_title":"Structure","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":562,"end":832,"contents_begin":562,"contents_end":832}
+{"type":"plain-list","begin":562,"end":832,"contents_begin":562,"contents_end":831}
+{"type":"item","begin":562,"end":636,"contents_begin":564,"contents_end":636,"bullet":"- "}
+{"type":"paragraph","begin":564,"end":636,"contents_begin":564,"contents_end":636}
+{"type":"item","begin":636,"end":695,"contents_begin":638,"contents_end":695,"bullet":"- "}
+{"type":"paragraph","begin":638,"end":695,"contents_begin":638,"contents_end":695}
+{"type":"item","begin":695,"end":760,"contents_begin":697,"contents_end":760,"bullet":"- "}
+{"type":"paragraph","begin":697,"end":760,"contents_begin":697,"contents_end":760}
+{"type":"item","begin":760,"end":831,"contents_begin":762,"contents_end":831,"bullet":"- "}
+{"type":"paragraph","begin":762,"end":831,"contents_begin":762,"contents_end":831}
+{"type":"headline","begin":832,"end":1197,"contents_begin":857,"contents_end":1197,"level":1,"raw_title":"Authoring and auditing","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":857,"end":1197,"contents_begin":857,"contents_end":1197}
+{"type":"plain-list","begin":857,"end":1197,"contents_begin":857,"contents_end":1196}
+{"type":"item","begin":857,"end":920,"contents_begin":859,"contents_end":920,"bullet":"- "}
+{"type":"paragraph","begin":859,"end":920,"contents_begin":859,"contents_end":920}
+{"type":"item","begin":920,"end":977,"contents_begin":922,"contents_end":977,"bullet":"- "}
+{"type":"paragraph","begin":922,"end":977,"contents_begin":922,"contents_end":977}
+{"type":"item","begin":977,"end":1042,"contents_begin":979,"contents_end":1042,"bullet":"- "}
+{"type":"paragraph","begin":979,"end":1042,"contents_begin":979,"contents_end":1042}
+{"type":"item","begin":1042,"end":1196,"contents_begin":1044,"contents_end":1196,"bullet":"- "}
+{"type":"paragraph","begin":1044,"end":1196,"contents_begin":1044,"contents_end":1196}
+{"type":"headline","begin":1197,"end":1616,"contents_begin":1225,"contents_end":1616,"level":1,"raw_title":"Related process practices","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1225,"end":1616,"contents_begin":1225,"contents_end":1616}
+{"type":"plain-list","begin":1225,"end":1616,"contents_begin":1225,"contents_end":1615}
+{"type":"item","begin":1225,"end":1383,"contents_begin":1227,"contents_end":1383,"bullet":"- "}
+{"type":"paragraph","begin":1227,"end":1383,"contents_begin":1227,"contents_end":1383}
+{"type":"item","begin":1383,"end":1615,"contents_begin":1385,"contents_end":1615,"bullet":"- "}
+{"type":"paragraph","begin":1385,"end":1615,"contents_begin":1385,"contents_end":1615}
+{"type":"headline","begin":1616,"end":1893,"contents_begin":1643,"contents_end":1893,"level":1,"raw_title":"Does this actually work?","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1643,"end":1893,"contents_begin":1643,"contents_end":1893}
+{"type":"plain-list","begin":1643,"end":1893,"contents_begin":1643,"contents_end":1892}
+{"type":"item","begin":1643,"end":1892,"contents_begin":1645,"contents_end":1892,"bullet":"- "}
+{"type":"paragraph","begin":1645,"end":1892,"contents_begin":1645,"contents_end":1892}
+{"type":"headline","begin":1893,"end":2294,"contents_begin":1909,"contents_end":2294,"level":1,"raw_title":"Writing style","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1909,"end":2294,"contents_begin":1909,"contents_end":2294}
+{"type":"plain-list","begin":1909,"end":2251,"contents_begin":1909,"contents_end":2250}
+{"type":"item","begin":1909,"end":1956,"contents_begin":1911,"contents_end":1956,"bullet":"- "}
+{"type":"paragraph","begin":1911,"end":1956,"contents_begin":1911,"contents_end":1956}
+{"type":"item","begin":1956,"end":2033,"contents_begin":1958,"contents_end":2033,"bullet":"- "}
+{"type":"paragraph","begin":1958,"end":2033,"contents_begin":1958,"contents_end":2033}
+{"type":"item","begin":2033,"end":2250,"contents_begin":2035,"contents_end":2250,"bullet":"- "}
+{"type":"paragraph","begin":2035,"end":2250,"contents_begin":2035,"contents_end":2250}
+{"type":"paragraph","begin":2251,"end":2294,"contents_begin":2251,"contents_end":2294}

@@ -1,0 +1,8 @@
+* Task
+:LOGBOOK:
+- note taken
+no end here
+* Next
+:NOTES:
+closed drawer
+:END:

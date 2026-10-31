@@ -1,0 +1,22 @@
+{"type":"#file","bytes":4757,"unmodified":true}
+{"type":"section","begin":0,"end":4757,"contents_begin":0,"contents_end":4757}
+{"type":"property-drawer","begin":0,"end":92,"contents_begin":13,"contents_end":86}
+{"type":"node-property","begin":13,"end":59,"contents_begin":null,"contents_end":null,"key":"ID","value":"practice:label-driven-release-automation"}
+{"type":"node-property","begin":59,"end":71,"contents_begin":null,"contents_end":null,"key":"ROLE","value":"atom"}
+{"type":"node-property","begin":71,"end":86,"contents_begin":null,"contents_end":null,"key":"KIND","value":"concept"}
+{"type":"keyword","begin":92,"end":133,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"Label-Driven Release Automation"}
+{"type":"keyword","begin":133,"end":186,"contents_begin":null,"contents_end":null,"key":"FILETAGS","value":":github:release:automation:devpractice:"}
+{"type":"paragraph","begin":186,"end":774,"contents_begin":186,"contents_end":773}
+{"type":"paragraph","begin":774,"end":1659,"contents_begin":774,"contents_end":1658}
+{"type":"paragraph","begin":1659,"end":2255,"contents_begin":1659,"contents_end":2254}
+{"type":"paragraph","begin":2255,"end":2263,"contents_begin":2255,"contents_end":2263}
+{"type":"comment","begin":2263,"end":2309,"contents_begin":null,"contents_end":null}
+{"type":"paragraph","begin":2309,"end":2411,"contents_begin":2309,"contents_end":2410}
+{"type":"paragraph","begin":2411,"end":2513,"contents_begin":2411,"contents_end":2513}
+{"type":"plain-list","begin":2513,"end":2993,"contents_begin":2513,"contents_end":2993}
+{"type":"item","begin":2513,"end":2993,"contents_begin":2521,"contents_end":2993,"bullet":"- "}
+{"type":"paragraph","begin":2521,"end":2993,"contents_begin":2521,"contents_end":2993}
+{"type":"paragraph","begin":2993,"end":2998,"contents_begin":2993,"contents_end":2997}
+{"type":"paragraph","begin":2998,"end":3254,"contents_begin":2998,"contents_end":3253}
+{"type":"paragraph","begin":3254,"end":4069,"contents_begin":3254,"contents_end":4068}
+{"type":"paragraph","begin":4069,"end":4757,"contents_begin":4069,"contents_end":4757}

@@ -1,0 +1,12 @@
+#+SEQ_TODO: NEXT(n) WAIT(w@/!) | FINISHED(f!)
+#+TYP_TODO: ALICE BOB | DONE
+* NEXT one
+* WAIT two
+* FINISHED three
+* BOB four
+* DONE five
+* TODO six
+#+begin_example
+#+TODO: IGNORED
+#+end_example
+* IGNORED seven

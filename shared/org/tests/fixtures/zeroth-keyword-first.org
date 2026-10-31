@@ -1,0 +1,5 @@
+#+title: keyword first
+:PROPERTIES:
+:ID: plain-drawer
+:END:
+Text.

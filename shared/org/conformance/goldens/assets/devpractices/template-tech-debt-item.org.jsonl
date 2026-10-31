@@ -1,0 +1,24 @@
+{"type":"#file","bytes":2257,"unmodified":true}
+{"type":"section","begin":0,"end":2257,"contents_begin":0,"contents_end":2257}
+{"type":"property-drawer","begin":0,"end":60,"contents_begin":13,"contents_end":54}
+{"type":"node-property","begin":13,"end":42,"contents_begin":null,"contents_end":null,"key":"ID","value":"template:tech-debt-item"}
+{"type":"node-property","begin":42,"end":54,"contents_begin":null,"contents_end":null,"key":"ROLE","value":"atom"}
+{"type":"keyword","begin":60,"end":93,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"Tech-Debt Item Template"}
+{"type":"keyword","begin":93,"end":139,"contents_begin":null,"contents_end":null,"key":"FILETAGS","value":":tech-debt:template:devpractice:"}
+{"type":"paragraph","begin":139,"end":465,"contents_begin":139,"contents_end":464}
+{"type":"plain-list","begin":465,"end":1555,"contents_begin":465,"contents_end":1554}
+{"type":"item","begin":465,"end":650,"contents_begin":467,"contents_end":650,"bullet":"- "}
+{"type":"paragraph","begin":467,"end":650,"contents_begin":467,"contents_end":650}
+{"type":"item","begin":650,"end":823,"contents_begin":652,"contents_end":823,"bullet":"- "}
+{"type":"paragraph","begin":652,"end":823,"contents_begin":652,"contents_end":823}
+{"type":"item","begin":823,"end":1013,"contents_begin":825,"contents_end":1013,"bullet":"- "}
+{"type":"paragraph","begin":825,"end":1013,"contents_begin":825,"contents_end":1013}
+{"type":"item","begin":1013,"end":1243,"contents_begin":1015,"contents_end":1243,"bullet":"- "}
+{"type":"paragraph","begin":1015,"end":1243,"contents_begin":1015,"contents_end":1243}
+{"type":"item","begin":1243,"end":1455,"contents_begin":1245,"contents_end":1455,"bullet":"- "}
+{"type":"paragraph","begin":1245,"end":1455,"contents_begin":1245,"contents_end":1455}
+{"type":"item","begin":1455,"end":1554,"contents_begin":1457,"contents_end":1554,"bullet":"- "}
+{"type":"paragraph","begin":1457,"end":1554,"contents_begin":1457,"contents_end":1554}
+{"type":"paragraph","begin":1555,"end":1579,"contents_begin":1555,"contents_end":1578}
+{"type":"example-block","begin":1579,"end":2029,"contents_begin":null,"contents_end":null}
+{"type":"paragraph","begin":2029,"end":2257,"contents_begin":2029,"contents_end":2257}

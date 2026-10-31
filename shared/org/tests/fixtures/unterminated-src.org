@@ -1,0 +1,11 @@
+#+TITLE: Unterminated
+
+#+begin_src python
+print('never closed')
+
+more code
+* After
+text under after
+#+begin_src sh
+ls
+#+end_src

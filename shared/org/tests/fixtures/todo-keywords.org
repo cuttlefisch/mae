@@ -1,0 +1,6 @@
+#+TODO: A B | C
+* A first
+* B second
+* C done
+* TODO not a keyword here
+* Ax not a keyword either

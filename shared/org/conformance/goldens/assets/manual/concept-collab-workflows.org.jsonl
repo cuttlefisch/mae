@@ -1,0 +1,60 @@
+{"type":"#file","bytes":2501,"unmodified":true}
+{"type":"section","begin":0,"end":296,"contents_begin":0,"contents_end":296}
+{"type":"property-drawer","begin":0,"end":113,"contents_begin":13,"contents_end":107}
+{"type":"node-property","begin":13,"end":43,"contents_begin":null,"contents_end":null,"key":"ID","value":"concept:collab-workflows"}
+{"type":"node-property","begin":43,"end":58,"contents_begin":null,"contents_end":null,"key":"KIND","value":"concept"}
+{"type":"node-property","begin":58,"end":107,"contents_begin":null,"contents_end":null,"key":"ALIASES","value":"collab workflows, loopback, multi-user"}
+{"type":"keyword","begin":113,"end":154,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"Collaborative Editing Workflows"}
+{"type":"keyword","begin":154,"end":197,"contents_begin":null,"contents_end":null,"key":"FILETAGS","value":":workflow:sync:collaboration:"}
+{"type":"paragraph","begin":197,"end":296,"contents_begin":197,"contents_end":295}
+{"type":"headline","begin":296,"end":557,"contents_begin":309,"contents_end":557,"level":2,"raw_title":"Solo Mode","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":309,"end":557,"contents_begin":309,"contents_end":557}
+{"type":"paragraph","begin":309,"end":420,"contents_begin":309,"contents_end":420}
+{"type":"plain-list","begin":420,"end":557,"contents_begin":420,"contents_end":556}
+{"type":"item","begin":420,"end":463,"contents_begin":422,"contents_end":463,"bullet":"- "}
+{"type":"paragraph","begin":422,"end":463,"contents_begin":422,"contents_end":463}
+{"type":"item","begin":463,"end":499,"contents_begin":465,"contents_end":499,"bullet":"- "}
+{"type":"paragraph","begin":465,"end":499,"contents_begin":465,"contents_end":499}
+{"type":"item","begin":499,"end":556,"contents_begin":501,"contents_end":556,"bullet":"- "}
+{"type":"paragraph","begin":501,"end":556,"contents_begin":501,"contents_end":556}
+{"type":"headline","begin":557,"end":1022,"contents_begin":594,"contents_end":1022,"level":2,"raw_title":"Loopback Mode (Local Multi-Agent)","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":594,"end":1022,"contents_begin":594,"contents_end":1022}
+{"type":"paragraph","begin":594,"end":703,"contents_begin":594,"contents_end":702}
+{"type":"src-block","begin":703,"end":791,"contents_begin":null,"contents_end":null,"language":"bash"}
+{"type":"paragraph","begin":791,"end":818,"contents_begin":791,"contents_end":818}
+{"type":"src-block","begin":818,"end":946,"contents_begin":null,"contents_end":null,"language":"scheme"}
+{"type":"paragraph","begin":946,"end":1022,"contents_begin":946,"contents_end":1021}
+{"type":"headline","begin":1022,"end":1438,"contents_begin":1057,"contents_end":1438,"level":2,"raw_title":"Collaborative Mode (Multi-User)","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1057,"end":1438,"contents_begin":1057,"contents_end":1438}
+{"type":"paragraph","begin":1057,"end":1095,"contents_begin":1057,"contents_end":1095}
+{"type":"src-block","begin":1095,"end":1183,"contents_begin":null,"contents_end":null,"language":"scheme"}
+{"type":"paragraph","begin":1183,"end":1215,"contents_begin":1183,"contents_end":1215}
+{"type":"src-block","begin":1215,"end":1274,"contents_begin":null,"contents_end":null,"language":"bash"}
+{"type":"paragraph","begin":1274,"end":1438,"contents_begin":1274,"contents_end":1437}
+{"type":"headline","begin":1438,"end":1842,"contents_begin":1450,"contents_end":1842,"level":2,"raw_title":"Commands","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1450,"end":1842,"contents_begin":1450,"contents_end":1842}
+{"type":"table","begin":1450,"end":1842,"contents_begin":1450,"contents_end":1841}
+{"type":"table-row","begin":1450,"end":1482,"contents_begin":1451,"contents_end":1481}
+{"type":"table-row","begin":1482,"end":1514,"contents_begin":null,"contents_end":null}
+{"type":"table-row","begin":1514,"end":1576,"contents_begin":1515,"contents_end":1575}
+{"type":"table-row","begin":1576,"end":1641,"contents_begin":1577,"contents_end":1640}
+{"type":"table-row","begin":1641,"end":1703,"contents_begin":1642,"contents_end":1702}
+{"type":"table-row","begin":1703,"end":1776,"contents_begin":1704,"contents_end":1775}
+{"type":"table-row","begin":1776,"end":1841,"contents_begin":1777,"contents_end":1840}
+{"type":"headline","begin":1842,"end":2089,"contents_begin":1867,"contents_end":2089,"level":2,"raw_title":"Configuration Options","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1867,"end":2089,"contents_begin":1867,"contents_end":2089}
+{"type":"table","begin":1867,"end":2089,"contents_begin":1867,"contents_end":2088}
+{"type":"table-row","begin":1867,"end":1902,"contents_begin":1868,"contents_end":1901}
+{"type":"table-row","begin":1902,"end":1937,"contents_begin":null,"contents_end":null}
+{"type":"table-row","begin":1937,"end":2011,"contents_begin":1938,"contents_end":2010}
+{"type":"table-row","begin":2011,"end":2088,"contents_begin":2012,"contents_end":2087}
+{"type":"headline","begin":2089,"end":2501,"contents_begin":2104,"contents_end":2501,"level":2,"raw_title":"Diagnostics","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":2104,"end":2501,"contents_begin":2104,"contents_end":2501}
+{"type":"plain-list","begin":2104,"end":2347,"contents_begin":2104,"contents_end":2346}
+{"type":"item","begin":2104,"end":2196,"contents_begin":2106,"contents_end":2196,"bullet":"- "}
+{"type":"paragraph","begin":2106,"end":2196,"contents_begin":2106,"contents_end":2196}
+{"type":"item","begin":2196,"end":2270,"contents_begin":2198,"contents_end":2270,"bullet":"- "}
+{"type":"paragraph","begin":2198,"end":2270,"contents_begin":2198,"contents_end":2270}
+{"type":"item","begin":2270,"end":2346,"contents_begin":2272,"contents_end":2346,"bullet":"- "}
+{"type":"paragraph","begin":2272,"end":2346,"contents_begin":2272,"contents_end":2346}
+{"type":"paragraph","begin":2347,"end":2501,"contents_begin":2347,"contents_end":2501}

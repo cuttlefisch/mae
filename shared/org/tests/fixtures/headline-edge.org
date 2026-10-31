@@ -1,0 +1,13 @@
+* 
+** TODO
+* COMMENT commented out
+* [#A] priority only
+*** DONE [#B] COMMENT all parts   :t1:t2:
+* tags-like:a:
+* trailing tags :x:y:   
+* not tags : a :
+* two runs :a: and :b:
+* TODO:x
+* COMMENTARY is a title
+**************** deep level
+* utf8 tags :éte:日本:

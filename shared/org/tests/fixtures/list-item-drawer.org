@@ -1,0 +1,10 @@
+* Node
+- first item
+  :PROPERTIES:
+  :ID: 7a1c9e0e-0000-4000-8000-000000000001
+  :END:
+  item body
+- second item
+  :LOGBOOK:
+  - inner
+  :END:

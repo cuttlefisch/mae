@@ -1,0 +1,19 @@
+{"type":"#file","bytes":943,"unmodified":true}
+{"type":"section","begin":0,"end":683,"contents_begin":0,"contents_end":683}
+{"type":"property-drawer","begin":0,"end":101,"contents_begin":13,"contents_end":95}
+{"type":"node-property","begin":13,"end":38,"contents_begin":null,"contents_end":null,"key":"ID","value":"collabtest:overview"}
+{"type":"node-property","begin":38,"end":53,"contents_begin":null,"contents_end":null,"key":"KIND","value":"concept"}
+{"type":"node-property","begin":53,"end":95,"contents_begin":null,"contents_end":null,"key":"ALIASES","value":"collab-test-kb,fixture-overview"}
+{"type":"keyword","begin":101,"end":139,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"Collab Test Fixture Overview"}
+{"type":"keyword","begin":139,"end":173,"contents_begin":null,"contents_end":null,"key":"FILETAGS","value":":collabtest:fixture:"}
+{"type":"paragraph","begin":173,"end":412,"contents_begin":173,"contents_end":411}
+{"type":"paragraph","begin":412,"end":613,"contents_begin":412,"contents_end":612}
+{"type":"paragraph","begin":613,"end":683,"contents_begin":613,"contents_end":682}
+{"type":"headline","begin":683,"end":943,"contents_begin":696,"contents_end":943,"level":2,"raw_title":"Structure","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":696,"end":943,"contents_begin":696,"contents_end":943}
+{"type":"plain-list","begin":696,"end":845,"contents_begin":696,"contents_end":844}
+{"type":"item","begin":696,"end":770,"contents_begin":698,"contents_end":770,"bullet":"- "}
+{"type":"paragraph","begin":698,"end":770,"contents_begin":698,"contents_end":770}
+{"type":"item","begin":770,"end":844,"contents_begin":772,"contents_end":844,"bullet":"- "}
+{"type":"paragraph","begin":772,"end":844,"contents_begin":772,"contents_end":844}
+{"type":"paragraph","begin":845,"end":943,"contents_begin":845,"contents_end":943}

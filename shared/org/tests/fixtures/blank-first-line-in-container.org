@@ -1,0 +1,13 @@
+#+begin_quote
+
+Text after one blank line.
+#+end_quote
+#+begin_aside
+  
+Text after a whitespace-only line.
+#+end_aside
+:DRAWER:
+
+
+After two blank lines.
+:END:

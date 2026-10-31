@@ -1,0 +1,16 @@
+Text with a reference.[fn:1]
+
+[fn:1] The definition
+continues here.
+
+[fn:two] Second, after one blank.
+#+NAME: fnname
+[fn:3] Third with affiliated above.
+
+
+After two blanks: not part of fn 3.
+[fn:4]
+
+  starts on a later line
+* Headline ends footnotes
+[fn:5] last

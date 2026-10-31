@@ -1,0 +1,86 @@
+# Files whose Emacs org-element parse is checked in under goldens/ (ADR-112 D5).
+# Paths are relative to the repository root. Regenerate with regen.sh after
+# editing this list. Every synthetic fixture is listed; the bundled corpus is
+# represented by a subset chosen for element-kind coverage (every kind the
+# bundled corpus contains) plus the structurally richest files per directory.
+# The whole bundled corpus, Org's own repository and Worg are checked with
+# tests/oracle_external.rs (needs Emacs; run locally).
+
+# Synthetic adversarial fixtures (invented for this crate).
+shared/org/tests/fixtures/affiliated.org
+shared/org/tests/fixtures/blank-first-line-in-container.org
+shared/org/tests/fixtures/blank-only.org
+shared/org/tests/fixtures/blocks-misc.org
+shared/org/tests/fixtures/bom.org
+shared/org/tests/fixtures/bracketed-keywords.org
+shared/org/tests/fixtures/col0-heading-in-example.org
+shared/org/tests/fixtures/col0-heading-in-quote.org
+shared/org/tests/fixtures/col0-heading-in-src.org
+shared/org/tests/fixtures/crlf.org
+shared/org/tests/fixtures/deep-blocks.org
+shared/org/tests/fixtures/deep-lists.org
+shared/org/tests/fixtures/empty.org
+shared/org/tests/fixtures/footnotes.org
+shared/org/tests/fixtures/headings-levels.org
+shared/org/tests/fixtures/headline-edge.org
+shared/org/tests/fixtures/indented-stars.org
+shared/org/tests/fixtures/list-item-drawer.org
+shared/org/tests/fixtures/lists.org
+shared/org/tests/fixtures/lone-star.org
+shared/org/tests/fixtures/many-affiliated-orphans.org
+shared/org/tests/fixtures/misc-elements.org
+shared/org/tests/fixtures/mixed-eol.org
+shared/org/tests/fixtures/nested-quotes-same-name.org
+shared/org/tests/fixtures/no-final-newline.org
+shared/org/tests/fixtures/planning-properties.org
+shared/org/tests/fixtures/property-drawer-after-blank.org
+shared/org/tests/fixtures/tables.org
+shared/org/tests/fixtures/todo-keywords.org
+shared/org/tests/fixtures/todo-seq-typ.org
+shared/org/tests/fixtures/unclosed-drawer.org
+shared/org/tests/fixtures/unicode.org
+shared/org/tests/fixtures/unterminated-src.org
+shared/org/tests/fixtures/zeroth-keyword-first.org
+shared/org/tests/fixtures/zeroth-section.org
+
+# Bundled corpus subset.
+assets/devpractices/hub-adr-and-process.org
+assets/devpractices/hub-build-and-vcs-workflow.org
+assets/devpractices/hub-code-quality.org
+assets/devpractices/hub-molecular-notes-methodology.org
+assets/devpractices/hub-start-here.org
+assets/devpractices/practice-label-driven-release-automation.org
+assets/devpractices/practice-mutating-script-safety.org
+assets/devpractices/practice-prior-art-review.org
+assets/devpractices/template-roadmap-phase.org
+assets/devpractices/template-tech-debt-item.org
+assets/manual/concept-collab-architecture.org
+assets/manual/concept-collab-workflows.org
+assets/manual/concept-debugging.org
+assets/manual/concept-design-philosophy.org
+assets/manual/concept-fonts.org
+assets/manual/concept-git-status.org
+assets/manual/concept-kb-sharing.org
+assets/manual/concept-kb-vs-alternatives.org
+assets/manual/concept-keymap-flavors.org
+assets/manual/concept-modules.org
+assets/manual/concept-options.org
+assets/manual/concept-org-link-syntax.org
+assets/manual/concept-self-test.org
+assets/manual/concept-setup-wizard.org
+assets/manual/lesson-collab-setup.org
+assets/manual/lesson-lsp.org
+assets/manual/tutorial-ai-setup.org
+assets/manual/tutorial-collab-setup.org
+assets/markup-demo.org
+assets/practices/adr-process.org
+assets/practices/adversarial-testing.org
+assets/practices/architecture-debt-tracking.org
+assets/practices/downstream-impact-review.org
+assets/practices/index.org
+assets/practices/no-hardcoding.org
+assets/practices/shared-computation.org
+tests/fixtures/kb/collabtest/alpha.org
+tests/fixtures/kb/collabtest/beta.org
+tests/fixtures/kb/collabtest/eor-instance.org
+tests/fixtures/kb/collabtest/overview.org

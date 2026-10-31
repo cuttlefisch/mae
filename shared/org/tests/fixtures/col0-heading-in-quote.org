@@ -1,0 +1,6 @@
+* Outer
+#+begin_quote
+Quoted text.
+** Inner headline
+still quoted?
+#+end_quote

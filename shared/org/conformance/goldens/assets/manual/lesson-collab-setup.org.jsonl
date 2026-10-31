@@ -1,0 +1,129 @@
+{"type":"#file","bytes":6065,"unmodified":true}
+{"type":"section","begin":0,"end":150,"contents_begin":0,"contents_end":150}
+{"type":"property-drawer","begin":0,"end":58,"contents_begin":13,"contents_end":52}
+{"type":"node-property","begin":13,"end":38,"contents_begin":null,"contents_end":null,"key":"ID","value":"lesson:collab-setup"}
+{"type":"node-property","begin":38,"end":52,"contents_begin":null,"contents_end":null,"key":"KIND","value":"lesson"}
+{"type":"keyword","begin":58,"end":100,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"Setting Up Collaborative Editing"}
+{"type":"keyword","begin":100,"end":150,"contents_begin":null,"contents_end":null,"key":"FILETAGS","value":":tutorial:collaboration:daemon:sync:"}
+{"type":"headline","begin":150,"end":6065,"contents_begin":187,"contents_end":6065,"level":2,"raw_title":"Setting Up Collaborative Editing","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":187,"end":470,"contents_begin":187,"contents_end":470}
+{"type":"paragraph","begin":187,"end":470,"contents_begin":187,"contents_end":469}
+{"type":"headline","begin":470,"end":733,"contents_begin":505,"contents_end":733,"level":3,"raw_title":"Step 1 — Install the daemon","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":505,"end":733,"contents_begin":505,"contents_end":733}
+{"type":"paragraph","begin":505,"end":549,"contents_begin":505,"contents_end":549}
+{"type":"src-block","begin":549,"end":657,"contents_begin":null,"contents_end":null,"language":"bash"}
+{"type":"paragraph","begin":657,"end":684,"contents_begin":657,"contents_end":684}
+{"type":"src-block","begin":684,"end":733,"contents_begin":null,"contents_end":null,"language":"bash"}
+{"type":"headline","begin":733,"end":1037,"contents_begin":766,"contents_end":1037,"level":3,"raw_title":"Step 2 — Start the server","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":766,"end":1037,"contents_begin":766,"contents_end":1037}
+{"type":"paragraph","begin":766,"end":792,"contents_begin":766,"contents_end":792}
+{"type":"src-block","begin":792,"end":861,"contents_begin":null,"contents_end":null,"language":"bash"}
+{"type":"paragraph","begin":861,"end":908,"contents_begin":861,"contents_end":908}
+{"type":"src-block","begin":908,"end":967,"contents_begin":null,"contents_end":null,"language":"bash"}
+{"type":"paragraph","begin":967,"end":1037,"contents_begin":967,"contents_end":1036}
+{"type":"headline","begin":1037,"end":1578,"contents_begin":1094,"contents_end":1578,"level":3,"raw_title":"Step 3 — Set a shared secret (PSK authentication)","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1094,"end":1578,"contents_begin":1094,"contents_end":1578}
+{"type":"paragraph","begin":1094,"end":1207,"contents_begin":1094,"contents_end":1206}
+{"type":"paragraph","begin":1207,"end":1239,"contents_begin":1207,"contents_end":1239}
+{"type":"example-block","begin":1239,"end":1318,"contents_begin":null,"contents_end":null}
+{"type":"paragraph","begin":1318,"end":1383,"contents_begin":1318,"contents_end":1383}
+{"type":"example-block","begin":1383,"end":1446,"contents_begin":null,"contents_end":null}
+{"type":"paragraph","begin":1446,"end":1506,"contents_begin":1446,"contents_end":1506}
+{"type":"example-block","begin":1506,"end":1578,"contents_begin":null,"contents_end":null}
+{"type":"headline","begin":1578,"end":1820,"contents_begin":1626,"contents_end":1820,"level":3,"raw_title":"Step 4 — Configure MAE to use the server","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1626,"end":1820,"contents_begin":1626,"contents_end":1820}
+{"type":"paragraph","begin":1626,"end":1671,"contents_begin":1626,"contents_end":1671}
+{"type":"src-block","begin":1671,"end":1756,"contents_begin":null,"contents_end":null,"language":"scheme"}
+{"type":"paragraph","begin":1756,"end":1820,"contents_begin":1756,"contents_end":1819}
+{"type":"headline","begin":1820,"end":2031,"contents_begin":1844,"contents_end":2031,"level":3,"raw_title":"Step 5 — Connect","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1844,"end":2031,"contents_begin":1844,"contents_end":2031}
+{"type":"paragraph","begin":1844,"end":1905,"contents_begin":1844,"contents_end":1905}
+{"type":"src-block","begin":1905,"end":1978,"contents_begin":null,"contents_end":null,"language":"scheme"}
+{"type":"paragraph","begin":1978,"end":2031,"contents_begin":1978,"contents_end":2030}
+{"type":"headline","begin":2031,"end":2193,"contents_begin":2062,"contents_end":2193,"level":3,"raw_title":"Step 6 — Share a buffer","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":2062,"end":2193,"contents_begin":2062,"contents_end":2193}
+{"type":"paragraph","begin":2062,"end":2193,"contents_begin":2062,"contents_end":2192}
+{"type":"headline","begin":2193,"end":2844,"contents_begin":2245,"contents_end":2844,"level":3,"raw_title":"Step 6b — Discover and join shared documents","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":2245,"end":2844,"contents_begin":2245,"contents_end":2844}
+{"type":"plain-list","begin":2245,"end":2467,"contents_begin":2245,"contents_end":2466}
+{"type":"item","begin":2245,"end":2319,"contents_begin":2247,"contents_end":2319,"bullet":"- "}
+{"type":"paragraph","begin":2247,"end":2319,"contents_begin":2247,"contents_end":2319}
+{"type":"item","begin":2319,"end":2404,"contents_begin":2321,"contents_end":2404,"bullet":"- "}
+{"type":"paragraph","begin":2321,"end":2404,"contents_begin":2321,"contents_end":2404}
+{"type":"item","begin":2404,"end":2466,"contents_begin":2406,"contents_end":2466,"bullet":"- "}
+{"type":"paragraph","begin":2406,"end":2466,"contents_begin":2406,"contents_end":2466}
+{"type":"paragraph","begin":2467,"end":2607,"contents_begin":2467,"contents_end":2607}
+{"type":"plain-list","begin":2607,"end":2844,"contents_begin":2607,"contents_end":2843}
+{"type":"item","begin":2607,"end":2670,"contents_begin":2609,"contents_end":2670,"bullet":"- "}
+{"type":"paragraph","begin":2609,"end":2670,"contents_begin":2609,"contents_end":2670}
+{"type":"item","begin":2670,"end":2738,"contents_begin":2672,"contents_end":2738,"bullet":"- "}
+{"type":"paragraph","begin":2672,"end":2738,"contents_begin":2672,"contents_end":2738}
+{"type":"item","begin":2738,"end":2843,"contents_begin":2740,"contents_end":2843,"bullet":"- "}
+{"type":"paragraph","begin":2740,"end":2843,"contents_begin":2740,"contents_end":2843}
+{"type":"headline","begin":2844,"end":3090,"contents_begin":2882,"contents_end":3090,"level":3,"raw_title":"Step 7 — Verify the connection","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":2882,"end":3090,"contents_begin":2882,"contents_end":3090}
+{"type":"plain-list","begin":2882,"end":3090,"contents_begin":2882,"contents_end":3089}
+{"type":"item","begin":2882,"end":2982,"contents_begin":2884,"contents_end":2982,"bullet":"- "}
+{"type":"paragraph","begin":2884,"end":2982,"contents_begin":2884,"contents_end":2982}
+{"type":"item","begin":2982,"end":3089,"contents_begin":2984,"contents_end":3089,"bullet":"- "}
+{"type":"paragraph","begin":2984,"end":3089,"contents_begin":2984,"contents_end":3089}
+{"type":"headline","begin":3090,"end":3621,"contents_begin":3133,"contents_end":3621,"level":3,"raw_title":"Step 8 — AI tools for collaboration","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":3133,"end":3621,"contents_begin":3133,"contents_end":3621}
+{"type":"paragraph","begin":3133,"end":3204,"contents_begin":3133,"contents_end":3203}
+{"type":"table","begin":3204,"end":3517,"contents_begin":3204,"contents_end":3516}
+{"type":"table-row","begin":3204,"end":3227,"contents_begin":3205,"contents_end":3226}
+{"type":"table-row","begin":3227,"end":3250,"contents_begin":null,"contents_end":null}
+{"type":"table-row","begin":3250,"end":3310,"contents_begin":3251,"contents_end":3309}
+{"type":"table-row","begin":3310,"end":3384,"contents_begin":3311,"contents_end":3383}
+{"type":"table-row","begin":3384,"end":3447,"contents_begin":3385,"contents_end":3446}
+{"type":"table-row","begin":3447,"end":3516,"contents_begin":3448,"contents_end":3515}
+{"type":"paragraph","begin":3517,"end":3621,"contents_begin":3517,"contents_end":3620}
+{"type":"headline","begin":3621,"end":3856,"contents_begin":3654,"contents_end":3856,"level":3,"raw_title":"Linux: Systemd User Service","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":3654,"end":3856,"contents_begin":3654,"contents_end":3856}
+{"type":"paragraph","begin":3654,"end":3711,"contents_begin":3654,"contents_end":3711}
+{"type":"src-block","begin":3711,"end":3856,"contents_begin":null,"contents_end":null,"language":"bash"}
+{"type":"headline","begin":3856,"end":4003,"contents_begin":3885,"contents_end":4003,"level":3,"raw_title":"macOS: Homebrew Service","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":3885,"end":4003,"contents_begin":3885,"contents_end":4003}
+{"type":"paragraph","begin":3885,"end":3912,"contents_begin":3885,"contents_end":3912}
+{"type":"src-block","begin":3912,"end":4003,"contents_begin":null,"contents_end":null,"language":"bash"}
+{"type":"headline","begin":4003,"end":4341,"contents_begin":4032,"contents_end":4341,"level":3,"raw_title":"macOS: launchd (manual)","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":4032,"end":4341,"contents_begin":4032,"contents_end":4341}
+{"type":"src-block","begin":4032,"end":4256,"contents_begin":null,"contents_end":null,"language":"bash"}
+{"type":"paragraph","begin":4256,"end":4341,"contents_begin":4256,"contents_end":4340}
+{"type":"headline","begin":4341,"end":4522,"contents_begin":4362,"contents_end":4522,"level":3,"raw_title":"macOS: Firewall","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":4362,"end":4522,"contents_begin":4362,"contents_end":4522}
+{"type":"paragraph","begin":4362,"end":4522,"contents_begin":4362,"contents_end":4521}
+{"type":"headline","begin":4522,"end":4927,"contents_begin":4549,"contents_end":4927,"level":3,"raw_title":"Client-Frame Workflow","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":4549,"end":4927,"contents_begin":4549,"contents_end":4927}
+{"type":"paragraph","begin":4549,"end":4649,"contents_begin":4549,"contents_end":4649}
+{"type":"example-block","begin":4649,"end":4737,"contents_begin":null,"contents_end":null}
+{"type":"paragraph","begin":4737,"end":4800,"contents_begin":4737,"contents_end":4800}
+{"type":"src-block","begin":4800,"end":4927,"contents_begin":null,"contents_end":null,"language":"scheme"}
+{"type":"headline","begin":4927,"end":5385,"contents_begin":4951,"contents_end":5385,"level":3,"raw_title":"Network & Firewall","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":4951,"end":5385,"contents_begin":4951,"contents_end":5385}
+{"type":"paragraph","begin":4951,"end":5008,"contents_begin":4951,"contents_end":5008}
+{"type":"src-block","begin":5008,"end":5067,"contents_begin":null,"contents_end":null,"language":"bash"}
+{"type":"paragraph","begin":5067,"end":5091,"contents_begin":5067,"contents_end":5091}
+{"type":"plain-list","begin":5091,"end":5220,"contents_begin":5091,"contents_end":5219}
+{"type":"item","begin":5091,"end":5183,"contents_begin":5093,"contents_end":5183,"bullet":"- "}
+{"type":"paragraph","begin":5093,"end":5183,"contents_begin":5093,"contents_end":5183}
+{"type":"item","begin":5183,"end":5219,"contents_begin":5185,"contents_end":5219,"bullet":"- "}
+{"type":"paragraph","begin":5185,"end":5219,"contents_begin":5185,"contents_end":5219}
+{"type":"paragraph","begin":5220,"end":5385,"contents_begin":5220,"contents_end":5384}
+{"type":"headline","begin":5385,"end":6065,"contents_begin":5406,"contents_end":6065,"level":3,"raw_title":"Troubleshooting","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":5406,"end":6065,"contents_begin":5406,"contents_end":6065}
+{"type":"plain-list","begin":5406,"end":5946,"contents_begin":5406,"contents_end":5945}
+{"type":"item","begin":5406,"end":5487,"contents_begin":5408,"contents_end":5487,"bullet":"- "}
+{"type":"paragraph","begin":5408,"end":5487,"contents_begin":5408,"contents_end":5487}
+{"type":"item","begin":5487,"end":5577,"contents_begin":5489,"contents_end":5577,"bullet":"- "}
+{"type":"paragraph","begin":5489,"end":5577,"contents_begin":5489,"contents_end":5577}
+{"type":"item","begin":5577,"end":5658,"contents_begin":5579,"contents_end":5658,"bullet":"- "}
+{"type":"paragraph","begin":5579,"end":5658,"contents_begin":5579,"contents_end":5658}
+{"type":"item","begin":5658,"end":5790,"contents_begin":5660,"contents_end":5790,"bullet":"- "}
+{"type":"paragraph","begin":5660,"end":5790,"contents_begin":5660,"contents_end":5790}
+{"type":"item","begin":5790,"end":5869,"contents_begin":5792,"contents_end":5869,"bullet":"- "}
+{"type":"paragraph","begin":5792,"end":5869,"contents_begin":5792,"contents_end":5869}
+{"type":"item","begin":5869,"end":5945,"contents_begin":5871,"contents_end":5945,"bullet":"- "}
+{"type":"paragraph","begin":5871,"end":5945,"contents_begin":5871,"contents_end":5945}
+{"type":"paragraph","begin":5946,"end":5982,"contents_begin":5946,"contents_end":5981}
+{"type":"paragraph","begin":5982,"end":6065,"contents_begin":5982,"contents_end":6065}

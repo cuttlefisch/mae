@@ -1,0 +1,16 @@
+# leading comment
+
+:PROPERTIES:
+:ID: after-blank
+:END:
+* H
+SCHEDULED: <2026-11-01 Sun>
+
+:PROPERTIES:
+:ID: x
+:END:
+* G
+DEADLINE: <2026-11-02 Mon>
+:PROPERTIES:
+:ID: y
+:END:

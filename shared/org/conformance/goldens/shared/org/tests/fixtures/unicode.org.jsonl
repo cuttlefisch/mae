@@ -1,0 +1,10 @@
+{"type":"#file","bytes":141,"unmodified":true}
+{"type":"headline","begin":0,"end":141,"contents_begin":36,"contents_end":141,"level":1,"raw_title":"Überschrift mit Ümlaut","todo":null,"priority":null,"tags":["ärger"],"commentedp":null}
+{"type":"section","begin":36,"end":141,"contents_begin":36,"contents_end":141}
+{"type":"paragraph","begin":36,"end":71,"contents_begin":36,"contents_end":71}
+{"type":"drawer","begin":71,"end":93,"contents_begin":79,"contents_end":87,"name":"ÉTAT"}
+{"type":"paragraph","begin":79,"end":87,"contents_begin":79,"contents_end":87}
+{"type":"plain-list","begin":93,"end":105,"contents_begin":93,"contents_end":105}
+{"type":"item","begin":93,"end":105,"contents_begin":95,"contents_end":105,"bullet":"- "}
+{"type":"paragraph","begin":95,"end":105,"contents_begin":95,"contents_end":105}
+{"type":"src-block","begin":105,"end":141,"contents_begin":null,"contents_end":null,"language":"日本"}

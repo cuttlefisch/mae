@@ -1,0 +1,6 @@
+{"type":"#file","bytes":83,"unmodified":true}
+{"type":"section","begin":2,"end":83,"contents_begin":2,"contents_end":83}
+{"type":"comment","begin":2,"end":34,"contents_begin":null,"contents_end":null}
+{"type":"property-drawer","begin":34,"end":72,"contents_begin":47,"contents_end":66}
+{"type":"node-property","begin":47,"end":66,"contents_begin":null,"contents_end":null,"key":"ID","value":"after-comment"}
+{"type":"keyword","begin":72,"end":83,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"x"}

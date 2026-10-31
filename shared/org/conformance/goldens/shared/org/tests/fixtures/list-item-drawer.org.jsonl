@@ -1,0 +1,15 @@
+{"type":"#file","bytes":143,"unmodified":true}
+{"type":"headline","begin":0,"end":143,"contents_begin":7,"contents_end":143,"level":1,"raw_title":"Node","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":7,"end":143,"contents_begin":7,"contents_end":143}
+{"type":"plain-list","begin":7,"end":143,"contents_begin":7,"contents_end":143}
+{"type":"item","begin":7,"end":99,"contents_begin":9,"contents_end":99,"bullet":"- "}
+{"type":"paragraph","begin":9,"end":20,"contents_begin":9,"contents_end":20}
+{"type":"drawer","begin":20,"end":87,"contents_begin":35,"contents_end":79,"name":"PROPERTIES"}
+{"type":"paragraph","begin":35,"end":79,"contents_begin":35,"contents_end":79}
+{"type":"paragraph","begin":87,"end":99,"contents_begin":87,"contents_end":99}
+{"type":"item","begin":99,"end":143,"contents_begin":101,"contents_end":143,"bullet":"- "}
+{"type":"paragraph","begin":101,"end":113,"contents_begin":101,"contents_end":113}
+{"type":"drawer","begin":113,"end":143,"contents_begin":125,"contents_end":135,"name":"LOGBOOK"}
+{"type":"plain-list","begin":125,"end":135,"contents_begin":125,"contents_end":135}
+{"type":"item","begin":125,"end":135,"contents_begin":129,"contents_end":135,"bullet":"- "}
+{"type":"paragraph","begin":129,"end":135,"contents_begin":129,"contents_end":135}

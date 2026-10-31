@@ -1,0 +1,9 @@
+{"type":"#file","bytes":344,"unmodified":true}
+{"type":"section","begin":0,"end":344,"contents_begin":0,"contents_end":344}
+{"type":"property-drawer","begin":0,"end":52,"contents_begin":13,"contents_end":46}
+{"type":"node-property","begin":13,"end":34,"contents_begin":null,"contents_end":null,"key":"ID","value":"collabtest:beta"}
+{"type":"node-property","begin":34,"end":46,"contents_begin":null,"contents_end":null,"key":"KIND","value":"note"}
+{"type":"keyword","begin":52,"end":78,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"Collab Test Beta"}
+{"type":"keyword","begin":78,"end":112,"contents_begin":null,"contents_end":null,"key":"FILETAGS","value":":collabtest:fixture:"}
+{"type":"paragraph","begin":112,"end":290,"contents_begin":112,"contents_end":289}
+{"type":"paragraph","begin":290,"end":344,"contents_begin":290,"contents_end":344}

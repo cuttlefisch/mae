@@ -1,0 +1,11 @@
+First paragraph line.
+#+foo[bar]: not a dual keyword, so the paragraph continues
+still the same paragraph.
+
+Second paragraph.
+#+CAPTION[short]: a dual keyword ends the paragraph
+| t |
+
+Third.
+#+RESULTS[abc123]: name
+: out

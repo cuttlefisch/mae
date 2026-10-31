@@ -1,0 +1,7 @@
+{"type":"#file","bytes":79,"unmodified":true}
+{"type":"headline","begin":0,"end":79,"contents_begin":8,"contents_end":79,"level":1,"raw_title":"Outer","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":8,"end":35,"contents_begin":8,"contents_end":35}
+{"type":"paragraph","begin":8,"end":35,"contents_begin":8,"contents_end":35}
+{"type":"headline","begin":35,"end":79,"contents_begin":53,"contents_end":79,"level":2,"raw_title":"Inner headline","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":53,"end":79,"contents_begin":53,"contents_end":79}
+{"type":"paragraph","begin":53,"end":79,"contents_begin":53,"contents_end":79}

@@ -1,0 +1,25 @@
+{"type":"#file","bytes":2199,"unmodified":true}
+{"type":"section","begin":0,"end":666,"contents_begin":0,"contents_end":666}
+{"type":"property-drawer","begin":0,"end":75,"contents_begin":13,"contents_end":69}
+{"type":"node-property","begin":13,"end":54,"contents_begin":null,"contents_end":null,"key":"ID","value":"practice:architecture-debt-tracking"}
+{"type":"node-property","begin":54,"end":69,"contents_begin":null,"contents_end":null,"key":"KIND","value":"concept"}
+{"type":"keyword","begin":75,"end":125,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"Architecture Debt Is Tracked, Not Silent"}
+{"type":"keyword","begin":125,"end":162,"contents_begin":null,"contents_end":null,"key":"FILETAGS","value":":practices:maintenance:"}
+{"type":"paragraph","begin":162,"end":666,"contents_begin":162,"contents_end":665}
+{"type":"headline","begin":666,"end":996,"contents_begin":719,"contents_end":996,"level":2,"raw_title":"If no ADR applies but the bug reveals duplication","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":719,"end":996,"contents_begin":719,"contents_end":996}
+{"type":"paragraph","begin":719,"end":996,"contents_begin":719,"contents_end":995}
+{"type":"headline","begin":996,"end":1863,"contents_begin":1036,"contents_end":1863,"level":2,"raw_title":"Debt gets a name and a place to live","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1036,"end":1863,"contents_begin":1036,"contents_end":1863}
+{"type":"paragraph","begin":1036,"end":1163,"contents_begin":1036,"contents_end":1163}
+{"type":"plain-list","begin":1163,"end":1863,"contents_begin":1163,"contents_end":1862}
+{"type":"item","begin":1163,"end":1339,"contents_begin":1165,"contents_end":1339,"bullet":"- "}
+{"type":"paragraph","begin":1165,"end":1339,"contents_begin":1165,"contents_end":1339}
+{"type":"item","begin":1339,"end":1659,"contents_begin":1341,"contents_end":1659,"bullet":"- "}
+{"type":"paragraph","begin":1341,"end":1659,"contents_begin":1341,"contents_end":1659}
+{"type":"item","begin":1659,"end":1862,"contents_begin":1661,"contents_end":1862,"bullet":"- "}
+{"type":"paragraph","begin":1661,"end":1862,"contents_begin":1661,"contents_end":1862}
+{"type":"headline","begin":1863,"end":2199,"contents_begin":1897,"contents_end":2199,"level":2,"raw_title":"Why silence is the actual risk","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1897,"end":2199,"contents_begin":1897,"contents_end":2199}
+{"type":"paragraph","begin":1897,"end":2172,"contents_begin":1897,"contents_end":2171}
+{"type":"paragraph","begin":2172,"end":2199,"contents_begin":2172,"contents_end":2199}

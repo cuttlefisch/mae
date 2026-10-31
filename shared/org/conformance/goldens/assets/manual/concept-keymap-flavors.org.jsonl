@@ -1,0 +1,51 @@
+{"type":"#file","bytes":3673,"unmodified":true}
+{"type":"section","begin":0,"end":408,"contents_begin":0,"contents_end":408}
+{"type":"property-drawer","begin":0,"end":62,"contents_begin":13,"contents_end":56}
+{"type":"node-property","begin":13,"end":41,"contents_begin":null,"contents_end":null,"key":"ID","value":"concept:keymap-flavors"}
+{"type":"node-property","begin":41,"end":56,"contents_begin":null,"contents_end":null,"key":"KIND","value":"concept"}
+{"type":"keyword","begin":62,"end":106,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"Keymap Flavors & the Leader Keypad"}
+{"type":"keyword","begin":106,"end":182,"contents_begin":null,"contents_end":null,"key":"FILETAGS","value":":keybindings:modal-editing:non-modal:extensibility:onboarding:"}
+{"type":"paragraph","begin":182,"end":408,"contents_begin":182,"contents_end":407}
+{"type":"headline","begin":408,"end":844,"contents_begin":436,"contents_end":844,"level":2,"raw_title":"The two shipped flavors","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":436,"end":844,"contents_begin":436,"contents_end":844}
+{"type":"table","begin":436,"end":699,"contents_begin":436,"contents_end":698}
+{"type":"table-row","begin":436,"end":492,"contents_begin":437,"contents_end":491}
+{"type":"table-row","begin":492,"end":548,"contents_begin":null,"contents_end":null}
+{"type":"table-row","begin":548,"end":624,"contents_begin":549,"contents_end":623}
+{"type":"table-row","begin":624,"end":698,"contents_begin":625,"contents_end":697}
+{"type":"paragraph","begin":699,"end":844,"contents_begin":699,"contents_end":843}
+{"type":"headline","begin":844,"end":1689,"contents_begin":897,"contents_end":1689,"level":2,"raw_title":"The leader keypad (God-Mode / Meow-Keypad model)","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":897,"end":1689,"contents_begin":897,"contents_end":1689}
+{"type":"paragraph","begin":897,"end":1139,"contents_begin":897,"contents_end":1138}
+{"type":"plain-list","begin":1139,"end":1441,"contents_begin":1139,"contents_end":1440}
+{"type":"item","begin":1139,"end":1202,"contents_begin":1141,"contents_end":1202,"bullet":"- "}
+{"type":"paragraph","begin":1141,"end":1202,"contents_begin":1141,"contents_end":1202}
+{"type":"item","begin":1202,"end":1440,"contents_begin":1204,"contents_end":1440,"bullet":"- "}
+{"type":"paragraph","begin":1204,"end":1440,"contents_begin":1204,"contents_end":1440}
+{"type":"paragraph","begin":1441,"end":1584,"contents_begin":1441,"contents_end":1583}
+{"type":"paragraph","begin":1584,"end":1689,"contents_begin":1584,"contents_end":1688}
+{"type":"headline","begin":1689,"end":2329,"contents_begin":1715,"contents_end":2329,"level":2,"raw_title":"Selecting & switching","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1715,"end":2329,"contents_begin":1715,"contents_end":2329}
+{"type":"plain-list","begin":1715,"end":2329,"contents_begin":1715,"contents_end":2328}
+{"type":"item","begin":1715,"end":1893,"contents_begin":1717,"contents_end":1893,"bullet":"- "}
+{"type":"paragraph","begin":1717,"end":1893,"contents_begin":1717,"contents_end":1893}
+{"type":"item","begin":1893,"end":2024,"contents_begin":1895,"contents_end":2024,"bullet":"- "}
+{"type":"paragraph","begin":1895,"end":2024,"contents_begin":1895,"contents_end":2024}
+{"type":"item","begin":2024,"end":2188,"contents_begin":2026,"contents_end":2188,"bullet":"- "}
+{"type":"paragraph","begin":2026,"end":2188,"contents_begin":2026,"contents_end":2188}
+{"type":"item","begin":2188,"end":2328,"contents_begin":2190,"contents_end":2328,"bullet":"- "}
+{"type":"paragraph","begin":2190,"end":2328,"contents_begin":2190,"contents_end":2328}
+{"type":"headline","begin":2329,"end":3072,"contents_begin":2363,"contents_end":3072,"level":2,"raw_title":"Extending (no kernel patches)","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":2363,"end":3072,"contents_begin":2363,"contents_end":3072}
+{"type":"plain-list","begin":2363,"end":3072,"contents_begin":2363,"contents_end":3071}
+{"type":"item","begin":2363,"end":2568,"contents_begin":2365,"contents_end":2568,"bullet":"- "}
+{"type":"paragraph","begin":2365,"end":2452,"contents_begin":2365,"contents_end":2452}
+{"type":"src-block","begin":2452,"end":2568,"contents_begin":null,"contents_end":null,"language":"scheme"}
+{"type":"item","begin":2568,"end":2835,"contents_begin":2570,"contents_end":2835,"bullet":"- "}
+{"type":"paragraph","begin":2570,"end":2835,"contents_begin":2570,"contents_end":2835}
+{"type":"item","begin":2835,"end":3071,"contents_begin":2837,"contents_end":3071,"bullet":"- "}
+{"type":"paragraph","begin":2837,"end":3071,"contents_begin":2837,"contents_end":3071}
+{"type":"headline","begin":3072,"end":3673,"contents_begin":3089,"contents_end":3673,"level":2,"raw_title":"Architecture","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":3089,"end":3673,"contents_begin":3089,"contents_end":3673}
+{"type":"paragraph","begin":3089,"end":3542,"contents_begin":3089,"contents_end":3541}
+{"type":"paragraph","begin":3542,"end":3673,"contents_begin":3542,"contents_end":3673}

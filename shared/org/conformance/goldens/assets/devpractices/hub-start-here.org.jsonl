@@ -1,0 +1,33 @@
+{"type":"#file","bytes":3228,"unmodified":true}
+{"type":"section","begin":0,"end":1373,"contents_begin":0,"contents_end":1373}
+{"type":"property-drawer","begin":0,"end":305,"contents_begin":13,"contents_end":299}
+{"type":"node-property","begin":13,"end":33,"contents_begin":null,"contents_end":null,"key":"ID","value":"hub:start-here"}
+{"type":"node-property","begin":33,"end":44,"contents_begin":null,"contents_end":null,"key":"ROLE","value":"hub"}
+{"type":"node-property","begin":44,"end":60,"contents_begin":null,"contents_end":null,"key":"KIND","value":"category"}
+{"type":"node-property","begin":60,"end":299,"contents_begin":null,"contents_end":null,"key":"ALIASES","value":"how should I approach development in this project, what are the conventions here, coding standards, development practices, project conventions, does this knowledge base actually help, why atomic notes instead of one big document"}
+{"type":"keyword","begin":305,"end":351,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"Start Here — Development Practices"}
+{"type":"keyword","begin":351,"end":382,"contents_begin":null,"contents_end":null,"key":"FILETAGS","value":":hub:devpractice:"}
+{"type":"paragraph","begin":382,"end":889,"contents_begin":382,"contents_end":888}
+{"type":"paragraph","begin":889,"end":1373,"contents_begin":889,"contents_end":1372}
+{"type":"headline","begin":1373,"end":2912,"contents_begin":1393,"contents_end":2912,"level":1,"raw_title":"Where to go next","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1393,"end":2912,"contents_begin":1393,"contents_end":2912}
+{"type":"plain-list","begin":1393,"end":2912,"contents_begin":1393,"contents_end":2911}
+{"type":"item","begin":1393,"end":1714,"contents_begin":1395,"contents_end":1714,"bullet":"- "}
+{"type":"paragraph","begin":1395,"end":1714,"contents_begin":1395,"contents_end":1714}
+{"type":"item","begin":1714,"end":1881,"contents_begin":1716,"contents_end":1881,"bullet":"- "}
+{"type":"paragraph","begin":1716,"end":1881,"contents_begin":1716,"contents_end":1881}
+{"type":"item","begin":1881,"end":2082,"contents_begin":1883,"contents_end":2082,"bullet":"- "}
+{"type":"paragraph","begin":1883,"end":2082,"contents_begin":1883,"contents_end":2082}
+{"type":"item","begin":2082,"end":2221,"contents_begin":2084,"contents_end":2221,"bullet":"- "}
+{"type":"paragraph","begin":2084,"end":2221,"contents_begin":2084,"contents_end":2221}
+{"type":"item","begin":2221,"end":2403,"contents_begin":2223,"contents_end":2403,"bullet":"- "}
+{"type":"paragraph","begin":2223,"end":2403,"contents_begin":2223,"contents_end":2403}
+{"type":"item","begin":2403,"end":2606,"contents_begin":2405,"contents_end":2606,"bullet":"- "}
+{"type":"paragraph","begin":2405,"end":2606,"contents_begin":2405,"contents_end":2606}
+{"type":"item","begin":2606,"end":2743,"contents_begin":2608,"contents_end":2743,"bullet":"- "}
+{"type":"paragraph","begin":2608,"end":2743,"contents_begin":2608,"contents_end":2743}
+{"type":"item","begin":2743,"end":2911,"contents_begin":2745,"contents_end":2911,"bullet":"- "}
+{"type":"paragraph","begin":2745,"end":2911,"contents_begin":2745,"contents_end":2911}
+{"type":"headline","begin":2912,"end":3228,"contents_begin":2921,"contents_end":3228,"level":1,"raw_title":"Scope","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":2921,"end":3228,"contents_begin":2921,"contents_end":3228}
+{"type":"paragraph","begin":2921,"end":3228,"contents_begin":2921,"contents_end":3228}

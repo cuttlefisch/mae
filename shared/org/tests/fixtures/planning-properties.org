@@ -1,0 +1,31 @@
+:PROPERTIES:
+:ID: file-level
+:END:
+#+title: Planning
+
+* TODO Task
+SCHEDULED: <2026-11-01 Sun> DEADLINE: <2026-11-03 Tue>
+:PROPERTIES:
+:ID: abc
+:Custom_Key: Mixed Case
+:multi+: appended
+:END:
+Body.
+* Blank before drawer
+
+:PROPERTIES:
+:ID: not-a-property-drawer
+:END:
+* lower case
+:properties:
+:id: lower
+:end:
+* Bad property line
+:PROPERTIES:
+not a property
+:END:
+* Planning after blank
+
+SCHEDULED: <2026-11-01 Sun>
+* closed: lowercase planning
+closed: [2026-10-30 Fri 10:00]

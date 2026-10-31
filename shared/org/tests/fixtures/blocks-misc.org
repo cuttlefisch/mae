@@ -1,0 +1,29 @@
+#+begin_comment
+hidden *text*
+#+end_comment
+
+#+BEGIN_VERSE
+  Roses are red
+#+END_VERSE
+#+begin_center
+centered
+#+end_center
+#+begin_aside :title x
+custom block
+
+- with a list
+#+end_aside
+#+begin_export html
+<b>raw</b>
+#+end_export
+#+begin_quote
+#+begin_src elisp
+(+ 1 2)
+#+end_src
+#+end_quote
+#+begin_quote
+#+end_quote
+#+begin_src
+#+end_src
+#+BEGIN_SRC: odd name
+#+END_SRC:

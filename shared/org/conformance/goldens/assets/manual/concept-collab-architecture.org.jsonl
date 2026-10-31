@@ -1,0 +1,49 @@
+{"type":"#file","bytes":3047,"unmodified":true}
+{"type":"section","begin":0,"end":408,"contents_begin":0,"contents_end":408}
+{"type":"property-drawer","begin":0,"end":116,"contents_begin":13,"contents_end":110}
+{"type":"node-property","begin":13,"end":46,"contents_begin":null,"contents_end":null,"key":"ID","value":"concept:collab-architecture"}
+{"type":"node-property","begin":46,"end":61,"contents_begin":null,"contents_end":null,"key":"KIND","value":"concept"}
+{"type":"node-property","begin":61,"end":110,"contents_begin":null,"contents_end":null,"key":"ALIASES","value":"collab, real-time, daemon, multiplayer"}
+{"type":"keyword","begin":116,"end":160,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"Collaborative Editing Architecture"}
+{"type":"keyword","begin":160,"end":207,"contents_begin":null,"contents_end":null,"key":"FILETAGS","value":":architecture:sync:collaboration:"}
+{"type":"paragraph","begin":207,"end":408,"contents_begin":207,"contents_end":407}
+{"type":"headline","begin":408,"end":815,"contents_begin":431,"contents_end":815,"level":2,"raw_title":"Document Addressing","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":431,"end":815,"contents_begin":431,"contents_end":815}
+{"type":"paragraph","begin":431,"end":513,"contents_begin":431,"contents_end":513}
+{"type":"table","begin":513,"end":815,"contents_begin":513,"contents_end":814}
+{"type":"table-row","begin":513,"end":547,"contents_begin":514,"contents_end":546}
+{"type":"table-row","begin":547,"end":580,"contents_begin":null,"contents_end":null}
+{"type":"table-row","begin":580,"end":660,"contents_begin":581,"contents_end":659}
+{"type":"table-row","begin":660,"end":737,"contents_begin":661,"contents_end":736}
+{"type":"table-row","begin":737,"end":814,"contents_begin":738,"contents_end":813}
+{"type":"headline","begin":815,"end":1249,"contents_begin":828,"contents_end":1249,"level":2,"raw_title":"Data Flow","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":828,"end":1249,"contents_begin":828,"contents_end":1249}
+{"type":"src-block","begin":828,"end":1249,"contents_begin":null,"contents_end":null,"language":null}
+{"type":"headline","begin":1249,"end":1687,"contents_begin":1266,"contents_end":1687,"level":2,"raw_title":"Save Protocol","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1266,"end":1687,"contents_begin":1266,"contents_end":1687}
+{"type":"paragraph","begin":1266,"end":1687,"contents_begin":1266,"contents_end":1686}
+{"type":"headline","begin":1687,"end":2215,"contents_begin":1708,"contents_end":2215,"level":2,"raw_title":"State Server Role","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1708,"end":2215,"contents_begin":1708,"contents_end":2215}
+{"type":"paragraph","begin":1708,"end":1831,"contents_begin":1708,"contents_end":1831}
+{"type":"plain-list","begin":1831,"end":2215,"contents_begin":1831,"contents_end":2214}
+{"type":"item","begin":1831,"end":1884,"contents_begin":1833,"contents_end":1884,"bullet":"- "}
+{"type":"paragraph","begin":1833,"end":1884,"contents_begin":1833,"contents_end":1884}
+{"type":"item","begin":1884,"end":1956,"contents_begin":1886,"contents_end":1956,"bullet":"- "}
+{"type":"paragraph","begin":1886,"end":1956,"contents_begin":1886,"contents_end":1956}
+{"type":"item","begin":1956,"end":2034,"contents_begin":1958,"contents_end":2034,"bullet":"- "}
+{"type":"paragraph","begin":1958,"end":2034,"contents_begin":1958,"contents_end":2034}
+{"type":"item","begin":2034,"end":2133,"contents_begin":2036,"contents_end":2133,"bullet":"- "}
+{"type":"paragraph","begin":2036,"end":2133,"contents_begin":2036,"contents_end":2133}
+{"type":"item","begin":2133,"end":2214,"contents_begin":2135,"contents_end":2214,"bullet":"- "}
+{"type":"paragraph","begin":2135,"end":2214,"contents_begin":2135,"contents_end":2214}
+{"type":"headline","begin":2215,"end":3047,"contents_begin":2239,"contents_end":3047,"level":2,"raw_title":"Three Workflow Tiers","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":2239,"end":3047,"contents_begin":2239,"contents_end":3047}
+{"type":"table","begin":2239,"end":2513,"contents_begin":2239,"contents_end":2512}
+{"type":"table-row","begin":2239,"end":2268,"contents_begin":2240,"contents_end":2267}
+{"type":"table-row","begin":2268,"end":2297,"contents_begin":null,"contents_end":null}
+{"type":"table-row","begin":2297,"end":2354,"contents_begin":2298,"contents_end":2353}
+{"type":"table-row","begin":2354,"end":2441,"contents_begin":2355,"contents_end":2440}
+{"type":"table-row","begin":2441,"end":2512,"contents_begin":2442,"contents_end":2511}
+{"type":"paragraph","begin":2513,"end":2794,"contents_begin":2513,"contents_end":2793}
+{"type":"paragraph","begin":2794,"end":2884,"contents_begin":2794,"contents_end":2883}
+{"type":"paragraph","begin":2884,"end":3047,"contents_begin":2884,"contents_end":3047}

@@ -1,0 +1,63 @@
+{"type":"#file","bytes":1847,"unmodified":true}
+{"type":"section","begin":0,"end":309,"contents_begin":0,"contents_end":309}
+{"type":"property-drawer","begin":0,"end":68,"contents_begin":13,"contents_end":62}
+{"type":"node-property","begin":13,"end":35,"contents_begin":null,"contents_end":null,"key":"ID","value":"hub:code-quality"}
+{"type":"node-property","begin":35,"end":46,"contents_begin":null,"contents_end":null,"key":"ROLE","value":"hub"}
+{"type":"node-property","begin":46,"end":62,"contents_begin":null,"contents_end":null,"key":"KIND","value":"category"}
+{"type":"keyword","begin":68,"end":90,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"Code Quality"}
+{"type":"keyword","begin":90,"end":121,"contents_begin":null,"contents_end":null,"key":"FILETAGS","value":":hub:devpractice:"}
+{"type":"paragraph","begin":121,"end":309,"contents_begin":121,"contents_end":308}
+{"type":"headline","begin":309,"end":1444,"contents_begin":329,"contents_end":1444,"level":1,"raw_title":"Design principles","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":329,"end":1444,"contents_begin":329,"contents_end":1444}
+{"type":"plain-list","begin":329,"end":1444,"contents_begin":329,"contents_end":1443}
+{"type":"item","begin":329,"end":399,"contents_begin":331,"contents_end":399,"bullet":"- "}
+{"type":"paragraph","begin":331,"end":399,"contents_begin":331,"contents_end":399}
+{"type":"item","begin":399,"end":457,"contents_begin":401,"contents_end":457,"bullet":"- "}
+{"type":"paragraph","begin":401,"end":457,"contents_begin":401,"contents_end":457}
+{"type":"item","begin":457,"end":511,"contents_begin":459,"contents_end":511,"bullet":"- "}
+{"type":"paragraph","begin":459,"end":511,"contents_begin":459,"contents_end":511}
+{"type":"item","begin":511,"end":559,"contents_begin":513,"contents_end":559,"bullet":"- "}
+{"type":"paragraph","begin":513,"end":559,"contents_begin":513,"contents_end":559}
+{"type":"item","begin":559,"end":645,"contents_begin":561,"contents_end":645,"bullet":"- "}
+{"type":"paragraph","begin":561,"end":645,"contents_begin":561,"contents_end":645}
+{"type":"item","begin":645,"end":721,"contents_begin":647,"contents_end":721,"bullet":"- "}
+{"type":"paragraph","begin":647,"end":721,"contents_begin":647,"contents_end":721}
+{"type":"item","begin":721,"end":785,"contents_begin":723,"contents_end":785,"bullet":"- "}
+{"type":"paragraph","begin":723,"end":785,"contents_begin":723,"contents_end":785}
+{"type":"item","begin":785,"end":851,"contents_begin":787,"contents_end":851,"bullet":"- "}
+{"type":"paragraph","begin":787,"end":851,"contents_begin":787,"contents_end":851}
+{"type":"item","begin":851,"end":907,"contents_begin":853,"contents_end":907,"bullet":"- "}
+{"type":"paragraph","begin":853,"end":907,"contents_begin":853,"contents_end":907}
+{"type":"item","begin":907,"end":957,"contents_begin":909,"contents_end":957,"bullet":"- "}
+{"type":"paragraph","begin":909,"end":957,"contents_begin":909,"contents_end":957}
+{"type":"item","begin":957,"end":1011,"contents_begin":959,"contents_end":1011,"bullet":"- "}
+{"type":"paragraph","begin":959,"end":1011,"contents_begin":959,"contents_end":1011}
+{"type":"item","begin":1011,"end":1085,"contents_begin":1013,"contents_end":1085,"bullet":"- "}
+{"type":"paragraph","begin":1013,"end":1085,"contents_begin":1013,"contents_end":1085}
+{"type":"item","begin":1085,"end":1133,"contents_begin":1087,"contents_end":1133,"bullet":"- "}
+{"type":"paragraph","begin":1087,"end":1133,"contents_begin":1087,"contents_end":1133}
+{"type":"item","begin":1133,"end":1201,"contents_begin":1135,"contents_end":1201,"bullet":"- "}
+{"type":"paragraph","begin":1135,"end":1201,"contents_begin":1135,"contents_end":1201}
+{"type":"item","begin":1201,"end":1259,"contents_begin":1203,"contents_end":1259,"bullet":"- "}
+{"type":"paragraph","begin":1203,"end":1259,"contents_begin":1203,"contents_end":1259}
+{"type":"item","begin":1259,"end":1325,"contents_begin":1261,"contents_end":1325,"bullet":"- "}
+{"type":"paragraph","begin":1261,"end":1325,"contents_begin":1261,"contents_end":1325}
+{"type":"item","begin":1325,"end":1385,"contents_begin":1327,"contents_end":1385,"bullet":"- "}
+{"type":"paragraph","begin":1327,"end":1385,"contents_begin":1327,"contents_end":1385}
+{"type":"item","begin":1385,"end":1443,"contents_begin":1387,"contents_end":1443,"bullet":"- "}
+{"type":"paragraph","begin":1387,"end":1443,"contents_begin":1387,"contents_end":1443}
+{"type":"headline","begin":1444,"end":1670,"contents_begin":1474,"contents_end":1670,"level":1,"raw_title":"Code annotation conventions","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1474,"end":1670,"contents_begin":1474,"contents_end":1670}
+{"type":"plain-list","begin":1474,"end":1670,"contents_begin":1474,"contents_end":1669}
+{"type":"item","begin":1474,"end":1521,"contents_begin":1476,"contents_end":1521,"bullet":"- "}
+{"type":"paragraph","begin":1476,"end":1521,"contents_begin":1476,"contents_end":1521}
+{"type":"item","begin":1521,"end":1614,"contents_begin":1523,"contents_end":1614,"bullet":"- "}
+{"type":"paragraph","begin":1523,"end":1614,"contents_begin":1523,"contents_end":1614}
+{"type":"item","begin":1614,"end":1669,"contents_begin":1616,"contents_end":1669,"bullet":"- "}
+{"type":"paragraph","begin":1616,"end":1669,"contents_begin":1616,"contents_end":1669}
+{"type":"headline","begin":1670,"end":1847,"contents_begin":1692,"contents_end":1847,"level":1,"raw_title":"Operational tooling","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1692,"end":1847,"contents_begin":1692,"contents_end":1847}
+{"type":"plain-list","begin":1692,"end":1804,"contents_begin":1692,"contents_end":1803}
+{"type":"item","begin":1692,"end":1803,"contents_begin":1694,"contents_end":1803,"bullet":"- "}
+{"type":"paragraph","begin":1694,"end":1803,"contents_begin":1694,"contents_end":1803}
+{"type":"paragraph","begin":1804,"end":1847,"contents_begin":1804,"contents_end":1847}

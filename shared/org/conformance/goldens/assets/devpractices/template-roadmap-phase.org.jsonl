@@ -1,0 +1,25 @@
+{"type":"#file","bytes":2239,"unmodified":true}
+{"type":"section","begin":0,"end":2239,"contents_begin":0,"contents_end":2239}
+{"type":"property-drawer","begin":0,"end":59,"contents_begin":13,"contents_end":53}
+{"type":"node-property","begin":13,"end":41,"contents_begin":null,"contents_end":null,"key":"ID","value":"template:roadmap-phase"}
+{"type":"node-property","begin":41,"end":53,"contents_begin":null,"contents_end":null,"key":"ROLE","value":"atom"}
+{"type":"keyword","begin":59,"end":91,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"Roadmap Phase Template"}
+{"type":"keyword","begin":91,"end":135,"contents_begin":null,"contents_end":null,"key":"FILETAGS","value":":roadmap:template:devpractice:"}
+{"type":"paragraph","begin":135,"end":589,"contents_begin":135,"contents_end":588}
+{"type":"plain-list","begin":589,"end":1517,"contents_begin":589,"contents_end":1516}
+{"type":"item","begin":589,"end":645,"contents_begin":591,"contents_end":645,"bullet":"- "}
+{"type":"paragraph","begin":591,"end":645,"contents_begin":591,"contents_end":645}
+{"type":"item","begin":645,"end":731,"contents_begin":647,"contents_end":731,"bullet":"- "}
+{"type":"paragraph","begin":647,"end":731,"contents_begin":647,"contents_end":731}
+{"type":"item","begin":731,"end":919,"contents_begin":733,"contents_end":919,"bullet":"- "}
+{"type":"paragraph","begin":733,"end":919,"contents_begin":733,"contents_end":919}
+{"type":"item","begin":919,"end":1108,"contents_begin":921,"contents_end":1108,"bullet":"- "}
+{"type":"paragraph","begin":921,"end":1108,"contents_begin":921,"contents_end":1108}
+{"type":"item","begin":1108,"end":1225,"contents_begin":1110,"contents_end":1225,"bullet":"- "}
+{"type":"paragraph","begin":1110,"end":1225,"contents_begin":1110,"contents_end":1225}
+{"type":"item","begin":1225,"end":1304,"contents_begin":1227,"contents_end":1304,"bullet":"- "}
+{"type":"paragraph","begin":1227,"end":1304,"contents_begin":1227,"contents_end":1304}
+{"type":"item","begin":1304,"end":1516,"contents_begin":1306,"contents_end":1516,"bullet":"- "}
+{"type":"paragraph","begin":1306,"end":1516,"contents_begin":1306,"contents_end":1516}
+{"type":"paragraph","begin":1517,"end":1541,"contents_begin":1517,"contents_end":1540}
+{"type":"example-block","begin":1541,"end":2239,"contents_begin":null,"contents_end":null}
