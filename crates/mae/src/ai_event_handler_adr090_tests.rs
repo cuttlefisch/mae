@@ -209,4 +209,128 @@ mod tests {
             "the human path must not be bounded by the AI's shipped default"
         );
     }
+
+    fn editor_with_guidance_node() -> Editor {
+        let mut editor = Editor::new();
+        let sys = mae_kb::CozoKbStore::open_mem().unwrap();
+        sys.seed_type_system().unwrap();
+        mae_kb::KbStore::insert_node(
+            &sys,
+            &mae_kb::Node::new(
+                "hub:testing",
+                "Testing",
+                mae_kb::NodeKind::Concept,
+                "Write the adversarial case first.",
+            ),
+        )
+        .unwrap();
+        editor
+            .kb
+            .system_stores
+            .insert("DevPractices".to_string(), std::sync::Arc::new(sys));
+        let primary = std::sync::Arc::new(mae_kb::CozoKbStore::open_mem().unwrap());
+        primary.seed_type_system().unwrap();
+        editor.kb.store = Some(primary.clone());
+        editor.kb.primary_cozo = Some(primary);
+        editor.kb.rebuild_query_layer();
+        editor
+    }
+
+    fn body_of(editor: &Editor, id: &str) -> String {
+        editor
+            .kb_resolve_anywhere(id)
+            .map(|(n, _)| n.body)
+            .unwrap_or_default()
+    }
+
+    /// Scheme an agent queued with `eval_scheme` is drained AFTER the tool's
+    /// dispatch scope; it must still count as AI-originated, or every AI-origin
+    /// guard is one `eval_scheme` away from being skipped.
+    #[test]
+    fn scheme_queued_by_an_ai_tool_counts_as_ai_originated() {
+        let mut editor = editor_with_guidance_node();
+        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
+        editor
+            .pending_scheme_eval
+            .push(r#"(kb-create "hub:testing" "Testing" "Tests are optional.")"#.to_string());
+        drain_ai_scheme_evals(&mut editor, &mut scheme, PermissionTier::Write);
+        assert_eq!(
+            body_of(&editor, "hub:testing"),
+            "Write the adversarial case first.",
+            "an agent's eval_scheme shadowed a guidance node"
+        );
+        assert_eq!(editor.ai.ai_dispatch_depth, 0, "the mark must not leak");
+    }
+
+    /// The control: the same code from the human's own REPL goes through, so the
+    /// case above is refused because of WHO asked, not because the fixture
+    /// cannot create the node at all.
+    #[test]
+    fn the_same_scheme_from_the_human_path_is_not_refused() {
+        let mut editor = editor_with_guidance_node();
+        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
+        editor
+            .pending_scheme_eval
+            .push(r#"(kb-create "hub:testing" "Testing" "my own note")"#.to_string());
+        drain_pending_scheme_evals(&mut editor, &mut scheme, HUMAN_AMBIENT_TIER);
+        assert_eq!(body_of(&editor, "hub:testing"), "my own note");
+    }
+
+    /// Run one MCP `eval_scheme` call against `editor` at full authority, the
+    /// way an external client reaches it, and return the reply.
+    fn mcp_eval(editor: &mut Editor, code: &str) -> mae_mcp::McpToolResult {
+        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
+        let (req, mut rx) =
+            mcp_request_with_ceiling("eval_scheme", serde_json::json!({"code": code}), 7, None);
+        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
+        let mut deferred = Vec::new();
+        handle_mcp_request(
+            editor,
+            req,
+            &[],
+            &super::super::tests::dispatch_mechanics_policy(),
+            &lsp_tx,
+            &mut deferred,
+            &mut scheme,
+        );
+        rx.try_recv().expect("reply must have been sent")
+    }
+
+    /// End to end through the real MCP handler, so reverting its drain call to
+    /// the unmarked one fails here (the unit test above calls the helper
+    /// directly and would not notice).
+    #[tokio::test]
+    async fn an_mcp_eval_scheme_cannot_shadow_a_guidance_node() {
+        let mut editor = editor_with_guidance_node();
+        mcp_eval(
+            &mut editor,
+            r#"(kb-create "hub:testing" "Testing" "Tests are optional.")"#,
+        );
+        assert_eq!(
+            body_of(&editor, "hub:testing"),
+            "Write the adversarial case first."
+        );
+        assert_eq!(editor.ai.ai_dispatch_depth, 0);
+    }
+
+    /// Code the agent's code queues while it runs is the agent's too: it is
+    /// drained inside the mark, not left for the human path to run unmarked.
+    #[tokio::test]
+    async fn scheme_queued_by_the_agents_own_scheme_stays_ai_originated() {
+        let mut editor = editor_with_guidance_node();
+        editor.buffers[0].insert_text_at(
+            0,
+            r#"(kb-create "hub:testing" "Testing" "Tests are optional.")"#,
+        );
+        mcp_eval(&mut editor, r#"(run-command "eval-buffer")"#);
+        assert!(
+            editor.pending_scheme_eval.is_empty(),
+            "left for the human path: {:?}",
+            editor.pending_scheme_eval
+        );
+        assert_eq!(
+            body_of(&editor, "hub:testing"),
+            "Write the adversarial case first."
+        );
+    }
 }

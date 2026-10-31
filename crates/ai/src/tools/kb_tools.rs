@@ -15,6 +15,11 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "Fetch a knowledge-base node by id. Returns JSON with title, kind, body (may contain [[link]] markers), tags, outgoing links, and incoming backlinks. IDs are namespaced like 'cmd:<name>', 'concept:<slug>', 'key:<context>', or 'index'. WARNING: Linkage is high; pull atomic info and avoid walking the entire graph.",
         )
         .prop("id", "string", "Node id, e.g. 'index', 'concept:buffer', 'cmd:save'")
+        .prop(
+            "kb",
+            "string",
+            "Optional: read from this KB only (a registered KB's name, or a system KB such as the guidance KB). Without it the user's own notes are searched first.",
+        )
         .required(["id"])
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -263,20 +268,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .required(["name"])
         .permission(PermissionTier::Write)
         .build(),
-        ToolDefBuilder::new(
-            "kb_reimport",
-            "Re-import a registered KB instance from its org directory. Use after editing org files to refresh the graph. Returns updated import stats and health metrics.",
-        )
-        .prop("name", "string", "Name or UUID of the instance to reimport")
-        .prop_enum(
-            "mode",
-            "string",
-            "Ingest mode (default: full). \"incremental\" only re-parses files whose content hash changed since the last import — it will NOT pick up a per-node metadata fix (e.g. a newly-added source_file stamp) for files whose content is unchanged. Use \"full\" (the default) after any ingestion-logic change, not just after editing org files.",
-            ["full", "incremental"],
-        )
-        .required(["name"])
-        .permission(PermissionTier::Shell)
-        .build(),
+        kb_reimport_def(),
         ToolDefBuilder::new(
             "kb_export_guidance",
             "Export MAE's guidance context (project CLAUDE.md/README.md files + the ai_guidance_kb-designated KB's index body) to a plain markdown file an external editor's AI agent reads unconditionally as part of its own repo scan (AGENTS.md by default; point 'path' at .github/copilot-instructions.md instead if preferred). Use this for external-editor pairings (VS Code/Copilot, etc.) since MCP's initialize.instructions field only sends a short pointer sentence, not the full guidance content, and whether a given host even forwards that field into its model's context is host-dependent and unverified. Additive-merge-safe: re-running only replaces MAE's own clearly delimited managed block, never touching hand-written content elsewhere in the file (a fresh file gets just the block; an existing file's content is fully preserved either way).",
@@ -324,20 +316,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .required(["id"])
         .permission(PermissionTier::Write)
         .build(),
-        ToolDefBuilder::new(
-            "kb_search_context",
-            "RAG-optimized KB search: returns top-K nodes with excerpts and relevance scores for AI reasoning context. Tokenized, field-weighted relevance (same field tiers as kb_search's underlying ranking) over titles, ids, bodies, tags, and aliases, with hub/meta navigational nodes down-weighted below the specific note they merely index; ties preserve kb_search's underlying order rather than falling back to node id. Searches local + federated KBs by default. Use this instead of kb_search + kb_get loops.",
-        )
-        .prop("query", "string", "Search query (case-insensitive substring, fuzzy fallback)")
-        .prop(
-            "scope",
-            "string",
-            "Which KBs to search: 'all' (default), 'local' (primary only), 'remote' (shared/collaborative instances only), or a specific instance name.",
-        )
-        .prop("limit", "integer", "Max results (default 5, max 20)")
-        .required(["query"])
-        .permission(PermissionTier::ReadOnly)
-        .build(),
+        kb_search_context_def(),
         // --- KB graph-native tools (CozoDB backend) ---
         ToolDefBuilder::new(
             "kb_shortest_path",
@@ -721,4 +700,45 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .permission(PermissionTier::Write)
         .build(),
     ]
+}
+
+/// `kb_reimport`: its description carries the when-to-re-import guidance.
+fn kb_reimport_def() -> ToolDefinition {
+    ToolDefBuilder::new(
+        "kb_reimport",
+        "Re-import a registered file-source KB from its org directory. This is a RECOVERY step, not routine: an editor that watches the KB (kb_sync_status `watcher_attached`, or this result's `watched`) already picks up file edits. Re-import when the editor does not watch it, or after git checkout/pull/rebase/revert (an incremental run skips files whose bytes match the last import). Both modes block the editor while they run. Result: `mode` (\"full\"/\"incremental\"; \"none\" when the store could not be opened and only an in-memory import ran); `watched`; `files_seen` (every .org file found); `files_reparsed` (files parsed this run that yielded at least one id); `files_unchanged` (skipped by content hash, incremental only); `nodes_imported` = nodes from files not imported before, `nodes_rewritten` = nodes from files imported before (in full mode, every such node, changed or not); `nodes_removed` (full mode only); `links_created` counts the links in parsed nodes, not new links.",
+    )
+    .prop("name", "string", "Name or UUID of the instance to reimport")
+    .prop_enum(
+        "mode",
+        "string",
+        "Ingest mode (default: full). \"incremental\" re-parses only files whose content hash changed since the last import and never removes nodes: fast, and enough after edits that deleted no file. \"full\" re-parses every file and removes the nodes of deleted files: use it after checkout/pull/rebase/revert or an ingestion-logic change.",
+        ["full", "incremental"],
+    )
+    .required(["name"])
+    .permission(PermissionTier::Shell)
+    .build()
+}
+
+/// `kb_search_context`: ranked excerpts, scoped by `scope`.
+fn kb_search_context_def() -> ToolDefinition {
+    ToolDefBuilder::new(
+        "kb_search_context",
+        "RAG-optimized KB search: returns top-K nodes with excerpts and relevance scores for AI reasoning context. Tokenized, field-weighted relevance (same field tiers as kb_search's underlying ranking) over titles, ids, bodies, tags, and aliases, with hub/meta navigational nodes down-weighted below the specific note they merely index; ties preserve kb_search's underlying order rather than falling back to node id. Searches local + federated KBs by default. Use this instead of kb_search + kb_get loops.",
+    )
+    .prop("query", "string", "Search query (case-insensitive substring, fuzzy fallback)")
+    .prop(
+        "scope",
+        "string",
+        "Which KBs to search: 'all' (default), 'local' (primary only), 'remote' (shared/collaborative instances only), or a specific instance name.",
+    )
+    .prop("limit", "integer", "Max results (default 5, max 20)")
+    .prop(
+        "context_budget_pct",
+        "integer",
+        "Optional: how full your context window is, 0-100. Above 85 results shrink (at most 3, shorter excerpts); above 92 only ids are returned.",
+    )
+    .required(["query"])
+    .permission(PermissionTier::ReadOnly)
+    .build()
 }

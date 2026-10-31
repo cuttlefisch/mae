@@ -16,8 +16,11 @@
 //! codebase). Stdin EOF is the shim's actual terminal-shutdown signal: the
 //! MCP host closed the pipe, so the process exits instead of reconnecting.
 //!
-//! Set `MAE_MCP_SHIM_LOG=/path/to/file.log` to override the default log path.
-//! Default log: `/tmp/mae-shim.log`.
+//! Logging is OFF unless `MAE_MCP_SHIM_LOG=/path/to/file.log` is set. The log
+//! holds every relayed message in full (tool arguments and results, KB note
+//! bodies), so it is created owner-only (0600 on Unix). There is no default
+//! path: a shared default under `/tmp` collected every session's traffic in
+//! one file other local users could read.
 //!
 //! Set `MAE_MCP_PERMISSION_CEILING=<ReadOnly|Write|Shell|Privileged>` to have
 //! the shim forward a `permissionCeiling` in its `initialize` request params
@@ -139,13 +142,43 @@ fn chrono_now() -> String {
 }
 
 fn open_log() -> LogHandle {
-    let path = env::var("MAE_MCP_SHIM_LOG").unwrap_or_else(|_| "/tmp/mae-shim.log".to_string());
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .ok()
-        .map(|f| Arc::new(Mutex::new(f)))
+    open_log_at(env::var_os("MAE_MCP_SHIM_LOG").as_deref())
+}
+
+/// The debug log at `path`, or none when no path was given (the default).
+///
+/// @ai-caution: [security] Opt-in and owner-only. The log is a full transcript
+/// of tool traffic, including KB content the user may keep private; do not
+/// restore a default path or widen the mode.
+fn open_log_at(path: Option<&std::ffi::OsStr>) -> LogHandle {
+    let path = path.filter(|p| !p.is_empty())?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Never follow a symlink someone planted at the log path, and never
+        // block opening a FIFO planted there.
+        opts.mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = opts.open(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        // An existing file another user owns cannot be made private by us: do
+        // not log into it. One we own is tightened, since `mode` above applies
+        // only when the file is created.
+        let meta = file.metadata().ok()?;
+        // Ours, a plain file, and not a hard link to some other file of ours
+        // (e.g. a shell rc file linked in from a shared directory).
+        if meta.uid() != unsafe { libc::geteuid() } || !meta.is_file() || meta.nlink() != 1 {
+            return None;
+        }
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .ok()?;
+    }
+    Some(Arc::new(Mutex::new(file)))
 }
 
 /// Write a newline-delimited JSON message (for the stdio side to Claude Code).
@@ -475,6 +508,68 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use tokio::net::UnixListener;
+
+    /// No path, no log: nothing is written anywhere by default.
+    #[test]
+    fn logging_is_off_unless_a_path_is_given() {
+        assert!(open_log_at(None).is_none());
+        assert!(open_log_at(Some(std::ffi::OsStr::new(""))).is_none());
+    }
+
+    /// A symlink at the log path is not followed, so a planted link cannot
+    /// redirect the transcript into a file the attacker can read.
+    #[cfg(unix)]
+    #[test]
+    fn the_log_does_not_follow_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("readable-by-others.log");
+        std::fs::write(&target, b"").unwrap();
+        let link = dir.path().join("mae-shim.log");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let handle = open_log_at(Some(link.as_os_str()));
+        log(&handle, "relayed message");
+        assert!(handle.is_none(), "opened a log through a symlink");
+        assert_eq!(std::fs::read(&target).unwrap(), b"");
+    }
+
+    /// A hard link to another file of the user's is not appended to, and a
+    /// FIFO planted at the path neither blocks nor receives the log.
+    #[cfg(unix)]
+    #[test]
+    fn the_log_refuses_hard_links_and_fifos() {
+        let dir = tempfile::tempdir().unwrap();
+        let rc = dir.path().join("shellrc");
+        std::fs::write(&rc, b"# rc\n").unwrap();
+        let hard = dir.path().join("hard.log");
+        std::fs::hard_link(&rc, &hard).unwrap();
+        assert!(open_log_at(Some(hard.as_os_str())).is_none());
+        assert_eq!(std::fs::read(&rc).unwrap(), b"# rc\n");
+
+        let fifo = dir.path().join("fifo.log");
+        let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        assert!(open_log_at(Some(fifo.as_os_str())).is_none());
+    }
+
+    /// The log is a transcript of tool traffic, so only its owner may read it:
+    /// both when the shim creates it and when it reuses one left world-readable.
+    #[cfg(unix)]
+    #[test]
+    fn the_log_is_owner_only_whether_created_or_reused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let fresh = dir.path().join("fresh.log");
+        let reused = dir.path().join("reused.log");
+        std::fs::write(&reused, b"old\n").unwrap();
+        std::fs::set_permissions(&reused, std::fs::Permissions::from_mode(0o644)).unwrap();
+        for path in [&fresh, &reused] {
+            let handle = open_log_at(Some(path.as_os_str()));
+            assert!(handle.is_some(), "{}", path.display());
+            log(&handle, "relayed message");
+            let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{} is {mode:o}", path.display());
+        }
+    }
 
     fn test_socket_path(dir: &tempfile::TempDir, name: &str) -> String {
         dir.path().join(name).to_string_lossy().to_string()
