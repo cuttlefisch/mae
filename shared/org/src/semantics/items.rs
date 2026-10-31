@@ -74,6 +74,15 @@ pub(crate) fn item_property_drawer(drawer: &SyntaxNode) -> Option<Vec<ItemProper
     Some(out)
 }
 
+/// An item's property drawer and its properties, if it has one. Only the
+/// first two elements can be the drawer (see the module doc).
+pub(crate) fn item_drawer(item: &SyntaxNode) -> Option<(SyntaxNode, Vec<ItemProperty>)> {
+    item.children()
+        .filter(|c| c.kind() != ITEM_TAG_CONTENT)
+        .take(2)
+        .find_map(|c| item_property_drawer(&c).map(|p| (c, p)))
+}
+
 /// The name of a drawer as written (`LOGBOOK` in `:LOGBOOK:`).
 pub(crate) fn drawer_name(drawer: &SyntaxNode) -> String {
     drawer
@@ -108,21 +117,32 @@ fn property_line(line: &str, at: usize) -> Option<ItemProperty> {
 /// The item's own text before its property drawer: its tag and first
 /// paragraph, as plain text (`tag :: text` for a descriptive item).
 pub(crate) fn item_title(item: &SyntaxNode, drawer: &SyntaxNode) -> Option<String> {
-    let tag = item
-        .children()
-        .find(|c| c.kind() == ITEM_TAG_CONTENT)
+    let (tag, first) = item_title_parts(item, drawer);
+    let tag = tag
         .map(|t| super::plain::plain_text(&t))
         .filter(|t| !t.is_empty());
-    let first = item
-        .children()
-        .take_while(|c| c != drawer)
-        .find(|c| c.kind() == PARAGRAPH)
+    let first = first
         .map(|p| super::plain::plain_text(&p))
         .filter(|t| !t.is_empty());
     match (tag, first) {
         (Some(t), Some(f)) => Some(format!("{t} :: {f}")),
         (t, f) => t.or(f),
     }
+}
+
+/// The nodes an item's title is read from: its tag, and its first
+/// paragraph before the property drawer. A renderer draws the title from
+/// these same nodes.
+pub(crate) fn item_title_parts(
+    item: &SyntaxNode,
+    drawer: &SyntaxNode,
+) -> (Option<SyntaxNode>, Option<SyntaxNode>) {
+    let tag = item.children().find(|c| c.kind() == ITEM_TAG_CONTENT);
+    let first = item
+        .children()
+        .take_while(|c| c != drawer)
+        .find(|c| c.kind() == PARAGRAPH);
+    (tag, first)
 }
 
 /// An item node's level: its headline's level (0 in the zeroth section) plus

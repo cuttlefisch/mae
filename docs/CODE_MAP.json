@@ -1087,6 +1087,10 @@
       ],
       "public_items": [
         {
+          "name": "API_VERSION",
+          "kind": "const"
+        },
+        {
           "name": "Document",
           "kind": "struct"
         },

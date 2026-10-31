@@ -77,11 +77,11 @@
 //!   definition's node. A node nested inside the definition still owns its
 //!   own links.
 
-mod items;
-mod plain;
-mod regions;
+pub(crate) mod items;
+pub(crate) mod plain;
+pub(crate) mod regions;
 
-use crate::kind::SyntaxKind::*;
+use crate::kind::SyntaxKind::{self, *};
 use crate::kind::SyntaxNode;
 use crate::link_grammar::{classify_link_with, org_trim, LinkKind, LinkTypes};
 use crate::span::Span;
@@ -340,6 +340,27 @@ impl SemanticDiagnostic {
     }
 }
 
+/// An element the projection does not read, so no renderer may draw: the
+/// decision renderers reuse (ADR-112 D2/D3) rather than re-derive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Unrendered {
+    /// The element's span; with `element` it identifies one node of the tree.
+    pub span: Span,
+    /// The element's kind (a `HEADLINE`, `COMMENT_BLOCK`, …).
+    pub element: SyntaxKind,
+    pub region: Region,
+}
+
+/// A footnote definition element in a rendered region: one that rendered
+/// text references (Org renders it in the footnotes section, wherever it
+/// sits, unless a region Org never parses holds it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedFootnote {
+    pub label: String,
+    /// The `FOOTNOTE_DEFINITION` element.
+    pub span: Span,
+}
+
 /// Everything the projection derives, each list in document order.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Semantics {
@@ -350,6 +371,13 @@ pub struct Semantics {
     pub transclusions: Vec<Transclusion>,
     /// Sorted by span, then kind.
     pub diagnostics: Vec<SemanticDiagnostic>,
+    /// Every element the walk found unrendered, outermost first: what it
+    /// skipped, so a renderer skips exactly the same (sorted by span start,
+    /// then by the longer span first). Nested entries occur only inside a
+    /// footnote definition Org re-adds from a pruned region.
+    pub unrendered: Vec<Unrendered>,
+    /// Every rendered footnote definition element, in document order.
+    pub footnotes: Vec<RenderedFootnote>,
 }
 
 impl Semantics {
@@ -398,6 +426,8 @@ pub fn semantics_with(doc: &Document, options: &SemanticsOptions) -> Semantics {
     let mut out = w.out;
     clip_bodies(&mut out.nodes);
     out.diagnostics.sort_by_key(|d| (d.span(), d.kind_name()));
+    out.unrendered
+        .sort_by_key(|u| (u.span.start, std::cmp::Reverse(u.span.end), u.element));
     out
 }
 
@@ -433,6 +463,9 @@ fn split_words(value: &str) -> Vec<String> {
 struct FileHeader {
     properties: Vec<(String, String)>,
     title: Option<String>,
+    /// The last `#+title` value and its offset (`None` when it is empty):
+    /// the source a renderer draws the title from.
+    title_source: Option<(String, usize)>,
     tags: Vec<String>,
     /// `Some` once a `#+kind` keyword is read, even an empty one.
     kind: Option<Option<String>>,
@@ -451,7 +484,11 @@ impl FileHeader {
             h.properties = resolve_properties(property_pairs(&d));
         }
         for k in section.children().filter_map(Keyword::cast) {
-            h.keyword(&k.key().to_ascii_lowercase(), &k.value());
+            let key = k.key().to_ascii_lowercase();
+            h.keyword(&key, &k.value());
+            if key == "title" {
+                h.title_source = value_token(k.syntax()).filter(|(v, _)| !org_trim(v).is_empty());
+            }
         }
         h
     }
@@ -473,6 +510,13 @@ impl FileHeader {
             _ => {}
         }
     }
+}
+
+/// The file title's source: the last `#+title` value of the zeroth
+/// section and its offset, `None` if absent or empty. The same reading as
+/// the file node's title (one implementation, principle #8).
+pub(crate) fn file_title_source(root: &SyntaxNode) -> Option<(String, usize)> {
+    FileHeader::read(root).title_source
 }
 
 /// Org's FILETAGS reading: words split on blanks, each split on `:`.
@@ -623,6 +667,11 @@ impl Walk<'_> {
                 }
             };
             if let Some(region) = self.rules.region(&n) {
+                self.out.unrendered.push(Unrendered {
+                    span: Span::of(&n),
+                    element: n.kind(),
+                    region,
+                });
                 self.unrendered(&n, region);
                 walk.skip_subtree();
                 continue;
@@ -728,13 +777,7 @@ impl Walk<'_> {
     }
 
     fn item(&mut self, n: &SyntaxNode) {
-        // Only the first two elements can be the drawer (see `items`).
-        let Some((drawer, raw)) = n
-            .children()
-            .filter(|c| c.kind() != ITEM_TAG_CONTENT)
-            .take(2)
-            .find_map(|c| items::item_property_drawer(&c).map(|p| (c, p)))
-        else {
+        let Some((drawer, raw)) = items::item_drawer(n) else {
             return;
         };
         let props = resolve_properties(raw.into_iter().map(|p| (p.key, p.value)).collect());
@@ -878,6 +921,10 @@ impl Walk<'_> {
             return;
         };
         let place = self.owner();
+        self.out.footnotes.push(RenderedFootnote {
+            label: label.clone(),
+            span: Span::of(n),
+        });
         self.note_place.entry(label.clone()).or_insert(place);
         self.owners.push((n.clone(), Owner::Note(label)));
     }
@@ -1051,7 +1098,7 @@ pub(crate) fn property_link_value(n: &SyntaxNode, rules: &Rules) -> Option<(Stri
     value_token(n)
 }
 
-fn value_token(n: &SyntaxNode) -> Option<(String, usize)> {
+pub(crate) fn value_token(n: &SyntaxNode) -> Option<(String, usize)> {
     let t = n
         .children_with_tokens()
         .filter_map(|e| e.into_token())

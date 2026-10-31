@@ -16,7 +16,10 @@
 //!
 //! Elements (phase O1) and inline objects (O2: emphasis, links, radio
 //! links, timestamps, entities, citations …) are both in the tree; the typed
-//! [`Link`] view reports a link as `org-element` does.
+//! [`Link`] view reports a link as `org-element` does. [`semantics`] is
+//! MAE's KB projection of the tree (O2), and the renderers (O3: [`render`],
+//! [`to_html`], [`to_hast`], [`text`], [`normalise`], [`node_source`])
+//! draw only what it renders.
 //!
 //! Properties the crate guarantees, each pinned by tests:
 //! - **Total:** `parse` never panics and never fails; malformed input
@@ -44,18 +47,27 @@ mod green;
 mod headline;
 mod index;
 mod inline;
+mod json;
+pub use json::json_string;
 mod kind;
 mod leaf;
 mod link_grammar;
 mod list;
 mod options;
 mod paragraph;
+mod render;
 mod scan;
 mod semantics;
 mod span;
 mod text;
 mod tokens;
 mod views;
+
+/// The version of mae-org's public contract: the renderers' output, the
+/// JSON shapes and the WASM facade's ABI. The `mae-org-vX.Y.Z` tags name it;
+/// it is independent of the workspace version, which every MAE release
+/// bumps whether or not this contract changed.
+pub const API_VERSION: &str = "0.1.0";
 
 /// The Emacs version the character classes and case folding were generated
 /// from (`conformance/gen-char-tables.el`).
@@ -69,15 +81,22 @@ pub use link_grammar::{
 pub use options::{
     ParseOptions, TodoSequence, DEFAULT_LINK_TYPES, DEFAULT_MAX_DEPTH, MAX_DEPTH_CEILING,
 };
+pub use render::{
+    encode_id, is_valid_id, is_valid_language, node_source, node_text, normalise, render,
+    render_hast, render_html, render_inline, safe_external_url, safe_resolver_href, slug, text,
+    text_of, to_hast, to_html, with_line_ending, Attr, Element, HeadlineIds, Node, NodeMeta,
+    RenderDiagnostic, RenderOptions, Rendered, Resolved, Resolver, Tag, TreeFormat, ATTRIBUTES,
+    CLASSES, DEFAULT_PLACEHOLDER, RENDER_MAX_DEPTH, SLUG_MAX, TAGS,
+};
 /// The tree is a rowan tree; `node.text_range()` returns rowan types. The
 /// re-export makes that coupling explicit and versioned: plain-data results
 /// (diagnostics, contents) use [`Span`] instead, so a JSON/WASM consumer never
 /// needs rowan.
 pub use rowan;
 pub use semantics::{
-    semantics, semantics_with, ArchivedTrees, NodeOrigin, Region, SemanticDiagnostic, SemanticLink,
-    SemanticNode, Semantics, SemanticsOptions, Transclusion, LINK_EXCLUDE_KEYWORDS,
-    ORG_EXPORT_SELECT_TAGS,
+    semantics, semantics_with, ArchivedTrees, NodeOrigin, Region, RenderedFootnote,
+    SemanticDiagnostic, SemanticLink, SemanticNode, Semantics, SemanticsOptions, Transclusion,
+    Unrendered, LINK_EXCLUDE_KEYWORDS, ORG_EXPORT_SELECT_TAGS,
 };
 pub use span::Span;
 pub use text::LineEnding;

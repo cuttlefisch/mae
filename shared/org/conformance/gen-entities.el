@@ -25,6 +25,35 @@
   (sort (delete-dups (mapcar #'car (cl-remove-if-not #'consp org-entities)))
         #'string<))
 
+(defun gen-entities--utf8 (name)
+  "The UTF-8 replacement of entity NAME: what `org-entity-get' returns at
+index 6, the string the `utf-8' export charset writes."
+  (nth 6 (org-entity-get name)))
+
+(defun gen-entities--rust-string (s)
+  "S as a Rust string literal: printable ASCII as itself (with backslash and
+double quote escaped), every other character as a \\u{...} escape, so an
+invisible character (a zero-width joiner, a no-break space) is visible in
+the generated source."
+  (concat "\""
+          (mapconcat (lambda (c)
+                       (cond ((memq c '(?\\ ?\")) (string ?\\ c))
+                             ((and (>= c 32) (< c 127)) (string c))
+                             (t (format "\\u{%x}" c))))
+                     s "")
+          "\""))
+
+(defun gen-entities--insert-list (items)
+  "Insert ITEMS (strings, already literals) as wrapped Rust list lines."
+  (let ((line "    "))
+    (dolist (it items)
+      (let ((it (concat it ",")))
+        (when (> (+ (length line) (length it)) 99)
+          (insert (string-trim-right line) "\n")
+          (setq line "    "))
+        (setq line (concat line it " "))))
+    (insert (string-trim-right line) "\n")))
+
 (defun gen-entities--write (file names)
   (with-temp-file file
     (set-buffer-file-coding-system 'utf-8-unix)
@@ -33,14 +62,13 @@
                     emacs-version org-version)
             "/// Entity names, sorted by bytes (`string<`).\n"
             "#[rustfmt::skip]\npub(crate) const ENTITY_NAMES: &[&str] = &[\n")
-    (let ((line "    "))
-      (dolist (n names)
-        (let ((it (format "%S," n)))
-          (when (> (+ (length line) (length it)) 99)
-            (insert (string-trim-right line) "\n")
-            (setq line "    "))
-          (setq line (concat line it " "))))
-      (insert (string-trim-right line) "\n"))
+    (gen-entities--insert-list (mapcar (lambda (n) (format "%S" n)) names))
+    (insert "];\n\n"
+            "/// Each name's UTF-8 replacement (`org-entities' index 6), in the\n"
+            "/// order of `ENTITY_NAMES`.\n"
+            "#[rustfmt::skip]\npub(crate) const ENTITY_UTF8: &[&str] = &[\n")
+    (gen-entities--insert-list
+     (mapcar (lambda (n) (gen-entities--rust-string (gen-entities--utf8 n))) names))
     (insert "];\n")))
 
 (let* ((root (expand-file-name "../../.." (file-name-directory load-file-name)))

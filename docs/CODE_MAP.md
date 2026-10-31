@@ -419,6 +419,7 @@ Source: `shared/org/src/lib.rs`
 
 | Item | Kind |
 |------|------|
+| `API_VERSION` | const |
 | `Document` | struct |
 | `parse` | fn |
 | `FragmentContext` | struct |
