@@ -150,5 +150,8 @@ const PIECES: &[&str] = &[
     "ref[fn:1]\n",
     "\\alpha \\nbsp \\\\\n",
     "<<<r>>> r\n",
+    "[[https://a.org][see *https://b.org* x[fn:1]]]\n",
+    "<<<r q>>> [[https://a][*r q*]]\n",
+    "* T [[https://a][*https://b*]]\n:PROPERTIES:\n:ID: t\n:ALIASES: [[https://a][*https://b*]]\n:END:\n",
     "#+CAPTION: c\nx\n",
 ];

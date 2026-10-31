@@ -347,6 +347,32 @@
             },
             "tagName": "pre",
             "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "shown: the last :exports wins"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "language-sh"
+                  ]
+                },
+                "tagName": "code",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-src"
+              ]
+            },
+            "tagName": "pre",
+            "type": "element"
           }
         ],
         "properties": {

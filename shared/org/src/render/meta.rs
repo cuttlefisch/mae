@@ -56,7 +56,7 @@ pub(crate) fn inline(text: &str, opts: &RenderOptions, resolver: &Resolver) -> V
 }
 
 impl Builder<'_> {
-    fn node_title(&mut self, root: &SyntaxNode, n: &SemanticNode) -> Vec<Node> {
+    pub fn node_title(&mut self, root: &SyntaxNode, n: &SemanticNode) -> Vec<Node> {
         let mut out = Vec::new();
         match n.origin {
             NodeOrigin::File => {

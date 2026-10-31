@@ -93,7 +93,9 @@ fn inline_parts(n: &SyntaxNode) -> Option<Vec<SyntaxElement>> {
 
 impl Builder<'_> {
     pub fn footnote_reference(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
-        if self.mode == Mode::Meta {
+        // Not in titles (shown anywhere) nor inside a link's description
+        // (its `<a>` would nest in the link's).
+        if self.mode == Mode::Meta || self.in_link {
             return;
         }
         let label = reference_label(n);

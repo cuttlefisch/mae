@@ -363,13 +363,14 @@ fn parse_query(query: &str) -> Query {
     q
 }
 
-/// A finite number, clamped to 0–1; `None` if malformed or not finite.
+/// A finite number, clamped to 0–1 (a negative zero is zero); `None` if
+/// malformed or not finite.
 fn unit(value: &str) -> Option<f64> {
     value
         .parse::<f64>()
         .ok()
         .filter(|f| f.is_finite())
-        .map(|f| f.clamp(0.0, 1.0))
+        .map(|f| f.clamp(0.0, 1.0) + 0.0)
 }
 
 /// A path as Org displays a link without a description: normalised and
@@ -438,6 +439,19 @@ mod tests {
         assert_eq!(unescape(r"a\\"), r"a\");
         assert_eq!(unescape(r"a\\b"), r"a\\b");
         assert_eq!(unescape("é\\"), "é");
+    }
+
+    #[test]
+    fn a_negative_zero_weight_is_zero() {
+        // `-0` parses to -0.0, which clamps to itself and would be written
+        // "-0" (a renderer's data-org-w, the semantics JSON).
+        for q in ["w=-0", "w=-0.0", "c=-0"] {
+            let c = classify_link(&format!("x?{q}"));
+            assert!(
+                c.weight.is_sign_positive() && c.confidence.is_sign_positive(),
+                "{q}"
+            );
+        }
     }
 
     #[test]

@@ -124,6 +124,8 @@ fn hostile_inputs_never_reach_an_attribute_or_markup() {
             "onclick=",
         ),
         ("#+begin_x\"><script>\ny\n#+end_x\"><script>\n", "<script"),
+        ("* Plan [[file:~/private/salaries.org]]\n", "salaries"),
+        ("* Intro @@html:<!-- codename Zeus -->@@\n", "zeus"),
     ];
     for (input, needle) in cases {
         let doc = parse(input, &ParseOptions::default());
@@ -221,6 +223,9 @@ const PIECES: &[&str] = &[
     ":LOGBOOK:\nlog <<tgt2>>\n:END:\n",
     "\n\n",
     "\r\n",
+    "[[https://a.org][see *https://b.org* and /[[id:n1]]/ x[fn:1]]] [[id:n1][*[fn:2]*]]\n",
+    "* Plan [[file:~/private/x.org]] @@html:<!-- codename -->@@ <<tg>> call_x(arg)\n",
+    "[[id:n1?w=-0&c=-0.0][negative zero]] [[id:n2?w=-1e999]]\n",
 ];
 
 fn org_doc() -> impl Strategy<Value = String> {
@@ -279,5 +284,38 @@ fn deep_nesting_degrades_to_a_diagnostic() {
         .unwrap();
         let _ = (mae_org::to_html(&out.body), mae_org::to_hast(&out.body));
         let _ = mae_org::text(&doc, &sem);
+    }
+}
+
+/// The search text of a node reads its title as rendered: a link without a
+/// description and an export snippet in a title show nothing there either.
+#[test]
+fn node_text_never_spells_a_title_link_target() {
+    let doc = parse(
+        "* Plan [[file:~/private/salaries.org]] @@html:<!-- Zeus -->@@ [[id:x][shown]]\n:PROPERTIES:\n:ID: p\n:END:\nbody\n",
+        &ParseOptions::default(),
+    );
+    let sem = semantics(&doc);
+    let t = mae_org::node_text(&doc, &sem, "p").unwrap();
+    assert_eq!(t, "Plan shown\nbody");
+}
+
+/// A resolver cannot point a link at a same-page anchor (it cannot know
+/// the page has it), nor anywhere a browser reads as another host.
+#[test]
+fn resolver_hrefs_that_are_not_pages_are_refused() {
+    for bad in [
+        "#x",
+        "//h/x",
+        "javascript:x",
+        "/a b",
+        "/a\\b",
+        "\u{a0}/x",
+        "",
+    ] {
+        assert_eq!(mae_org::safe_resolver_href(bad), None, "{bad:?}");
+    }
+    for good in ["/n/x.html", "n/x?y=1#z", "https://h/x", "mailto:a@b"] {
+        assert!(mae_org::safe_resolver_href(good).is_some(), "{good:?}");
     }
 }

@@ -69,6 +69,10 @@ pub(crate) struct Builder<'a> {
     base: Option<u32>,
     /// Render only what lies in this span (a node's body).
     scope: Option<Span>,
+    /// Inside a link's description: a nested link or footnote reference
+    /// (Org allows one inside emphasis there) must not become an `<a>`
+    /// inside an `<a>`, which an HTML parser would restructure.
+    pub in_link: bool,
     depth: usize,
     pub diagnostics: Vec<RenderDiagnostic>,
 }
@@ -142,6 +146,7 @@ impl<'a> Builder<'a> {
             notes: Notes::new(doc, sem),
             base: Some(0),
             scope: None,
+            in_link: false,
             depth: 0,
             diagnostics: Vec::new(),
         }

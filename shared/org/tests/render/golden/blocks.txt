@@ -19,6 +19,7 @@ example <text> & more
 fixed width
   indented
 no language
+shown: the last :exports wins
 Special and dynamic
 A special block.
 Hyphenated name.

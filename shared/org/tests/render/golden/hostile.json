@@ -402,6 +402,46 @@
         },
         "tagName": "section",
         "type": "element"
+      },
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "Plan "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "[?]"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-unresolved"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "id": "id-plan-node"
+            },
+            "tagName": "h1",
+            "type": "element"
+          }
+        ],
+        "properties": {
+          "className": [
+            "org-section",
+            "org-level-1"
+          ]
+        },
+        "tagName": "section",
+        "type": "element"
       }
     ],
     "type": "root"
@@ -459,6 +499,49 @@
           {
             "type": "text",
             "value": "Confusable"
+          }
+        ],
+        "type": "root"
+      }
+    },
+    {
+      "aliases": [],
+      "anchor": "id-plan-node",
+      "id": "plan-node",
+      "properties": [
+        {
+          "key": "ID",
+          "value": {
+            "children": [
+              {
+                "type": "text",
+                "value": "plan-node"
+              }
+            ],
+            "type": "root"
+          }
+        }
+      ],
+      "title": {
+        "children": [
+          {
+            "type": "text",
+            "value": "Plan "
+          },
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "[?]"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-unresolved"
+              ]
+            },
+            "tagName": "span",
+            "type": "element"
           }
         ],
         "type": "root"

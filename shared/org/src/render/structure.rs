@@ -23,7 +23,15 @@ fn token_text(n: &SyntaxNode, kind: crate::SyntaxKind) -> Option<String> {
 
 impl Builder<'_> {
     /// The anchor of a headline, claimed now (same order in both passes).
-    fn headline_anchor(&mut self, n: &SyntaxNode, h: &Headline, title: &str) -> Option<String> {
+    /// `title` is the title as written (the key `[[*Title]]` links find it
+    /// by); `shown` is its rendered text, which the slug is made from, so
+    /// an id never spells a link target or snippet the title does not show.
+    fn headline_anchor(
+        &mut self,
+        n: &SyntaxNode,
+        h: &Headline,
+        (title, shown): (&str, &str),
+    ) -> Option<String> {
         if self.mode == Mode::Meta {
             return None;
         }
@@ -46,7 +54,7 @@ impl Builder<'_> {
             }
         }
         let id = id.unwrap_or_else(|| {
-            let s = slug(title);
+            let s = slug(shown);
             let base = if s.is_empty() {
                 "h".to_string()
             } else {
@@ -73,12 +81,17 @@ impl Builder<'_> {
         };
         let title_node = n.children().find(|c| c.kind() == HEADLINE_TITLE);
         let plain = title_node.as_ref().map(plain_text).unwrap_or_default();
-        let anchor = self.headline_anchor(n, &h, &plain);
+        let mut title = Vec::new();
+        if let Some(t) = &title_node {
+            self.objects(t, &mut title);
+        }
+        let shown = super::text::text_of(&without_footnote_refs(&title));
+        let anchor = self.headline_anchor(n, &h, (&plain, &shown));
         let mut head = Element::new(Tag::heading(h.level()));
         if let Some(id) = anchor {
             head = head.attr(Attr::Id, id);
         }
-        let head = head.with(self.headline_line(&h, title_node.as_ref()));
+        let head = head.with(self.headline_line(&h, title));
         let level = format!("org-level-{}", h.level());
         let mut section = vec![head.into()];
         self.elements(n, &mut section);
@@ -90,7 +103,7 @@ impl Builder<'_> {
     }
 
     /// The headline's line: TODO keyword, priority, title and tags.
-    fn headline_line(&mut self, h: &Headline, title: Option<&SyntaxNode>) -> Vec<Node> {
+    fn headline_line(&mut self, h: &Headline, title: Vec<Node>) -> Vec<Node> {
         let mut line = Vec::new();
         if let Some(kw) = h.todo() {
             let mut span = Element::new(Tag::Span).class("org-todo");
@@ -105,9 +118,7 @@ impl Builder<'_> {
             push(&mut line, span.with(vec![text(&p)]).into());
             push(&mut line, text(" "));
         }
-        if let Some(t) = title {
-            self.objects(t, &mut line);
-        }
+        title.into_iter().for_each(|t| push(&mut line, t));
         trim_text(&mut line);
         let mut tags = Vec::new();
         for t in h.tags().iter().filter(|t| !t.is_empty()) {
@@ -315,8 +326,11 @@ impl Builder<'_> {
     }
 
     pub fn src(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
-        let lang = Block::cast(n.clone())
-            .and_then(|b| b.parameters())
+        let params = Block::cast(n.clone()).and_then(|b| b.parameters());
+        if params.as_deref().is_some_and(hides_code) {
+            return;
+        }
+        let lang = params
             .and_then(|p| p.split([' ', '\t']).next().map(str::to_string))
             .filter(|l| super::links::is_valid_language(l));
         let mut code = Element::new(Tag::Code);
@@ -368,6 +382,44 @@ impl Builder<'_> {
             .with(vec![code.into()]);
         push(out, pre.into());
     }
+}
+
+/// `nodes` without footnote references: a slug must not carry a note's
+/// number, which an unrelated earlier note would change.
+fn without_footnote_refs(nodes: &[Node]) -> Vec<Node> {
+    nodes
+        .iter()
+        .filter(
+            |n| !matches!(n, Node::Element(e) if e.get(Attr::Class) == Some("org-footnote-ref")),
+        )
+        .map(|n| match n {
+            Node::Element(e) => {
+                let mut e = e.clone();
+                e.children = without_footnote_refs(&e.children);
+                Node::Element(e)
+            }
+            t => t.clone(),
+        })
+        .collect()
+}
+
+/// Whether a src block's own header says its code is not exported
+/// (`:exports none` or `:exports results`; results are never computed
+/// here, and a `#+RESULTS:` block already in the text renders on its own).
+/// Inherited header arguments (`#+PROPERTY: header-args`, drawers) are not
+/// read.
+fn hides_code(params: &str) -> bool {
+    let words: Vec<&str> = params
+        .split([' ', '\t'])
+        .filter(|w| !w.is_empty())
+        .collect();
+    // The last `:exports` wins, as in Org's header-argument merge.
+    let value = words
+        .windows(2)
+        .rev()
+        .find(|w| w[0].eq_ignore_ascii_case(":exports"))
+        .map(|w| w[1]);
+    value.is_some_and(|v| v.eq_ignore_ascii_case("none") || v.eq_ignore_ascii_case("results"))
 }
 
 /// `[@N]`'s N when it is a decimal number.

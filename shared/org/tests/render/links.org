@@ -15,6 +15,7 @@
 - Other: [[file:notes.org][A file]] [[elisp:(kill-emacs)]] [[shell:rm -rf /][Shell]] [[ftp://x.org]]
 - Local: [[*Kinds][to kinds]] [[#kinds]] [[*Missing heading]] [[#missing]] [[(ref)]] [[a target]]
 - Target: <<a target>>
+- Nested: [[https://a.org][see *https://b.org*]] [[id:known][known, /see https://c.org/]]
 * Same page node
 :PROPERTIES:
 :ID: here

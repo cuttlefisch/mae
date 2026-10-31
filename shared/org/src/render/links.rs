@@ -52,7 +52,8 @@ pub fn safe_external_url(url: &str) -> Option<String> {
 
 /// A resolver-supplied href, if it is safe: an `http:`, `https:` or
 /// `mailto:` URL, or a reference with NO scheme (its first segment, before
-/// `/`, `?` or `#`, holds no `:`) that is not protocol-relative (`//host`).
+/// `/`, `?` or `#`, holds no `:`) that is neither protocol-relative
+/// (`//host`) nor only a fragment (`#x`, which names this page).
 /// Refused (`None`), rather than repaired, when empty or when it holds
 /// anything a URL must percent-encode (blanks, which a browser strips;
 /// quotes; `\`, which a browser reads as `/`; controls; non-ASCII): the
@@ -65,7 +66,9 @@ pub fn safe_resolver_href(href: &str) -> Option<String> {
         return safe_external_url(href);
     }
     let first = href.split(['/', '?', '#']).next().unwrap_or("");
-    let ok = !href.starts_with("//") && !first.contains(':');
+    // `#x` alone is a same-page anchor, which only the page may name: the
+    // resolver cannot know it exists.
+    let ok = !href.starts_with("//") && !href.starts_with('#') && !first.contains(':');
     ok.then(|| href.to_string())
 }
 
@@ -111,18 +114,25 @@ enum Target {
     Image(String),
     /// No target: the description, or the placeholder.
     None,
+    /// Shown as plain text (a link inside another link's description).
+    Plain,
 }
 
 impl Builder<'_> {
-    /// The rendered description of `link` (its objects), trimmed.
+    /// The rendered description of `link` (its objects), trimmed. A link
+    /// nested in it (inside emphasis, as Org allows) shows its text under
+    /// the same policy but is no `<a>`, and a footnote reference in it
+    /// shows nothing: the outer `<a>` must hold no other.
     fn description(&mut self, link: &Link) -> Vec<Node> {
         let mut out = Vec::new();
+        let outer = std::mem::replace(&mut self.in_link, true);
         for e in link.description().unwrap_or_default() {
             match e {
                 rowan::NodeOrToken::Token(t) => push(&mut out, text(t.text())),
                 rowan::NodeOrToken::Node(o) => self.deeper(&o, |b| b.object(&o, &mut out)),
             }
         }
+        self.in_link = outer;
         trim_text(&mut out);
         out
     }
@@ -145,7 +155,7 @@ impl Builder<'_> {
                 desc = vec![text(&d)];
             }
         }
-        let target = self.link_target(class, desc.is_empty());
+        let target = self.link_target(class, desc.is_empty() && !self.in_link);
         let shown = match &target {
             _ if !desc.is_empty() || self.mode == Mode::Text => desc,
             Target::Href(_, Some(l)) => self.resolved_text(l),
@@ -153,6 +163,11 @@ impl Builder<'_> {
             Target::Href(h, None) if h.starts_with('#') => vec![text(&plain::link_text(n))],
             Target::Href(h, None) => vec![text(h.strip_prefix("mailto:").unwrap_or(h))],
             _ => self.placeholder(),
+        };
+        let target = match target {
+            // Nested in another link's description: its text, unlinked.
+            Target::Href(..) if self.in_link => Target::Plain,
+            t => t,
         };
         push(out, link_element(target, shown));
     }
@@ -241,7 +256,7 @@ impl Builder<'_> {
         let desc = self.description(link);
         let key = radio_key(&link.description_text().unwrap_or_default());
         match self.local(|t| t.radios.get(&key).cloned()) {
-            Target::Href(h, _) => {
+            Target::Href(h, _) if !self.in_link => {
                 let a = Element::new(Tag::A).class("org-radio").attr(Attr::Href, h);
                 push(out, a.with(desc).into());
             }
@@ -304,6 +319,7 @@ fn link_element(target: Target, shown: Vec<Node>) -> Node {
             .class("org-unresolved")
             .with(shown)
             .into(),
+        Target::Plain => Element::new(Tag::Span).with(shown).into(),
     }
 }
 

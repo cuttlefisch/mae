@@ -26,3 +26,7 @@ code
 #+begin_note"><script>
 special
 #+end_note"><script>
+* Plan [[file:~/private/salaries.org]] @@html:<!-- codename Zeus -->@@
+:PROPERTIES:
+:ID: plan-node
+:END:

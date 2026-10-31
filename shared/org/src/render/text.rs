@@ -2,7 +2,7 @@
 //! only, link descriptions and never targets, entities decoded, footnote
 //! definitions included and their markers not.
 
-use super::build::{page, Mode};
+use super::build::{page, Builder, Mode, Table};
 use super::tree::{Node, Tag};
 use super::{RenderOptions, Resolver};
 use crate::{Document, Semantics};
@@ -68,7 +68,11 @@ pub fn node_text(doc: &Document, sem: &Semantics, id: &str) -> Option<String> {
     let opts = RenderOptions::default();
     let resolver = text_resolver();
     let body = page(doc, sem, &opts, &resolver, Mode::Text, Some(node.body_span)).body;
-    let title = node.title.clone().unwrap_or_default();
+    // The title as rendered (link descriptions, no snippet), not the
+    // semantics' plain title, which spells a link without one as its target.
+    let mut b = Builder::new(doc, sem, &opts, &resolver, Mode::Text, Table::default());
+    let title = text_of(&b.node_title(&doc.syntax(), node));
+    let title = crate::semantics::plain::collapse(&title);
     let body = text_of(&body);
     Some(match (title.is_empty(), body.is_empty()) {
         (_, true) => title,
