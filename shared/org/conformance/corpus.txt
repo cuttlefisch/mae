@@ -51,6 +51,7 @@ shared/org/tests/fixtures/objects-citations.org
 shared/org/tests/fixtures/objects-emphasis.org
 shared/org/tests/fixtures/objects-entities-latex.org
 shared/org/tests/fixtures/objects-eol-mac.org
+shared/org/tests/fixtures/objects-link-eol-paths.org
 shared/org/tests/fixtures/objects-links.org
 shared/org/tests/fixtures/objects-misc.org
 shared/org/tests/fixtures/objects-multibrace.org
