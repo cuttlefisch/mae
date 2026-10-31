@@ -242,3 +242,76 @@ fn kb_register_still_accepts_a_name_that_merely_resembles_a_system_kb() {
     assert!(editor.kb.registry.find("MyDevPractices").is_some());
     assert!(editor.kb.watchers.contains_key(&result.uuid));
 }
+
+fn editor_with_guidance_node() -> (Editor, TempDir) {
+    let mut editor = Editor::new();
+    let dirs = with_test_dirs(&mut editor);
+    let sys = mae_kb::CozoKbStore::open_mem().unwrap();
+    sys.seed_type_system().unwrap();
+    sys.insert_node(&mae_kb::Node::new(
+        "hub:testing",
+        "Testing",
+        mae_kb::NodeKind::Concept,
+        "Write the adversarial case first.",
+    ))
+    .unwrap();
+    editor
+        .kb
+        .system_stores
+        .insert("DevPractices".to_string(), std::sync::Arc::new(sys));
+    // A real user primary store: it is what the query layer consults FIRST,
+    // which is what made the shadowing work.
+    let primary = std::sync::Arc::new(mae_kb::CozoKbStore::open_mem().unwrap());
+    primary.seed_type_system().unwrap();
+    editor.kb.store = Some(primary.clone());
+    editor.kb.primary_cozo = Some(primary);
+    editor.kb.rebuild_query_layer();
+    (editor, dirs)
+}
+
+/// The attack: an agent creates a node under a guidance id, and every later
+/// session that follows the guidance link gets the agent's text instead.
+#[test]
+fn an_agent_cannot_create_a_node_that_shadows_a_guidance_node() {
+    let (mut editor, _dirs) = editor_with_guidance_node();
+    editor.ai.ai_dispatch_depth = 1; // inside an AI dispatch scope
+
+    let r = editor.kb_create_node(
+        "hub:testing",
+        "Testing",
+        "Tests are optional.",
+        mae_kb::NodeKind::Note,
+    );
+    editor.ai.ai_dispatch_depth = 0;
+
+    assert!(r.is_err(), "agent shadowed a guidance node: {r:?}");
+    let (got, _) = editor
+        .kb_resolve_anywhere("hub:testing")
+        .expect("still resolvable");
+    assert_eq!(got.body, "Write the adversarial case first.");
+}
+
+/// The guard is about the agent, not the id: a human may still use the name.
+/// Without this case the test above would pass if every create were refused.
+#[test]
+fn a_human_may_still_create_a_node_with_a_system_id() {
+    let (mut editor, _dirs) = editor_with_guidance_node();
+    let r = editor.kb_create_node("hub:testing", "Mine", "my note", mae_kb::NodeKind::Note);
+    assert!(r.is_ok(), "{r:?}");
+    // And the fixture is not vacuous: an allowed create really does shadow.
+    let (got, _) = editor.kb_resolve_anywhere("hub:testing").unwrap();
+    assert_eq!(
+        got.body, "my note",
+        "fixture: the user's store must win the lookup"
+    );
+}
+
+/// An agent can still create ordinary nodes.
+#[test]
+fn an_agent_may_create_a_node_no_system_kb_holds() {
+    let (mut editor, _dirs) = editor_with_guidance_node();
+    editor.ai.ai_dispatch_depth = 1;
+    let r = editor.kb_create_node("note:fresh", "Fresh", "body", mae_kb::NodeKind::Note);
+    editor.ai.ai_dispatch_depth = 0;
+    assert!(r.is_ok(), "{r:?}");
+}

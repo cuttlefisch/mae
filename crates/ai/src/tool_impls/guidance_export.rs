@@ -69,6 +69,55 @@ fn merge_guidance_block(existing: Option<&str>, guidance_body: &str) -> Result<S
     }
 }
 
+/// Where `target` lands, if it is somewhere this tool may write: a relative path
+/// that stays inside the project root after symlinks are resolved, and is not MAE
+/// configuration.
+///
+/// @ai-caution: [security] This tool is Write tier and its content is the
+/// project's CLAUDE.md/README.md, which an agent can edit. `Path::join` with an
+/// absolute `path` replaces the root, so without this check the tool wrote
+/// wherever it was pointed, MAE's own configuration included (principle #16,
+/// ADR-089 D4). Containment is checked on the RESOLVED path, so a symlink
+/// shipped inside the project cannot point it out.
+fn contained_target(root: &std::path::Path, target: &str) -> Result<std::path::PathBuf, String> {
+    use std::path::Component;
+    let rel = std::path::Path::new(target);
+    let plain = !target.is_empty()
+        && rel
+            .components()
+            .all(|c| matches!(c, Component::Normal(_) | Component::CurDir));
+    if !plain {
+        return Err(format!(
+            "Refused: path '{target}' must be relative to the project root, without '..'"
+        ));
+    }
+    let out = root.join(rel);
+    let root_real = root
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve the project root {}: {e}", root.display()))?;
+    // The deepest part of `out` that exists decides where the write really goes
+    // (the rest is created below it).
+    let existing = out
+        .ancestors()
+        .find(|a| a.symlink_metadata().is_ok())
+        .unwrap_or(root);
+    let existing_real = existing
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve {}: {e}", existing.display()))?;
+    if !existing_real.starts_with(&root_real) {
+        return Err(format!(
+            "Refused: '{target}' resolves outside the project root ({})",
+            existing_real.display()
+        ));
+    }
+    if mae_core::workspace_trust::is_protected_config_path(&out) {
+        return Err(format!(
+            "Refused: '{target}' is MAE configuration, which an AI session may not write"
+        ));
+    }
+    Ok(out)
+}
+
 /// Export MAE's guidance context to a markdown file for external agents that
 /// don't (or might not) consume MCP `initialize.instructions` themselves —
 /// `AGENTS.md` by default; pass `path` to target `.github/copilot-instructions.md`
@@ -95,7 +144,7 @@ pub fn execute_kb_export_guidance(
              project root first",
         )?;
 
-    let out_path = root.join(target);
+    let out_path = contained_target(&root, target)?;
     let existing = std::fs::read_to_string(&out_path).ok();
     let merged = merge_guidance_block(existing.as_deref(), context.trim())?;
 
@@ -245,5 +294,71 @@ mod tests {
         assert!(out.contains("Do not remove this section."));
         assert!(out.contains("v2 guidance"));
         assert!(!out.contains("v1 guidance"));
+    }
+
+    fn editor_with_root(root: &std::path::Path) -> mae_core::Editor {
+        std::fs::write(root.join("CLAUDE.md"), "/planted/trusted/dir\n").unwrap();
+        let mut editor = mae_core::Editor::new();
+        editor.project = Some(mae_core::project::Project::from_root(root.to_path_buf()));
+        editor
+    }
+
+    /// The attack: an absolute `path` used to replace the project root, so the
+    /// tool appended CLAUDE.md's lines to any file — including the trust list.
+    #[test]
+    fn refuses_an_absolute_path_outside_the_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let victim = tmp.path().join("trusted-projects");
+        std::fs::write(&victim, "# trust list\n").unwrap();
+        let editor = editor_with_root(&project);
+
+        let r = execute_kb_export_guidance(
+            &editor,
+            &serde_json::json!({"path": victim.to_str().unwrap()}),
+        );
+        assert!(r.is_err(), "absolute path accepted: {r:?}");
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "# trust list\n");
+    }
+
+    #[test]
+    fn refuses_parent_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let editor = editor_with_root(&project);
+
+        let r = execute_kb_export_guidance(&editor, &serde_json::json!({"path": "../outside.md"}));
+        assert!(r.is_err(), "'..' accepted: {r:?}");
+        assert!(!tmp.path().join("outside.md").exists());
+    }
+
+    /// Inside the project but MAE configuration: `.mae/` decides what runs on open.
+    #[test]
+    fn refuses_project_local_mae_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let editor = editor_with_root(tmp.path());
+
+        let r = execute_kb_export_guidance(&editor, &serde_json::json!({"path": ".mae/init.scm"}));
+        assert!(r.is_err(), ".mae/ accepted: {r:?}");
+        assert!(!tmp.path().join(".mae").exists());
+    }
+
+    /// A hostile repo can ship a symlink; containment is checked after resolving it.
+    #[cfg(unix)]
+    #[test]
+    fn refuses_a_symlink_that_points_outside_the_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, project.join("docs")).unwrap();
+        let editor = editor_with_root(&project);
+
+        let r = execute_kb_export_guidance(&editor, &serde_json::json!({"path": "docs/AGENTS.md"}));
+        assert!(r.is_err(), "symlinked escape accepted: {r:?}");
+        assert!(!outside.join("AGENTS.md").exists());
     }
 }

@@ -222,7 +222,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 }
             };
             // Drain any pending Scheme evals queued by the tool (e.g. eval_scheme).
-            let scheme_output = drain_pending_scheme_evals(
+            let scheme_output = drain_ai_scheme_evals(
                 editor,
                 ctx.scheme,
                 ctx.permission_policy.ambient_scheme_tier(),
@@ -1211,7 +1211,7 @@ pub fn handle_mcp_request(
     };
     // Drain any pending Scheme evals queued by the tool (e.g. eval_scheme).
     let scheme_output =
-        drain_pending_scheme_evals(editor, scheme, effective_policy.ambient_scheme_tier());
+        drain_ai_scheme_evals(editor, scheme, effective_policy.ambient_scheme_tier());
     match exec_result {
         ExecuteResult::Immediate(mut result) => {
             // If the tool queued a Scheme eval, replace the output with the
@@ -1654,6 +1654,27 @@ pub fn timeout_deferred_dap_reply(editor: &mut Editor, deferred_dap_reply: &mut 
             resolve_dap_deferred(editor, deferred_dap_reply, false, &output, &tool_call_id);
         }
     }
+}
+
+/// [`drain_pending_scheme_evals`] for Scheme an AI tool queued (`eval_scheme`):
+/// the evaluation and every effect it applies count as AI-originated.
+///
+/// @ai-caution: [security] The drain runs AFTER the tool's
+/// `with_ai_dispatch_scope`, so without this mark an agent's `eval_scheme` reached
+/// effects with `is_ai_originated_dispatch() == false` — the AI-origin guards
+/// (protected-config saves, system-node shadowing) treated it as the human.
+/// The human keypress path calls `drain_pending_scheme_evals` directly.
+pub fn drain_ai_scheme_evals(
+    editor: &mut Editor,
+    scheme: &mut mae_scheme::SchemeRuntime,
+    ambient_tier: PermissionTier,
+) -> Option<(String, bool)> {
+    // Same unwind direction as `with_ai_dispatch_scope_for_session`: a leaked
+    // increment is more restrictive, never less.
+    editor.ai.ai_dispatch_depth = editor.ai.ai_dispatch_depth.saturating_add(1);
+    let out = drain_pending_scheme_evals(editor, scheme, ambient_tier);
+    editor.ai.ai_dispatch_depth = editor.ai.ai_dispatch_depth.saturating_sub(1);
+    out
 }
 
 /// Drain any pending Scheme evaluations queued by AI tools (e.g. `eval_scheme`).

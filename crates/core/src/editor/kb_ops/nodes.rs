@@ -217,6 +217,35 @@ impl Editor {
         self.kb_create_node_in(owner, id, title, body, kind)
     }
 
+    /// Refuse an AI-originated create of an id that one of MAE's system KBs
+    /// (manual, guidance corpora) already holds.
+    ///
+    /// @ai-caution: [security] Principle #16: the agent does not choose its own
+    /// standing instructions. Guidance links are followed with `kb_get`, which
+    /// resolves the user's stores BEFORE the system stores, so a node created under
+    /// a guidance id (`hub:testing`) silently replaced the shipped practice for
+    /// every later session. Gated on AI origin, not tier, like
+    /// `refuse_ai_save_of_protected_config`: a human may still name their own note
+    /// `index`. Covers every owner, since a user instance can shadow too.
+    fn kb_refuse_agent_shadowing_system_node(&self, id: &str) -> Result<(), String> {
+        if !self.is_ai_originated_dispatch() {
+            return Ok(());
+        }
+        let holder = self.kb.system_stores.iter().find(|(_, store)| {
+            matches!(
+                mae_kb::KbStore::get_node_light(store.as_ref(), id),
+                Ok(Some(_))
+            )
+        });
+        match holder {
+            Some((name, _)) => Err(format!(
+                "Refused: '{id}' is a node of MAE's system KB '{name}'. An AI session may \
+                 not create a node that would shadow it — choose another id."
+            )),
+            None => Ok(()),
+        }
+    }
+
     /// [`Editor::kb_create_node`] with the owning KB named by the caller rather
     /// than inferred from the id's prefix.
     ///
@@ -233,6 +262,7 @@ impl Editor {
         kind: mae_kb::NodeKind,
     ) -> Result<(), String> {
         self.kb_write_blocked()?;
+        self.kb_refuse_agent_shadowing_system_node(id)?;
         // Guard: refuse to overwrite seed nodes
         if let Some(existing) = self.kb.primary.get(id) {
             if existing.source == Some(mae_kb::NodeSource::Seed) {

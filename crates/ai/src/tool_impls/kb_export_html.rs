@@ -526,6 +526,14 @@ pub fn execute_kb_export_subgraph_html(
     );
 
     let out_path = resolve_path(editor, path_arg);
+    // ADR-089 D4: MAE's own configuration is not agent-writable, whatever the tier.
+    if mae_core::workspace_trust::is_protected_config_path(&out_path) {
+        return Err(format!(
+            "kb_export_subgraph_html: refused: {} is MAE configuration, which an AI \
+             session may not write",
+            out_path.display()
+        ));
+    }
     if let Some(parent) = out_path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent).map_err(|e| {
@@ -660,6 +668,22 @@ mod tests {
             ));
         }
         editor
+    }
+
+    /// Shell tier does not make MAE's own configuration writable (ADR-089 D4): a
+    /// project-local `.mae/` file decides what runs when the project opens.
+    #[test]
+    fn refuses_to_write_into_project_local_mae_config() {
+        let editor = editor_with_linked_notes();
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join(".mae").join("init.scm");
+        let r = execute_kb_export_subgraph_html(
+            &editor,
+            &serde_json::json!({"id": "root", "path": out.to_str().unwrap()}),
+            None,
+        );
+        assert!(r.is_err(), "wrote into .mae/: {r:?}");
+        assert!(!dir.path().join(".mae").exists());
     }
 
     #[test]

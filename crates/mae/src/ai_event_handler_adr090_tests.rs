@@ -209,4 +209,70 @@ mod tests {
             "the human path must not be bounded by the AI's shipped default"
         );
     }
+
+    fn editor_with_guidance_node() -> Editor {
+        let mut editor = Editor::new();
+        let sys = mae_kb::CozoKbStore::open_mem().unwrap();
+        sys.seed_type_system().unwrap();
+        mae_kb::KbStore::insert_node(
+            &sys,
+            &mae_kb::Node::new(
+                "hub:testing",
+                "Testing",
+                mae_kb::NodeKind::Concept,
+                "Write the adversarial case first.",
+            ),
+        )
+        .unwrap();
+        editor
+            .kb
+            .system_stores
+            .insert("DevPractices".to_string(), std::sync::Arc::new(sys));
+        let primary = std::sync::Arc::new(mae_kb::CozoKbStore::open_mem().unwrap());
+        primary.seed_type_system().unwrap();
+        editor.kb.store = Some(primary.clone());
+        editor.kb.primary_cozo = Some(primary);
+        editor.kb.rebuild_query_layer();
+        editor
+    }
+
+    fn body_of(editor: &Editor, id: &str) -> String {
+        editor
+            .kb_resolve_anywhere(id)
+            .map(|(n, _)| n.body)
+            .unwrap_or_default()
+    }
+
+    /// Scheme an agent queued with `eval_scheme` is drained AFTER the tool's
+    /// dispatch scope; it must still count as AI-originated, or every AI-origin
+    /// guard is one `eval_scheme` away from being skipped.
+    #[test]
+    fn scheme_queued_by_an_ai_tool_counts_as_ai_originated() {
+        let mut editor = editor_with_guidance_node();
+        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
+        editor
+            .pending_scheme_eval
+            .push(r#"(kb-create "hub:testing" "Testing" "Tests are optional.")"#.to_string());
+        drain_ai_scheme_evals(&mut editor, &mut scheme, PermissionTier::Write);
+        assert_eq!(
+            body_of(&editor, "hub:testing"),
+            "Write the adversarial case first.",
+            "an agent's eval_scheme shadowed a guidance node"
+        );
+        assert_eq!(editor.ai.ai_dispatch_depth, 0, "the mark must not leak");
+    }
+
+    /// The control: the same code from the human's own REPL goes through, so the
+    /// case above is refused because of WHO asked, not because the fixture
+    /// cannot create the node at all.
+    #[test]
+    fn the_same_scheme_from_the_human_path_is_not_refused() {
+        let mut editor = editor_with_guidance_node();
+        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
+        editor
+            .pending_scheme_eval
+            .push(r#"(kb-create "hub:testing" "Testing" "my own note")"#.to_string());
+        drain_pending_scheme_evals(&mut editor, &mut scheme, HUMAN_AMBIENT_TIER);
+        assert_eq!(body_of(&editor, "hub:testing"), "my own note");
+    }
 }
