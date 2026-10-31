@@ -3,58 +3,98 @@
 //! The tree decides where a link is and splits a bracket link's PATH from its
 //! DESCRIPTION exactly as `org-element` does (the path stops at the first
 //! unescaped `]`, so `][` is found by the tree, never searched for in text).
-//! [`classify_link`] reads that path, in one fixed order:
+//! [`classify_link_with`] reads that path, in one fixed order:
 //!
 //! 1. **Normalise like Org** (`org-element-link-parser`): a line break inside
 //!    the path, with the blanks around it, becomes one space, and
 //!    `org-link-unescape` halves every backslash run before `[`, `]` or the
-//!    end. Then trim.
-//! 2. **Scheme** (ASCII case-insensitive): `id:` is a KB link with the prefix
-//!    stripped; `http://`/`https://` is [`LinkKind::Web`]; `mailto:` is
-//!    [`LinkKind::Mailto`]; a scheme in [`OTHER_SCHEMES`] is
-//!    [`LinkKind::Other`]. A web, mail or other target is kept whole: no store
-//!    form, fragment or query is read from it (`?` and `#` belong to the URL).
-//!    Anything else is a KB link. This is an EXCLUDE list on purpose: an
-//!    org-roam id is often a bare UUID with no namespace, so an include list
-//!    would silently drop real edges, while a missed scheme only costs a
-//!    broken-link report (the reasoning of the `@ai-caution` on mae-kb's
-//!    `EXTERNAL_LINK_SCHEMES`, which this list supersedes).
+//!    end. NOT trimmed: Org reads the type from the path's first character,
+//!    so `[[ id:x]]` is the fuzzy link ` id:x`, not an id link.
+//! 2. **Kind, as `org-element-link-parser` decides the type**, in its order:
+//!    a path that is a file name (`/…`, `~/…`, `./…`, `../…`) is a file link,
+//!    [`LinkKind::Other`]; then a known scheme `TYPE:` (ASCII
+//!    case-insensitive, as Org matches it: `Mailto:`, `ID:`): `id` is a KB
+//!    link with the prefix stripped, the [`LinkTypes`] web schemes (`http`,
+//!    `https`: `[[https:x]]` is web, as in Org) are [`LinkKind::Web`], `mailto`
+//!    is [`LinkKind::Mailto`], every other listed scheme [`LinkKind::Other`];
+//!    then `(REF)` is a [`LinkKind::Coderef`], `#ID` a [`LinkKind::CustomId`],
+//!    and `*TITLE` a [`LinkKind::Heading`] (Org's fuzzy search restricted to
+//!    headlines). These three are local targets in the same file, never KB
+//!    edges. Anything else (a bare id, `concept:x`, a fuzzy name, an unknown
+//!    scheme) is a KB link. A web, mail, other or local target is kept whole
+//!    (normalised, trimmed): no store form, query or fragment is read from it
+//!    (`?` and `#` belong to the URL), except a file link's search option.
+//!    The scheme lists are an EXCLUDE list on purpose: an org-roam id is
+//!    often a bare UUID with no namespace, so an include list would silently
+//!    drop real edges, while a missed scheme only costs a broken-link report
+//!    (the reasoning of the `@ai-caution` on mae-kb's `EXTERNAL_LINK_SCHEMES`,
+//!    which [`OTHER_SCHEMES`] supersedes).
+//!
+//! Then, on a KB path (after `id:`):
+//!
 //! 3. **Store form** `T|D` (MAE's own storage of `[[T][D]]`): the first `|`
 //!    ends the target; `D` is [`LinkClass::description`]. Before `?` and `#`,
 //!    so a description may contain either (`[[x|What? C# notes]]`).
-//! 4. **Query**: the first `?` starts the ADR-030 query, to the end.
-//! 5. **Fragment**: the first `#` before the query starts the fragment
-//!    (`NODE_ID [#FRAGMENT] [?QUERY]`, ADR-030's order; a `#` after the `?`
-//!    is part of the query).
+//! 4. **Query**: the first `?` starts the ADR-030 query, to the end. Before
+//!    the search option: the query is MAE's metadata about the EDGE, outside
+//!    Org's path like the store form, so `[[id:x::*h?rel=r]]` keeps its
+//!    relation. A search string cannot contain `?` (it starts the query).
+//! 5. **Search option** (`id:` links only): the first `::` ends the id and
+//!    the rest is [`LinkClass::search`], as `org-id-open` reads it
+//!    (`"::\\(.*\\)\\'"`, org-id.el) and org-roam stores it. Org 9.7 writes this
+//!    form by default (`org-id-link-use-context`). A file link (`file:`,
+//!    `file+sys:`, `file+emacs:`, or a file name) is split the same way, as
+//!    `org-element-link-parser` does (its `:search-option`); its target is
+//!    the path without the option.
+//! 6. **Fragment**: the first `#` before the query (and, for an id link,
+//!    before `::`) starts the fragment (`NODE_ID [#FRAGMENT] [?QUERY]`,
+//!    ADR-030's order; a `#` after `::` belongs to the search, so
+//!    `[[id:x::#custom]]` keeps Org's custom-id search).
+//!
+//! Every trim is Org's (`org-trim`: space, tab, LF, CR), never Unicode
+//! whitespace: a no-break space is content, as in Emacs.
 //!
 //! MAE had three split orders before this (pinned in
 //! `tests/link_grammar.rs`): mae-kb's projector split `][` then `|`, then `?`
 //! then `#`; the exporter searched `][` past the link's own `]]`; the help
-//! renderer split `|` before `][` and kept the `id:` prefix.
+//! renderer split `|` before `][` and kept the `id:` prefix. mae-kb also kept
+//! `::search` in the target (`x::*h`, an id that never exists).
+
+use std::sync::OnceLock;
 
 /// What a link points at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum LinkKind {
     /// A KB node (`id:UUID`, `concept:x`, a bare id, a fuzzy `[[name]]`).
     Kb,
-    /// `http://` or `https://`.
+    /// A web scheme of [`LinkTypes::web`] (`http:`, `https:`).
     Web,
     /// `mailto:`.
     Mailto,
-    /// A known non-KB scheme ([`OTHER_SCHEMES`]): never a node, never
-    /// rendered as a hyperlink (ADR-112 D3's protocol allowlist is http,
-    /// https and mailto).
+    /// A known non-KB scheme ([`OTHER_SCHEMES`]) or a file name: never a
+    /// node, never rendered as a hyperlink (ADR-112 D3's protocol allowlist
+    /// is http, https and mailto).
     Other,
+    /// `[[*Title]]`: a headline of this file, found by its title.
+    Heading,
+    /// `[[#id]]`: the element of this file with that `CUSTOM_ID`.
+    CustomId,
+    /// `[[(ref)]]`: a code reference in a source block of this file.
+    Coderef,
 }
 
 impl LinkKind {
-    /// The name used in JSON: `kb`, `web`, `mailto`, `other`.
+    /// The name used in JSON: `kb`, `web`, `mailto`, `other`, `heading`,
+    /// `custom_id`, `coderef`.
     pub fn as_str(self) -> &'static str {
         match self {
             LinkKind::Kb => "kb",
             LinkKind::Web => "web",
             LinkKind::Mailto => "mailto",
             LinkKind::Other => "other",
+            LinkKind::Heading => "heading",
+            LinkKind::CustomId => "custom_id",
+            LinkKind::Coderef => "coderef",
         }
     }
 }
@@ -63,12 +103,17 @@ impl LinkKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LinkClass {
     pub kind: LinkKind,
-    /// For a KB link, the node id (no `id:`, store-form description, query
-    /// or fragment). Otherwise the whole normalised path, scheme included.
+    /// For a KB link, the node id (no `id:`, store-form description, query,
+    /// search option or fragment). For a heading, custom-id or coderef link,
+    /// the title, id or reference (`H` of `*H`). Otherwise the whole
+    /// normalised path, scheme included, without a file link's search option.
     pub target: String,
     /// `#FRAGMENT` of a KB link (a block index or heading slug); `None` when
     /// absent or empty.
     pub fragment: Option<String>,
+    /// The search option after `::` of an `id:` or file link (`*h` of
+    /// `id:x::*h`), as written; `None` when absent.
+    pub search: Option<String>,
     /// `rel=`: the relationship type, [`DEFAULT_REL`] when absent or empty.
     pub rel: String,
     /// `w=`/`weight=`, clamped to 0–1; 1.0 when absent, malformed or not finite.
@@ -85,8 +130,20 @@ pub struct LinkClass {
 /// The relationship of a link whose query names none.
 pub const DEFAULT_REL: &str = "references";
 
-/// Schemes that are never a KB node id. Matched as ASCII case-insensitive
-/// prefixes.
+/// The schemes a web link may have.
+pub const WEB_SCHEMES: &[&str] = &["http", "https"];
+
+/// The schemes a mail link may have.
+pub const MAIL_SCHEMES: &[&str] = &["mailto"];
+
+/// Schemes that are never a KB node id, without their colon. Matched ASCII
+/// case-insensitively against the text before a path's first `:`.
+///
+/// Org's own link types in `emacs -Q` (Org 9.7.11,
+/// [`crate::DEFAULT_LINK_TYPES`]) except `id`, `http`, `https` and `mailto`;
+/// then `ftps`, `attachment` and `man` (Org link types in modules `emacs -Q`
+/// does not load), and the bibliography schemes `cite` (org-ref),
+/// `zotero` and `roam` (org-roam's `roam:` link to a title, not an id).
 ///
 /// @ai-caution: [kb-links] Deliberately an EXCLUDE list. Adding a scheme here
 /// turns every link that starts with it into a non-edge on every peer and the
@@ -95,55 +152,128 @@ pub const DEFAULT_REL: &str = "references";
 /// ids are `namespace:slug` or bare UUIDs), and never turn this into an
 /// include list: an org-roam id has no namespace to include.
 pub const OTHER_SCHEMES: &[&str] = &[
-    "ftp://",
-    "ftps://",
-    "file:",
-    "file+sys:",
-    "file+emacs:",
-    "attachment:",
-    "docview:",
-    "news:",
-    "irc:",
-    "info:",
-    "help:",
-    "shell:",
-    "elisp:",
-    "man:",
-    "doi:",
+    "eww",
+    "rmail",
+    "mhe",
+    "irc",
+    "info",
+    "gnus",
+    "docview",
+    "bibtex",
+    "bbdb",
+    "w3m",
+    "doi",
+    "file+sys",
+    "file+emacs",
+    "shell",
+    "news",
+    "ftp",
+    "help",
+    "file",
+    "elisp",
+    "ftps",
+    "attachment",
+    "man",
+    "cite",
+    "zotero",
+    "roam",
 ];
+
+/// Which link schemes are web, mail or other (never a KB node): declared
+/// data (ADR-112 D4), so a KB can extend the defaults and every peer reads
+/// its links alike. Names are without the colon, matched ASCII
+/// case-insensitively. A scheme in none of the lists, other than `id`, is a
+/// KB link.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkTypes {
+    pub web: Vec<String>,
+    pub mail: Vec<String>,
+    pub other: Vec<String>,
+}
+
+impl Default for LinkTypes {
+    /// [`WEB_SCHEMES`], [`MAIL_SCHEMES`] and [`OTHER_SCHEMES`].
+    fn default() -> Self {
+        let own = |v: &[&str]| v.iter().map(|s| s.to_string()).collect();
+        LinkTypes {
+            web: own(WEB_SCHEMES),
+            mail: own(MAIL_SCHEMES),
+            other: own(OTHER_SCHEMES),
+        }
+    }
+}
+
+impl LinkTypes {
+    /// The defaults, built once.
+    pub fn defaults() -> &'static LinkTypes {
+        static DEFAULTS: OnceLock<LinkTypes> = OnceLock::new();
+        DEFAULTS.get_or_init(LinkTypes::default)
+    }
+}
+
+/// [`classify_link_with`] under the default [`LinkTypes`].
+pub fn classify_link(raw: &str) -> LinkClass {
+    classify_link_with(raw, LinkTypes::defaults())
+}
 
 /// Classifies a link path (the text between `[[` and `]]`/`][`, or a plain
 /// or angle link's path). Total: any input gives a link; nothing is dropped.
 /// `raw` is a path as Emacs's buffer holds it: line endings as `\n` (see
 /// [`crate::Link`]'s path for a parsed link).
-pub fn classify_link(raw: &str) -> LinkClass {
+pub fn classify_link_with(raw: &str, types: &LinkTypes) -> LinkClass {
     let path = normalize_path(raw);
-    let path = path.trim();
-    let starts = |p: &str| {
-        path.len() >= p.len() && path.as_bytes()[..p.len()].eq_ignore_ascii_case(p.as_bytes())
-    };
-    let whole = |kind| LinkClass::whole(kind, path);
-    if starts("id:") {
-        return kb_link(&path[3..]);
+    let path = path.as_str();
+    let is_file_name = ["/", "~/", "./", "../"].iter().any(|p| path.starts_with(p));
+    if is_file_name {
+        return file_link(path);
     }
-    if starts("http://") || starts("https://") {
-        return whole(LinkKind::Web);
+    let scheme = path.split_once(':').map(|(s, _)| s);
+    let is =
+        |list: &[String]| scheme.is_some_and(|s| list.iter().any(|t| t.eq_ignore_ascii_case(s)));
+    if scheme.is_some_and(|s| s.eq_ignore_ascii_case("id")) {
+        return kb_link(&path[3..], true);
     }
-    if starts("mailto:") {
-        return whole(LinkKind::Mailto);
+    if is(&types.web) {
+        return LinkClass::whole(LinkKind::Web, org_trim(path));
     }
-    if OTHER_SCHEMES.iter().any(|s| starts(s)) {
-        return whole(LinkKind::Other);
+    if is(&types.mail) {
+        return LinkClass::whole(LinkKind::Mailto, org_trim(path));
     }
-    kb_link(path)
+    if is(&types.other) {
+        let file = scheme.is_some_and(|s| {
+            let s = s.to_ascii_lowercase();
+            s == "file" || s.starts_with("file+")
+        });
+        if file {
+            return file_link(path);
+        }
+        return LinkClass::whole(LinkKind::Other, org_trim(path));
+    }
+    if path.len() >= 2 && path.starts_with('(') && path.ends_with(')') {
+        return LinkClass::whole(LinkKind::Coderef, org_trim(&path[1..path.len() - 1]));
+    }
+    if let Some(rest) = path.strip_prefix('#') {
+        return LinkClass::whole(LinkKind::CustomId, org_trim(rest));
+    }
+    if let Some(rest) = path.strip_prefix('*') {
+        return LinkClass::whole(LinkKind::Heading, org_trim(rest));
+    }
+    kb_link(path, false)
+}
+
+/// Org's `org-trim`: space, tab, LF and CR at both ends; any other
+/// character (a no-break space) is content.
+pub(crate) fn org_trim(s: &str) -> &str {
+    s.trim_matches([' ', '\t', '\n', '\r'])
 }
 
 impl LinkClass {
-    fn whole(kind: LinkKind, path: &str) -> LinkClass {
+    fn whole(kind: LinkKind, target: &str) -> LinkClass {
         LinkClass {
             kind,
-            target: path.to_string(),
+            target: target.to_string(),
             fragment: None,
+            search: None,
             rel: DEFAULT_REL.to_string(),
             weight: 1.0,
             confidence: 1.0,
@@ -153,25 +283,49 @@ impl LinkClass {
     }
 }
 
-/// Steps 3–5 of the grammar on a KB path (after `id:`).
-fn kb_link(path: &str) -> LinkClass {
+/// A file link: the path without its `::search` option, which Org splits at
+/// the first `::`.
+fn file_link(path: &str) -> LinkClass {
+    let (target, search) = split_search(path);
+    let mut c = LinkClass::whole(LinkKind::Other, org_trim(target));
+    c.search = search;
+    c
+}
+
+/// Splits at the first `::`: (before, the rest).
+fn split_search(path: &str) -> (&str, Option<String>) {
+    match path.split_once("::") {
+        Some((t, s)) => (t, Some(s.to_string())),
+        None => (path, None),
+    }
+}
+
+/// Steps 3–6 of the grammar on a KB path (after `id:`); `id` says whether
+/// it had one, which is when `::` starts a search option.
+fn kb_link(path: &str, id: bool) -> LinkClass {
     let (target, description) = match path.split_once('|') {
-        Some((t, d)) => (t, Some(d.trim().to_string())),
+        Some((t, d)) => (t, Some(org_trim(d).to_string())),
         None => (path, None),
     };
     let (target, query) = match target.split_once('?') {
         Some((t, q)) => (t, Some(q)),
         None => (target, None),
     };
+    let (target, search) = if id {
+        split_search(target)
+    } else {
+        (target, None)
+    };
     let (target, fragment) = match target.split_once('#') {
-        Some((t, f)) => (t, Some(f.trim()).filter(|f| !f.is_empty())),
+        Some((t, f)) => (t, Some(org_trim(f)).filter(|f| !f.is_empty())),
         None => (target, None),
     };
     let q = query.map(parse_query).unwrap_or_default();
     LinkClass {
         kind: LinkKind::Kb,
-        target: target.trim().to_string(),
+        target: org_trim(target).to_string(),
         fragment: fragment.map(str::to_string),
+        search,
         rel: q.rel.unwrap_or_else(|| DEFAULT_REL.to_string()),
         weight: q.weight.unwrap_or(1.0),
         confidence: q.confidence.unwrap_or(1.0),
@@ -189,14 +343,14 @@ struct Query {
 }
 
 /// ADR-030's query: `&`-separated `KEY=VALUE` pairs, keys and values
-/// trimmed. Keys are case-sensitive. A repeated recognised key: the last
+/// trimmed (Org's trim). Keys are case-sensitive. A repeated recognised key: the last
 /// valid value wins. Empty pairs and empty keys are skipped.
 fn parse_query(query: &str) -> Query {
     let mut q = Query::default();
     for pair in query.split('&') {
         let (key, value) = match pair.split_once('=') {
-            Some((k, v)) => (k.trim(), v.trim()),
-            None => (pair.trim(), ""),
+            Some((k, v)) => (org_trim(k), org_trim(v)),
+            None => (org_trim(pair), ""),
         };
         match key {
             "" => {}
@@ -221,7 +375,7 @@ fn unit(value: &str) -> Option<f64> {
 /// A path as Org displays a link without a description: normalised and
 /// trimmed, scheme kept.
 pub(crate) fn display_path(raw: &str) -> String {
-    normalize_path(raw).trim().to_string()
+    org_trim(&normalize_path(raw)).to_string()
 }
 
 /// `org-element-link-parser`'s normalisation of a path: `[ \t]*\n[ \t]*` →

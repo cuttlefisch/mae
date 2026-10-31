@@ -62,7 +62,10 @@ mod views;
 pub use chartables::EMACS_VERSION as CHAR_TABLES_EMACS_VERSION;
 pub use diagnostic::{Diagnostic, DiagnosticKind};
 pub use kind::{OrgLanguage, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
-pub use link_grammar::{classify_link, LinkClass, LinkKind, DEFAULT_REL, OTHER_SCHEMES};
+pub use link_grammar::{
+    classify_link, classify_link_with, LinkClass, LinkKind, LinkTypes, DEFAULT_REL, MAIL_SCHEMES,
+    OTHER_SCHEMES, WEB_SCHEMES,
+};
 pub use options::{
     ParseOptions, TodoSequence, DEFAULT_LINK_TYPES, DEFAULT_MAX_DEPTH, MAX_DEPTH_CEILING,
 };

@@ -4,7 +4,10 @@
 //! their sources, so the inputs on which they disagreed are pinned against
 //! the order mae-org chose. They go when their callers move to mae-org (O4).
 
-use mae_org::{classify_link, parse, semantics, LinkClass, LinkKind, ParseOptions, DEFAULT_REL};
+use mae_org::{
+    classify_link, classify_link_with, parse, semantics, LinkClass, LinkKind, LinkTypes,
+    ParseOptions, DEFAULT_REL, MAIL_SCHEMES, OTHER_SCHEMES, WEB_SCHEMES,
+};
 use proptest::prelude::*;
 
 /// mae-kb `parse_typed_links` + `split_link_target`: `][` then `|` on the
@@ -107,6 +110,47 @@ fn the_three_old_split_orders_and_the_chosen_one() {
     assert_eq!(c.rel, DEFAULT_REL);
 }
 
+/// Where the new steps sit in the chosen order: the search option (7) and
+/// the link's own description over the store form's (8).
+#[test]
+fn the_search_option_and_the_description_in_the_chosen_order() {
+    // 7. An id link's `::search` (org-id.el's `org-id-open`, org-roam): the
+    //    first `::` ends the id. mae-kb kept it in the target, an id that
+    //    never exists. After the store form and the query, before the
+    //    fragment: `[[id:x::*h?rel=r]]` keeps its relation, and a `#` after
+    //    `::` is Org's custom-id search, not a fragment.
+    assert_eq!(old_kb("id:x::*h").0, "x::*h");
+    let c = classify_link("id:x::*h?rel=r");
+    let got = (c.target.as_str(), c.search.as_deref(), c.rel.as_str());
+    assert_eq!(got, ("x", Some("*h"), "r"));
+    let c = classify_link("id:x::#custom");
+    assert_eq!(
+        (c.target.as_str(), c.search.as_deref(), c.fragment),
+        ("x", Some("#custom"), None)
+    );
+    let c = classify_link("id:x#f::s");
+    let got = (
+        c.target.as_str(),
+        c.search.as_deref(),
+        c.fragment.as_deref(),
+    );
+    assert_eq!(got, ("x", Some("s"), Some("f")));
+    let c = classify_link("id:a|b::c");
+    assert_eq!(
+        (c.target.as_str(), c.search, c.description.as_deref()),
+        ("a", None, Some("b::c"))
+    );
+
+    // 8. In `[[a|b][c]]` the link's own description wins over the store
+    //    form's.
+    let doc = parse("[[a|b][c]]", &ParseOptions::default());
+    let l = &semantics(&doc).links[0];
+    assert_eq!(
+        (l.target.as_str(), l.description.as_deref()),
+        ("a", Some("c"))
+    );
+}
+
 #[test]
 fn external_classifier_is_an_exclude_list() {
     let kind = |p: &str| classify_link(p).kind;
@@ -182,10 +226,179 @@ fn paths_are_normalised_like_org() {
     let links = semantics(&doc).links;
     assert_eq!(links[0].target, "concept:a b");
     assert_eq!(links[1].target, "x]y");
-    // A fragment that is only `#` is no fragment.
+    // A fragment that is only `#` is no fragment; Org's trim on each part.
     assert_eq!(classify_link("x#").fragment, None);
-    assert_eq!(classify_link("#frag").target, "");
-    assert_eq!(classify_link("#frag").fragment.as_deref(), Some("frag"));
+    let c = classify_link("x # f \t|  d \n");
+    let got = (
+        c.target.as_str(),
+        c.fragment.as_deref(),
+        c.description.as_deref(),
+    );
+    assert_eq!(got, ("x", Some("f"), Some("d")));
+    // A no-break space is content, as in Emacs (`org-trim`).
+    let c = classify_link("\u{a0}x#f\u{a0}|d\u{a0}");
+    let got = (
+        c.target.as_str(),
+        c.fragment.as_deref(),
+        c.description.as_deref(),
+    );
+    assert_eq!(got, ("\u{a0}x", Some("f\u{a0}"), Some("d\u{a0}")));
+}
+
+/// `org-element-link-parser` decides the type from the path's first
+/// characters, untrimmed: a file name, then a known `TYPE:` (any case),
+/// then `(coderef)`, `#custom-id`, and `*heading`. The last three are
+/// targets in the same file, never KB edges (`[[#x]]` used to become a
+/// fragment on the current node).
+#[test]
+fn kinds_are_read_as_org_reads_types() {
+    let kind = |p: &str| {
+        let c = classify_link(p);
+        (c.kind, c.target)
+    };
+    assert_eq!(kind("*A Heading"), (LinkKind::Heading, "A Heading".into()));
+    assert_eq!(kind("#custom"), (LinkKind::CustomId, "custom".into()));
+    assert_eq!(kind("(ref)"), (LinkKind::Coderef, "ref".into()));
+    assert_eq!(kind("(not-a-ref"), (LinkKind::Kb, "(not-a-ref".into()));
+    // Emacs: ` id:lead` is a fuzzy link; `https:x` is type https;
+    // `Mailto:` and `ID:` are their types.
+    assert_eq!(kind(" id:lead"), (LinkKind::Kb, "id:lead".into()));
+    assert_eq!(kind("id:lead"), (LinkKind::Kb, "lead".into()));
+    assert_eq!(kind("https:x"), (LinkKind::Web, "https:x".into()));
+    assert_eq!(
+        kind("Mailto:a@b.invalid"),
+        (LinkKind::Mailto, "Mailto:a@b.invalid".into())
+    );
+    assert_eq!(kind("ID:abc"), (LinkKind::Kb, "abc".into()));
+    // File names are file links.
+    for p in ["/abs.org", "~/home.org", "./rel.org", "../up.org"] {
+        assert_eq!(kind(p), (LinkKind::Other, p.into()), "{p}");
+    }
+    // None of the local kinds is an edge in the semantics.
+    let doc = parse(
+        ":PROPERTIES:\n:ID: f\n:END:\n[[*H]] [[#c]] [[(r)]] [[id:x]]\n",
+        &ParseOptions::default(),
+    );
+    let links = semantics(&doc).links;
+    let kinds: Vec<LinkKind> = links.iter().map(|l| l.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            LinkKind::Heading,
+            LinkKind::CustomId,
+            LinkKind::Coderef,
+            LinkKind::Kb
+        ]
+    );
+}
+
+/// An `id:` or file link's `::search` option, split at the first `::` as
+/// Org does (`file:x::a::b` has the option `a::b`). Only those: a fuzzy or
+/// namespaced KB path keeps its `::`.
+#[test]
+fn id_and_file_links_split_their_search_option() {
+    let c = classify_link("id:x::*h");
+    assert_eq!(
+        (c.kind, c.target.as_str(), c.search.as_deref()),
+        (LinkKind::Kb, "x", Some("*h"))
+    );
+    let c = classify_link("id:x::a::b");
+    assert_eq!(
+        (c.target.as_str(), c.search.as_deref()),
+        ("x", Some("a::b"))
+    );
+    for (p, target, search) in [
+        ("file:x.org::*h", "file:x.org", "*h"),
+        ("FILE:x.org::s", "FILE:x.org", "s"),
+        ("file+sys:/x::5", "file+sys:/x", "5"),
+        ("./x.org::#c", "./x.org", "#c"),
+    ] {
+        let c = classify_link(p);
+        assert_eq!(
+            (c.kind, c.target.as_str(), c.search.as_deref()),
+            (LinkKind::Other, target, Some(search)),
+            "{p}"
+        );
+    }
+    let c = classify_link("concept:x::y");
+    assert_eq!((c.target.as_str(), c.search), ("concept:x::y", None));
+    let c = classify_link("https://a.invalid/x::y");
+    assert_eq!(
+        (c.target.as_str(), c.search),
+        ("https://a.invalid/x::y", None)
+    );
+}
+
+/// Every non-KB scheme, pinned one by one against a list written here (not
+/// read from the constant it checks), in two cases each.
+#[test]
+fn every_non_kb_scheme_is_pinned() {
+    let expected = [
+        "eww",
+        "rmail",
+        "mhe",
+        "irc",
+        "info",
+        "gnus",
+        "docview",
+        "bibtex",
+        "bbdb",
+        "w3m",
+        "doi",
+        "file+sys",
+        "file+emacs",
+        "shell",
+        "news",
+        "ftp",
+        "help",
+        "file",
+        "elisp",
+        "ftps",
+        "attachment",
+        "man",
+        "cite",
+        "zotero",
+        "roam",
+    ];
+    let mut got: Vec<&str> = OTHER_SCHEMES.to_vec();
+    let mut want = expected.to_vec();
+    got.sort_unstable();
+    want.sort_unstable();
+    assert_eq!(got, want);
+    for s in expected {
+        for p in [format!("{s}:x"), format!("{}:x", s.to_ascii_uppercase())] {
+            assert_eq!(classify_link(&p).kind, LinkKind::Other, "{p}");
+        }
+    }
+    assert_eq!(WEB_SCHEMES, ["http", "https"]);
+    assert_eq!(MAIL_SCHEMES, ["mailto"]);
+}
+
+/// The scheme lists are declared data (ADR-112 D4): `classify_link` is
+/// `classify_link_with` the defaults, and a KB's own lists change only the
+/// schemes they name.
+#[test]
+fn link_types_are_declared_data() {
+    for p in [
+        "zettel:x",
+        "file:x",
+        "news:x",
+        "https://a.invalid",
+        "concept:x",
+    ] {
+        assert_eq!(
+            classify_link(p),
+            classify_link_with(p, &LinkTypes::default()),
+            "{p}"
+        );
+    }
+    let mut types = LinkTypes::default();
+    types.other.push("zettel".into());
+    types.other.retain(|s| s != "news");
+    assert_eq!(classify_link_with("Zettel:x", &types).kind, LinkKind::Other);
+    assert_eq!(classify_link("zettel:x").kind, LinkKind::Kb);
+    let c = classify_link_with("news:x", &types);
+    assert_eq!((c.kind, c.target.as_str()), (LinkKind::Kb, "news:x"));
 }
 
 /// One query pair: a recognised key with a valid or invalid value, or an
