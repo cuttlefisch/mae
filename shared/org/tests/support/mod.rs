@@ -645,6 +645,31 @@ fn token_text(node: &mae_org::SyntaxNode, kind: SyntaxKind) -> Option<String> {
     )
 }
 
+/// The text after the first MARKUP token reading `open` and before the
+/// last MARKUP token, line endings read as `\n`.
+fn between(node: &mae_org::SyntaxNode, open: &str) -> String {
+    let toks: Vec<_> = node
+        .children_with_tokens()
+        .filter_map(|e| e.into_token())
+        .collect();
+    let markup = |t: &mae_org::SyntaxToken| t.kind() == MARKUP;
+    let Some(a) = toks.iter().position(|t| markup(t) && t.text() == open) else {
+        return String::new();
+    };
+    let b = toks.iter().rposition(markup).unwrap_or(toks.len());
+    toks.get(a + 1..b)
+        .unwrap_or_default()
+        .iter()
+        .map(|t| {
+            if t.kind() == NEWLINE {
+                "\n".to_string()
+            } else {
+                t.text().to_string()
+            }
+        })
+        .collect()
+}
+
 /// `org-element-timestamp-parser`'s `:type` and `:range-type` from the raw
 /// value: diary if it opens `<%%`; a range if a second stamp follows `--`
 /// (daterange) or the first holds `H:MM-H:MM` (timerange); active if it
@@ -757,9 +782,10 @@ fn view_fields(
             "key",
             json!(token_text(&node, NAME).map(|k| k.to_lowercase())),
         )],
-        "inline-src-block" | "export-snippet" => {
-            vec![("value", json!(token_text(&node, VALUE).unwrap_or_default()))]
-        }
+        // Between the `:` (or `{`) markup and the closing markup: a value
+        // that is only a line ending holds no VALUE token (`@@a:\n@@`).
+        "export-snippet" => vec![("value", json!(between(&node, ":")))],
+        "inline-src-block" => vec![("value", json!(between(&node, "{")))],
         "timestamp" => {
             let raw = token_text(&node, VALUE).unwrap_or_default();
             let (ty, range) = timestamp_type(&raw);
