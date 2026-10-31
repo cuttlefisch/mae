@@ -8,7 +8,7 @@ use mae_kb::KbStore;
 use super::Editor;
 
 pub use node_buffer::EditSurface;
-pub use registry::{open_instance_store_with_engine, KbResolution};
+pub use registry::{open_instance_store_with_engine, KbResolution, ScopedNode};
 pub use search::QueryVector;
 
 /// The honest, point-of-action advisory shown when a user enables E2E content
@@ -180,7 +180,11 @@ impl KbImportResult {
             ),
             self.name,
             self.uuid,
-            self.report.mode,
+            if self.report.mode.is_empty() {
+                "none".to_string()
+            } else {
+                self.report.mode.to_lowercase()
+            },
             self.watched,
             self.report.source_files_seen,
             self.report.path_to_ids.len(),

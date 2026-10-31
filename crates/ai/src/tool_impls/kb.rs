@@ -86,7 +86,22 @@ pub fn execute_kb_get(editor: &Editor, args: &serde_json::Value) -> Result<Strin
         .get("id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required argument: id".to_string())?;
-    match node_json(editor, id)? {
+    let found = match args.get("kb").and_then(|v| v.as_str()) {
+        Some(kb) => editor.kb_get_in(kb, id)?.map(|s| {
+            serde_json::json!({
+                "id": s.node.id,
+                "title": s.node.title,
+                "kind": s.node.kind,
+                "body": s.node.body,
+                "tags": s.node.tags,
+                "links_from": s.links_from,
+                "links_to": s.links_to,
+                "instance": kb,
+            })
+        }),
+        None => node_json(editor, id)?,
+    };
+    match found {
         Some(v) => {
             let mut result = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
             if editor.kb.ai_visited_ids.contains(id) {

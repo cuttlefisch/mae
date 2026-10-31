@@ -63,6 +63,7 @@ pub(super) fn shell_tool_definitions() -> Vec<ToolDefinition> {
             "Read the current screen content of a terminal. Returns the visible text (typically 24-80 lines).",
         )
         .prop("buffer_index", "integer", "Buffer index of the terminal")
+        .prop("lines", "integer", "How many recent lines to return (default 24)")
         .required(["buffer_index"])
         .permission(PermissionTier::ReadOnly)
         .build(),

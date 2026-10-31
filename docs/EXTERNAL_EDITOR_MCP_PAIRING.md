@@ -102,12 +102,10 @@ discovery tools, `search_tools`/`request_tools`
 (`mcp_tools_tiered_by_default`, default `true` — a large flat tool list measurably
 degrades tool-selection accuracy for external clients, see `docs/MODEL_SUPPORT.md`). This
 is not a capability restriction: any tool not shown in the 🔧 picker is still directly
-callable once you know its name — Copilot (or any agent) is expected to call
-`search_tools` to find a tool by keyword, then `request_tools` (by category or exact name)
-to get its full definition/schema, then call it directly. `kb_search` and `kb_get`
-themselves are Extended-tier under this default and won't appear in the picker — this is
-expected, not a bug; ask the agent to search for/request them if it doesn't do so on its
-own. Set `mcp_tools_tiered_by_default = false` (`:set-save`) to go back to the full flat
+reachable once you know its name — Copilot (or any agent) is expected to call
+`search_tools` to find a tool by keyword, then `request_tools {"tools": "name1,name2"}` to
+add it: MAE returns the definitions and announces the new tools (`tools/list_changed`).
+`kb_search` and `kb_get` are Core and always listed. Set `mcp_tools_tiered_by_default = false` (`:set-save`) to go back to the full flat
 list for a deployment already tuned around it.
 
 **Minimum VS Code version:** ADR-050's research found broad MCP support landing around VS
@@ -130,9 +128,8 @@ config-fragmentation risk noted below).
 in this repo drives the shim exactly as any generic MCP host would — spawns it, does a
 real `initialize` → `notifications/initialized` → `tools/list` → `tools/call` round trip
 over stdio, confirms the tiered-by-default tool list (K2) carries a correctly-annotated
-Core-tier tool, and proves an Extended-tier tool (`kb_search`, deliberately absent from
-the default list) is still discoverable via `request_tools` and directly callable via
-`tools/call` even though it was never advertised.
+Core-tier tool, and proves an Extended-tier tool (`kb_list`, deliberately absent from
+the default list) is discoverable via `request_tools` with a usable schema.
 Run it against a live MAE instance to confirm the pairing mechanism itself is sound before
 troubleshooting a specific host's own MCP client:
 
@@ -399,7 +396,7 @@ restriction, fail-closed. See
   always the settings-checkbox step above (Path 1, step 3) — "discovered" and "listed in
   the picker" are not the same as "enabled for this chat session." Open the chat view's
   ⚙️ settings icon (not 🔧) and check `mae-editor`.
-- **A specific tool you expect (e.g. `kb_search`) never gets called, even after enabling
+- **A specific tool you expect (e.g. `kb_list`) never gets called, even after enabling
   `mae-editor`**: check whether it's Extended-tier under K2's default tiering — it won't
   appear in `tools/list`, and a less-capable agent may not think to call `search_tools`/
   `request_tools` to reach it unprompted. Ask explicitly ("use search_tools to find a KB

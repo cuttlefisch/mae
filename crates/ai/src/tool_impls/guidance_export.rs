@@ -144,7 +144,13 @@ pub fn execute_kb_export_guidance(
              project root first",
         )?;
 
-    let out_path = contained_target(&root, target)?;
+    // Gated on AI origin, like the protected-config save guard: a human's
+    // `:kb-export-guidance` may still write wherever they point it.
+    let out_path = if editor.is_ai_originated_dispatch() {
+        contained_target(&root, target)?
+    } else {
+        root.join(target)
+    };
     let existing = std::fs::read_to_string(&out_path).ok();
     let merged = merge_guidance_block(existing.as_deref(), context.trim())?;
 
@@ -296,11 +302,56 @@ mod tests {
         assert!(!out.contains("v1 guidance"));
     }
 
+    /// An editor whose current dispatch is an AI tool call.
     fn editor_with_root(root: &std::path::Path) -> mae_core::Editor {
         std::fs::write(root.join("CLAUDE.md"), "/planted/trusted/dir\n").unwrap();
         let mut editor = mae_core::Editor::new();
         editor.project = Some(mae_core::project::Project::from_root(root.to_path_buf()));
+        editor.ai.ai_dispatch_depth = 1;
         editor
+    }
+
+    /// The refusals below must not come from refusing everything: an agent
+    /// still exports to the default file and to a nested path, including when
+    /// the project root itself is reached through a symlink.
+    #[test]
+    fn an_agent_may_still_export_inside_the_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let mut roots = vec![real.clone()];
+        #[cfg(unix)]
+        {
+            let link = tmp.path().join("link");
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            roots.push(link);
+        }
+        for root in roots {
+            let editor = editor_with_root(&root);
+            for path in ["AGENTS.md", ".github/copilot-instructions.md"] {
+                let r = execute_kb_export_guidance(&editor, &serde_json::json!({"path": path}));
+                assert!(r.is_ok(), "{} / {path}: {r:?}", root.display());
+                assert!(real.join(path).exists(), "{path} not written");
+            }
+        }
+    }
+
+    /// The containment is a bound on the agent, not on the human: a human's
+    /// own export may go where they point it.
+    #[test]
+    fn a_human_may_export_outside_the_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let mut editor = editor_with_root(&project);
+        editor.ai.ai_dispatch_depth = 0;
+        let outside = tmp.path().join("elsewhere.md");
+        let r = execute_kb_export_guidance(
+            &editor,
+            &serde_json::json!({"path": outside.to_str().unwrap()}),
+        );
+        assert!(r.is_ok(), "{r:?}");
+        assert!(outside.exists());
     }
 
     /// The attack: an absolute `path` used to replace the project root, so the

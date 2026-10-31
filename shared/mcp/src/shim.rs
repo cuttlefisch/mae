@@ -157,15 +157,22 @@ fn open_log_at(path: Option<&std::ffi::OsStr>) -> LogHandle {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
+        // Never follow a symlink someone planted at the log path.
+        opts.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
     let file = opts.open(path).ok()?;
-    // `mode` applies only when the file is created; an existing log keeps its
-    // old permissions, so tighten it too.
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        // An existing file another user owns cannot be made private by us: do
+        // not log into it. One we own is tightened, since `mode` above applies
+        // only when the file is created.
+        let meta = file.metadata().ok()?;
+        if meta.uid() != unsafe { libc::geteuid() } {
+            return None;
+        }
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .ok()?;
     }
     Some(Arc::new(Mutex::new(file)))
 }
@@ -503,6 +510,22 @@ mod tests {
     fn logging_is_off_unless_a_path_is_given() {
         assert!(open_log_at(None).is_none());
         assert!(open_log_at(Some(std::ffi::OsStr::new(""))).is_none());
+    }
+
+    /// A symlink at the log path is not followed, so a planted link cannot
+    /// redirect the transcript into a file the attacker can read.
+    #[cfg(unix)]
+    #[test]
+    fn the_log_does_not_follow_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("readable-by-others.log");
+        std::fs::write(&target, b"").unwrap();
+        let link = dir.path().join("mae-shim.log");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let handle = open_log_at(Some(link.as_os_str()));
+        log(&handle, "relayed message");
+        assert!(handle.is_none(), "opened a log through a symlink");
+        assert_eq!(std::fs::read(&target).unwrap(), b"");
     }
 
     /// The log is a transcript of tool traffic, so only its owner may read it:

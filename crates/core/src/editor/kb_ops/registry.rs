@@ -1288,6 +1288,70 @@ impl Editor {
     }
 }
 
+impl Editor {
+    /// A node and the ids it links to and from, read from ONE named KB: a
+    /// system KB (`manual`, the guidance corpora) or a registered instance,
+    /// by name or uuid. `Ok(None)` when that KB has no such node; `Err` when
+    /// no KB has that name.
+    ///
+    /// @ai-caution: [security] Guidance links are followed through this, not
+    /// `kb_resolve_anywhere`: the latter reads the user's stores first, so a
+    /// node created or promoted under a guidance id would stand in for the
+    /// shipped practice (principle #16: the agent does not choose its own
+    /// standing instructions).
+    pub fn kb_get_in(&self, kb: &str, id: &str) -> Result<Option<ScopedNode>, String> {
+        use mae_kb::KbStore as _;
+        let store = match self.kb.system_stores.get(kb) {
+            Some(s) => s.clone(),
+            None => {
+                let inst = self
+                    .kb
+                    .registry
+                    .find(kb)
+                    .ok_or_else(|| format!("No KB named '{kb}'"))?;
+                match self.kb.instance_stores.get(&inst.uuid) {
+                    Some(s) => s.clone(),
+                    None => {
+                        let mem = self
+                            .kb
+                            .instances
+                            .get(&inst.uuid)
+                            .ok_or_else(|| format!("KB '{kb}' is registered but not loaded"))?;
+                        return Ok(mem.get(id).map(|n| ScopedNode {
+                            node: n.clone(),
+                            links_from: mem.links_from(id),
+                            links_to: mem.links_to(id),
+                        }));
+                    }
+                }
+            }
+        };
+        let Some(node) = store.get_node(id).map_err(|e| e.to_string())? else {
+            return Ok(None);
+        };
+        let ids = |links: Vec<mae_kb::Link>, src: bool| -> Vec<String> {
+            links
+                .into_iter()
+                .map(|l| if src { l.src } else { l.dst })
+                .collect()
+        };
+        Ok(Some(ScopedNode {
+            node,
+            links_from: ids(store.links_from(id).map_err(|e| e.to_string())?, false),
+            links_to: ids(store.links_to(id).map_err(|e| e.to_string())?, true),
+        }))
+    }
+}
+
+/// A node read from one named KB by [`Editor::kb_get_in`], with the ids it
+/// links to (`links_from`) and is linked from (`links_to`).
+#[derive(Debug, Clone)]
+pub struct ScopedNode {
+    pub node: mae_kb::Node,
+    pub links_from: Vec<String>,
+    pub links_to: Vec<String>,
+}
+
 /// Which KB tier a [`Editor::kb_resolve_anywhere`] lookup resolved through.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KbResolution {

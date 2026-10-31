@@ -22,7 +22,10 @@ fn an_incremental_reimport_reports_which_files_it_reparsed() {
         .kb_reimport("TestNotes", Some(mae_kb::IngestMode::Incremental))
         .expect("reimport");
     let idle = json(&idle);
-    assert_eq!(idle["mode"], "Incremental");
+    assert_eq!(
+        idle["mode"], "incremental",
+        "same spelling as the `mode` argument"
+    );
     assert_eq!(idle["files_reparsed"], 0, "nothing changed: {idle}");
     assert_eq!(idle["nodes_rewritten"], 0, "{idle}");
 

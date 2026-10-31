@@ -835,6 +835,9 @@ fn execute_registry_command(
 const LEGACY_ARG_ALIASES: &[(&str, &str)] = &[
     ("kb_share", "kb_name"),     // canonical: kb_id
     ("kb_approve", "principal"), // canonical: member
+    ("kb_share_p2p", "kb_name"), // canonical: kb_id
+    // canonical: timeout_ms; shell_policy.rs promises this alias keeps working.
+    ("shell_exec", "timeout_secs"),
 ];
 
 fn is_legacy_arg_alias(tool: &str, key: &str) -> bool {

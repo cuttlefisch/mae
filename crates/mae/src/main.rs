@@ -386,8 +386,8 @@ fn guidance_instructions_fragment(
 
     let mut out = format!(
         "The following are required practices from KB '{guidance_kb}' -- read them \
-         before acting. Any `[[id:...]]` reference below is a KB node: fetch it with \
-         the `kb_get` tool.\n\n{kb}\n\n"
+         before acting. Any `[[...]]` link below names a node of that KB: fetch it with \
+         the `kb_get` tool as {{\"id\": \"<link target>\", \"kb\": \"{guidance_kb}\"}}.\n\n{kb}\n\n"
     );
 
     // Project context is a bonus, not a competitor. Append only if it fits in
@@ -1400,10 +1400,6 @@ mod tests {
         );
     }
 
-    /// The delivered text must tell the agent HOW to follow the `[[id:...]]`
-    /// references it contains. The KB's index node is a navigation menu; without
-    /// naming the retrieval tool, an agent has to guess that `kb_get` resolves
-    /// them — and nothing measured whether any agent ever did.
     /// Every tool the MCP instructions tell an agent to call must be in the
     /// Core list a tiered client actually receives. `kb_get` was named by the
     /// guidance preamble but Extended, so clients that only call listed tools
@@ -1437,6 +1433,10 @@ mod tests {
         }
     }
 
+    /// The delivered text must tell the agent HOW to follow the `[[id:...]]`
+    /// references it contains. The KB's index node is a navigation menu; without
+    /// naming the retrieval tool, an agent has to guess that `kb_get` resolves
+    /// them — and nothing measured whether any agent ever did.
     #[test]
     fn guidance_fragment_names_the_tool_that_resolves_kb_references() {
         let kb = "Start at [[id:hub:start-here][Start Here]]";
@@ -1445,6 +1445,12 @@ mod tests {
             frag.contains("kb_get"),
             "inlined guidance contains [[id:...]] references, so it must name the \
              tool that resolves them: {frag}"
+        );
+        // ...scoped to the guidance KB, so the user's own store (read first by
+        // an unscoped kb_get) cannot stand in for a shipped practice.
+        assert!(
+            frag.contains(r#""kb": "DevPractices""#),
+            "the instructions must scope guidance reads to the guidance KB: {frag}"
         );
     }
 

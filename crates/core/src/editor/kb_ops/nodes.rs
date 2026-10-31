@@ -45,6 +45,10 @@ impl Editor {
     /// this codebase already behaves.
     pub fn kb_promote_node(&mut self, node_id: &str) -> Result<KbPromoteResult, String> {
         self.kb_write_blocked()?;
+        // Promotion writes into the primary store, which is read first: the
+        // same shadowing risk as a create (an agent writes an org file with a
+        // guidance id into an attached KB, then promotes it).
+        self.kb_refuse_agent_shadowing_system_node(node_id)?;
 
         if self.kb.primary.contains(node_id) {
             return Err(format!("'{}' is already in the primary KB", node_id));
@@ -231,10 +235,11 @@ impl Editor {
         if !self.is_ai_originated_dispatch() {
             return Ok(());
         }
+        // A store that cannot answer counts as holding the id (fail closed).
         let holder = self.kb.system_stores.iter().find(|(_, store)| {
-            matches!(
+            !matches!(
                 mae_kb::KbStore::get_node_light(store.as_ref(), id),
-                Ok(Some(_))
+                Ok(None)
             )
         });
         match holder {

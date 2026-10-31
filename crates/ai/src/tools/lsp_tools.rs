@@ -37,6 +37,12 @@ pub(super) fn lsp_tool_definitions() -> Vec<ToolDefinition> {
             "Get LSP diagnostics (errors, warnings) for a buffer. Returns JSON array of {line, character, severity, message, source}. Lines are 1-indexed.",
         )
         .prop("buffer_name", "string", "Buffer name (default: active buffer)")
+        .prop_enum(
+            "scope",
+            "string",
+            "\"buffer\" (default): one buffer; \"all\": every file with diagnostics",
+            ["buffer", "all"],
+        )
         .permission(PermissionTier::ReadOnly)
         .build(),
         ToolDefBuilder::new(

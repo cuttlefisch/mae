@@ -15,6 +15,11 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "Fetch a knowledge-base node by id. Returns JSON with title, kind, body (may contain [[link]] markers), tags, outgoing links, and incoming backlinks. IDs are namespaced like 'cmd:<name>', 'concept:<slug>', 'key:<context>', or 'index'. WARNING: Linkage is high; pull atomic info and avoid walking the entire graph.",
         )
         .prop("id", "string", "Node id, e.g. 'index', 'concept:buffer', 'cmd:save'")
+        .prop(
+            "kb",
+            "string",
+            "Optional: read from this KB only (a registered KB's name, or a system KB such as the guidance KB). Without it the user's own notes are searched first.",
+        )
         .required(["id"])
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -701,7 +706,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
 fn kb_reimport_def() -> ToolDefinition {
     ToolDefBuilder::new(
         "kb_reimport",
-        "Re-import a registered file-source KB from its org directory. This is a RECOVERY step, not routine: an editor that watches the KB (kb_sync_status `watcher_attached`, or this result's `watched`) already picks up file edits. Re-import when the editor does not watch it, or after git checkout/pull/rebase/revert (an incremental run skips files whose bytes match the last import). Both modes block the editor while they run. Result: `mode`; `watched`; `files_seen` / `files_reparsed` / `files_unchanged` (skipped by content hash); `nodes_imported` = new nodes, `nodes_rewritten` = nodes of re-parsed known files, `nodes_removed` (full mode only); `links_created` counts the links in re-parsed nodes, not new links.",
+        "Re-import a registered file-source KB from its org directory. This is a RECOVERY step, not routine: an editor that watches the KB (kb_sync_status `watcher_attached`, or this result's `watched`) already picks up file edits. Re-import when the editor does not watch it, or after git checkout/pull/rebase/revert (an incremental run skips files whose bytes match the last import). Both modes block the editor while they run. Result: `mode` (\"full\"/\"incremental\"); `watched`; `files_seen` (every .org file found); `files_reparsed` (files parsed this run that produced nodes); `files_unchanged` (skipped by content hash, incremental only); `nodes_imported` = nodes from files not imported before, `nodes_rewritten` = nodes from files imported before (in full mode, every such node, changed or not); `nodes_removed` (full mode only); `links_created` counts the links in parsed nodes, not new links.",
     )
     .prop("name", "string", "Name or UUID of the instance to reimport")
     .prop_enum(

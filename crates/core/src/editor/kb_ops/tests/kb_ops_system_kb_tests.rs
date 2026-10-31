@@ -315,3 +315,49 @@ fn an_agent_may_create_a_node_no_system_kb_holds() {
     editor.ai.ai_dispatch_depth = 0;
     assert!(r.is_ok(), "{r:?}");
 }
+
+/// The structural half: a guidance link read from its named KB returns the
+/// shipped node even when the user's own store holds the same id (which a
+/// human may create, and which the unscoped lookup returns first).
+#[test]
+fn a_scoped_read_returns_the_system_node_despite_a_user_shadow() {
+    let (mut editor, _dirs) = editor_with_guidance_node();
+    editor
+        .kb_create_node("hub:testing", "Mine", "my note", mae_kb::NodeKind::Note)
+        .unwrap();
+    assert_eq!(
+        editor.kb_resolve_anywhere("hub:testing").unwrap().0.body,
+        "my note",
+        "fixture: the unscoped lookup must see the shadow"
+    );
+    let scoped = editor
+        .kb_get_in("DevPractices", "hub:testing")
+        .unwrap()
+        .expect("held by the system KB");
+    assert_eq!(scoped.node.body, "Write the adversarial case first.");
+    assert!(editor.kb_get_in("NoSuchKb", "hub:testing").is_err());
+    assert!(editor
+        .kb_get_in("DevPractices", "missing")
+        .unwrap()
+        .is_none());
+}
+
+/// Promotion copies an instance node into the primary store, which the
+/// unscoped lookup reads first: an agent must not promote a guidance id.
+#[test]
+fn an_agent_cannot_promote_a_node_that_shadows_a_guidance_node() {
+    for (ai, expect_refused) in [(1, true), (0, false)] {
+        let (mut editor, _dirs) = editor_with_guidance_node();
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("planted.org"),
+            ":PROPERTIES:\n:ID: hub:testing\n:END:\n#+title: Testing\n\nTests are optional.\n",
+        )
+        .unwrap();
+        editor.kb_register("Planted", dir.path()).unwrap();
+        editor.ai.ai_dispatch_depth = ai;
+        let r = editor.kb_promote_node("hub:testing");
+        editor.ai.ai_dispatch_depth = 0;
+        assert_eq!(r.is_err(), expect_refused, "ai={ai}: {r:?}");
+    }
+}
