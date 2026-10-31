@@ -794,7 +794,7 @@ impl Walk<'_> {
         };
         let c = classify_link_with(&buffer, self.link_types);
         let description = plain::description(n).or(c.description);
-        let span = without_trailing_blanks(n);
+        let span = object_span(n);
         let (from, note) = self.from();
         if let Some(label) = note {
             self.pending_links.push((self.out.links.len(), label));
@@ -1077,7 +1077,17 @@ fn id_line_span(drawer: &SyntaxNode) -> Option<Span> {
         .map(|(_, s)| s)
 }
 
-/// `node`'s span without trailing blanks and line endings.
+/// An object's span without its post-blank: the spaces and tabs
+/// org-element counts as `:post-blank`. Not line endings: a plain link's
+/// path may end in a content CR (`org-link-plain-re` takes it in an LF
+/// file), and an object never owns the newline after it.
+fn object_span(node: &SyntaxNode) -> Span {
+    let s = Span::of(node);
+    let kept = node.to_string().trim_end_matches([' ', '\t']).len();
+    Span::new(s.start as usize, s.start as usize + kept)
+}
+
+/// An element's (a line's) span without trailing blanks and its line ending.
 fn without_trailing_blanks(node: &SyntaxNode) -> Span {
     let s = Span::of(node);
     let text = node.to_string();

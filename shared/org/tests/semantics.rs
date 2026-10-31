@@ -902,3 +902,25 @@ fn plain_id_links_are_links() {
         .collect();
     assert_eq!(targets, vec!["target".to_string()]);
 }
+
+/// A plain link's path may end in a content CR in an LF file (Org's
+/// `org-link-plain-re` takes it; the tree pins that in tests/inline.rs).
+/// The semantic link must cover what the tree covers: its span holds its
+/// path, in a headline title and in a paragraph alike.
+#[test]
+fn a_plain_link_ending_in_a_content_cr_keeps_it_in_its_span() {
+    let text = "* Head http:x\r\n:PROPERTIES:\n:ID: h\n:END:\nSee https://a.b/c\r\nmore\n";
+    let s = semantics(&parse(text, &ParseOptions::default()));
+    let links: Vec<(&str, &str)> = s
+        .links
+        .iter()
+        .map(|l| (l.path.as_str(), &text[l.span.range()]))
+        .collect();
+    assert_eq!(
+        links,
+        vec![
+            ("http:x\r", "http:x\r"),
+            ("https://a.b/c\r", "https://a.b/c\r")
+        ]
+    );
+}
