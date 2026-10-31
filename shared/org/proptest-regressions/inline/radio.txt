@@ -10,3 +10,4 @@ cc aa1957987e0195739bf1102cfe13bc58fffe784d08cef222b73dee529d9b3e3f # shrinks to
 cc ddcf3f2dedd2d62c4518fbfd2db660f58793e421c4e096a42554b5b112acef55 # shrinks to values = ["\u{a0}"], picks = [(0, '-')], regions = []
 cc 4e7e27b1dfbf0f736bc76bae473465e0e4b541ec32ab143572b29857599e21d9 # shrinks to values = ["\u{a0}"], text = "\u{a0}-", regions = []
 cc 4b5785236e2cfc7e21e598a5d5b37299742a93c980cfecd6ec85cb8c8aee43bd # shrinks to values = ["A\ta"], text = "a\ta-", regions = []
+cc 2227df96360691625b3b35f082b1aa6be333286525d28abf5b31220a4f023303 # shrinks to values = ["a", "a\u{a0}", "aaaa", "aaba", "-a a", "aa"], picks = [(2, '-')], noise = "", regions = [], limit = 63

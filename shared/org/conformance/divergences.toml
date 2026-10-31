@@ -66,17 +66,6 @@ begin = 23
 reason = "Emacs emits a radio link overlapping the previous one; a tree cannot hold it, mae-org keeps only the first"
 test = "a_radio_link_never_overlaps_the_object_before_it"
 
-# Above org-target-link-regexp-limit (8192 chars of regexp) Org splits the
-# radio regexp and takes the match that ENDS first across the parts, so
-# which link wins depends on where the split falls. The limit is a size
-# constant of Org's regexp engine, not the document's text or declared
-# configuration (ADR-112 D4); mae-org matches as one regexp at any size.
-[[divergence]]
-kind = "link"
-file = "shared/org/tests/fixtures/objects-radio-split-regexp.org"
-reason = "Org splits its radio regexp above 8192 chars and picks the earliest-ending match; mae-org matches as one regexp (the long target, not bar)"
-test = "radio_targets_match_as_one_regexp_however_many_there_are"
-
 # `<2024-1-1 x+1d>` matches org-element--timestamp-regexp's repeater
 # alternative (any digit counts), then org-parse-time-string signals "Not an
 # Org time string" and Org's parse of the whole buffer fails (the golden is

@@ -83,6 +83,20 @@ pub struct ParseOptions {
     /// Declared data (ADR-112 D4); the default is what `emacs -Q` registers
     /// once an Org buffer exists, the conformance oracle's set ([`DEFAULT_LINK_TYPES`]).
     pub link_types: Vec<String>,
+    /// `org-target-link-regexp-limit`: when the regexp matching every radio
+    /// target would be this many chars or longer, Org splits the targets
+    /// into several regexps, and which link wins then depends on the split
+    /// (see `inline::radio`). Org's value, [`Self::ORG_TARGET_LINK_REGEXP_LIMIT`],
+    /// is a constant of its implementation, not a user setting: Emacs
+    /// signals "Regular expression too big" if it is raised far, so the
+    /// split is a function of the text alone. It is declared here (ADR-112
+    /// D4) so the parse states every input it depends on.
+    pub radio_regexp_limit: usize,
+}
+
+impl ParseOptions {
+    /// `org-target-link-regexp-limit` in Org 9.7.11: `(ash 2 12)`.
+    pub const ORG_TARGET_LINK_REGEXP_LIMIT: usize = 8192;
 }
 
 /// `(org-link-types)` in `emacs -Q` with Org 9.7.11 once `org-mode` has run
@@ -140,6 +154,7 @@ impl Default for ParseOptions {
             }],
             max_depth: DEFAULT_MAX_DEPTH,
             link_types: DEFAULT_LINK_TYPES.iter().map(|s| s.to_string()).collect(),
+            radio_regexp_limit: Self::ORG_TARGET_LINK_REGEXP_LIMIT,
         }
     }
 }

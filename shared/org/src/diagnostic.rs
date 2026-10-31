@@ -21,9 +21,13 @@ pub enum DiagnosticKind {
     DepthLimit,
     /// Radio targets with whitespace other than spaces (a tab, a no-break
     /// space) next to spaces or at an end need a backtracking match per
-    /// candidate; past a work budget proportional to the input those
-    /// targets stop matching, so some radio links Org would make are plain
-    /// text. The span is the document.
+    /// candidate, and targets past Org's regexp limit a search per regexp;
+    /// both run within a work budget proportional to the input. When it runs
+    /// out, NO radio link is made from that point on (the links before it
+    /// are Org's; none after it is a different link, only a missing one),
+    /// and the rest of the document's objects are parsed as usual. The span
+    /// runs from where the lexer was when the work ran out to the end of
+    /// the document.
     RadioLinkBudget,
     /// In a fragment (`parse_fragment`), a headline at or above the
     /// fragment's level. In the file it would end the body, so the fragment

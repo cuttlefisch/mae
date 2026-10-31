@@ -14,32 +14,43 @@ use crate::kind::SyntaxKind::{self, *};
 
 /// The first object in the frame's region at or after its cursor.
 pub(super) fn next_object(cx: &InlineCx, f: &mut Frame) -> Option<Obj> {
-    let (from, end, floor, r) = (f.cursor, f.end, f.floor, f.restriction);
+    let (end, floor, r) = (f.end, f.floor, f.restriction);
     if r.allows(TABLE_CELL) {
-        return objects::table_cell(cx, from, end);
+        return objects::table_cell(cx, f.cursor, end);
     }
     if r.allows(CITATION_REFERENCE) {
-        return cite::citation_reference(cx, from, end);
+        return cite::citation_reference(cx, f.cursor, end);
     }
-    // The next radio link's start: candidates may not extend past the char
-    // after it (Org's bound is one char past the link's text).
-    let radio = match cx.radio {
-        Some(radio) if r.allows(LINK) => radio.next_link(cx, from, end, floor, &mut f.radio),
-        _ => None,
-    };
-    let lim = radio.map_or(end, |p| cx.step(p));
-    let mut i = from;
-    while i < lim {
-        if is_candidate(cx, i, end, lim, floor) {
-            if let Some(o) = dispatch(cx, i, end, floor, r) {
-                return Some(o);
+    let mut from = f.cursor;
+    loop {
+        // The next radio link's start: candidates may not extend past the
+        // char after it (Org's bound is one char past the link's text).
+        let radio = match cx.radio {
+            Some(radio) if r.allows(LINK) => radio.next_link(cx, from, end, floor, &mut f.radio),
+            _ => None,
+        };
+        let lim = radio.map_or(end, |p| cx.step(p));
+        let mut i = from;
+        while i < lim {
+            if is_candidate(cx, i, end, lim, floor) {
+                if let Some(o) = dispatch(cx, i, end, floor, r) {
+                    return Some(o);
+                }
             }
+            i += cx.char_at(i).map_or(1, char::len_utf8);
         }
-        i += cx.char_at(i).map_or(1, char::len_utf8);
+        // No object before the radio link: parse it (Org calls the link
+        // parser one character before the bound).
+        let p = radio?;
+        if let Some(o) = link::link(cx, p, end, floor) {
+            return Some(o);
+        }
+        // Org's link parser always succeeds where its search matched, and
+        // so does this one (the search records what it reads there). Were it
+        // ever to fail, the region's other objects are still found: the
+        // lexer goes on past the bound rather than ending the region.
+        from = lim;
     }
-    // No object before the radio link: parse it (Org calls the link parser
-    // one character before the bound).
-    link::link(cx, radio?, end, floor)
 }
 
 /// The char at `i` if it is before `lim` (a match may not extend past it;
