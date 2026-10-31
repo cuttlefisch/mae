@@ -25,6 +25,7 @@ mod kb_ops_read_clobber_tests;
 mod kb_ops_registry_failure_tests;
 mod kb_ops_registry_tests;
 mod kb_ops_reimport_guard_tests;
+mod kb_ops_reimport_report_tests;
 mod kb_ops_remote_hub_tests;
 mod kb_ops_retire_tests;
 mod kb_ops_retired_origin_tests;

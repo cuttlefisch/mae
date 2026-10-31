@@ -48,27 +48,42 @@ fn resolve_path(editor: &Editor, raw: &str) -> PathBuf {
     }
 }
 
-/// Write `contents` to `path` atomically: write to a temp file in the SAME
-/// directory (so the final `rename` is same-filesystem, never a cross-
-/// filesystem copy that could itself fail partway), then rename over the
-/// destination. A disk-full/killed-process/power-loss mid-write can now
-/// only ever leave the ORIGINAL file untouched or the NEW file fully
-/// written at `path` -- never a partial/corrupt file at the destination,
-/// unlike the previous plain `std::fs::write`. Best-effort cleanup of the
-/// temp file on a write failure (not the rename failure path, where the
-/// temp file IS the recovery artifact) -- a leftover `.tmp-<pid>` file on
-/// that rare failure is a minor cleanup nit, not a correctness issue.
+/// Atomic, exclusive-temp write shared with the guidance export (one
+/// implementation: see `guidance_export::write_replacing`).
 fn write_atomically(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
-    let file_name = path.file_name().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no file name")
-    })?;
-    let tmp_name = format!("{}.tmp-{}", file_name.to_string_lossy(), std::process::id());
-    let tmp_path = path.with_file_name(tmp_name);
-    if let Err(e) = std::fs::write(&tmp_path, contents) {
-        let _ = std::fs::remove_file(&tmp_path);
-        return Err(e);
+    super::guidance_export::write_replacing(path, contents)
+}
+
+/// Write the exported page: refuse MAE configuration, create the parent
+/// directory, then write atomically.
+fn write_export(out_path: &std::path::Path, html: &str) -> Result<(), String> {
+    // ADR-089 D4. For every caller: a Scheme hook an agent installed runs this
+    // later without the AI-origin mark (principle #6's known tension), and an
+    // HTML page is never a legitimate MAE config file.
+    if mae_core::workspace_trust::is_protected_config_path(out_path) {
+        return Err(format!(
+            "kb_export_subgraph_html: refused: {} is MAE configuration, which an AI \
+             session may not write",
+            out_path.display()
+        ));
     }
-    std::fs::rename(&tmp_path, path)
+    if let Some(parent) = out_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "kb_export_subgraph_html: couldn't create directory {}: {e}",
+                    parent.display()
+                )
+            })?;
+        }
+    }
+    write_atomically(out_path, html).map_err(|e| {
+        format!(
+            "kb_export_subgraph_html: couldn't write {}: {e}",
+            out_path.display()
+        )
+    })?;
+    Ok(())
 }
 
 /// Find which `KnowledgeBase` (primary, or a registered federated instance)
@@ -526,22 +541,7 @@ pub fn execute_kb_export_subgraph_html(
     );
 
     let out_path = resolve_path(editor, path_arg);
-    if let Some(parent) = out_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                format!(
-                    "kb_export_subgraph_html: couldn't create directory {}: {e}",
-                    parent.display()
-                )
-            })?;
-        }
-    }
-    write_atomically(&out_path, &html).map_err(|e| {
-        format!(
-            "kb_export_subgraph_html: couldn't write {}: {e}",
-            out_path.display()
-        )
-    })?;
+    write_export(&out_path, &html)?;
 
     Ok(format!(
         "Exported {} node{} ({} edges) rooted at '{id}' to {} ({} bytes){}{}{}{}{}",
@@ -660,6 +660,23 @@ mod tests {
             ));
         }
         editor
+    }
+
+    /// Shell tier does not make MAE's own configuration writable (ADR-089 D4): a
+    /// project-local `.mae/` file decides what runs when the project opens.
+    #[test]
+    fn refuses_to_write_into_project_local_mae_config() {
+        let mut editor = editor_with_linked_notes();
+        editor.ai.ai_dispatch_depth = 1; // an AI tool call
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join(".mae").join("init.scm");
+        let r = execute_kb_export_subgraph_html(
+            &editor,
+            &serde_json::json!({"id": "root", "path": out.to_str().unwrap()}),
+            None,
+        );
+        assert!(r.is_err(), "wrote into .mae/: {r:?}");
+        assert!(!dir.path().join(".mae").exists());
     }
 
     #[test]
@@ -1050,11 +1067,11 @@ mod tests {
         let leftover: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
             .collect();
         assert!(
             leftover.is_empty(),
-            "no .tmp-<pid> file should remain after a successful write: {leftover:?}"
+            "no temp file should remain after a successful write: {leftover:?}"
         );
     }
 
@@ -1086,7 +1103,7 @@ mod tests {
         let leftover: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
             .collect();
         assert!(leftover.is_empty(), "{leftover:?}");
     }

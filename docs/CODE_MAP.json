@@ -4057,7 +4057,7 @@
     },
     {
       "name": "kb-export-guidance",
-      "doc": "Export guidance-KB context to AGENTS.md or a custom path (ADR-050 Phase H)"
+      "doc": "Export guidance-KB context to AGENTS.md or another file in the project (ADR-050 Phase H)"
     },
     {
       "name": "kb-export-html",

@@ -8,7 +8,7 @@ use mae_kb::KbStore;
 use super::Editor;
 
 pub use node_buffer::EditSurface;
-pub use registry::{open_instance_store_with_engine, KbResolution};
+pub use registry::{open_instance_store_with_engine, KbResolution, ScopedNode};
 pub use search::QueryVector;
 
 /// The honest, point-of-action advisory shown when a user enables E2E content
@@ -72,6 +72,10 @@ pub struct KbImportResult {
     pub uuid: String,
     pub report: ImportReport,
     pub health: ImportHealth,
+    /// Whether THIS editor has a file watcher on the KB's org dir. An editor
+    /// started after the KB was registered may not, in which case its view
+    /// only changes on an explicit re-import; a client needs to know that.
+    pub watched: bool,
 }
 
 /// Result of promoting a federated/imported node into the primary KB
@@ -152,7 +156,15 @@ impl KbImportResult {
                 "{{\n",
                 "  \"name\": \"{}\",\n",
                 "  \"uuid\": \"{}\",\n",
+                "  \"mode\": \"{}\",\n",
+                "  \"watched\": {},\n",
+                "  \"files_seen\": {},\n",
+                "  \"files_reparsed\": {},\n",
+                "  \"files_unchanged\": {},\n",
                 "  \"nodes_imported\": {},\n",
+                "  \"nodes_rewritten\": {},\n",
+                "  \"nodes_removed\": {},\n",
+                "  \"duration_ms\": {},\n",
                 "  \"links_created\": {},\n",
                 "  \"files_without_id\": {},\n",
                 "  \"duplicate_ids\": {},\n",
@@ -168,7 +180,20 @@ impl KbImportResult {
             ),
             self.name,
             self.uuid,
+            if self.report.mode.is_empty() {
+                "none".to_string()
+            } else {
+                self.report.mode.to_lowercase()
+            },
+            self.watched,
+            self.report.source_files_seen,
+            self.report.path_to_ids.len(),
+            // Counted per FILE skipped by content hash, despite the field name.
+            self.report.nodes_unchanged,
             self.report.nodes_imported,
+            self.report.nodes_updated,
+            self.report.nodes_removed,
+            self.report.duration_ms,
             self.report.links_created,
             self.report.nodes_skipped,
             self.report.duplicate_ids.len(),
