@@ -1,0 +1,51 @@
+* Links in a title: [[https://example.org][site]] and https://example.org/x
+* [[#custom][Starts with a link]]
+
+Bracket: [[https://example.org]] [[https://example.org][desc *bold* =v=]]
+Fuzzy, custom id, coderef: [[Some heading]] [[#my-id]] [[(ref)]] [[*Star heading]]
+Files: [[./rel.org]] [[../up.org]] [[/abs/path.org]] [[file:x.org::*heading]]
+[[file:x.org::123]] [[file+sys:/bin/ls]] [[file+emacs:a.txt]] [[~/home.org]]
+Known types: [[id:4F2A-11]] [[info:org#Links]] [[doi:10.1000/182]] [[elisp:(+ 1 2)]]
+Plain known types: id:4F2A-11 info:org#Links doi:10.1000/182 irc:irc.x.org eww:x.org
+Case: [[HTTPS://EXAMPLE.ORG]] HTTP://EXAMPLE.ORG/caps Mailto:someone@example.org
+Escapes: [[a\[b\]c]] [[a\\]] [[tail\\\]x]] [[x\y]] [[\\\\]] [[a\\[b]]
+Multi-line: [[https://example.org/long
+  path][desc
+  on two lines]] and [[fuzzy
+target]]
+Empty and odd: [[]] [[a][]] [[a]b]] [[a][b] [[[[x]]]] [[a]][[b]]
+Description with links: [[a][see [[b]] here]] [[a][https://x.org]]
+Description objects: [[a][*b* \alpha $x$ src_c{d} {{{m}}} [1/2] <<t>>]]
+
+Plain: https://example.org, http://x.org/a(b)c http://x.org/(a(b)c) d
+Endings: http://x.org/path. http://x.org/path- http://x.org/a/ http://x.org/a_
+mailto:a@b.c shell:ls news:comp.emacs ftp://f.org help:org-mode
+Not links: xhttps://example.org https: http:/ http:a (http:x) [http:y]
+Word start: -http://a.org/b _https://c.org/d émailto:x@y.z
+
+Angle: <https://example.org> <mailto:a@b.c> <https://a.org/with spaces>
+Angle across lines: <https://example.org/a
+  b> and <https://x.org/a
+> and <https://x.org/
+   >
+Angle unclosed: <https://example.org and <notatype:x> <http:>
+
+| [[cell][link]] | https://x.org | <https://y.org> |
+
+- [[a][tag link]] :: def https://x.org
+- term :: [[b]]
+
+#+LINK: tracker https://tracker.example/%s/issues
+#+LINK: hex https://search.example/?q=%h
+#+LINK: "my site" https://example.org/
+#+LINK: dup https://first.example/
+#+link: dup https://second.example/
+#+LINK: lonelykey
+
+Abbreviations: [[tracker:org/repo]] [[tracker::org/repo]] [[tracker]] [[hex:a b/é]]
+[[my site:page]] [[dup:x]] [[nokey:x]] [[TRACKER:x]] [[tracker:multi
+  line]] plain tracker:not-expanded <tracker:not-expanded>
+
+#+CAPTION: [[https://example.org][caption link]]
+#+NAME: fig
+[[./image.png]]

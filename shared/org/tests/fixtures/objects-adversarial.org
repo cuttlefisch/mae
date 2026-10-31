@@ -1,0 +1,39 @@
+* *unclosed bold in a title
+* [[unclosed link in a title
+* title ending with an opener [[
+* title with a tag after markup *x* :tag:
+* title *spanning :tag: marks*
+
+Openers at the end of a paragraph: *a [[b {{{c @@d: <<e <<<f [fn:g src_h[ call_i( \(j $k
+Closers without openers: a* b/ c_ d+ e= f~ ]] }}} @@ >> >>> \) $ ]
+Storms: ***** ///// _____ +++++ ===== ~~~~~ [[[[[ ]]]]] {{{{{ $$$$$ \\\\\ <<<<< >>>>> @@@@@
+Alternating: *a/b*c/ =a~b=c~ [[a*b]]c* *a [[b* c]] d
+Link swallowing markup: *a [[b][c* d]] e* and =a [[b=]] c=
+Description closing early: [[a][b]]c]] [[a][b ]] c]]
+Brackets in paths: [[a[b]] [[a]b]] [[a][b[c]d]]
+Escaped at the end: [[a\]] [[a\\]] [[a\\\]]]
+Sub/superscript edge: a_ a^ _ ^ a_{ a^{ a_( a^( a_{}b a^()b ^{x}
+Entity edge: \ \\ \_ \a1 \alpha\beta\gamma \alpha$x$
+Backslash before a line break: a \\\\
+Nested: *a *a *a *a z**** and [fn:: a [fn:: b [fn:: c]]] and /a /b c// x
+Long verbatim with every opener inside: =*a /b _c +d ~e [[f {{{g @@h: <<i [fn:j \k $l=
+
+- *unclosed in a tag :: def
+- tag with [[a link :: def
+- tag :: *unclosed in the body
+- [[a][b :: c]] :: d
+
+| *unclosed | [[unclosed | {{{unclosed | $unclosed | [fn:x | src_x{ |
+| a *b | c* d | [[e | f]] |
+
+#+CAPTION: *unclosed caption [[and link
+#+CAPTION[[[short: *s*
+#+NAME: adversarial
+| a |
+
+#+begin_verse
+  *verse \\
+  bold* [[link
+  ]] end \\
+#+end_verse
+Final line without a newline *and an opener

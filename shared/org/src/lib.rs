@@ -14,8 +14,9 @@
 //! layer. Intended differences are listed, with the test that pins each, in
 //! `conformance/divergences.toml`.
 //!
-//! Phase O1 builds block structure only. Inline content (emphasis, links,
-//! timestamps) is a `TEXT` token per line until O2.
+//! Elements (phase O1) and inline objects (O2: emphasis, links, radio
+//! links, timestamps, entities, citations …) are both in the tree; the typed
+//! [`Link`] view reports a link as `org-element` does.
 //!
 //! Properties the crate guarantees, each pinned by tests:
 //! - **Total:** `parse` never panics and never fails; malformed input
@@ -69,7 +70,9 @@ pub use options::{
 pub use rowan;
 pub use span::Span;
 pub use text::LineEnding;
-pub use views::{Block, Headline, Keyword, Property, PropertyDrawer};
+pub use views::{
+    Block, Headline, Keyword, Link, LinkAbbrevs, LinkFormat, LinkInfo, Property, PropertyDrawer,
+};
 
 use rowan::GreenNode;
 

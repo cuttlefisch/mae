@@ -15,3 +15,4 @@ cc 1522bde9f4dfb948a0fe0c3a8aab4043e9ed8bee829a1fd07817ef0fb15343ce # shrinks to
 cc 1fe5bb205c465afa9ed666a7f3eebd23f9d42f8bad64c712e46dce1277b5e5aa # shrinks to file = 0, at = 0, frag = "#+CAPTION[s]: c#+begin_src sh"
 cc e1bccb2e6d7329faf42ca586b307c4a6fdc1d0109aee1ad0c91aab1db28b65a6 # shrinks to text = "* \n#+CAPTION[s]: c\n*\t"
 cc 309cf07212e6295c6b94788e83405b46431c9af327bb86f89d4a28c975bb1948 # shrinks to file = 790, at = 487, frag = "*\t\n#+CAPTION[s]: c\n*\t"
+cc f30a9ee19137c90d7b52f14783f983bba98d07fcddbffae3fa4ad7a8110cd042 # shrinks to text = "|\\a"

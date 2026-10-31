@@ -96,7 +96,9 @@ pub fn shift_el(el: &El, f: impl Fn(usize) -> usize) -> El {
         contents: el.contents.map(|(a, b)| (f(a), f(b))),
         parent: (
             el.parent.0.clone(),
-            if el.parent.0 == "org-data" {
+            // The document and a secondary string (a CAPTION value) have no
+            // position: their "begin" is always 0.
+            if el.parent.0 == "org-data" || el.parent.0 == "secondary" {
                 0
             } else {
                 f(el.parent.1)
@@ -445,19 +447,26 @@ pub fn compare_views(
 ) -> (std::collections::BTreeMap<String, usize>, Vec<String>) {
     let mut counts = std::collections::BTreeMap::new();
     let mut bad = Vec::new();
-    for (el, v) in golden_elements(golden) {
-        let node = doc.syntax().descendants().find(|n| {
+    // One pass over the tree, not one per golden element.
+    let mut by_span = std::collections::HashMap::new();
+    for n in doc.syntax().descendants() {
+        if let Some(name) = kind_name(n.kind()) {
             let r = n.text_range();
-            usize::from(r.start()) == el.begin
-                && usize::from(r.end()) == el.end
-                && kind_name(n.kind()) == Some(el.kind.as_str())
-        });
-        let Some(node) = node else { continue };
-        let Some(fields) = view_fields(&el.kind, node) else {
+            by_span
+                .entry((usize::from(r.start()), usize::from(r.end()), name))
+                .or_insert(n);
+        }
+    }
+    let abbrevs = mae_org::LinkAbbrevs::of(&doc.syntax());
+    for (el, v) in golden_elements(golden) {
+        let Some(node) = by_span.get(&(el.begin, el.end, el.kind.as_str())).cloned() else {
+            continue;
+        };
+        let Some(fields) = view_fields(&el.kind, node, &abbrevs) else {
             continue;
         };
         let group = match el.kind.as_str() {
-            "headline" | "keyword" | "node-property" => el.kind.clone(),
+            "headline" | "keyword" | "node-property" | "link" => el.kind.clone(),
             _ => "drawer/block".to_string(),
         };
         *counts.entry(group).or_default() += 1;
@@ -483,8 +492,9 @@ pub fn compare_views(
 fn view_fields(
     kind: &str,
     node: mae_org::SyntaxNode,
+    abbrevs: &mae_org::LinkAbbrevs,
 ) -> Option<Vec<(&'static str, serde_json::Value)>> {
-    use mae_org::{Block, Headline, Keyword, PropertyDrawer};
+    use mae_org::{Block, Headline, Keyword, Link, ParseOptions, PropertyDrawer};
     use serde_json::json;
     Some(match kind {
         "headline" => {
@@ -516,6 +526,16 @@ fn view_fields(
             ]
         }
         "special-block" => vec![("block_type", json!(Block::cast(node)?.name()))],
+        "link" => {
+            // The default link types: every corpus file is parsed with them.
+            let info = Link::cast(node)?.info_with(&ParseOptions::default().link_types, abbrevs);
+            vec![
+                ("link_type", json!(info.link_type)),
+                ("path", json!(info.path)),
+                ("raw_link", json!(info.raw_link)),
+                ("format", json!(info.format.as_str())),
+            ]
+        }
         "drawer" => {
             // The opening line, not the first child: affiliated keywords come first.
             let name = node

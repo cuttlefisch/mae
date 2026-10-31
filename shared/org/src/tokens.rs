@@ -174,9 +174,14 @@ pub(crate) fn keyword_line(em: &mut Emitter, start: usize, end: usize, affiliate
             .filter(|_| affiliated)
             .unwrap_or(key_end);
         c.to(KEY, name_end);
+        let parsed = affiliated && s[ws + 2..name_end].eq_ignore_ascii_case("CAPTION");
+        // A CAPTION's `[SHORT]` dual value is parsed as well.
+        if parsed && name_end < key_end && c.em.budget > 0 {
+            c.to(TEXT, name_end + 1);
+            c.objects(AFFILIATED_VALUE, key_end - 1);
+        }
         c.to(TEXT, key_end);
         c.to(COLON, key_end + 1);
-        let parsed = affiliated && s[ws + 2..name_end].eq_ignore_ascii_case("CAPTION");
         // The value is `org-trim`med: [ \t\n\r] off both ends.
         let rest = &s[key_end + 1..];
         let lead = rest.len() - rest.trim_start_matches(is_trim).len();

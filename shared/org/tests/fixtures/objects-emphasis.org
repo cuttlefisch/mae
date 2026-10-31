@@ -1,0 +1,54 @@
+#+title: Emphasis *in* a /keyword/ value stays text
+
+* Plain *bold* /italic/ _under_ +strike+ =verb= ~code~ in a title :tag:
+* A title ending in *bold*
+* *bold at the start* of a title
+* COMMENT *bold* after a comment keyword
+
+Simple: *bold* /italic/ _underline_ +strike+ =verbatim= ~code~.
+Nested: *bold /italic _under +strike =v= ~c~ +_/* and /a *b* c/.
+Pre chars: (*a*) '*b*' "*c*" {*d*} -*e*- x*f*y and a*b* and *g*x.
+Post chars: *a*. *b*, *c*; *d*: *e*! *f*? *g*' *h*" *i*) *j*} *k*\ *l*[ *m*-
+Spaces: * not bold* *not bold * *  * ** *a* ** *a *b* c*
+Across lines: *one
+two* and /three
+
+four/ (blank line splits the paragraph).
+Markup inside verbatim: =*not bold* [[not a link]]= ~$x$ \alpha~ =a=b= ~a~b~.
+Post blank: *a*   then *b*	then =c=  	end.
+Unclosed: *never closed /also never _nor this +or this =or= ~this
+Mark at region end: *a* *b
+*x*
+Single chars: *a* /b/ _c_ +d+ =e= ~f~ and *** and =/= and /=/.
+Unicode: *émphase* /日本語/ _ü_ *a* * b* *ß*.
+Underline vs subscript: a_b_c x_{i}_ _a_b_ __a__ (_a_) -_b_ {_c_}.
+
+- *bold* item :: with /italic/ in the description
+- term *x* :: definition *y*
+- =verb= :: tag ending in verbatim
+- =verb=  :: two blanks before the separator
+- *b*		:: tabs before the separator
+- [ ] *checkbox then bold*
+
+| *bold* | /it/ | _u_ | +s+ | =v= | ~c~ |
+| *a | b* | =c | d= |
+
+#+CAPTION: A *bold* caption with /italic/
+#+CAPTION[short *s*]: long *l*
+#+NAME: tbl
+| a |
+
+#+begin_verse
+*bold* in a verse
+  /italic/ indented
+#+end_verse
+
+#+begin_quote
+*bold* in a quote
+#+end_quote
+
+#+begin_src emacs-lisp
+*not parsed* in a src block
+#+end_src
+
+Deep: *a /b _c +d *e /f _g +h*+_/*+_/* end.

@@ -125,9 +125,9 @@ impl Radio {
         radio
     }
 
-    /// `org-element--object-lex`'s bound when a radio link follows `from`:
-    /// one past where the next link's text starts.
-    pub fn limit(
+    /// Where the next radio link's text starts at or after `from` (Org bounds
+    /// `org-element--object-lex`'s search one char past it).
+    pub fn next_link(
         &self,
         cx: &InlineCx,
         from: usize,
@@ -142,7 +142,7 @@ impl Radio {
         };
         let m = self.search(cx, s0, (floor, end), cur)?;
         if m.p >= from {
-            return Some(m.p + 1);
+            return Some(m.p);
         }
         // Matched at the start of the line just behind us. Org handles a
         // one-char link there by searching again from the match's end; a
@@ -156,7 +156,7 @@ impl Radio {
             from
         };
         let m = self.search(cx, again, (floor, end), cur)?;
-        (m.p >= from).then_some(m.p + 1)
+        (m.p >= from).then_some(m.p)
     }
 
     /// The first match whose regexp starts at or after `s0`.
@@ -167,16 +167,16 @@ impl Radio {
         (floor, end): (usize, usize),
         cur: &mut Cursor,
     ) -> Option<Match> {
+        // Candidates this frame skipped are rejected for good: a later
+        // search starts at or after `s0`, and whether a candidate `p >= s0`
+        // matches does not depend on `s0` (at `p == s0` only `^` can, which
+        // does not look at it). So the cursor only moves forward.
         let first = self.starts.partition_point(|&p| p < s0);
         let mut k = cur.next.max(first);
         while let Some(&p) = self.starts.get(k).filter(|&&p| p < end) {
             if let Some(m) = self.valid_at(cx, p, s0, (floor, end)) {
                 cur.next = k;
                 return Some(m);
-            }
-            // Only a candidate AT `s0` may become valid for a later search.
-            if p > s0 {
-                cur.next = k + 1;
             }
             k += 1;
         }

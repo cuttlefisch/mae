@@ -290,13 +290,14 @@ fn typed_views_agree_with_the_oracles_properties() {
         "view mismatches:\n{}",
         mismatches.join("\n")
     );
-    // Floors just under what the goldens hold (1415/433/118/597 on
+    // Floors just under what the goldens hold (1436/434/117/597/401 on
     // 2026-10-31), so a matcher that silently stops finding nodes fails.
     for (kind, floor) in [
         ("headline", 1400),
         ("keyword", 425),
         ("node-property", 110),
         ("drawer/block", 590),
+        ("link", 395),
     ] {
         assert!(
             compared.get(kind).copied().unwrap_or(0) >= floor,

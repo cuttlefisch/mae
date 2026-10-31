@@ -1,0 +1,39 @@
+* Radio <<<Gizmo>>> in a title
+* A title mentioning gizmo and Widget frame
+
+Targets: <<<widget frame>>> <<<widget>>> <<<x>>> <<<C++>>> <<<日本>>>
+<<<a  b>>> <<<tab	sep>>> <<<nbsp end >>> <<< lead>>> <<<z>>> <<<*b*>>>
+
+Case and spacing: Widget Frame, WIDGET   frame, widget
+frame (across a line), widgetframe, widget-frame, widgets.
+Longest first: widget frame beats widget; widget alone.
+Boundaries: xgizmo gizmox (gizmo) gizmo. _gizmo_ *gizmo* =gizmo= 1gizmo.
+One char: x marks the spot, xx, x.
+x at the start of a line, and
+x
+y x
+x,x and x,x.
+x.x
+Symbols: C++ and c++, but aC++ and C++b.
+CJK: これは日本です and 日本語.
+Spaces in targets: a b, a     b, a
+b, ab.
+Tab target: tab	sep, tab sep, tab		sep.
+Nbsp target: nbsp end x, nbsp end x, nbsp end   , and  lead, x lead,     lead.
+Markup target: a *b* c, *b*x, (*b*).
+Inside objects: *widget* /a gizmo here/ [[x][widget]] [[widget]] ~gizmo~.
+Not a target in verbatim: =<<<hidden>>>= hidden.
+Not a target in a link: [[t][<<<linked>>>]] linked.
+
+| gizmo | a widget frame | x |
+
+- gizmo :: widget
+- [ ] x
+
+#+CAPTION: A gizmo caption
+| z |
+
+#+begin_example
+<<<example>>> is not a target
+#+end_example
+example

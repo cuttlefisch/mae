@@ -5,6 +5,9 @@
 use crate::kind::SyntaxKind::{self, *};
 use crate::kind::{SyntaxNode, SyntaxToken};
 
+mod link;
+pub use link::{Link, LinkAbbrevs, LinkFormat, LinkInfo};
+
 fn token(node: &SyntaxNode, kind: SyntaxKind) -> Option<SyntaxToken> {
     node.children_with_tokens()
         .filter_map(|e| e.into_token())

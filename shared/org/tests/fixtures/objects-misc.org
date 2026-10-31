@@ -1,0 +1,47 @@
+* TODO Tasks [1/3] [33%] with a cookie [/] [%] and [10/] :tag:
+* Title with a line break \\
+* Title with {{{macro(x)}}} and @@html:<b>@@ and [fn:1]
+
+Cookies: [1/3] [33%] [/] [%] [1/] [/3] [12345/67890] [1%/] [ 1/3] [1/3 ] [a/b] [%%]
+Macros: {{{title}}} {{{Author}}} {{{date(%Y)}}} {{{n(a,b)}}} {{{x()}}} {{{a-b_c}}}
+{{{args(with
+newline)}}} {{{nested({{{m}}})}}} {{{close(a)}}}x)}}} {{{1bad}}} {{{bad name}}}
+{{{unclosed {{{also(unclosed} {{{m(a}}} {{{m)}}}
+Snippets: @@html:<b>@@ @@latex:\textbf{x}@@ @@a-b:x@@ @@html:@@ @@:x@@ @@ht ml:x@@
+@@html:multi
+line@@ @@html:unclosed @@x:y @@z@@
+Targets: <<target>> <<two words>> << spaced>> <<spaced >> <<a>> <<>> <<x<y>> <<a>b>>
+Footnotes: [fn:1] [fn:label] [fn:: anonymous *def*] [fn:named: inline /def/]
+[fn:nested: a [b] c] [fn:x:] [fn::] [FN:1] [fn:] [fn:bad label] [fn:unclosed: x
+[fn:a-b_c] [fn:2]x [fn:3]: [fn:multi: line
+two] done.
+Inline src: src_python{print(1)} src_sh[:results output]{echo hi} src_c{a{b}c}
+src_x{unclosed src_y[unclosed]{z} src_[x]{y} src_z{} xsrc_a{b} src_a {b} SRC_A{B}
+src_el{multi
+line}
+Babel calls: call_f() call_g(x=1) call_h[:session s](y) call_i(a)[:results raw]
+call_j[h](a)[e] call_k(nested(x)) call_l(unclosed call_m[x] call_() xcall_f() CALL_F()
+call_n(multi
+line)
+Scripts: x^2 x_i x^{a b} x_{i,j} H_2O e^{i\pi} x^-1 x^+a x_1.5 x_a.b. x^* x^** x_(a b)
+x^{a{b{c}}} x^{a{b{c{d}}}} x^(a(b(c))) x^(a(b(c(d)))) x^{unclosed x_{} x^{}
+^start _start a ^b a _b a^ b ~x^2~ a__b a^^b
+^^at line start
+x_{multi
+line}
+Line breaks: one \\
+two \\
+three \\ not at end \\\ triple
+\\\\
+four\\
+end
+
+- term \\ :: tag
+- [@3] x^2 item
+
+| a \\ | b_1 | c^2 | src_x{y} | call_z() | [1/2] | <<t>> | [fn:1] |
+|      |   |  x  |
+| no trailing bar
+|
+
+[fn:1] A definition with x^2 and {{{m}}}.

@@ -21,11 +21,13 @@ pub(super) fn next_object(cx: &InlineCx, f: &mut Frame) -> Option<Obj> {
     if r.allows(CITATION_REFERENCE) {
         return cite::citation_reference(cx, from, end);
     }
-    let limit = match cx.radio {
-        Some(radio) if r.allows(LINK) => radio.limit(cx, from, end, floor, &mut f.radio),
+    // The next radio link's start: candidates may not extend past the char
+    // after it (Org's bound is one char past the link's text).
+    let radio = match cx.radio {
+        Some(radio) if r.allows(LINK) => radio.next_link(cx, from, end, floor, &mut f.radio),
         _ => None,
     };
-    let lim = limit.unwrap_or(end);
+    let lim = radio.map_or(end, |p| cx.step(p));
     let mut i = from;
     while i < lim {
         if is_candidate(cx, i, end, lim, floor) {
@@ -37,12 +39,13 @@ pub(super) fn next_object(cx: &InlineCx, f: &mut Frame) -> Option<Obj> {
     }
     // No object before the radio link: parse it (Org calls the link parser
     // one character before the bound).
-    link::link(cx, limit? - 1, end, floor)
+    link::link(cx, radio?, end, floor)
 }
 
-/// The char at `i` if it ends by `lim` (a match may not extend past it).
+/// The char at `i` if it is before `lim` (a match may not extend past it;
+/// `lim` is a char boundary).
 fn fit(cx: &InlineCx, i: usize, lim: usize) -> Option<char> {
-    cx.ch(i, lim).filter(|_| cx.step(i) <= lim)
+    cx.ch(i, lim)
 }
 
 /// Does `org-element--object-regexp` match at `i` without consuming past

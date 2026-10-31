@@ -2,8 +2,8 @@
 //!
 //! Node kinds mirror `org-element`'s element types one to one (ADR-112 D7), so
 //! the Emacs differential compares kinds through a flat name table rather than
-//! a mapping layer. Token kinds are deliberately coarse in O1: inline content
-//! is a single `TEXT` token per line until O2 builds the inline tree.
+//! a mapping layer. Object kinds (from 2000) mirror its object types the same
+//! way; tokens inside objects are coarse (`MARKUP`, `TEXT`, `NAME`, `VALUE` …).
 
 /// Every kind of token or node in a `mae-org` tree.
 ///

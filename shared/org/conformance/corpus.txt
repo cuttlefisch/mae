@@ -46,6 +46,15 @@ shared/org/tests/fixtures/misc-elements.org
 shared/org/tests/fixtures/mixed-eol.org
 shared/org/tests/fixtures/nested-quotes-same-name.org
 shared/org/tests/fixtures/no-final-newline.org
+shared/org/tests/fixtures/objects-adversarial.org
+shared/org/tests/fixtures/objects-citations.org
+shared/org/tests/fixtures/objects-emphasis.org
+shared/org/tests/fixtures/objects-entities-latex.org
+shared/org/tests/fixtures/objects-eol-mac.org
+shared/org/tests/fixtures/objects-links.org
+shared/org/tests/fixtures/objects-misc.org
+shared/org/tests/fixtures/objects-radio.org
+shared/org/tests/fixtures/objects-timestamps.org
 shared/org/tests/fixtures/planning-properties.org
 shared/org/tests/fixtures/property-drawer-after-blank.org
 shared/org/tests/fixtures/survivor-clock-orphans-affiliated.org
