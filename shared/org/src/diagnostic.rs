@@ -34,6 +34,20 @@ pub enum DiagnosticKind {
     InputTooLarge,
 }
 
+impl DiagnosticKind {
+    /// The name used in JSON.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DiagnosticKind::UnterminatedBlock => "unterminated_block",
+            DiagnosticKind::UnterminatedDrawer => "unterminated_drawer",
+            DiagnosticKind::DepthLimit => "depth_limit",
+            DiagnosticKind::RadioLinkBudget => "radio_link_budget",
+            DiagnosticKind::HeadlineOutsideFragment => "headline_outside_fragment",
+            DiagnosticKind::InputTooLarge => "input_too_large",
+        }
+    }
+}
+
 /// A diagnostic and the bytes it concerns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Diagnostic {

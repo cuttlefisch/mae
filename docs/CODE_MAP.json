@@ -1108,6 +1108,42 @@
         }
       ]
     },
+    "mae-org-wasm": {
+      "path": "shared/org-wasm/src/lib.rs",
+      "dependencies": [
+        "mae-org"
+      ],
+      "public_items": [
+        {
+          "name": "api",
+          "kind": "mod"
+        },
+        {
+          "name": "json",
+          "kind": "mod"
+        },
+        {
+          "name": "mae_org_alloc",
+          "kind": "fn"
+        },
+        {
+          "name": "mae_org_call",
+          "kind": "fn"
+        },
+        {
+          "name": "mae_org_result_ptr",
+          "kind": "fn"
+        },
+        {
+          "name": "mae_org_result_free",
+          "kind": "fn"
+        },
+        {
+          "name": "mae_org_live_bytes",
+          "kind": "fn"
+        }
+      ]
+    },
     "mae-renderer": {
       "path": "crates/renderer/src/lib.rs",
       "dependencies": [

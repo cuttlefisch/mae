@@ -3321,6 +3321,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mae-org-wasm"
+version = "0.14.131"
+dependencies = [
+ "mae-org",
+ "proptest",
+ "serde_json",
+]
+
+[[package]]
 name = "mae-renderer"
 version = "0.14.131"
 dependencies = [

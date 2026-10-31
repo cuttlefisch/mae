@@ -58,6 +58,7 @@ graph TD
     mae_make[mae-make]
     mae_mcp --> mae_effect_sandbox
     mae_org --> mae_kb
+    mae_org_wasm --> mae_org
     mae_renderer --> mae_core
     mae_renderer --> mae_shell
     mae_scheme --> mae_ai
@@ -424,6 +425,20 @@ Source: `shared/org/src/lib.rs`
 | `parse` | fn |
 | `FragmentContext` | struct |
 | `parse_fragment` | fn |
+
+## mae-org-wasm
+
+Source: `shared/org-wasm/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `api` | mod |
+| `json` | mod |
+| `mae_org_alloc` | fn |
+| `mae_org_call` | fn |
+| `mae_org_result_ptr` | fn |
+| `mae_org_result_free` | fn |
+| `mae_org_live_bytes` | fn |
 
 ## mae-renderer
 

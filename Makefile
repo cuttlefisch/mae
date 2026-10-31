@@ -101,6 +101,7 @@ ICON_FILE    := assets/mae.svg
 	clean clean-cache prune-artifacts disk-report \
 	code-map code-map-check heavy-e2e-check tool-args-check \
 	audit-metrics audit-metrics-check audit-metrics-bless \
+	org-wasm org-wasm-repro org-wasm-test \
 	manual-kb install-manual practices-kb install-practices kb-provisioning-cost backup-kbs \
 	devpractices-kb install-devpractices adr-kb fetch-adr-kb install-adr \
 	docker-ci docker-new-user docker-smoke docker-dev docker-clean \
@@ -623,6 +624,18 @@ heavy-e2e-check:
 ## the schema leaves out is dead code a client cannot reach.
 tool-args-check:
 	python3 scripts/check-tool-args-declared.py .
+
+## org-wasm: build mae-org's WASM module (shared/org-wasm, ADR-112 D5); prints size and sha256
+org-wasm:
+	CARGO=$(CARGO) scripts/org-wasm.sh build
+
+## org-wasm-repro: build the WASM module twice in separate target dirs and require identical bytes
+org-wasm-repro:
+	CARGO=$(CARGO) scripts/org-wasm.sh repro
+
+## org-wasm-test: size budget, native-vs-WASM differential and memory over 10,000 calls (needs node)
+org-wasm-test:
+	CARGO=$(CARGO) scripts/org-wasm.sh test
 
 ## audit-metrics: regenerate docs/AUDIT_METRICS.json (structural metrics + marker cross-refs)
 audit-metrics:
