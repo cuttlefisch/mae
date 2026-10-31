@@ -76,8 +76,8 @@ fn a_mixed_file_is_unix_and_every_cr_is_content() {
     assert_eq!(h[0], ("LF heading".to_string(), vec!["lf".to_string()]));
     assert_eq!(
         h[1],
-        ("CRLF heading :crlf:\r".to_string(), vec![]),
-        "the tag line ends in CR"
+        ("CRLF heading :crlf:".to_string(), vec![]),
+        "the tag line ends in CR, so no tags; org-trim drops the CR from the title"
     );
     assert_eq!(
         doc.blocks().count(),

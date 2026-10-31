@@ -57,7 +57,9 @@ view!(
 );
 
 impl Headline {
-    /// The number of stars.
+    /// The number of stars: Org's `:true-level`, which decides structure.
+    /// Under `#+STARTUP: odd` Org also reports a reduced `:level`
+    /// (`(stars + 1) / 2`); that view setting is not modelled in O1.
     pub fn level(&self) -> usize {
         token(&self.0, STARS).map_or(0, |t| t.text().len())
     }

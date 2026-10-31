@@ -15,6 +15,8 @@ shared/org/tests/fixtures/blank-only.org
 shared/org/tests/fixtures/blocks-misc.org
 shared/org/tests/fixtures/bom.org
 shared/org/tests/fixtures/bracketed-keywords.org
+shared/org/tests/fixtures/clock-prefix-lower.org
+shared/org/tests/fixtures/clock-prefix-orphans.org
 shared/org/tests/fixtures/col0-heading-in-example.org
 shared/org/tests/fixtures/col0-heading-in-quote.org
 shared/org/tests/fixtures/col0-heading-in-src.org
@@ -71,6 +73,9 @@ shared/org/tests/fixtures/unicode-word.org
 shared/org/tests/fixtures/unicode.org
 shared/org/tests/fixtures/unterminated-src.org
 shared/org/tests/fixtures/verse-empty.org
+shared/org/tests/fixtures/views-cr-dos-titles.org
+shared/org/tests/fixtures/views-cr-dos.org
+shared/org/tests/fixtures/views-cr-mixed.org
 shared/org/tests/fixtures/zeroth-keyword-first.org
 shared/org/tests/fixtures/zeroth-section.org
 

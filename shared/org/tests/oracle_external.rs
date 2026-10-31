@@ -34,6 +34,7 @@ fn oracle_diff_external_dir() {
     let goldens = run_oracle(&files, &out);
     let mut tally = Tally::new();
     let (mut agree, mut skipped, mut shown) = (0, 0, 0);
+    let (mut views, mut view_bad) = (0, 0);
     for (file, golden) in files.iter().zip(&goldens) {
         let text = read(file);
         let checked = golden
@@ -52,8 +53,15 @@ fn oracle_diff_external_dir() {
             .into_iter()
             .map(|(e, _)| e)
             .collect();
-        let mine = mae_elements(&parse_default(&text));
+        let doc = parse_default(&text);
+        let mine = mae_elements(&doc);
         count(&oracle, &mine, &mut tally);
+        let (counts, bad) = compare_views(&doc, golden);
+        views += counts.values().sum::<usize>();
+        for m in bad.iter().take(3) {
+            eprintln!("== {} VIEW {m}", file.display());
+        }
+        view_bad += bad.len();
         let (only_oracle, only_mae) = diff(&oracle, &mine);
         if only_oracle.is_empty() && only_mae.is_empty() {
             agree += 1;
@@ -72,6 +80,7 @@ fn oracle_diff_external_dir() {
         "files fully agreeing: {agree}/{} ({skipped} skipped: oracle error)",
         files.len() - skipped
     );
+    eprintln!("view elements compared: {views}, field mismatches: {view_bad}");
     eprintln!("  {:22} {:>13} {:>13}", "kind", "exact", "span only");
     for (k, (exact, span, total)) in tally {
         eprintln!("  {k:22} {exact:6}/{total:6} {span:6}/{total:6}");

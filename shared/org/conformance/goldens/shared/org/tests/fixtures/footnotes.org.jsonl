@@ -10,7 +10,7 @@
 {"type":"paragraph","begin":156,"end":192,"contents_begin":156,"contents_end":192,"parent_type":"section","parent_begin":0}
 {"type":"footnote-definition","begin":192,"end":225,"contents_begin":200,"contents_end":225,"parent_type":"section","parent_begin":0}
 {"type":"paragraph","begin":200,"end":225,"contents_begin":200,"contents_end":225,"parent_type":"footnote-definition","parent_begin":192}
-{"type":"headline","begin":225,"end":263,"contents_begin":251,"contents_end":263,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"Headline ends footnotes","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":225,"end":263,"contents_begin":251,"contents_end":263,"parent_type":"org-data","parent_begin":0,"level":1,"true_level":1,"raw_title":"Headline ends footnotes","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":251,"end":263,"contents_begin":251,"contents_end":263,"parent_type":"headline","parent_begin":225}
 {"type":"footnote-definition","begin":251,"end":263,"contents_begin":258,"contents_end":263,"parent_type":"section","parent_begin":251}
 {"type":"paragraph","begin":258,"end":263,"contents_begin":258,"contents_end":263,"parent_type":"footnote-definition","parent_begin":251}

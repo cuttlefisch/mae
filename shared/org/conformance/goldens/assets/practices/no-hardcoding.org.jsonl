@@ -13,10 +13,10 @@
 {"type":"paragraph","begin":603,"end":744,"contents_begin":603,"contents_end":744,"parent_type":"item","parent_begin":601}
 {"type":"item","begin":744,"end":926,"contents_begin":746,"contents_end":926,"parent_type":"plain-list","parent_begin":378,"bullet":"- "}
 {"type":"paragraph","begin":746,"end":926,"contents_begin":746,"contents_end":926,"parent_type":"item","parent_begin":744}
-{"type":"headline","begin":927,"end":1459,"contents_begin":963,"contents_end":1459,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Corollary: no ad-hoc workarounds","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":927,"end":1459,"contents_begin":963,"contents_end":1459,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Corollary: no ad-hoc workarounds","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":963,"end":1459,"contents_begin":963,"contents_end":1459,"parent_type":"headline","parent_begin":927}
 {"type":"paragraph","begin":963,"end":1459,"contents_begin":963,"contents_end":1458,"parent_type":"section","parent_begin":963}
-{"type":"headline","begin":1459,"end":1964,"contents_begin":1498,"contents_end":1964,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Why this matters more than it looks","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1459,"end":1964,"contents_begin":1498,"contents_end":1964,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Why this matters more than it looks","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1498,"end":1964,"contents_begin":1498,"contents_end":1964,"parent_type":"headline","parent_begin":1459}
 {"type":"paragraph","begin":1498,"end":1937,"contents_begin":1498,"contents_end":1936,"parent_type":"section","parent_begin":1498}
 {"type":"paragraph","begin":1937,"end":1964,"contents_begin":1937,"contents_end":1964,"parent_type":"section","parent_begin":1498}

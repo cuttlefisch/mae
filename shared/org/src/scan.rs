@@ -282,6 +282,13 @@ pub(crate) fn is_planning(s: &str) -> bool {
         .any(|k| starts_with_ci(r, k))
 }
 
+/// `org-clock-line-re`: `^[ \t]*CLOCK:` (any case). Org's affiliated-keyword
+/// collector orphans its keywords before ANY such line, not only before a
+/// well-formed clock line (review: `#+NAME: x` then `CLOCK: garbage`).
+pub(crate) fn is_clock_prefix(s: &str) -> bool {
+    starts_with_ci(&s[ws_len(s)..], "CLOCK:")
+}
+
 /// `org-element-clock-line-re`.
 pub(crate) fn is_clock(s: &str) -> bool {
     let r = &s[ws_len(s)..];

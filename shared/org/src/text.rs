@@ -72,8 +72,18 @@ const BOM: &str = "\u{feff}";
 
 impl<'a> Source<'a> {
     pub fn new(text: &'a str) -> Source<'a> {
-        let bom = if text.starts_with(BOM) { BOM.len() } else { 0 };
-        let eol = LineEnding::detect(text);
+        Source::with(text, LineEnding::detect(text), true)
+    }
+
+    /// A source read with a given convention (a fragment's file's) and,
+    /// unless `at_file_start`, a leading BOM treated as the content it is
+    /// mid-file.
+    pub fn with(text: &'a str, eol: LineEnding, at_file_start: bool) -> Source<'a> {
+        let bom = if at_file_start && text.starts_with(BOM) {
+            BOM.len()
+        } else {
+            0
+        };
         Source {
             text,
             eol,
@@ -214,6 +224,13 @@ pub(crate) fn indent_column(s: &str) -> usize {
         .take_while(|&b| b == b' ' || b == b'\t')
         .map(|b| if b == b'\t' { 8 } else { 1 })
         .sum()
+}
+
+/// `org-trim`'s character set: `[ \t\n\r]`. A CR that is content (a unix
+/// file with CRLF lines, or `\r\r\n` in a DOS file) is trimmed from the
+/// values Org trims, though it is never a blank for `[ \t]*$`.
+pub(crate) fn is_trim(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r')
 }
 
 /// `s` without trailing spaces and tabs.

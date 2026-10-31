@@ -3,7 +3,9 @@
 ;; Usage (from the repository root):
 ;;   emacs -Q --batch -l shared/org/conformance/gen-char-tables.el
 ;;
-;; Writes shared/org/src/chartables.rs (generated; do not edit) and the
+;; Writes shared/org/src/chartables.rs (generated; do not edit; the
+;; committed file is byte-identical to this script's output, so
+;; regenerate-and-diff is a valid freshness check) and the
 ;; per-class fixtures shared/org/tests/fixtures/unicode-*.org, then run
 ;; conformance/regen.sh for their goldens.
 ;;
@@ -70,7 +72,7 @@
                 (setq acc (concat acc (string-trim-right line) "\n") line "    "))
               (setq line (concat line it)))
             (concat acc (string-trim-right line) "\n"))
-          "];\n\n"))
+          "];\n"))
 
 (defun gct-generate ()
   (with-temp-buffer
@@ -89,9 +91,9 @@
             (format "//! Emacs %s, Org %s, in an org-mode buffer.\n" emacs-version org-version)
             "//! Inclusive code-point ranges, and (char, canonical char) pairs.\n\n"
             (format "/// The Emacs version the tables were generated from.\npub const EMACS_VERSION: &str = %S;\n\n" emacs-version)
-            (gct--rust-pairs "WHITESPACE" "Chars with whitespace syntax (`\\s-`)." (nth 0 tables))
-            (gct--rust-pairs "WORD" "Chars with word syntax (`\\w`)." (nth 1 tables))
-            (gct--rust-pairs "ALNUM" "Chars matching `[[:alnum:]]`." (nth 2 tables))
+            (gct--rust-pairs "WHITESPACE" "Chars with whitespace syntax (`\\s-`)." (nth 0 tables)) "\n"
+            (gct--rust-pairs "WORD" "Chars with word syntax (`\\w`)." (nth 1 tables)) "\n"
+            (gct--rust-pairs "ALNUM" "Chars matching `[[:alnum:]]`." (nth 2 tables)) "\n"
             (gct--rust-pairs "CANON" "(char, canonical char) wherever they differ." (nth 3 tables)))))
 
 ;;;; Per-class fixtures: a deterministic sample at every range boundary.

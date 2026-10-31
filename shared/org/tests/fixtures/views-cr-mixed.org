@@ -1,0 +1,9 @@
+#+TITLE: x
+* TODO h :t:
+:PROPERTIES:
+:a: b
+:END:
+#+begin_foo
+y
+#+end_foo
+z

@@ -5,20 +5,20 @@
 {"type":"node-property","begin":36,"end":52,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"KIND","value":"tutorial"}
 {"type":"keyword","begin":58,"end":86,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"Tutorial: AI Setup"}
 {"type":"keyword","begin":86,"end":113,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":tutorial:ai:"}
-{"type":"headline","begin":113,"end":4104,"contents_begin":125,"contents_end":4104,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"AI Setup","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":113,"end":4104,"contents_begin":125,"contents_end":4104,"parent_type":"org-data","parent_begin":0,"level":1,"true_level":1,"raw_title":"AI Setup","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":125,"end":333,"contents_begin":125,"contents_end":333,"parent_type":"headline","parent_begin":113}
 {"type":"paragraph","begin":125,"end":182,"contents_begin":125,"contents_end":181,"parent_type":"section","parent_begin":125}
 {"type":"paragraph","begin":182,"end":333,"contents_begin":182,"contents_end":332,"parent_type":"section","parent_begin":125}
-{"type":"headline","begin":333,"end":469,"contents_begin":354,"contents_end":469,"parent_type":"headline","parent_begin":113,"level":2,"raw_title":"1. Prerequisites","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":333,"end":469,"contents_begin":354,"contents_end":469,"parent_type":"headline","parent_begin":113,"level":2,"true_level":2,"raw_title":"1. Prerequisites","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":354,"end":469,"contents_begin":354,"contents_end":469,"parent_type":"headline","parent_begin":333}
 {"type":"paragraph","begin":354,"end":469,"contents_begin":354,"contents_end":468,"parent_type":"section","parent_begin":354}
-{"type":"headline","begin":469,"end":837,"contents_begin":495,"contents_end":837,"parent_type":"headline","parent_begin":113,"level":2,"raw_title":"2. Locate your config","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":469,"end":837,"contents_begin":495,"contents_end":837,"parent_type":"headline","parent_begin":113,"level":2,"true_level":2,"raw_title":"2. Locate your config","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":495,"end":837,"contents_begin":495,"contents_end":837,"parent_type":"headline","parent_begin":469}
 {"type":"paragraph","begin":495,"end":635,"contents_begin":495,"contents_end":634,"parent_type":"section","parent_begin":495}
 {"type":"paragraph","begin":635,"end":756,"contents_begin":635,"contents_end":755,"parent_type":"section","parent_begin":495}
 {"type":"paragraph","begin":756,"end":837,"contents_begin":756,"contents_end":836,"parent_type":"section","parent_begin":495}
-{"type":"headline","begin":837,"end":2331,"contents_begin":862,"contents_end":2331,"parent_type":"headline","parent_begin":113,"level":2,"raw_title":"3. Choose a provider","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"headline","begin":862,"end":1512,"contents_begin":885,"contents_end":1512,"parent_type":"headline","parent_begin":837,"level":3,"raw_title":"Claude (Anthropic)","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":837,"end":2331,"contents_begin":862,"contents_end":2331,"parent_type":"headline","parent_begin":113,"level":2,"true_level":2,"raw_title":"3. Choose a provider","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":862,"end":1512,"contents_begin":885,"contents_end":1512,"parent_type":"headline","parent_begin":837,"level":3,"true_level":3,"raw_title":"Claude (Anthropic)","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":885,"end":1512,"contents_begin":885,"contents_end":1512,"parent_type":"headline","parent_begin":862}
 {"type":"plain-list","begin":885,"end":987,"contents_begin":885,"contents_end":987,"parent_type":"section","parent_begin":885}
 {"type":"item","begin":885,"end":948,"contents_begin":888,"contents_end":948,"parent_type":"plain-list","parent_begin":885,"bullet":"1. "}
@@ -38,7 +38,7 @@
 {"type":"plain-list","begin":1443,"end":1512,"contents_begin":1443,"contents_end":1511,"parent_type":"section","parent_begin":885}
 {"type":"item","begin":1443,"end":1511,"contents_begin":1446,"contents_end":1511,"parent_type":"plain-list","parent_begin":1443,"bullet":"5. "}
 {"type":"paragraph","begin":1446,"end":1511,"contents_begin":1446,"contents_end":1511,"parent_type":"item","parent_begin":1443}
-{"type":"headline","begin":1512,"end":1679,"contents_begin":1523,"contents_end":1679,"parent_type":"headline","parent_begin":837,"level":3,"raw_title":"OpenAI","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1512,"end":1679,"contents_begin":1523,"contents_end":1679,"parent_type":"headline","parent_begin":837,"level":3,"true_level":3,"raw_title":"OpenAI","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1523,"end":1679,"contents_begin":1523,"contents_end":1679,"parent_type":"headline","parent_begin":1512}
 {"type":"plain-list","begin":1523,"end":1590,"contents_begin":1523,"contents_end":1590,"parent_type":"section","parent_begin":1523}
 {"type":"item","begin":1523,"end":1579,"contents_begin":1526,"contents_end":1579,"parent_type":"plain-list","parent_begin":1523,"bullet":"1. "}
@@ -46,7 +46,7 @@
 {"type":"item","begin":1579,"end":1590,"contents_begin":1582,"contents_end":1590,"parent_type":"plain-list","parent_begin":1523,"bullet":"2. "}
 {"type":"paragraph","begin":1582,"end":1590,"contents_begin":1582,"contents_end":1590,"parent_type":"item","parent_begin":1579}
 {"type":"src-block","begin":1590,"end":1679,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":1523,"language":"toml"}
-{"type":"headline","begin":1679,"end":1861,"contents_begin":1699,"contents_end":1861,"parent_type":"headline","parent_begin":837,"level":3,"raw_title":"Gemini (Google)","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1679,"end":1861,"contents_begin":1699,"contents_end":1861,"parent_type":"headline","parent_begin":837,"level":3,"true_level":3,"raw_title":"Gemini (Google)","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1699,"end":1861,"contents_begin":1699,"contents_end":1861,"parent_type":"headline","parent_begin":1679}
 {"type":"plain-list","begin":1699,"end":1765,"contents_begin":1699,"contents_end":1765,"parent_type":"section","parent_begin":1699}
 {"type":"item","begin":1699,"end":1754,"contents_begin":1702,"contents_end":1754,"parent_type":"plain-list","parent_begin":1699,"bullet":"1. "}
@@ -54,7 +54,7 @@
 {"type":"item","begin":1754,"end":1765,"contents_begin":1757,"contents_end":1765,"parent_type":"plain-list","parent_begin":1699,"bullet":"2. "}
 {"type":"paragraph","begin":1757,"end":1765,"contents_begin":1757,"contents_end":1765,"parent_type":"item","parent_begin":1754}
 {"type":"src-block","begin":1765,"end":1861,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":1699,"language":"toml"}
-{"type":"headline","begin":1861,"end":2041,"contents_begin":1874,"contents_end":2041,"parent_type":"headline","parent_begin":837,"level":3,"raw_title":"DeepSeek","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1861,"end":2041,"contents_begin":1874,"contents_end":2041,"parent_type":"headline","parent_begin":837,"level":3,"true_level":3,"raw_title":"DeepSeek","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1874,"end":2041,"contents_begin":1874,"contents_end":2041,"parent_type":"headline","parent_begin":1861}
 {"type":"plain-list","begin":1874,"end":1943,"contents_begin":1874,"contents_end":1943,"parent_type":"section","parent_begin":1874}
 {"type":"item","begin":1874,"end":1932,"contents_begin":1877,"contents_end":1932,"parent_type":"plain-list","parent_begin":1874,"bullet":"1. "}
@@ -62,7 +62,7 @@
 {"type":"item","begin":1932,"end":1943,"contents_begin":1935,"contents_end":1943,"parent_type":"plain-list","parent_begin":1874,"bullet":"2. "}
 {"type":"paragraph","begin":1935,"end":1943,"contents_begin":1935,"contents_end":1943,"parent_type":"item","parent_begin":1932}
 {"type":"src-block","begin":1943,"end":2041,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":1874,"language":"toml"}
-{"type":"headline","begin":2041,"end":2331,"contents_begin":2078,"contents_end":2331,"parent_type":"headline","parent_begin":837,"level":3,"raw_title":"Environment variable alternative","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":2041,"end":2331,"contents_begin":2078,"contents_end":2331,"parent_type":"headline","parent_begin":837,"level":3,"true_level":3,"raw_title":"Environment variable alternative","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":2078,"end":2331,"contents_begin":2078,"contents_end":2331,"parent_type":"headline","parent_begin":2041}
 {"type":"paragraph","begin":2078,"end":2125,"contents_begin":2078,"contents_end":2125,"parent_type":"section","parent_begin":2078}
 {"type":"plain-list","begin":2125,"end":2250,"contents_begin":2125,"contents_end":2249,"parent_type":"section","parent_begin":2078}
@@ -71,28 +71,28 @@
 {"type":"item","begin":2203,"end":2249,"contents_begin":2205,"contents_end":2249,"parent_type":"plain-list","parent_begin":2125,"bullet":"- "}
 {"type":"paragraph","begin":2205,"end":2249,"contents_begin":2205,"contents_end":2249,"parent_type":"item","parent_begin":2203}
 {"type":"paragraph","begin":2250,"end":2331,"contents_begin":2250,"contents_end":2330,"parent_type":"section","parent_begin":2078}
-{"type":"headline","begin":2331,"end":2512,"contents_begin":2358,"contents_end":2512,"parent_type":"headline","parent_begin":113,"level":2,"raw_title":"4. Verify connectivity","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":2331,"end":2512,"contents_begin":2358,"contents_end":2512,"parent_type":"headline","parent_begin":113,"level":2,"true_level":2,"raw_title":"4. Verify connectivity","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":2358,"end":2512,"contents_begin":2358,"contents_end":2512,"parent_type":"headline","parent_begin":2331}
 {"type":"paragraph","begin":2358,"end":2427,"contents_begin":2358,"contents_end":2426,"parent_type":"section","parent_begin":2358}
 {"type":"paragraph","begin":2427,"end":2512,"contents_begin":2427,"contents_end":2511,"parent_type":"section","parent_begin":2358}
-{"type":"headline","begin":2512,"end":2796,"contents_begin":2535,"contents_end":2796,"parent_type":"headline","parent_begin":113,"level":2,"raw_title":"5. Test your agent","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":2512,"end":2796,"contents_begin":2535,"contents_end":2796,"parent_type":"headline","parent_begin":113,"level":2,"true_level":2,"raw_title":"5. Test your agent","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":2535,"end":2796,"contents_begin":2535,"contents_end":2796,"parent_type":"headline","parent_begin":2512}
 {"type":"paragraph","begin":2535,"end":2588,"contents_begin":2535,"contents_end":2588,"parent_type":"section","parent_begin":2535}
 {"type":"quote-block","begin":2588,"end":2639,"contents_begin":2602,"contents_end":2626,"parent_type":"section","parent_begin":2535}
 {"type":"paragraph","begin":2602,"end":2626,"contents_begin":2602,"contents_end":2626,"parent_type":"quote-block","parent_begin":2588}
 {"type":"paragraph","begin":2639,"end":2743,"contents_begin":2639,"contents_end":2742,"parent_type":"section","parent_begin":2535}
 {"type":"paragraph","begin":2743,"end":2796,"contents_begin":2743,"contents_end":2795,"parent_type":"section","parent_begin":2535}
-{"type":"headline","begin":2796,"end":3192,"contents_begin":2836,"contents_end":3192,"parent_type":"headline","parent_begin":113,"level":2,"raw_title":"6. Security hardening (recommended)","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":2796,"end":3192,"contents_begin":2836,"contents_end":3192,"parent_type":"headline","parent_begin":113,"level":2,"true_level":2,"raw_title":"6. Security hardening (recommended)","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":2836,"end":3192,"contents_begin":2836,"contents_end":3192,"parent_type":"headline","parent_begin":2796}
 {"type":"paragraph","begin":2836,"end":2927,"contents_begin":2836,"contents_end":2927,"parent_type":"section","parent_begin":2836}
 {"type":"src-block","begin":2927,"end":3100,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":2836,"language":"toml"}
 {"type":"paragraph","begin":3100,"end":3192,"contents_begin":3100,"contents_end":3191,"parent_type":"section","parent_begin":2836}
-{"type":"headline","begin":3192,"end":3511,"contents_begin":3225,"contents_end":3511,"parent_type":"headline","parent_begin":113,"level":2,"raw_title":"7. AI Agent (terminal-based)","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":3192,"end":3511,"contents_begin":3225,"contents_end":3511,"parent_type":"headline","parent_begin":113,"level":2,"true_level":2,"raw_title":"7. AI Agent (terminal-based)","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":3225,"end":3511,"contents_begin":3225,"contents_end":3511,"parent_type":"headline","parent_begin":3192}
 {"type":"paragraph","begin":3225,"end":3357,"contents_begin":3225,"contents_end":3357,"parent_type":"section","parent_begin":3225}
 {"type":"src-block","begin":3357,"end":3446,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":3225,"language":"toml"}
 {"type":"paragraph","begin":3446,"end":3511,"contents_begin":3446,"contents_end":3510,"parent_type":"section","parent_begin":3225}
-{"type":"headline","begin":3511,"end":4104,"contents_begin":3526,"contents_end":4104,"parent_type":"headline","parent_begin":113,"level":2,"raw_title":"Next steps","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":3511,"end":4104,"contents_begin":3526,"contents_end":4104,"parent_type":"headline","parent_begin":113,"level":2,"true_level":2,"raw_title":"Next steps","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":3526,"end":3863,"contents_begin":3526,"contents_end":3863,"parent_type":"headline","parent_begin":3511}
 {"type":"plain-list","begin":3526,"end":3863,"contents_begin":3526,"contents_end":3862,"parent_type":"section","parent_begin":3526}
 {"type":"item","begin":3526,"end":3606,"contents_begin":3528,"contents_end":3606,"parent_type":"plain-list","parent_begin":3526,"bullet":"- "}
@@ -103,7 +103,7 @@
 {"type":"paragraph","begin":3695,"end":3778,"contents_begin":3695,"contents_end":3778,"parent_type":"item","parent_begin":3693}
 {"type":"item","begin":3778,"end":3862,"contents_begin":3780,"contents_end":3862,"parent_type":"plain-list","parent_begin":3526,"bullet":"- "}
 {"type":"paragraph","begin":3780,"end":3862,"contents_begin":3780,"contents_end":3862,"parent_type":"item","parent_begin":3778}
-{"type":"headline","begin":3863,"end":4104,"contents_begin":3880,"contents_end":4104,"parent_type":"headline","parent_begin":3511,"level":3,"raw_title":"Getting Help","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":3863,"end":4104,"contents_begin":3880,"contents_end":4104,"parent_type":"headline","parent_begin":3511,"level":3,"true_level":3,"raw_title":"Getting Help","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":3880,"end":4104,"contents_begin":3880,"contents_end":4104,"parent_type":"headline","parent_begin":3863}
 {"type":"plain-list","begin":3880,"end":4104,"contents_begin":3880,"contents_end":4104,"parent_type":"section","parent_begin":3880}
 {"type":"item","begin":3880,"end":3911,"contents_begin":3882,"contents_end":3911,"parent_type":"plain-list","parent_begin":3880,"bullet":"- "}

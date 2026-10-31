@@ -1,4 +1,4 @@
 {"type":"#file","bytes":62,"eol":"unix","unmodified":true}
-{"type":"headline","begin":0,"end":34,"contents_begin":null,"contents_end":null,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"TODO\tafter a tab: not a keyword","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"headline","begin":34,"end":55,"contents_begin":null,"contents_end":null,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"after a space","todo":"TODO","priority":null,"tags":[],"commentedp":null}
-{"type":"headline","begin":55,"end":62,"contents_begin":null,"contents_end":null,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"","todo":"DONE","priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":0,"end":34,"contents_begin":null,"contents_end":null,"parent_type":"org-data","parent_begin":0,"level":1,"true_level":1,"raw_title":"TODO\tafter a tab: not a keyword","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":34,"end":55,"contents_begin":null,"contents_end":null,"parent_type":"org-data","parent_begin":0,"level":1,"true_level":1,"raw_title":"after a space","todo":"TODO","priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":55,"end":62,"contents_begin":null,"contents_end":null,"parent_type":"org-data","parent_begin":0,"level":1,"true_level":1,"raw_title":"","todo":"DONE","priority":null,"tags":[],"commentedp":null}

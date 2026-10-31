@@ -6,7 +6,7 @@
 {"type":"keyword","begin":53,"end":88,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"Font & Icon Configuration"}
 {"type":"keyword","begin":88,"end":126,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":gui:fonts:icons:config:"}
 {"type":"paragraph","begin":126,"end":321,"contents_begin":126,"contents_end":320,"parent_type":"section","parent_begin":0}
-{"type":"headline","begin":321,"end":1276,"contents_begin":332,"contents_end":1276,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Options","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":321,"end":1276,"contents_begin":332,"contents_end":1276,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Options","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":332,"end":1276,"contents_begin":332,"contents_end":1276,"parent_type":"headline","parent_begin":321}
 {"type":"paragraph","begin":332,"end":557,"contents_begin":332,"contents_end":556,"parent_type":"section","parent_begin":332}
 {"type":"table","begin":557,"end":921,"contents_begin":557,"contents_end":920,"parent_type":"section","parent_begin":332}
@@ -18,7 +18,7 @@
 {"type":"paragraph","begin":921,"end":936,"contents_begin":921,"contents_end":936,"parent_type":"section","parent_begin":332}
 {"type":"src-block","begin":936,"end":1090,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":332,"language":"scheme"}
 {"type":"paragraph","begin":1090,"end":1276,"contents_begin":1090,"contents_end":1275,"parent_type":"section","parent_begin":332}
-{"type":"headline","begin":1276,"end":2098,"contents_begin":1348,"contents_end":2098,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Resolution order (the GUI never fails to launch over a missing font)","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1276,"end":2098,"contents_begin":1348,"contents_end":2098,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Resolution order (the GUI never fails to launch over a missing font)","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1348,"end":2098,"contents_begin":1348,"contents_end":2098,"parent_type":"headline","parent_begin":1276}
 {"type":"paragraph","begin":1348,"end":1466,"contents_begin":1348,"contents_end":1465,"parent_type":"section","parent_begin":1348}
 {"type":"plain-list","begin":1466,"end":1955,"contents_begin":1466,"contents_end":1954,"parent_type":"section","parent_begin":1348}
@@ -33,17 +33,17 @@
 {"type":"item","begin":1919,"end":1954,"contents_begin":1922,"contents_end":1954,"parent_type":"plain-list","parent_begin":1466,"bullet":"5. "}
 {"type":"paragraph","begin":1922,"end":1954,"contents_begin":1922,"contents_end":1954,"parent_type":"item","parent_begin":1919}
 {"type":"paragraph","begin":1955,"end":2098,"contents_begin":1955,"contents_end":2097,"parent_type":"section","parent_begin":1348}
-{"type":"headline","begin":2098,"end":2888,"contents_begin":2126,"contents_end":2888,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Icons (Nerd Font glyphs)","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":2098,"end":2888,"contents_begin":2126,"contents_end":2888,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Icons (Nerd Font glyphs)","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":2126,"end":2888,"contents_begin":2126,"contents_end":2888,"parent_type":"headline","parent_begin":2098}
 {"type":"paragraph","begin":2126,"end":2365,"contents_begin":2126,"contents_end":2364,"parent_type":"section","parent_begin":2126}
 {"type":"paragraph","begin":2365,"end":2594,"contents_begin":2365,"contents_end":2594,"parent_type":"section","parent_begin":2126}
 {"type":"src-block","begin":2594,"end":2682,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":2126,"language":"scheme"}
 {"type":"paragraph","begin":2682,"end":2888,"contents_begin":2682,"contents_end":2887,"parent_type":"section","parent_begin":2126}
-{"type":"headline","begin":2888,"end":3567,"contents_begin":2904,"contents_end":3567,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Bundled font","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":2888,"end":3567,"contents_begin":2904,"contents_end":3567,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Bundled font","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":2904,"end":3567,"contents_begin":2904,"contents_end":3567,"parent_type":"headline","parent_begin":2888}
 {"type":"paragraph","begin":2904,"end":3317,"contents_begin":2904,"contents_end":3316,"parent_type":"section","parent_begin":2904}
 {"type":"paragraph","begin":3317,"end":3567,"contents_begin":3317,"contents_end":3566,"parent_type":"section","parent_begin":2904}
-{"type":"headline","begin":3567,"end":4058,"contents_begin":3586,"contents_end":4058,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Troubleshooting","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":3567,"end":4058,"contents_begin":3586,"contents_end":4058,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Troubleshooting","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":3586,"end":4058,"contents_begin":3586,"contents_end":4058,"parent_type":"headline","parent_begin":3567}
 {"type":"plain-list","begin":3586,"end":4000,"contents_begin":3586,"contents_end":3999,"parent_type":"section","parent_begin":3586}
 {"type":"item","begin":3586,"end":3785,"contents_begin":3588,"contents_end":3785,"parent_type":"plain-list","parent_begin":3586,"bullet":"- "}

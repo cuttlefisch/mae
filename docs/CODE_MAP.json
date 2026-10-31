@@ -1093,6 +1093,10 @@
           "kind": "fn"
         },
         {
+          "name": "FragmentContext",
+          "kind": "struct"
+        },
+        {
           "name": "parse_fragment",
           "kind": "fn"
         }

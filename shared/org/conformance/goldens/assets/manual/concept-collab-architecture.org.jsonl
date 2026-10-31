@@ -7,7 +7,7 @@
 {"type":"keyword","begin":116,"end":160,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"Collaborative Editing Architecture"}
 {"type":"keyword","begin":160,"end":207,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":architecture:sync:collaboration:"}
 {"type":"paragraph","begin":207,"end":408,"contents_begin":207,"contents_end":407,"parent_type":"section","parent_begin":0}
-{"type":"headline","begin":408,"end":815,"contents_begin":431,"contents_end":815,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Document Addressing","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":408,"end":815,"contents_begin":431,"contents_end":815,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Document Addressing","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":431,"end":815,"contents_begin":431,"contents_end":815,"parent_type":"headline","parent_begin":408}
 {"type":"paragraph","begin":431,"end":513,"contents_begin":431,"contents_end":513,"parent_type":"section","parent_begin":431}
 {"type":"table","begin":513,"end":815,"contents_begin":513,"contents_end":814,"parent_type":"section","parent_begin":431}
@@ -16,13 +16,13 @@
 {"type":"table-row","begin":580,"end":660,"contents_begin":581,"contents_end":659,"parent_type":"table","parent_begin":513}
 {"type":"table-row","begin":660,"end":737,"contents_begin":661,"contents_end":736,"parent_type":"table","parent_begin":513}
 {"type":"table-row","begin":737,"end":814,"contents_begin":738,"contents_end":813,"parent_type":"table","parent_begin":513}
-{"type":"headline","begin":815,"end":1249,"contents_begin":828,"contents_end":1249,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Data Flow","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":815,"end":1249,"contents_begin":828,"contents_end":1249,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Data Flow","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":828,"end":1249,"contents_begin":828,"contents_end":1249,"parent_type":"headline","parent_begin":815}
 {"type":"src-block","begin":828,"end":1249,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":828,"language":null}
-{"type":"headline","begin":1249,"end":1687,"contents_begin":1266,"contents_end":1687,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Save Protocol","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1249,"end":1687,"contents_begin":1266,"contents_end":1687,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Save Protocol","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1266,"end":1687,"contents_begin":1266,"contents_end":1687,"parent_type":"headline","parent_begin":1249}
 {"type":"paragraph","begin":1266,"end":1687,"contents_begin":1266,"contents_end":1686,"parent_type":"section","parent_begin":1266}
-{"type":"headline","begin":1687,"end":2215,"contents_begin":1708,"contents_end":2215,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"State Server Role","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1687,"end":2215,"contents_begin":1708,"contents_end":2215,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"State Server Role","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1708,"end":2215,"contents_begin":1708,"contents_end":2215,"parent_type":"headline","parent_begin":1687}
 {"type":"paragraph","begin":1708,"end":1831,"contents_begin":1708,"contents_end":1831,"parent_type":"section","parent_begin":1708}
 {"type":"plain-list","begin":1831,"end":2215,"contents_begin":1831,"contents_end":2214,"parent_type":"section","parent_begin":1708}
@@ -36,7 +36,7 @@
 {"type":"paragraph","begin":2036,"end":2133,"contents_begin":2036,"contents_end":2133,"parent_type":"item","parent_begin":2034}
 {"type":"item","begin":2133,"end":2214,"contents_begin":2135,"contents_end":2214,"parent_type":"plain-list","parent_begin":1831,"bullet":"- "}
 {"type":"paragraph","begin":2135,"end":2214,"contents_begin":2135,"contents_end":2214,"parent_type":"item","parent_begin":2133}
-{"type":"headline","begin":2215,"end":3047,"contents_begin":2239,"contents_end":3047,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Three Workflow Tiers","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":2215,"end":3047,"contents_begin":2239,"contents_end":3047,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Three Workflow Tiers","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":2239,"end":3047,"contents_begin":2239,"contents_end":3047,"parent_type":"headline","parent_begin":2215}
 {"type":"table","begin":2239,"end":2513,"contents_begin":2239,"contents_end":2512,"parent_type":"section","parent_begin":2239}
 {"type":"table-row","begin":2239,"end":2268,"contents_begin":2240,"contents_end":2267,"parent_type":"table","parent_begin":2239}

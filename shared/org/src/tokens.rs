@@ -8,7 +8,7 @@
 use crate::kind::SyntaxKind::{self, *};
 use crate::list::item_head;
 use crate::scan;
-use crate::text::{is_blank, trim_end_blank, ws_len, Source};
+use crate::text::{is_blank, is_trim, trim_end_blank, ws_len, Source};
 
 /// One step of a pre-order walk of the tree to build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,9 +149,11 @@ pub(crate) fn keyword_line(em: &mut Emitter, start: usize, end: usize, affiliate
         c.to(KEY, name_end);
         c.to(TEXT, key_end);
         c.to(COLON, key_end + 1);
-        c.ws();
-        c.to(VALUE, trim_end_blank(s).len());
-        c.ws();
+        // The value is `org-trim`med: [ \t\n\r] off both ends.
+        let rest = &s[key_end + 1..];
+        let lead = rest.len() - rest.trim_start_matches(is_trim).len();
+        c.to(WHITESPACE, key_end + 1 + lead);
+        c.to(VALUE, s.trim_end_matches(is_trim).len());
     }
     c.done();
 }

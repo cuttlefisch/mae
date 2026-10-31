@@ -1,6 +1,6 @@
 {"type":"#file","bytes":81,"eol":"unix","unmodified":true}
 {"type":"section","begin":0,"end":36,"contents_begin":0,"contents_end":36,"parent_type":"org-data","parent_begin":0}
 {"type":"paragraph","begin":0,"end":36,"contents_begin":0,"contents_end":36,"parent_type":"section","parent_begin":0}
-{"type":"headline","begin":36,"end":81,"contents_begin":62,"contents_end":81,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"Not literal: a headline","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":36,"end":81,"contents_begin":62,"contents_end":81,"parent_type":"org-data","parent_begin":0,"level":1,"true_level":1,"raw_title":"Not literal: a headline","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":62,"end":81,"contents_begin":62,"contents_end":81,"parent_type":"headline","parent_begin":36}
 {"type":"paragraph","begin":62,"end":81,"contents_begin":62,"contents_end":81,"parent_type":"section","parent_begin":62}

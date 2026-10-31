@@ -6,7 +6,7 @@
 {"type":"keyword","begin":55,"end":79,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"Editor Options"}
 {"type":"keyword","begin":79,"end":123,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":options:configuration:scheme:"}
 {"type":"paragraph","begin":123,"end":208,"contents_begin":123,"contents_end":207,"parent_type":"section","parent_begin":0}
-{"type":"headline","begin":208,"end":1033,"contents_begin":229,"contents_end":1033,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Available options","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":208,"end":1033,"contents_begin":229,"contents_end":1033,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Available options","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":229,"end":1033,"contents_begin":229,"contents_end":1033,"parent_type":"headline","parent_begin":208}
 {"type":"table","begin":229,"end":1033,"contents_begin":229,"contents_end":1032,"parent_type":"section","parent_begin":229}
 {"type":"table-row","begin":229,"end":263,"contents_begin":230,"contents_end":262,"parent_type":"table","parent_begin":229}
@@ -21,10 +21,10 @@
 {"type":"table-row","begin":750,"end":807,"contents_begin":751,"contents_end":806,"parent_type":"table","parent_begin":229}
 {"type":"table-row","begin":807,"end":917,"contents_begin":808,"contents_end":916,"parent_type":"table","parent_begin":229}
 {"type":"table-row","begin":917,"end":1032,"contents_begin":918,"contents_end":1031,"parent_type":"table","parent_begin":229}
-{"type":"headline","begin":1033,"end":1280,"contents_begin":1054,"contents_end":1280,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Usage from Scheme","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1033,"end":1280,"contents_begin":1054,"contents_end":1280,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Usage from Scheme","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1054,"end":1280,"contents_begin":1054,"contents_end":1280,"parent_type":"headline","parent_begin":1033}
 {"type":"src-block","begin":1054,"end":1280,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":1054,"language":"scheme"}
-{"type":"headline","begin":1280,"end":1784,"contents_begin":1299,"contents_end":1784,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Toggle commands","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1280,"end":1784,"contents_begin":1299,"contents_end":1784,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Toggle commands","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1299,"end":1784,"contents_begin":1299,"contents_end":1784,"parent_type":"headline","parent_begin":1280}
 {"type":"paragraph","begin":1299,"end":1354,"contents_begin":1299,"contents_end":1354,"parent_type":"section","parent_begin":1299}
 {"type":"plain-list","begin":1354,"end":1529,"contents_begin":1354,"contents_end":1528,"parent_type":"section","parent_begin":1299}

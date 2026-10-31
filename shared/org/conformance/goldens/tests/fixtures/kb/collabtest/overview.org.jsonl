@@ -9,7 +9,7 @@
 {"type":"paragraph","begin":173,"end":412,"contents_begin":173,"contents_end":411,"parent_type":"section","parent_begin":0}
 {"type":"paragraph","begin":412,"end":613,"contents_begin":412,"contents_end":612,"parent_type":"section","parent_begin":0}
 {"type":"paragraph","begin":613,"end":683,"contents_begin":613,"contents_end":682,"parent_type":"section","parent_begin":0}
-{"type":"headline","begin":683,"end":943,"contents_begin":696,"contents_end":943,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Structure","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":683,"end":943,"contents_begin":696,"contents_end":943,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Structure","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":696,"end":943,"contents_begin":696,"contents_end":943,"parent_type":"headline","parent_begin":683}
 {"type":"plain-list","begin":696,"end":845,"contents_begin":696,"contents_end":844,"parent_type":"section","parent_begin":696}
 {"type":"item","begin":696,"end":770,"contents_begin":698,"contents_end":770,"parent_type":"plain-list","parent_begin":696,"bullet":"- "}

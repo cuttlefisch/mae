@@ -6,10 +6,10 @@
 {"type":"keyword","begin":67,"end":116,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"Shared Computation, No Duplicated Logic"}
 {"type":"keyword","begin":116,"end":154,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":practices:architecture:"}
 {"type":"paragraph","begin":154,"end":408,"contents_begin":154,"contents_end":407,"parent_type":"section","parent_begin":0}
-{"type":"headline","begin":408,"end":865,"contents_begin":460,"contents_end":865,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Why duplication is the failure mode to watch for","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":408,"end":865,"contents_begin":460,"contents_end":865,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Why duplication is the failure mode to watch for","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":460,"end":865,"contents_begin":460,"contents_end":865,"parent_type":"headline","parent_begin":408}
 {"type":"paragraph","begin":460,"end":865,"contents_begin":460,"contents_end":864,"parent_type":"section","parent_begin":460}
-{"type":"headline","begin":865,"end":1511,"contents_begin":890,"contents_end":1511,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"The extraction reflex","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":865,"end":1511,"contents_begin":890,"contents_end":1511,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"The extraction reflex","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":890,"end":1511,"contents_begin":890,"contents_end":1511,"parent_type":"headline","parent_begin":865}
 {"type":"paragraph","begin":890,"end":1053,"contents_begin":890,"contents_end":1053,"parent_type":"section","parent_begin":890}
 {"type":"plain-list","begin":1053,"end":1511,"contents_begin":1053,"contents_end":1510,"parent_type":"section","parent_begin":890}
@@ -19,7 +19,7 @@
 {"type":"paragraph","begin":1133,"end":1258,"contents_begin":1133,"contents_end":1258,"parent_type":"item","parent_begin":1131}
 {"type":"item","begin":1258,"end":1510,"contents_begin":1260,"contents_end":1510,"parent_type":"plain-list","parent_begin":1053,"bullet":"- "}
 {"type":"paragraph","begin":1260,"end":1510,"contents_begin":1260,"contents_end":1510,"parent_type":"item","parent_begin":1258}
-{"type":"headline","begin":1511,"end":2055,"contents_begin":1542,"contents_end":2055,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Enforcement over convention","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1511,"end":2055,"contents_begin":1542,"contents_end":2055,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Enforcement over convention","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1542,"end":2055,"contents_begin":1542,"contents_end":2055,"parent_type":"headline","parent_begin":1511}
 {"type":"paragraph","begin":1542,"end":1963,"contents_begin":1542,"contents_end":1962,"parent_type":"section","parent_begin":1542}
 {"type":"paragraph","begin":1963,"end":2055,"contents_begin":1963,"contents_end":2055,"parent_type":"section","parent_begin":1542}

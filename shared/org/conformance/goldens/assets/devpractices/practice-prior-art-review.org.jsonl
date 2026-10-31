@@ -8,7 +8,7 @@
 {"type":"keyword","begin":121,"end":161,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":adr:research:devpractice:"}
 {"type":"paragraph","begin":161,"end":573,"contents_begin":161,"contents_end":572,"parent_type":"section","parent_begin":0}
 {"type":"paragraph","begin":573,"end":819,"contents_begin":573,"contents_end":818,"parent_type":"section","parent_begin":0}
-{"type":"headline","begin":819,"end":1531,"contents_begin":838,"contents_end":1531,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"When it applies","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":819,"end":1531,"contents_begin":838,"contents_end":1531,"parent_type":"org-data","parent_begin":0,"level":1,"true_level":1,"raw_title":"When it applies","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":838,"end":1531,"contents_begin":838,"contents_end":1531,"parent_type":"headline","parent_begin":819}
 {"type":"paragraph","begin":838,"end":899,"contents_begin":838,"contents_end":898,"parent_type":"section","parent_begin":838}
 {"type":"plain-list","begin":899,"end":1419,"contents_begin":899,"contents_end":1418,"parent_type":"section","parent_begin":838}
@@ -21,7 +21,7 @@
 {"type":"item","begin":1226,"end":1418,"contents_begin":1228,"contents_end":1418,"parent_type":"plain-list","parent_begin":899,"bullet":"- "}
 {"type":"paragraph","begin":1228,"end":1418,"contents_begin":1228,"contents_end":1418,"parent_type":"item","parent_begin":1226}
 {"type":"paragraph","begin":1419,"end":1531,"contents_begin":1419,"contents_end":1530,"parent_type":"section","parent_begin":838}
-{"type":"headline","begin":1531,"end":3292,"contents_begin":1548,"contents_end":3292,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"The procedure","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1531,"end":3292,"contents_begin":1548,"contents_end":3292,"parent_type":"org-data","parent_begin":0,"level":1,"true_level":1,"raw_title":"The procedure","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1548,"end":3292,"contents_begin":1548,"contents_end":3292,"parent_type":"headline","parent_begin":1531}
 {"type":"plain-list","begin":1548,"end":3292,"contents_begin":1548,"contents_end":3291,"parent_type":"section","parent_begin":1548}
 {"type":"item","begin":1548,"end":1895,"contents_begin":1551,"contents_end":1894,"parent_type":"plain-list","parent_begin":1548,"bullet":"1. "}
@@ -36,11 +36,11 @@
 {"type":"paragraph","begin":2698,"end":3003,"contents_begin":2698,"contents_end":3003,"parent_type":"item","parent_begin":2695}
 {"type":"item","begin":3004,"end":3291,"contents_begin":3007,"contents_end":3291,"parent_type":"plain-list","parent_begin":1548,"bullet":"6. "}
 {"type":"paragraph","begin":3007,"end":3291,"contents_begin":3007,"contents_end":3291,"parent_type":"item","parent_begin":3004}
-{"type":"headline","begin":3292,"end":3814,"contents_begin":3340,"contents_end":3814,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"What to do when the evidence contradicts you","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":3292,"end":3814,"contents_begin":3340,"contents_end":3814,"parent_type":"org-data","parent_begin":0,"level":1,"true_level":1,"raw_title":"What to do when the evidence contradicts you","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":3340,"end":3814,"contents_begin":3340,"contents_end":3814,"parent_type":"headline","parent_begin":3292}
 {"type":"paragraph","begin":3340,"end":3726,"contents_begin":3340,"contents_end":3725,"parent_type":"section","parent_begin":3340}
 {"type":"paragraph","begin":3726,"end":3814,"contents_begin":3726,"contents_end":3813,"parent_type":"section","parent_begin":3340}
-{"type":"headline","begin":3814,"end":4808,"contents_begin":3831,"contents_end":4808,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"Failure modes","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":3814,"end":4808,"contents_begin":3831,"contents_end":4808,"parent_type":"org-data","parent_begin":0,"level":1,"true_level":1,"raw_title":"Failure modes","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":3831,"end":4808,"contents_begin":3831,"contents_end":4808,"parent_type":"headline","parent_begin":3814}
 {"type":"plain-list","begin":3831,"end":4808,"contents_begin":3831,"contents_end":4807,"parent_type":"section","parent_begin":3831}
 {"type":"item","begin":3831,"end":3974,"contents_begin":3833,"contents_end":3974,"parent_type":"plain-list","parent_begin":3831,"bullet":"- "}
@@ -51,6 +51,6 @@
 {"type":"paragraph","begin":4344,"end":4616,"contents_begin":4344,"contents_end":4616,"parent_type":"item","parent_begin":4342}
 {"type":"item","begin":4616,"end":4807,"contents_begin":4618,"contents_end":4807,"parent_type":"plain-list","parent_begin":3831,"bullet":"- "}
 {"type":"paragraph","begin":4618,"end":4807,"contents_begin":4618,"contents_end":4807,"parent_type":"item","parent_begin":4616}
-{"type":"headline","begin":4808,"end":5324,"contents_begin":4839,"contents_end":5324,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"Relation to other practices","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":4808,"end":5324,"contents_begin":4839,"contents_end":5324,"parent_type":"org-data","parent_begin":0,"level":1,"true_level":1,"raw_title":"Relation to other practices","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":4839,"end":5324,"contents_begin":4839,"contents_end":5324,"parent_type":"headline","parent_begin":4808}
 {"type":"paragraph","begin":4839,"end":5324,"contents_begin":4839,"contents_end":5324,"parent_type":"section","parent_begin":4839}

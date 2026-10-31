@@ -66,6 +66,7 @@
      (pcase type
        ('headline
         (list (cons 'level (org-element-property :level el))
+              (cons 'true_level (org-element-property :true-level el))
               (cons 'raw_title (org-element-property :raw-value el))
               (cons 'todo (org-element-property :todo-keyword el))
               (cons 'priority (let ((p (org-element-property :priority el))) (and p (char-to-string p))))

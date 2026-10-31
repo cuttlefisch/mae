@@ -7,7 +7,7 @@
 {"type":"keyword","begin":113,"end":153,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"KB vs Obsidian / Roam Research"}
 {"type":"keyword","begin":153,"end":196,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":kb:comparison:obsidian:roam:"}
 {"type":"paragraph","begin":196,"end":262,"contents_begin":196,"contents_end":261,"parent_type":"section","parent_begin":0}
-{"type":"headline","begin":262,"end":1037,"contents_begin":284,"contents_end":1037,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Feature comparison","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":262,"end":1037,"contents_begin":284,"contents_end":1037,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Feature comparison","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":284,"end":1037,"contents_begin":284,"contents_end":1037,"parent_type":"headline","parent_begin":262}
 {"type":"table","begin":284,"end":1037,"contents_begin":284,"contents_end":1036,"parent_type":"section","parent_begin":284}
 {"type":"table-row","begin":284,"end":332,"contents_begin":285,"contents_end":331,"parent_type":"table","parent_begin":284}
@@ -21,8 +21,8 @@
 {"type":"table-row","begin":840,"end":904,"contents_begin":841,"contents_end":903,"parent_type":"table","parent_begin":284}
 {"type":"table-row","begin":904,"end":962,"contents_begin":905,"contents_end":961,"parent_type":"table","parent_begin":284}
 {"type":"table-row","begin":962,"end":1036,"contents_begin":963,"contents_end":1035,"parent_type":"table","parent_begin":284}
-{"type":"headline","begin":1037,"end":1568,"contents_begin":1057,"contents_end":1568,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Migration paths","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"headline","begin":1057,"end":1339,"contents_begin":1075,"contents_end":1339,"parent_type":"headline","parent_begin":1037,"level":3,"raw_title":"From Obsidian","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1037,"end":1568,"contents_begin":1057,"contents_end":1568,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Migration paths","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1057,"end":1339,"contents_begin":1075,"contents_end":1339,"parent_type":"headline","parent_begin":1037,"level":3,"true_level":3,"raw_title":"From Obsidian","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1075,"end":1339,"contents_begin":1075,"contents_end":1339,"parent_type":"headline","parent_begin":1057}
 {"type":"plain-list","begin":1075,"end":1339,"contents_begin":1075,"contents_end":1338,"parent_type":"section","parent_begin":1075}
 {"type":"item","begin":1075,"end":1135,"contents_begin":1077,"contents_end":1135,"parent_type":"plain-list","parent_begin":1075,"bullet":"- "}
@@ -33,7 +33,7 @@
 {"type":"paragraph","begin":1217,"end":1285,"contents_begin":1217,"contents_end":1285,"parent_type":"item","parent_begin":1215}
 {"type":"item","begin":1285,"end":1338,"contents_begin":1287,"contents_end":1338,"parent_type":"plain-list","parent_begin":1075,"bullet":"- "}
 {"type":"paragraph","begin":1287,"end":1338,"contents_begin":1287,"contents_end":1338,"parent_type":"item","parent_begin":1285}
-{"type":"headline","begin":1339,"end":1568,"contents_begin":1362,"contents_end":1568,"parent_type":"headline","parent_begin":1037,"level":3,"raw_title":"From Roam Research","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1339,"end":1568,"contents_begin":1362,"contents_end":1568,"parent_type":"headline","parent_begin":1037,"level":3,"true_level":3,"raw_title":"From Roam Research","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1362,"end":1568,"contents_begin":1362,"contents_end":1568,"parent_type":"headline","parent_begin":1339}
 {"type":"plain-list","begin":1362,"end":1568,"contents_begin":1362,"contents_end":1567,"parent_type":"section","parent_begin":1362}
 {"type":"item","begin":1362,"end":1411,"contents_begin":1364,"contents_end":1411,"parent_type":"plain-list","parent_begin":1362,"bullet":"- "}
@@ -44,7 +44,7 @@
 {"type":"paragraph","begin":1457,"end":1515,"contents_begin":1457,"contents_end":1515,"parent_type":"item","parent_begin":1455}
 {"type":"item","begin":1515,"end":1567,"contents_begin":1517,"contents_end":1567,"parent_type":"plain-list","parent_begin":1362,"bullet":"- "}
 {"type":"paragraph","begin":1517,"end":1567,"contents_begin":1517,"contents_end":1567,"parent_type":"item","parent_begin":1515}
-{"type":"headline","begin":1568,"end":2606,"contents_begin":1633,"contents_end":2606,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Philosophy: why local-first + AI-peer + plain-text-canonical","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1568,"end":2606,"contents_begin":1633,"contents_end":2606,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Philosophy: why local-first + AI-peer + plain-text-canonical","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1633,"end":2606,"contents_begin":1633,"contents_end":2606,"parent_type":"headline","parent_begin":1568}
 {"type":"plain-list","begin":1633,"end":2426,"contents_begin":1633,"contents_end":2425,"parent_type":"section","parent_begin":1633}
 {"type":"item","begin":1633,"end":1766,"contents_begin":1636,"contents_end":1766,"parent_type":"plain-list","parent_begin":1633,"bullet":"1. "}

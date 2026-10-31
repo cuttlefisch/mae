@@ -421,6 +421,7 @@ Source: `shared/org/src/lib.rs`
 |------|------|
 | `Document` | struct |
 | `parse` | fn |
+| `FragmentContext` | struct |
 | `parse_fragment` | fn |
 
 ## mae-renderer

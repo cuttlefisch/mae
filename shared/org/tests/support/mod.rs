@@ -384,3 +384,105 @@ pub fn unparsed_count(doc: &Document) -> usize {
         .filter(|e| e.kind() == UNPARSED)
         .count()
 }
+
+fn opt_str(v: &serde_json::Value) -> Option<String> {
+    v.as_str().map(str::to_string)
+}
+
+/// Compares the typed views with the oracle's properties for every element
+/// of a golden whose span mae-org reproduces (span differences are the
+/// differential's job). Returns how many of each view were compared, and a
+/// description of every field that differs.
+pub fn compare_views(
+    doc: &Document,
+    golden: &str,
+) -> (std::collections::BTreeMap<String, usize>, Vec<String>) {
+    let mut counts = std::collections::BTreeMap::new();
+    let mut bad = Vec::new();
+    for (el, v) in golden_elements(golden) {
+        let node = doc.syntax().descendants().find(|n| {
+            let r = n.text_range();
+            usize::from(r.start()) == el.begin
+                && usize::from(r.end()) == el.end
+                && kind_name(n.kind()) == Some(el.kind.as_str())
+        });
+        let Some(node) = node else { continue };
+        let Some(fields) = view_fields(&el.kind, node) else {
+            continue;
+        };
+        let group = match el.kind.as_str() {
+            "headline" | "keyword" | "node-property" => el.kind.clone(),
+            _ => "drawer/block".to_string(),
+        };
+        *counts.entry(group).or_default() += 1;
+        for (field, mine) in fields {
+            let want = &v[field];
+            let want = if field == "commentedp" && want.is_null() {
+                serde_json::json!(false)
+            } else {
+                want.clone()
+            };
+            if want != mine {
+                bad.push(format!(
+                    "{} @{} {field}: oracle {want} mae {mine}",
+                    el.kind, el.begin
+                ));
+            }
+        }
+    }
+    (counts, bad)
+}
+
+/// The oracle's field names and mae-org's values for them, per view.
+fn view_fields(
+    kind: &str,
+    node: mae_org::SyntaxNode,
+) -> Option<Vec<(&'static str, serde_json::Value)>> {
+    use mae_org::{Block, Headline, Keyword, PropertyDrawer};
+    use serde_json::json;
+    Some(match kind {
+        "headline" => {
+            let h = Headline::cast(node)?;
+            vec![
+                // `level` is reduced under `#+STARTUP: odd`; mae-org's level is
+                // the star count, Org's `:true-level`.
+                ("true_level", json!(h.level())),
+                ("raw_title", json!(h.title())),
+                ("todo", json!(h.todo())),
+                ("priority", json!(h.priority().map(String::from))),
+                ("tags", json!(h.tags())),
+                ("commentedp", json!(h.is_commented())),
+            ]
+        }
+        "keyword" => {
+            let k = Keyword::cast(node)?;
+            vec![
+                ("key", json!(k.key().to_uppercase())),
+                ("value", json!(k.value())),
+            ]
+        }
+        "node-property" => {
+            let props = node.parent().and_then(PropertyDrawer::cast)?.properties();
+            let p = props.into_iter().find(|p| p.node == node)?;
+            vec![
+                ("key", json!(p.key_as_written())),
+                ("value", json!(p.value)),
+            ]
+        }
+        "special-block" => vec![("block_type", json!(Block::cast(node)?.name()))],
+        "drawer" => {
+            // The opening line, not the first child: affiliated keywords come first.
+            let name = node
+                .children()
+                .find(|c| c.kind() == BLOCK_BEGIN)
+                .and_then(|l| {
+                    l.children_with_tokens()
+                        .filter_map(|t| t.into_token())
+                        .find(|t| t.kind() == NAME)
+                        .map(|t| t.text().to_string())
+                });
+            vec![("name", json!(opt_str(&serde_json::Value::from(name))))]
+        }
+        _ => return None,
+    })
+}

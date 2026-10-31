@@ -6,7 +6,7 @@
 {"type":"keyword","begin":65,"end":92,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"Design Philosophy"}
 {"type":"keyword","begin":92,"end":142,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":modules:architecture:extensibility:"}
 {"type":"paragraph","begin":142,"end":245,"contents_begin":142,"contents_end":244,"parent_type":"section","parent_begin":0}
-{"type":"headline","begin":245,"end":484,"contents_begin":280,"contents_end":484,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"1. Composition over inheritance","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":245,"end":484,"contents_begin":280,"contents_end":484,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"1. Composition over inheritance","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":280,"end":484,"contents_begin":280,"contents_end":484,"parent_type":"headline","parent_begin":245}
 {"type":"plain-list","begin":280,"end":484,"contents_begin":280,"contents_end":483,"parent_type":"section","parent_begin":280}
 {"type":"item","begin":280,"end":316,"contents_begin":282,"contents_end":316,"parent_type":"plain-list","parent_begin":280,"bullet":"- "}
@@ -17,10 +17,10 @@
 {"type":"paragraph","begin":360,"end":429,"contents_begin":360,"contents_end":429,"parent_type":"item","parent_begin":358}
 {"type":"item","begin":429,"end":483,"contents_begin":431,"contents_end":483,"parent_type":"plain-list","parent_begin":280,"bullet":"- "}
 {"type":"paragraph","begin":431,"end":483,"contents_begin":431,"contents_end":483,"parent_type":"item","parent_begin":429}
-{"type":"headline","begin":484,"end":755,"contents_begin":513,"contents_end":755,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"2. Single source of truth","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":484,"end":755,"contents_begin":513,"contents_end":755,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"2. Single source of truth","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":513,"end":755,"contents_begin":513,"contents_end":755,"parent_type":"headline","parent_begin":484}
 {"type":"paragraph","begin":513,"end":755,"contents_begin":513,"contents_end":754,"parent_type":"section","parent_begin":513}
-{"type":"headline","begin":755,"end":1083,"contents_begin":781,"contents_end":1083,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"3. Stable API contract","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":755,"end":1083,"contents_begin":781,"contents_end":1083,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"3. Stable API contract","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":781,"end":1083,"contents_begin":781,"contents_end":1083,"parent_type":"headline","parent_begin":755}
 {"type":"paragraph","begin":781,"end":892,"contents_begin":781,"contents_end":892,"parent_type":"section","parent_begin":781}
 {"type":"plain-list","begin":892,"end":1083,"contents_begin":892,"contents_end":1082,"parent_type":"section","parent_begin":781}
@@ -30,14 +30,14 @@
 {"type":"paragraph","begin":945,"end":1009,"contents_begin":945,"contents_end":1009,"parent_type":"item","parent_begin":943}
 {"type":"item","begin":1009,"end":1082,"contents_begin":1011,"contents_end":1082,"parent_type":"plain-list","parent_begin":892,"bullet":"- "}
 {"type":"paragraph","begin":1011,"end":1082,"contents_begin":1011,"contents_end":1082,"parent_type":"item","parent_begin":1009}
-{"type":"headline","begin":1083,"end":1462,"contents_begin":1110,"contents_end":1462,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"4. No framework, no SDK","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1083,"end":1462,"contents_begin":1110,"contents_end":1462,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"4. No framework, no SDK","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1110,"end":1462,"contents_begin":1110,"contents_end":1462,"parent_type":"headline","parent_begin":1083}
 {"type":"paragraph","begin":1110,"end":1176,"contents_begin":1110,"contents_end":1176,"parent_type":"section","parent_begin":1110}
 {"type":"src-block","begin":1176,"end":1462,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":1110,"language":"scheme"}
-{"type":"headline","begin":1462,"end":1651,"contents_begin":1481,"contents_end":1651,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Kernel boundary","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1462,"end":1651,"contents_begin":1481,"contents_end":1651,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Kernel boundary","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1481,"end":1651,"contents_begin":1481,"contents_end":1651,"parent_type":"headline","parent_begin":1462}
 {"type":"paragraph","begin":1481,"end":1651,"contents_begin":1481,"contents_end":1650,"parent_type":"section","parent_begin":1481}
-{"type":"headline","begin":1651,"end":2170,"contents_begin":1672,"contents_end":2170,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Pitfall avoidance","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1651,"end":2170,"contents_begin":1672,"contents_end":2170,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Pitfall avoidance","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1672,"end":2170,"contents_begin":1672,"contents_end":2170,"parent_type":"headline","parent_begin":1651}
 {"type":"table","begin":1672,"end":2105,"contents_begin":1672,"contents_end":2104,"parent_type":"section","parent_begin":1672}
 {"type":"table-row","begin":1672,"end":1709,"contents_begin":1673,"contents_end":1708,"parent_type":"table","parent_begin":1672}

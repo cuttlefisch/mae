@@ -6,7 +6,7 @@
 {"type":"keyword","begin":57,"end":79,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"AI Self-Test"}
 {"type":"keyword","begin":79,"end":111,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":ai:testing:tools:"}
 {"type":"paragraph","begin":111,"end":265,"contents_begin":111,"contents_end":264,"parent_type":"section","parent_begin":0}
-{"type":"headline","begin":265,"end":455,"contents_begin":274,"contents_end":455,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Usage","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":265,"end":455,"contents_begin":274,"contents_end":455,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Usage","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":274,"end":455,"contents_begin":274,"contents_end":455,"parent_type":"headline","parent_begin":265}
 {"type":"plain-list","begin":274,"end":455,"contents_begin":274,"contents_end":454,"parent_type":"section","parent_begin":274}
 {"type":"item","begin":274,"end":318,"contents_begin":276,"contents_end":318,"parent_type":"plain-list","parent_begin":274,"bullet":"- "}
@@ -15,7 +15,7 @@
 {"type":"paragraph","begin":320,"end":388,"contents_begin":320,"contents_end":388,"parent_type":"item","parent_begin":318}
 {"type":"item","begin":388,"end":454,"contents_begin":390,"contents_end":454,"parent_type":"plain-list","parent_begin":274,"bullet":"- "}
 {"type":"paragraph","begin":390,"end":454,"contents_begin":390,"contents_end":454,"parent_type":"item","parent_begin":388}
-{"type":"headline","begin":455,"end":1459,"contents_begin":469,"contents_end":1459,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Categories","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":455,"end":1459,"contents_begin":469,"contents_end":1459,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Categories","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":469,"end":1459,"contents_begin":469,"contents_end":1459,"parent_type":"headline","parent_begin":455}
 {"type":"table","begin":469,"end":1459,"contents_begin":469,"contents_end":1458,"parent_type":"section","parent_begin":469}
 {"type":"table-row","begin":469,"end":498,"contents_begin":470,"contents_end":497,"parent_type":"table","parent_begin":469}
@@ -30,10 +30,10 @@
 {"type":"table-row","begin":1181,"end":1248,"contents_begin":1182,"contents_end":1247,"parent_type":"table","parent_begin":469}
 {"type":"table-row","begin":1248,"end":1374,"contents_begin":1249,"contents_end":1373,"parent_type":"table","parent_begin":469}
 {"type":"table-row","begin":1374,"end":1458,"contents_begin":1375,"contents_end":1457,"parent_type":"table","parent_begin":469}
-{"type":"headline","begin":1459,"end":1636,"contents_begin":1479,"contents_end":1636,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"State management","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1459,"end":1636,"contents_begin":1479,"contents_end":1636,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"State management","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1479,"end":1636,"contents_begin":1479,"contents_end":1636,"parent_type":"headline","parent_begin":1459}
 {"type":"paragraph","begin":1479,"end":1636,"contents_begin":1479,"contents_end":1635,"parent_type":"section","parent_begin":1479}
-{"type":"headline","begin":1636,"end":2027,"contents_begin":1655,"contents_end":2027,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Reading results","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1636,"end":2027,"contents_begin":1655,"contents_end":2027,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Reading results","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1655,"end":2027,"contents_begin":1655,"contents_end":2027,"parent_type":"headline","parent_begin":1636}
 {"type":"paragraph","begin":1655,"end":1705,"contents_begin":1655,"contents_end":1705,"parent_type":"section","parent_begin":1655}
 {"type":"plain-list","begin":1705,"end":1865,"contents_begin":1705,"contents_end":1864,"parent_type":"section","parent_begin":1655}
@@ -44,7 +44,7 @@
 {"type":"item","begin":1806,"end":1864,"contents_begin":1808,"contents_end":1864,"parent_type":"plain-list","parent_begin":1705,"bullet":"- "}
 {"type":"paragraph","begin":1808,"end":1864,"contents_begin":1808,"contents_end":1864,"parent_type":"item","parent_begin":1806}
 {"type":"paragraph","begin":1865,"end":2027,"contents_begin":1865,"contents_end":2026,"parent_type":"section","parent_begin":1655}
-{"type":"headline","begin":2027,"end":2442,"contents_begin":2046,"contents_end":2442,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Why this exists","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":2027,"end":2442,"contents_begin":2046,"contents_end":2442,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Why this exists","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":2046,"end":2442,"contents_begin":2046,"contents_end":2442,"parent_type":"headline","parent_begin":2027}
 {"type":"paragraph","begin":2046,"end":2280,"contents_begin":2046,"contents_end":2279,"parent_type":"section","parent_begin":2046}
 {"type":"paragraph","begin":2280,"end":2442,"contents_begin":2280,"contents_end":2442,"parent_type":"section","parent_begin":2046}

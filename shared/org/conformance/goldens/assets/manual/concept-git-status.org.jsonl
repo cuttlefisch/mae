@@ -6,10 +6,10 @@
 {"type":"keyword","begin":58,"end":91,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"Git Status (Magit-lite)"}
 {"type":"keyword","begin":91,"end":119,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":git:workflow:"}
 {"type":"paragraph","begin":119,"end":294,"contents_begin":119,"contents_end":293,"parent_type":"section","parent_begin":0}
-{"type":"headline","begin":294,"end":467,"contents_begin":314,"contents_end":467,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Multi-Level Fold","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":294,"end":467,"contents_begin":314,"contents_end":467,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Multi-Level Fold","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":314,"end":467,"contents_begin":314,"contents_end":467,"parent_type":"headline","parent_begin":294}
 {"type":"paragraph","begin":314,"end":467,"contents_begin":314,"contents_end":466,"parent_type":"section","parent_begin":314}
-{"type":"headline","begin":467,"end":1657,"contents_begin":482,"contents_end":1657,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Keybindings","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":467,"end":1657,"contents_begin":482,"contents_end":1657,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Keybindings","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":482,"end":1657,"contents_begin":482,"contents_end":1657,"parent_type":"headline","parent_begin":467}
 {"type":"table","begin":482,"end":1657,"contents_begin":482,"contents_end":1656,"parent_type":"section","parent_begin":482}
 {"type":"table-row","begin":482,"end":509,"contents_begin":483,"contents_end":508,"parent_type":"table","parent_begin":482}
@@ -37,7 +37,7 @@
 {"type":"table-row","begin":1515,"end":1563,"contents_begin":1516,"contents_end":1562,"parent_type":"table","parent_begin":482}
 {"type":"table-row","begin":1563,"end":1613,"contents_begin":1564,"contents_end":1612,"parent_type":"table","parent_begin":482}
 {"type":"table-row","begin":1613,"end":1656,"contents_begin":1614,"contents_end":1655,"parent_type":"table","parent_begin":482}
-{"type":"headline","begin":1657,"end":1913,"contents_begin":1683,"contents_end":1913,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Context-Aware Dispatch","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1657,"end":1913,"contents_begin":1683,"contents_end":1913,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Context-Aware Dispatch","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1683,"end":1913,"contents_begin":1683,"contents_end":1913,"parent_type":"headline","parent_begin":1657}
 {"type":"paragraph","begin":1683,"end":1729,"contents_begin":1683,"contents_end":1729,"parent_type":"section","parent_begin":1683}
 {"type":"plain-list","begin":1729,"end":1913,"contents_begin":1729,"contents_end":1912,"parent_type":"section","parent_begin":1683}
@@ -47,10 +47,10 @@
 {"type":"paragraph","begin":1789,"end":1846,"contents_begin":1789,"contents_end":1846,"parent_type":"item","parent_begin":1787}
 {"type":"item","begin":1846,"end":1912,"contents_begin":1848,"contents_end":1912,"parent_type":"plain-list","parent_begin":1729,"bullet":"- "}
 {"type":"paragraph","begin":1848,"end":1912,"contents_begin":1848,"contents_end":1912,"parent_type":"item","parent_begin":1846}
-{"type":"headline","begin":1913,"end":2040,"contents_begin":1928,"contents_end":2040,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Inline Diff","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1913,"end":2040,"contents_begin":1928,"contents_end":2040,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Inline Diff","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1928,"end":2040,"contents_begin":1928,"contents_end":2040,"parent_type":"headline","parent_begin":1913}
 {"type":"paragraph","begin":1928,"end":2040,"contents_begin":1928,"contents_end":2039,"parent_type":"section","parent_begin":1928}
-{"type":"headline","begin":2040,"end":2438,"contents_begin":2052,"contents_end":2438,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Workflow","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":2040,"end":2438,"contents_begin":2052,"contents_end":2438,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Workflow","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":2052,"end":2438,"contents_begin":2052,"contents_end":2438,"parent_type":"headline","parent_begin":2040}
 {"type":"plain-list","begin":2052,"end":2219,"contents_begin":2052,"contents_end":2218,"parent_type":"section","parent_begin":2052}
 {"type":"item","begin":2052,"end":2082,"contents_begin":2055,"contents_end":2082,"parent_type":"plain-list","parent_begin":2052,"bullet":"1. "}

@@ -1,5 +1,5 @@
 {"type":"#file","bytes":141,"eol":"unix","unmodified":true}
-{"type":"headline","begin":0,"end":141,"contents_begin":36,"contents_end":141,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"Überschrift mit Ümlaut","todo":null,"priority":null,"tags":["ärger"],"commentedp":null}
+{"type":"headline","begin":0,"end":141,"contents_begin":36,"contents_end":141,"parent_type":"org-data","parent_begin":0,"level":1,"true_level":1,"raw_title":"Überschrift mit Ümlaut","todo":null,"priority":null,"tags":["ärger"],"commentedp":null}
 {"type":"section","begin":36,"end":141,"contents_begin":36,"contents_end":141,"parent_type":"headline","parent_begin":0}
 {"type":"paragraph","begin":36,"end":71,"contents_begin":36,"contents_end":71,"parent_type":"section","parent_begin":36}
 {"type":"drawer","begin":71,"end":93,"contents_begin":79,"contents_end":87,"parent_type":"section","parent_begin":36,"name":"ÉTAT"}

@@ -6,19 +6,19 @@
 {"type":"keyword","begin":73,"end":107,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"Downstream Impact Review"}
 {"type":"keyword","begin":107,"end":139,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":practices:review:"}
 {"type":"paragraph","begin":139,"end":376,"contents_begin":139,"contents_end":375,"parent_type":"section","parent_begin":0}
-{"type":"headline","begin":376,"end":571,"contents_begin":388,"contents_end":571,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Bug risk","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":376,"end":571,"contents_begin":388,"contents_end":571,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Bug risk","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":388,"end":571,"contents_begin":388,"contents_end":571,"parent_type":"headline","parent_begin":376}
 {"type":"paragraph","begin":388,"end":571,"contents_begin":388,"contents_end":570,"parent_type":"section","parent_begin":388}
-{"type":"headline","begin":571,"end":873,"contents_begin":593,"contents_end":873,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Performance impact","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":571,"end":873,"contents_begin":593,"contents_end":873,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Performance impact","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":593,"end":873,"contents_begin":593,"contents_end":873,"parent_type":"headline","parent_begin":571}
 {"type":"paragraph","begin":593,"end":873,"contents_begin":593,"contents_end":872,"parent_type":"section","parent_begin":593}
-{"type":"headline","begin":873,"end":1235,"contents_begin":902,"contents_end":1235,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Type safety at boundaries","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":873,"end":1235,"contents_begin":902,"contents_end":1235,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Type safety at boundaries","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":902,"end":1235,"contents_begin":902,"contents_end":1235,"parent_type":"headline","parent_begin":873}
 {"type":"paragraph","begin":902,"end":1235,"contents_begin":902,"contents_end":1234,"parent_type":"section","parent_begin":902}
-{"type":"headline","begin":1235,"end":1676,"contents_begin":1271,"contents_end":1676,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Regression guard across surfaces","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1235,"end":1676,"contents_begin":1271,"contents_end":1676,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Regression guard across surfaces","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1271,"end":1676,"contents_begin":1271,"contents_end":1676,"parent_type":"headline","parent_begin":1235}
 {"type":"paragraph","begin":1271,"end":1676,"contents_begin":1271,"contents_end":1675,"parent_type":"section","parent_begin":1271}
-{"type":"headline","begin":1676,"end":1979,"contents_begin":1745,"contents_end":1979,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Adversarial case, for security/auth/crypto/sync work specifically","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":1676,"end":1979,"contents_begin":1745,"contents_end":1979,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Adversarial case, for security/auth/crypto/sync work specifically","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1745,"end":1979,"contents_begin":1745,"contents_end":1979,"parent_type":"headline","parent_begin":1676}
 {"type":"paragraph","begin":1745,"end":1952,"contents_begin":1745,"contents_end":1951,"parent_type":"section","parent_begin":1745}
 {"type":"paragraph","begin":1952,"end":1979,"contents_begin":1952,"contents_end":1979,"parent_type":"section","parent_begin":1745}

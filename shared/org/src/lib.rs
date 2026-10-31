@@ -83,33 +83,49 @@ pub struct Document {
 /// to `text`, except inputs over `u32::MAX` bytes, which give an empty
 /// document with an [`DiagnosticKind::InputTooLarge`] diagnostic.
 pub fn parse(text: &str, options: &ParseOptions) -> Document {
-    parse_with(text, options, builder::Start::Document)
+    parse_with(text::Source::new(text), options, builder::Start::Document)
 }
 
-/// Parses `text` as the BODY of a headline of level `level`: what follows
-/// the headline line in a file (ADR-112 D1, M4). It parses exactly as the
-/// same text placed under a level-`level` headline in a document would —
-/// planning and a property drawer are recognised at its top — with offsets
-/// relative to `text`. A headline at or above `level` (one that would end
-/// the body in a file) is parsed and reported as
-/// [`DiagnosticKind::HeadlineOutsideFragment`]. `level == 0` is [`parse`].
+/// What a fragment cannot know from its own text: where it sits in its file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FragmentContext {
+    /// The level of the headline whose body this is; 0 for the text before
+    /// the first headline (the start of the file).
+    pub level: usize,
+    /// The FILE's line-ending convention ([`LineEnding::detect`] on the whole
+    /// file, or [`Document::line_ending`] of its parse). A fragment's own
+    /// endings can say otherwise: a CRLF body in a file with one LF line is a
+    /// unix file, in which every CR is content.
+    pub line_ending: LineEnding,
+}
+
+/// Parses `text` as the BODY of a headline: what follows the headline line in
+/// its file (ADR-112 D1, M4). It parses exactly as the whole file would parse
+/// that text — planning and a property drawer are recognised at its top —
+/// with offsets relative to `text`. A headline at or above `context.level`
+/// (one that would end the body in the file) is parsed and reported as
+/// [`DiagnosticKind::HeadlineOutsideFragment`].
 ///
-/// A fragment cannot see the rest of its file: pass the file's TODO
-/// sequences in `options` (an in-fragment `#+TODO:` still applies to it).
-pub fn parse_fragment(text: &str, options: &ParseOptions, level: usize) -> Document {
-    let start = if level == 0 {
-        builder::Start::Document
-    } else {
-        builder::Start::Fragment { level }
+/// What a fragment cannot know, the caller supplies: the file's line-ending
+/// convention (`context.line_ending`), and the TODO sequences in force in the
+/// file (`options.todo_sequences`; an in-fragment `#+TODO:` still applies).
+/// A body never starts its file, so a leading BOM is content, as it is
+/// mid-file; at level 0 the fragment IS the start of the file and a BOM is
+/// trivia, as in [`parse`].
+pub fn parse_fragment(text: &str, options: &ParseOptions, context: &FragmentContext) -> Document {
+    let start = match context.level {
+        0 => builder::Start::Document,
+        level => builder::Start::Fragment { level },
     };
-    parse_with(text, options, start)
+    let src = text::Source::with(text, context.line_ending, context.level == 0);
+    parse_with(src, options, start)
 }
 
-fn parse_with(text: &str, options: &ParseOptions, start: builder::Start) -> Document {
+fn parse_with(src: text::Source, options: &ParseOptions, start: builder::Start) -> Document {
+    let text = src.text;
     if exceeds_tree_limit(text.len()) {
         return Document::too_large();
     }
-    let src = text::Source::new(text);
     let ix = index::Index::build(&src);
     let built = builder::build(&src, &ix, options, start);
     let declared = !built.in_file_todo.is_empty();

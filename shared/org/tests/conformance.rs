@@ -272,126 +272,35 @@ fn every_divergence_names_a_reason_and_an_existing_pinning_test() {
 /// views, not just the spans.
 #[test]
 fn typed_views_agree_with_the_oracles_properties() {
-    let mut compared = BTreeMap::<&str, usize>::new();
+    let mut compared = BTreeMap::<String, usize>::new();
+    let mut mismatches = Vec::new();
     for rel in corpus_list() {
+        // No CR or BOM skip: the oracle decodes as find-file does, so its view
+        // fields are what an Org user sees (review: org-trim drops content CRs).
         let text = read(&repo_root().join(&rel));
-        if text.contains('\r') || text.starts_with('\u{feff}') {
-            continue;
+        let (counts, bad) = compare_views(&parse_default(&text), &golden_for(&rel));
+        for (k, n) in counts {
+            *compared.entry(k).or_default() += n;
         }
-        let doc = parse_default(&text);
-        for (el, v) in golden_elements(&golden_for(&rel)) {
-            let node = doc.syntax().descendants().find(|n| {
-                let r = n.text_range();
-                usize::from(r.start()) == el.begin
-                    && usize::from(r.end()) == el.end
-                    && KIND_MAP
-                        .iter()
-                        .any(|(k, s)| *k == n.kind() && *s == el.kind)
-            });
-            let Some(node) = node else { continue }; // span differences are the other test's job
-            if check_view(&el.kind, node, &v, &rel) {
-                *compared
-                    .entry(match el.kind.as_str() {
-                        "headline" => "headline",
-                        "keyword" => "keyword",
-                        "node-property" => "node-property",
-                        _ => "drawer/block",
-                    })
-                    .or_default() += 1;
-            }
-        }
+        mismatches.extend(bad.into_iter().map(|m| format!("{rel}: {m}")));
     }
     eprintln!("view fields compared: {compared:?}");
-    // Floors just under what the goldens hold (458/391/100/52 at
+    assert!(
+        mismatches.is_empty(),
+        "view mismatches:\n{}",
+        mismatches.join("\n")
+    );
+    // Floors just under what the goldens hold (1415/433/118/597 on
     // 2026-10-31), so a matcher that silently stops finding nodes fails.
-    assert!(compared.get("headline").copied().unwrap_or(0) >= 450);
-    assert!(compared.get("keyword").copied().unwrap_or(0) >= 380);
-    assert!(compared.get("node-property").copied().unwrap_or(0) >= 95);
-    assert!(compared.get("drawer/block").copied().unwrap_or(0) >= 45);
-}
-
-fn opt_str(v: &serde_json::Value) -> Option<String> {
-    v.as_str().map(str::to_string)
-}
-
-fn check_view(kind: &str, node: mae_org::SyntaxNode, v: &serde_json::Value, rel: &str) -> bool {
-    use mae_org::*;
-    match kind {
-        "headline" => {
-            let h = Headline::cast(node).expect("headline view");
-            let tags: Vec<String> = v["tags"]
-                .as_array()
-                .map(|a| a.iter().filter_map(opt_str).collect())
-                .unwrap_or_default();
-            assert_eq!(
-                h.level() as u64,
-                v["level"].as_u64().unwrap_or(0),
-                "{rel} level"
-            );
-            assert_eq!(
-                h.title(),
-                v["raw_title"].as_str().unwrap_or(""),
-                "{rel} title"
-            );
-            assert_eq!(h.todo(), opt_str(&v["todo"]), "{rel} todo");
-            assert_eq!(
-                h.priority().map(String::from),
-                opt_str(&v["priority"]),
-                "{rel} priority"
-            );
-            assert_eq!(h.tags(), tags, "{rel} tags");
-            assert_eq!(h.is_commented(), v["commentedp"] == true, "{rel} commented");
-        }
-        "keyword" => {
-            let k = Keyword::cast(node).expect("keyword view");
-            assert_eq!(
-                k.key().to_uppercase(),
-                v["key"].as_str().unwrap_or(""),
-                "{rel} key"
-            );
-            assert_eq!(k.value(), v["value"].as_str().unwrap_or(""), "{rel} value");
-        }
-        "node-property" => {
-            let parent = node
-                .parent()
-                .and_then(PropertyDrawer::cast)
-                .expect("node property in a property drawer");
-            let props = parent.properties();
-            let p = props
-                .iter()
-                .find(|p| p.node == node)
-                .expect("property view");
-            assert_eq!(
-                p.key_as_written(),
-                v["key"].as_str().unwrap_or(""),
-                "{rel} property key"
-            );
-            assert_eq!(
-                p.value,
-                v["value"].as_str().unwrap_or(""),
-                "{rel} property value"
-            );
-        }
-        "special-block" => {
-            assert_eq!(
-                Block::cast(node).expect("block view").name(),
-                v["block_type"].as_str().unwrap_or(""),
-                "{rel} block type"
-            );
-        }
-        "drawer" => {
-            let name = node.children().next().and_then(|l| {
-                l.children_with_tokens()
-                    .filter_map(|t| t.into_token())
-                    .find(|t| t.kind() == SyntaxKind::NAME)
-            });
-            assert_eq!(
-                name.map(|t| t.text().to_string()),
-                opt_str(&v["name"]),
-                "{rel} drawer name"
-            );
-        }
-        _ => return false,
+    for (kind, floor) in [
+        ("headline", 1400),
+        ("keyword", 425),
+        ("node-property", 110),
+        ("drawer/block", 590),
+    ] {
+        assert!(
+            compared.get(kind).copied().unwrap_or(0) >= floor,
+            "{kind}: {compared:?}"
+        );
     }
-    true
 }

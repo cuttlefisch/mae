@@ -261,7 +261,7 @@ fn orphaned(cx: &Ctx, j: usize, limit: usize) -> bool {
     let s = cx.src.content(j);
     cx.src.is_blank(j)
         || scan::is_comment(s)
-        || scan::is_clock(s)
+        || scan::is_clock_prefix(s)
         || scan::headline_level(s).is_some()
 }
 

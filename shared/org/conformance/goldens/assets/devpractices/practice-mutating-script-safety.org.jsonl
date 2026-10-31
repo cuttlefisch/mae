@@ -7,7 +7,7 @@
 {"type":"keyword","begin":83,"end":159,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"Mutating Script Safety (set -e, Logging, Check-Plan-Confirm-Apply)"}
 {"type":"keyword","begin":159,"end":192,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":shell:devpractice:"}
 {"type":"paragraph","begin":192,"end":644,"contents_begin":192,"contents_end":643,"parent_type":"section","parent_begin":0}
-{"type":"headline","begin":644,"end":2575,"contents_begin":701,"contents_end":2575,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Fail fast: `set -euo pipefail`, audited, not assumed","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":644,"end":2575,"contents_begin":701,"contents_end":2575,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Fail fast: `set -euo pipefail`, audited, not assumed","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":701,"end":2575,"contents_begin":701,"contents_end":2575,"parent_type":"headline","parent_begin":644}
 {"type":"paragraph","begin":701,"end":1161,"contents_begin":701,"contents_end":1160,"parent_type":"section","parent_begin":701}
 {"type":"paragraph","begin":1161,"end":1313,"contents_begin":1161,"contents_end":1312,"parent_type":"section","parent_begin":701}
@@ -19,10 +19,10 @@
 {"type":"item","begin":1572,"end":2077,"contents_begin":1574,"contents_end":2077,"parent_type":"plain-list","parent_begin":1313,"bullet":"- "}
 {"type":"paragraph","begin":1574,"end":2077,"contents_begin":1574,"contents_end":2077,"parent_type":"item","parent_begin":1572}
 {"type":"paragraph","begin":2078,"end":2575,"contents_begin":2078,"contents_end":2574,"parent_type":"section","parent_begin":701}
-{"type":"headline","begin":2575,"end":3305,"contents_begin":2646,"contents_end":3305,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Log the full transcript, not just what scrolled past interactively","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":2575,"end":3305,"contents_begin":2646,"contents_end":3305,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Log the full transcript, not just what scrolled past interactively","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":2646,"end":3305,"contents_begin":2646,"contents_end":3305,"parent_type":"headline","parent_begin":2575}
 {"type":"paragraph","begin":2646,"end":3305,"contents_begin":2646,"contents_end":3304,"parent_type":"section","parent_begin":2646}
-{"type":"headline","begin":3305,"end":4615,"contents_begin":3337,"contents_end":4615,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Check, Plan, Confirm, Apply","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":3305,"end":4615,"contents_begin":3337,"contents_end":4615,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Check, Plan, Confirm, Apply","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":3337,"end":4615,"contents_begin":3337,"contents_end":4615,"parent_type":"headline","parent_begin":3305}
 {"type":"paragraph","begin":3337,"end":3472,"contents_begin":3337,"contents_end":3471,"parent_type":"section","parent_begin":3337}
 {"type":"plain-list","begin":3472,"end":4312,"contents_begin":3472,"contents_end":4311,"parent_type":"section","parent_begin":3337}
@@ -35,10 +35,10 @@
 {"type":"item","begin":4201,"end":4311,"contents_begin":4204,"contents_end":4311,"parent_type":"plain-list","parent_begin":3472,"bullet":"4. "}
 {"type":"paragraph","begin":4204,"end":4311,"contents_begin":4204,"contents_end":4311,"parent_type":"item","parent_begin":4201}
 {"type":"paragraph","begin":4312,"end":4615,"contents_begin":4312,"contents_end":4614,"parent_type":"section","parent_begin":3337}
-{"type":"headline","begin":4615,"end":6048,"contents_begin":4684,"contents_end":6048,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"A worked example of why this needs real auditing, not a template","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":4615,"end":6048,"contents_begin":4684,"contents_end":6048,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"A worked example of why this needs real auditing, not a template","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":4684,"end":6048,"contents_begin":4684,"contents_end":6048,"parent_type":"headline","parent_begin":4615}
 {"type":"paragraph","begin":4684,"end":5586,"contents_begin":4684,"contents_end":5585,"parent_type":"section","parent_begin":4684}
 {"type":"paragraph","begin":5586,"end":6048,"contents_begin":5586,"contents_end":6047,"parent_type":"section","parent_begin":4684}
-{"type":"headline","begin":6048,"end":6426,"contents_begin":6060,"contents_end":6426,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Related","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":6048,"end":6426,"contents_begin":6060,"contents_end":6426,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Related","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":6060,"end":6426,"contents_begin":6060,"contents_end":6426,"parent_type":"headline","parent_begin":6048}
 {"type":"paragraph","begin":6060,"end":6426,"contents_begin":6060,"contents_end":6426,"parent_type":"section","parent_begin":6060}
