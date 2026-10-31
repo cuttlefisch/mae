@@ -132,7 +132,6 @@ pub fn classify_tool_tier(name: &str) -> ToolTier {
         | "self_test_suite"
         | "introspect"
         | "perf_stats"
-        | "perf_benchmark"
         | "window_layout"
         | "ai_permissions"
         | "input_lock"
@@ -160,8 +159,6 @@ pub fn classify_tool_tier(name: &str) -> ToolTier {
         | "github_pr_status"
         | "ask_user"
         | "rename_file"
-        | "ai_save"
-        | "ai_load"
         | "create_plan"
         | "update_plan"
         | "save_memory"
@@ -169,7 +166,6 @@ pub fn classify_tool_tier(name: &str) -> ToolTier {
         | "read_messages"
         | "syntax_tree"
         | "switch_project"
-        | "toggle_file_tree"
         | "audit_configuration"
         | "list_modules"
         | "format_buffer"
@@ -179,7 +175,18 @@ pub fn classify_tool_tier(name: &str) -> ToolTier {
         | "lookup_online"
         | "next_error"
         | "search_tools"
-        | "keymap_query" => ToolTier::Core,
+        | "keymap_query"
+        // Named by the MCP instructions (guidance links, saving after
+        // buffer_write), so they must be callable without a request_tools
+        // round trip: `crates/mae/src/main.rs` pins this. kb_get and kb_search
+        // were the two most-called tools in client logs (2026-10-31: 135 and
+        // 78 of 842 calls) while Extended; perf_benchmark, ai_save, ai_load and
+        // toggle_file_tree (0 calls) moved to Extended to hold the
+        // advertised-list ratchet.
+        | "kb_get"
+        | "kb_search"
+        | "execute_command"
+        | "request_tools" => ToolTier::Core,
         // Everything else is extended
         _ => ToolTier::Extended,
     }
@@ -306,7 +313,7 @@ pub fn parse_categories(input: &str) -> Vec<ToolCategory> {
 pub fn request_tools_definition() -> ToolDefinition {
     super::tool_def::ToolDefBuilder::new(
         "request_tools",
-        "Request additional tools by category or specific name. Use search_tools first to discover tool names, then request them here. Categories: lsp, dap, knowledge, execution, shell, commands, git, web, ai, visual, debug, mcp.",
+        "Add tools to your tool list by name and/or category; give at least one of `tools` or `categories`, each a comma-separated STRING (e.g. {\"tools\": \"kb_update,kb_delete\"}). Use search_tools first to find names. Categories: lsp, dap, knowledge, execution, shell, commands, git, web, ai, visual, debug, mcp. The `commands` category is every editor command (hundreds of tools); prefer naming tools, or execute_command.",
     )
     .prop(
         "categories",
@@ -314,7 +321,6 @@ pub fn request_tools_definition() -> ToolDefinition {
         "Comma-separated categories: lsp, dap, knowledge, execution, shell, commands, git, web, ai, visual, debug, mcp",
     )
     .prop("tools", "string", "Comma-separated tool names to add (e.g. from search_tools results)")
-    .required(["categories"])
     .permission(PermissionTier::ReadOnly)
     .build()
 }

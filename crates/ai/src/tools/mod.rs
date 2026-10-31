@@ -379,11 +379,19 @@ mod tests {
     }
 
     #[test]
-    fn request_tools_meta_tool_has_categories_param() {
+    /// Either argument alone is a complete request: a client that knows the
+    /// tool names (from search_tools) must not be forced to also name a
+    /// category, which is what made `{tools: "kb_get"}` fail in the field.
+    fn request_tools_takes_names_or_categories_and_requires_neither() {
         let def = request_tools_definition();
         assert_eq!(def.name, "request_tools");
         assert!(def.parameters.properties.contains_key("categories"));
-        assert!(def.parameters.required.contains(&"categories".into()));
+        assert!(def.parameters.properties.contains_key("tools"));
+        assert!(
+            def.parameters.required.is_empty(),
+            "{:?}",
+            def.parameters.required
+        );
     }
 
     #[test]

@@ -66,8 +66,9 @@ def main(shim_path):
         tools = resp["result"]["tools"]
         print(f"tools/list OK — {len(tools)} tools")
         # K2 (post-ship quality pass): tools/list is tiered (Core +
-        # request_tools/search_tools) by default, so kb_search (Extended)
-        # is deliberately NOT expected here — kb_search_context is Core.
+        # request_tools/search_tools) by default. kb_search and kb_get are
+        # Core (the instructions name kb_get); kb_list is the Extended
+        # example and is deliberately NOT expected here.
         kb_search_context = next(
             (t for t in tools if t["name"] == "kb_search_context"), None
         )
@@ -81,8 +82,10 @@ def main(shim_path):
         assert any(t["name"] == "request_tools" for t in tools), (
             "request_tools must be present so a client can discover Extended-tier tools"
         )
-        assert not any(t["name"] == "kb_search" for t in tools), (
-            "kb_search is Extended-tier and must not be pre-listed under K2's tiered default"
+        for core in ("kb_search", "kb_get"):
+            assert any(t["name"] == core for t in tools), f"{core} (Core-tier) missing from tools/list"
+        assert not any(t["name"] == "kb_list" for t in tools), (
+            "kb_list is Extended-tier and must not be pre-listed under K2's tiered default"
         )
 
         # 4. tools/call: introspect (a safe, always-available read tool)
@@ -99,11 +102,7 @@ def main(shim_path):
         print("tools/call(introspect) OK")
 
         # 5. tools/call: kb_search — a real read-only KB round trip, the
-        #    actual capability this whole pairing story is for. kb_search is
-        #    Extended-tier (not in tools/list above) — this proves K2's core
-        #    claim: tools/call dispatch is never restricted to what was
-        #    advertised, so a client that discovers a tool name via
-        #    search_tools/request_tools can call it directly.
+        #    actual capability this whole pairing story is for.
         send(
             {
                 "jsonrpc": "2.0",
@@ -114,11 +113,10 @@ def main(shim_path):
         )
         resp = recv()
         assert resp is not None and "error" not in resp, f"tools/call kb_search failed: {resp}"
-        print("tools/call(kb_search) OK — an Extended-tier tool, absent from tools/list, still dispatches")
+        print("tools/call(kb_search) OK")
 
         # 6. tools/call: kb_get — the other half of the "kb_search/kb_get
-        #    round trip" this pairing exists for, same Extended-tier-but-
-        #    still-callable point as above. A nonexistent id is deliberate:
+        #    round trip" this pairing exists for. A nonexistent id is deliberate:
         #    this asserts the *protocol* round trip (a valid JSON-RPC
         #    response, not an error) rather than depending on any particular
         #    KB content being registered.
@@ -145,15 +143,15 @@ def main(shim_path):
                 "method": "tools/call",
                 "params": {
                     "name": "request_tools",
-                    "arguments": {"categories": "", "tools": "kb_search"},
+                    "arguments": {"tools": "kb_list"},
                 },
             }
         )
         resp = recv()
         assert resp is not None and "error" not in resp, f"tools/call request_tools failed: {resp}"
         text = resp["result"]["content"][0]["text"]
-        assert "kb_search" in text and "input_schema" in text, (
-            f"request_tools must return kb_search's full definition (with schema), got: {text}"
+        assert "kb_list" in text and "input_schema" in text, (
+            f"request_tools must return kb_list's full definition (with schema), got: {text}"
         )
         print("tools/call(request_tools) OK — Extended-tier tool discoverable with a usable schema")
 

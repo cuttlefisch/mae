@@ -48,14 +48,7 @@ pub(super) fn shell_tool_definitions() -> Vec<ToolDefinition> {
         .permission(PermissionTier::Shell)
         .build(),
         // --- Agent terminal tools ---
-        ToolDefBuilder::new(
-            "terminal_spawn",
-            "Spawn a new interactive shell terminal buffer. Returns the buffer index. The terminal is visible to the user and supports long-running processes (compilers, servers).",
-        )
-        .prop("name", "string", "Optional name for the terminal buffer (e.g. '*build*')")
-        .prop("command", "string", "Initial command to run in the terminal (optional)")
-        .permission(PermissionTier::Shell)
-        .build(),
+        terminal_spawn_def(),
         ToolDefBuilder::new(
             "terminal_send",
             "Send input to a terminal spawned via terminal_spawn. Use for interactive prompts.",
@@ -70,6 +63,7 @@ pub(super) fn shell_tool_definitions() -> Vec<ToolDefinition> {
             "Read the current screen content of a terminal. Returns the visible text (typically 24-80 lines).",
         )
         .prop("buffer_index", "integer", "Buffer index of the terminal")
+        .prop("lines", "integer", "How many recent lines to return (default 24)")
         .required(["buffer_index"])
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -200,4 +194,17 @@ pub(super) fn shell_tool_definitions() -> Vec<ToolDefinition> {
         .permission(PermissionTier::Shell)
         .build(),
     ]
+}
+
+/// `terminal_spawn`: an interactive shell buffer the user can see.
+fn terminal_spawn_def() -> ToolDefinition {
+    ToolDefBuilder::new(
+        "terminal_spawn",
+        "Spawn a new interactive shell terminal buffer. Returns the buffer index. The terminal is visible to the user and supports long-running processes (compilers, servers).",
+    )
+    .prop("name", "string", "Optional name for the terminal buffer (e.g. '*build*')")
+    .prop("command", "string", "Initial command to run in the terminal (optional)")
+    .prop("cwd", "string", "Working directory for the shell (optional; ~ is expanded)")
+    .permission(PermissionTier::Shell)
+    .build()
 }

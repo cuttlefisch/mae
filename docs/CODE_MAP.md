@@ -1197,7 +1197,7 @@ Source: `shared/sync/src/lib.rs`
 | `daily-prev` | Navigate to previous daily note (SPC n d p) |
 | `daily-next` | Navigate to next daily note (SPC n d n) |
 | `kb-audit` | Run KB audit report (SPC n H a) |
-| `kb-export-guidance` | Export guidance-KB context to AGENTS.md or a custom path (ADR-050 Phase H) |
+| `kb-export-guidance` | Export guidance-KB context to AGENTS.md or another file in the project (ADR-050 Phase H) |
 | `kb-export-html` | Export a KB subgraph (seed node + neighborhood) to one self-contained HTML file |
 | `kb-narrow` | Narrow to a meta-node component for editing |
 | `kb-widen` | Save edits and widen back from narrowed meta-node component |

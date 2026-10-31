@@ -1185,7 +1185,7 @@ impl CommandRegistry {
         reg.register_builtin("kb-audit", "Run KB audit report (SPC n H a)");
         reg.register_builtin(
             "kb-export-guidance",
-            "Export guidance-KB context to AGENTS.md or a custom path (ADR-050 Phase H)",
+            "Export guidance-KB context to AGENTS.md or another file in the project (ADR-050 Phase H)",
         );
         reg.register_builtin(
             "kb-export-html",

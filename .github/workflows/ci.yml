@@ -1412,6 +1412,10 @@ jobs:
       # no build and adds a couple of seconds to an already-cheap job.
       - name: Check heavy-e2e filter lists agree
         run: make heavy-e2e-check
+      # Tool calls refuse undeclared arguments, so an implementation reading a
+      # name its schema omits is unreachable. Pure python3 over source, no build.
+      - name: Check AI tool arguments are declared
+        run: make tool-args-check
 
   adr-kb-sync:
     name: ADR KB staleness gate (ADR-059 Phase E)
