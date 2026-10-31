@@ -48,27 +48,10 @@ fn resolve_path(editor: &Editor, raw: &str) -> PathBuf {
     }
 }
 
-/// Write `contents` to `path` atomically: write to a temp file in the SAME
-/// directory (so the final `rename` is same-filesystem, never a cross-
-/// filesystem copy that could itself fail partway), then rename over the
-/// destination. A disk-full/killed-process/power-loss mid-write can now
-/// only ever leave the ORIGINAL file untouched or the NEW file fully
-/// written at `path` -- never a partial/corrupt file at the destination,
-/// unlike the previous plain `std::fs::write`. Best-effort cleanup of the
-/// temp file on a write failure (not the rename failure path, where the
-/// temp file IS the recovery artifact) -- a leftover `.tmp-<pid>` file on
-/// that rare failure is a minor cleanup nit, not a correctness issue.
+/// Atomic, exclusive-temp write shared with the guidance export (one
+/// implementation: see `guidance_export::write_replacing`).
 fn write_atomically(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
-    let file_name = path.file_name().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no file name")
-    })?;
-    let tmp_name = format!("{}.tmp-{}", file_name.to_string_lossy(), std::process::id());
-    let tmp_path = path.with_file_name(tmp_name);
-    if let Err(e) = std::fs::write(&tmp_path, contents) {
-        let _ = std::fs::remove_file(&tmp_path);
-        return Err(e);
-    }
-    std::fs::rename(&tmp_path, path)
+    super::guidance_export::write_replacing(path, contents)
 }
 
 /// Write the exported page: refuse MAE configuration, create the parent
@@ -1084,11 +1067,11 @@ mod tests {
         let leftover: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
             .collect();
         assert!(
             leftover.is_empty(),
-            "no .tmp-<pid> file should remain after a successful write: {leftover:?}"
+            "no temp file should remain after a successful write: {leftover:?}"
         );
     }
 
@@ -1120,7 +1103,7 @@ mod tests {
         let leftover: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
             .collect();
         assert!(leftover.is_empty(), "{leftover:?}");
     }

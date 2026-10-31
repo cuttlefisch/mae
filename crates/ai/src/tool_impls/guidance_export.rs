@@ -117,34 +117,60 @@ fn contained_target(root: &std::path::Path, target: &str) -> Result<std::path::P
             "Refused: '{target}' is MAE configuration, which an AI session may not write"
         ));
     }
+    // A link INSIDE the project is refused too: reading through it would copy
+    // the file it names (`.env`, `.git/config`) into the export, and replacing
+    // it would silently turn a deliberate link into a stale copy.
+    if out
+        .symlink_metadata()
+        .is_ok_and(|m| m.file_type().is_symlink())
+    {
+        return Err(format!(
+            "Refused: '{target}' is a symbolic link; the export neither reads nor \
+             replaces a link. Export to another path, or replace the link with a file."
+        ));
+    }
     Ok(out)
 }
 
 /// Write `contents` to `path` by renaming a sibling temp file over it, so a
-/// symlink at `path` is replaced, never written through, even if it appeared
-/// after `contained_target` checked.
-fn write_replacing(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+/// link at `path` is replaced, never written through, even if it appeared after
+/// `contained_target` checked. The temp file is created exclusively under a
+/// random name: a pre-planted entry at a guessable name (a link, even a dangling
+/// one) makes the create fail instead of being followed. The existing file's
+/// permissions carry over. A crash between create and rename can leave a
+/// `.<name>.<random>.tmp` beside the target; never a partial target.
+pub(super) fn write_replacing(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write as _;
     let name = path.file_name().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no file name")
     })?;
     let tmp = path.with_file_name(format!(
-        ".{}.tmp-{}",
+        ".{}.{}.tmp",
         name.to_string_lossy(),
-        std::process::id()
+        uuid::Uuid::new_v4().simple()
     ));
-    if let Err(e) = std::fs::write(&tmp, contents) {
+    let written = (|| {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        f.write_all(contents.as_bytes())?;
+        if let Ok(meta) = std::fs::symlink_metadata(path) {
+            f.set_permissions(meta.permissions())?;
+        }
+        f.sync_all()?;
+        std::fs::rename(&tmp, path)
+    })();
+    if written.is_err() {
         let _ = std::fs::remove_file(&tmp);
-        return Err(e);
     }
-    std::fs::rename(&tmp, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })
+    written
 }
 
 /// Export MAE's guidance context to a markdown file for external agents that
 /// don't (or might not) consume MCP `initialize.instructions` themselves —
 /// `AGENTS.md` by default; pass `path` to target `.github/copilot-instructions.md`
-/// or anything else. Read-modify-write, additive-merge-safe (see module doc).
+/// or another regular file inside the project (see `contained_target`). Read-modify-write, additive-merge-safe (see module doc).
 pub fn execute_kb_export_guidance(
     editor: &Editor,
     args: &serde_json::Value,
@@ -374,6 +400,53 @@ mod tests {
         let r = execute_kb_export_guidance(&editor, &serde_json::json!({}));
         assert!(r.is_err(), "wrote through a shipped symlink: {r:?}");
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "# trust list\n");
+    }
+
+    /// A link that stays inside the project is refused as well: reading
+    /// through it would copy the linked file (a secrets file) into AGENTS.md.
+    #[cfg(unix)]
+    #[test]
+    fn an_in_project_symlink_is_neither_read_nor_replaced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let editor = editor_with_root(tmp.path());
+        std::fs::write(tmp.path().join(".env"), "TOKEN=secret\n").unwrap();
+        std::os::unix::fs::symlink(".env", tmp.path().join("AGENTS.md")).unwrap();
+
+        let r = execute_kb_export_guidance(&editor, &serde_json::json!({}));
+        assert!(r.is_err(), "{r:?}");
+        let agents = tmp.path().join("AGENTS.md");
+        assert!(agents.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join(".env")).unwrap(),
+            "TOKEN=secret\n"
+        );
+    }
+
+    /// A planted entry at the temp name, even a dangling link, is never
+    /// followed: the temp file is created exclusively.
+    #[cfg(unix)]
+    #[test]
+    fn the_temp_file_is_created_exclusively() {
+        let tmp = tempfile::tempdir().unwrap();
+        let victim = tmp.path().join("victim");
+        let target = tmp.path().join("out.md");
+        // Every name a predictable scheme could produce is moot with a random
+        // suffix; plant the old predictable one to prove it is not used.
+        std::os::unix::fs::symlink(
+            &victim,
+            tmp.path()
+                .join(format!(".out.md.tmp-{}", std::process::id())),
+        )
+        .unwrap();
+        write_replacing(&target, "body").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "body");
+        assert!(!victim.exists(), "wrote through a planted link");
+        let leftovers: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp file left behind");
     }
 
     /// The same containment for a human-typed path: exporting guidance is for
