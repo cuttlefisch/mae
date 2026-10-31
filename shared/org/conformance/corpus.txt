@@ -118,5 +118,4 @@ assets/practices/no-hardcoding.org
 assets/practices/shared-computation.org
 tests/fixtures/kb/collabtest/alpha.org
 tests/fixtures/kb/collabtest/beta.org
-tests/fixtures/kb/collabtest/eor-instance.org
 tests/fixtures/kb/collabtest/overview.org
