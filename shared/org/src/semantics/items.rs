@@ -14,20 +14,44 @@ use crate::kind::SyntaxKind::*;
 use crate::kind::SyntaxNode;
 use crate::span::Span;
 
-/// The properties of `drawer` if it is an item's property drawer, as written
-/// (keys not yet canonical), in order.
-pub(crate) fn item_property_drawer(drawer: &SyntaxNode) -> Option<Vec<(String, String)>> {
-    if drawer.kind() != DRAWER {
+/// One `:KEY: value` line of an item's property drawer.
+pub(crate) struct ItemProperty {
+    /// The key as written (not yet canonical).
+    pub key: String,
+    /// The value, trimmed of blanks.
+    pub value: String,
+    /// The value's start in the document.
+    pub value_start: usize,
+}
+
+/// Whether `drawer` is placed where an item's property drawer may be: a
+/// direct child of an item, its first element or its second after one
+/// paragraph. O(1): only the item's first two elements are looked at.
+fn placed(drawer: &SyntaxNode) -> bool {
+    let Some(item) = drawer.parent().filter(|p| p.kind() == ITEM) else {
+        return false;
+    };
+    let mut elements = item.children().filter(|c| c.kind() != ITEM_TAG_CONTENT);
+    match elements.next() {
+        Some(first) if first == *drawer => true,
+        Some(first) if first.kind() == PARAGRAPH => elements.next().as_ref() == Some(drawer),
+        _ => false,
+    }
+}
+
+/// Whether `drawer` is an item's property drawer (see the module doc).
+pub(crate) fn is_item_property_drawer(drawer: &SyntaxNode) -> bool {
+    item_property_drawer(drawer).is_some()
+}
+
+/// The properties of `drawer` if it is an item's property drawer, in order.
+/// The cost is the drawer's own size: a drawer that is not in place, or not
+/// named PROPERTIES, is rejected before its lines are read.
+pub(crate) fn item_property_drawer(drawer: &SyntaxNode) -> Option<Vec<ItemProperty>> {
+    if drawer.kind() != DRAWER || !placed(drawer) {
         return None;
     }
-    let item = drawer.parent().filter(|p| p.kind() == ITEM)?;
-    let elements: Vec<SyntaxNode> = item
-        .children()
-        .filter(|c| c.kind() != ITEM_TAG_CONTENT)
-        .collect();
-    let at = elements.iter().position(|e| e == drawer)?;
-    let placed = at == 0 || (at == 1 && elements[0].kind() == PARAGRAPH);
-    if !placed || !drawer_name(drawer).eq_ignore_ascii_case("PROPERTIES") {
+    if !drawer_name(drawer).eq_ignore_ascii_case("PROPERTIES") {
         return None;
     }
     let begin = drawer.children().find(|c| c.kind() == BLOCK_BEGIN)?;
@@ -36,11 +60,18 @@ pub(crate) fn item_property_drawer(drawer: &SyntaxNode) -> Option<Vec<(String, S
     let base = usize::from(drawer.text_range().start());
     let from = usize::from(begin.text_range().end()) - base;
     let to = usize::from(end.text_range().start()) - base;
-    text[from..to]
-        .split(['\n', '\r'])
-        .filter(|l| !l.trim_matches([' ', '\t']).is_empty())
-        .map(property_line)
-        .collect()
+    let mut out = Vec::new();
+    let mut pos = base + from;
+    for seg in text[from..to].split_inclusive(['\n', '\r']) {
+        let line = seg.trim_end_matches(['\n', '\r']);
+        let at = pos;
+        pos += seg.len();
+        if line.trim_matches([' ', '\t']).is_empty() {
+            continue;
+        }
+        out.push(property_line(line, at)?);
+    }
+    Some(out)
 }
 
 /// The name of a drawer as written (`LOGBOOK` in `:LOGBOOK:`).
@@ -58,13 +89,20 @@ pub(crate) fn drawer_name(drawer: &SyntaxNode) -> String {
 
 /// `:KEY: value` as the tree's property lines read it: the key is the
 /// non-blank run after the first colon, ending in a colon; the value is the
-/// rest, trimmed.
-fn property_line(line: &str) -> Option<(String, String)> {
+/// rest, trimmed of blanks. `at` is the line's start in the document.
+fn property_line(line: &str, at: usize) -> Option<ItemProperty> {
     let blank = [' ', '\t'];
-    let rest = line.trim_start_matches(blank).strip_prefix(':')?;
+    let indent = line.len() - line.trim_start_matches(blank).len();
+    let rest = line[indent..].strip_prefix(':')?;
     let n = rest.find(blank).unwrap_or(rest.len());
     let key = rest[..n].strip_suffix(':').filter(|k| !k.is_empty())?;
-    Some((key.to_string(), rest[n..].trim_matches(blank).to_string()))
+    let after = &rest[n..];
+    let lead = after.len() - after.trim_start_matches(blank).len();
+    Some(ItemProperty {
+        key: key.to_string(),
+        value: after.trim_matches(blank).to_string(),
+        value_start: at + indent + 1 + n + lead,
+    })
 }
 
 /// The item's own text before its property drawer: its tag and first

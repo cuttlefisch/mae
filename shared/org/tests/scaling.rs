@@ -10,6 +10,11 @@
 //! byte ratio of the two inputs, t(8N)/t(N) · 8/B < 24, where linear gives ~8,
 //! n·log n ~9–10 and quadratic 64.
 //!
+//! `semantics()` is held to the same bound (the "sem:" families after the
+//! parse ones, timed alone on a document parsed outside the clock): the
+//! projection runs on every peer and the daemon on every change too. Their
+//! measurements are listed after the parse families' below.
+//!
 //! Measured on the development machine (Linux x86_64, release, 2026-10-31,
 //! with every O2 inline parser; absolute times vary ~2x with machine load,
 //! ratios do not), t(N) → t(8N), the byte ratio, and the normalised ratio
@@ -59,8 +64,26 @@
 //! - radio links: 7.57 ms -> 65.11 ms for x8 bytes, normalised x8.6
 //! - long radio target: 4.81 ms -> 41.56 ms for x8 bytes, normalised x8.6
 //! - radio candidates rejected: 3.58 ms -> 29.45 ms for x8 bytes, normalised x8.2
+//!
+//! The `semantics()` families (2026-10-31, after the review fixes; before
+//! them the first six were x47–x391: a scan of the item's children per
+//! drawer, of the tags so far per tag, of the keys so far per key, of the
+//! exclude tags per tag, and one set of every file tag per headline; "N
+//! footnotes" swings x4–x8 between runs, allocation again):
+//! - sem: item with N plain drawers: 5.11 ms -> 40.98 ms for x8 bytes, normalised x8.0
+//! - sem: N filetags, N headline nodes: 3.12 ms -> 24.83 ms for x9 bytes, normalised x7.5
+//! - sem: one drawer, N distinct keys: 20.83 ms -> 189.11 ms for x9 bytes, normalised x8.3
+//! - sem: one headline, N tags: 1.03 ms -> 8.27 ms for x9 bytes, normalised x6.9
+//! - sem: one file node, N filetags: 2.20 ms -> 18.73 ms for x9 bytes, normalised x7.3
+//! - sem: N EXCLUDE_TAGS, N tagged headlines: 1.71 ms -> 14.02 ms for x9 bytes, normalised x7.4
+//! - sem: N footnotes, each a link: 6.94 ms -> 31.98 ms for x9 bytes, normalised x4.3
+//! - sem: footnote chain of N: 3.33 ms -> 31.89 ms for x9 bytes, normalised x8.9
+//! - sem: N headline ids, half duplicates: 6.41 ms -> 54.41 ms for x8 bytes, normalised x8.3
+//! - sem: N links in one paragraph: 8.79 ms -> 68.77 ms for x8 bytes, normalised x7.8
+//! - sem: one drawer, N KEY+ appends: 10.46 ms -> 85.37 ms for x8 bytes, normalised x8.2
+//! - sem: N transclusions: 25.99 ms -> 218.40 ms for x8 bytes, normalised x8.4
 
-use mae_org::{parse, ParseOptions};
+use mae_org::{parse, semantics, ParseOptions};
 #[cfg(not(debug_assertions))]
 use std::time::{Duration, Instant};
 
@@ -205,6 +228,126 @@ fn nested_blocks(n: usize) -> String {
     format!("{open}core\n{close}")
 }
 
+/// `semantics()` families (ADR-112 D5 gate 3 applied to the projection):
+/// timed alone, on a document parsed once outside the clock. Each is a
+/// shape on which a per-element scan of a growing collection (the item's
+/// children, the tags so far, the keys so far, the exclude tags) went
+/// quadratic or worse before the review that added them.
+const SEMANTIC_FAMILIES: &[Family] = &[
+    ("sem: item with N plain drawers", item_with_drawers, 2_000),
+    ("sem: N filetags, N headline nodes", filetags_and_nodes, 500),
+    ("sem: one drawer, N distinct keys", drawer_with_keys, 8_000),
+    ("sem: one headline, N tags", headline_with_tags, 4_000),
+    (
+        "sem: one file node, N filetags",
+        file_node_with_filetags,
+        4_000,
+    ),
+    (
+        "sem: N EXCLUDE_TAGS, N tagged headlines",
+        exclude_tags_and_headlines,
+        1_000,
+    ),
+    ("sem: N footnotes, each a link", footnotes_with_links, 2_000),
+    ("sem: footnote chain of N", footnote_chain, 2_000),
+    ("sem: N headline ids, half duplicates", headline_ids, 2_000),
+    (
+        "sem: N links in one paragraph",
+        |n| {
+            format!(
+                ":PROPERTIES:\n:ID: f\n:END:\n{}\n",
+                "[[id:a?rel=r#f][d]] ".repeat(n)
+            )
+        },
+        5_000,
+    ),
+    (
+        "sem: one drawer, N KEY+ appends",
+        |n| {
+            format!(
+                ":PROPERTIES:\n:ID: f\n:K: v\n{}:END:\n",
+                ":K+: w\n".repeat(n)
+            )
+        },
+        5_000,
+    ),
+    (
+        "sem: N transclusions",
+        |n| {
+            format!(
+                ":PROPERTIES:\n:ID: f\n:END:\n{}",
+                "#+TRANSCLUDE: [[id:m][M]] :level 2\n".repeat(n)
+            )
+        },
+        5_000,
+    ),
+];
+
+fn item_with_drawers(n: usize) -> String {
+    format!(
+        "- item\n  :PROPERTIES:\n  :ID: i\n  :END:\n{}",
+        "  :D:\n  [[id:x]]\n  :END:\n".repeat(n)
+    )
+}
+
+fn tag_run(prefix: &str, n: usize) -> String {
+    let tags: Vec<String> = (0..n).map(|i| format!("{prefix}{i}")).collect();
+    format!(":{}:", tags.join(":"))
+}
+
+fn filetags_and_nodes(n: usize) -> String {
+    let nodes: String = (0..n)
+        .map(|i| format!("* h{i}\n:PROPERTIES:\n:ID: h{i}\n:END:\n"))
+        .collect();
+    format!(
+        ":PROPERTIES:\n:ID: f\n:END:\n#+filetags: {}\n{nodes}",
+        tag_run("t", n)
+    )
+}
+
+fn drawer_with_keys(n: usize) -> String {
+    let keys: String = (0..n).map(|i| format!(":K{i}: v\n")).collect();
+    format!(":PROPERTIES:\n:ID: f\n{keys}:END:\n")
+}
+
+fn headline_with_tags(n: usize) -> String {
+    format!("* h {}\n:PROPERTIES:\n:ID: h\n:END:\n", tag_run("t", n))
+}
+
+fn file_node_with_filetags(n: usize) -> String {
+    format!(
+        ":PROPERTIES:\n:ID: f\n:END:\n#+filetags: {}\n",
+        tag_run("t", n)
+    )
+}
+
+fn exclude_tags_and_headlines(n: usize) -> String {
+    let words: Vec<String> = (0..n).map(|i| format!("x{i}")).collect();
+    let heads: String = (0..n).map(|i| format!("* h :y{i}:\nt\n")).collect();
+    format!("#+EXCLUDE_TAGS: {}\n{heads}", words.join(" "))
+}
+
+fn footnotes_with_links(n: usize) -> String {
+    let refs: String = (0..n).map(|i| format!("r[fn:{i}] ")).collect();
+    let defs: String = (0..n)
+        .map(|i| format!("[fn:{i}] [[id:t{i}]]\n\n"))
+        .collect();
+    format!(":PROPERTIES:\n:ID: f\n:END:\n{refs}\n\n{defs}")
+}
+
+fn footnote_chain(n: usize) -> String {
+    let defs: String = (0..n)
+        .map(|i| format!("[fn:{i}] [[id:t{i}]] next[fn:{}]\n\n", i + 1))
+        .collect();
+    format!(":PROPERTIES:\n:ID: f\n:END:\nr[fn:0]\n\n{defs}")
+}
+
+fn headline_ids(n: usize) -> String {
+    (0..n)
+        .map(|i| format!("* h\n:PROPERTIES:\n:ID: i{}\n:END:\n[[id:x]]\n", i / 2))
+        .collect()
+}
+
 #[cfg(not(debug_assertions))]
 fn time(text: &str) -> Duration {
     let opts = ParseOptions::default();
@@ -230,13 +373,44 @@ fn every_family_parses_and_round_trips_at_8n() {
         let doc = parse(&text, &ParseOptions::default());
         assert_eq!(doc.syntax().to_string(), text, "{name}");
     }
+    for (name, gen, base) in SEMANTIC_FAMILIES {
+        let text = gen(base * 8);
+        let s = semantics(&parse(&text, &ParseOptions::default()));
+        assert!(!s.nodes.is_empty() || name.contains("EXCLUDE"), "{name}");
+    }
 }
 
+/// The minimum of up to seven runs of `semantics()` on `text`, parsed once
+/// outside the clock. Stops early once a run passes two seconds: a family
+/// that slow has failed the gate whatever the minimum is.
+#[cfg(not(debug_assertions))]
+fn time_semantics(text: &str) -> Duration {
+    let doc = parse(text, &ParseOptions::default());
+    let mut best = Duration::MAX;
+    for _ in 0..7 {
+        let t = Instant::now();
+        let s = semantics(&doc);
+        let d = t.elapsed();
+        std::hint::black_box(s);
+        best = best.min(d);
+        if d > Duration::from_secs(2) {
+            break;
+        }
+    }
+    best
+}
+
+/// Parse and semantics families in one test, one after the other, so no
+/// two timings ever share the machine.
 #[cfg(not(debug_assertions))]
 #[test]
-fn parse_time_grows_roughly_linearly() {
+fn parse_and_semantics_time_grow_roughly_linearly() {
     let mut failures = Vec::new();
-    for (name, gen, base) in FAMILIES {
+    let parse_families = FAMILIES.iter().map(|f| (f, time as fn(&str) -> Duration));
+    let sem_families = SEMANTIC_FAMILIES
+        .iter()
+        .map(|f| (f, time_semantics as fn(&str) -> Duration));
+    for ((name, gen, base), time) in parse_families.chain(sem_families) {
         let (small, large) = (gen(*base), gen(base * 8));
         let (t1, t8) = (time(&small), time(&large));
         let bytes = large.len() as f64 / small.len() as f64;

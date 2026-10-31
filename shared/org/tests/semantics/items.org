@@ -12,6 +12,7 @@
   :PROPERTIES:
   :ID: sem-items-checkbox
   :KIND: task
+  :Item-Key: an item's key, written in mixed case
   :END:
   Its body [[id:sem-items-checkbox-link]].
 - term :: a descriptive item

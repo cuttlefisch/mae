@@ -327,6 +327,13 @@ fn id_and_file_links_split_their_search_option() {
         (c.target.as_str(), c.search),
         ("https://a.invalid/x::y", None)
     );
+    // The semantics carry it.
+    let doc = parse("[[id:x::*Heading][d]]", &ParseOptions::default());
+    let l = &semantics(&doc).links[0];
+    assert_eq!(
+        (l.target.as_str(), l.search.as_deref()),
+        ("x", Some("*Heading"))
+    );
 }
 
 /// Every non-KB scheme, pinned one by one against a list written here (not

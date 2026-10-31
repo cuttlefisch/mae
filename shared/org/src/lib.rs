@@ -75,8 +75,8 @@ pub use options::{
 /// needs rowan.
 pub use rowan;
 pub use semantics::{
-    semantics, semantics_with, NodeOrigin, Region, SemanticDiagnostic, SemanticLink, SemanticNode,
-    Semantics, SemanticsOptions, Transclusion,
+    semantics, semantics_with, ArchivedTrees, NodeOrigin, Region, SemanticDiagnostic, SemanticLink,
+    SemanticNode, Semantics, SemanticsOptions, Transclusion, LINK_EXCLUDE_KEYWORDS,
 };
 pub use span::Span;
 pub use text::LineEnding;

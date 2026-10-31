@@ -81,9 +81,14 @@ fn titles_are_plain_text() {
         Some("A styled headline with code and a link")
     );
     assert_eq!((h.todo.as_deref(), h.priority), (Some("TODO"), Some('A')));
-    assert_eq!(h.tags, vec!["tag"]);
+    assert_eq!(h.own_tags, vec!["tag"]);
     // A link without a description reads as its path, as Org displays it.
     assert_eq!(s.nodes[2].title.as_deref(), Some("id:sem-title-bare only"));
+    // Every other object stays exactly as written.
+    assert_eq!(
+        s.nodes[3].title.as_deref(),
+        Some("Objects [1/2] \\alpha <2026-10-31 Sat> {{{macro}}} stay as written")
+    );
 
     let t = |title: &str| {
         let s = sem(&format!("* {title}\n:PROPERTIES:\n:ID: x\n:END:\n"));
@@ -268,12 +273,271 @@ fn duplicate_ids_are_diagnosed_and_not_nodes() {
     assert!(edges(&s).contains(&("sem-dup".into(), "sem-dup-first-link".into())));
 }
 
+/// org-roam's `org-roam-db-extra-links-elements` default, `(node-property
+/// keyword)`: a link in a keyword or property value is an edge of the node
+/// that owns the value, except the excluded keys (`ROAM_REFS`, `TRANSCLUDE`)
+/// and raw export keywords and snippets, which are output text, not Org.
 #[test]
-fn keyword_values_are_not_link_sources() {
+fn keyword_and_property_values_are_link_sources() {
     let s = sem(&fixture("titles.org"));
-    assert!(s.links.iter().all(|l| l.target != "sem-title-target"));
-    let s = sem(":PROPERTIES:\n:ID: f\n:URL: [[id:in-a-property]]\n:END:\n#+subtitle: [[id:in-a-keyword]]\n");
-    assert!(s.links.is_empty(), "{:?}", s.links);
+    let title = s.links.iter().find(|l| l.target == "sem-title-target");
+    assert_eq!(
+        title.map(|l| (l.from.as_deref(), l.description.as_deref())),
+        Some((Some("sem-title-file"), Some("linked")))
+    );
+    let text = ":PROPERTIES:\n:ID: f\n:URL: [[id:in-a-property]] and [[id:second]]\n:ROAM_REFS: [[id:a-ref]]\n:END:\n#+subtitle: [[id:in-a-keyword]]\n#+TRANSCLUDE: [[id:transcluded]]\n#+HTML: <a>[[id:raw-html]]</a>\nText @@html:[[id:in-a-snippet]]@@.\n#+caption: [[id:in-a-caption]]\n| x |\n* H\n:PROPERTIES:\n:ID: h\n:Source: [[id:from-h]]\n:END:\n#+keyword_in_h: [[id:kw-h]]\n- item\n  :PROPERTIES:\n  :ID: i\n  :SEE: [[id:from-item]]\n  :roam_refs: [[id:item-ref]]\n  :END:\n";
+    let s = sem(text);
+    let want = [
+        ("f", "in-a-property"),
+        ("f", "second"),
+        ("f", "in-a-keyword"),
+        ("f", "in-a-caption"),
+        ("h", "from-h"),
+        ("h", "kw-h"),
+        ("i", "from-item"),
+    ];
+    assert_eq!(edges(&s), pairs(&want));
+    // Each value link's span is the link itself in the document.
+    for l in &s.links {
+        assert_eq!(&text[l.span.range()], format!("[[{}]]", l.path), "{l:?}");
+    }
+    // Excluded keys are not even diagnosed when unrendered.
+    let hidden = sem("* x :noexport:\n:PROPERTIES:\n:URL: [[id:u]]\n:ROAM_REFS: [[id:r]]\n:END:\n#+title: [[id:t]]\n#+HTML: [[id:h]]\n");
+    let got: Vec<String> = unrendered_links(&hidden).into_iter().map(|l| l.0).collect();
+    assert_eq!(got, vec!["id:u", "id:t"]);
+}
+
+#[test]
+fn an_id_and_its_property_agree_on_what_is_trimmed() {
+    // Org trims space, tab, LF and CR only: a no-break space is content.
+    let s = sem(":PROPERTIES:\n:ID: x\u{a0}\n:ALIASES: a\u{a0}, \u{a0}b\n:END:\n");
+    let n = &s.nodes[0];
+    assert_eq!(n.id, "x\u{a0}");
+    assert_eq!(n.properties[0], ("ID".to_string(), "x\u{a0}".to_string()));
+    assert_eq!(n.aliases, vec!["a\u{a0}", "\u{a0}b"]);
+    let s = sem("* h\n:PROPERTIES:\n:ID: \u{a0}y\n:END:\n");
+    assert_eq!(s.nodes[0].id, "\u{a0}y");
+}
+
+/// One rule for every file keyword: document order, the last wins, an empty
+/// last value clears (Org's reading of repeated keywords). The file's
+/// property drawer precedes its keywords, so a keyword wins over `:KIND:` and
+/// `:ALIASES:`; a keyword before the drawer makes the drawer a plain drawer.
+#[test]
+fn file_keywords_last_wins_and_an_empty_value_clears() {
+    let file = |body: &str| {
+        let s = sem(&format!(
+            ":PROPERTIES:\n:ID: f\n:KIND: concept\n:ALIASES: p1, p2\n:END:\n{body}"
+        ));
+        s.nodes[0].clone()
+    };
+    let n = file("#+todo_state: TODO\n#+priority: B\n#+kind: lesson\n#+aliases: k1, k2\n");
+    assert_eq!((n.todo.as_deref(), n.priority), (Some("TODO"), Some('B')));
+    assert_eq!(
+        (n.kind.as_deref(), n.aliases.clone()),
+        (Some("lesson"), vec!["k1".to_string(), "k2".to_string()])
+    );
+    let n = file("#+todo_state: TODO\n#+todo_state:\n#+priority: B\n#+priority:\n#+kind: lesson\n#+kind:\n#+aliases: k1\n#+aliases:\n#+title: T\n#+title:\n");
+    assert_eq!(
+        (n.todo, n.priority, n.kind, n.title),
+        (None, None, None, None)
+    );
+    assert!(n.aliases.is_empty(), "{:?}", n.aliases);
+    let n = file("#+todo_state: WAIT\n#+todo_state: NEXT\n");
+    assert_eq!(n.todo.as_deref(), Some("NEXT"));
+    // Without keywords the drawer's own KIND and ALIASES hold.
+    let n = file("");
+    assert_eq!(
+        (n.kind.as_deref(), n.aliases.clone()),
+        (Some("concept"), vec!["p1".to_string(), "p2".to_string()])
+    );
+    // A keyword first: the drawer is not the file's, so no file node.
+    let s = sem("#+aliases: k\n:PROPERTIES:\n:ID: f\n:ALIASES: p\n:END:\n");
+    assert!(s.nodes.is_empty(), "{:?}", s.nodes);
+}
+
+/// The fixtures the differential compares with mae-kb, which kept the
+/// first non-empty `#+todo_state` and read a drawer after a keyword.
+#[test]
+fn keyword_precedence_fixtures() {
+    let s = sem(&fixture("keyword-precedence.org"));
+    let n = &s.nodes[0];
+    assert_eq!((n.todo.as_deref(), n.priority), (None, Some('A')));
+    assert_eq!(
+        (n.kind.as_deref(), n.aliases.clone()),
+        (Some("lesson"), vec!["from-keyword-2".to_string()])
+    );
+    let s = sem(&fixture("keyword-before-drawer.org"));
+    assert!(s.nodes.is_empty(), "{:?}", s.nodes);
+    assert_eq!(
+        unrendered_ids(&s),
+        vec![("sem-kw-late-drawer".to_string(), Region::Drawer)]
+    );
+}
+
+#[test]
+fn every_node_gets_the_file_tags_once() {
+    let s = sem("#+filetags: :ft:\n* H :own:\n:PROPERTIES:\n:ID: h\n:END:\n- item\n  :PROPERTIES:\n  :ID: i\n  :END:\n");
+    assert_eq!(s.tags_of(&s.nodes[0]), vec!["ft", "own"]);
+    assert_eq!(s.tags_of(&s.nodes[1]), vec!["ft"]);
+    // Repeats in a headline's tags appear once.
+    let s = sem("* H :a:b:a::b:\n:PROPERTIES:\n:ID: h\n:END:\n");
+    assert_eq!(s.nodes[0].own_tags, vec!["a", "b"]);
+}
+
+/// org-transclusion's form: the member is the link's target, and its
+/// properties are kept as args. MAE's own form is unchanged.
+#[test]
+fn org_transclusion_links_give_their_target() {
+    let text = ":PROPERTIES:\n:ID: f\n:END:\n#+TRANSCLUDE: [[id:x][X]] :level 2 :only-contents\n#+transclude: [[file:notes.org::*h]]\n#+TRANSCLUDE: [[id:y]]\n#+TRANSCLUDE: plain-id reference\n#+TRANSCLUDE: lone\t\n";
+    let s = sem(text);
+    let got: Vec<(&str, &str, Option<&str>)> = s
+        .transclusions
+        .iter()
+        .map(|t| (t.member.as_str(), t.role.as_str(), t.args.as_deref()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("x", "content", Some(":level 2 :only-contents")),
+            ("file:notes.org", "content", None),
+            ("y", "content", None),
+            ("plain-id", "reference", None),
+            ("lone", "content", None),
+        ]
+    );
+    // The span is the keyword line without its line ending or blanks.
+    let spans: Vec<&str> = s
+        .transclusions
+        .iter()
+        .map(|t| &text[t.span.range()])
+        .collect();
+    assert_eq!(spans[4], "#+TRANSCLUDE: lone");
+    assert_eq!(
+        spans[0],
+        "#+TRANSCLUDE: [[id:x][X]] :level 2 :only-contents"
+    );
+}
+
+/// `drawer-after-blank.org`: a property drawer after a blank line is not the
+/// headline's (Org reads it only right under the headline or planning
+/// line), so it is a plain drawer, unrendered, and its id is no node.
+#[test]
+fn a_property_drawer_after_a_blank_line_is_a_plain_drawer() {
+    let s = sem(&fixture("drawer-after-blank.org"));
+    assert_eq!(ids(&s), vec!["sem-blank-file"]);
+    assert_eq!(
+        unrendered_ids(&s),
+        vec![("sem-blank-heading".to_string(), Region::Drawer)]
+    );
+    assert_eq!(edges(&s), pairs(&[("sem-blank-file", "sem-blank-target")]));
+}
+
+/// `external-links.org`: every link kind, in order, as `classify_link`
+/// reads it inside a document.
+#[test]
+fn external_links_fixture_classifies_each_kind() {
+    let s = sem(&fixture("external-links.org"));
+    let got: Vec<(LinkKind, &str, Option<&str>)> = s
+        .links
+        .iter()
+        .map(|l| (l.kind, l.target.as_str(), l.search.as_deref()))
+        .collect();
+    use LinkKind::*;
+    let want = vec![
+        (Web, "https://example.invalid/a?b=c#d", None),
+        (Web, "HTTP://EXAMPLE.INVALID", None),
+        (Mailto, "mailto:someone@example.invalid", None),
+        (Other, "file:notes.org", None),
+        (Other, "doi:10.1000/1", None),
+        (Other, "help:org-mode", None),
+        (Other, "file+sys:/bin/sh", None),
+        (Kb, "ssh://host.invalid", None),
+        (Kb, "0f1e2d3c-0000-4000-8000-00000000abcd", None),
+        (Kb, "concept:buffer", None),
+        (CustomId, "custom-id", None),
+        (Heading, "A heading", None),
+        (Coderef, "ref", None),
+        (Kb, "", None),
+        (Other, "roam:Some title", None),
+        (Other, "cite:key2026", None),
+        (Other, "zotero://select/items/X", None),
+        (Kb, "sem-external-search", Some("*A heading")),
+        (Other, "file:notes.org", Some("*h")),
+        (Kb, "sem-external-plain", None),
+    ];
+    assert_eq!(got, want);
+}
+
+/// (target, fragment, rel, weight, confidence, description).
+type SplitRead<'a> = (&'a str, Option<&'a str>, &'a str, f64, f64, Option<&'a str>);
+
+/// `split-orders.org`: each link where the old splitters disagreed, read
+/// by the chosen order (`tests/link_grammar.rs` pins the order itself).
+#[test]
+fn split_orders_fixture_reads_each_link() {
+    let s = sem(&fixture("split-orders.org"));
+    let got: Vec<SplitRead> = s
+        .links
+        .iter()
+        .map(|l| {
+            let d = l.description.as_deref();
+            (
+                l.target.as_str(),
+                l.fragment.as_deref(),
+                l.rel.as_str(),
+                l.weight,
+                l.confidence,
+                d,
+            )
+        })
+        .collect();
+    let want = vec![
+        ("sem-split-a", None, "references", 1.0, 1.0, Some("c")),
+        ("sem-split-q", None, "cites#frag", 1.0, 1.0, None),
+        ("sem-split-f", Some("frag"), "cites", 0.5, 1.0, None),
+        ("sem-split-m", None, "references", 1.0, 1.0, None),
+        ("sem-split-stray", None, "references", 1.0, 1.0, None),
+        ("sem-split-one", None, "references", 1.0, 1.0, None),
+        ("sem-split-two", None, "references", 1.0, 1.0, Some("two")),
+        (
+            "sem-split-s",
+            None,
+            "references",
+            1.0,
+            1.0,
+            Some("What? #1"),
+        ),
+    ];
+    assert_eq!(got, want);
+    let attrs: Vec<&[(String, String)]> = s.links.iter().map(|l| l.attrs.as_slice()).collect();
+    assert_eq!(attrs[2], &[("by".to_string(), "ai".to_string())]);
+}
+
+/// Every fixture under `tests/semantics/` is named by some test, so none is
+/// read by the differential alone with nothing pinning what it means.
+#[test]
+fn every_semantics_fixture_is_named_by_a_test() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+    let mut sources = String::new();
+    for e in std::fs::read_dir(&dir).unwrap().flatten() {
+        let p = e.path();
+        let differential = p
+            .file_name()
+            .is_some_and(|f| f == "semantics_differential.rs");
+        if p.extension().is_some_and(|x| x == "rs") && !differential {
+            sources.push_str(&support::read(&p));
+        }
+    }
+    let fixtures = support::org_files(&dir.join("semantics"));
+    assert!(!fixtures.is_empty());
+    for f in fixtures {
+        let name = f.file_name().unwrap().to_string_lossy().to_string();
+        assert!(
+            sources.contains(&format!("fixture(\"{name}\")")),
+            "no test reads tests/semantics/{name}"
+        );
+    }
 }
 
 #[test]
@@ -332,9 +596,13 @@ fn transclude_keywords_are_case_insensitive() {
 fn filetags_split_like_org_and_tags_appear_once() {
     let s = sem(&fixture("file-tags.org"));
     // `#+tags:` declares the allowed tag set; it is not file tags.
-    assert_eq!(s.nodes[0].tags, vec!["alpha", "beta", "gamma", "delta"]);
+    assert_eq!(s.file_tags, vec!["alpha", "beta", "gamma", "delta"]);
+    assert_eq!(s.tags_of(&s.nodes[0]), s.file_tags);
+    assert!(s.nodes[0].own_tags.is_empty());
+    // `beta` is a file tag already: the heading's own tags are what is left.
+    assert_eq!(s.nodes[1].own_tags, vec!["own"]);
     assert_eq!(
-        s.nodes[1].tags,
+        s.tags_of(&s.nodes[1]),
         vec!["alpha", "beta", "gamma", "delta", "own"]
     );
 }
@@ -397,6 +665,8 @@ fn list_items_with_a_property_drawer_are_nodes() {
         &text[cb.body_span.range()],
         "  Its body [[id:sem-items-checkbox-link]].\n"
     );
+    // An item's keys are canonical like a drawer's.
+    assert_eq!(cb.properties[2].0, "ITEM-KEY");
     assert_eq!(
         s.nodes[3].title.as_deref(),
         Some("term :: a descriptive item")
@@ -484,6 +754,7 @@ fn exclude_tags_are_declared_data() {
         "* A :secret:\n:PROPERTIES:\n:ID: a\n:END:\n* B :noexport:\n:PROPERTIES:\n:ID: b\n:END:\n";
     let opts = SemanticsOptions {
         exclude_tags: vec!["secret".into()],
+        ..SemanticsOptions::default()
     };
     let s = semantics_with(&parse(plain, &ParseOptions::default()), &opts);
     assert_eq!(ids(&s), vec!["b"]);

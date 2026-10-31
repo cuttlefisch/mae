@@ -1,0 +1,6 @@
+#+aliases: from-keyword
+:PROPERTIES:
+:ID: sem-kw-late-drawer
+:ALIASES: from-drawer
+:END:
+A property drawer after a keyword is not the file's: Org reads one only at the top.

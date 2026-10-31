@@ -2,39 +2,80 @@
 //! projection of the tree (ADR-112 D2, D6 layer 1).
 //!
 //! [`semantics`] is a pure function of the parsed text and declared
-//! configuration: no user code, no I/O, so every peer and the daemon derive
-//! the same nodes and edges from the same text. It reads ONLY rendered
-//! regions (see `regions`); an id or link that occurs only in an unrendered
-//! region yields nothing but a diagnostic.
+//! configuration ([`SemanticsOptions`], ADR-112 D4): no user code, no I/O,
+//! so every peer and the daemon derive the same nodes and edges from the
+//! same text. It reads ONLY rendered regions (see `regions`); an id, link or
+//! transclusion that occurs only in an unrendered region yields nothing but
+//! a diagnostic. A `#+SETUPFILE` is not read (no I/O): it is diagnosed,
+//! since the file it names could declare TODO keywords and tags.
 //!
 //! MAE's extensions to Org, each a documented delta:
 //! - `:KIND:` and `:ALIASES:` (comma-separated) properties;
 //! - file keywords `#+kind`, `#+aliases`, `#+todo_state`, `#+priority`,
 //!   alongside Org's `#+title` and `#+filetags`; all are read from the
-//!   zeroth section only (Org reads TITLE and FILETAGS buffer-wide), and a
-//!   later keyword replaces an earlier one, except FILETAGS, which add up;
+//!   zeroth section only (Org reads TITLE and FILETAGS buffer-wide). One
+//!   precedence rule for every one of them, Org's for keywords: document
+//!   order, the last wins, and an empty last value clears the field
+//!   (`#+todo_state: TODO` then `#+todo_state:` gives no state). The file's
+//!   property drawer always precedes its keywords (Org reads a drawer only
+//!   at the top), so `#+kind` and `#+aliases` win over `:KIND:` and
+//!   `:ALIASES:`. FILETAGS alone add up, as in Org;
 //! - list items with their own property drawer are nodes (see `items`);
-//! - `#+TRANSCLUDE: MEMBER [ROLE]`;
-//! - the link grammar of [`crate::classify_link`].
+//! - `#+TRANSCLUDE: MEMBER [ROLE]`, and org-transclusion's
+//!   `#+TRANSCLUDE: [[LINK][DESC]] ARGS…`, whose member is the link's target;
+//! - the link grammar of [`crate::classify_link_with`].
 //!
 //! What a node's fields mean, pinned by `tests/semantics.rs`:
 //! - `span` is the whole element: the file, the headline's subtree, the item;
-//! - `body_span` is the body alone, the write contract's unit: for a
-//!   headline, its section after the planning line and property drawer, up to
-//!   its first child headline (trailing blank lines included, as the section
-//!   holds them); for an item, from after its property drawer to the item's
-//!   end; for the file, the zeroth section after its leading comments,
-//!   property drawer and keywords. An empty body is an empty span where the
-//!   body would start;
-//! - `tags` are the file tags then the node's own, each once, in order
-//!   (inheritance from a parent headline is not applied: Org makes it
-//!   configurable, so it would be declared data, not done here);
+//! - `body_span` is the body alone, the write contract's unit (ADR-092). It
+//!   starts after the node's front matter (a headline's line, planning line
+//!   and property drawer; an item's first line and drawer; the file's
+//!   leading comments, property drawer and keywords) and runs to the start
+//!   of the FIRST NODE NESTED in the element, or to the element's end when
+//!   none is. So the bodies of two nodes never overlap and a body never
+//!   holds another node, its drawer or its `:ID:`: writing one node's body
+//!   can never rewrite another node. A headline without an id, a duplicate
+//!   id or an unrendered subtree is not a node, so its text is part of the
+//!   body around it, exactly as its links are (the same rule for headlines
+//!   and items). Text AFTER a nested node (a paragraph after a sub-item
+//!   node, a heading after a child headline node) is in no node's body: the
+//!   write path never touches it, so it is kept byte for byte, but it is not
+//!   editable through any node. Its links and transclusions still belong to
+//!   the innermost node around them. One contiguous span was chosen over a
+//!   body with holes because a write is then one splice of one range; a
+//!   body with holes would need the writer to decide which hole new text
+//!   falls into. An empty body is an empty span where the body would start;
+//! - a node's tags are the file tags then its own, each once, in order
+//!   ([`Semantics::tags_of`]); inheritance from a parent headline is not
+//!   applied (Org makes it configurable, so it would be declared data, not
+//!   done here). The file tags are stored ONCE, in [`Semantics::file_tags`],
+//!   and each node holds only its own tags not among them
+//!   ([`SemanticNode::own_tags`]): N file tags and N nodes would otherwise
+//!   be N² strings, a memory denial of service from a few hundred KB of
+//!   text (`tests/scaling.rs`);
 //! - `properties` are the node's property drawer with canonical keys
 //!   ([`crate::Property::key`]), `ID` included, in first-occurrence order; a
 //!   repeated key keeps its last value and `KEY+` appends to `KEY` with a
-//!   space, as Org does;
+//!   space, as Org does. Values are trimmed as Org trims them (space, tab,
+//!   LF, CR, never a no-break space), so the `ID` field and `properties`
+//!   always agree;
 //! - links belong to the innermost node around them (`from`), never also to
-//!   that node's ancestors; `None` outside every node.
+//!   that node's ancestors; `None` outside every node. A link in a property
+//!   value belongs to the node whose drawer it is, and a link in a keyword
+//!   value (`#+title`, `#+caption`, any other) to the node around the
+//!   keyword: org-roam's defaults (`org-roam-db-extra-links-elements` is
+//!   `(node-property keyword)`), except the values it excludes
+//!   (`ROAM_REFS`, `TRANSCLUDE`) and the raw export keywords (`#+HTML:` and
+//!   the like, whose value is output text, never Org), all declared in
+//!   [`SemanticsOptions`]. A link inside an export snippet `@@html:…@@` is
+//!   not an Org link at all;
+//! - a link or transclusion inside a rendered footnote definition belongs
+//!   to the node of the text that references the footnote (where Org's
+//!   export puts the note), not to the node the definition happens to sit
+//!   under: the first reference in rendered text, in document order, and
+//!   for a definition referenced only from another definition, that
+//!   definition's node. A node nested inside the definition still owns its
+//!   own links.
 
 mod items;
 mod plain;
@@ -42,27 +83,84 @@ mod regions;
 
 use crate::kind::SyntaxKind::*;
 use crate::kind::SyntaxNode;
-use crate::link_grammar::{classify_link, LinkKind};
+use crate::link_grammar::{classify_link_with, org_trim, LinkKind, LinkTypes};
 use crate::span::Span;
 use crate::views::{Headline, Keyword, PropertyDrawer};
 use crate::Document;
 use regions::Rules;
 use rowan::WalkEvent;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+/// How an archived headline (one tagged with [`SemanticsOptions::archive_tag`])
+/// is rendered: `org-export-with-archived-trees`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ArchivedTrees {
+    /// The headline is rendered, its contents are not (Org's default,
+    /// `'headline`).
+    Headline,
+    /// The whole subtree is rendered (`t`).
+    All,
+    /// Nothing of it is rendered (`nil`).
+    None,
+}
 
 /// Declared configuration the projection reads (ADR-112 D4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SemanticsOptions {
-    /// Subtrees tagged with one of these are not rendered. An in-file
-    /// `#+EXCLUDE_TAGS:` replaces them, as in Org. Default: `noexport`
+    /// Subtrees tagged with one of these (or every subtree, when the file
+    /// tags carry one) are not rendered. In-file `#+EXCLUDE_TAGS:` lines
+    /// replace them, as in Org. Default: `noexport`
     /// (`org-export-exclude-tags`).
     pub exclude_tags: Vec<String>,
+    /// When a headline (or the file tags) carries one of these, only the
+    /// selected subtrees and their ancestors are rendered, and the zeroth
+    /// section's content is not. In-file `#+SELECT_TAGS:` lines replace
+    /// them. Default: `export` (`org-export-select-tags`).
+    pub select_tags: Vec<String>,
+    /// The tag that archives a headline, matched exactly
+    /// (`org-archive-tag`). Default: `ARCHIVE`.
+    pub archive_tag: String,
+    /// Default: [`ArchivedTrees::Headline`].
+    pub archived_trees: ArchivedTrees,
+    /// Which link schemes are not KB links. Default: [`LinkTypes::default`].
+    pub link_types: LinkTypes,
+    /// Keywords (any case) whose values are not read for links: org-roam's
+    /// `TRANSCLUDE` and the raw export keywords. Default:
+    /// [`LINK_EXCLUDE_KEYWORDS`].
+    pub link_exclude_keywords: Vec<String>,
+    /// Properties (any case) whose values are not read for links. Default:
+    /// org-roam's `ROAM_REFS`.
+    pub link_exclude_properties: Vec<String>,
 }
+
+/// Keywords whose values are not link sources: `TRANSCLUDE` (org-roam's
+/// `org-roam-db-extra-links-exclude-keys`), and the keywords whose value Org
+/// passes to an exporter as raw output, which is never parsed as Org.
+pub const LINK_EXCLUDE_KEYWORDS: &[&str] = &[
+    "TRANSCLUDE",
+    "ASCII",
+    "BEAMER",
+    "HTML",
+    "HTML_HEAD",
+    "HTML_HEAD_EXTRA",
+    "LATEX",
+    "LATEX_HEADER",
+    "LATEX_HEADER_EXTRA",
+    "ODT",
+    "TEXINFO",
+];
 
 impl Default for SemanticsOptions {
     fn default() -> Self {
+        let own = |v: &[&str]| v.iter().map(|s| s.to_string()).collect();
         SemanticsOptions {
-            exclude_tags: vec!["noexport".to_string()],
+            exclude_tags: own(&["noexport"]),
+            select_tags: own(&["export"]),
+            archive_tag: "ARCHIVE".to_string(),
+            archived_trees: ArchivedTrees::Headline,
+            link_types: LinkTypes::default(),
+            link_exclude_keywords: own(LINK_EXCLUDE_KEYWORDS),
+            link_exclude_properties: own(&["ROAM_REFS"]),
         }
     }
 }
@@ -88,7 +186,9 @@ pub struct SemanticNode {
     /// Plain text (see `plain`); `None` if empty or absent.
     pub title: Option<String>,
     pub aliases: Vec<String>,
-    pub tags: Vec<String>,
+    /// The node's own tags (a headline's), each once, without any of the
+    /// file's tags: [`Semantics::tags_of`] gives the full list.
+    pub own_tags: Vec<String>,
     pub properties: Vec<(String, String)>,
     pub todo: Option<String>,
     pub priority: Option<char>,
@@ -99,13 +199,15 @@ pub struct SemanticNode {
 /// A link in a rendered region.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticLink {
-    /// The innermost node around the link.
+    /// The node the link belongs to (see the module doc).
     pub from: Option<String>,
     pub kind: LinkKind,
     /// The path as written (`LINK_PATH`).
     pub path: String,
     pub target: String,
     pub fragment: Option<String>,
+    /// The `::search` option of an `id:` or file link.
+    pub search: Option<String>,
     pub rel: String,
     pub weight: f64,
     pub confidence: f64,
@@ -116,13 +218,19 @@ pub struct SemanticLink {
     pub span: Span,
 }
 
-/// A `#+TRANSCLUDE: MEMBER [ROLE]` line in a rendered region.
+/// A `#+TRANSCLUDE:` line in a rendered region.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transclusion {
     pub from: Option<String>,
+    /// MAE's `MEMBER`, or the target of org-transclusion's link (the id of
+    /// `[[id:x][X]]`).
     pub member: String,
-    /// The rest of the line, trimmed; `content` when empty.
+    /// MAE's `ROLE`: the rest of the line, trimmed; `content` when empty, and
+    /// always for org-transclusion's link form.
     pub role: String,
+    /// org-transclusion's properties after the link (`:level 2`), trimmed;
+    /// `None` for MAE's form or when there are none.
+    pub args: Option<String>,
     pub span: Span,
 }
 
@@ -136,6 +244,12 @@ pub enum Region {
     CommentSubtree,
     ExcludedSubtree,
     UnreferencedFootnote,
+    /// Outside every selected tree, or the zeroth section's content, while a
+    /// select tag is in force.
+    Unselected,
+    /// The contents of an archived headline (or, under
+    /// [`ArchivedTrees::None`], the whole subtree).
+    Archived,
 }
 
 impl Region {
@@ -149,6 +263,8 @@ impl Region {
             Region::CommentSubtree => "comment_subtree",
             Region::ExcludedSubtree => "excluded_subtree",
             Region::UnreferencedFootnote => "unreferenced_footnote",
+            Region::Unselected => "unselected",
+            Region::Archived => "archived",
         }
     }
 }
@@ -169,10 +285,21 @@ pub enum SemanticDiagnostic {
         span: Span,
         region: Region,
     },
+    /// A `#+TRANSCLUDE:` in an unrendered region: no transclusion comes from
+    /// it. `member` is what the member would have been.
+    TransclusionInUnrenderedRegion {
+        member: String,
+        span: Span,
+        region: Region,
+    },
     /// A second element with an id already used in this document: it is not
     /// a node (its content belongs to the node around it). `span` is the
     /// repeated `:ID:` property, `first` the first node's span.
     DuplicateId { id: String, span: Span, first: Span },
+    /// A `#+SETUPFILE:` keyword. The file it names can declare TODO keywords,
+    /// tags and options that would change this document's semantics; it was
+    /// not read (no I/O), so the semantics are those of this text alone.
+    SetupFileNotRead { file: String, span: Span },
 }
 
 impl SemanticDiagnostic {
@@ -181,7 +308,11 @@ impl SemanticDiagnostic {
         match self {
             SemanticDiagnostic::IdInUnrenderedRegion { .. } => "id_in_unrendered_region",
             SemanticDiagnostic::LinkInUnrenderedRegion { .. } => "link_in_unrendered_region",
+            SemanticDiagnostic::TransclusionInUnrenderedRegion { .. } => {
+                "transclusion_in_unrendered_region"
+            }
             SemanticDiagnostic::DuplicateId { .. } => "duplicate_id",
+            SemanticDiagnostic::SetupFileNotRead { .. } => "setup_file_not_read",
         }
     }
 
@@ -189,7 +320,9 @@ impl SemanticDiagnostic {
         match self {
             SemanticDiagnostic::IdInUnrenderedRegion { span, .. }
             | SemanticDiagnostic::LinkInUnrenderedRegion { span, .. }
-            | SemanticDiagnostic::DuplicateId { span, .. } => *span,
+            | SemanticDiagnostic::TransclusionInUnrenderedRegion { span, .. }
+            | SemanticDiagnostic::DuplicateId { span, .. }
+            | SemanticDiagnostic::SetupFileNotRead { span, .. } => *span,
         }
     }
 }
@@ -197,11 +330,22 @@ impl SemanticDiagnostic {
 /// Everything the projection derives, each list in document order.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Semantics {
+    /// The file's tags (`#+filetags`), each once, in order: every node's.
+    pub file_tags: Vec<String>,
     pub nodes: Vec<SemanticNode>,
     pub links: Vec<SemanticLink>,
     pub transclusions: Vec<Transclusion>,
     /// Sorted by span, then kind.
     pub diagnostics: Vec<SemanticDiagnostic>,
+}
+
+impl Semantics {
+    /// A node's tags: the file tags, then its own.
+    pub fn tags_of(&self, node: &SemanticNode) -> Vec<String> {
+        let mut out = self.file_tags.clone();
+        out.extend(node.own_tags.iter().cloned());
+        out
+    }
 }
 
 /// [`semantics_with`] under the default options.
@@ -212,44 +356,62 @@ pub fn semantics(doc: &Document) -> Semantics {
 /// The KB nodes, links and transclusions of `doc`.
 pub fn semantics_with(doc: &Document, options: &SemanticsOptions) -> Semantics {
     let root = doc.syntax();
-    let exclude_tags = exclude_tags(doc, options);
-    let referenced = regions::referenced_footnotes(&root, &exclude_tags);
+    let exclude = declared_tags(doc, "EXCLUDE_TAGS", &options.exclude_tags);
+    let select = declared_tags(doc, "SELECT_TAGS", &options.select_tags);
     let header = FileHeader::read(&root);
+    let mut rules = Rules::new(&root, options, &exclude, &select, &header.tags);
+    let (referenced, order) = regions::referenced_footnotes(&root, &rules);
+    rules.referenced = Some(referenced);
     let mut w = Walk {
-        rules: Rules {
-            exclude_tags,
-            referenced: Some(referenced),
-        },
-        file_tags: header.tags.clone(),
+        rules,
+        link_types: &options.link_types,
+        file_tags: merge_tags(&header.tags, &HashSet::new()),
+        file_tag_set: HashSet::new(),
         file_id: None,
         owners: Vec::new(),
         seen: HashMap::new(),
+        note_ctx: HashMap::new(),
+        note_place: HashMap::new(),
+        pending_links: Vec::new(),
+        pending_transclusions: Vec::new(),
         out: Semantics::default(),
     };
+    w.out.file_tags = w.file_tags.clone();
+    w.file_tag_set = w.file_tags.iter().cloned().collect();
     w.file_node(&root, header);
     w.walk(&root);
-    w.out.diagnostics.sort_by_key(|d| (d.span(), d.kind_name()));
-    w.out
+    w.setup_files(doc);
+    w.attribute_notes(&order);
+    let mut out = w.out;
+    clip_bodies(&mut out.nodes);
+    out.diagnostics.sort_by_key(|d| (d.span(), d.kind_name()));
+    out
 }
 
-/// In-file `#+EXCLUDE_TAGS:` (all of them, words split on blanks) replace
-/// the configured exclude tags.
-fn exclude_tags(doc: &Document, options: &SemanticsOptions) -> Vec<String> {
+/// The tags declared by every in-file `KEY` keyword (anywhere, as Org
+/// collects them), words split on Org's blanks; `configured` if there are
+/// none.
+fn declared_tags(doc: &Document, key: &str, configured: &[String]) -> Vec<String> {
     let declared: Vec<Keyword> = doc
         .keywords()
-        .filter(|k| k.key().eq_ignore_ascii_case("EXCLUDE_TAGS"))
+        .filter(|k| k.key().eq_ignore_ascii_case(key))
         .collect();
     if declared.is_empty() {
-        return options.exclude_tags.clone();
+        return configured.to_vec();
     }
     declared
         .iter()
-        .flat_map(|k| {
-            k.value()
-                .split_whitespace()
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
+        .flat_map(|k| split_words(&k.value()))
+        .collect()
+}
+
+/// `split-string` with its default separators: runs of ASCII space, form
+/// feed, tab, LF, CR and vertical tab. A no-break space is not one.
+fn split_words(value: &str) -> Vec<String> {
+    value
+        .split([' ', '\x0c', '\t', '\n', '\r', '\x0b'])
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
         .collect()
 }
 
@@ -259,7 +421,8 @@ struct FileHeader {
     properties: Vec<(String, String)>,
     title: Option<String>,
     tags: Vec<String>,
-    kind: Option<String>,
+    /// `Some` once a `#+kind` keyword is read, even an empty one.
+    kind: Option<Option<String>>,
     aliases: Option<Vec<String>>,
     todo: Option<String>,
     priority: Option<char>,
@@ -280,8 +443,9 @@ impl FileHeader {
         h
     }
 
+    /// One keyword, in document order: the last wins, an empty value clears.
     fn keyword(&mut self, key: &str, value: &str) {
-        let value = value.trim();
+        let value = org_trim(value);
         let some = || Some(value.to_string()).filter(|v| !v.is_empty());
         match key {
             "title" => {
@@ -289,7 +453,7 @@ impl FileHeader {
                 self.title = Some(t).filter(|t| !t.is_empty());
             }
             "filetags" => self.tags.extend(split_filetags(value)),
-            "kind" => self.kind = some(),
+            "kind" => self.kind = Some(some()),
             "aliases" => self.aliases = Some(split_commas(value)),
             "todo_state" => self.todo = some(),
             "priority" => self.priority = value.chars().next(),
@@ -300,8 +464,8 @@ impl FileHeader {
 
 /// Org's FILETAGS reading: words split on blanks, each split on `:`.
 fn split_filetags(value: &str) -> Vec<String> {
-    value
-        .split_whitespace()
+    split_words(value)
+        .iter()
         .flat_map(|w| w.split(':'))
         .filter(|t| !t.is_empty())
         .map(str::to_string)
@@ -311,7 +475,7 @@ fn split_filetags(value: &str) -> Vec<String> {
 fn split_commas(value: &str) -> Vec<String> {
     value
         .split(',')
-        .map(str::trim)
+        .map(org_trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .collect()
@@ -325,22 +489,27 @@ fn property_pairs(d: &PropertyDrawer) -> Vec<(String, String)> {
 }
 
 /// Org's reading of a drawer's lines: keys canonical, the last value of a
-/// repeated key wins (in the first one's position), `KEY+` appends.
+/// repeated key wins (in the first one's position), `KEY+` appends. Linear:
+/// each key is found through a map, not a scan of the keys so far.
 fn resolve_properties(pairs: Vec<(String, String)>) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
+    let mut at: HashMap<String, usize> = HashMap::new();
     for (key, value) in pairs {
         let key = crate::views::canonical_key(&key);
         let (base, append) = match key.strip_suffix('+') {
             Some(b) if !b.is_empty() => (b.to_string(), true),
             _ => (key, false),
         };
-        match out.iter_mut().find(|(k, _)| *k == base) {
-            Some((_, v)) if append => {
-                v.push(' ');
-                v.push_str(&value);
+        match at.get(&base) {
+            Some(&i) if append => {
+                out[i].1.push(' ');
+                out[i].1.push_str(&value);
             }
-            Some((_, v)) => *v = value,
-            None => out.push((base, value)),
+            Some(&i) => out[i].1 = value,
+            None => {
+                at.insert(base.clone(), out.len());
+                out.push((base, value));
+            }
         }
     }
     out
@@ -350,29 +519,54 @@ fn property<'a>(props: &'a [(String, String)], key: &str) -> Option<&'a str> {
     props
         .iter()
         .find(|(k, _)| k == key)
-        .map(|(_, v)| v.trim())
+        .map(|(_, v)| org_trim(v))
         .filter(|v| !v.is_empty())
 }
 
-/// Own tags after the file tags, each once.
-fn merge_tags(file: &[String], own: impl IntoIterator<Item = String>) -> Vec<String> {
+/// `tags` without empty ones, repeats or any in `skip`, in order. Linear in
+/// `tags` alone: `skip` is a set built once, so N file tags and N headlines
+/// cost O(N), not one set of N per headline.
+fn merge_tags(tags: &[String], skip: &HashSet<String>) -> Vec<String> {
+    let mut seen: HashSet<&str> = HashSet::new();
     let mut out: Vec<String> = Vec::new();
-    for t in file.iter().cloned().chain(own) {
-        if !t.is_empty() && !out.contains(&t) {
-            out.push(t);
+    for t in tags {
+        if !t.is_empty() && !skip.contains(t) && seen.insert(t.as_str()) {
+            out.push(t.clone());
         }
     }
     out
 }
 
-struct Walk {
+/// Whom text belongs to while it is walked.
+#[derive(Debug, Clone)]
+enum Owner {
+    /// A node.
+    Node(String),
+    /// The node of the text that references footnote `LABEL`, known once
+    /// the walk is done.
+    Note(String),
+}
+
+struct Walk<'o> {
     rules: Rules,
+    link_types: &'o LinkTypes,
     file_tags: Vec<String>,
+    /// The same, as a set, built once.
+    file_tag_set: HashSet<String>,
     file_id: Option<String>,
-    /// Enclosing headline/item nodes: (element, id).
-    owners: Vec<(SyntaxNode, String)>,
+    /// Enclosing headline/item nodes and rendered footnote definitions.
+    owners: Vec<(SyntaxNode, Owner)>,
     /// First span of every id given to a node.
     seen: HashMap<String, Span>,
+    /// For each referenced footnote label, the owner at the reference that
+    /// made it referenced.
+    note_ctx: HashMap<String, Option<Owner>>,
+    /// For each label, the owner around its (first) definition: used only
+    /// if its reference was never walked.
+    note_place: HashMap<String, Option<Owner>>,
+    /// Links and transclusions whose owner is a footnote's, by index.
+    pending_links: Vec<(usize, String)>,
+    pending_transclusions: Vec<(usize, String)>,
     out: Semantics,
 }
 
@@ -386,16 +580,25 @@ struct NodeCore {
     body_span: Span,
 }
 
-impl Walk {
-    fn owner(&self) -> Option<String> {
+impl Walk<'_> {
+    fn owner(&self) -> Option<Owner> {
         self.owners
             .last()
             .map(|o| o.1.clone())
-            .or_else(|| self.file_id.clone())
+            .or_else(|| self.file_id.clone().map(Owner::Node))
     }
 
-    fn walk(&mut self, root: &SyntaxNode) {
-        let mut walk = root.preorder();
+    /// The owner as a node id, or the footnote label to resolve later.
+    fn from(&self) -> (Option<String>, Option<String>) {
+        match self.owner() {
+            Some(Owner::Node(id)) => (Some(id), None),
+            Some(Owner::Note(label)) => (None, Some(label)),
+            None => (None, None),
+        }
+    }
+
+    fn walk(&mut self, start: &SyntaxNode) {
+        let mut walk = start.preorder();
         while let Some(ev) = walk.next() {
             let n = match ev {
                 WalkEvent::Enter(n) => n,
@@ -414,13 +617,18 @@ impl Walk {
             match n.kind() {
                 HEADLINE => self.headline(&n),
                 ITEM => self.item(&n),
-                LINK => self.link(&n),
+                LINK => self.link(&n, 0),
                 KEYWORD => self.keyword(&n),
+                PROPERTY_DRAWER => self.property_drawer_links(&n),
+                DRAWER => self.item_drawer_links(&n),
+                FOOTNOTE_DEFINITION => self.enter_note(&n),
+                FOOTNOTE_REFERENCE => self.note_reference(&n),
                 _ => {}
             }
             if matches!(n.kind(), LINK | PROPERTY_DRAWER | DRAWER) {
-                // A link's parts are not links; a property drawer (or an
-                // item's, the only drawer that reaches here) holds values.
+                // A link's parts are not links; a drawer's values were read
+                // as values above (an item's drawer is the only drawer that
+                // reaches here).
                 walk.skip_subtree();
             }
         }
@@ -447,9 +655,10 @@ impl Walk {
         let span = Span::of(root);
         self.seen.insert(id.clone(), span);
         self.file_id = Some(id.clone());
+        // A keyword follows the drawer, so it wins, even when empty.
         let kind = h
             .kind
-            .or_else(|| property(&h.properties, "KIND").map(str::to_string));
+            .unwrap_or_else(|| property(&h.properties, "KIND").map(str::to_string));
         let aliases = h.aliases.unwrap_or_else(|| {
             property(&h.properties, "ALIASES").map_or_else(Vec::new, split_commas)
         });
@@ -460,7 +669,7 @@ impl Walk {
             kind,
             title: h.title,
             aliases,
-            tags: merge_tags(&h.tags, []),
+            own_tags: Vec::new(),
             properties: h.properties,
             todo: h.todo,
             priority: h.priority,
@@ -470,6 +679,10 @@ impl Walk {
     }
 
     fn headline(&mut self, n: &SyntaxNode) {
+        // An archived headline is rendered, its drawer is not: no node.
+        if self.rules.contents_hidden(n) {
+            return;
+        }
         let Some(h) = Headline::cast(n.clone()) else {
             return;
         };
@@ -489,7 +702,7 @@ impl Walk {
             .find(|c| c.kind() == HEADLINE_TITLE)
             .map(|t| plain::plain_text(&t))
             .filter(|t| !t.is_empty());
-        let tags = merge_tags(&self.file_tags, h.tags());
+        let tags = merge_tags(&h.tags(), &self.file_tag_set);
         let core = NodeCore {
             id,
             origin: NodeOrigin::Headline,
@@ -502,13 +715,16 @@ impl Walk {
     }
 
     fn item(&mut self, n: &SyntaxNode) {
+        // Only the first two elements can be the drawer (see `items`).
         let Some((drawer, raw)) = n
             .children()
+            .filter(|c| c.kind() != ITEM_TAG_CONTENT)
+            .take(2)
             .find_map(|c| items::item_property_drawer(&c).map(|p| (c, p)))
         else {
             return;
         };
-        let props = resolve_properties(raw);
+        let props = resolve_properties(raw.into_iter().map(|p| (p.key, p.value)).collect());
         let Some(id) = property(&props, "ID").map(str::to_string) else {
             return;
         };
@@ -517,7 +733,7 @@ impl Walk {
             return;
         }
         let title = items::item_title(n, &drawer);
-        let tags = merge_tags(&self.file_tags, []);
+        let tags = Vec::new();
         let core = NodeCore {
             id,
             origin: NodeOrigin::Item,
@@ -539,7 +755,8 @@ impl Walk {
     ) {
         let kind = property(&core.props, "KIND").map(str::to_string);
         let aliases = property(&core.props, "ALIASES").map_or_else(Vec::new, split_commas);
-        self.owners.push((element.clone(), core.id.clone()));
+        self.owners
+            .push((element.clone(), Owner::Node(core.id.clone())));
         self.out.nodes.push(SemanticNode {
             id: core.id,
             origin: core.origin,
@@ -547,7 +764,7 @@ impl Walk {
             kind,
             title,
             aliases,
-            tags,
+            own_tags: tags,
             properties: core.props,
             todo,
             priority,
@@ -556,63 +773,277 @@ impl Walk {
         });
     }
 
-    fn link(&mut self, n: &SyntaxNode) {
+    /// A LINK object; `base` is the offset of the tree it is in (non-zero
+    /// for a link in a keyword or property value, parsed on its own).
+    fn link(&mut self, n: &SyntaxNode, base: usize) {
         let (Some(path), Some(buffer)) = (plain::link_path(n), plain::link_path_buffer(n)) else {
             return;
         };
-        let c = classify_link(&buffer);
+        let c = classify_link_with(&buffer, self.link_types);
         let description = plain::description(n).or(c.description);
+        let span = without_trailing_blanks(n);
+        let (from, note) = self.from();
+        if let Some(label) = note {
+            self.pending_links.push((self.out.links.len(), label));
+        }
         self.out.links.push(SemanticLink {
-            from: self.owner(),
+            from,
             kind: c.kind,
             path,
             target: c.target,
             fragment: c.fragment,
+            search: c.search,
             rel: c.rel,
             weight: c.weight,
             confidence: c.confidence,
             attrs: c.attrs,
             description,
-            span: without_trailing_blanks(n),
+            span: Span::new(base + span.start as usize, base + span.end as usize),
         });
     }
 
+    /// The links of a keyword or property value, read as Org reads a
+    /// secondary string (its objects), at `at` in the document.
+    fn value_links(&mut self, value: &str, at: usize) {
+        let tree = crate::green::objects(value, PARAGRAPH);
+        for l in tree.descendants().filter(|n| n.kind() == LINK) {
+            self.link(&l, at);
+        }
+    }
+
     fn keyword(&mut self, n: &SyntaxNode) {
+        if let Some((text, at)) = keyword_link_value(n, &self.rules) {
+            self.value_links(&text, at);
+        }
         let Some(k) = Keyword::cast(n.clone()) else {
             return;
         };
         if !k.key().eq_ignore_ascii_case("TRANSCLUDE") {
             return;
         }
-        let value = k.value();
-        let value = value.trim();
-        let (member, role) = match value.split_once([' ', '\t']) {
-            Some((m, r)) => (m, r.trim()),
-            None => (value, ""),
-        };
-        if member.is_empty() {
+        let Some((member, role, args)) = transclusion_parts(&k.value(), self.link_types) else {
             return;
+        };
+        let (from, note) = self.from();
+        if let Some(label) = note {
+            self.pending_transclusions
+                .push((self.out.transclusions.len(), label));
         }
-        let role = if role.is_empty() { "content" } else { role };
         self.out.transclusions.push(Transclusion {
-            from: self.owner(),
-            member: member.to_string(),
-            role: role.to_string(),
+            from,
+            member,
+            role,
+            args,
             span: without_trailing_blanks(n),
         });
     }
 
-    fn unrendered(&mut self, n: &SyntaxNode, region: Region) {
-        let base = usize::from(n.text_range().start());
-        for (id, span) in regions::id_lines(&n.to_string(), base) {
-            let d = SemanticDiagnostic::IdInUnrenderedRegion { id, span, region };
-            self.out.diagnostics.push(d);
-        }
-        for (path, span) in regions::region_links(n) {
-            let d = SemanticDiagnostic::LinkInUnrenderedRegion { path, span, region };
-            self.out.diagnostics.push(d);
+    /// Links in the values of a headline's or the file's property drawer.
+    fn property_drawer_links(&mut self, drawer: &SyntaxNode) {
+        for p in drawer.children().filter(|c| c.kind() == NODE_PROPERTY) {
+            if let Some((text, at)) = property_link_value(&p, &self.rules) {
+                self.value_links(&text, at);
+            }
         }
     }
+
+    /// Links in the values of an item's property drawer.
+    fn item_drawer_links(&mut self, drawer: &SyntaxNode) {
+        for p in items::item_property_drawer(drawer).unwrap_or_default() {
+            let key = crate::views::canonical_key(&p.key);
+            let key = key.strip_suffix('+').unwrap_or(&key);
+            if !self.rules.link_exclude_properties.contains(key) {
+                self.value_links(&p.value, p.value_start);
+            }
+        }
+    }
+
+    /// A rendered footnote definition: what it holds belongs to the node of
+    /// the text referencing it, resolved once the walk is done.
+    fn enter_note(&mut self, n: &SyntaxNode) {
+        let Some(label) = regions::definition_label(n) else {
+            return;
+        };
+        let place = self.owner();
+        self.note_place.entry(label.clone()).or_insert(place);
+        self.owners.push((n.clone(), Owner::Note(label)));
+    }
+
+    /// The reference that made a footnote referenced records its owner.
+    fn note_reference(&mut self, n: &SyntaxNode) {
+        let Some(label) = regions::reference_label(n) else {
+            return;
+        };
+        let first = self
+            .rules
+            .referenced
+            .as_ref()
+            .and_then(|m| m.get(&label))
+            .copied();
+        if first == Some(u32::from(n.text_range().start())) {
+            let owner = self.owner();
+            self.note_ctx.entry(label).or_insert(owner);
+        }
+    }
+
+    /// Resolves the owners of footnote contents. `order` is the order the
+    /// labels became referenced, so a label referenced from inside another
+    /// definition comes after that definition's label: one pass, no chains.
+    fn attribute_notes(&mut self, order: &[String]) {
+        let mut resolved: HashMap<&str, Option<String>> = HashMap::new();
+        for label in order {
+            let ctx = self
+                .note_ctx
+                .get(label)
+                .or_else(|| self.note_place.get(label))
+                .cloned()
+                .flatten();
+            let id = match ctx {
+                Some(Owner::Node(id)) => Some(id),
+                Some(Owner::Note(l)) => resolved.get(l.as_str()).cloned().flatten(),
+                None => None,
+            };
+            resolved.insert(label, id);
+        }
+        for (i, label) in std::mem::take(&mut self.pending_links) {
+            self.out.links[i].from = resolved.get(label.as_str()).cloned().flatten();
+        }
+        for (i, label) in std::mem::take(&mut self.pending_transclusions) {
+            self.out.transclusions[i].from = resolved.get(label.as_str()).cloned().flatten();
+        }
+    }
+
+    fn unrendered(&mut self, n: &SyntaxNode, region: Region) {
+        // Footnote definitions Org re-adds from this region are rendered:
+        // walk them, and report only what lies outside them.
+        let kept = if region.parses_contents() {
+            regions::rendered_definitions(n, &self.rules)
+        } else {
+            Vec::new()
+        };
+        let outside = |s: Span| {
+            !kept
+                .iter()
+                .any(|d| Span::of(d).range().contains(&(s.start as usize)))
+        };
+        let base = usize::from(n.text_range().start());
+        for (id, span) in regions::id_lines(&n.to_string(), base) {
+            if outside(span) {
+                let d = SemanticDiagnostic::IdInUnrenderedRegion { id, span, region };
+                self.out.diagnostics.push(d);
+            }
+        }
+        let hidden = regions::region_contents(n, &self.rules);
+        for (path, span) in hidden.links {
+            if outside(span) {
+                let d = SemanticDiagnostic::LinkInUnrenderedRegion { path, span, region };
+                self.out.diagnostics.push(d);
+            }
+        }
+        for (member, span) in hidden.transclusions {
+            if outside(span) {
+                let d = SemanticDiagnostic::TransclusionInUnrenderedRegion {
+                    member,
+                    span,
+                    region,
+                };
+                self.out.diagnostics.push(d);
+            }
+        }
+        for def in kept {
+            self.walk(&def);
+        }
+    }
+
+    /// Every `#+SETUPFILE:` keyword, wherever it is (Org reads them
+    /// buffer-wide).
+    fn setup_files(&mut self, doc: &Document) {
+        for k in doc.keywords() {
+            if k.key().eq_ignore_ascii_case("SETUPFILE") {
+                self.out
+                    .diagnostics
+                    .push(SemanticDiagnostic::SetupFileNotRead {
+                        file: org_trim(&k.value()).to_string(),
+                        span: without_trailing_blanks(k.syntax()),
+                    });
+            }
+        }
+    }
+}
+
+/// A `#+TRANSCLUDE:` keyword's member and span, for a diagnostic.
+pub(crate) fn transclude_member(n: &SyntaxNode) -> Option<(String, Span)> {
+    let k = Keyword::cast(n.clone())?;
+    if !k.key().eq_ignore_ascii_case("TRANSCLUDE") {
+        return None;
+    }
+    let (member, _, _) = transclusion_parts(&k.value(), LinkTypes::defaults())?;
+    Some((member, without_trailing_blanks(n)))
+}
+
+/// `(member, role, args)` of a `#+TRANSCLUDE:` value: org-transclusion's
+/// `[[LINK][DESC]] ARGS…` (member: the link's target), else MAE's
+/// `MEMBER [ROLE]`. `None` when there is no member.
+fn transclusion_parts(value: &str, types: &LinkTypes) -> Option<(String, String, Option<String>)> {
+    let value = org_trim(value);
+    if value.starts_with("[[") {
+        let tree = crate::green::objects(value, PARAGRAPH);
+        let link = tree
+            .children()
+            .find(|c| c.kind() == LINK && u32::from(c.text_range().start()) == 0);
+        if let Some(link) = link {
+            let path = plain::link_path_buffer(&link)?;
+            let member = classify_link_with(&path, types).target;
+            let end = usize::from(link.text_range().end());
+            let args = Some(org_trim(&value[end..]).to_string()).filter(|a| !a.is_empty());
+            return Some((member, "content".to_string(), args)).filter(|m| !m.0.is_empty());
+        }
+    }
+    let (member, role) = match value.split_once([' ', '\t']) {
+        Some((m, r)) => (m, org_trim(r)),
+        None => (value, ""),
+    };
+    if member.is_empty() {
+        return None;
+    }
+    let role = if role.is_empty() { "content" } else { role };
+    Some((member.to_string(), role.to_string(), None))
+}
+
+/// The value of a keyword the semantics read links from, and its offset:
+/// `None` for an excluded key or an empty value.
+pub(crate) fn keyword_link_value(n: &SyntaxNode, rules: &Rules) -> Option<(String, usize)> {
+    let k = Keyword::cast(n.clone())?;
+    if rules
+        .link_exclude_keywords
+        .contains(&k.key().to_ascii_uppercase())
+    {
+        return None;
+    }
+    value_token(n)
+}
+
+/// The value of a property line the semantics read links from, and its
+/// offset: `None` for an excluded key or an empty value.
+pub(crate) fn property_link_value(n: &SyntaxNode, rules: &Rules) -> Option<(String, usize)> {
+    let key = n
+        .children_with_tokens()
+        .filter_map(|e| e.into_token())
+        .find(|t| t.kind() == NAME)?;
+    let key = crate::views::canonical_key(key.text());
+    let key = key.strip_suffix('+').unwrap_or(&key);
+    if rules.link_exclude_properties.contains(key) {
+        return None;
+    }
+    value_token(n)
+}
+
+fn value_token(n: &SyntaxNode) -> Option<(String, usize)> {
+    let t = n
+        .children_with_tokens()
+        .filter_map(|e| e.into_token())
+        .find(|t| t.kind() == VALUE)?;
+    Some((t.text().to_string(), usize::from(t.text_range().start())))
 }
 
 /// The span of a property drawer's (last) `ID` property line.
@@ -641,45 +1072,54 @@ fn without_trailing_blanks(node: &SyntaxNode) -> Span {
     Span::new(s.start as usize, s.start as usize + kept)
 }
 
-/// A headline's body: its section after planning and property drawer.
+/// A headline's body before clipping: after its planning line and property
+/// drawer, to the end of its subtree.
 fn headline_body(n: &SyntaxNode) -> Span {
+    let end = usize::from(n.text_range().end());
     let Some(section) = n.children().find(|c| c.kind() == SECTION) else {
         let at = n
             .children()
             .find(|c| c.kind() == HEADLINE)
             .map_or(n.text_range().end(), |c| c.text_range().start());
-        return Span::new(usize::from(at), usize::from(at));
+        return Span::new(usize::from(at), end);
     };
     let head = section
         .children()
         .take_while(|c| matches!(c.kind(), PLANNING | PROPERTY_DRAWER))
         .last();
-    after(&section, head.as_ref())
+    let start = head.map_or(section.text_range().start(), |h| h.text_range().end());
+    Span::new(usize::from(start), end)
 }
 
-/// The file's body: the zeroth section after its leading comments,
-/// property drawer and keywords.
+/// The file's body before clipping: after the zeroth section's leading
+/// comments, property drawer and keywords, to the end of the document.
 fn file_body(root: &SyntaxNode) -> Span {
+    let end = usize::from(root.text_range().end());
     let Some(first) = root.children().next() else {
-        let end = usize::from(root.text_range().end());
         return Span::new(end, end);
     };
     if first.kind() != SECTION {
-        let at = usize::from(first.text_range().start());
-        return Span::new(at, at);
+        return Span::new(usize::from(first.text_range().start()), end);
     }
     let head = first
         .children()
         .take_while(|c| matches!(c.kind(), COMMENT | PROPERTY_DRAWER | KEYWORD))
         .last();
-    after(&first, head.as_ref())
+    let start = head.map_or(first.text_range().start(), |h| h.text_range().end());
+    Span::new(usize::from(start), end)
 }
 
-/// From the end of `head` (or the start of `container`) to its end.
-fn after(container: &SyntaxNode, head: Option<&SyntaxNode>) -> Span {
-    let start = head.map_or(container.text_range().start(), |h| h.text_range().end());
-    Span::new(
-        usize::from(start),
-        usize::from(container.text_range().end()),
-    )
+/// Ends each body at the first node nested in its element (see the module
+/// doc). Nodes are in document order and their spans nest, so the first
+/// node nested in node `i`, if any, is node `i + 1`.
+fn clip_bodies(nodes: &mut [SemanticNode]) {
+    for i in 0..nodes.len() {
+        let Some(next) = nodes.get(i + 1).map(|n| n.span.start) else {
+            break;
+        };
+        let n = &mut nodes[i];
+        if next < n.span.end && next < n.body_span.end {
+            n.body_span.end = next.max(n.body_span.start);
+        }
+    }
 }

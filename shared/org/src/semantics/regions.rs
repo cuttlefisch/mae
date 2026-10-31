@@ -1,60 +1,210 @@
 //! Which parts of a document are rendered (ADR-112 D2), and what an
 //! unrendered region would have contributed.
 //!
-//! Unrendered: comment lines, comment and export blocks, every drawer except
-//! a property drawer (and MAE's list-item property drawer), a `COMMENT`
-//! subtree, a subtree carrying an exclude tag (`noexport` unless declared
-//! otherwise), and a footnote definition no rendered text references.
+//! Unrendered, as Org's exporter prunes them (`org-export--skip-p`,
+//! `org-export--prune-tree`, Org 9.7.11): comment lines, comment and export
+//! blocks, every drawer except a property drawer (and MAE's list-item
+//! property drawer), a `COMMENT` subtree, a subtree whose own tags or the
+//! file's tags carry an exclude tag, the contents of an archived headline,
+//! and, when some headline carries a select tag, every headline outside the
+//! selected trees and their ancestors, plus the zeroth section's content
+//! (not the file's property drawer, which defines the file node). A footnote
+//! definition is rendered exactly when rendered text references it, wherever
+//! it is, unless it sits in a region Org never parses (a `COMMENT` subtree,
+//! which the exporter deletes before parsing, or a block or comment): Org
+//! re-adds a definition from a pruned region (`org-export--missing-definitions`).
+//!
+//! Every headline's region is decided once, in [`Rules::new`], so the cost of
+//! reading tags is paid once per headline, whatever asks.
 
-use super::{items, Region};
+use super::{items, Region, SemanticsOptions};
 use crate::kind::SyntaxKind::*;
 use crate::kind::SyntaxNode;
 use crate::span::Span;
 use crate::views::Headline;
 use rowan::WalkEvent;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// What decides whether a node is rendered.
 pub(crate) struct Rules {
-    pub exclude_tags: Vec<String>,
-    /// Labels of referenced footnote definitions; `None` while they are being
-    /// computed, when every definition counts as unrendered.
-    pub referenced: Option<HashSet<String>>,
+    /// The region of each headline that is not rendered, by start offset.
+    headlines: HashMap<u32, Region>,
+    /// Start offsets of archived headlines whose contents are not rendered.
+    archived: HashSet<u32>,
+    /// The zeroth section, when a select tag hides its content.
+    zeroth: Option<SyntaxNode>,
+    /// Referenced footnote labels, each with the start of the reference that
+    /// first made it referenced; `None` while they are being computed.
+    pub referenced: Option<HashMap<String, u32>>,
+    /// Keyword keys (upper case) whose values are not read for links.
+    pub link_exclude_keywords: HashSet<String>,
+    /// Property keys (canonical) whose values are not read for links.
+    pub link_exclude_properties: HashSet<String>,
+}
+
+impl Region {
+    /// Whether Org parses this region's contents before pruning it, so a
+    /// footnote definition inside can still be re-added by a reference.
+    pub(crate) fn parses_contents(self) -> bool {
+        matches!(
+            self,
+            Region::ExcludedSubtree | Region::Drawer | Region::Unselected | Region::Archived
+        )
+    }
 }
 
 impl Rules {
+    /// The rules of `root` under `options`: `exclude` and `select` are the
+    /// tags in force (in-file declarations already applied), `file_tags`
+    /// the file's tags, which every headline inherits for exclusion and
+    /// selection (`org-export-get-tags` with inheritance).
+    pub fn new(
+        root: &SyntaxNode,
+        options: &SemanticsOptions,
+        exclude: &[String],
+        select: &[String],
+        file_tags: &[String],
+    ) -> Rules {
+        let exclude: HashSet<&str> = exclude.iter().map(String::as_str).collect();
+        let select: HashSet<&str> = select.iter().map(String::as_str).collect();
+        let file_excluded = file_tags.iter().any(|t| exclude.contains(t.as_str()));
+        let file_selected = file_tags.iter().any(|t| select.contains(t.as_str()));
+        let mut own: Vec<(SyntaxNode, Vec<String>, bool)> = Vec::new();
+        for n in root.descendants().filter(|n| n.kind() == HEADLINE) {
+            let Some(h) = Headline::cast(n.clone()) else {
+                continue;
+            };
+            own.push((n, h.tags(), h.is_commented()));
+        }
+        let selected = selected_headlines(&own, &select, file_selected);
+        let mut headlines = HashMap::new();
+        let mut archived = HashSet::new();
+        for (n, tags, commented) in &own {
+            let at = u32::from(n.text_range().start());
+            let excluded = file_excluded || tags.iter().any(|t| exclude.contains(t.as_str()));
+            let is_archived = tags.contains(&options.archive_tag);
+            let region = if *commented {
+                Some(Region::CommentSubtree)
+            } else if excluded {
+                Some(Region::ExcludedSubtree)
+            } else if selected.as_ref().is_some_and(|s| !s.contains(&at)) {
+                Some(Region::Unselected)
+            } else if is_archived && options.archived_trees == super::ArchivedTrees::None {
+                Some(Region::Archived)
+            } else {
+                None
+            };
+            match region {
+                Some(r) => {
+                    headlines.insert(at, r);
+                }
+                None if is_archived && options.archived_trees == super::ArchivedTrees::Headline => {
+                    archived.insert(at);
+                }
+                None => {}
+            }
+        }
+        let zeroth = selected
+            .and_then(|_| root.children().next())
+            .filter(|s| s.kind() == SECTION);
+        let upper = |v: &[String]| v.iter().map(|k| k.to_ascii_uppercase()).collect();
+        Rules {
+            headlines,
+            archived,
+            zeroth,
+            referenced: None,
+            link_exclude_keywords: upper(&options.link_exclude_keywords),
+            link_exclude_properties: options
+                .link_exclude_properties
+                .iter()
+                .map(|k| crate::views::canonical_key(k))
+                .collect(),
+        }
+    }
+
     /// The region `node` opens, if it is not rendered.
     pub fn region(&self, node: &SyntaxNode) -> Option<Region> {
-        match node.kind() {
+        let kind = node.kind();
+        if kind == FOOTNOTE_DEFINITION {
+            let label = definition_label(node);
+            let referenced = match (&self.referenced, label) {
+                (Some(map), Some(l)) => map.contains_key(&l),
+                _ => false,
+            };
+            return (!referenced).then_some(Region::UnreferencedFootnote);
+        }
+        let parent = node.parent();
+        if let Some(z) = &self.zeroth {
+            if parent.as_ref() == Some(z) && kind != PROPERTY_DRAWER {
+                return Some(Region::Unselected);
+            }
+        }
+        match kind {
             COMMENT => Some(Region::CommentLine),
             COMMENT_BLOCK => Some(Region::CommentBlock),
             EXPORT_BLOCK => Some(Region::ExportBlock),
-            DRAWER if items::item_property_drawer(node).is_none() => Some(Region::Drawer),
-            HEADLINE => self.headline_region(node),
-            FOOTNOTE_DEFINITION => {
-                let label = definition_label(node);
-                let referenced = match (&self.referenced, label) {
-                    (Some(set), Some(l)) => set.contains(&l),
-                    _ => false,
-                };
-                (!referenced).then_some(Region::UnreferencedFootnote)
+            DRAWER if !items::is_item_property_drawer(node) => Some(Region::Drawer),
+            SECTION | HEADLINE if parent.as_ref().is_some_and(|p| self.contents_hidden(p)) => {
+                Some(Region::Archived)
             }
+            HEADLINE => self.headlines.get(&start(node)).copied(),
             _ => None,
         }
     }
 
-    fn headline_region(&self, node: &SyntaxNode) -> Option<Region> {
-        let h = Headline::cast(node.clone())?;
-        if h.is_commented() {
-            return Some(Region::CommentSubtree);
-        }
-        let excluded = h.tags().iter().any(|t| self.exclude_tags.contains(t));
-        excluded.then_some(Region::ExcludedSubtree)
+    /// Whether `headline` is archived, so rendered without its contents.
+    pub fn contents_hidden(&self, headline: &SyntaxNode) -> bool {
+        headline.kind() == HEADLINE && self.archived.contains(&start(headline))
     }
 }
 
+fn start(n: &SyntaxNode) -> u32 {
+    u32::from(n.text_range().start())
+}
+
+/// `org-export--selected-trees`: `None` when no select tag is in force (no
+/// headline and no file tag carries one); otherwise the start offsets of
+/// the headlines in a selected tree and of their ancestors. A file tag that
+/// is a select tag selects every headline. `own` is in document order.
+fn selected_headlines(
+    own: &[(SyntaxNode, Vec<String>, bool)],
+    select: &HashSet<&str>,
+    file_selected: bool,
+) -> Option<HashSet<u32>> {
+    if file_selected {
+        return Some(own.iter().map(|h| start(&h.0)).collect());
+    }
+    // In a selected tree, and ancestors of one: separate sets, or a
+    // selected tree's ancestor would pass selection on to its other
+    // children (Emacs renders the ancestor, not its siblings' trees).
+    let mut in_tree: HashSet<u32> = HashSet::new();
+    let mut ancestors: HashSet<u32> = HashSet::new();
+    let mut any = false;
+    for (n, tags, _) in own {
+        let root = tags.iter().any(|t| select.contains(t.as_str()));
+        let parent_in = n
+            .parent()
+            .filter(|p| p.kind() == HEADLINE)
+            .is_some_and(|p| in_tree.contains(&start(&p)));
+        if root || parent_in {
+            in_tree.insert(start(n));
+        }
+        if root {
+            any = true;
+            // Stop at an ancestor already marked, so each is visited once.
+            for a in n.ancestors().skip(1).filter(|a| a.kind() == HEADLINE) {
+                if !ancestors.insert(start(&a)) {
+                    break;
+                }
+            }
+        }
+    }
+    let chosen: HashSet<u32> = in_tree.union(&ancestors).copied().collect();
+    any.then_some(chosen)
+}
+
 /// `LABEL` of a definition's `[fn:LABEL]`.
-fn definition_label(def: &SyntaxNode) -> Option<String> {
+pub(crate) fn definition_label(def: &SyntaxNode) -> Option<String> {
     let tok = def
         .children_with_tokens()
         .filter_map(|e| e.into_token())
@@ -65,59 +215,114 @@ fn definition_label(def: &SyntaxNode) -> Option<String> {
 
 /// `LABEL` of a reference `[fn:LABEL]` or `[fn:LABEL:inline definition]`;
 /// `None` for an anonymous `[fn::…]`.
-fn reference_label(reference: &SyntaxNode) -> Option<String> {
+pub(crate) fn reference_label(reference: &SyntaxNode) -> Option<String> {
     let text = reference.to_string();
     let rest = text.strip_prefix("[fn:")?;
     let end = rest.find([':', ']'])?;
     Some(rest[..end].to_string()).filter(|l| !l.is_empty())
 }
 
-/// Labels of the footnote definitions rendered text references: references
-/// outside every unrendered region, then, to a fixed point, references
-/// inside definitions already found referenced. A worklist: each label's
-/// definitions are read once, so a chain of N definitions costs O(N), not
-/// one rescan of every definition per link of the chain.
-pub(crate) fn referenced_footnotes(root: &SyntaxNode, exclude_tags: &[String]) -> HashSet<String> {
-    let rules = Rules {
-        exclude_tags: exclude_tags.to_vec(),
-        referenced: None,
-    };
-    let mut refs = HashSet::new();
-    collect_references(root, &rules, &mut refs);
+/// The footnote labels rendered text references, each with the start of the
+/// reference that first made it referenced, and the labels in that order.
+///
+/// References in rendered text (outside every unrendered region) come first,
+/// in document order; then, breadth first, the references inside each
+/// referenced definition. A definition counts wherever Org's exporter can
+/// still find it: anywhere but under a region it never parses (see
+/// [`Region::parses_contents`]). A worklist: each label's definitions are
+/// read once, so a chain of N definitions costs O(N).
+pub(crate) fn referenced_footnotes(
+    root: &SyntaxNode,
+    rules: &Rules,
+) -> (HashMap<String, u32>, Vec<String>) {
+    let mut outside: Vec<(String, u32)> = Vec::new();
     let mut defs: HashMap<String, Vec<SyntaxNode>> = HashMap::new();
-    for n in root
-        .descendants()
-        .filter(|n| n.kind() == FOOTNOTE_DEFINITION)
-    {
-        let hidden = n.ancestors().skip(1).any(|a| rules.region(&a).is_some());
-        if let Some(label) = definition_label(&n).filter(|_| !hidden) {
-            defs.entry(label).or_default().push(n);
+    let mut hidden: Vec<SyntaxNode> = Vec::new();
+    let mut walk = root.preorder();
+    while let Some(ev) = walk.next() {
+        let n = match ev {
+            WalkEvent::Enter(n) => n,
+            WalkEvent::Leave(n) => {
+                if hidden.last() == Some(&n) {
+                    hidden.pop();
+                }
+                continue;
+            }
+        };
+        if n.kind() == FOOTNOTE_DEFINITION {
+            if let Some(label) = definition_label(&n) {
+                defs.entry(label).or_default().push(n);
+            }
+            walk.skip_subtree();
+        } else if let Some(r) = rules.region(&n) {
+            if r.parses_contents() {
+                hidden.push(n);
+            } else {
+                walk.skip_subtree();
+            }
+        } else if n.kind() == FOOTNOTE_REFERENCE && hidden.is_empty() {
+            outside.extend(reference_label(&n).map(|l| (l, start(&n))));
         }
     }
-    let mut queue: Vec<String> = refs.iter().cloned().collect();
-    while let Some(label) = queue.pop() {
-        let mut found = HashSet::new();
+    let mut first: HashMap<String, u32> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+    let mut queue: VecDeque<String> = VecDeque::new();
+    let mut add = |l: String, at: u32, queue: &mut VecDeque<String>| {
+        if let std::collections::hash_map::Entry::Vacant(e) = first.entry(l.clone()) {
+            e.insert(at);
+            order.push(l.clone());
+            queue.push_back(l);
+        }
+    };
+    for (l, at) in outside {
+        add(l, at, &mut queue);
+    }
+    while let Some(label) = queue.pop_front() {
         for def in defs.remove(&label).unwrap_or_default() {
             for c in def.children() {
-                collect_references(&c, &rules, &mut found);
+                for (l, at) in references_under(&c, rules) {
+                    add(l, at, &mut queue);
+                }
             }
         }
-        queue.extend(found.into_iter().filter(|l| refs.insert(l.clone())));
     }
-    refs
+    (first, order)
 }
 
-/// References under `start` that are not inside an unrendered region.
-fn collect_references(start: &SyntaxNode, rules: &Rules, out: &mut HashSet<String>) {
+/// References under `start` outside every unrendered region, in order.
+fn references_under(start: &SyntaxNode, rules: &Rules) -> Vec<(String, u32)> {
+    let mut out = Vec::new();
     let mut walk = start.preorder();
     while let Some(ev) = walk.next() {
         let WalkEvent::Enter(n) = ev else { continue };
-        if rules.region(&n).is_some() {
+        if n.kind() == FOOTNOTE_DEFINITION || rules.region(&n).is_some() {
             walk.skip_subtree();
         } else if n.kind() == FOOTNOTE_REFERENCE {
-            out.extend(reference_label(&n));
+            out.extend(reference_label(&n).map(|l| (l, self::start(&n))));
         }
     }
+    out
+}
+
+/// The referenced footnote definitions under an unrendered `region` that
+/// Org still renders (only when the region's contents are parsed), in
+/// document order.
+pub(crate) fn rendered_definitions(region: &SyntaxNode, rules: &Rules) -> Vec<SyntaxNode> {
+    let mut out = Vec::new();
+    let mut walk = region.preorder();
+    walk.next(); // the region itself
+    while let Some(ev) = walk.next() {
+        let WalkEvent::Enter(n) = ev else { continue };
+        if n.kind() == FOOTNOTE_DEFINITION {
+            if rules.region(&n).is_none() {
+                out.push(n);
+            }
+            walk.skip_subtree();
+        } else if rules.region(&n).is_some_and(|r| !r.parses_contents()) {
+            walk.skip_subtree();
+        }
+    }
+    out
 }
 
 /// Every `:ID: value` line of `text` (`base` is its offset in the document),
@@ -146,15 +351,25 @@ pub(crate) fn id_lines(text: &str, base: usize) -> Vec<(String, Span)> {
     out
 }
 
-/// Every link in an unrendered region: its LINK objects, and the links of
-/// the raw text of comment/export blocks and comment lines inside it, read
-/// by parsing that text (one level: a raw block inside a raw block is not
-/// read again). Returns `(path as written, span)`.
-pub(crate) fn region_links(region: &SyntaxNode) -> Vec<(String, Span)> {
-    let mut out = Vec::new();
+/// What an unrendered region would have contributed: its links and its
+/// `#+TRANSCLUDE` members, each `(text, span)`.
+#[derive(Default)]
+pub(crate) struct Hidden {
+    pub links: Vec<(String, Span)>,
+    pub transclusions: Vec<(String, Span)>,
+}
+
+/// Everything under an unrendered region that would be a link or a
+/// transclusion if rendered: its LINK objects, the links in keyword and
+/// property values the semantics read, its `#+TRANSCLUDE` keywords, and the
+/// same in the raw text of comment/export blocks and comment lines inside
+/// it, read by parsing that text (one level: a raw block inside a raw block
+/// is not read again).
+pub(crate) fn region_contents(region: &SyntaxNode, rules: &Rules) -> Hidden {
+    let mut out = Hidden::default();
+    scan_tree(region, rules, &mut out, 0);
     for n in region.descendants() {
         match n.kind() {
-            LINK => out.extend(super::plain::link_path(&n).map(|p| (p, Span::of(&n)))),
             COMMENT_BLOCK | EXPORT_BLOCK => {
                 let content = n
                     .children_with_tokens()
@@ -162,17 +377,55 @@ pub(crate) fn region_links(region: &SyntaxNode) -> Vec<(String, Span)> {
                     .find(|t| t.kind() == BLOCK_CONTENT);
                 if let Some(t) = content {
                     let base = usize::from(t.text_range().start());
-                    out.extend(links_in_text(t.text(), base));
+                    scan_text(t.text(), base, rules, &mut out);
                 }
             }
             COMMENT => {
                 let base = usize::from(n.text_range().start());
-                out.extend(links_in_text(&uncomment(&n.to_string()), base));
+                scan_text(&uncomment(&n.to_string()), base, rules, &mut out);
             }
             _ => {}
         }
     }
     out
+}
+
+/// The links and transclusions of a parsed tree (`base` shifts its spans).
+fn scan_tree(root: &SyntaxNode, rules: &Rules, out: &mut Hidden, base: usize) {
+    let shift = |s: Span| Span::new(base + s.start as usize, base + s.end as usize);
+    for n in root.descendants() {
+        match n.kind() {
+            LINK => out
+                .links
+                .extend(super::plain::link_path(&n).map(|p| (p, shift(Span::of(&n))))),
+            KEYWORD => {
+                if let Some((member, span)) = super::transclude_member(&n) {
+                    out.transclusions.push((member, shift(span)));
+                } else if let Some((text, at)) = super::keyword_link_value(&n, rules) {
+                    out.links.extend(value_links(&text, base + at));
+                }
+            }
+            NODE_PROPERTY => {
+                if let Some((text, at)) = super::property_link_value(&n, rules) {
+                    out.links.extend(value_links(&text, base + at));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The paths and spans of the links in a keyword or property value.
+fn value_links(text: &str, base: usize) -> Vec<(String, Span)> {
+    let tree = crate::green::objects(text, PARAGRAPH);
+    tree.descendants()
+        .filter(|n| n.kind() == LINK)
+        .filter_map(|n| {
+            let s = Span::of(&n);
+            let span = Span::new(base + s.start as usize, base + s.end as usize);
+            Some((super::plain::link_path(&n)?, span))
+        })
+        .collect()
 }
 
 /// The text of comment lines with each line's `#` and the space after it
@@ -193,15 +446,7 @@ fn uncomment(text: &str) -> String {
     out
 }
 
-fn links_in_text(text: &str, base: usize) -> Vec<(String, Span)> {
+fn scan_text(text: &str, base: usize, rules: &Rules, out: &mut Hidden) {
     let doc = crate::parse(text, &crate::ParseOptions::default());
-    doc.syntax()
-        .descendants()
-        .filter(|n| n.kind() == LINK)
-        .filter_map(|n| {
-            let s = Span::of(&n);
-            let span = Span::new(base + s.start as usize, base + s.end as usize);
-            Some((super::plain::link_path(&n)?, span))
-        })
-        .collect()
+    scan_tree(&doc.syntax(), rules, out, base);
 }

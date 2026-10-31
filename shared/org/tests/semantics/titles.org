@@ -16,3 +16,8 @@
 :PROPERTIES:
 :ID: sem-title-bare-heading
 :END:
+
+* Objects [1/2] \alpha <2026-10-31 Sat> {{{macro}}} stay as written
+:PROPERTIES:
+:ID: sem-title-objects
+:END:
