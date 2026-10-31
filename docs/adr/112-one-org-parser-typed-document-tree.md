@@ -156,7 +156,11 @@ layer on it becomes the cheaper path.
   declared configuration; the differential harness, divergence register, scaling and fuzz gates.
 - **O2** inline tree, the one link grammar, and `semantics()`.
 - **O3** renderers and the WASM facade. Tag `mae-org-v0.1.0`: the first version an external consumer
-  may pin.
+  may pin. *Built:* one element tree (`render`) read as HTML, hast JSON and search text; the
+  normalised org source; `mae-org-wasm` (no bindings generator, a synchronous loader). The size
+  budget D5 asks for, measured: 607,388 bytes with rustc 1.98 at `opt-level = "s"` (no `wasm-opt`;
+  `"z"` is 508,112 bytes but ~75% slower per call), held to **700,000 bytes** by the CI job, which
+  pins its toolchain so the reproducible build is the same bytes on every run.
 - **O4** MAE switches ingest, export and read mode to it, with the repair path; the span-based write
   path lands on the same spans.
 - **O5** the remaining constructs by measured use, privacy-relevant regions first.
