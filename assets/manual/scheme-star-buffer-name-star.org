@@ -2,7 +2,7 @@
 :ID: scheme:*buffer-name*
 :KIND: scheme_api
 :END:
-#+title: Scheme: *buffer-name*
+#+title: Scheme: =*buffer-name*=
 #+filetags: :scheme:api:variable:
 
 *Type:* string
