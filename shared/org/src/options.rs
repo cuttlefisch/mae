@@ -11,36 +11,59 @@ pub struct TodoSequence {
 }
 
 impl TodoSequence {
-    /// Parses an in-file `#+TODO:` value the way Org does: whitespace
-    /// separated words, `|` splits todo from done, a missing `|` makes the
-    /// last word the only done state, and a fast-access suffix such as
-    /// `(t)` or `(w@/!)` is not part of the keyword.
-    pub fn parse(value: &str) -> Option<TodoSequence> {
-        let words: Vec<&str> = value.split_whitespace().collect();
-        let bar = words.iter().position(|w| *w == "|");
-        let strip = |w: &&str| -> Option<String> {
-            let kw = w.split('(').next().unwrap_or("");
-            (!kw.is_empty() && *w != "|").then(|| kw.to_string())
+    /// Parses an in-file `#+TODO:` value the way `org-set-regexps-and-options`
+    /// does: words split on ASCII whitespace only (`split-string`'s default),
+    /// `|` splits todo from done, a missing `|` makes the last word the only
+    /// done state, and a keyword is its shortest prefix whose remainder is
+    /// empty or a `(...)` fast-access suffix (`TODO(t)` → `TODO`, but
+    /// `A(x)B` stays whole). An empty value gives an empty sequence, which
+    /// still counts as a declaration.
+    pub fn parse(value: &str) -> TodoSequence {
+        let words: Vec<&str> = value
+            .split(is_ascii_space)
+            .filter(|w| !w.is_empty())
+            .collect();
+        let names = |ws: &[&str]| -> Vec<String> {
+            ws.iter()
+                .filter(|w| **w != "|")
+                .map(|w| keyword_name(w))
+                .filter(|n| !n.is_empty())
+                .map(str::to_string)
+                .collect()
         };
-        let (todo, done): (Vec<String>, Vec<String>) = match bar {
-            Some(i) => (
-                words[..i].iter().filter_map(strip).collect(),
-                words[i + 1..].iter().filter_map(strip).collect(),
-            ),
+        match words.iter().position(|w| *w == "|") {
+            Some(i) => TodoSequence {
+                todo: names(&words[..i]),
+                done: names(&words[i + 1..]),
+            },
             None => {
-                let all: Vec<String> = words.iter().filter_map(strip).collect();
-                match all.split_last() {
-                    Some((last, rest)) => (rest.to_vec(), vec![last.clone()]),
-                    None => (Vec::new(), Vec::new()),
-                }
+                let mut todo = names(&words);
+                let done = todo.pop().into_iter().collect();
+                TodoSequence { todo, done }
             }
-        };
-        (!todo.is_empty() || !done.is_empty()).then_some(TodoSequence { todo, done })
+        }
     }
 
     fn keywords(&self) -> impl Iterator<Item = &str> {
         self.todo.iter().chain(&self.done).map(String::as_str)
     }
+}
+
+/// `split-string-default-separators`: `[ \f\t\n\r\v]`.
+fn is_ascii_space(c: char) -> bool {
+    matches!(c, ' ' | '\x0c' | '\t' | '\n' | '\r' | '\x0b')
+}
+
+/// `^\(.*?\)\(?:(\([^!@/]\)?.*?)\)?$`: the shortest prefix whose remainder
+/// is empty or starts with `(` and ends with `)`.
+fn keyword_name(word: &str) -> &str {
+    word.char_indices()
+        .map(|(i, _)| i)
+        .find(|&i| {
+            let rest = &word[i..];
+            rest.len() >= 2 && rest.starts_with('(') && rest.ends_with(')')
+        })
+        .map_or(word, |i| &word[..i])
 }
 
 /// Everything that can change the SHAPE of the tree. Settings that only
@@ -52,9 +75,17 @@ pub struct ParseOptions {
     pub todo_sequences: Vec<TodoSequence>,
     /// Maximum nesting of greater elements. Contents nested deeper are kept
     /// as one opaque token with a [`crate::DiagnosticKind::DepthLimit`]
-    /// diagnostic: the parse never recurses on input nesting.
+    /// diagnostic: the parse never recurses on input nesting. Values above
+    /// [`MAX_DEPTH_CEILING`] are clamped to it.
     pub max_depth: usize,
 }
+
+/// The most `max_depth` can be: larger values are clamped to it. The parse
+/// itself never recurses, but rowan drops and compares a tree recursively,
+/// one stack frame per level. At this depth that fits in 512 KiB in a debug
+/// build and 128 KiB in release (measured), so any tree mae-org builds can be
+/// dropped on a 1 MiB stack (the WASM default) or a 2 MiB thread.
+pub const MAX_DEPTH_CEILING: usize = 1024;
 
 /// The default nesting cap. Real documents nest a few levels; this bounds the
 /// tree depth (and so the stack depth of anything that walks it recursively,
@@ -75,37 +106,39 @@ impl Default for ParseOptions {
     }
 }
 
-/// The TODO keywords in force for one document.
+/// The TODO keywords in force for one document, as a set: a headline's
+/// candidate keyword is its first space-delimited word, so matching is one
+/// hash lookup per headline whatever the number of keywords (scanning every
+/// keyword per headline was quadratic; review finding).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TodoKeywords {
-    words: Vec<String>,
+    words: std::collections::HashSet<String>,
 }
 
 impl TodoKeywords {
-    /// In-file sequences win over configured ones when the file has any.
-    pub fn resolve(in_file: &[TodoSequence], configured: &[TodoSequence]) -> TodoKeywords {
-        let source = if in_file.is_empty() {
-            configured
-        } else {
-            in_file
-        };
-        let mut words: Vec<String> = source
-            .iter()
-            .flat_map(|s| s.keywords().map(str::to_string))
-            .collect();
-        // Longest first, so a keyword that prefixes another cannot shadow it.
-        words.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
-        words.dedup();
-        TodoKeywords { words }
+    /// `declared` is true when the file has any `#+TODO`-family keyword,
+    /// even an empty one: then the file's sequences replace the configured
+    /// ones entirely, as in Emacs.
+    pub fn resolve(
+        declared: bool,
+        in_file: &[TodoSequence],
+        configured: &[TodoSequence],
+    ) -> TodoKeywords {
+        let source = if declared { in_file } else { configured };
+        TodoKeywords {
+            words: source
+                .iter()
+                .flat_map(|s| s.keywords().map(str::to_string))
+                .collect(),
+        }
     }
 
     /// The keyword that starts `s` and is followed by a space or the end of
-    /// the line (case-sensitive, as Org matches it).
+    /// the line (case-sensitive, as Org matches it). Keywords contain no
+    /// ASCII space, so the only candidate is the text before the first space.
     pub fn match_at<'s>(&self, s: &'s str) -> Option<&'s str> {
-        self.words.iter().find_map(|w| {
-            let rest = s.strip_prefix(w.as_str())?;
-            (rest.is_empty() || rest.starts_with(' ')).then(|| &s[..w.len()])
-        })
+        let word = &s[..s.find(' ').unwrap_or(s.len())];
+        self.words.contains(word).then_some(word)
     }
 }
 
@@ -129,30 +162,32 @@ mod tests {
 
     #[test]
     fn todo_values_parse_like_org() {
-        assert_eq!(
-            TodoSequence::parse("A B | C"),
-            Some(seq(&["A", "B"], &["C"]))
-        );
+        assert_eq!(TodoSequence::parse("A B | C"), seq(&["A", "B"], &["C"]));
         assert_eq!(
             TodoSequence::parse("TODO(t) WAIT(w@/!) | DONE(d!)"),
-            Some(seq(&["TODO", "WAIT"], &["DONE"]))
+            seq(&["TODO", "WAIT"], &["DONE"])
         );
         // No bar: the last word is the done state.
         assert_eq!(
             TodoSequence::parse("NEXT LATER FINISHED"),
-            Some(seq(&["NEXT", "LATER"], &["FINISHED"]))
+            seq(&["NEXT", "LATER"], &["FINISHED"])
         );
-        assert_eq!(TodoSequence::parse("   "), None);
-        assert_eq!(TodoSequence::parse("|"), None);
+        // Empty declarations are empty sequences (and still declarations).
+        assert_eq!(TodoSequence::parse("   "), seq(&[], &[]));
+        assert_eq!(TodoSequence::parse("|"), seq(&[], &[]));
+        assert_eq!(TodoSequence::parse("A |"), seq(&["A"], &[]));
     }
 
     #[test]
     fn in_file_sequences_replace_configured_ones() {
         let configured = vec![seq(&["TODO"], &["DONE"])];
-        let kw = TodoKeywords::resolve(&[seq(&["A"], &["C"])], &configured);
+        let kw = TodoKeywords::resolve(true, &[seq(&["A"], &["C"])], &configured);
         assert_eq!(kw.match_at("A x"), Some("A"));
         assert_eq!(kw.match_at("TODO x"), None);
-        let kw = TodoKeywords::resolve(&[], &configured);
+        // Declared but empty: no keywords at all.
+        let kw = TodoKeywords::resolve(true, &[seq(&[], &[])], &configured);
+        assert_eq!(kw.match_at("TODO x"), None);
+        let kw = TodoKeywords::resolve(false, &[], &configured);
         assert_eq!(kw.match_at("TODO x"), Some("TODO"));
         assert_eq!(kw.match_at("TODO"), Some("TODO"));
         // Case-sensitive, and must be followed by a space or the line end.
@@ -163,8 +198,9 @@ mod tests {
 
     #[test]
     fn a_keyword_that_prefixes_another_does_not_shadow_it() {
-        let kw = TodoKeywords::resolve(&[seq(&["DO", "DOING"], &["DONE"])], &[]);
+        let kw = TodoKeywords::resolve(true, &[seq(&["DO", "DOING"], &["DONE"])], &[]);
         assert_eq!(kw.match_at("DOING x"), Some("DOING"));
         assert_eq!(kw.match_at("DO x"), Some("DO"));
+        assert_eq!(kw.match_at("DOIN x"), None);
     }
 }

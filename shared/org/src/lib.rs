@@ -5,7 +5,8 @@
 //! belongs to exactly one token, so printing an unedited tree reproduces the
 //! input byte for byte — CRLF, a BOM and a missing final newline included.
 //! Typed views ([`Headline`], [`PropertyDrawer`], [`Block`], [`Keyword`]) sit
-//! on top and read only from the tree.
+//! on top and read only from the tree. [`parse_fragment`] parses a headline's
+//! body; [`Document::contents`] gives each element's contents range.
 //!
 //! Element extents follow `org-element` (Org 9.7), the conformance oracle:
 //! affiliated keywords and trailing blank lines live inside the element they
@@ -22,12 +23,19 @@
 //! - **Linear-ish:** every forward search is a lookup in an index built in
 //!   one pass, so hostile input cannot make the parse quadratic.
 //! - **No recursion on input nesting:** containers are an explicit stack,
-//!   capped by [`ParseOptions::max_depth`].
+//!   capped by [`ParseOptions::max_depth`], itself clamped to
+//!   [`MAX_DEPTH_CEILING`] because rowan drops and compares a tree
+//!   recursively (one frame per level).
+//! - **Emacs's reading of the bytes:** the line-ending convention
+//!   ([`LineEnding`]), character classes and case folding are Emacs's own,
+//!   the latter generated from Emacs by `conformance/gen-char-tables.el`.
 //! - **Deterministic and configuration-as-data:** the tree is a function of
 //!   the text and [`ParseOptions`] only (ADR-112 D4). No I/O.
 
 mod blocks;
 mod builder;
+mod chars;
+mod chartables;
 mod diagnostic;
 mod element;
 mod green;
@@ -39,14 +47,24 @@ mod list;
 mod options;
 mod paragraph;
 mod scan;
+mod span;
 mod text;
 mod tokens;
 mod views;
 
+/// The Emacs version the character classes and case folding were generated
+/// from (`conformance/gen-char-tables.el`).
+pub use chartables::EMACS_VERSION as CHAR_TABLES_EMACS_VERSION;
 pub use diagnostic::{Diagnostic, DiagnosticKind};
 pub use kind::{OrgLanguage, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
-pub use options::{ParseOptions, TodoSequence, DEFAULT_MAX_DEPTH};
-pub use rowan::{TextRange, TextSize};
+pub use options::{ParseOptions, TodoSequence, DEFAULT_MAX_DEPTH, MAX_DEPTH_CEILING};
+/// The tree is a rowan tree; `node.text_range()` returns rowan types. The
+/// re-export makes that coupling explicit and versioned: plain-data results
+/// (diagnostics, contents) use [`Span`] instead, so a JSON/WASM consumer never
+/// needs rowan.
+pub use rowan;
+pub use span::Span;
+pub use text::LineEnding;
 pub use views::{Block, Headline, Keyword, Property, PropertyDrawer};
 
 use rowan::GreenNode;
@@ -57,32 +75,61 @@ pub struct Document {
     green: GreenNode,
     diagnostics: Vec<Diagnostic>,
     todo_sequences: Vec<TodoSequence>,
+    line_ending: LineEnding,
+    contents: span::ContentsTable,
 }
 
 /// Parses `text`. Total: any input gives a document whose tree prints back
 /// to `text`, except inputs over `u32::MAX` bytes, which give an empty
 /// document with an [`DiagnosticKind::InputTooLarge`] diagnostic.
 pub fn parse(text: &str, options: &ParseOptions) -> Document {
+    parse_with(text, options, builder::Start::Document)
+}
+
+/// Parses `text` as the BODY of a headline of level `level`: what follows
+/// the headline line in a file (ADR-112 D1, M4). It parses exactly as the
+/// same text placed under a level-`level` headline in a document would —
+/// planning and a property drawer are recognised at its top — with offsets
+/// relative to `text`. A headline at or above `level` (one that would end
+/// the body in a file) is parsed and reported as
+/// [`DiagnosticKind::HeadlineOutsideFragment`]. `level == 0` is [`parse`].
+///
+/// A fragment cannot see the rest of its file: pass the file's TODO
+/// sequences in `options` (an in-fragment `#+TODO:` still applies to it).
+pub fn parse_fragment(text: &str, options: &ParseOptions, level: usize) -> Document {
+    let start = if level == 0 {
+        builder::Start::Document
+    } else {
+        builder::Start::Fragment { level }
+    };
+    parse_with(text, options, start)
+}
+
+fn parse_with(text: &str, options: &ParseOptions, start: builder::Start) -> Document {
     if exceeds_tree_limit(text.len()) {
         return Document::too_large();
     }
     let src = text::Source::new(text);
     let ix = index::Index::build(&src);
-    let built = builder::build(&src, &ix, options);
-    let todo = options::TodoKeywords::resolve(&built.in_file_todo, &options.todo_sequences);
+    let built = builder::build(&src, &ix, options, start);
+    let declared = !built.in_file_todo.is_empty();
+    let todo =
+        options::TodoKeywords::resolve(declared, &built.in_file_todo, &options.todo_sequences);
     let green = green::to_green(text, &built.events, &todo);
     let mut diagnostics = built.diagnostics;
     diagnostics.sort_by_key(Diagnostic::order_key);
     diagnostics.dedup();
-    let todo_sequences = if built.in_file_todo.is_empty() {
-        options.todo_sequences.clone()
-    } else {
+    let todo_sequences = if declared {
         built.in_file_todo
+    } else {
+        options.todo_sequences.clone()
     };
     Document {
         green,
         diagnostics,
         todo_sequences,
+        line_ending: src.eol,
+        contents: built.contents,
     }
 }
 
@@ -103,7 +150,24 @@ impl Document {
             green: b.finish(),
             diagnostics,
             todo_sequences: Vec::new(),
+            line_ending: LineEnding::Lf,
+            contents: span::ContentsTable::default(),
         }
+    }
+
+    /// The contents of an element node, as `org-element` defines them
+    /// (`:contents-begin`/`:contents-end`): e.g. a block's lines between its
+    /// delimiters, a paragraph without its trailing blank lines, an item after
+    /// its bullet. `None` for elements Org gives no contents (keywords, lesser
+    /// blocks, empty greater elements) and for nodes that are not elements.
+    pub fn contents(&self, node: &SyntaxNode) -> Option<Span> {
+        self.contents.get(node)
+    }
+
+    /// The line-ending convention the document was read with (decided once,
+    /// as Emacs decides it; see [`LineEnding::detect`]).
+    pub fn line_ending(&self) -> LineEnding {
+        self.line_ending
     }
 
     /// The root of the tree (a `DOCUMENT` node).

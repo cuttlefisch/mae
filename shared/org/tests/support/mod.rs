@@ -74,17 +74,9 @@ pub fn to_crlf(text: &str) -> String {
     out
 }
 
-/// Whether every line ending is CRLF and no CR stands alone: such a file is
-/// what Emacs decodes with DOS line endings.
-pub fn is_pure_crlf(text: &str) -> bool {
-    text.contains("\r\n")
-        && text.matches('\r').count() == text.matches("\r\n").count()
-        && text.matches('\n').count() == text.matches("\r\n").count()
-}
-
-/// Maps an element span from an LF text onto the same text with CRLF line
+/// Maps an element from an LF text onto the same text with CRLF line
 /// endings: each LF before an offset adds one byte. An offset pointing AT an
-/// LF stays before the CR, which is where Emacs would put it.
+/// LF (a table row's contents end) stays before the CR, as in Emacs.
 pub fn lf_to_crlf(lf_text: &str, el: &El) -> El {
     let shift = |o: usize| {
         o + lf_text.as_bytes()[..o.min(lf_text.len())]
@@ -92,10 +84,24 @@ pub fn lf_to_crlf(lf_text: &str, el: &El) -> El {
             .filter(|&&b| b == b'\n')
             .count()
     };
+    shift_el(el, shift)
+}
+
+/// `el` with every offset passed through `f`.
+pub fn shift_el(el: &El, f: impl Fn(usize) -> usize) -> El {
     El {
         kind: el.kind.clone(),
-        begin: shift(el.begin),
-        end: shift(el.end),
+        begin: f(el.begin),
+        end: f(el.end),
+        contents: el.contents.map(|(a, b)| (f(a), f(b))),
+        parent: (
+            el.parent.0.clone(),
+            if el.parent.0 == "org-data" {
+                0
+            } else {
+                f(el.parent.1)
+            },
+        ),
     }
 }
 
@@ -134,12 +140,21 @@ pub const KIND_MAP: &[(SyntaxKind, &str)] = &[
     (LATEX_ENVIRONMENT, "latex-environment"),
 ];
 
-/// One element: its org-element type and byte span.
+/// One element as the differential compares it: its org-element type, byte
+/// span, contents range, and its parent element's type and begin. Contents
+/// and parent matter as much as the span: O4's span-based write path splices
+/// contents, and a correct span under the wrong parent is a wrong tree.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct El {
     pub kind: String,
     pub begin: usize,
     pub end: usize,
+    pub contents: Option<(usize, usize)>,
+    pub parent: (String, usize),
+}
+
+fn kind_name(kind: SyntaxKind) -> Option<&'static str> {
+    KIND_MAP.iter().find(|(k, _)| *k == kind).map(|(_, s)| *s)
 }
 
 /// mae-org's elements, in document order, mapped through [`KIND_MAP`].
@@ -147,12 +162,22 @@ pub fn mae_elements(doc: &Document) -> Vec<El> {
     doc.syntax()
         .descendants()
         .filter_map(|n| {
-            let name = KIND_MAP.iter().find(|(k, _)| *k == n.kind())?.1;
+            let name = kind_name(n.kind())?;
             let r = n.text_range();
+            let parent = n
+                .ancestors()
+                .skip(1)
+                .find_map(|p| {
+                    kind_name(p.kind())
+                        .map(|k| (k.to_string(), usize::from(p.text_range().start())))
+                })
+                .unwrap_or_else(|| ("org-data".to_string(), 0));
             Some(El {
                 kind: name.to_string(),
                 begin: r.start().into(),
                 end: r.end().into(),
+                contents: doc.contents(&n).map(|c| (c.start as usize, c.end as usize)),
+                parent,
             })
         })
         .collect()
@@ -180,6 +205,19 @@ pub fn check_golden_header(jsonl: &str, text: &str) -> Result<(), String> {
     if v["unmodified"] != true {
         return Err("org-mode modified the buffer before parsing".into());
     }
+    // Emacs's own EOL detection must agree with mae-org's: the oracle's
+    // offsets are mapped through it, and so is every line mae-org sees.
+    let mine = match mae_org::LineEnding::detect(text) {
+        mae_org::LineEnding::Lf => "unix",
+        mae_org::LineEnding::CrLf => "dos",
+        mae_org::LineEnding::Cr => "mac",
+    };
+    if v["eol"] != mine {
+        return Err(format!(
+            "Emacs decoded the file as {}, mae-org as {mine}",
+            v["eol"]
+        ));
+    }
     Ok(())
 }
 
@@ -190,10 +228,17 @@ pub fn golden_elements(jsonl: &str) -> Vec<(El, serde_json::Value)> {
         .filter(|l| !l.trim().is_empty() && !l.starts_with("{\"type\":\"#"))
         .map(|l| {
             let v: serde_json::Value = serde_json::from_str(l).expect("golden line is JSON");
+            let num = |k: &str| v[k].as_u64().map(|n| n as usize);
+            let contents = num("contents_begin").zip(num("contents_end"));
             let el = El {
                 kind: v["type"].as_str().expect("type").to_string(),
-                begin: v["begin"].as_u64().expect("begin") as usize,
-                end: v["end"].as_u64().expect("end") as usize,
+                begin: num("begin").expect("begin"),
+                end: num("end").expect("end"),
+                contents,
+                parent: (
+                    v["parent_type"].as_str().expect("parent_type").to_string(),
+                    num("parent_begin").expect("parent_begin"),
+                ),
             };
             (el, v)
         })

@@ -10,24 +10,27 @@
 //! byte ratio of the two inputs, t(8N)/t(N) · 8/B < 24, where linear gives ~8,
 //! n·log n ~9–10 and quadratic 64.
 //!
-//! Measured on the development machine (Linux x86_64, release, 2026-10-31),
+//! Measured on the development machine (Linux x86_64, release, 2026-10-31,
+//! after the review fixes; absolute times vary ~2x with machine load, ratios do not),
 //! t(N) → t(8N), the byte ratio, and the normalised ratio (three runs agreed
 //! within ±1.5; "blank lines" is linear per doubling above 100k lines, its
 //! excess at this size is allocation, not complexity):
-//! - *a x N (one line): 0.11 ms -> 0.90 ms for x8 bytes, normalised x7.9
-//! - [[ x N: 0.17 ms -> 1.01 ms for x8 bytes, normalised x5.9
-//! - nested same-name quotes: 0.75 ms -> 4.41 ms for x8 bytes, normalised x5.9
-//! - nested distinct blocks (capped): 0.46 ms -> 3.34 ms for x9 bytes, normalised x6.9
-//! - deep list: 0.15 ms -> 4.45 ms for x62 bytes, normalised x3.9
-//! - one long line of words: 0.04 ms -> 0.34 ms for x8 bytes, normalised x7.9
-//! - headings: 0.59 ms -> 5.22 ms for x9 bytes, normalised x8.1
-//! - affiliated orphans: 1.46 ms -> 13.53 ms for x8 bytes, normalised x9.3
-//! - table.el near-misses: 3.96 ms -> 38.32 ms for x8 bytes, normalised x9.7
-//! - unterminated begins: 0.68 ms -> 5.75 ms for x8 bytes, normalised x8.4
-//! - property-like lines: 0.54 ms -> 4.45 ms for x8 bytes, normalised x8.2
-//! - drawer openers: 0.45 ms -> 3.84 ms for x8 bytes, normalised x8.5
-//! - footnotes: 1.64 ms -> 15.35 ms for x8 bytes, normalised x9.3
-//! - blank lines: 1.29 ms -> 17.41 ms for x8 bytes, normalised x13.5
+//! - *a x N (one line): 0.14 ms -> 1.06 ms for x8 bytes, normalised x7.8
+//! - [[ x N: 0.22 ms -> 1.76 ms for x8 bytes, normalised x8.0
+//! - nested same-name quotes: 2.42 ms -> 11.25 ms for x8 bytes, normalised x4.7
+//! - nested distinct blocks (capped): 1.07 ms -> 7.96 ms for x9 bytes, normalised x7.0
+//! - deep list: 0.33 ms -> 10.18 ms for x62 bytes, normalised x4.0
+//! - one long line of words: 0.13 ms -> 1.05 ms for x8 bytes, normalised x8.0
+//! - headings: 1.32 ms -> 11.53 ms for x9 bytes, normalised x8.0
+//! - affiliated orphans: 3.19 ms -> 29.05 ms for x8 bytes, normalised x9.1
+//! - table.el near-misses: 9.02 ms -> 86.21 ms for x8 bytes, normalised x9.6
+//! - unterminated begins: 1.66 ms -> 6.43 ms for x8 bytes, normalised x3.9
+//! - property-like lines: 0.61 ms -> 5.00 ms for x8 bytes, normalised x8.2
+//! - drawer openers: 0.49 ms -> 4.00 ms for x8 bytes, normalised x8.3
+//! - footnotes: 1.84 ms -> 17.53 ms for x8 bytes, normalised x9.5
+//! - blank lines: 1.31 ms -> 16.49 ms for x8 bytes, normalised x12.6
+//! - TODO: N keywords, N headlines: 0.79 ms -> 6.99 ms for x9 bytes, normalised x7.9
+//! - N #+TODO lines: 1.73 ms -> 15.78 ms for x9 bytes, normalised x8.5
 
 use mae_org::{parse, ParseOptions};
 #[cfg(not(debug_assertions))]
@@ -95,7 +98,26 @@ const FAMILIES: &[Family] = &[
     ("drawer openers", |n| ":D:\nx\n".repeat(n), 5_000),
     ("footnotes", |n| "[fn:1] a\n".repeat(n), 5_000),
     ("blank lines", |n| "\n".repeat(n), 50_000),
+    // One `#+TODO:` with N keywords, then N headlines (review finding: the
+    // keyword match scanned every keyword per headline, x4 per doubling).
+    ("TODO: N keywords, N headlines", todo_many_keywords, 2_000),
+    // N `#+TODO:` lines, each followed by a headline.
+    (
+        "N #+TODO lines",
+        |n| {
+            (0..n)
+                .map(|i| format!("#+TODO: A{i}\n* B{i} t\n"))
+                .collect()
+        },
+        2_000,
+    ),
 ];
+
+fn todo_many_keywords(n: usize) -> String {
+    let kws: Vec<String> = (0..n).map(|i| format!("K{i}")).collect();
+    let heads: String = (0..n).map(|i| format!("* K{} t\n", n - 1 - i)).collect();
+    format!("#+TODO: {} | D\n{heads}", kws.join(" "))
+}
 
 fn nested_blocks(n: usize) -> String {
     let open: String = (0..n).map(|i| format!("#+begin_b{i}\n")).collect();

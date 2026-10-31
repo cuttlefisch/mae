@@ -7,6 +7,7 @@
 //! once, by kind and name, in sorted line order; each question is a binary
 //! search. Building the index is one pass over the lines.
 
+use crate::chars::fold;
 use crate::scan;
 use crate::text::Source;
 use std::collections::HashMap;
@@ -72,16 +73,10 @@ impl Index {
             levels.push(level);
         }
         if let Some(name) = scan::block_end_name(s) {
-            self.block_ends
-                .entry(name.to_uppercase())
-                .or_default()
-                .push(i);
+            self.block_ends.entry(fold(name)).or_default().push(i);
         }
         if let Some(name) = scan::latex_end_name(s) {
-            self.latex_ends
-                .entry(name.to_uppercase())
-                .or_default()
-                .push(i);
+            self.latex_ends.entry(fold(name)).or_default().push(i);
         }
         if scan::is_drawer_end(s) {
             self.drawer_ends.push(i);
@@ -102,13 +97,13 @@ impl Index {
 
     /// The first `#+end_NAME` line at or after `from` that ends by `limit`.
     pub fn block_end(&self, src: &Source, name: &str, from: usize, limit: usize) -> Option<usize> {
-        let v = self.block_ends.get(&name.to_uppercase())?;
+        let v = self.block_ends.get(&fold(name))?;
         first_within(src, v, from, limit)
     }
 
     /// The first `\end{NAME}` line at or after `from` that ends by `limit`.
     pub fn latex_end(&self, src: &Source, name: &str, from: usize, limit: usize) -> Option<usize> {
-        let v = self.latex_ends.get(&name.to_uppercase())?;
+        let v = self.latex_ends.get(&fold(name))?;
         first_within(src, v, from, limit)
     }
 

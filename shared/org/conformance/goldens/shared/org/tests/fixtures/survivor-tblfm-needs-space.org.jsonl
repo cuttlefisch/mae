@@ -1,0 +1,5 @@
+{"type":"#file","bytes":19,"eol":"unix","unmodified":true}
+{"type":"section","begin":0,"end":19,"contents_begin":0,"contents_end":19,"parent_type":"org-data","parent_begin":0}
+{"type":"table","begin":0,"end":6,"contents_begin":0,"contents_end":6,"parent_type":"section","parent_begin":0}
+{"type":"table-row","begin":0,"end":6,"contents_begin":1,"contents_end":5,"parent_type":"table","parent_begin":0}
+{"type":"keyword","begin":6,"end":19,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TBLFM","value":"$1=2"}

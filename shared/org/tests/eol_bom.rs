@@ -1,10 +1,10 @@
-//! Line endings and the byte-order mark: the two places mae-org follows how
-//! Emacs DECODES a file for a user rather than the oracle's raw-byte view
+//! Line endings and the byte-order mark, as Emacs decodes them when it visits
+//! a file (the oracle decodes the same way and maps offsets back to bytes)
 //! (see conformance/divergences.toml).
 
 mod support;
 
-use mae_org::{Headline, SyntaxKind};
+use mae_org::{Headline, LineEnding, SyntaxKind};
 use support::*;
 
 #[test]
@@ -21,14 +21,7 @@ fn bom_is_trivia_so_the_first_line_stays_at_column_0() {
     assert_eq!(usize::from(h[0].syntax().text_range().start()), 3);
     // Without the BOM the same text is the same tree, shifted by 3.
     let plain = mae_elements(&parse_default(&text['\u{feff}'.len_utf8()..]));
-    let shifted: Vec<El> = plain
-        .iter()
-        .map(|e| El {
-            kind: e.kind.clone(),
-            begin: e.begin + 3,
-            end: e.end + 3,
-        })
-        .collect();
+    let shifted: Vec<El> = plain.iter().map(|e| shift_el(e, |o| o + 3)).collect();
     assert_eq!(mae_elements(&doc), shifted);
 }
 
@@ -69,11 +62,66 @@ fn crlf_is_one_line_ending_and_a_lone_cr_is_content() {
     assert_eq!(newlines, 1);
 }
 
+/// One lone LF anywhere makes the whole file unix, so EVERY CR is content
+/// (Emacs `find-file`; the reviewer's repro and the oracle agree): a tag
+/// followed by CR is not a tag, and a `#+end_src` followed by CR does not
+/// close its block.
 #[test]
-fn mixed_line_endings_round_trip_and_split_only_at_lf() {
+fn a_mixed_file_is_unix_and_every_cr_is_content() {
     let text = read(&repo_root().join("shared/org/tests/fixtures/mixed-eol.org"));
     let doc = parse_default(&text);
+    assert_eq!(doc.line_ending(), LineEnding::Lf);
     assert_eq!(doc.syntax().to_string(), text);
-    let titles: Vec<String> = doc.headlines().map(|h| h.title()).collect();
-    assert_eq!(titles, vec!["LF heading", "Next"]);
+    let h: Vec<(String, Vec<String>)> = doc.headlines().map(|h| (h.title(), h.tags())).collect();
+    assert_eq!(h[0], ("LF heading".to_string(), vec!["lf".to_string()]));
+    assert_eq!(
+        h[1],
+        ("CRLF heading :crlf:\r".to_string(), vec![]),
+        "the tag line ends in CR"
+    );
+    assert_eq!(
+        doc.blocks().count(),
+        0,
+        "`#+end_src\\r` closes nothing in a unix file"
+    );
+    let tag = parse_default(&read(
+        &repo_root().join("shared/org/tests/fixtures/eol-mixed-tag.org"),
+    ));
+    assert!(tag.headlines().next().is_some_and(|h| h.tags().is_empty()));
+}
+
+/// A file with only CRs is mac: CR ends lines.
+#[test]
+fn a_cr_only_file_is_mac_and_cr_ends_lines() {
+    let text = read(&repo_root().join("shared/org/tests/fixtures/eol-cr-only.org"));
+    let doc = parse_default(&text);
+    assert_eq!(doc.line_ending(), LineEnding::Cr);
+    assert_eq!(doc.syntax().to_string(), text);
+    let h: Vec<(String, Vec<String>)> = doc.headlines().map(|h| (h.title(), h.tags())).collect();
+    assert_eq!(
+        h,
+        vec![
+            ("a".to_string(), vec![]),
+            ("b".to_string(), vec!["t".to_string()])
+        ]
+    );
+    assert_eq!(doc.blocks().count(), 1);
+}
+
+/// DOS needs every LF to follow a CR; a lone CR inside a DOS file is content.
+#[test]
+fn a_dos_file_keeps_a_lone_cr_as_content() {
+    let text = read(&repo_root().join("shared/org/tests/fixtures/eol-dos-lone-cr.org"));
+    let doc = parse_default(&text);
+    assert_eq!(doc.line_ending(), LineEnding::CrLf);
+    assert_eq!(
+        doc.headlines().next().map(|h| h.tags()),
+        Some(vec!["tag".to_string()])
+    );
+    let para = doc
+        .syntax()
+        .descendants()
+        .find(|n| n.kind() == SyntaxKind::PARAGRAPH)
+        .expect("paragraph");
+    assert!(para.to_string().contains("lone\rCR"));
 }

@@ -1,0 +1,6 @@
+#+begin_verse
+#+end_verse
+
+#+begin_verse
+line
+#+end_verse

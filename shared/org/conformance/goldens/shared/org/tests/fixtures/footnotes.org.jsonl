@@ -1,16 +1,16 @@
-{"type":"#file","bytes":263,"unmodified":true}
-{"type":"section","begin":0,"end":225,"contents_begin":0,"contents_end":225}
-{"type":"paragraph","begin":0,"end":30,"contents_begin":0,"contents_end":29}
-{"type":"footnote-definition","begin":30,"end":69,"contents_begin":37,"contents_end":68}
-{"type":"paragraph","begin":37,"end":68,"contents_begin":37,"contents_end":68}
-{"type":"footnote-definition","begin":69,"end":103,"contents_begin":78,"contents_end":103}
-{"type":"paragraph","begin":78,"end":103,"contents_begin":78,"contents_end":103}
-{"type":"footnote-definition","begin":103,"end":156,"contents_begin":125,"contents_end":154}
-{"type":"paragraph","begin":125,"end":154,"contents_begin":125,"contents_end":154}
-{"type":"paragraph","begin":156,"end":192,"contents_begin":156,"contents_end":192}
-{"type":"footnote-definition","begin":192,"end":225,"contents_begin":200,"contents_end":225}
-{"type":"paragraph","begin":200,"end":225,"contents_begin":200,"contents_end":225}
-{"type":"headline","begin":225,"end":263,"contents_begin":251,"contents_end":263,"level":1,"raw_title":"Headline ends footnotes","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":251,"end":263,"contents_begin":251,"contents_end":263}
-{"type":"footnote-definition","begin":251,"end":263,"contents_begin":258,"contents_end":263}
-{"type":"paragraph","begin":258,"end":263,"contents_begin":258,"contents_end":263}
+{"type":"#file","bytes":263,"eol":"unix","unmodified":true}
+{"type":"section","begin":0,"end":225,"contents_begin":0,"contents_end":225,"parent_type":"org-data","parent_begin":0}
+{"type":"paragraph","begin":0,"end":30,"contents_begin":0,"contents_end":29,"parent_type":"section","parent_begin":0}
+{"type":"footnote-definition","begin":30,"end":69,"contents_begin":37,"contents_end":68,"parent_type":"section","parent_begin":0}
+{"type":"paragraph","begin":37,"end":68,"contents_begin":37,"contents_end":68,"parent_type":"footnote-definition","parent_begin":30}
+{"type":"footnote-definition","begin":69,"end":103,"contents_begin":78,"contents_end":103,"parent_type":"section","parent_begin":0}
+{"type":"paragraph","begin":78,"end":103,"contents_begin":78,"contents_end":103,"parent_type":"footnote-definition","parent_begin":69}
+{"type":"footnote-definition","begin":103,"end":156,"contents_begin":125,"contents_end":154,"parent_type":"section","parent_begin":0}
+{"type":"paragraph","begin":125,"end":154,"contents_begin":125,"contents_end":154,"parent_type":"footnote-definition","parent_begin":103}
+{"type":"paragraph","begin":156,"end":192,"contents_begin":156,"contents_end":192,"parent_type":"section","parent_begin":0}
+{"type":"footnote-definition","begin":192,"end":225,"contents_begin":200,"contents_end":225,"parent_type":"section","parent_begin":0}
+{"type":"paragraph","begin":200,"end":225,"contents_begin":200,"contents_end":225,"parent_type":"footnote-definition","parent_begin":192}
+{"type":"headline","begin":225,"end":263,"contents_begin":251,"contents_end":263,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"Headline ends footnotes","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":251,"end":263,"contents_begin":251,"contents_end":263,"parent_type":"headline","parent_begin":225}
+{"type":"footnote-definition","begin":251,"end":263,"contents_begin":258,"contents_end":263,"parent_type":"section","parent_begin":251}
+{"type":"paragraph","begin":258,"end":263,"contents_begin":258,"contents_end":263,"parent_type":"footnote-definition","parent_begin":251}

@@ -1,5 +1,5 @@
-{"type":"#file","bytes":1302,"unmodified":true}
-{"type":"section","begin":0,"end":1302,"contents_begin":0,"contents_end":1302}
-{"type":"quote-block","begin":0,"end":714,"contents_begin":14,"contents_end":702}
-{"type":"paragraph","begin":14,"end":702,"contents_begin":14,"contents_end":702}
-{"type":"paragraph","begin":714,"end":1302,"contents_begin":714,"contents_end":1302}
+{"type":"#file","bytes":1302,"eol":"unix","unmodified":true}
+{"type":"section","begin":0,"end":1302,"contents_begin":0,"contents_end":1302,"parent_type":"org-data","parent_begin":0}
+{"type":"quote-block","begin":0,"end":714,"contents_begin":14,"contents_end":702,"parent_type":"section","parent_begin":0}
+{"type":"paragraph","begin":14,"end":702,"contents_begin":14,"contents_end":702,"parent_type":"quote-block","parent_begin":0}
+{"type":"paragraph","begin":714,"end":1302,"contents_begin":714,"contents_end":1302,"parent_type":"section","parent_begin":0}

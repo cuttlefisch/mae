@@ -6,17 +6,21 @@
 //! ```
 //!
 //! It runs `emacs -Q --batch` with `conformance/org-element-dump.el` over every
-//! `.org` file under the directory (one Emacs process), compares element kinds
-//! and spans with mae-org's, and prints agreement per kind plus the first
-//! differences. Nothing is written into the repository, so a private corpus
-//! can be checked without its content leaving the machine. It reports; it does
-//! not fail on disagreement (the checked-in goldens are the gate).
+//! `.org` file under the directory (one Emacs process) and compares each
+//! element — kind, span, contents and parent — with mae-org's. It prints
+//! agreement per kind (exact, and span-only) plus the first differences.
+//! Nothing is written into the repository, so a private corpus can be checked
+//! without its content leaving the machine. It reports; it does not fail on
+//! disagreement (the checked-in goldens are the gate).
 
 mod support;
 
 use std::collections::BTreeMap;
 use std::path::Path;
 use support::*;
+
+/// Per kind: (exact matches, span-only matches, oracle total).
+type Tally = BTreeMap<String, (usize, usize, usize)>;
 
 #[test]
 #[ignore = "needs emacs and MAE_ORG_ORACLE_DIR; run locally"]
@@ -28,36 +32,31 @@ fn oracle_diff_external_dir() {
     let files = org_files(Path::new(&dir));
     let out = std::env::temp_dir().join(format!("mae-org-oracle-{}", std::process::id()));
     let goldens = run_oracle(&files, &out);
-    let mut per_kind: BTreeMap<String, (usize, usize)> = BTreeMap::new();
-    let (mut agree_files, mut shown) = (0, 0);
+    let mut tally = Tally::new();
+    let (mut agree, mut skipped, mut shown) = (0, 0, 0);
     for (file, golden) in files.iter().zip(&goldens) {
-        let Some(golden) = golden else { continue };
         let text = read(file);
-        let checked = if is_pure_crlf(&text) {
-            text.replace("\r\n", "\n")
-        } else {
-            text.clone()
+        let checked = golden
+            .as_deref()
+            .ok_or_else(|| "no output".to_string())
+            .and_then(|g| check_golden_header(g, &text).map(|_| g));
+        let golden = match checked {
+            Ok(g) => g,
+            Err(e) => {
+                skipped += 1;
+                eprintln!("== {}: oracle unusable: {e}", file.display());
+                continue;
+            }
         };
-        if let Err(e) = check_golden_header(golden, &checked) {
-            eprintln!("== {}: oracle self-check failed: {e}", file.display());
-            continue;
-        }
-        let lf = text.replace("\r\n", "\n");
         let oracle: Vec<El> = golden_elements(golden)
             .into_iter()
             .map(|(e, _)| e)
             .collect();
-        // A pure-CRLF file was fed to the oracle as LF (see run_oracle).
-        let oracle: Vec<El> = if is_pure_crlf(&text) {
-            oracle.iter().map(|e| lf_to_crlf(&lf, e)).collect()
-        } else {
-            oracle
-        };
         let mine = mae_elements(&parse_default(&text));
-        tally(&oracle, &mine, &mut per_kind);
+        count(&oracle, &mine, &mut tally);
         let (only_oracle, only_mae) = diff(&oracle, &mine);
         if only_oracle.is_empty() && only_mae.is_empty() {
-            agree_files += 1;
+            agree += 1;
         } else if shown < 40 {
             shown += 1;
             eprintln!(
@@ -69,9 +68,13 @@ fn oracle_diff_external_dir() {
         }
     }
     let _ = std::fs::remove_dir_all(&out);
-    eprintln!("files fully agreeing: {agree_files}/{}", files.len());
-    for (k, (m, t)) in per_kind {
-        eprintln!("  {k:22} {m:6}/{t:6}");
+    eprintln!(
+        "files fully agreeing: {agree}/{} ({skipped} skipped: oracle error)",
+        files.len() - skipped
+    );
+    eprintln!("  {:22} {:>13} {:>13}", "kind", "exact", "span only");
+    for (k, (exact, span, total)) in tally {
+        eprintln!("  {k:22} {exact:6}/{total:6} {span:6}/{total:6}");
     }
 }
 
@@ -79,44 +82,50 @@ fn first(v: &[El]) -> &[El] {
     &v[..v.len().min(6)]
 }
 
-/// Per kind: (oracle elements matched exactly by mae-org, oracle total).
-fn tally(oracle: &[El], mine: &[El], per_kind: &mut BTreeMap<String, (usize, usize)>) {
-    let (only_oracle, _) = diff(oracle, mine);
+fn span_only(v: &[El]) -> Vec<El> {
+    v.iter()
+        .map(|e| El {
+            contents: None,
+            parent: (String::new(), 0),
+            ..e.clone()
+        })
+        .collect()
+}
+
+fn count(oracle: &[El], mine: &[El], tally: &mut Tally) {
+    let (exact_miss, _) = diff(oracle, mine);
+    let (span_miss, _) = diff(&span_only(oracle), &span_only(mine));
     for e in oracle {
-        let entry = per_kind.entry(e.kind.clone()).or_default();
-        entry.0 += 1;
-        entry.1 += 1;
+        let t = tally.entry(e.kind.clone()).or_default();
+        t.0 += 1;
+        t.1 += 1;
+        t.2 += 1;
     }
-    for e in &only_oracle {
-        if let Some(entry) = per_kind.get_mut(&e.kind) {
-            entry.0 -= 1;
+    for e in &exact_miss {
+        if let Some(t) = tally.get_mut(&e.kind) {
+            t.0 -= 1;
+        }
+    }
+    for e in &span_miss {
+        if let Some(t) = tally.get_mut(&e.kind) {
+            t.1 -= 1;
         }
     }
 }
 
-/// Runs the oracle over `files` in one Emacs process; `None` where it failed.
+/// Runs the oracle over `files` in one Emacs process; `None` where it wrote
+/// nothing. A file Emacs itself fails on yields a `#error` line instead.
 fn run_oracle(files: &[std::path::PathBuf], out: &Path) -> Vec<Option<String>> {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("conformance/org-element-dump.el");
     std::fs::create_dir_all(out).expect("scratch dir");
     let manifest = out.join("manifest");
-    // Emacs decodes a pure-CRLF file with DOS line endings for a user; the
-    // oracle reads `utf-8-unix` (exact bytes), so it is given the LF form and
-    // the spans are mapped back. Lone CRs are left as they are.
     let lines: String = files
         .iter()
         .enumerate()
         .map(|(i, f)| {
-            let text = std::fs::read_to_string(f).unwrap_or_default();
-            let input = if is_pure_crlf(&text) {
-                let lf = out.join(format!("{i}.lf.org"));
-                std::fs::write(&lf, text.replace("\r\n", "\n")).expect("LF copy");
-                lf
-            } else {
-                f.clone()
-            };
             format!(
                 "{}\t{}\n",
-                input.display(),
+                f.display(),
                 out.join(format!("{i}.jsonl")).display()
             )
         })
@@ -135,9 +144,9 @@ fn run_oracle(files: &[std::path::PathBuf], out: &Path) -> Vec<Option<String>> {
         .collect()
 }
 
-/// Prints mae-org's elements for one file, in the oracle's format, for
-/// investigating a difference: `MAE_ORG_DUMP=path cargo test -p mae-org
-/// --test oracle_external dump_one_file -- --ignored --nocapture`.
+/// Prints mae-org's elements for one file, for investigating a difference:
+/// `MAE_ORG_DUMP=path cargo test -p mae-org --test oracle_external
+/// dump_one_file -- --ignored --nocapture`.
 #[test]
 #[ignore = "debugging aid; needs MAE_ORG_DUMP"]
 fn dump_one_file() {
@@ -145,6 +154,6 @@ fn dump_one_file() {
         return;
     };
     for e in mae_elements(&parse_default(&read(Path::new(&path)))) {
-        println!("{} {} {}", e.kind, e.begin, e.end);
+        println!("{e:?}");
     }
 }

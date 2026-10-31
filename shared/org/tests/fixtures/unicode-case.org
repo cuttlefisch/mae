@@ -1,0 +1,1136 @@
+# #+begin_xC / #+end_xK for K = canonical(C) (a block), and K = upcase(C) when that
+# differs from canonical(C) (no block unless they fold).
+* U+0041
+#+begin_xA
+body
+#+end_xa
+#+begin_yA
+body
+#+end_yA
+* U+004A
+#+begin_xJ
+body
+#+end_xj
+#+begin_yJ
+body
+#+end_yJ
+* U+0053
+#+begin_xS
+body
+#+end_xs
+#+begin_yS
+body
+#+end_yS
+* U+00C0
+#+begin_xÀ
+body
+#+end_xà
+#+begin_yÀ
+body
+#+end_yÀ
+* U+00C9
+#+begin_xÉ
+body
+#+end_xé
+#+begin_yÉ
+body
+#+end_yÉ
+* U+00D2
+#+begin_xÒ
+body
+#+end_xò
+#+begin_yÒ
+body
+#+end_yÒ
+* U+00DC
+#+begin_xÜ
+body
+#+end_xü
+#+begin_yÜ
+body
+#+end_yÜ
+* U+010C
+#+begin_xČ
+body
+#+end_xč
+#+begin_yČ
+body
+#+end_yČ
+* U+011E
+#+begin_xĞ
+body
+#+end_xğ
+#+begin_yĞ
+body
+#+end_yĞ
+* U+0132
+#+begin_xĲ
+body
+#+end_xĳ
+#+begin_yĲ
+body
+#+end_yĲ
+* U+0145
+#+begin_xŅ
+body
+#+end_xņ
+#+begin_yŅ
+body
+#+end_yŅ
+* U+0158
+#+begin_xŘ
+body
+#+end_xř
+#+begin_yŘ
+body
+#+end_yŘ
+* U+016A
+#+begin_xŪ
+body
+#+end_xū
+#+begin_yŪ
+body
+#+end_yŪ
+* U+017B
+#+begin_xŻ
+body
+#+end_xż
+#+begin_yŻ
+body
+#+end_yŻ
+* U+018B
+#+begin_xƋ
+body
+#+end_xƌ
+#+begin_yƋ
+body
+#+end_yƋ
+* U+0198
+#+begin_xƘ
+body
+#+end_xƙ
+#+begin_yƘ
+body
+#+end_yƘ
+* U+01A9
+#+begin_xƩ
+body
+#+end_xʃ
+#+begin_yƩ
+body
+#+end_yƩ
+* U+01B8
+#+begin_xƸ
+body
+#+end_xƹ
+#+begin_yƸ
+body
+#+end_yƸ
+* U+01CF
+#+begin_xǏ
+body
+#+end_xǐ
+#+begin_yǏ
+body
+#+end_yǏ
+* U+01E2
+#+begin_xǢ
+body
+#+end_xǣ
+#+begin_yǢ
+body
+#+end_yǢ
+* U+01F4
+#+begin_xǴ
+body
+#+end_xǵ
+#+begin_yǴ
+body
+#+end_yǴ
+* U+0204
+#+begin_xȄ
+body
+#+end_xȅ
+#+begin_yȄ
+body
+#+end_yȄ
+* U+0216
+#+begin_xȖ
+body
+#+end_xȗ
+#+begin_yȖ
+body
+#+end_yȖ
+* U+0228
+#+begin_xȨ
+body
+#+end_xȩ
+#+begin_yȨ
+body
+#+end_yȨ
+* U+023E
+#+begin_xȾ
+body
+#+end_xⱦ
+#+begin_yȾ
+body
+#+end_yȾ
+* U+024E
+#+begin_xɎ
+body
+#+end_xɏ
+#+begin_yɎ
+body
+#+end_yɎ
+* U+038A
+#+begin_xΊ
+body
+#+end_xί
+#+begin_yΊ
+body
+#+end_yΊ
+* U+0396
+#+begin_xΖ
+body
+#+end_xζ
+#+begin_yΖ
+body
+#+end_yΖ
+* U+039F
+#+begin_xΟ
+body
+#+end_xο
+#+begin_yΟ
+body
+#+end_yΟ
+* U+03A9
+#+begin_xΩ
+body
+#+end_xω
+#+begin_yΩ
+body
+#+end_yΩ
+* U+03D8
+#+begin_xϘ
+body
+#+end_xϙ
+#+begin_yϘ
+body
+#+end_yϘ
+* U+03EA
+#+begin_xϪ
+body
+#+end_xϫ
+#+begin_yϪ
+body
+#+end_yϪ
+* U+03FA
+#+begin_xϺ
+body
+#+end_xϻ
+#+begin_yϺ
+body
+#+end_yϺ
+* U+0405
+#+begin_xЅ
+body
+#+end_xѕ
+#+begin_yЅ
+body
+#+end_yЅ
+* U+040E
+#+begin_xЎ
+body
+#+end_xў
+#+begin_yЎ
+body
+#+end_yЎ
+* U+0417
+#+begin_xЗ
+body
+#+end_xз
+#+begin_yЗ
+body
+#+end_yЗ
+* U+0420
+#+begin_xР
+body
+#+end_xр
+#+begin_yР
+body
+#+end_yР
+* U+0429
+#+begin_xЩ
+body
+#+end_xщ
+#+begin_yЩ
+body
+#+end_yЩ
+* U+0464
+#+begin_xѤ
+body
+#+end_xѥ
+#+begin_yѤ
+body
+#+end_yѤ
+* U+0476
+#+begin_xѶ
+body
+#+end_xѷ
+#+begin_yѶ
+body
+#+end_yѶ
+* U+0490
+#+begin_xҐ
+body
+#+end_xґ
+#+begin_yҐ
+body
+#+end_yҐ
+* U+04A2
+#+begin_xҢ
+body
+#+end_xң
+#+begin_yҢ
+body
+#+end_yҢ
+* U+04B4
+#+begin_xҴ
+body
+#+end_xҵ
+#+begin_yҴ
+body
+#+end_yҴ
+* U+04C5
+#+begin_xӅ
+body
+#+end_xӆ
+#+begin_yӅ
+body
+#+end_yӅ
+* U+04D8
+#+begin_xӘ
+body
+#+end_xә
+#+begin_yӘ
+body
+#+end_yӘ
+* U+04EA
+#+begin_xӪ
+body
+#+end_xӫ
+#+begin_yӪ
+body
+#+end_yӪ
+* U+04FC
+#+begin_xӼ
+body
+#+end_xӽ
+#+begin_yӼ
+body
+#+end_yӼ
+* U+050E
+#+begin_xԎ
+body
+#+end_xԏ
+#+begin_yԎ
+body
+#+end_yԎ
+* U+0520
+#+begin_xԠ
+body
+#+end_xԡ
+#+begin_yԠ
+body
+#+end_yԠ
+* U+0532
+#+begin_xԲ
+body
+#+end_xբ
+#+begin_yԲ
+body
+#+end_yԲ
+* U+053B
+#+begin_xԻ
+body
+#+end_xի
+#+begin_yԻ
+body
+#+end_yԻ
+* U+0544
+#+begin_xՄ
+body
+#+end_xմ
+#+begin_yՄ
+body
+#+end_yՄ
+* U+054D
+#+begin_xՍ
+body
+#+end_xս
+#+begin_yՍ
+body
+#+end_yՍ
+* U+0556
+#+begin_xՖ
+body
+#+end_xֆ
+#+begin_yՖ
+body
+#+end_yՖ
+* U+10A8
+#+begin_xႨ
+body
+#+end_xⴈ
+#+begin_yႨ
+body
+#+end_yႨ
+* U+10B1
+#+begin_xႱ
+body
+#+end_xⴑ
+#+begin_yႱ
+body
+#+end_yႱ
+* U+10BA
+#+begin_xႺ
+body
+#+end_xⴚ
+#+begin_yႺ
+body
+#+end_yႺ
+* U+10C3
+#+begin_xჃ
+body
+#+end_xⴣ
+#+begin_yჃ
+body
+#+end_yჃ
+* U+13A4
+#+begin_xᎤ
+body
+#+end_xꭴ
+#+begin_yᎤ
+body
+#+end_yᎤ
+* U+13AD
+#+begin_xᎭ
+body
+#+end_xꭽ
+#+begin_yᎭ
+body
+#+end_yᎭ
+* U+13B6
+#+begin_xᎶ
+body
+#+end_xꮆ
+#+begin_yᎶ
+body
+#+end_yᎶ
+* U+13BF
+#+begin_xᎿ
+body
+#+end_xꮏ
+#+begin_yᎿ
+body
+#+end_yᎿ
+* U+13C8
+#+begin_xᏈ
+body
+#+end_xꮘ
+#+begin_yᏈ
+body
+#+end_yᏈ
+* U+13D1
+#+begin_xᏑ
+body
+#+end_xꮡ
+#+begin_yᏑ
+body
+#+end_yᏑ
+* U+13DA
+#+begin_xᏚ
+body
+#+end_xꮪ
+#+begin_yᏚ
+body
+#+end_yᏚ
+* U+13E3
+#+begin_xᏣ
+body
+#+end_xꮳ
+#+begin_yᏣ
+body
+#+end_yᏣ
+* U+13EC
+#+begin_xᏬ
+body
+#+end_xꮼ
+#+begin_yᏬ
+body
+#+end_yᏬ
+* U+13F5
+#+begin_xᏵ
+body
+#+end_xᏽ
+#+begin_yᏵ
+body
+#+end_yᏵ
+* U+1C88
+#+begin_xᲈ
+body
+#+end_xꙋ
+#+begin_yᲈ
+body
+#+end_yꙊ
+* U+1C98
+#+begin_xᲘ
+body
+#+end_xი
+#+begin_yᲘ
+body
+#+end_yᲘ
+* U+1CA1
+#+begin_xᲡ
+body
+#+end_xს
+#+begin_yᲡ
+body
+#+end_yᲡ
+* U+1CAA
+#+begin_xᲪ
+body
+#+end_xც
+#+begin_yᲪ
+body
+#+end_yᲪ
+* U+1CB3
+#+begin_xᲳ
+body
+#+end_xჳ
+#+begin_yᲳ
+body
+#+end_yᲳ
+* U+1CBE
+#+begin_xᲾ
+body
+#+end_xჾ
+#+begin_yᲾ
+body
+#+end_yᲾ
+* U+1E0E
+#+begin_xḎ
+body
+#+end_xḏ
+#+begin_yḎ
+body
+#+end_yḎ
+* U+1E20
+#+begin_xḠ
+body
+#+end_xḡ
+#+begin_yḠ
+body
+#+end_yḠ
+* U+1E32
+#+begin_xḲ
+body
+#+end_xḳ
+#+begin_yḲ
+body
+#+end_yḲ
+* U+1E44
+#+begin_xṄ
+body
+#+end_xṅ
+#+begin_yṄ
+body
+#+end_yṄ
+* U+1E56
+#+begin_xṖ
+body
+#+end_xṗ
+#+begin_yṖ
+body
+#+end_yṖ
+* U+1E68
+#+begin_xṨ
+body
+#+end_xṩ
+#+begin_yṨ
+body
+#+end_yṨ
+* U+1E7A
+#+begin_xṺ
+body
+#+end_xṻ
+#+begin_yṺ
+body
+#+end_yṺ
+* U+1E8C
+#+begin_xẌ
+body
+#+end_xẍ
+#+begin_yẌ
+body
+#+end_yẌ
+* U+1EA4
+#+begin_xẤ
+body
+#+end_xấ
+#+begin_yẤ
+body
+#+end_yẤ
+* U+1EB6
+#+begin_xẶ
+body
+#+end_xặ
+#+begin_yẶ
+body
+#+end_yẶ
+* U+1EC8
+#+begin_xỈ
+body
+#+end_xỉ
+#+begin_yỈ
+body
+#+end_yỈ
+* U+1EDA
+#+begin_xỚ
+body
+#+end_xớ
+#+begin_yỚ
+body
+#+end_yỚ
+* U+1EEC
+#+begin_xỬ
+body
+#+end_xử
+#+begin_yỬ
+body
+#+end_yỬ
+* U+1EFE
+#+begin_xỾ
+body
+#+end_xỿ
+#+begin_yỾ
+body
+#+end_yỾ
+* U+1F18
+#+begin_xἘ
+body
+#+end_xἐ
+#+begin_yἘ
+body
+#+end_yἘ
+* U+1F2B
+#+begin_xἫ
+body
+#+end_xἣ
+#+begin_yἫ
+body
+#+end_yἫ
+* U+1F3C
+#+begin_xἼ
+body
+#+end_xἴ
+#+begin_yἼ
+body
+#+end_yἼ
+* U+1F4D
+#+begin_xὍ
+body
+#+end_xὅ
+#+begin_yὍ
+body
+#+end_yὍ
+* U+1F6C
+#+begin_xὬ
+body
+#+end_xὤ
+#+begin_yὬ
+body
+#+end_yὬ
+* U+1F8D
+#+begin_xᾍ
+body
+#+end_xᾅ
+#+begin_yᾍ
+body
+#+end_yᾍ
+* U+1F9E
+#+begin_xᾞ
+body
+#+end_xᾖ
+#+begin_yᾞ
+body
+#+end_yᾞ
+* U+1FAF
+#+begin_xᾯ
+body
+#+end_xᾧ
+#+begin_yᾯ
+body
+#+end_yᾯ
+* U+1FCA
+#+begin_xῊ
+body
+#+end_xὴ
+#+begin_yῊ
+body
+#+end_yῊ
+* U+1FEA
+#+begin_xῪ
+body
+#+end_xὺ
+#+begin_yῪ
+body
+#+end_yῪ
+* U+212B
+#+begin_xÅ
+body
+#+end_xå
+#+begin_yÅ
+body
+#+end_yÅ
+* U+2167
+#+begin_xⅧ
+body
+#+end_xⅷ
+#+begin_yⅧ
+body
+#+end_yⅧ
+* U+2183
+#+begin_xↃ
+body
+#+end_xↄ
+#+begin_yↃ
+body
+#+end_yↃ
+* U+24BE
+#+begin_xⒾ
+body
+#+end_xⓘ
+#+begin_yⒾ
+body
+#+end_yⒾ
+* U+24C7
+#+begin_xⓇ
+body
+#+end_xⓡ
+#+begin_yⓇ
+body
+#+end_yⓇ
+* U+2C00
+#+begin_xⰀ
+body
+#+end_xⰰ
+#+begin_yⰀ
+body
+#+end_yⰀ
+* U+2C09
+#+begin_xⰉ
+body
+#+end_xⰹ
+#+begin_yⰉ
+body
+#+end_yⰉ
+* U+2C12
+#+begin_xⰒ
+body
+#+end_xⱂ
+#+begin_yⰒ
+body
+#+end_yⰒ
+* U+2C1B
+#+begin_xⰛ
+body
+#+end_xⱋ
+#+begin_yⰛ
+body
+#+end_yⰛ
+* U+2C24
+#+begin_xⰤ
+body
+#+end_xⱔ
+#+begin_yⰤ
+body
+#+end_yⰤ
+* U+2C2D
+#+begin_xⰭ
+body
+#+end_xⱝ
+#+begin_yⰭ
+body
+#+end_yⰭ
+* U+2C6B
+#+begin_xⱫ
+body
+#+end_xⱬ
+#+begin_yⱫ
+body
+#+end_yⱫ
+* U+2C80
+#+begin_xⲀ
+body
+#+end_xⲁ
+#+begin_yⲀ
+body
+#+end_yⲀ
+* U+2C92
+#+begin_xⲒ
+body
+#+end_xⲓ
+#+begin_yⲒ
+body
+#+end_yⲒ
+* U+2CA4
+#+begin_xⲤ
+body
+#+end_xⲥ
+#+begin_yⲤ
+body
+#+end_yⲤ
+* U+2CB6
+#+begin_xⲶ
+body
+#+end_xⲷ
+#+begin_yⲶ
+body
+#+end_yⲶ
+* U+2CC8
+#+begin_xⳈ
+body
+#+end_xⳉ
+#+begin_yⳈ
+body
+#+end_yⳈ
+* U+2CDA
+#+begin_xⳚ
+body
+#+end_xⳛ
+#+begin_yⳚ
+body
+#+end_yⳚ
+* U+A642
+#+begin_xꙂ
+body
+#+end_xꙃ
+#+begin_yꙂ
+body
+#+end_yꙂ
+* U+A654
+#+begin_xꙔ
+body
+#+end_xꙕ
+#+begin_yꙔ
+body
+#+end_yꙔ
+* U+A666
+#+begin_xꙦ
+body
+#+end_xꙧ
+#+begin_yꙦ
+body
+#+end_yꙦ
+* U+A68A
+#+begin_xꚊ
+body
+#+end_xꚋ
+#+begin_yꚊ
+body
+#+end_yꚊ
+* U+A722
+#+begin_xꜢ
+body
+#+end_xꜣ
+#+begin_yꜢ
+body
+#+end_yꜢ
+* U+A736
+#+begin_xꜶ
+body
+#+end_xꜷ
+#+begin_yꜶ
+body
+#+end_yꜶ
+* U+A748
+#+begin_xꝈ
+body
+#+end_xꝉ
+#+begin_yꝈ
+body
+#+end_yꝈ
+* U+A75A
+#+begin_xꝚ
+body
+#+end_xꝛ
+#+begin_yꝚ
+body
+#+end_yꝚ
+* U+A76C
+#+begin_xꝬ
+body
+#+end_xꝭ
+#+begin_yꝬ
+body
+#+end_yꝬ
+* U+A786
+#+begin_xꞆ
+body
+#+end_xꞇ
+#+begin_yꞆ
+body
+#+end_yꞆ
+* U+A79E
+#+begin_xꞞ
+body
+#+end_xꞟ
+#+begin_yꞞ
+body
+#+end_yꞞ
+* U+A7AD
+#+begin_xꞭ
+body
+#+end_xɬ
+#+begin_yꞭ
+body
+#+end_yꞭ
+* U+A7BA
+#+begin_xꞺ
+body
+#+end_xꞻ
+#+begin_yꞺ
+body
+#+end_yꞺ
+* U+A7C9
+#+begin_xꟉ
+body
+#+end_xꟊ
+#+begin_yꟉ
+body
+#+end_yꟉ
+* U+FF25
+#+begin_xＥ
+body
+#+end_xｅ
+#+begin_yＥ
+body
+#+end_yＥ
+* U+FF2E
+#+begin_xＮ
+body
+#+end_xｎ
+#+begin_yＮ
+body
+#+end_yＮ
+* U+FF37
+#+begin_xＷ
+body
+#+end_xｗ
+#+begin_yＷ
+body
+#+end_yＷ
+* U+10405
+#+begin_x𐐅
+body
+#+end_x𐐭
+#+begin_y𐐅
+body
+#+end_y𐐅
+* U+1040E
+#+begin_x𐐎
+body
+#+end_x𐐶
+#+begin_y𐐎
+body
+#+end_y𐐎
+* U+10417
+#+begin_x𐐗
+body
+#+end_x𐐿
+#+begin_y𐐗
+body
+#+end_y𐐗
+* U+10420
+#+begin_x𐐠
+body
+#+end_x𐑈
+#+begin_y𐐠
+body
+#+end_y𐐠
+* U+104B1
+#+begin_x𐒱
+body
+#+end_x𐓙
+#+begin_y𐒱
+body
+#+end_y𐒱
+* U+104BA
+#+begin_x𐒺
+body
+#+end_x𐓢
+#+begin_y𐒺
+body
+#+end_y𐒺
+* U+104C3
+#+begin_x𐓃
+body
+#+end_x𐓫
+#+begin_y𐓃
+body
+#+end_y𐓃
+* U+104CC
+#+begin_x𐓌
+body
+#+end_x𐓴
+#+begin_y𐓌
+body
+#+end_y𐓌
+* U+10571
+#+begin_x𐕱
+body
+#+end_x𐖘
+#+begin_y𐕱
+body
+#+end_y𐕱
+* U+1057A
+#+begin_x𐕺
+body
+#+end_x𐖡
+#+begin_y𐕺
+body
+#+end_y𐕺
+* U+10584
+#+begin_x𐖄
+body
+#+end_x𐖫
+#+begin_y𐖄
+body
+#+end_y𐖄
+* U+1058E
+#+begin_x𐖎
+body
+#+end_x𐖵
+#+begin_y𐖎
+body
+#+end_y𐖎
+* U+10C82
+#+begin_x𐲂
+body
+#+end_x𐳂
+#+begin_y𐲂
+body
+#+end_y𐲂
+* U+10C8B
+#+begin_x𐲋
+body
+#+end_x𐳋
+#+begin_y𐲋
+body
+#+end_y𐲋
+* U+10C94
+#+begin_x𐲔
+body
+#+end_x𐳔
+#+begin_y𐲔
+body
+#+end_y𐲔
+* U+10C9D
+#+begin_x𐲝
+body
+#+end_x𐳝
+#+begin_y𐲝
+body
+#+end_y𐲝
+* U+10CA6
+#+begin_x𐲦
+body
+#+end_x𐳦
+#+begin_y𐲦
+body
+#+end_y𐲦
+* U+10CAF
+#+begin_x𐲯
+body
+#+end_x𐳯
+#+begin_y𐲯
+body
+#+end_y𐲯
+* U+118A5
+#+begin_x𑢥
+body
+#+end_x𑣅
+#+begin_y𑢥
+body
+#+end_y𑢥
+* U+118AE
+#+begin_x𑢮
+body
+#+end_x𑣎
+#+begin_y𑢮
+body
+#+end_y𑢮
+* U+118B7
+#+begin_x𑢷
+body
+#+end_x𑣗
+#+begin_y𑢷
+body
+#+end_y𑢷
+* U+16E40
+#+begin_x𖹀
+body
+#+end_x𖹠
+#+begin_y𖹀
+body
+#+end_y𖹀
+* U+16E49
+#+begin_x𖹉
+body
+#+end_x𖹩
+#+begin_y𖹉
+body
+#+end_y𖹉
+* U+16E52
+#+begin_x𖹒
+body
+#+end_x𖹲
+#+begin_y𖹒
+body
+#+end_y𖹒
+* U+16E5B
+#+begin_x𖹛
+body
+#+end_x𖹻
+#+begin_y𖹛
+body
+#+end_y𖹛
+* U+1E904
+#+begin_x𞤄
+body
+#+end_x𞤦
+#+begin_y𞤄
+body
+#+end_y𞤄
+* U+1E90D
+#+begin_x𞤍
+body
+#+end_x𞤯
+#+begin_y𞤍
+body
+#+end_y𞤍
+* U+1E916
+#+begin_x𞤖
+body
+#+end_x𞤸
+#+begin_y𞤖
+body
+#+end_y𞤖
+* U+1E91F
+#+begin_x𞤟
+body
+#+end_x𞥁
+#+begin_y𞤟
+body
+#+end_y𞤟

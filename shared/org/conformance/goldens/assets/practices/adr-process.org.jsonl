@@ -1,26 +1,26 @@
-{"type":"#file","bytes":1897,"unmodified":true}
-{"type":"section","begin":0,"end":492,"contents_begin":0,"contents_end":492}
-{"type":"property-drawer","begin":0,"end":60,"contents_begin":13,"contents_end":54}
-{"type":"node-property","begin":13,"end":39,"contents_begin":null,"contents_end":null,"key":"ID","value":"practice:adr-process"}
-{"type":"node-property","begin":39,"end":54,"contents_begin":null,"contents_end":null,"key":"KIND","value":"concept"}
-{"type":"keyword","begin":60,"end":99,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"Architecture Decision Records"}
-{"type":"keyword","begin":99,"end":138,"contents_begin":null,"contents_end":null,"key":"FILETAGS","value":":practices:documentation:"}
-{"type":"paragraph","begin":138,"end":492,"contents_begin":138,"contents_end":491}
-{"type":"headline","begin":492,"end":1100,"contents_begin":522,"contents_end":1100,"level":2,"raw_title":"When a change warrants one","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":522,"end":1100,"contents_begin":522,"contents_end":1100}
-{"type":"paragraph","begin":522,"end":582,"contents_begin":522,"contents_end":582}
-{"type":"plain-list","begin":582,"end":923,"contents_begin":582,"contents_end":922}
-{"type":"item","begin":582,"end":787,"contents_begin":584,"contents_end":787,"bullet":"- "}
-{"type":"paragraph","begin":584,"end":787,"contents_begin":584,"contents_end":787}
-{"type":"item","begin":787,"end":850,"contents_begin":789,"contents_end":850,"bullet":"- "}
-{"type":"paragraph","begin":789,"end":850,"contents_begin":789,"contents_end":850}
-{"type":"item","begin":850,"end":922,"contents_begin":852,"contents_end":922,"bullet":"- "}
-{"type":"paragraph","begin":852,"end":922,"contents_begin":852,"contents_end":922}
-{"type":"paragraph","begin":923,"end":1100,"contents_begin":923,"contents_end":1099}
-{"type":"headline","begin":1100,"end":1451,"contents_begin":1121,"contents_end":1451,"level":2,"raw_title":"What one contains","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":1121,"end":1451,"contents_begin":1121,"contents_end":1451}
-{"type":"paragraph","begin":1121,"end":1451,"contents_begin":1121,"contents_end":1450}
-{"type":"headline","begin":1451,"end":1897,"contents_begin":1502,"contents_end":1897,"level":2,"raw_title":"Before writing a fix, check for a governing ADR","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":1502,"end":1897,"contents_begin":1502,"contents_end":1897}
-{"type":"paragraph","begin":1502,"end":1870,"contents_begin":1502,"contents_end":1869}
-{"type":"paragraph","begin":1870,"end":1897,"contents_begin":1870,"contents_end":1897}
+{"type":"#file","bytes":1897,"eol":"unix","unmodified":true}
+{"type":"section","begin":0,"end":492,"contents_begin":0,"contents_end":492,"parent_type":"org-data","parent_begin":0}
+{"type":"property-drawer","begin":0,"end":60,"contents_begin":13,"contents_end":54,"parent_type":"section","parent_begin":0}
+{"type":"node-property","begin":13,"end":39,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"ID","value":"practice:adr-process"}
+{"type":"node-property","begin":39,"end":54,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"KIND","value":"concept"}
+{"type":"keyword","begin":60,"end":99,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"Architecture Decision Records"}
+{"type":"keyword","begin":99,"end":138,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":practices:documentation:"}
+{"type":"paragraph","begin":138,"end":492,"contents_begin":138,"contents_end":491,"parent_type":"section","parent_begin":0}
+{"type":"headline","begin":492,"end":1100,"contents_begin":522,"contents_end":1100,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"When a change warrants one","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":522,"end":1100,"contents_begin":522,"contents_end":1100,"parent_type":"headline","parent_begin":492}
+{"type":"paragraph","begin":522,"end":582,"contents_begin":522,"contents_end":582,"parent_type":"section","parent_begin":522}
+{"type":"plain-list","begin":582,"end":923,"contents_begin":582,"contents_end":922,"parent_type":"section","parent_begin":522}
+{"type":"item","begin":582,"end":787,"contents_begin":584,"contents_end":787,"parent_type":"plain-list","parent_begin":582,"bullet":"- "}
+{"type":"paragraph","begin":584,"end":787,"contents_begin":584,"contents_end":787,"parent_type":"item","parent_begin":582}
+{"type":"item","begin":787,"end":850,"contents_begin":789,"contents_end":850,"parent_type":"plain-list","parent_begin":582,"bullet":"- "}
+{"type":"paragraph","begin":789,"end":850,"contents_begin":789,"contents_end":850,"parent_type":"item","parent_begin":787}
+{"type":"item","begin":850,"end":922,"contents_begin":852,"contents_end":922,"parent_type":"plain-list","parent_begin":582,"bullet":"- "}
+{"type":"paragraph","begin":852,"end":922,"contents_begin":852,"contents_end":922,"parent_type":"item","parent_begin":850}
+{"type":"paragraph","begin":923,"end":1100,"contents_begin":923,"contents_end":1099,"parent_type":"section","parent_begin":522}
+{"type":"headline","begin":1100,"end":1451,"contents_begin":1121,"contents_end":1451,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"What one contains","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1121,"end":1451,"contents_begin":1121,"contents_end":1451,"parent_type":"headline","parent_begin":1100}
+{"type":"paragraph","begin":1121,"end":1451,"contents_begin":1121,"contents_end":1450,"parent_type":"section","parent_begin":1121}
+{"type":"headline","begin":1451,"end":1897,"contents_begin":1502,"contents_end":1897,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Before writing a fix, check for a governing ADR","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1502,"end":1897,"contents_begin":1502,"contents_end":1897,"parent_type":"headline","parent_begin":1451}
+{"type":"paragraph","begin":1502,"end":1870,"contents_begin":1502,"contents_end":1869,"parent_type":"section","parent_begin":1502}
+{"type":"paragraph","begin":1870,"end":1897,"contents_begin":1870,"contents_end":1897,"parent_type":"section","parent_begin":1502}

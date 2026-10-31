@@ -1,6 +1,6 @@
-{"type":"#file","bytes":229,"unmodified":true}
-{"type":"section","begin":0,"end":229,"contents_begin":0,"contents_end":229}
-{"type":"property-drawer","begin":0,"end":69,"contents_begin":13,"contents_end":63}
-{"type":"node-property","begin":13,"end":63,"contents_begin":null,"contents_end":null,"key":"ID","value":"18c0ff1bd2017f33-1c3c-4000-8000-000000000000"}
-{"type":"keyword","begin":69,"end":108,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"collabtest (MAE KB Instance)"}
-{"type":"paragraph","begin":108,"end":229,"contents_begin":108,"contents_end":229}
+{"type":"#file","bytes":229,"eol":"unix","unmodified":true}
+{"type":"section","begin":0,"end":229,"contents_begin":0,"contents_end":229,"parent_type":"org-data","parent_begin":0}
+{"type":"property-drawer","begin":0,"end":69,"contents_begin":13,"contents_end":63,"parent_type":"section","parent_begin":0}
+{"type":"node-property","begin":13,"end":63,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"ID","value":"18c0ff1bd2017f33-1c3c-4000-8000-000000000000"}
+{"type":"keyword","begin":69,"end":108,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"collabtest (MAE KB Instance)"}
+{"type":"paragraph","begin":108,"end":229,"contents_begin":108,"contents_end":229,"parent_type":"section","parent_begin":0}

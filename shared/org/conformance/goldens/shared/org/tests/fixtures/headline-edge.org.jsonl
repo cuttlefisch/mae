@@ -1,14 +1,14 @@
-{"type":"#file","bytes":265,"unmodified":true}
-{"type":"headline","begin":0,"end":11,"contents_begin":3,"contents_end":11,"level":1,"raw_title":"","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"headline","begin":3,"end":11,"contents_begin":null,"contents_end":null,"level":2,"raw_title":"","todo":"TODO","priority":null,"tags":[],"commentedp":null}
-{"type":"headline","begin":11,"end":35,"contents_begin":null,"contents_end":null,"level":1,"raw_title":"commented out","todo":null,"priority":null,"tags":[],"commentedp":true}
-{"type":"headline","begin":35,"end":98,"contents_begin":56,"contents_end":98,"level":1,"raw_title":"priority only","todo":null,"priority":"A","tags":[],"commentedp":null}
-{"type":"headline","begin":56,"end":98,"contents_begin":null,"contents_end":null,"level":3,"raw_title":"all parts","todo":"DONE","priority":"B","tags":["t1","t2"],"commentedp":true}
-{"type":"headline","begin":98,"end":113,"contents_begin":null,"contents_end":null,"level":1,"raw_title":"tags-like","todo":null,"priority":null,"tags":["a"],"commentedp":null}
-{"type":"headline","begin":113,"end":138,"contents_begin":null,"contents_end":null,"level":1,"raw_title":"trailing tags","todo":null,"priority":null,"tags":["x","y"],"commentedp":null}
-{"type":"headline","begin":138,"end":155,"contents_begin":null,"contents_end":null,"level":1,"raw_title":"not tags : a :","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"headline","begin":155,"end":178,"contents_begin":null,"contents_end":null,"level":1,"raw_title":"two runs :a: and","todo":null,"priority":null,"tags":["b"],"commentedp":null}
-{"type":"headline","begin":178,"end":187,"contents_begin":null,"contents_end":null,"level":1,"raw_title":"TODO:x","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"headline","begin":187,"end":239,"contents_begin":211,"contents_end":239,"level":1,"raw_title":"COMMENTARY is a title","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"headline","begin":211,"end":239,"contents_begin":null,"contents_end":null,"level":16,"raw_title":"deep level","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"headline","begin":239,"end":265,"contents_begin":null,"contents_end":null,"level":1,"raw_title":"utf8 tags","todo":null,"priority":null,"tags":["éte","日本"],"commentedp":null}
+{"type":"#file","bytes":265,"eol":"unix","unmodified":true}
+{"type":"headline","begin":0,"end":11,"contents_begin":3,"contents_end":11,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":3,"end":11,"contents_begin":null,"contents_end":null,"parent_type":"headline","parent_begin":0,"level":2,"raw_title":"","todo":"TODO","priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":11,"end":35,"contents_begin":null,"contents_end":null,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"commented out","todo":null,"priority":null,"tags":[],"commentedp":true}
+{"type":"headline","begin":35,"end":98,"contents_begin":56,"contents_end":98,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"priority only","todo":null,"priority":"A","tags":[],"commentedp":null}
+{"type":"headline","begin":56,"end":98,"contents_begin":null,"contents_end":null,"parent_type":"headline","parent_begin":35,"level":3,"raw_title":"all parts","todo":"DONE","priority":"B","tags":["t1","t2"],"commentedp":true}
+{"type":"headline","begin":98,"end":113,"contents_begin":null,"contents_end":null,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"tags-like","todo":null,"priority":null,"tags":["a"],"commentedp":null}
+{"type":"headline","begin":113,"end":138,"contents_begin":null,"contents_end":null,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"trailing tags","todo":null,"priority":null,"tags":["x","y"],"commentedp":null}
+{"type":"headline","begin":138,"end":155,"contents_begin":null,"contents_end":null,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"not tags : a :","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":155,"end":178,"contents_begin":null,"contents_end":null,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"two runs :a: and","todo":null,"priority":null,"tags":["b"],"commentedp":null}
+{"type":"headline","begin":178,"end":187,"contents_begin":null,"contents_end":null,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"TODO:x","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":187,"end":239,"contents_begin":211,"contents_end":239,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"COMMENTARY is a title","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":211,"end":239,"contents_begin":null,"contents_end":null,"parent_type":"headline","parent_begin":187,"level":16,"raw_title":"deep level","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"headline","begin":239,"end":265,"contents_begin":null,"contents_end":null,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"utf8 tags","todo":null,"priority":null,"tags":["éte","日本"],"commentedp":null}

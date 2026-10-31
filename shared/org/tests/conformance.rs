@@ -1,5 +1,6 @@
 //! The Emacs differential gate (ADR-112 D5): mae-org's elements must equal
-//! `org-element`'s — kind, begin and end — for every file in
+//! `org-element`'s — kind, begin, end, contents begin/end and parent — for
+//! every file in
 //! `conformance/corpus.txt`, except differences listed in
 //! `conformance/divergences.toml`. An unlisted difference fails; so does a
 //! listed one that no longer occurs (a stale entry hides nothing, so it must
@@ -193,40 +194,45 @@ fn every_listed_file_has_a_golden_and_every_golden_is_listed() {
 /// No divergence may be registered against these.
 #[test]
 fn crlf_and_bom_variants_agree_with_the_lf_goldens() {
+    let register = load_register();
     let mut checked = 0;
     for rel in corpus_list() {
         let text = read(&repo_root().join(&rel));
         if text.contains('\r') || text.starts_with('\u{feff}') {
-            continue; // stored with CR or a BOM: see divergences.toml
+            continue; // stored with CR or a BOM: its golden already covers it
         }
-        let oracle: Vec<El> = golden_elements(&golden_for(&rel))
-            .into_iter()
-            .map(|(e, _)| e)
-            .collect();
-        let crlf = to_crlf(&text);
-        let want: Vec<El> = oracle.iter().map(|e| lf_to_crlf(&text, e)).collect();
-        let (a, b) = diff(&want, &mae_elements(&parse_default(&crlf)));
+        // A file with a registered divergence is checked against mae-org's
+        // own LF parse: the variant must not ADD a difference.
+        let diverges = register.iter().any(|d| {
+            d.file == rel
+                || (d.file.ends_with('*') && rel.starts_with(d.file.trim_end_matches('*')))
+        });
+        let base: Vec<El> = if diverges {
+            mae_elements(&parse_default(&text))
+        } else {
+            golden_elements(&golden_for(&rel))
+                .into_iter()
+                .map(|(e, _)| e)
+                .collect()
+        };
+        let want: Vec<El> = base.iter().map(|e| lf_to_crlf(&text, e)).collect();
+        let (a, b) = diff(&want, &mae_elements(&parse_default(&to_crlf(&text))));
         assert!(
             a.is_empty() && b.is_empty(),
             "{rel} as CRLF:\n oracle only {a:?}\n mae only {b:?}"
         );
-        let bom = format!("\u{feff}{text}");
-        let want: Vec<El> = oracle
-            .iter()
-            .map(|e| El {
-                kind: e.kind.clone(),
-                begin: e.begin + 3,
-                end: e.end + 3,
-            })
-            .collect();
-        let (a, b) = diff(&want, &mae_elements(&parse_default(&bom)));
+        let want: Vec<El> = base.iter().map(|e| shift_el(e, |o| o + 3)).collect();
+        let (a, b) = diff(
+            &want,
+            &mae_elements(&parse_default(&format!("\u{feff}{text}"))),
+        );
         assert!(
             a.is_empty() && b.is_empty(),
             "{rel} with BOM:\n oracle only {a:?}\n mae only {b:?}"
         );
         checked += 1;
     }
-    assert!(checked > 60, "only {checked} files checked");
+    assert!(checked > 80, "only {checked} files checked");
 }
 
 #[test]

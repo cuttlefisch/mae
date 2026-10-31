@@ -1,0 +1,44 @@
+# Case folding is per character, through Emacs's canonicalize table.
+# Positive: these pairs fold together, so each is a block.
+* sharp s, capital sharp s
+#+begin_aß
+x
+#+end_aẞ
+* final sigma, capital sigma
+#+begin_aς
+x
+#+end_aΣ
+* ascii
+#+begin_Note
+x
+#+end_NOTE
+# Negative: these do NOT fold in Emacs, so none is a block.
+* sharp s vs SS (no multi-char folding)
+#+begin_aß
+x
+#+end_aSS
+* long s vs s
+#+begin_ſrc
+x
+#+end_SRC
+* dotless i vs i
+#+begin_aı
+x
+#+end_aI
+* dotted capital I vs i
+#+begin_aİ
+x
+#+end_ai
+* Kelvin sign vs k
+#+begin_aK
+x
+#+end_ak
+* ligature fi vs FI
+#+begin_ﬁle
+x
+#+end_FILE
+* Kelvin sign in an ASCII literal
+CKOCK: [2026-01-01 Thu 10:00]
+:DRAWER:
+x
+:EKD:

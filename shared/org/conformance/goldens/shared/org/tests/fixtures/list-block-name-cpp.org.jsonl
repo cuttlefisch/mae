@@ -1,0 +1,9 @@
+{"type":"#file","bytes":36,"eol":"unix","unmodified":true}
+{"type":"section","begin":0,"end":36,"contents_begin":0,"contents_end":36,"parent_type":"org-data","parent_begin":0}
+{"type":"plain-list","begin":0,"end":18,"contents_begin":0,"contents_end":18,"parent_type":"section","parent_begin":0}
+{"type":"item","begin":0,"end":18,"contents_begin":2,"contents_end":18,"parent_type":"plain-list","parent_begin":0,"bullet":"- "}
+{"type":"paragraph","begin":2,"end":18,"contents_begin":2,"contents_end":18,"parent_type":"item","parent_begin":0}
+{"type":"paragraph","begin":18,"end":32,"contents_begin":18,"contents_end":32,"parent_type":"section","parent_begin":0}
+{"type":"plain-list","begin":32,"end":36,"contents_begin":32,"contents_end":36,"parent_type":"section","parent_begin":0}
+{"type":"item","begin":32,"end":36,"contents_begin":34,"contents_end":36,"parent_type":"plain-list","parent_begin":32,"bullet":"- "}
+{"type":"paragraph","begin":34,"end":36,"contents_begin":34,"contents_end":36,"parent_type":"item","parent_begin":32}

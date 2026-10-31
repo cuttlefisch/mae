@@ -1,17 +1,17 @@
-{"type":"#file","bytes":374,"unmodified":true}
-{"type":"section","begin":0,"end":374,"contents_begin":0,"contents_end":374}
-{"type":"comment-block","begin":0,"end":45,"contents_begin":null,"contents_end":null}
-{"type":"verse-block","begin":45,"end":87,"contents_begin":59,"contents_end":75}
-{"type":"center-block","begin":87,"end":124,"contents_begin":102,"contents_end":111}
-{"type":"paragraph","begin":102,"end":111,"contents_begin":102,"contents_end":111}
-{"type":"special-block","begin":124,"end":187,"contents_begin":147,"contents_end":175,"block_type":"aside"}
-{"type":"paragraph","begin":147,"end":161,"contents_begin":147,"contents_end":160}
-{"type":"plain-list","begin":161,"end":175,"contents_begin":161,"contents_end":175}
-{"type":"item","begin":161,"end":175,"contents_begin":163,"contents_end":175,"bullet":"- "}
-{"type":"paragraph","begin":163,"end":175,"contents_begin":163,"contents_end":175}
-{"type":"export-block","begin":187,"end":231,"contents_begin":null,"contents_end":null}
-{"type":"quote-block","begin":231,"end":293,"contents_begin":245,"contents_end":281}
-{"type":"src-block","begin":245,"end":281,"contents_begin":null,"contents_end":null,"language":"elisp"}
-{"type":"quote-block","begin":293,"end":319,"contents_begin":null,"contents_end":null}
-{"type":"src-block","begin":319,"end":341,"contents_begin":null,"contents_end":null,"language":null}
-{"type":"special-block","begin":341,"end":374,"contents_begin":null,"contents_end":null,"block_type":"SRC:"}
+{"type":"#file","bytes":374,"eol":"unix","unmodified":true}
+{"type":"section","begin":0,"end":374,"contents_begin":0,"contents_end":374,"parent_type":"org-data","parent_begin":0}
+{"type":"comment-block","begin":0,"end":45,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0}
+{"type":"verse-block","begin":45,"end":87,"contents_begin":59,"contents_end":75,"parent_type":"section","parent_begin":0}
+{"type":"center-block","begin":87,"end":124,"contents_begin":102,"contents_end":111,"parent_type":"section","parent_begin":0}
+{"type":"paragraph","begin":102,"end":111,"contents_begin":102,"contents_end":111,"parent_type":"center-block","parent_begin":87}
+{"type":"special-block","begin":124,"end":187,"contents_begin":147,"contents_end":175,"parent_type":"section","parent_begin":0,"block_type":"aside"}
+{"type":"paragraph","begin":147,"end":161,"contents_begin":147,"contents_end":160,"parent_type":"special-block","parent_begin":124}
+{"type":"plain-list","begin":161,"end":175,"contents_begin":161,"contents_end":175,"parent_type":"special-block","parent_begin":124}
+{"type":"item","begin":161,"end":175,"contents_begin":163,"contents_end":175,"parent_type":"plain-list","parent_begin":161,"bullet":"- "}
+{"type":"paragraph","begin":163,"end":175,"contents_begin":163,"contents_end":175,"parent_type":"item","parent_begin":161}
+{"type":"export-block","begin":187,"end":231,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0}
+{"type":"quote-block","begin":231,"end":293,"contents_begin":245,"contents_end":281,"parent_type":"section","parent_begin":0}
+{"type":"src-block","begin":245,"end":281,"contents_begin":null,"contents_end":null,"parent_type":"quote-block","parent_begin":231,"language":"elisp"}
+{"type":"quote-block","begin":293,"end":319,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0}
+{"type":"src-block","begin":319,"end":341,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"language":null}
+{"type":"special-block","begin":341,"end":374,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"block_type":"SRC:"}

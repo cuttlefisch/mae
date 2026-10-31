@@ -8,3 +8,4 @@ cc 72ab0317dffcc6c9813c4f16d5ecd7ea462a64e64b8cd9bfe200991be33c5567 # shrinks to
 cc 78246f479c0774624f457e7556c26cafa39be1988c96f6c139e919912fadb7d6 # shrinks to file = 0, at = 0, frag = ""
 cc e2bb5bf694d93b72dff247a63ea4a43e397db55ab2cbb82584a2b7ba587be863 # shrinks to text = "#+NAME: n"
 cc 8fabc6587bdcbbb2196d1f3dc774270d474b588ca17f397784a78485f69c59b3 # shrinks to file = 53, at = 68926, frag = "#+NAME: n"
+cc 99ca008fe0a55b7db2423eb07c9c746886bb7a36b90f57e50af770637e9f2803 # shrinks to file = 0, at = 0, frag = "\n"

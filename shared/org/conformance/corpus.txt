@@ -6,7 +6,9 @@
 # The whole bundled corpus, Org's own repository and Worg are checked with
 # tests/oracle_external.rs (needs Emacs; run locally).
 
-# Synthetic adversarial fixtures (invented for this crate).
+# Synthetic adversarial fixtures (invented for this crate, the reviewer's
+# reproductions, and the per-class Unicode fixtures from gen-char-tables.el).
+shared/org/tests/fixtures/affiliated-names.org
 shared/org/tests/fixtures/affiliated.org
 shared/org/tests/fixtures/blank-first-line-in-container.org
 shared/org/tests/fixtures/blank-only.org
@@ -20,11 +22,21 @@ shared/org/tests/fixtures/crlf.org
 shared/org/tests/fixtures/deep-blocks.org
 shared/org/tests/fixtures/deep-lists.org
 shared/org/tests/fixtures/empty.org
+shared/org/tests/fixtures/eol-cr-after-headline.org
+shared/org/tests/fixtures/eol-cr-leading-blank.org
+shared/org/tests/fixtures/eol-cr-only.org
+shared/org/tests/fixtures/eol-dos-lone-cr.org
+shared/org/tests/fixtures/eol-mac.org
+shared/org/tests/fixtures/eol-mixed-block.org
+shared/org/tests/fixtures/eol-mixed-tag.org
 shared/org/tests/fixtures/footnotes.org
 shared/org/tests/fixtures/headings-levels.org
 shared/org/tests/fixtures/headline-edge.org
 shared/org/tests/fixtures/indented-stars.org
+shared/org/tests/fixtures/list-block-name-cpp.org
+shared/org/tests/fixtures/list-block-name-regex.org
 shared/org/tests/fixtures/list-item-drawer.org
+shared/org/tests/fixtures/list-tab-width.org
 shared/org/tests/fixtures/lists.org
 shared/org/tests/fixtures/lone-star.org
 shared/org/tests/fixtures/many-affiliated-orphans.org
@@ -34,12 +46,31 @@ shared/org/tests/fixtures/nested-quotes-same-name.org
 shared/org/tests/fixtures/no-final-newline.org
 shared/org/tests/fixtures/planning-properties.org
 shared/org/tests/fixtures/property-drawer-after-blank.org
+shared/org/tests/fixtures/survivor-clock-orphans-affiliated.org
+shared/org/tests/fixtures/survivor-dynamic-end-without-colon.org
+shared/org/tests/fixtures/survivor-lone-hash-is-comment.org
+shared/org/tests/fixtures/survivor-paren-item-is-ordered.org
+shared/org/tests/fixtures/survivor-planning-final-whitespace.org
+shared/org/tests/fixtures/survivor-tblfm-needs-space.org
+shared/org/tests/fixtures/survivor-two-blank-lines-end-list.org
+shared/org/tests/fixtures/survivor-zeroth-drawer-after-blanks.org
 shared/org/tests/fixtures/tables.org
+shared/org/tests/fixtures/tags-edge.org
+shared/org/tests/fixtures/todo-bar-only.org
+shared/org/tests/fixtures/todo-empty.org
 shared/org/tests/fixtures/todo-keywords.org
+shared/org/tests/fixtures/todo-paren-mid.org
 shared/org/tests/fixtures/todo-seq-typ.org
+shared/org/tests/fixtures/todo-tab.org
 shared/org/tests/fixtures/unclosed-drawer.org
+shared/org/tests/fixtures/unicode-alnum.org
+shared/org/tests/fixtures/unicode-case-negative.org
+shared/org/tests/fixtures/unicode-case.org
+shared/org/tests/fixtures/unicode-whitespace.org
+shared/org/tests/fixtures/unicode-word.org
 shared/org/tests/fixtures/unicode.org
 shared/org/tests/fixtures/unterminated-src.org
+shared/org/tests/fixtures/verse-empty.org
 shared/org/tests/fixtures/zeroth-keyword-first.org
 shared/org/tests/fixtures/zeroth-section.org
 

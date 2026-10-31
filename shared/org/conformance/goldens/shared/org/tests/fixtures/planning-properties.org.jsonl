@@ -1,31 +1,31 @@
-{"type":"#file","bytes":475,"unmodified":true}
-{"type":"section","begin":0,"end":54,"contents_begin":0,"contents_end":54}
-{"type":"property-drawer","begin":0,"end":35,"contents_begin":13,"contents_end":29}
-{"type":"node-property","begin":13,"end":29,"contents_begin":null,"contents_end":null,"key":"ID","value":"file-level"}
-{"type":"keyword","begin":35,"end":54,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"Planning"}
-{"type":"headline","begin":54,"end":197,"contents_begin":66,"contents_end":197,"level":1,"raw_title":"Task","todo":"TODO","priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":66,"end":197,"contents_begin":66,"contents_end":197}
-{"type":"planning","begin":66,"end":121,"contents_begin":null,"contents_end":null}
-{"type":"property-drawer","begin":121,"end":191,"contents_begin":134,"contents_end":185}
-{"type":"node-property","begin":134,"end":143,"contents_begin":null,"contents_end":null,"key":"ID","value":"abc"}
-{"type":"node-property","begin":143,"end":167,"contents_begin":null,"contents_end":null,"key":"Custom_Key","value":"Mixed Case"}
-{"type":"node-property","begin":167,"end":185,"contents_begin":null,"contents_end":null,"key":"multi+","value":"appended"}
-{"type":"paragraph","begin":191,"end":197,"contents_begin":191,"contents_end":197}
-{"type":"headline","begin":197,"end":266,"contents_begin":220,"contents_end":266,"level":1,"raw_title":"Blank before drawer","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":220,"end":266,"contents_begin":220,"contents_end":266}
-{"type":"drawer","begin":220,"end":266,"contents_begin":233,"contents_end":260,"name":"PROPERTIES"}
-{"type":"paragraph","begin":233,"end":260,"contents_begin":233,"contents_end":260}
-{"type":"headline","begin":266,"end":309,"contents_begin":279,"contents_end":309,"level":1,"raw_title":"lower case","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":279,"end":309,"contents_begin":279,"contents_end":309}
-{"type":"property-drawer","begin":279,"end":309,"contents_begin":292,"contents_end":303}
-{"type":"node-property","begin":292,"end":303,"contents_begin":null,"contents_end":null,"key":"id","value":"lower"}
-{"type":"headline","begin":309,"end":363,"contents_begin":329,"contents_end":363,"level":1,"raw_title":"Bad property line","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":329,"end":363,"contents_begin":329,"contents_end":363}
-{"type":"drawer","begin":329,"end":363,"contents_begin":342,"contents_end":357,"name":"PROPERTIES"}
-{"type":"paragraph","begin":342,"end":357,"contents_begin":342,"contents_end":357}
-{"type":"headline","begin":363,"end":415,"contents_begin":387,"contents_end":415,"level":1,"raw_title":"Planning after blank","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":387,"end":415,"contents_begin":387,"contents_end":415}
-{"type":"paragraph","begin":387,"end":415,"contents_begin":387,"contents_end":415}
-{"type":"headline","begin":415,"end":475,"contents_begin":444,"contents_end":475,"level":1,"raw_title":"closed: lowercase planning","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":444,"end":475,"contents_begin":444,"contents_end":475}
-{"type":"planning","begin":444,"end":475,"contents_begin":null,"contents_end":null}
+{"type":"#file","bytes":475,"eol":"unix","unmodified":true}
+{"type":"section","begin":0,"end":54,"contents_begin":0,"contents_end":54,"parent_type":"org-data","parent_begin":0}
+{"type":"property-drawer","begin":0,"end":35,"contents_begin":13,"contents_end":29,"parent_type":"section","parent_begin":0}
+{"type":"node-property","begin":13,"end":29,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"ID","value":"file-level"}
+{"type":"keyword","begin":35,"end":54,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"Planning"}
+{"type":"headline","begin":54,"end":197,"contents_begin":66,"contents_end":197,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"Task","todo":"TODO","priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":66,"end":197,"contents_begin":66,"contents_end":197,"parent_type":"headline","parent_begin":54}
+{"type":"planning","begin":66,"end":121,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":66}
+{"type":"property-drawer","begin":121,"end":191,"contents_begin":134,"contents_end":185,"parent_type":"section","parent_begin":66}
+{"type":"node-property","begin":134,"end":143,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":121,"key":"ID","value":"abc"}
+{"type":"node-property","begin":143,"end":167,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":121,"key":"Custom_Key","value":"Mixed Case"}
+{"type":"node-property","begin":167,"end":185,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":121,"key":"multi+","value":"appended"}
+{"type":"paragraph","begin":191,"end":197,"contents_begin":191,"contents_end":197,"parent_type":"section","parent_begin":66}
+{"type":"headline","begin":197,"end":266,"contents_begin":220,"contents_end":266,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"Blank before drawer","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":220,"end":266,"contents_begin":220,"contents_end":266,"parent_type":"headline","parent_begin":197}
+{"type":"drawer","begin":220,"end":266,"contents_begin":233,"contents_end":260,"parent_type":"section","parent_begin":220,"name":"PROPERTIES"}
+{"type":"paragraph","begin":233,"end":260,"contents_begin":233,"contents_end":260,"parent_type":"drawer","parent_begin":220}
+{"type":"headline","begin":266,"end":309,"contents_begin":279,"contents_end":309,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"lower case","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":279,"end":309,"contents_begin":279,"contents_end":309,"parent_type":"headline","parent_begin":266}
+{"type":"property-drawer","begin":279,"end":309,"contents_begin":292,"contents_end":303,"parent_type":"section","parent_begin":279}
+{"type":"node-property","begin":292,"end":303,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":279,"key":"id","value":"lower"}
+{"type":"headline","begin":309,"end":363,"contents_begin":329,"contents_end":363,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"Bad property line","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":329,"end":363,"contents_begin":329,"contents_end":363,"parent_type":"headline","parent_begin":309}
+{"type":"drawer","begin":329,"end":363,"contents_begin":342,"contents_end":357,"parent_type":"section","parent_begin":329,"name":"PROPERTIES"}
+{"type":"paragraph","begin":342,"end":357,"contents_begin":342,"contents_end":357,"parent_type":"drawer","parent_begin":329}
+{"type":"headline","begin":363,"end":415,"contents_begin":387,"contents_end":415,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"Planning after blank","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":387,"end":415,"contents_begin":387,"contents_end":415,"parent_type":"headline","parent_begin":363}
+{"type":"paragraph","begin":387,"end":415,"contents_begin":387,"contents_end":415,"parent_type":"section","parent_begin":387}
+{"type":"headline","begin":415,"end":475,"contents_begin":444,"contents_end":475,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"closed: lowercase planning","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":444,"end":475,"contents_begin":444,"contents_end":475,"parent_type":"headline","parent_begin":415}
+{"type":"planning","begin":444,"end":475,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":444}

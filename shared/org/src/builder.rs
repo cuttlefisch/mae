@@ -10,8 +10,9 @@ use crate::diagnostic::{Diagnostic, DiagnosticKind};
 use crate::element::{recognize, Body, Ctx, Element, Mode};
 use crate::index::Index;
 use crate::kind::SyntaxKind::{self, *};
-use crate::options::{is_todo_key, ParseOptions, TodoSequence};
+use crate::options::{is_todo_key, ParseOptions, TodoSequence, MAX_DEPTH_CEILING};
 use crate::scan;
+use crate::span::{contents_of, ContentsTable, Span};
 use crate::text::{trim_end_blank, Source};
 use crate::tokens::{self, Emitter, Event};
 
@@ -28,79 +29,165 @@ struct Frame {
 
 pub(crate) struct Built {
     pub events: Vec<Event>,
+    pub contents: ContentsTable,
     pub diagnostics: Vec<Diagnostic>,
     pub in_file_todo: Vec<TodoSequence>,
 }
 
-pub(crate) fn build(src: &Source, ix: &Index, opts: &ParseOptions) -> Built {
-    let mut cx = Ctx::new(src, ix);
-    let mut em = Emitter::new(src);
-    let mut todo = Vec::new();
-    em.start(DOCUMENT);
-    em.tok(BOM, 0, src.bom);
-    let mut cursor = cx.start(cx.first_nonblank);
-    em.lines(src.bom, cursor, TEXT);
-    let mut stack = vec![Frame {
-        kind: DOCUMENT,
-        limit: src.len(),
-        end: src.len(),
-        mode: Mode::FirstSection,
-        list: None,
-    }];
-    while let Some(top) = stack.last_mut() {
-        if cursor >= top.limit {
-            if let Some(f) = stack.pop() {
-                tail(&mut em, f.kind, f.limit, f.end);
-                em.finish();
-                cursor = f.end;
-            }
-            continue;
-        }
-        let parent_mode = top.mode;
-        let el = sane(
-            recognize(&mut cx, cursor, top.limit, parent_mode, top.list),
+/// What the text is: a whole document, or the body of a headline of the
+/// given level (`parse_fragment`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Start {
+    Document,
+    Fragment { level: usize },
+}
+
+pub(crate) fn build(src: &Source, ix: &Index, opts: &ParseOptions, start: Start) -> Built {
+    let mut b = Builder::new(src, ix, opts, start);
+    while !b.stack.is_empty() {
+        b.step();
+    }
+    b.contents.finish();
+    Built {
+        events: b.em.events,
+        contents: b.contents,
+        diagnostics: b.cx.diagnostics,
+        in_file_todo: b.todo,
+    }
+}
+
+struct Builder<'a> {
+    cx: Ctx<'a>,
+    em: Emitter<'a>,
+    todo: Vec<TodoSequence>,
+    contents: ContentsTable,
+    stack: Vec<Frame>,
+    cursor: usize,
+    cap: usize,
+    start: Start,
+}
+
+impl<'a> Builder<'a> {
+    fn new(src: &'a Source<'a>, ix: &'a Index, opts: &ParseOptions, start: Start) -> Builder<'a> {
+        let mut cx = Ctx::new(src, ix);
+        // A fragment is a headline's body: its first line follows the headline
+        // line, so it starts in the headline's `section` mode (planning and a
+        // property drawer are allowed right at its top).
+        cx.after_headline = matches!(start, Start::Fragment { .. });
+        let mode = if cx.after_headline {
+            Mode::Section
+        } else {
+            Mode::FirstSection
+        };
+        let mut em = Emitter::new(src);
+        em.start(DOCUMENT);
+        em.tok(BOM, 0, src.bom);
+        let cursor = cx.start(cx.first_nonblank);
+        em.lines(src.bom, cursor, TEXT);
+        let root = Frame {
+            kind: DOCUMENT,
+            limit: src.len(),
+            end: src.len(),
+            mode,
+            list: None,
+        };
+        let cap = opts.max_depth.min(MAX_DEPTH_CEILING);
+        Builder {
+            cx,
+            em,
+            todo: Vec::new(),
+            contents: ContentsTable::default(),
+            stack: vec![root],
             cursor,
-            top.limit,
+            cap,
+            start,
+        }
+    }
+
+    /// Closes the innermost container if its contents are done, otherwise
+    /// parses the next element in it.
+    fn step(&mut self) {
+        let Some(top) = self.stack.last_mut() else {
+            return;
+        };
+        if self.cursor >= top.limit {
+            if let Some(f) = self.stack.pop() {
+                tail(&mut self.em, f.kind, f.limit, f.end);
+                self.em.finish();
+                self.cursor = f.end;
+            }
+            return;
+        }
+        let (limit, parent_mode, list) = (top.limit, top.mode, top.list);
+        let src = self.cx.src;
+        let el = sane(
+            recognize(&mut self.cx, self.cursor, limit, parent_mode, list),
+            self.cursor,
+            limit,
             src,
         );
-        top.mode = parent_mode.after(el.kind);
-        if el.begin > cursor {
-            em.lines(cursor, el.begin, UNPARSED);
+        if let Some(top) = self.stack.last_mut() {
+            top.mode = parent_mode.after(el.kind);
         }
+        if el.begin > self.cursor {
+            self.em.lines(self.cursor, el.begin, UNPARSED);
+        }
+        self.record(&el);
+        open(&mut self.em, &el);
+        self.descend_or_close(&el, parent_mode);
+    }
+
+    /// Side data for an element: TODO declarations, contents, diagnostics.
+    fn record(&mut self, el: &Element) {
+        let src = self.cx.src;
         if el.kind == KEYWORD {
-            collect_todo(src, &el, &mut todo);
+            collect_todo(src, el, &mut self.todo);
         }
-        open(&mut em, &el);
+        if let Some((a, b)) = contents_of(el, src) {
+            self.contents
+                .push(el.kind, el.begin, el.end, Span::new(a, b));
+        }
+        if let (HEADLINE, Start::Fragment { level }) = (el.kind, self.start) {
+            let line = src.lines[src.line_of(el.begin)];
+            if scan::headline_level(src.content(src.line_of(el.begin))).is_some_and(|l| l <= level)
+            {
+                self.cx.diagnose(
+                    DiagnosticKind::HeadlineOutsideFragment,
+                    line.start,
+                    line.end,
+                );
+            }
+        }
+    }
+
+    /// Pushes a frame for a greater element's contents, or emits the rest
+    /// of the element and closes it.
+    fn descend_or_close(&mut self, el: &Element, parent_mode: Mode) {
         if el.body == Body::Children && el.body_end > el.head_end {
-            if stack.len() >= opts.max_depth {
-                cx.diagnose(DiagnosticKind::DepthLimit, el.head_end, el.body_end);
-                em.tok(OPAQUE, el.head_end, el.body_end);
-            } else {
+            if self.stack.len() < self.cap {
                 let list = matches!(el.kind, PLAIN_LIST | ITEM)
                     .then_some(el.list)
                     .flatten();
                 let mode = parent_mode.for_children(el.kind);
-                stack.push(Frame {
+                self.stack.push(Frame {
                     kind: el.kind,
                     limit: el.body_end,
                     end: el.end,
                     mode,
                     list,
                 });
-                cursor = el.head_end;
-                continue;
+                self.cursor = el.head_end;
+                return;
             }
+            self.cx
+                .diagnose(DiagnosticKind::DepthLimit, el.head_end, el.body_end);
+            self.em.tok(OPAQUE, el.head_end, el.body_end);
         } else {
-            body(&mut em, &el);
+            body(&mut self.em, el);
         }
-        tail(&mut em, el.kind, el.body_end, el.end);
-        em.finish();
-        cursor = el.end;
-    }
-    Built {
-        events: em.events,
-        diagnostics: cx.diagnostics,
-        in_file_todo: todo,
+        tail(&mut self.em, el.kind, el.body_end, el.end);
+        self.em.finish();
+        self.cursor = el.end;
     }
 }
 
@@ -216,8 +303,8 @@ fn collect_todo(src: &Source, el: &Element, out: &mut Vec<TodoSequence>) {
         return;
     };
     if is_todo_key(&line[a..b]) {
-        if let Some(seq) = TodoSequence::parse(trim_end_blank(&line[b + 1..])) {
-            out.push(seq);
-        }
+        // Pushed even when empty: an empty declaration still replaces the
+        // configured sequences (oracle).
+        out.push(TodoSequence::parse(trim_end_blank(&line[b + 1..])));
     }
 }

@@ -1091,6 +1091,10 @@
         {
           "name": "parse",
           "kind": "fn"
+        },
+        {
+          "name": "parse_fragment",
+          "kind": "fn"
         }
       ]
     },

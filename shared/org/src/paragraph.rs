@@ -38,9 +38,13 @@ pub(crate) fn paragraph(cx: &mut Ctx, begin: usize, cb: usize, limit: usize) -> 
         }
         i += 1;
     };
+    // `skip-chars-backward " \r\t\n" contents-begin` then
+    // `line-beginning-position 2`: for a paragraph of only blank lines this
+    // is the line after its first, past the separator (oracle).
     let ce = src
         .after_last_nonblank(before_blank, cb)
-        .clamp(cb, before_blank.max(cb));
+        .max(cb)
+        .min(limit.max(cb));
     let end = src.skip_blank(before_blank, limit).max(ce);
     Element {
         kind: PARAGRAPH,

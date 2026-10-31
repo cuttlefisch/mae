@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 632b0e71fc4d3c15af152d6222a9897c2e6e064c128f87ea40373016cff697bf # shrinks to parts = ["* ", "\n", "SCHEDULED: <2026-01-01 Thu>"], level = 1
+cc 8b6f71968a6b5f6558bcd655d360fafffc7ec812a39d34e12c356655df1a0e27 # shrinks to parts = ["\r\n", "\n"], level = 1
+cc 8bf480d661a1d4c09d5709b777ed2d896a45ded5ae107481270543048b875e1b # shrinks to parts = ["\n"], level = 1
+cc e8c5ff84e4bc867ef420eeb258bd8d7946612e8792763fb117413410620cf17b # shrinks to parts = ["SCHEDULED: <2026-01-01 Thu>"], level = 1

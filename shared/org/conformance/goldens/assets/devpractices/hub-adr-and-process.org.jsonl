@@ -1,54 +1,54 @@
-{"type":"#file","bytes":1371,"unmodified":true}
-{"type":"section","begin":0,"end":282,"contents_begin":0,"contents_end":282}
-{"type":"property-drawer","begin":0,"end":71,"contents_begin":13,"contents_end":65}
-{"type":"node-property","begin":13,"end":38,"contents_begin":null,"contents_end":null,"key":"ID","value":"hub:adr-and-process"}
-{"type":"node-property","begin":38,"end":49,"contents_begin":null,"contents_end":null,"key":"ROLE","value":"hub"}
-{"type":"node-property","begin":49,"end":65,"contents_begin":null,"contents_end":null,"key":"KIND","value":"category"}
-{"type":"keyword","begin":71,"end":94,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"ADR & Process"}
-{"type":"keyword","begin":94,"end":125,"contents_begin":null,"contents_end":null,"key":"FILETAGS","value":":hub:devpractice:"}
-{"type":"paragraph","begin":125,"end":282,"contents_begin":125,"contents_end":281}
-{"type":"headline","begin":282,"end":526,"contents_begin":314,"contents_end":526,"level":1,"raw_title":"Architecture decision records","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":314,"end":526,"contents_begin":314,"contents_end":526}
-{"type":"plain-list","begin":314,"end":526,"contents_begin":314,"contents_end":525}
-{"type":"item","begin":314,"end":383,"contents_begin":316,"contents_end":383,"bullet":"- "}
-{"type":"paragraph","begin":316,"end":383,"contents_begin":316,"contents_end":383}
-{"type":"item","begin":383,"end":424,"contents_begin":385,"contents_end":424,"bullet":"- "}
-{"type":"paragraph","begin":385,"end":424,"contents_begin":385,"contents_end":424}
-{"type":"item","begin":424,"end":460,"contents_begin":426,"contents_end":460,"bullet":"- "}
-{"type":"paragraph","begin":426,"end":460,"contents_begin":426,"contents_end":460}
-{"type":"item","begin":460,"end":525,"contents_begin":462,"contents_end":525,"bullet":"- "}
-{"type":"paragraph","begin":462,"end":525,"contents_begin":462,"contents_end":525}
-{"type":"headline","begin":526,"end":711,"contents_begin":554,"contents_end":711,"level":1,"raw_title":"Commits and pull requests","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":554,"end":711,"contents_begin":554,"contents_end":711}
-{"type":"plain-list","begin":554,"end":711,"contents_begin":554,"contents_end":710}
-{"type":"item","begin":554,"end":609,"contents_begin":556,"contents_end":609,"bullet":"- "}
-{"type":"paragraph","begin":556,"end":609,"contents_begin":556,"contents_end":609}
-{"type":"item","begin":609,"end":652,"contents_begin":611,"contents_end":652,"bullet":"- "}
-{"type":"paragraph","begin":611,"end":652,"contents_begin":611,"contents_end":652}
-{"type":"item","begin":652,"end":710,"contents_begin":654,"contents_end":710,"bullet":"- "}
-{"type":"paragraph","begin":654,"end":710,"contents_begin":654,"contents_end":710}
-{"type":"headline","begin":711,"end":1058,"contents_begin":734,"contents_end":1058,"level":1,"raw_title":"Tech debt and audits","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":734,"end":1058,"contents_begin":734,"contents_end":1058}
-{"type":"plain-list","begin":734,"end":1058,"contents_begin":734,"contents_end":1057}
-{"type":"item","begin":734,"end":791,"contents_begin":736,"contents_end":791,"bullet":"- "}
-{"type":"paragraph","begin":736,"end":791,"contents_begin":736,"contents_end":791}
-{"type":"item","begin":791,"end":852,"contents_begin":793,"contents_end":852,"bullet":"- "}
-{"type":"paragraph","begin":793,"end":852,"contents_begin":793,"contents_end":852}
-{"type":"item","begin":852,"end":919,"contents_begin":854,"contents_end":919,"bullet":"- "}
-{"type":"paragraph","begin":854,"end":919,"contents_begin":854,"contents_end":919}
-{"type":"item","begin":919,"end":999,"contents_begin":921,"contents_end":999,"bullet":"- "}
-{"type":"paragraph","begin":921,"end":999,"contents_begin":921,"contents_end":999}
-{"type":"item","begin":999,"end":1057,"contents_begin":1001,"contents_end":1057,"bullet":"- "}
-{"type":"paragraph","begin":1001,"end":1057,"contents_begin":1001,"contents_end":1057}
-{"type":"headline","begin":1058,"end":1371,"contents_begin":1079,"contents_end":1371,"level":1,"raw_title":"Issues and roadmap","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":1079,"end":1371,"contents_begin":1079,"contents_end":1371}
-{"type":"plain-list","begin":1079,"end":1328,"contents_begin":1079,"contents_end":1327}
-{"type":"item","begin":1079,"end":1151,"contents_begin":1081,"contents_end":1151,"bullet":"- "}
-{"type":"paragraph","begin":1081,"end":1151,"contents_begin":1081,"contents_end":1151}
-{"type":"item","begin":1151,"end":1202,"contents_begin":1153,"contents_end":1202,"bullet":"- "}
-{"type":"paragraph","begin":1153,"end":1202,"contents_begin":1153,"contents_end":1202}
-{"type":"item","begin":1202,"end":1271,"contents_begin":1204,"contents_end":1271,"bullet":"- "}
-{"type":"paragraph","begin":1204,"end":1271,"contents_begin":1204,"contents_end":1271}
-{"type":"item","begin":1271,"end":1327,"contents_begin":1273,"contents_end":1327,"bullet":"- "}
-{"type":"paragraph","begin":1273,"end":1327,"contents_begin":1273,"contents_end":1327}
-{"type":"paragraph","begin":1328,"end":1371,"contents_begin":1328,"contents_end":1371}
+{"type":"#file","bytes":1371,"eol":"unix","unmodified":true}
+{"type":"section","begin":0,"end":282,"contents_begin":0,"contents_end":282,"parent_type":"org-data","parent_begin":0}
+{"type":"property-drawer","begin":0,"end":71,"contents_begin":13,"contents_end":65,"parent_type":"section","parent_begin":0}
+{"type":"node-property","begin":13,"end":38,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"ID","value":"hub:adr-and-process"}
+{"type":"node-property","begin":38,"end":49,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"ROLE","value":"hub"}
+{"type":"node-property","begin":49,"end":65,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"KIND","value":"category"}
+{"type":"keyword","begin":71,"end":94,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"ADR & Process"}
+{"type":"keyword","begin":94,"end":125,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":hub:devpractice:"}
+{"type":"paragraph","begin":125,"end":282,"contents_begin":125,"contents_end":281,"parent_type":"section","parent_begin":0}
+{"type":"headline","begin":282,"end":526,"contents_begin":314,"contents_end":526,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"Architecture decision records","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":314,"end":526,"contents_begin":314,"contents_end":526,"parent_type":"headline","parent_begin":282}
+{"type":"plain-list","begin":314,"end":526,"contents_begin":314,"contents_end":525,"parent_type":"section","parent_begin":314}
+{"type":"item","begin":314,"end":383,"contents_begin":316,"contents_end":383,"parent_type":"plain-list","parent_begin":314,"bullet":"- "}
+{"type":"paragraph","begin":316,"end":383,"contents_begin":316,"contents_end":383,"parent_type":"item","parent_begin":314}
+{"type":"item","begin":383,"end":424,"contents_begin":385,"contents_end":424,"parent_type":"plain-list","parent_begin":314,"bullet":"- "}
+{"type":"paragraph","begin":385,"end":424,"contents_begin":385,"contents_end":424,"parent_type":"item","parent_begin":383}
+{"type":"item","begin":424,"end":460,"contents_begin":426,"contents_end":460,"parent_type":"plain-list","parent_begin":314,"bullet":"- "}
+{"type":"paragraph","begin":426,"end":460,"contents_begin":426,"contents_end":460,"parent_type":"item","parent_begin":424}
+{"type":"item","begin":460,"end":525,"contents_begin":462,"contents_end":525,"parent_type":"plain-list","parent_begin":314,"bullet":"- "}
+{"type":"paragraph","begin":462,"end":525,"contents_begin":462,"contents_end":525,"parent_type":"item","parent_begin":460}
+{"type":"headline","begin":526,"end":711,"contents_begin":554,"contents_end":711,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"Commits and pull requests","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":554,"end":711,"contents_begin":554,"contents_end":711,"parent_type":"headline","parent_begin":526}
+{"type":"plain-list","begin":554,"end":711,"contents_begin":554,"contents_end":710,"parent_type":"section","parent_begin":554}
+{"type":"item","begin":554,"end":609,"contents_begin":556,"contents_end":609,"parent_type":"plain-list","parent_begin":554,"bullet":"- "}
+{"type":"paragraph","begin":556,"end":609,"contents_begin":556,"contents_end":609,"parent_type":"item","parent_begin":554}
+{"type":"item","begin":609,"end":652,"contents_begin":611,"contents_end":652,"parent_type":"plain-list","parent_begin":554,"bullet":"- "}
+{"type":"paragraph","begin":611,"end":652,"contents_begin":611,"contents_end":652,"parent_type":"item","parent_begin":609}
+{"type":"item","begin":652,"end":710,"contents_begin":654,"contents_end":710,"parent_type":"plain-list","parent_begin":554,"bullet":"- "}
+{"type":"paragraph","begin":654,"end":710,"contents_begin":654,"contents_end":710,"parent_type":"item","parent_begin":652}
+{"type":"headline","begin":711,"end":1058,"contents_begin":734,"contents_end":1058,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"Tech debt and audits","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":734,"end":1058,"contents_begin":734,"contents_end":1058,"parent_type":"headline","parent_begin":711}
+{"type":"plain-list","begin":734,"end":1058,"contents_begin":734,"contents_end":1057,"parent_type":"section","parent_begin":734}
+{"type":"item","begin":734,"end":791,"contents_begin":736,"contents_end":791,"parent_type":"plain-list","parent_begin":734,"bullet":"- "}
+{"type":"paragraph","begin":736,"end":791,"contents_begin":736,"contents_end":791,"parent_type":"item","parent_begin":734}
+{"type":"item","begin":791,"end":852,"contents_begin":793,"contents_end":852,"parent_type":"plain-list","parent_begin":734,"bullet":"- "}
+{"type":"paragraph","begin":793,"end":852,"contents_begin":793,"contents_end":852,"parent_type":"item","parent_begin":791}
+{"type":"item","begin":852,"end":919,"contents_begin":854,"contents_end":919,"parent_type":"plain-list","parent_begin":734,"bullet":"- "}
+{"type":"paragraph","begin":854,"end":919,"contents_begin":854,"contents_end":919,"parent_type":"item","parent_begin":852}
+{"type":"item","begin":919,"end":999,"contents_begin":921,"contents_end":999,"parent_type":"plain-list","parent_begin":734,"bullet":"- "}
+{"type":"paragraph","begin":921,"end":999,"contents_begin":921,"contents_end":999,"parent_type":"item","parent_begin":919}
+{"type":"item","begin":999,"end":1057,"contents_begin":1001,"contents_end":1057,"parent_type":"plain-list","parent_begin":734,"bullet":"- "}
+{"type":"paragraph","begin":1001,"end":1057,"contents_begin":1001,"contents_end":1057,"parent_type":"item","parent_begin":999}
+{"type":"headline","begin":1058,"end":1371,"contents_begin":1079,"contents_end":1371,"parent_type":"org-data","parent_begin":0,"level":1,"raw_title":"Issues and roadmap","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1079,"end":1371,"contents_begin":1079,"contents_end":1371,"parent_type":"headline","parent_begin":1058}
+{"type":"plain-list","begin":1079,"end":1328,"contents_begin":1079,"contents_end":1327,"parent_type":"section","parent_begin":1079}
+{"type":"item","begin":1079,"end":1151,"contents_begin":1081,"contents_end":1151,"parent_type":"plain-list","parent_begin":1079,"bullet":"- "}
+{"type":"paragraph","begin":1081,"end":1151,"contents_begin":1081,"contents_end":1151,"parent_type":"item","parent_begin":1079}
+{"type":"item","begin":1151,"end":1202,"contents_begin":1153,"contents_end":1202,"parent_type":"plain-list","parent_begin":1079,"bullet":"- "}
+{"type":"paragraph","begin":1153,"end":1202,"contents_begin":1153,"contents_end":1202,"parent_type":"item","parent_begin":1151}
+{"type":"item","begin":1202,"end":1271,"contents_begin":1204,"contents_end":1271,"parent_type":"plain-list","parent_begin":1079,"bullet":"- "}
+{"type":"paragraph","begin":1204,"end":1271,"contents_begin":1204,"contents_end":1271,"parent_type":"item","parent_begin":1202}
+{"type":"item","begin":1271,"end":1327,"contents_begin":1273,"contents_end":1327,"parent_type":"plain-list","parent_begin":1079,"bullet":"- "}
+{"type":"paragraph","begin":1273,"end":1327,"contents_begin":1273,"contents_end":1327,"parent_type":"item","parent_begin":1271}
+{"type":"paragraph","begin":1328,"end":1371,"contents_begin":1328,"contents_end":1371,"parent_type":"section","parent_begin":1079}

@@ -1,0 +1,88 @@
+# Every affiliated keyword name Org knows, each before an element it attaches to,
+# and each again before a blank line (orphaned: a plain keyword).
+#+CAPTION: v
+| CAPTION |
+
+#+CAPTION: orphan
+
+#+DATA: v
+| DATA |
+
+#+DATA: orphan
+
+#+HEADER: v
+| HEADER |
+
+#+HEADER: orphan
+
+#+HEADERS: v
+| HEADERS |
+
+#+HEADERS: orphan
+
+#+LABEL: v
+| LABEL |
+
+#+LABEL: orphan
+
+#+NAME: v
+| NAME |
+
+#+NAME: orphan
+
+#+PLOT: v
+| PLOT |
+
+#+PLOT: orphan
+
+#+RESNAME: v
+| RESNAME |
+
+#+RESNAME: orphan
+
+#+RESULT: v
+| RESULT |
+
+#+RESULT: orphan
+
+#+RESULTS: v
+| RESULTS |
+
+#+RESULTS: orphan
+
+#+SOURCE: v
+| SOURCE |
+
+#+SOURCE: orphan
+
+#+SRCNAME: v
+| SRCNAME |
+
+#+SRCNAME: orphan
+
+#+TBLNAME: v
+| TBLNAME |
+
+#+TBLNAME: orphan
+
+#+ATTR_HTML: v
+| ATTR_HTML |
+
+#+ATTR_HTML: orphan
+
+#+attr_latex: v
+| attr_latex |
+
+#+attr_latex: orphan
+
+#+Name: v
+| Name |
+
+#+Name: orphan
+
+#+NAMES: not affiliated
+| t |
+#+RESULTS[hash]: dual
+: out
+#+CAPTION[short]: dual
+paragraph

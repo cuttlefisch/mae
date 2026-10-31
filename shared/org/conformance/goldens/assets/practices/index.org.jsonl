@@ -1,26 +1,26 @@
-{"type":"#file","bytes":1523,"unmodified":true}
-{"type":"section","begin":0,"end":481,"contents_begin":0,"contents_end":481}
-{"type":"property-drawer","begin":0,"end":43,"contents_begin":13,"contents_end":37}
-{"type":"node-property","begin":13,"end":24,"contents_begin":null,"contents_end":null,"key":"ID","value":"index"}
-{"type":"node-property","begin":24,"end":37,"contents_begin":null,"contents_end":null,"key":"KIND","value":"index"}
-{"type":"keyword","begin":43,"end":78,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"MAE Development Practices"}
-{"type":"keyword","begin":78,"end":112,"contents_begin":null,"contents_end":null,"key":"FILETAGS","value":":practices:guidance:"}
-{"type":"paragraph","begin":112,"end":481,"contents_begin":112,"contents_end":480}
-{"type":"headline","begin":481,"end":1284,"contents_begin":494,"contents_end":1284,"level":2,"raw_title":"Practices","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":494,"end":1284,"contents_begin":494,"contents_end":1284}
-{"type":"plain-list","begin":494,"end":1284,"contents_begin":494,"contents_end":1283}
-{"type":"item","begin":494,"end":611,"contents_begin":496,"contents_end":611,"bullet":"- "}
-{"type":"paragraph","begin":496,"end":611,"contents_begin":496,"contents_end":611}
-{"type":"item","begin":611,"end":751,"contents_begin":613,"contents_end":751,"bullet":"- "}
-{"type":"paragraph","begin":613,"end":751,"contents_begin":613,"contents_end":751}
-{"type":"item","begin":751,"end":883,"contents_begin":753,"contents_end":883,"bullet":"- "}
-{"type":"paragraph","begin":753,"end":883,"contents_begin":753,"contents_end":883}
-{"type":"item","begin":883,"end":1032,"contents_begin":885,"contents_end":1032,"bullet":"- "}
-{"type":"paragraph","begin":885,"end":1032,"contents_begin":885,"contents_end":1032}
-{"type":"item","begin":1032,"end":1144,"contents_begin":1034,"contents_end":1144,"bullet":"- "}
-{"type":"paragraph","begin":1034,"end":1144,"contents_begin":1034,"contents_end":1144}
-{"type":"item","begin":1144,"end":1283,"contents_begin":1146,"contents_end":1283,"bullet":"- "}
-{"type":"paragraph","begin":1146,"end":1283,"contents_begin":1146,"contents_end":1283}
-{"type":"headline","begin":1284,"end":1523,"contents_begin":1303,"contents_end":1523,"level":2,"raw_title":"How to use this","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":1303,"end":1523,"contents_begin":1303,"contents_end":1523}
-{"type":"paragraph","begin":1303,"end":1523,"contents_begin":1303,"contents_end":1523}
+{"type":"#file","bytes":1523,"eol":"unix","unmodified":true}
+{"type":"section","begin":0,"end":481,"contents_begin":0,"contents_end":481,"parent_type":"org-data","parent_begin":0}
+{"type":"property-drawer","begin":0,"end":43,"contents_begin":13,"contents_end":37,"parent_type":"section","parent_begin":0}
+{"type":"node-property","begin":13,"end":24,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"ID","value":"index"}
+{"type":"node-property","begin":24,"end":37,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"KIND","value":"index"}
+{"type":"keyword","begin":43,"end":78,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"MAE Development Practices"}
+{"type":"keyword","begin":78,"end":112,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":practices:guidance:"}
+{"type":"paragraph","begin":112,"end":481,"contents_begin":112,"contents_end":480,"parent_type":"section","parent_begin":0}
+{"type":"headline","begin":481,"end":1284,"contents_begin":494,"contents_end":1284,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Practices","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":494,"end":1284,"contents_begin":494,"contents_end":1284,"parent_type":"headline","parent_begin":481}
+{"type":"plain-list","begin":494,"end":1284,"contents_begin":494,"contents_end":1283,"parent_type":"section","parent_begin":494}
+{"type":"item","begin":494,"end":611,"contents_begin":496,"contents_end":611,"parent_type":"plain-list","parent_begin":494,"bullet":"- "}
+{"type":"paragraph","begin":496,"end":611,"contents_begin":496,"contents_end":611,"parent_type":"item","parent_begin":494}
+{"type":"item","begin":611,"end":751,"contents_begin":613,"contents_end":751,"parent_type":"plain-list","parent_begin":494,"bullet":"- "}
+{"type":"paragraph","begin":613,"end":751,"contents_begin":613,"contents_end":751,"parent_type":"item","parent_begin":611}
+{"type":"item","begin":751,"end":883,"contents_begin":753,"contents_end":883,"parent_type":"plain-list","parent_begin":494,"bullet":"- "}
+{"type":"paragraph","begin":753,"end":883,"contents_begin":753,"contents_end":883,"parent_type":"item","parent_begin":751}
+{"type":"item","begin":883,"end":1032,"contents_begin":885,"contents_end":1032,"parent_type":"plain-list","parent_begin":494,"bullet":"- "}
+{"type":"paragraph","begin":885,"end":1032,"contents_begin":885,"contents_end":1032,"parent_type":"item","parent_begin":883}
+{"type":"item","begin":1032,"end":1144,"contents_begin":1034,"contents_end":1144,"parent_type":"plain-list","parent_begin":494,"bullet":"- "}
+{"type":"paragraph","begin":1034,"end":1144,"contents_begin":1034,"contents_end":1144,"parent_type":"item","parent_begin":1032}
+{"type":"item","begin":1144,"end":1283,"contents_begin":1146,"contents_end":1283,"parent_type":"plain-list","parent_begin":494,"bullet":"- "}
+{"type":"paragraph","begin":1146,"end":1283,"contents_begin":1146,"contents_end":1283,"parent_type":"item","parent_begin":1144}
+{"type":"headline","begin":1284,"end":1523,"contents_begin":1303,"contents_end":1523,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"How to use this","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1303,"end":1523,"contents_begin":1303,"contents_end":1523,"parent_type":"headline","parent_begin":1284}
+{"type":"paragraph","begin":1303,"end":1523,"contents_begin":1303,"contents_end":1523,"parent_type":"section","parent_begin":1303}

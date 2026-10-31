@@ -84,7 +84,7 @@ fn a_column_0_headline_ends_an_open_block_whose_begin_line_becomes_text() {
         assert!(
             doc.diagnostics()
                 .iter()
-                .any(|d| d.kind == want && usize::from(d.span.start()) == 4),
+                .any(|d| d.kind == want && d.span.start as usize == 4),
             "{open}: {:?}",
             doc.diagnostics()
         );
@@ -304,7 +304,7 @@ fn diagnostics_are_data_with_spans() {
     let kinds: Vec<_> = doc
         .diagnostics()
         .iter()
-        .map(|d| (d.kind, u32::from(d.span.start()), u32::from(d.span.end())))
+        .map(|d| (d.kind, d.span.start, d.span.end))
         .collect();
     assert_eq!(
         kinds,
@@ -340,4 +340,133 @@ fn edge_inputs_round_trip() {
         check_tree(&doc, text, mae_org::DEFAULT_MAX_DEPTH)
             .unwrap_or_else(|e| panic!("{text:?}: {e}"));
     }
+}
+
+#[test]
+fn an_empty_todo_declaration_still_replaces_the_defaults() {
+    // oracle: `#+TODO:` with no value, or only `|`, declares an empty set:
+    // `* TODO x` then has no keyword and its title is "TODO x".
+    for decl in ["#+TODO:", "#+TODO: |", "#+TODO:    "] {
+        let doc = parse_default(&format!("{decl}\n* TODO x\n"));
+        let h = doc.headlines().next().expect("headline");
+        assert_eq!(
+            (h.todo(), h.title()),
+            (None, "TODO x".to_string()),
+            "{decl}"
+        );
+    }
+}
+
+#[test]
+fn only_a_trailing_parenthesised_suffix_is_stripped_from_a_keyword() {
+    // Org: "^\(.*?\)\(?:(\([^!@/]\)?.*?)\)?$" — the shortest name whose
+    // remainder is empty or `(...)`.
+    let doc = parse_default("#+TODO: A(x)B W(w@/!) | C\n* A(x)B y\n* A z\n* W v\n");
+    let todo: Vec<Option<String>> = doc.headlines().map(|h| h.todo()).collect();
+    assert_eq!(todo, vec![Some("A(x)B".into()), None, Some("W".into())]);
+    let seq = TodoSequence::parse("A(x)(y) B(b)c");
+    assert_eq!(seq.done, vec!["B(b)c".to_string()]);
+    assert_eq!(seq.todo, vec!["A".to_string()]);
+}
+
+#[test]
+fn todo_values_split_on_ascii_whitespace_only() {
+    // split-string's default separators are [ \f\t\n\r\v]+; a no-break space
+    // is part of a keyword.
+    let seq = TodoSequence::parse("A\u{a0}B\tC");
+    assert_eq!(seq.todo, vec!["A\u{a0}B".to_string()]);
+    assert_eq!(seq.done, vec!["C".to_string()]);
+}
+
+#[test]
+fn tags_keep_interior_empty_tags_like_org_split_string() {
+    // oracle: `* a :x::y:` has tags ("x" "" "y").
+    let doc = parse_default("* a :x::y:\n* b :::\n");
+    let tags: Vec<Vec<String>> = doc.headlines().map(|h| h.tags()).collect();
+    assert_eq!(
+        tags[0],
+        vec!["x".to_string(), String::new(), "y".to_string()]
+    );
+    assert_eq!(tags[1], vec![String::new(), String::new()]);
+}
+
+/// Registered divergence (conformance/divergences.toml): Emacs's list
+/// scanner reads a block name as a regexp; mae-org reads it literally, as
+/// Org's own block parser does. So a `c++` block inside an item is a block
+/// that keeps the item open, and `#+end_aXb` does not close `#+begin_a.b`.
+#[test]
+fn inside_a_list_block_names_are_literal_not_regexps() {
+    let doc = parse_default("- a\n  #+begin_c++\nx\n  #+end_c++\n- b\n");
+    let b: Vec<String> = doc.blocks().map(|b| b.name()).collect();
+    assert_eq!(b, vec!["c++".to_string()]);
+    let items = doc
+        .syntax()
+        .descendants()
+        .filter(|n| n.kind() == ITEM)
+        .count();
+    assert_eq!(items, 2);
+    let doc = parse_default("- a\n  #+begin_a.b\nx\n  #+end_aXb\n- b\n  #+end_a.b\n");
+    let block = doc.blocks().next().expect("a.b block");
+    assert!(
+        block.syntax().to_string().ends_with("#+end_a.b\n"),
+        "closed by its literal end line only"
+    );
+}
+
+/// `max_depth` is clamped to `MAX_DEPTH_CEILING`. The parser itself is
+/// iterative, but rowan drops (and compares) a green tree recursively, one
+/// stack frame per level: measured, a 10,000-deep tree overflows a 256 KiB
+/// stack on drop, while a 1,024-deep one drops in under 512 KiB in debug
+/// builds and 128 KiB in release. So even `usize::MAX` on 5,000-deep input
+/// must parse, print, compare and drop on a 1 MiB thread (the WASM default)
+/// for blocks nested 5,000 deep and lists and headlines nested 2,000 deep.
+#[test]
+fn an_unbounded_max_depth_is_clamped_so_deep_input_fits_a_small_stack() {
+    let inputs = [
+        nested_blocks(5_000),
+        // Lists and headlines grow as depth² bytes; 2,000 is past the ceiling.
+        (0..2_000)
+            .map(|i| format!("{}- {i}\n", " ".repeat(i)))
+            .collect::<String>(),
+        (1..2_000)
+            .map(|i| format!("{} h\n", "*".repeat(i)))
+            .collect::<String>(),
+    ];
+    for text in inputs {
+        let ok = std::thread::Builder::new()
+            .stack_size(1 << 20)
+            .spawn(move || {
+                let opts = ParseOptions {
+                    max_depth: usize::MAX,
+                    ..ParseOptions::default()
+                };
+                let doc = parse(&text, &opts);
+                assert_eq!(doc.syntax().to_string(), text);
+                assert!(doc == parse(&text, &opts));
+                let depth = doc
+                    .syntax()
+                    .descendants()
+                    .map(|n| n.ancestors().count())
+                    .max()
+                    .unwrap_or(0);
+                assert!(
+                    depth <= mae_org::MAX_DEPTH_CEILING + 3,
+                    "tree depth {depth}"
+                );
+                assert!(doc
+                    .diagnostics()
+                    .iter()
+                    .any(|d| d.kind == DiagnosticKind::DepthLimit));
+                drop(doc);
+            })
+            .expect("thread")
+            .join();
+        assert!(ok.is_ok(), "deep input failed on a 1 MiB stack");
+    }
+}
+
+fn nested_blocks(n: usize) -> String {
+    let open: String = (0..n).map(|i| format!("#+begin_b{i}\n")).collect();
+    let close: String = (0..n).rev().map(|i| format!("#+end_b{i}\n")).collect();
+    format!("{open}core\n{close}")
 }

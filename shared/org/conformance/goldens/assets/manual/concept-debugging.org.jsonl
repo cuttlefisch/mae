@@ -1,51 +1,51 @@
-{"type":"#file","bytes":2203,"unmodified":true}
-{"type":"section","begin":0,"end":303,"contents_begin":0,"contents_end":303}
-{"type":"property-drawer","begin":0,"end":99,"contents_begin":13,"contents_end":93}
-{"type":"node-property","begin":13,"end":36,"contents_begin":null,"contents_end":null,"key":"ID","value":"concept:debugging"}
-{"type":"node-property","begin":36,"end":51,"contents_begin":null,"contents_end":null,"key":"KIND","value":"concept"}
-{"type":"node-property","begin":51,"end":93,"contents_begin":null,"contents_end":null,"key":"ALIASES","value":"debugger, breakpoints, stepping"}
-{"type":"keyword","begin":99,"end":124,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"Debugging (DAP)"}
-{"type":"keyword","begin":124,"end":156,"contents_begin":null,"contents_end":null,"key":"FILETAGS","value":":dap:debugging:ai:"}
-{"type":"paragraph","begin":156,"end":303,"contents_begin":156,"contents_end":302}
-{"type":"headline","begin":303,"end":473,"contents_begin":317,"contents_end":473,"level":2,"raw_title":"DAP client","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":317,"end":473,"contents_begin":317,"contents_end":473}
-{"type":"paragraph","begin":317,"end":473,"contents_begin":317,"contents_end":472}
-{"type":"headline","begin":473,"end":786,"contents_begin":488,"contents_end":786,"level":2,"raw_title":"Debug panel","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":488,"end":786,"contents_begin":488,"contents_end":786}
-{"type":"paragraph","begin":488,"end":617,"contents_begin":488,"contents_end":616}
-{"type":"table","begin":617,"end":786,"contents_begin":617,"contents_end":785}
-{"type":"table-row","begin":617,"end":634,"contents_begin":618,"contents_end":633}
-{"type":"table-row","begin":634,"end":651,"contents_begin":null,"contents_end":null}
-{"type":"table-row","begin":651,"end":682,"contents_begin":652,"contents_end":681}
-{"type":"table-row","begin":682,"end":717,"contents_begin":683,"contents_end":716}
-{"type":"table-row","begin":717,"end":757,"contents_begin":718,"contents_end":756}
-{"type":"table-row","begin":757,"end":785,"contents_begin":758,"contents_end":784}
-{"type":"headline","begin":786,"end":1727,"contents_begin":815,"contents_end":1727,"level":2,"raw_title":"AI debug tools (13 tools)","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":815,"end":1727,"contents_begin":815,"contents_end":1727}
-{"type":"table","begin":815,"end":1639,"contents_begin":815,"contents_end":1638}
-{"type":"table-row","begin":815,"end":851,"contents_begin":816,"contents_end":850}
-{"type":"table-row","begin":851,"end":886,"contents_begin":null,"contents_end":null}
-{"type":"table-row","begin":886,"end":943,"contents_begin":887,"contents_end":942}
-{"type":"table-row","begin":943,"end":1008,"contents_begin":944,"contents_end":1007}
-{"type":"table-row","begin":1008,"end":1066,"contents_begin":1009,"contents_end":1065}
-{"type":"table-row","begin":1066,"end":1112,"contents_begin":1067,"contents_end":1111}
-{"type":"table-row","begin":1112,"end":1156,"contents_begin":1113,"contents_end":1155}
-{"type":"table-row","begin":1156,"end":1226,"contents_begin":1157,"contents_end":1225}
-{"type":"table-row","begin":1226,"end":1293,"contents_begin":1227,"contents_end":1292}
-{"type":"table-row","begin":1293,"end":1361,"contents_begin":1294,"contents_end":1360}
-{"type":"table-row","begin":1361,"end":1415,"contents_begin":1362,"contents_end":1414}
-{"type":"table-row","begin":1415,"end":1465,"contents_begin":1416,"contents_end":1464}
-{"type":"table-row","begin":1465,"end":1516,"contents_begin":1466,"contents_end":1515}
-{"type":"table-row","begin":1516,"end":1577,"contents_begin":1517,"contents_end":1576}
-{"type":"table-row","begin":1577,"end":1638,"contents_begin":1578,"contents_end":1637}
-{"type":"paragraph","begin":1639,"end":1727,"contents_begin":1639,"contents_end":1726}
-{"type":"headline","begin":1727,"end":2203,"contents_begin":1747,"contents_end":2203,"level":2,"raw_title":"Permission tiers","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":1747,"end":2203,"contents_begin":1747,"contents_end":2203}
-{"type":"plain-list","begin":1747,"end":2096,"contents_begin":1747,"contents_end":2095}
-{"type":"item","begin":1747,"end":1798,"contents_begin":1749,"contents_end":1798,"bullet":"- "}
-{"type":"paragraph","begin":1749,"end":1798,"contents_begin":1749,"contents_end":1798}
-{"type":"item","begin":1798,"end":1982,"contents_begin":1800,"contents_end":1982,"bullet":"- "}
-{"type":"paragraph","begin":1800,"end":1982,"contents_begin":1800,"contents_end":1982}
-{"type":"item","begin":1982,"end":2095,"contents_begin":1984,"contents_end":2095,"bullet":"- "}
-{"type":"paragraph","begin":1984,"end":2095,"contents_begin":1984,"contents_end":2095}
-{"type":"paragraph","begin":2096,"end":2203,"contents_begin":2096,"contents_end":2203}
+{"type":"#file","bytes":2203,"eol":"unix","unmodified":true}
+{"type":"section","begin":0,"end":303,"contents_begin":0,"contents_end":303,"parent_type":"org-data","parent_begin":0}
+{"type":"property-drawer","begin":0,"end":99,"contents_begin":13,"contents_end":93,"parent_type":"section","parent_begin":0}
+{"type":"node-property","begin":13,"end":36,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"ID","value":"concept:debugging"}
+{"type":"node-property","begin":36,"end":51,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"KIND","value":"concept"}
+{"type":"node-property","begin":51,"end":93,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"ALIASES","value":"debugger, breakpoints, stepping"}
+{"type":"keyword","begin":99,"end":124,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"Debugging (DAP)"}
+{"type":"keyword","begin":124,"end":156,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":dap:debugging:ai:"}
+{"type":"paragraph","begin":156,"end":303,"contents_begin":156,"contents_end":302,"parent_type":"section","parent_begin":0}
+{"type":"headline","begin":303,"end":473,"contents_begin":317,"contents_end":473,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"DAP client","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":317,"end":473,"contents_begin":317,"contents_end":473,"parent_type":"headline","parent_begin":303}
+{"type":"paragraph","begin":317,"end":473,"contents_begin":317,"contents_end":472,"parent_type":"section","parent_begin":317}
+{"type":"headline","begin":473,"end":786,"contents_begin":488,"contents_end":786,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Debug panel","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":488,"end":786,"contents_begin":488,"contents_end":786,"parent_type":"headline","parent_begin":473}
+{"type":"paragraph","begin":488,"end":617,"contents_begin":488,"contents_end":616,"parent_type":"section","parent_begin":488}
+{"type":"table","begin":617,"end":786,"contents_begin":617,"contents_end":785,"parent_type":"section","parent_begin":488}
+{"type":"table-row","begin":617,"end":634,"contents_begin":618,"contents_end":633,"parent_type":"table","parent_begin":617}
+{"type":"table-row","begin":634,"end":651,"contents_begin":null,"contents_end":null,"parent_type":"table","parent_begin":617}
+{"type":"table-row","begin":651,"end":682,"contents_begin":652,"contents_end":681,"parent_type":"table","parent_begin":617}
+{"type":"table-row","begin":682,"end":717,"contents_begin":683,"contents_end":716,"parent_type":"table","parent_begin":617}
+{"type":"table-row","begin":717,"end":757,"contents_begin":718,"contents_end":756,"parent_type":"table","parent_begin":617}
+{"type":"table-row","begin":757,"end":785,"contents_begin":758,"contents_end":784,"parent_type":"table","parent_begin":617}
+{"type":"headline","begin":786,"end":1727,"contents_begin":815,"contents_end":1727,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"AI debug tools (13 tools)","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":815,"end":1727,"contents_begin":815,"contents_end":1727,"parent_type":"headline","parent_begin":786}
+{"type":"table","begin":815,"end":1639,"contents_begin":815,"contents_end":1638,"parent_type":"section","parent_begin":815}
+{"type":"table-row","begin":815,"end":851,"contents_begin":816,"contents_end":850,"parent_type":"table","parent_begin":815}
+{"type":"table-row","begin":851,"end":886,"contents_begin":null,"contents_end":null,"parent_type":"table","parent_begin":815}
+{"type":"table-row","begin":886,"end":943,"contents_begin":887,"contents_end":942,"parent_type":"table","parent_begin":815}
+{"type":"table-row","begin":943,"end":1008,"contents_begin":944,"contents_end":1007,"parent_type":"table","parent_begin":815}
+{"type":"table-row","begin":1008,"end":1066,"contents_begin":1009,"contents_end":1065,"parent_type":"table","parent_begin":815}
+{"type":"table-row","begin":1066,"end":1112,"contents_begin":1067,"contents_end":1111,"parent_type":"table","parent_begin":815}
+{"type":"table-row","begin":1112,"end":1156,"contents_begin":1113,"contents_end":1155,"parent_type":"table","parent_begin":815}
+{"type":"table-row","begin":1156,"end":1226,"contents_begin":1157,"contents_end":1225,"parent_type":"table","parent_begin":815}
+{"type":"table-row","begin":1226,"end":1293,"contents_begin":1227,"contents_end":1292,"parent_type":"table","parent_begin":815}
+{"type":"table-row","begin":1293,"end":1361,"contents_begin":1294,"contents_end":1360,"parent_type":"table","parent_begin":815}
+{"type":"table-row","begin":1361,"end":1415,"contents_begin":1362,"contents_end":1414,"parent_type":"table","parent_begin":815}
+{"type":"table-row","begin":1415,"end":1465,"contents_begin":1416,"contents_end":1464,"parent_type":"table","parent_begin":815}
+{"type":"table-row","begin":1465,"end":1516,"contents_begin":1466,"contents_end":1515,"parent_type":"table","parent_begin":815}
+{"type":"table-row","begin":1516,"end":1577,"contents_begin":1517,"contents_end":1576,"parent_type":"table","parent_begin":815}
+{"type":"table-row","begin":1577,"end":1638,"contents_begin":1578,"contents_end":1637,"parent_type":"table","parent_begin":815}
+{"type":"paragraph","begin":1639,"end":1727,"contents_begin":1639,"contents_end":1726,"parent_type":"section","parent_begin":815}
+{"type":"headline","begin":1727,"end":2203,"contents_begin":1747,"contents_end":2203,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Permission tiers","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1747,"end":2203,"contents_begin":1747,"contents_end":2203,"parent_type":"headline","parent_begin":1727}
+{"type":"plain-list","begin":1747,"end":2096,"contents_begin":1747,"contents_end":2095,"parent_type":"section","parent_begin":1747}
+{"type":"item","begin":1747,"end":1798,"contents_begin":1749,"contents_end":1798,"parent_type":"plain-list","parent_begin":1747,"bullet":"- "}
+{"type":"paragraph","begin":1749,"end":1798,"contents_begin":1749,"contents_end":1798,"parent_type":"item","parent_begin":1747}
+{"type":"item","begin":1798,"end":1982,"contents_begin":1800,"contents_end":1982,"parent_type":"plain-list","parent_begin":1747,"bullet":"- "}
+{"type":"paragraph","begin":1800,"end":1982,"contents_begin":1800,"contents_end":1982,"parent_type":"item","parent_begin":1798}
+{"type":"item","begin":1982,"end":2095,"contents_begin":1984,"contents_end":2095,"parent_type":"plain-list","parent_begin":1747,"bullet":"- "}
+{"type":"paragraph","begin":1984,"end":2095,"contents_begin":1984,"contents_end":2095,"parent_type":"item","parent_begin":1982}
+{"type":"paragraph","begin":2096,"end":2203,"contents_begin":2096,"contents_end":2203,"parent_type":"section","parent_begin":1747}

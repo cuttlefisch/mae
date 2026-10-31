@@ -1,0 +1,121 @@
+# A property key or keyword key containing each char: only \S- chars may.
+* U+0008
+:PROPERTIES:
+:ab: v
+:END:
+#+key: x
+* U+0009
+:PROPERTIES:
+:a	b: v
+:END:
+#+k	ey: x
+* U+000B
+:PROPERTIES:
+:ab: v
+:END:
+#+key: x
+* U+000C
+:PROPERTIES:
+:ab: v
+:END:
+#+key: x
+* U+000E
+:PROPERTIES:
+:ab: v
+:END:
+#+key: x
+* U+001F
+:PROPERTIES:
+:ab: v
+:END:
+#+key: x
+* U+0020
+:PROPERTIES:
+:a b: v
+:END:
+#+k ey: x
+* U+0021
+:PROPERTIES:
+:a!b: v
+:END:
+#+k!ey: x
+* U+009F
+:PROPERTIES:
+:ab: v
+:END:
+#+key: x
+* U+00A0
+:PROPERTIES:
+:a b: v
+:END:
+#+k ey: x
+* U+00A1
+:PROPERTIES:
+:a¡b: v
+:END:
+#+k¡ey: x
+* U+1FFF
+:PROPERTIES:
+:a῿b: v
+:END:
+#+k῿ey: x
+* U+2000
+:PROPERTIES:
+:a b: v
+:END:
+#+k ey: x
+* U+200B
+:PROPERTIES:
+:a​b: v
+:END:
+#+k​ey: x
+* U+200C
+:PROPERTIES:
+:a‌b: v
+:END:
+#+k‌ey: x
+* U+202E
+:PROPERTIES:
+:a‮b: v
+:END:
+#+k‮ey: x
+* U+202F
+:PROPERTIES:
+:a b: v
+:END:
+#+k ey: x
+* U+2030
+:PROPERTIES:
+:a‰b: v
+:END:
+#+k‰ey: x
+* U+205E
+:PROPERTIES:
+:a⁞b: v
+:END:
+#+k⁞ey: x
+* U+205F
+:PROPERTIES:
+:a b: v
+:END:
+#+k ey: x
+* U+2060
+:PROPERTIES:
+:a⁠b: v
+:END:
+#+k⁠ey: x
+* U+2FFF
+:PROPERTIES:
+:a⿿b: v
+:END:
+#+k⿿ey: x
+* U+3000
+:PROPERTIES:
+:a　b: v
+:END:
+#+k　ey: x
+* U+3001
+:PROPERTIES:
+:a、b: v
+:END:
+#+k、ey: x

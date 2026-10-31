@@ -1,5 +1,11 @@
-* LF heading
-line
-lonecr in content
+* LF heading :lf:
+* CRLF heading :crlf:
 
+#+begin_src sh
+echo crlf block in a unix file
+#+end_src
+lonecr in content
+:DRAWER:
+x
+:END:
 * Next

@@ -6,122 +6,130 @@
 //! is a single `TEXT` token per line until O2 builds the inline tree.
 
 /// Every kind of token or node in a `mae-org` tree.
+///
+/// The numeric values are PINNED (see `numeric_values_are_pinned`): a JSON
+/// or WASM consumer may persist them. Tokens are numbered from 0 and nodes
+/// from 1000, so a later phase appends new kinds to either range without
+/// renumbering. `#[non_exhaustive]`: matches outside this crate need a
+/// wildcard arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u16)]
 #[allow(non_camel_case_types)]
+#[non_exhaustive]
 pub enum SyntaxKind {
     // ---- tokens -------------------------------------------------------
     /// A leading U+FEFF byte-order mark. Trivia: it never shifts column 0.
     BOM = 0,
-    /// A line ending: `\n` or `\r\n`. A lone `\r` is content, not a line end.
-    NEWLINE,
+    /// A line ending, per the document's convention (`LineEnding`): `\n`,
+    /// `\r\n` or `\r`. A CR that is not part of one is content.
+    NEWLINE = 1,
     /// Spaces and tabs inside a structural line.
-    WHITESPACE,
+    WHITESPACE = 2,
     /// A whole blank line (only spaces/tabs), including its line ending.
-    BLANK_LINE,
+    BLANK_LINE = 3,
     /// Unstructured text: paragraph lines, titles until O2, values.
-    TEXT,
+    TEXT = 4,
     /// Text the parser could not place; never produced on well-formed input
     /// and asserted absent by the corpus tests.
-    UNPARSED,
+    UNPARSED = 5,
     /// Contents left unparsed because the nesting cap was reached.
-    OPAQUE,
+    OPAQUE = 6,
     /// The raw contents of a lesser block (src, example, export, comment, verse).
-    BLOCK_CONTENT,
+    BLOCK_CONTENT = 7,
     /// The `*`s opening a headline.
-    STARS,
+    STARS = 8,
     /// A TODO keyword from the active sequences.
-    TODO_KEYWORD,
+    TODO_KEYWORD = 9,
     /// A `[#X]` priority cookie.
-    PRIORITY,
+    PRIORITY = 10,
     /// The `COMMENT` marker of a commented headline.
-    COMMENT_MARKER,
+    COMMENT_MARKER = 11,
     /// A headline's title text.
-    TITLE,
+    TITLE = 12,
     /// A headline's trailing `:tag:list:`.
-    TAGS,
+    TAGS = 13,
     /// `#+` opening a keyword, block line or affiliated keyword.
-    HASH_PLUS,
+    HASH_PLUS = 14,
     /// A keyword or affiliated keyword name, without `#+` and `:`.
-    KEY,
+    KEY = 15,
     /// A single `:`.
-    COLON,
+    COLON = 16,
     /// A keyword's or property's value.
-    VALUE,
+    VALUE = 17,
     /// `begin_` / `end_` (any case) in a block delimiter line.
-    BLOCK_MARKER,
+    BLOCK_MARKER = 18,
     /// The `X` of `#+begin_X`, or a dynamic block's name.
-    BLOCK_NAME,
+    BLOCK_NAME = 19,
     /// Everything after the name on a block's opening line.
-    PARAMETERS,
+    PARAMETERS = 20,
     /// A drawer's or property's name between colons.
-    NAME,
+    NAME = 21,
     /// A plain-list bullet.
-    BULLET,
+    BULLET = 22,
     /// An item's `[@N]` counter.
-    COUNTER,
+    COUNTER = 23,
     /// An item's `[ ]` / `[X]` / `[-]` checkbox.
-    CHECKBOX,
+    CHECKBOX = 24,
     /// A descriptive item's tag, including its `::`.
-    ITEM_TAG,
+    ITEM_TAG = 25,
     /// A footnote definition's `[fn:LABEL]`.
-    FOOTNOTE_LABEL,
+    FOOTNOTE_LABEL = 26,
     /// `SCHEDULED:` / `DEADLINE:` / `CLOSED:` on a planning line.
-    PLANNING_KEYWORD,
+    PLANNING_KEYWORD = 27,
 
     // ---- nodes --------------------------------------------------------
-    DOCUMENT,
-    SECTION,
-    HEADLINE,
-    PLANNING,
-    PROPERTY_DRAWER,
-    NODE_PROPERTY,
-    DRAWER,
-    CENTER_BLOCK,
-    QUOTE_BLOCK,
-    SPECIAL_BLOCK,
-    SRC_BLOCK,
-    EXAMPLE_BLOCK,
-    EXPORT_BLOCK,
-    COMMENT_BLOCK,
-    VERSE_BLOCK,
-    DYNAMIC_BLOCK,
+    DOCUMENT = 1000,
+    SECTION = 1001,
+    HEADLINE = 1002,
+    PLANNING = 1003,
+    PROPERTY_DRAWER = 1004,
+    NODE_PROPERTY = 1005,
+    DRAWER = 1006,
+    CENTER_BLOCK = 1007,
+    QUOTE_BLOCK = 1008,
+    SPECIAL_BLOCK = 1009,
+    SRC_BLOCK = 1010,
+    EXAMPLE_BLOCK = 1011,
+    EXPORT_BLOCK = 1012,
+    COMMENT_BLOCK = 1013,
+    VERSE_BLOCK = 1014,
+    DYNAMIC_BLOCK = 1015,
     /// The opening line of a block or drawer.
-    BLOCK_BEGIN,
+    BLOCK_BEGIN = 1016,
     /// The closing line of a block or drawer.
-    BLOCK_END,
-    KEYWORD,
+    BLOCK_END = 1017,
+    KEYWORD = 1018,
     /// An affiliated keyword (`#+NAME:`, `#+CAPTION:`, `#+ATTR_*:` …), placed
     /// inside the element it belongs to, as `org-element` represents it.
-    AFFILIATED_KEYWORD,
-    BABEL_CALL,
-    COMMENT,
-    FIXED_WIDTH,
-    HORIZONTAL_RULE,
-    FOOTNOTE_DEFINITION,
-    PARAGRAPH,
-    PLAIN_LIST,
-    ITEM,
-    TABLE,
-    TABLE_ROW,
-    CLOCK,
-    DIARY_SEXP,
-    LATEX_ENVIRONMENT,
+    AFFILIATED_KEYWORD = 1019,
+    BABEL_CALL = 1020,
+    COMMENT = 1021,
+    FIXED_WIDTH = 1022,
+    HORIZONTAL_RULE = 1023,
+    FOOTNOTE_DEFINITION = 1024,
+    PARAGRAPH = 1025,
+    PLAIN_LIST = 1026,
+    ITEM = 1027,
+    TABLE = 1028,
+    TABLE_ROW = 1029,
+    CLOCK = 1030,
+    DIARY_SEXP = 1031,
+    LATEX_ENVIRONMENT = 1032,
 }
 
 use SyntaxKind::*;
 
-const LAST: u16 = LATEX_ENVIRONMENT as u16;
-
 impl SyntaxKind {
     /// Inverse of `as u16`. `None` for a value no kind has.
     pub fn from_raw(raw: u16) -> Option<SyntaxKind> {
-        ALL.get(raw as usize).copied().filter(|_| raw <= LAST)
+        ALL.binary_search_by_key(&raw, |k| *k as u16)
+            .ok()
+            .map(|i| ALL[i])
     }
 
     /// True for node kinds, false for token kinds.
     pub fn is_node(self) -> bool {
-        self as u16 >= DOCUMENT as u16
+        self as u16 >= FIRST_NODE
     }
 
     /// The `org-element` type name this node corresponds to, if any.
@@ -165,7 +173,10 @@ impl SyntaxKind {
     }
 }
 
-/// Every kind, indexed by its `u16` value.
+/// The first node kind's value; tokens are below it.
+const FIRST_NODE: u16 = 1000;
+
+/// Every kind, in ascending value order.
 const ALL: &[SyntaxKind] = &[
     BOM,
     NEWLINE,
@@ -262,13 +273,36 @@ mod tests {
 
     #[test]
     fn raw_values_round_trip_for_every_kind() {
-        // A kind added to the enum but not to ALL would map to the wrong
-        // variant; this walks every raw value up to the last one.
-        for raw in 0..=LAST {
-            let kind = SyntaxKind::from_raw(raw).expect("every raw value up to LAST is a kind");
-            assert_eq!(kind as u16, raw);
+        for &k in ALL {
+            assert_eq!(SyntaxKind::from_raw(k as u16), Some(k));
         }
-        assert_eq!(SyntaxKind::from_raw(LAST + 1), None);
-        assert_eq!(ALL.len(), LAST as usize + 1);
+        assert!(
+            ALL.windows(2).all(|w| (w[0] as u16) < (w[1] as u16)),
+            "ALL must be sorted"
+        );
+        assert_eq!(SyntaxKind::from_raw(999), None);
+        assert_eq!(SyntaxKind::from_raw(u16::MAX), None);
+    }
+
+    /// Changing any of these numbers breaks persisted data; add new kinds
+    /// with new numbers instead.
+    #[test]
+    fn numeric_values_are_pinned() {
+        let got: Vec<String> = ALL.iter().map(|k| format!("{k:?}={}", *k as u16)).collect();
+        let want = "BOM=0 NEWLINE=1 WHITESPACE=2 BLANK_LINE=3 TEXT=4 UNPARSED=5 OPAQUE=6 BLOCK_CONTENT=7 \
+            STARS=8 TODO_KEYWORD=9 PRIORITY=10 COMMENT_MARKER=11 TITLE=12 TAGS=13 HASH_PLUS=14 KEY=15 \
+            COLON=16 VALUE=17 BLOCK_MARKER=18 BLOCK_NAME=19 PARAMETERS=20 NAME=21 BULLET=22 COUNTER=23 \
+            CHECKBOX=24 ITEM_TAG=25 FOOTNOTE_LABEL=26 PLANNING_KEYWORD=27 DOCUMENT=1000 SECTION=1001 \
+            HEADLINE=1002 PLANNING=1003 PROPERTY_DRAWER=1004 NODE_PROPERTY=1005 DRAWER=1006 \
+            CENTER_BLOCK=1007 QUOTE_BLOCK=1008 SPECIAL_BLOCK=1009 SRC_BLOCK=1010 EXAMPLE_BLOCK=1011 \
+            EXPORT_BLOCK=1012 COMMENT_BLOCK=1013 VERSE_BLOCK=1014 DYNAMIC_BLOCK=1015 BLOCK_BEGIN=1016 \
+            BLOCK_END=1017 KEYWORD=1018 AFFILIATED_KEYWORD=1019 BABEL_CALL=1020 COMMENT=1021 \
+            FIXED_WIDTH=1022 HORIZONTAL_RULE=1023 FOOTNOTE_DEFINITION=1024 PARAGRAPH=1025 \
+            PLAIN_LIST=1026 ITEM=1027 TABLE=1028 TABLE_ROW=1029 CLOCK=1030 DIARY_SEXP=1031 \
+            LATEX_ENVIRONMENT=1032";
+        assert_eq!(
+            got.join(" "),
+            want.split_whitespace().collect::<Vec<_>>().join(" ")
+        );
     }
 }

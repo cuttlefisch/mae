@@ -1,0 +1,5 @@
+- a
+    - b at column 4
+	- c at column 8: deeper than b only with 8-column tabs
+  	- d at column 8 too (2 spaces then a tab)
+  text at column 2

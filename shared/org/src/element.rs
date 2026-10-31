@@ -119,19 +119,28 @@ pub(crate) struct Ctx<'a> {
     pub diagnostics: Vec<Diagnostic>,
     /// The first non-blank line: where the zeroth section starts.
     pub first_nonblank: usize,
+    /// The text is a headline's body, so its first line follows a headline.
+    pub after_headline: bool,
 }
 
 impl<'a> Ctx<'a> {
     pub fn new(src: &'a Source<'a>, ix: &'a Index) -> Ctx<'a> {
-        let first_nonblank = (0..src.lines.len())
-            .find(|&i| !src.is_blank(i))
-            .unwrap_or(src.lines.len());
+        // `org-skip-whitespace` skips " \t\n\r", so in a unix-convention
+        // file a line holding only a content CR counts as blank here, though
+        // not for `[ \t]*$` (oracle: eol-cr-leading-blank.org).
+        let q = src.skip_blank(src.bom, src.len());
+        let first_nonblank = if q >= src.len() {
+            src.lines.len()
+        } else {
+            src.line_of(q)
+        };
         Ctx {
             src,
             ix,
             lists: Vec::new(),
             diagnostics: Vec::new(),
             first_nonblank,
+            after_headline: false,
         }
     }
 
@@ -203,7 +212,10 @@ fn recognize_at_bol(
 }
 
 fn previous_line_is_starred(cx: &Ctx, li: usize) -> bool {
-    li > 0 && cx.src.content(li - 1).starts_with('*')
+    if li == 0 {
+        return cx.after_headline;
+    }
+    cx.src.content(li - 1).starts_with('*')
 }
 
 /// Where a property drawer may start, per `org-element--current-element`:

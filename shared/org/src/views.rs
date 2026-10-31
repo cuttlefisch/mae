@@ -82,15 +82,18 @@ impl Headline {
         token(&self.0, TITLE).map_or_else(String::new, |t| t.text().to_string())
     }
 
-    /// The tags, in order, as written.
+    /// The tags, in order, as written. Like `org-split-string` on `:`, an
+    /// empty tag between two colons is kept (`:x::y:` → `x`, ``, `y`).
     pub fn tags(&self) -> Vec<String> {
-        token(&self.0, TAGS).map_or_else(Vec::new, |t| {
-            t.text()
-                .split(':')
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
+        let Some(t) = token(&self.0, TAGS) else {
+            return Vec::new();
+        };
+        let inner = t
+            .text()
+            .strip_prefix(':')
+            .and_then(|t| t.strip_suffix(':'))
+            .unwrap_or("");
+        inner.split(':').map(str::to_string).collect()
     }
 
     /// The section directly under the headline (before any sub-headline).
@@ -114,8 +117,9 @@ impl Headline {
 /// One `:KEY: value` line of a property drawer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Property {
-    /// The key in canonical case (upper): Org property keys are
-    /// case-insensitive. An appending key keeps its `+` (`MULTI+`).
+    /// The key in canonical form: Org property keys are case-insensitive,
+    /// so keys that Emacs's case folding equates are equal here (ASCII shown
+    /// upper case). An appending key keeps its `+` (`MULTI+`).
     pub key: String,
     /// The value, trimmed.
     pub value: String,
@@ -135,6 +139,14 @@ impl Property {
     }
 }
 
+/// Two property keys are the same key iff Emacs's case folding says so.
+/// Folding maps ASCII letters to lower case and never maps anything else to
+/// ASCII (checked when the tables are generated), so upper-casing the ASCII
+/// afterwards keeps that equivalence and reads naturally (`ID`, `CUSTOM_ID`).
+fn canonical_key(written: &str) -> String {
+    crate::chars::fold(written).to_ascii_uppercase()
+}
+
 impl PropertyDrawer {
     /// The properties, in file order.
     pub fn properties(&self) -> Vec<Property> {
@@ -142,7 +154,7 @@ impl PropertyDrawer {
             .children()
             .filter(|n| n.kind() == NODE_PROPERTY)
             .filter_map(|node| {
-                let key = token(&node, NAME)?.text().to_uppercase();
+                let key = canonical_key(token(&node, NAME)?.text());
                 let value = token(&node, VALUE).map_or_else(String::new, |t| t.text().to_string());
                 Some(Property { key, value, node })
             })
@@ -151,7 +163,7 @@ impl PropertyDrawer {
 
     /// The value of `key` (any case). The last occurrence wins, as in Org.
     pub fn get(&self, key: &str) -> Option<String> {
-        let want = key.to_uppercase();
+        let want = canonical_key(key);
         self.properties()
             .into_iter()
             .rev()

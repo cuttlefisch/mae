@@ -62,7 +62,7 @@ fn tags_start(s: &str, from: usize) -> Option<usize> {
     if !t.ends_with(':') || t.len() < from + 3 {
         return None;
     }
-    let is_tag = |c: char| c.is_alphanumeric() || matches!(c, '_' | '@' | '#' | '%' | ':');
+    let is_tag = |c: char| crate::chars::is_alnum(c) || matches!(c, '_' | '@' | '#' | '%' | ':');
     let run = t
         .char_indices()
         .rev()
@@ -83,6 +83,7 @@ mod tests {
 
     fn kinds(s: &str) -> Vec<(SyntaxKind, String)> {
         let todo = TodoKeywords::resolve(
+            true,
             &[TodoSequence {
                 todo: vec!["TODO".into()],
                 done: vec!["DONE".into()],

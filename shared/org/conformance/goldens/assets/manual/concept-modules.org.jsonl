@@ -1,56 +1,56 @@
-{"type":"#file","bytes":2500,"unmodified":true}
-{"type":"section","begin":0,"end":451,"contents_begin":0,"contents_end":451}
-{"type":"property-drawer","begin":0,"end":103,"contents_begin":13,"contents_end":97}
-{"type":"node-property","begin":13,"end":34,"contents_begin":null,"contents_end":null,"key":"ID","value":"concept:modules"}
-{"type":"node-property","begin":34,"end":49,"contents_begin":null,"contents_end":null,"key":"KIND","value":"concept"}
-{"type":"node-property","begin":49,"end":97,"contents_begin":null,"contents_end":null,"key":"ALIASES","value":"plugins, packages, extensions, addons"}
-{"type":"keyword","begin":103,"end":126,"contents_begin":null,"contents_end":null,"key":"TITLE","value":"Module System"}
-{"type":"keyword","begin":126,"end":172,"contents_begin":null,"contents_end":null,"key":"FILETAGS","value":":modules:extensibility:packages:"}
-{"type":"paragraph","begin":172,"end":451,"contents_begin":172,"contents_end":450}
-{"type":"headline","begin":451,"end":833,"contents_begin":464,"contents_end":833,"level":2,"raw_title":"Structure","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":464,"end":833,"contents_begin":464,"contents_end":833}
-{"type":"paragraph","begin":464,"end":494,"contents_begin":464,"contents_end":494}
-{"type":"table","begin":494,"end":833,"contents_begin":494,"contents_end":832}
-{"type":"table-row","begin":494,"end":527,"contents_begin":495,"contents_end":526}
-{"type":"table-row","begin":527,"end":560,"contents_begin":null,"contents_end":null}
-{"type":"table-row","begin":560,"end":653,"contents_begin":561,"contents_end":652}
-{"type":"table-row","begin":653,"end":754,"contents_begin":654,"contents_end":753}
-{"type":"table-row","begin":754,"end":832,"contents_begin":755,"contents_end":831}
-{"type":"headline","begin":833,"end":1217,"contents_begin":850,"contents_end":1217,"level":2,"raw_title":"Loading order","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":850,"end":1217,"contents_begin":850,"contents_end":1217}
-{"type":"src-block","begin":850,"end":1089,"contents_begin":null,"contents_end":null,"language":null}
-{"type":"paragraph","begin":1089,"end":1217,"contents_begin":1089,"contents_end":1216}
-{"type":"headline","begin":1217,"end":1466,"contents_begin":1237,"contents_end":1466,"level":2,"raw_title":"Built-in modules","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":1237,"end":1466,"contents_begin":1237,"contents_end":1466}
-{"type":"paragraph","begin":1237,"end":1466,"contents_begin":1237,"contents_end":1465}
-{"type":"headline","begin":1466,"end":1646,"contents_begin":1494,"contents_end":1646,"level":2,"raw_title":"Manifest (~module.toml~)","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":1494,"end":1646,"contents_begin":1494,"contents_end":1646}
-{"type":"src-block","begin":1494,"end":1646,"contents_begin":null,"contents_end":null,"language":"toml"}
-{"type":"headline","begin":1646,"end":1877,"contents_begin":1653,"contents_end":1877,"level":2,"raw_title":"CLI","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":1653,"end":1877,"contents_begin":1653,"contents_end":1877}
-{"type":"plain-list","begin":1653,"end":1877,"contents_begin":1653,"contents_end":1876}
-{"type":"item","begin":1653,"end":1702,"contents_begin":1655,"contents_end":1702,"bullet":"- "}
-{"type":"paragraph","begin":1655,"end":1702,"contents_begin":1655,"contents_end":1702}
-{"type":"item","begin":1702,"end":1768,"contents_begin":1704,"contents_end":1768,"bullet":"- "}
-{"type":"paragraph","begin":1704,"end":1768,"contents_begin":1704,"contents_end":1768}
-{"type":"item","begin":1768,"end":1824,"contents_begin":1770,"contents_end":1824,"bullet":"- "}
-{"type":"paragraph","begin":1770,"end":1824,"contents_begin":1770,"contents_end":1824}
-{"type":"item","begin":1824,"end":1876,"contents_begin":1826,"contents_end":1876,"bullet":"- "}
-{"type":"paragraph","begin":1826,"end":1876,"contents_begin":1826,"contents_end":1876}
-{"type":"headline","begin":1877,"end":2197,"contents_begin":1894,"contents_end":2197,"level":2,"raw_title":"Introspection","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":1894,"end":2197,"contents_begin":1894,"contents_end":2197}
-{"type":"plain-list","begin":1894,"end":2197,"contents_begin":1894,"contents_end":2196}
-{"type":"item","begin":1894,"end":1962,"contents_begin":1896,"contents_end":1962,"bullet":"- "}
-{"type":"paragraph","begin":1896,"end":1962,"contents_begin":1896,"contents_end":1962}
-{"type":"item","begin":1962,"end":2024,"contents_begin":1964,"contents_end":2024,"bullet":"- "}
-{"type":"paragraph","begin":1964,"end":2024,"contents_begin":1964,"contents_end":2024}
-{"type":"item","begin":2024,"end":2090,"contents_begin":2026,"contents_end":2090,"bullet":"- "}
-{"type":"paragraph","begin":2026,"end":2090,"contents_begin":2026,"contents_end":2090}
-{"type":"item","begin":2090,"end":2150,"contents_begin":2092,"contents_end":2150,"bullet":"- "}
-{"type":"paragraph","begin":2092,"end":2150,"contents_begin":2092,"contents_end":2150}
-{"type":"item","begin":2150,"end":2196,"contents_begin":2152,"contents_end":2196,"bullet":"- "}
-{"type":"paragraph","begin":2152,"end":2196,"contents_begin":2152,"contents_end":2196}
-{"type":"headline","begin":2197,"end":2500,"contents_begin":2212,"contents_end":2500,"level":2,"raw_title":"Live reload","todo":null,"priority":null,"tags":[],"commentedp":null}
-{"type":"section","begin":2212,"end":2500,"contents_begin":2212,"contents_end":2500}
-{"type":"paragraph","begin":2212,"end":2318,"contents_begin":2212,"contents_end":2317}
-{"type":"paragraph","begin":2318,"end":2500,"contents_begin":2318,"contents_end":2500}
+{"type":"#file","bytes":2500,"eol":"unix","unmodified":true}
+{"type":"section","begin":0,"end":451,"contents_begin":0,"contents_end":451,"parent_type":"org-data","parent_begin":0}
+{"type":"property-drawer","begin":0,"end":103,"contents_begin":13,"contents_end":97,"parent_type":"section","parent_begin":0}
+{"type":"node-property","begin":13,"end":34,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"ID","value":"concept:modules"}
+{"type":"node-property","begin":34,"end":49,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"KIND","value":"concept"}
+{"type":"node-property","begin":49,"end":97,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"ALIASES","value":"plugins, packages, extensions, addons"}
+{"type":"keyword","begin":103,"end":126,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"Module System"}
+{"type":"keyword","begin":126,"end":172,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":modules:extensibility:packages:"}
+{"type":"paragraph","begin":172,"end":451,"contents_begin":172,"contents_end":450,"parent_type":"section","parent_begin":0}
+{"type":"headline","begin":451,"end":833,"contents_begin":464,"contents_end":833,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Structure","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":464,"end":833,"contents_begin":464,"contents_end":833,"parent_type":"headline","parent_begin":451}
+{"type":"paragraph","begin":464,"end":494,"contents_begin":464,"contents_end":494,"parent_type":"section","parent_begin":464}
+{"type":"table","begin":494,"end":833,"contents_begin":494,"contents_end":832,"parent_type":"section","parent_begin":464}
+{"type":"table-row","begin":494,"end":527,"contents_begin":495,"contents_end":526,"parent_type":"table","parent_begin":494}
+{"type":"table-row","begin":527,"end":560,"contents_begin":null,"contents_end":null,"parent_type":"table","parent_begin":494}
+{"type":"table-row","begin":560,"end":653,"contents_begin":561,"contents_end":652,"parent_type":"table","parent_begin":494}
+{"type":"table-row","begin":653,"end":754,"contents_begin":654,"contents_end":753,"parent_type":"table","parent_begin":494}
+{"type":"table-row","begin":754,"end":832,"contents_begin":755,"contents_end":831,"parent_type":"table","parent_begin":494}
+{"type":"headline","begin":833,"end":1217,"contents_begin":850,"contents_end":1217,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Loading order","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":850,"end":1217,"contents_begin":850,"contents_end":1217,"parent_type":"headline","parent_begin":833}
+{"type":"src-block","begin":850,"end":1089,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":850,"language":null}
+{"type":"paragraph","begin":1089,"end":1217,"contents_begin":1089,"contents_end":1216,"parent_type":"section","parent_begin":850}
+{"type":"headline","begin":1217,"end":1466,"contents_begin":1237,"contents_end":1466,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Built-in modules","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1237,"end":1466,"contents_begin":1237,"contents_end":1466,"parent_type":"headline","parent_begin":1217}
+{"type":"paragraph","begin":1237,"end":1466,"contents_begin":1237,"contents_end":1465,"parent_type":"section","parent_begin":1237}
+{"type":"headline","begin":1466,"end":1646,"contents_begin":1494,"contents_end":1646,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Manifest (~module.toml~)","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1494,"end":1646,"contents_begin":1494,"contents_end":1646,"parent_type":"headline","parent_begin":1466}
+{"type":"src-block","begin":1494,"end":1646,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":1494,"language":"toml"}
+{"type":"headline","begin":1646,"end":1877,"contents_begin":1653,"contents_end":1877,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"CLI","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1653,"end":1877,"contents_begin":1653,"contents_end":1877,"parent_type":"headline","parent_begin":1646}
+{"type":"plain-list","begin":1653,"end":1877,"contents_begin":1653,"contents_end":1876,"parent_type":"section","parent_begin":1653}
+{"type":"item","begin":1653,"end":1702,"contents_begin":1655,"contents_end":1702,"parent_type":"plain-list","parent_begin":1653,"bullet":"- "}
+{"type":"paragraph","begin":1655,"end":1702,"contents_begin":1655,"contents_end":1702,"parent_type":"item","parent_begin":1653}
+{"type":"item","begin":1702,"end":1768,"contents_begin":1704,"contents_end":1768,"parent_type":"plain-list","parent_begin":1653,"bullet":"- "}
+{"type":"paragraph","begin":1704,"end":1768,"contents_begin":1704,"contents_end":1768,"parent_type":"item","parent_begin":1702}
+{"type":"item","begin":1768,"end":1824,"contents_begin":1770,"contents_end":1824,"parent_type":"plain-list","parent_begin":1653,"bullet":"- "}
+{"type":"paragraph","begin":1770,"end":1824,"contents_begin":1770,"contents_end":1824,"parent_type":"item","parent_begin":1768}
+{"type":"item","begin":1824,"end":1876,"contents_begin":1826,"contents_end":1876,"parent_type":"plain-list","parent_begin":1653,"bullet":"- "}
+{"type":"paragraph","begin":1826,"end":1876,"contents_begin":1826,"contents_end":1876,"parent_type":"item","parent_begin":1824}
+{"type":"headline","begin":1877,"end":2197,"contents_begin":1894,"contents_end":2197,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Introspection","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1894,"end":2197,"contents_begin":1894,"contents_end":2197,"parent_type":"headline","parent_begin":1877}
+{"type":"plain-list","begin":1894,"end":2197,"contents_begin":1894,"contents_end":2196,"parent_type":"section","parent_begin":1894}
+{"type":"item","begin":1894,"end":1962,"contents_begin":1896,"contents_end":1962,"parent_type":"plain-list","parent_begin":1894,"bullet":"- "}
+{"type":"paragraph","begin":1896,"end":1962,"contents_begin":1896,"contents_end":1962,"parent_type":"item","parent_begin":1894}
+{"type":"item","begin":1962,"end":2024,"contents_begin":1964,"contents_end":2024,"parent_type":"plain-list","parent_begin":1894,"bullet":"- "}
+{"type":"paragraph","begin":1964,"end":2024,"contents_begin":1964,"contents_end":2024,"parent_type":"item","parent_begin":1962}
+{"type":"item","begin":2024,"end":2090,"contents_begin":2026,"contents_end":2090,"parent_type":"plain-list","parent_begin":1894,"bullet":"- "}
+{"type":"paragraph","begin":2026,"end":2090,"contents_begin":2026,"contents_end":2090,"parent_type":"item","parent_begin":2024}
+{"type":"item","begin":2090,"end":2150,"contents_begin":2092,"contents_end":2150,"parent_type":"plain-list","parent_begin":1894,"bullet":"- "}
+{"type":"paragraph","begin":2092,"end":2150,"contents_begin":2092,"contents_end":2150,"parent_type":"item","parent_begin":2090}
+{"type":"item","begin":2150,"end":2196,"contents_begin":2152,"contents_end":2196,"parent_type":"plain-list","parent_begin":1894,"bullet":"- "}
+{"type":"paragraph","begin":2152,"end":2196,"contents_begin":2152,"contents_end":2196,"parent_type":"item","parent_begin":2150}
+{"type":"headline","begin":2197,"end":2500,"contents_begin":2212,"contents_end":2500,"parent_type":"org-data","parent_begin":0,"level":2,"raw_title":"Live reload","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":2212,"end":2500,"contents_begin":2212,"contents_end":2500,"parent_type":"headline","parent_begin":2197}
+{"type":"paragraph","begin":2212,"end":2318,"contents_begin":2212,"contents_end":2317,"parent_type":"section","parent_begin":2212}
+{"type":"paragraph","begin":2318,"end":2500,"contents_begin":2318,"contents_end":2500,"parent_type":"section","parent_begin":2212}
