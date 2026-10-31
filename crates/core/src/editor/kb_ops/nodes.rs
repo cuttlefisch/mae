@@ -235,6 +235,14 @@ impl Editor {
         if !self.is_ai_originated_dispatch() {
             return Ok(());
         }
+        // Until the guidance stores are adopted (a background build; seconds,
+        // longer on a slow disk) nothing can say which ids they hold.
+        if self.kb.pending_system_stores.is_some() {
+            return Err(format!(
+                "Refused for now: MAE's system KBs are still loading, so '{id}' cannot be \
+                 checked against them. Retry shortly."
+            ));
+        }
         // A store that cannot answer counts as holding the id (fail closed).
         let holder = self.kb.system_stores.iter().find(|(_, store)| {
             !matches!(
@@ -243,10 +251,16 @@ impl Editor {
             )
         });
         match holder {
-            Some((name, _)) => Err(format!(
-                "Refused: '{id}' is a node of MAE's system KB '{name}'. An AI session may \
-                 not create a node that would shadow it — choose another id."
-            )),
+            Some((name, store)) => Err(match mae_kb::KbStore::get_node_light(store.as_ref(), id) {
+                Ok(Some(_)) => format!(
+                    "Refused: '{id}' is a node of MAE's system KB '{name}'. An AI session \
+                         may not create a node that would shadow it — choose another id."
+                ),
+                _ => format!(
+                    "Refused: MAE's system KB '{name}' could not be checked for '{id}', so \
+                         it may hold it. Retry, or choose another id."
+                ),
+            }),
             None => Ok(()),
         }
     }

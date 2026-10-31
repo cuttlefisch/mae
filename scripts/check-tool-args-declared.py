@@ -101,9 +101,34 @@ def reads(fn, seen=frozenset()):
     return ks
 
 
+def brace_block(t, start):
+    """The text of the `{...}` block that opens at or after `start`."""
+    b = t.find("{", start)
+    if b < 0:
+        return ""
+    depth, i = 0, b
+    while i < len(t):
+        if t[i] == "{":
+            depth += 1
+        elif t[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return t[b:i + 1]
+        i += 1
+    return t[b:]
+
+
 arms = collections.defaultdict(set)
 for f, t in texts.items():
-    if "/executor/" not in f:
+    # Tools intercepted before the match arms: `if call.name == "x" { ... }`.
+    for m in re.finditer(r'call\.name\s*==\s*"([a-z_0-9]+)"', t):
+        body = brace_block(t, m.end())
+        ks = direct(body)
+        for c in set(CALL.findall(body)):
+            if c in fns and passes_args(body, c):
+                ks |= reads(c)
+        arms[m.group(1)] |= ks
+    if "/executor/" not in f.replace(os.sep, "/"):
         continue
     for m in re.finditer(r'"([a-z_0-9]+)"(?:\s*\|\s*"[a-z_0-9]+")*\s*=>\s*', t):
         names = re.findall(r'"([a-z_0-9]+)"', t[m.start():m.end()])

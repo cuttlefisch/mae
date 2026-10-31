@@ -157,8 +157,10 @@ fn open_log_at(path: Option<&std::ffi::OsStr>) -> LogHandle {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        // Never follow a symlink someone planted at the log path.
-        opts.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        // Never follow a symlink someone planted at the log path, and never
+        // block opening a FIFO planted there.
+        opts.mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     let file = opts.open(path).ok()?;
     #[cfg(unix)]
@@ -168,7 +170,9 @@ fn open_log_at(path: Option<&std::ffi::OsStr>) -> LogHandle {
         // not log into it. One we own is tightened, since `mode` above applies
         // only when the file is created.
         let meta = file.metadata().ok()?;
-        if meta.uid() != unsafe { libc::geteuid() } {
+        // Ours, a plain file, and not a hard link to some other file of ours
+        // (e.g. a shell rc file linked in from a shared directory).
+        if meta.uid() != unsafe { libc::geteuid() } || !meta.is_file() || meta.nlink() != 1 {
             return None;
         }
         file.set_permissions(std::fs::Permissions::from_mode(0o600))
@@ -526,6 +530,25 @@ mod tests {
         log(&handle, "relayed message");
         assert!(handle.is_none(), "opened a log through a symlink");
         assert_eq!(std::fs::read(&target).unwrap(), b"");
+    }
+
+    /// A hard link to another file of the user's is not appended to, and a
+    /// FIFO planted at the path neither blocks nor receives the log.
+    #[cfg(unix)]
+    #[test]
+    fn the_log_refuses_hard_links_and_fifos() {
+        let dir = tempfile::tempdir().unwrap();
+        let rc = dir.path().join("shellrc");
+        std::fs::write(&rc, b"# rc\n").unwrap();
+        let hard = dir.path().join("hard.log");
+        std::fs::hard_link(&rc, &hard).unwrap();
+        assert!(open_log_at(Some(hard.as_os_str())).is_none());
+        assert_eq!(std::fs::read(&rc).unwrap(), b"# rc\n");
+
+        let fifo = dir.path().join("fifo.log");
+        let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        assert!(open_log_at(Some(fifo.as_os_str())).is_none());
     }
 
     /// The log is a transcript of tool traffic, so only its owner may read it:

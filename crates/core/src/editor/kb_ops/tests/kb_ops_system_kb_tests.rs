@@ -361,3 +361,39 @@ fn an_agent_cannot_promote_a_node_that_shadows_a_guidance_node() {
         assert_eq!(r.is_err(), expect_refused, "ai={ai}: {r:?}");
     }
 }
+
+/// `ai_guidance_kb` is matched case-blind, so the name an agent was told may
+/// differ in case from the catalog's; a scoped read must still find the KB
+/// rather than push the agent to the unscoped, shadowable read.
+#[test]
+fn a_scoped_read_matches_a_system_kb_name_case_blind() {
+    let (editor, _dirs) = editor_with_guidance_node();
+    let got = editor.kb_get_in("devpractices", "hub:testing").unwrap();
+    assert_eq!(got.unwrap().node.body, "Write the adversarial case first.");
+}
+
+/// Before the guidance stores are adopted, nothing can say which ids they
+/// hold: an agent create is refused and a scoped read says "loading", instead
+/// of letting a shadow in that would outlive the startup window.
+#[test]
+fn before_system_kbs_load_agent_creates_wait_and_scoped_reads_say_so() {
+    let mut editor = Editor::new();
+    let _dirs = with_test_dirs(&mut editor);
+    let primary = std::sync::Arc::new(mae_kb::CozoKbStore::open_mem().unwrap());
+    primary.seed_type_system().unwrap();
+    editor.kb.store = Some(primary.clone());
+    editor.kb.primary_cozo = Some(primary);
+    let (_tx, rx) = std::sync::mpsc::channel();
+    editor.kb.pending_system_stores = Some(rx);
+
+    editor.ai.ai_dispatch_depth = 1;
+    let r = editor.kb_create_node("hub:testing", "T", "planted", mae_kb::NodeKind::Note);
+    editor.ai.ai_dispatch_depth = 0;
+    assert!(r.is_err(), "agent create during the loading window: {r:?}");
+    let e = editor.kb_get_in("DevPractices", "hub:testing").unwrap_err();
+    assert!(e.contains("loading"), "{e}");
+    // The human is not held up.
+    assert!(editor
+        .kb_create_node("note:x", "X", "b", mae_kb::NodeKind::Note)
+        .is_ok());
+}

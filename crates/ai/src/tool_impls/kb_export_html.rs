@@ -71,11 +71,13 @@ fn write_atomically(path: &std::path::Path, contents: &str) -> std::io::Result<(
     std::fs::rename(&tmp_path, path)
 }
 
-/// Write the exported page: refuse MAE configuration for an AI caller,
-/// create the parent directory, then write atomically.
-fn write_export(out_path: &std::path::Path, html: &str, ai_originated: bool) -> Result<(), String> {
-    // ADR-089 D4: MAE's own configuration is not agent-writable, whatever the tier.
-    if ai_originated && mae_core::workspace_trust::is_protected_config_path(out_path) {
+/// Write the exported page: refuse MAE configuration, create the parent
+/// directory, then write atomically.
+fn write_export(out_path: &std::path::Path, html: &str) -> Result<(), String> {
+    // ADR-089 D4. For every caller: a Scheme hook an agent installed runs this
+    // later without the AI-origin mark (principle #6's known tension), and an
+    // HTML page is never a legitimate MAE config file.
+    if mae_core::workspace_trust::is_protected_config_path(out_path) {
         return Err(format!(
             "kb_export_subgraph_html: refused: {} is MAE configuration, which an AI \
              session may not write",
@@ -556,7 +558,7 @@ pub fn execute_kb_export_subgraph_html(
     );
 
     let out_path = resolve_path(editor, path_arg);
-    write_export(&out_path, &html, editor.is_ai_originated_dispatch())?;
+    write_export(&out_path, &html)?;
 
     Ok(format!(
         "Exported {} node{} ({} edges) rooted at '{id}' to {} ({} bytes){}{}{}{}{}",

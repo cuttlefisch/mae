@@ -381,13 +381,25 @@ fn guidance_instructions_fragment(
         // Either no KB content resolved, or it alone exceeds the budget. Never
         // truncate mid-content -- a half-delivered practice can be worse than a
         // pointer to the whole thing.
-        return format!("Before acting, consult KB '{guidance_kb}' for required practices. ");
+        return format!(
+            "Before acting, consult KB '{guidance_kb}' for required practices: its \
+             `index` node first. {} ",
+            mae_ai::guidance::guidance_link_instruction(guidance_kb)
+        );
     };
 
+    // Normally the KB content already carries the link instruction
+    // (`read_guidance_kb_context` adds it for every delivery path); say it here
+    // only when it does not, never twice.
+    let instruction = mae_ai::guidance::guidance_link_instruction(guidance_kb);
+    let header_instruction = if kb.contains(&instruction) {
+        String::new()
+    } else {
+        format!(" {instruction}")
+    };
     let mut out = format!(
         "The following are required practices from KB '{guidance_kb}' -- read them \
-         before acting. Any `[[...]]` link below names a node of that KB: fetch it with \
-         the `kb_get` tool as {{\"id\": \"<link target>\", \"kb\": \"{guidance_kb}\"}}.\n\n{kb}\n\n"
+         before acting.{header_instruction}\n\n{kb}\n\n"
     );
 
     // Project context is a bonus, not a competitor. Append only if it fits in
@@ -1456,10 +1468,12 @@ mod tests {
 
     #[test]
     fn guidance_fragment_one_over_budget_falls_back_cleanly_never_truncates() {
-        let content = "x".repeat(11);
+        // A marker that cannot occur in the fallback's own prose, so the check
+        // detects leaked content rather than any word containing the letter.
+        let content = "§".repeat(11);
         let frag = guidance_instructions_fragment("MaePractices", Some(&content), None, 10);
         assert!(
-            !frag.contains('x'),
+            !frag.contains('§'),
             "over-budget content must never appear even partially/truncated: {frag}"
         );
         assert!(frag.contains("consult KB 'MaePractices'"));

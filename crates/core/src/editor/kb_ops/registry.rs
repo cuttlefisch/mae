@@ -1301,7 +1301,18 @@ impl Editor {
     /// standing instructions).
     pub fn kb_get_in(&self, kb: &str, id: &str) -> Result<Option<ScopedNode>, String> {
         use mae_kb::KbStore as _;
-        let store = match self.kb.system_stores.get(kb) {
+        // A system KB under its catalog spelling (`ai_guidance_kb` is matched
+        // case-blind, so the name an agent was given may differ in case).
+        let system = mae_kb::system_kb::find(kb).map(|k| k.name);
+        let loaded = system.and_then(|name| self.kb.system_stores.get(name));
+        if let (Some(name), None) = (system, loaded) {
+            if self.kb.pending_system_stores.is_some() {
+                return Err(format!(
+                    "System KB '{name}' is still loading; retry shortly"
+                ));
+            }
+        }
+        let store = match loaded {
             Some(s) => s.clone(),
             None => {
                 let inst = self

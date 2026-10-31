@@ -69,16 +69,18 @@ fn merge_guidance_block(existing: Option<&str>, guidance_body: &str) -> Result<S
     }
 }
 
-/// Where `target` lands, if it is somewhere this tool may write: a relative path
-/// that stays inside the project root after symlinks are resolved, and is not MAE
-/// configuration.
+/// Where `target` lands, if it is somewhere this export may write: a relative
+/// path that stays inside the project root after symlinks are resolved, and is
+/// not MAE configuration.
 ///
-/// @ai-caution: [security] This tool is Write tier and its content is the
-/// project's CLAUDE.md/README.md, which an agent can edit. `Path::join` with an
-/// absolute `path` replaces the root, so without this check the tool wrote
-/// wherever it was pointed, MAE's own configuration included (principle #16,
-/// ADR-089 D4). Containment is checked on the RESOLVED path, so a symlink
-/// shipped inside the project cannot point it out.
+/// @ai-caution: [security] Applies to EVERY caller. The content is the project's
+/// CLAUDE.md/README.md — text a cloned repository controls — and the path is
+/// often not chosen by the human either: live-sync exports at startup and the
+/// command defaults to AGENTS.md, which a repository can ship as a symlink. An
+/// export that followed it appended the repository's lines to the workspace
+/// trust list, so its `.mae/init.scm` ran on the next launch (principle #16,
+/// ADR-089 D4). Containment is checked on the RESOLVED path, and the write
+/// replaces the file rather than writing through it (`write_replacing`).
 fn contained_target(root: &std::path::Path, target: &str) -> Result<std::path::PathBuf, String> {
     use std::path::Component;
     let rel = std::path::Path::new(target);
@@ -118,6 +120,27 @@ fn contained_target(root: &std::path::Path, target: &str) -> Result<std::path::P
     Ok(out)
 }
 
+/// Write `contents` to `path` by renaming a sibling temp file over it, so a
+/// symlink at `path` is replaced, never written through, even if it appeared
+/// after `contained_target` checked.
+fn write_replacing(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    let name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no file name")
+    })?;
+    let tmp = path.with_file_name(format!(
+        ".{}.tmp-{}",
+        name.to_string_lossy(),
+        std::process::id()
+    ));
+    if let Err(e) = std::fs::write(&tmp, contents) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
 /// Export MAE's guidance context to a markdown file for external agents that
 /// don't (or might not) consume MCP `initialize.instructions` themselves —
 /// `AGENTS.md` by default; pass `path` to target `.github/copilot-instructions.md`
@@ -144,13 +167,10 @@ pub fn execute_kb_export_guidance(
              project root first",
         )?;
 
-    // Gated on AI origin, like the protected-config save guard: a human's
-    // `:kb-export-guidance` may still write wherever they point it.
-    let out_path = if editor.is_ai_originated_dispatch() {
-        contained_target(&root, target)?
-    } else {
-        root.join(target)
-    };
+    // Every caller, not only an agent: the live-sync export runs unattended at
+    // startup and `:kb-export-guidance` defaults to AGENTS.md, so for both the
+    // destination is chosen by whatever the PROJECT ships at that path.
+    let out_path = contained_target(&root, target)?;
     let existing = std::fs::read_to_string(&out_path).ok();
     let merged = merge_guidance_block(existing.as_deref(), context.trim())?;
 
@@ -158,7 +178,7 @@ pub fn execute_kb_export_guidance(
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
     }
-    std::fs::write(&out_path, &merged)
+    write_replacing(&out_path, &merged)
         .map_err(|e| format!("failed to write {}: {e}", out_path.display()))?;
 
     Ok(format!(
@@ -336,10 +356,30 @@ mod tests {
         }
     }
 
-    /// The containment is a bound on the agent, not on the human: a human's
-    /// own export may go where they point it.
+    /// No AI involved: the startup live-sync export and a bare
+    /// `:kb-export-guidance` both write AGENTS.md, and a cloned repository can
+    /// ship AGENTS.md as a symlink to the trust list (or to ~/.bashrc).
+    #[cfg(unix)]
     #[test]
-    fn a_human_may_export_outside_the_project() {
+    fn a_human_or_startup_export_does_not_follow_a_shipped_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let victim = tmp.path().join("trusted-projects");
+        std::fs::write(&victim, "# trust list\n").unwrap();
+        std::os::unix::fs::symlink(&victim, project.join("AGENTS.md")).unwrap();
+        let mut editor = editor_with_root(&project);
+        editor.ai.ai_dispatch_depth = 0; // not an AI call
+
+        let r = execute_kb_export_guidance(&editor, &serde_json::json!({}));
+        assert!(r.is_err(), "wrote through a shipped symlink: {r:?}");
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "# trust list\n");
+    }
+
+    /// The same containment for a human-typed path: exporting guidance is for
+    /// files inside the project (AGENTS.md, .github/copilot-instructions.md).
+    #[test]
+    fn a_human_export_stays_inside_the_project_too() {
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path().join("project");
         std::fs::create_dir(&project).unwrap();
@@ -350,8 +390,8 @@ mod tests {
             &editor,
             &serde_json::json!({"path": outside.to_str().unwrap()}),
         );
-        assert!(r.is_ok(), "{r:?}");
-        assert!(outside.exists());
+        assert!(r.is_err(), "{r:?}");
+        assert!(!outside.exists());
     }
 
     /// The attack: an absolute `path` used to replace the project root, so the
