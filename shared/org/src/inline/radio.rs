@@ -361,72 +361,114 @@ impl Radio {
         if self.exhausted.get() {
             return None;
         }
-        let items = &self.targets[t as usize].items;
-        let memo = &mut *self.memo.borrow_mut();
-        // Frames: (item, position, for a run the end being tried and the
-        // run's extent).
-        let mut stack: Vec<(usize, usize, usize, usize)> = Vec::new();
-        let mut state = Some((0usize, p));
+        let mut run = Exact {
+            radio: self,
+            cx,
+            t,
+            end,
+            items: &self.targets[t as usize].items,
+            memo: &mut self.memo.borrow_mut(),
+            stack: Vec::new(),
+        };
+        let mut state = (0usize, p);
         loop {
-            if let Some((k, pos)) = state.take() {
-                if !self.spend() {
-                    return None;
+            match run.enter(state) {
+                Step::Matched(m) => return Some(m),
+                Step::Next(s) => state = s,
+                Step::Failed => state = run.backtrack()?,
+                Step::OutOfWork => return None,
+            }
+        }
+    }
+}
+
+/// One exact match of a mixed target in progress.
+struct Exact<'r, 'a> {
+    radio: &'r Radio,
+    cx: &'r InlineCx<'a>,
+    t: u32,
+    end: usize,
+    items: &'r [Item],
+    memo: &'r mut Memo,
+    /// Frames: (item, position, for a run the end being tried and the
+    /// run's extent).
+    stack: Vec<(usize, usize, usize, usize)>,
+}
+
+enum Step {
+    Matched((usize, usize)),
+    Next((usize, usize)),
+    Failed,
+    OutOfWork,
+}
+
+impl Exact<'_, '_> {
+    /// Tries item `k` at `pos`.
+    fn enter(&mut self, (k, pos): (usize, usize)) -> Step {
+        if !self.radio.spend() {
+            return Step::OutOfWork;
+        }
+        let (cx, end) = (self.cx, self.end);
+        let key = (self.t, end, k as u32, pos);
+        if self.memo.failed.contains(&key) {
+            return Step::Failed;
+        }
+        match self.items.get(k) {
+            None => match after(cx, pos, end) {
+                Some(m0) => return Step::Matched((pos, m0)),
+                None => self.fail(k, pos),
+            },
+            Some(&Item::Lit(c)) => match cx.ch(pos, end) {
+                Some(d) if canon(d) == c => {
+                    self.stack.push((k, pos, 0, 0));
+                    return Step::Next((k + 1, cx.step(pos)));
                 }
-                let key = (t, end, k as u32, pos);
-                if !memo.failed.contains(&key) {
-                    match items.get(k) {
-                        None => match after(cx, pos, end) {
-                            Some(m0) => return Some((pos, m0)),
-                            None => {
-                                memo.failed.insert(key);
-                            }
-                        },
-                        Some(&Item::Lit(c)) => match cx.ch(pos, end) {
-                            Some(d) if canon(d) == c => {
-                                stack.push((k, pos, 0, 0));
-                                state = Some((k + 1, cx.step(pos)));
-                                continue;
-                            }
-                            _ => {
-                                memo.failed.insert(key);
-                            }
-                        },
-                        Some(Item::Run) => {
-                            // The run's extent from the symbol table: scanning
-                            // it here would cost its length per call.
-                            let q = self.run_end(pos, end);
-                            let rk = (t, end, k as u32, q);
-                            let known = memo.run_failed.get(&rk).is_some_and(|&f| f <= pos);
-                            if q > pos && !known {
-                                stack.push((k, pos, q, q));
-                                state = Some((k + 1, q));
-                                continue;
-                            }
-                        }
-                    }
+                _ => self.fail(k, pos),
+            },
+            Some(Item::Run) => {
+                // The run's extent from the symbol table: scanning it here
+                // would cost its length per call.
+                let q = self.radio.run_end(pos, end);
+                let known = self
+                    .memo
+                    .run_failed
+                    .get(&(self.t, end, k as u32, q))
+                    .is_some_and(|&f| f <= pos);
+                if q > pos && !known {
+                    self.stack.push((k, pos, q, q));
+                    return Step::Next((k + 1, q));
                 }
             }
-            // The state just tried failed: backtrack.
-            loop {
-                let top = stack.last_mut()?;
-                let (k, pos, tried, extent) = *top;
-                if items[k] == Item::Run {
-                    let shorter = back(cx, tried);
-                    if shorter > pos {
-                        top.2 = shorter;
-                        state = Some((k + 1, shorter));
-                        break;
-                    }
-                    let f = memo
-                        .run_failed
-                        .entry((t, end, k as u32, extent))
-                        .or_insert(pos);
-                    *f = (*f).min(pos);
-                } else {
-                    memo.failed.insert((t, end, k as u32, pos));
+        }
+        Step::Failed
+    }
+
+    fn fail(&mut self, k: usize, pos: usize) {
+        self.memo.failed.insert((self.t, self.end, k as u32, pos));
+    }
+
+    /// After a failed state: the next state to try, the most recent run
+    /// giving up one more char; `None` when every choice failed.
+    fn backtrack(&mut self) -> Option<(usize, usize)> {
+        loop {
+            let top = self.stack.last_mut()?;
+            let (k, pos, tried, extent) = *top;
+            if self.items[k] == Item::Run {
+                let shorter = back(self.cx, tried);
+                if shorter > pos {
+                    top.2 = shorter;
+                    return Some((k + 1, shorter));
                 }
-                stack.pop();
+                let f = self
+                    .memo
+                    .run_failed
+                    .entry((self.t, self.end, k as u32, extent))
+                    .or_insert(pos);
+                *f = (*f).min(pos);
+            } else {
+                self.fail(k, pos);
             }
+            self.stack.pop();
         }
     }
 }
@@ -791,86 +833,118 @@ impl Sam {
         }
         cur
     }
+
+    /// The automaton of the sequences reversed, and the state of each whole
+    /// reversed sequence.
+    fn of_reversed(seqs: &[(u32, Vec<u32>, bool)]) -> (Sam, Vec<u32>) {
+        let mut sam = Sam {
+            len: vec![0],
+            link: vec![NONE],
+            next: vec![Vec::new()],
+        };
+        let ends = seqs
+            .iter()
+            .map(|(_, syms, _)| syms.iter().rev().fold(0, |last, &s| sam.extend(last, s)))
+            .collect();
+        (sam, ends)
+    }
+
+    /// Shortest length of a state's strings.
+    fn lo(&self, x: u32) -> usize {
+        self.len[self.link[x as usize] as usize] as usize + 1
+    }
+}
+
+/// The suffix automaton's states whose strings end some reversed target:
+/// their strings are prefixes of targets, so they map to trie nodes.
+struct PrefixStates {
+    /// Per state: where its nodes start in `nodes` (`NONE`: not a prefix
+    /// state), and how many it has (lengths `lo..=len`).
+    off: Vec<u32>,
+    count: Vec<u32>,
+    nodes: Vec<u32>,
+    /// Per state: the nearest prefix state on its suffix-link chain.
+    nearest: Vec<u32>,
+}
+
+impl PrefixStates {
+    fn new(sam: &Sam, ends: &[u32], trie: &Trie, seqs: &[(u32, Vec<u32>, bool)]) -> PrefixStates {
+        let states = sam.len.len();
+        let mut p = PrefixStates {
+            off: vec![NONE; states],
+            count: vec![0; states],
+            nodes: vec![0],
+            nearest: vec![0; states],
+        };
+        p.off[0] = 0;
+        for ((_, syms, _), &end) in seqs.iter().zip(ends) {
+            // The trie path of this sequence, by depth.
+            let mut path = vec![0u32];
+            for &s in syms {
+                let v = path[path.len() - 1];
+                path.push(trie.next.get(&(v, s)).copied().unwrap_or(0));
+            }
+            // Every string of a state that ends a reversed target is no
+            // longer than that target (a longer one cannot end where it
+            // ends), so `hi == len`. A filled state's chain is filled.
+            let mut x = end;
+            while x != 0 && p.off[x as usize] == NONE {
+                let (lo, hi) = (sam.lo(x), (sam.len[x as usize] as usize).min(syms.len()));
+                debug_assert_eq!(hi, sam.len[x as usize] as usize);
+                p.off[x as usize] = p.nodes.len() as u32;
+                p.count[x as usize] = (hi + 1).saturating_sub(lo) as u32;
+                p.nodes.extend((lo..=hi).map(|l| path[l]));
+                x = sam.link[x as usize];
+            }
+        }
+        let mut order: Vec<u32> = (0..states as u32).collect();
+        order.sort_unstable_by_key(|&x| sam.len[x as usize]);
+        for x in order {
+            let xi = x as usize;
+            p.nearest[xi] = if p.off[xi] != NONE {
+                x
+            } else {
+                p.nearest[sam.link[xi] as usize]
+            };
+        }
+        p
+    }
+
+    /// The trie node of the string of length `l` in state `x`, or of the
+    /// longest string of the nearest prefix state when `x` is not one.
+    fn node(&self, sam: &Sam, x: u32, l: usize) -> u32 {
+        let (x, l) = if self.off[x as usize] != NONE {
+            (x, l)
+        } else {
+            let a = self.nearest[x as usize];
+            (a, sam.len[a as usize] as usize)
+        };
+        if x == 0 {
+            return 0;
+        }
+        let i = l
+            .saturating_sub(sam.lo(x))
+            .min(self.count[x as usize].saturating_sub(1) as usize);
+        self.nodes[self.off[x as usize] as usize + i]
+    }
 }
 
 /// For each text symbol, the deepest trie node the text from it reaches:
 /// the longest prefix of the text there that is a prefix of some target.
 /// Reading the text right to left against the suffix automaton of the
 /// reversed targets gives, at each symbol, the longest such prefix that is
-/// a SUBSTRING of a reversed target; a state whose strings end some reversed
-/// target holds only prefixes of that target, so the nearest such state on
-/// the suffix-link chain gives the answer, and its strings map to trie nodes.
+/// a SUBSTRING of a reversed target (matching statistics); a state whose
+/// strings end some reversed target holds only prefixes of that target, so
+/// the nearest such state on the suffix-link chain gives the answer, and its
+/// strings map to trie nodes.
 fn deepest(trie: &Trie, seqs: &[(u32, Vec<u32>, bool)], text: &[u32]) -> Vec<u32> {
-    let mut sam = Sam {
-        len: vec![0],
-        link: vec![NONE],
-        next: vec![Vec::new()],
-    };
-    let mut ends = Vec::with_capacity(seqs.len());
-    for (_, syms, _) in seqs {
-        let mut last = 0;
-        for &s in syms.iter().rev() {
-            last = sam.extend(last, s);
-        }
-        ends.push(last);
-    }
-    // Map each prefix state's strings (lengths lo..=len) to trie nodes.
-    let states = sam.len.len();
-    // A state's strings are lengths lo..=len; its nodes are `nodes[off..]`.
-    // Every string of a state that ends a reversed target is no longer than
-    // that target (a longer one cannot end where it ends), so `hi == len`.
-    let mut off = vec![NONE; states];
-    let mut count = vec![0u32; states];
-    let mut nodes: Vec<u32> = Vec::new();
-    off[0] = 0;
-    nodes.push(0);
-    for ((_, syms, _), &end) in seqs.iter().zip(&ends) {
-        // The trie path of this sequence, by depth.
-        let mut path = vec![0u32];
-        let mut v = 0u32;
-        for &s in syms {
-            v = trie.next.get(&(v, s)).copied().unwrap_or(0);
-            path.push(v);
-        }
-        let mut x = end;
-        while x != 0 && off[x as usize] == NONE {
-            let lo = sam.len[sam.link[x as usize] as usize] as usize + 1;
-            let hi = (sam.len[x as usize] as usize).min(syms.len());
-            debug_assert_eq!(hi, sam.len[x as usize] as usize);
-            off[x as usize] = nodes.len() as u32;
-            count[x as usize] = (hi + 1).saturating_sub(lo) as u32;
-            nodes.extend((lo..=hi).map(|l| path[l]));
-            x = sam.link[x as usize];
-        }
-    }
-    // The nearest prefix state on each state's suffix-link chain.
-    let mut order: Vec<u32> = (0..states as u32).collect();
-    order.sort_unstable_by_key(|&x| sam.len[x as usize]);
-    let mut pref = vec![0u32; states];
-    for &x in &order {
-        let xi = x as usize;
-        pref[xi] = if off[xi] != NONE {
-            x
-        } else {
-            pref[sam.link[xi] as usize]
-        };
-    }
-    let node_of = |x: u32, l: usize| -> u32 {
-        if x == 0 {
-            return 0;
-        }
-        let lo = sam.len[sam.link[x as usize] as usize] as usize + 1;
-        let i = l
-            .saturating_sub(lo)
-            .min(count[x as usize].saturating_sub(1) as usize);
-        nodes[off[x as usize] as usize + i]
-    };
+    let (sam, ends) = Sam::of_reversed(seqs);
+    let prefixes = PrefixStates::new(&sam, &ends, trie, seqs);
     let mut deep = vec![0u32; text.len()];
     let (mut cur, mut l) = (0u32, 0usize);
     for i in (0..text.len()).rev() {
-        let c = text[i];
         loop {
-            if let Some(nx) = sam.get(cur, c) {
+            if let Some(nx) = sam.get(cur, text[i]) {
                 cur = nx;
                 l += 1;
                 break;
@@ -882,12 +956,7 @@ fn deepest(trie: &Trie, seqs: &[(u32, Vec<u32>, bool)], text: &[u32]) -> Vec<u32
             cur = sam.link[cur as usize];
             l = sam.len[cur as usize] as usize;
         }
-        deep[i] = if off[cur as usize] != NONE {
-            node_of(cur, l)
-        } else {
-            let a = pref[cur as usize];
-            node_of(a, sam.len[a as usize] as usize)
-        };
+        deep[i] = prefixes.node(&sam, cur, l);
     }
     deep
 }

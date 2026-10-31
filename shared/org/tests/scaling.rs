@@ -46,6 +46,8 @@
 //! - <1 run: 5.82 ms -> 47.25 ms for x8 bytes, normalised x8.1
 //! - [1 run: 3.61 ms -> 29.51 ms for x8 bytes, normalised x8.2
 //! - unclosed timestamps: 3.26 ms -> 26.29 ms for x8 bytes, normalised x8.1
+//! - repeater candidates, one far >: 1.52 ms -> 12.13 ms for x8 bytes, normalised x8.0
+//!   (before the indexed digit run: 24.38 ms -> 1,377.78 ms, x56.5)
 //! - [fn: unclosed: 3.00 ms -> 23.97 ms for x8 bytes, normalised x8.0
 //! - src_x[ unclosed: 6.18 ms -> 51.80 ms for x8 bytes, normalised x8.4
 //! - call_x( unclosed: 6.46 ms -> 53.85 ms for x8 bytes, normalised x8.3
@@ -59,6 +61,14 @@
 //! - radio links: 7.57 ms -> 65.11 ms for x8 bytes, normalised x8.6
 //! - long radio target: 4.81 ms -> 41.56 ms for x8 bytes, normalised x8.6
 //! - radio candidates rejected: 3.58 ms -> 29.45 ms for x8 bytes, normalised x8.2
+//! - blank-start radio target: 1.93 ms -> 15.48 ms for x8 bytes, normalised x8.1
+//!   (before the linear matcher: 680 ms -> 43,105 ms, x63.5)
+//! - nested radio targets: 2.12 ms -> 15.49 ms for x8 bytes, normalised x7.5
+//!   (before: 18.24 ms -> 524.87 ms, x29.5)
+//! - nested tab radio targets: 2.13 ms -> 16.17 ms for x8 bytes, normalised x7.8
+//! - nested mixed radio targets: 3.52 ms -> 27.18 ms for x8 bytes, normalised x7.8
+//! - mixed radio targets failing late: 39.71 ms -> 281.76 ms for x8 bytes, normalised x7.3
+//! - radio link before [[ (Emacs loops): 9.69 ms -> 87.19 ms for x8 bytes, normalised x9.0
 
 use mae_org::{parse, ParseOptions};
 #[cfg(not(debug_assertions))]

@@ -8,8 +8,14 @@
 //! The inputs stay small enough that a regression shows here as a failed
 //! ratio, not as an OOM kill of the test process.
 //!
-//! Measured on the development machine (2026-10-31), peak heap at N -> 8N:
-//! see `peak_heap_grows_linearly`'s output (`--nocapture`).
+//! Measured on the development machine (2026-10-31, release), peak heap at
+//! N -> 8N (the radio families failed before the linear matcher: nested
+//! targets 18.6 MB -> 303 MB for 12 KB -> 94 KB, normalised x2.08):
+//! - nested radio targets: 661 KB -> 5172 KB for 12 KB -> 94 KB, normalised x1.00
+//! - blank-start radio target: 635 KB -> 5059 KB for 7 KB -> 62 KB, normalised x1.00
+//! - nested tab radio targets: 661 KB -> 5172 KB for 12 KB -> 94 KB, normalised x1.00
+//! - nested mixed radio targets: 802 KB -> 6267 KB for 17 KB -> 141 KB, normalised x0.99
+//! - plain words: 85 KB -> 669 KB for 19 KB -> 156 KB, normalised x0.98
 
 use mae_org::{parse, ParseOptions};
 use std::alloc::{GlobalAlloc, Layout, System};
