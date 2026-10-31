@@ -1,0 +1,17 @@
+Text with a note[fn:1], a named one[fn:named], an inline one[fn:inl: Inline *def*],
+an anonymous one[fn:: Anonymous] and the first again[fn:1].
+A dangling one[fn:none] and a nested one[fn:outer].
+
+* Heading with a note[fn:h]
+[fn:1] The first note.
+
+[fn:named] A named note
+with two lines.
+
+[fn:outer] Outer refers to[fn:inner].
+
+[fn:inner] Inner.
+
+[fn:h] From a heading.
+
+[fn:unused] Never referenced: must not render.

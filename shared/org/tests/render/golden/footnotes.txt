@@ -1,0 +1,12 @@
+Text with a note, a named one, an inline one,
+an anonymous one and the first again.
+A dangling one[fn:none] and a nested one.
+Heading with a note
+The first note.
+A named note
+with two lines.
+Inline def
+Anonymous
+Outer refers to.
+From a heading.
+Inner.

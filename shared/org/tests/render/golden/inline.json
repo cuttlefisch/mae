@@ -1,0 +1,497 @@
+{
+  "body": {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "Objects"
+              }
+            ],
+            "properties": {
+              "id": "h-objects"
+            },
+            "tagName": "h1",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "bold"
+                  }
+                ],
+                "properties": {},
+                "tagName": "strong",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "italic"
+                  }
+                ],
+                "properties": {},
+                "tagName": "em",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "underline"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-underline"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "strike"
+                  }
+                ],
+                "properties": {},
+                "tagName": "del",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "verbatim <x>"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-verbatim"
+                  ]
+                },
+                "tagName": "code",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "code & y"
+                  }
+                ],
+                "properties": {},
+                "tagName": "code",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": "\nx"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "2"
+                  }
+                ],
+                "properties": {},
+                "tagName": "sup",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " x"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "i,j"
+                  }
+                ],
+                "properties": {},
+                "tagName": "sub",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " H"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "2O"
+                  }
+                ],
+                "properties": {},
+                "tagName": "sub",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " α →  x   spaced\nA line break "
+              },
+              {
+                "children": [],
+                "properties": {},
+                "tagName": "br",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": "\nnext line.\nCookies "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "[1/3]"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-cookie"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "[50%]"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-cookie"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": ", a timestamp "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "<2026-10-31 Sat 10:00>--<2026-11-01 Sun>"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-timestamp"
+                  ]
+                },
+                "tagName": "time",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " and "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "[2026-01-01 Thu]"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-timestamp"
+                  ]
+                },
+                "tagName": "time",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": ".\nMacro "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "{{{title}}}"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-macro"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": ", citation "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "[cite:@key]"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-citation"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": ", snippet  gone.\nInline src "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "print(\"<x>\")"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-inline-src",
+                    "language-python"
+                  ]
+                },
+                "tagName": "code",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " and "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "ls"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-inline-src",
+                    "language-sh"
+                  ]
+                },
+                "tagName": "code",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " and "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "x"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-inline-src"
+                  ]
+                },
+                "tagName": "code",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": ".\nBabel  gone.\nTargets: "
+              },
+              {
+                "children": [],
+                "properties": {
+                  "className": [
+                    "org-target"
+                  ],
+                  "id": "t-a.20target"
+                },
+                "tagName": "span",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " and "
+              },
+              {
+                "children": [],
+                "properties": {
+                  "className": [
+                    "org-target"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " again; radio "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "Radio Word"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-radio-target"
+                  ],
+                  "id": "r-radio.20word"
+                },
+                "tagName": "span",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " then "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "radio word"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-radio"
+                  ],
+                  "href": "#r-radio.20word"
+                },
+                "tagName": "a",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": ", "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "RADIO   WORD"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-radio"
+                  ],
+                  "href": "#r-radio.20word"
+                },
+                "tagName": "a",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": ".\nEntities in "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "α italic"
+                  }
+                ],
+                "properties": {},
+                "tagName": "em",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " and "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "nested "
+                  },
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "emph"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "em",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "strong",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": "."
+              }
+            ],
+            "properties": {},
+            "tagName": "p",
+            "type": "element"
+          }
+        ],
+        "properties": {
+          "className": [
+            "org-section",
+            "org-level-1"
+          ]
+        },
+        "tagName": "section",
+        "type": "element"
+      }
+    ],
+    "type": "root"
+  },
+  "diagnostics": [],
+  "nodes": []
+}

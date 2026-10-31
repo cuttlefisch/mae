@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b7fdee44f6ed6f66effb84552de7f5033794548b5544d90f4e3953e7bbe29e1c # shrinks to doc = "[[https://x.org/a b][web]] <https://y.org> mailto:a@b.c [[file:x.png]] [[https://x.org/i.png]]\n"
+cc e7bd78710724b85f2845cf2d27fdfc5b23d8c18086ad24d5e148649b94af39c3 # shrinks to doc = "[[id:n1][to n1]] [[id:n2]] [[n3]] [[id:n4?rel=r&w=0.3#f][meta]] [[*H1]] [[#c1]] [[#nope]]\n"
+cc 656474566df50ae3915057925ac03d84e96c15afc91dd35e4ef7869878031c97 # shrinks to doc = "[[id:n1][to n1]] [[id:n2]] [[n3]] [[id:n4?rel=r&w=0.3#f][meta]] [[*H1]] [[#c1]] [[#nope]]\n"

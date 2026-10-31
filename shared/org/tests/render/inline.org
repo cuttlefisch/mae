@@ -1,0 +1,11 @@
+* Objects
+*bold* /italic/ _underline_ +strike+ =verbatim <x>= ~code & y~
+x^2 x_{i,j} H_2O \alpha \rarr \nbsp{}x \_  spaced
+A line break \\
+next line.
+Cookies [1/3] [50%], a timestamp <2026-10-31 Sat 10:00>--<2026-11-01 Sun> and [2026-01-01 Thu].
+Macro {{{title}}}, citation [cite:@key], snippet @@html:<b>bold</b>@@ gone.
+Inline src src_python{print("<x>")} and src_sh[:x 1]{ls} and src_"><b>{x}.
+Babel call_f(x=1) gone.
+Targets: <<a target>> and <<a target>> again; radio <<<Radio Word>>> then radio word, RADIO   WORD.
+Entities in /\alpha italic/ and *nested /emph/*.

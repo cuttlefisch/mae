@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc f3436d4230cd5b9e95fddab0795a38cf1805122386a0dd670e54ee0a580c194c # shrinks to (doc, markers) = ("#+ATTR_HTML: :id QZX000QZX :onclick QZX000QZX :class QZX000QZX\nAttributed paragraph.\n", ["QZX000QZX"])
+cc 944500b7b60a06482d89abeba56d3298ce85200927321dd0c1d9ae025dc3fcba # shrinks to (doc, markers) = ("#+SELECT_TAGS: pick\nQZXSELQZX zeroth [[id:QZXSELQZX]] <<QZXSELQZX>>\n* Other QZXSELQZX\n:PROPERTIES:\n:ID: QZXSELQZX\n:END:\nQZXSELQZX\n* Keep :pick:\n#+ATTR_HTML: :id QZX000QZX :onclick QZX000QZX :class QZX000QZX\nAttributed paragraph.\n", ["QZX000QZX", "QZXSELQZX"])
+cc 40733a5457e15c9f338bdc641b2a3c05dbb0470b94652995bbca1fca825662ad # shrinks to (doc, markers) = ("* Kept :ARCHIVE:\n:PROPERTIES:\n:ID: QZX000QZX\n:CUSTOM_ID: QZX000QZX\n:END:\nQZX000QZX [[id:QZX000QZX][QZX000QZX]]\n** QZX000QZX\n* Next\n", ["QZX000QZX"])

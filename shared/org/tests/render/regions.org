@@ -1,0 +1,33 @@
+#+title: Regions
+#+EXCLUDE_TAGS: noexport private
+Visible zeroth section.
+# A comment line SECRET-COMMENT-LINE
+#+begin_comment
+SECRET-COMMENT-BLOCK [[id:SECRET-LINK-1]]
+#+end_comment
+#+begin_export html
+<script>SECRET-EXPORT</script>
+#+end_export
+#+HTML: <script>SECRET-HTML-KEYWORD</script>
+:LOGBOOK:
+SECRET-DRAWER <<SECRET-TARGET>>
+:END:
+* Visible
+Body.
+* COMMENT Commented SECRET-COMMENT-HEADING
+SECRET-COMMENT-SUBTREE
+* Excluded SECRET-EXCLUDED-HEADING :noexport:
+:PROPERTIES:
+:ID: SECRET-EXCLUDED-ID
+:END:
+SECRET-EXCLUDED-BODY [fn:rescued]
+* Private :private:
+SECRET-PRIVATE
+* Archived :ARCHIVE:
+SECRET-ARCHIVED-BODY
+** SECRET-ARCHIVED-CHILD
+* Visible again
+Reference to the rescued note[fn:rescued].
+
+[fn:rescued] Rescued from an excluded subtree.
+[fn:orphan] SECRET-UNREFERENCED-FOOTNOTE

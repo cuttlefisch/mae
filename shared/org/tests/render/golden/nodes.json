@@ -1,0 +1,918 @@
+{
+  "body": {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "ID"
+              }
+            ],
+            "properties": {},
+            "tagName": "dt",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "file-node"
+              }
+            ],
+            "properties": {},
+            "tagName": "dd",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "ALIASES"
+              }
+            ],
+            "properties": {},
+            "tagName": "dt",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "First alias, Second *alias*"
+              }
+            ],
+            "properties": {},
+            "tagName": "dd",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "ROAM_REFS"
+              }
+            ],
+            "properties": {},
+            "tagName": "dt",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "https://example.org/ref "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "known ref"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-link"
+                  ],
+                  "dataOrgC": "1",
+                  "dataOrgRel": "references",
+                  "dataOrgW": "1",
+                  "href": "/notes/known.html"
+                },
+                "tagName": "a",
+                "type": "element"
+              }
+            ],
+            "properties": {},
+            "tagName": "dd",
+            "type": "element"
+          }
+        ],
+        "properties": {
+          "className": [
+            "org-properties"
+          ]
+        },
+        "tagName": "dl",
+        "type": "element"
+      },
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "DONE"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-todo",
+                    "org-done"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "[#B]"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-priority"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " A headline node "
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "tag1"
+                      }
+                    ],
+                    "properties": {
+                      "className": [
+                        "org-tag"
+                      ]
+                    },
+                    "tagName": "span",
+                    "type": "element"
+                  },
+                  {
+                    "type": "text",
+                    "value": " "
+                  },
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "tag2"
+                      }
+                    ],
+                    "properties": {
+                      "className": [
+                        "org-tag"
+                      ]
+                    },
+                    "tagName": "span",
+                    "type": "element"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-tags"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "id": "id-kb.3aheadline.2fone"
+            },
+            "tagName": "h1",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "ID"
+                  }
+                ],
+                "properties": {},
+                "tagName": "dt",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "kb:headline/one"
+                  }
+                ],
+                "properties": {},
+                "tagName": "dd",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "KIND"
+                  }
+                ],
+                "properties": {},
+                "tagName": "dt",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "concept"
+                  }
+                ],
+                "properties": {},
+                "tagName": "dd",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "CUSTOM_ID"
+                  }
+                ],
+                "properties": {},
+                "tagName": "dt",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "custom-one"
+                  }
+                ],
+                "properties": {},
+                "tagName": "dd",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "LOWER"
+                  }
+                ],
+                "properties": {},
+                "tagName": "dt",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "value with "
+                  },
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "a link"
+                      }
+                    ],
+                    "properties": {
+                      "className": [
+                        "org-link"
+                      ],
+                      "dataOrgC": "1",
+                      "dataOrgRel": "references",
+                      "dataOrgW": "1",
+                      "href": "/notes/known.html"
+                    },
+                    "tagName": "a",
+                    "type": "element"
+                  },
+                  {
+                    "type": "text",
+                    "value": " and *no markup*"
+                  }
+                ],
+                "properties": {},
+                "tagName": "dd",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-properties"
+              ]
+            },
+            "tagName": "dl",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "Body text."
+              }
+            ],
+            "properties": {},
+            "tagName": "p",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "An item node"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "ID"
+                          }
+                        ],
+                        "properties": {},
+                        "tagName": "dt",
+                        "type": "element"
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "item-node"
+                          }
+                        ],
+                        "properties": {},
+                        "tagName": "dd",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {
+                      "className": [
+                        "org-properties"
+                      ]
+                    },
+                    "tagName": "dl",
+                    "type": "element"
+                  },
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "Item body."
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {
+                  "id": "id-item-node"
+                },
+                "tagName": "li",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "term :: "
+                  },
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "tagged item"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "ID"
+                          }
+                        ],
+                        "properties": {},
+                        "tagName": "dt",
+                        "type": "element"
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "tagged-item"
+                          }
+                        ],
+                        "properties": {},
+                        "tagName": "dd",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {
+                      "className": [
+                        "org-properties"
+                      ]
+                    },
+                    "tagName": "dl",
+                    "type": "element"
+                  }
+                ],
+                "properties": {
+                  "id": "id-tagged-item"
+                },
+                "tagName": "li",
+                "type": "element"
+              }
+            ],
+            "properties": {},
+            "tagName": "ul",
+            "type": "element"
+          }
+        ],
+        "properties": {
+          "className": [
+            "org-section",
+            "org-level-1"
+          ]
+        },
+        "tagName": "section",
+        "type": "element"
+      },
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "A headline without id"
+              }
+            ],
+            "properties": {
+              "id": "h-a-headline-without-id"
+            },
+            "tagName": "h1",
+            "type": "element"
+          }
+        ],
+        "properties": {
+          "className": [
+            "org-section",
+            "org-level-1"
+          ]
+        },
+        "tagName": "section",
+        "type": "element"
+      },
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "A headline without id"
+              }
+            ],
+            "properties": {
+              "id": "h-a-headline-without-id-2"
+            },
+            "tagName": "h1",
+            "type": "element"
+          }
+        ],
+        "properties": {
+          "className": [
+            "org-section",
+            "org-level-1"
+          ]
+        },
+        "tagName": "section",
+        "type": "element"
+      },
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "Duplicate"
+              }
+            ],
+            "properties": {
+              "id": "h-duplicate"
+            },
+            "tagName": "h1",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "ID"
+                  }
+                ],
+                "properties": {},
+                "tagName": "dt",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "kb:headline/one"
+                  }
+                ],
+                "properties": {},
+                "tagName": "dd",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-properties"
+              ]
+            },
+            "tagName": "dl",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "known"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-link"
+                  ],
+                  "href": "/notes/known.html"
+                },
+                "tagName": "a",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-transclusion"
+              ]
+            },
+            "tagName": "p",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "Missing member"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-unresolved"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-transclusion"
+              ]
+            },
+            "tagName": "p",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "[?]"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-unresolved"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-transclusion"
+              ]
+            },
+            "tagName": "p",
+            "type": "element"
+          }
+        ],
+        "properties": {
+          "className": [
+            "org-section",
+            "org-level-1"
+          ]
+        },
+        "tagName": "section",
+        "type": "element"
+      }
+    ],
+    "type": "root"
+  },
+  "diagnostics": [],
+  "nodes": [
+    {
+      "aliases": [
+        {
+          "children": [
+            {
+              "type": "text",
+              "value": "First alias"
+            }
+          ],
+          "type": "root"
+        },
+        {
+          "children": [
+            {
+              "type": "text",
+              "value": "Second "
+            },
+            {
+              "children": [
+                {
+                  "type": "text",
+                  "value": "alias"
+                }
+              ],
+              "properties": {},
+              "tagName": "strong",
+              "type": "element"
+            }
+          ],
+          "type": "root"
+        }
+      ],
+      "anchor": null,
+      "id": "file-node",
+      "properties": [
+        {
+          "key": "ID",
+          "value": {
+            "children": [
+              {
+                "type": "text",
+                "value": "file-node"
+              }
+            ],
+            "type": "root"
+          }
+        },
+        {
+          "key": "ALIASES",
+          "value": {
+            "children": [
+              {
+                "type": "text",
+                "value": "First alias, Second *alias*"
+              }
+            ],
+            "type": "root"
+          }
+        },
+        {
+          "key": "ROAM_REFS",
+          "value": {
+            "children": [
+              {
+                "type": "text",
+                "value": "https://example.org/ref "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "known ref"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-link"
+                  ],
+                  "dataOrgC": "1",
+                  "dataOrgRel": "references",
+                  "dataOrgW": "1",
+                  "href": "/notes/known.html"
+                },
+                "tagName": "a",
+                "type": "element"
+              }
+            ],
+            "type": "root"
+          }
+        }
+      ],
+      "title": {
+        "children": [
+          {
+            "type": "text",
+            "value": "The "
+          },
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "file"
+              }
+            ],
+            "properties": {},
+            "tagName": "strong",
+            "type": "element"
+          },
+          {
+            "type": "text",
+            "value": " title"
+          }
+        ],
+        "type": "root"
+      }
+    },
+    {
+      "aliases": [],
+      "anchor": "id-kb.3aheadline.2fone",
+      "id": "kb:headline/one",
+      "properties": [
+        {
+          "key": "ID",
+          "value": {
+            "children": [
+              {
+                "type": "text",
+                "value": "kb:headline/one"
+              }
+            ],
+            "type": "root"
+          }
+        },
+        {
+          "key": "KIND",
+          "value": {
+            "children": [
+              {
+                "type": "text",
+                "value": "concept"
+              }
+            ],
+            "type": "root"
+          }
+        },
+        {
+          "key": "CUSTOM_ID",
+          "value": {
+            "children": [
+              {
+                "type": "text",
+                "value": "custom-one"
+              }
+            ],
+            "type": "root"
+          }
+        },
+        {
+          "key": "LOWER",
+          "value": {
+            "children": [
+              {
+                "type": "text",
+                "value": "value with "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "a link"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-link"
+                  ],
+                  "dataOrgC": "1",
+                  "dataOrgRel": "references",
+                  "dataOrgW": "1",
+                  "href": "/notes/known.html"
+                },
+                "tagName": "a",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " and *no markup*"
+              }
+            ],
+            "type": "root"
+          }
+        }
+      ],
+      "title": {
+        "children": [
+          {
+            "type": "text",
+            "value": "A headline node"
+          }
+        ],
+        "type": "root"
+      }
+    },
+    {
+      "aliases": [],
+      "anchor": "id-item-node",
+      "id": "item-node",
+      "properties": [
+        {
+          "key": "ID",
+          "value": {
+            "children": [
+              {
+                "type": "text",
+                "value": "item-node"
+              }
+            ],
+            "type": "root"
+          }
+        }
+      ],
+      "title": {
+        "children": [
+          {
+            "type": "text",
+            "value": "An item node"
+          }
+        ],
+        "type": "root"
+      }
+    },
+    {
+      "aliases": [],
+      "anchor": "id-tagged-item",
+      "id": "tagged-item",
+      "properties": [
+        {
+          "key": "ID",
+          "value": {
+            "children": [
+              {
+                "type": "text",
+                "value": "tagged-item"
+              }
+            ],
+            "type": "root"
+          }
+        }
+      ],
+      "title": {
+        "children": [
+          {
+            "type": "text",
+            "value": "term :: tagged item"
+          }
+        ],
+        "type": "root"
+      }
+    }
+  ]
+}

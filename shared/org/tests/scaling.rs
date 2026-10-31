@@ -92,8 +92,25 @@
 //! - sem: N links in one paragraph: 8.79 ms -> 68.77 ms for x8 bytes, normalised x7.8
 //! - sem: one drawer, N KEY+ appends: 10.46 ms -> 85.37 ms for x8 bytes, normalised x8.2
 //! - sem: N transclusions: 25.99 ms -> 218.40 ms for x8 bytes, normalised x8.4
+//!
+//! The renderer families (2026-10-31; `render()`, `to_html` and `to_hast`
+//! timed together on a parsed, projected document). "deep list" is cut by
+//! the parser's nesting cap (128 levels) at 8N, so its large input renders
+//! no deeper than its small one: that is the cap working. Before anchors
+//! kept a next-suffix per base, "N headlines, one title" scanned `-2`, `-3`
+//! … per repeat, which is quadratic:
+//! - render: deep list: 0.19 ms -> 0.19 ms for x60 bytes, normalised x0.1
+//! - render: nested quotes: 4.11 ms -> 33.73 ms for x8 bytes, normalised x8.2
+//! - render: N footnotes: 16.39 ms -> 174.95 ms for x9 bytes, normalised x9.9
+//! - render: footnote chain of N: 16.79 ms -> 202.65 ms for x9 bytes, normalised x11.3
+//! - render: N links in one paragraph: 17.11 ms -> 150.34 ms for x8 bytes, normalised x8.6
+//! - render: large table: 15.74 ms -> 148.76 ms for x8 bytes, normalised x9.5
+//! - render: long paragraph: 34.16 ms -> 296.81 ms for x8 bytes, normalised x8.7
+//! - render: N headlines, one title: 10.59 ms -> 95.50 ms for x8 bytes, normalised x9.0
+//! - render: N radio links and targets: 17.23 ms -> 147.56 ms for x8 bytes, normalised x8.6
+//! - render: N headline nodes with titles: 17.25 ms -> 167.52 ms for x8 bytes, normalised x9.2
 
-use mae_org::{parse, semantics, ParseOptions};
+use mae_org::{parse, render, semantics, ParseOptions, RenderOptions, Resolved, Resolver};
 #[cfg(not(debug_assertions))]
 use std::time::{Duration, Instant};
 
@@ -412,6 +429,115 @@ fn headline_ids(n: usize) -> String {
         .collect()
 }
 
+/// Renderer families (ADR-112 D3 under gate 3): `render()` and both
+/// serialisations, timed alone on a document parsed and projected outside
+/// the clock. Each is a shape on which a per-element scan of a growing
+/// collection would go quadratic: anchors claimed so far (N headlines with
+/// one title), notes numbered so far, links resolved so far, cells.
+const RENDER_FAMILIES: &[Family] = &[
+    (
+        "render: deep list",
+        |n| {
+            (0..n)
+                .map(|i| format!("{}- {i}\n", " ".repeat(i)))
+                .collect()
+        },
+        100,
+    ),
+    (
+        "render: nested quotes",
+        |n| {
+            format!(
+                "{}x\n{}",
+                "#+begin_quote\n".repeat(n),
+                "#+end_quote\n".repeat(n)
+            )
+        },
+        2_000,
+    ),
+    ("render: N footnotes", footnotes_with_links, 2_000),
+    ("render: footnote chain of N", footnote_chain, 2_000),
+    (
+        "render: N links in one paragraph",
+        |n| {
+            (0..n)
+                .map(|i| format!("[[id:t{}?rel=r&w=0.5#f][d]] [[https://x.org/{i}]] ", i % 50))
+                .collect()
+        },
+        3_000,
+    ),
+    (
+        "render: large table",
+        |n| {
+            let row: String = (0..10).map(|j| format!(" c{j} *b* |")).collect();
+            format!("| h |\n|---|\n{}", format!("|{row}\n").repeat(n))
+        },
+        1_000,
+    ),
+    (
+        "render: long paragraph",
+        |n| "word *b* /i/ =v= x^2 \\alpha [[l][d]] ".repeat(n),
+        4_000,
+    ),
+    (
+        "render: N headlines, one title",
+        |n| "* Same title\nbody\n".repeat(n),
+        2_000,
+    ),
+    (
+        "render: N radio links and targets",
+        |n| format!("<<<ab>>> {}\n{}", "<<t>> ".repeat(n), "ab ".repeat(n)),
+        5_000,
+    ),
+    (
+        "render: N headline nodes with titles",
+        |n| {
+            (0..n)
+                .map(|i| {
+                    format!(
+                        "* H{i} [[id:t{i}]]\n:PROPERTIES:\n:ID: n{i}\n:ALIASES: a{i}, b\n:END:\n"
+                    )
+                })
+                .collect()
+        },
+        1_000,
+    ),
+];
+
+/// A resolver for `t0`…`t49`.
+fn resolver() -> Resolver {
+    let mut r = Resolver::default();
+    for i in 0..50 {
+        let href = format!("/t{i}.html");
+        r.targets
+            .insert(format!("t{i}"), Resolved { href, title: None });
+    }
+    r
+}
+
+/// The minimum of up to seven runs of rendering `text` (to the tree, HTML
+/// and hast JSON), parsed and projected once outside the clock.
+#[cfg(not(debug_assertions))]
+fn time_render(text: &str) -> Duration {
+    let doc = parse(text, &ParseOptions::default());
+    let sem = semantics(&doc);
+    let (opts, r) = (RenderOptions::default(), resolver());
+    let mut best = Duration::MAX;
+    for _ in 0..7 {
+        let t = Instant::now();
+        let out = render(&doc, &sem, &opts, &r);
+        let html = mae_org::to_html(&out.body);
+        let hast = mae_org::to_hast(&out.body);
+        let d = t.elapsed();
+        std::hint::black_box((out, html, hast));
+        best = best.min(d);
+        if d > Duration::from_secs(2) {
+            break;
+        }
+    }
+    best
+}
+
 #[cfg(not(debug_assertions))]
 fn time(text: &str) -> Duration {
     let opts = ParseOptions::default();
@@ -441,6 +567,17 @@ fn every_family_parses_and_round_trips_at_8n() {
         let text = gen(base * 8);
         let s = semantics(&parse(&text, &ParseOptions::default()));
         assert!(!s.nodes.is_empty() || name.contains("EXCLUDE"), "{name}");
+    }
+    for (name, gen, base) in RENDER_FAMILIES {
+        let text = gen(*base);
+        let doc = parse(&text, &ParseOptions::default());
+        let out = render(
+            &doc,
+            &semantics(&doc),
+            &RenderOptions::default(),
+            &resolver(),
+        );
+        assert!(!out.body.is_empty(), "{name}");
     }
 }
 
@@ -474,7 +611,11 @@ fn parse_and_semantics_time_grow_roughly_linearly() {
     let sem_families = SEMANTIC_FAMILIES
         .iter()
         .map(|f| (f, time_semantics as fn(&str) -> Duration));
-    for ((name, gen, base), time) in parse_families.chain(sem_families) {
+    let render_families = RENDER_FAMILIES
+        .iter()
+        .map(|f| (f, time_render as fn(&str) -> Duration));
+    let families = parse_families.chain(sem_families).chain(render_families);
+    for ((name, gen, base), time) in families {
         let (small, large) = (gen(*base), gen(base * 8));
         let (t1, t8) = (time(&small), time(&large));
         let bytes = large.len() as f64 / small.len() as f64;

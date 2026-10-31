@@ -1,0 +1,32 @@
+:PROPERTIES:
+:ID: file-node
+:ALIASES: First alias, Second *alias*
+:ROAM_REFS: https://example.org/ref [[id:known][known ref]]
+:END:
+#+title: The *file* title
+* DONE [#B] A headline node :tag1:tag2:
+:PROPERTIES:
+:ID: kb:headline/one
+:KIND: concept
+:CUSTOM_ID: custom-one
+:Lower: value with [[id:known][a link]] and *no markup*
+:END:
+Body text.
+- An item node
+  :PROPERTIES:
+  :ID: item-node
+  :END:
+  Item body.
+- term :: tagged item
+  :PROPERTIES:
+  :ID: tagged-item
+  :END:
+* A headline without id
+* A headline without id
+* Duplicate
+:PROPERTIES:
+:ID: kb:headline/one
+:END:
+#+TRANSCLUDE: known
+#+TRANSCLUDE: [[id:missing][Missing member]] :level 2
+#+TRANSCLUDE: missing

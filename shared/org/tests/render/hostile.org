@@ -1,0 +1,28 @@
+* Hostile "<script>" heading
+:PROPERTIES:
+:ID: a"b<c d
+:END:
+Plain <script>alert(1)</script> & text.
+[[javascript:alert(1)][js]] [[JaVaScRiPt:alert(1)]] [[data:text/html,<script>][data]] [[vbscript:msgbox][vb]]
+[[&#106;avascript:alert(1)][entity]] [[ javascript:alert(1)][space]] [[	javascript:alert(1)][tab]]
+[[//evil.example/x][protocol-relative]] [[https://x.org/"onmouseover=alert(1)][quote]] [[https://x.org/a>b]]
+[[https://x.org/a
+b][newline]] [[https://x.org/‮][bidi]] [[https://x.org/x y][space in url]]
+@@html:<script>alert(1)</script>@@ snippet
+#+ATTR_HTML: :onclick alert(1) :class evil
+#+CAPTION: caption
+[[https://example.org/i.png]]
+#+HTML: <script>alert(1)</script>
+#+begin_export html
+<script>alert(1)</script>
+#+end_export
+#+begin_src "><script>alert(1)</script>
+code
+#+end_src
+* Confusable
+:PROPERTIES:
+:ID: аpple
+:END:
+#+begin_note"><script>
+special
+#+end_note"><script>
