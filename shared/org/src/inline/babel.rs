@@ -5,13 +5,16 @@
 
 use super::index::{Bracket, Needle};
 use super::{InlineCx, Obj};
-use crate::chars::is_word;
+use crate::chars::word_start;
 use crate::kind::SyntaxKind::{self, *};
 
 /// `\<PREFIX\([^ \t\n[OPEN]+\)[OPEN[]`, case-sensitive: where the name ends.
 fn head(cx: &InlineCx, i: usize, at: (usize, usize), prefix: &str, stop: Needle) -> Option<usize> {
     let (floor, end) = at;
-    if !cx.starts(i, end, prefix) || cx.ch_before(i, floor).is_some_and(is_word) {
+    // `\<`: the prefix's first char is a word char, so this is Emacs's word
+    // start, scripts included (`яcall_f()` is a call).
+    let start = |c| word_start(cx.ch_before(i, floor), c);
+    if !cx.starts(i, end, prefix) || !cx.char_at(i).is_some_and(start) {
         return None;
     }
     let name = i + prefix.len();

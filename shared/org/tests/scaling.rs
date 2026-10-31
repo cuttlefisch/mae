@@ -51,6 +51,8 @@
 //! - <1 run: 5.82 ms -> 47.25 ms for x8 bytes, normalised x8.1
 //! - [1 run: 3.61 ms -> 29.51 ms for x8 bytes, normalised x8.2
 //! - unclosed timestamps: 3.26 ms -> 26.29 ms for x8 bytes, normalised x8.1
+//! - repeater candidates, one far >: 1.52 ms -> 12.13 ms for x8 bytes, normalised x8.0
+//!   (before the indexed digit run: 24.38 ms -> 1,377.78 ms, x56.5)
 //! - [fn: unclosed: 3.00 ms -> 23.97 ms for x8 bytes, normalised x8.0
 //! - src_x[ unclosed: 6.18 ms -> 51.80 ms for x8 bytes, normalised x8.4
 //! - call_x( unclosed: 6.46 ms -> 53.85 ms for x8 bytes, normalised x8.3
@@ -64,6 +66,14 @@
 //! - radio links: 7.57 ms -> 65.11 ms for x8 bytes, normalised x8.6
 //! - long radio target: 4.81 ms -> 41.56 ms for x8 bytes, normalised x8.6
 //! - radio candidates rejected: 3.58 ms -> 29.45 ms for x8 bytes, normalised x8.2
+//! - blank-start radio target: 1.93 ms -> 15.48 ms for x8 bytes, normalised x8.1
+//!   (before the linear matcher: 680 ms -> 43,105 ms, x63.5)
+//! - nested radio targets: 2.12 ms -> 15.49 ms for x8 bytes, normalised x7.5
+//!   (before: 18.24 ms -> 524.87 ms, x29.5)
+//! - nested tab radio targets: 2.13 ms -> 16.17 ms for x8 bytes, normalised x7.8
+//! - nested mixed radio targets: 3.52 ms -> 27.18 ms for x8 bytes, normalised x7.8
+//! - mixed radio targets failing late: 39.71 ms -> 281.76 ms for x8 bytes, normalised x7.3
+//! - radio link before [[ (Emacs loops): 9.69 ms -> 87.19 ms for x8 bytes, normalised x9.0
 //!
 //! The `semantics()` families (2026-10-31, after the review fixes; before
 //! them the first six were x47–x391: a scan of the item's children per
@@ -177,6 +187,13 @@ const FAMILIES: &[Family] = &[
     ("<1 run", |n| "<1".repeat(n), 30_000),
     ("[1 run", |n| "[1".repeat(n), 30_000),
     ("unclosed timestamps", |n| "<2026-01-01 a ".repeat(n), 5_000),
+    // Repeater candidates sharing one far `>` after a long digit run (review
+    // finding: each candidate rescanned the run backwards, x30-x60).
+    (
+        "repeater candidates, one far >",
+        |n| format!("{} {}d>", "<1-1-1".repeat(n), "9".repeat(6 * n)),
+        3_000,
+    ),
     ("[fn: unclosed", |n| "[fn:a: ".repeat(n), 10_000),
     ("src_x[ unclosed", |n| "src_x[a ".repeat(n), 10_000),
     ("call_x( unclosed", |n| "call_x(a ".repeat(n), 10_000),
@@ -206,7 +223,54 @@ const FAMILIES: &[Family] = &[
         rejected_radio_candidates,
         3_000,
     ),
+    // A target starting with a no-break space before a long run of them
+    // that ends in a failing match (review: 32 KB took 10.7 s, x63-x89).
+    ("blank-start radio target", blank_start_radio, 4_000),
+    // Targets `a`, `a a`, … (√N of them) before `a `×N: every word starts
+    // a match of every target (review: memory S^1.5; see scaling_memory.rs).
+    ("nested radio targets", |n| nested_radio(n, " "), 4_000),
+    ("nested tab radio targets", |n| nested_radio(n, "\t"), 4_000),
+    // A tab next to a space: mixed targets, matched by backtracking within
+    // a work budget (past it: RadioLinkBudget, tests/inline.rs).
+    (
+        "nested mixed radio targets",
+        |n| nested_radio(n, "\t "),
+        4_000,
+    ),
+    (
+        "mixed radio targets failing late",
+        mixed_failing_late,
+        4_000,
+    ),
+    // The shape on which Emacs never terminates, repeated.
+    (
+        "radio link before [[ (Emacs loops)",
+        |n| format!("<<<x>>>\n\n{}\n", "x[[x]] x[[/^\n".repeat(n)),
+        3_000,
+    ),
 ];
+
+/// Mixed targets whose last stretch fails at every word: bounded by the
+/// work budget, not by targets × length per word.
+fn mixed_failing_late(n: usize) -> String {
+    let k = (n as f64).sqrt() as usize;
+    let targets: String = (1..=k)
+        .map(|j| format!("<<<{}a \ta>>>\n", "a\t ".repeat(j)))
+        .collect();
+    format!("{targets}\n{}\n", "a\t ".repeat(n))
+}
+
+fn blank_start_radio(n: usize) -> String {
+    format!("<<<\u{a0} x>>>\n\n{}xa\n", "\u{a0}".repeat(n))
+}
+
+fn nested_radio(n: usize, sep: &str) -> String {
+    let k = (n as f64).sqrt() as usize;
+    let targets: String = (1..=k)
+        .map(|j| format!("<<<{}>>>\n", vec!["a"; j].join(sep)))
+        .collect();
+    format!("{targets}\n{}\n", format!("a{sep}").repeat(n))
+}
 
 fn rejected_radio_candidates(n: usize) -> String {
     format!("<<<ab>>>\n{}{} ab\n", "*a* ".repeat(n), "xab".repeat(n))

@@ -29,6 +29,13 @@ pub(crate) fn to_green(
     expand(cx, events, todo, contents, &mut |ev| {
         simple(&mut b, text, ev)
     });
+    if radio.as_ref().is_some_and(Radio::budget_exhausted) {
+        cx.diagnostics.borrow_mut().push(crate::Diagnostic::new(
+            crate::DiagnosticKind::RadioLinkBudget,
+            0,
+            text.len(),
+        ));
+    }
     b.finish()
 }
 
@@ -89,6 +96,8 @@ pub(crate) fn objects(text: &str, container: SyntaxKind) -> crate::SyntaxNode {
         .map(|t| t.to_string())
         .collect();
     link_types.sort_by_key(|t| std::cmp::Reverse(t.len()));
+    // A secondary string's diagnostics have no place in a document.
+    let diagnostics = std::cell::RefCell::new(Vec::new());
     let cx = InlineCx {
         src: &src,
         ix: &ix,
@@ -96,6 +105,7 @@ pub(crate) fn objects(text: &str, container: SyntaxKind) -> crate::SyntaxNode {
         // A radio link reads as its own text, so a plain-text value is the
         // same without the document's radio targets.
         radio: None,
+        diagnostics: &diagnostics,
     };
     let mut events = vec![Event::Start(container)];
     let mut contents = ContentsTable::default();

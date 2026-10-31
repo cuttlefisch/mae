@@ -253,6 +253,11 @@ pub fn parse_default(text: &str) -> Document {
 pub fn check_golden_header(jsonl: &str, text: &str) -> Result<(), String> {
     let first = jsonl.lines().next().ok_or("empty golden")?;
     let v: serde_json::Value = serde_json::from_str(first).map_err(|e| e.to_string())?;
+    if is_nonterminating(jsonl) {
+        // Emacs hit the runner's memory or time cap: there is no oracle
+        // parse, so every mae-org element differs and must be registered.
+        return Ok(());
+    }
     if v["type"] != "#file" {
         return Err("golden has no #file self-check line".into());
     }
@@ -280,6 +285,103 @@ pub fn check_golden_header(jsonl: &str, text: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// The golden of a file on which Emacs did not terminate under the runner's
+/// caps (`conformance/regen.sh`, `tests/oracle_external.rs`).
+pub fn is_nonterminating(jsonl: &str) -> bool {
+    jsonl.starts_with("{\"type\":\"#nonterminating\"")
+}
+
+/// Why a golden holds no oracle parse, if it holds none: Emacs did not
+/// terminate under the caps, or signalled an error on the file (e.g. "Not
+/// an Org time string"). Such a file's differences are every mae-org
+/// element, and the conformance gate requires the file to be registered.
+pub fn oracle_failure(jsonl: &str) -> Option<&'static str> {
+    if is_nonterminating(jsonl) {
+        Some("Emacs did not terminate")
+    } else if jsonl.starts_with("{\"type\":\"#error\"") {
+        Some("Emacs signalled an error")
+    } else {
+        None
+    }
+}
+
+/// What one bounded Emacs run ended with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmacsExit {
+    Ok,
+    /// Emacs reported memory exhausted (it then exits 3 from
+    /// `org-element-dump.el`, or 1 or 255 when the exhaustion strikes outside
+    /// it: measured, the status is not reliable, the message is).
+    OutOfMemory,
+    /// Killed at the wall-clock limit.
+    TimedOut,
+    /// Killed by a signal, or another nonzero status.
+    Failed(Option<i32>),
+}
+
+/// Runs `emacs ARGS` under a virtual-memory cap (`ulimit -v`, through `sh`,
+/// so no `unsafe` pre-exec hook) and a wall-clock limit, with stdout to
+/// `stdout`. On some inputs org-element never terminates, allocating without
+/// bound (`<<<x>>>\n\nx[[x]]`), so the oracle must never run unbounded.
+pub fn run_emacs_bounded(
+    args: &[std::ffi::OsString],
+    vmem_kb: u64,
+    limit: std::time::Duration,
+    stdout: std::process::Stdio,
+) -> EmacsExit {
+    let err = std::env::temp_dir().join(format!(
+        "mae-org-emacs-{}-{:?}.err",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let status = run_bounded_raw(args, vmem_kb, limit, stdout, &err);
+    let log = std::fs::read_to_string(&err).unwrap_or_default();
+    let _ = std::fs::remove_file(&err);
+    match status {
+        EmacsExit::Failed(_) if log.contains("Memory exhausted") => EmacsExit::OutOfMemory,
+        s => s,
+    }
+}
+
+fn run_bounded_raw(
+    args: &[std::ffi::OsString],
+    vmem_kb: u64,
+    limit: std::time::Duration,
+    stdout: std::process::Stdio,
+    err: &Path,
+) -> EmacsExit {
+    use std::process::{Command, Stdio};
+    let stderr = std::fs::File::create(err).expect("stderr file");
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(
+            "kb=$1; shift; ulimit -v \"$kb\" 2>/dev/null \
+             || echo 'oracle: no ulimit -v here; Emacs has no memory cap' >&2; \
+             exec emacs \"$@\"",
+        )
+        .arg("sh")
+        .arg(vmem_kb.to_string())
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr)
+        .spawn()
+        .expect("sh runs");
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        match child.try_wait().expect("wait for emacs") {
+            Some(s) if s.success() => return EmacsExit::Ok,
+            Some(s) => return EmacsExit::Failed(s.code()),
+            None if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return EmacsExit::TimedOut;
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(20)),
+        }
+    }
 }
 
 /// The oracle's elements from a golden (JSON lines), without the self-check.
@@ -497,7 +599,8 @@ pub fn compare_views(
             continue;
         };
         let group = match el.kind.as_str() {
-            "headline" | "keyword" | "node-property" | "link" => el.kind.clone(),
+            "headline" | "keyword" | "node-property" | "link" | "entity" | "macro"
+            | "inline-src-block" | "export-snippet" | "timestamp" => el.kind.clone(),
             _ => "drawer/block".to_string(),
         };
         *counts.entry(group).or_default() += 1;
@@ -517,6 +620,111 @@ pub fn compare_views(
         }
     }
     (counts, bad)
+}
+
+/// The text of a node's direct token of `kind` (several are joined, as a
+/// value split over lines is), line endings read as `\n`.
+fn token_text(node: &mae_org::SyntaxNode, kind: SyntaxKind) -> Option<String> {
+    let toks: Vec<_> = node
+        .children_with_tokens()
+        .filter_map(|e| e.into_token())
+        .collect();
+    let first = toks.iter().position(|t| t.kind() == kind)?;
+    let last = toks.iter().rposition(|t| t.kind() == kind)?;
+    Some(
+        toks[first..=last]
+            .iter()
+            .map(|t| {
+                if t.kind() == NEWLINE {
+                    "\n".to_string()
+                } else {
+                    t.text().to_string()
+                }
+            })
+            .collect(),
+    )
+}
+
+/// The text after the first MARKUP token reading `open` and before the
+/// last MARKUP token, line endings read as `\n`.
+fn between(node: &mae_org::SyntaxNode, open: &str) -> String {
+    let toks: Vec<_> = node
+        .children_with_tokens()
+        .filter_map(|e| e.into_token())
+        .collect();
+    let markup = |t: &mae_org::SyntaxToken| t.kind() == MARKUP;
+    let Some(a) = toks.iter().position(|t| markup(t) && t.text() == open) else {
+        return String::new();
+    };
+    let b = toks.iter().rposition(markup).unwrap_or(toks.len());
+    toks.get(a + 1..b)
+        .unwrap_or_default()
+        .iter()
+        .map(|t| {
+            if t.kind() == NEWLINE {
+                "\n".to_string()
+            } else {
+                t.text().to_string()
+            }
+        })
+        .collect()
+}
+
+/// `org-element-timestamp-parser`'s `:type` and `:range-type` from the raw
+/// value: diary if it opens `<%%`; a range if a second stamp follows `--`
+/// (daterange) or the first holds `H:MM-H:MM` (timerange); active if it
+/// opens with `<`. Independent of mae-org's parser, so a wrong extent shows.
+fn timestamp_type(raw: &str) -> (&'static str, Option<&'static str>) {
+    let diary = raw.starts_with("<%%");
+    let close = raw[1..].find([']', '>']).map_or(raw.len(), |k| k + 1);
+    let date_end = raw[close..].starts_with("]--") || raw[close..].starts_with(">--");
+    // A diary's time is read after its sexp: the text after the last `)`.
+    let start = if diary {
+        &raw[raw[..close].rfind(')').map_or(close, |k| k + 1)..close]
+    } else {
+        &raw[..close]
+    };
+    let time_range = has_time_range(start);
+    let active = raw.starts_with('<');
+    let ty = match (diary, active, date_end || time_range) {
+        (true, _, _) => "diary",
+        (_, true, true) => "active-range",
+        (_, true, false) => "active",
+        (_, false, true) => "inactive-range",
+        (_, false, false) => "inactive",
+    };
+    let range = if date_end {
+        Some("daterange")
+    } else if time_range {
+        Some("timerange")
+    } else {
+        None
+    };
+    (ty, range)
+}
+
+/// `[012]?[0-9]:[0-5][0-9]-[012]?[0-9]:[0-5][0-9]` somewhere in `s`.
+fn has_time_range(s: &str) -> bool {
+    let b = s.as_bytes();
+    // `H:MM` or `HH:MM` ending at `k` (exclusive), `[012]?` optional.
+    let clock_at = |i: usize| -> Option<usize> {
+        let d = |k: usize| b.get(k).is_some_and(u8::is_ascii_digit);
+        let start = if d(i) && d(i + 1) && b.get(i + 2) == Some(&b':') {
+            (matches!(b[i], b'0'..=b'2')).then_some(i + 2)?
+        } else if d(i) && b.get(i + 1) == Some(&b':') {
+            i + 1
+        } else {
+            return None;
+        };
+        let m = start + 1;
+        (b.get(m).is_some_and(|c| matches!(c, b'0'..=b'5')) && d(m + 1)).then_some(m + 2)
+    };
+    (0..b.len()).any(|i| {
+        clock_at(i)
+            .filter(|&e| b.get(e) == Some(&b'-'))
+            .and_then(|e| clock_at(e + 1))
+            .is_some()
+    })
 }
 
 /// The oracle's field names and mae-org's values for them, per view.
@@ -565,6 +773,26 @@ fn view_fields(
                 ("path", json!(info.path)),
                 ("raw_link", json!(info.raw_link)),
                 ("format", json!(info.format.as_str())),
+            ]
+        }
+        // Objects without a typed view yet: their fields read off the tree.
+        "entity" => vec![("name", json!(token_text(&node, NAME)))],
+        // `:key` is the name downcased.
+        "macro" => vec![(
+            "key",
+            json!(token_text(&node, NAME).map(|k| k.to_lowercase())),
+        )],
+        // Between the `:` (or `{`) markup and the closing markup: a value
+        // that is only a line ending holds no VALUE token (`@@a:\n@@`).
+        "export-snippet" => vec![("value", json!(between(&node, ":")))],
+        "inline-src-block" => vec![("value", json!(between(&node, "{")))],
+        "timestamp" => {
+            let raw = token_text(&node, VALUE).unwrap_or_default();
+            let (ty, range) = timestamp_type(&raw);
+            vec![
+                ("timestamp_type", json!(ty)),
+                ("range_type", json!(range)),
+                ("raw_value", json!(raw)),
             ]
         }
         "drawer" => {

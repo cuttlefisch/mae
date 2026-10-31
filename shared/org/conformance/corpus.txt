@@ -9,6 +9,7 @@
 # Synthetic adversarial fixtures (invented for this crate, the reviewer's
 # reproductions, and the per-class Unicode fixtures from gen-char-tables.el).
 shared/org/tests/fixtures/affiliated-names.org
+shared/org/tests/fixtures/affiliated-orphan-shapes.org
 shared/org/tests/fixtures/affiliated.org
 shared/org/tests/fixtures/blank-first-line-in-container.org
 shared/org/tests/fixtures/blank-only.org
@@ -48,13 +49,24 @@ shared/org/tests/fixtures/nested-quotes-same-name.org
 shared/org/tests/fixtures/no-final-newline.org
 shared/org/tests/fixtures/objects-adversarial.org
 shared/org/tests/fixtures/objects-citations.org
+shared/org/tests/fixtures/objects-content-cr.org
 shared/org/tests/fixtures/objects-emphasis.org
 shared/org/tests/fixtures/objects-entities-latex.org
+shared/org/tests/fixtures/objects-emacs-nonterminating.org
+shared/org/tests/fixtures/objects-emacs-nonterminating-tag.org
+shared/org/tests/fixtures/objects-emacs-nonterminating-verse.org
 shared/org/tests/fixtures/objects-eol-mac.org
+shared/org/tests/fixtures/objects-eol-values.org
+shared/org/tests/fixtures/objects-link-eol-paths.org
 shared/org/tests/fixtures/objects-links.org
 shared/org/tests/fixtures/objects-misc.org
+shared/org/tests/fixtures/objects-multibrace.org
+shared/org/tests/fixtures/objects-radio-overlap.org
+shared/org/tests/fixtures/objects-radio-split-regexp.org
 shared/org/tests/fixtures/objects-radio.org
+shared/org/tests/fixtures/objects-timestamp-not-org.org
 shared/org/tests/fixtures/objects-timestamps.org
+shared/org/tests/fixtures/objects-word-boundary.org
 shared/org/tests/fixtures/planning-properties.org
 shared/org/tests/fixtures/property-drawer-after-blank.org
 shared/org/tests/fixtures/survivor-clock-orphans-affiliated.org

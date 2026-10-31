@@ -109,7 +109,15 @@ fn goldens_agree_with_emacs_except_registered_divergences() {
     for rel in corpus_list() {
         let text = read(&repo_root().join(&rel));
         let golden = golden_for(&rel);
-        check_golden_header(&golden, &text).unwrap_or_else(|e| panic!("{rel}: {e}"));
+        if let Some(why) = oracle_failure(&golden) {
+            // No oracle parse: the whole file must be registered.
+            match register.iter().position(|d| d.kind == "*" && d.file == rel) {
+                Some(i) => used[i] = true,
+                None => unlisted.push(format!("{rel}: {why}, and no `*` entry registers it")),
+            }
+        } else {
+            check_golden_header(&golden, &text).unwrap_or_else(|e| panic!("{rel}: {e}"));
+        }
         let oracle: Vec<El> = golden_elements(&golden)
             .into_iter()
             .map(|(e, _)| e)
@@ -268,7 +276,8 @@ fn every_divergence_names_a_reason_and_an_existing_pinning_test() {
 }
 
 /// The typed views must report what Emacs reports, for every headline,
-/// keyword, property and drawer in the goldens: a selective oracle for the
+/// keyword, property, drawer, block, link, entity, macro, timestamp, inline
+/// src block and export snippet in the goldens: a selective oracle for the
 /// views, not just the spans.
 #[test]
 fn typed_views_agree_with_the_oracles_properties() {
@@ -298,6 +307,12 @@ fn typed_views_agree_with_the_oracles_properties() {
         ("node-property", 110),
         ("drawer/block", 590),
         ("link", 395),
+        // Objects whose fields the oracle dumps (39/7/18/15/50 on 2026-10-31).
+        ("entity", 35),
+        ("export-snippet", 6),
+        ("inline-src-block", 15),
+        ("macro", 12),
+        ("timestamp", 45),
     ] {
         assert!(
             compared.get(kind).copied().unwrap_or(0) >= floor,

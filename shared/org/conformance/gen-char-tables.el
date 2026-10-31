@@ -91,7 +91,99 @@
            (alpha (gct--ranges (gct--matches "[[:alpha:]]")))
            (linebreak (gct--ranges (gct--matches "\\c|"))))
       (gct--check-facts canon)
-      (list ws word alnum pairs delim alpha linebreak))))
+      (list ws word alnum pairs delim alpha linebreak
+            (gct--word-boundary-data)))))
+
+;;;; Word boundaries between word characters (`\<', `\b').
+;;
+;; regex-emacs.c finds a word boundary between two word-syntax chars C1 C2
+;; when WORD_BOUNDARY_P (C1, C2) (category.h): not both below 256, and
+;; `word_boundary_p' (category.c), which compares their `char-script-table'
+;; entries and then walks `word-separating-categories' (same script,
+;; default: no boundary) or `word-combining-categories' (different scripts,
+;; default: boundary) against the chars' category sets. So mae-org needs
+;; the script of every char, both lists, and membership of every category
+;; the lists name.
+
+(defun gct--script-runs ()
+  "Maximal runs (START END . SCRIPT) of chars with one `char-script-table' entry."
+  (let (out start prev)
+    (dotimes (c (1+ gct-max))
+      (let ((s (aref char-script-table c)))
+        (cond ((null start) (setq start c prev s))
+              ((not (eq s prev))
+               (push (list start (1- c) prev) out)
+               (setq start c prev s)))))
+    (push (list start gct-max prev) out)
+    (nreverse out)))
+
+(defun gct--word-boundary-data ()
+  "Scripts as runs plus a name table, the two category lists, and a range
+table per category they name. Fails if a char has no category set (the C
+code's NILP case, which the Rust side does not model)."
+  (dotimes (c (1+ gct-max))
+    (unless (or (gct--surrogate-p c) (char-category-set c))
+      (error "U+%04X has no category set" c)))
+  (let* ((runs (gct--script-runs))
+         (names (let (acc)
+                  (dolist (r runs) (unless (memq (nth 2 r) acc) (push (nth 2 r) acc)))
+                  (nreverse acc)))
+         (cats (let (acc)
+                 (dolist (pair (append word-combining-categories word-separating-categories))
+                   (dolist (k (list (car pair) (cdr pair)))
+                     (when (and k (not (memq k acc))) (push k acc))))
+                 (sort acc #'<))))
+    (list runs names word-combining-categories word-separating-categories
+          (mapcar (lambda (k)
+                    (cons k (gct--ranges (lambda (c) (aref (char-category-set c) k)))))
+                  cats))))
+
+(defun gct--rust-scripts (runs names)
+  (concat "/// Scripts as `char-script-table` gives them, by first code point (\"nil\": none).\n"
+          "/// Read by tests only: the Rust side compares indices.\n#[cfg_attr(not(test), allow(dead_code))]\npub(crate) const SCRIPT_NAMES: &[&str] = &[\n"
+          (mapconcat (lambda (n) (format "    %S,\n" (if n (symbol-name n) "nil"))) names "")
+          "];\n\n"
+          "/// Maximal runs of chars with one script: (first, last, index into `SCRIPT_NAMES`).\n"
+          "#[rustfmt::skip]\npub(crate) const SCRIPTS: &[(u32, u32, u16)] = &[\n"
+          (let ((line "    ") (acc ""))
+            (dolist (r runs)
+              (let ((it (format "(0x%X,0x%X,%d)," (nth 0 r) (nth 1 r)
+                                (cl-position (nth 2 r) names))))
+                (when (> (+ (length line) (length it)) 99)
+                  (setq acc (concat acc (string-trim-right line) "\n") line "    "))
+                (setq line (concat line it))))
+            (concat acc (string-trim-right line) "\n"))
+          "];\n"))
+
+(defun gct--rust-category-list (name doc lst)
+  (concat (format "/// `%s`: %s\n" (replace-regexp-in-string "_" "-" (downcase name)) doc)
+          (format "#[rustfmt::skip]\npub(crate) const %s: &[(Option<char>, Option<char>)] = &[\n" name)
+          (mapconcat (lambda (p)
+                       (format "    (%s, %s),\n"
+                               (if (car p) (format "Some('%c')" (car p)) "None")
+                               (if (cdr p) (format "Some('%c')" (cdr p)) "None")))
+                     lst "")
+          "];\n"))
+
+(defun gct--rust-word-boundary (data)
+  (let ((runs (nth 0 data)) (names (nth 1 data)))
+    (concat
+     (gct--rust-scripts runs names) "\n"
+     (gct--rust-category-list "WORD_COMBINING_CATEGORIES"
+                              "between chars of different scripts, a pair here means no boundary."
+                              (nth 2 data)) "\n"
+     (gct--rust-category-list "WORD_SEPARATING_CATEGORIES"
+                              "between chars of one script, a pair here means a boundary."
+                              (nth 3 data)) "\n"
+     "/// For each category the two lists name, the chars that have it.\n"
+     "pub(crate) const CATEGORIES: &[(char, &[(u32, u32)])] = &[\n"
+     (mapconcat (lambda (k) (format "    ('%c', CATEGORY_%d),\n" (car k) (car k))) (nth 4 data) "")
+     "];\n"
+     (mapconcat (lambda (k)
+                  (concat "\n" (gct--rust-pairs (format "CATEGORY_%d" (car k))
+                                                (format "Chars of category `%c`." (car k))
+                                                (cdr k))))
+                (nth 4 data) ""))))
 
 (defun gct--write-rust (file tables)
   (with-temp-file file
@@ -105,7 +197,8 @@
             (gct--rust-pairs "CANON" "(char, canonical char) wherever they differ." (nth 3 tables)) "\n"
             (gct--rust-pairs "DELIM" "Chars with punctuation, paren or string-quote syntax (`\\s.`, `\\s(`, `\\s)`, `\\s\"`)." (nth 4 tables)) "\n"
             (gct--rust-pairs "ALPHA" "Chars matching `[[:alpha:]]` (rx `letter`)." (nth 5 tables)) "\n"
-            (gct--rust-pairs "LINEBREAK" "Chars of category `|` (`\\c|`, line breakable)." (nth 6 tables)))))
+            (gct--rust-pairs "LINEBREAK" "Chars of category `|` (`\\c|`, line breakable)." (nth 6 tables)) "\n"
+            (gct--rust-word-boundary (nth 7 tables)))))
 
 ;;;; Per-class fixtures: a deterministic sample at every range boundary.
 

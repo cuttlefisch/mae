@@ -9,7 +9,7 @@
 
 use super::{babel, cite, emphasis, latex, link, objects, script, timestamp};
 use super::{Frame, InlineCx, Obj, Restriction};
-use crate::chars::{is_alnum, is_space, is_word};
+use crate::chars::{is_alnum, is_space, word_start};
 use crate::kind::SyntaxKind::{self, *};
 
 /// The first object in the frame's region at or after its cursor.
@@ -127,10 +127,12 @@ fn type_name_at(cx: &InlineCx, i: usize, lim: usize) -> Option<usize> {
 }
 
 /// `\<TYPE:` — a word start followed by a registered link type and a colon.
+/// `\<` is Emacs's, so a word char after one of another script starts a
+/// word (`参见https:`); see [`word_start`].
 fn plain_link_candidate(cx: &InlineCx, i: usize, lim: usize, floor: usize) -> bool {
-    let word_start =
-        cx.char_at(i).is_some_and(is_word) && !cx.ch_before(i, floor).is_some_and(is_word);
-    word_start && link::type_at(cx, i, lim).is_some()
+    cx.char_at(i)
+        .is_some_and(|c| word_start(cx.ch_before(i, floor), c))
+        && link::type_at(cx, i, lim).is_some()
 }
 
 /// The parsers tried at a candidate, in `org-element--object-lex`'s order.

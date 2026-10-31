@@ -19,6 +19,8 @@ mod lex;
 mod link;
 mod objects;
 pub(crate) mod radio;
+#[cfg(test)]
+mod radio_reference;
 mod script;
 mod timestamp;
 
@@ -240,6 +242,8 @@ pub(crate) struct InlineCx<'a> {
     pub link_types: &'a [String],
     /// The document's radio targets (`org-target-link-regexp`), if any.
     pub radio: Option<&'a radio::Radio>,
+    /// Where inline parsing reports diagnostics.
+    pub diagnostics: &'a std::cell::RefCell<Vec<crate::Diagnostic>>,
 }
 
 impl InlineCx<'_> {
@@ -404,6 +408,16 @@ pub(crate) fn parse(
         let found = if top.cursor < top.end && room {
             lex::next_object(cx, top)
         } else {
+            if top.cursor < top.end && lex::next_object(cx, top).is_some() {
+                // Past the cap a region is plain text; say so when Org would
+                // have found an object in it (a radio target there makes no
+                // radio links: Org finds targets at any depth).
+                cx.diagnostics.borrow_mut().push(crate::Diagnostic::new(
+                    crate::DiagnosticKind::DepthLimit,
+                    top.cursor,
+                    top.end,
+                ));
+            }
             None
         };
         let Some(obj) = found else {

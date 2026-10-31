@@ -80,9 +80,12 @@ impl Link {
         &self.0
     }
 
-    /// A radio link: text matching a `<<<radio target>>>`.
+    /// A radio link: text matching a `<<<radio target>>>`. Not a bracket or
+    /// angle link (whose path may be only a line ending, so hold no
+    /// `LINK_PATH` token: `[[\n]]`), and not a plain link (whose path starts
+    /// with its type).
     pub fn is_radio(&self) -> bool {
-        !self.tokens().any(|t| t.kind() == LINK_PATH)
+        self.format() == LinkFormat::Plain && !self.tokens().any(|t| t.kind() == LINK_PATH)
     }
 
     pub fn format(&self) -> LinkFormat {
@@ -101,23 +104,22 @@ impl Link {
         self.0.children_with_tokens().filter_map(|e| e.into_token())
     }
 
-    /// The text from the first `LINK_PATH` token to the last, line endings
-    /// read as `\n` (as Emacs's buffer holds them).
+    /// The path: the `LINK_PATH` and `NEWLINE` tokens after the opening
+    /// markup (if any), up to the next other token, line endings read as `\n`
+    /// (as Emacs's buffer holds them). A line ending at either end of a
+    /// bracket path is part of it: `[[\n@@]]` has the path `\n@@`, which
+    /// Org reads as ` @@`.
     pub(crate) fn path_text(&self) -> String {
+        let mut toks = self.tokens().peekable();
+        if toks.peek().is_some_and(|t| t.kind() == MARKUP) {
+            toks.next();
+        }
         let mut out = String::new();
-        let mut pending = String::new();
-        let mut started = false;
-        for t in self.tokens() {
+        for t in toks {
             match t.kind() {
-                LINK_PATH => {
-                    out.push_str(&pending);
-                    pending.clear();
-                    out.push_str(t.text());
-                    started = true;
-                }
-                NEWLINE if started => pending.push('\n'),
-                _ if started => pending.push_str(t.text()),
-                _ => {}
+                LINK_PATH => out.push_str(t.text()),
+                NEWLINE => out.push('\n'),
+                _ => break,
             }
         }
         out

@@ -3,7 +3,7 @@
 
 use crate::kind::SyntaxKind::{self, *};
 use crate::options::TodoKeywords;
-use crate::text::{is_trim, trim_end_blank, ws_len};
+use crate::text::{trim_end_blank, ws_len};
 
 /// The tokens of headline line `s`, as `(kind, start, end)` relative to `s`.
 /// They cover `s` exactly.
@@ -39,10 +39,14 @@ pub(crate) fn tokens(s: &str, todo: &TodoKeywords) -> Vec<(SyntaxKind, usize, us
     }
     let trimmed = trim_end_blank(s).len().max(i);
     let tags = tags_start(s, i).unwrap_or(trimmed);
-    // raw-value is `org-trim`med: a content CR is not part of the title.
+    // The title's objects are parsed between `skip-chars-forward " \t"` and
+    // `skip-chars-backward " \t"`: a content CR (in an LF file) is inside
+    // them, so a plain link may end with it. `:raw-value` is `org-trim`med
+    // (the view trims the CR off).
+    let blank = |c: char| c == ' ' || c == '\t';
     let title = &s[i..tags];
-    let title_start = i + (title.len() - title.trim_start_matches(is_trim).len());
-    let title_end = (i + title.trim_end_matches(is_trim).len()).max(title_start);
+    let title_start = i + (title.len() - title.trim_start_matches(blank).len());
+    let title_end = (i + title.trim_end_matches(blank).len()).max(title_start);
     push(WHITESPACE, i, title_start);
     push(TITLE, title_start, title_end);
     push(WHITESPACE, title_end, tags);

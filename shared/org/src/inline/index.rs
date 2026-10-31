@@ -92,6 +92,9 @@ pub(crate) struct Pair {
     pub open: usize,
     pub close: usize,
     pub depth: u32,
+    /// Do its direct children (pairs of its kind) all have the same depth?
+    /// True when it has none.
+    pub uniform: bool,
 }
 
 pub(crate) struct InlineIndex {
@@ -104,6 +107,10 @@ pub(crate) struct InlineIndex {
     needles: [Vec<usize>; NEEDLES],
     /// Per bracket kind, every matched pair, sorted by opening position.
     pairs: [Vec<Pair>; 3],
+    /// For the `k`th `>`: how many ASCII digits end just before the char
+    /// that precedes it (the `[0-9]+` of a repeater's `+[0-9]+[dwmy]>`).
+    /// Runs before distinct `>`s are disjoint, so this is one pass.
+    gt_digits: Vec<u32>,
 }
 
 /// The closer's post set: `(any space ?- ?. ?, ?\; ?: ?! ?? ?' ?\" ?\) ?\} ?\\ ?\[)`.
@@ -182,15 +189,29 @@ impl InlineIndex {
             double_close,
             needles: Default::default(),
             pairs: Default::default(),
+            gt_digits: Vec::new(),
         };
         ix.index_bytes(text, src.eol);
+        ix.gt_digits = ix.needles[Needle::Gt.slot()]
+            .iter()
+            .map(|&g| {
+                let run = text.as_bytes()[..g.saturating_sub(1)]
+                    .iter()
+                    .rev()
+                    .take_while(|c| c.is_ascii_digit())
+                    .count();
+                u32::try_from(run).unwrap_or(u32::MAX)
+            })
+            .collect();
         ix.index_cite_keys(text);
         ix
     }
 
     fn index_bytes(&mut self, text: &str, eol: LineEnding) {
         let b = text.as_bytes();
-        let mut stacks: [Vec<(usize, u32)>; 3] = Default::default();
+        // Per open bracket: its position, and the greatest and least depth
+        // of its direct children so far (0 and u32::MAX: none yet).
+        let mut stacks: [Vec<(usize, u32, u32)>; 3] = Default::default();
         let mut found = Vec::with_capacity(4);
         for (i, &c) in b.iter().enumerate() {
             found.clear();
@@ -201,16 +222,18 @@ impl InlineIndex {
             if let Some((kind, open)) = Bracket::of(c) {
                 let stack = &mut stacks[kind as usize];
                 if open {
-                    stack.push((i, 0));
-                } else if let Some((o, inner)) = stack.pop() {
-                    let depth = inner + 1;
+                    stack.push((i, 0, u32::MAX));
+                } else if let Some((o, max, min)) = stack.pop() {
+                    let depth = max + 1;
                     if let Some(parent) = stack.last_mut() {
                         parent.1 = parent.1.max(depth);
+                        parent.2 = parent.2.min(depth);
                     }
                     self.pairs[kind as usize].push(Pair {
                         open: o,
                         close: i,
                         depth,
+                        uniform: min == u32::MAX || min == max,
                     });
                 }
             }
@@ -260,6 +283,15 @@ impl InlineIndex {
         k.checked_sub(1)
             .map(|k| v[k])
             .filter(|&p| p >= from && p + n.len() <= before)
+    }
+
+    /// How many ASCII digits end at `gt - 1`, where `gt` holds a `>`: the run
+    /// just before the char that precedes the `>`.
+    pub fn digits_before_gt_unit(&self, gt: usize) -> usize {
+        let v = &self.needles[Needle::Gt.slot()];
+        v.binary_search(&gt)
+            .ok()
+            .map_or(0, |k| self.gt_digits[k] as usize)
     }
 
     /// The bracket opening at `open`, if it is closed by `end` (`scan-lists`

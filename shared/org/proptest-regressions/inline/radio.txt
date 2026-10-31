@@ -1,0 +1,12 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc aae9ecf6de2e65638612ffc778753e26367da64dd402e7aba5d67c8f7146bb6a # shrinks to values = ["中", "中-a"], picks = [(0, '-')], regions = []
+cc 117d6777aeeb5edd0c6e858e6f001608544443069e6c92d2d355ed39da8db0b3 # shrinks to values = ["A中", "A"], text = "A中-", regions = []
+cc aa1957987e0195739bf1102cfe13bc58fffe784d08cef222b73dee529d9b3e3f # shrinks to values = ["Ab"], text = "aaaaaa-abaa", regions = [(24, 20)]
+cc ddcf3f2dedd2d62c4518fbfd2db660f58793e421c4e096a42554b5b112acef55 # shrinks to values = ["\u{a0}"], picks = [(0, '-')], regions = []
+cc 4e7e27b1dfbf0f736bc76bae473465e0e4b541ec32ab143572b29857599e21d9 # shrinks to values = ["\u{a0}"], text = "\u{a0}-", regions = []
+cc 4b5785236e2cfc7e21e598a5d5b37299742a93c980cfecd6ec85cb8c8aee43bd # shrinks to values = ["A\ta"], text = "a\ta-", regions = []

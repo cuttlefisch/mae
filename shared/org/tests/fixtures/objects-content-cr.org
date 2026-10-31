@@ -1,0 +1,7 @@
+# A content CR in a headline title (this file is LF: not every LF
+# follows a CR). Links ending with one are pinned in tests/inline.rs.
+b
+* t3 a
+* t4 *b*
+* t5 *b*  :tag:
+* t6 *b* :tag:
