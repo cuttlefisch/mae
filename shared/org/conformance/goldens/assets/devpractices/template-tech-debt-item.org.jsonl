@@ -6,19 +6,35 @@
 {"type":"keyword","begin":60,"end":93,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"Tech-Debt Item Template"}
 {"type":"keyword","begin":93,"end":139,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":tech-debt:template:devpractice:"}
 {"type":"paragraph","begin":139,"end":465,"contents_begin":139,"contents_end":464,"parent_type":"section","parent_begin":0}
+{"type":"link","begin":372,"end":427,"contents_begin":406,"contents_end":424,"parent_type":"paragraph","parent_begin":139,"link_type":"id","path":"practice:tech-debt-tracking","raw_link":"id:practice:tech-debt-tracking","format":"bracket"}
 {"type":"plain-list","begin":465,"end":1555,"contents_begin":465,"contents_end":1554,"parent_type":"section","parent_begin":0}
 {"type":"item","begin":465,"end":650,"contents_begin":467,"contents_end":650,"parent_type":"plain-list","parent_begin":465,"bullet":"- "}
 {"type":"paragraph","begin":467,"end":650,"contents_begin":467,"contents_end":650,"parent_type":"item","parent_begin":465}
+{"type":"bold","begin":467,"end":477,"contents_begin":468,"contents_end":475,"parent_type":"paragraph","parent_begin":467}
+{"type":"bold","begin":468,"end":475,"contents_begin":469,"contents_end":474,"parent_type":"bold","parent_begin":467}
 {"type":"item","begin":650,"end":823,"contents_begin":652,"contents_end":823,"parent_type":"plain-list","parent_begin":465,"bullet":"- "}
 {"type":"paragraph","begin":652,"end":823,"contents_begin":652,"contents_end":823,"parent_type":"item","parent_begin":650}
+{"type":"bold","begin":652,"end":673,"contents_begin":653,"contents_end":671,"parent_type":"paragraph","parent_begin":652}
+{"type":"bold","begin":653,"end":671,"contents_begin":654,"contents_end":670,"parent_type":"bold","parent_begin":652}
 {"type":"item","begin":823,"end":1013,"contents_begin":825,"contents_end":1013,"parent_type":"plain-list","parent_begin":465,"bullet":"- "}
 {"type":"paragraph","begin":825,"end":1013,"contents_begin":825,"contents_end":1013,"parent_type":"item","parent_begin":823}
+{"type":"bold","begin":825,"end":843,"contents_begin":826,"contents_end":841,"parent_type":"paragraph","parent_begin":825}
+{"type":"bold","begin":826,"end":841,"contents_begin":827,"contents_end":840,"parent_type":"bold","parent_begin":825}
 {"type":"item","begin":1013,"end":1243,"contents_begin":1015,"contents_end":1243,"parent_type":"plain-list","parent_begin":465,"bullet":"- "}
 {"type":"paragraph","begin":1015,"end":1243,"contents_begin":1015,"contents_end":1243,"parent_type":"item","parent_begin":1013}
+{"type":"bold","begin":1015,"end":1030,"contents_begin":1016,"contents_end":1028,"parent_type":"paragraph","parent_begin":1015}
+{"type":"bold","begin":1016,"end":1028,"contents_begin":1017,"contents_end":1027,"parent_type":"bold","parent_begin":1015}
+{"type":"link","begin":1153,"end":1224,"contents_begin":1192,"contents_end":1221,"parent_type":"paragraph","parent_begin":1015,"link_type":"id","path":"practice:issue-roadmap-crosslink","raw_link":"id:practice:issue-roadmap-crosslink","format":"bracket"}
 {"type":"item","begin":1243,"end":1455,"contents_begin":1245,"contents_end":1455,"parent_type":"plain-list","parent_begin":465,"bullet":"- "}
 {"type":"paragraph","begin":1245,"end":1455,"contents_begin":1245,"contents_end":1455,"parent_type":"item","parent_begin":1243}
+{"type":"bold","begin":1245,"end":1266,"contents_begin":1246,"contents_end":1264,"parent_type":"paragraph","parent_begin":1245}
+{"type":"bold","begin":1246,"end":1264,"contents_begin":1247,"contents_end":1263,"parent_type":"bold","parent_begin":1245}
 {"type":"item","begin":1455,"end":1554,"contents_begin":1457,"contents_end":1554,"parent_type":"plain-list","parent_begin":465,"bullet":"- "}
 {"type":"paragraph","begin":1457,"end":1554,"contents_begin":1457,"contents_end":1554,"parent_type":"item","parent_begin":1455}
+{"type":"bold","begin":1457,"end":1468,"contents_begin":1458,"contents_end":1466,"parent_type":"paragraph","parent_begin":1457}
+{"type":"bold","begin":1458,"end":1466,"contents_begin":1459,"contents_end":1465,"parent_type":"bold","parent_begin":1457}
 {"type":"paragraph","begin":1555,"end":1579,"contents_begin":1555,"contents_end":1578,"parent_type":"section","parent_begin":0}
 {"type":"example-block","begin":1579,"end":2029,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0}
 {"type":"paragraph","begin":2029,"end":2257,"contents_begin":2029,"contents_end":2257,"parent_type":"section","parent_begin":0}
+{"type":"link","begin":2073,"end":2124,"contents_begin":2109,"contents_end":2121,"parent_type":"paragraph","parent_begin":2029,"link_type":"id","path":"practice:deep-audit-checklist","raw_link":"id:practice:deep-audit-checklist","format":"bracket"}
+{"type":"link","begin":2130,"end":2191,"contents_begin":2169,"contents_end":2188,"parent_type":"paragraph","parent_begin":2029,"link_type":"id","path":"practice:multi-lens-audit-review","raw_link":"id:practice:multi-lens-audit-review","format":"bracket"}

@@ -138,6 +138,30 @@ pub const KIND_MAP: &[(SyntaxKind, &str)] = &[
     (CLOCK, "clock"),
     (DIARY_SEXP, "diary-sexp"),
     (LATEX_ENVIRONMENT, "latex-environment"),
+    (BOLD, "bold"),
+    (CITATION, "citation"),
+    (CITATION_REFERENCE, "citation-reference"),
+    (CODE, "code"),
+    (ENTITY, "entity"),
+    (EXPORT_SNIPPET, "export-snippet"),
+    (FOOTNOTE_REFERENCE, "footnote-reference"),
+    (INLINE_BABEL_CALL, "inline-babel-call"),
+    (INLINE_SRC_BLOCK, "inline-src-block"),
+    (ITALIC, "italic"),
+    (LINE_BREAK, "line-break"),
+    (LATEX_FRAGMENT, "latex-fragment"),
+    (LINK, "link"),
+    (MACRO, "macro"),
+    (RADIO_TARGET, "radio-target"),
+    (STATISTICS_COOKIE, "statistics-cookie"),
+    (STRIKE_THROUGH, "strike-through"),
+    (SUBSCRIPT, "subscript"),
+    (SUPERSCRIPT, "superscript"),
+    (TABLE_CELL, "table-cell"),
+    (TARGET, "target"),
+    (TIMESTAMP, "timestamp"),
+    (UNDERLINE, "underline"),
+    (VERBATIM, "verbatim"),
 ];
 
 /// One element as the differential compares it: its org-element type, byte
@@ -168,6 +192,10 @@ pub fn mae_elements(doc: &Document) -> Vec<El> {
                 .ancestors()
                 .skip(1)
                 .find_map(|p| {
+                    // A CAPTION value is a secondary string with no owner in Org.
+                    if p.kind() == AFFILIATED_VALUE {
+                        return Some(("secondary".to_string(), 0));
+                    }
                     kind_name(p.kind())
                         .map(|k| (k.to_string(), usize::from(p.text_range().start())))
                 })

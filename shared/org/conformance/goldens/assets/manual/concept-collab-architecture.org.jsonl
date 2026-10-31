@@ -7,29 +7,52 @@
 {"type":"keyword","begin":116,"end":160,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"Collaborative Editing Architecture"}
 {"type":"keyword","begin":160,"end":207,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":architecture:sync:collaboration:"}
 {"type":"paragraph","begin":207,"end":408,"contents_begin":207,"contents_end":407,"parent_type":"section","parent_begin":0}
+{"type":"bold","begin":207,"end":244,"contents_begin":208,"contents_end":242,"parent_type":"paragraph","parent_begin":207}
 {"type":"headline","begin":408,"end":815,"contents_begin":431,"contents_end":815,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Document Addressing","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":431,"end":815,"contents_begin":431,"contents_end":815,"parent_type":"headline","parent_begin":408}
 {"type":"paragraph","begin":431,"end":513,"contents_begin":431,"contents_end":513,"parent_type":"section","parent_begin":431}
 {"type":"table","begin":513,"end":815,"contents_begin":513,"contents_end":814,"parent_type":"section","parent_begin":431}
 {"type":"table-row","begin":513,"end":547,"contents_begin":514,"contents_end":546,"parent_type":"table","parent_begin":513}
+{"type":"table-cell","begin":514,"end":526,"contents_begin":515,"contents_end":524,"parent_type":"table-row","parent_begin":513}
+{"type":"table-cell","begin":526,"end":536,"contents_begin":527,"contents_end":534,"parent_type":"table-row","parent_begin":513}
+{"type":"table-cell","begin":536,"end":546,"contents_begin":537,"contents_end":544,"parent_type":"table-row","parent_begin":513}
 {"type":"table-row","begin":547,"end":580,"contents_begin":null,"contents_end":null,"parent_type":"table","parent_begin":513}
 {"type":"table-row","begin":580,"end":660,"contents_begin":581,"contents_end":659,"parent_type":"table","parent_begin":513}
+{"type":"table-cell","begin":581,"end":591,"contents_begin":582,"contents_end":589,"parent_type":"table-row","parent_begin":580}
+{"type":"code","begin":582,"end":589,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":581}
+{"type":"table-cell","begin":591,"end":629,"contents_begin":592,"contents_end":627,"parent_type":"table-row","parent_begin":580}
+{"type":"code","begin":592,"end":627,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":591}
+{"type":"table-cell","begin":629,"end":659,"contents_begin":630,"contents_end":657,"parent_type":"table-row","parent_begin":580}
 {"type":"table-row","begin":660,"end":737,"contents_begin":661,"contents_end":736,"parent_type":"table","parent_begin":513}
+{"type":"table-cell","begin":661,"end":669,"contents_begin":662,"contents_end":667,"parent_type":"table-row","parent_begin":660}
+{"type":"code","begin":662,"end":667,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":661}
+{"type":"table-cell","begin":669,"end":714,"contents_begin":670,"contents_end":712,"parent_type":"table-row","parent_begin":660}
+{"type":"code","begin":670,"end":712,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":669}
+{"type":"table-cell","begin":714,"end":736,"contents_begin":715,"contents_end":734,"parent_type":"table-row","parent_begin":660}
 {"type":"table-row","begin":737,"end":814,"contents_begin":738,"contents_end":813,"parent_type":"table","parent_begin":513}
+{"type":"table-cell","begin":738,"end":750,"contents_begin":739,"contents_end":748,"parent_type":"table-row","parent_begin":737}
+{"type":"code","begin":739,"end":748,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":738}
+{"type":"table-cell","begin":750,"end":785,"contents_begin":751,"contents_end":783,"parent_type":"table-row","parent_begin":737}
+{"type":"code","begin":751,"end":783,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":750}
+{"type":"table-cell","begin":785,"end":813,"contents_begin":786,"contents_end":811,"parent_type":"table-row","parent_begin":737}
 {"type":"headline","begin":815,"end":1249,"contents_begin":828,"contents_end":1249,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Data Flow","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":828,"end":1249,"contents_begin":828,"contents_end":1249,"parent_type":"headline","parent_begin":815}
 {"type":"src-block","begin":828,"end":1249,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":828,"language":null}
 {"type":"headline","begin":1249,"end":1687,"contents_begin":1266,"contents_end":1687,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Save Protocol","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1266,"end":1687,"contents_begin":1266,"contents_end":1687,"parent_type":"headline","parent_begin":1249}
 {"type":"paragraph","begin":1266,"end":1687,"contents_begin":1266,"contents_end":1686,"parent_type":"section","parent_begin":1266}
+{"type":"code","begin":1611,"end":1629,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1266}
 {"type":"headline","begin":1687,"end":2215,"contents_begin":1708,"contents_end":2215,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"State Server Role","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1708,"end":2215,"contents_begin":1708,"contents_end":2215,"parent_type":"headline","parent_begin":1687}
 {"type":"paragraph","begin":1708,"end":1831,"contents_begin":1708,"contents_end":1831,"parent_type":"section","parent_begin":1708}
+{"type":"code","begin":1712,"end":1725,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1708}
+{"type":"bold","begin":1737,"end":1751,"contents_begin":1738,"contents_end":1750,"parent_type":"paragraph","parent_begin":1708}
 {"type":"plain-list","begin":1831,"end":2215,"contents_begin":1831,"contents_end":2214,"parent_type":"section","parent_begin":1708}
 {"type":"item","begin":1831,"end":1884,"contents_begin":1833,"contents_end":1884,"parent_type":"plain-list","parent_begin":1831,"bullet":"- "}
 {"type":"paragraph","begin":1833,"end":1884,"contents_begin":1833,"contents_end":1884,"parent_type":"item","parent_begin":1831}
 {"type":"item","begin":1884,"end":1956,"contents_begin":1886,"contents_end":1956,"parent_type":"plain-list","parent_begin":1831,"bullet":"- "}
 {"type":"paragraph","begin":1886,"end":1956,"contents_begin":1886,"contents_end":1956,"parent_type":"item","parent_begin":1884}
+{"type":"code","begin":1900,"end":1914,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1886}
 {"type":"item","begin":1956,"end":2034,"contents_begin":1958,"contents_end":2034,"parent_type":"plain-list","parent_begin":1831,"bullet":"- "}
 {"type":"paragraph","begin":1958,"end":2034,"contents_begin":1958,"contents_end":2034,"parent_type":"item","parent_begin":1956}
 {"type":"item","begin":2034,"end":2133,"contents_begin":2036,"contents_end":2133,"parent_type":"plain-list","parent_begin":1831,"bullet":"- "}
@@ -40,10 +63,33 @@
 {"type":"section","begin":2239,"end":3047,"contents_begin":2239,"contents_end":3047,"parent_type":"headline","parent_begin":2215}
 {"type":"table","begin":2239,"end":2513,"contents_begin":2239,"contents_end":2512,"parent_type":"section","parent_begin":2239}
 {"type":"table-row","begin":2239,"end":2268,"contents_begin":2240,"contents_end":2267,"parent_type":"table","parent_begin":2239}
+{"type":"table-cell","begin":2240,"end":2247,"contents_begin":2241,"contents_end":2245,"parent_type":"table-row","parent_begin":2239}
+{"type":"table-cell","begin":2247,"end":2256,"contents_begin":2248,"contents_end":2254,"parent_type":"table-row","parent_begin":2239}
+{"type":"table-cell","begin":2256,"end":2267,"contents_begin":2257,"contents_end":2265,"parent_type":"table-row","parent_begin":2239}
 {"type":"table-row","begin":2268,"end":2297,"contents_begin":null,"contents_end":null,"parent_type":"table","parent_begin":2239}
 {"type":"table-row","begin":2297,"end":2354,"contents_begin":2298,"contents_end":2353,"parent_type":"table","parent_begin":2239}
+{"type":"table-cell","begin":2298,"end":2307,"contents_begin":2299,"contents_end":2305,"parent_type":"table-row","parent_begin":2297}
+{"type":"bold","begin":2299,"end":2305,"contents_begin":2300,"contents_end":2304,"parent_type":"table-cell","parent_begin":2298}
+{"type":"table-cell","begin":2307,"end":2314,"contents_begin":2308,"contents_end":2312,"parent_type":"table-row","parent_begin":2297}
+{"type":"table-cell","begin":2314,"end":2353,"contents_begin":2315,"contents_end":2351,"parent_type":"table-row","parent_begin":2297}
 {"type":"table-row","begin":2354,"end":2441,"contents_begin":2355,"contents_end":2440,"parent_type":"table","parent_begin":2239}
+{"type":"table-cell","begin":2355,"end":2368,"contents_begin":2356,"contents_end":2366,"parent_type":"table-row","parent_begin":2354}
+{"type":"bold","begin":2356,"end":2366,"contents_begin":2357,"contents_end":2365,"parent_type":"table-cell","parent_begin":2355}
+{"type":"table-cell","begin":2368,"end":2387,"contents_begin":2369,"contents_end":2385,"parent_type":"table-row","parent_begin":2354}
+{"type":"code","begin":2369,"end":2385,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":2368}
+{"type":"table-cell","begin":2387,"end":2440,"contents_begin":2388,"contents_end":2438,"parent_type":"table-row","parent_begin":2354}
 {"type":"table-row","begin":2441,"end":2512,"contents_begin":2442,"contents_end":2511,"parent_type":"table","parent_begin":2239}
+{"type":"table-cell","begin":2442,"end":2460,"contents_begin":2443,"contents_end":2458,"parent_type":"table-row","parent_begin":2441}
+{"type":"bold","begin":2443,"end":2458,"contents_begin":2444,"contents_end":2457,"parent_type":"table-cell","parent_begin":2442}
+{"type":"table-cell","begin":2460,"end":2474,"contents_begin":2461,"contents_end":2472,"parent_type":"table-row","parent_begin":2441}
+{"type":"table-cell","begin":2474,"end":2511,"contents_begin":2475,"contents_end":2509,"parent_type":"table-row","parent_begin":2441}
 {"type":"paragraph","begin":2513,"end":2794,"contents_begin":2513,"contents_end":2793,"parent_type":"section","parent_begin":2239}
+{"type":"code","begin":2690,"end":2747,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2513}
 {"type":"paragraph","begin":2794,"end":2884,"contents_begin":2794,"contents_end":2883,"parent_type":"section","parent_begin":2239}
+{"type":"link","begin":2807,"end":2881,"contents_begin":2851,"contents_end":2879,"parent_type":"paragraph","parent_begin":2794,"link_type":"fuzzy","path":"concept:collaborative-state?rel=explains","raw_link":"concept:collaborative-state?rel=explains","format":"bracket"}
 {"type":"paragraph","begin":2884,"end":3047,"contents_begin":2884,"contents_end":3047,"parent_type":"section","parent_begin":2239}
+{"type":"link","begin":2894,"end":2945,"contents_begin":2932,"contents_end":2943,"parent_type":"paragraph","parent_begin":2884,"link_type":"fuzzy","path":"concept:sync-engine?rel=references","raw_link":"concept:sync-engine?rel=references","format":"bracket"}
+{"type":"link","begin":2947,"end":2975,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2884,"link_type":"fuzzy","path":"concept:collab-workflows","raw_link":"concept:collab-workflows","format":"bracket"}
+{"type":"link","begin":2977,"end":3008,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2884,"link_type":"fuzzy","path":"concept:collaborative-state","raw_link":"concept:collaborative-state","format":"bracket"}
+{"type":"link","begin":3010,"end":3035,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2884,"link_type":"fuzzy","path":"concept:adr-text-sync","raw_link":"concept:adr-text-sync","format":"bracket"}
+{"type":"link","begin":3037,"end":3046,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2884,"link_type":"fuzzy","path":"index","raw_link":"index","format":"bracket"}

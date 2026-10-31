@@ -12,38 +12,54 @@
 {"type":"plain-list","begin":427,"end":813,"contents_begin":427,"contents_end":812,"parent_type":"section","parent_begin":427}
 {"type":"item","begin":427,"end":504,"contents_begin":429,"contents_end":504,"parent_type":"plain-list","parent_begin":427,"bullet":"- "}
 {"type":"paragraph","begin":429,"end":504,"contents_begin":429,"contents_end":504,"parent_type":"item","parent_begin":427}
+{"type":"link","begin":429,"end":503,"contents_begin":473,"contents_end":501,"parent_type":"paragraph","parent_begin":429,"link_type":"id","path":"practice:makefile-canonical-interface","raw_link":"id:practice:makefile-canonical-interface","format":"bracket"}
 {"type":"item","begin":504,"end":579,"contents_begin":506,"contents_end":579,"parent_type":"plain-list","parent_begin":427,"bullet":"- "}
 {"type":"paragraph","begin":506,"end":579,"contents_begin":506,"contents_end":579,"parent_type":"item","parent_begin":504}
+{"type":"link","begin":506,"end":578,"contents_begin":549,"contents_end":576,"parent_type":"paragraph","parent_begin":506,"link_type":"id","path":"practice:makefile-self-documentation","raw_link":"id:practice:makefile-self-documentation","format":"bracket"}
 {"type":"item","begin":579,"end":632,"contents_begin":581,"contents_end":632,"parent_type":"plain-list","parent_begin":427,"bullet":"- "}
 {"type":"paragraph","begin":581,"end":632,"contents_begin":581,"contents_end":632,"parent_type":"item","parent_begin":579}
+{"type":"link","begin":581,"end":631,"contents_begin":613,"contents_end":629,"parent_type":"paragraph","parent_begin":581,"link_type":"id","path":"practice:makefile-hygiene","raw_link":"id:practice:makefile-hygiene","format":"bracket"}
 {"type":"item","begin":632,"end":687,"contents_begin":634,"contents_end":687,"parent_type":"plain-list","parent_begin":427,"bullet":"- "}
 {"type":"paragraph","begin":634,"end":687,"contents_begin":634,"contents_end":687,"parent_type":"item","parent_begin":632}
+{"type":"link","begin":634,"end":686,"contents_begin":667,"contents_end":684,"parent_type":"paragraph","parent_begin":634,"link_type":"id","path":"practice:makefile-ci-tiers","raw_link":"id:practice:makefile-ci-tiers","format":"bracket"}
 {"type":"item","begin":687,"end":752,"contents_begin":689,"contents_end":752,"parent_type":"plain-list","parent_begin":427,"bullet":"- "}
 {"type":"paragraph","begin":689,"end":752,"contents_begin":689,"contents_end":752,"parent_type":"item","parent_begin":687}
+{"type":"link","begin":689,"end":751,"contents_begin":727,"contents_end":749,"parent_type":"paragraph","parent_begin":689,"link_type":"id","path":"practice:makefile-doctor-target","raw_link":"id:practice:makefile-doctor-target","format":"bracket"}
 {"type":"item","begin":752,"end":812,"contents_begin":754,"contents_end":812,"parent_type":"plain-list","parent_begin":427,"bullet":"- "}
 {"type":"paragraph","begin":754,"end":812,"contents_begin":754,"contents_end":812,"parent_type":"item","parent_begin":752}
+{"type":"link","begin":754,"end":811,"contents_begin":785,"contents_end":809,"parent_type":"paragraph","parent_begin":754,"link_type":"id","path":"template:makefile-target","raw_link":"id:template:makefile-target","format":"bracket"}
 {"type":"headline","begin":813,"end":1166,"contents_begin":830,"contents_end":1166,"parent_type":"org-data","parent_begin":0,"level":1,"true_level":1,"raw_title":"Git and GitLab","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":830,"end":1166,"contents_begin":830,"contents_end":1166,"parent_type":"headline","parent_begin":813}
 {"type":"plain-list","begin":830,"end":1166,"contents_begin":830,"contents_end":1165,"parent_type":"section","parent_begin":830}
 {"type":"item","begin":830,"end":903,"contents_begin":832,"contents_end":903,"parent_type":"plain-list","parent_begin":830,"bullet":"- "}
 {"type":"paragraph","begin":832,"end":903,"contents_begin":832,"contents_end":903,"parent_type":"item","parent_begin":830}
+{"type":"link","begin":832,"end":902,"contents_begin":874,"contents_end":900,"parent_type":"paragraph","parent_begin":832,"link_type":"id","path":"practice:makefile-wraps-vcs-actions","raw_link":"id:practice:makefile-wraps-vcs-actions","format":"bracket"}
 {"type":"item","begin":903,"end":960,"contents_begin":905,"contents_end":960,"parent_type":"plain-list","parent_begin":830,"bullet":"- "}
 {"type":"paragraph","begin":905,"end":960,"contents_begin":905,"contents_end":960,"parent_type":"item","parent_begin":903}
+{"type":"link","begin":905,"end":959,"contents_begin":939,"contents_end":957,"parent_type":"paragraph","parent_begin":905,"link_type":"id","path":"practice:gitlab-mr-workflow","raw_link":"id:practice:gitlab-mr-workflow","format":"bracket"}
 {"type":"item","begin":960,"end":1041,"contents_begin":962,"contents_end":1041,"parent_type":"plain-list","parent_begin":830,"bullet":"- "}
 {"type":"paragraph","begin":962,"end":1041,"contents_begin":962,"contents_end":1041,"parent_type":"item","parent_begin":960}
+{"type":"link","begin":962,"end":1040,"contents_begin":1008,"contents_end":1038,"parent_type":"paragraph","parent_begin":962,"link_type":"id","path":"practice:gitlab-ci-pipeline-conventions","raw_link":"id:practice:gitlab-ci-pipeline-conventions","format":"bracket"}
 {"type":"item","begin":1041,"end":1116,"contents_begin":1043,"contents_end":1116,"parent_type":"plain-list","parent_begin":830,"bullet":"- "}
 {"type":"paragraph","begin":1043,"end":1116,"contents_begin":1043,"contents_end":1116,"parent_type":"item","parent_begin":1041}
+{"type":"link","begin":1043,"end":1115,"contents_begin":1086,"contents_end":1113,"parent_type":"paragraph","parent_begin":1043,"link_type":"id","path":"practice:git-branch-release-strategy","raw_link":"id:practice:git-branch-release-strategy","format":"bracket"}
 {"type":"item","begin":1116,"end":1165,"contents_begin":1118,"contents_end":1165,"parent_type":"plain-list","parent_begin":830,"bullet":"- "}
 {"type":"paragraph","begin":1118,"end":1165,"contents_begin":1118,"contents_end":1165,"parent_type":"item","parent_begin":1116}
+{"type":"link","begin":1118,"end":1164,"contents_begin":1148,"contents_end":1162,"parent_type":"paragraph","parent_begin":1118,"link_type":"id","path":"practice:glab-cli-usage","raw_link":"id:practice:glab-cli-usage","format":"bracket"}
 {"type":"headline","begin":1166,"end":1485,"contents_begin":1183,"contents_end":1485,"parent_type":"org-data","parent_begin":0,"level":1,"true_level":1,"raw_title":"Git and GitHub","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1183,"end":1485,"contents_begin":1183,"contents_end":1485,"parent_type":"headline","parent_begin":1166}
 {"type":"plain-list","begin":1183,"end":1442,"contents_begin":1183,"contents_end":1441,"parent_type":"section","parent_begin":1183}
 {"type":"item","begin":1183,"end":1240,"contents_begin":1185,"contents_end":1240,"parent_type":"plain-list","parent_begin":1183,"bullet":"- "}
 {"type":"paragraph","begin":1185,"end":1240,"contents_begin":1185,"contents_end":1240,"parent_type":"item","parent_begin":1183}
+{"type":"link","begin":1185,"end":1239,"contents_begin":1219,"contents_end":1237,"parent_type":"paragraph","parent_begin":1185,"link_type":"id","path":"practice:github-pr-workflow","raw_link":"id:practice:github-pr-workflow","format":"bracket"}
 {"type":"item","begin":1240,"end":1313,"contents_begin":1242,"contents_end":1313,"parent_type":"plain-list","parent_begin":1183,"bullet":"- "}
 {"type":"paragraph","begin":1242,"end":1313,"contents_begin":1242,"contents_end":1313,"parent_type":"item","parent_begin":1240}
+{"type":"link","begin":1242,"end":1312,"contents_begin":1284,"contents_end":1310,"parent_type":"paragraph","parent_begin":1242,"link_type":"id","path":"practice:github-actions-conventions","raw_link":"id:practice:github-actions-conventions","format":"bracket"}
 {"type":"item","begin":1313,"end":1358,"contents_begin":1315,"contents_end":1358,"parent_type":"plain-list","parent_begin":1183,"bullet":"- "}
 {"type":"paragraph","begin":1315,"end":1358,"contents_begin":1315,"contents_end":1358,"parent_type":"item","parent_begin":1313}
+{"type":"link","begin":1315,"end":1357,"contents_begin":1343,"contents_end":1355,"parent_type":"paragraph","parent_begin":1315,"link_type":"id","path":"practice:gh-cli-usage","raw_link":"id:practice:gh-cli-usage","format":"bracket"}
 {"type":"item","begin":1358,"end":1441,"contents_begin":1360,"contents_end":1441,"parent_type":"plain-list","parent_begin":1183,"bullet":"- "}
 {"type":"paragraph","begin":1360,"end":1441,"contents_begin":1360,"contents_end":1441,"parent_type":"item","parent_begin":1358}
+{"type":"link","begin":1360,"end":1440,"contents_begin":1407,"contents_end":1438,"parent_type":"paragraph","parent_begin":1360,"link_type":"id","path":"practice:label-driven-release-automation","raw_link":"id:practice:label-driven-release-automation","format":"bracket"}
 {"type":"paragraph","begin":1442,"end":1485,"contents_begin":1442,"contents_end":1485,"parent_type":"section","parent_begin":1183}
+{"type":"link","begin":1450,"end":1483,"contents_begin":1471,"contents_end":1481,"parent_type":"paragraph","parent_begin":1442,"link_type":"id","path":"hub:start-here","raw_link":"id:hub:start-here","format":"bracket"}

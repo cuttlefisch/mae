@@ -46,6 +46,7 @@
 {"type":"headline","begin":386,"end":420,"contents_begin":395,"contents_end":420,"parent_type":"org-data","parent_begin":0,"level":1,"true_level":1,"raw_title":"U+003A","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":395,"end":420,"contents_begin":395,"contents_end":420,"parent_type":"headline","parent_begin":386}
 {"type":"paragraph","begin":395,"end":420,"contents_begin":395,"contents_end":420,"parent_type":"section","parent_begin":395}
+{"type":"footnote-reference","begin":409,"end":418,"contents_begin":415,"contents_end":416,"parent_type":"paragraph","parent_begin":395}
 {"type":"headline","begin":420,"end":454,"contents_begin":429,"contents_end":454,"parent_type":"org-data","parent_begin":0,"level":1,"true_level":1,"raw_title":"U+0040","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":429,"end":454,"contents_begin":429,"contents_end":454,"parent_type":"headline","parent_begin":420}
 {"type":"paragraph","begin":429,"end":454,"contents_begin":429,"contents_end":454,"parent_type":"section","parent_begin":429}

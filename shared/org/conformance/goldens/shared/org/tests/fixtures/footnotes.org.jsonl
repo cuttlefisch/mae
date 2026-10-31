@@ -1,6 +1,7 @@
 {"type":"#file","bytes":263,"eol":"unix","unmodified":true}
 {"type":"section","begin":0,"end":225,"contents_begin":0,"contents_end":225,"parent_type":"org-data","parent_begin":0}
 {"type":"paragraph","begin":0,"end":30,"contents_begin":0,"contents_end":29,"parent_type":"section","parent_begin":0}
+{"type":"footnote-reference","begin":22,"end":28,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":0}
 {"type":"footnote-definition","begin":30,"end":69,"contents_begin":37,"contents_end":68,"parent_type":"section","parent_begin":0}
 {"type":"paragraph","begin":37,"end":68,"contents_begin":37,"contents_end":68,"parent_type":"footnote-definition","parent_begin":30}
 {"type":"footnote-definition","begin":69,"end":103,"contents_begin":78,"contents_end":103,"parent_type":"section","parent_begin":0}

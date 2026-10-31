@@ -78,7 +78,28 @@ pub struct ParseOptions {
     /// diagnostic: the parse never recurses on input nesting. Values above
     /// [`MAX_DEPTH_CEILING`] are clamped to it.
     pub max_depth: usize,
+    /// Registered link types (`org-link-types`): they decide which
+    /// `type:path` text is a plain or angle link, and a bracket link's type.
+    /// Declared data (ADR-112 D4); the default is what `emacs -Q` registers,
+    /// the conformance oracle's set. `id` is NOT in it: `[[id:x]]` is then a
+    /// fuzzy link to Org, though `classify_link` still reads it as a KB link.
+    pub link_types: Vec<String>,
 }
+
+/// `(org-link-types)` in `emacs -Q` with Org 9.7.11.
+pub const DEFAULT_LINK_TYPES: [&str; 11] = [
+    "file+sys",
+    "file+emacs",
+    "shell",
+    "news",
+    "mailto",
+    "https",
+    "http",
+    "ftp",
+    "help",
+    "file",
+    "elisp",
+];
 
 /// The most `max_depth` can be: larger values are clamped to it. The parse
 /// itself never recurses, but rowan drops and compares a tree recursively,
@@ -102,6 +123,7 @@ impl Default for ParseOptions {
                 done: vec!["DONE".into()],
             }],
             max_depth: DEFAULT_MAX_DEPTH,
+            link_types: DEFAULT_LINK_TYPES.iter().map(|s| s.to_string()).collect(),
         }
     }
 }

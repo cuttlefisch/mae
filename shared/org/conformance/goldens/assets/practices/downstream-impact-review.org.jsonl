@@ -15,10 +15,14 @@
 {"type":"headline","begin":873,"end":1235,"contents_begin":902,"contents_end":1235,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Type safety at boundaries","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":902,"end":1235,"contents_begin":902,"contents_end":1235,"parent_type":"headline","parent_begin":873}
 {"type":"paragraph","begin":902,"end":1235,"contents_begin":902,"contents_end":1234,"parent_type":"section","parent_begin":902}
+{"type":"link","begin":950,"end":1001,"contents_begin":981,"contents_end":999,"parent_type":"paragraph","parent_begin":902,"link_type":"fuzzy","path":"practice:shared-computation","raw_link":"practice:shared-computation","format":"bracket"}
 {"type":"headline","begin":1235,"end":1676,"contents_begin":1271,"contents_end":1676,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Regression guard across surfaces","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1271,"end":1676,"contents_begin":1271,"contents_end":1676,"parent_type":"headline","parent_begin":1235}
 {"type":"paragraph","begin":1271,"end":1676,"contents_begin":1271,"contents_end":1675,"parent_type":"section","parent_begin":1271}
 {"type":"headline","begin":1676,"end":1979,"contents_begin":1745,"contents_end":1979,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Adversarial case, for security/auth/crypto/sync work specifically","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1745,"end":1979,"contents_begin":1745,"contents_end":1979,"parent_type":"headline","parent_begin":1676}
 {"type":"paragraph","begin":1745,"end":1952,"contents_begin":1745,"contents_end":1951,"parent_type":"section","parent_begin":1745}
+{"type":"bold","begin":1823,"end":1838,"contents_begin":1824,"contents_end":1836,"parent_type":"paragraph","parent_begin":1745}
+{"type":"link","begin":1846,"end":1900,"contents_begin":1878,"contents_end":1897,"parent_type":"paragraph","parent_begin":1745,"link_type":"fuzzy","path":"practice:adversarial-testing","raw_link":"practice:adversarial-testing","format":"bracket"}
 {"type":"paragraph","begin":1952,"end":1979,"contents_begin":1952,"contents_end":1979,"parent_type":"section","parent_begin":1745}
+{"type":"link","begin":1961,"end":1977,"contents_begin":1970,"contents_end":1975,"parent_type":"paragraph","parent_begin":1952,"link_type":"fuzzy","path":"index","raw_link":"index","format":"bracket"}

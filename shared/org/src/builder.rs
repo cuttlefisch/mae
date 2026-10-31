@@ -133,6 +133,7 @@ impl<'a> Builder<'a> {
             self.em.lines(self.cursor, el.begin, UNPARSED);
         }
         self.record(&el);
+        self.em.budget = self.cap.saturating_sub(self.stack.len());
         open(&mut self.em, &el);
         self.descend_or_close(&el, parent_mode);
     }
@@ -239,7 +240,8 @@ fn head(em: &mut Emitter, el: &Element) {
     match el.kind {
         HEADLINE => {
             let l = em.src.lines[em.src.line_of(a)];
-            em.events.push(Event::HeadlineLine(l.start, l.end.min(b)));
+            em.events
+                .push(Event::HeadlineLine(l.start, l.end.min(b), em.budget));
             em.tok(NEWLINE, l.end.min(b), first_end);
             em.lines(first_end, b, TEXT);
         }
@@ -248,6 +250,7 @@ fn head(em: &mut Emitter, el: &Element) {
         NODE_PROPERTY => tokens::property_line(em, a, b),
         ITEM => tokens::item_line(em, a, b),
         FOOTNOTE_DEFINITION => tokens::footnote_head(em, a, b),
+        TABLE_ROW => table_row(em, el, a, b),
         k if closes(k) => {
             tokens::begin_line(em, k, a, first_end);
             em.lines(first_end, b, TEXT);
@@ -275,9 +278,23 @@ fn closes(kind: SyntaxKind) -> bool {
 }
 
 fn body(em: &mut Emitter, el: &Element) {
-    match el.body {
-        Body::Opaque => em.tok(BLOCK_CONTENT, el.head_end, el.body_end),
+    match (el.kind, el.body) {
+        // Verse contents and paragraphs hold objects (O2).
+        (VERSE_BLOCK | PARAGRAPH, _) => em.inline(el.head_end, el.body_end, el.kind),
+        (_, Body::Opaque) => em.tok(BLOCK_CONTENT, el.head_end, el.body_end),
         _ => em.lines(el.head_end, el.body_end, TEXT),
+    }
+}
+
+/// A standard table row's contents (after its first `|`) are table cells.
+fn table_row(em: &mut Emitter, el: &Element, a: usize, b: usize) {
+    match crate::span::contents_of(el, em.src) {
+        Some((cb, ce)) => {
+            em.tok(MARKUP, a, cb);
+            em.inline(cb, ce, TABLE_ROW);
+            em.lines(ce, b, TEXT);
+        }
+        None => em.lines(a, b, TEXT),
     }
 }
 

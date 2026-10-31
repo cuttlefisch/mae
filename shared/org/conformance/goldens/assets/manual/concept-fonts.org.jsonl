@@ -9,25 +9,56 @@
 {"type":"headline","begin":321,"end":1276,"contents_begin":332,"contents_end":1276,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Options","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":332,"end":1276,"contents_begin":332,"contents_end":1276,"parent_type":"headline","parent_begin":321}
 {"type":"paragraph","begin":332,"end":557,"contents_begin":332,"contents_end":556,"parent_type":"section","parent_begin":332}
+{"type":"bold","begin":389,"end":402,"contents_begin":390,"contents_end":400,"parent_type":"paragraph","parent_begin":332}
+{"type":"code","begin":390,"end":400,"contents_begin":null,"contents_end":null,"parent_type":"bold","parent_begin":389}
+{"type":"code","begin":406,"end":425,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":332}
+{"type":"code","begin":465,"end":472,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":332}
+{"type":"code","begin":489,"end":501,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":332}
+{"type":"code","begin":518,"end":528,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":332}
+{"type":"link","begin":535,"end":554,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":332,"link_type":"fuzzy","path":"concept:options","raw_link":"concept:options","format":"bracket"}
 {"type":"table","begin":557,"end":921,"contents_begin":557,"contents_end":920,"parent_type":"section","parent_begin":332}
 {"type":"table-row","begin":557,"end":588,"contents_begin":558,"contents_end":587,"parent_type":"table","parent_begin":557}
+{"type":"table-cell","begin":558,"end":567,"contents_begin":559,"contents_end":565,"parent_type":"table-row","parent_begin":557}
+{"type":"table-cell","begin":567,"end":577,"contents_begin":568,"contents_end":575,"parent_type":"table-row","parent_begin":557}
+{"type":"table-cell","begin":577,"end":587,"contents_begin":578,"contents_end":585,"parent_type":"table-row","parent_begin":557}
 {"type":"table-row","begin":588,"end":619,"contents_begin":null,"contents_end":null,"parent_type":"table","parent_begin":557}
 {"type":"table-row","begin":619,"end":720,"contents_begin":620,"contents_end":719,"parent_type":"table","parent_begin":557}
+{"type":"table-cell","begin":620,"end":636,"contents_begin":621,"contents_end":634,"parent_type":"table-row","parent_begin":619}
+{"type":"code","begin":621,"end":634,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":620}
+{"type":"table-cell","begin":636,"end":646,"contents_begin":637,"contents_end":644,"parent_type":"table-row","parent_begin":619}
+{"type":"table-cell","begin":646,"end":719,"contents_begin":647,"contents_end":717,"parent_type":"table-row","parent_begin":619}
 {"type":"table-row","begin":720,"end":807,"contents_begin":721,"contents_end":806,"parent_type":"table","parent_begin":557}
+{"type":"table-cell","begin":721,"end":735,"contents_begin":722,"contents_end":733,"parent_type":"table-row","parent_begin":720}
+{"type":"code","begin":722,"end":733,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":721}
+{"type":"table-cell","begin":735,"end":744,"contents_begin":736,"contents_end":742,"parent_type":"table-row","parent_begin":720}
+{"type":"code","begin":736,"end":742,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":735}
+{"type":"table-cell","begin":744,"end":806,"contents_begin":745,"contents_end":804,"parent_type":"table-row","parent_begin":720}
 {"type":"table-row","begin":807,"end":920,"contents_begin":808,"contents_end":919,"parent_type":"table","parent_begin":557}
+{"type":"table-cell","begin":808,"end":829,"contents_begin":809,"contents_end":827,"parent_type":"table-row","parent_begin":807}
+{"type":"code","begin":809,"end":827,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":808}
+{"type":"table-cell","begin":829,"end":839,"contents_begin":830,"contents_end":837,"parent_type":"table-row","parent_begin":807}
+{"type":"table-cell","begin":839,"end":919,"contents_begin":840,"contents_end":917,"parent_type":"table-row","parent_begin":807}
 {"type":"paragraph","begin":921,"end":936,"contents_begin":921,"contents_end":936,"parent_type":"section","parent_begin":332}
+{"type":"code","begin":924,"end":934,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":921}
 {"type":"src-block","begin":936,"end":1090,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":332,"language":"scheme"}
 {"type":"paragraph","begin":1090,"end":1276,"contents_begin":1090,"contents_end":1275,"parent_type":"section","parent_begin":332}
+{"type":"code","begin":1102,"end":1122,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1090}
+{"type":"code","begin":1128,"end":1140,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1090}
+{"type":"code","begin":1154,"end":1167,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1090}
+{"type":"code","begin":1168,"end":1195,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1090}
+{"type":"code","begin":1237,"end":1247,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1090}
 {"type":"headline","begin":1276,"end":2098,"contents_begin":1348,"contents_end":2098,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Resolution order (the GUI never fails to launch over a missing font)","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1348,"end":2098,"contents_begin":1348,"contents_end":2098,"parent_type":"headline","parent_begin":1276}
 {"type":"paragraph","begin":1348,"end":1466,"contents_begin":1348,"contents_end":1465,"parent_type":"section","parent_begin":1348}
 {"type":"plain-list","begin":1466,"end":1955,"contents_begin":1466,"contents_end":1954,"parent_type":"section","parent_begin":1348}
 {"type":"item","begin":1466,"end":1506,"contents_begin":1469,"contents_end":1506,"parent_type":"plain-list","parent_begin":1466,"bullet":"1. "}
 {"type":"paragraph","begin":1469,"end":1506,"contents_begin":1469,"contents_end":1506,"parent_type":"item","parent_begin":1466}
+{"type":"code","begin":1469,"end":1483,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1469}
 {"type":"item","begin":1506,"end":1614,"contents_begin":1509,"contents_end":1614,"parent_type":"plain-list","parent_begin":1466,"bullet":"2. "}
 {"type":"paragraph","begin":1509,"end":1614,"contents_begin":1509,"contents_end":1614,"parent_type":"item","parent_begin":1506}
 {"type":"item","begin":1614,"end":1793,"contents_begin":1617,"contents_end":1793,"parent_type":"plain-list","parent_begin":1466,"bullet":"3. "}
 {"type":"paragraph","begin":1617,"end":1793,"contents_begin":1617,"contents_end":1793,"parent_type":"item","parent_begin":1614}
+{"type":"bold","begin":1621,"end":1631,"contents_begin":1622,"contents_end":1629,"parent_type":"paragraph","parent_begin":1617}
 {"type":"item","begin":1793,"end":1919,"contents_begin":1796,"contents_end":1919,"parent_type":"plain-list","parent_begin":1466,"bullet":"4. "}
 {"type":"paragraph","begin":1796,"end":1919,"contents_begin":1796,"contents_end":1919,"parent_type":"item","parent_begin":1793}
 {"type":"item","begin":1919,"end":1954,"contents_begin":1922,"contents_end":1954,"parent_type":"plain-list","parent_begin":1466,"bullet":"5. "}
@@ -36,20 +67,41 @@
 {"type":"headline","begin":2098,"end":2888,"contents_begin":2126,"contents_end":2888,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Icons (Nerd Font glyphs)","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":2126,"end":2888,"contents_begin":2126,"contents_end":2888,"parent_type":"headline","parent_begin":2098}
 {"type":"paragraph","begin":2126,"end":2365,"contents_begin":2126,"contents_end":2364,"parent_type":"section","parent_begin":2126}
+{"type":"code","begin":2239,"end":2258,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2126}
+{"type":"bold","begin":2343,"end":2353,"contents_begin":2344,"contents_end":2351,"parent_type":"paragraph","parent_begin":2126}
 {"type":"paragraph","begin":2365,"end":2594,"contents_begin":2365,"contents_end":2594,"parent_type":"section","parent_begin":2126}
+{"type":"bold","begin":2421,"end":2453,"contents_begin":2422,"contents_end":2451,"parent_type":"paragraph","parent_begin":2365}
+{"type":"bold","begin":2422,"end":2451,"contents_begin":2423,"contents_end":2450,"parent_type":"bold","parent_begin":2421}
+{"type":"code","begin":2560,"end":2579,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2365}
+{"type":"code","begin":2582,"end":2592,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2365}
 {"type":"src-block","begin":2594,"end":2682,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":2126,"language":"scheme"}
 {"type":"paragraph","begin":2682,"end":2888,"contents_begin":2682,"contents_end":2887,"parent_type":"section","parent_begin":2126}
 {"type":"headline","begin":2888,"end":3567,"contents_begin":2904,"contents_end":3567,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Bundled font","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":2904,"end":3567,"contents_begin":2904,"contents_end":3567,"parent_type":"headline","parent_begin":2888}
 {"type":"paragraph","begin":2904,"end":3317,"contents_begin":2904,"contents_end":3316,"parent_type":"section","parent_begin":2904}
+{"type":"bold","begin":2950,"end":2976,"contents_begin":2951,"contents_end":2975,"parent_type":"paragraph","parent_begin":2904}
+{"type":"code","begin":3214,"end":3241,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2904}
 {"type":"paragraph","begin":3317,"end":3567,"contents_begin":3317,"contents_end":3566,"parent_type":"section","parent_begin":2904}
+{"type":"code","begin":3363,"end":3378,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":3317}
+{"type":"code","begin":3412,"end":3427,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":3317}
+{"type":"code","begin":3463,"end":3515,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":3317}
 {"type":"headline","begin":3567,"end":4058,"contents_begin":3586,"contents_end":4058,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Troubleshooting","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":3586,"end":4058,"contents_begin":3586,"contents_end":4058,"parent_type":"headline","parent_begin":3567}
 {"type":"plain-list","begin":3586,"end":4000,"contents_begin":3586,"contents_end":3999,"parent_type":"section","parent_begin":3586}
 {"type":"item","begin":3586,"end":3785,"contents_begin":3588,"contents_end":3785,"parent_type":"plain-list","parent_begin":3586,"bullet":"- "}
 {"type":"paragraph","begin":3588,"end":3785,"contents_begin":3588,"contents_end":3785,"parent_type":"item","parent_begin":3586}
+{"type":"bold","begin":3588,"end":3638,"contents_begin":3589,"contents_end":3636,"parent_type":"paragraph","parent_begin":3588}
+{"type":"code","begin":3711,"end":3725,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":3588}
 {"type":"item","begin":3785,"end":3920,"contents_begin":3787,"contents_end":3920,"parent_type":"plain-list","parent_begin":3586,"bullet":"- "}
 {"type":"paragraph","begin":3787,"end":3920,"contents_begin":3787,"contents_end":3920,"parent_type":"item","parent_begin":3785}
+{"type":"bold","begin":3787,"end":3809,"contents_begin":3788,"contents_end":3807,"parent_type":"paragraph","parent_begin":3787}
+{"type":"code","begin":3862,"end":3880,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":3787}
 {"type":"item","begin":3920,"end":3999,"contents_begin":3922,"contents_end":3999,"parent_type":"plain-list","parent_begin":3586,"bullet":"- "}
 {"type":"paragraph","begin":3922,"end":3999,"contents_begin":3922,"contents_end":3999,"parent_type":"item","parent_begin":3920}
+{"type":"bold","begin":3922,"end":3935,"contents_begin":3923,"contents_end":3933,"parent_type":"paragraph","parent_begin":3922}
+{"type":"code","begin":3939,"end":3959,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":3922}
+{"type":"code","begin":3975,"end":3987,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":3922}
 {"type":"paragraph","begin":4000,"end":4058,"contents_begin":4000,"contents_end":4058,"parent_type":"section","parent_begin":3586}
+{"type":"link","begin":4010,"end":4025,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":4000,"link_type":"fuzzy","path":"concept:gui","raw_link":"concept:gui","format":"bracket"}
+{"type":"link","begin":4027,"end":4046,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":4000,"link_type":"fuzzy","path":"concept:options","raw_link":"concept:options","format":"bracket"}
+{"type":"link","begin":4048,"end":4057,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":4000,"link_type":"fuzzy","path":"index","raw_link":"index","format":"bracket"}

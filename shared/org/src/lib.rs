@@ -41,6 +41,7 @@ mod element;
 mod green;
 mod headline;
 mod index;
+mod inline;
 mod kind;
 mod leaf;
 mod list;
@@ -57,7 +58,9 @@ mod views;
 pub use chartables::EMACS_VERSION as CHAR_TABLES_EMACS_VERSION;
 pub use diagnostic::{Diagnostic, DiagnosticKind};
 pub use kind::{OrgLanguage, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken};
-pub use options::{ParseOptions, TodoSequence, DEFAULT_MAX_DEPTH, MAX_DEPTH_CEILING};
+pub use options::{
+    ParseOptions, TodoSequence, DEFAULT_LINK_TYPES, DEFAULT_MAX_DEPTH, MAX_DEPTH_CEILING,
+};
 /// The tree is a rowan tree; `node.text_range()` returns rowan types. The
 /// re-export makes that coupling explicit and versioned: plain-data results
 /// (diagnostics, contents) use [`Span`] instead, so a JSON/WASM consumer never
@@ -131,7 +134,17 @@ fn parse_with(src: text::Source, options: &ParseOptions, start: builder::Start) 
     let declared = !built.in_file_todo.is_empty();
     let todo =
         options::TodoKeywords::resolve(declared, &built.in_file_todo, &options.todo_sequences);
-    let green = green::to_green(text, &built.events, &todo);
+    let ix = inline::InlineIndex::build(text);
+    let mut link_types = options.link_types.clone();
+    link_types.sort_by_key(|t| std::cmp::Reverse(t.len()));
+    let cx = inline::InlineCx {
+        src: &src,
+        ix: &ix,
+        link_types: &link_types,
+    };
+    let mut contents = built.contents;
+    let green = green::to_green(&cx, &built.events, &todo, &mut contents);
+    contents.finish();
     let mut diagnostics = built.diagnostics;
     diagnostics.sort_by_key(Diagnostic::order_key);
     diagnostics.dedup();
@@ -145,7 +158,7 @@ fn parse_with(src: text::Source, options: &ParseOptions, start: builder::Start) 
         diagnostics,
         todo_sequences,
         line_ending: src.eol,
-        contents: built.contents,
+        contents,
     }
 }
 

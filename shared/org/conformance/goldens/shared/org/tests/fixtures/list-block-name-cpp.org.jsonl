@@ -3,7 +3,9 @@
 {"type":"plain-list","begin":0,"end":18,"contents_begin":0,"contents_end":18,"parent_type":"section","parent_begin":0}
 {"type":"item","begin":0,"end":18,"contents_begin":2,"contents_end":18,"parent_type":"plain-list","parent_begin":0,"bullet":"- "}
 {"type":"paragraph","begin":2,"end":18,"contents_begin":2,"contents_end":18,"parent_type":"item","parent_begin":0}
+{"type":"subscript","begin":13,"end":15,"contents_begin":14,"contents_end":15,"parent_type":"paragraph","parent_begin":2}
 {"type":"paragraph","begin":18,"end":32,"contents_begin":18,"contents_end":32,"parent_type":"section","parent_begin":0}
+{"type":"subscript","begin":27,"end":29,"contents_begin":28,"contents_end":29,"parent_type":"paragraph","parent_begin":18}
 {"type":"plain-list","begin":32,"end":36,"contents_begin":32,"contents_end":36,"parent_type":"section","parent_begin":0}
 {"type":"item","begin":32,"end":36,"contents_begin":34,"contents_end":36,"parent_type":"plain-list","parent_begin":32,"bullet":"- "}
 {"type":"paragraph","begin":34,"end":36,"contents_begin":34,"contents_end":36,"parent_type":"item","parent_begin":32}

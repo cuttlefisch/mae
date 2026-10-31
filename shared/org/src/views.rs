@@ -79,9 +79,9 @@ impl Headline {
         token(&self.0, COMMENT_MARKER).is_some()
     }
 
-    /// The title as written (inline markup is not interpreted until O2).
+    /// The title as written (its objects' text, markup included).
     pub fn title(&self) -> String {
-        token(&self.0, TITLE).map_or_else(String::new, |t| t.text().to_string())
+        child(&self.0, HEADLINE_TITLE).map_or_else(String::new, |t| t.to_string())
     }
 
     /// The tags, in order, as written. Like `org-split-string` on `:`, an

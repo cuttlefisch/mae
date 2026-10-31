@@ -4,6 +4,7 @@
 {"type":"dynamic-block","begin":16,"end":65,"contents_begin":48,"contents_end":58,"parent_type":"section","parent_begin":0}
 {"type":"table","begin":48,"end":58,"contents_begin":48,"contents_end":58,"parent_type":"dynamic-block","parent_begin":16}
 {"type":"table-row","begin":48,"end":58,"contents_begin":49,"contents_end":57,"parent_type":"table","parent_begin":48}
+{"type":"table-cell","begin":49,"end":57,"contents_begin":50,"contents_end":55,"parent_type":"table-row","parent_begin":48}
 {"type":"paragraph","begin":65,"end":85,"contents_begin":65,"contents_end":85,"parent_type":"section","parent_begin":0}
 {"type":"diary-sexp","begin":85,"end":126,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0}
 {"type":"horizontal-rule","begin":126,"end":132,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0}
@@ -14,6 +15,7 @@
 {"type":"latex-environment","begin":260,"end":296,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0}
 {"type":"latex-environment","begin":296,"end":331,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0}
 {"type":"paragraph","begin":331,"end":354,"contents_begin":331,"contents_end":354,"parent_type":"section","parent_begin":0}
+{"type":"latex-fragment","begin":331,"end":346,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":331}
 {"type":"keyword","begin":354,"end":375,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"KEY","value":"value no space"}
 {"type":"keyword","begin":375,"end":393,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"A:B","value":"greedy key"}
 {"type":"paragraph","begin":393,"end":406,"contents_begin":393,"contents_end":406,"parent_type":"section","parent_begin":0}

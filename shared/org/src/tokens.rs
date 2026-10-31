@@ -19,12 +19,18 @@ pub(crate) enum Event {
     /// A headline's line content `[start, end)`. Its tokens depend on the
     /// TODO keywords, which are only known once every `#+TODO:` keyword
     /// element has been seen, so they are cut when the tree is built.
-    HeadlineLine(usize, usize),
+    /// A headline's line content `[start, end)` and the nesting budget left.
+    HeadlineLine(usize, usize, usize),
+    /// Objects in `[start, end)` inside a container of the given kind, with
+    /// the nesting budget left. Expanded when the tree is built.
+    Inline(usize, usize, SyntaxKind, usize),
 }
 
 pub(crate) struct Emitter<'a> {
     pub src: &'a Source<'a>,
     pub events: Vec<Event>,
+    /// Nesting levels left for objects inside the element being emitted.
+    pub budget: usize,
 }
 
 impl<'a> Emitter<'a> {
@@ -32,6 +38,7 @@ impl<'a> Emitter<'a> {
         Emitter {
             src,
             events: Vec::new(),
+            budget: 0,
         }
     }
 
@@ -41,6 +48,14 @@ impl<'a> Emitter<'a> {
 
     pub fn finish(&mut self) {
         self.events.push(Event::Finish);
+    }
+
+    /// Objects in `[a, b)` of a `container`.
+    pub fn inline(&mut self, a: usize, b: usize, container: SyntaxKind) {
+        if a < b {
+            self.events
+                .push(Event::Inline(a, b, container, self.budget));
+        }
     }
 
     pub fn tok(&mut self, kind: SyntaxKind, a: usize, b: usize) {
@@ -117,6 +132,18 @@ impl<'e, 'a> Cut<'e, 'a> {
         self.to(WHITESPACE, rel + n);
     }
 
+    /// A node of `kind` up to line-relative `to`, holding the objects of a
+    /// `container` (`container` == `kind` for the wrapper nodes).
+    fn objects(&mut self, kind: SyntaxKind, to: usize) {
+        let e = (self.base + to).min(self.end);
+        if e > self.pos {
+            self.em.start(kind);
+            self.em.inline(self.pos, e, kind);
+            self.em.finish();
+            self.pos = e;
+        }
+    }
+
     fn done(self) {
         let (pos, end) = (self.pos, self.end);
         self.em.rest(pos, end);
@@ -149,11 +176,17 @@ pub(crate) fn keyword_line(em: &mut Emitter, start: usize, end: usize, affiliate
         c.to(KEY, name_end);
         c.to(TEXT, key_end);
         c.to(COLON, key_end + 1);
+        let parsed = affiliated && s[ws + 2..name_end].eq_ignore_ascii_case("CAPTION");
         // The value is `org-trim`med: [ \t\n\r] off both ends.
         let rest = &s[key_end + 1..];
         let lead = rest.len() - rest.trim_start_matches(is_trim).len();
         c.to(WHITESPACE, key_end + 1 + lead);
-        c.to(VALUE, s.trim_end_matches(is_trim).len());
+        if parsed {
+            // `org-element-parsed-keywords`: CAPTION values hold objects.
+            c.objects(AFFILIATED_VALUE, s.trim_end_matches(is_trim).len());
+        } else {
+            c.to(VALUE, s.trim_end_matches(is_trim).len());
+        }
     }
     c.done();
 }
@@ -290,7 +323,7 @@ pub(crate) fn item_line(em: &mut Emitter, start: usize, end: usize) {
     // An ordered item's tag is part of its contents, not its head.
     if let Some((a, b)) = h.tag.filter(|&(a, _)| h.contents_start > a) {
         c.to(TEXT, a);
-        c.to(ITEM_TAG, b);
+        c.objects(ITEM_TAG_CONTENT, b);
         c.to(TEXT, h.contents_start);
     }
     c.done();

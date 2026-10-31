@@ -13,41 +13,90 @@
 {"type":"plain-list","begin":243,"end":645,"contents_begin":243,"contents_end":644,"parent_type":"section","parent_begin":243}
 {"type":"item","begin":243,"end":324,"contents_begin":245,"contents_end":324,"parent_type":"plain-list","parent_begin":243,"bullet":"- "}
 {"type":"paragraph","begin":245,"end":324,"contents_begin":245,"contents_end":324,"parent_type":"item","parent_begin":243}
+{"type":"bold","begin":245,"end":252,"contents_begin":246,"contents_end":250,"parent_type":"paragraph","parent_begin":245}
+{"type":"verbatim","begin":252,"end":272,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":245}
+{"type":"verbatim","begin":287,"end":315,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":245}
 {"type":"item","begin":324,"end":460,"contents_begin":326,"contents_end":460,"parent_type":"plain-list","parent_begin":243,"bullet":"- "}
 {"type":"paragraph","begin":326,"end":460,"contents_begin":326,"contents_end":460,"parent_type":"item","parent_begin":324}
+{"type":"bold","begin":326,"end":339,"contents_begin":327,"contents_end":337,"parent_type":"paragraph","parent_begin":326}
+{"type":"verbatim","begin":339,"end":355,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":326}
+{"type":"verbatim","begin":401,"end":412,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":326}
+{"type":"verbatim","begin":414,"end":429,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":326}
+{"type":"verbatim","begin":431,"end":442,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":326}
+{"type":"verbatim","begin":444,"end":459,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":326}
 {"type":"item","begin":460,"end":527,"contents_begin":462,"contents_end":527,"parent_type":"plain-list","parent_begin":243,"bullet":"- "}
 {"type":"paragraph","begin":462,"end":527,"contents_begin":462,"contents_end":527,"parent_type":"item","parent_begin":460}
+{"type":"bold","begin":462,"end":477,"contents_begin":463,"contents_end":475,"parent_type":"paragraph","parent_begin":462}
+{"type":"verbatim","begin":477,"end":490,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":462}
 {"type":"item","begin":527,"end":644,"contents_begin":529,"contents_end":644,"parent_type":"plain-list","parent_begin":243,"bullet":"- "}
 {"type":"paragraph","begin":529,"end":644,"contents_begin":529,"contents_end":644,"parent_type":"item","parent_begin":527}
+{"type":"bold","begin":529,"end":544,"contents_begin":530,"contents_end":542,"parent_type":"paragraph","parent_begin":529}
+{"type":"verbatim","begin":607,"end":629,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":529}
 {"type":"headline","begin":645,"end":1134,"contents_begin":669,"contents_end":1134,"parent_type":"headline","parent_begin":119,"level":2,"true_level":2,"raw_title":"Config Architecture","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":669,"end":1134,"contents_begin":669,"contents_end":1134,"parent_type":"headline","parent_begin":645}
 {"type":"paragraph","begin":669,"end":778,"contents_begin":669,"contents_end":777,"parent_type":"section","parent_begin":669}
+{"type":"verbatim","begin":669,"end":680,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":669}
+{"type":"verbatim","begin":729,"end":745,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":669}
 {"type":"src-block","begin":778,"end":1020,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":669,"language":"scheme"}
 {"type":"paragraph","begin":1020,"end":1134,"contents_begin":1020,"contents_end":1133,"parent_type":"section","parent_begin":669}
+{"type":"verbatim","begin":1020,"end":1034,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1020}
+{"type":"verbatim","begin":1097,"end":1109,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1020}
+{"type":"verbatim","begin":1121,"end":1131,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1020}
 {"type":"headline","begin":1134,"end":1334,"contents_begin":1146,"contents_end":1334,"parent_type":"headline","parent_begin":119,"level":2,"true_level":2,"raw_title":"Secrets","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1146,"end":1334,"contents_begin":1146,"contents_end":1334,"parent_type":"headline","parent_begin":1134}
 {"type":"paragraph","begin":1146,"end":1241,"contents_begin":1146,"contents_end":1240,"parent_type":"section","parent_begin":1146}
+{"type":"verbatim","begin":1196,"end":1207,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1146}
 {"type":"plain-list","begin":1241,"end":1334,"contents_begin":1241,"contents_end":1333,"parent_type":"section","parent_begin":1146}
 {"type":"item","begin":1241,"end":1298,"contents_begin":1243,"contents_end":1298,"parent_type":"plain-list","parent_begin":1241,"bullet":"- "}
 {"type":"paragraph","begin":1243,"end":1298,"contents_begin":1243,"contents_end":1298,"parent_type":"item","parent_begin":1241}
+{"type":"bold","begin":1243,"end":1252,"contents_begin":1244,"contents_end":1250,"parent_type":"paragraph","parent_begin":1243}
+{"type":"verbatim","begin":1252,"end":1297,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1243}
 {"type":"item","begin":1298,"end":1333,"contents_begin":1300,"contents_end":1333,"parent_type":"plain-list","parent_begin":1241,"bullet":"- "}
 {"type":"paragraph","begin":1300,"end":1333,"contents_begin":1300,"contents_end":1333,"parent_type":"item","parent_begin":1298}
+{"type":"bold","begin":1300,"end":1309,"contents_begin":1301,"contents_end":1307,"parent_type":"paragraph","parent_begin":1300}
+{"type":"verbatim","begin":1309,"end":1332,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1300}
 {"type":"headline","begin":1334,"end":1764,"contents_begin":1347,"contents_end":1764,"parent_type":"headline","parent_begin":119,"level":2,"true_level":2,"raw_title":"Sections","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1347,"end":1764,"contents_begin":1347,"contents_end":1764,"parent_type":"headline","parent_begin":1334}
 {"type":"table","begin":1347,"end":1764,"contents_begin":1347,"contents_end":1763,"parent_type":"section","parent_begin":1347}
 {"type":"table-row","begin":1347,"end":1390,"contents_begin":1348,"contents_end":1389,"parent_type":"table","parent_begin":1347}
+{"type":"table-cell","begin":1348,"end":1358,"contents_begin":1349,"contents_end":1356,"parent_type":"table-row","parent_begin":1347}
+{"type":"table-cell","begin":1358,"end":1368,"contents_begin":1359,"contents_end":1366,"parent_type":"table-row","parent_begin":1347}
+{"type":"table-cell","begin":1368,"end":1389,"contents_begin":1369,"contents_end":1387,"parent_type":"table-row","parent_begin":1347}
 {"type":"table-row","begin":1390,"end":1466,"contents_begin":null,"contents_end":null,"parent_type":"table","parent_begin":1347}
 {"type":"table-row","begin":1466,"end":1537,"contents_begin":1467,"contents_end":1536,"parent_type":"table","parent_begin":1347}
+{"type":"table-cell","begin":1467,"end":1472,"contents_begin":1468,"contents_end":1470,"parent_type":"table-row","parent_begin":1466}
+{"type":"table-cell","begin":1472,"end":1486,"contents_begin":1473,"contents_end":1484,"parent_type":"table-row","parent_begin":1466}
+{"type":"verbatim","begin":1473,"end":1484,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":1472}
+{"type":"table-cell","begin":1486,"end":1536,"contents_begin":1487,"contents_end":1534,"parent_type":"table-row","parent_begin":1466}
 {"type":"table-row","begin":1537,"end":1576,"contents_begin":1538,"contents_end":1575,"parent_type":"table","parent_begin":1347}
+{"type":"table-cell","begin":1538,"end":1546,"contents_begin":1539,"contents_end":1544,"parent_type":"table-row","parent_begin":1537}
+{"type":"table-cell","begin":1546,"end":1561,"contents_begin":1547,"contents_end":1559,"parent_type":"table-row","parent_begin":1537}
+{"type":"verbatim","begin":1547,"end":1559,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":1546}
+{"type":"table-cell","begin":1561,"end":1575,"contents_begin":1562,"contents_end":1573,"parent_type":"table-row","parent_begin":1537}
 {"type":"table-row","begin":1576,"end":1639,"contents_begin":1577,"contents_end":1638,"parent_type":"table","parent_begin":1347}
+{"type":"table-cell","begin":1577,"end":1586,"contents_begin":1578,"contents_end":1584,"parent_type":"table-row","parent_begin":1576}
+{"type":"table-cell","begin":1586,"end":1604,"contents_begin":1587,"contents_end":1602,"parent_type":"table-row","parent_begin":1576}
+{"type":"verbatim","begin":1587,"end":1602,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":1586}
+{"type":"table-cell","begin":1604,"end":1638,"contents_begin":1605,"contents_end":1636,"parent_type":"table-row","parent_begin":1576}
 {"type":"table-row","begin":1639,"end":1707,"contents_begin":1640,"contents_end":1706,"parent_type":"table","parent_begin":1347}
+{"type":"table-cell","begin":1640,"end":1651,"contents_begin":1641,"contents_end":1649,"parent_type":"table-row","parent_begin":1639}
+{"type":"table-cell","begin":1651,"end":1665,"contents_begin":1652,"contents_end":1663,"parent_type":"table-row","parent_begin":1639}
+{"type":"verbatim","begin":1652,"end":1663,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":1651}
+{"type":"table-cell","begin":1665,"end":1706,"contents_begin":1666,"contents_end":1704,"parent_type":"table-row","parent_begin":1639}
 {"type":"table-row","begin":1707,"end":1763,"contents_begin":1708,"contents_end":1762,"parent_type":"table","parent_begin":1347}
+{"type":"table-cell","begin":1708,"end":1717,"contents_begin":1709,"contents_end":1715,"parent_type":"table-row","parent_begin":1707}
+{"type":"table-cell","begin":1717,"end":1735,"contents_begin":1718,"contents_end":1733,"parent_type":"table-row","parent_begin":1707}
+{"type":"verbatim","begin":1718,"end":1733,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":1717}
+{"type":"table-cell","begin":1735,"end":1762,"contents_begin":1736,"contents_end":1760,"parent_type":"table-row","parent_begin":1707}
 {"type":"headline","begin":1764,"end":1935,"contents_begin":1777,"contents_end":1935,"parent_type":"headline","parent_begin":119,"level":2,"true_level":2,"raw_title":"See Also","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1777,"end":1935,"contents_begin":1777,"contents_end":1935,"parent_type":"headline","parent_begin":1764}
 {"type":"plain-list","begin":1777,"end":1935,"contents_begin":1777,"contents_end":1935,"parent_type":"section","parent_begin":1777}
 {"type":"item","begin":1777,"end":1823,"contents_begin":1779,"contents_end":1823,"parent_type":"plain-list","parent_begin":1777,"bullet":"- "}
 {"type":"paragraph","begin":1779,"end":1823,"contents_begin":1779,"contents_end":1823,"parent_type":"item","parent_begin":1777}
+{"type":"link","begin":1779,"end":1822,"contents_begin":1803,"contents_end":1820,"parent_type":"paragraph","parent_begin":1779,"link_type":"id","path":"tutorial:ai-setup","raw_link":"id:tutorial:ai-setup","format":"bracket"}
 {"type":"item","begin":1823,"end":1884,"contents_begin":1825,"contents_end":1884,"parent_type":"plain-list","parent_begin":1777,"bullet":"- "}
 {"type":"paragraph","begin":1825,"end":1884,"contents_begin":1825,"contents_end":1884,"parent_type":"item","parent_begin":1823}
+{"type":"link","begin":1825,"end":1883,"contents_begin":1853,"contents_end":1881,"parent_type":"paragraph","parent_begin":1825,"link_type":"id","path":"tutorial:collab-setup","raw_link":"id:tutorial:collab-setup","format":"bracket"}
 {"type":"item","begin":1884,"end":1935,"contents_begin":1886,"contents_end":1935,"parent_type":"plain-list","parent_begin":1777,"bullet":"- "}
 {"type":"paragraph","begin":1886,"end":1935,"contents_begin":1886,"contents_end":1935,"parent_type":"item","parent_begin":1884}
+{"type":"link","begin":1886,"end":1934,"contents_begin":1917,"contents_end":1932,"parent_type":"paragraph","parent_begin":1886,"link_type":"id","path":"tutorial:getting-started","raw_link":"id:tutorial:getting-started","format":"bracket"}

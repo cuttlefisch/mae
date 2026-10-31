@@ -7,7 +7,7 @@
 ;;   emacs -Q --batch -l org-element-dump.el --manifest MANIFEST
 ;; where each MANIFEST line is "SOURCE<TAB>DESTINATION".
 ;;
-;; One JSON object per ELEMENT (objects are O2's business): its type, its
+;; One JSON object per element and per OBJECT (inline): its type, its
 ;; parent's type and begin, and 0-based BYTE offsets INTO THE FILE AS STORED
 ;; (begin/end, contents_begin/contents_end), plus the properties mae-org's
 ;; typed views must agree on.
@@ -48,9 +48,12 @@
   (and pos (+ mae-dump--bom (1- (position-bytes pos)) (mae-dump--crs-before pos))))
 
 (defun mae-dump--parent (el)
-  (let ((p (org-element-property :parent el)))
-    (list (cons 'parent_type (if p (symbol-name (org-element-type p)) "none"))
-          (cons 'parent_begin (if (and p (not (eq (org-element-type p) 'org-data)))
+  ;; Objects of a secondary string parsed without an owner (an affiliated
+  ;; CAPTION value) have a plain list as parent: reported as "secondary".
+  (let* ((p (org-element-property :parent el))
+         (type (and p (org-element-type p))))
+    (list (cons 'parent_type (cond ((not p) "none") (type (symbol-name type)) (t "secondary")))
+          (cons 'parent_begin (if (and type (not (eq type 'org-data)))
                                   (mae-dump--byte (org-element-property :begin p))
                                 0)))))
 
@@ -79,7 +82,16 @@
                        (cons 'value (org-element-property :value el))))
        ('special-block (list (cons 'block_type (org-element-property :type el))))
        ('src-block (list (cons 'language (org-element-property :language el))))
-       ('item (list (cons 'bullet (org-element-property :bullet el))))))))
+       ('item (list (cons 'bullet (org-element-property :bullet el))))
+       ('link (list (cons 'link_type (org-element-property :type el))
+                    (cons 'path (org-element-property :path el))
+                    (cons 'raw_link (org-element-property :raw-link el))
+                    (cons 'format (symbol-name (org-element-property :format el)))))
+       ('timestamp (list (cons 'timestamp_type (symbol-name (org-element-property :type el)))))
+       ('entity (list (cons 'name (org-element-property :name el))))
+       ('macro (list (cons 'key (org-element-property :key el))))
+       ((or 'inline-src-block 'export-snippet)
+        (list (cons 'value (org-element-property :value el))))))))
 
 (defun mae-dump--decode (file)
   "Insert FILE as `find-file' decodes it; set the offset-mapping state.
@@ -115,9 +127,9 @@ something other than the file cannot pass."
       ;; tables IN THE BUFFER, so offsets would describe text that is not
       ;; the file (found on Worg). In-buffer #+TODO is still honoured.
       (let ((org-inhibit-startup t)) (org-mode))
-      (let ((tree (org-element-parse-buffer 'element))
+      (let ((tree (org-element-parse-buffer 'object))
             (out '()))
-        (org-element-map tree org-element-all-elements
+        (org-element-map tree (append org-element-all-elements org-element-all-objects)
           (lambda (el) (push (concat (json-encode (mae-dump--props el)) "\n") out))
           nil nil nil t)
         (concat (json-encode

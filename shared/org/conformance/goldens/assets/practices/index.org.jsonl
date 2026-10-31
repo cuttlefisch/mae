@@ -11,16 +11,22 @@
 {"type":"plain-list","begin":494,"end":1284,"contents_begin":494,"contents_end":1283,"parent_type":"section","parent_begin":494}
 {"type":"item","begin":494,"end":611,"contents_begin":496,"contents_end":611,"parent_type":"plain-list","parent_begin":494,"bullet":"- "}
 {"type":"paragraph","begin":496,"end":611,"contents_begin":496,"contents_end":611,"parent_type":"item","parent_begin":494}
+{"type":"link","begin":496,"end":550,"contents_begin":528,"contents_end":547,"parent_type":"paragraph","parent_begin":496,"link_type":"fuzzy","path":"practice:adversarial-testing","raw_link":"practice:adversarial-testing","format":"bracket"}
 {"type":"item","begin":611,"end":751,"contents_begin":613,"contents_end":751,"parent_type":"plain-list","parent_begin":494,"bullet":"- "}
 {"type":"paragraph","begin":613,"end":751,"contents_begin":613,"contents_end":751,"parent_type":"item","parent_begin":611}
+{"type":"link","begin":613,"end":685,"contents_begin":639,"contents_end":682,"parent_type":"paragraph","parent_begin":613,"link_type":"fuzzy","path":"practice:no-hardcoding","raw_link":"practice:no-hardcoding","format":"bracket"}
 {"type":"item","begin":751,"end":883,"contents_begin":753,"contents_end":883,"parent_type":"plain-list","parent_begin":494,"bullet":"- "}
 {"type":"paragraph","begin":753,"end":883,"contents_begin":753,"contents_end":883,"parent_type":"item","parent_begin":751}
+{"type":"link","begin":753,"end":826,"contents_begin":784,"contents_end":823,"parent_type":"paragraph","parent_begin":753,"link_type":"fuzzy","path":"practice:shared-computation","raw_link":"practice:shared-computation","format":"bracket"}
 {"type":"item","begin":883,"end":1032,"contents_begin":885,"contents_end":1032,"parent_type":"plain-list","parent_begin":494,"bullet":"- "}
 {"type":"paragraph","begin":885,"end":1032,"contents_begin":885,"contents_end":1032,"parent_type":"item","parent_begin":883}
+{"type":"link","begin":885,"end":949,"contents_begin":922,"contents_end":946,"parent_type":"paragraph","parent_begin":885,"link_type":"fuzzy","path":"practice:downstream-impact-review","raw_link":"practice:downstream-impact-review","format":"bracket"}
 {"type":"item","begin":1032,"end":1144,"contents_begin":1034,"contents_end":1144,"parent_type":"plain-list","parent_begin":494,"bullet":"- "}
 {"type":"paragraph","begin":1034,"end":1144,"contents_begin":1034,"contents_end":1144,"parent_type":"item","parent_begin":1032}
+{"type":"link","begin":1034,"end":1090,"contents_begin":1058,"contents_end":1087,"parent_type":"paragraph","parent_begin":1034,"link_type":"fuzzy","path":"practice:adr-process","raw_link":"practice:adr-process","format":"bracket"}
 {"type":"item","begin":1144,"end":1283,"contents_begin":1146,"contents_end":1283,"parent_type":"plain-list","parent_begin":494,"bullet":"- "}
 {"type":"paragraph","begin":1146,"end":1283,"contents_begin":1146,"contents_end":1283,"parent_type":"item","parent_begin":1144}
+{"type":"link","begin":1146,"end":1228,"contents_begin":1185,"contents_end":1225,"parent_type":"paragraph","parent_begin":1146,"link_type":"fuzzy","path":"practice:architecture-debt-tracking","raw_link":"practice:architecture-debt-tracking","format":"bracket"}
 {"type":"headline","begin":1284,"end":1523,"contents_begin":1303,"contents_end":1523,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"How to use this","todo":null,"priority":null,"tags":[],"commentedp":null}
 {"type":"section","begin":1303,"end":1523,"contents_begin":1303,"contents_end":1523,"parent_type":"headline","parent_begin":1284}
 {"type":"paragraph","begin":1303,"end":1523,"contents_begin":1303,"contents_end":1523,"parent_type":"section","parent_begin":1303}
