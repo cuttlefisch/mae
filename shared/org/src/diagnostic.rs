@@ -15,8 +15,16 @@ pub enum DiagnosticKind {
     /// container. The line is paragraph text.
     UnterminatedDrawer,
     /// Contents nested deeper than `ParseOptions::max_depth`, kept as one
-    /// opaque token. The span is the unparsed contents.
+    /// opaque token (elements) or as plain text (objects: the span is the
+    /// region, which holds at least one object Org would parse, possibly a
+    /// radio target, which then makes no radio links).
     DepthLimit,
+    /// Radio targets with whitespace other than spaces (a tab, a no-break
+    /// space) next to spaces or at an end need a backtracking match per
+    /// candidate; past a work budget proportional to the input those
+    /// targets stop matching, so some radio links Org would make are plain
+    /// text. The span is the document.
+    RadioLinkBudget,
     /// In a fragment (`parse_fragment`), a headline at or above the
     /// fragment's level. In the file it would end the body, so the fragment
     /// is not one body. The span is the headline line.

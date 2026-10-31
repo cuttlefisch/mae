@@ -61,6 +61,31 @@ fn a_content_cr_ends_a_plain_link_in_a_headline_title() {
     assert_eq!(paths, ["x^2\r", "a\r"]);
 }
 
+/// Mixed radio targets (a tab next to a space) are matched by backtracking
+/// within a work budget proportional to the input. A small document stays
+/// well inside it and makes Org's links; nested targets over a long text
+/// exhaust it, which is reported (`RadioLinkBudget`) rather than paid for.
+#[test]
+fn mixed_radio_targets_work_within_a_budget_and_report_when_it_runs_out() {
+    let small = "<<<a\t b>>>\n\nx a\t  b y\n";
+    let doc = parse(small, &ParseOptions::default());
+    assert_eq!(count(&doc, LINK), 1);
+    assert!(doc.diagnostics().is_empty(), "{:?}", doc.diagnostics());
+    // Every target's run-collapsed shape matches at every word, and each
+    // fails only at its last stretch (` \t` against the text's `\t `): the
+    // backtracking work per word grows with the targets' total length.
+    let targets: String = (1..=120)
+        .map(|j| format!("<<<{}a \ta>>>\n", "a\t ".repeat(j)))
+        .collect();
+    let big = format!("{targets}\n{}\n", "a\t ".repeat(40_000));
+    let doc = parse(&big, &ParseOptions::default());
+    assert!(doc
+        .diagnostics()
+        .iter()
+        .any(|d| d.kind == mae_org::DiagnosticKind::RadioLinkBudget));
+    assert_eq!(doc.syntax().to_string(), big);
+}
+
 #[test]
 fn objects_nested_5000_deep_parse_on_a_small_stack_within_the_cap() {
     for text in deep_inputs(5_000) {

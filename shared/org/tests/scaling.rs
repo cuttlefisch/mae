@@ -190,7 +190,48 @@ const FAMILIES: &[Family] = &[
         rejected_radio_candidates,
         3_000,
     ),
+    // A target starting with a no-break space before a long run of them
+    // that ends in a failing match (review: 32 KB took 10.7 s, x63-x89).
+    ("blank-start radio target", blank_start_radio, 4_000),
+    // Targets `a`, `a a`, … (√N of them) before `a `×N: every word starts
+    // a match of every target (review: memory S^1.5; see scaling_memory.rs).
+    ("nested radio targets", |n| nested_radio(n, " "), 4_000),
+    ("nested tab radio targets", |n| nested_radio(n, "\t"), 4_000),
+    // A tab next to a space: mixed targets, matched by backtracking within
+    // a work budget (past it: RadioLinkBudget, tests/inline.rs).
+    (
+        "nested mixed radio targets",
+        |n| nested_radio(n, "\t "),
+        4_000,
+    ),
+    (
+        "mixed radio targets failing late",
+        mixed_failing_late,
+        4_000,
+    ),
 ];
+
+/// Mixed targets whose last stretch fails at every word: bounded by the
+/// work budget, not by targets × length per word.
+fn mixed_failing_late(n: usize) -> String {
+    let k = (n as f64).sqrt() as usize;
+    let targets: String = (1..=k)
+        .map(|j| format!("<<<{}a \ta>>>\n", "a\t ".repeat(j)))
+        .collect();
+    format!("{targets}\n{}\n", "a\t ".repeat(n))
+}
+
+fn blank_start_radio(n: usize) -> String {
+    format!("<<<\u{a0} x>>>\n\n{}xa\n", "\u{a0}".repeat(n))
+}
+
+fn nested_radio(n: usize, sep: &str) -> String {
+    let k = (n as f64).sqrt() as usize;
+    let targets: String = (1..=k)
+        .map(|j| format!("<<<{}>>>\n", vec!["a"; j].join(sep)))
+        .collect();
+    format!("{targets}\n{}\n", format!("a{sep}").repeat(n))
+}
 
 fn rejected_radio_candidates(n: usize) -> String {
     format!("<<<ab>>>\n{}{} ab\n", "*a* ".repeat(n), "xab".repeat(n))

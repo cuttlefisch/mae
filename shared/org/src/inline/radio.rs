@@ -7,27 +7,59 @@
 //! where each target is quoted and each run of spaces in it matches any
 //! non-empty run of whitespace (`\s-+`), and the match ignores case. The
 //! object lexer bounds its search just past the next match, so a radio link
-//! is parsed when no other object starts before it.
+//! is parsed when no other object starts before it. At a given start the
+//! regexp picks the FIRST target, in that order, whose match (with its
+//! after-context, inside the region) succeeds.
 //!
-//! Searching that regexp from every lexer position, as Emacs does, costs
-//! O(text × targets × length). Here the matches are found once per document:
-//! an Aho–Corasick automaton runs over the text with case folded and each
-//! whitespace run read as one symbol, which for a target whose only
-//! whitespace is spaces IS the regexp (its runs sit between non-blank chars,
-//! so `\s-+` must take a whole run). A target with other whitespace (a tab, a
-//! no-break space) is checked at each automaton hit by a backtracking match
-//! of the exact regexp, memoised so it stays polynomial. The context checks
-//! (start/end of line, the region's bounds, the alnum class) depend on the
-//! region and are made when the lexer asks.
+//! Searching that regexp from every position, as Emacs does, costs
+//! O(text × targets × length); recording every (start, target) hit costs
+//! O(text^1.5) memory on targets `a`, `a a`, `a a a`, … Here nothing is
+//! enumerated per hit. The text is read as symbols — a char, case folded,
+//! or a whole whitespace run — and the targets are a trie over the same
+//! symbols. For each symbol the deepest trie node the text from there
+//! reaches is found once for the whole document (matching statistics over a
+//! suffix automaton of the reversed targets: linear). The targets matching
+//! at a start are then exactly the target nodes on that one trie path, and
+//! which of them the regexp picks is a property of the path:
+//!
+//! - a target that ends INSIDE the path is followed by the path's next
+//!   symbol, so its after-context is fixed by the trie edge (a whitespace
+//!   run or a border char passes); the first such target in regexp order is
+//!   precomputed per node;
+//! - the target at the path's last node is followed by text off the trie:
+//!   its after-context is checked at the position;
+//! - a region ending inside the path cuts it: the node at the cut depth is
+//!   a level-ancestor query (jump pointers, O(log)).
+//!
+//! Targets are of three shapes. SIMPLE ones have only spaces as whitespace
+//! (each space run is `\s-+`, which takes a whole text run since it sits
+//! between non-blank chars): a trie match is a regexp match. LITERAL ones
+//! have other whitespace (a tab, a no-break space) but no space, and start
+//! and end with a non-blank char: each of their whitespace stretches must
+//! equal the text's run exactly, so they get their own trie over symbols
+//! where a run is its exact content. MIXED ones (spaces and other
+//! whitespace in one stretch, or whitespace at either end, so a match may
+//! start or end inside a run) are found on the first trie's path and
+//! checked by a backtracking match of the exact regexp, which shares its
+//! failed states across calls (a run's later starts are a subset of its
+//! earlier ones) and runs within a work budget proportional to the text;
+//! past it they stop matching and the parse reports
+//! [`crate::DiagnosticKind::RadioLinkBudget`].
 
 use super::{InlineCx, Obj};
 use crate::chars::{canon, is_alnum, is_linebreak, is_space};
 use crate::kind::SyntaxKind::*;
 use crate::span::ContentsTable;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 
-/// The symbol a whitespace run reads as.
+/// No node / no target.
+const NONE: u32 = u32::MAX;
+/// The symbol a whitespace run reads as in the first trie.
 const W: u32 = u32::MAX;
+/// Exact whitespace-run contents, as symbols of the second trie, start here
+/// (above every char).
+const RUN_BASE: u32 = 0x0020_0000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Item {
@@ -37,23 +69,43 @@ enum Item {
     Run,
 }
 
-struct Target {
-    items: Vec<Item>,
-    /// Only spaces as whitespace: an automaton hit is a match.
-    simple: bool,
-    /// Starts with a whitespace char, so it may start inside a text run.
-    blank_start: bool,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    Simple,
+    Literal,
+    Mixed,
 }
 
-/// A position where some target may start: the targets, in regexp order, and
-/// for a simple target where its match ends (`usize::MAX`: compute it).
-type Alt = (u32, usize);
+struct Target {
+    items: Vec<Item>,
+    shape: Shape,
+}
 
 pub(crate) struct Radio {
     targets: Vec<Target>,
+    /// Byte start of each symbol of the text, then the text's end.
+    sym: Vec<usize>,
+    /// Whether each symbol is a whitespace run.
+    ws: Vec<bool>,
+    /// Simple targets, and mixed ones (by their run-collapsed symbols).
+    plain: Matcher,
+    /// Literal targets, runs read as their exact content.
+    literal: Matcher,
+    /// Byte positions where some target may start, sorted.
     starts: Vec<usize>,
-    ranges: Vec<(u32, u32)>,
-    alts: Vec<Alt>,
+    /// Work left for mixed targets' exact matches.
+    budget: Cell<u64>,
+    exhausted: Cell<bool>,
+    memo: RefCell<Memo>,
+}
+
+/// Exact-match states of mixed targets known to fail, per region end.
+#[derive(Default)]
+struct Memo {
+    failed: HashSet<(u32, usize, u32, usize)>,
+    /// A `\s-+` item at the start of a text run: the least start at which it
+    /// failed. Starting later in the same run offers a subset of the ends.
+    run_failed: HashMap<(u32, usize, u32, usize), usize>,
 }
 
 /// Where a frame's search for radio links has got to: candidates before
@@ -64,11 +116,11 @@ pub(crate) struct Cursor {
 }
 
 /// A match of the regexp: group 1 `[p, g1)`, the whole match ending at `m0`.
-#[derive(Debug, Clone, Copy)]
-struct Match {
-    p: usize,
-    g1: usize,
-    m0: usize,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Match {
+    pub p: usize,
+    pub g1: usize,
+    pub m0: usize,
 }
 
 impl Radio {
@@ -85,10 +137,11 @@ impl Radio {
         }
         let mut table = ContentsTable::default();
         parse_all(cx, &mut table);
+        let mut seen = HashSet::new();
         let mut values: Vec<&str> = Vec::new();
         for s in table.spans_of(RADIO_TARGET) {
             let v = &cx.src.text[s.range()];
-            if !values.contains(&v) {
+            if seen.insert(v) {
                 values.push(v);
             }
         }
@@ -98,31 +151,60 @@ impl Radio {
         (!values.is_empty()).then(|| Radio::build(cx, &values))
     }
 
-    fn build(cx: &InlineCx, values: &[&str]) -> Radio {
+    pub(crate) fn build(cx: &InlineCx, values: &[&str]) -> Radio {
         let targets: Vec<Target> = values.iter().map(|v| compile(v)).collect();
-        let mut hits: Vec<(usize, u32, usize)> = Vec::new();
-        let ac = Automaton::new(&targets);
-        ac.scan(cx, &targets, &mut hits);
-        hits.sort_unstable_by_key(|&(p, t, _)| (p, t));
-        hits.dedup_by_key(|h| (h.0, h.1));
-        let mut radio = Radio {
-            targets,
-            starts: Vec::new(),
-            ranges: Vec::new(),
-            alts: Vec::with_capacity(hits.len()),
-        };
-        for (p, t, g1) in hits {
-            if radio.starts.last() != Some(&p) {
-                radio.starts.push(p);
-                let at = radio.alts.len() as u32;
-                radio.ranges.push((at, at));
-            }
-            radio.alts.push((t, g1));
-            if let Some(r) = radio.ranges.last_mut() {
-                r.1 += 1;
+        let text = Symbols::read(cx);
+        let mut plain_seqs = Vec::new();
+        let mut literal_seqs = Vec::new();
+        for (t, target) in targets.iter().enumerate() {
+            let t = t as u32;
+            match target.shape {
+                Shape::Simple => plain_seqs.push((t, collapsed(target), true)),
+                Shape::Mixed => plain_seqs.push((t, collapsed(target), false)),
+                Shape::Literal => {
+                    // A stretch the text never holds cannot match: skip it.
+                    if let Some(seq) = exact_symbols(target, &text.runs) {
+                        literal_seqs.push((t, seq, true));
+                    }
+                }
             }
         }
-        radio
+        let plain = Matcher::new(&plain_seqs, &text.plain);
+        let literal = Matcher::new(&literal_seqs, &text.exact);
+        let n = text.ws.len();
+        let mut starts = Vec::new();
+        for k in 0..n {
+            let any_plain = plain.trie.any[plain.deep[k] as usize];
+            if text.ws[k] {
+                // Only a mixed target can start in a run, at any char of it.
+                if any_plain {
+                    let mut q = text.sym[k];
+                    while q < text.sym[k + 1] {
+                        starts.push(q);
+                        q = cx.step(q);
+                    }
+                }
+            } else if any_plain || literal.trie.any[literal.deep[k] as usize] {
+                starts.push(text.sym[k]);
+            }
+        }
+        Radio {
+            targets,
+            sym: text.sym,
+            ws: text.ws,
+            plain,
+            literal,
+            starts,
+            budget: Cell::new(8 * cx.src.len() as u64 + 65_536),
+            exhausted: Cell::new(false),
+            memo: RefCell::new(Memo::default()),
+        }
+    }
+
+    /// Did a mixed target's exact match run out of work (some radio links
+    /// may be missing)?
+    pub fn budget_exhausted(&self) -> bool {
+        self.exhausted.get()
     }
 
     /// Where the next radio link's text starts at or after `from` (Org bounds
@@ -146,8 +228,9 @@ impl Radio {
         }
         // Matched at the start of the line just behind us. Org handles a
         // one-char link there by searching again from the match's end; a
-        // longer one would make Org return an object starting before point,
-        // which no tree can hold, so it is skipped.
+        // longer one makes Org return an object starting before point,
+        // overlapping the previous one (registered divergence), which no
+        // tree can hold, so it is skipped.
         let lbp = cx.src.lines[cx.src.line_of(from)].start.max(floor);
         let after_lbp = lbp + cx.char_at(lbp).map_or(1, char::len_utf8);
         let again = if from == after_lbp && m.g1 == from {
@@ -185,7 +268,7 @@ impl Radio {
     }
 
     /// The regexp with group 1 at `p`, reached from a search start `s0`.
-    fn valid_at(
+    pub(crate) fn valid_at(
         &self,
         cx: &InlineCx,
         p: usize,
@@ -193,6 +276,9 @@ impl Radio {
         region: (usize, usize),
     ) -> Option<Match> {
         let (floor, end) = region;
+        if p >= end || p < floor {
+            return None;
+        }
         let bol_branch = p >= s0 && cx.at_bol(p, floor);
         let char_branch = p > floor
             && p - cx.char_before(p, floor).map_or(1, char::len_utf8) >= s0
@@ -200,25 +286,173 @@ impl Radio {
         if !(bol_branch || char_branch) {
             return None;
         }
-        let k = self.starts.binary_search(&p).ok()?;
-        let (a, b) = self.ranges[k];
-        self.alts[a as usize..b as usize]
-            .iter()
-            .find_map(|&(t, g1)| {
-                let t = &self.targets[t as usize];
-                if t.simple {
-                    (g1 <= end).then_some(())?;
-                    after(cx, g1, end).map(|m0| Match { p, g1, m0 })
-                } else {
-                    exact(cx, &t.items, p, end).map(|(g1, m0)| Match { p, g1, m0 })
+        let k = self.sym.partition_point(|&s| s <= p).checked_sub(1)?;
+        if k + 1 >= self.sym.len() {
+            return None;
+        }
+        // Symbols from `k` that end by `end`, and that start before it.
+        let fit = (self.sym.partition_point(|&s| s <= end) - 1).saturating_sub(k);
+        let reach = self.sym.partition_point(|&s| s < end) - k;
+        let mut best: Option<(u32, Match)> = None;
+        if !self.ws[k] {
+            if self.sym[k] != p {
+                return None;
+            }
+            for m in [&self.plain, &self.literal] {
+                if let Some((t, g1)) = m.first_at(cx, &self.sym, k, fit, end) {
+                    if best.is_none_or(|b| t < b.0) {
+                        let m0 = after(cx, g1, end)?;
+                        best = Some((t, Match { p, g1, m0 }));
+                    }
                 }
-            })
+            }
+        }
+        // Mixed targets on the run-collapsed path, deepest first, in regexp
+        // order; only those ahead of the best so far are tried.
+        let deep = self.plain.deep[k];
+        let tr = &self.plain.trie;
+        let mut u = tr.mixed_up[tr.level_ancestor(deep, reach) as usize];
+        while u != NONE {
+            let (a, b) = tr.mixed[u as usize];
+            for &t in &tr.mixed_list[a as usize..b as usize] {
+                if best.is_some_and(|b| b.0 <= t) {
+                    break;
+                }
+                if let Some((g1, m0)) = self.exact(cx, t, p, end) {
+                    best = Some((t, Match { p, g1, m0 }));
+                    break;
+                }
+            }
+            u = match tr.parent[u as usize] {
+                pu if pu == u => NONE,
+                pu => tr.mixed_up[pu as usize],
+            };
+        }
+        best.map(|(_, m)| m)
     }
+
+    /// Where the whitespace from `pos` ends, not past `end` (`pos` itself
+    /// if there is none): `\s-+`'s longest extent.
+    fn run_end(&self, pos: usize, end: usize) -> usize {
+        match self.sym.partition_point(|&s| s <= pos).checked_sub(1) {
+            Some(k) if k < self.ws.len() && self.ws[k] => self.sym[k + 1].min(end).max(pos),
+            _ => pos,
+        }
+    }
+
+    fn spend(&self) -> bool {
+        match self.budget.get() {
+            0 => {
+                self.exhausted.set(true);
+                false
+            }
+            b => {
+                self.budget.set(b - 1);
+                true
+            }
+        }
+    }
+
+    /// The exact regexp for mixed target `t` at `p` (group 1 and the
+    /// after-context), with Emacs's backtracking order: a run tries its
+    /// longest extent first. A state that fails is remembered, so no state
+    /// is explored twice across calls.
+    fn exact(&self, cx: &InlineCx, t: u32, p: usize, end: usize) -> Option<(usize, usize)> {
+        if self.exhausted.get() {
+            return None;
+        }
+        let items = &self.targets[t as usize].items;
+        let memo = &mut *self.memo.borrow_mut();
+        // Frames: (item, position, for a run the end being tried and the
+        // run's extent).
+        let mut stack: Vec<(usize, usize, usize, usize)> = Vec::new();
+        let mut state = Some((0usize, p));
+        loop {
+            if let Some((k, pos)) = state.take() {
+                if !self.spend() {
+                    return None;
+                }
+                let key = (t, end, k as u32, pos);
+                if !memo.failed.contains(&key) {
+                    match items.get(k) {
+                        None => match after(cx, pos, end) {
+                            Some(m0) => return Some((pos, m0)),
+                            None => {
+                                memo.failed.insert(key);
+                            }
+                        },
+                        Some(&Item::Lit(c)) => match cx.ch(pos, end) {
+                            Some(d) if canon(d) == c => {
+                                stack.push((k, pos, 0, 0));
+                                state = Some((k + 1, cx.step(pos)));
+                                continue;
+                            }
+                            _ => {
+                                memo.failed.insert(key);
+                            }
+                        },
+                        Some(Item::Run) => {
+                            // The run's extent from the symbol table: scanning
+                            // it here would cost its length per call.
+                            let q = self.run_end(pos, end);
+                            let rk = (t, end, k as u32, q);
+                            let known = memo.run_failed.get(&rk).is_some_and(|&f| f <= pos);
+                            if q > pos && !known {
+                                stack.push((k, pos, q, q));
+                                state = Some((k + 1, q));
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+            // The state just tried failed: backtrack.
+            loop {
+                let top = stack.last_mut()?;
+                let (k, pos, tried, extent) = *top;
+                if items[k] == Item::Run {
+                    let shorter = back(cx, tried);
+                    if shorter > pos {
+                        top.2 = shorter;
+                        state = Some((k + 1, shorter));
+                        break;
+                    }
+                    let f = memo
+                        .run_failed
+                        .entry((t, end, k as u32, extent))
+                        .or_insert(pos);
+                    *f = (*f).min(pos);
+                } else {
+                    memo.failed.insert((t, end, k as u32, pos));
+                }
+                stack.pop();
+            }
+        }
+    }
+}
+
+/// The position of the char before `q` as [`InlineCx::ch`] reads chars (a
+/// CRLF is one).
+fn back(cx: &InlineCx, q: usize) -> usize {
+    let b = cx.bytes();
+    if q >= 2
+        && b[q - 1] == b'\n'
+        && b[q - 2] == b'\r'
+        && cx.src.eol == crate::text::LineEnding::CrLf
+    {
+        return q - 2;
+    }
+    q - cx.char_before(q, 0).map_or(1, char::len_utf8)
 }
 
 /// `[^[:alnum:]]` or `\c|`: a char that may border a radio link.
 fn boundary(c: char) -> bool {
     !is_alnum(c) || is_linebreak(c)
+}
+
+/// Does the symbol's first char border a link (a run starts with blank)?
+fn boundary_symbol(s: u32) -> bool {
+    s == W || s >= RUN_BASE || char::from_u32(s).is_none_or(boundary)
 }
 
 /// The after-context at `g1`: `$`, or one bordering char. Where the match ends.
@@ -241,15 +475,22 @@ fn compile(value: &str) -> Target {
         }
     }
     let ws_lit = |i: &Item| matches!(i, Item::Lit(c) if is_space(*c));
-    Target {
-        simple: !items.iter().any(ws_lit),
-        blank_start: items.first().is_some_and(ws_lit),
-        items,
-    }
+    let blank = |i: &Item| *i == Item::Run || ws_lit(i);
+    let shape = if !items.iter().any(ws_lit) {
+        Shape::Simple
+    } else if !items.contains(&Item::Run)
+        && !items.first().is_some_and(blank)
+        && !items.last().is_some_and(blank)
+    {
+        Shape::Literal
+    } else {
+        Shape::Mixed
+    };
+    Target { items, shape }
 }
 
-/// The target as automaton symbols: each maximal whitespace stretch is `W`.
-fn symbols(t: &Target) -> Vec<u32> {
+/// The target as run-collapsed symbols: each maximal whitespace stretch is `W`.
+fn collapsed(t: &Target) -> Vec<u32> {
     let mut out: Vec<u32> = Vec::new();
     for i in &t.items {
         let s = match *i {
@@ -263,205 +504,392 @@ fn symbols(t: &Target) -> Vec<u32> {
     out
 }
 
-/// The exact regexp for one target at `p` (group 1 and the after-context),
-/// with Emacs's backtracking order: a run tries its longest extent first.
-/// Each (item, position) state is entered once: the search returns at the
-/// first success, so a state seen again has already failed.
-fn exact(cx: &InlineCx, items: &[Item], p: usize, end: usize) -> Option<(usize, usize)> {
-    let mut seen: HashSet<(usize, usize)> = HashSet::new();
-    let mut choices: Vec<(usize, Vec<usize>)> = Vec::new();
-    let (mut k, mut pos) = (0, p);
-    loop {
-        // Advance until this path fails (a success returns).
-        while seen.insert((k, pos)) {
-            match items.get(k) {
-                None => match after(cx, pos, end) {
-                    Some(m0) => return Some((pos, m0)),
-                    None => break,
-                },
-                Some(&Item::Lit(c)) => match cx.ch(pos, end) {
-                    Some(d) if canon(d) == c => {
-                        pos = cx.step(pos);
-                        k += 1;
-                    }
-                    _ => break,
-                },
-                Some(Item::Run) => {
-                    let mut ends = Vec::new();
-                    let mut q = pos;
-                    while cx.ch(q, end).is_some_and(is_space) {
-                        q = cx.step(q);
-                        ends.push(q);
-                    }
-                    let Some(longest) = ends.pop() else {
-                        break;
-                    };
-                    choices.push((k + 1, ends));
-                    k += 1;
-                    pos = longest;
+/// A literal target as exact symbols (each whitespace stretch the id of
+/// that exact run), or `None` if a stretch never occurs in the text.
+fn exact_symbols(t: &Target, runs: &HashMap<String, u32>) -> Option<Vec<u32>> {
+    let mut out = Vec::new();
+    let mut stretch = String::new();
+    for i in &t.items {
+        let Item::Lit(c) = *i else { return None };
+        if is_space(c) {
+            stretch.push(c);
+            continue;
+        }
+        if !stretch.is_empty() {
+            out.push(RUN_BASE + *runs.get(&stretch)?);
+            stretch.clear();
+        }
+        out.push(c as u32);
+    }
+    Some(out)
+}
+
+/// The text as symbols.
+struct Symbols {
+    sym: Vec<usize>,
+    ws: Vec<bool>,
+    /// Run-collapsed symbols.
+    plain: Vec<u32>,
+    /// Runs as their exact contents.
+    exact: Vec<u32>,
+    /// Exact run contents (as `InlineCx::ch` reads them) to ids.
+    runs: HashMap<String, u32>,
+}
+
+impl Symbols {
+    fn read(cx: &InlineCx) -> Symbols {
+        let len = cx.src.len();
+        let mut s = Symbols {
+            sym: Vec::new(),
+            ws: Vec::new(),
+            plain: Vec::new(),
+            exact: Vec::new(),
+            runs: HashMap::new(),
+        };
+        let mut i = cx.src.bom;
+        let mut run = String::new();
+        while let Some(c) = cx.ch(i, len) {
+            s.sym.push(i);
+            if is_space(c) {
+                run.clear();
+                let mut j = i;
+                while let Some(d) = cx.ch(j, len).filter(|&d| is_space(d)) {
+                    run.push(canon(d));
+                    j = cx.step(j);
                 }
+                let next = s.runs.len() as u32;
+                let id = *s.runs.entry(run.clone()).or_insert(next);
+                s.ws.push(true);
+                s.plain.push(W);
+                s.exact.push(RUN_BASE + id);
+                i = j;
+            } else {
+                let c = canon(c) as u32;
+                s.ws.push(false);
+                s.plain.push(c);
+                s.exact.push(c);
+                i = cx.step(i);
             }
         }
-        // Backtrack: the most recent run gives up one more char.
+        s.sym.push(len.max(cx.src.bom));
+        s
+    }
+}
+
+/// A trie of target symbol sequences, and for each text symbol the deepest
+/// node the text from it reaches.
+struct Matcher {
+    trie: Trie,
+    deep: Vec<u32>,
+}
+
+impl Matcher {
+    /// `seqs`: (target, symbols, whether a trie match is a match).
+    fn new(seqs: &[(u32, Vec<u32>, bool)], text: &[u32]) -> Matcher {
+        let trie = Trie::new(seqs);
+        let deep = deepest(&trie, seqs, text);
+        Matcher { trie, deep }
+    }
+
+    /// The first target in regexp order that this trie matches from symbol
+    /// `k` within `fit` symbols (those ending by the region's `end`): its
+    /// index and group 1's end.
+    fn first_at(
+        &self,
+        cx: &InlineCx,
+        sym: &[usize],
+        k: usize,
+        fit: usize,
+        end: usize,
+    ) -> Option<(u32, usize)> {
+        let tr = &self.trie;
+        let c = tr.level_ancestor(self.deep[k], fit) as usize;
+        let mut best: Option<(u32, usize)> = None;
+        let (t, d) = tr.inner[c];
+        if t != NONE {
+            best = Some((t, sym[k + d as usize]));
+        }
+        let own = tr.own[c];
+        if own != NONE && best.is_none_or(|b| own < b.0) {
+            let g1 = sym[k + tr.depth[c] as usize];
+            if after(cx, g1, end).is_some() {
+                best = Some((own, g1));
+            }
+        }
+        best
+    }
+}
+
+struct Trie {
+    next: HashMap<(u32, u32), u32>,
+    parent: Vec<u32>,
+    depth: Vec<u32>,
+    /// Jump pointers (Myers): level ancestors in O(log depth).
+    jump: Vec<u32>,
+    /// The first matched target (regexp order) ending here.
+    own: Vec<u32>,
+    /// The first matched target ending at a proper ancestor whose next
+    /// symbol toward here borders a link, and that ancestor's depth.
+    inner: Vec<(u32, u32)>,
+    /// Mixed targets ending here, in regexp order: a range of `mixed_list`.
+    mixed: Vec<(u32, u32)>,
+    mixed_list: Vec<u32>,
+    /// The nearest ancestor-or-self holding mixed targets.
+    mixed_up: Vec<u32>,
+    /// Some target ends here or at an ancestor (the root excluded).
+    any: Vec<bool>,
+}
+
+impl Trie {
+    fn new(seqs: &[(u32, Vec<u32>, bool)]) -> Trie {
+        let mut next: HashMap<(u32, u32), u32> = HashMap::new();
+        let (mut parent, mut depth, mut edge) = (vec![0u32], vec![0u32], vec![W]);
+        let mut own = vec![NONE];
+        let mut mixed_of: Vec<Vec<u32>> = vec![Vec::new()];
+        for (t, syms, matched) in seqs {
+            let mut node = 0u32;
+            for &s in syms {
+                node = *next.entry((node, s)).or_insert_with(|| {
+                    parent.push(node);
+                    depth.push(depth[node as usize] + 1);
+                    edge.push(s);
+                    own.push(NONE);
+                    mixed_of.push(Vec::new());
+                    (parent.len() - 1) as u32
+                });
+            }
+            let n = node as usize;
+            if node == 0 {
+                continue; // an empty target matches nothing (none exists)
+            }
+            if *matched {
+                own[n] = own[n].min(*t);
+            } else {
+                mixed_of[n].push(*t);
+            }
+        }
+        let count = parent.len();
+        let mut tr = Trie {
+            next,
+            jump: vec![0; count],
+            inner: vec![(NONE, 0); count],
+            mixed: Vec::with_capacity(count),
+            mixed_list: Vec::new(),
+            mixed_up: vec![NONE; count],
+            any: vec![false; count],
+            parent,
+            depth,
+            own,
+        };
+        // Nodes are numbered after their parent: one pass in index order.
+        for v in 0..count {
+            let a = tr.mixed_list.len() as u32;
+            let mut list = std::mem::take(&mut mixed_of[v]);
+            list.sort_unstable();
+            tr.mixed_list.extend(list);
+            tr.mixed.push((a, tr.mixed_list.len() as u32));
+            let held = tr.mixed_list.len() as u32 > a;
+            if v == 0 {
+                continue;
+            }
+            let p = tr.parent[v] as usize;
+            let j1 = tr.jump[p] as usize;
+            let j2 = tr.jump[j1] as usize;
+            tr.jump[v] = if p != 0 && tr.depth[p] - tr.depth[j1] == tr.depth[j1] - tr.depth[j2] {
+                j2 as u32
+            } else {
+                p as u32
+            };
+            let mut inner = tr.inner[p];
+            if tr.own[p] != NONE && boundary_symbol(edge[v]) && tr.own[p] < inner.0 {
+                inner = (tr.own[p], tr.depth[p]);
+            }
+            tr.inner[v] = inner;
+            tr.mixed_up[v] = if held { v as u32 } else { tr.mixed_up[p] };
+            tr.any[v] = tr.any[p] || held || tr.own[v] != NONE;
+        }
+        tr
+    }
+
+    /// The ancestor-or-self of `v` at depth `min(depth(v), d)`.
+    fn level_ancestor(&self, mut v: u32, d: usize) -> u32 {
+        let d = d.min(u32::MAX as usize) as u32;
+        while self.depth[v as usize] > d {
+            let j = self.jump[v as usize];
+            v = if self.depth[j as usize] >= d {
+                j
+            } else {
+                self.parent[v as usize]
+            };
+        }
+        v
+    }
+}
+
+/// A suffix automaton of the reversed target sequences (generalized:
+/// several strings, built online with the existing-transition check).
+struct Sam {
+    len: Vec<u32>,
+    link: Vec<u32>,
+    next: Vec<Vec<(u32, u32)>>,
+}
+
+impl Sam {
+    fn get(&self, v: u32, c: u32) -> Option<u32> {
+        let e = &self.next[v as usize];
+        e.binary_search_by_key(&c, |&(s, _)| s).ok().map(|i| e[i].1)
+    }
+
+    fn set(&mut self, v: u32, c: u32, to: u32) {
+        let e = &mut self.next[v as usize];
+        match e.binary_search_by_key(&c, |&(s, _)| s) {
+            Ok(i) => e[i].1 = to,
+            Err(i) => e.insert(i, (c, to)),
+        }
+    }
+
+    fn state(&mut self, len: u32, link: u32, next: Vec<(u32, u32)>) -> u32 {
+        self.len.push(len);
+        self.link.push(link);
+        self.next.push(next);
+        (self.len.len() - 1) as u32
+    }
+
+    /// Redirects the transitions on `c` to `q` from `p` and its suffix links
+    /// to a clone of `q` of length `len`.
+    fn split(&mut self, mut p: u32, c: u32, q: u32, len: u32) -> u32 {
+        let clone = self.state(len, self.link[q as usize], self.next[q as usize].clone());
+        while p != NONE && self.get(p, c) == Some(q) {
+            self.set(p, c, clone);
+            p = self.link[p as usize];
+        }
+        self.link[q as usize] = clone;
+        clone
+    }
+
+    fn extend(&mut self, last: u32, c: u32) -> u32 {
+        let l = self.len[last as usize] + 1;
+        if let Some(q) = self.get(last, c) {
+            if self.len[q as usize] == l {
+                return q;
+            }
+            return self.split(last, c, q, l);
+        }
+        let cur = self.state(l, 0, Vec::new());
+        let mut p = last;
+        while p != NONE && self.get(p, c).is_none() {
+            self.set(p, c, cur);
+            p = self.link[p as usize];
+        }
+        if p != NONE {
+            let q = self.get(p, c).unwrap_or(0);
+            self.link[cur as usize] = if self.len[p as usize] + 1 == self.len[q as usize] {
+                q
+            } else {
+                self.split(p, c, q, self.len[p as usize] + 1)
+            };
+        }
+        cur
+    }
+}
+
+/// For each text symbol, the deepest trie node the text from it reaches:
+/// the longest prefix of the text there that is a prefix of some target.
+/// Reading the text right to left against the suffix automaton of the
+/// reversed targets gives, at each symbol, the longest such prefix that is
+/// a SUBSTRING of a reversed target; a state whose strings end some reversed
+/// target holds only prefixes of that target, so the nearest such state on
+/// the suffix-link chain gives the answer, and its strings map to trie nodes.
+fn deepest(trie: &Trie, seqs: &[(u32, Vec<u32>, bool)], text: &[u32]) -> Vec<u32> {
+    let mut sam = Sam {
+        len: vec![0],
+        link: vec![NONE],
+        next: vec![Vec::new()],
+    };
+    let mut ends = Vec::with_capacity(seqs.len());
+    for (_, syms, _) in seqs {
+        let mut last = 0;
+        for &s in syms.iter().rev() {
+            last = sam.extend(last, s);
+        }
+        ends.push(last);
+    }
+    // Map each prefix state's strings (lengths lo..=len) to trie nodes.
+    let states = sam.len.len();
+    // A state's strings are lengths lo..=len; its nodes are `nodes[off..]`.
+    // Every string of a state that ends a reversed target is no longer than
+    // that target (a longer one cannot end where it ends), so `hi == len`.
+    let mut off = vec![NONE; states];
+    let mut count = vec![0u32; states];
+    let mut nodes: Vec<u32> = Vec::new();
+    off[0] = 0;
+    nodes.push(0);
+    for ((_, syms, _), &end) in seqs.iter().zip(&ends) {
+        // The trie path of this sequence, by depth.
+        let mut path = vec![0u32];
+        let mut v = 0u32;
+        for &s in syms {
+            v = trie.next.get(&(v, s)).copied().unwrap_or(0);
+            path.push(v);
+        }
+        let mut x = end;
+        while x != 0 && off[x as usize] == NONE {
+            let lo = sam.len[sam.link[x as usize] as usize] as usize + 1;
+            let hi = (sam.len[x as usize] as usize).min(syms.len());
+            debug_assert_eq!(hi, sam.len[x as usize] as usize);
+            off[x as usize] = nodes.len() as u32;
+            count[x as usize] = (hi + 1).saturating_sub(lo) as u32;
+            nodes.extend((lo..=hi).map(|l| path[l]));
+            x = sam.link[x as usize];
+        }
+    }
+    // The nearest prefix state on each state's suffix-link chain.
+    let mut order: Vec<u32> = (0..states as u32).collect();
+    order.sort_unstable_by_key(|&x| sam.len[x as usize]);
+    let mut pref = vec![0u32; states];
+    for &x in &order {
+        let xi = x as usize;
+        pref[xi] = if off[xi] != NONE {
+            x
+        } else {
+            pref[sam.link[xi] as usize]
+        };
+    }
+    let node_of = |x: u32, l: usize| -> u32 {
+        if x == 0 {
+            return 0;
+        }
+        let lo = sam.len[sam.link[x as usize] as usize] as usize + 1;
+        let i = l
+            .saturating_sub(lo)
+            .min(count[x as usize].saturating_sub(1) as usize);
+        nodes[off[x as usize] as usize + i]
+    };
+    let mut deep = vec![0u32; text.len()];
+    let (mut cur, mut l) = (0u32, 0usize);
+    for i in (0..text.len()).rev() {
+        let c = text[i];
         loop {
-            let (next_k, ends) = choices.last_mut()?;
-            if let Some(e) = ends.pop() {
-                k = *next_k;
-                pos = e;
+            if let Some(nx) = sam.get(cur, c) {
+                cur = nx;
+                l += 1;
                 break;
             }
-            choices.pop();
+            if cur == 0 {
+                l = 0;
+                break;
+            }
+            cur = sam.link[cur as usize];
+            l = sam.len[cur as usize] as usize;
         }
-    }
-}
-
-/// Aho–Corasick over symbols.
-struct Automaton {
-    goto_: HashMap<(u32, u32), u32>,
-    fail: Vec<u32>,
-    /// Targets whose symbols end at this node.
-    out: Vec<Vec<u32>>,
-    /// The nearest node on the fail chain with outputs.
-    dict: Vec<Option<u32>>,
-    lens: Vec<usize>,
-    max_len: usize,
-}
-
-impl Automaton {
-    fn new(targets: &[Target]) -> Automaton {
-        let mut a = Automaton {
-            goto_: HashMap::new(),
-            fail: vec![0],
-            out: vec![Vec::new()],
-            dict: vec![None],
-            lens: Vec::with_capacity(targets.len()),
-            max_len: 0,
+        deep[i] = if off[cur as usize] != NONE {
+            node_of(cur, l)
+        } else {
+            let a = pref[cur as usize];
+            node_of(a, sam.len[a as usize] as usize)
         };
-        for (t, target) in targets.iter().enumerate() {
-            let syms = symbols(target);
-            let mut node = 0u32;
-            for &s in &syms {
-                node = match a.goto_.get(&(node, s)) {
-                    Some(&n) => n,
-                    None => {
-                        let n = a.fail.len() as u32;
-                        a.fail.push(0);
-                        a.out.push(Vec::new());
-                        a.dict.push(None);
-                        a.goto_.insert((node, s), n);
-                        n
-                    }
-                };
-            }
-            a.out[node as usize].push(t as u32);
-            a.max_len = a.max_len.max(syms.len());
-            a.lens.push(syms.len());
-        }
-        a.link();
-        a
     }
-
-    /// Fail and dictionary links, breadth first.
-    fn link(&mut self) {
-        let mut children: Vec<Vec<(u32, u32)>> = vec![Vec::new(); self.fail.len()];
-        for (&(from, s), &to) in &self.goto_ {
-            children[from as usize].push((s, to));
-        }
-        let mut queue: VecDeque<u32> = children[0].iter().map(|&(_, n)| n).collect();
-        while let Some(n) = queue.pop_front() {
-            for &(s, child) in &children[n as usize] {
-                let mut f = self.fail[n as usize];
-                let target = loop {
-                    if let Some(&g) = self.goto_.get(&(f, s)) {
-                        break g;
-                    }
-                    if f == 0 {
-                        break 0;
-                    }
-                    f = self.fail[f as usize];
-                };
-                self.fail[child as usize] = target;
-                let ft = target as usize;
-                self.dict[child as usize] = if self.out[ft].is_empty() {
-                    self.dict[ft]
-                } else {
-                    Some(target)
-                };
-                queue.push_back(child);
-            }
-        }
-    }
-
-    fn step(&self, mut node: u32, s: u32) -> u32 {
-        loop {
-            if let Some(&n) = self.goto_.get(&(node, s)) {
-                return n;
-            }
-            if node == 0 {
-                return 0;
-            }
-            node = self.fail[node as usize];
-        }
-    }
-
-    /// Every (start, target, end) hit in the text. Symbols are chars (case
-    /// folded) and whitespace runs; a ring keeps the last `max_len` symbols'
-    /// extents so a hit's start is known.
-    fn scan(&self, cx: &InlineCx, targets: &[Target], hits: &mut Vec<(usize, u32, usize)>) {
-        let n = self.max_len.max(1);
-        let mut ring: Vec<(usize, usize)> = vec![(0, 0); n];
-        let (mut count, mut node, mut i) = (0usize, 0u32, cx.src.bom);
-        let len = cx.src.len();
-        while i < len {
-            let (sym, j) = match cx.ch(i, len) {
-                Some(c) if is_space(c) => {
-                    let mut j = cx.step(i);
-                    while cx.ch(j, len).is_some_and(is_space) {
-                        j = cx.step(j);
-                    }
-                    (W, j)
-                }
-                Some(c) => (canon(c) as u32, cx.step(i)),
-                None => break,
-            };
-            ring[count % n] = (i, j);
-            count += 1;
-            node = self.step(node, sym);
-            let mut at = Some(node).filter(|&x| !self.out[x as usize].is_empty());
-            at = at.or(self.dict[node as usize]);
-            while let Some(x) = at {
-                for &t in &self.out[x as usize] {
-                    let first = ring[(count - self.lens[t as usize]) % n];
-                    record(cx, &targets[t as usize], t, first, j, hits);
-                }
-                at = self.dict[x as usize];
-            }
-            i = j;
-        }
-    }
-}
-
-/// Records where target `t` may start, given the extent of the first symbol
-/// of its hit and where the hit ends.
-fn record(
-    cx: &InlineCx,
-    target: &Target,
-    t: u32,
-    first: (usize, usize),
-    hit_end: usize,
-    hits: &mut Vec<(usize, u32, usize)>,
-) {
-    if target.simple {
-        hits.push((first.0, t, hit_end));
-    } else if target.blank_start {
-        let mut q = first.0;
-        while q < first.1 {
-            hits.push((q, t, usize::MAX));
-            q = cx.step(q);
-        }
-    } else {
-        hits.push((first.0, t, usize::MAX));
-    }
+    deep
 }
 
 /// `org-element-link-parser`'s first case: a radio link at `i` when the
@@ -488,4 +916,149 @@ pub(crate) fn link(cx: &InlineCx, i: usize, end: usize, floor: usize) -> Option<
             .contents(m.p, m.g1)
             .blank(m.g1),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::radio_reference as reference;
+    use super::*;
+    use crate::inline::InlineIndex;
+    use crate::text::Source;
+    use proptest::prelude::*;
+
+    /// The chars the generated targets and texts are made of: case pairs,
+    /// a border char, a line-breakable (Han) char, space, tab, no-break
+    /// space, ideographic space, line feed.
+    const ALPHABET: &[char] = &['a', 'b', 'A', '-', '中', ' ', '\t', '\u{a0}', '\u{3000}'];
+
+    fn compare(text: &str, values: &[String], regions: &[(usize, usize)]) -> Result<(), String> {
+        let src = Source::new(text);
+        let ix = InlineIndex::build(&src);
+        let types: Vec<String> = Vec::new();
+        let diagnostics = std::cell::RefCell::new(Vec::new());
+        let cx = InlineCx {
+            src: &src,
+            ix: &ix,
+            link_types: &types,
+            radio: None,
+            diagnostics: &diagnostics,
+        };
+        let refs: Vec<&str> = values.iter().map(String::as_str).collect();
+        let new = Radio::build(&cx, &refs);
+        let old = reference::Radio::build(&cx, &refs);
+        let bounds: Vec<usize> = (0..=text.len())
+            .filter(|&i| text.is_char_boundary(i))
+            .collect();
+        let mut all = vec![(0, text.len())];
+        all.extend(regions.iter().map(|&(a, b)| {
+            let (a, b) = (bounds[a % bounds.len()], bounds[b % bounds.len()]);
+            (a.min(b), a.max(b))
+        }));
+        for (floor, end) in all {
+            for &p in bounds.iter().filter(|&&p| p >= floor && p < end) {
+                let prev = bounds.iter().rev().find(|&&q| q < p).copied();
+                let mut s0s = vec![p, floor];
+                s0s.extend(prev.filter(|&q| q >= floor));
+                for s0 in s0s {
+                    let a = new.valid_at(&cx, p, s0, (floor, end));
+                    let b = old.valid_at(&cx, p, s0, (floor, end));
+                    let a = a.map(|m| (m.p, m.g1, m.m0));
+                    let b = b.map(|m| (m.p, m.g1, m.m0));
+                    if a != b {
+                        return Err(format!(
+                            "text {text:?} targets {values:?} region {floor}..{end} p {p} s0 {s0}: new {a:?} reference {b:?}"
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn target() -> impl Strategy<Value = String> {
+        prop::collection::vec(prop::sample::select(ALPHABET), 1..6)
+            .prop_map(|cs| cs.into_iter().collect::<String>())
+            // `org-target-regexp`'s border chars are not space or tab.
+            .prop_filter("border", |s| {
+                let ok = |c: Option<char>| c.is_some_and(|c| c != ' ' && c != '\t');
+                ok(s.chars().next()) && ok(s.chars().last())
+            })
+    }
+
+    fn text() -> impl Strategy<Value = String> {
+        let mut chars = ALPHABET.to_vec();
+        chars.push('\n');
+        prop::collection::vec(prop::sample::select(chars), 0..40)
+            .prop_map(|cs| cs.into_iter().collect())
+    }
+
+    /// Targets in regexp order, as `Radio::find` sorts them.
+    fn ordered(mut v: Vec<String>) -> Vec<String> {
+        let mut seen = HashSet::new();
+        v.retain(|s| seen.insert(s.clone()));
+        v.sort_by_key(|s| std::cmp::Reverse(s.chars().count()));
+        v
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(3000))]
+
+        /// The linear matcher agrees with the reference (the previous,
+        /// hit-enumerating matcher) at every start, search start and region.
+        #[test]
+        fn agrees_with_the_reference_matcher(
+            values in prop::collection::vec(target(), 1..6),
+            text in text(),
+            regions in prop::collection::vec((0usize..64, 0usize..64), 0..4),
+        ) {
+            let values = ordered(values);
+            prop_assert_eq!(compare(&text, &values, &regions), Ok(()));
+        }
+
+        /// Texts made of the targets themselves, so long matches are common.
+        #[test]
+        fn agrees_with_the_reference_on_texts_of_targets(
+            values in prop::collection::vec(target(), 1..6),
+            picks in prop::collection::vec((0usize..6, prop::sample::select(ALPHABET)), 0..12),
+            regions in prop::collection::vec((0usize..96, 0usize..96), 0..4),
+        ) {
+            let values = ordered(values);
+            let text: String = picks
+                .iter()
+                .map(|&(i, sep)| format!("{}{sep}", values[i % values.len()]))
+                .collect();
+            prop_assert_eq!(compare(&text, &values, &regions), Ok(()));
+        }
+    }
+
+    /// Fixed cases worth keeping whatever proptest draws.
+    #[test]
+    fn agrees_with_the_reference_on_chosen_cases() {
+        let cases: &[(&str, &[&str])] = &[
+            ("a b c", &["a b c", "a b", "a"]),
+            ("a  b x", &["a  b", "a b"]),
+            ("a\u{a0} b", &["a\u{a0} b", "a\u{a0}"]),
+            ("x \u{a0}\u{a0} xa \u{a0} x", &["\u{a0} x"]),
+            ("中ab文 xab ab", &["ab"]),
+            ("a\tb a\tb\ta", &["a\tb\ta", "a\tb"]),
+            ("a\n\tb", &["a\tb", "a b"]),
+            ("A B", &["a b"]),
+            ("a-b", &["a-b", "b", "a"]),
+        ];
+        for (text, values) in cases {
+            let values: Vec<String> = values.iter().map(|s| s.to_string()).collect();
+            assert_eq!(compare(text, &values, &[(1, 4), (0, 3)]), Ok(()));
+        }
+    }
+
+    /// The edge rule for inner targets reads the folded char: folding must
+    /// never change whether a char borders a link.
+    #[test]
+    fn folding_keeps_the_border_class() {
+        for u in 0..=0x10FFFFu32 {
+            if let Some(c) = char::from_u32(u) {
+                assert_eq!(boundary(c), boundary(canon(c)), "U+{u:04X}");
+            }
+        }
+    }
 }

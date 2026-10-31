@@ -148,16 +148,19 @@ fn parse_with(src: text::Source, options: &ParseOptions, start: builder::Start) 
     let ix = inline::InlineIndex::build(&src);
     let mut link_types = options.link_types.clone();
     link_types.sort_by_key(|t| std::cmp::Reverse(t.len()));
+    let inline_diagnostics = std::cell::RefCell::new(Vec::new());
     let cx = inline::InlineCx {
         src: &src,
         ix: &ix,
         link_types: &link_types,
         radio: None,
+        diagnostics: &inline_diagnostics,
     };
     let mut contents = built.contents;
     let green = green::to_green(&cx, &built.events, &todo, &mut contents);
     contents.finish();
     let mut diagnostics = built.diagnostics;
+    diagnostics.extend(inline_diagnostics.into_inner());
     diagnostics.sort_by_key(Diagnostic::order_key);
     diagnostics.dedup();
     let todo_sequences = if declared {
