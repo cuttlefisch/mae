@@ -41,6 +41,9 @@ else
     timeout_cmd=
     echo "regen.sh: warning: no timeout/gtimeout; Emacs runs without a time limit" >&2
 fi
+# `ulimit -v` is not POSIX (SC3045), but dash, bash, ksh and zsh all have it;
+# it is probed here and skipped with a warning where it is missing.
+# shellcheck disable=SC3045
 if ! (ulimit -v "$vmem_kb") 2>/dev/null; then
     echo "regen.sh: warning: ulimit -v unsupported here; Emacs runs without a memory cap" >&2
     vmem_kb=
@@ -51,6 +54,7 @@ bounded() {
     limit=$1
     shift
     (
+        # shellcheck disable=SC3045 # probed above
         [ -z "$vmem_kb" ] || ulimit -v "$vmem_kb"
         if [ -n "$timeout_cmd" ]; then
             exec "$timeout_cmd" "$limit" emacs "$@"
@@ -91,9 +95,9 @@ one() {
     fi
     rm -f "$dst.tmp"
     if grep -q "Memory exhausted" "$tmp/err"; then
-        why=memory
+        why="memory"
     elif [ "$status" -eq 124 ]; then
-        why=time
+        why="time"
     else
         why="exit $status"
     fi
