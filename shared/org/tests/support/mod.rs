@@ -599,7 +599,8 @@ pub fn compare_views(
             continue;
         };
         let group = match el.kind.as_str() {
-            "headline" | "keyword" | "node-property" | "link" => el.kind.clone(),
+            "headline" | "keyword" | "node-property" | "link" | "entity" | "macro"
+            | "inline-src-block" | "export-snippet" | "timestamp" => el.kind.clone(),
             _ => "drawer/block".to_string(),
         };
         *counts.entry(group).or_default() += 1;
@@ -619,6 +620,86 @@ pub fn compare_views(
         }
     }
     (counts, bad)
+}
+
+/// The text of a node's direct token of `kind` (several are joined, as a
+/// value split over lines is), line endings read as `\n`.
+fn token_text(node: &mae_org::SyntaxNode, kind: SyntaxKind) -> Option<String> {
+    let toks: Vec<_> = node
+        .children_with_tokens()
+        .filter_map(|e| e.into_token())
+        .collect();
+    let first = toks.iter().position(|t| t.kind() == kind)?;
+    let last = toks.iter().rposition(|t| t.kind() == kind)?;
+    Some(
+        toks[first..=last]
+            .iter()
+            .map(|t| {
+                if t.kind() == NEWLINE {
+                    "\n".to_string()
+                } else {
+                    t.text().to_string()
+                }
+            })
+            .collect(),
+    )
+}
+
+/// `org-element-timestamp-parser`'s `:type` and `:range-type` from the raw
+/// value: diary if it opens `<%%`; a range if a second stamp follows `--`
+/// (daterange) or the first holds `H:MM-H:MM` (timerange); active if it
+/// opens with `<`. Independent of mae-org's parser, so a wrong extent shows.
+fn timestamp_type(raw: &str) -> (&'static str, Option<&'static str>) {
+    let diary = raw.starts_with("<%%");
+    let close = raw[1..].find([']', '>']).map_or(raw.len(), |k| k + 1);
+    let date_end = raw[close..].starts_with("]--") || raw[close..].starts_with(">--");
+    // A diary's time is read after its sexp: the text after the last `)`.
+    let start = if diary {
+        &raw[raw[..close].rfind(')').map_or(close, |k| k + 1)..close]
+    } else {
+        &raw[..close]
+    };
+    let time_range = has_time_range(start);
+    let active = raw.starts_with('<');
+    let ty = match (diary, active, date_end || time_range) {
+        (true, _, _) => "diary",
+        (_, true, true) => "active-range",
+        (_, true, false) => "active",
+        (_, false, true) => "inactive-range",
+        (_, false, false) => "inactive",
+    };
+    let range = if date_end {
+        Some("daterange")
+    } else if time_range {
+        Some("timerange")
+    } else {
+        None
+    };
+    (ty, range)
+}
+
+/// `[012]?[0-9]:[0-5][0-9]-[012]?[0-9]:[0-5][0-9]` somewhere in `s`.
+fn has_time_range(s: &str) -> bool {
+    let b = s.as_bytes();
+    // `H:MM` or `HH:MM` ending at `k` (exclusive), `[012]?` optional.
+    let clock_at = |i: usize| -> Option<usize> {
+        let d = |k: usize| b.get(k).is_some_and(u8::is_ascii_digit);
+        let start = if d(i) && d(i + 1) && b.get(i + 2) == Some(&b':') {
+            (matches!(b[i], b'0'..=b'2')).then_some(i + 2)?
+        } else if d(i) && b.get(i + 1) == Some(&b':') {
+            i + 1
+        } else {
+            return None;
+        };
+        let m = start + 1;
+        (b.get(m).is_some_and(|c| matches!(c, b'0'..=b'5')) && d(m + 1)).then_some(m + 2)
+    };
+    (0..b.len()).any(|i| {
+        clock_at(i)
+            .filter(|&e| b.get(e) == Some(&b'-'))
+            .and_then(|e| clock_at(e + 1))
+            .is_some()
+    })
 }
 
 /// The oracle's field names and mae-org's values for them, per view.
@@ -667,6 +748,25 @@ fn view_fields(
                 ("path", json!(info.path)),
                 ("raw_link", json!(info.raw_link)),
                 ("format", json!(info.format.as_str())),
+            ]
+        }
+        // Objects without a typed view yet: their fields read off the tree.
+        "entity" => vec![("name", json!(token_text(&node, NAME)))],
+        // `:key` is the name downcased.
+        "macro" => vec![(
+            "key",
+            json!(token_text(&node, NAME).map(|k| k.to_lowercase())),
+        )],
+        "inline-src-block" | "export-snippet" => {
+            vec![("value", json!(token_text(&node, VALUE).unwrap_or_default()))]
+        }
+        "timestamp" => {
+            let raw = token_text(&node, VALUE).unwrap_or_default();
+            let (ty, range) = timestamp_type(&raw);
+            vec![
+                ("timestamp_type", json!(ty)),
+                ("range_type", json!(range)),
+                ("raw_value", json!(raw)),
             ]
         }
         "drawer" => {
