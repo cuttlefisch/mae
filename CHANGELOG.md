@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.131] - 2026-10-31
+
+
+
+
+### Bug Fixes
+
+- *(ai)* Keep guidance export inside the project and system KB nodes unshadowed ([9062825](https://github.com/cuttlefisch/mae/commit/9062825faad78076b83d605cee018dbeea04b42d))
+- *(mcp)* Refuse unknown tool arguments, advertise the KB read tools, say what a re-import did ([b5086b1](https://github.com/cuttlefisch/mae/commit/b5086b1090ba109fea9f199aef0047732601cc0f))
+- *(ai)* Close the review's gaps in the agent-surface fixes ([e56a84b](https://github.com/cuttlefisch/mae/commit/e56a84b29dd0328496103ea57df76939a54857df))
+- *(ai)* Contain every guidance export, and make scoped guidance reads robust ([072a193](https://github.com/cuttlefisch/mae/commit/072a19305a08306e246eb2fe24c85dd6922c83ff))
+- *(ai)* The guidance export never reads or writes through a link ([6fbaa78](https://github.com/cuttlefisch/mae/commit/6fbaa78876d61f51e55af74b0b746643ac30b0b8))
+
+### Refactor
+
+- *(ai)* Extract the touched tool definitions and the export write step ([8388252](https://github.com/cuttlefisch/mae/commit/83882525fd52c9f968618ca65fd4575dfa05d191))
+
+### Testing
+
+- *(headless)* Build the stale-socket fixture from a socket that never listens ([cf7f7ff](https://github.com/cuttlefisch/mae/commit/cf7f7ff1f3d9b37be84305e5a76a4b818364d6c8))
+
 ## [0.14.130] - 2026-10-30
 
 
@@ -11,6 +32,10 @@ All notable changes to this project will be documented in this file.
 
 - *(kb)* The registry never loses KBs, and a node write is atomic ([1eb110d](https://github.com/cuttlefisch/mae/commit/1eb110db0f7c9c176d21dd7c65b7588cef24df33))
 - *(release)* Ship a raster AppImage icon and pin appimagetool ([af7d956](https://github.com/cuttlefisch/mae/commit/af7d9568891e303a836dbd3775f688ad18ecbd19))
+
+### Miscellaneous
+
+- Bump version to 0.14.130 ([bc7e197](https://github.com/cuttlefisch/mae/commit/bc7e197364a6c0bdd335468dd7fe21f2ce0b47c5))
 
 ## [0.14.129] - 2026-10-30
 
