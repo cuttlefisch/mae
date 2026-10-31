@@ -44,22 +44,6 @@ test = "titles_are_plain_text"
 
 [[divergence]]
 what = "link"
-class = "unrendered_region"
-file = "assets/devpractices/practice-kb-pdf-export-pipeline.org"
-detail = "from: \"practice:kb-pdf-export-pipeline\", p: Payload { target: \"practice:molecular-notes-overview\""
-reason = "The note's #+filetags include `export`, Org's default select tag (org-export-select-tags), so Org selects every headline and does not render the zeroth section, which is the whole note: its links are diagnosed, not edges (emacs -Q exports nothing of it). Corpus question for the DevPractices owners: rename the tag, or declare select_tags for that KB (D4)."
-test = "select_tags_render_only_the_selected_trees"
-
-[[divergence]]
-what = "link"
-class = "unrendered_region"
-file = "assets/devpractices/practice-kb-pdf-export-pipeline.org"
-detail = "from: \"practice:kb-pdf-export-pipeline\", p: Payload { target: \"practice:node-linking\""
-reason = "The note's #+filetags include `export`, Org's default select tag (org-export-select-tags), so Org selects every headline and does not render the zeroth section, which is the whole note: its links are diagnosed, not edges (emacs -Q exports nothing of it). Corpus question for the DevPractices owners: rename the tag, or declare select_tags for that KB (D4)."
-test = "select_tags_render_only_the_selected_trees"
-
-[[divergence]]
-what = "link"
 class = "verbatim_object"
 file = "assets/devpractices/practice-mutating-script-safety.org"
 detail = "from: \"practice:mutating-script-safety\", p: Payload { target: \"-z \\"$X\\"\""

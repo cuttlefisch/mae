@@ -115,7 +115,15 @@ pub struct SemanticsOptions {
     /// When a headline (or the file tags) carries one of these, only the
     /// selected subtrees and their ancestors are rendered, and the zeroth
     /// section's content is not. In-file `#+SELECT_TAGS:` lines replace
-    /// them. Default: `export` (`org-export-select-tags`).
+    /// them.
+    ///
+    /// Default: **none**, deliberately unlike Org's `org-export-select-tags`
+    /// (`export`). Selection is an export-time choice made by whoever runs
+    /// the export; in a KB, a note tagged `export` because it is *about*
+    /// exporting would otherwise vanish from the graph, zeroth section and
+    /// all (a bundled DevPractices note did). A KB or file that wants Org's
+    /// selection declares it: here, or in-file with `#+SELECT_TAGS:`.
+    /// [`ORG_EXPORT_SELECT_TAGS`] is Org's default, for an exporter.
     pub select_tags: Vec<String>,
     /// The tag that archives a headline, matched exactly
     /// (`org-archive-tag`). Default: `ARCHIVE`.
@@ -132,6 +140,11 @@ pub struct SemanticsOptions {
     /// org-roam's `ROAM_REFS`.
     pub link_exclude_properties: Vec<String>,
 }
+
+/// Org's default `org-export-select-tags`, for a caller that wants export
+/// selection exactly as `emacs -Q` does it (see
+/// [`SemanticsOptions::select_tags`] for why it is not the default).
+pub const ORG_EXPORT_SELECT_TAGS: &[&str] = &["export"];
 
 /// Keywords whose values are not link sources: `TRANSCLUDE` (org-roam's
 /// `org-roam-db-extra-links-exclude-keys`), and the keywords whose value Org
@@ -155,7 +168,7 @@ impl Default for SemanticsOptions {
         let own = |v: &[&str]| v.iter().map(|s| s.to_string()).collect();
         SemanticsOptions {
             exclude_tags: own(&["noexport"]),
-            select_tags: own(&["export"]),
+            select_tags: Vec::new(),
             archive_tag: "ARCHIVE".to_string(),
             archived_trees: ArchivedTrees::Headline,
             link_types: LinkTypes::default(),

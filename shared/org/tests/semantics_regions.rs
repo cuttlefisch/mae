@@ -8,7 +8,7 @@ mod support;
 
 use mae_org::{
     parse, semantics, semantics_with, ArchivedTrees, LinkKind, ParseOptions, Region,
-    SemanticDiagnostic, Semantics, SemanticsOptions,
+    SemanticDiagnostic, Semantics, SemanticsOptions, ORG_EXPORT_SELECT_TAGS,
 };
 
 fn sem(text: &str) -> Semantics {
@@ -150,6 +150,14 @@ fn transclusions_in_unrendered_regions_are_diagnosed() {
 /// read like `#+title`).
 #[test]
 fn select_tags_render_only_the_selected_trees() {
+    let org = SemanticsOptions {
+        select_tags: ORG_EXPORT_SELECT_TAGS
+            .iter()
+            .map(|t| t.to_string())
+            .collect(),
+        ..SemanticsOptions::default()
+    };
+    let sem = |text: &str| sem_with(text, &org);
     let text = ":PROPERTIES:\n:ID: f\n:END:\n#+title: T [[id:in-title]]\nZeroth [[id:zeroth]].\n* A\n:PROPERTIES:\n:ID: a\n:END:\nA's text [[id:a-text]].\n** B :export:\n:PROPERTIES:\n:ID: b\n:END:\n[[id:b-text]]\n*** B1\n:PROPERTIES:\n:ID: b1\n:END:\n** C\n:PROPERTIES:\n:ID: c\n:END:\n[[id:c-text]]\n* D\n[[id:d-text]]\n";
     let s = sem(text);
     assert_eq!(ids(&s), vec!["f", "a", "b", "b1"]);
@@ -184,6 +192,22 @@ fn select_tags_render_only_the_selected_trees() {
         "* A :export:\n:PROPERTIES:\n:ID: a\n:END:\n* B :pick:\n:PROPERTIES:\n:ID: b\n:END:\n";
     assert_eq!(ids(&sem_with(configured, &opts)), vec!["b"]);
     assert_eq!(ids(&sem(configured)), vec!["a"]);
+}
+
+/// The KB default selects nothing: a note tagged `export` (because it is
+/// about exporting) keeps its zeroth section, its nodes and its links. Only
+/// a declared selection prunes, and an in-file `#+SELECT_TAGS:` is one.
+#[test]
+fn the_default_declares_no_select_tags() {
+    let by_file = ":PROPERTIES:\n:ID: f\n:END:\n#+filetags: :export:\nZeroth [[id:z]].\n* A\n:PROPERTIES:\n:ID: a\n:END:\n";
+    let s = sem(by_file);
+    assert_eq!(ids(&s), vec!["f", "a"]);
+    assert_eq!(edges(&s), pairs(&[("f", "z")]));
+    assert!(diags(&s).iter().all(|d| d.2 != Region::Unselected.as_str()));
+    let tagged = "* A :export:\n:PROPERTIES:\n:ID: a\n:END:\n* B\n:PROPERTIES:\n:ID: b\n:END:\n";
+    assert_eq!(ids(&sem(tagged)), vec!["a", "b"]);
+    let declared = format!("#+SELECT_TAGS: export\n{tagged}");
+    assert_eq!(ids(&sem(&declared)), vec!["a"]);
 }
 
 /// A file tag that is an exclude tag excludes every headline (Org reads

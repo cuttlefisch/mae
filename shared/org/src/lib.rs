@@ -77,6 +77,7 @@ pub use rowan;
 pub use semantics::{
     semantics, semantics_with, ArchivedTrees, NodeOrigin, Region, SemanticDiagnostic, SemanticLink,
     SemanticNode, Semantics, SemanticsOptions, Transclusion, LINK_EXCLUDE_KEYWORDS,
+    ORG_EXPORT_SELECT_TAGS,
 };
 pub use span::Span;
 pub use text::LineEnding;
