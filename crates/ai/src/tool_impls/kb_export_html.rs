@@ -71,6 +71,36 @@ fn write_atomically(path: &std::path::Path, contents: &str) -> std::io::Result<(
     std::fs::rename(&tmp_path, path)
 }
 
+/// Write the exported page: refuse MAE configuration, create the parent
+/// directory, then write atomically.
+fn write_export(out_path: &std::path::Path, html: &str) -> Result<(), String> {
+    // ADR-089 D4: MAE's own configuration is not agent-writable, whatever the tier.
+    if mae_core::workspace_trust::is_protected_config_path(out_path) {
+        return Err(format!(
+            "kb_export_subgraph_html: refused: {} is MAE configuration, which an AI \
+             session may not write",
+            out_path.display()
+        ));
+    }
+    if let Some(parent) = out_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "kb_export_subgraph_html: couldn't create directory {}: {e}",
+                    parent.display()
+                )
+            })?;
+        }
+    }
+    write_atomically(out_path, html).map_err(|e| {
+        format!(
+            "kb_export_subgraph_html: couldn't write {}: {e}",
+            out_path.display()
+        )
+    })?;
+    Ok(())
+}
+
 /// Find which `KnowledgeBase` (primary, or a registered federated instance)
 /// actually contains `id` — `extract_subgraph` is a method on a single
 /// in-memory `KnowledgeBase` and never crosses instance boundaries (see
@@ -526,30 +556,7 @@ pub fn execute_kb_export_subgraph_html(
     );
 
     let out_path = resolve_path(editor, path_arg);
-    // ADR-089 D4: MAE's own configuration is not agent-writable, whatever the tier.
-    if mae_core::workspace_trust::is_protected_config_path(&out_path) {
-        return Err(format!(
-            "kb_export_subgraph_html: refused: {} is MAE configuration, which an AI \
-             session may not write",
-            out_path.display()
-        ));
-    }
-    if let Some(parent) = out_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                format!(
-                    "kb_export_subgraph_html: couldn't create directory {}: {e}",
-                    parent.display()
-                )
-            })?;
-        }
-    }
-    write_atomically(&out_path, &html).map_err(|e| {
-        format!(
-            "kb_export_subgraph_html: couldn't write {}: {e}",
-            out_path.display()
-        )
-    })?;
+    write_export(&out_path, &html)?;
 
     Ok(format!(
         "Exported {} node{} ({} edges) rooted at '{id}' to {} ({} bytes){}{}{}{}{}",
