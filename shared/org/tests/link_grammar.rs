@@ -290,3 +290,25 @@ proptest! {
         }
     }
 }
+
+/// A path split over lines classifies the same in every line-ending
+/// convention: a DOS or mac file's line ending is a line break in Emacs's
+/// buffer, while a CR that is content (a unix file) stays, as Org keeps it.
+#[test]
+fn a_multi_line_path_classifies_alike_in_every_convention() {
+    for text in [
+        "[[concept:a\n   b][d]]\n",
+        "[[concept:a\r\n   b][d]]\r\n",
+        "[[concept:a\r   b][d]]\r",
+    ] {
+        let links = semantics(&parse(text, &ParseOptions::default())).links;
+        assert_eq!(links[0].target, "concept:a b", "{text:?}");
+    }
+    // Unix file with a CRLF line inside the path: the CR is content.
+    let links = semantics(&parse(
+        "[[concept:a\r\n   b][d]]\nx\n",
+        &ParseOptions::default(),
+    ))
+    .links;
+    assert_eq!(links[0].target, "concept:a\r b");
+}

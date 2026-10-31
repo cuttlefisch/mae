@@ -95,3 +95,27 @@ pub fn nested_blocks(n: usize) -> String {
     let close: String = (0..n).rev().map(|i| format!("#+end_b{i}\n")).collect();
     format!("{open}core\n{close}")
 }
+
+/// The corpus walk must see exactly the `.org` files git tracks: a
+/// gitignored, machine-generated file (`*-instance.org` from `:kb-register`)
+/// made every corpus count differ between machines. Skipped without git.
+#[test]
+fn the_bundled_corpus_is_exactly_the_tracked_org_files() {
+    let root = repo_root();
+    let Ok(out) = std::process::Command::new("git")
+        .args(["ls-files", "assets", "tests"])
+        .current_dir(&root)
+        .output()
+    else {
+        return;
+    };
+    let mut tracked: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.ends_with(".org"))
+        .map(str::to_string)
+        .collect();
+    tracked.sort();
+    let mut walked: Vec<String> = bundled_corpus().iter().map(|p| rel(p)).collect();
+    walked.sort();
+    assert_eq!(walked, tracked);
+}
