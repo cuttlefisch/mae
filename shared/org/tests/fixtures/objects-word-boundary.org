@@ -1,0 +1,47 @@
+# Emacs's \< finds a word start between word chars of different scripts
+# (regex-emacs.c, category.c word_boundary_p). Each line puts a plain link,
+# an inline babel call and an inline src block right after a word char.
+
+* Han
+参见https://example.com 和
+见call_f() 和src_py{1} 中src_py{2}
+* Hiragana
+これはhttps://a.b です
+はcall_f() はsrc_py{1}
+* Katakana
+リンクhttp://a.b
+クcall_f() クsrc_py{1}
+* Hangul
+링크https://a.b
+크call_f() 크src_py{1}
+* Cyrillic
+яhttp://a.b
+яcall_f() яsrc_py{1}
+* Greek
+αhttp://a.b
+αcall_f() αsrc_py{1}
+* Arabic
+رابطhttp://a.b
+بcall_f() بsrc_py{1}
+* Fullwidth Latin
+ａhttp://a.b
+ａcall_f() ａsrc_py{1}
+* Thai
+ลิงก์http://a.b
+กcall_f() กsrc_py{1}
+* Controls: Latin-1, digits, ASCII
+éhttp://a.b
+écall_f() ésrc_py{1}
+1http://a.b
+1call_f() 1src_py{1}
+xhttp://a.b
+xcall_f() xsrc_py{1}
+* Combining marks join across scripts
+a̐http://a.b
+ก์call_f()
+* Kana and Han: one script, categories split
+漢ひhttp://a.b
+ひカhttp://a.b
+カひhttp://a.b
+* After the link
+https://a.b中文

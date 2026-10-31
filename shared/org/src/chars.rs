@@ -6,7 +6,10 @@
 //! (a no-break space is whitespace to Emacs, so a property key containing
 //! one is not a property; a ß and ẞ fold together, SS does not).
 
-use crate::chartables::{ALNUM, ALPHA, CANON, DELIM, LINEBREAK, WHITESPACE, WORD};
+use crate::chartables::{
+    ALNUM, ALPHA, CANON, CATEGORIES, DELIM, LINEBREAK, SCRIPTS, WHITESPACE, WORD,
+    WORD_COMBINING_CATEGORIES, WORD_SEPARATING_CATEGORIES,
+};
 
 fn in_ranges(table: &[(u32, u32)], c: char) -> bool {
     let c = c as u32;
@@ -44,6 +47,49 @@ pub(crate) fn is_linebreak(c: char) -> bool {
     in_ranges(LINEBREAK, c)
 }
 
+/// The `char-script-table` entry of `c`, as an index into `SCRIPT_NAMES`.
+fn script(c: char) -> u16 {
+    let u = c as u32;
+    let k = SCRIPTS.partition_point(|&(_, last, _)| last < u);
+    SCRIPTS.get(k).map_or(u16::MAX, |&(_, _, s)| s)
+}
+
+/// Does `c` have category `cat` (one the word-boundary lists name)?
+fn has_category(c: char, cat: char) -> bool {
+    CATEGORIES
+        .iter()
+        .find(|&&(k, _)| k == cat)
+        .is_some_and(|&(_, table)| in_ranges(table, c))
+}
+
+/// `WORD_BOUNDARY_P (c1, c2)` (category.h): is there a word boundary
+/// between two word-syntax chars `c1` then `c2`? Never between two chars
+/// below 256; otherwise `word_boundary_p` (category.c): chars of one script
+/// are split only by a `word-separating-categories` pair, chars of different
+/// scripts are split unless a `word-combining-categories` pair joins them.
+/// So `参见http` and `яhttp` have a word start at `h`, `éhttp` does not.
+pub(crate) fn word_boundary(c1: char, c2: char) -> bool {
+    if (c1 as u32) < 256 && (c2 as u32) < 256 {
+        return false;
+    }
+    let (pairs, default) = if script(c1) == script(c2) {
+        (WORD_SEPARATING_CATEGORIES, false)
+    } else {
+        (WORD_COMBINING_CATEGORIES, true)
+    };
+    let flips = pairs.iter().any(|&(a, b)| {
+        a.is_none_or(|k| has_category(c1, k) && !has_category(c2, k))
+            && b.is_none_or(|k| !has_category(c1, k) && has_category(c2, k))
+    });
+    default != flips
+}
+
+/// `\<` at a char `c2` preceded by `c1` (`None` at the start of the region,
+/// `AT_STRINGS_BEG`): a word char that does not continue a word.
+pub(crate) fn word_start(c1: Option<char>, c2: char) -> bool {
+    is_word(c2) && c1.is_none_or(|c1| !is_word(c1) || word_boundary(c1, c2))
+}
+
 /// The char `c` folds to under `case-fold-search`: two chars match iff
 /// their canonical chars are equal.
 pub(crate) fn canon(c: char) -> char {
@@ -64,6 +110,7 @@ pub(crate) fn fold(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chartables::SCRIPT_NAMES;
 
     #[test]
     fn tables_are_sorted_and_disjoint() {
@@ -76,6 +123,59 @@ mod tests {
         }
         assert!(CANON.windows(2).all(|w| w[0].0 < w[1].0));
         assert!(!crate::chartables::EMACS_VERSION.is_empty());
+    }
+
+    /// `(looking-at "\\<")` between the two chars of an org-mode buffer
+    /// holding exactly them, measured in Emacs 30.2: scripts (Han, Cyrillic,
+    /// fullwidth Latin, Thai, Hangul, Greek, Arabic), the kana and Han
+    /// category pairs, combining marks (category `^`), and the controls
+    /// that must stay joined (`é`, digits, two Thai letters, Latin-1 pairs).
+    #[test]
+    fn word_starts_measured_in_emacs_30() {
+        let measured = [
+            ("参", "h", true),
+            ("я", "h", true),
+            ("ａ", "h", true),
+            ("é", "h", false),
+            ("1", "h", false),
+            ("ก", "h", true),
+            ("h", "ก", true),
+            ("ก", "ข", false),
+            ("a", "\u{301}", false),
+            ("ก", "\u{e31}", false),
+            ("h", "\u{e31}", false),
+            ("漢", "ひ", false),
+            ("漢", "カ", false),
+            ("ひ", "カ", true),
+            ("カ", "ひ", false),
+            ("ひ", "漢", true),
+            ("한", "h", true),
+            ("α", "h", true),
+            ("ب", "h", true),
+            ("ä", "h", false),
+            ("h", "я", true),
+            ("ｈ", "ａ", false),
+            ("é", "я", true),
+            ("ǅ", "h", false),
+        ];
+        for (a, b, want) in measured {
+            let (c1, c2) = (a.chars().next().unwrap(), b.chars().next().unwrap());
+            assert_eq!(word_start(Some(c1), c2), want, "{a:?} {b:?}");
+        }
+        assert!(word_start(None, 'h'));
+        assert!(!word_start(None, '-'));
+        assert_eq!(SCRIPT_NAMES[script('я') as usize], "cyrillic");
+        assert_eq!(SCRIPT_NAMES[script('\u{e01}') as usize], "thai");
+    }
+
+    #[test]
+    fn script_runs_tile_every_code_point() {
+        assert_eq!(SCRIPTS.first().map(|r| r.0), Some(0));
+        assert_eq!(SCRIPTS.last().map(|r| r.1), Some(0x10FFFF));
+        assert!(SCRIPTS.windows(2).all(|w| w[0].1 + 1 == w[1].0));
+        assert!(SCRIPTS
+            .iter()
+            .all(|&(_, _, s)| (s as usize) < SCRIPT_NAMES.len()));
     }
 
     #[test]
