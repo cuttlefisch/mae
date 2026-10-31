@@ -408,6 +408,16 @@ pub(crate) fn parse(
         let found = if top.cursor < top.end && room {
             lex::next_object(cx, top)
         } else {
+            if top.cursor < top.end && lex::next_object(cx, top).is_some() {
+                // Past the cap a region is plain text; say so when Org would
+                // have found an object in it (a radio target there makes no
+                // radio links: Org finds targets at any depth).
+                cx.diagnostics.borrow_mut().push(crate::Diagnostic::new(
+                    crate::DiagnosticKind::DepthLimit,
+                    top.cursor,
+                    top.end,
+                ));
+            }
             None
         };
         let Some(obj) = found else {

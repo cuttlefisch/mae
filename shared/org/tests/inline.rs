@@ -133,7 +133,45 @@ fn objects_past_the_default_cap_are_plain_text() {
             .max()
             .unwrap_or(0);
         assert!(deepest >= objects, "objects are not nested");
+        // The cap is reported where Org would still find objects.
+        let limits: Vec<_> = doc
+            .diagnostics()
+            .iter()
+            .filter(|d| d.kind == mae_org::DiagnosticKind::DepthLimit)
+            .collect();
+        assert_eq!(limits.len(), 1, "{:?}", doc.diagnostics());
+        let span = limits[0].span;
+        assert!(text[span.range()].contains("a"), "{span:?}");
     }
+    // Under the cap, and past it with only text left, nothing is reported.
+    for text in deep_inputs(50) {
+        assert!(parse_default(&text).diagnostics().is_empty());
+    }
+    let text = format!("{}z{}\n", "*a ".repeat(300), "*".repeat(300));
+    let opts = ParseOptions {
+        max_depth: 400,
+        ..ParseOptions::default()
+    };
+    assert!(parse(&text, &opts).diagnostics().is_empty());
+}
+
+/// A radio target nested past the cap is not seen (Org finds targets at any
+/// depth), so its links are missing; the DepthLimit diagnostic says where.
+#[test]
+fn a_radio_target_past_the_cap_is_reported() {
+    let deep = format!(
+        "{}<<<rt>>>{}\n\nrt\n",
+        "[fn:: a ".repeat(200),
+        "]".repeat(200)
+    );
+    let doc = parse_default(&deep);
+    assert_eq!(count(&doc, RADIO_TARGET), 0);
+    assert_eq!(count(&doc, LINK), 0);
+    let at = deep.find("<<<").unwrap();
+    assert!(doc
+        .diagnostics()
+        .iter()
+        .any(|d| d.kind == mae_org::DiagnosticKind::DepthLimit && d.span.range().contains(&at)));
 }
 
 /// `<2026-3-4 x +1d>` matches `org-element--timestamp-regexp` (its repeater
