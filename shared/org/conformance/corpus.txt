@@ -9,6 +9,7 @@
 # Synthetic adversarial fixtures (invented for this crate, the reviewer's
 # reproductions, and the per-class Unicode fixtures from gen-char-tables.el).
 shared/org/tests/fixtures/affiliated-names.org
+shared/org/tests/fixtures/affiliated-orphan-shapes.org
 shared/org/tests/fixtures/affiliated.org
 shared/org/tests/fixtures/blank-first-line-in-container.org
 shared/org/tests/fixtures/blank-only.org

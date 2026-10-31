@@ -1,0 +1,21 @@
+#+CAPTION[s b]: x
+
+#+CAPTION[s]: x
+
+#+ATTR_HTML[a b]: :width 1
+# a comment
+
+#+NAME[x y]: n
+* Heading
+#+CAPTION[s b]: x
+Para
+
+#+begin_quote
+#+CAPTION[s b]: in quote
+#+end_quote
+
+#+begin_quote
+#+NAME: q
+#+end_quote
+
+#+CAPTION[s b]: x

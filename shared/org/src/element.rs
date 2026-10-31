@@ -232,8 +232,9 @@ fn property_drawer_allowed(cx: &Ctx, li: usize, mode: Mode) -> bool {
 }
 
 /// Collects affiliated keywords, then parses the element they belong to.
-/// Orphaned ones (before a blank line, a comment, a clock line, a headline, or
-/// running into the limit) are plain keywords instead.
+/// Orphaned ones (before the end of the buffer, a blank line, a comment, a
+/// clock line or a headline) are dropped and the first line is parsed on its
+/// own; ones that run into the limit otherwise are a keyword.
 fn with_affiliated(cx: &mut Ctx, li: usize, limit: usize, list: Option<usize>) -> Element {
     let begin = cx.start(li);
     // `(while (and (< (point) limit) (looking-at affiliated-re)) (forward-line))`
@@ -241,8 +242,18 @@ fn with_affiliated(cx: &mut Ctx, li: usize, limit: usize, list: Option<usize>) -
         .ix
         .affiliated_run_end(li)
         .min(first_line_at(cx, limit, li));
-    if j > li && orphaned(cx, j, limit) {
-        return leaf::keyword(cx, li, begin, limit);
+    if j > li {
+        if orphaned(cx, j) {
+            // `org-element--collect-affiliated-keywords' moves back to the
+            // first one and drops them; the current-element regexp then
+            // reads that line on its own: a keyword only if it is one
+            // (`#+KEY:`), so `#+CAPTION[s b]: x' is a paragraph.
+            return element_at(cx, li, begin, limit, list);
+        }
+        if cx.start(j) >= limit {
+            // Kept but off-limits: Org calls the keyword parser regardless.
+            return leaf::keyword(cx, li, begin, limit);
+        }
     }
     element_at(cx, j, begin, limit, list)
 }
@@ -254,8 +265,10 @@ fn first_line_at(cx: &Ctx, limit: usize, from: usize) -> usize {
     k.max(from)
 }
 
-fn orphaned(cx: &Ctx, j: usize, limit: usize) -> bool {
-    if j >= cx.src.lines.len() || cx.start(j) >= limit {
+/// Org's orphan test at the line after the keywords: the end of the buffer,
+/// a blank line, a comment, a clock line or a headline.
+fn orphaned(cx: &Ctx, j: usize) -> bool {
+    if j >= cx.src.lines.len() {
         return true;
     }
     let s = cx.src.content(j);

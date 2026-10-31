@@ -159,10 +159,19 @@ fn line_at<'a>(src: &Source<'a>, start: usize) -> &'a str {
 /// `#+KEY: value` (keywords, babel calls, affiliated keywords).
 pub(crate) fn keyword_line(em: &mut Emitter, start: usize, end: usize, affiliated: bool) {
     let s = line_at(em.src, start);
-    let key_end = if affiliated {
-        scan::affiliated(s).map(|e| s[..e].trim_end_matches([' ', '\t']).len() - 1)
+    let aff_key = || scan::affiliated(s).map(|e| s[..e].trim_end_matches([' ', '\t']).len() - 1);
+    // A keyword line that is not `#+KEY:` is an affiliated keyword Org kept
+    // but ran into its limit with (`#+CAPTION[s b]: x' last in a block): it
+    // calls the keyword parser anyway, whose `looking-at' fails, so the key
+    // and value come from the affiliated regexp's match data — the
+    // affiliated key and the text after its `]:'.
+    let (key_end, aff_form) = if affiliated {
+        (aff_key(), true)
     } else {
-        scan::keyword_key(s).map(|(_, e)| e)
+        match scan::keyword_key(s) {
+            Some((_, e)) => (Some(e), false),
+            None => (aff_key(), true),
+        }
     };
     let mut c = Cut::new(em, start, end);
     if let Some(key_end) = key_end {
@@ -171,7 +180,7 @@ pub(crate) fn keyword_line(em: &mut Emitter, start: usize, end: usize, affiliate
         c.to(HASH_PLUS, ws + 2);
         let name_end = s[..key_end]
             .find('[')
-            .filter(|_| affiliated)
+            .filter(|_| aff_form)
             .unwrap_or(key_end);
         c.to(KEY, name_end);
         let parsed = affiliated && s[ws + 2..name_end].eq_ignore_ascii_case("CAPTION");
