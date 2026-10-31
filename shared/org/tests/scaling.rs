@@ -11,26 +11,54 @@
 //! n·log n ~9–10 and quadratic 64.
 //!
 //! Measured on the development machine (Linux x86_64, release, 2026-10-31,
-//! after the review fixes; absolute times vary ~2x with machine load, ratios do not),
-//! t(N) → t(8N), the byte ratio, and the normalised ratio (three runs agreed
-//! within ±1.5; "blank lines" is linear per doubling above 100k lines, its
-//! excess at this size is allocation, not complexity):
-//! - *a x N (one line): 0.14 ms -> 1.06 ms for x8 bytes, normalised x7.8
-//! - [[ x N: 0.22 ms -> 1.76 ms for x8 bytes, normalised x8.0
-//! - nested same-name quotes: 2.42 ms -> 11.25 ms for x8 bytes, normalised x4.7
-//! - nested distinct blocks (capped): 1.07 ms -> 7.96 ms for x9 bytes, normalised x7.0
-//! - deep list: 0.33 ms -> 10.18 ms for x62 bytes, normalised x4.0
-//! - one long line of words: 0.13 ms -> 1.05 ms for x8 bytes, normalised x8.0
-//! - headings: 1.32 ms -> 11.53 ms for x9 bytes, normalised x8.0
-//! - affiliated orphans: 3.19 ms -> 29.05 ms for x8 bytes, normalised x9.1
-//! - table.el near-misses: 9.02 ms -> 86.21 ms for x8 bytes, normalised x9.6
-//! - unterminated begins: 1.66 ms -> 6.43 ms for x8 bytes, normalised x3.9
-//! - property-like lines: 0.61 ms -> 5.00 ms for x8 bytes, normalised x8.2
-//! - drawer openers: 0.49 ms -> 4.00 ms for x8 bytes, normalised x8.3
-//! - footnotes: 1.84 ms -> 17.53 ms for x8 bytes, normalised x9.5
-//! - blank lines: 1.31 ms -> 16.49 ms for x8 bytes, normalised x12.6
-//! - TODO: N keywords, N headlines: 0.79 ms -> 6.99 ms for x9 bytes, normalised x7.9
-//! - N #+TODO lines: 1.73 ms -> 15.78 ms for x9 bytes, normalised x8.5
+//! with every O2 inline parser; absolute times vary ~2x with machine load,
+//! ratios do not), t(N) → t(8N), the byte ratio, and the normalised ratio
+//! (two runs agreed within ±0.5 except "property-like lines", "drawer
+//! openers" and "blank lines", which swing between x4 and x13 from run to
+//! run at these sizes: allocation, not complexity, as they are linear per
+//! doubling above 100k lines). The inline families below "N #+TODO lines"
+//! are one paragraph line each; the radio families include a 5,000-word
+//! target whose prefix matches the whole text, which a match attempt per
+//! position (Emacs's regexp search) makes quadratic, and objects before a run
+//! of rejected candidates (removing the per-frame cursor makes it x60):
+//! - *a x N (one line): 5.38 ms -> 26.63 ms for x8 bytes, normalised x4.9
+//! - [[ x N: 5.09 ms -> 38.65 ms for x8 bytes, normalised x7.6
+//! - nested same-name quotes: 4.37 ms -> 36.47 ms for x8 bytes, normalised x8.4
+//! - nested distinct blocks (capped): 1.39 ms -> 10.54 ms for x9 bytes, normalised x7.1
+//! - deep list: 0.76 ms -> 48.13 ms for x62 bytes, normalised x8.2
+//! - one long line of words: 9.56 ms -> 90.68 ms for x8 bytes, normalised x9.5
+//! - headings: 2.32 ms -> 20.58 ms for x9 bytes, normalised x8.1
+//! - affiliated orphans: 3.58 ms -> 32.15 ms for x8 bytes, normalised x9.0
+//! - table.el near-misses: 12.91 ms -> 120.81 ms for x8 bytes, normalised x9.4
+//! - unterminated begins: 6.41 ms -> 54.48 ms for x8 bytes, normalised x8.5
+//! - property-like lines: 4.12 ms -> 34.57 ms for x8 bytes, normalised x8.4
+//! - drawer openers: 2.74 ms -> 23.33 ms for x8 bytes, normalised x8.5
+//! - footnotes: 4.67 ms -> 42.24 ms for x8 bytes, normalised x9.1
+//! - blank lines: 3.53 ms -> 38.15 ms for x8 bytes, normalised x10.8
+//! - TODO: N keywords, N headlines: 2.17 ms -> 19.13 ms for x9 bytes, normalised x7.9
+//! - N #+TODO lines: 4.68 ms -> 42.38 ms for x9 bytes, normalised x8.4
+//! - = and ~ storm: 2.93 ms -> 23.33 ms for x8 bytes, normalised x8.0
+//! - openers, no closers: 3.53 ms -> 28.27 ms for x8 bytes, normalised x8.0
+//! - plain-link-like: 3.03 ms -> 24.21 ms for x8 bytes, normalised x8.0
+//! - backslash run: 0.51 ms -> 4.14 ms for x8 bytes, normalised x8.2
+//! - {{{a unclosed: 1.53 ms -> 12.71 ms for x8 bytes, normalised x8.3
+//! - $ storm: 2.22 ms -> 19.34 ms for x8 bytes, normalised x8.7
+//! - <1 run: 5.82 ms -> 47.25 ms for x8 bytes, normalised x8.1
+//! - [1 run: 3.61 ms -> 29.51 ms for x8 bytes, normalised x8.2
+//! - unclosed timestamps: 3.26 ms -> 26.29 ms for x8 bytes, normalised x8.1
+//! - [fn: unclosed: 3.00 ms -> 23.97 ms for x8 bytes, normalised x8.0
+//! - src_x[ unclosed: 6.18 ms -> 51.80 ms for x8 bytes, normalised x8.4
+//! - call_x( unclosed: 6.46 ms -> 53.85 ms for x8 bytes, normalised x8.3
+//! - @@a: unclosed: 3.58 ms -> 30.53 ms for x8 bytes, normalised x8.5
+//! - <<< unclosed: 4.65 ms -> 37.19 ms for x8 bytes, normalised x8.0
+//! - \alpha storm: 3.73 ms -> 30.08 ms for x8 bytes, normalised x8.1
+//! - ^{ _{ unclosed: 4.29 ms -> 35.22 ms for x8 bytes, normalised x8.2
+//! - [cite: unclosed: 3.33 ms -> 26.86 ms for x8 bytes, normalised x8.1
+//! - \( unclosed: 1.72 ms -> 14.11 ms for x8 bytes, normalised x8.2
+//! - table cells: 3.09 ms -> 26.85 ms for x8 bytes, normalised x8.7
+//! - radio links: 7.57 ms -> 65.11 ms for x8 bytes, normalised x8.6
+//! - long radio target: 4.81 ms -> 41.56 ms for x8 bytes, normalised x8.6
+//! - radio candidates rejected: 3.58 ms -> 29.45 ms for x8 bytes, normalised x8.2
 
 use mae_org::{parse, ParseOptions};
 #[cfg(not(debug_assertions))]
@@ -111,7 +139,59 @@ const FAMILIES: &[Family] = &[
         },
         2_000,
     ),
+    // Inline objects (O2). Each is one paragraph line unless noted: the
+    // shapes on which a forward search per opener would go quadratic.
+    ("= and ~ storm", |n| "=a ~b ".repeat(n), 10_000),
+    (
+        "openers, no closers",
+        |n| "*a /b _c +d =e ~f ".repeat(n),
+        4_000,
+    ),
+    ("plain-link-like", |n| "http:x ".repeat(n), 10_000),
+    ("backslash run", |n| "\\".repeat(n), 50_000),
+    ("{{{a unclosed", |n| "{{{a(".repeat(n), 10_000),
+    ("$ storm", |n| "$a ".repeat(n), 20_000),
+    ("<1 run", |n| "<1".repeat(n), 30_000),
+    ("[1 run", |n| "[1".repeat(n), 30_000),
+    ("unclosed timestamps", |n| "<2026-01-01 a ".repeat(n), 5_000),
+    ("[fn: unclosed", |n| "[fn:a: ".repeat(n), 10_000),
+    ("src_x[ unclosed", |n| "src_x[a ".repeat(n), 10_000),
+    ("call_x( unclosed", |n| "call_x(a ".repeat(n), 10_000),
+    ("@@a: unclosed", |n| "@@a:b ".repeat(n), 10_000),
+    ("<<< unclosed", |n| "<<<a ".repeat(n), 10_000),
+    ("\\alpha storm", |n| "\\alpha".repeat(n), 10_000),
+    ("^{ _{ unclosed", |n| "x^{a x_{b ".repeat(n), 10_000),
+    ("[cite: unclosed", |n| "[cite:@a ".repeat(n), 10_000),
+    ("\\( unclosed", |n| "\\(a ".repeat(n), 10_000),
+    (
+        "table cells",
+        |n| format!("|{}\n", " a |".repeat(n)),
+        10_000,
+    ),
+    // Radio links: many short ones, and a long target whose prefix matches
+    // the whole text (a match attempt per position would be quadratic).
+    (
+        "radio links",
+        |n| format!("<<<ab>>>\n{}\n", "ab ".repeat(n)),
+        10_000,
+    ),
+    ("long radio target", long_radio_target, 5_000),
+    // Objects before a run of rejected radio candidates (`xab` has no
+    // border): each object's search must not re-examine the run.
+    (
+        "radio candidates rejected",
+        rejected_radio_candidates,
+        3_000,
+    ),
 ];
+
+fn rejected_radio_candidates(n: usize) -> String {
+    format!("<<<ab>>>\n{}{} ab\n", "*a* ".repeat(n), "xab".repeat(n))
+}
+
+fn long_radio_target(n: usize) -> String {
+    format!("<<<{}b>>>\n{}\n", "a ".repeat(n), "a ".repeat(n))
+}
 
 fn todo_many_keywords(n: usize) -> String {
     let kws: Vec<String> = (0..n).map(|i| format!("K{i}")).collect();
