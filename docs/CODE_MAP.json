@@ -1082,7 +1082,9 @@
     },
     "mae-org": {
       "path": "shared/org/src/lib.rs",
-      "dependencies": [],
+      "dependencies": [
+        "mae-kb"
+      ],
       "public_items": [
         {
           "name": "Document",

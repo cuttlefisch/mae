@@ -57,7 +57,7 @@ graph TD
     mae_lsp[mae-lsp]
     mae_make[mae-make]
     mae_mcp --> mae_effect_sandbox
-    mae_org[mae-org]
+    mae_org --> mae_kb
     mae_renderer --> mae_core
     mae_renderer --> mae_shell
     mae_scheme --> mae_ai
