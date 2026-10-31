@@ -12,7 +12,7 @@ use crate::kind::SyntaxNode;
 use crate::span::Span;
 use crate::views::Headline;
 use rowan::WalkEvent;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// What decides whether a node is rendered.
 pub(crate) struct Rules {
@@ -74,7 +74,9 @@ fn reference_label(reference: &SyntaxNode) -> Option<String> {
 
 /// Labels of the footnote definitions rendered text references: references
 /// outside every unrendered region, then, to a fixed point, references
-/// inside definitions already found referenced.
+/// inside definitions already found referenced. A worklist: each label's
+/// definitions are read once, so a chain of N definitions costs O(N), not
+/// one rescan of every definition per link of the chain.
 pub(crate) fn referenced_footnotes(root: &SyntaxNode, exclude_tags: &[String]) -> HashSet<String> {
     let rules = Rules {
         exclude_tags: exclude_tags.to_vec(),
@@ -82,30 +84,27 @@ pub(crate) fn referenced_footnotes(root: &SyntaxNode, exclude_tags: &[String]) -
     };
     let mut refs = HashSet::new();
     collect_references(root, &rules, &mut refs);
-    let defs: Vec<(String, SyntaxNode)> = root
+    let mut defs: HashMap<String, Vec<SyntaxNode>> = HashMap::new();
+    for n in root
         .descendants()
         .filter(|n| n.kind() == FOOTNOTE_DEFINITION)
-        .filter(|n| !n.ancestors().skip(1).any(|a| rules.region(&a).is_some()))
-        .filter_map(|n| Some((definition_label(&n)?, n)))
-        .collect();
-    let mut done = HashSet::new();
-    loop {
-        let ready: Vec<&(String, SyntaxNode)> = defs
-            .iter()
-            .filter(|(l, _)| refs.contains(l) && !done.contains(l))
-            .collect();
-        if ready.is_empty() {
-            return refs;
+    {
+        let hidden = n.ancestors().skip(1).any(|a| rules.region(&a).is_some());
+        if let Some(label) = definition_label(&n).filter(|_| !hidden) {
+            defs.entry(label).or_default().push(n);
         }
+    }
+    let mut queue: Vec<String> = refs.iter().cloned().collect();
+    while let Some(label) = queue.pop() {
         let mut found = HashSet::new();
-        for (label, def) in ready {
-            done.insert(label.clone());
+        for def in defs.remove(&label).unwrap_or_default() {
             for c in def.children() {
                 collect_references(&c, &rules, &mut found);
             }
         }
-        refs.extend(found);
+        queue.extend(found.into_iter().filter(|l| refs.insert(l.clone())));
     }
+    refs
 }
 
 /// References under `start` that are not inside an unrendered region.

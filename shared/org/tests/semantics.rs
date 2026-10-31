@@ -414,6 +414,40 @@ fn list_items_with_a_property_drawer_are_nodes() {
     assert_eq!(unrendered_ids(&s), want);
 }
 
+/// Each condition of the item-drawer extension on its own: the same item
+/// is a node, then not, as one condition is broken; keys are canonical.
+#[test]
+fn item_property_drawers_need_their_place_name_and_syntax() {
+    let item = |body: &str| sem(&format!("- First line\n{body}"));
+    let ok = item("  :PROPERTIES:\n  :id: i\n  :kind: task\n  :END:\n");
+    assert_eq!(ids(&ok), vec!["i"]);
+    // Keys as written are folded to their canonical form.
+    assert_eq!(
+        ok.nodes[0].properties,
+        pairs(&[("ID", "i"), ("KIND", "task")])
+    );
+    assert_eq!(ok.nodes[0].kind.as_deref(), Some("task"));
+    // The drawer as the item's first element (no title line) still counts.
+    assert_eq!(
+        ids(&sem("- \n  :PROPERTIES:\n  :ID: i\n  :END:\n")),
+        vec!["i"]
+    );
+    // Not the drawer's place: after a second paragraph.
+    let late = item("\n  Second paragraph.\n  :PROPERTIES:\n  :ID: i\n  :END:\n");
+    assert!(late.nodes.is_empty());
+    assert_eq!(
+        unrendered_ids(&late),
+        vec![("i".to_string(), Region::Drawer)]
+    );
+    // Not its name: any other drawer, even holding property lines.
+    let named = item("  :LOGBOOK:\n  :ID: i\n  :END:\n");
+    assert!(named.nodes.is_empty());
+    assert_eq!(
+        unrendered_ids(&named),
+        vec![("i".to_string(), Region::Drawer)]
+    );
+}
+
 #[test]
 fn body_spans_are_the_body_alone() {
     let text = "# -*- mode: org -*-\n:PROPERTIES:\n:ID: f\n:END:\n#+title: T\n\nFile body.\n\n* H\nSCHEDULED: <2026-10-31>\n:PROPERTIES:\n:ID: h\n:END:\nH body.\n\n** C\n:PROPERTIES:\n:ID: c\n:END:\n* E\n:PROPERTIES:\n:ID: e\n:END:\n";

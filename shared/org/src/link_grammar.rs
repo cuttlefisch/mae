@@ -86,7 +86,14 @@ pub struct LinkClass {
 pub const DEFAULT_REL: &str = "references";
 
 /// Schemes that are never a KB node id. Matched as ASCII case-insensitive
-/// prefixes. Only add one that cannot be the start of a node id.
+/// prefixes.
+///
+/// @ai-caution: [kb-links] Deliberately an EXCLUDE list. Adding a scheme here
+/// turns every link that starts with it into a non-edge on every peer and the
+/// daemon at once; a node id that happens to start with it loses its edges
+/// silently. Only add a scheme that cannot be the start of a node id (MAE's
+/// ids are `namespace:slug` or bare UUIDs), and never turn this into an
+/// include list: an org-roam id has no namespace to include.
 pub const OTHER_SCHEMES: &[&str] = &[
     "ftp://",
     "ftps://",
@@ -219,15 +226,19 @@ pub(crate) fn display_path(raw: &str) -> String {
 /// one space (a CR before the LF goes with it), then `org-link-unescape`.
 fn normalize_path(raw: &str) -> String {
     let blank = [' ', '\t'];
+    // Emacs's buffer holds `\n` whatever the file's convention, so CRLF and a
+    // lone CR (a mac file) are line breaks here too. A CR is never meaningful
+    // in a link path, so this holds even in a unix file.
+    let raw = raw.replace("\r\n", "\n").replace('\r', "\n");
     let lines: Vec<&str> = raw.split('\n').collect();
     let last = lines.len() - 1;
     let mut out = String::with_capacity(raw.len());
     for (i, line) in lines.into_iter().enumerate() {
-        // Each `\n` is one match: blanks before it (and a CR) and after it
-        // go, and every match leaves exactly one space.
+        // Each `\n` is one match: blanks before and after it go, and every
+        // match leaves exactly one space.
         let mut l = line;
         if i < last {
-            l = l.strip_suffix('\r').unwrap_or(l).trim_end_matches(blank);
+            l = l.trim_end_matches(blank);
         }
         if i > 0 {
             out.push(' ');
@@ -279,5 +290,8 @@ mod tests {
         assert_eq!(normalize_path("a  \n\t b"), "a b");
         assert_eq!(normalize_path("a\r\nb"), "a b");
         assert_eq!(normalize_path("a\n\nb"), "a  b");
+        // A mac file's lone CR, and a CR before blanks.
+        assert_eq!(normalize_path("a \rb"), "a b");
+        assert_eq!(normalize_path("a\r\n  \r\nb"), "a  b");
     }
 }
