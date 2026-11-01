@@ -413,8 +413,8 @@ impl Edit<'_> {
         let resolver = probing_resolver([before, after]);
         let (s, e) = self.range;
         let (ns, ne) = self.new_range;
-        let was = super::build::rendering_without(old, before, &resolver, Span::new(s, e));
-        let now = super::build::rendering_without(new, after, &resolver, Span::new(ns, ne));
+        let was = super::build::rendering_outside(old, before, &resolver, Span::new(s, e));
+        let now = super::build::rendering_outside(new, after, &resolver, Span::new(ns, ne));
         if was != now {
             return Err(BodyEditError::ChangesRendering {
                 what: "the page".into(),
@@ -769,6 +769,7 @@ mod tests {
         };
         let (few, many) = (walks(10), walks(400));
         assert_eq!(few, many, "walks grow with the nodes: {few} -> {many}");
-        assert!(many <= 4, "{many} walks");
+        // Two passes per side under each of the two HeadlineIds modes.
+        assert!(many <= 8, "{many} walks");
     }
 }

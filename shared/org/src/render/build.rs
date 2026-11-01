@@ -45,6 +45,8 @@ pub(crate) struct Table {
     /// shows: a heading's (or KB node's) title as rendered inline-only, a
     /// target's text (which its id already spells).
     pub shown: HashMap<String, String>,
+    /// The notes (numbers) referenced from outside [`Builder::blank`].
+    pub outside_notes: HashSet<usize>,
 }
 
 /// A built page.
@@ -105,8 +107,13 @@ pub(crate) struct Builder<'a> {
     pub in_value: bool,
     /// Render only what lies in this span (a node's body).
     scope: Option<Span>,
-    /// Leave out every element inside this span (`rendering_without`).
-    exclude: Option<Span>,
+    /// Render every element inside this span (an edited body) as usual,
+    /// numbering and claiming what it holds, but output nothing of it
+    /// (`rendering_outside`).
+    blank: Option<Span>,
+    /// Inside [`Builder::blank`]: what is rendered is thrown away, and a
+    /// footnote referenced from here is not referenced from outside it.
+    pub in_blank: bool,
     /// Inside a link's description: a nested link or footnote reference
     /// (Org allows one inside emphasis there) must not become an `<a>`
     /// inside an `<a>`, which an HTML parser would restructure.
@@ -227,7 +234,8 @@ impl<'a> Builder<'a> {
             slugging: false,
             in_value: false,
             scope: None,
-            exclude: None,
+            blank: None,
+            in_blank: false,
             in_link: false,
             depth: 0,
             diagnostics: Vec::new(),
@@ -242,6 +250,15 @@ impl<'a> Builder<'a> {
     /// The KB node id a headline or item starting at `start` carries.
     pub fn node_id(&self, start: u32) -> Option<&'a str> {
         self.cx.node_ids.get(&start).copied()
+    }
+
+    /// Takes the span whose elements render to nothing (see the field).
+    pub fn take_blank(&mut self) -> Option<Span> {
+        self.blank.take()
+    }
+
+    pub fn set_blank(&mut self, blank: Option<Span>) {
+        self.blank = blank;
     }
 
     /// The source text of the title of the headline starting at `start`,
@@ -263,10 +280,8 @@ impl<'a> Builder<'a> {
         // A note is drawn wherever it is defined: a scope (a node's body)
         // bounds what references it, not where its definition may be.
         let scope = self.scope.take();
-        let exclude = self.exclude.take();
         let notes = self.footnotes_section();
         self.scope = scope;
-        self.exclude = exclude;
         if let Some(section) = notes {
             push(&mut body, section.into());
         }
@@ -390,9 +405,12 @@ impl<'a> Builder<'a> {
         if self.skipped(n) || self.cx.babel.hides(n) {
             return;
         }
-        if let Some(out) = self.exclude {
+        if let Some(b) = self.blank.filter(|_| !self.in_blank) {
             let s = Span::of(n);
-            if s.start >= out.start && s.end <= out.end && s.start < s.end {
+            if s.start >= b.start && s.end <= b.end && s.start < s.end {
+                self.in_blank = true;
+                self.element(n, &mut Vec::new());
+                self.in_blank = false;
                 return;
             }
         }
@@ -618,41 +636,55 @@ pub(crate) fn node_text_trees(
     (title, body)
 }
 
-/// The whole page of `doc` with the elements inside `out` left out (as if
-/// they were not there: nothing in them numbered or claimed), and every
-/// node's metadata, as one string: what `replace_body` compares on both
-/// sides of an edit of the body `out`. Footnote definitions are drawn
-/// wherever they are, `out` included, when referenced from elsewhere.
-/// One render (two passes) of the document, whatever its number of nodes.
-pub(crate) fn rendering_without(
+/// What `replace_body` compares on both sides of an edit of the body
+/// `body`: the whole page of `doc` (its macros expanded, as rendered) with
+/// the body PRESENT, so everything it numbers or claims (footnote numbers,
+/// reference ids and back-links, target ids) counts, but its own output
+/// left out (and its own notes: defined in it and referenced only from
+/// it); and every node's metadata. Under the options that expose the
+/// most (property drawers and images on) in both [`super::HeadlineIds`] modes,
+/// which differ in where node and custom-id links land. One string; four
+/// walks of the document per side, whatever its number of nodes.
+pub(crate) fn rendering_outside(
     doc: &Document,
     sem: &Semantics,
     resolver: &Resolver,
-    out: Span,
+    body: Span,
 ) -> String {
-    let opts = RenderOptions::default();
     let p = super::prepared::prepare(doc, sem);
     // Nothing renders, before and after alike, wherever the failing macro
     // stands.
     if let Some(f) = p.failed {
         return f.kind_name().to_string();
     }
-    let out = p.to_rendered(out);
-    let cx = p.cx();
+    let body = p.to_rendered(body);
     let root = p.doc.syntax();
-    let mut first = Builder::with_cx(cx.clone(), &opts, resolver, Mode::Page, Table::default());
-    first.exclude = Some(out);
-    first.run(&root);
-    let mut second = Builder::with_cx(cx, &opts, resolver, Mode::Page, first.found);
-    second.exclude = Some(out);
-    let body = second.run(&root);
-    let nodes = super::meta::nodes(&p, sem, &opts, resolver, &second.found);
-    let rendered = super::Rendered {
-        body,
-        nodes,
-        diagnostics: Vec::new(),
-    };
-    super::hast::rendered_json(&rendered, super::TreeFormat::Hast)
+    let mut out = String::new();
+    for ids in [super::HeadlineIds::Explicit, super::HeadlineIds::Slug] {
+        let opts = RenderOptions {
+            headline_ids: ids,
+            images: true,
+            property_drawers: true,
+        };
+        let cx = p.cx();
+        let mut first = Builder::with_cx(cx.clone(), &opts, resolver, Mode::Page, Table::default());
+        first.blank = Some(body);
+        first.run(&root);
+        let mut second = Builder::with_cx(cx, &opts, resolver, Mode::Page, first.found);
+        second.blank = Some(body);
+        let body = second.run(&root);
+        let nodes = super::meta::nodes(&p, sem, &opts, resolver, &second.found);
+        let rendered = super::Rendered {
+            body,
+            nodes,
+            diagnostics: Vec::new(),
+        };
+        out.push_str(&super::hast::rendered_json(
+            &rendered,
+            super::TreeFormat::Hast,
+        ));
+    }
+    out
 }
 
 fn is_caption(affiliated: &SyntaxNode) -> bool {

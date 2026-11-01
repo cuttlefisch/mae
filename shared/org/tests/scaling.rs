@@ -638,8 +638,13 @@ fn headline_ids(n: usize) -> String {
 const SPLICE_FAMILIES: &[Family] = &[("splice: N nodes with links", splice_nodes, 500)];
 
 fn splice_nodes(n: usize) -> String {
+    // The edited node (the first) holds no note: removing one numbered
+    // before the others' renumbers theirs, and is refused.
     (0..n)
-        .map(|i| format!("* N{i}\n:PROPERTIES:\n:ID: n{i}\n:END:\nbody {i} [[id:n{}]] note[fn:{i}]\n\n[fn:{i}] note {i}\n", (i + 1) % n))
+        .map(|i| match i {
+            0 => "* N0\n:PROPERTIES:\n:ID: n0\n:END:\nbody 0 [[id:n1]]\n".to_string(),
+            _ => format!("* N{i}\n:PROPERTIES:\n:ID: n{i}\n:END:\nbody {i} [[id:n{}]] note[fn:{i}]\n\n[fn:{i}] note {i}\n", (i + 1) % n),
+        })
         .collect()
 }
 

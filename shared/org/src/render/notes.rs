@@ -30,8 +30,9 @@ pub(crate) enum NoteSource {
 pub(crate) struct Notes {
     defs: std::rc::Rc<HashMap<String, SyntaxNode>>,
     numbers: HashMap<String, usize>,
-    /// Per note (number - 1): its source and how many references it has.
-    queue: Vec<(NoteSource, usize)>,
+    /// Per note (number - 1): its source, how many references it has, and
+    /// whether one is outside [`Builder::blank`].
+    queue: Vec<(NoteSource, usize, bool)>,
 }
 
 /// The node of kind `kind` exactly at `span`, if there is one.
@@ -78,7 +79,7 @@ impl Notes {
     }
 
     fn add(&mut self, source: NoteSource) -> usize {
-        self.queue.push((source, 0));
+        self.queue.push((source, 0, false));
         self.queue.len()
     }
 }
@@ -127,9 +128,13 @@ impl Builder<'_> {
         if let Some(l) = label {
             self.notes.numbers.insert(l, k);
         }
-        let count = &mut self.notes.queue[k - 1].1;
-        *count += 1;
-        let id = match *count {
+        let note = &mut self.notes.queue[k - 1];
+        note.1 += 1;
+        note.2 |= !self.in_blank;
+        if note.2 {
+            self.found.outside_notes.insert(k);
+        }
+        let id = match note.1 {
             1 => format!("fnr-{k}"),
             c => format!("fnr-{k}-{c}"),
         };
@@ -146,18 +151,36 @@ impl Builder<'_> {
         push(out, sup.into());
     }
 
-    /// Every note, in number order (rendering one may add more).
+    /// Every note, in number order (rendering one may add more). With a
+    /// [`Builder::blank`] span, a note defined in it and referenced only
+    /// from it is the blank text's own: rendered (what it references is
+    /// numbered) and thrown away.
     pub fn footnotes_section(&mut self) -> Option<Element> {
         if self.mode == Mode::Meta {
             return None;
         }
+        // A note is drawn whole wherever it is defined, the blank span
+        // included, unless it is the blank text's own.
+        let blank = self.take_blank();
         let mut notes = Vec::new();
         let mut i = 0;
         while i < self.notes.queue.len() {
-            let source = self.notes.queue[i].0.clone();
+            let (source, _, outside) = self.notes.queue[i].clone();
             i += 1;
+            let at = match &source {
+                NoteSource::Element(d) => Span::of(d),
+                NoteSource::Inline(r) => Span::of(r),
+            };
+            let inside = blank.is_some_and(|b| at.start >= b.start && at.end <= b.end);
+            if inside && !outside && !self.table.outside_notes.contains(&i) {
+                let was = std::mem::replace(&mut self.in_blank, true);
+                self.note(i, &source);
+                self.in_blank = was;
+                continue;
+            }
             notes.push(self.note(i, &source).into());
         }
+        self.set_blank(blank);
         (!notes.is_empty()).then(|| {
             Element::new(Tag::Section)
                 .class("org-footnotes")

@@ -649,3 +649,63 @@ fn a_retargeted_link_in_a_shared_note_is_refused() {
         })
     );
 }
+
+/// Review round 4: the third reviewer's documents (as written), whose
+/// edits of A's body the checks accepted though they change what renders
+/// outside it.
+const NOTES: &str = "* A\n:PROPERTIES:\n:ID: a\n:END:\nold body\n\n* B\n:PROPERTIES:\n:ID: b\n:END:\nsee[fn:b]\n\n[fn:b] the b note\n";
+const NAMES: &str = "* A\n:PROPERTIES:\n:ID: a\n:END:\nold body\n\n* B\n:PROPERTIES:\n:ID: b\n:END:\nsee [[foo bar]] and [[Intro]].\n\n* Intro\nintro text\n\n* foo bar\nx\n";
+const COUNTERS: &str = "* A\n:PROPERTIES:\n:ID: a\n:END:\nold body\n\n* B\n:PROPERTIES:\n:ID: b\n:END:\nnumber {{{n}}}\n";
+const KEYWORD: &str = "* A\n:PROPERTIES:\n:ID: a\n:END:\nold body\n\n* B\n:PROPERTIES:\n:ID: b\n:END:\nsays {{{keyword(K)}}}\n";
+
+/// Each edit of node `a` is refused.
+fn refused(cases: &[(&str, &str, &str)]) {
+    for (name, text, body) in cases {
+        let r = one(text, body);
+        assert!(
+            r.is_err(),
+            "{name}: accepted:\n{text}\n--- body:\n{body}\n--- gives:\n{r:?}"
+        );
+    }
+}
+
+/// Each edit of node `a` is written.
+fn written(cases: &[(&str, &str, &str)]) {
+    for (name, text, body) in cases {
+        let doc = parse(text, &ParseOptions::default());
+        let sem = semantics(&doc);
+        let a = sem.nodes.iter().find(|n| n.id == "a").unwrap();
+        let r = replace_body(text, &doc, a, body);
+        assert!(
+            r.is_ok(),
+            "{name}: refused: {r:?}\n{text}\n--- body:\n{body}"
+        );
+    }
+}
+
+/// M1: the comparison left the body out, so what it numbers did not
+/// count: a new note, an anonymous one, or a reference to B's note in A
+/// renumbers B's reference or moves its back-link; a counter or a keyword
+/// the body adds changes what B's macros expand to. Compared with the
+/// body present (its own output left out), each is refused; the body's
+/// own text, and a note numbered after every other, are still written.
+#[test]
+fn an_edit_that_renumbers_or_recounts_outside_the_body_is_refused() {
+    refused(&[
+        ("own note", NOTES, "mine[fn:mine]\n\n[fn:mine] my note\n"),
+        ("anonymous note", NOTES, "inline[fn:: anon note]\n"),
+        ("reference to B's note", NOTES, "ref[fn:b]\n"),
+        ("counter", COUNTERS, "a {{{n}}}\n"),
+        ("keyword", KEYWORD, "new\n#+K: value\n"),
+    ]);
+    written(&[
+        ("plain text", NOTES, "a new body\n"),
+        ("own target", NAMES, "here <<mine>> it is\n"),
+        ("own counter after none", KEYWORD, "a {{{n}}}\n"),
+        (
+            "own note last",
+            "* B\n:PROPERTIES:\n:ID: b\n:END:\nsee[fn:b]\n\n[fn:b] the b note\n\n* A\n:PROPERTIES:\n:ID: a\n:END:\nold body\n",
+            "mine[fn:mine]\n\n[fn:mine] my note\n",
+        ),
+    ]);
+}
