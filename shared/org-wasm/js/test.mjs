@@ -28,14 +28,16 @@ import { fileURLToPath } from 'node:url';
 // after the parser's own review fixes (Org's split radio regexps, keyword
 // reading, `#+LINK` expansion); 755,498 bytes after the final pre-tag
 // review's fixes, 761,547 after its second round, 772,721 after its
-// third. The first budget, 700,000 (~15% over the
-// first measurement), caught that growth as it should; it was raised once,
-// to 800,000 (~13% over the tagged size), as recorded in ADR-112's O3
-// note. The module runs at build time in Node, so the budget guards
-// against accidental bloat (a stray dependency, a generic blow-up), not a
-// download size; raising it again is a decision to record there, not a
-// number to bump.
-const SIZE_BUDGET = 800_000;
+// third; 846,219 once macros were expanded as Org's export does (review
+// round 4), 865,332 after round 5. The first budget, 700,000 (~15% over the
+// first measurement), caught that growth as it should; it was raised to
+// 800,000 (~13% over the tagged size), then to 900,000 as the deliberate
+// cost of expanding macros, each recorded in ADR-112's O3 note. The
+// module runs at build time in Node, so the budget guards against
+// accidental bloat (a stray dependency, a generic blow-up), not a download
+// size; raising it again is a decision to record there, not a number to
+// bump.
+const SIZE_BUDGET = 900_000;
 const OPS = { semantics: 1, renderHast: 2, renderHtml: 3, text: 4, classifyLink: 5, version: 6 };
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../../..');
