@@ -5,7 +5,7 @@ use super::build::{lines, trim_eol, trim_text, Builder, Mode};
 use super::tree::{push, text, Attr, Element, Node, Tag};
 use super::HeadlineIds;
 use crate::kind::SyntaxKind::*;
-use crate::kind::{SyntaxNode, SyntaxToken};
+use crate::kind::{SyntaxElement, SyntaxNode, SyntaxToken};
 use crate::semantics::plain::plain_text;
 use crate::views::Headline;
 use crate::Span;
@@ -289,6 +289,10 @@ impl Builder<'_> {
         push(out, pre.into());
     }
 
+    /// A verse block: lines joined by `<br>`, the indentation all its
+    /// non-blank lines share removed and the rest as no-break spaces, one
+    /// per column (tabs to the next multiple of 8), as Org's export does
+    /// (`org-remove-indentation`); a blank line is empty.
     pub fn verse(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
         let parts: Vec<_> = n
             .children_with_tokens()
@@ -301,6 +305,7 @@ impl Builder<'_> {
                 )
             })
             .collect();
+        let common = verse_indentation(&parts);
         // The verse's own final line ending is not a break; one before
         // more content is.
         let last_newline = parts
@@ -309,7 +314,7 @@ impl Builder<'_> {
             .map(|_| parts.len() - 1);
         let mut inner = Vec::new();
         let mut at_bol = true;
-        for (i, part) in parts.into_iter().enumerate() {
+        for (i, part) in parts.iter().enumerate() {
             match part {
                 NodeOrToken::Token(t) if t.kind() == NEWLINE => {
                     if Some(i) != last_newline {
@@ -319,11 +324,16 @@ impl Builder<'_> {
                     at_bol = true;
                 }
                 NodeOrToken::Token(t) => {
-                    push(&mut inner, text(&verse_text(t.text(), at_bol)));
+                    let blank_line = at_bol
+                        && is_blank(t.text())
+                        && parts.get(i + 1).is_none_or(|e| e.kind() == NEWLINE);
+                    if !blank_line {
+                        push(&mut inner, text(&verse_text(t.text(), at_bol, common)));
+                    }
                     at_bol = false;
                 }
                 NodeOrToken::Node(o) => {
-                    self.deeper(&o, |b| b.object(&o, &mut inner));
+                    self.deeper(o, |b| b.object(o, &mut inner));
                     at_bol = false;
                 }
             }
@@ -503,14 +513,60 @@ fn is_rule(row: &SyntaxNode) -> bool {
         .is_some_and(|t| t.kind() == TEXT && t.text().trim_start().starts_with("|-"))
 }
 
-/// A verse line's leading spaces as no-break spaces (Org's verse export).
-fn verse_text(s: &str, at_bol: bool) -> String {
+fn is_blank(s: &str) -> bool {
+    s.chars().all(|c| c == ' ' || c == '\t')
+}
+
+/// The column `s`'s leading blanks reach, and the rest of `s`.
+fn indentation(s: &str) -> (usize, &str) {
+    let mut col = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            ' ' => col += 1,
+            '\t' => col = (col / 8 + 1) * 8,
+            _ => return (col, &s[i..]),
+        }
+    }
+    (col, "")
+}
+
+/// The indentation every non-blank line of a verse shares, in columns.
+fn verse_indentation(parts: &[SyntaxElement]) -> usize {
+    let mut common: Option<usize> = None;
+    let mut at_bol = true;
+    for (i, part) in parts.iter().enumerate() {
+        if part.kind() == NEWLINE {
+            at_bol = true;
+            continue;
+        }
+        if !at_bol {
+            continue;
+        }
+        at_bol = false;
+        let col = match part {
+            NodeOrToken::Token(t) => {
+                let blank =
+                    is_blank(t.text()) && parts.get(i + 1).is_none_or(|e| e.kind() == NEWLINE);
+                if blank {
+                    continue;
+                }
+                indentation(t.text()).0
+            }
+            NodeOrToken::Node(_) => 0,
+        };
+        common = Some(common.map_or(col, |c| c.min(col)));
+    }
+    common.unwrap_or(0)
+}
+
+/// A verse line's start: `common` columns of indentation removed, the rest
+/// as no-break spaces.
+fn verse_text(s: &str, at_bol: bool, common: usize) -> String {
     if !at_bol {
         return s.to_string();
     }
-    let rest = s.trim_start_matches(' ');
-    let lead = s.len() - rest.len();
-    format!("{}{rest}", "\u{a0}".repeat(lead))
+    let (col, rest) = indentation(s);
+    format!("{}{rest}", "\u{a0}".repeat(col.saturating_sub(common)))
 }
 
 /// `org-unescape-code-in-string`: a comma at the start of a line (after

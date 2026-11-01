@@ -8,7 +8,7 @@ Verse
 Second line \\ not a break here
 
 After a blank line
-   
+
 last line ends in a break 
 Code
 (message "<b>")

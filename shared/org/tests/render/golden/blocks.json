@@ -166,10 +166,6 @@
           {
             "children": [
               {
-                "type": "text",
-                "value": "   "
-              },
-              {
                 "children": [],
                 "properties": {},
                 "tagName": "br",
