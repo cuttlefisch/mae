@@ -100,7 +100,7 @@ impl Rules {
         // Org deletes the COMMENT subtrees before it selects: a select tag
         // under a COMMENT headline selects nothing.
         let mut commented: HashSet<u32> = HashSet::new();
-        for (n, _, c) in &own {
+        for (n, _, c) in own.iter().filter(|_| !options.comments_deleted) {
             let parent = n.parent().filter(|p| p.kind() == HEADLINE);
             if *c || parent.is_some_and(|p| commented.contains(&start(&p))) {
                 commented.insert(start(n));
@@ -118,7 +118,10 @@ impl Rules {
             let at = u32::from(n.text_range().start());
             let excluded = file_excluded || tags.iter().any(|t| exclude.contains(t.as_str()));
             let is_archived = tags.contains(&options.archive_tag);
-            let region = if *commented {
+            let region = if *commented && options.comments_deleted {
+                // Made by an expansion: parsed, then pruned (`org-export--skip-p`).
+                Some(Region::ExcludedSubtree)
+            } else if *commented {
                 Some(Region::CommentSubtree)
             } else if excluded {
                 Some(Region::ExcludedSubtree)

@@ -1,0 +1,4 @@
+#+SELECT_TAGS: sel
+#+MACRO: star *
+QZaQZ} {{{results(=QZbQZ=)}}}
+*{{{star}}} COMMENT :ARCHIVE:sel:

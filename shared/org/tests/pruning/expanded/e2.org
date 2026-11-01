@@ -1,0 +1,6 @@
+#+SELECT_TAGS: sel
+#+MACRO: star *
+*{{{star}}} COMMENT QZcQZ
+*** TODO QZdQZ :ARCHIVE:sel:
+* QZeQZ
+body QZfQZ

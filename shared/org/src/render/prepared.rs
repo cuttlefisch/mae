@@ -123,7 +123,7 @@ fn removed_results(doc: &Document, sem: &Semantics) -> (HashSet<usize>, HashSet<
         if is_results(&n) {
             if b.babel_hides_object(&n) {
                 out.insert(usize::from(n.text_range().start()));
-                if b.org_keeps_results(&n) {
+                if b.org_keeps_results(&n) || babel_skips(&n, &sem.options.archive_tag) {
                     kept.insert(usize::from(n.text_range().start()));
                 }
             }
@@ -152,11 +152,24 @@ fn removed_results(doc: &Document, sem: &Semantics) -> (HashSet<usize>, HashSet<
     (out, kept)
 }
 
+/// Whether Org's babel skips `n`: under a COMMENT or archived heading
+/// (`org-babel-exp-process-buffer`), so a results macro there stays for
+/// the second expansion.
+fn babel_skips(n: &crate::SyntaxNode, archive_tag: &str) -> bool {
+    n.ancestors()
+        .filter_map(crate::Headline::cast)
+        .any(|h| h.is_commented() || h.tags().iter().any(|t| t == archive_tag))
+}
+
 impl<'d> Prepared<'d> {
     /// Renders `d` (an expansion of the source) from now on, with its
     /// semantics derived under the source's options.
     fn adopt(&mut self, d: Document) {
-        let s = crate::semantics_with(&d, &self.sem.options);
+        let options = crate::SemanticsOptions {
+            comments_deleted: true,
+            ..self.sem.options.clone()
+        };
+        let s = crate::semantics_with(&d, &options);
         self.doc = Cow::Owned(d);
         self.sem = Cow::Owned(s);
     }

@@ -253,8 +253,52 @@ type Found = (usize, usize, String, Option<String>);
 /// Expands the macros of `doc`, or `Ok(None)` when it has none to expand.
 pub(crate) fn expand(doc: &Document) -> Result<Option<Expansion>, RenderDiagnostic> {
     let source = doc.syntax().to_string();
-    let engine = scan::Engine::new(doc, source.len(), value::templates(doc, &source));
-    engine.run(Map::default(), HashSet::new())
+    let templates = value::templates(doc, &source);
+    // `org-export--delete-comment-trees`: the COMMENT subtrees go first,
+    // from the text, before anything else reads it.
+    let (text, map) = without_comment_trees(doc, &source);
+    if map.pieces.is_empty() {
+        return scan::Engine::new(doc, source.len(), templates).run(map, HashSet::new());
+    }
+    let d = doc.reparse(&text);
+    let engine = scan::Engine::new(&d, source.len(), templates);
+    Ok(Some(engine.run(map.clone(), HashSet::new())?.unwrap_or(
+        Expansion {
+            text,
+            map,
+            notes: Vec::new(),
+            work: 0,
+        },
+    )))
+}
+
+/// `source` (the text of `doc`) without its COMMENT subtrees (each from
+/// its headline to the end of its subtree), and the map of what went.
+fn without_comment_trees(doc: &Document, source: &str) -> (String, Map) {
+    let mut text = String::with_capacity(source.len());
+    let mut pieces = Vec::new();
+    let mut at = 0;
+    let mut walk = doc.syntax().preorder();
+    while let Some(ev) = walk.next() {
+        let rowan::WalkEvent::Enter(n) = ev else {
+            continue;
+        };
+        if crate::Headline::cast(n.clone()).is_some_and(|h| h.is_commented()) {
+            walk.skip_subtree();
+            let (a, b) = (
+                usize::from(n.text_range().start()),
+                usize::from(n.text_range().end()),
+            );
+            text.push_str(&source[at..a]);
+            pieces.push(Piece {
+                src: (a, b),
+                out: (text.len(), text.len()),
+            });
+            at = b;
+        }
+    }
+    text.push_str(&source[at..]);
+    (text, Map { pieces })
 }
 
 /// `text` (a link fragment) with its macros expanded with the templates

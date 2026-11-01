@@ -1,0 +1,7 @@
+#+MACRO: c COMMENT
+* {{{c}}} H
+See[fn:x] QZgQZ.
+
+[fn:x] note QZhQZ
+* V
+Ref[fn:x] QZiQZ.

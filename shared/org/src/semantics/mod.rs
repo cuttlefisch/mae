@@ -146,6 +146,11 @@ pub struct SemanticsOptions {
     /// Properties (any case) whose values are not read for links. Default:
     /// org-roam's `ROAM_REFS`.
     pub link_exclude_properties: Vec<String>,
+    /// The text read is an export's expansion, whose COMMENT subtrees were
+    /// deleted before its macros were expanded: a COMMENT headline in it
+    /// is one an expansion made, which Org parses, selects and prunes like
+    /// an excluded one.
+    pub(crate) comments_deleted: bool,
 }
 
 /// Org's default `org-export-select-tags`, for a caller that wants export
@@ -184,6 +189,7 @@ impl Default for SemanticsOptions {
             link_types: LinkTypes::default(),
             link_exclude_keywords: own(LINK_EXCLUDE_KEYWORDS),
             link_exclude_properties: own(&["ROAM_REFS"]),
+            comments_deleted: false,
         }
     }
 }

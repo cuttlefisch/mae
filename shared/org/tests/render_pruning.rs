@@ -197,3 +197,60 @@ fn every_name_table_reads_the_pruned_tree() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Leak oracle (seed 2, round 6): Org deletes the source's COMMENT
+/// subtrees from the text before it expands macros; a COMMENT headline an
+/// expansion makes stays, is parsed (its tags select, its footnote
+/// definitions are used), and is pruned with what it holds. Babel skips
+/// what sits under a COMMENT or archived heading, so a results macro there
+/// stays for the second expansion, where an undefined macro it completes
+/// fails the export. Emacs 30.2 on each (`tests/pruning/expanded/`):
+/// (file, what the page shows, what no output shows, whether the export
+/// fails).
+#[test]
+fn an_expansions_comment_headline_is_parsed_then_pruned() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pruning/expanded");
+    let cases: &[(&str, &[&str], &[&str], bool)] = &[
+        ("e1", &[], &["QZaQZ", "QZbQZ"], false),
+        ("e2", &[], &["QZcQZ", "QZdQZ", "QZeQZ", "QZfQZ"], false),
+        ("e3", &["V", "QZhQZ", "QZiQZ"], &["QZgQZ"], false),
+        ("e4", &["V", "QZkQZ"], &["QZjQZ"], false),
+        ("e5", &[], &["QZlQZ", "QZmQZ"], false),
+        ("e6", &[], &["qz20qz", "qz22qz"], true),
+        ("e7", &["V", "ok"], &["QZnQZ"], false),
+    ];
+    let mut failures = Vec::new();
+    for (name, shown, hidden, fails) in cases {
+        let doc = std::fs::read_to_string(dir.join(format!("{name}.org"))).unwrap();
+        let d = parse(&doc, &ParseOptions::default());
+        let sem = semantics(&d);
+        let r = render(&d, &sem, &RenderOptions::default(), &Resolver::default());
+        let all = format!(
+            "{}{}",
+            r.to_json(TreeFormat::Html),
+            r.to_json(TreeFormat::Hast)
+        );
+        let page = mae_org::to_html(&r.body);
+        for s in *shown {
+            if !page.contains(s) {
+                failures.push(format!("{name}: {s} not shown: {page}"));
+            }
+        }
+        for h in *hidden {
+            if all.contains(h) {
+                failures.push(format!("{name}: {h} shown: {all}"));
+            }
+        }
+        if shown.is_empty() && !page.is_empty() {
+            failures.push(format!("{name}: Emacs's page is empty: {page}"));
+        }
+        let failed = r
+            .diagnostics
+            .iter()
+            .any(|d| d.kind_name() == "macro_undefined");
+        if failed != *fails {
+            failures.push(format!("{name}: {:?}", r.diagnostics));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
