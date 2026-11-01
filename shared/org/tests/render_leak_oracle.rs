@@ -143,14 +143,7 @@ fn run_all(docs: &[Doc], emacs: &Emacs, cfg: &Config, start: Instant) -> Vec<Out
     std::thread::scope(|s| {
         for _ in 0..cfg.jobs {
             let (tx, next) = (tx.clone(), &next);
-            s.spawn(move || loop {
-                let lo = next.fetch_add(1, Ordering::Relaxed) * cfg.chunk;
-                if lo >= docs.len() {
-                    break;
-                }
-                let hi = (lo + cfg.chunk).min(docs.len());
-                run_chunk(&docs[lo..hi], lo, emacs, start, &tx);
-            });
+            s.spawn(move || export_worker(docs, emacs, cfg, start, next, &tx));
         }
         drop(tx);
         for (k, o) in rx.into_iter().enumerate() {
@@ -165,6 +158,25 @@ fn run_all(docs: &[Doc], emacs: &Emacs, cfg: &Config, start: Instant) -> Vec<Out
         .into_iter()
         .map(|o| o.expect("every document judged"))
         .collect()
+}
+
+/// Takes chunks from `next` until none is left.
+fn export_worker(
+    docs: &[Doc],
+    emacs: &Emacs,
+    cfg: &Config,
+    start: Instant,
+    next: &AtomicUsize,
+    tx: &mpsc::Sender<Outcome>,
+) {
+    loop {
+        let lo = next.fetch_add(1, Ordering::Relaxed) * cfg.chunk;
+        if lo >= docs.len() {
+            return;
+        }
+        let hi = (lo + cfg.chunk).min(docs.len());
+        run_chunk(&docs[lo..hi], lo, emacs, start, tx);
+    }
 }
 
 fn run_chunk(docs: &[Doc], lo: usize, emacs: &Emacs, start: Instant, tx: &mpsc::Sender<Outcome>) {
@@ -259,17 +271,7 @@ fn minimise_all(
         let handles: Vec<_> = (0..cfg.jobs)
             .map(|_| {
                 let (ts, next) = (&ts, &next);
-                s.spawn(move || {
-                    let mut mine = Vec::new();
-                    loop {
-                        let k = next.fetch_add(1, Ordering::Relaxed);
-                        let Some((i, t)) = ts.get(k) else {
-                            break;
-                        };
-                        mine.push((k, repro(&docs[*i], t, emacs, cfg.budget)));
-                    }
-                    mine
-                })
+                s.spawn(move || minimise_worker(docs, ts, emacs, cfg, next))
             })
             .collect();
         for h in handles {
@@ -282,6 +284,24 @@ fn minimise_all(
         s.push_str(&p);
     }
     s
+}
+
+/// Takes targets from `next` until none is left: (index, repro).
+fn minimise_worker(
+    docs: &[Doc],
+    ts: &[(usize, Target)],
+    emacs: &Emacs,
+    cfg: &Config,
+    next: &AtomicUsize,
+) -> Vec<(usize, String)> {
+    let mut mine = Vec::new();
+    loop {
+        let k = next.fetch_add(1, Ordering::Relaxed);
+        let Some((i, t)) = ts.get(k) else {
+            return mine;
+        };
+        mine.push((k, repro(&docs[*i], t, emacs, cfg.budget)));
+    }
 }
 
 /// The minimised document for `target`, with Emacs's output and the
