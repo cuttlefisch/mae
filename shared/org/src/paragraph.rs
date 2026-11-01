@@ -58,6 +58,14 @@ pub(crate) fn paragraph(cx: &mut Ctx, begin: usize, cb: usize, limit: usize) -> 
     }
 }
 
+/// Whether line `s` may end a paragraph above it: whether
+/// `org-element-paragraph-separate` matches it (a headline, a list-like
+/// line, a line that may start another element). An opener among these
+/// ends the paragraph only if its end follows.
+pub(crate) fn may_end(s: &str) -> bool {
+    scan::headline_level(s).is_some() || scan::may_separate(s) || scan::list_like(s)
+}
+
 /// Does line `i` end the paragraph above it?
 fn separates(cx: &mut Ctx, i: usize, limit: usize) -> bool {
     let src = cx.src;
@@ -65,7 +73,7 @@ fn separates(cx: &mut Ctx, i: usize, limit: usize) -> bool {
     if scan::headline_level(s).is_some() {
         return true;
     }
-    if !(scan::may_separate(s) || scan::list_like(s)) {
+    if !may_end(s) {
         return false;
     }
     if scan::drawer_name(s).is_some() {

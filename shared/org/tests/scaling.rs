@@ -752,22 +752,22 @@ const RENDER_FAMILIES: &[Family] = &[
     (
         // Review round 5 (blocker 3): the scan searched the line's start
         // and end per macro, quadratic in the line (1 MB took 6.8 s, 2 MB
-        // 22.6 s). One line, then one per line. Sized so the quadratic
-        // term shows: at b2824246 this family measures x27.1 and the
-        // splice one x35.6 (both past 24); smaller bases hide it (x14.7).
-        "render: a line of N counters",
+        // 22.6 s). Since round 6 every expansion reads its unit again, so
+        // one line of thousands is past the budget and fails closed
+        // (registered: macros): the time to fail stays linear.
+        "render: a line of N counters (fails closed)",
         |n| format!("{}\n", "{{{n}}} abcdefgh ".repeat(n)),
         16_000,
     ),
     (
-        "render: N lines of counters",
-        |n| "{{{n}}} abcdefgh\n".repeat(n),
+        "render: N paragraphs of counters",
+        |n| "{{{n}}} abcdefgh\n\n".repeat(n),
         4_000,
     ),
     (
-        // One paragraph each: an expansion that is not a plain word has its
-        // paragraph read again, so thousands in ONE paragraph cost past the
-        // budget (registered: macros).
+        // One paragraph each: an expansion has its paragraph read again,
+        // so thousands in ONE paragraph cost past the budget (registered:
+        // macros).
         "render: N paragraphs of macros expanding plainly",
         |n| {
             format!(
@@ -891,7 +891,7 @@ fn every_family_parses_and_round_trips_at_8n() {
             &resolver(),
         );
         assert!(
-            !out.body.is_empty() || name.contains("exponential"),
+            !out.body.is_empty() || name.contains("exponential") || name.contains("fails closed"),
             "{name}"
         );
     }

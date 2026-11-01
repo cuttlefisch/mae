@@ -4,14 +4,16 @@
 //! where its expansion starts.
 //!
 //! The buffer is the text of its last full parse (`dtext`, parsed as `d`)
-//! with the edits made since. The scan goes unit by unit: a unit is the
-//! element whose objects hold a macro (a paragraph's contents, a headline's
-//! title, a table row, a parsed keyword's value). An expansion that holds a
-//! line ending, or stands at the start of a line, can change what every
-//! later line is: the whole buffer is parsed again. Any other can change
-//! only its unit's objects: the unit alone is read again from its start,
-//! unless the expansion is a plain word between blanks, which changes no
-//! object around it. Every read is charged to the budget.
+//! with the edits made since. The scan goes unit by unit: a unit is what
+//! holds a macro's objects (a paragraph's contents, a headline's title, a
+//! table row, a parsed keyword's value; any other is read whole again).
+//! After each expansion the lines it touches are read before and after by
+//! the parser's own line classifier ([`crate::element::same_line`]): if one
+//! is now another kind of line (or the expansion takes lines its unit
+//! cannot), what any later line is may have changed, and the whole buffer
+//! is parsed again; otherwise only the unit's objects can have changed,
+//! and the unit alone is read again from its start. Every read is charged
+//! to the budget, so one unit with N macros costs N reads of it.
 
 use super::syntax::{fold, object_macros, raw_macros};
 use super::value::Template;
@@ -26,8 +28,9 @@ use std::collections::{HashMap, HashSet};
 /// What kind of element a unit is, which decides how it is read again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
-    /// A paragraph's contents: its objects.
-    Paragraph,
+    /// The objects of a container: a paragraph's contents (which may take
+    /// the lines a macro's arguments span).
+    Objects(crate::kind::SyntaxKind),
     /// A headline's title (its headline's span, and its line's): the line
     /// can become COMMENT.
     Title {
@@ -38,18 +41,15 @@ enum Kind {
     Row,
     /// A parsed keyword's or `EXPORT_` property's value: Org's regexp.
     Forced,
-    /// Anything else (a caption, an item's tag, a verse block): the whole
-    /// buffer is read again after each expansion.
+    /// Anything else: the whole buffer is read again after each expansion.
     Other,
 }
 
-/// The element holding a macro: its kind and span in `dtext`, and whether
-/// it starts a line (only blanks before it).
+/// The element holding a macro: its kind and span in `dtext`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Unit {
     kind: Kind,
     span: (usize, usize),
-    line_start: bool,
 }
 
 /// A macro of the current parse and the unit holding it.
@@ -185,61 +185,6 @@ impl Cursor {
                 out: (start, end),
             });
         }
-    }
-
-    /// Whether the text just spliced in at the end of `done` stands at the
-    /// start of a line (only blanks before it).
-    fn at_line_start(&self, eol: char) -> bool {
-        let before = self.done.trim_end_matches([' ', '\t']);
-        if before.is_empty() {
-            return self.unit.line_start;
-        }
-        before.ends_with(eol)
-    }
-
-    /// Whether the line the text just spliced in starts still starts no
-    /// element: it begins with a word not followed by `:` (`CLOCK:`,
-    /// `SCHEDULED:`) or `.`/`)` after digits (`1.`), or with a character
-    /// no element starts with (a headline, a list item, a keyword, a block,
-    /// drawer or table line, a footnote definition, a LaTeX environment, a
-    /// diary sexp all start with `* # : | - + [ \ %`, a digit or a word).
-    /// The line it replaces started with `{{{`, which starts none either.
-    fn line_stays_text(&self, dtext: &str) -> bool {
-        let rest = &dtext[self.rest..self.unit.span.1];
-        let head: String = self.pending.chars().chain(rest.chars()).take(64).collect();
-        let head = head.trim_start_matches([' ', '\t']);
-        let word = head
-            .bytes()
-            .take_while(|b| b.is_ascii_alphanumeric())
-            .count();
-        let next = head.as_bytes().get(word).copied();
-        match head.bytes().next() {
-            Some(b) if b.is_ascii_alphabetic() => next != Some(b':'),
-            Some(b) if b.is_ascii_digit() => !matches!(next, Some(b'.' | b')' | b':')),
-            // What an element's first line may start with, or a line
-            // ending (an empty line ends the paragraph).
-            None
-            | Some(b'*' | b'#' | b':' | b'|' | b'-' | b'+' | b'[' | b'\\' | b'%' | b'\n' | b'\r') => {
-                false
-            }
-            Some(_) => true,
-        }
-    }
-
-    /// Whether `value`, just spliced in, is a plain word between blanks
-    /// (or at the start of a line, then followed by a blank or the line's
-    /// end): no object around it can start, end or change with it, and a
-    /// line starting with a word and a blank starts no element.
-    fn inert(&self, value: &str, dtext: &str, line_start: bool) -> bool {
-        let before = self.done.chars().next_back();
-        let after = self.pending[value.len()..]
-            .chars()
-            .next()
-            .or_else(|| dtext[self.rest..self.unit.span.1].chars().next());
-        !value.is_empty()
-            && value.bytes().all(|b| b.is_ascii_alphanumeric())
-            && (line_start || matches!(before, Some(' ' | '\t')))
-            && matches!(after, None | Some(' ' | '\t' | '\n' | '\r'))
     }
 }
 
@@ -408,10 +353,9 @@ impl Engine {
                 (a - base, b - base, n, args)
             })
             .collect();
-        let (mut k, mut adj) = (0, 0isize);
-        while let Some((a, b, name, args)) = cands.get(k).cloned() {
-            k += 1;
-            let (r, e) = ((a as isize + adj) as usize, (b as isize + adj) as usize);
+        // After each expansion the unit is read again from it: the next
+        // macro is always the first one found.
+        while let Some((r, e, name, args)) = cands.first().cloned() {
             let raw = c.slice((r, e), &self.dtext);
             let at = c.at + r;
             // What the expansion replaces, in `dtext`: itself, or the
@@ -427,20 +371,19 @@ impl Engine {
                 let s = self.map.to_source(Span::new(here.0, here.1));
                 self.notes.push(RenderDiagnostic::MacroEnvironment(s));
             }
-            let vlen = value.len();
-            let structural = value.contains(['\n', '\r']);
-            c.splice((r, e), value.clone(), &self.dtext, &mut self.segment);
+            let kept = self.keeps_lines(&c.text(&self.dtext), out, (r, e), &value, unit)?;
+            c.splice((r, e), value, &self.dtext, &mut self.segment);
             self.charge(c.pending.len())?;
             if c.at + c.done.len() + c.pending.len() > self.size_limit {
                 return Err((MacroFailure::Budget, here.0, here.1));
             }
-            let line_start = c.at_line_start(self.eol_char());
-            let inert = !structural && c.inert(&value, &self.dtext, line_start);
-            let line_start = line_start && !c.line_stays_text(&self.dtext);
-            if !inert && (structural || line_start || unit.kind == Kind::Other) {
+            if !kept || unit.kind == Kind::Other {
                 return Ok(self.reparse_flow(c, out));
             }
             if let Kind::Title { headline, line } = unit.kind {
+                // A todo keyword or priority cookie the expansion makes
+                // does not move the title for the next macro: Emacs 30.2
+                // judges it in the title as it started (`r6-k10`).
                 let text = format!(
                     "{}{}{}",
                     &self.dtext[line.0..unit.span.0],
@@ -452,13 +395,7 @@ impl Engine {
                     return Ok(self.finish(c, out));
                 }
             }
-            if inert {
-                adj += vlen as isize - (e - r) as isize;
-                continue;
-            }
             cands = self.reread_unit(&c, r)?;
-            k = 0;
-            adj = 0;
         }
         Ok(self.finish(c, out))
     }
@@ -474,7 +411,8 @@ impl Engine {
                 object_macros(&d.syntax())
             }
             Kind::Title { .. } => object_macros(&crate::green::objects(&text, HEADLINE_TITLE)),
-            _ => object_macros(&crate::green::objects(&text, PARAGRAPH)),
+            Kind::Objects(container) => object_macros(&crate::green::objects(&text, container)),
+            Kind::Other => Vec::new(),
         };
         Ok(all
             .into_iter()
@@ -494,6 +432,71 @@ impl Engine {
         self.charge(line.len())?;
         let d = crate::parse(&format!("{line}\n"), &self.opts);
         Ok(d.headlines().next().is_some_and(|h| h.is_commented()))
+    }
+
+    /// Whether the lines the expansion of unit text `t[r..e]` into `value`
+    /// touches are read as they were: the same kind of line
+    /// ([`crate::element::same_line`]). A value
+    /// holding a line ending makes lines, and a call whose arguments span
+    /// lines takes them; only a paragraph's or verse block's contents can
+    /// take lines (the lines a macro object spans are no element's start).
+    fn keeps_lines(
+        &mut self,
+        t: &str,
+        out: &str,
+        (r, e): (usize, usize),
+        value: &str,
+        unit: Unit,
+    ) -> Result<bool, Stop> {
+        let eol = self.eol_char();
+        let raw = &t[r..e];
+        let takes = matches!(unit.kind, Kind::Objects(PARAGRAPH | VERSE_BLOCK));
+        // No value holds a line ending today (arguments' blanks collapse,
+        // a template is one line, Lisp is never evaluated): a guard.
+        if value.contains(eol) || (raw.contains(eol) && !takes) {
+            return Ok(false);
+        }
+        let mut prefix = String::new();
+        match t[..r].rfind(eol) {
+            Some(i) => prefix.push_str(&t[i + 1..r]),
+            None => {
+                prefix.push_str(&out[out.rfind(eol).map_or(0, |i| i + 1)..]);
+                prefix.push_str(&t[..r]);
+            }
+        }
+        let mut suffix = String::new();
+        match t[e..].find(eol) {
+            Some(i) => suffix.push_str(&t[e..e + i]),
+            None => {
+                let rest = &self.dtext[unit.span.1..];
+                suffix.push_str(&t[e..]);
+                suffix.push_str(&rest[..rest.find(eol).unwrap_or(rest.len())]);
+            }
+        }
+        let before = format!("{prefix}{raw}{suffix}");
+        let after = format!("{prefix}{value}{suffix}");
+        self.charge(before.len() + after.len())?;
+        let crlf = self.eol == LineEnding::CrLf;
+        let content = |l: &'_ str| -> String {
+            match l.strip_suffix('\r') {
+                Some(c) if crlf => c.to_string(),
+                _ => l.to_string(),
+            }
+        };
+        // The first line: the call's bytes replaced by the value's, or,
+        // when the call takes lines, the rest of the line by the rest of
+        // the joined one. The lines it takes are inside its paragraph, so
+        // they started no element.
+        let (first, now) = (
+            content(before.split(eol).next().unwrap_or("")),
+            content(&after),
+        );
+        let at = prefix.len();
+        let (old, new) = match raw.contains(eol) {
+            false => (raw.len(), value.len()),
+            true => (first.len() - at, now.len() - at),
+        };
+        Ok(crate::element::same_line(&first, &now, at, old, new))
     }
 
     /// The unit is done: its text joins `out`.
@@ -562,7 +565,7 @@ impl Engine {
         let (kind, sp) = match a.kind() {
             PARAGRAPH => match self.d.contents(&a) {
                 Some(c) if c.start <= Span::of(n).start && Span::of(n).end <= c.end => {
-                    (Kind::Paragraph, (c.start as usize, c.end as usize))
+                    (Kind::Objects(a.kind()), (c.start as usize, c.end as usize))
                 }
                 _ => (Kind::Other, span(&a)),
             },
@@ -581,13 +584,7 @@ impl Engine {
             TABLE_ROW => (Kind::Row, span(&a)),
             _ => (Kind::Other, span(&a)),
         };
-        let before = self.dtext[..sp.0].trim_end_matches([' ', '\t']);
-        let line_start = before.is_empty() || before.ends_with(['\n', '\r']);
-        Unit {
-            kind,
-            span: sp,
-            line_start,
-        }
+        Unit { kind, span: sp }
     }
 
     /// The macros Org's regexp finds in the value of keyword or property
@@ -611,7 +608,6 @@ impl Engine {
         let unit = Unit {
             kind: Kind::Forced,
             span: (a, end),
-            line_start: false,
         };
         for found in found {
             out.push(Occurrence { found, unit });

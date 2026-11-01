@@ -188,16 +188,17 @@ fn recognize_at_bol(
     list: Option<usize>,
 ) -> Element {
     let s = cx.src.content(li);
-    if scan::headline_level(s).is_some() {
+    let kind = line_kind(s);
+    if let LineKind::Headline(_) = kind {
         return leaf::headline(cx, li);
     }
     if matches!(mode, Mode::Section | Mode::FirstSection) {
         return leaf::section(cx, li);
     }
-    if scan::is_comment(s) {
+    if kind == LineKind::Comment {
         return leaf::comment(cx, li, limit);
     }
-    if mode == Mode::Planning && previous_line_is_starred(cx, li) && scan::is_planning(s) {
+    if kind == LineKind::Planning && mode == Mode::Planning && previous_line_is_starred(cx, li) {
         return leaf::planning(cx, li, limit);
     }
     if property_drawer_allowed(cx, li, mode) {
@@ -205,7 +206,7 @@ fn recognize_at_bol(
             return e;
         }
     }
-    if scan::is_clock(s) {
+    if kind == LineKind::Clock {
         return leaf::clock(cx, li, limit);
     }
     with_affiliated(cx, li, limit, list)
@@ -282,51 +283,159 @@ fn orphaned(cx: &Ctx, j: usize) -> bool {
 /// `aff`. This is the single-regexp dispatch of `org-element--current-element`.
 fn element_at(cx: &mut Ctx, j: usize, aff: usize, limit: usize, list: Option<usize>) -> Element {
     let s = cx.src.content(j);
-    if let Some(name) = scan::latex_begin(s) {
-        return blocks::latex_environment(cx, j, aff, limit, name);
+    match element_start(s) {
+        Start::LatexEnvironment(name) => blocks::latex_environment(cx, j, aff, limit, name),
+        Start::Drawer(_) => blocks::drawer(cx, j, aff, limit),
+        Start::FixedWidth => leaf::fixed_width(cx, j, aff, limit),
+        Start::DynamicBlock(_) => blocks::dynamic_block(cx, j, aff, limit),
+        Start::Block(name) => blocks::block(cx, j, aff, limit, name),
+        Start::BabelCall => leaf::one_line(cx, BABEL_CALL, j, aff, limit),
+        Start::Keyword(_) => leaf::keyword(cx, j, aff, limit),
+        Start::FootnoteDefinition(_) => blocks::footnote_definition(cx, j, aff, limit),
+        Start::HorizontalRule => leaf::one_line(cx, HORIZONTAL_RULE, j, aff, limit),
+        Start::DiarySexp => leaf::one_line(cx, DIARY_SEXP, j, aff, limit),
+        Start::TableRow => leaf::table(cx, j, aff, limit),
+        Start::TableElRule if is_tableel_table(cx, j, limit) => leaf::table(cx, j, aff, limit),
+        Start::Item(_) => list::plain_list(cx, j, aff, limit, list),
+        Start::TableElRule | Start::Text => paragraph::paragraph(cx, aff, cx.start(j), limit),
     }
-    if scan::drawer_name(s).is_some() {
-        return blocks::drawer(cx, j, aff, limit);
-    }
-    if scan::is_fixed_width(s) {
-        return leaf::fixed_width(cx, j, aff, limit);
-    }
-    if scan::dynamic_begin(s).is_some() {
-        return blocks::dynamic_block(cx, j, aff, limit);
-    }
-    if let Some(e) = hash_plus_element(cx, j, aff, limit) {
-        return e;
-    }
-    if scan::footnote_definition(s).is_some() {
-        return blocks::footnote_definition(cx, j, aff, limit);
-    }
-    if scan::is_horizontal_rule(s) || scan::is_diary_sexp(s) {
-        let kind = if scan::is_diary_sexp(s) {
-            DIARY_SEXP
-        } else {
-            HORIZONTAL_RULE
-        };
-        return leaf::one_line(cx, kind, j, aff, limit);
-    }
-    if scan::is_table_row(s) || is_tableel_table(cx, j, limit) {
-        return leaf::table(cx, j, aff, limit);
-    }
-    if scan::item_bullet(s).is_some() {
-        return list::plain_list(cx, j, aff, limit, list);
-    }
-    paragraph::paragraph(cx, aff, cx.start(j), limit)
 }
 
-/// `#+BEGIN_…`, `#+CALL:` and `#+KEY:` lines.
-fn hash_plus_element(cx: &mut Ctx, j: usize, aff: usize, limit: usize) -> Option<Element> {
-    let s = cx.src.content(j);
-    if let Some(name) = scan::block_begin(s) {
-        return Some(blocks::block(cx, j, aff, limit, name));
+/// What a line is to the recogniser out of context: the first of the
+/// regexps `org-element--current-element` tries, in its order, that the
+/// line matches, before the mode, the limit and the lines around it decide
+/// (a block begin is a block only if its end follows: an opener is a kind
+/// of line whether or not it is closed, so a line becoming one is a
+/// change). The recogniser dispatches on it; the macro expansion compares
+/// a line's kind before and after an edit with it, so both read lines one
+/// way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LineKind<'a> {
+    Blank,
+    Headline(usize),
+    Comment,
+    Planning,
+    Clock,
+    /// An affiliated keyword: its `#+KEY[…]:`.
+    Affiliated(&'a str),
+    Element(Start<'a>),
+}
+
+/// The element a line starts by the single-regexp dispatch, with the name
+/// or key it carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Start<'a> {
+    LatexEnvironment(&'a str),
+    Drawer(&'a str),
+    FixedWidth,
+    DynamicBlock(&'a str),
+    Block(&'a str),
+    BabelCall,
+    Keyword(&'a str),
+    FootnoteDefinition(&'a str),
+    HorizontalRule,
+    DiarySexp,
+    TableRow,
+    /// A table.el rule: a table if the lines after it make one.
+    TableElRule,
+    /// A list item: its bullet.
+    Item(&'a str),
+    Text,
+}
+
+/// The kind of line `s` (its content, no line ending).
+pub(crate) fn line_kind(s: &str) -> LineKind<'_> {
+    if crate::text::is_blank(s) {
+        LineKind::Blank
+    } else if let Some(level) = scan::headline_level(s) {
+        LineKind::Headline(level)
+    } else if scan::is_comment(s) {
+        LineKind::Comment
+    } else if scan::is_planning(s) {
+        LineKind::Planning
+    } else if scan::is_clock(s) {
+        LineKind::Clock
+    } else if let Some(e) = scan::affiliated(s) {
+        LineKind::Affiliated(&s[..e])
+    } else {
+        LineKind::Element(element_start(s))
     }
-    if scan::is_babel_call(s) {
-        return Some(leaf::one_line(cx, BABEL_CALL, j, aff, limit));
+}
+
+/// The element line `s` starts by the single-regexp dispatch.
+pub(crate) fn element_start(s: &str) -> Start<'_> {
+    let at = |(a, b): (usize, usize)| &s[a..b];
+    if let Some(name) = scan::latex_begin(s) {
+        Start::LatexEnvironment(name)
+    } else if let Some(n) = scan::drawer_name(s) {
+        Start::Drawer(at(n))
+    } else if scan::is_fixed_width(s) {
+        Start::FixedWidth
+    } else if let Some(n) = scan::dynamic_begin(s) {
+        Start::DynamicBlock(at(n))
+    } else if let Some(n) = scan::block_begin(s) {
+        Start::Block(at(n))
+    } else if scan::is_babel_call(s) {
+        Start::BabelCall
+    } else if let Some(k) = scan::keyword_key(s) {
+        Start::Keyword(at(k))
+    } else if let Some(e) = scan::footnote_definition(s) {
+        Start::FootnoteDefinition(&s[..e])
+    } else if scan::is_horizontal_rule(s) {
+        Start::HorizontalRule
+    } else if scan::is_diary_sexp(s) {
+        Start::DiarySexp
+    } else if scan::is_table_row(s) {
+        Start::TableRow
+    } else if scan::is_tableel_rule(s) {
+        Start::TableElRule
+    } else if let Some(b) = scan::item_bullet(s) {
+        Start::Item(at(b))
+    } else {
+        Start::Text
     }
-    scan::keyword_key(s).map(|_| leaf::keyword(cx, j, aff, limit))
+}
+
+/// Whether line `after` is read as line `before` is, where `after` is
+/// `before` with its bytes `at..at + old` replaced by `new` bytes: the same
+/// kind with the same names, the same indentation, the same answer to
+/// whether it ends a paragraph or a table above it, and, for a list item,
+/// the same parts (bullet, counter, checkbox, tag, contents) moved by the
+/// edit. What the line closes is not compared: a line closes only an
+/// opener above it, and an opener above an expansion that a later line
+/// closed would hold the expansion's macro, which then was no macro; so
+/// what a new closer encloses is all before the expansion, already done.
+pub(crate) fn same_line(before: &str, after: &str, at: usize, old: usize, new: usize) -> bool {
+    let (kb, ka) = (line_kind(before), line_kind(after));
+    if kb != ka
+        || crate::text::ws_len(before) != crate::text::ws_len(after)
+        || paragraph::may_end(before) != paragraph::may_end(after)
+        || scan::ends_table(before, true) != scan::ends_table(after, true)
+    {
+        return false;
+    }
+    if !matches!(kb, LineKind::Element(Start::Item(_))) {
+        return true;
+    }
+    let moved = |p: usize| {
+        if p <= at {
+            Some(p)
+        } else if p >= at + old {
+            Some(p - old + new)
+        } else {
+            None
+        }
+    };
+    let pair = |r: Option<(usize, usize)>| r.map(|(a, b)| (moved(a), moved(b)));
+    let (hb, ha) = (list::item_head(before), list::item_head(after));
+    let same = |x: Option<(usize, usize)>, y: Option<(usize, usize)>| {
+        pair(x) == y.map(|(a, b)| (Some(a), Some(b)))
+    };
+    same(Some(hb.bullet), Some(ha.bullet))
+        && same(hb.counter, ha.counter)
+        && same(hb.checkbox, ha.checkbox)
+        && same(hb.tag, ha.tag)
+        && moved(hb.contents_start) == Some(ha.contents_start)
 }
 
 /// The table.el heuristic: a full rule line, more lines before the limit,

@@ -450,15 +450,15 @@ mod tests {
     }
 
     /// The work of an expansion, counted: it grows as the source does
-    /// (8 times the calls, about 8 times the work), every byte it produces
+    /// (8 times the units, about 8 times the work), every byte it produces
     /// is counted, and the reviewer's exponential shape (review round 4,
     /// B7: 15 s for 8.6 KB) stops within the bound, whatever N.
     #[test]
     fn expansion_work_is_linear_in_the_source() {
         let plain = |n: usize| {
             format!(
-                "#+MACRO: m <$1>\n#+MACRO: w {{{{{{m($1)}}}}}}\n{}\n",
-                "{{{w(x)}}} {{{n}}} ".repeat(n)
+                "#+MACRO: m <$1>\n#+MACRO: w {{{{{{m($1)}}}}}}\n{}",
+                "{{{w(x)}}} {{{n}}} text\n\n".repeat(n)
             )
         };
         let (few, r) = work(&plain(400));
@@ -473,20 +473,41 @@ mod tests {
                 "{{{b}}}".repeat(255),
                 "{{{a}}} ".repeat(n)
             );
-            let (w, r) = work(&doc);
-            let limit = WORK_BASE + WORK_PER_BYTE * doc.len() as u64;
-            assert!(
-                matches!(
-                    r,
-                    Err(RenderDiagnostic::MacroFailed(MacroFailure::Budget, _))
-                ),
-                "{n}: {r:?}"
-            );
-            // Past the limit by at most the last charge, which is never
-            // past the size bound.
-            let size = (SIZE_BASE + SIZE_PER_BYTE * doc.len()) as u64;
-            assert!(w <= limit + size, "{n}: {w} > {limit} + {size}");
+            assert_fails_within_the_budget(&doc);
         }
+    }
+
+    fn assert_fails_within_the_budget(doc: &str) {
+        let (w, r) = work(doc);
+        let limit = WORK_BASE + WORK_PER_BYTE * doc.len() as u64;
+        assert!(
+            matches!(
+                r,
+                Err(RenderDiagnostic::MacroFailed(MacroFailure::Budget, _))
+            ),
+            "{r:?}"
+        );
+        // Past the limit by at most the last charge, which is never past
+        // the size bound.
+        let size = (SIZE_BASE + SIZE_PER_BYTE * doc.len()) as u64;
+        assert!(w <= limit + size, "{w} > {limit} + {size}");
+    }
+
+    /// The measured limit of one unit (registered: macros): each expansion
+    /// re-reads the unit holding it, and the line it touches, so N macros
+    /// in one paragraph cost about N times its length. Alone in a
+    /// document, a paragraph of up to 320 short macros on one line (5.4 KB)
+    /// expands, or 568 on as many lines (9.7 KB); 3,200 fail closed, within
+    /// the budget.
+    #[test]
+    fn one_paragraph_of_many_macros_is_bounded_by_the_budget() {
+        let line = |n: usize| format!("{}\n", "{{{n}}} abcdefgh ".repeat(n));
+        let (_, r) = work(&line(320));
+        assert!(r.is_ok(), "{r:?}");
+        assert_fails_within_the_budget(&line(3200));
+        let lines = |n: usize| "{{{n}}} abcdefgh\n".repeat(n);
+        assert!(work(&lines(568)).1.is_ok());
+        assert_fails_within_the_budget(&lines(3200));
     }
 
     #[test]

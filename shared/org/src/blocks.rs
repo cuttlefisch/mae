@@ -12,17 +12,9 @@ use crate::kind::SyntaxKind::{self, *};
 use crate::paragraph::paragraph;
 use crate::scan;
 
-/// `#+begin_NAME` … `#+end_NAME`. `name` is the name's byte range in the line.
-pub(crate) fn block(
-    cx: &mut Ctx,
-    j: usize,
-    aff: usize,
-    limit: usize,
-    name: (usize, usize),
-) -> Element {
+/// `#+begin_NAME` … `#+end_NAME`.
+pub(crate) fn block(cx: &mut Ctx, j: usize, aff: usize, limit: usize, name: &str) -> Element {
     let src = cx.src;
-    let line = src.content(j);
-    let name = &line[name.0..name.1];
     let (kind, greater) = block_kind(name);
     let Some(e) = cx.ix.block_end(src, name, j + 1, limit) else {
         cx.diagnose(

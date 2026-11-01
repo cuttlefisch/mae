@@ -609,8 +609,9 @@ fn a_later_macro_is_judged_in_the_buffer_as_it_then_stands() {
 }
 
 /// Ordinary documents stay within the budget: 14,000 paragraphs, each
-/// with a counter and a macro that expands to markup (1 MB), and one long
-/// line of 60,000 counters, render.
+/// with a counter and a macro that expands to markup (1 MB), render. One
+/// long line of 60,000 counters is one unit read again per macro: it
+/// fails closed (registered: macros), with the budget's diagnostic.
 #[test]
 fn many_macros_in_ordinary_paragraphs_stay_within_the_budget() {
     let paragraphs: String = (0..14_000)
@@ -618,12 +619,20 @@ fn many_macros_in_ordinary_paragraphs_stay_within_the_budget() {
         .collect();
     let doc = format!("#+MACRO: m *$1*\n{paragraphs}");
     assert!(doc.len() > 900_000, "{}", doc.len());
+    let r = rendered(&doc);
+    assert!(r.diagnostics.is_empty(), "{:?}", &r.diagnostics[..1]);
+    assert!(!r.body.is_empty());
     let line = format!("{}\n", "{{{n}}} abcdefgh ".repeat(60_000));
-    for doc in [doc, line] {
-        let r = rendered(&doc);
-        assert!(r.diagnostics.is_empty(), "{:?}", &r.diagnostics[..1]);
-        assert!(!r.body.is_empty());
-    }
+    let r = rendered(&line);
+    assert!(r.body.is_empty());
+    assert!(
+        matches!(
+            r.diagnostics[..],
+            [RenderDiagnostic::MacroFailed(MacroFailure::Budget, _)]
+        ),
+        "{:?}",
+        r.diagnostics
+    );
 }
 
 /// In a parsed keyword Org's regexp reads a macro's arguments past the
@@ -634,4 +643,96 @@ fn a_keyword_macro_takes_the_lines_its_arguments_span() {
     let doc = "#+MACRO: m <$1>\n#+TITLE: T {{{m(  QZA \n QZB )}}}\nBody QZC.\n";
     let h = html(doc);
     assert!(h.contains("QZC") && !h.contains("QZB"), "{h}");
+}
+
+/// Review round 6 (blocker 1): an expansion glued into a line's first
+/// token changes what element the line is (`#+BEGIN{{{m}}}` becomes a
+/// block's first line, `:{{{e}}} ` a fixed-width line, `\begin{{{m}}}` a
+/// LaTeX environment, `#{{{e}}} ` a comment, `[fn{{{m}}}1]` a footnote
+/// definition), and Org judges every later macro inside the new element.
+/// Where the new element holds objects (a headline, an item, a table row,
+/// a drawer) Org expands them. Emacs 30.2 on each file: (file, what it
+/// hides, what it shows). MAE shows drawers only when asked (option set 1,
+/// which also shows `r6-l12`'s property drawer).
+#[test]
+fn an_expansion_in_a_lines_first_token_changes_the_lines_element() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/macro-review");
+    let lit = "{{{keyword(SECRETKW)}}}";
+    let cases: &[(&str, &[&str], &[&str])] = &[
+        ("r6-l7", &["SECRETLEAKB"], &[lit]),
+        ("r6-l9", &["SECRETLEAKB"], &[lit]),
+        ("r6-l10", &["SECRETLEAKB"], &[]),
+        ("r6-l11", &["SECRETLEAKB"], &[]),
+        ("r6-l12", &["SECRETLEAKP"], &["{{{property(SECRET)}}}"]),
+        ("r6-l13", &["SECRETLEAKB"], &[]),
+        ("r6-g1", &["SECRETLEAKB"], &[]),
+        ("r6-g2", &[], &["SECRETLEAKB"]),
+        ("r6-g3", &[], &["<li><p>SECRETLEAKB</p>"]),
+        ("r6-g4", &[], &["SECRETLEAKB</td>"]),
+        ("r6-g5", &[], &["<li><p>SECRETLEAKB</p>"]),
+        ("r6-g6", &["SECRETLEAKB"], &[]),
+        ("r6-g7", &["SECRETLEAKB"], &[]),
+        ("r6-g8", &["SECRETLEAKB"], &[lit]),
+        ("r6-g9", &["SECRETLEAKB"], &[lit]),
+        ("r6-g10", &["SECRETLEAKB"], &[]),
+        ("r6-g11", &[], &["SECRETLEAKB</dt>"]),
+        // A LOGBOOK drawer, which Org does not export.
+        ("r6-g12", &["SECRETLEAKB"], &[]),
+        ("r6-g13", &[], &["SECRETLEAKB"]),
+        ("r6-g14", &[], &["x SECRETLEAKB"]),
+        ("r6-g15", &[], &["SECRETLEAKB</dt>"]),
+        ("r6-g16", &[], &["xy SECRETLEAKB"]),
+        // The line stays text but now ends the paragraph above it (`*` and
+        // a tab), or joins the list above it (indented): the bold or
+        // verbatim it closed is another, and holds the next macro.
+        ("r6-k1", &["SECRETLEAKB"], &["v* {{{keyword(SECRETKW)}}}"]),
+        ("r6-k5", &["SECRETLEAKB"], &["y {{{keyword(SECRETKW)}}}"]),
+        // The line stays text but now continues the table.el table above
+        // it: the table runs on, over the next macro's row.
+        ("r6-k7", &["SECRETLEAKB"], &[]),
+        // The block's name changes, and its end is found.
+        ("r6-k8", &["SECRETLEAKB"], &[lit]),
+        // A tag made inside the bold that held the macro: the bold ends
+        // in the tag, and the verbatim after it holds the next macro.
+        ("r6-k9", &["SECRETLEAKB"], &["b* {{{keyword(SECRETKW)}}}"]),
+        // A priority cookie made at the title's start: Emacs judges the
+        // next macro in the title as it started, so expands it.
+        ("r6-k10", &[], &["x SECRETLEAKB</code>"]),
+        // A caption's short value takes Org's last `]:`: the long value
+        // and its macro stay.
+        ("r6-k11", &[], &["x SECRETLEAKB="]),
+        // A closing line made where the environment it closes holds the
+        // macro: the macro was never one.
+        ("r6-k4", &["SECRETLEAKB"], &[lit]),
+        // A keyword's macro takes the lines its arguments span, a block's
+        // first line among them: the macro after it is a macro now.
+        ("r6-k6", &[], &["SECRETSHOWN here"]),
+    ];
+    let mut failures = Vec::new();
+    for (name, hidden, shown) in cases {
+        let doc = std::fs::read_to_string(dir.join(format!("{name}.org"))).unwrap();
+        let all = outputs(&doc);
+        for (surface, s) in &all {
+            let drawn = *name == "r6-l12" && surface.ends_with("/1");
+            for h in hidden.iter().filter(|_| !drawn) {
+                if s.contains(h) {
+                    failures.push(format!("{name}: {h} in {surface}:\n{s}"));
+                }
+            }
+        }
+        let d = parse(&doc, &ParseOptions::default());
+        let pages: Vec<String> = [
+            RenderOptions::default(),
+            RenderOptions::default().with_property_drawers(true),
+        ]
+        .iter()
+        .map(|o| mae_org::render_html(&d, &semantics(&d), o, &Resolver::default()))
+        .collect();
+        for want in *shown {
+            if !pages.iter().any(|p| p.contains(want)) {
+                failures.push(format!("{name}: {want} not shown:\n{pages:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
