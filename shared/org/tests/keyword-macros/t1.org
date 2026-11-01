@@ -1,0 +1,6 @@
+:PROPERTIES:
+:ID: n9
+:END:
+#+MACRO: m QZaQZ
+#+TITLE: =v {{{m}}}=
+P {{{title}}}

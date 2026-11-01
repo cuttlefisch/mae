@@ -117,7 +117,9 @@ impl Builder<'_> {
             NodeOrigin::File => {
                 if let Some((value, at)) = file_title_source(root) {
                     let tree = crate::green::objects(&value, PARAGRAPH);
+                    let was = std::mem::replace(&mut self.in_doc_title, true);
                     self.with_base(at, |b| b.objects(&tree, &mut out));
+                    self.in_doc_title = was;
                 }
             }
             NodeOrigin::Headline => {

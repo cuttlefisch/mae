@@ -164,6 +164,14 @@ reason = "A construct the body hides is hidden everywhere (ADR-112 D3): a value 
 test = "no_hidden_inline_construct_reaches_any_output_in_any_container"
 
 [[divergence]]
+id = "babel-in-titles"
+what = "an inline src block or inline babel call in the #+TITLE value (the file node's title)"
+org = "babel does not process the title: the block is left as written, and the document title shows its code"
+mae = "hidden, as an inline src block whose :exports hides its code is in the body"
+reason = "Privacy first: a title is shown wherever the node is (lists, links, other pages), and what babel would export there is decided by evaluation MAE never does (D1, D4); hiding cannot publish what Org would have hidden."
+test = "the_document_title_renders_as_org_renders_it"
+
+[[divergence]]
 id = "same-page-link-text"
 what = "a link without a description (or one rendering empty) to a headline, custom id or KB node on the same page"
 org = "the headline's section number (num:t, the default), else its title"

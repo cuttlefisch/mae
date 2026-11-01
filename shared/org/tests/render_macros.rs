@@ -838,3 +838,38 @@ fn a_results_macro_org_keeps_fails_as_org_fails() {
         assert_eq!(r.body.is_empty(), fails, "{name}");
     }
 }
+
+/// Review round 6 (leak oracle, citations in a title): Org expands the
+/// macros of `#+TITLE` anywhere in its value (forced), but processes only
+/// the parse tree's citations: one in the title exports as nothing. The
+/// file node's title is the document's title: Emacs 30.2's
+/// `<h1 class="title">` of each (`tests/keyword-macros/`), while the page
+/// shows `{{{title}}}`, the value as written, expanded where it stands.
+/// (file, the document title, the page.)
+#[test]
+fn the_document_title_renders_as_org_renders_it() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/keyword-macros");
+    let cases = [
+        ("t1", "v QZaQZ", "P v {{{m}}}"),
+        ("t2", "b QZbQZ", "P b QZbQZ"),
+        ("t3", "", "P (??, ????)"),
+        ("t4", "d x", "P d x"),
+        // The inline src block Org shows in the title is hidden
+        // (registered: babel-in-titles).
+        ("t5", "x", "P x"),
+        ("t6", "d QZfQZ x", "P d QZfQZ x"),
+    ];
+    let mut failures = Vec::new();
+    for (name, want, page_want) in cases {
+        let r = rendered(&std::fs::read_to_string(dir.join(format!("{name}.org"))).unwrap());
+        let title = shown(&mae_org::to_html(&r.nodes[0].title));
+        if title != want {
+            failures.push(format!("{name}: {title:?}, Emacs {want:?}"));
+        }
+        let page = shown(&mae_org::to_html(&r.body)).replace("( ", "(");
+        if page != page_want {
+            failures.push(format!("{name}: page {page:?}, Emacs {page_want:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

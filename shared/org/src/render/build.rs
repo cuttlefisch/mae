@@ -128,6 +128,10 @@ pub(crate) struct Builder<'a> {
     /// (Org allows one inside emphasis there) must not become an `<a>`
     /// inside an `<a>`, which an HTML parser would restructure.
     pub in_link: bool,
+    /// Rendering the document's `#+TITLE`: Org processes the citations of
+    /// the parse tree only, not those of the title, which export as
+    /// nothing (Emacs 30.2: `#+TITLE: [cite:@k]` gives an empty title).
+    pub in_doc_title: bool,
     depth: usize,
     pub diagnostics: Vec<RenderDiagnostic>,
 }
@@ -250,6 +254,7 @@ impl<'a> Builder<'a> {
             blank: None,
             in_blank: false,
             in_link: false,
+            in_doc_title: false,
             depth: 0,
             diagnostics: Vec::new(),
         }

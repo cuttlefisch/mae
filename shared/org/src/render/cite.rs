@@ -204,6 +204,9 @@ impl Builder<'_> {
 
     /// A citation, as `oc-basic` exports an unresolved one (see the module).
     pub fn citation(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
+        if self.in_doc_title {
+            return;
+        }
         let p = parts(n);
         let affixes = !holds_hidden(n);
         self.number(&p);
