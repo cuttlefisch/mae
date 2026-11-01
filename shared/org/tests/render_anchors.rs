@@ -301,3 +301,123 @@ fn repeats_and_other_scripts_never_take_another_titles_anchor() {
     );
     assert_eq!(href_of(&out, "x2"), "/x.html#h-x-2");
 }
+
+/// A title with objects in it: words, sub- and superscripts, entities,
+/// emphasis, code and verbatim, a hidden inline src block, other scripts.
+fn object_title() -> impl Strategy<Value = String> {
+    let piece = prop::sample::select(vec![
+        "H_2O",
+        "A^2",
+        "x_{ij}",
+        "\\alpha",
+        "Caf\\'e",
+        "*bold*",
+        "/it/",
+        "_u_",
+        "+s+",
+        "~code~",
+        "=verb=",
+        "src_sh{echo x}",
+        "levels",
+        "Straße",
+        "ΣΟΦΟΣ",
+        "İstanbul",
+        "2",
+        "notes",
+        "\\to",
+    ]);
+    prop::collection::vec(piece, 1..5).prop_map(|ps| ps.join(" "))
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// Review round 2 (B4): a fragment written as the title (objects and
+    /// all) lands on that heading, on this page and in another page's
+    /// anchor. `H_2O levels` slugged `h-h2o-levels` but the fragment
+    /// `#H_2O levels` asked for `h-h-2o-levels`.
+    #[test]
+    fn a_fragment_written_as_the_title_lands_on_it(titles in prop::collection::vec(object_title(), 1..5)) {
+        let mut doc = String::from("* Node\n:PROPERTIES:\n:ID: n\n:END:\n");
+        for t in &titles {
+            doc.push_str(&format!("** {t}\n"));
+        }
+        doc.push_str("* Links\n");
+        for (i, t) in titles.iter().enumerate() {
+            doc.push_str(&format!("[[id:n#{t}][lk{i}]]\n"));
+        }
+        let out = html(&doc);
+        let r = resolver(&[("n", "/n.html")]);
+        let cross = html_with(&doc, HeadlineIds::Explicit, &r);
+        let heads: Vec<String> = out
+            .split("<h2 id=\"")
+            .skip(1)
+            .map(|p| p[..p.find('"').unwrap()].to_string())
+            .collect();
+        for (i, head) in heads.iter().enumerate().take(titles.len()) {
+            let href = href_of(&out, &format!("lk{i}"));
+            // A title with no letter or digit once rendered (only a hidden
+            // src block) has the bare `h` anchor, which no fragment names.
+            if head == "h" || head.starts_with("h--") {
+                prop_assert_eq!(href, "#id-n");
+                continue;
+            }
+            prop_assert_ne!(href, "#id-n", "fell back to the node:\n{}", doc);
+            // It lands on a heading whose rendered title slugs as this one's.
+            let mine = slug(&heading_text(&out, head));
+            let there = slug(&heading_text(&out, &href[1..]));
+            prop_assert_eq!(&there, &mine, "{}", out);
+            // Another page: the same anchor, percent-encoded.
+            let x = href_of(&cross, &format!("lk{i}"));
+            let want = format!("#{}", &href[1..]);
+            prop_assert!(
+                x.starts_with("/n.html#") && percent_decode(&x["/n.html".len()..]) == want,
+                "{x} vs {want}"
+            );
+        }
+    }
+}
+
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            out.push(u8::from_str_radix(&s[i + 1..i + 3], 16).unwrap());
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).unwrap()
+}
+
+/// The reviewer's cases: each fragment is the title as written.
+#[test]
+fn fragments_with_objects_land_on_their_heading() {
+    let doc = "* Node\n:PROPERTIES:\n:ID: n1\n:END:\n** H_2O levels\n** Caf\\'e \\alpha notes\n** A^2 and B\n** İstanbul ΣΟΦΟΣ Straße ǅemal\n** Ⓐ circled\nSee [[id:n1#H_2O levels][a]], [[id:n1#Caf\\'e \\alpha notes][b]], [[id:n1#A^2 and B][c]], [[id:n1#İstanbul ΣΟΦΟΣ Straße ǅemal][d]], [[id:n1#Ⓐ circled][e]].\n";
+    let out = html(doc);
+    // (`\'e` is no Org entity: it renders as written.)
+    for (label, want) in [
+        ("a", "#h-h2o-levels"),
+        ("b", "#h-caf-e-α-notes"),
+        ("c", "#h-a2-and-b"),
+        ("d", "#h-İstanbul-σοφοσ-straße-ǆemal"),
+        ("e", "#h-circled"),
+    ] {
+        assert_eq!(href_of(&out, label), want, "{out}");
+        assert!(
+            out.contains(&format!("<h2 id=\"{}\">", &want[1..])),
+            "{out}"
+        );
+    }
+    // A src block its heading shows (`:exports code` in its own drawer):
+    // the slug never holds code, so the fragment, read with no scope of
+    // its own, lands there too.
+    let doc = "* Node\n:PROPERTIES:\n:ID: n2\n:END:\n** Run src_sh{ls} now\n:PROPERTIES:\n:header-args: :exports code\n:END:\nSee [[id:n2#Run src_sh{ls} now][r]].\n";
+    let out = html(doc);
+    assert!(out.contains("<h2 id=\"h-run-now\">Run <code"), "{out}");
+    assert_eq!(href_of(&out, "r"), "#h-run-now", "{out}");
+}

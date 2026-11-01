@@ -1,7 +1,6 @@
 //! The link policy: what a link may point at, and what it shows when it may
 //! not (ADR-112 D3).
 
-use super::anchors::heading_anchor;
 use super::build::{trim_text, Builder, Mode};
 use super::objects::radio_key;
 use super::tree::{push, text, Attr, Element, Node, Tag};
@@ -264,7 +263,7 @@ impl Builder<'_> {
     }
 
     /// A KB link's target. Its `#fragment` names a heading by its title
-    /// (ADR-030): it becomes the heading's `h-` anchor ([`heading_anchor`]
+    /// (ADR-030): it becomes the heading's `h-` anchor ([`super::heading_anchor`]
     /// of the fragment, [`super::slug`] being idempotent), appended to the
     /// resolver's href (percent-encoded: a slug may hold non-ASCII
     /// letters, and a browser decodes a fragment before matching an id),
@@ -273,11 +272,7 @@ impl Builder<'_> {
     /// anchor when it does not (never dropped silently). A fragment with no
     /// letter or digit names nothing.
     fn kb_target(&mut self, l: crate::SemanticLink) -> Target {
-        let heading = l
-            .fragment
-            .as_deref()
-            .filter(|f| !super::slug(f).is_empty())
-            .map(heading_anchor);
+        let heading = l.fragment.as_deref().and_then(|f| self.fragment_anchor(f));
         if let Some(href) = self
             .resolver
             .targets

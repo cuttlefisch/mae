@@ -37,7 +37,7 @@
 //!
 //! | Construct | Rendered as |
 //! |---|---|
-//! | headline | `<section class="org-section org-level-N">` (with `id` = the node's or custom id under [`HeadlineIds::Explicit`]) holding `<hN id="h-SLUG">` (`h` for a title with no letter or digit, a repeat `h-SLUG--2`, `--3`, …; h6 below 6; see [`heading_anchor`] and [`slug`]: letters and digits of any script, lower-cased by Emacs's case table): TODO keyword `<span class="org-todo">` (+ `org-done`), priority `<span class="org-priority">`, title, tags `<span class="org-tags">` of `<span class="org-tag">` |
+//! | headline | `<section class="org-section org-level-N">` (with `id` = the node's or custom id under [`HeadlineIds::Explicit`]) holding `<hN id="h-SLUG">` (`h` for a title with no letter or digit, a repeat `h-SLUG--2`, `--3`, …; h6 below 6; see [`heading_anchor`] and [`slug`]: the title as rendered inline-only, babel objects dropped, its letters and digits of any script case-folded by Emacs's table): TODO keyword `<span class="org-todo">` (+ `org-done`), priority `<span class="org-priority">`, title, tags `<span class="org-tags">` of `<span class="org-tag">` |
 //! | section, zeroth section | its elements, unwrapped |
 //! | paragraph | `<p>` |
 //! | bold, italic, underline, strike-through | `<strong>`, `<em>`, `<span class="org-underline">`, `<del>` |

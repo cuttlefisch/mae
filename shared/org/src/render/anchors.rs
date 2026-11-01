@@ -20,7 +20,7 @@
 //! byte of the UTF-8 as `.` plus two lower-case hex digits: injective (a
 //! `.` is never kept, so it always starts an escape), deterministic, and
 //! limited to `[A-Za-z0-9_.-]`. A slug keeps letters and digits of any
-//! script (Emacs's `[[:alnum:]]`), lower-cased by Emacs's case table, so a
+//! script (Emacs's `[[:alnum:]]`), case-folded by Emacs's table, so a
 //! heading anchor may hold non-ASCII letters (`h-глава-2`); every id needs
 //! no escaping in HTML (attribute values are escaped as always) and is
 //! percent-encoded where it becomes part of another page's URL.
@@ -51,16 +51,20 @@ fn hex(n: u8) -> char {
 /// repeat suffix).
 pub const SLUG_MAX: usize = 64;
 
-/// A headline title as a slug: its letters and digits (Emacs's
-/// `[[:alnum:]]`, any script) lower-cased by Emacs's case table (the
-/// crate's generated one, so every peer and toolchain agrees); every run of
-/// anything else is one `-`; no `-` at either end; at most [`SLUG_MAX`]
-/// bytes, cut on a char boundary and never before a `-`. Empty when the
-/// title has no letter or digit. Never contains `--`.
+/// A text as a slug: its letters and digits (Emacs's `[[:alnum:]]`, any
+/// script), each case-folded by Emacs's case-fold table (`canon`, the
+/// crate's generated one, so every peer and toolchain agrees: what
+/// case-insensitive matching equates, lower case for most letters, but a
+/// few, such as `İ`, fold to themselves); every run of anything else is one
+/// `-`; no `-` at either end; at most [`SLUG_MAX`] bytes, cut on a char
+/// boundary and never before a `-`. Empty when the text has no letter or
+/// digit. Never contains `--`. Idempotent: `slug(slug(t)) == slug(t)`.
 ///
-/// Idempotent (`slug(slug(t)) == slug(t)`), so a KB link fragment written
-/// as a slug (`id:x#rope-internals`) and one written as the title
-/// (`id:x#Rope internals`) name the same heading.
+/// A heading's anchor slugs its TITLE AS RENDERED (inline-only, babel
+/// objects and export snippets dropped: `H_2O levels` is `H2O levels`), and
+/// a KB link's `#fragment` is rendered the same way before it is slugged.
+/// So a fragment written as the title (`id:x#H_2O levels`) and one written
+/// as its slug (`id:x#h2o-levels`) both name that heading.
 pub fn slug(title: &str) -> String {
     let mut out = String::new();
     let mut dash = false;
@@ -131,7 +135,7 @@ impl Ids {
 
 /// Whether `id` has the shape every anchor this module builds has: an
 /// ASCII letter, then ASCII letters, digits, `_`, `.` and `-`, and the
-/// non-ASCII letters and digits a slug keeps (lower-cased by Emacs's case
+/// non-ASCII letters and digits a slug keeps (case-folded by Emacs's case
 /// table, so never a char the table would change).
 pub fn is_valid_id(id: &str) -> bool {
     let mut chars = id.chars();

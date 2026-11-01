@@ -311,6 +311,25 @@ impl<'a> Builder<'a> {
         crate::semantics::plain::collapse(&super::text::text_of(&out))
     }
 
+    /// The text `f` renders for a slug: inline-only ([`Builder::meta_text`])
+    /// with every babel object and export snippet dropped
+    /// ([`Builder::slugging`]), so it depends on nothing but the text.
+    pub fn slug_text(&mut self, f: impl FnOnce(&mut Self, &mut Vec<Node>)) -> String {
+        let old = std::mem::replace(&mut self.slugging, true);
+        let t = self.meta_text(f);
+        self.slugging = old;
+        t
+    }
+
+    /// The `h-` anchor a KB link fragment names: the fragment read as a
+    /// headline title, rendered as a title's slug is ([`Builder::slug_text`]).
+    /// `None` when that has no letter or digit.
+    pub fn fragment_anchor(&mut self, fragment: &str) -> Option<String> {
+        let tree = crate::green::objects(fragment, HEADLINE_TITLE);
+        let t = self.slug_text(|b, out| b.placeless(None, |b| b.objects(&tree, out)));
+        (!super::slug(&t).is_empty()).then(|| super::heading_anchor(&t))
+    }
+
     /// Runs `f` one level deeper, or records `n` as too deep and skips it.
     pub fn deeper(&mut self, n: &SyntaxNode, f: impl FnOnce(&mut Self)) {
         if self.depth >= RENDER_MAX_DEPTH {

@@ -27,15 +27,17 @@ impl Builder<'_> {
     /// [`HeadlineIds::Explicit`] the section's `id-`/`cid-` anchor when the
     /// headline is a KB node or has a `CUSTOM_ID`. `title` is the title as
     /// written (the key `[[*Title]]` links find it by); `shown` is its
-    /// text rendered inline-only ([`Builder::meta_text`]), which the slug is
-    /// made from, so an id never spells a link target or snippet the title
-    /// does not show, and both passes claim the same ids. `None`s in Meta
-    /// mode.
+    /// text rendered inline-only ([`Builder::meta_text`]), what a link
+    /// landing on it shows; `slugged` is that text without babel objects
+    /// ([`Builder::slug_text`]), which the slug is made from, so an id never
+    /// spells a link target or snippet the title does not show, a fragment
+    /// written as the title slugs the same, and both passes claim the same
+    /// ids. `None`s in Meta mode.
     fn headline_anchors(
         &mut self,
         n: &SyntaxNode,
         h: &Headline,
-        (title, shown): (&str, &str),
+        (title, shown, slugged): (&str, &str, &str),
     ) -> (Option<String>, Option<String>) {
         if self.mode == Mode::Meta {
             return (None, None);
@@ -45,8 +47,8 @@ impl Builder<'_> {
         // headline): Org's export still gives the headline its CUSTOM_ID.
         let custom = h.property_drawer().and_then(|d| d.get("CUSTOM_ID"));
         let custom = custom.filter(|c| !c.is_empty());
-        let heading = self.ids.claim(heading_anchor(shown));
         let node = self.node_id(start);
+        let heading = self.ids.claim(heading_anchor(slugged));
         self.found.headings.insert(heading.clone());
         let mut section = None;
         if self.opts.headline_ids == HeadlineIds::Explicit {
@@ -88,11 +90,14 @@ impl Builder<'_> {
         if let Some(t) = &title_node {
             self.objects(t, &mut title);
         }
-        let shown = match (&title_node, self.mode) {
-            (Some(t), Mode::Page | Mode::Text) => self.meta_text(|b, out| b.objects(t, out)),
-            _ => String::new(),
+        let (shown, slugged) = match (&title_node, self.mode) {
+            (Some(t), Mode::Page | Mode::Text) => (
+                self.meta_text(|b, out| b.objects(t, out)),
+                self.slug_text(|b, out| b.objects(t, out)),
+            ),
+            _ => (String::new(), String::new()),
         };
-        let (heading, section_id) = self.headline_anchors(n, &h, (&plain, &shown));
+        let (heading, section_id) = self.headline_anchors(n, &h, (&plain, &shown, &slugged));
         let mut head = Element::new(Tag::heading(h.level()));
         if let Some(id) = heading {
             head = head.attr(Attr::Id, id);
