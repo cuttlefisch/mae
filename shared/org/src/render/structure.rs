@@ -216,6 +216,14 @@ impl Builder<'_> {
         if rows.is_empty() {
             return self.table_el(n, out);
         }
+        // Org's special rows (column groups, cookies, marks) and special
+        // column are instructions, not data: dropped before the header is
+        // found, as ox drops them.
+        let special_column = has_special_column(&rows);
+        let rows: Vec<SyntaxNode> = rows
+            .into_iter()
+            .filter(|r| !is_special_row(r, special_column))
+            .collect();
         let mut groups: Vec<Vec<&SyntaxNode>> = vec![Vec::new()];
         for r in &rows {
             if is_rule(r) {
@@ -240,7 +248,7 @@ impl Builder<'_> {
             let head = header && i == 0;
             let mut trs = Vec::new();
             for r in g {
-                let tr = self.table_row(r, head);
+                let tr = self.table_row(r, head, special_column);
                 push(&mut trs, tr.into());
             }
             let wrap = if head { Tag::Thead } else { Tag::Tbody };
@@ -249,9 +257,10 @@ impl Builder<'_> {
         push(out, Element::new(Tag::Table).with(children).into());
     }
 
-    fn table_row(&mut self, row: &SyntaxNode, head: bool) -> Element {
+    fn table_row(&mut self, row: &SyntaxNode, head: bool, special_column: bool) -> Element {
         let mut cells = Vec::new();
-        for c in row.children().filter(|c| c.kind() == TABLE_CELL) {
+        let skip = usize::from(special_column);
+        for c in row.children().filter(|c| c.kind() == TABLE_CELL).skip(skip) {
             let mut inner = Vec::new();
             for part in c.children_with_tokens() {
                 match part {
@@ -410,6 +419,83 @@ fn counter_value(counter: &str) -> Option<String> {
     (!n.is_empty() && n.len() <= 9 && n.bytes().all(|b| b.is_ascii_digit()))
         .then(|| n.trim_start_matches('0').to_string())
         .map(|v| if v.is_empty() { "0".to_string() } else { v })
+}
+
+/// A cell's contents when they are one plain string, trimmed (`Some("")`
+/// for an empty cell); `None` when they hold an object, which is never a
+/// mark or a cookie (Org compares the parsed contents with a string).
+fn cell_string(cell: &SyntaxNode) -> Option<String> {
+    let mut s = String::new();
+    for part in cell.children_with_tokens() {
+        match part {
+            NodeOrToken::Token(t) if t.kind() == MARKUP => {}
+            NodeOrToken::Token(t) => s.push_str(t.text()),
+            NodeOrToken::Node(_) => return None,
+        }
+    }
+    Some(s.trim_matches([' ', '\t']).to_string())
+}
+
+/// The cells of a row (no rule) as [`cell_string`]s.
+fn row_strings(row: &SyntaxNode) -> Vec<Option<String>> {
+    row.children()
+        .filter(|c| c.kind() == TABLE_CELL)
+        .map(|c| cell_string(&c))
+        .collect()
+}
+
+/// `org-export-table-has-special-column-p`: every non-rule row's first cell
+/// is empty or one of `/ # ! $ * _ ^`, and one is not empty.
+fn has_special_column(rows: &[SyntaxNode]) -> bool {
+    let mut marked = false;
+    for r in rows.iter().filter(|r| !is_rule(r)) {
+        match row_strings(r).into_iter().next() {
+            // No cell at all, or an empty one.
+            None => {}
+            Some(Some(s)) if s.is_empty() => {}
+            Some(Some(s)) if matches!(s.as_str(), "/" | "#" | "!" | "$" | "*" | "_" | "^") => {
+                marked = true
+            }
+            _ => return false,
+        }
+    }
+    marked
+}
+
+/// `org-export-table-row-is-special-p`: a column-group row (`/` first), a
+/// marked row (`^ _ $ !` first, in a table with a special column), or a
+/// row of only cookies (`<[lrc]?N?>`, any case) and empty cells.
+fn is_special_row(row: &SyntaxNode, special_column: bool) -> bool {
+    if is_rule(row) {
+        return false;
+    }
+    let cells = row_strings(row);
+    let first = cells.first().cloned().flatten();
+    match first.as_deref() {
+        Some("/") => return true,
+        Some("^" | "_" | "$" | "!") if special_column => return true,
+        _ => {}
+    }
+    let mut cookie = false;
+    for c in &cells {
+        match c.as_deref() {
+            Some("") => {}
+            Some(s) if is_cookie(s) => cookie = true,
+            _ => return false,
+        }
+    }
+    cookie
+}
+
+/// `\`<[lrc]?\([0-9]+\)?>\'`, case-insensitive as Emacs matches it.
+fn is_cookie(s: &str) -> bool {
+    let Some(inner) = s.strip_prefix('<').and_then(|r| r.strip_suffix('>')) else {
+        return false;
+    };
+    let digits = inner
+        .strip_prefix(['l', 'r', 'c', 'L', 'R', 'C'])
+        .unwrap_or(inner);
+    digits.bytes().all(|b| b.is_ascii_digit())
 }
 
 fn is_rule(row: &SyntaxNode) -> bool {
