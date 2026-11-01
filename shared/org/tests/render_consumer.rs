@@ -83,3 +83,32 @@ fn a_target_name_reaches_no_output() {
         "{h}"
     );
 }
+
+/// C (02): a reference whose definition sits only in a COMMENT subtree
+/// renders nothing (Emacs's export fails), with a footnote_undefined
+/// diagnostic at the reference.
+#[test]
+fn a_footnote_without_a_definition_renders_nothing_and_says_so() {
+    let doc = fixture("02-footnote-def-in-comment-subtree.org");
+    let d = parse(&doc, &ParseOptions::default());
+    let out = render(
+        &d,
+        &semantics(&d),
+        &RenderOptions::default(),
+        &Resolver::default(),
+    );
+    let h = mae_org::to_html(&out.body);
+    assert!(
+        h.contains("<p>A reference here.</p>") && !h.contains("fn:c"),
+        "{h}"
+    );
+    let at = doc.rfind("reference[fn:c]").unwrap() + "reference".len();
+    let want = mae_org::Span {
+        start: at as u32,
+        end: (at + 6) as u32,
+    };
+    assert_eq!(out.diagnostics, [RenderDiagnostic::FootnoteUndefined(want)]);
+    assert!(out
+        .to_json(TreeFormat::Html)
+        .contains("\"kind\":\"footnote_undefined\""));
+}

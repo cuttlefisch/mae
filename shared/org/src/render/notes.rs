@@ -3,8 +3,11 @@
 //! Which definitions exist is [`crate::Semantics::footnotes`] (the rendered
 //! definition elements; the first one of a label is its definition). A
 //! labelled reference with no such definition uses its own inline
-//! definition (`[fn:L:text]`) if it has one; with neither it is dangling and
-//! shows its source text. Definitions render in number order, and a
+//! definition (`[fn:L:text]`) if it has one; with neither it is undefined:
+//! it renders nothing, with a [`super::RenderDiagnostic::FootnoteUndefined`]
+//! (Org's export stops there, "Definition not found for footnote"; a draft
+//! with one stays publishable, and a consumer can refuse it). Definitions
+//! render in number order, and a
 //! reference inside one numbers a new note after it: a worklist, so a chain
 //! of N notes costs O(N).
 
@@ -119,11 +122,15 @@ impl Builder<'_> {
             (None, None) if inline => Some(self.notes.add(NoteSource::Inline(n.clone()))),
             (None, None) => None,
         };
-        // A dangling reference (no definition anywhere, none inline) is its
-        // source text, `[fn:LABEL]`, as Org exports it: a label holds no
-        // object, so nothing hidden can be spelled there.
+        // An undefined reference (no definition in the exported document,
+        // none inline: the definition may sit in a COMMENT or `:noexport:`
+        // subtree) shows nothing, not even its label.
         let Some(k) = number else {
-            return push(out, text(&raw(n)));
+            // The reference itself, its post-blank excluded.
+            let at = Span::of(n).start as usize;
+            let d = super::RenderDiagnostic::FootnoteUndefined(Span::new(at, at + raw(n).len()));
+            self.diagnostics.push(d);
+            return;
         };
         if let Some(l) = label {
             self.notes.numbers.insert(l, k);

@@ -69,7 +69,7 @@
 //! | src, example block, fixed width | `<pre class="org-src|org-example|org-fixed-width"><code>`, verbatim (Org's comma escapes removed; `: ` prefixes removed); src gets `language-L` for a valid language name. Never highlighted, never evaluated. A src block whose `:exports` is `none` or `results` is not rendered, nor are the existing results (`#+RESULTS:`) of one whose `:exports` is `none` or `code` |
 //! | caption (`#+CAPTION`) | a table's `<caption>`; around a paragraph or src/example block, `<figure class="org-figure">` with `<figcaption>` |
 //! | horizontal rule | `<hr>` |
-//! | footnote reference | `<sup class="org-footnote-ref"><a id="fnr-N" href="#fn-N">N</a></sup>`; definitions in `<section class="org-footnotes">` as `<div class="org-footnote" id="fn-N">`, numbered in order of first reference; a reference with no definition is its text |
+//! | footnote reference | `<sup class="org-footnote-ref"><a id="fnr-N" href="#fn-N">N</a></sup>`; definitions in `<section class="org-footnotes">` as `<div class="org-footnote" id="fn-N">`, numbered in order of first reference; a reference with no definition in the exported document renders nothing, with a [`RenderDiagnostic::FootnoteUndefined`] |
 //! | timestamp | `<time class="org-timestamp">` with its text |
 //! | entity | its UTF-8 (`org-entities`) |
 //! | subscript, superscript | `<sub>`, `<sup>` |
@@ -211,6 +211,12 @@ pub enum RenderDiagnostic {
     /// page, whose templates this render cannot know: the link goes to the
     /// node, without the fragment.
     FragmentMacro(Span),
+    /// A footnote reference whose label has no definition in the exported
+    /// document (its definition only in a COMMENT or `:noexport:` subtree,
+    /// or nowhere): it renders nothing. The label is the source text at
+    /// the span. Org's export stops there ("Definition not found for
+    /// footnote"); MAE renders the rest, and a consumer can refuse it.
+    FootnoteUndefined(Span),
 }
 
 /// Why a document's macros could not be expanded.
@@ -249,6 +255,7 @@ impl RenderDiagnostic {
             },
             RenderDiagnostic::MacroEnvironment(_) => "macro_environment",
             RenderDiagnostic::FragmentMacro(_) => "fragment_macro",
+            RenderDiagnostic::FootnoteUndefined(_) => "footnote_undefined",
         }
     }
 
@@ -258,7 +265,8 @@ impl RenderDiagnostic {
             | RenderDiagnostic::Unparsed(s)
             | RenderDiagnostic::MacroFailed(_, s)
             | RenderDiagnostic::MacroEnvironment(s)
-            | RenderDiagnostic::FragmentMacro(s) => *s,
+            | RenderDiagnostic::FragmentMacro(s)
+            | RenderDiagnostic::FootnoteUndefined(s) => *s,
         }
     }
 
@@ -270,6 +278,7 @@ impl RenderDiagnostic {
             RenderDiagnostic::MacroFailed(f, _) => RenderDiagnostic::MacroFailed(f, s),
             RenderDiagnostic::MacroEnvironment(_) => RenderDiagnostic::MacroEnvironment(s),
             RenderDiagnostic::FragmentMacro(_) => RenderDiagnostic::FragmentMacro(s),
+            RenderDiagnostic::FootnoteUndefined(_) => RenderDiagnostic::FootnoteUndefined(s),
         }
     }
 }

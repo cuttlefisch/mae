@@ -112,9 +112,11 @@ impl Builder<'_> {
     ///
     /// Where an object is shown as its source text (`raw`), that IS what is
     /// shown, never a fallback for something hidden (review B1): a cookie,
-    /// a LaTeX fragment, a macro and a citation are drawn as written
-    /// (registered: latex, macros-citations; a results macro Org's export
-    /// removes was dropped above); an entity is only parsed for a name in
+    /// a LaTeX fragment and a citation are drawn as written (registered:
+    /// latex, macros-citations), and a macro only in `replace_body`'s
+    /// comparison of a document whose macros fail (both sides as written);
+    /// an undefined footnote reference shows nothing (see `notes`); an
+    /// entity is only parsed for a name in
     /// `org-entities`, so its source is never reached; and no other object
     /// kind reaches the last arm (a table cell is drawn by its row, a
     /// citation reference inside its citation).

@@ -90,7 +90,12 @@ export interface Rendered<T> {
    *   `{{{input-file}}}` with nothing (informational);
    * - `fragment_macro`: a KB link's `#fragment` holds a macro and names a
    *   heading on another page, whose macros this render cannot know: the
-   *   link goes to the node without the fragment.
+   *   link goes to the node without the fragment;
+   * - `footnote_undefined`: a footnote reference whose label has no
+   *   definition in the exported document (only in a COMMENT or
+   *   `:noexport:` subtree, or nowhere); it renders nothing. The label is
+   *   the source text at the span. Org's export fails there; refuse such a
+   *   document if that matters to you.
    */
   diagnostics: { kind: string; start: number; end: number }[];
 }

@@ -150,7 +150,7 @@
           },
           {
             "type": "text",
-            "value": ".\nA dangling one[fn:none] and a nested one"
+            "value": ".\nA dangling one and a nested one"
           },
           {
             "children": [
@@ -612,6 +612,12 @@
     ],
     "type": "root"
   },
-  "diagnostics": [],
+  "diagnostics": [
+    {
+      "end": 167,
+      "kind": "footnote_undefined",
+      "start": 158
+    }
+  ],
   "nodes": []
 }
