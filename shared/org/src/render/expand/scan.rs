@@ -294,8 +294,12 @@ impl Engine {
         RenderDiagnostic::MacroFailed(f, self.map.to_source(Span::new(a, b)))
     }
 
+    /// Whether `p` is in a subtree an expansion made COMMENT. Those are
+    /// pushed in scan order and none holds another (a macro inside one is
+    /// not expanded), so they are sorted and disjoint.
     fn in_comment(&self, p: usize) -> bool {
-        self.commented.iter().any(|&(a, b)| p >= a && p < b)
+        let i = self.commented.partition_point(|&(a, _)| a <= p);
+        i > 0 && p < self.commented[i - 1].1
     }
 
     /// The buffer `buffer` becomes the parsed text; the scan goes on at

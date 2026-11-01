@@ -817,6 +817,19 @@ const RENDER_FAMILIES: &[Family] = &[
         1_000,
     ),
     (
+        // Review round 6 (major 4): each COMMENT an expansion made was
+        // searched for every later macro (8 MB took 85 s, never charged).
+        "render: N headlines made COMMENT",
+        |n| {
+            format!(
+                "#+MACRO: c COMMENT\nShown.\n{}",
+                "* {{{c}}} h\n{{{n}}}\n".repeat(n)
+            )
+        },
+        // Sized so the quadratic term shows: x34.5 at 29b5ef68, x5.0 after.
+        16_000,
+    ),
+    (
         // Review round 4 (B7): a template of thousands of words called
         // hundreds of times by another, called N times; fails within the
         // expansion budget, which is linear in the source.
