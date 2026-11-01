@@ -13,7 +13,7 @@ use super::tree::{push, text, Element, Node, Tag};
 use super::{RenderDiagnostic, RenderOptions, Resolver, RENDER_MAX_DEPTH};
 use crate::kind::SyntaxKind::{self, *};
 use crate::kind::{SyntaxElement, SyntaxNode};
-use crate::{Document, SemanticLink, Semantics, Span, Transclusion};
+use crate::{Document, LineEnding, SemanticLink, Semantics, Span, Transclusion};
 use rowan::NodeOrToken;
 use std::collections::{HashMap, HashSet};
 
@@ -67,6 +67,9 @@ pub(crate) struct Builder<'a> {
     pub notes: Notes,
     /// What Org's export removes for babel's `:exports` (see `babel`).
     pub babel: Babel,
+    /// The document's line-ending convention: where verbatim text splits
+    /// into lines.
+    pub eol: LineEnding,
     /// The offset of the text being rendered in the document: `Some(0)` for
     /// the document, a value's offset for a keyword or property value, and
     /// `None` for text with no place in it (an alias), whose links are
@@ -150,6 +153,7 @@ impl<'a> Builder<'a> {
             found: Table::default(),
             notes: Notes::new(doc, sem),
             babel: Babel::new(doc),
+            eol: doc.line_ending(),
             base: Some(0),
             scope: None,
             in_link: false,
@@ -422,4 +426,41 @@ pub(crate) fn trim_text(nodes: &mut Vec<Node>) {
         *t = t.trim_end_matches(blank).to_string();
     }
     nodes.retain(|n| !matches!(n, Node::Text(t) if t.is_empty()));
+}
+
+/// `s` as lines, each with its line ending, in the document's convention:
+/// `\n` (a CR is content), `\r\n` (a lone CR is content) or `\r` (the
+/// file has no LF). Verbatim text is split by this, never by `\n` alone,
+/// or a CR-only file would be one line.
+pub(crate) fn lines(s: &str, eol: LineEnding) -> Vec<&str> {
+    match eol {
+        LineEnding::Lf => s.split_inclusive('\n').collect(),
+        LineEnding::Cr => s.split_inclusive('\r').collect(),
+        LineEnding::CrLf => {
+            let mut out = Vec::new();
+            let mut rest = s;
+            while let Some(i) = rest.find("\r\n") {
+                out.push(&rest[..i + 2]);
+                rest = &rest[i + 2..];
+            }
+            if !rest.is_empty() {
+                out.push(rest);
+            }
+            out
+        }
+    }
+}
+
+/// `s` without its trailing line endings (in the document's convention).
+pub(crate) fn trim_eol(s: &str, eol: LineEnding) -> &str {
+    let end = match eol {
+        LineEnding::Lf => "\n",
+        LineEnding::CrLf => "\r\n",
+        LineEnding::Cr => "\r",
+    };
+    let mut s = s;
+    while let Some(r) = s.strip_suffix(end) {
+        s = r;
+    }
+    s
 }

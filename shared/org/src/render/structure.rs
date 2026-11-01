@@ -1,7 +1,7 @@
 //! Headlines, lists, tables and the verbatim blocks.
 
 use super::anchors::{encode_id, heading_anchor};
-use super::build::{trim_text, Builder, Mode};
+use super::build::{lines, trim_eol, trim_text, Builder, Mode};
 use super::tree::{push, text, Attr, Element, Node, Tag};
 use super::HeadlineIds;
 use crate::kind::SyntaxKind::*;
@@ -282,7 +282,7 @@ impl Builder<'_> {
     /// A table.el table: its text, verbatim.
     fn table_el(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
         let raw: String = tokens(n).map(|t| t.text().to_string()).collect();
-        let code = Element::new(Tag::Code).with(vec![text(raw.trim_end_matches(['\n', '\r']))]);
+        let code = Element::new(Tag::Code).with(vec![text(trim_eol(&raw, self.eol))]);
         let pre = Element::new(Tag::Pre)
             .class("org-table-el")
             .with(vec![code.into()]);
@@ -347,7 +347,7 @@ impl Builder<'_> {
             code = code.class(&format!("language-{l}"));
         }
         let raw = token_text(n, BLOCK_CONTENT).unwrap_or_default();
-        let code = code.with(vec![text(&unescape_code(&raw))]);
+        let code = code.with(vec![text(&unescape_code(&raw, self.eol))]);
         let pre = Element::new(Tag::Pre)
             .class("org-src")
             .with(vec![code.into()]);
@@ -357,22 +357,22 @@ impl Builder<'_> {
     /// An example block (or any lesser block shown verbatim).
     pub fn verbatim(&mut self, n: &SyntaxNode, class: &str, out: &mut Vec<Node>) {
         let raw = token_text(n, BLOCK_CONTENT).unwrap_or_default();
-        let code = Element::new(Tag::Code).with(vec![text(&unescape_code(&raw))]);
+        let code = Element::new(Tag::Code).with(vec![text(&unescape_code(&raw, self.eol))]);
         let pre = Element::new(Tag::Pre).class(class).with(vec![code.into()]);
         push(out, pre.into());
     }
 
     pub fn fixed_width(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
         let raw: String = tokens(n).map(|t| t.text().to_string()).collect();
-        let body: String = raw
-            .split_inclusive('\n')
+        let body: String = lines(&raw, self.eol)
+            .into_iter()
             .map(|l| {
                 let rest = l.trim_start_matches([' ', '\t']);
                 let rest = rest.strip_prefix(':').unwrap_or(rest);
                 rest.strip_prefix(' ').unwrap_or(rest).to_string()
             })
             .collect();
-        let code = Element::new(Tag::Code).with(vec![text(body.trim_end_matches(['\n', '\r']))]);
+        let code = Element::new(Tag::Code).with(vec![text(trim_eol(&body, self.eol))]);
         let pre = Element::new(Tag::Pre)
             .class("org-fixed-width")
             .with(vec![code.into()]);
@@ -385,7 +385,7 @@ impl Builder<'_> {
             .filter(|e| !matches!(e.kind(), AFFILIATED_KEYWORD | BLANK_LINE))
             .map(|e| e.to_string())
             .collect();
-        let code = Element::new(Tag::Code).with(vec![text(raw.trim_end_matches(['\n', '\r']))]);
+        let code = Element::new(Tag::Code).with(vec![text(trim_eol(&raw, self.eol))]);
         let pre = Element::new(Tag::Pre)
             .class("org-latex-environment")
             .with(vec![code.into()]);
@@ -515,9 +515,9 @@ fn verse_text(s: &str, at_bol: bool) -> String {
 
 /// `org-unescape-code-in-string`: a comma at the start of a line (after
 /// blanks) before `*`, `,*`, `#+` or `,#+` is removed.
-fn unescape_code(s: &str) -> String {
+fn unescape_code(s: &str, eol: crate::LineEnding) -> String {
     let mut out = String::with_capacity(s.len());
-    for line in s.split_inclusive('\n') {
+    for line in lines(s, eol) {
         let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
         let rest = &line[indent..];
         let escaped = rest.strip_prefix(',').is_some_and(|r| {
@@ -526,5 +526,5 @@ fn unescape_code(s: &str) -> String {
         out.push_str(&line[..indent]);
         out.push_str(if escaped { &rest[1..] } else { rest });
     }
-    out.trim_end_matches(['\n', '\r']).to_string()
+    trim_eol(&out, eol).to_string()
 }
