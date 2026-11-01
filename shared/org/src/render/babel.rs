@@ -1,6 +1,6 @@
 //! Babel's export decision, read and never run: which src blocks, inline
 //! src blocks and existing results Org's export removes, from each block's
-//! `:exports` header argument (`ob-exp`).
+//! or call's `:exports` header argument (`ob-exp`).
 //!
 //! `:exports` is resolved as `org-babel-get-src-block-info` resolves it,
 //! from in-file declarations only (ADR-112 D4), merged in this order, a
@@ -24,21 +24,33 @@
 //!   ever evaluated, so they are the results already in the text);
 //! - `both`: nothing is removed.
 //!
-//! A block's existing results are the element after it carrying an
-//! anonymous `#+RESULTS:` and, for a block with a `#+NAME:`, the first
-//! element carrying `#+RESULTS: NAME`; an inline block's are the
-//! `{{{results(…)}}}` macro after it. "Removed" includes everything
-//! attached to the element: its affiliated keywords (a `#+CAPTION:` and the
-//! targets and footnote references in it).
+//! A babel call (`#+CALL:`, `call_…()`) is never rendered itself, and its
+//! existing results follow its own `:exports`, merged as `ob-lob` merges a
+//! call's: Org's call default `results`, then the `header-args` properties
+//! at the call (`header-args:LANG` with the called block's language), the
+//! inside header `foo[:h]()` and the end header `foo() :h`. Org reads no
+//! `#+HEADER:` for a call, so neither does this ([`Babel::call_exports`]).
+//!
+//! A block's or call's existing results are the element after it carrying
+//! an anonymous `#+RESULTS:` and, for a named one, the first element
+//! carrying a results line naming it (`org-babel-find-named-result`'s
+//! regexp, which also reads `#+RESULTS: x: NAME` as NAME's); an inline
+//! block's or call's are the `{{{results(…)}}}` macro after it. "Removed"
+//! includes everything attached to the element: its affiliated keywords (a
+//! `#+CAPTION:` and the targets and footnote references in it).
 //!
 //! Deliberate differences, each erring towards hiding (listed in
 //! `conformance/render-divergences.toml`): header-argument names and
 //! `:exports` values are matched case-insensitively (`:exports NONE` hides;
 //! Org warns and exports the block as written); a word other than the four
-//! values is ignored rather than making the whole value unknown (`none foo`
-//! hides; Org exports as written); a value Org would evaluate (Lisp, or a
-//! number, on which Org's export fails) hides the code and the results; a
-//! named block's adjacent anonymous results are removed too; and blocks
+//! values beside one of them is ignored rather than making the whole value
+//! unknown (`none foo` hides; Org exports as written); a value holding none
+//! of the four (Lisp, which Org evaluates; a number, on which Org's export
+//! fails; an unknown word, which Org exports as written) hides the code and
+//! the results; a named block's adjacent anonymous results are removed too;
+//! an inline call's results follow its `:exports` (Org keeps them: its
+//! cleanup for a call looks for a `#+RESULTS:` line); a call whose block is
+//! not in the document hides its results (Org's export fails); and blocks
 //! under an archived headline follow their `:exports` (Org's babel pass
 //! skips them, so with `org-export-with-archived-trees` set to `t` it
 //! exports their code as written).
@@ -82,6 +94,9 @@ pub(crate) struct Babel {
     file_drawer: Option<PropertyDrawer>,
     /// (headline start, canonical property) → its inherited value.
     memo: RefCell<HashMap<(u32, String), Option<String>>>,
+    /// Named src blocks and calls, by `:name`: the first element with each
+    /// (`org-babel-lob--src-info`'s search).
+    defs: HashMap<String, SyntaxNode>,
 }
 
 fn key(n: &SyntaxNode) -> (u32, u32, SyntaxKind) {
@@ -128,31 +143,89 @@ impl Babel {
             global: global_properties(doc),
             file_drawer: doc.property_drawer(),
             memo: RefCell::new(HashMap::new()),
+            defs: HashMap::new(),
         };
-        let mut named: HashMap<String, SyntaxNode> = HashMap::new();
+        let mut named = NamedResults::default();
         let mut blocks = Vec::new();
         for n in root.descendants() {
-            for (k, v) in affiliated(&n) {
-                if k == "RESULTS" && !v.is_empty() {
-                    named.entry(crate::chars::fold(&v)).or_insert(n.clone());
-                }
+            named.add(&n);
+            if let Some(name) = definition_name(&n) {
+                babel.defs.entry(name).or_insert(n.clone());
             }
-            if n.kind() == SRC_BLOCK {
+            if matches!(n.kind(), SRC_BLOCK | BABEL_CALL) {
                 blocks.push(n);
             }
         }
         for b in blocks {
-            let e = babel.block_exports(&b);
-            if !e.shows_code() {
+            let e = match b.kind() {
+                SRC_BLOCK => babel.block_exports(&b),
+                _ => babel.call_exports(&b),
+            };
+            // A call's own line is never rendered; its results are what
+            // `:exports` decides (`org-babel-exp-do-export` with `lob`).
+            if b.kind() == SRC_BLOCK && !e.shows_code() {
                 babel.hidden.insert(key(&b));
             }
             if !e.keeps_results() {
-                for r in results_of(&b, &named) {
+                for r in results_of(&b, &mut named) {
                     babel.hidden.insert(key(&r));
                 }
             }
         }
         babel
+    }
+
+    /// `:exports` of a `#+CALL:` line, merged as `org-babel-lob-get-info`
+    /// merges a call's parameters (`ob-lob`): the called block's (whose
+    /// `:exports` is always replaced by the next), Org's call default
+    /// `results` (`org-babel-default-lob-header-args`), the `header-args`
+    /// and `header-args:LANG` properties at the call (LANG the called
+    /// block's language), the inside header `foo[:h]()`, the end header
+    /// `foo() :h`. NOT `#+HEADER:`, which Org does not read for a call. A
+    /// call whose block is not in the document (an unknown or remote name:
+    /// Org's export fails, "Unknown Babel reference") hides its results.
+    fn call_exports(&self, n: &SyntaxNode) -> Exports {
+        let call = block_call(&token(n, VALUE).unwrap_or_default());
+        let headline = n.ancestors().find(|a| a.kind() == HEADLINE);
+        self.lob_exports(&call, headline)
+    }
+
+    /// `:exports` of an inline babel call at `at` (see [`Babel::call_exports`];
+    /// `call_foo[:h](args)[:h]`).
+    pub fn inline_call_exports(&self, n: &SyntaxNode, at: Option<u32>) -> Exports {
+        let call = inline_call(n);
+        let headline = at.and_then(|p| self.headline_at(p));
+        self.lob_exports(&call, headline)
+    }
+
+    fn lob_exports(&self, call: &Call, headline: Option<SyntaxNode>) -> Exports {
+        let Some(lang) = self.called_language(&call.name, 0) else {
+            return Exports::Opaque;
+        };
+        let headers = [call.inside.clone(), call.end.clone()];
+        self.resolve(Exports::Results, headline, &lang, "", &headers)
+    }
+
+    /// The language of the block `name` calls (through calls of calls), as
+    /// `org-babel-lob--src-info` finds it; `None` when Org's lookup fails:
+    /// no such element, an element that is not a src block or call, a
+    /// remote `FILE:NAME` reference, or a cycle.
+    fn called_language(&self, name: &str, depth: usize) -> Option<String> {
+        let remote = name
+            .split_once(':')
+            .is_some_and(|(f, n)| !f.is_empty() && !n.is_empty());
+        if remote || depth > 32 {
+            return None;
+        }
+        let def = self.defs.get(name)?;
+        match def.kind() {
+            SRC_BLOCK => Some(src_line(&begin_line(def)).0),
+            BABEL_CALL => {
+                let call = block_call(&token(def, VALUE).unwrap_or_default());
+                self.called_language(&call.name, depth + 1)
+            }
+            _ => None,
+        }
     }
 
     /// Whether Org's export removes element `n`.
@@ -162,12 +235,7 @@ impl Babel {
 
     /// `:exports` of a src block.
     fn block_exports(&self, n: &SyntaxNode) -> Exports {
-        let line = n
-            .children()
-            .find(|c| c.kind() == BLOCK_BEGIN)
-            .map(|l| l.to_string())
-            .unwrap_or_default();
-        let (lang, params) = src_line(&line);
+        let (lang, params) = src_line(&begin_line(n));
         let headers: Vec<String> = affiliated(n)
             .filter(|(k, _)| k == "HEADER")
             .map(|(_, v)| v)
@@ -325,31 +393,211 @@ fn global_properties(doc: &Document) -> HashMap<String, String> {
     out
 }
 
-/// The results elements of src block `n`: the next element when it carries
-/// an anonymous `#+RESULTS:`, and the named results of a named block.
-fn results_of(n: &SyntaxNode, named: &HashMap<String, SyntaxNode>) -> Vec<SyntaxNode> {
+/// A block's opening line.
+fn begin_line(n: &SyntaxNode) -> String {
+    n.children()
+        .find(|c| c.kind() == BLOCK_BEGIN)
+        .map(|l| l.to_string())
+        .unwrap_or_default()
+}
+
+/// An element's `:name`: its last `#+NAME:` (or alias) value, if any.
+fn element_name(n: &SyntaxNode) -> Option<String> {
+    affiliated(n)
+        .filter(|(k, _)| k == "NAME")
+        .map(|(_, v)| v)
+        .last()
+        .filter(|v| !v.is_empty())
+}
+
+/// The `:name` under which `org-babel-lob--src-info` can find element `n`:
+/// its search is for a `#+NAME:` or `#+TBLNAME:` line naming it (case
+/// ignored), then the element's `:name` must equal the reference exactly.
+fn definition_name(n: &SyntaxNode) -> Option<String> {
+    let name = element_name(n)?;
+    let folded = crate::chars::fold(&name);
+    let searched = n
+        .children()
+        .filter(|c| c.kind() == AFFILIATED_KEYWORD)
+        .any(|a| {
+            let k = token(&a, KEY).unwrap_or_default();
+            let v = token(&a, VALUE).unwrap_or_default();
+            (k.eq_ignore_ascii_case("NAME") || k.eq_ignore_ascii_case("TBLNAME"))
+                && crate::chars::fold(v.trim_matches([' ', '\t'])) == folded
+        });
+    searched.then_some(name)
+}
+
+/// The `#+RESULTS` lines of a document, for `org-babel-find-named-result`:
+/// a results line names `NAME` when it matches
+/// `^[ \t]*#\+RESULTS.*?:[ \t]*NAME[ \t]*$`, case ignored. The `.*?:`
+/// lets anything precede the colon before the name: `#+RESULTS[hash]: nm`,
+/// and also `#+RESULTS: x: nm`, are results of `nm`.
+#[derive(Default)]
+struct NamedResults {
+    /// Each results line's text after `#+RESULTS`, and its element, in
+    /// document order.
+    lines: Vec<(String, SyntaxNode)>,
+    /// Per number K of colons in a name: folded name → the first element
+    /// whose line names it (built on first use).
+    by_colons: HashMap<usize, HashMap<String, SyntaxNode>>,
+}
+
+impl NamedResults {
+    fn add(&mut self, n: &SyntaxNode) {
+        for a in n.children().filter(|c| c.kind() == AFFILIATED_KEYWORD) {
+            let mut toks = a
+                .children_with_tokens()
+                .filter_map(SyntaxElement::into_token)
+                .skip_while(|t| t.kind() != KEY);
+            let Some(k) = toks.next() else { continue };
+            if !k.text().eq_ignore_ascii_case("RESULTS") {
+                continue;
+            }
+            let rest: String = toks
+                .take_while(|t| t.kind() != NEWLINE)
+                .map(|t| t.text().to_string())
+                .collect();
+            self.lines.push((rest, n.clone()));
+        }
+    }
+
+    /// The first element whose results line names `name`.
+    fn get(&mut self, name: &str) -> Option<SyntaxNode> {
+        let k = name.matches(':').count();
+        let lines = &self.lines;
+        let map = self.by_colons.entry(k).or_insert_with(|| {
+            let mut m = HashMap::new();
+            for (rest, n) in lines {
+                // The name holds K colons, so the colon before it is the
+                // (K+1)-th from the end.
+                let Some((at, _)) = rest.match_indices(':').rev().nth(k) else {
+                    continue;
+                };
+                let tail = rest[at + 1..].trim_matches([' ', '\t']);
+                m.entry(crate::chars::fold(tail)).or_insert(n.clone());
+            }
+            m
+        });
+        map.get(&crate::chars::fold(name)).cloned()
+    }
+}
+
+/// The results elements of src block or call `n`: the next element when
+/// it carries an anonymous `#+RESULTS:`, and the named results of a named
+/// one.
+fn results_of(n: &SyntaxNode, named: &mut NamedResults) -> Vec<SyntaxNode> {
     let mut out = Vec::new();
     if let Some(next) = n.next_sibling() {
         if affiliated(&next).any(|(k, v)| k == "RESULTS" && v.is_empty()) {
             out.push(next);
         }
     }
-    let name = affiliated(n)
-        .filter(|(k, _)| k == "NAME")
-        .map(|(_, v)| v)
-        .last()
-        .filter(|v| !v.is_empty());
-    if let Some(r) = name.and_then(|v| named.get(&crate::chars::fold(&v))) {
-        if !out.contains(r) {
-            out.push(r.clone());
+    if let Some(r) = element_name(n).and_then(|v| named.get(&v)) {
+        if !out.contains(&r) {
+            out.push(r);
         }
     }
     out
 }
 
-/// Whether the inline src block's results macro `n` (a `MACRO`) is removed:
-/// it follows an inline src block (only blanks between) whose `:exports`
-/// does not keep results.
+/// What a babel call names and its header arguments.
+struct Call {
+    /// `:call`, as written.
+    name: String,
+    inside: String,
+    end: String,
+}
+
+/// A `#+CALL:` line's value as `org-element-babel-call-parser` splits it:
+/// the call up to the first `[`, `]`, `(` or `)`; an inside header in
+/// paired `[…]`; arguments in paired `(…)`; the rest, trimmed, the end
+/// header.
+fn block_call(value: &str) -> Call {
+    let v = value.trim_matches([' ', '\t']);
+    let stop = v.find(['[', ']', '(', ')']).unwrap_or(v.len());
+    let name = v[..stop].to_string();
+    let mut rest = &v[stop..];
+    let mut inside = String::new();
+    if let Some((inner, after)) = paired(rest, '[', ']') {
+        inside = inner.to_string();
+        rest = after;
+    }
+    if let Some((_, after)) = paired(rest, '(', ')') {
+        rest = after;
+    }
+    Call {
+        name,
+        inside,
+        end: rest.trim().to_string(),
+    }
+}
+
+/// `org-element--parse-paired-brackets`: when `s` starts with `open`, the
+/// contents up to the matching `close` (nested pairs counted, double-quoted
+/// strings and backslash escapes skipped, as `scan-lists` does with Org's
+/// pair tables) and the text after it.
+fn paired(s: &str, open: char, close: char) -> Option<(&str, &str)> {
+    if !s.starts_with(open) {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut chars = s.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            '"' => {
+                while let Some((_, d)) = chars.next() {
+                    match d {
+                        '\\' => {
+                            chars.next();
+                        }
+                        '"' => break,
+                        _ => {}
+                    }
+                }
+            }
+            c if c == open => depth += 1,
+            c if c == close => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((&s[open.len_utf8()..i], &s[i + close.len_utf8()..]));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// An inline babel call's parts, from its tokens: the inside header is the
+/// `PARAMETERS` before the arguments' `(`, the end header the one after.
+fn inline_call(n: &SyntaxNode) -> Call {
+    let mut call = Call {
+        name: token(n, NAME).unwrap_or_default(),
+        inside: String::new(),
+        end: String::new(),
+    };
+    let mut after_args = false;
+    for t in n
+        .children_with_tokens()
+        .filter_map(SyntaxElement::into_token)
+    {
+        match t.kind() {
+            MARKUP if t.text() == "(" => after_args = true,
+            PARAMETERS if after_args => call.end = t.text().to_string(),
+            PARAMETERS => call.inside = t.text().to_string(),
+            _ => {}
+        }
+    }
+    call
+}
+
+/// The inline src block or inline babel call whose results macro `n` (a
+/// `MACRO` named `results`) is: the object right before it, only blanks
+/// between (`org-babel-where-is-src-block-result`).
 pub(crate) fn results_macro_owner(n: &SyntaxNode) -> Option<SyntaxNode> {
     let name = token(n, NAME)?;
     if !name.eq_ignore_ascii_case("results") {
@@ -365,7 +613,11 @@ pub(crate) fn results_macro_owner(n: &SyntaxNode) -> Option<SyntaxNode> {
             {
                 prev = t.prev_sibling_or_token();
             }
-            rowan::NodeOrToken::Node(s) if s.kind() == INLINE_SRC_BLOCK => return Some(s),
+            rowan::NodeOrToken::Node(s)
+                if matches!(s.kind(), INLINE_SRC_BLOCK | INLINE_BABEL_CALL) =>
+            {
+                return Some(s)
+            }
             _ => return None,
         }
     }
@@ -516,38 +768,38 @@ fn balanced_split(s: &str) -> Vec<String> {
 
 /// Merges one `:exports` value into `out`: each of `code`, `results`,
 /// `both`, `none` replaces the previous one (`org-babel-merge-params`'s
-/// exclusive group), any other word is ignored, and a value Org would
-/// evaluate is [`Exports::Opaque`].
+/// exclusive group), the last one in a value winning, and other words
+/// beside one are ignored. A value holding none of the four is
+/// [`Exports::Opaque`]: Org evaluates Lisp, fails the export on a number
+/// (`org-babel-read` makes `1e3`, `+1` or `.5` one, and the merge then
+/// splits it as a string), and exports the block as written for an unknown
+/// word. Which of those a value is need not be decided: hiding is the one
+/// answer that publishes nothing any of them would not.
 fn merge_exports(out: &mut Exports, value: Option<&str>) {
     let Some(v) = value.map(str::trim).filter(|v| !v.is_empty()) else {
         return;
     };
-    if is_evaluated(v) {
+    if is_lisp(v) {
         *out = Exports::Opaque;
         return;
     }
-    let v = unquote(v);
-    for w in v.split_whitespace() {
-        *out = match w.to_ascii_lowercase().as_str() {
-            "code" => Exports::Code,
-            "results" => Exports::Results,
-            "both" => Exports::Both,
-            "none" => Exports::None,
-            _ => continue,
+    let mut known = None;
+    for w in unquote(v).split_whitespace() {
+        known = match w.to_ascii_lowercase().as_str() {
+            "code" => Some(Exports::Code),
+            "results" => Some(Exports::Results),
+            "both" => Some(Exports::Both),
+            "none" => Some(Exports::None),
+            _ => known,
         };
     }
+    *out = known.unwrap_or(Exports::Opaque);
 }
 
-/// `org-babel-read` would not return `v` as a string: Lisp (`(`, `'`, `` ` ``,
-/// `[`, `*this*`), which it evaluates, or a number, on which the merge fails.
-fn is_evaluated(v: &str) -> bool {
-    let lisp = v.starts_with(['(', '\'', '`', '[']) || v == "*this*";
-    let number = {
-        let d = v.strip_prefix('-').unwrap_or(v);
-        let (a, b) = d.split_once('.').unwrap_or((d, ""));
-        a.bytes().all(|c| c.is_ascii_digit()) && b.bytes().all(|c| c.is_ascii_digit())
-    };
-    lisp || number
+/// `org-babel-read` evaluates `v`: Lisp (`(`, `'`, `` ` ``, `[`, `*this*`).
+/// (A quoted string holding a word, `"(code)"`, is still Lisp to it.)
+fn is_lisp(v: &str) -> bool {
+    v.starts_with(['(', '\'', '`', '[']) || v == "*this*"
 }
 
 /// A value that is one Lisp string literal, read; otherwise `v`.
@@ -624,6 +876,11 @@ mod tests {
         assert_eq!(merged(&["(if x \"code\" \"none\")"]), Exports::Opaque);
         assert_eq!(merged(&["1"]), Exports::Opaque);
         assert_eq!(merged(&["(x)", "both"]), Exports::Both);
-        assert_eq!(merged(&["foo"]), Exports::Code);
+        // No known word: whatever Org would make of it, hidden.
+        for v in ["foo", "1e3", "+1", ".5", "1.", "-2", "1 2", "nil", "\"\""] {
+            assert_eq!(merged(&[v]), Exports::Opaque, "{v}");
+        }
+        assert_eq!(merged(&["1 code"]), Exports::Code);
+        assert_eq!(merged(&["foo", "both"]), Exports::Both);
     }
 }

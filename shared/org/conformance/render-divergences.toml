@@ -117,18 +117,34 @@ test = "exports_decide_what_is_rendered_as_emacs_decides"
 
 [[divergence]]
 id = "exports-unknown-word"
-what = "an :exports value with an extra word (:exports none foo)"
+what = "an :exports value with an unknown word beside a known one (:exports none foo)"
 org = "the whole value is unknown: exported as written"
-mae = "unknown words are ignored; none, code, results or both decides"
-reason = "Privacy first: a typo next to `none` must not publish the code."
+mae = "the unknown words are ignored; the last of none, code, results or both decides"
+reason = "Privacy first: a typo next to `none` must not publish the code. A value with NO known word is exports-no-known-word."
 test = "exports_decide_what_is_rendered_as_emacs_decides"
 
 [[divergence]]
-id = "exports-evaluated"
-what = "an :exports value Org would evaluate (Lisp, or a number)"
-org = "evaluates the Lisp (a number makes the export fail)"
+id = "exports-no-known-word"
+what = "an :exports value holding none of code, results, both, none: Lisp, a number (1e3, +1, .5, 1), an unknown word (foo)"
+org = "evaluates the Lisp; fails the export on a number (org-babel-read makes it one, and the merge then splits it as a string: \"Wrong type argument: stringp\"); exports the block as written for an unknown word"
 mae = "hides the code and the results"
-reason = "Nothing is evaluated (D1, D4); hiding is the only answer that cannot publish what the value would have hidden."
+reason = "Nothing is evaluated (D1, D4), and which of the three a value is need not be decided: hiding is the only answer that cannot publish what any of them would have hidden."
+test = "exports_decide_what_is_rendered_as_emacs_decides"
+
+[[divergence]]
+id = "inline-call-results"
+what = "the {{{results(…)}}} of an inline babel call whose :exports is none or code (call_f[:exports none]())"
+org = "kept: the cleanup org-babel-exp-do-export runs for a call (type lob) looks for a #+RESULTS: line, not an inline results macro"
+mae = "removed, as an inline src block's are"
+reason = "Privacy first: the author's :exports none is plain; Org keeping them is an accident of its cleanup path."
+test = "exports_decide_what_is_rendered_as_emacs_decides"
+
+[[divergence]]
+id = "call-unknown-reference"
+what = "a babel call naming no src block or call in the document (#+CALL: nosuch(), or a remote file.org:name)"
+org = "the export fails: \"Unknown Babel reference\" (a remote file is read from disk)"
+mae = "the call's results are hidden; the rest renders"
+reason = "No I/O (D1); without the called block Org's merge cannot be reproduced, and hiding cannot publish what Org would not."
 test = "exports_decide_what_is_rendered_as_emacs_decides"
 
 [[divergence]]

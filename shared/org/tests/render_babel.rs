@@ -122,6 +122,85 @@ const CASES: &[Case] = &[
         hidden: &["WHICH17b"],
         shown: &["WHICH17"],
     },
+    // Babel calls (review B2): `org-babel-exp-do-export` with `lob`
+    // removes the results of a call whose `:exports` is `none` or `code`.
+    // Merged as `org-babel-lob-get-info` merges: the call default
+    // `results`, the properties at the call, the inside header, the end
+    // header. Org reads no `#+HEADER:` for a call.
+    Case {
+        name: "#+CALL: foo() :exports none removes the call's results",
+        doc: "#+NAME: foo\n#+begin_src sh :exports code\necho SHOWNBLK\n#+end_src\n\n#+CALL: foo() :exports none\n\n#+RESULTS:\n: CALLRES01\n\nafter\n",
+        hidden: &["CALLRES01"],
+        shown: &["SHOWNBLK", "after"],
+    },
+    Case {
+        name: "an inside header foo[:exports none]()",
+        doc: "#+NAME: foo\n#+begin_src sh :exports code\necho SHOWNBLK\n#+end_src\n\n#+CALL: foo[:exports none]()\n\n#+RESULTS:\n: CALLRES02\n\nafter\n",
+        hidden: &["CALLRES02"],
+        shown: &["SHOWNBLK", "after"],
+    },
+    Case {
+        name: "#+CALL: foo() :exports code removes the results",
+        doc: "#+NAME: foo\n#+begin_src sh :exports code\necho SHOWNBLK\n#+end_src\n\n#+CALL: foo() :exports code\n\n#+RESULTS:\n: CALLRES03\n\nafter\n",
+        hidden: &["CALLRES03"],
+        shown: &["SHOWNBLK", "after"],
+    },
+    Case {
+        name: "a file-level #+PROPERTY header-args applies to a plain call",
+        doc: "#+PROPERTY: header-args :exports none\n#+NAME: foo\n#+begin_src sh :exports code\necho SHOWNBLK\n#+end_src\n\n#+CALL: foo()\n\n#+RESULTS:\n: CALLRES04\n\nafter\n",
+        hidden: &["CALLRES04"],
+        shown: &["SHOWNBLK", "after"],
+    },
+    Case {
+        name: "an inherited header-args applies to a call",
+        doc: "* H\n:PROPERTIES:\n:header-args: :exports code\n:END:\n#+NAME: foo\n#+begin_src sh :exports code\necho SHOWNBLK\n#+end_src\n\n#+CALL: foo()\n\n#+RESULTS:\n: CALLRES05\n\nafter\n",
+        hidden: &["CALLRES05"],
+        shown: &["SHOWNBLK", "after"],
+    },
+    Case {
+        name: "a named call's results are removed wherever they are",
+        doc: "#+NAME: foo\n#+begin_src sh :exports code\necho SHOWNBLK\n#+end_src\n\n#+NAME: r\n#+CALL: foo() :exports none\n\nlater\n\n#+RESULTS: r\n: CALLRES06\n\nafter\n",
+        hidden: &["CALLRES06"],
+        shown: &["SHOWNBLK", "later", "after"],
+    },
+    Case {
+        name: "the call default results replaces the called block's :exports",
+        doc: "#+NAME: foo\n#+begin_src sh :exports none\necho HIDDENBLK\n#+end_src\n\n#+CALL: foo()\n\n#+RESULTS:\n: CALLRES07\n\nafter\n",
+        hidden: &["HIDDENBLK"],
+        shown: &["CALLRES07", "after"],
+    },
+    Case {
+        name: "#+HEADER is not read for a call",
+        doc: "#+NAME: foo\n#+begin_src sh :exports code\necho SHOWNBLK\n#+end_src\n\n#+HEADER: :exports none\n#+CALL: foo()\n\n#+RESULTS:\n: CALLRES08\n\nafter\n",
+        hidden: &[],
+        shown: &["CALLRES08", "SHOWNBLK", "after"],
+    },
+    Case {
+        name: "header-args:LANG at a call is the called block's language",
+        doc: "#+PROPERTY: header-args:sh :exports none\n#+NAME: foo\n#+begin_src sh :exports code\necho SHOWNBLK\n#+end_src\n\n#+NAME: py\n#+begin_src python :exports code\nSHOWNPY\n#+end_src\n\n#+CALL: foo()\n\n#+RESULTS:\n: CALLRES09sh\n\n#+CALL: py()\n\n#+RESULTS:\n: CALLRES09py\n\nafter\n",
+        hidden: &["CALLRES09sh"],
+        shown: &["CALLRES09py", "SHOWNBLK", "SHOWNPY"],
+    },
+    Case {
+        name: "the end header overrides the inside header",
+        doc: "#+NAME: foo\n#+begin_src sh :exports code\necho SHOWNBLK\n#+end_src\n\n#+CALL: foo[:exports none]() :exports both\n\n#+RESULTS:\n: CALLRES10\n\nafter\n",
+        hidden: &[],
+        shown: &["CALLRES10", "SHOWNBLK"],
+    },
+    Case {
+        name: "a call of a call",
+        doc: "#+NAME: c1\n#+CALL: foo()\n\n#+NAME: foo\n#+begin_src sh :exports code\necho SHOWNBLK\n#+end_src\n\n#+CALL: c1() :exports none\n\n#+RESULTS:\n: CALLRES16\n\nafter\n",
+        hidden: &["CALLRES16"],
+        shown: &["SHOWNBLK", "after"],
+    },
+    // `org-babel-find-named-result`'s regexp, `#+RESULTS.*?:[ \t]*NAME`, case
+    // ignored: anything before the colon, a hash included.
+    Case {
+        name: "#+RESULTS: x: NAME and #+RESULTS[hash]: NAME are NAME's results",
+        doc: "#+NAME: nm\n#+begin_src sh :exports code\nSHOWN14\n#+end_src\n\npara\n\n#+RESULTS: x: nm\n: RES14\n\n#+NAME: nm2\n#+begin_src sh :exports code\nSHOWN17\n#+end_src\n\npara\n\n#+RESULTS[a1b2]: NM2\n: RES17\n\nafter\n",
+        hidden: &["RES14", "RES17"],
+        shown: &["SHOWN14", "SHOWN17", "after"],
+    },
     // Deliberate divergences: Emacs SHOWS these (it warns "Unknown value of
     // src block parameter :exports" and exports the block as written).
     Case {
@@ -135,6 +214,23 @@ const CASES: &[Case] = &[
         doc: "#+begin_src sh :exports (if t \"code\" \"none\")\nLISP\n#+end_src\n\n#+RESULTS:\n: LISPRES\n",
         hidden: &["LISP", "LISPRES"],
         shown: &[],
+    },    Case {
+        name: "DIVERGENCE: a value with no known word (a number, an unknown word) hides code and results",
+        doc: "#+begin_src sh :exports 1e3\nNUM13\n#+end_src\n\n#+RESULTS:\n: NUM13R\n\n#+begin_src sh :exports +1\nNUM13b\n#+end_src\n\n#+begin_src sh :exports .5\nNUM13c\n#+end_src\n\n#+begin_src sh :exports foo\nUNK15\n#+end_src\n\n#+RESULTS:\n: UNK15R\n\nafter\n",
+        hidden: &["NUM13", "NUM13R", "NUM13b", "NUM13c", "UNK15", "UNK15R"],
+        shown: &["after"],
+    },
+    Case {
+        name: "DIVERGENCE: an inline call's results follow its :exports (Org keeps them)",
+        doc: "#+NAME: foo\n#+begin_src sh :exports code\necho SHOWNBLK\n#+end_src\n\nText call_foo[:exports none]() {{{results(=ICALL11=)}}} and call_foo() {{{results(=ICALL11d=)}}} end.\n",
+        hidden: &["ICALL11="],
+        shown: &["ICALL11d", "SHOWNBLK"],
+    },
+    Case {
+        name: "DIVERGENCE: a call of no block in the document hides its results (Org's export fails)",
+        doc: "#+CALL: nosuch() :exports both\n\n#+RESULTS:\n: CALLRES12\n\n#+CALL: file.org:fn() :exports both\n\n#+RESULTS:\n: CALLRES12b\n\nafter\n",
+        hidden: &["CALLRES12"],
+        shown: &["after"],
     },
 ];
 

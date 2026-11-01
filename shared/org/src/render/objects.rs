@@ -80,15 +80,19 @@ impl Builder<'_> {
 
     /// Whether Org's export removes object `n` for babel's `:exports`: an
     /// inline src block that does not export its code, or the results macro
-    /// of one that does not keep its results.
+    /// of one, or of an inline babel call, that does not keep its results
+    /// (Org keeps an inline call's: a registered divergence,
+    /// `inline-call-results`).
     pub fn babel_hides_object(&self, n: &SyntaxNode) -> bool {
         match n.kind() {
             INLINE_SRC_BLOCK => !self.babel.inline_exports(n, self.position(n)).shows_code(),
-            MACRO => super::babel::results_macro_owner(n).is_some_and(|src| {
-                !self
-                    .babel
-                    .inline_exports(&src, self.position(&src))
-                    .keeps_results()
+            MACRO => super::babel::results_macro_owner(n).is_some_and(|owner| {
+                let at = self.position(&owner);
+                let e = match owner.kind() {
+                    INLINE_SRC_BLOCK => self.babel.inline_exports(&owner, at),
+                    _ => self.babel.inline_call_exports(&owner, at),
+                };
+                !e.keeps_results()
             }),
             _ => false,
         }

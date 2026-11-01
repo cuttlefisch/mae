@@ -1,5 +1,5 @@
 //! Hidden inline constructs stay hidden in every container (ADR-112 D3,
-//! review B1): a marker placed inside every inline construct the export
+//! review B1/B2): a marker placed inside every inline construct the export
 //! removes (an inline src block its `:exports` hides, the results macro of
 //! one, an inline babel call and its hidden results, an export snippet) and
 //! that construct placed in every container that holds objects (link
@@ -33,8 +33,20 @@ const HIDDEN: &[(&str, &str)] = &[
         "results of an inline src with :exports code",
         "src_sh[:exports code]{shown} {{{results(={M}=)}}}",
     ),
+    (
+        "inline src, :exports a number",
+        "src_sh[:exports 1e3]{echo {M}} {{{results(={M}=)}}}",
+    ),
     ("inline babel call arguments", "call_fn({M})"),
     ("inline babel call name", "call_{M}()"),
+    (
+        "results of an inline call with :exports none",
+        "call_fn[:exports none]() {{{results(={M}=)}}}",
+    ),
+    (
+        "results of an inline call with :exports code",
+        "call_fn()[:exports code] {{{results(={M}=)}}}",
+    ),
     ("an HTML export snippet", "@@html:<b>{M}</b>@@"),
     ("a LaTeX export snippet", "@@latex:\\textbf{{M}}@@"),
 ];
