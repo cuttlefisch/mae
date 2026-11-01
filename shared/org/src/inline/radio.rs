@@ -126,6 +126,9 @@ struct OutOfWork;
 type Work<T> = Result<T, OutOfWork>;
 
 pub(crate) struct Radio {
+    /// The targets' values as written, in regexp order (the document's
+    /// radio targets, [`crate::Document::radio_targets`]).
+    values: Vec<String>,
     targets: Vec<Target>,
     /// Leading stretches of mixed targets (each with the char after it):
     /// checked as targets of their own, ids `targets.len() + i`.
@@ -443,6 +446,7 @@ impl Radio {
             };
         }
         Radio {
+            values: values.iter().map(|v| v.to_string()).collect(),
             targets,
             leads,
             part,
@@ -459,6 +463,11 @@ impl Radio {
             memo: RefCell::new(Memo::new(cx.src.len())),
             answer: Cell::new(None),
         }
+    }
+
+    /// The targets' values, in regexp order.
+    pub fn values(&self) -> &[String] {
+        &self.values
     }
 
     /// Where radio links stop, if the work budget ran out: no radio link

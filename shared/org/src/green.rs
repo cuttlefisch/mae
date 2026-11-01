@@ -9,17 +9,31 @@ use crate::span::ContentsTable;
 use crate::tokens::Event;
 use rowan::{GreenNode, GreenNodeBuilder, Language};
 
+/// The tree of `events`, and the radio targets it was parsed with (in
+/// regexp order). `given`: the targets to use (a fragment's file's), or
+/// `None` to find them in this text.
 pub(crate) fn to_green(
     cx: &InlineCx,
     events: &[Event],
     todo: &TodoKeywords,
     contents: &mut ContentsTable,
-) -> GreenNode {
+    given: Option<&[String]>,
+) -> (GreenNode, Vec<String>) {
     // Radio targets are found with no radio links active, as Org finds them
     // when the buffer is set up; then every container is parsed with them.
-    let radio = Radio::find(cx, |cx, table| {
-        expand(cx, events, todo, table, &mut |_| {});
-    });
+    let radio = match given {
+        Some([]) => None,
+        Some(values) => {
+            let values: Vec<&str> = values.iter().map(String::as_str).collect();
+            Some(Radio::build(cx, &values))
+        }
+        None => Radio::find(cx, |cx, table| {
+            expand(cx, events, todo, table, &mut |_| {});
+        }),
+    };
+    let targets = radio
+        .as_ref()
+        .map_or_else(Vec::new, |r| r.values().to_vec());
     let cx = &InlineCx {
         radio: radio.as_ref(),
         ..*cx
@@ -36,7 +50,7 @@ pub(crate) fn to_green(
             text.len(),
         ));
     }
-    b.finish()
+    (b.finish(), targets)
 }
 
 /// The events with every headline line cut and every object container

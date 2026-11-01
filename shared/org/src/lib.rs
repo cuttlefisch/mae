@@ -130,17 +130,27 @@ pub struct Document {
     todo_sequences: Vec<TodoSequence>,
     line_ending: LineEnding,
     contents: span::ContentsTable,
+    radio_targets: Vec<String>,
 }
 
 /// Parses `text`. Total: any input gives a document whose tree prints back
 /// to `text`, except inputs over `u32::MAX` bytes, which give an empty
 /// document with an [`DiagnosticKind::InputTooLarge`] diagnostic.
 pub fn parse(text: &str, options: &ParseOptions) -> Document {
-    parse_with(text::Source::new(text), options, builder::Start::Document)
+    parse_with(
+        text::Source::new(text),
+        options,
+        builder::Start::Document,
+        None,
+    )
 }
 
-/// What a fragment cannot know from its own text: where it sits in its file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// What a fragment cannot know from its own text: where it sits in its file,
+/// and what the rest of the file declares that its parse reads. Built from
+/// the file's parse ([`FragmentContext::from_document`]) or field by field
+/// ([`FragmentContext::new`] and the `with_*` setters).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct FragmentContext {
     /// The level of the headline whose body this is; 0 for the text before
     /// the first headline (the start of the file).
@@ -150,40 +160,105 @@ pub struct FragmentContext {
     /// endings can say otherwise: a CRLF body in a file with one LF line is a
     /// unix file, in which every CR is content.
     pub line_ending: LineEnding,
+    /// The FILE's radio targets ([`Document::radio_targets`]): text anywhere
+    /// in the file matching one is a radio link, wherever the target is.
+    /// `None`: the fragment's own targets only.
+    pub radio_targets: Option<Vec<String>>,
+    /// The TODO sequences in force in the FILE ([`Document::todo_sequences`]):
+    /// they replace both `ParseOptions::todo_sequences` and any `#+TODO:` in
+    /// the fragment, which the file's already include. `None`: the options',
+    /// unless the fragment declares its own.
+    pub todo_sequences: Option<Vec<TodoSequence>>,
+}
+
+impl FragmentContext {
+    /// A body at `level` in a file with `line_ending`, nothing else known.
+    pub fn new(level: usize, line_ending: LineEnding) -> FragmentContext {
+        FragmentContext {
+            level,
+            line_ending,
+            radio_targets: None,
+            todo_sequences: None,
+        }
+    }
+
+    /// The context of a body at `level` in `doc`, the parse of its whole
+    /// file: the file's line ending, radio targets and TODO sequences, so
+    /// [`parse_fragment`] reads the body exactly as `doc`'s parse did.
+    pub fn from_document(doc: &Document, level: usize) -> FragmentContext {
+        FragmentContext {
+            level,
+            line_ending: doc.line_ending(),
+            radio_targets: Some(doc.radio_targets().to_vec()),
+            todo_sequences: Some(doc.todo_sequences().to_vec()),
+        }
+    }
+
+    pub fn with_level(mut self, level: usize) -> Self {
+        self.level = level;
+        self
+    }
+
+    pub fn with_line_ending(mut self, line_ending: LineEnding) -> Self {
+        self.line_ending = line_ending;
+        self
+    }
+
+    pub fn with_radio_targets<S: Into<String>>(
+        mut self,
+        targets: impl IntoIterator<Item = S>,
+    ) -> Self {
+        self.radio_targets = Some(targets.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_todo_sequences(mut self, sequences: Vec<TodoSequence>) -> Self {
+        self.todo_sequences = Some(sequences);
+        self
+    }
 }
 
 /// Parses `text` as the BODY of a headline: what follows the headline line in
-/// its file (ADR-112 D1, M4). It parses exactly as the whole file would parse
-/// that text — planning and a property drawer are recognised at its top —
-/// with offsets relative to `text`. A headline at or above `context.level`
-/// (one that would end the body in the file) is parsed and reported as
+/// its file (ADR-112 D1, M4). With [`FragmentContext::from_document`] it
+/// parses exactly as the whole file parsed that text — planning and a
+/// property drawer are recognised at its top, radio links to targets
+/// anywhere in the file are made, the file's TODO keywords apply — with
+/// offsets relative to `text`. A headline at or above `context.level` (one
+/// that would end the body in the file) is parsed and reported as
 /// [`DiagnosticKind::HeadlineOutsideFragment`].
 ///
-/// What a fragment cannot know, the caller supplies: the file's line-ending
-/// convention (`context.line_ending`), and the TODO sequences in force in the
-/// file (`options.todo_sequences`; an in-fragment `#+TODO:` still applies).
-/// A body never starts its file, so a leading BOM is content, as it is
-/// mid-file; at level 0 the fragment IS the start of the file and a BOM is
-/// trivia, as in [`parse`].
+/// What a fragment cannot know, the caller supplies in `context`: the file's
+/// line-ending convention, its radio targets and its TODO sequences (see
+/// each field). A body never starts its file, so a leading BOM is content,
+/// as it is mid-file; at level 0 the fragment IS the start of the file and
+/// a BOM is trivia, as in [`parse`]. Not reproduced: the radio work budget
+/// is proportional to the text parsed, so a body near it may run out where
+/// its file did not (or not where its file did).
 pub fn parse_fragment(text: &str, options: &ParseOptions, context: &FragmentContext) -> Document {
     let start = match context.level {
         0 => builder::Start::Document,
         level => builder::Start::Fragment { level },
     };
     let src = text::Source::with(text, context.line_ending, context.level == 0);
-    parse_with(src, options, start)
+    parse_with(src, options, start, Some(context))
 }
 
-fn parse_with(src: text::Source, options: &ParseOptions, start: builder::Start) -> Document {
+fn parse_with(
+    src: text::Source,
+    options: &ParseOptions,
+    start: builder::Start,
+    fragment: Option<&FragmentContext>,
+) -> Document {
     let text = src.text;
     if exceeds_tree_limit(text.len()) {
         return Document::too_large();
     }
     let ix = index::Index::build(&src);
     let built = builder::build(&src, &ix, options, start);
-    let declared = !built.in_file_todo.is_empty();
-    let todo =
-        options::TodoKeywords::resolve(declared, &built.in_file_todo, &options.todo_sequences);
+    let file_todo = fragment.and_then(|f| f.todo_sequences.as_deref());
+    let declared = file_todo.is_some() || !built.in_file_todo.is_empty();
+    let in_file = file_todo.unwrap_or(&built.in_file_todo);
+    let todo = options::TodoKeywords::resolve(declared, in_file, &options.todo_sequences);
     let ix = inline::InlineIndex::build(&src);
     let mut link_types = options.link_types.clone();
     link_types.sort_by_key(|t| std::cmp::Reverse(t.len()));
@@ -197,16 +272,17 @@ fn parse_with(src: text::Source, options: &ParseOptions, start: builder::Start) 
         diagnostics: &inline_diagnostics,
     };
     let mut contents = built.contents;
-    let green = green::to_green(&cx, &built.events, &todo, &mut contents);
+    let given = fragment.and_then(|f| f.radio_targets.as_deref());
+    let (green, radio_targets) = green::to_green(&cx, &built.events, &todo, &mut contents, given);
     contents.finish();
     let mut diagnostics = built.diagnostics;
     diagnostics.extend(inline_diagnostics.into_inner());
     diagnostics.sort_by_key(Diagnostic::order_key);
     diagnostics.dedup();
-    let todo_sequences = if declared {
-        built.in_file_todo
-    } else {
-        options.todo_sequences.clone()
+    let todo_sequences = match (file_todo, declared) {
+        (Some(t), _) => t.to_vec(),
+        (None, true) => built.in_file_todo,
+        (None, false) => options.todo_sequences.clone(),
     };
     Document {
         green,
@@ -214,6 +290,7 @@ fn parse_with(src: text::Source, options: &ParseOptions, start: builder::Start) 
         todo_sequences,
         line_ending: src.eol,
         contents,
+        radio_targets,
     }
 }
 
@@ -236,6 +313,7 @@ impl Document {
             todo_sequences: Vec::new(),
             line_ending: LineEnding::Lf,
             contents: span::ContentsTable::default(),
+            radio_targets: Vec::new(),
         }
     }
 
@@ -262,6 +340,13 @@ impl Document {
     /// Diagnostics, sorted by position.
     pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics
+    }
+
+    /// The radio targets the parse made radio links of (`<<<…>>>` values as
+    /// written, deduplicated, in Org's regexp order: longest first), or a
+    /// fragment's file's ([`FragmentContext::radio_targets`]).
+    pub fn radio_targets(&self) -> &[String] {
+        &self.radio_targets
     }
 
     /// The TODO sequences the parse used: the file's own if it declares any,

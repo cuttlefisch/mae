@@ -4,7 +4,7 @@
 
 /// One TODO sequence: the keywords before `|` are "todo" states, those after
 /// are "done" states.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct TodoSequence {
     pub todo: Vec<String>,
