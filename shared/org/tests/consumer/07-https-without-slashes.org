@@ -1,0 +1,7 @@
+# Expected (Emacs): Emacs 30.2: all three are exported as links: href="https:SECnoslash", href="https:/SEConeslash", href="https:///SECthree".
+# Observed (mae-org): mae-org is faithful. Consumer policy rejects them (web = scheme://host).
+# Synthetic; SEC… strings are markers that must not reach the output where Emacs hides them.
+#+title: https: without //
+- [[https:SECnoslash][no slashes]]
+- [[https:/SEConeslash][one slash]]
+- [[https:///SECthree][three slashes]]

@@ -121,7 +121,9 @@ impl Builder<'_> {
     /// kind reaches the last arm (a table cell is drawn by its row, a
     /// citation reference inside its citation).
     pub fn object(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
-        if self.babel_hides_object(n) {
+        // A `nocite` citation exports nothing, its post-blank with it, as
+        // an object babel removes does (see `cite`).
+        if self.babel_hides_object(n) || (n.kind() == CITATION && self.nocite(n)) {
             return;
         }
         let span = |c: &str| Element::new(Tag::Span).class(c);
@@ -166,14 +168,9 @@ impl Builder<'_> {
             // a COMMENT subtree): it shows nothing.
             MACRO if self.raw_macros() => push(out, text(&raw(n))),
             MACRO => {}
-            // A citation is drawn as written; one holding a construct the
-            // export hides, or a macro, only its keys (fail closed,
-            // registered: macros-citations).
-            CITATION if holds_hidden(n) || n.descendants().any(|d| d.kind() == MACRO) => {
-                let keys = span("org-citation").with(vec![text(&citation_keys(n))]);
-                push(out, keys.into())
-            }
-            CITATION => push(out, span("org-citation").with(vec![text(&raw(n))]).into()),
+            // As Org's basic processor exports an unresolved one: no key
+            // shown (see `cite`).
+            CITATION => self.citation(n, out),
             EXPORT_SNIPPET | INLINE_BABEL_CALL => {}
             // Not reached (see above); drawn as written rather than lost.
             _ => push(out, text(&raw(n))),
@@ -244,16 +241,6 @@ pub(crate) fn holds_hidden(n: &SyntaxNode) -> bool {
             INLINE_SRC_BLOCK | INLINE_BABEL_CALL | EXPORT_SNIPPET
         ) || (d.kind() == MACRO && token_text(&d, NAME).eq_ignore_ascii_case("results"))
     })
-}
-
-/// A citation as its keys only: `[cite:@a;@b]`.
-fn citation_keys(n: &SyntaxNode) -> String {
-    let keys: Vec<String> = n
-        .children()
-        .filter(|c| c.kind() == CITATION_REFERENCE)
-        .map(|r| format!("@{}", token_text(&r, NAME)))
-        .collect();
-    format!("[cite:{}]", keys.join(";"))
 }
 
 /// The text of an object's non-markup tokens (its contents, verbatim),

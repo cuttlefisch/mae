@@ -90,6 +90,8 @@ pub(crate) struct Builder<'a> {
     /// This pass's anchors.
     pub found: Table,
     pub notes: Notes,
+    /// What the page's citations so far decide (see `cite`).
+    pub citations: super::cite::Citations,
     /// The document's line-ending convention: where verbatim text splits
     /// into lines.
     pub eol: LineEnding,
@@ -234,6 +236,7 @@ impl<'a> Builder<'a> {
             table,
             found: Table::default(),
             notes: Notes::with_defs(cx.note_defs.clone()),
+            citations: Default::default(),
             eol: cx.eol,
             cx,
             base: Some(0),

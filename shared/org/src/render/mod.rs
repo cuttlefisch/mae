@@ -97,6 +97,7 @@
 mod anchors;
 mod babel;
 mod build;
+mod cite;
 mod expand;
 mod hast;
 mod html;

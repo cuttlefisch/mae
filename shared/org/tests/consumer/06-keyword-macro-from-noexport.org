@@ -1,0 +1,8 @@
+# Expected (Emacs): Emacs 30.2: {{{keyword(SECKW)}}} expands to "SECkeywordvalue" although #+SECKW is inside a :noexport: subtree.
+# Observed (mae-org): mae-org is faithful. Consumer note: a keyword inside a hidden subtree still reaches the output through the macro.
+# Synthetic; SEC… strings are markers that must not reach the output where Emacs hides them.
+#+title: keyword macro reads a keyword set inside a noexport subtree
+Value: {{{keyword(SECKW)}}}
+
+* Hidden                                                         :noexport:
+#+SECKW: SECkeywordvalue

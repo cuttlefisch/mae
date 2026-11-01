@@ -1,0 +1,7 @@
+# Expected (Emacs): Emacs 30.2: descriptions are exported as written: "desc file:/home/usr/SECdescplain" as link text; a file: description becomes an inline <img src="file:///...">; <file:...> inside a description is literal text.
+# Observed (mae-org): mae-org is faithful (as text; images:false). Consumer policy hides it; not a mae-org defect. Included so the corpus pins the current behaviour.
+# Synthetic; SEC… strings are markers that must not reach the output where Emacs hides them.
+#+title: file: text inside a link description
+- [[https://example.org][desc file:/home/usr/SECdescplain]]
+- [[https://example.org][file:/home/usr/SECimg.png]]
+- [[https://example.org][desc <file:/home/usr/SECangle> x]]

@@ -152,3 +152,36 @@ fn a_kb_links_refused_values_are_left_out_and_reported() {
         "{h}"
     );
 }
+
+/// D (08): a citation's key is shown nowhere (Emacs: `(??, ????)`).
+#[test]
+fn a_citation_key_reaches_no_output() {
+    let (all, _) = everything(&fixture("08-citation-key.org"), &Resolver::default());
+    assert!(!all.contains("SECcitekey"), "{all}");
+    let h = html(&fixture("08-citation-key.org"), &Resolver::default());
+    assert!(
+        h.contains("A citation <span class=\"org-citation\">(??, ????)</span> in the text."),
+        "{h}"
+    );
+}
+
+/// 03–07 and 09 match Emacs (each fixture's header): pinned as they are.
+#[test]
+fn the_fixtures_that_match_emacs_render_as_they_did() {
+    let r = Resolver::default().with_target(
+        "aaaaaaaa-0000-0000-0000-000000000001",
+        Resolved::new("/r/a1"),
+    );
+    let cases = [
+        ("03-file-link-in-description.org", "<a class=\"org-link\" href=\"https://example.org\">desc &lt;file:/home/usr/SECangle&gt; x</a>"),
+        ("04-nested-link-in-description.org", "<a class=\"org-link\" href=\"https://example.org\">see [[file:/home/usr/SECnestedfile][x</a> y]] after."),
+        ("05-property-macro-exposes-drawer.org", "<p>A /home/usr/SECprop C</p>"),
+        ("06-keyword-macro-from-noexport.org", "<p>Value: SECkeywordvalue</p>"),
+        ("07-https-without-slashes.org", "<a class=\"org-link\" href=\"https:///SECthree\">three slashes</a>"),
+        ("09-fragment-on-id-link.org", "href=\"/r/a1#h-home-usr-secfrag\""),
+    ];
+    for (name, want) in cases {
+        let h = html(&fixture(name), &r);
+        assert!(h.contains(want), "{name}: {h}");
+    }
+}

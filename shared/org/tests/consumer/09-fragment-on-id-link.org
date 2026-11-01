@@ -1,0 +1,8 @@
+# Expected (Emacs): Emacs 30.2 (emacs -Q, org-id-track-globally nil): export errors (id links need ID tracking); not comparable. MAE KB semantics.
+# Observed (mae-org): mae-org b2824246 with this ID in resolver.targets: href=<target href>#h-home-usr-secfrag (author fragment slugged into the href). Your decision: by design; consumers strip it.
+# Synthetic; SEC… strings are markers that must not reach the output where Emacs hides them.
+#+title: Fragment text on an id link (MAE KB semantics)
+:PROPERTIES:
+:ID: aaaaaaaa-0000-0000-0000-000000000001
+:END:
+Link: [[id:aaaaaaaa-0000-0000-0000-000000000001#/home/usr/SECfrag][self with fragment]]

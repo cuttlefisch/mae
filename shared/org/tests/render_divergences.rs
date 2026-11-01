@@ -186,7 +186,8 @@ fn latex_timestamps_macros_and_citations_render_as_their_source() {
         // A lone results macro (babel's, left by expansion) is its
         // argument, as Org prints it after babel.
         "</time> r <span",
-        "<span class=\"org-citation\">[cite:@k]</span>",
+        // A citation as an unresolved one, its key never shown.
+        "<span class=\"org-citation\">(??, ????)</span>",
         "<pre class=\"org-latex-environment\"><code>\\begin{equation}",
     ] {
         assert!(out.contains(want), "{want} missing: {out}");

@@ -55,8 +55,10 @@ const UNRENDERED: &[&str] = &[
     "#+CAPTION: {M} <<{M}>>\nsrc_sh{{M}}\n\n",
     // Review round 5: a dedicated target's name is never shown (its anchor
     // is t-N; a link landing on it without a description: see
-    // tests/render_consumer.rs, as this resolver resolves every marker).
+    // tests/render_consumer.rs, as this resolver resolves every marker); a
+    // citation's key never (no bibliography: Org shows ??).
     "Hidden target <<{M}>> here.\n",
+    "A citation [cite:@{M}] and [cite/t:pre @{M} suf;@{M}x] and [cite/nb:@{M}y].\n",
 ];
 
 /// A document: pieces in order, each unrendered one with its own marker.

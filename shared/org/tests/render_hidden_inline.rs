@@ -496,7 +496,7 @@ fn the_reviewers_macro_and_citation_show_none_of_their_hidden_text() {
     let html = mae_org::render_html(&d, &semantics(&d), &RenderOptions::default(), &resolver());
     assert!(html.contains("<p>See and  end.</p>"), "{html}");
     assert!(
-        html.contains("<span class=\"org-citation\">[cite:@key]</span>"),
+        html.contains("<span class=\"org-citation\">(??, ????)</span>"),
         "{html}"
     );
 }

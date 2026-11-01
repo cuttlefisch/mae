@@ -1,0 +1,9 @@
+# Expected (Emacs): Emacs 30.2: {{{property(SRC)}}} expands to the drawer value: "A /home/usr/SECprop C" (even though the drawer itself is not exported).
+# Observed (mae-org): mae-org is faithful. Consumer note: hiding drawers does not hide their values from macros.
+# Synthetic; SEC… strings are markers that must not reach the output where Emacs hides them.
+#+title: property macro exposes drawer values
+* Heading
+:PROPERTIES:
+:SRC: /home/usr/SECprop
+:END:
+A {{{property(SRC)}}} C

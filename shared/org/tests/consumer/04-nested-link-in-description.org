@@ -1,0 +1,5 @@
+# Expected (Emacs): Emacs 30.2: the outer link ends at the first ]]: <a href="https://example.org">see [[file:/home/usr/SECnestedfile][x</a> y]] (path left as literal text).
+# Observed (mae-org): mae-org is faithful. Consumer policy; pins current behaviour.
+# Synthetic; SEC… strings are markers that must not reach the output where Emacs hides them.
+#+title: Nested link inside a description
+See [[https://example.org][see [[file:/home/usr/SECnestedfile][x]] y]] after.
