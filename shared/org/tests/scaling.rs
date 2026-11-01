@@ -88,11 +88,18 @@
 //!   (before: a sorted transition list per state, 2.86 ms -> 102.11 ms, x35.7)
 //! - split radio regexps (glossary): 27.19 ms -> 253.21 ms for x8 bytes, normalised x8.9
 //! - radio link before [[ (Emacs loops): 9.96 ms -> 87.96 ms for x8 bytes, normalised x8.8
+//! - split regexps, objects before a long run (review B3, 2026-11-01):
+//!   6.57 ms -> 27.09 ms for x5 bytes, normalised x6.8 (before the
+//!   incremental split search: 1.8 s at 33 KB, 7.6 s at 58 KB, 32 s at
+//!   108 KB, with no diagnostic)
+//! - split regexps, objects before a long target: 6.31 ms -> 23.32 ms for
+//!   x5 bytes, normalised x6.4 (before: 14.8 s at 192 KB)
 //!
 //! The per-candidate work on mixed targets (review F3 a, b) grew as N^1.5,
 //! which at these sizes is only x22.6 per 8x and hides under this bound; it
 //! is gated exactly, by counting visits, in `inline::radio`'s
-//! `mixed_target_work_per_candidate_is_bounded`.
+//! `mixed_target_work_per_candidate_is_bounded`, and the split search's
+//! steps per input byte by `radio_work_per_input_byte_is_bounded`.
 //!
 //! The `semantics()` families (2026-10-31, after the review fixes; before
 //! them the first six were x47–x391: a scan of the item's children per
@@ -328,7 +335,40 @@ const FAMILIES: &[Family] = &[
         |n| format!("<<<x>>>\n\n{}\n", "x[[x]] x[[/^\n".repeat(n)),
         3_000,
     ),
+    // Review B3: split regexps (an 8150-char target), and N objects before
+    // a match across a long run whose every char is a candidate (a lone
+    // no-break-space target): every lexer call rescanned the run (33 KB
+    // took 1.8 s, 108 KB 32 s).
+    (
+        "split regexps, objects before a long run",
+        split_long_run,
+        2_000,
+    ),
+    // The same before a long target sharing its regexp with `a`.
+    (
+        "split regexps, objects before a long target",
+        split_long_target,
+        2_000,
+    ),
 ];
+
+fn split_long_run(n: usize) -> String {
+    format!(
+        "<<<{}>>>\n\n<<<a b>>> <<<\u{a0}>>>\n\n{}a{}b\n",
+        "q".repeat(8150),
+        "*x* ".repeat(n),
+        " ".repeat(n)
+    )
+}
+
+fn split_long_target(n: usize) -> String {
+    let target = vec!["a"; n / 10 + 1].join(" ");
+    format!(
+        "<<<{}>>>\n\n<<<{target}>>> <<<a>>>\n\n{}{target}\n",
+        "q".repeat(8150),
+        "*x* ".repeat(n)
+    )
+}
 
 /// `<<<\u{a0} abcdefghijklmnop>>>` in N/40 case variants, then the word
 /// after two ASCII spaces, N/2 times.

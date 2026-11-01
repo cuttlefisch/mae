@@ -60,9 +60,9 @@
 //! stretch (`x \ty`, `x \t\ty`, …), over text holding such whitespace. Each
 //! is tried at each candidate, and such a document spends the budget.
 //!
-//! WORK BUDGET. The exact matches of mixed targets, and with a split regexp
-//! the per-regexp search, run within a work budget proportional to the text
-//! ([`budget_for`]); their memo of failed states is capped in proportion to
+//! WORK BUDGET. Every step of the search (each candidate visited, each
+//! match recorded or dropped, each trie or exact-match step) is charged to
+//! a work budget proportional to the text ([`budget_for`]); their memo of failed states is capped in proportion to
 //! the text too, so memory is bounded however hostile the input. When the
 //! budget runs out the rule is: NO FURTHER RADIO LINK is made, in this
 //! region or any later one (the lexer goes on as if the document had no
@@ -201,10 +201,112 @@ fn key(id: u32, item: usize, end: usize, pos: usize) -> u128 {
 }
 
 /// Where a frame's search for radio links has got to: candidates before
-/// `next` were rejected for good.
-#[derive(Debug, Default, Clone, Copy)]
+/// `next` were rejected for good; with split regexps, what the frame's
+/// searches have learnt so far ([`Window`]).
+#[derive(Debug, Default)]
 pub(crate) struct Cursor {
     next: usize,
+    window: Option<Box<Window>>,
+}
+
+/// A split search's state for one frame (one region, whose searches start
+/// at non-decreasing positions), so that a candidate is visited once and
+/// examined at most once however many searches the lexer makes in the
+/// region (review B3: every search restarted at the region's first match,
+/// so N objects before a long match visited its candidates N times).
+///
+/// A search's answer is, of each regexp's first match at or after the
+/// search start (its FRONT), the one ending first. Candidates are visited
+/// in order. One is EXAMINED (every regexp's first target there found) unless
+/// every regexp that could match there already has a front, which is then
+/// earlier: it is only noted as SKIPPED (the old per-search shortcut, kept,
+/// so that a long match's inside costs nothing). When the search start
+/// passes a regexp's front, its next match is its next examined one, or an
+/// earlier skipped candidate: those are examined, in order, until it is
+/// found. So no skipped candidate lies before the front of a regexp that
+/// could match it, every candidate is examined at most once, and each
+/// front is that regexp's first match.
+#[derive(Debug, Default)]
+struct Window {
+    /// The next candidate (an index into `Radio::starts`) to visit.
+    scan: usize,
+    /// Examined candidates with a match, at or after the search start:
+    /// position → each regexp matching there with its first target.
+    hits: std::collections::BTreeMap<usize, PartMatches>,
+    /// Per regexp, the positions in `hits` holding it.
+    of: HashMap<u32, std::collections::BTreeSet<usize>>,
+    /// Visited candidates not examined, in order.
+    skipped: std::collections::VecDeque<usize>,
+    /// Each regexp's front: its position and match end, and all of them by
+    /// `(end, regexp)`.
+    front: HashMap<u32, (usize, usize)>,
+    fronts: std::collections::BTreeSet<(usize, u32)>,
+    /// The regexps with a front, as a bitset.
+    covered: Vec<u64>,
+    /// The last answer: the best match and what the link parser reads at
+    /// its start (a function of the position alone).
+    last: Option<(Match, Option<Match>)>,
+}
+
+impl Window {
+    fn set_front(&mut self, j: u32, p: usize, m0: usize) {
+        self.front.insert(j, (p, m0));
+        self.fronts.insert((m0, j));
+        let (w, b) = (j as usize / 64, j % 64);
+        if self.covered.len() <= w {
+            self.covered.resize(w + 1, 0);
+        }
+        self.covered[w] |= 1 << b;
+    }
+
+    fn clear_front(&mut self, j: u32) {
+        if let Some((_, m0)) = self.front.remove(&j) {
+            self.fronts.remove(&(m0, j));
+            if let Some(w) = self.covered.get_mut(j as usize / 64) {
+                *w &= !(1 << (j % 64));
+            }
+        }
+    }
+
+    /// Does every regexp in `lo..=hi` have a front?
+    fn all_covered(&self, lo: u32, hi: u32) -> bool {
+        (lo..=hi).all(|j| {
+            self.covered
+                .get(j as usize / 64)
+                .is_some_and(|w| w >> (j % 64) & 1 == 1)
+        })
+    }
+
+    /// Records examined candidate `p`'s table. A regexp without a front
+    /// and not `moving` gets it here: no examined candidate before `p`
+    /// holds it, and no skipped one could. A moving regexp's front is
+    /// found by the caller.
+    fn record(&mut self, p: usize, table: PartMatches, moving: &HashSet<u32>) {
+        if table.is_empty() {
+            return;
+        }
+        for &(j, _, m) in &table {
+            self.of.entry(j).or_default().insert(p);
+            if !self.front.contains_key(&j) && !moving.contains(&j) {
+                self.set_front(j, p, m.m0);
+            }
+        }
+        self.hits.insert(p, table);
+    }
+
+    /// The first examined match of regexp `j`: position and end.
+    fn first_of(&self, j: u32) -> Option<(usize, usize)> {
+        let p = *self.of.get(&j)?.first()?;
+        let m0 = self.hits[&p].iter().find(|e| e.0 == j)?.2.m0;
+        Some((p, m0))
+    }
+
+    /// The best match: the front ending first, the earliest regexp on a tie.
+    fn best(&self) -> Option<Match> {
+        let &(_, j) = self.fronts.first()?;
+        let (p, _) = self.front[&j];
+        self.hits[&p].iter().find(|e| e.0 == j).map(|e| e.2)
+    }
 }
 
 /// A match of the regexp: group 1 `[p, g1)`, the whole match ending at `m0`.
@@ -440,10 +542,14 @@ impl Radio {
         // Candidates this frame skipped are rejected for good: a later
         // search starts at or after `s0`, and whether a candidate `p >= s0`
         // matches does not depend on `s0` (at `p == s0` only `^` can, which
-        // does not look at it). So the cursor only moves forward.
+        // does not look at it). So the cursor only moves forward. Each
+        // candidate tried is charged (`first_at`).
+        self.charge()?;
         let first = self.starts.partition_point(|&p| p < s0);
         let mut k = cur.next.max(first);
         while let Some(&p) = self.starts.get(k).filter(|&&p| p < end) {
+            #[cfg(test)]
+            tests::VISITS.with(|v| v.set(v.get() + 1));
             if let Some(m) = self.first_at(cx, p, s0, (floor, end))? {
                 cur.next = k;
                 return Ok(Some(m));
@@ -459,10 +565,12 @@ impl Radio {
     /// earliest regexp on a tie; then what the link parser reads at its
     /// start (`org--re-list-looking-at`, the first regexp matching there).
     ///
-    /// Candidates are visited in order; a regexp counts only at its first
-    /// match, and the scan stops at the best end so far (any later match
-    /// ends after it). Candidates before the first match of any regexp are
-    /// rejected for good, as in [`Radio::search_one`].
+    /// Incremental per frame ([`Window`]). The scan stops once no candidate
+    /// can end first (a match at or after the best end ends after it).
+    /// Whether a candidate at `p > s0` matches does not depend on `s0` (the
+    /// char before it is a border or `p` starts a line, whichever `s0`); at
+    /// `p == s0` only a line start can, so a candidate there that is not
+    /// one is dropped for good, as a later search starts at or after `s0`.
     fn search_split(
         &self,
         cx: &InlineCx,
@@ -470,83 +578,111 @@ impl Radio {
         (floor, end): (usize, usize),
         cur: &mut Cursor,
     ) -> Work<Option<(Match, Option<Match>)>> {
-        let first = self.starts.partition_point(|&p| p < s0);
-        let mut k = cur.next.max(first);
-        // The regexps already counted, sorted.
-        let mut seen: Vec<u32> = Vec::new();
-        let mut best: Option<(usize, u32, Match)> = None;
-        let mut hit = None;
-        // The matches at the best candidate and the one after it: all the
-        // link parser below can read (at a line start it also tries the
-        // next char). Only these two are kept, so memory stays O(regexps).
-        let mut tables: Vec<(usize, PartMatches)> = Vec::new();
-        while let Some(&p) = self.starts.get(k).filter(|&&p| p < end) {
-            if best.is_some_and(|b| p >= b.0) {
-                break;
-            }
-            // Inside a long match the same targets recur at every candidate:
-            // when every regexp that could match here is counted, skip it.
-            if hit.is_some() && self.all_counted(p, end, &seen) {
-                #[cfg(test)]
-                tests::SKIPPED.with(|w| w.set(w.get() + 1));
-                k += 1;
-                continue;
-            }
-            let mut table = Vec::new();
-            self.each_part_at(cx, p, s0, (floor, end), &mut table)?;
-            if !table.is_empty() && hit.is_none() {
-                hit = Some(k);
-            }
-            let mut improved = false;
-            for &(j, _, m) in &table {
-                if let Err(i) = seen.binary_search(&j) {
-                    seen.insert(i, j);
-                    if best.is_none_or(|b| (m.m0, j) < (b.0, b.1)) {
-                        best = Some((m.m0, j, m));
-                        improved = true;
-                    }
+        self.charge()?;
+        let w = cur.window.get_or_insert_with(Box::default);
+        let passed = |p: usize| p < s0 || (p == s0 && !cx.at_bol(p, floor));
+        // Matches the search start has passed: their regexps' fronts move.
+        let mut moved = HashSet::new();
+        while let Some((&p, _)) = w.hits.first_key_value().filter(|(&p, _)| passed(p)) {
+            #[cfg(test)]
+            tests::VISITS.with(|v| v.set(v.get() + 1));
+            self.charge()?;
+            let table = w.hits.remove(&p).unwrap_or_default();
+            for (j, _, _) in table {
+                w.of.entry(j).or_default().remove(&p);
+                if w.front.get(&j).is_some_and(|f| f.0 == p) {
+                    w.clear_front(j);
+                    moved.insert(j);
                 }
             }
-            if improved {
-                tables.clear();
-                tables.push((p, table));
-            } else if tables.len() == 1 && best.is_some_and(|b| cx.step(b.2.p) == p) {
-                tables.push((p, table));
-            }
-            k += 1;
         }
-        cur.next = hit.unwrap_or(k);
-        let Some((_, _, m)) = best else {
+        while w.skipped.front().is_some_and(|&p| passed(p)) {
+            #[cfg(test)]
+            tests::VISITS.with(|v| v.set(v.get() + 1));
+            self.charge()?;
+            w.skipped.pop_front();
+        }
+        // A moved front is the regexp's next examined match, unless a
+        // skipped candidate before it holds one: those are examined first,
+        // in order, until none is left before it.
+        let pending: Vec<u32> = moved.iter().copied().collect();
+        for j in pending {
+            loop {
+                let next = w.first_of(j);
+                let Some(&p) = w.skipped.front().filter(|&&p| next.is_none_or(|n| p < n.0)) else {
+                    if let Some((p, m0)) = next {
+                        w.set_front(j, p, m0);
+                    }
+                    break;
+                };
+                #[cfg(test)]
+                tests::VISITS.with(|v| v.set(v.get() + 1));
+                self.charge()?;
+                w.skipped.pop_front();
+                let table = self.examine(cx, p, (floor, end))?;
+                w.record(p, table, &moved);
+            }
+            moved.remove(&j);
+        }
+        w.scan = w.scan.max(self.starts.partition_point(|&p| p < s0));
+        while let Some(&p) = self.starts.get(w.scan).filter(|&&p| p < end) {
+            if w.best().is_some_and(|b| p >= b.m0) {
+                break;
+            }
+            #[cfg(test)]
+            tests::VISITS.with(|v| v.set(v.get() + 1));
+            self.charge()?;
+            w.scan += 1;
+            if passed(p) {
+                continue;
+            }
+            match self.regexps_at(p, end) {
+                Some((lo, hi)) if !w.all_covered(lo, hi) => {
+                    let table = self.examine(cx, p, (floor, end))?;
+                    w.record(p, table, &moved);
+                }
+                // No regexp can match here, or each that can has an earlier
+                // front: nothing to learn unless a front moves past it.
+                Some(_) => w.skipped.push_back(p),
+                None => {}
+            }
+        }
+        let Some(m) = w.best() else {
             return Ok(None);
         };
-        // A candidate reachable from `s0` is reachable from where the link
-        // parser stands at the same position, with the same targets.
-        let known = |q: usize| {
-            tables
-                .binary_search_by_key(&q, |t| t.0)
-                .ok()
-                .map(|i| tables[i].1.clone())
-        };
+        if let Some((lm, link)) = w.last.filter(|l| l.0 == m) {
+            return Ok(Some((lm, link)));
+        }
+        // An examined candidate's table is the link parser's at the same
+        // position: it reaches it from a line start or past a border too.
+        let known = |q: usize| w.hits.get(&q).cloned();
         let link = self.looking_at_with(cx, m.p, (floor, end), &known)?;
+        w.last = Some((m, link));
         Ok(Some((m, link)))
     }
 
-    /// Is every regexp holding a target on the trie paths from `p` (cut at
-    /// the region's `end`) in `seen` (sorted)?
-    fn all_counted(&self, p: usize, end: usize, seen: &[u32]) -> bool {
-        let Some((k, _, reach)) = self.locate(p, end) else {
-            return true;
-        };
+    /// Every regexp's first target matching at candidate `p` (reachable
+    /// from any search start before it), each match charged.
+    fn examine(&self, cx: &InlineCx, p: usize, (floor, end): (usize, usize)) -> Work<PartMatches> {
+        let mut table = Vec::new();
+        self.each_part_at(cx, p, floor, (floor, end), &mut table)?;
+        for _ in &table {
+            self.charge()?;
+        }
+        Ok(table)
+    }
+
+    /// The least and greatest regexp holding a target on the trie paths
+    /// from `p` (cut at the region's `end`): what can match at `p`. `None`
+    /// when nothing can.
+    fn regexps_at(&self, p: usize, end: usize) -> Option<(u32, u32)> {
+        let (k, _, reach) = self.locate(p, end)?;
         let (mut lo, mut hi) = (NONE, 0u32);
         for m in [&self.plain, &self.literal] {
             let (a, b) = m.trie.parts_up[m.trie.level_ancestor(m.deep[k], reach) as usize];
             (lo, hi) = (lo.min(a), hi.max(b));
         }
-        if lo > hi {
-            return true;
-        }
-        let n = seen.partition_point(|&j| j <= hi) - seen.partition_point(|&j| j < lo);
-        n == (hi - lo + 1) as usize
+        (lo <= hi).then_some((lo, hi))
     }
 
     /// `org-element-link-parser`'s radio case at `i`: the regexp(s) tried
@@ -656,6 +792,7 @@ impl Radio {
         s0: usize,
         region: (usize, usize),
     ) -> Work<Option<Match>> {
+        self.charge()?;
         let (floor, end) = region;
         if p >= end || p < floor || !self.reachable(cx, p, s0, floor) {
             return Ok(None);
@@ -695,13 +832,13 @@ impl Radio {
         (floor, end): (usize, usize),
         out: &mut PartMatches,
     ) -> Work<()> {
+        self.charge()?;
         if p >= end || p < floor || !self.reachable(cx, p, s0, floor) {
             return Ok(());
         }
         let Some((k, fit, reach)) = self.locate(p, end) else {
             return Ok(());
         };
-        self.charge()?;
         let mut sink = Sink::Parts(out, &self.part);
         if !self.ws[k] {
             if self.sym[k] != p {
@@ -819,6 +956,8 @@ impl Radio {
     }
 
     fn spend(&self) -> bool {
+        #[cfg(test)]
+        tests::WORK.with(|w| w.set(w.get() + 1));
         match self.budget.get() {
             0 => {
                 self.exhausted.set(true);
@@ -2051,8 +2190,10 @@ mod tests {
         pub(super) static BUDGET: Cell<Option<u64>> = const { Cell::new(None) };
         /// Mixed-target nodes and targets visited (every parse adds).
         pub(super) static WALKED: Cell<u64> = const { Cell::new(0) };
-        /// Candidates a split search skipped as fully counted.
-        pub(super) static SKIPPED: Cell<u64> = const { Cell::new(0) };
+        /// Every step of the radio search (every charge to the budget).
+        pub(super) static WORK: Cell<u64> = const { Cell::new(0) };
+        /// Every candidate visit of the searches (charged or not).
+        pub(super) static VISITS: Cell<u64> = const { Cell::new(0) };
         /// Fault injection: the link parser forgets what the search found,
         /// so it can run out of work where the search did not.
         pub(super) static FORGET_ANSWER: Cell<bool> = const { Cell::new(false) };
@@ -2144,6 +2285,149 @@ mod tests {
                     w8 <= 4 * large.len() as u64,
                     "{name}, limit {limit}: {w8} visits for {} bytes",
                     large.len()
+                );
+            }
+        }
+    }
+
+    /// The radio search's steps in one parse of `text` (no budget limit)
+    /// under a radio regexp limit, and whether the budget ran out.
+    fn work(text: &str, limit: usize) -> (u64, bool) {
+        WORK.with(|w| w.set(0));
+        let (_, exhausted) = objects_with(text, u64::MAX, limit);
+        (WORK.with(Cell::get), exhausted.is_some())
+    }
+
+    /// Review B3: with split regexps, every lexer call in a region rescanned
+    /// the candidates from the region's first match to the best match's
+    /// end (and skipped ones were not charged), so N objects before a long
+    /// match cost N x its length: 108 KB took 31 s with no diagnostic. The
+    /// search must examine each candidate O(1) times per region, every step
+    /// charged. Counted, not timed: the steps per input byte are bounded,
+    /// and grow no faster than the input.
+    #[test]
+    fn radio_work_per_input_byte_is_bounded() {
+        let fill = "q".repeat(8150);
+        // Org's limit: the 8150-char target alone passes it, so these split.
+        let org = crate::ParseOptions::ORG_TARGET_LINK_REGEXP_LIMIT;
+        type Gen = Box<dyn Fn(usize) -> String>;
+        let families: Vec<(&str, usize, Gen)> = vec![
+            // The reviewer's gen3: a lone no-break-space target makes every
+            // char of a long run a candidate; `a b` matches across it.
+            (
+                "objects before a long run (split)",
+                org,
+                Box::new(move |n| {
+                    format!(
+                        "<<<{fill}>>>\n\n<<<a b>>> <<<\u{a0}>>>\n\n{}a{}b\n",
+                        "*x* ".repeat(n),
+                        " ".repeat(n)
+                    )
+                }),
+            ),
+            // gen2: a long simple target sharing its regexp with `a`.
+            (
+                "objects before a long target (split)",
+                org,
+                Box::new(|n| {
+                    let l = vec!["a"; n].join(" ");
+                    format!(
+                        "<<<{}>>>\n\n<<<{l}>>> <<<a>>>\n\n{}{l}\n",
+                        "q".repeat(8150),
+                        "*x* ".repeat(n)
+                    )
+                }),
+            ),
+            (
+                "radio links",
+                usize::MAX,
+                Box::new(|n| format!("<<<ab>>>\n{}\n", "ab ".repeat(n))),
+            ),
+            (
+                "long radio target",
+                usize::MAX,
+                Box::new(|n| format!("<<<{}b>>>\n{}\n", "a ".repeat(n), "a ".repeat(n))),
+            ),
+            (
+                "radio candidates rejected, split",
+                2048,
+                Box::new(|n| {
+                    format!(
+                        "<<<{}>>>\n<<<ab>>>\n{}{} ab\n",
+                        "q".repeat(2100),
+                        "*a* ".repeat(n),
+                        "xab".repeat(n)
+                    )
+                }),
+            ),
+            (
+                "nested targets, split",
+                2048,
+                Box::new(|n| {
+                    let k = (n as f64).sqrt() as usize;
+                    let targets: String = (1..=k)
+                        .map(|j| format!("<<<{}>>>\n", vec!["a"; j].join(" ")))
+                        .collect();
+                    format!(
+                        "<<<{}>>>\n{targets}\n{}\n",
+                        "q".repeat(2100),
+                        "a ".repeat(n)
+                    )
+                }),
+            ),
+        ];
+        let mut failures = Vec::new();
+        for (name, limit, gen) in families {
+            let (small, large) = (gen(500), gen(4_000));
+            let ((w1, e1), (w8, e8)) = (work(&small, limit), work(&large, limit));
+            let per_byte = w8 as f64 / large.len() as f64;
+            // Against the 8x of the repeated part (the fixed targets would
+            // flatter a per-byte ratio): linear is about 1, quadratic 8.
+            let growth = w8 as f64 / (w1.max(1) as f64 * 8.0);
+            let line = format!(
+                "{name}: {w1} -> {w8} steps for {} -> {} bytes, {per_byte:.2}/byte, growth x{growth:.2}",
+                small.len(),
+                large.len()
+            );
+            eprintln!("{line}");
+            if e1 || e8 || per_byte >= 8.0 || growth >= 1.5 {
+                failures.push(line);
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// "Every step charged" (review B3: the split search's skipped
+    /// candidates were not, so its work escaped the budget): under any
+    /// budget, the searches visit at most that many candidates, so the
+    /// budget bounds the time. Visits are counted where they happen,
+    /// whether charged or not.
+    #[test]
+    fn every_candidate_visit_is_charged() {
+        let org = crate::ParseOptions::ORG_TARGET_LINK_REGEXP_LIMIT;
+        let fill = "q".repeat(8150);
+        let n = 3_000;
+        let docs = [
+            format!(
+                "<<<{fill}>>>\n\n<<<a b>>> <<<\u{a0}>>>\n\n{}a{}b\n",
+                "*x* ".repeat(n),
+                " ".repeat(n)
+            ),
+            format!(
+                "<<<{fill}>>>\n\n<<<{l}>>> <<<a>>>\n\n{}{l}\n",
+                "*x* ".repeat(n),
+                l = vec!["a"; 200].join(" ")
+            ),
+            format!("<<<ab>>>\n{}{} ab\n", "*a* ".repeat(n), "xab".repeat(n)),
+        ];
+        for (i, doc) in docs.iter().enumerate() {
+            for budget in [50u64, 500, 5_000, 50_000] {
+                VISITS.with(|v| v.set(0));
+                objects_with(doc, budget, org);
+                let visits = VISITS.with(Cell::get);
+                assert!(
+                    visits <= budget + 1,
+                    "doc {i}, budget {budget}: {visits} visits"
                 );
             }
         }
