@@ -66,46 +66,98 @@ fn a_comment_subtree_counts_for_nothing_in_any_table() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Every name table the page resolves against × every reason a subtree
-/// is pruned (COMMENT, `:noexport:`, archived, outside a selection, a
-/// COMMENT subtree inside an archived one): the one definition of a name
-/// sits in the pruned subtree, a use of it outside. What Emacs 30.2 shows
-/// of the markers (`QZvQZ` outside, `QZsQZ` in the definition), or the
-/// error its export stops with: MAE shows no marker Emacs does not.
+/// Every name table the page resolves against (footnote definitions,
+/// standalone and inline; targets; radio targets; `#+NAME`; named
+/// results; babel calls; macro templates) × every way Org leaves a region
+/// out (a COMMENT subtree, alone or in an archived one; `:noexport:`; an
+/// `#+EXCLUDE_TAGS` tag; archived; outside a selection; a LOGBOOK or other
+/// drawer; a comment block; comment lines): the one definition of a name
+/// sits in the region, a use of it outside. Measured in Emacs 30.2, the
+/// markers its page shows (`v` outside, `s` in the definition), or the
+/// error its export stops with: only what ox deletes before it parses (a
+/// COMMENT subtree) or never parses as a definition (a comment) holds
+/// none; a footnote definition anywhere else, standalone or inline, is
+/// still used. MAE shows exactly the markers Emacs shows, but in a drawer
+/// it does not render.
 const MATRIX: &[(&str, &str)] = &[
     ("call--archive", "v"),
+    ("call--comment-block", "error"),
     ("call--comment-in-archive", "error"),
+    ("call--comment-lines", "error"),
     ("call--comment", "error"),
+    ("call--drawer", "sv"),
+    ("call--exclude", "v"),
+    ("call--logbook", "v"),
     ("call--noexport", "v"),
     ("call--unselected", "v"),
     ("fn--archive", "sv"),
+    ("fn--comment-block", "footnote"),
     ("fn--comment-in-archive", "footnote"),
+    ("fn--comment-lines", "footnote"),
     ("fn--comment", "footnote"),
+    ("fn--drawer", "sv"),
+    ("fn--exclude", "sv"),
+    ("fninline--archive", "sv"),
+    ("fninline--comment-block", "footnote"),
+    ("fninline--comment-in-archive", "footnote"),
+    ("fninline--comment-lines", "footnote"),
+    ("fninline--comment", "footnote"),
+    ("fninline--drawer", "sv"),
+    ("fninline--exclude", "sv"),
+    ("fninline--logbook", "sv"),
+    ("fninline--noexport", "sv"),
+    ("fninline--unselected", "sv"),
+    ("fn--logbook", "sv"),
     ("fn--noexport", "sv"),
     ("fn--unselected", "sv"),
     ("macro--archive", "sv"),
+    ("macro--comment-block", "error"),
     ("macro--comment-in-archive", "error"),
+    ("macro--comment-lines", "error"),
     ("macro--comment", "error"),
+    ("macro--drawer", "sv"),
+    ("macro--exclude", "sv"),
+    ("macro--logbook", "sv"),
     ("macro--noexport", "sv"),
     ("macro--unselected", "sv"),
     ("name--archive", "v"),
+    ("name--comment-block", "v"),
     ("name--comment-in-archive", "v"),
+    ("name--comment-lines", "v"),
     ("name--comment", "v"),
+    ("name--drawer", "sv"),
+    ("name--exclude", "v"),
+    ("name--logbook", "v"),
     ("name--noexport", "v"),
     ("name--unselected", "v"),
     ("radio--archive", "v"),
+    ("radio--comment-block", "v"),
     ("radio--comment-in-archive", "v"),
+    ("radio--comment-lines", "v"),
     ("radio--comment", "v"),
+    ("radio--drawer", "sv"),
+    ("radio--exclude", "v"),
+    ("radio--logbook", "v"),
     ("radio--noexport", "v"),
     ("radio--unselected", "v"),
     ("results--archive", "v"),
+    ("results--comment-block", "v"),
     ("results--comment-in-archive", "v"),
+    ("results--comment-lines", "v"),
     ("results--comment", "v"),
+    ("results--drawer", "v"),
+    ("results--exclude", "v"),
+    ("results--logbook", "v"),
     ("results--noexport", "v"),
     ("results--unselected", "v"),
     ("target--archive", "v"),
+    ("target--comment-block", "v"),
     ("target--comment-in-archive", "v"),
+    ("target--comment-lines", "v"),
     ("target--comment", "v"),
+    ("target--drawer", "sv"),
+    ("target--exclude", "v"),
+    ("target--logbook", "v"),
     ("target--noexport", "v"),
     ("target--unselected", "v"),
 ];
@@ -134,6 +186,9 @@ fn every_name_table_reads_the_pruned_tree() {
                         .iter()
                         .any(|d| d.kind_name() == "footnote_undefined")
             }
+            // A drawer other than LOGBOOK: Org exports it, MAE renders
+            // none (registered: drawers), so hides what it holds.
+            seen if name.ends_with("--drawer") => shows("v") && (!shows("s") || seen.contains('s')),
             seen => ["s", "v"].iter().all(|m| shows(m) == seen.contains(m)),
         };
         if !ok {

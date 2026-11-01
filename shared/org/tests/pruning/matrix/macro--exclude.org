@@ -1,0 +1,5 @@
+#+EXCLUDE_TAGS: ex
+* Visible
+Use {{{m}}} QZvQZ.
+* Pruned :ex:
+#+MACRO: m QZsQZ

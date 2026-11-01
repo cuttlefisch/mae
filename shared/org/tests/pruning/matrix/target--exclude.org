@@ -1,0 +1,5 @@
+#+EXCLUDE_TAGS: ex
+* Visible
+See [[tgt]] QZvQZ.
+* Pruned :ex:
+Here <<tgt>> QZsQZ

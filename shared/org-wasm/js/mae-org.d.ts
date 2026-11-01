@@ -92,8 +92,10 @@ export interface Rendered<T> {
    *   heading on another page, whose macros this render cannot know: the
    *   link goes to the node without the fragment;
    * - `footnote_undefined`: a footnote reference whose label has no
-   *   definition in the exported document (only in a COMMENT or
-   *   `:noexport:` subtree, or nowhere); it renders nothing. The label is
+   *   definition Org's export can use (one only in a COMMENT subtree, a
+   *   comment block or comment lines, or none at all; a definition in a
+   *   `:noexport:`, excluded, archived or unselected subtree or a drawer is
+   *   still used); it renders nothing. The label is
    *   the source text at the span. Org's export fails there; refuse such a
    *   document if that matters to you;
    * - `link_attribute`: a KB link's `rel=`, `w=` or `c=` that is not a

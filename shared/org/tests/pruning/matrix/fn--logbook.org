@@ -1,0 +1,6 @@
+* Visible
+See[fn:x] QZvQZ.
+
+:LOGBOOK:
+[fn:x] note QZsQZ
+:END:

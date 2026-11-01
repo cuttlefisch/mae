@@ -1,0 +1,7 @@
+* Visible
+See [[tbl]] QZvQZ.
+
+:LOGBOOK:
+#+NAME: tbl
+| QZsQZ |
+:END:

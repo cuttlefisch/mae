@@ -67,7 +67,11 @@ impl Notes {
             if defs.contains_key(&f.label) {
                 continue;
             }
-            if let Some(n) = node_at(&root, f.span, FOOTNOTE_DEFINITION) {
+            // A standalone definition, or the inline one Org uses (re-added
+            // from a pruned region too).
+            let n = node_at(&root, f.span, FOOTNOTE_DEFINITION)
+                .or_else(|| node_at(&root, f.span, FOOTNOTE_REFERENCE));
+            if let Some(n) = n {
                 defs.insert(f.label.clone(), n);
             }
         }
@@ -115,6 +119,9 @@ impl Builder<'_> {
         let number = match (known, &label) {
             (Some(k), _) => Some(k),
             (None, Some(l)) => match self.notes.defs.get(l).cloned() {
+                Some(d) if d.kind() == FOOTNOTE_REFERENCE => {
+                    Some(self.notes.add(NoteSource::Inline(d)))
+                }
                 Some(d) => Some(self.notes.add(NoteSource::Element(d))),
                 None if inline => Some(self.notes.add(NoteSource::Inline(n.clone()))),
                 None => None,
@@ -123,8 +130,8 @@ impl Builder<'_> {
             (None, None) => None,
         };
         // An undefined reference (no definition in the exported document,
-        // none inline: the definition may sit in a COMMENT or `:noexport:`
-        // subtree) shows nothing, not even its label.
+        // none inline: the definition may sit in a COMMENT subtree or a
+        // comment) shows nothing, not even its label.
         let Some(k) = number else {
             // The reference itself, its post-blank excluded.
             let at = Span::of(n).start as usize;

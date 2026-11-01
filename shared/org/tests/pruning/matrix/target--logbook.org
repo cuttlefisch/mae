@@ -1,0 +1,6 @@
+* Visible
+See [[tgt]] QZvQZ.
+
+:LOGBOOK:
+Here <<tgt>> QZsQZ
+:END:

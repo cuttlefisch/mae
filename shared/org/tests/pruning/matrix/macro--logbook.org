@@ -1,0 +1,6 @@
+* Visible
+Use {{{m}}} QZvQZ.
+
+:LOGBOOK:
+#+MACRO: m QZsQZ
+:END:

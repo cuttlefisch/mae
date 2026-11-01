@@ -229,7 +229,7 @@ test = "a_target_name_reaches_no_output"
 
 [[divergence]]
 id = "undefined-footnote"
-what = "a footnote reference with no definition in the exported document (only in a COMMENT or :noexport: subtree, or nowhere)"
+what = "a footnote reference with no definition Org's export can use (one only in a COMMENT subtree, a comment block or comment lines, which ox deletes or never parses as a definition, or none at all; a definition in a :noexport:, excluded, archived or unselected subtree or a drawer is still used)"
 org = "the export fails: \"Definition not found for footnote LABEL\""
 mae = "the reference renders nothing (no label, no number) and the render carries a footnote_undefined diagnostic; the rest of the page renders"
 reason = "A dangling label is not hidden content, and failing the document would make ordinary drafts unpublishable; a consumer that wants Org's behaviour refuses a render with the diagnostic (review round 5)."

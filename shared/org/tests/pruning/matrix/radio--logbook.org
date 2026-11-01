@@ -1,0 +1,6 @@
+* Visible
+See rad QZvQZ.
+
+:LOGBOOK:
+Here <<<rad>>> QZsQZ
+:END:

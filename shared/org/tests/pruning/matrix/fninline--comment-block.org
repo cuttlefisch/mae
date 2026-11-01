@@ -1,0 +1,6 @@
+* Visible
+See[fn:x] QZvQZ.
+
+#+begin_comment
+Inline[fn:x: note QZsQZ] here.
+#+end_comment

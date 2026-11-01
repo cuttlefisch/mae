@@ -1,0 +1,6 @@
+#+EXCLUDE_TAGS: ex
+* Visible
+See [[tbl]] QZvQZ.
+* Pruned :ex:
+#+NAME: tbl
+| QZsQZ |

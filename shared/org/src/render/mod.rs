@@ -213,7 +213,7 @@ pub enum RenderDiagnostic {
     /// node, without the fragment.
     FragmentMacro(Span),
     /// A footnote reference whose label has no definition in the exported
-    /// document (its definition only in a COMMENT or `:noexport:` subtree,
+    /// document (its definition only in a COMMENT subtree or a comment,
     /// or nowhere): it renders nothing. The label is the source text at
     /// the span. Org's export stops there ("Definition not found for
     /// footnote"); MAE renders the rest, and a consumer can refuse it.

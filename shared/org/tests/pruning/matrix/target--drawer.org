@@ -1,0 +1,6 @@
+* Visible
+See [[tgt]] QZvQZ.
+
+:NOTES:
+Here <<tgt>> QZsQZ
+:END:
