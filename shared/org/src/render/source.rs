@@ -25,7 +25,10 @@
 //! convention (one lone LF in a DOS file makes Emacs read the WHOLE file as
 //! unix, turning every CR into content).
 
-use crate::{Document, LineEnding, SemanticNode};
+use crate::{
+    Document, LineEnding, ParseOptions, SemanticDiagnostic, SemanticNode, Semantics,
+    SemanticsOptions, Span,
+};
 
 /// `text` in its document's convention, with line endings as `\n`.
 fn to_lf(text: &str, eol: LineEnding) -> String {
@@ -102,7 +105,37 @@ pub enum BodyEditError {
     /// title, properties, tags or place (a list item's body can end its
     /// list, for one).
     ChangesNode { id: String },
+    /// The edit would change the links or transclusions of another node
+    /// (`id`, or `None` for text outside every node).
+    ChangesLinks { id: Option<String> },
+    /// The edit would change how text outside the body parses: an element
+    /// or object there (at `offset` in the new text) differs, as when a
+    /// radio target in the body makes a radio link elsewhere.
+    ChangesOutside { offset: u32 },
+    /// The edit would add, remove or change a file-level declaration that
+    /// the parse or the semantics read (`#+TODO:`, `#+LINK:`, `#+FILETAGS:`
+    /// …: [`DECLARATION_KEYWORDS`]), which can change every node.
+    ChangesDeclaration { key: String },
+    /// The edit would give an `:ID:` that another element of the file
+    /// holds: which of them is the node would depend on their order.
+    DuplicateId { id: String },
 }
+
+/// The file-level keywords that change how the whole file parses or reads
+/// (TODO keywords, link abbreviations, tags, inherited properties, a setup
+/// file): [`replace_body`] refuses an edit that changes any of them.
+pub const DECLARATION_KEYWORDS: &[&str] = &[
+    "TODO",
+    "SEQ_TODO",
+    "TYP_TODO",
+    "LINK",
+    "TAGS",
+    "SELECT_TAGS",
+    "EXCLUDE_TAGS",
+    "FILETAGS",
+    "PROPERTY",
+    "SETUPFILE",
+];
 
 impl std::fmt::Display for BodyEditError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -119,6 +152,21 @@ impl std::fmt::Display for BodyEditError {
                 )
             }
             BodyEditError::ChangesNode { id } => write!(f, "the edit would change node {id:?}"),
+            BodyEditError::ChangesLinks { id: Some(id) } => {
+                write!(f, "the edit would change the links of node {id:?}")
+            }
+            BodyEditError::ChangesLinks { id: None } => {
+                write!(f, "the edit would change links outside every node")
+            }
+            BodyEditError::ChangesOutside { offset } => {
+                write!(f, "the edit would change the text's reading at {offset}")
+            }
+            BodyEditError::ChangesDeclaration { key } => {
+                write!(f, "the edit would change the file's #+{key} declarations")
+            }
+            BodyEditError::DuplicateId { id } => {
+                write!(f, "the edit would repeat the id {id:?}")
+            }
         }
     }
 }
@@ -137,15 +185,27 @@ impl std::error::Error for BodyEditError {}
 ///
 /// Refused ([`BodyEditError`]) when a line of the new body would be a
 /// headline, when the file's line endings would be read differently, and
-/// when the result, parsed again, would change any other node or this
-/// node's own metadata (checked: the text is re-parsed with the document's
-/// TODO keywords and otherwise default options, and every node compared,
-/// spans moved by the edit). New nodes inside the new body are allowed.
+/// when the result, parsed FRESH with the caller's `parse` and `semantics`
+/// options (so every in-file declaration is read from the new text), would
+/// differ in anything but this node's body: any other node (id, title,
+/// TODO keyword, priority, tags, properties, aliases, kind, level; spans
+/// moved by the edit), this node's own metadata, any link or transclusion
+/// whose source is not this node, any file-level declaration
+/// ([`DECLARATION_KEYWORDS`]), an `:ID:` the new body would repeat (in
+/// either order), or any element, object or token outside the body (a
+/// radio target in the body that makes a radio link elsewhere). A new node
+/// in the body is refused too: a body runs to the first node nested in it,
+/// so the edited node's body would change.
+///
+/// `parse` and `semantics` must be the options `doc` and `node` came from:
+/// the check compares the file before and after under them.
 pub fn replace_body(
     text: &str,
     doc: &Document,
     node: &SemanticNode,
     new_body: &str,
+    parse: &ParseOptions,
+    semantics: &SemanticsOptions,
 ) -> Result<String, BodyEditError> {
     if doc.syntax().to_string() != text {
         return Err(BodyEditError::StaleDocument);
@@ -182,75 +242,228 @@ pub fn replace_body(
         return Err(BodyEditError::LineEnding);
     }
     let start = s + prefix.len();
-    check_nodes(text, &out, doc, node, (s, e), (start, start + body.len()))?;
+    let edit = Edit {
+        old: text,
+        new: &out,
+        edited: node,
+        range: (s, e),
+        new_range: (start, start + body.len()),
+    };
+    edit.check(parse, semantics)?;
     Ok(out)
 }
 
-/// Every node of `old` but `edited` is in `new` unchanged but for its spans,
-/// moved by the edit of `old[s..e]` into `new[ns..ne]`; `edited` keeps its
-/// metadata and its body is exactly the new range.
-fn check_nodes(
-    old: &str,
-    new: &str,
-    doc: &Document,
-    edited: &SemanticNode,
-    (s, e): (usize, usize),
-    (ns, ne): (usize, usize),
-) -> Result<(), BodyEditError> {
-    let opts = crate::ParseOptions::default().with_todo_sequences(doc.todo_sequences().to_vec());
-    let before = crate::semantics(&crate::parse(old, &opts));
-    let after = crate::semantics(&crate::parse(new, &opts));
-    let delta = ne as i64 - e as i64;
-    let moved = |p: u32| -> Option<u32> {
+/// One splice: `old[s..e]` became `new[ns..ne]`.
+struct Edit<'a> {
+    old: &'a str,
+    new: &'a str,
+    edited: &'a SemanticNode,
+    range: (usize, usize),
+    new_range: (usize, usize),
+}
+
+/// A document parsed fresh, and its semantics.
+fn read(text: &str, parse: &ParseOptions, sem: &SemanticsOptions) -> (Document, Semantics) {
+    let doc = crate::parse(text, parse);
+    let s = crate::semantics_with(&doc, sem);
+    (doc, s)
+}
+
+/// The document's declaration keywords, in order: `(KEY, value)`.
+fn declarations(doc: &Document) -> Vec<(String, String)> {
+    doc.keywords()
+        .map(|k| (k.key().to_ascii_uppercase(), k.value()))
+        .filter(|(k, _)| DECLARATION_KEYWORDS.contains(&k.as_str()))
+        .collect()
+}
+
+impl Edit<'_> {
+    /// Where position `p` of the old text is in the new; `None` inside the
+    /// replaced range.
+    fn moved(&self, p: u32) -> Option<u32> {
+        let ((s, e), (_, ne)) = (self.range, self.new_range);
         let p = p as usize;
         if p >= e {
-            u32::try_from(p as i64 + delta).ok()
+            u32::try_from(p as i64 + (ne as i64 - e as i64)).ok()
         } else if p <= s {
             Some(p as u32)
         } else {
             None
         }
-    };
-    let changed = |id: &str| BodyEditError::ChangesNode { id: id.to_string() };
-    for n in &before.nodes {
-        let Some(m) = after.nodes.iter().find(|m| m.id == n.id) else {
-            return Err(changed(&n.id));
+    }
+
+    fn moved_span(&self, sp: Span) -> Option<Span> {
+        Some(Span {
+            start: self.moved(sp.start)?,
+            end: self.moved(sp.end)?,
+        })
+    }
+
+    fn inside_new(&self, sp: Span) -> bool {
+        let (ns, ne) = self.new_range;
+        sp.start as usize >= ns && sp.end as usize <= ne
+    }
+
+    fn check(&self, parse: &ParseOptions, sem: &SemanticsOptions) -> Result<(), BodyEditError> {
+        let (old_doc, before) = read(self.old, parse, sem);
+        let (new_doc, after) = read(self.new, parse, sem);
+        let (was, now) = (declarations(&old_doc), declarations(&new_doc));
+        if was != now {
+            let key = was
+                .iter()
+                .zip(&now)
+                .find(|(a, b)| a != b)
+                .map(|(a, b)| (&a.0).max(&b.0).clone())
+                .or_else(|| {
+                    was.get(now.len())
+                        .or(now.get(was.len()))
+                        .map(|d| d.0.clone())
+                })
+                .unwrap_or_default();
+            return Err(BodyEditError::ChangesDeclaration { key });
+        }
+        for d in &after.diagnostics {
+            if let SemanticDiagnostic::DuplicateId { id, span, first } = d {
+                if self.inside_new(*span) || self.inside_new(*first) {
+                    return Err(BodyEditError::DuplicateId { id: id.clone() });
+                }
+            }
+        }
+        self.check_nodes(&before, &after)?;
+        self.check_links(&before, &after)?;
+        self.check_outside(&old_doc, &new_doc)
+    }
+
+    /// Every element, object and token wholly outside the body reads the
+    /// same: same kind, same (moved) span, in the same order. "Outside" is
+    /// before the splice point (not touching it: a line ending the splice
+    /// adds there extends what ends at it) or after the replaced text.
+    fn check_outside(&self, old: &Document, new: &Document) -> Result<(), BodyEditError> {
+        let ((s, e), (_, ne)) = (self.range, self.new_range);
+        let outside = |d: &Document, b: usize| {
+            d.syntax()
+                .descendants_with_tokens()
+                .filter_map(move |el| {
+                    let r = el.text_range();
+                    let (x, y) = (usize::from(r.start()), usize::from(r.end()));
+                    (y < s || x >= b).then_some((el.kind(), x, y))
+                })
+                .collect::<Vec<_>>()
         };
-        let mut want = n.clone();
-        let span = (moved(n.span.start), moved(n.span.end));
-        want.span = match span {
-            (Some(a), Some(b)) => crate::Span { start: a, end: b },
-            _ => return Err(changed(&n.id)),
+        let was = outside(old, e);
+        let now = outside(new, ne);
+        let shift = |p: usize| {
+            if p >= e {
+                (p as i64 + ne as i64 - e as i64) as usize
+            } else {
+                p
+            }
         };
-        want.body_span = if n.id == edited.id {
-            // Within the new range: blank lines at its start are the
-            // drawer's post-blank to Org, so they may fall outside it.
-            let b = m.body_span;
-            let blank = |r: std::ops::Range<usize>| {
-                new.get(r)
-                    .is_some_and(|t| t.chars().all(char::is_whitespace))
+        let differs = was
+            .iter()
+            .map(|&(k, x, y)| (k, shift(x), shift(y)))
+            .zip(now.iter().copied())
+            .position(|(a, b)| a != b);
+        match differs {
+            None if was.len() == now.len() => Ok(()),
+            at => {
+                let i = at.unwrap_or(was.len().min(now.len()));
+                let offset = now.get(i).map_or(self.new.len(), |n| n.1) as u32;
+                Err(BodyEditError::ChangesOutside { offset })
+            }
+        }
+    }
+
+    /// Every node of `before` but the edited one is in `after` unchanged
+    /// but for its spans, moved by the edit; the edited one keeps its
+    /// metadata and its body is exactly the new range; a node that is new
+    /// lies in the new body (and then, as it ends the edited node's body,
+    /// the check above has already refused it).
+    fn check_nodes(&self, before: &Semantics, after: &Semantics) -> Result<(), BodyEditError> {
+        let (ns, ne) = self.new_range;
+        let changed = |id: &str| BodyEditError::ChangesNode { id: id.to_string() };
+        for n in &before.nodes {
+            let Some(m) = after.nodes.iter().find(|m| m.id == n.id) else {
+                return Err(changed(&n.id));
             };
-            let inside = b.start as usize >= ns && b.end as usize <= ne && b.start <= b.end;
-            if !(inside && blank(ns..b.start as usize) && blank(b.end as usize..ne)) {
+            let mut want = n.clone();
+            want.span = self.moved_span(n.span).ok_or_else(|| changed(&n.id))?;
+            want.body_span = if n.id == self.edited.id {
+                // Within the new range: blank lines at its start are the
+                // drawer's post-blank to Org, so they may fall outside it.
+                let b = m.body_span;
+                let blank = |r: std::ops::Range<usize>| {
+                    self.new
+                        .get(r)
+                        .is_some_and(|t| t.chars().all(char::is_whitespace))
+                };
+                let inside = b.start as usize >= ns && b.end as usize <= ne && b.start <= b.end;
+                if !(inside && blank(ns..b.start as usize) && blank(b.end as usize..ne)) {
+                    return Err(changed(&n.id));
+                }
+                b
+            } else {
+                self.moved_span(n.body_span).ok_or_else(|| changed(&n.id))?
+            };
+            if *m != want {
                 return Err(changed(&n.id));
             }
-            b
-        } else {
-            match (moved(n.body_span.start), moved(n.body_span.end)) {
-                (Some(a), Some(b)) => crate::Span { start: a, end: b },
-                _ => return Err(changed(&n.id)),
+        }
+        for m in &after.nodes {
+            let new_node = !before.nodes.iter().any(|n| n.id == m.id);
+            if new_node && !self.inside_new(m.span) {
+                return Err(changed(&m.id));
             }
+        }
+        Ok(())
+    }
+
+    /// Every link and transclusion whose source is not the edited node (nor
+    /// a node new in its body) is the same before and after, spans moved.
+    fn check_links(&self, before: &Semantics, after: &Semantics) -> Result<(), BodyEditError> {
+        let new_ids: std::collections::HashSet<&str> = after
+            .nodes
+            .iter()
+            .filter(|m| !before.nodes.iter().any(|n| n.id == m.id))
+            .map(|m| m.id.as_str())
+            .collect();
+        let others = |from: &Option<String>| {
+            from.as_deref()
+                .is_none_or(|f| f != self.edited.id && !new_ids.contains(f))
         };
-        if *m != want {
-            return Err(changed(&n.id));
+        let changed = |from: &Option<String>| BodyEditError::ChangesLinks { id: from.clone() };
+        let mut was = Vec::new();
+        for l in before.links.iter().filter(|l| others(&l.from)) {
+            let mut l = l.clone();
+            l.span = self.moved_span(l.span).ok_or_else(|| changed(&l.from))?;
+            was.push(l);
         }
-    }
-    // A node that is new must lie in the new body.
-    for m in &after.nodes {
-        let new_node = !before.nodes.iter().any(|n| n.id == m.id);
-        if new_node && !(m.span.start as usize >= ns && m.span.end as usize <= ne) {
-            return Err(changed(&m.id));
+        let now: Vec<_> = after.links.iter().filter(|l| others(&l.from)).collect();
+        if was.len() != now.len() || was.iter().zip(&now).any(|(a, b)| a != *b) {
+            let at = was.iter().zip(&now).find(|(a, b)| a != *b);
+            let from = at.map(|(a, _)| a.from.clone());
+            let from = from.or_else(|| was.get(now.len()).map(|l| l.from.clone()));
+            let from = from.or_else(|| now.get(was.len()).map(|l| l.from.clone()));
+            return Err(changed(&from.flatten()));
         }
+        let mut was = Vec::new();
+        for t in before.transclusions.iter().filter(|t| others(&t.from)) {
+            let mut t = t.clone();
+            t.span = self.moved_span(t.span).ok_or_else(|| changed(&t.from))?;
+            was.push(t);
+        }
+        let now: Vec<_> = after
+            .transclusions
+            .iter()
+            .filter(|t| others(&t.from))
+            .collect();
+        if was.len() != now.len() || was.iter().zip(&now).any(|(a, b)| a != *b) {
+            let from = was
+                .first()
+                .or(now.first().copied())
+                .and_then(|t| t.from.clone());
+            return Err(changed(&from));
+        }
+        Ok(())
     }
-    Ok(())
 }

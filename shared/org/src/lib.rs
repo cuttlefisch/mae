@@ -101,8 +101,8 @@ pub use render::{
     render, render_hast, render_html, render_inline, replace_body, safe_external_url,
     safe_resolver_href, slug, text, text_of, to_hast, to_html, with_line_ending, Attr,
     BodyEditError, Element, HeadlineIds, Node, NodeMeta, RenderDiagnostic, RenderOptions, Rendered,
-    Resolved, Resolver, Tag, TreeFormat, ATTRIBUTES, CLASSES, DEFAULT_PLACEHOLDER,
-    RENDER_MAX_DEPTH, SLUG_MAX, TAGS,
+    Resolved, Resolver, Tag, TreeFormat, ATTRIBUTES, CLASSES, DECLARATION_KEYWORDS,
+    DEFAULT_PLACEHOLDER, RENDER_MAX_DEPTH, SLUG_MAX, TAGS,
 };
 /// The tree is a rowan tree; `node.text_range()` returns rowan types. The
 /// re-export makes that coupling explicit and versioned: plain-data results

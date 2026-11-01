@@ -6,9 +6,27 @@
 mod support;
 
 use mae_org::{
-    node_source, parse, replace_body, semantics, BodyEditError, LineEnding, ParseOptions,
-    SemanticNode, Span,
+    node_source, parse, semantics, BodyEditError, LineEnding, ParseOptions, SemanticNode,
+    SemanticsOptions, Span,
 };
+
+/// The splice under default options (those the documents here are read
+/// with).
+fn replace_body(
+    text: &str,
+    doc: &mae_org::Document,
+    node: &SemanticNode,
+    new_body: &str,
+) -> Result<String, BodyEditError> {
+    mae_org::replace_body(
+        text,
+        doc,
+        node,
+        new_body,
+        &ParseOptions::default(),
+        &SemanticsOptions::default(),
+    )
+}
 use proptest::prelude::*;
 use std::path::Path;
 
@@ -97,17 +115,36 @@ fn check_written(
         let m = sem2.nodes.iter().find(|m| m.id == n.id);
         prop_assert!(m.is_some(), "{} is gone", n.id);
         let m = m.unwrap();
-        prop_assert_eq!(&m.title, &n.title);
-        prop_assert_eq!(&m.properties, &n.properties);
-        prop_assert_eq!(&m.own_tags, &n.own_tags);
-        prop_assert_eq!(m.level, n.level);
         let span = |a: u32, b: u32| Span {
             start: mv(a),
             end: mv(b),
         };
-        prop_assert_eq!(m.span, span(n.span.start, n.span.end));
-        prop_assert_eq!(m.body_span, span(n.body_span.start, n.body_span.end));
+        // The whole node (id, title, TODO keyword, priority, tags,
+        // properties, aliases, kind, level), its spans moved.
+        let mut want = n.clone();
+        want.span = span(n.span.start, n.span.end);
+        want.body_span = span(n.body_span.start, n.body_span.end);
+        prop_assert_eq!(m, &want);
     }
+    // Every link of another node, its span moved (review M1: links were not
+    // compared, so a `#+LINK:` in one body retargeted another's).
+    let before = semantics(&parse(text, &ParseOptions::default()));
+    let other = |l: &&mae_org::SemanticLink| l.from.as_deref() != Some(node.id.as_str());
+    let was: Vec<_> = before
+        .links
+        .iter()
+        .filter(other)
+        .map(|l| {
+            let mut l = l.clone();
+            l.span = Span {
+                start: mv(l.span.start),
+                end: mv(l.span.end),
+            };
+            l
+        })
+        .collect();
+    let now: Vec<_> = sem2.links.iter().filter(other).cloned().collect();
+    prop_assert_eq!(was, now);
     Ok(())
 }
 
@@ -294,4 +331,87 @@ fn an_edit_that_would_change_another_node_is_refused() {
     // (`BodyEditError::LineEnding` guards a file whose only bare LF is in
     // the body; no node can be in such a file, since in an LF file every
     // drawer line that makes a node ends with a bare LF.)
+}
+
+/// Review M1: the check re-read the file with its OLD in-file TODO
+/// keywords, compared nodes but not links, and found a repeated `:ID:`
+/// only when it came first. Each of these edits changes the file outside
+/// the body, and must be refused.
+#[test]
+fn an_edit_that_changes_what_the_file_declares_or_links_is_refused() {
+    let edit = |text: &str, id: &str, body: &str| {
+        let doc = parse(text, &ParseOptions::default());
+        let sem = semantics(&doc);
+        let n = sem.nodes.iter().find(|n| n.id == id).expect("node");
+        replace_body(text, &doc, n, body)
+    };
+    // The reviewer's: removing a #+TODO: in one body un-keywords another
+    // headline's WAIT.
+    let todo = "* Setup\n:PROPERTIES:\n:ID: a\n:END:\n#+TODO: WAIT | GONE\n* WAIT Other task\n:PROPERTIES:\n:ID: b\n:END:\ntext\n";
+    assert!(matches!(
+        edit(todo, "a", "no keywords now\n"),
+        Err(BodyEditError::ChangesDeclaration { .. })
+    ));
+    // Kept, it is fine.
+    assert!(edit(todo, "a", "#+TODO: WAIT | GONE\nmore\n").is_ok());
+    // Adding one is refused too.
+    assert!(matches!(
+        edit(todo, "b", "#+TODO: X | Y\n"),
+        Err(BodyEditError::ChangesDeclaration { .. })
+    ));
+    // The reviewer's: a #+LINK abbreviation added in one body retargets
+    // another node's link.
+    let link = "* A\n:PROPERTIES:\n:ID: a\n:END:\nbody a\n* B\n:PROPERTIES:\n:ID: b\n:END:\nSee [[kb:target-node][x]].\n";
+    assert!(matches!(
+        edit(link, "a", "#+LINK: kb id:\n"),
+        Err(BodyEditError::ChangesDeclaration { .. })
+    ));
+    // A radio target in one body makes a link in another.
+    let radio = "* A\n:PROPERTIES:\n:ID: a\n:END:\nbody a\n* B\n:PROPERTIES:\n:ID: b\n:END:\nThe widget is here.\n";
+    assert!(matches!(
+        edit(radio, "a", "<<<widget>>> defined\n"),
+        Err(BodyEditError::ChangesOutside { .. })
+    ));
+    // A link of another node that the semantics read differently.
+    let kb =
+        "* A\n:PROPERTIES:\n:ID: a\n:END:\nbody a\n* B\n:PROPERTIES:\n:ID: b\n:END:\nSee [[x]].\n";
+    assert!(edit(kb, "a", "<<x>> here\n").is_ok_and(|t| t.contains("<<x>>")));
+    assert!(edit(radio, "a", "widget, not defined\n").is_ok());
+    // An id another element holds, after it and before it.
+    let ids = "* A\n:PROPERTIES:\n:ID: a\n:END:\nbody\n* B\n:PROPERTIES:\n:ID: b\n:END:\nbody\n";
+    let item = |id: &str| format!("- x\n  :PROPERTIES:\n  :ID: {id}\n  :END:\n");
+    for (node, id) in [("a", "b"), ("b", "a"), ("a", "a")] {
+        assert_eq!(
+            edit(ids, node, &item(id)),
+            Err(BodyEditError::DuplicateId { id: id.into() }),
+            "{node} gets {id}"
+        );
+    }
+    // A new id is a new node nested in the body, which would end the body
+    // at it: refused as a change to the node, not as a duplicate.
+    assert_eq!(
+        edit(ids, "a", &item("c")),
+        Err(BodyEditError::ChangesNode { id: "a".into() })
+    );
+}
+
+/// The options the check reads with are the caller's: a body that keeps
+/// another node's keyword under the caller's TODO keywords is fine, and
+/// one that changes it under them is refused.
+#[test]
+fn the_check_reads_with_the_callers_options() {
+    let text = "* A\n:PROPERTIES:\n:ID: a\n:END:\nbody\n* NEXT B\n:PROPERTIES:\n:ID: b\n:END:\n";
+    let opts = ParseOptions::default()
+        .with_todo_sequences(vec![mae_org::TodoSequence::new(["NEXT"], ["DONE"])]);
+    let doc = parse(text, &opts);
+    let sem = mae_org::semantics_with(&doc, &SemanticsOptions::default());
+    let a = sem.nodes.iter().find(|n| n.id == "a").unwrap();
+    let sopts = SemanticsOptions::default();
+    assert!(mae_org::replace_body(text, &doc, a, "new\n", &opts, &sopts).is_ok());
+    // An in-body declaration replaces the caller's keywords: B's NEXT
+    // stops being one.
+    assert!(matches!(
+        mae_org::replace_body(text, &doc, a, "#+TODO: X | Y\n", &opts, &sopts),
+        Err(BodyEditError::ChangesDeclaration { .. })
+    ));
 }
