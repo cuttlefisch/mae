@@ -493,6 +493,51 @@ mod tests {
         assert!(w <= limit + size, "{w} > {limit} + {size}");
     }
 
+    /// Review round 6 (major 2): ordinary documents, a macro in every
+    /// glossary tag, caption, changelog entry and numbered step (5,000 of
+    /// each), expand with work linear in the source: 8 times the entries,
+    /// at most 9 times the work. Each re-reads its own unit (the line it
+    /// touches stays the same kind of line); none re-reads the buffer.
+    #[test]
+    fn ordinary_documents_expand_with_linear_work() {
+        let prose = "This entry explains the term in a sentence or two of ordinary prose.";
+        type Entry = fn(usize, &str) -> String;
+        let families: [(&str, Entry); 5] = [
+            ("glossary", |i, p| {
+                format!("- {{{{{{term(Word{i})}}}}}} :: {p}\n")
+            }),
+            ("captions", |i, p| {
+                format!("#+CAPTION: {{{{{{v(Figure {i}.)}}}}}}\n[[file:img{i}.png]]\n\n{p}\n\n")
+            }),
+            ("changelog", |i, p| {
+                format!("{{{{{{issue({i})}}}}}} fixed a thing. {p}\n\n")
+            }),
+            ("steps", |i, p| {
+                format!(
+                    "Step {{{{{{n}}}}}}. Then step {{{{{{n}}}}}}, see ({{{{{{n}}}}}}). {p} {i}\n\n"
+                )
+            }),
+            ("table", |i, _| {
+                format!("| {{{{{{n}}}}}}. | {{{{{{term(w{i})}}}}}} | x |\n")
+            }),
+        ];
+        let head = "#+MACRO: term /$1/\n#+MACRO: v $1\n#+MACRO: issue [[https://example.com/issues/$1][#$1]]\n\n* Section\n";
+        for (name, entry) in families {
+            let doc = |n: usize| -> String {
+                let body: String = (0..n).map(|i| entry(i, prose)).collect();
+                format!("{head}{body}")
+            };
+            let (few, r) = work(&doc(625));
+            assert!(r.is_ok(), "{name}: {r:?}");
+            let big = doc(5000);
+            let (many, r) = work(&big);
+            assert!(r.is_ok(), "{name}: {r:?}");
+            assert!(many <= 9 * few, "{name}: {few} -> {many}");
+            let limit = WORK_BASE + WORK_PER_BYTE * big.len() as u64;
+            assert!(many * 4 <= limit, "{name}: {many} of {limit}");
+        }
+    }
+
     /// The measured limit of one unit (registered: macros): each expansion
     /// re-reads the unit holding it, and the line it touches, so N macros
     /// in one paragraph cost about N times its length. Alone in a

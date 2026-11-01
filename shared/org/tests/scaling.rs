@@ -777,6 +777,45 @@ const RENDER_FAMILIES: &[Family] = &[
         },
         2_000,
     ),
+    // Review round 6 (major 2): ordinary documents with a macro in every
+    // glossary tag, caption and changelog entry re-read the whole buffer
+    // per macro (a tag and a caption were `Other`; a line starting with
+    // `[` was taken for a new element) and emptied the budget at 250, 300
+    // and 400 entries. Each now reads its own unit again.
+    (
+        "render: a glossary of N tag macros",
+        |n| {
+            let body: String = (0..n)
+                .map(|i| format!("- {{{{{{term(Word{i})}}}}}} :: A definition in prose.\n"))
+                .collect();
+            format!("#+MACRO: term /$1/\n* Terms\n{body}")
+        },
+        1_000,
+    ),
+    (
+        "render: N captions with a macro",
+        |n| {
+            let body: String = (0..n)
+                .map(|i| {
+                    format!(
+                        "#+CAPTION: {{{{{{v(Figure {i}.)}}}}}}\n[[file:img{i}.png]]\n\nText.\n\n"
+                    )
+                })
+                .collect();
+            format!("#+MACRO: v $1\n{body}")
+        },
+        1_000,
+    ),
+    (
+        "render: a changelog of N link macros",
+        |n| {
+            let body: String = (0..n)
+                .map(|i| format!("{{{{{{issue({i})}}}}}} fixed a thing.\n\n"))
+                .collect();
+            format!("#+MACRO: issue [[https://example.com/issues/$1][#$1]]\n* Changes\n{body}")
+        },
+        1_000,
+    ),
     (
         // Review round 4 (B7): a template of thousands of words called
         // hundreds of times by another, called N times; fails within the

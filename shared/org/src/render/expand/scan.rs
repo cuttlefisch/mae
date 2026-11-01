@@ -5,8 +5,9 @@
 //!
 //! The buffer is the text of its last full parse (`dtext`, parsed as `d`)
 //! with the edits made since. The scan goes unit by unit: a unit is what
-//! holds a macro's objects (a paragraph's contents, a headline's title, a
-//! table row, a parsed keyword's value; any other is read whole again).
+//! holds a macro's objects (a paragraph's or verse block's contents, a
+//! caption's value, an item's tag, a headline's title, a table row, a
+//! parsed keyword's value).
 //! After each expansion the lines it touches are read before and after by
 //! the parser's own line classifier ([`crate::element::same_line`]): if one
 //! is now another kind of line (or the expansion takes lines its unit
@@ -28,8 +29,9 @@ use std::collections::{HashMap, HashSet};
 /// What kind of element a unit is, which decides how it is read again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
-    /// The objects of a container: a paragraph's contents (which may take
-    /// the lines a macro's arguments span).
+    /// The objects of a container: a paragraph's or verse block's contents
+    /// (which may take the lines a macro's arguments span), a caption's
+    /// value, an item's tag.
     Objects(crate::kind::SyntaxKind),
     /// A headline's title (its headline's span, and its line's): the line
     /// can become COMMENT.
@@ -563,12 +565,13 @@ impl Engine {
             .find(|a| (a.kind() as u16) < 2000)
             .unwrap_or_else(|| n.clone());
         let (kind, sp) = match a.kind() {
-            PARAGRAPH => match self.d.contents(&a) {
+            PARAGRAPH | VERSE_BLOCK => match self.d.contents(&a) {
                 Some(c) if c.start <= Span::of(n).start && Span::of(n).end <= c.end => {
                     (Kind::Objects(a.kind()), (c.start as usize, c.end as usize))
                 }
                 _ => (Kind::Other, span(&a)),
             },
+            AFFILIATED_VALUE | ITEM_TAG_CONTENT => (Kind::Objects(a.kind()), span(&a)),
             HEADLINE_TITLE => {
                 let h = a.parent().unwrap_or_else(|| a.clone());
                 let hs = span(&h);
