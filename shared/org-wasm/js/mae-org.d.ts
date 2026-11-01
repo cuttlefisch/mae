@@ -53,7 +53,10 @@ export interface Rendered<T> {
      * The node's anchor id on this page (`id-…`, `cid-…`, or a heading's
      * `h-<slug>`; a slug keeps letters of any script, lower-cased, runs of
      * anything else one `-`, so it may be non-ASCII: `h-глава-2`; a
-     * repeated title's heading is `h-<slug>--2`, `--3`, …). Null for the
+     * repeated title's heading is `h-<slug>--2`, `--3`, …; titles that
+     * differ only in case, punctuation or blanks share a slug, so `A b` and
+     * `A-b` are `h-a-b` and `h-a-b--2`; a link in a title adds only its
+     * description). Null for the
      * file node. Percent-encode it to put it in another page's URL.
      */
     anchor: string | null;
@@ -67,8 +70,8 @@ export interface Rendered<T> {
 }
 
 /**
- * The KB projection. Its node titles, aliases, property values and link
- * descriptions are the SOURCE as plain text: an inline src block, a babel
+ * The KB projection. Its node titles, aliases, property values, link
+ * descriptions and link fragments are the SOURCE as plain text: an inline src block, a babel
  * call or an export snippet the export hides is spelled out in them. Never
  * show them to a reader: display text comes from a render's `nodes`
  * (`title`, `title_unlinked`, `aliases`, `properties`) or from `text`.

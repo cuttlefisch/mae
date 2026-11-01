@@ -64,7 +64,14 @@ pub const SLUG_MAX: usize = 64;
 /// objects and export snippets dropped: `H_2O levels` is `H2O levels`), and
 /// a KB link's `#fragment` is rendered the same way before it is slugged.
 /// So a fragment written as the title (`id:x#H_2O levels`) and one written
-/// as its slug (`id:x#h2o-levels`) both name that heading.
+/// as its slug (`id:x#h2o-levels`) both name that heading. In that
+/// rendering a link is its description only, and a link without one adds
+/// nothing, so no anchor depends on a resolver or on the rest of the page.
+///
+/// Slugging loses distinctions, by design: titles that differ only in
+/// case, punctuation or blanks share a slug (`A b`, `A-b` and `a, b` are
+/// all `a-b`). The second such heading gets `--2`, and a fragment naming
+/// either lands on the first.
 pub fn slug(title: &str) -> String {
     let mut out = String::new();
     let mut dash = false;

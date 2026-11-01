@@ -421,3 +421,50 @@ fn fragments_with_objects_land_on_their_heading() {
     assert!(out.contains("<h2 id=\"h-run-now\">Run <code"), "{out}");
     assert_eq!(href_of(&out, "r"), "#h-run-now", "{out}");
 }
+
+/// A title with links in it: KB links with and without a description,
+/// external links, words.
+fn linked_title() -> impl Strategy<Value = String> {
+    let piece = prop::sample::select(vec![
+        "See",
+        "[[id:other]]",
+        "[[id:other][the other]]",
+        "[[https://x.example]]",
+        "[[https://x.example][site]]",
+        "<https://y.example>",
+        "notes",
+        "[[*Elsewhere]]",
+    ]);
+    prop::collection::vec(piece, 1..5).prop_map(|ps| ps.join(" "))
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// Review round 3: anchors are frozen at the tag, so they must not
+    /// depend on resolver data. `* See [[id:other]]` was `h-see-other`
+    /// with a resolver title and `h-see` without. In a slug a link is its
+    /// rendered description only; a link with none adds nothing.
+    #[test]
+    fn heading_anchors_do_not_depend_on_the_resolver(titles in prop::collection::vec(linked_title(), 1..6)) {
+        let doc: String = titles.iter().map(|t| format!("* {t}\n")).collect();
+        let titled = Resolver::default()
+            .with_target("other", Resolved::new("/o.html").with_title("A Resolved Title"));
+        let ids = |r: &Resolver| -> Vec<String> {
+            html_with(&doc, HeadlineIds::Slug, r)
+                .split("<h1 id=\"")
+                .skip(1)
+                .map(|p| p[..p.find('"').unwrap()].to_string())
+                .collect()
+        };
+        prop_assert_eq!(ids(&Resolver::default()), ids(&titled), "{}", doc);
+    }
+}
+
+#[test]
+fn a_link_in_a_title_slugs_as_its_description() {
+    let doc = "* See [[id:other]]\n* See [[id:other][the other]] too\n";
+    let out = html(doc);
+    assert!(out.contains("<h1 id=\"h-see\">"), "{out}");
+    assert!(out.contains("<h1 id=\"h-see-the-other-too\">"), "{out}");
+}

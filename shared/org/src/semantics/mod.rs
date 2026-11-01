@@ -239,6 +239,8 @@ pub struct SemanticLink {
     /// The path as written (`LINK_PATH`).
     pub path: String,
     pub target: String,
+    /// The `#fragment` as written: source text like the description (a
+    /// renderer resolves it to a heading anchor from its rendered form).
     pub fragment: Option<String>,
     /// The `::search` option of an `id:` or file link.
     pub search: Option<String>,

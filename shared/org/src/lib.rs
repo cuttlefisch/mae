@@ -22,7 +22,8 @@
 //! draw only what it renders.
 //!
 //! **Source is not display text.** [`semantics`] reads titles, aliases,
-//! property values and link descriptions as plain SOURCE text, so an inline
+//! property values, link descriptions and link fragments as plain SOURCE
+//! text, so an inline
 //! src block, a babel call or an export snippet the export hides is spelled
 //! out in them. Anything shown to a reader (a page, a title in a list, a
 //! search result) comes from the renderers ([`NodeMeta`]'s `title`,

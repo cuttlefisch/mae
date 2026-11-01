@@ -161,6 +161,14 @@ impl Builder<'_> {
         if link.is_radio() {
             return self.radio_link(&link, out);
         }
+        if self.slugging {
+            // A slug depends on the text alone: a link is its description
+            // as rendered, and a link without one adds nothing (what it
+            // shows then comes from the resolver or the page).
+            let desc = self.description(&link);
+            desc.into_iter().for_each(|d| push(out, d));
+            return;
+        }
         if self.in_value {
             // In a property value only a bracket link is a link: another is
             // its text, as a link nested in a description is. A bracket
