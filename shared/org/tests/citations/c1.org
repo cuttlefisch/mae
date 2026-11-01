@@ -1,0 +1,2 @@
+#+MACRO: id $1
+A [cite:pre {{{id(QZaQZ)}}} @k suf] B.

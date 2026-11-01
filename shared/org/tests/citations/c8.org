@@ -1,0 +1,2 @@
+#+MACRO: cc ]
+A [cite:@k {{{cc}}} QZgQZ] B.

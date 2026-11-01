@@ -132,3 +132,53 @@ fn no_citation_key_reaches_any_output() {
         .unwrap()
         .contains("SECKEY"));
 }
+
+/// Review round 6 (I): Org's export never expands a macro inside a
+/// citation (`org-macro-replace-all` does not see it as a macro there) and
+/// exports it as nothing, so a counter there does not count. MAE expanded
+/// it, and what the expansion made was read as the citation: text oc-basic
+/// drops, and a key (`@@` from a macro made `@K` a suffix). Each
+/// expectation is Emacs 30.2's page (`tests/citations/`), blanks collapsed.
+#[test]
+fn a_macro_in_a_citation_is_never_expanded() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/citations");
+    let cases: &[(&str, &str)] = &[
+        ("c1", "A (pre ??, ???? suf) B."),
+        ("c2", "A ?? (????) B."),
+        ("c3", "A (??, ???? suf) C1 B."),
+        ("c4", "A (??, ???? QZcQZ) B."),
+        ("c5", "A (??, ????) B."),
+        ("c7", "A (??, ????, ??, a) B."),
+        ("c8", "A (??, ???? QZgQZ) B."),
+        ("c10", "A (????) B."),
+    ];
+    let norm = |s: &str| {
+        s.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .replace("( ", "(")
+            .replace(" )", ")")
+    };
+    let mut failures = Vec::new();
+    for (name, want) in cases {
+        let doc = std::fs::read_to_string(dir.join(format!("{name}.org"))).unwrap();
+        let got = norm(&visible(&page(&doc)));
+        if got != norm(want) {
+            failures.push(format!("{name}: {got:?}, Emacs {want:?}"));
+        }
+    }
+    // Neither a key nor a macro's argument shows, in any output.
+    for name in ["c1", "c2", "c5", "c6", "c9", "c10"] {
+        let doc = std::fs::read_to_string(dir.join(format!("{name}.org"))).unwrap();
+        let d = mae_org::parse(&doc, &mae_org::ParseOptions::default());
+        let sem = mae_org::semantics(&d);
+        let r = mae_org::render(&d, &sem, &Default::default(), &Default::default());
+        let all = r.to_json(mae_org::TreeFormat::Html);
+        for m in ["QZaQZ", "QZbQZ", "QZdQZ", "QZeQZ", "QZhQZ", "QZjQZ"] {
+            if all.contains(m) {
+                failures.push(format!("{name}: {m} in\n{all}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

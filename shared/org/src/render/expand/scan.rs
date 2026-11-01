@@ -543,6 +543,7 @@ impl Engine {
                 HEADLINE if Headline::cast(n.clone()).is_some_and(|h| h.is_commented()) => {
                     walk.skip_subtree()
                 }
+                MACRO if super::syntax::in_citation(&n) => {}
                 MACRO => {
                     let unit = self.unit_of(&n);
                     out.extend(

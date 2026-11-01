@@ -38,9 +38,17 @@ pub(super) fn object_macro(n: &SyntaxNode) -> Option<Found> {
 /// Every macro object of `tree`, in order.
 pub(super) fn object_macros(tree: &SyntaxNode) -> Vec<Found> {
     tree.descendants()
-        .filter(|d| d.kind() == MACRO)
+        .filter(|d| d.kind() == MACRO && !in_citation(d))
         .filter_map(|d| object_macro(&d))
         .collect()
+}
+
+/// Whether macro object `n` is inside a citation: Org's export does not
+/// expand it there (`org-macro-replace-all` never sees it as a macro), and
+/// it exports as nothing (Emacs 30.2: `[cite:@k {{{n}}}] {{{n}}}` gives
+/// `(??, ????) 1`).
+pub(super) fn in_citation(n: &SyntaxNode) -> bool {
+    n.ancestors().any(|a| a.kind() == CITATION)
 }
 
 /// Whether node property `n` is an `EXPORT_` property of a parsed keyword

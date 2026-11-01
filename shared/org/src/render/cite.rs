@@ -25,8 +25,10 @@
 //!
 //! Prefixes and suffixes are rendered as objects where Emacs shows them; a
 //! citation holding a construct the export hides (an inline src block, a
-//! babel call, an export snippet, a results macro) or a macro shows none
-//! of them (fail closed: Org exports an inline src block's code there).
+//! babel call, an export snippet, a results macro) shows none of them
+//! (fail closed: Org exports an inline src block's code there). A macro in
+//! a citation is never expanded (Org's export does not see it as one) and
+//! renders nothing, as in Emacs.
 //! Not reproduced: a `note` citation outside a footnote, which Org moves
 //! into a new footnote, renders in place as `text`.
 
@@ -203,7 +205,7 @@ impl Builder<'_> {
     /// A citation, as `oc-basic` exports an unresolved one (see the module).
     pub fn citation(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
         let p = parts(n);
-        let affixes = !holds_hidden(n) && !n.descendants().any(|d| d.kind() == MACRO);
+        let affixes = !holds_hidden(n);
         self.number(&p);
         let bare = matches!(p.variant.as_str(), "bare" | "bare-caps" | "b" | "bc");
         let mut inner = Vec::new();
