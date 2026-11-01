@@ -111,6 +111,7 @@ export declare class MaeOrg {
   constructor(instance: WebAssembly.Instance, module?: WebAssembly.Module | null);
   /** Instances replaced after a failed call. */
   readonly restarts: number;
+  /** Throws a TypeError for a request that is not a string, and an Error for an unknown `op`, before touching the instance. */
   callRaw(op: Op, request: string): string;
   call(op: Op, request?: Request): unknown;
   semantics(request: Request): SemanticsResult;

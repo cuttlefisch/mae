@@ -10,14 +10,16 @@
 // `text`, not a JavaScript string index (UTF-16 code units): convert with
 // `new TextEncoder().encode(text)` before slicing.
 
-const OPS = Object.freeze({
-  semantics: 1,
-  renderHast: 2,
-  renderHtml: 3,
-  text: 4,
-  classifyLink: 5,
-  version: 6,
-});
+// A Map, not an object: `OPS['__proto__']` or `OPS.toString` must not
+// name an operation.
+const OPS = new Map([
+  ['semantics', 1],
+  ['renderHast', 2],
+  ['renderHtml', 3],
+  ['text', 4],
+  ['classifyLink', 5],
+  ['version', 6],
+]);
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -55,10 +57,23 @@ export class MaeOrg {
     this.restarts = 0;
   }
 
-  /** Runs operation `op` on a request string; returns the response string. */
+  /**
+   * Runs operation `op` on a request string; returns the response string.
+   * A request that is not a string is a `TypeError`, thrown before
+   * anything else: converting it would run the caller's code (`toString`),
+   * which could call back into this object mid-call.
+   */
   callRaw(op, request) {
-    const code = OPS[op];
-    if (code === undefined) throw new Error(`unknown operation ${op}`);
+    if (typeof request !== 'string') {
+      throw new TypeError(`mae-org: a request must be a string, not ${typeof request}`);
+    }
+    const code = typeof op === 'string' ? OPS.get(op) : undefined;
+    if (code === undefined) {
+      throw new Error(`unknown operation ${typeof op === 'string' ? op : typeof op}`);
+    }
+    // Encoded before the instance is chosen, so nothing after this point
+    // runs while a call is in flight.
+    const input = encoder.encode(request);
     if (this.broken) {
       if (!this.module) {
         throw new Error(`mae-org instance unusable after a failed call: ${this.broken.message}`);
@@ -68,7 +83,6 @@ export class MaeOrg {
       this.restarts += 1;
     }
     const e = this.exports;
-    const input = encoder.encode(request);
     try {
       // Pointers and lengths are u32: `>>> 0` reads them unsigned past 2 GiB.
       const ptr = e.mae_org_alloc(input.length) >>> 0;

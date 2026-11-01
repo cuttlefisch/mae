@@ -129,6 +129,31 @@ if (/<a\b/.test(meta.title_unlinked)) fail(`title_unlinked holds a link: ${meta.
 const v = org.version();
 console.log(`version: api ${v.api}, crate ${v.crate}`);
 
+// 4. The loader's own input checks (review): a request that is not a
+// string is refused before it is converted (its `toString` could call back
+// into the loader mid-call and retire the instance the outer call then
+// uses), and only the six operations are operations: no inherited name.
+{
+  let called = false;
+  const evil = { toString() { called = true; org.callRaw('version', '{}'); return '{"text": "x"}'; } };
+  let threw = null;
+  try { org.callRaw('renderHtml', evil); } catch (e) { threw = e; }
+  if (!(threw instanceof TypeError)) fail(`a non-string request was not a TypeError: ${threw}`);
+  if (called) fail('a non-string request was converted (its toString ran)');
+  for (const bad of [12345, null, undefined, { text: 'x' }]) {
+    try { org.callRaw('text', bad); fail(`request ${bad} accepted`); } catch (e) {
+      if (!(e instanceof TypeError)) fail(`request ${bad}: ${e}`);
+    }
+  }
+  for (const op of ['__proto__', 'toString', 'constructor', 'hasOwnProperty', 'valueOf', '']) {
+    try { org.callRaw(op, '{}'); fail(`operation ${op} accepted`); } catch (e) {
+      if (!/unknown operation/.test(e.message)) fail(`operation ${op}: ${e}`);
+    }
+  }
+  if (org.broken) fail('an input check retired the instance');
+  if (org.callRaw('text', '{"text": "ok"}').indexOf('ok') < 0) fail('the loader is unusable after input checks');
+}
+
 // 4. An instance a call failed in is not used again, whatever the call
 // threw (a trap, or a RangeError: the host's stack exhausted mid-call).
 // Stubs with no module to restart from, so every later call must refuse.
