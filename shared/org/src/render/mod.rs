@@ -49,7 +49,8 @@
 //!   depends on the `#+MACRO:` lines; a KB link fragment holding a macro
 //!   is expanded with its own page's macros, and to another page goes to
 //!   the node alone ([`RenderDiagnostic::FragmentMacro`]). [`Semantics`]
-//!   stays the source's (registered: `macros`).
+//!   stays the source's: links an expansion makes are rendered and
+//!   resolved, but are not in it (registered: `macros`).
 //!
 //! Per construct (what is shown, and what is deliberately not):
 //!

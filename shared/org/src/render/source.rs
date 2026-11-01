@@ -28,6 +28,7 @@
 use std::collections::HashSet;
 
 use super::objects::name_key;
+use super::prepared::{prepare, unexpanded};
 
 use crate::{
     Document, LineEnding, ParseOptions, SemanticDiagnostic, SemanticNode, Semantics,
@@ -418,11 +419,20 @@ impl Edit<'_> {
         (old, before): (&Document, &Semantics),
         (new, after): (&Document, &Semantics),
     ) -> Result<(), BodyEditError> {
-        let resolver = probing_resolver([before, after]);
+        // Expanded as rendered; when either side's macros cannot be (it
+        // renders nothing), both as written, so a change outside the body
+        // still shows and a body that repairs its own macros is written.
+        let (mut was_p, mut now_p) = (prepare(old, before), prepare(new, after));
+        if was_p.failed.is_some() || now_p.failed.is_some() {
+            (was_p, now_p) = (unexpanded(old, before), unexpanded(new, after));
+        }
+        // Every target either side links to, those only an expansion makes
+        // included.
+        let resolver = probing_resolver([before, after, &was_p.sem, &now_p.sem]);
         let (s, e) = self.range;
         let (ns, ne) = self.new_range;
-        let was = super::build::rendering_outside(old, before, &resolver, Span::new(s, e));
-        let now = super::build::rendering_outside(new, after, &resolver, Span::new(ns, ne));
+        let was = super::build::rendering_outside(&was_p, before, &resolver, Span::new(s, e));
+        let now = super::build::rendering_outside(&now_p, after, &resolver, Span::new(ns, ne));
         if was != now {
             return Err(BodyEditError::ChangesRendering {
                 what: "the page".into(),
@@ -637,7 +647,7 @@ fn step() {
 /// A resolver giving every KB target either semantics link to (or
 /// transclude) its own href and title, derived from the target: under it,
 /// a link whose target changes renders differently.
-fn probing_resolver(sems: [&Semantics; 2]) -> super::Resolver {
+fn probing_resolver(sems: [&Semantics; 4]) -> super::Resolver {
     let mut r = super::Resolver::default();
     for sem in sems {
         let targets = sem.links.iter().map(|l| l.target.clone());

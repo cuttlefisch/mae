@@ -163,6 +163,7 @@ impl Builder<'_> {
             // and one babel removes was dropped above. A macro left was
             // never one to Org's export where it stands (a property value,
             // a COMMENT subtree): it shows nothing.
+            MACRO if self.raw_macros() => push(out, text(&raw(n))),
             MACRO => {}
             // A citation is drawn as written; one holding a construct the
             // export hides, or a macro, only its keys (fail closed,

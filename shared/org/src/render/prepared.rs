@@ -17,6 +17,8 @@ pub(crate) struct Prepared<'d> {
     map: Option<Map>,
     /// The document as written.
     source: &'d Document,
+    /// Not expanded: macros are shown as written (see [`unexpanded`]).
+    raw: bool,
     /// Why nothing renders.
     pub failed: Option<RenderDiagnostic>,
     /// Environment substitutions (`MacroEnvironment`).
@@ -32,6 +34,7 @@ pub(crate) fn prepare<'d>(doc: &'d Document, sem: &'d Semantics) -> Prepared<'d>
         sem: Cow::Borrowed(sem),
         map: None,
         source: doc,
+        raw: false,
         failed: None,
         notes: Vec::new(),
     };
@@ -72,6 +75,21 @@ pub(crate) fn prepare<'d>(doc: &'d Document, sem: &'d Semantics) -> Prepared<'d>
     }
     p.map = map;
     p
+}
+
+/// `doc` with nothing expanded, its macros shown as written: what
+/// `replace_body` compares when either side's macros cannot be expanded,
+/// so the comparison still sees every change outside the edited body.
+pub(crate) fn unexpanded<'d>(doc: &'d Document, sem: &'d Semantics) -> Prepared<'d> {
+    Prepared {
+        doc: Cow::Borrowed(doc),
+        sem: Cow::Borrowed(sem),
+        map: None,
+        source: doc,
+        raw: true,
+        failed: None,
+        notes: Vec::new(),
+    }
 }
 
 /// The starts of the results macros of `doc` that babel removes: macro
@@ -131,7 +149,11 @@ impl<'d> Prepared<'d> {
 
     /// The builders' shared reading of the document.
     pub fn cx(&self) -> Rc<DocCx<'_>> {
-        DocCx::with_source(&self.doc, &self.sem, Some(self.source))
+        let mut cx = DocCx::with_source(&self.doc, &self.sem, Some(self.source));
+        if self.raw {
+            Rc::get_mut(&mut cx).expect("a fresh reading").raw_macros = true;
+        }
+        cx
     }
 
     /// A diagnostic of the rendered text, at its place in the source.

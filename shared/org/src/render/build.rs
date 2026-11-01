@@ -71,6 +71,8 @@ pub(crate) struct DocCx<'a> {
     eol: LineEnding,
     /// The ids of the KB nodes on this page.
     page_ids: HashSet<&'a str>,
+    /// Macros are shown as written (the document is not expanded).
+    pub raw_macros: bool,
     /// The document as written, when this is its expansion: a link
     /// fragment naming a heading by a title with macros is expanded with
     /// its templates.
@@ -198,6 +200,7 @@ impl<'a> DocCx<'a> {
             note_defs: Rc::new(Notes::defs(doc, sem)),
             eol: doc.line_ending(),
             page_ids: sem.nodes.iter().map(|n| n.id.as_str()).collect(),
+            raw_macros: false,
             source,
         })
     }
@@ -263,6 +266,11 @@ impl<'a> Builder<'a> {
 
     pub fn set_blank(&mut self, blank: Option<Span>) {
         self.blank = blank;
+    }
+
+    /// Whether macros are shown as written (see [`DocCx::raw_macros`]).
+    pub fn raw_macros(&self) -> bool {
+        self.cx.raw_macros
     }
 
     /// Whether KB node `id` is on this page.
@@ -649,26 +657,21 @@ pub(crate) fn node_text_trees(
 }
 
 /// What `replace_body` compares on both sides of an edit of the body
-/// `body`: the whole page of `doc` (its macros expanded, as rendered) with
-/// the body PRESENT, so everything it numbers or claims (footnote numbers,
-/// reference ids and back-links, target ids) counts, but its own output
-/// left out (and its own notes: defined in it and referenced only from
-/// it); and every node's metadata. Under the options that expose the
-/// most (property drawers and images on) in both [`super::HeadlineIds`] modes,
-/// which differ in where node and custom-id links land. One string; four
-/// walks of the document per side, whatever its number of nodes.
+/// `body` (in the source): the whole page `p` renders (its macros
+/// expanded, or as written when `p` is unexpanded) with the body PRESENT,
+/// so everything it numbers or claims (footnote numbers, reference ids and
+/// back-links, target ids) counts, but its own output left out (and its
+/// own notes: defined in it and referenced only from it); and every node's
+/// metadata. Under the options that expose the most (property drawers and
+/// images on) in both [`super::HeadlineIds`] modes, which differ in where
+/// node and custom-id links land. One string; four walks of the document
+/// per side, whatever its number of nodes.
 pub(crate) fn rendering_outside(
-    doc: &Document,
+    p: &super::prepared::Prepared,
     sem: &Semantics,
     resolver: &Resolver,
     body: Span,
 ) -> String {
-    let p = super::prepared::prepare(doc, sem);
-    // Nothing renders, before and after alike, wherever the failing macro
-    // stands.
-    if let Some(f) = p.failed {
-        return f.kind_name().to_string();
-    }
     let body = p.to_rendered(body);
     let root = p.doc.syntax();
     let mut out = String::new();
@@ -685,7 +688,7 @@ pub(crate) fn rendering_outside(
         let mut second = Builder::with_cx(cx, &opts, resolver, Mode::Page, first.found);
         second.blank = Some(body);
         let body = second.run(&root);
-        let nodes = super::meta::nodes(&p, sem, &opts, resolver, &second.found);
+        let nodes = super::meta::nodes(p, sem, &opts, resolver, &second.found);
         let rendered = super::Rendered {
             body,
             nodes,

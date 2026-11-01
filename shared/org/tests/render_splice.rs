@@ -729,3 +729,79 @@ fn a_name_that_differs_only_in_blanks_or_case_is_the_same_name() {
 fn an_edit_that_adds_a_macro_template_is_refused() {
     refused(&[("macro", DRAWER, "new body\n#+MACRO: m $1\n")]);
 }
+
+/// Review round 5 (M4): a link that exists only in the EXPANDED text (a
+/// `{{{keyword(T)}}}` in A reading a `#+T:` line in B's example block)
+/// rendered unresolved on both sides, so retargeting it was accepted. The
+/// probing resolver now holds every target of both sides' expanded
+/// parses: the retarget is refused, a change of what the link shows too.
+#[test]
+fn a_link_only_the_expansion_makes_is_compared() {
+    let text = "* A\n:PROPERTIES:\n:ID: a\n:END:\nLook {{{keyword(T)}}} here.\n* B\n:PROPERTIES:\n:ID: b\n:END:\n#+begin_example\n#+T: [[id:x][see]]\n#+end_example\n";
+    let doc = parse(text, &ParseOptions::default());
+    let sem = semantics(&doc);
+    let b = sem.nodes.iter().find(|n| n.id == "b").unwrap();
+    for body in [
+        "#+begin_example\n#+T: [[id:y][see]]\n#+end_example\n",
+        "#+begin_example\n#+T: [[id:x][look]]\n#+end_example\n",
+    ] {
+        let r = replace_body(text, &doc, b, body);
+        assert!(r.is_err(), "accepted {body:?}: {r:?}");
+    }
+    let r = replace_body(
+        text,
+        &doc,
+        b,
+        "#+begin_example\n#+T: [[id:x][see]]\n#+end_example\nmore\n",
+    );
+    assert!(r.is_ok(), "{r:?}");
+}
+
+/// Review round 5 (M5): when a side's macros cannot be expanded it renders
+/// nothing, and two empty pages compared equal: any edit was accepted
+/// whatever it changed outside the body (fail open), and a body repairing
+/// its own macro was refused. Both sides are now compared with nothing
+/// expanded: the repair is written; an edit renumbering another node's
+/// footnote is refused.
+#[test]
+fn a_document_whose_macros_fail_is_compared_unexpanded() {
+    let text = "* A\n:PROPERTIES:\n:ID: a\n:END:\nhello\n* B\n:PROPERTIES:\n:ID: b\n:END:\noops {{{nosuch}}} see[fn:b]\n\n[fn:b] the b note\n";
+    let doc = parse(text, &ParseOptions::default());
+    let sem = semantics(&doc);
+    let node = |id: &str| sem.nodes.iter().find(|n| n.id == id).unwrap();
+    let r = replace_body(
+        text,
+        &doc,
+        node("b"),
+        "oops fixed see[fn:b]\n\n[fn:b] the b note\n",
+    );
+    assert!(r.is_ok(), "{r:?}");
+    let r = replace_body(text, &doc, node("a"), "hello[fn:a]\n\n[fn:a] mine\n");
+    assert!(r.is_err(), "{r:?}");
+    let r = replace_body(text, &doc, node("a"), "hello again\n");
+    assert!(r.is_ok(), "{r:?}");
+    // The repair is written even where other macros expand once it is
+    // made (expanded, A's counter would read 1; failing, nothing).
+    let text = text.replace("hello\n", "hello {{{n}}}\n");
+    let doc = parse(&text, &ParseOptions::default());
+    let sem = semantics(&doc);
+    let b = sem.nodes.iter().find(|n| n.id == "b").unwrap();
+    let r = replace_body(
+        &text,
+        &doc,
+        b,
+        "oops fixed see[fn:b]\n\n[fn:b] the b note\n",
+    );
+    assert!(r.is_ok(), "{r:?}");
+}
+
+/// Review round 5: a body whose macro makes a level-1 headline (here
+/// `:noexport:`) re-parents the next node under it, hiding it: refused.
+#[test]
+fn a_body_whose_expansion_hides_the_next_node_is_refused() {
+    let text = "#+MACRO: h * X :noexport:\n* P\n** A\n:PROPERTIES:\n:ID: a\n:END:\nbody a\n** C\n:PROPERTIES:\n:ID: c\n:END:\nbody c\n";
+    let doc = parse(text, &ParseOptions::default());
+    let sem = semantics(&doc);
+    let a = sem.nodes.iter().find(|n| n.id == "a").unwrap();
+    assert!(replace_body(text, &doc, a, "{{{h}}}\n").is_err());
+}
