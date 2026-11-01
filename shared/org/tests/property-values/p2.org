@@ -1,0 +1,7 @@
+#+MACRO: os src_sh[:exports none]{echo
+* H
+:PROPERTIES:
+:ID: n1
+:Q: {{{os}}} QZbQZ}
+:END:
+P {{{property(Q)}}}

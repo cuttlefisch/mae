@@ -98,7 +98,10 @@ export interface Rendered<T> {
    *   document if that matters to you;
    * - `link_attribute`: a KB link's `rel=`, `w=` or `c=` that is not a
    *   valid value (a relation name `[a-z][a-z_-]{0,63}`: no digit; a finite
-   *   number); its `data-org-*` attribute is left out.
+   *   number); its `data-org-*` attribute is left out;
+   * - `property_withheld`: a property value whose macros cannot be expanded
+   *   (as `{{{property(KEY)}}}` would expand them at its entry): it renders
+   *   as nothing in `nodes` and in the drawer. The span is the drawer's.
    */
   diagnostics: { kind: string; start: number; end: number }[];
 }

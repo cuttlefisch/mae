@@ -9,7 +9,7 @@ use crate::kind::SyntaxKind::*;
 use crate::kind::SyntaxNode;
 use crate::semantics::file_title_source;
 use crate::semantics::items::{item_drawer, item_title_parts};
-use crate::{NodeOrigin, SemanticNode, Semantics};
+use crate::{NodeOrigin, RenderDiagnostic, SemanticNode, Semantics, Span};
 
 /// The metadata of every node of `source` (the source's semantics) that
 /// the page exports, in its order, read from its counterpart in the
@@ -22,13 +22,15 @@ pub(crate) fn nodes(
     opts: &RenderOptions,
     resolver: &Resolver,
     page: &Table,
-) -> Vec<NodeMeta> {
+) -> (Vec<NodeMeta>, Vec<RenderDiagnostic>) {
     let root = p.doc.syntax();
-    let mut b = Builder::new(&p.doc, &p.sem, opts, resolver, Mode::Meta, Table::default());
-    p.counterparts(source)
+    let mut b = Builder::with_cx(p.cx(), opts, resolver, Mode::Meta, Table::default());
+    let nodes = p
+        .counterparts(source)
         .into_iter()
         .map(|(_, n)| b.node_meta(&root, n, page))
-        .collect()
+        .collect();
+    (nodes, b.diagnostics)
 }
 
 impl Builder<'_> {
@@ -60,11 +62,12 @@ impl Builder<'_> {
             .filter(|_| !cut)
             .map(|a| b.placeless(at, |b| b.inline_text(a)))
             .collect();
+        let (entry, drawer) = node_entry(root, n);
         let properties = n
             .properties
             .iter()
             .map(|(k, v)| {
-                let v = b.placeless(at, |b| b.property_value(v));
+                let v = b.placeless(at, |b| b.macro_value(&entry, v, drawer));
                 (k.clone(), v)
             })
             .collect();
@@ -192,7 +195,108 @@ impl Builder<'_> {
     }
 }
 
+/// The entry text `{{{property}}}` reads at node `n` (see [`entry_text`]),
+/// and where its property drawer is (else the node).
+fn node_entry(root: &SyntaxNode, n: &SemanticNode) -> (String, Span) {
+    let at = match n.origin {
+        NodeOrigin::File => None,
+        NodeOrigin::Headline => node_at(root, n.span, HEADLINE),
+        NodeOrigin::Item => node_at(root, n.span, ITEM),
+    };
+    let inside = at.unwrap_or_else(|| root.clone());
+    let drawer = entry_drawer(&inside).map_or(n.span, |d| Span::of(&d));
+    (entry_text(&inside), drawer)
+}
+
+/// The property drawer of the entry holding `inside` (its headline's, or
+/// the file's before the first).
+fn entry_drawer(inside: &SyntaxNode) -> Option<SyntaxNode> {
+    let headline = inside.ancestors().find(|a| a.kind() == HEADLINE);
+    match headline.and_then(crate::Headline::cast) {
+        Some(h) => h.property_drawer().map(|d| d.syntax().clone()),
+        None => {
+            let root = inside.ancestors().last()?;
+            let zeroth = root.children().next().filter(|s| s.kind() == SECTION)?;
+            zeroth.children().find(|c| c.kind() == PROPERTY_DRAWER)
+        }
+    }
+}
+
+/// What `{{{property(KEY)}}}` reads at the entry holding `inside`: its
+/// headline's first line (for `ITEM` and `TODO`) and its property drawer,
+/// as text a value's paragraph can follow, line endings `\n`.
+pub(crate) fn entry_text(inside: &SyntaxNode) -> String {
+    let mut out = String::new();
+    if let Some(h) = inside.ancestors().find(|a| a.kind() == HEADLINE) {
+        let t = h.to_string();
+        out.push_str(t.split(['\n', '\r']).next().unwrap_or(""));
+        out.push('\n');
+    }
+    if let Some(d) = entry_drawer(inside) {
+        let t = d.to_string().replace("\r\n", "\n").replace('\r', "\n");
+        out.push_str(t.trim_end_matches('\n'));
+        out.push('\n');
+    }
+    out
+}
+
 impl Builder<'_> {
+    /// A property value as `{{{property(KEY)}}}` renders it at its entry
+    /// (`entry`, see [`entry_text`]): Org shows a property value only
+    /// through that macro, whose expansion is scanned again where it
+    /// stands, so the value's macros expand with the document's templates
+    /// (then babel's `results`), and what they open or close hides as it
+    /// would there. A value whose macros cannot be expanded is withheld
+    /// (nothing), with a [`RenderDiagnostic::PropertyWithheld`] at
+    /// `drawer`. A value with no macro, or a document shown as written,
+    /// is rendered as it is.
+    pub fn macro_value(&mut self, entry: &str, value: &str, drawer: Span) -> Vec<Node> {
+        let expanded = match self.value_cx() {
+            Some(vcx) if value.contains("{{{") => {
+                let text = format!("{entry}x {value}\n");
+                match self.expand_value(vcx, &text) {
+                    Ok(t) => t,
+                    Err(_) => {
+                        self.diagnostics
+                            .push(RenderDiagnostic::PropertyWithheld(drawer));
+                        return Vec::new();
+                    }
+                }
+            }
+            _ => return self.property_value(value),
+        };
+        let line = expanded.lines().last().unwrap_or("");
+        self.property_value(line.strip_prefix("x ").unwrap_or(line))
+    }
+
+    /// `text` with its macros expanded twice, as the export does: the
+    /// templates, then the `results` babel keeps (in a value, a results
+    /// macro an inline src block or call owns is removed).
+    fn expand_value(
+        &self,
+        vcx: &super::expand::ValueCx,
+        text: &str,
+    ) -> Result<String, crate::MacroFailure> {
+        let (text, map) = match vcx.expand(text)? {
+            Some(e) => (e.text, e.map),
+            None => (text.to_string(), Default::default()),
+        };
+        if !text.contains("{{{") {
+            return Ok(text);
+        }
+        let d = crate::parse(&text, vcx.options());
+        let removed = d
+            .syntax()
+            .descendants()
+            .filter(|n| n.kind() == MACRO && super::babel::results_macro_owner(n).is_some())
+            .map(|n| usize::from(n.text_range().start()))
+            .collect();
+        Ok(match vcx.results(&d, map, removed)? {
+            Some(e) => e.text,
+            None => text,
+        })
+    }
+
     /// Whether `value`, read as objects at this builder's place, holds
     /// anything the renderer hides: an inline src block or results macro
     /// its `:exports` hides, a babel call, an export snippet, or a macro

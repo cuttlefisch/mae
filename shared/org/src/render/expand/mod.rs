@@ -240,6 +240,8 @@ pub(crate) struct Expansion {
     pub text: String,
     pub map: Map,
     pub notes: Vec<RenderDiagnostic>,
+    /// The work it was charged.
+    pub work: u64,
 }
 
 /// Why an expansion stopped, and where (in the parsed text).
@@ -266,6 +268,88 @@ pub(crate) fn expand_text(doc: &Document, text: &str) -> Option<String> {
         Ok(Some(e)) => Some(e.text),
         Ok(None) => Some(text.to_string()),
         Err(_) => None,
+    }
+}
+
+/// What the macros of a property value expand with, as
+/// `{{{property(KEY)}}}` expands them where it stands: the templates and
+/// the `#+KEY:` lines of the document as written, and one budget, linear
+/// in it, that every value of a render shares.
+pub(crate) struct ValueCx {
+    templates: HashMap<String, value::Template>,
+    lines: std::rc::Rc<Vec<String>>,
+    opts: crate::ParseOptions,
+    left: std::cell::Cell<u64>,
+}
+
+impl ValueCx {
+    pub(crate) fn new(source: &Document) -> ValueCx {
+        let text = source.syntax().to_string();
+        let root = source.syntax();
+        let lines = value::keyword_lines(&root, &text, source.line_ending());
+        ValueCx {
+            templates: value::templates(source, &text),
+            lines: std::rc::Rc::new(lines.into_iter().map(str::to_string).collect()),
+            opts: crate::ParseOptions {
+                todo_sequences: source.todo_sequences().to_vec(),
+                ..crate::ParseOptions::default()
+            },
+            left: std::cell::Cell::new(WORK_BASE + WORK_PER_BYTE * text.len() as u64),
+        }
+    }
+
+    /// The parse options of the document.
+    pub(crate) fn options(&self) -> &crate::ParseOptions {
+        &self.opts
+    }
+
+    /// `text` (an entry: its heading line and property drawer, then a
+    /// paragraph holding the value) with its macros expanded as the
+    /// export's first expansion does, `results` left; `Ok(None)` when it
+    /// has none. Charged to the shared budget.
+    pub(crate) fn expand(&self, text: &str) -> Result<Option<Expansion>, MacroFailure> {
+        let d = crate::parse(text, &self.opts);
+        let mut engine = scan::Engine::new(&d, text.len(), self.templates.clone());
+        engine.outer_lines = Some(self.lines.clone());
+        self.run(engine, Map::default(), HashSet::new())
+    }
+
+    /// Org's second expansion of `doc` (what [`ValueCx::expand`] made,
+    /// parsed), as [`expand_results`]; charged to the shared budget.
+    pub(crate) fn results(
+        &self,
+        doc: &Document,
+        map: Map,
+        removed: HashSet<usize>,
+    ) -> Result<Option<Expansion>, MacroFailure> {
+        let templates =
+            HashMap::from([("results".to_string(), value::Template::Text("$1".into()))]);
+        let len = doc.syntax().text().len().into();
+        self.run(scan::Engine::new(doc, len, templates), map, removed)
+    }
+
+    fn run(
+        &self,
+        mut engine: scan::Engine,
+        map: Map,
+        skip: HashSet<usize>,
+    ) -> Result<Option<Expansion>, MacroFailure> {
+        let limit = engine.work_limit.min(self.left.get());
+        engine.work_limit = limit;
+        engine.charge(0).map_err(|(f, ..)| f)?;
+        let len = engine.dtext.len() as u64;
+        let r = engine.run(map, skip);
+        // Nothing expanded: about one read of the text.
+        let spent = match &r {
+            Ok(Some(e)) => e.work,
+            Ok(None) => len,
+            Err(_) => limit,
+        };
+        self.left.set(self.left.get().saturating_sub(spent));
+        r.map_err(|d| match d {
+            RenderDiagnostic::MacroFailed(f, _) => f,
+            _ => MacroFailure::Unsupported,
+        })
     }
 }
 

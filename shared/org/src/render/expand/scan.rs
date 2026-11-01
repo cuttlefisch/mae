@@ -87,6 +87,9 @@ pub(super) struct Engine {
     pub(super) commented: Vec<(usize, usize)>,
     /// Caches of the current parse.
     pub(super) lines: Option<Vec<String>>,
+    /// The `#+KEY:` lines `{{{keyword}}}` reads instead of the parse's
+    /// (a property value expanded apart from its document).
+    pub(super) outer_lines: Option<std::rc::Rc<Vec<String>>>,
     pub(super) keywords: HashMap<String, Option<String>>,
     pub(super) properties: HashMap<usize, Vec<(String, String)>>,
 }
@@ -217,6 +220,7 @@ impl Engine {
             skip: HashSet::new(),
             commented: Vec::new(),
             lines: None,
+            outer_lines: None,
             keywords: HashMap::new(),
             properties: HashMap::new(),
         }
@@ -287,6 +291,7 @@ impl Engine {
             text: out,
             map,
             notes: self.notes,
+            work: self.work,
         }))
     }
 

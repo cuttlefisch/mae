@@ -102,11 +102,14 @@ impl Engine {
         if let Some(v) = self.keywords.get(&key) {
             return Ok(v.clone());
         }
-        if self.lines.is_none() {
+        if self.lines.is_none() && self.outer_lines.is_none() {
             let lines = keyword_lines(&self.d.syntax(), &self.dtext, self.eol);
             self.lines = Some(lines.into_iter().map(str::to_string).collect());
         }
-        let lines = self.lines.as_deref().unwrap_or_default();
+        let lines = match &self.outer_lines {
+            Some(outer) => outer.as_slice(),
+            None => self.lines.as_deref().unwrap_or_default(),
+        };
         let n = lines.len();
         let v =
             crate::semantics::keywords::keyword_value(lines.iter().map(String::as_str), name, true);

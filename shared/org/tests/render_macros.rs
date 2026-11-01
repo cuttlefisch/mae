@@ -736,3 +736,78 @@ fn an_expansion_in_a_lines_first_token_changes_the_lines_element() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
+
+/// What a page shows, tags dropped and blanks collapsed.
+fn shown(html: &str) -> String {
+    let mut out = String::new();
+    let mut tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => tag = true,
+            '>' if tag => tag = false,
+            c if !tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Review round 6 (G): Org shows a property value only through
+/// `{{{property(KEY)}}}`, whose expansion is scanned again where it
+/// stands: the value's macros expand with the document's templates, and
+/// what they open or close hides as it would there. A value's rendered
+/// form (node metadata, and the drawer when drawers are shown) is that
+/// expansion; one whose macros fail is withheld, with a diagnostic. Each
+/// expectation is Emacs 30.2's page of `P {{{property(Q)}}}`
+/// (`tests/property-values/`).
+#[test]
+fn a_property_value_renders_as_the_property_macro_does() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/property-values");
+    let cases: &[(&str, &str, &str)] = &[
+        ("p1", "Q", "tail"),
+        ("p2", "Q", ""),
+        ("p3", "Q", "t QZcQZ"),
+        ("p4", "Q", "t QZeQZ"),
+        ("p5", "Q", "QZgQZ Head QZhQZ rr QZiQZ TODO"),
+        ("p6", "Q", ""),
+        ("p7", "Q", "x QZlQZ y"),
+        ("p8", "ALIASES", "QZmQZ"),
+    ];
+    let mut failures = Vec::new();
+    for (name, key, want) in cases {
+        let doc = std::fs::read_to_string(dir.join(format!("{name}.org"))).unwrap();
+        let d = parse(&doc, &ParseOptions::default());
+        let sem = semantics(&d);
+        for pd in [false, true] {
+            let opts = RenderOptions::default().with_property_drawers(pd);
+            let r = render(&d, &sem, &opts, &Resolver::default());
+            let value = r.nodes[0]
+                .properties
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| shown(&mae_org::to_html(v)))
+                .unwrap_or_default();
+            if value != *want {
+                failures.push(format!("{name}: {key} = {value:?}, Emacs {want:?}"));
+            }
+            let page = shown(&mae_org::to_html(&r.body));
+            if pd && !want.is_empty() && !page.contains(want) {
+                failures.push(format!("{name}: the drawer shows {page:?}"));
+            }
+            for m in ["QZaQZ", "QZbQZ", "QZdQZ", "QZfQZ", "QZjQZ", "QZnQZ"] {
+                let all = r.to_json(TreeFormat::Html);
+                if all.contains(m) {
+                    failures.push(format!("{name}: {m} shown (pd {pd}):\n{all}"));
+                }
+            }
+            let withheld = r
+                .diagnostics
+                .iter()
+                .any(|d| d.kind_name() == "property_withheld");
+            if withheld != (*name == "p6") {
+                failures.push(format!("{name}: diagnostics {:?}", r.diagnostics));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

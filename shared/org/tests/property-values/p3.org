@@ -1,0 +1,7 @@
+#+MACRO: res {{{results($1)}}}
+* H
+:PROPERTIES:
+:ID: n1
+:Q: {{{res(t {{{results(=QZcQZ=)}}},~QZdQZ~)}}}
+:END:
+P {{{property(Q)}}}

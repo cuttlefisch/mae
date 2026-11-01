@@ -223,6 +223,11 @@ pub enum RenderDiagnostic {
     /// confidence that is no finite number): its `data-org-*` attribute is
     /// left out.
     LinkAttribute(Span),
+    /// A property value whose macros cannot be expanded (as
+    /// `{{{property(KEY)}}}` would expand them there): it is withheld,
+    /// rendered as nothing in the node metadata and the drawer. The span
+    /// is the property drawer's.
+    PropertyWithheld(Span),
 }
 
 /// Why a document's macros could not be expanded.
@@ -263,6 +268,7 @@ impl RenderDiagnostic {
             RenderDiagnostic::FragmentMacro(_) => "fragment_macro",
             RenderDiagnostic::FootnoteUndefined(_) => "footnote_undefined",
             RenderDiagnostic::LinkAttribute(_) => "link_attribute",
+            RenderDiagnostic::PropertyWithheld(_) => "property_withheld",
         }
     }
 
@@ -274,7 +280,8 @@ impl RenderDiagnostic {
             | RenderDiagnostic::MacroEnvironment(s)
             | RenderDiagnostic::FragmentMacro(s)
             | RenderDiagnostic::FootnoteUndefined(s)
-            | RenderDiagnostic::LinkAttribute(s) => *s,
+            | RenderDiagnostic::LinkAttribute(s)
+            | RenderDiagnostic::PropertyWithheld(s) => *s,
         }
     }
 
@@ -288,6 +295,7 @@ impl RenderDiagnostic {
             RenderDiagnostic::FragmentMacro(_) => RenderDiagnostic::FragmentMacro(s),
             RenderDiagnostic::FootnoteUndefined(_) => RenderDiagnostic::FootnoteUndefined(s),
             RenderDiagnostic::LinkAttribute(_) => RenderDiagnostic::LinkAttribute(s),
+            RenderDiagnostic::PropertyWithheld(_) => RenderDiagnostic::PropertyWithheld(s),
         }
     }
 }
@@ -363,8 +371,9 @@ pub fn render(
         None => {
             let cx = p.cx();
             let page = build::page_with(&p.doc, cx, options, resolver, build::Mode::Page, None);
-            let nodes = meta::nodes(&p, sem, options, resolver, &page.table);
-            diagnostics.extend(page.diagnostics.into_iter().map(|d| p.to_source(d)));
+            let (nodes, notes) = meta::nodes(&p, sem, options, resolver, &page.table);
+            let found = page.diagnostics.into_iter().chain(notes);
+            diagnostics.extend(found.map(|d| p.to_source(d)));
             (page.body, nodes)
         }
     };

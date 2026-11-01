@@ -77,6 +77,8 @@ pub(crate) struct DocCx<'a> {
     /// fragment naming a heading by a title with macros is expanded with
     /// its templates.
     source: Option<&'a Document>,
+    /// What property values' macros expand with, made when one needs it.
+    values: std::cell::OnceCell<super::expand::ValueCx>,
 }
 
 pub(crate) struct Builder<'a> {
@@ -204,6 +206,7 @@ impl<'a> DocCx<'a> {
             page_ids: sem.nodes.iter().map(|n| n.id.as_str()).collect(),
             raw_macros: false,
             source,
+            values: std::cell::OnceCell::new(),
         })
     }
 }
@@ -288,6 +291,17 @@ impl<'a> Builder<'a> {
             Some(src) => super::expand::expand_text(src, text),
             None => super::expand::expand_text(&crate::parse("", &Default::default()), text),
         }
+    }
+
+    /// What property values' macros expand with: the document as written
+    /// (`None` when it is not known, or shown as written).
+    pub fn value_cx(&self) -> Option<&super::expand::ValueCx> {
+        let src = self.cx.source.filter(|_| !self.cx.raw_macros)?;
+        Some(
+            self.cx
+                .values
+                .get_or_init(|| super::expand::ValueCx::new(src)),
+        )
     }
 
     /// Whether `kw` is a done keyword.
@@ -611,10 +625,11 @@ impl Builder<'_> {
         // The values have no single place: they sit in the drawer, whose
         // `:exports` scope is theirs.
         let at = Some(Span::of(n).start);
+        let entry = super::meta::entry_text(n);
         let mut dl = Vec::new();
         for (key, value) in crate::semantics::resolve_properties(pairs) {
             push(&mut dl, Element::new(Tag::Dt).with(vec![text(&key)]).into());
-            let v = self.placeless(at, |b| b.property_value(&value));
+            let v = self.placeless(at, |b| b.macro_value(&entry, &value, Span::of(n)));
             push(&mut dl, Element::new(Tag::Dd).with(v).into());
         }
         let dl = Element::new(Tag::Dl).class("org-properties").with(dl);
@@ -691,7 +706,7 @@ pub(crate) fn rendering_outside(
         let mut second = Builder::with_cx(cx, &opts, resolver, Mode::Page, first.found);
         second.blank = Some(body);
         let body = second.run(&root);
-        let nodes = super::meta::nodes(p, sem, &opts, resolver, &second.found);
+        let (nodes, _) = super::meta::nodes(p, sem, &opts, resolver, &second.found);
         let rendered = super::Rendered {
             body,
             nodes,

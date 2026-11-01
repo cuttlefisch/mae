@@ -1,0 +1,7 @@
+#+MACRO: cs }
+* H
+:PROPERTIES:
+:ID: n1
+:Q: src_sh[:exports none]{echo QZaQZ{{{cs}}} tail
+:END:
+P {{{property(Q)}}}

@@ -1,0 +1,8 @@
+#+K: QZgQZ
+* TODO Head QZhQZ
+:PROPERTIES:
+:ID: n1
+:R: rr QZiQZ
+:Q: {{{keyword(K)}}} {{{property(ITEM)}}} {{{property(R)}}} {{{property(TODO)}}}
+:END:
+P {{{property(Q)}}}
