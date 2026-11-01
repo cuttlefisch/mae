@@ -294,19 +294,7 @@ impl Radio {
         let mut targets: Vec<Target> = values.iter().map(|v| compile(v)).collect();
         let part = partitions(values, &targets, cx.radio_limit);
         let parts = part.last().map_or(1, |&j| j as usize + 1);
-        let mut leads: Vec<Vec<Item>> = Vec::new();
-        let mut lead_ids: HashMap<Vec<Item>, u32> = HashMap::new();
-        for t in targets.iter_mut().filter(|t| t.shape == Shape::Mixed) {
-            let blank = |i: &Item| *i == Item::Run || matches!(i, Item::Lit(c) if is_space(*c));
-            if let Some(j) = t.items.iter().position(|i| !blank(i)).filter(|&j| j > 0) {
-                let lead = t.items[..=j].to_vec();
-                let next = leads.len() as u32;
-                t.lead = *lead_ids.entry(lead.clone()).or_insert_with(|| {
-                    leads.push(lead);
-                    next
-                });
-            }
-        }
+        let leads = assign_leads(&mut targets);
         let text = Symbols::read(cx);
         let mut plain_seqs = Vec::new();
         let mut literal_seqs = Vec::new();
@@ -488,7 +476,9 @@ impl Radio {
         let mut seen: Vec<u32> = Vec::new();
         let mut best: Option<(usize, u32, Match)> = None;
         let mut hit = None;
-        // Each examined candidate's matches, kept for the link parser below.
+        // The matches at the best candidate and the one after it: all the
+        // link parser below can read (at a line start it also tries the
+        // next char). Only these two are kept, so memory stays O(regexps).
         let mut tables: Vec<(usize, PartMatches)> = Vec::new();
         while let Some(&p) = self.starts.get(k).filter(|&&p| p < end) {
             if best.is_some_and(|b| p >= b.0) {
@@ -507,15 +497,22 @@ impl Radio {
             if !table.is_empty() && hit.is_none() {
                 hit = Some(k);
             }
+            let mut improved = false;
             for &(j, _, m) in &table {
                 if let Err(i) = seen.binary_search(&j) {
                     seen.insert(i, j);
                     if best.is_none_or(|b| (m.m0, j) < (b.0, b.1)) {
                         best = Some((m.m0, j, m));
+                        improved = true;
                     }
                 }
             }
-            tables.push((p, table));
+            if improved {
+                tables.clear();
+                tables.push((p, table));
+            } else if tables.len() == 1 && best.is_some_and(|b| cx.step(b.2.p) == p) {
+                tables.push((p, table));
+            }
             k += 1;
         }
         cur.next = hit.unwrap_or(k);
@@ -672,14 +669,16 @@ impl Radio {
                 return Ok(None);
             }
             for m in [&self.plain, &self.literal] {
-                if let Some((t, g1)) = m.first_at(cx, &self.sym, k, fit, end) {
-                    if best.is_none_or(|b| t < b.0) {
-                        let Some(m0) = after(cx, g1, end) else {
-                            return Ok(None);
-                        };
-                        best = Some((t, Match { p, g1, m0 }));
-                    }
+                let Some((t, g1)) = m.first_at(cx, &self.sym, k, fit, end) else {
+                    continue;
+                };
+                if best.is_some_and(|b| b.0 <= t) {
+                    continue;
                 }
+                let Some(m0) = after(cx, g1, end) else {
+                    return Ok(None);
+                };
+                best = Some((t, Match { p, g1, m0 }));
             }
         }
         self.mixed_walk(cx, (k, p), (reach, end), &mut Sink::First(&mut best))?;
@@ -709,35 +708,45 @@ impl Radio {
                 return Ok(());
             }
             for m in [&self.plain, &self.literal] {
-                let tr = &m.trie;
-                let c = tr.level_ancestor(m.deep[k], fit);
-                // The deepest node: followed by text off the trie.
-                let d = tr.depth[c as usize] as usize;
-                if tr.has_own(c) {
-                    let g1 = self.sym[k + d];
-                    if let Some(m0) = after(cx, g1, end) {
-                        for &t in tr.own_of(c) {
-                            sink.take(t, Match { p, g1, m0 });
-                        }
-                    }
-                }
-                // Inner nodes: followed by the path's next symbol.
-                let mut u = tr.own_up_above(c);
-                while u != NONE {
-                    self.charge()?;
-                    let d = tr.depth[u as usize] as usize;
-                    let g1 = self.sym[k + d];
-                    let borders = self.ws[k + d] || cx.ch(g1, end).is_some_and(boundary);
-                    if let Some(m0) = after(cx, g1, end).filter(|_| borders) {
-                        for &t in tr.own_of(u) {
-                            sink.take(t, Match { p, g1, m0 });
-                        }
-                    }
-                    u = tr.own_up_above(u);
-                }
+                self.trie_matches(cx, m, (k, p), (fit, end), &mut sink)?;
             }
         }
         self.mixed_walk(cx, (k, p), (reach, end), &mut sink)
+    }
+
+    /// The matched targets of `m`'s trie on the path from symbol `k` (cut
+    /// at `fit` symbols), each offered to `sink`: the deepest node's checked
+    /// against the text after it, inner ones against the path's next symbol.
+    fn trie_matches(
+        &self,
+        cx: &InlineCx,
+        m: &Matcher,
+        (k, p): (usize, usize),
+        (fit, end): (usize, usize),
+        sink: &mut Sink,
+    ) -> Work<()> {
+        let tr = &m.trie;
+        let c = tr.level_ancestor(m.deep[k], fit);
+        let mut offer = |u: u32, inner: bool| {
+            let d = tr.depth[u as usize] as usize;
+            let g1 = self.sym[k + d];
+            let borders = !inner || self.ws[k + d] || cx.ch(g1, end).is_some_and(boundary);
+            if let Some(m0) = after(cx, g1, end).filter(|_| borders) {
+                for &t in tr.own_of(u) {
+                    sink.take(t, Match { p, g1, m0 });
+                }
+            }
+        };
+        if tr.has_own(c) {
+            offer(c, false);
+        }
+        let mut u = tr.own_up_above(c);
+        while u != NONE {
+            self.charge()?;
+            offer(u, true);
+            u = tr.own_up_above(u);
+        }
+        Ok(())
     }
 
     /// Mixed targets on the run-collapsed path from symbol `k` (cut at
@@ -1034,6 +1043,26 @@ fn compile(value: &str) -> Target {
     }
 }
 
+/// Each mixed target's lead group (`Target::lead`): its leading whitespace
+/// stretch and the char after it, one id per distinct group. The groups.
+fn assign_leads(targets: &mut [Target]) -> Vec<Vec<Item>> {
+    let blank = |i: &Item| *i == Item::Run || matches!(i, Item::Lit(c) if is_space(*c));
+    let mut leads: Vec<Vec<Item>> = Vec::new();
+    let mut ids: HashMap<Vec<Item>, u32> = HashMap::new();
+    for t in targets.iter_mut().filter(|t| t.shape == Shape::Mixed) {
+        let Some(j) = t.items.iter().position(|i| !blank(i)).filter(|&j| j > 0) else {
+            continue;
+        };
+        let lead = t.items[..=j].to_vec();
+        let next = leads.len() as u32;
+        t.lead = *ids.entry(lead.clone()).or_insert_with(|| {
+            leads.push(lead);
+            next
+        });
+    }
+    leads
+}
+
 /// Org's split of the targets (in regexp order) into regexps
 /// (`org-update-radio-target-regexp`, Org 9.7.11): none unless the single
 /// regexp would be at least `limit` chars long; otherwise targets are taken
@@ -1222,6 +1251,10 @@ impl Matcher {
     }
 }
 
+/// A trie just built from its sequences: the trie (lists still empty),
+/// each node's edge symbol, and the matched and mixed targets ending there.
+type Inserted = (Trie, Vec<u32>, Vec<Vec<u32>>, Vec<Vec<u32>>);
+
 struct Trie {
     next: HashMap<(u32, u32), u32>,
     parent: Vec<u32>,
@@ -1261,6 +1294,26 @@ struct Trie {
 
 impl Trie {
     fn new(seqs: &[(u32, Vec<u32>, bool)], targets: &[Target], part: &[u32]) -> Trie {
+        let (mut tr, edge, mut owns, mut mixed_of) = Trie::insert(seqs);
+        // Nodes are numbered after their parent: one pass in index order.
+        for v in 0..tr.parent.len() {
+            let (held, here) = tr.fill_lists(
+                v,
+                std::mem::take(&mut owns[v]),
+                std::mem::take(&mut mixed_of[v]),
+                targets,
+                part,
+            );
+            if v > 0 {
+                tr.link_node(v, edge[v], held, here);
+            }
+        }
+        tr
+    }
+
+    /// The trie of `seqs`, with each node's edge symbol and the matched and
+    /// mixed targets ending at it.
+    fn insert(seqs: &[(u32, Vec<u32>, bool)]) -> Inserted {
         let mut next: HashMap<(u32, u32), u32> = HashMap::new();
         let (mut parent, mut depth, mut edge) = (vec![0u32], vec![0u32], vec![W]);
         let mut owns: Vec<Vec<u32>> = vec![Vec::new()];
@@ -1288,7 +1341,7 @@ impl Trie {
             }
         }
         let count = parent.len();
-        let mut tr = Trie {
+        let tr = Trie {
             next,
             jump: vec![0; count],
             own: vec![NONE; count],
@@ -1306,68 +1359,80 @@ impl Trie {
             parent,
             depth,
         };
-        // Nodes are numbered after their parent: one pass in index order.
-        for v in 0..count {
-            // Matched targets: per regexp, the first only.
-            let mut list = std::mem::take(&mut owns[v]);
-            list.sort_unstable();
-            list.dedup_by_key(|t| part[*t as usize]);
-            tr.own[v] = list.first().copied().unwrap_or(NONE);
-            let mut here = (NONE, 0u32);
-            for &t in list.iter().chain(&mixed_of[v]) {
-                let j = part[t as usize];
-                here = (here.0.min(j), here.1.max(j));
-            }
-            let a = tr.own_list.len() as u32;
-            tr.own_list.extend(list);
-            tr.own_at.push((a, tr.own_list.len() as u32));
-            // Mixed targets: one per (regexp, items).
-            let a = tr.mixed_list.len() as u32;
-            let mut list = std::mem::take(&mut mixed_of[v]);
-            list.sort_unstable();
-            let mut kept: HashSet<(u32, &[Item])> = HashSet::new();
-            list.retain(|&t| kept.insert((part[t as usize], &targets[t as usize].items[..])));
-            let leads: HashSet<u32> = list.iter().map(|&t| targets[t as usize].lead).collect();
-            tr.mixed_list.extend(list);
-            tr.mixed.push((a, tr.mixed_list.len() as u32));
-            let held = tr.mixed_list.len() as u32 > a;
-            if held && leads.len() == 1 {
-                tr.lead_key[v] = leads.into_iter().next().unwrap_or(NONE);
-            }
-            if v == 0 {
-                continue;
-            }
-            let p = tr.parent[v] as usize;
-            let j1 = tr.jump[p] as usize;
-            let j2 = tr.jump[j1] as usize;
-            tr.jump[v] = if p != 0 && tr.depth[p] - tr.depth[j1] == tr.depth[j1] - tr.depth[j2] {
+        (tr, edge, owns, mixed_of)
+    }
+
+    /// Node `v`'s own target lists: matched targets, the first per regexp;
+    /// mixed ones, one per (regexp, items). Whether it holds mixed targets,
+    /// and the range of regexps of its targets.
+    fn fill_lists(
+        &mut self,
+        v: usize,
+        mut owns: Vec<u32>,
+        mut mixed: Vec<u32>,
+        targets: &[Target],
+        part: &[u32],
+    ) -> (bool, (u32, u32)) {
+        owns.sort_unstable();
+        owns.dedup_by_key(|t| part[*t as usize]);
+        self.own[v] = owns.first().copied().unwrap_or(NONE);
+        let here = owns.iter().chain(&mixed).fold((NONE, 0u32), |h, &t| {
+            let j = part[t as usize];
+            (h.0.min(j), h.1.max(j))
+        });
+        let a = self.own_list.len() as u32;
+        self.own_list.extend(owns);
+        self.own_at.push((a, self.own_list.len() as u32));
+        let a = self.mixed_list.len() as u32;
+        mixed.sort_unstable();
+        let mut kept: HashSet<(u32, &[Item])> = HashSet::new();
+        mixed.retain(|&t| kept.insert((part[t as usize], &targets[t as usize].items[..])));
+        let leads: HashSet<u32> = mixed.iter().map(|&t| targets[t as usize].lead).collect();
+        self.mixed_list.extend(mixed);
+        self.mixed.push((a, self.mixed_list.len() as u32));
+        let held = self.mixed_list.len() as u32 > a;
+        if held && leads.len() == 1 {
+            self.lead_key[v] = leads.into_iter().next().unwrap_or(NONE);
+        }
+        (held, here)
+    }
+
+    /// Node `v`'s pointers from its parent's (computed first): jump,
+    /// inner target, nearest holders, lead skip, regexp range.
+    fn link_node(&mut self, v: usize, edge: u32, held: bool, here: (u32, u32)) {
+        let p = self.parent[v] as usize;
+        let j1 = self.jump[p] as usize;
+        let j2 = self.jump[j1] as usize;
+        self.jump[v] =
+            if p != 0 && self.depth[p] - self.depth[j1] == self.depth[j1] - self.depth[j2] {
                 j2 as u32
             } else {
                 p as u32
             };
-            let mut inner = tr.inner[p];
-            if tr.own[p] != NONE && boundary_symbol(edge[v]) && tr.own[p] < inner.0 {
-                inner = (tr.own[p], tr.depth[p]);
-            }
-            tr.inner[v] = inner;
-            tr.own_up[v] = if tr.own[v] != NONE {
-                v as u32
-            } else {
-                tr.own_up[p]
-            };
-            let up = tr.mixed_up[p];
-            tr.mixed_up[v] = if held { v as u32 } else { up };
-            if held {
-                let same = up != NONE
-                    && tr.lead_key[v] != NONE
-                    && tr.lead_key[up as usize] == tr.lead_key[v];
-                tr.lead_skip[v] = if same { tr.lead_skip[up as usize] } else { up };
-            }
-            tr.any[v] = tr.any[p] || held || tr.own[v] != NONE;
-            let up = tr.parts_up[p];
-            tr.parts_up[v] = (here.0.min(up.0), here.1.max(up.1));
+        let mut inner = self.inner[p];
+        if self.own[p] != NONE && boundary_symbol(edge) && self.own[p] < inner.0 {
+            inner = (self.own[p], self.depth[p]);
         }
-        tr
+        self.inner[v] = inner;
+        self.own_up[v] = if self.own[v] != NONE {
+            v as u32
+        } else {
+            self.own_up[p]
+        };
+        let up = self.mixed_up[p];
+        self.mixed_up[v] = if held { v as u32 } else { up };
+        if held {
+            let key = self.lead_key[v];
+            let same = up != NONE && key != NONE && self.lead_key[up as usize] == key;
+            self.lead_skip[v] = if same {
+                self.lead_skip[up as usize]
+            } else {
+                up
+            };
+        }
+        self.any[v] = self.any[p] || held || self.own[v] != NONE;
+        let up = self.parts_up[p];
+        self.parts_up[v] = (here.0.min(up.0), here.1.max(up.1));
     }
 
     /// The ancestor-or-self of `v` at depth `min(depth(v), d)`.
@@ -1775,39 +1840,7 @@ mod tests {
             radio_limit: limit,
             diagnostics: &diagnostics,
         };
-        let refs: Vec<&str> = values.iter().map(String::as_str).collect();
-        let new = Radio::build(&cx, &refs);
-        let groups = org_split(values, limit);
-        let mine: Vec<Vec<u32>> = (0..new.parts)
-            .map(|j| {
-                (0..values.len() as u32)
-                    .filter(|&t| new.part[t as usize] == j as u32)
-                    .collect()
-            })
-            .collect();
-        let theirs: Vec<Vec<u32>> = {
-            let mut i = 0u32;
-            groups
-                .iter()
-                .map(|g| {
-                    let v = (i..i + g.len() as u32).collect();
-                    i += g.len() as u32;
-                    v
-                })
-                .collect()
-        };
-        if mine != theirs {
-            return Err(format!(
-                "split of {values:?} at {limit}: {mine:?} vs Org's {theirs:?}"
-            ));
-        }
-        let olds: Vec<reference::Radio> = groups
-            .iter()
-            .map(|g| {
-                let r: Vec<&str> = g.iter().map(String::as_str).collect();
-                reference::Radio::build(&cx, &r)
-            })
-            .collect();
+        let (new, olds) = split_and_reference(&cx, values, limit)?;
         let bounds: Vec<usize> = (0..=text.len())
             .filter(|&i| text.is_char_boundary(i))
             .collect();
@@ -1816,77 +1849,142 @@ mod tests {
             let (a, b) = (bounds[a % bounds.len()], bounds[b % bounds.len()]);
             (a.min(b), a.max(b))
         }));
-        let triple = |m: Option<Match>| m.map(|m| (m.p, m.g1, m.m0));
-        for (floor, end) in all {
+        let what = |region: (usize, usize)| {
+            format!("text {text:?} targets {values:?} limit {limit} region {region:?}")
+        };
+        for region in all {
             let inside: Vec<usize> = bounds
                 .iter()
                 .copied()
-                .filter(|&p| p >= floor && p <= end)
+                .filter(|&p| p >= region.0 && p <= region.1)
                 .collect();
-            let mut shared = Cursor::default();
-            for &s0 in &inside {
-                // Each regexp's leftmost match from s0, then the one ending first.
-                let mut want: Option<(usize, usize, (usize, usize, usize))> = None;
-                for (j, old) in olds.iter().enumerate() {
-                    let first = inside
-                        .iter()
-                        .filter(|&&p| p >= s0 && p < end)
-                        .find_map(|&p| old.valid_at(&cx, p, s0, (floor, end)));
-                    if let Some(m) = first {
-                        if want.is_none_or(|w| (m.m0, j) < (w.0, w.1)) {
-                            want = Some((m.m0, j, (m.p, m.g1, m.m0)));
-                        }
-                    }
+            split_searches(&cx, &new, &olds, region, &inside)
+                .map_err(|e| format!("{} {e}", what(region)))?;
+            split_links(&cx, &new, &olds, region, &inside)
+                .map_err(|e| format!("{} {e}", what(region)))?;
+        }
+        Ok(())
+    }
+
+    fn triple(m: Option<Match>) -> Option<(usize, usize, usize)> {
+        m.map(|m| (m.p, m.g1, m.m0))
+    }
+
+    /// The split mae-org makes, checked against Org's; and the reference
+    /// matcher for each of Org's regexps.
+    fn split_and_reference(
+        cx: &InlineCx,
+        values: &[String],
+        limit: usize,
+    ) -> Result<(Radio, Vec<reference::Radio>), String> {
+        let refs: Vec<&str> = values.iter().map(String::as_str).collect();
+        let new = Radio::build(cx, &refs);
+        let groups = org_split(values, limit);
+        let mine: Vec<Vec<u32>> = (0..new.parts)
+            .map(|j| {
+                (0..values.len() as u32)
+                    .filter(|&t| new.part[t as usize] == j as u32)
+                    .collect()
+            })
+            .collect();
+        let mut i = 0u32;
+        let theirs: Vec<Vec<u32>> = groups
+            .iter()
+            .map(|g| {
+                let v = (i..i + g.len() as u32).collect();
+                i += g.len() as u32;
+                v
+            })
+            .collect();
+        if mine != theirs {
+            return Err(format!(
+                "split of {values:?} at {limit}: {mine:?} vs Org's {theirs:?}"
+            ));
+        }
+        let olds = groups
+            .iter()
+            .map(|g| {
+                let r: Vec<&str> = g.iter().map(String::as_str).collect();
+                reference::Radio::build(cx, &r)
+            })
+            .collect();
+        Ok((new, olds))
+    }
+
+    /// Every search start in `region`: each regexp's leftmost match, then
+    /// the one ending first; with a fresh cursor and with a shared one; and
+    /// the link the search records is the one the link parser computes.
+    fn split_searches(
+        cx: &InlineCx,
+        new: &Radio,
+        olds: &[reference::Radio],
+        (floor, end): (usize, usize),
+        inside: &[usize],
+    ) -> Result<(), String> {
+        let mut shared = Cursor::default();
+        for &s0 in inside {
+            let mut want: Option<(usize, usize, (usize, usize, usize))> = None;
+            for (j, old) in olds.iter().enumerate() {
+                let first = inside
+                    .iter()
+                    .filter(|&&p| p >= s0 && p < end)
+                    .find_map(|&p| old.valid_at(cx, p, s0, (floor, end)));
+                let better = |m: &reference::Match| want.is_none_or(|w| (m.m0, j) < (w.0, w.1));
+                if let Some(m) = first.filter(better) {
+                    want = Some((m.m0, j, (m.p, m.g1, m.m0)));
                 }
-                let want = want.map(|w| w.2);
-                let found = new.search(&cx, s0, (floor, end), &mut Cursor::default());
-                // What the search recorded for the link parser is what the
-                // link parser computes there afresh.
-                if let Some(m) = found {
-                    let recorded = new.answer.get().filter(|a| a.at == (m.p, floor, end));
-                    let fresh = new.looking_at(&cx, m.p, (floor, end)).ok().flatten();
-                    if recorded.map(|a| triple(a.link)) != Some(triple(fresh)) {
-                        return Err(format!(
-                            "text {text:?} targets {values:?} limit {limit} region {floor}..{end} from {s0}: recorded link {:?}, fresh {:?}",
-                            recorded.map(|a| triple(a.link)),
-                            triple(fresh)
-                        ));
-                    }
-                }
-                let got = triple(found);
-                let got_shared = triple(new.search(&cx, s0, (floor, end), &mut shared));
-                if got != want || got_shared != want {
+            }
+            let want = want.map(|w| w.2);
+            let found = new.search(cx, s0, (floor, end), &mut Cursor::default());
+            if let Some(m) = found {
+                let recorded = new.answer.get().filter(|a| a.at == (m.p, floor, end));
+                let fresh = new.looking_at(cx, m.p, (floor, end)).ok().flatten();
+                if recorded.map(|a| triple(a.link)) != Some(triple(fresh)) {
                     return Err(format!(
-                        "text {text:?} targets {values:?} limit {limit} region {floor}..{end} search from {s0}: new {got:?} (shared cursor {got_shared:?}) reference {want:?}"
+                        "from {s0}: recorded link {:?}, fresh {:?}",
+                        recorded.map(|a| triple(a.link)),
+                        triple(fresh)
                     ));
                 }
             }
-            // The link parser at every position.
-            for &i in inside.iter().filter(|&&i| i < end) {
-                let bol = cx.at_bol(i, floor);
-                let mut want = None;
-                for old in &olds {
-                    let m = if bol {
-                        old.valid_at(&cx, i, i, (floor, end)).or_else(|| {
-                            cx.ch(i, end)
-                                .filter(|&c| boundary(c))
-                                .and_then(|_| old.valid_at(&cx, cx.step(i), i, (floor, end)))
-                        })
-                    } else {
-                        let s = i - cx.char_before(i, floor).map_or(1, char::len_utf8);
-                        old.valid_at(&cx, i, s, (floor, end))
-                    };
-                    if let Some(m) = m {
-                        want = Some((m.p, m.g1, m.m0));
-                        break;
-                    }
+            let got = triple(found);
+            let got_shared = triple(new.search(cx, s0, (floor, end), &mut shared));
+            if got != want || got_shared != want {
+                return Err(format!(
+                    "search from {s0}: new {got:?} (shared cursor {got_shared:?}) reference {want:?}"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The link parser at every position of `region`: the first regexp
+    /// that matches there, `^` before the border char at a line start.
+    fn split_links(
+        cx: &InlineCx,
+        new: &Radio,
+        olds: &[reference::Radio],
+        (floor, end): (usize, usize),
+        inside: &[usize],
+    ) -> Result<(), String> {
+        for &i in inside.iter().filter(|&&i| i < end) {
+            let bol = cx.at_bol(i, floor);
+            let at = |old: &reference::Radio| {
+                if bol {
+                    old.valid_at(cx, i, i, (floor, end)).or_else(|| {
+                        cx.ch(i, end)
+                            .filter(|&c| boundary(c))
+                            .and_then(|_| old.valid_at(cx, cx.step(i), i, (floor, end)))
+                    })
+                } else {
+                    let s = i - cx.char_before(i, floor).map_or(1, char::len_utf8);
+                    old.valid_at(cx, i, s, (floor, end))
                 }
-                let got = triple(new.looking_at(&cx, i, (floor, end)).ok().flatten());
-                if got != want {
-                    return Err(format!(
-                        "text {text:?} targets {values:?} limit {limit} region {floor}..{end} link at {i}: new {got:?} reference {want:?}"
-                    ));
-                }
+            };
+            let want = olds.iter().find_map(at).map(|m| (m.p, m.g1, m.m0));
+            let got = triple(new.looking_at(cx, i, (floor, end)).ok().flatten());
+            if got != want {
+                return Err(format!("link at {i}: new {got:?} reference {want:?}"));
             }
         }
         Ok(())
