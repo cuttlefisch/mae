@@ -27,6 +27,8 @@
 
 use std::collections::HashSet;
 
+use super::objects::name_key;
+
 use crate::{
     Document, LineEnding, ParseOptions, SemanticDiagnostic, SemanticNode, Semantics,
     SemanticsOptions, Span,
@@ -380,6 +382,7 @@ impl Edit<'_> {
         now.sort();
         // What the rest of the file refers to, or names itself, on either
         // side: a name the body adds, removes or changes must be none of it.
+        // Every name compared by the renderer's own key (`name_key`).
         let mut taken = refs_outside(old, self.range);
         taken.extend(refs_outside(new, self.new_range));
         let outside = names_in(old, self.range, false).into_iter().chain(names_in(
@@ -387,8 +390,8 @@ impl Edit<'_> {
             self.new_range,
             false,
         ));
-        taken.extend(outside.map(|(_, n)| crate::chars::fold(&n)));
-        let changed = |n: &(String, String)| taken.contains(&crate::chars::fold(&n.1));
+        taken.extend(outside.map(|(_, n)| name_key(&n)));
+        let changed = |n: &(String, String)| taken.contains(&name_key(&n.1));
         let gone = was.iter().filter(|n| !now.contains(n));
         let new = now.iter().filter(|n| !was.contains(n));
         match gone.chain(new).find(|n| changed(n)) {
@@ -625,9 +628,9 @@ fn refs_outside(doc: &Document, (a, b): (usize, usize)) -> HashSet<String> {
     use crate::kind::SyntaxKind::*;
     let mut out = HashSet::new();
     let mut add = |s: &str| {
-        let s = s.trim();
+        let s = name_key(s);
         if !s.is_empty() {
-            out.insert(crate::chars::fold(s));
+            out.insert(s);
         }
     };
     for n in doc.syntax().descendants() {

@@ -2,7 +2,7 @@
 //! not (ADR-112 D3).
 
 use super::build::{trim_text, Builder, Mode};
-use super::objects::radio_key;
+use super::objects::name_key;
 use super::tree::{push, text, Attr, Element, Node, Tag};
 use crate::kind::SyntaxKind::*;
 use crate::kind::SyntaxNode;
@@ -322,7 +322,7 @@ impl Builder<'_> {
                     .then(|| {
                         self.local(|t| {
                             t.targets
-                                .get(&target)
+                                .get(&name_key(&target))
                                 .or_else(|| t.titles.get(&target))
                                 .cloned()
                         })
@@ -336,7 +336,7 @@ impl Builder<'_> {
 
     fn radio_link(&mut self, link: &Link, out: &mut Vec<Node>) {
         let desc = self.description(link);
-        let key = radio_key(&link.description_text().unwrap_or_default());
+        let key = name_key(&link.description_text().unwrap_or_default());
         match self.local(|t| t.radios.get(&key).cloned()) {
             Some(h) if !self.in_link => {
                 let a = Element::new(Tag::A)

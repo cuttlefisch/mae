@@ -41,9 +41,12 @@ fn token_text(n: &SyntaxNode, kind: SyntaxKind) -> String {
         .collect()
 }
 
-/// The key a radio target and its links share: whitespace collapsed, case
-/// folded as Emacs folds it (radio links match case-insensitively).
-pub(crate) fn radio_key(s: &str) -> String {
+/// The key of a NAME: what a radio target and its links share, what a
+/// target and a link searching for it share (Org matches both with blanks
+/// collapsed and case folded, as Emacs folds it), and what `replace_body`
+/// compares every name by. One function, so no two names the renderer
+/// treats as one can differ to the edit check (review round 4, M2).
+pub(crate) fn name_key(s: &str) -> String {
     crate::chars::fold(&collapse(s))
 }
 
@@ -192,13 +195,14 @@ impl Builder<'_> {
         if self.mode == Mode::Meta {
             return;
         }
-        let key = collapse(&inner_text(n));
+        let written = collapse(&inner_text(n));
+        let key = name_key(&written);
         let mut e = Element::new(Tag::Span).class("org-target");
         if !key.is_empty() && !self.found.targets.contains_key(&key) {
-            if let Some(id) = self.ids.try_claim(format!("t-{}", encode_id(&key))) {
+            if let Some(id) = self.ids.try_claim(format!("t-{}", encode_id(&written))) {
                 // A target's text holds no object (Org reads it as text),
                 // and its id already spells it.
-                self.found.shown.insert(id.clone(), key.clone());
+                self.found.shown.insert(id.clone(), written);
                 self.found.targets.insert(key, id.clone());
                 e = e.attr(Attr::Id, id);
             }
@@ -211,7 +215,7 @@ impl Builder<'_> {
         let mut inner = Vec::new();
         self.contents(n, &mut inner);
         let mut e = Element::new(Tag::Span).class("org-radio-target");
-        let key = radio_key(&inner_text(n));
+        let key = name_key(&inner_text(n));
         if self.mode != Mode::Meta && !key.is_empty() && !self.found.radios.contains_key(&key) {
             if let Some(id) = self.ids.try_claim(format!("r-{}", encode_id(&key))) {
                 self.found.radios.insert(key, id.clone());

@@ -709,3 +709,15 @@ fn an_edit_that_renumbers_or_recounts_outside_the_body_is_refused() {
         ),
     ]);
 }
+
+/// M2: names were compared with their case folded but not their blanks
+/// collapsed, while a target and the link searching for it match with
+/// both (as Org's do): `<<foo   bar>>` took B's `[[foo bar]]` from the
+/// heading `foo bar`. One key now names both.
+#[test]
+fn a_name_that_differs_only_in_blanks_or_case_is_the_same_name() {
+    refused(&[
+        ("target", NAMES, "here <<foo   bar>> it is\n"),
+        ("target, case", NAMES, "here <<INTRO>> it is\n"),
+    ]);
+}

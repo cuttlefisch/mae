@@ -468,3 +468,13 @@ fn a_link_in_a_title_slugs_as_its_description() {
     assert!(out.contains("<h1 id=\"h-see\">"), "{out}");
     assert!(out.contains("<h1 id=\"h-see-the-other-too\">"), "{out}");
 }
+
+/// A target and the link searching for it match with blanks collapsed and
+/// case folded, as in Emacs 30.2 (`<<Foo   Bar>>` is where `[[foo bar]]`
+/// and `[[Foo Bar]]` both land): the one name key `replace_body` compares
+/// names by too (review round 4, M2).
+#[test]
+fn a_target_matches_its_link_in_any_case_and_spacing() {
+    let h = html("Para <<Foo   Bar>> x.\n\nSee [[foo bar]] and [[Foo Bar]] y.\n");
+    assert_eq!(h.matches("href=\"#t-Foo.20Bar\"").count(), 2, "{h}");
+}
