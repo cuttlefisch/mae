@@ -499,7 +499,7 @@
               }
             ],
             "properties": {
-              "id": "h-a-headline-without-id-2"
+              "id": "h-a-headline-without-id--2"
             },
             "tagName": "h1",
             "type": "element"

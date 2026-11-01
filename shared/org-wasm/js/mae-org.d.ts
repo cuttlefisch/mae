@@ -49,6 +49,13 @@ export interface Rendered<T> {
   body: T;
   nodes: {
     id: string;
+    /**
+     * The node's anchor id on this page (`id-…`, `cid-…`, or a heading's
+     * `h-<slug>`; a slug keeps letters of any script, lower-cased, runs of
+     * anything else one `-`, so it may be non-ASCII: `h-глава-2`; a
+     * repeated title's heading is `h-<slug>--2`, `--3`, …). Null for the
+     * file node. Percent-encode it to put it in another page's URL.
+     */
     anchor: string | null;
     title: T;
     /** The title with links replaced by what they show: no <a> inside, to wrap in a link. */

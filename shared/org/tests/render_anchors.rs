@@ -53,6 +53,49 @@ fn same_page_links_land(html: &str) {
     }
 }
 
+/// A headline title: letters of three scripts in both cases, digits,
+/// blanks and punctuation that is neither Org markup nor link syntax, so
+/// the rendered title is the title as written (digits only and
+/// punctuation only included).
+fn title() -> impl Strategy<Value = String> {
+    let chars = prop::sample::select(vec![
+        'a', 'Z', 'é', 'É', 'я', 'Я', '中', 'ß', '2', '9', ' ', ' ', ',', '.', '!', '-', '\'', '(',
+        ')', '\u{a0}',
+    ]);
+    prop::collection::vec(chars, 1..12)
+        .prop_map(|cs| cs.into_iter().collect::<String>().trim().to_string())
+        .prop_filter("a title", |t| !t.is_empty())
+}
+
+/// Every `id="…"` of `html`, in order.
+fn ids_of(html: &str) -> Vec<String> {
+    html.split(" id=\"")
+        .skip(1)
+        .map(|p| p[..p.find('"').expect("closed")].to_string())
+        .collect()
+}
+
+/// The text of the heading whose id is `id` (tags stripped).
+fn heading_text(html: &str, id: &str) -> String {
+    let at = html
+        .find(&format!("id=\"{id}\">"))
+        .unwrap_or_else(|| panic!("no {id}"));
+    let rest = &html[at..];
+    let start = rest.find('>').expect(">") + 1;
+    let end = rest.find("</h").expect("a heading");
+    let mut text = String::new();
+    let mut in_tag = false;
+    for c in rest[start..end].chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            c if !in_tag => text.push(c),
+            _ => {}
+        }
+    }
+    text.replace("&amp;", "&").replace("&#39;", "'")
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
@@ -62,8 +105,69 @@ proptest! {
         prop_assert_eq!(slug(&s), s.clone());
         prop_assert!(s.len() <= SLUG_MAX, "{} > {}", s.len(), SLUG_MAX);
         prop_assert!(!s.starts_with('-') && !s.ends_with('-'), "{s:?}");
-        prop_assert!(s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'));
-        prop_assert!(!s.contains("--"));
+        prop_assert!(!s.contains("--"), "{s:?}");
+        // Letters and digits of any script, lower-cased, and single dashes:
+        // a valid id after its prefix.
+        prop_assert!(s.is_empty() || mae_org::is_valid_id(&format!("h-{s}")), "{s:?}");
+    }
+
+    /// Every anchor of a page is unique and well formed, whatever the titles
+    /// (repeats, digits only, punctuation only, other scripts).
+    #[test]
+    fn anchors_are_unique_per_page(titles in prop::collection::vec(title(), 1..14)) {
+        let doc: String = titles.iter().map(|t| format!("* {t}\n")).collect();
+        for ids in [HeadlineIds::Explicit, HeadlineIds::Slug] {
+            let out = html_with(&doc, ids, &Resolver::default());
+            let all = ids_of(&out);
+            let unique: std::collections::HashSet<&String> = all.iter().collect();
+            prop_assert_eq!(unique.len(), all.len(), "{}", out);
+            for id in &all {
+                prop_assert!(mae_org::is_valid_id(id), "{id:?}");
+            }
+        }
+    }
+
+    /// `[[id:NODE#FRAGMENT]]` lands on the first heading whose title slugs
+    /// as the fragment does, and on the node when no heading does (a
+    /// fragment with no letter or digit names none): never on a repeat of
+    /// another title, never nowhere.
+    #[test]
+    fn a_fragment_lands_on_the_heading_whose_title_slugs_the_same(
+        titles in prop::collection::vec(title(), 1..10),
+        frags in prop::collection::vec(title(), 1..6),
+    ) {
+        let mut doc = String::from("* Node\n:PROPERTIES:\n:ID: n\n:END:\n");
+        for t in &titles {
+            doc.push_str(&format!("** {t}\n"));
+        }
+        doc.push_str("* Links\n");
+        let asked: Vec<&String> = frags.iter().chain(titles.iter()).collect();
+        for (i, f) in asked.iter().enumerate() {
+            doc.push_str(&format!("[[id:n#{f}][lk{i}]]\n"));
+        }
+        let mut slugs: Vec<String> = titles.iter().map(|t| slug(t)).collect();
+        slugs.extend(["node".to_string(), "links".to_string()]);
+        for ids in [HeadlineIds::Explicit, HeadlineIds::Slug] {
+            let out = html_with(&doc, ids, &Resolver::default());
+            same_page_links_land(&out);
+            for (i, f) in asked.iter().enumerate() {
+                let href = href_of(&out, &format!("lk{i}"));
+                let lands = !slug(f).is_empty() && slugs.contains(&slug(f));
+                let want = if !lands {
+                    match ids {
+                        HeadlineIds::Explicit => "#id-n".to_string(),
+                        _ => "#h-node".to_string(),
+                    }
+                } else {
+                    format!("#{}", heading_anchor(f))
+                };
+                prop_assert_eq!(href, want.as_str(), "{}", doc);
+                if lands {
+                    let title = heading_text(&out, &want[1..]);
+                    prop_assert_eq!(slug(&title), slug(f), "{}", out);
+                }
+            }
+        }
     }
 
     #[test]
@@ -93,7 +197,7 @@ fn every_heading_carries_its_slug_anchor_whatever_the_mode() {
         "<section class=\"org-section org-level-1\" id=\"id-n1\"><h1 id=\"h-node-one\">",
         "<section class=\"org-section org-level-1\" id=\"cid-c2\"><h1 id=\"h-custom\">",
         "<section class=\"org-section org-level-1\"><h1 id=\"h-plain\">",
-        "<h1 id=\"h-plain-2\">",
+        "<h1 id=\"h-plain--2\">",
     ] {
         assert!(explicit.contains(want), "{want} missing:\n{explicit}");
     }
@@ -105,7 +209,7 @@ fn every_heading_carries_its_slug_anchor_whatever_the_mode() {
     for want in [
         "<h1 id=\"h-node-one\">",
         "<h1 id=\"h-custom\">",
-        "<h1 id=\"h-plain-2\">",
+        "<h1 id=\"h-plain--2\">",
     ] {
         assert!(slugs.contains(want), "{want} missing:\n{slugs}");
     }
@@ -168,4 +272,32 @@ fn node_metadata_names_the_anchor_links_land_on() {
         let r = render(&d, &sem, &opts, &Resolver::default());
         assert_eq!(r.nodes[0].anchor.as_deref(), Some(want));
     }
+}
+
+/// Review B4: a repeat suffix in the slug alphabet made `#x 2` land on the
+/// second `x`, and every non-ASCII title slug to `h`, so `#Глава 2` landed
+/// on whichever came first.
+#[test]
+fn repeats_and_other_scripts_never_take_another_titles_anchor() {
+    let doc = "* x\n* x\n* x 2\n* Глава 1\n* Глава 2\n* 中文\n* Links\n[[#x 2][a]]\n";
+    let out = html(doc);
+    for want in [
+        "<h1 id=\"h-x\">x</h1>",
+        "<h1 id=\"h-x--2\">x</h1>",
+        "<h1 id=\"h-x-2\">x 2</h1>",
+        "<h1 id=\"h-глава-1\">Глава 1</h1>",
+        "<h1 id=\"h-глава-2\">Глава 2</h1>",
+        "<h1 id=\"h-中文\">中文</h1>",
+    ] {
+        assert!(out.contains(want), "{want} missing:\n{out}");
+    }
+    let r = resolver(&[("x", "/x.html")]);
+    let doc = "[[id:x#Глава 2][g]] [[id:x#x 2][x2]]\n";
+    let out = html_with(doc, HeadlineIds::Explicit, &r);
+    // Another page's anchor, percent-encoded into its URL.
+    assert_eq!(
+        href_of(&out, "g"),
+        "/x.html#h-%D0%B3%D0%BB%D0%B0%D0%B2%D0%B0-2"
+    );
+    assert_eq!(href_of(&out, "x2"), "/x.html#h-x-2");
 }

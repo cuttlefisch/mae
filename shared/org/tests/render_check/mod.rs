@@ -107,10 +107,17 @@ pub fn is_safe_external(u: &str) -> bool {
         && u.chars().all(url_char)
 }
 
+/// An anchor id: an ASCII letter, then ASCII letters, digits and `_.-`,
+/// or non-ASCII chars that are one token (a heading slug keeps letters of
+/// any script): no whitespace, no control, no format char.
 fn is_anchor_id(s: &str) -> bool {
     let mut c = s.chars();
     c.next().is_some_and(|c| c.is_ascii_alphabetic())
-        && c.all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
+        && c.all(|c| {
+            c.is_ascii_alphanumeric()
+                || "_.-".contains(c)
+                || (!c.is_ascii() && c.is_alphanumeric() && !c.is_whitespace())
+        })
 }
 
 fn token(s: &str, max: usize, extra: &str) -> bool {
@@ -278,10 +285,25 @@ fn href_ok(v: &str, c: &Contract, ids: &HashSet<String>) -> bool {
         || (c.resolver_hrefs.contains(base) && frag.is_some_and(is_anchor_like))
 }
 
+/// A fragment this crate appends to a resolver href: an anchor id with
+/// every non-ASCII byte percent-encoded.
 fn is_anchor_like(f: &str) -> bool {
+    let b = f.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let hex = |k: usize| b.get(k).is_some_and(u8::is_ascii_hexdigit);
+            if !(hex(i + 1) && hex(i + 2)) {
+                return false;
+            }
+            i += 3;
+        } else if b[i].is_ascii_alphanumeric() || b"_.-".contains(&b[i]) {
+            i += 1;
+        } else {
+            return false;
+        }
+    }
     !f.is_empty()
-        && f.chars()
-            .all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
 }
 
 fn value(tag: &str, a: &str, v: &str, c: &Contract, ids: &HashSet<String>) -> Result<(), String> {

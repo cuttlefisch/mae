@@ -266,10 +266,12 @@ impl Builder<'_> {
     /// A KB link's target. Its `#fragment` names a heading by its title
     /// (ADR-030): it becomes the heading's `h-` anchor ([`heading_anchor`]
     /// of the fragment, [`super::slug`] being idempotent), appended to the
-    /// resolver's href, unless that href already has a fragment, which
-    /// wins. On this page it lands on that heading when the page has it,
-    /// and on the node's own anchor when it does not (never dropped
-    /// silently). A fragment with no ASCII letter or digit names nothing.
+    /// resolver's href (percent-encoded: a slug may hold non-ASCII
+    /// letters, and a browser decodes a fragment before matching an id),
+    /// unless that href already has a fragment, which wins. On this page it
+    /// lands on that heading when the page has it, and on the node's own
+    /// anchor when it does not (never dropped silently). A fragment with no
+    /// letter or digit names nothing.
     fn kb_target(&mut self, l: crate::SemanticLink) -> Target {
         let heading = l
             .fragment
@@ -283,7 +285,7 @@ impl Builder<'_> {
             .and_then(|r| safe_resolver_href(&r.href))
         {
             let href = match &heading {
-                Some(h) if !href.contains('#') => format!("{href}#{h}"),
+                Some(h) if !href.contains('#') => format!("{href}#{}", percent_encode(h)),
                 _ => href,
             };
             return Target::Href(href, Some(Box::new(l)));

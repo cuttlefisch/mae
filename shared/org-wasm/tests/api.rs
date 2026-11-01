@@ -79,7 +79,7 @@ fn the_module_reports_the_contract_version_it_is() {
 fn options_reach_the_renderer() {
     let req = r##"{"text": "* Same\n* Same\n", "render": {"headline_ids": "slug"}}"##;
     let body = ok(3, req)["body"].as_str().unwrap().to_string();
-    assert!(body.contains("id=\"h-same-2\""), "{body}");
+    assert!(body.contains("id=\"h-same--2\""), "{body}");
     let req =
         r##"{"text": "* x :secret:\nhidden\n* y\n", "semantics": {"exclude_tags": ["secret"]}}"##;
     assert!(!ok(4, req).as_str().unwrap().contains("hidden"));

@@ -4,21 +4,28 @@
 //! - `id-` + enc(`:ID:`) for a KB node (a headline's section, or a list
 //!   item);
 //! - `cid-` + enc(`CUSTOM_ID`) for a headline's section;
-//! - `h-` + a slug of the headline's title, on EVERY headline's heading
-//!   (the anchor a KB link's `#fragment` lands on, see [`slug`]);
+//! - `h-` + [`slug`] of the headline's title (`h` when the slug is empty),
+//!   on EVERY headline's heading: the anchor a KB link's `#fragment` lands
+//!   on. A repeat gets `--2`, `--3`, … until free;
 //! - `t-` + enc(text) for a `<<target>>`; `r-` + enc(text) for a radio target;
 //! - `fn-N` and `fnr-N` (`fnr-N-K` for the K-th repeat) for footnotes.
 //!
 //! The prefixes are distinct and none is a prefix of another, and within a
-//! kind every body is unique (a repeat gets `-2`, `-3`, … until free), so no
-//! two anchors on a page can collide. `enc` keeps ASCII letters, digits, `_`
-//! and `-`, and writes every other byte of the UTF-8 as `.` plus two
-//! lower-case hex digits: injective (a `.` is never kept, so it always
-//! starts an escape), deterministic, and limited to `[A-Za-z0-9_.-]`, which
-//! needs no escaping in HTML, URL fragments or CSS identifiers after the
-//! prefix. A Unicode confusable is therefore never an id character: it is
-//! its bytes, spelled out.
+//! kind every body is unique, so no two anchors on a page can collide. A
+//! slug never contains `--` nor starts with `-`, so a heading's repeat
+//! suffix can never spell another title's slug (`#x--2` is the second `x`,
+//! never a title "x 2", which is `h-x-2`).
+//!
+//! `enc` keeps ASCII letters, digits, `_` and `-`, and writes every other
+//! byte of the UTF-8 as `.` plus two lower-case hex digits: injective (a
+//! `.` is never kept, so it always starts an escape), deterministic, and
+//! limited to `[A-Za-z0-9_.-]`. A slug keeps letters and digits of any
+//! script (Emacs's `[[:alnum:]]`), lower-cased by Emacs's case table, so a
+//! heading anchor may hold non-ASCII letters (`h-глава-2`); every id needs
+//! no escaping in HTML (attribute values are escaped as always) and is
+//! percent-encoded where it becomes part of another page's URL.
 
+use crate::chars::{canon, is_alnum};
 use std::collections::{HashMap, HashSet};
 
 /// `enc` of the module doc.
@@ -44,9 +51,12 @@ fn hex(n: u8) -> char {
 /// repeat suffix).
 pub const SLUG_MAX: usize = 64;
 
-/// A headline title as a slug: ASCII letters and digits, lower-cased; every
-/// run of anything else is one `-`; no `-` at either end; at most
-/// [`SLUG_MAX`] bytes. Empty when the title has no ASCII letter or digit.
+/// A headline title as a slug: its letters and digits (Emacs's
+/// `[[:alnum:]]`, any script) lower-cased by Emacs's case table (the
+/// crate's generated one, so every peer and toolchain agrees); every run of
+/// anything else is one `-`; no `-` at either end; at most [`SLUG_MAX`]
+/// bytes, cut on a char boundary and never before a `-`. Empty when the
+/// title has no letter or digit. Never contains `--`.
 ///
 /// Idempotent (`slug(slug(t)) == slug(t)`), so a KB link fragment written
 /// as a slug (`id:x#rope-internals`) and one written as the title
@@ -55,18 +65,19 @@ pub fn slug(title: &str) -> String {
     let mut out = String::new();
     let mut dash = false;
     for c in title.chars() {
-        if c.is_ascii_alphanumeric() {
+        let k = canon(c);
+        if is_alnum(k) {
             let sep = dash && !out.is_empty();
             // The separator and the character must both fit: a slug never
             // ends in `-` and never exceeds the limit.
-            if out.len() + usize::from(sep) + 1 > SLUG_MAX {
+            if out.len() + usize::from(sep) + k.len_utf8() > SLUG_MAX {
                 break;
             }
             if sep {
                 out.push('-');
             }
             dash = false;
-            out.push(c.to_ascii_lowercase());
+            out.push(k);
         } else {
             dash = true;
         }
@@ -95,14 +106,16 @@ pub(crate) struct Ids {
 }
 
 impl Ids {
-    /// `base` if free, else `base-2`, `base-3`, … the first free one.
+    /// `base` if free, else `base--2`, `base--3`, … the first free one.
+    /// A slug holds no `--`, so a repeat never spells another title's
+    /// anchor.
     pub fn claim(&mut self, base: String) -> String {
         if self.used.insert(base.clone()) {
             return base;
         }
         let n = self.next.entry(base.clone()).or_insert(2);
         loop {
-            let candidate = format!("{base}-{n}");
+            let candidate = format!("{base}--{n}");
             *n += 1;
             if self.used.insert(candidate.clone()) {
                 return candidate;
@@ -116,11 +129,18 @@ impl Ids {
     }
 }
 
-/// Whether `id` has the shape every anchor this module builds has.
+/// Whether `id` has the shape every anchor this module builds has: an
+/// ASCII letter, then ASCII letters, digits, `_`, `.` and `-`, and the
+/// non-ASCII letters and digits a slug keeps (lower-cased by Emacs's case
+/// table, so never a char the table would change).
 pub fn is_valid_id(id: &str) -> bool {
     let mut chars = id.chars();
     chars.next().is_some_and(|c| c.is_ascii_alphabetic())
-        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+        && chars.all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '_' | '.' | '-')
+                || (!c.is_ascii() && is_alnum(c) && canon(c) == c)
+        })
 }
 
 #[cfg(test)]
@@ -140,13 +160,50 @@ mod tests {
     }
 
     #[test]
-    fn repeats_get_the_first_free_suffix() {
+    fn repeats_get_a_suffix_no_slug_can_spell() {
         let mut ids = Ids::default();
-        assert_eq!(ids.claim("h-a".into()), "h-a");
-        assert_eq!(ids.claim("h-a-2".into()), "h-a-2");
-        assert_eq!(ids.claim("h-a".into()), "h-a-3");
+        assert_eq!(ids.claim(heading_anchor("a")), "h-a");
+        // A title "a 2" is `h-a-2`, never the second "a".
+        assert_eq!(ids.claim(heading_anchor("a 2")), "h-a-2");
+        assert_eq!(ids.claim(heading_anchor("a")), "h-a--2");
+        assert_eq!(ids.claim(heading_anchor("a")), "h-a--3");
+        assert_eq!(ids.claim(heading_anchor("¿?")), "h");
+        assert_eq!(ids.claim(heading_anchor("")), "h--2");
         assert_eq!(slug("  Hello, World! "), "hello-world");
-        assert_eq!(slug("Café au lait"), "caf-au-lait");
+        assert_eq!(slug("Café au lait"), "café-au-lait");
+        assert_eq!(slug("Глава 2"), "глава-2");
+        assert_eq!(slug("ÉCOLE--Straße"), "école-straße");
+        assert_eq!(slug("中文 标题"), "中文-标题");
         assert_eq!(slug("¿?"), "");
+        assert_eq!(slug("x 2"), "x-2");
+        // Emacs's table, not Rust's `to_lowercase` (which a toolchain
+        // update may change): a final sigma folds to sigma, the Kelvin
+        // sign stays itself.
+        assert_eq!(slug("Λόγος ς"), "λόγοσ-σ");
+        assert_eq!(slug("5 \u{212a}"), "5-\u{212a}");
+    }
+
+    /// Idempotence rests on the case table: a kept char's canonical form is
+    /// itself kept, and canonical twice is canonical once. Every char.
+    #[test]
+    fn the_case_table_keeps_slugs_idempotent() {
+        for u in 0..=0x10FFFFu32 {
+            let Some(c) = char::from_u32(u) else { continue };
+            let k = canon(c);
+            if is_alnum(k) {
+                assert_eq!(canon(k), k, "U+{u:04X}");
+                assert!(is_valid_id(&format!("h-{k}")), "U+{u:04X}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_cut_slug_ends_on_a_char_and_never_on_a_dash() {
+        let t = format!("{} {}", "a".repeat(SLUG_MAX - 1), "b");
+        assert_eq!(slug(&t), "a".repeat(SLUG_MAX - 1));
+        let t = format!("{}é", "a".repeat(SLUG_MAX - 1));
+        assert_eq!(slug(&t), "a".repeat(SLUG_MAX - 1));
+        let t = "я".repeat(SLUG_MAX);
+        assert_eq!(slug(&t).len(), SLUG_MAX);
     }
 }
