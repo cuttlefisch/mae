@@ -1,0 +1,2 @@
+#+MACRO: res {{{results($1)}}}
+A src_sh[:exports none]{echo x} {{{res({{{res(t QZgQZ)}}})}}} B.

@@ -85,6 +85,15 @@ impl Builder<'_> {
     /// of one, or of an inline babel call, that does not keep its results
     /// (Org keeps an inline call's: a registered divergence,
     /// `inline-call-results`).
+    /// Whether results macro `n` is one Org's babel leaves as written
+    /// (see [`super::babel::Babel::left_as_written`]), though MAE hides it.
+    pub fn org_keeps_results(&self, n: &SyntaxNode) -> bool {
+        super::babel::results_macro_owner(n).is_some_and(|owner| {
+            let at = self.babel_position(&owner);
+            self.babel().left_as_written(&owner, at)
+        })
+    }
+
     pub fn babel_hides_object(&self, n: &SyntaxNode) -> bool {
         match n.kind() {
             INLINE_SRC_BLOCK if self.slugging || self.in_value => true,

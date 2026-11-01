@@ -1,0 +1,7 @@
+#+MACRO: res {{{results($1)}}}
+#+NAME: f
+#+begin_src elisp
+1
+#+end_src
+
+A call_f[:exports foo](x="a") {{{res({{{res(t QZfQZ)}}})}}} B.

@@ -55,8 +55,18 @@ pub(crate) fn prepare<'d>(doc: &'d Document, sem: &'d Semantics) -> Prepared<'d>
     // Org's second expansion, after babel: the results macros it keeps
     // (in a keyword's value too, where no macro object shows them).
     if source.contains("{{{") {
-        let removed = removed_results(&p.doc, &p.sem);
+        let (removed, kept) = removed_results(&p.doc, &p.sem);
         let m = map.clone().unwrap_or_default();
+        // Org leaves the results macros whose `:exports` it does not know
+        // in place and expands them, which MAE hides: their expansion
+        // must still succeed, or Org's export fails, and so does this.
+        if !kept.is_empty() {
+            let org: HashSet<usize> = removed.difference(&kept).copied().collect();
+            if let Err(d) = super::expand::expand_results(&p.doc, m.clone(), source.len(), org) {
+                p.failed = Some(d);
+                return p;
+            }
+        }
         match super::expand::expand_results(&p.doc, m, source.len(), removed) {
             Ok(None) => {}
             Err(d) => {
@@ -96,7 +106,7 @@ pub(crate) fn unexpanded<'d>(doc: &'d Document, sem: &'d Semantics) -> Prepared<
 /// objects whose `:exports` hides them, and in the value of a keyword the
 /// export parses (where Org's second expansion finds them too) those its
 /// `:exports` hides there; in an `EXPORT_` property, all (fail closed).
-fn removed_results(doc: &Document, sem: &Semantics) -> HashSet<usize> {
+fn removed_results(doc: &Document, sem: &Semantics) -> (HashSet<usize>, HashSet<usize>) {
     let is_results = |n: &crate::SyntaxNode| {
         n.kind() == MACRO
             && n.children_with_tokens()
@@ -108,10 +118,14 @@ fn removed_results(doc: &Document, sem: &Semantics) -> HashSet<usize> {
     let mode = super::build::Mode::Page;
     let mut b = super::build::Builder::new(doc, sem, &opts, &resolver, mode, Default::default());
     let mut out = HashSet::new();
+    let mut kept = HashSet::new();
     for n in doc.syntax().descendants() {
         if is_results(&n) {
             if b.babel_hides_object(&n) {
                 out.insert(usize::from(n.text_range().start()));
+                if b.org_keeps_results(&n) {
+                    kept.insert(usize::from(n.text_range().start()));
+                }
             }
             continue;
         }
@@ -135,7 +149,7 @@ fn removed_results(doc: &Document, sem: &Semantics) -> HashSet<usize> {
             }
         }
     }
-    out
+    (out, kept)
 }
 
 impl<'d> Prepared<'d> {

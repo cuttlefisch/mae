@@ -811,3 +811,30 @@ fn a_property_value_renders_as_the_property_macro_does() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Review round 6 (J): Org's second expansion replaces each results macro
+/// babel leaves by its first argument and scans that again, with only
+/// `results` defined: a macro it completes is undefined, and the export
+/// fails ("Undefined Org macro: res"). Babel leaves a results macro in
+/// place when its block's `:exports` holds a word Org does not know (MAE
+/// hides those, registered: exports-unknown-word), so that expansion must
+/// succeed too. Emacs 30.2 on each (`tests/results-macros/`).
+#[test]
+fn a_results_macro_org_keeps_fails_as_org_fails() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/results-macros");
+    for (name, fails) in [
+        ("j1", false),
+        ("j5", true),
+        ("j6", true),
+        ("j9", true),
+        ("j10", false),
+    ] {
+        let r = rendered(&std::fs::read_to_string(dir.join(format!("{name}.org"))).unwrap());
+        let failed = matches!(
+            r.diagnostics[..],
+            [RenderDiagnostic::MacroFailed(MacroFailure::Undefined, _)]
+        );
+        assert_eq!(failed, fails, "{name}: {:?}", r.diagnostics);
+        assert_eq!(r.body.is_empty(), fails, "{name}");
+    }
+}

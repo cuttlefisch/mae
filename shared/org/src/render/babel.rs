@@ -208,6 +208,38 @@ impl Babel {
         self.resolve(Exports::Results, headline, &lang, "", &headers)
     }
 
+    /// Whether Org's babel leaves inline src block or call `owner` (at
+    /// `at`) as written, its results macro with it: its merged `:exports`
+    /// holds a word that is none of `none`, `code`, `results`, `both`
+    /// (`org-babel-exp-do-export`'s unknown value; MAE hides those,
+    /// registered `exports-unknown-word`, `exports-no-known-word`). Org then
+    /// expands that results macro in its second expansion.
+    pub fn left_as_written(&self, owner: &SyntaxNode, at: Option<u32>) -> bool {
+        let headline = at.and_then(|p| self.headline_at(p));
+        let sources = match owner.kind() {
+            INLINE_SRC_BLOCK => {
+                let lang = token(owner, NAME).unwrap_or_default();
+                let params = token(owner, PARAMETERS).unwrap_or_default();
+                self.sources(headline, &lang, &params, &[])
+            }
+            _ => {
+                let call = inline_call(owner);
+                let Some(lang) = self.called_language(&call.name, 0) else {
+                    return false;
+                };
+                let headers = [call.inside.clone(), call.end.clone()];
+                self.sources(headline, &lang, "", &headers)
+            }
+        };
+        sources.iter().any(|s| {
+            parse_header_arguments(s)
+                .into_iter()
+                .filter(|(k, _)| k.eq_ignore_ascii_case(":exports"))
+                .filter_map(|(_, v)| v)
+                .any(|v| has_unknown_word(&v))
+        })
+    }
+
     /// The language of the block `name` calls (through calls of calls), as
     /// `org-babel-lob--src-info` finds it; `None` when Org's lookup fails:
     /// no such element, an element that is not a src block or call, a
@@ -273,14 +305,7 @@ impl Babel {
         params: &str,
         headers: &[String],
     ) -> Exports {
-        let mut sources = Vec::new();
-        sources.extend(self.inherited("HEADER-ARGS", headline.as_ref()));
-        if !lang.is_empty() {
-            let prop = canonical_key(&format!("header-args:{lang}"));
-            sources.extend(self.inherited(&prop, headline.as_ref()));
-        }
-        sources.push(params.to_string());
-        sources.extend(headers.iter().cloned());
+        let sources = self.sources(headline, lang, params, headers);
         let mut out = default;
         for s in &sources {
             for (k, v) in parse_header_arguments(s) {
@@ -290,6 +315,27 @@ impl Babel {
             }
         }
         out
+    }
+
+    /// The header-argument strings an element's parameters merge from, in
+    /// order: the inherited `header-args` and `header-args:LANG`, its own
+    /// parameters, then `headers`.
+    fn sources(
+        &self,
+        headline: Option<SyntaxNode>,
+        lang: &str,
+        params: &str,
+        headers: &[String],
+    ) -> Vec<String> {
+        let mut sources = Vec::new();
+        sources.extend(self.inherited("HEADER-ARGS", headline.as_ref()));
+        if !lang.is_empty() {
+            let prop = canonical_key(&format!("header-args:{lang}"));
+            sources.extend(self.inherited(&prop, headline.as_ref()));
+        }
+        sources.push(params.to_string());
+        sources.extend(headers.iter().cloned());
+        sources
     }
 
     /// `prop` (canonical) as `org-entry-get` with inheritance reads it at a
@@ -803,6 +849,20 @@ fn merge_exports(out: &mut Exports, value: Option<&str>) {
         };
     }
     *out = known.unwrap_or(Exports::Opaque);
+}
+
+/// Whether `:exports` value `v` holds a word Org does not know (not Lisp,
+/// which Org evaluates): the merge keeps it, so the whole value is unknown.
+fn has_unknown_word(v: &str) -> bool {
+    let v = v.trim();
+    !v.is_empty()
+        && !is_lisp(v)
+        && unquote(v).split_whitespace().any(|w| {
+            !matches!(
+                w.to_ascii_lowercase().as_str(),
+                "code" | "results" | "both" | "none"
+            )
+        })
 }
 
 /// `org-babel-read` evaluates `v`: Lisp (`(`, `'`, `` ` ``, `[`, `*this*`).
