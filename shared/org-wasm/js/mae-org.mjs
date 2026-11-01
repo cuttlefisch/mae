@@ -5,6 +5,10 @@
 // linear memory. This file is the only code that drives it; a request is a
 // plain object (serialised with JSON.stringify), a response is parsed
 // JSON, and an `{"ok": false}` response throws.
+//
+// Every span in a response is a UTF-8 BYTE offset into the request's
+// `text`, not a JavaScript string index (UTF-16 code units): convert with
+// `new TextEncoder().encode(text)` before slicing.
 
 const OPS = Object.freeze({
   semantics: 1,
@@ -25,22 +29,44 @@ const decoder = new TextDecoder('utf-8', { fatal: true });
  */
 export function instantiate(bytes) {
   const module = bytes instanceof WebAssembly.Module ? bytes : new WebAssembly.Module(bytes);
-  return new MaeOrg(new WebAssembly.Instance(module, {}));
+  return new MaeOrg(new WebAssembly.Instance(module, {}), module);
 }
 
+/**
+ * One module instance at a time. A call that throws for ANY reason
+ * retires the instance it ran in: a trap (`WebAssembly.RuntimeError`),
+ * but also the host's own stack running out inside a WASM frame (V8
+ * throws a `RangeError` there) or anything else that unwinds out of the
+ * module mid-call. Such an exit skips the module's own cleanup, so its
+ * memory holds leaked allocations and possibly a borrowed result slot;
+ * reusing it leaks on every call and can later trap out of bounds.
+ *
+ * The failing call rethrows its error. The NEXT call runs in a fresh
+ * instance of the same compiled module (`restarts` counts them), so one
+ * pathological document costs one failed call, not the loader. An object
+ * built from a bare instance (no module) cannot restart: after a failed
+ * call every later call throws.
+ */
 export class MaeOrg {
-  constructor(instance) {
+  constructor(instance, module = null) {
+    this.module = module;
     this.exports = instance.exports;
     this.broken = null;
+    this.restarts = 0;
   }
 
   /** Runs operation `op` on a request string; returns the response string. */
   callRaw(op, request) {
     const code = OPS[op];
     if (code === undefined) throw new Error(`unknown operation ${op}`);
-    // A trap (a panic, or the stack exhausted) leaves the module's memory
-    // in whatever state it reached: the instance is not used again.
-    if (this.broken) throw new Error(`mae-org instance unusable after a trap: ${this.broken.message}`);
+    if (this.broken) {
+      if (!this.module) {
+        throw new Error(`mae-org instance unusable after a failed call: ${this.broken.message}`);
+      }
+      this.exports = new WebAssembly.Instance(this.module, {}).exports;
+      this.broken = null;
+      this.restarts += 1;
+    }
     const e = this.exports;
     const input = encoder.encode(request);
     try {
@@ -56,7 +82,8 @@ export class MaeOrg {
         e.mae_org_result_free();
       }
     } catch (err) {
-      if (err instanceof WebAssembly.RuntimeError) this.broken = err;
+      // Whatever unwound out of the module, its state is not to be trusted.
+      this.broken = err;
       throw err;
     }
   }

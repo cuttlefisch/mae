@@ -1,6 +1,8 @@
 // Types for mae-org.mjs. SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Spans are UTF-8 BYTE offsets into the request's text, not UTF-16 indices.
+// Every span (`start`/`end`, in results and diagnostics) is a UTF-8 BYTE
+// offset into the request's `text`, NOT a JavaScript string index (UTF-16
+// code units). Slice `new TextEncoder().encode(text)`, not `text`.
 
 export interface Request {
   text?: string;
@@ -83,11 +85,19 @@ export interface LinkClass {
 export type Op = 'semantics' | 'renderHast' | 'renderHtml' | 'text' | 'classifyLink' | 'version';
 
 /**
- * One module instance. Not re-entrant; calls are synchronous. If a call
- * traps (WebAssembly.RuntimeError), the instance throws on every later
- * call: instantiate a new one.
+ * The module, one instance at a time. Not re-entrant; calls are
+ * synchronous. A call that throws for ANY reason (a trap, the host stack
+ * exhausted inside the module, which V8 reports as a RangeError, or
+ * anything else) rethrows, and retires the instance it ran in: its memory
+ * is not trusted again. The next call runs in a fresh instance of the same
+ * compiled module (`restarts` counts them). A `MaeOrg` constructed from a
+ * bare instance, without its module, cannot restart: every call after a
+ * failed one throws.
  */
 export declare class MaeOrg {
+  constructor(instance: WebAssembly.Instance, module?: WebAssembly.Module | null);
+  /** Instances replaced after a failed call. */
+  readonly restarts: number;
   callRaw(op: Op, request: string): string;
   call(op: Op, request?: Request): unknown;
   semantics(request: Request): SemanticsResult;

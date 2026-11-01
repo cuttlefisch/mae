@@ -11,7 +11,9 @@
 // 3. memory: 10,000 calls leave live allocations and linear memory where
 //    they were after warm-up;
 // 4. the module loads synchronously and imports nothing; a deep document
-//    renders without exhausting its stack; errors are responses.
+//    renders without exhausting its stack; errors are responses; a call
+//    that throws for any reason retires its instance; the shadow stack
+//    sits below the data.
 
 import { instantiate, MaeOrg } from './mae-org.mjs';
 import { readFileSync, writeFileSync, mkdtempSync, statSync, rmSync } from 'node:fs';
@@ -113,22 +115,71 @@ if (rendered.some((r) => /href[^,}]*javascript:/i.test(r))) fail('a hostile href
 const v = org.version();
 console.log(`version: api ${v.api}, crate ${v.crate}`);
 
-// 4. An instance that trapped is not used again (a stub that traps).
-const trapping = new MaeOrg({
-  exports: {
-    memory: new WebAssembly.Memory({ initial: 1 }),
-    mae_org_alloc: () => 0,
-    mae_org_call: () => { throw new WebAssembly.RuntimeError('unreachable'); },
-    mae_org_result_ptr: () => 0,
-    mae_org_result_free: () => {},
-    mae_org_live_bytes: () => 0,
-  },
-});
-let trapped = 0;
-for (let i = 0; i < 2; i++) {
-  try { trapping.callRaw('text', '{}'); } catch (e) { trapped += /unusable/.test(e.message) ? 1 : 0; }
+// 4. An instance a call failed in is not used again, whatever the call
+// threw (a trap, or a RangeError: the host's stack exhausted mid-call).
+// Stubs with no module to restart from, so every later call must refuse.
+for (const thrown of [new WebAssembly.RuntimeError('unreachable'), new RangeError('stack'), new TypeError('x')]) {
+  const failing = new MaeOrg({
+    exports: {
+      memory: new WebAssembly.Memory({ initial: 1 }),
+      mae_org_alloc: () => 0,
+      mae_org_call: () => { throw thrown; },
+      mae_org_result_ptr: () => 0,
+      mae_org_result_free: () => {},
+      mae_org_live_bytes: () => 0,
+    },
+  });
+  let refused = 0;
+  for (let i = 0; i < 3; i++) {
+    try { failing.callRaw('text', '{}'); } catch (e) { refused += /unusable/.test(e.message) ? 1 : 0; }
+  }
+  if (refused !== 2) fail(`an instance was used again after a call threw ${thrown.constructor.name}`);
 }
-if (trapped !== 1) fail('a trapped instance was used again');
+
+// 4. The real thing: the host stack exhausted inside the module, in a
+// child Node with a small stack (test-stack.mjs). The loader retires the
+// instance and the next call runs in a fresh one.
+const stack = spawnSync(process.execPath, ['--stack-size=200', join(dirname(fileURLToPath(import.meta.url)), 'test-stack.mjs'), wasmPath], { encoding: 'utf8' });
+process.stdout.write(stack.stdout);
+if (stack.status !== 0) fail(`host-stack exhaustion: ${stack.stderr.trim() || `exit ${stack.status}`}`);
+
+// 4. Linear memory puts the shadow stack FIRST, below the data: a stack
+// overflow runs below address 0 and traps out of bounds rather than
+// writing over static data or the heap. Read from the module itself.
+{
+  const b = bytes;
+  let p = 8;
+  const uleb = () => { let r = 0, sh = 0, x; do { x = b[p++]; r += (x & 0x7f) * 2 ** sh; sh += 7; } while (x & 0x80); return r; };
+  const sleb = () => { let r = 0, sh = 0, x; do { x = b[p++]; r |= (x & 0x7f) << sh; sh += 7; } while (x & 0x80); if (sh < 32 && (x & 0x40)) r |= ~0 << sh; return r; };
+  let stackTop = null;
+  let lowestData = Infinity;
+  while (p < b.length) {
+    const id = b[p++];
+    const len = uleb();
+    const end = p + len;
+    if (id === 6 && stackTop === null) {
+      // The first global is __stack_pointer: (mut i32) (i32.const N).
+      uleb();
+      const type = b[p++], mut = b[p++], op = b[p++];
+      if (type === 0x7f && mut === 1 && op === 0x41) stackTop = sleb();
+    }
+    if (id === 11) {
+      const n = uleb();
+      for (let i = 0; i < n; i++) {
+        const flag = uleb();
+        if (flag !== 0) break;
+        if (b[p++] !== 0x41) break;
+        lowestData = Math.min(lowestData, sleb());
+        p++; // end
+        p += uleb();
+      }
+    }
+    p = end;
+  }
+  console.log(`layout: stack 0..${stackTop}, data from ${lowestData}`);
+  if (stackTop !== 4 << 20) fail(`the shadow stack is ${stackTop} bytes, not the 4 MiB build.rs sets`);
+  if (!(stackTop <= lowestData)) fail('the shadow stack is not below the data (no --stack-first)');
+}
 
 // 4. A deep document (the parse cap raised to its ceiling) renders.
 const deep = Array.from({ length: 1000 }, (_, i) => ' '.repeat(i) + '- *x /y/*\n').join('');
