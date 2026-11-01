@@ -112,6 +112,11 @@ pub enum BodyEditError {
     /// (`<<x>>`), `radio target`, `name` (`#+NAME:` and its aliases on any
     /// element), `results` (a named `#+RESULTS:`), `CUSTOM_ID` or `ID`.
     ChangesName { kind: String, name: String },
+    /// The edit would change the links or transclusions of another node
+    /// (`id`, or `None` for text outside every node): every field the
+    /// semantics give a link, those no rendering shows included (a
+    /// footnote definition's links belong to the node that references it).
+    ChangesLinks { id: Option<String> },
     /// Node `id` (not the edited one) would render differently: its body
     /// rendered alone or its search text. The last line of defence, behind
     /// the precise checks.
@@ -165,6 +170,12 @@ impl std::fmt::Display for BodyEditError {
                     f,
                     "the edit would add, remove or change the {kind} {name:?}"
                 )
+            }
+            BodyEditError::ChangesLinks { id: Some(id) } => {
+                write!(f, "the edit would change the links of node {id:?}")
+            }
+            BodyEditError::ChangesLinks { id: None } => {
+                write!(f, "the edit would change links outside every node")
             }
             BodyEditError::ChangesRendering { id } => {
                 write!(f, "the edit would change how node {id:?} renders")
@@ -345,6 +356,7 @@ impl Edit<'_> {
         }
         self.check_names(&old_doc, &new_doc)?;
         self.check_nodes(&before, &after)?;
+        self.check_links(&before, &after)?;
         self.check_outside(&old_doc, &new_doc)?;
         self.check_renderings((&old_doc, &before), (&new_doc, &after))
     }
@@ -381,6 +393,80 @@ impl Edit<'_> {
             if n.id != self.edited.id && was.get(&n.id) != now.get(&n.id) {
                 return Err(BodyEditError::ChangesRendering { id: n.id.clone() });
             }
+        }
+        Ok(())
+    }
+
+    /// Every link and transclusion whose source is not the edited node (nor
+    /// a node new in its body) is the same before and after, spans moved.
+    fn check_links(&self, before: &Semantics, after: &Semantics) -> Result<(), BodyEditError> {
+        let new_ids: std::collections::HashSet<&str> = after
+            .nodes
+            .iter()
+            .filter(|m| !before.nodes.iter().any(|n| n.id == m.id))
+            .map(|m| m.id.as_str())
+            .collect();
+        let others = |from: &Option<String>| {
+            from.as_deref()
+                .is_none_or(|f| f != self.edited.id && !new_ids.contains(f))
+        };
+        let changed = |from: &Option<String>| BodyEditError::ChangesLinks { id: from.clone() };
+        // A link inside the body that another node owns (in a footnote
+        // definition it references) has no span to compare: the body's
+        // text moved it. Everything else about it must be the same.
+        let (s, e) = self.range;
+        let in_old = |sp: Span| sp.start as usize >= s && sp.end as usize <= e;
+        let was: Vec<_> = before
+            .links
+            .iter()
+            .filter(|l| others(&l.from))
+            .map(|l| {
+                let mut l = l.clone();
+                l.span = if in_old(l.span) {
+                    Span::default()
+                } else {
+                    self.moved_span(l.span).unwrap_or_default()
+                };
+                l
+            })
+            .collect();
+        let now: Vec<_> = after
+            .links
+            .iter()
+            .filter(|l| others(&l.from))
+            .map(|l| {
+                let mut l = l.clone();
+                if self.inside_new(l.span) {
+                    l.span = Span::default();
+                }
+                l
+            })
+            .collect();
+        let now: Vec<_> = now.iter().collect();
+        if was.len() != now.len() || was.iter().zip(&now).any(|(a, b)| a != *b) {
+            let at = was.iter().zip(&now).find(|(a, b)| a != *b);
+            let from = at.map(|(a, _)| a.from.clone());
+            let from = from.or_else(|| was.get(now.len()).map(|l| l.from.clone()));
+            let from = from.or_else(|| now.get(was.len()).map(|l| l.from.clone()));
+            return Err(changed(&from.flatten()));
+        }
+        let mut was = Vec::new();
+        for t in before.transclusions.iter().filter(|t| others(&t.from)) {
+            let mut t = t.clone();
+            t.span = self.moved_span(t.span).ok_or_else(|| changed(&t.from))?;
+            was.push(t);
+        }
+        let now: Vec<_> = after
+            .transclusions
+            .iter()
+            .filter(|t| others(&t.from))
+            .collect();
+        if was.len() != now.len() || was.iter().zip(&now).any(|(a, b)| a != *b) {
+            let from = was
+                .first()
+                .or(now.first().copied())
+                .and_then(|t| t.from.clone());
+            return Err(changed(&from));
         }
         Ok(())
     }

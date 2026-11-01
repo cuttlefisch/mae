@@ -514,3 +514,36 @@ fn an_edit_that_changes_how_another_node_renders_is_refused() {
     // The same definition, kept as it was: fine.
     assert!(replace_body(text, &doc, e1, "new body\n\n[fn:x] the note as it was\n").is_ok());
 }
+
+/// Round 3 (the second reviewer): removing the link comparison was wrong.
+/// A footnote definition's links belong to the node that references it,
+/// and a rendering does not show every field the semantics give a link:
+/// retargeting `[[id:one]]` in A's definition of B's note changes B's
+/// links. And an attribute no rendering shows (`?k=`) changes them too:
+/// only the link comparison sees that.
+#[test]
+fn an_edit_that_changes_another_nodes_links_is_refused() {
+    let text = "* A\n:PROPERTIES:\n:ID: a\n:END:\nBody A.\n\n[fn:x] See [[id:one?k=v1][it]].\n* B\n:PROPERTIES:\n:ID: b\n:END:\nBody B[fn:x].\n";
+    let doc = parse(text, &ParseOptions::default());
+    let sem = semantics(&doc);
+    let a = sem.nodes.iter().find(|n| n.id == "a").unwrap();
+    for body in [
+        "Body A.\n\n[fn:x] See [[id:two?k=v1][it]].\n",
+        "Body A.\n\n[fn:x] See [[id:one?k=v2][it]].\n",
+    ] {
+        assert_eq!(
+            replace_body(text, &doc, a, body),
+            Err(BodyEditError::ChangesLinks {
+                id: Some("b".into())
+            }),
+            "{body:?}"
+        );
+    }
+    assert!(replace_body(
+        text,
+        &doc,
+        a,
+        "Body A, reworded.\n\n[fn:x] See [[id:one?k=v1][it]].\n"
+    )
+    .is_ok());
+}
