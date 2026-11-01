@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url';
 // reading, `#+LINK` expansion); 755,498 bytes after the final pre-tag
 // review's fixes, 761,547 after its second round, 772,721 after its
 // third; 846,219 once macros were expanded as Org's export does (review
-// round 4), 865,332 after round 5. The first budget, 700,000 (~15% over the
+// round 4), 868,108 after round 5. The first budget, 700,000 (~15% over the
 // first measurement), caught that growth as it should; it was raised to
 // 800,000 (~13% over the tagged size), then to 900,000 as the deliberate
 // cost of expanding macros, each recorded in ADR-112's O3 note. The
