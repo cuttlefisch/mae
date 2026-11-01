@@ -805,3 +805,39 @@ fn a_body_whose_expansion_hides_the_next_node_is_refused() {
     let a = sem.nodes.iter().find(|n| n.id == "a").unwrap();
     assert!(replace_body(text, &doc, a, "{{{h}}}\n").is_err());
 }
+
+/// Review round 6 (major 3): a body edit that makes a page which renders
+/// fail to render (an undefined macro, an `(eval …)` template) emptied the
+/// page while every check compared both sides unexpanded: it is refused,
+/// with the failure named. A body whose macros already fail may still be
+/// edited, to repair them or not (compared unexpanded).
+#[test]
+fn an_edit_that_breaks_the_page_is_refused() {
+    let base = "#+TITLE: Notes\n\n* Alpha\n:PROPERTIES:\n:ID: a\n:END:\nAlpha text with a note[fn:1] and <<here>> a target.\n\n[fn:1] First note.\n\n* Gamma\n:PROPERTIES:\n:ID: c\n:END:\nGamma body.\n";
+    let eval = "#+MACRO: x (eval (+ 1 2))\n\n* Alpha\n:PROPERTIES:\n:ID: a\n:END:\nAlpha {{{n}}}.\n\n* Gamma\n:PROPERTIES:\n:ID: c\n:END:\nGamma body.\n";
+    let edit = |text: &str, body: &str| {
+        let doc = parse(text, &ParseOptions::default());
+        let sem = semantics(&doc);
+        let c = sem.nodes.iter().find(|n| n.id == "c").unwrap();
+        replace_body(text, &doc, c, body)
+    };
+    for (text, body, kind) in [
+        (
+            base,
+            "Gamma body with a typo {{{nosuch}}}.\n",
+            "macro_undefined",
+        ),
+        (eval, "Gamma body {{{x}}}.\n", "macro_eval"),
+    ] {
+        assert_eq!(
+            edit(text, body),
+            Err(BodyEditError::BreaksRendering { kind: kind.into() }),
+            "{body}"
+        );
+    }
+    // Broken before: the edit is compared unexpanded, both ways.
+    let broken = base.replace("Gamma body.", "Gamma {{{nosuch}}}.");
+    assert!(edit(&broken, "Gamma {{{nosuch}}} still.\n").is_ok());
+    assert!(edit(&broken, "Gamma repaired.\n").is_ok());
+    assert!(edit(base, "Gamma body, edited.\n").is_ok());
+}

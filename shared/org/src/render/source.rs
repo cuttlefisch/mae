@@ -141,6 +141,12 @@ pub enum BodyEditError {
     /// The edit would give an `:ID:` that another element of the file
     /// holds: which of them is the node would depend on their order.
     DuplicateId { id: String },
+    /// The page renders before the edit and would render nothing after
+    /// it: a macro could no longer be expanded (`kind` is the failure's
+    /// diagnostic name: `macro_undefined`, `macro_circular`, `macro_eval`,
+    /// `macro_unsupported`, `macro_budget`). A file whose macros already
+    /// fail may be edited either way, compared with nothing expanded.
+    BreaksRendering { kind: String },
 }
 
 /// The file-level keywords that change how the whole file parses or reads
@@ -200,6 +206,9 @@ impl std::fmt::Display for BodyEditError {
             }
             BodyEditError::DuplicateId { id } => {
                 write!(f, "the edit would repeat the id {id:?}")
+            }
+            BodyEditError::BreaksRendering { kind } => {
+                write!(f, "the edit would make the page fail to render ({kind})")
             }
         }
     }
@@ -419,11 +428,18 @@ impl Edit<'_> {
         (old, before): (&Document, &Semantics),
         (new, after): (&Document, &Semantics),
     ) -> Result<(), BodyEditError> {
-        // Expanded as rendered; when either side's macros cannot be (it
-        // renders nothing), both as written, so a change outside the body
-        // still shows and a body that repairs its own macros is written.
+        // Expanded as rendered. An edit that makes a rendering page fail
+        // is refused; when the page already fails (it renders nothing),
+        // both sides as written, so a change outside the body still shows
+        // and a body that repairs its macros, or keeps them failing, is
+        // written.
         let (mut was_p, mut now_p) = (prepare(old, before), prepare(new, after));
-        if was_p.failed.is_some() || now_p.failed.is_some() {
+        if let (None, Some(d)) = (&was_p.failed, &now_p.failed) {
+            return Err(BodyEditError::BreaksRendering {
+                kind: d.kind_name().into(),
+            });
+        }
+        if was_p.failed.is_some() {
             (was_p, now_p) = (unexpanded(old, before), unexpanded(new, after));
         }
         // Every target either side links to, those only an expansion makes
