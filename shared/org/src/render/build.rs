@@ -576,13 +576,53 @@ pub(crate) fn node_text_trees(
     node: &crate::SemanticNode,
     resolver: &Resolver,
 ) -> (Vec<Node>, Vec<Node>) {
+    node_text_trees_with(doc, DocCx::new(doc, sem), node, resolver)
+}
+
+fn node_text_trees_with(
+    doc: &Document,
+    cx: Rc<DocCx<'_>>,
+    node: &crate::SemanticNode,
+    resolver: &Resolver,
+) -> (Vec<Node>, Vec<Node>) {
     let opts = RenderOptions::default();
     let root = doc.syntax();
-    let mut b = Builder::new(doc, sem, &opts, resolver, Mode::Text, Table::default());
+    let mut b = Builder::with_cx(cx, &opts, resolver, Mode::Text, Table::default());
     let title = b.node_title(&root, node);
     b.scope = Some(node.body_span);
     let body = b.run(&root);
     (title, body)
+}
+
+/// Every KB node's own rendering, as one string per node id: its body
+/// rendered as a page alone (a fixed resolver and options; hast, ids and
+/// footnotes as that page has them) and its search text. One read of the
+/// document for all of them. What `replace_body` compares for every node
+/// it did not edit.
+pub(crate) fn node_renderings(doc: &Document, sem: &Semantics) -> HashMap<String, String> {
+    let cx = DocCx::new(doc, sem);
+    let opts = RenderOptions::default();
+    let resolver = Resolver::default();
+    let mut out = HashMap::new();
+    for n in &sem.nodes {
+        let page = page_with(
+            doc,
+            cx.clone(),
+            &opts,
+            &resolver,
+            Mode::Page,
+            Some(n.body_span),
+        );
+        let (title, body) = node_text_trees_with(doc, cx.clone(), n, &resolver);
+        let rendering = format!(
+            "{}\n{}\n{}",
+            super::to_hast(&page.body),
+            super::text::text_of(&title),
+            super::text::text_of(&body)
+        );
+        out.insert(n.id.clone(), rendering);
+    }
+    out
 }
 
 fn is_caption(affiliated: &SyntaxNode) -> bool {

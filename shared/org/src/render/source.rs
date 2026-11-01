@@ -105,9 +105,17 @@ pub enum BodyEditError {
     /// title, properties, tags or place (a list item's body can end its
     /// list, for one).
     ChangesNode { id: String },
-    /// The edit would change the links or transclusions of another node
-    /// (`id`, or `None` for text outside every node).
-    ChangesLinks { id: Option<String> },
+    /// The body would add, remove or change a name the rest of the file can
+    /// resolve (review round 2: another node's `[fn:x]`, `[[tgt]]` or
+    /// `#+CALL: fn()` would then render something else): `kind` is
+    /// `footnote` (a definition, or an inline one with a label), `target`
+    /// (`<<x>>`), `radio target`, `name` (`#+NAME:` and its aliases on any
+    /// element), `results` (a named `#+RESULTS:`), `CUSTOM_ID` or `ID`.
+    ChangesName { kind: String, name: String },
+    /// Node `id` (not the edited one) would render differently: its body
+    /// rendered alone or its search text. The last line of defence, behind
+    /// the precise checks.
+    ChangesRendering { id: String },
     /// The edit would change how text outside the body parses: an element
     /// or object there (at `offset` in the new text) differs, as when a
     /// radio target in the body makes a radio link elsewhere.
@@ -152,11 +160,14 @@ impl std::fmt::Display for BodyEditError {
                 )
             }
             BodyEditError::ChangesNode { id } => write!(f, "the edit would change node {id:?}"),
-            BodyEditError::ChangesLinks { id: Some(id) } => {
-                write!(f, "the edit would change the links of node {id:?}")
+            BodyEditError::ChangesName { kind, name } => {
+                write!(
+                    f,
+                    "the edit would add, remove or change the {kind} {name:?}"
+                )
             }
-            BodyEditError::ChangesLinks { id: None } => {
-                write!(f, "the edit would change links outside every node")
+            BodyEditError::ChangesRendering { id } => {
+                write!(f, "the edit would change how node {id:?} renders")
             }
             BodyEditError::ChangesOutside { offset } => {
                 write!(f, "the edit would change the text's reading at {offset}")
@@ -192,8 +203,11 @@ impl std::error::Error for BodyEditError {}
 /// moved by the edit), this node's own metadata, any link or transclusion
 /// whose source is not this node, any file-level declaration
 /// ([`DECLARATION_KEYWORDS`]), an `:ID:` the new body would repeat (in
-/// either order), or any element, object or token outside the body (a
-/// radio target in the body that makes a radio link elsewhere). A new node
+/// either order), any name the rest of the file can resolve that the body
+/// adds, removes or changes (a footnote label, a target, a radio target, a
+/// `#+NAME:`, a named `#+RESULTS:`, a `CUSTOM_ID` or `ID`), any element,
+/// object or token outside the body, or, last, how any other node renders
+/// (its body rendered alone, and its search text). A new node
 /// in the body is refused too: a body runs to the first node nested in it,
 /// so the edited node's body would change.
 ///
@@ -329,9 +343,46 @@ impl Edit<'_> {
                 }
             }
         }
+        self.check_names(&old_doc, &new_doc)?;
         self.check_nodes(&before, &after)?;
-        self.check_links(&before, &after)?;
-        self.check_outside(&old_doc, &new_doc)
+        self.check_outside(&old_doc, &new_doc)?;
+        self.check_renderings((&old_doc, &before), (&new_doc, &after))
+    }
+
+    /// The names the rest of the file can resolve are the same in the old
+    /// body and the new one ([`BodyEditError::ChangesName`]).
+    fn check_names(&self, old: &Document, new: &Document) -> Result<(), BodyEditError> {
+        let mut was = names_in(old, self.range);
+        let mut now = names_in(new, self.new_range);
+        was.sort();
+        now.sort();
+        let differs = was
+            .iter()
+            .zip(&now)
+            .find(|(a, b)| a != b)
+            .map(|(a, b)| a.min(b).clone())
+            .or_else(|| was.get(now.len()).or(now.get(was.len())).cloned());
+        match differs {
+            Some((kind, name)) => Err(BodyEditError::ChangesName { kind, name }),
+            None => Ok(()),
+        }
+    }
+
+    /// Every node but the edited one renders as before (its body as a page
+    /// alone, and its search text), under a fixed resolver and options.
+    fn check_renderings(
+        &self,
+        (old, before): (&Document, &Semantics),
+        (new, after): (&Document, &Semantics),
+    ) -> Result<(), BodyEditError> {
+        let was = super::build::node_renderings(old, before);
+        let now = super::build::node_renderings(new, after);
+        for n in &before.nodes {
+            if n.id != self.edited.id && was.get(&n.id) != now.get(&n.id) {
+                return Err(BodyEditError::ChangesRendering { id: n.id.clone() });
+            }
+        }
+        Ok(())
     }
 
     /// Every element, object and token wholly outside the body reads the
@@ -417,53 +468,63 @@ impl Edit<'_> {
         }
         Ok(())
     }
+}
 
-    /// Every link and transclusion whose source is not the edited node (nor
-    /// a node new in its body) is the same before and after, spans moved.
-    fn check_links(&self, before: &Semantics, after: &Semantics) -> Result<(), BodyEditError> {
-        let new_ids: std::collections::HashSet<&str> = after
-            .nodes
-            .iter()
-            .filter(|m| !before.nodes.iter().any(|n| n.id == m.id))
-            .map(|m| m.id.as_str())
-            .collect();
-        let others = |from: &Option<String>| {
-            from.as_deref()
-                .is_none_or(|f| f != self.edited.id && !new_ids.contains(f))
-        };
-        let changed = |from: &Option<String>| BodyEditError::ChangesLinks { id: from.clone() };
-        let mut was = Vec::new();
-        for l in before.links.iter().filter(|l| others(&l.from)) {
-            let mut l = l.clone();
-            l.span = self.moved_span(l.span).ok_or_else(|| changed(&l.from))?;
-            was.push(l);
+/// `(kind, name)` of every name in `doc` within `range` that the rest of the
+/// file can resolve (see [`BodyEditError::ChangesName`]).
+fn names_in(doc: &Document, (a, b): (usize, usize)) -> Vec<(String, String)> {
+    use crate::kind::SyntaxKind::*;
+    let mut out = Vec::new();
+    let token = |n: &crate::SyntaxNode, kind: crate::SyntaxKind| {
+        n.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.kind() == kind)
+            .map(|t| t.text().to_string())
+    };
+    for n in doc.syntax().descendants() {
+        let sp = Span::of(&n);
+        if (sp.start as usize) < a || sp.end as usize > b {
+            continue;
         }
-        let now: Vec<_> = after.links.iter().filter(|l| others(&l.from)).collect();
-        if was.len() != now.len() || was.iter().zip(&now).any(|(a, b)| a != *b) {
-            let at = was.iter().zip(&now).find(|(a, b)| a != *b);
-            let from = at.map(|(a, _)| a.from.clone());
-            let from = from.or_else(|| was.get(now.len()).map(|l| l.from.clone()));
-            let from = from.or_else(|| now.get(was.len()).map(|l| l.from.clone()));
-            return Err(changed(&from.flatten()));
+        let mut add = |kind: &str, name: String| out.push((kind.to_string(), name));
+        match n.kind() {
+            FOOTNOTE_DEFINITION => {
+                if let Some(l) = crate::semantics::regions::definition_label(&n) {
+                    add("footnote", l);
+                }
+            }
+            FOOTNOTE_REFERENCE => {
+                if let Some(l) = crate::semantics::regions::inline_label(&n) {
+                    add("footnote", l);
+                }
+            }
+            TARGET => add("target", super::objects::inner_text(&n)),
+            RADIO_TARGET => add("radio target", super::objects::inner_text(&n)),
+            NODE_PROPERTY => {
+                let key = token(&n, NAME).map(|k| crate::views::canonical_key(&k));
+                if let Some(k @ ("CUSTOM_ID" | "ID")) = key.as_deref() {
+                    let v = token(&n, VALUE).unwrap_or_default();
+                    add(k, v.trim().to_string());
+                }
+            }
+            // A list item's property drawer is a drawer to the tree.
+            DRAWER => {
+                for p in crate::semantics::items::item_property_drawer(&n).unwrap_or_default() {
+                    let key = crate::views::canonical_key(&p.key);
+                    if matches!(key.as_str(), "CUSTOM_ID" | "ID") {
+                        add(&key, p.value.trim().to_string());
+                    }
+                }
+            }
+            _ => {}
         }
-        let mut was = Vec::new();
-        for t in before.transclusions.iter().filter(|t| others(&t.from)) {
-            let mut t = t.clone();
-            t.span = self.moved_span(t.span).ok_or_else(|| changed(&t.from))?;
-            was.push(t);
+        for (k, v) in super::babel::affiliated(&n) {
+            match k.as_str() {
+                "NAME" => add("name", v),
+                "RESULTS" if !v.is_empty() => add("results", v),
+                _ => {}
+            }
         }
-        let now: Vec<_> = after
-            .transclusions
-            .iter()
-            .filter(|t| others(&t.from))
-            .collect();
-        if was.len() != now.len() || was.iter().zip(&now).any(|(a, b)| a != *b) {
-            let from = was
-                .first()
-                .or(now.first().copied())
-                .and_then(|t| t.from.clone());
-            return Err(changed(&from));
-        }
-        Ok(())
     }
+    out
 }

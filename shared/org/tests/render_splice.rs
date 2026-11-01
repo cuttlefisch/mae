@@ -75,6 +75,16 @@ fn check_edit(text: &str, i: usize, new_body: &str) -> Result<bool, TestCaseErro
             );
             Ok(false)
         }
+        // Removing a name the rest of the file can resolve is refused
+        // whatever the new body: the old body must have held it.
+        Err(BodyEditError::ChangesName { name, .. }) => {
+            let old = &text[node.body_span.start as usize..node.body_span.end as usize];
+            prop_assert!(
+                old.contains(name.as_str()) || new_body.contains(name.as_str()),
+                "refused for a name {name:?} neither body holds"
+            );
+            Ok(false)
+        }
         Err(e) => {
             // Structure and line-ending refusals are allowed only for
             // bodies that could cause them.
@@ -368,14 +378,25 @@ fn an_edit_that_changes_what_the_file_declares_or_links_is_refused() {
     ));
     // A radio target in one body makes a link in another.
     let radio = "* A\n:PROPERTIES:\n:ID: a\n:END:\nbody a\n* B\n:PROPERTIES:\n:ID: b\n:END:\nThe widget is here.\n";
-    assert!(matches!(
+    assert_eq!(
         edit(radio, "a", "<<<widget>>> defined\n"),
-        Err(BodyEditError::ChangesOutside { .. })
-    ));
+        Err(BodyEditError::ChangesName {
+            kind: "radio target".into(),
+            name: "widget".into()
+        })
+    );
     // A link of another node that the semantics read differently.
     let kb =
         "* A\n:PROPERTIES:\n:ID: a\n:END:\nbody a\n* B\n:PROPERTIES:\n:ID: b\n:END:\nSee [[x]].\n";
-    assert!(edit(kb, "a", "<<x>> here\n").is_ok_and(|t| t.contains("<<x>>")));
+    // A target another node's `[[x]]` would land on (review round 2: it
+    // used to be accepted, as the semantics' links did not change).
+    assert_eq!(
+        edit(kb, "a", "<<x>> here\n"),
+        Err(BodyEditError::ChangesName {
+            kind: "target".into(),
+            name: "x".into()
+        })
+    );
     assert!(edit(radio, "a", "widget, not defined\n").is_ok());
     // An id another element holds, after it and before it.
     let ids = "* A\n:PROPERTIES:\n:ID: a\n:END:\nbody\n* B\n:PROPERTIES:\n:ID: b\n:END:\nbody\n";
@@ -387,11 +408,14 @@ fn an_edit_that_changes_what_the_file_declares_or_links_is_refused() {
             "{node} gets {id}"
         );
     }
-    // A new id is a new node nested in the body, which would end the body
-    // at it: refused as a change to the node, not as a duplicate.
+    // A new id is a new name (and a new node nested in the body, which
+    // would end the body at it): refused, though not as a duplicate.
     assert_eq!(
         edit(ids, "a", &item("c")),
-        Err(BodyEditError::ChangesNode { id: "a".into() })
+        Err(BodyEditError::ChangesName {
+            kind: "ID".into(),
+            name: "c".into()
+        })
     );
 }
 
@@ -414,4 +438,79 @@ fn the_check_reads_with_the_callers_options() {
         mae_org::replace_body(text, &doc, a, "#+TODO: X | Y\n", &opts, &sopts),
         Err(BodyEditError::ChangesDeclaration { .. })
     ));
+}
+
+/// Review round 2 (M1): the body may not add, remove or change a name the
+/// rest of the file can resolve: another node's rendering would change
+/// (its footnote, its `[[target]]`, a `#+CALL:` of a block, results found by
+/// name). The reviewer's case: one edit adds all three, and the other
+/// node's hidden `PRIVATE-RESULT` would have been rendered.
+#[test]
+fn an_edit_that_adds_or_removes_a_name_is_refused() {
+    let text = "* Editable\n:PROPERTIES:\n:ID: e1\n:END:\nold body\n\n* Other\n:PROPERTIES:\n:ID: o1\n:END:\nSee note[fn:x] and [[tgt]].\n\n#+CALL: fn()\n\n#+RESULTS:\n: PRIVATE-RESULT\n";
+    let edit = |t: &str, body: &str| {
+        let doc = parse(t, &ParseOptions::default());
+        let sem = semantics(&doc);
+        let n = sem.nodes.iter().find(|n| n.id == "e1").expect("e1");
+        replace_body(t, &doc, n, body)
+    };
+    let s1 = "new body <<tgt>>\n\n#+NAME: fn\n#+begin_src elisp :exports none\n1\n#+end_src\n\n[fn:x] INJECTED footnote text\n";
+    assert!(
+        matches!(edit(text, s1), Err(BodyEditError::ChangesName { .. })),
+        "{:?}",
+        edit(text, s1)
+    );
+    let cases = [
+        ("footnote", "x", "[fn:x] a definition\n"),
+        ("footnote", "x", "inline[fn:x:defined here]\n"),
+        ("target", "tgt", "a <<tgt>> here\n"),
+        ("radio target", "word", "a <<<word>>> here\n"),
+        ("name", "fn", "#+NAME: fn\n| a |\n"),
+        ("name", "unused", "#+NAME: unused\n| a |\n"),
+        ("results", "fn", "#+RESULTS: fn\n: r\n"),
+        (
+            "CUSTOM_ID",
+            "c",
+            "- x\n  :PROPERTIES:\n  :CUSTOM_ID: c\n  :END:\n",
+        ),
+    ];
+    for (kind, name, body) in cases {
+        assert_eq!(
+            edit(text, body),
+            Err(BodyEditError::ChangesName {
+                kind: kind.into(),
+                name: name.into()
+            }),
+            "{body:?}"
+        );
+    }
+    // Removing one is refused too; keeping it is fine.
+    let with = text.replace("old body", "old <<tgt>> body");
+    assert_eq!(
+        edit(&with, "gone\n"),
+        Err(BodyEditError::ChangesName {
+            kind: "target".into(),
+            name: "tgt".into()
+        })
+    );
+    assert!(edit(&with, "kept <<tgt>> still\n").is_ok());
+    assert!(edit(text, "plain new words\n").is_ok());
+}
+
+/// The last line of defence, which no precise check covers: every other
+/// node renders as before. Rewording a footnote definition the body holds
+/// changes no name, but another node that references it shows the new
+/// text.
+#[test]
+fn an_edit_that_changes_how_another_node_renders_is_refused() {
+    let text = "* Editable\n:PROPERTIES:\n:ID: e1\n:END:\nold body\n\n[fn:x] the note as it was\n\n* Other\n:PROPERTIES:\n:ID: o1\n:END:\nSee note[fn:x].\n";
+    let doc = parse(text, &ParseOptions::default());
+    let sem = semantics(&doc);
+    let e1 = sem.nodes.iter().find(|n| n.id == "e1").unwrap();
+    assert_eq!(
+        replace_body(text, &doc, e1, "new body\n\n[fn:x] the note reworded\n"),
+        Err(BodyEditError::ChangesRendering { id: "o1".into() })
+    );
+    // The same definition, kept as it was: fine.
+    assert!(replace_body(text, &doc, e1, "new body\n\n[fn:x] the note as it was\n").is_ok());
 }

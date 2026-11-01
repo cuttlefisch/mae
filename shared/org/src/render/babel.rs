@@ -125,7 +125,7 @@ fn affiliated_key(a: &SyntaxNode) -> String {
 /// `(key, value)` of each affiliated keyword of `n`, in order. A RESULTS
 /// keyword is babel's only when written `RESULTS` (its regexps do not know
 /// the `RESULT` alias).
-fn affiliated(n: &SyntaxNode) -> impl Iterator<Item = (String, String)> {
+pub(crate) fn affiliated(n: &SyntaxNode) -> impl Iterator<Item = (String, String)> {
     n.children()
         .filter(|c| c.kind() == AFFILIATED_KEYWORD)
         .map(|a| {
