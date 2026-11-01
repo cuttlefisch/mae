@@ -70,11 +70,15 @@ fn round_trips(text_in: &str) -> Result<(), String> {
         let mut trees = vec![out.body.clone()];
         for n in &out.nodes {
             trees.push(n.title.clone());
+            trees.push(n.title_unlinked.clone());
             trees.extend(n.aliases.iter().cloned());
             trees.extend(n.properties.iter().map(|(_, v)| v.clone()));
         }
         for t in trees {
             let html = mae_org::to_html(&t);
+            if let Some(path) = nested_anchor(&from_tree(&t), false) {
+                return Err(format!("an <a> inside an <a> ({path}):\n{html}"));
+            }
             let back = parse_html(&html);
             if back != from_tree(&t) {
                 return Err(format!("HTML does not parse back to its tree:\n{html}"));
@@ -82,6 +86,41 @@ fn round_trips(text_in: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// The tag path of an `<a>` nested in another, if there is one: an HTML
+/// parser closes the outer link at the inner one, so the published page
+/// would not be the tree.
+fn nested_anchor(dom: &[Dom], in_a: bool) -> Option<String> {
+    for d in dom {
+        if let Dom::El(tag, _, children) = d {
+            if tag == "a" && in_a {
+                return Some("a > … > a".into());
+            }
+            if let Some(p) = nested_anchor(children, in_a || tag == "a") {
+                return Some(format!("{tag} > {p}"));
+            }
+        }
+    }
+    None
+}
+
+/// A footnote reference (or a link) inside a link's description, which
+/// Org allows inside emphasis there, shows no anchor of its own.
+#[test]
+fn nothing_in_a_link_description_is_an_anchor() {
+    let cases = [
+        "[[https://x.example][*a[fn:1]*]]\n\n[fn:1] Note.\n",
+        "[[https://x.example][/b [fn:2]/ and _c[fn::inline]_]]\n\n[fn:2] Two.\n",
+        "[[id:known][*k[fn:1]*]] then[fn:1]\n\n[fn:1] Note.\n",
+        "* Title [[https://x.example][*t[fn:1]*]]\n:PROPERTIES:\n:ID: t\n:END:\n[fn:1] Note.\n",
+        "<<<r>>> and [[https://x.example][*r*]]\n",
+    ];
+    for c in cases {
+        if let Err(e) = round_trips(c) {
+            panic!("{c:?}: {e}");
+        }
+    }
 }
 
 #[test]
@@ -155,6 +194,7 @@ const PIECES: &[&str] = &[
     "<<<r>>> r\n",
     "[[https://a.org][see *https://b.org* x[fn:1]]]\n",
     "<<<r q>>> [[https://a][*r q*]]\n",
+    "[[https://a.org][*a[fn:1]* /b[fn::c]/]]\n",
     "* T [[https://a][*https://b*]]\n:PROPERTIES:\n:ID: t\n:ALIASES: [[https://a][*https://b*]]\n:END:\n",
     "#+CAPTION: c\nx\n",
 ];

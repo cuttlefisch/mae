@@ -233,8 +233,17 @@ pub fn check(nodes: &[Dom], c: &Contract) -> Result<(), String> {
 
 fn walk(nodes: &[Dom], c: &Contract, ids: &HashSet<String>) -> Result<(), String> {
     for n in nodes {
-        let Dom::El(tag, attrs, children) = n else {
-            continue;
+        let (tag, attrs, children) = match n {
+            Dom::El(tag, attrs, children) => (tag, attrs, children),
+            Dom::Text(t) => {
+                // The tree's text holds no control character but tab and
+                // newline, and no DEL: none is printable, and an HTML
+                // parser drops or replaces some of them.
+                if let Some(c) = t.chars().find(|c| is_unprintable(*c)) {
+                    return Err(format!("text holds control character {c:?}"));
+                }
+                continue;
+            }
         };
         if !TAGS.contains(&tag.as_str()) {
             return Err(format!("tag <{tag}> is not allowed"));
@@ -363,4 +372,9 @@ pub fn resolved(href: String, title: Option<String>) -> mae_org::Resolved {
     let mut r = mae_org::Resolved::new(href);
     r.title = title;
     r
+}
+
+/// A C0 control character other than tab and newline, or DEL.
+pub fn is_unprintable(c: char) -> bool {
+    (c < ' ' && c != '\t' && c != '\n') || c == '\u{7f}'
 }

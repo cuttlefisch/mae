@@ -44,6 +44,7 @@ fn check_all(text_in: &str) -> Result<(), String> {
         check(&from_tree(&out.body), &contract)?;
         for n in &out.nodes {
             check(&from_tree(&n.title), &contract)?;
+            check(&from_tree(&n.title_unlinked), &contract)?;
             for a in &n.aliases {
                 check(&from_tree(a), &contract)?;
             }
@@ -319,5 +320,56 @@ fn resolver_hrefs_that_are_not_pages_are_refused() {
     }
     for good in ["/n/x.html", "n/x?y=1#z", "https://h/x", "mailto:a@b"] {
         assert!(mae_org::safe_resolver_href(good).is_some(), "{good:?}");
+    }
+}
+
+/// Every C0 control character and DEL, in every place text can come from:
+/// none reaches the tree (each but tab and newline is U+FFFD).
+#[test]
+fn control_characters_never_reach_the_tree() {
+    let controls: String = (0u8..0x20)
+        .chain(std::iter::once(0x7f))
+        .filter(|b| !matches!(b, b'\n' | b'\r'))
+        .map(char::from)
+        .collect();
+    let doc = format!(
+        "* Title {controls}\n:PROPERTIES:\n:ID: n\n:ALIASES: a{controls}\n:END:\nBody {controls} [[https://x.example][d{controls}]]\n#+begin_src sh :exports code\n{controls}\n#+end_src\n| {controls} |\n"
+    );
+    check_all(&doc).unwrap();
+    let d = parse(&doc, &ParseOptions::default());
+    let html = mae_org::render_html(
+        &d,
+        &semantics(&d),
+        &RenderOptions::default(),
+        &Resolver::default(),
+    );
+    assert!(html.contains('\u{fffd}'), "{html:?}");
+    assert!(!html.contains('\u{7f}'), "{html:?}");
+}
+
+/// U+2028 and U+2029 are valid in JSON but end a line in pre-ES2019
+/// JavaScript source: every JSON this crate writes escapes them, so a
+/// response can be embedded in a `<script>` or evaluated as a literal.
+#[test]
+fn json_never_carries_a_raw_line_or_paragraph_separator() {
+    let doc = "* T\u{2029}x\n:PROPERTIES:\n:ID: a\u{2028}b\n:END:\nBody\u{2028}text [[https://x.example][d\u{2029}]] [[id:a\u{2028}b]]\n";
+    let d = parse(doc, &ParseOptions::default());
+    let sem = semantics(&d);
+    let r = render(&d, &sem, &RenderOptions::default(), &Resolver::default());
+    let outs = [
+        r.to_json(mae_org::TreeFormat::Hast),
+        r.to_json(mae_org::TreeFormat::Html),
+        mae_org::to_hast(&r.body),
+        sem.to_json(),
+        mae_org::json_string("\u{2028}\u{2029}"),
+    ];
+    for json in &outs {
+        assert!(!json.contains(['\u{2028}', '\u{2029}']), "{json}");
+        let v: serde_json::Value = serde_json::from_str(json).expect("JSON");
+        let back = serde_json::to_string(&v).unwrap();
+        assert!(
+            back.contains('\u{2028}') || back.contains('\u{2029}'),
+            "{json}: the separators were lost"
+        );
     }
 }
