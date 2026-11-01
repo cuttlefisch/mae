@@ -1,0 +1,5 @@
+* Visible
+See [[tbl]] QZvQZ.
+* Pruned :noexport:
+#+NAME: tbl
+| QZsQZ |

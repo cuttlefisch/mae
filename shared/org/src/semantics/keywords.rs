@@ -34,17 +34,23 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Every keyword element outside COMMENT subtrees, in document order.
 pub(crate) fn outside_comment_trees(root: &SyntaxNode) -> Vec<Keyword> {
-    let mut out = Vec::new();
+    uncommented(root).filter_map(Keyword::cast).collect()
+}
+
+/// Every node of `root`, in document order, outside the COMMENT subtrees:
+/// the buffer as Org's export reads it to collect settings and templates
+/// and to run babel, after `org-export--delete-comment-trees`.
+pub(crate) fn uncommented(root: &SyntaxNode) -> impl Iterator<Item = SyntaxNode> {
     let mut walk = root.preorder();
-    while let Some(ev) = walk.next() {
-        let WalkEvent::Enter(n) = ev else { continue };
-        if Headline::cast(n.clone()).is_some_and(|h| h.is_commented()) {
-            walk.skip_subtree();
-        } else if let Some(k) = Keyword::cast(n) {
-            out.push(k);
+    std::iter::from_fn(move || loop {
+        match walk.next()? {
+            WalkEvent::Enter(n) if Headline::cast(n.clone()).is_some_and(|h| h.is_commented()) => {
+                walk.skip_subtree()
+            }
+            WalkEvent::Enter(n) => return Some(n),
+            WalkEvent::Leave(_) => {}
         }
-    }
-    out
+    })
 }
 
 /// The tags the `key` keywords among `keywords` declare (words split on

@@ -1,0 +1,5 @@
+* Visible
+See [[tbl]] QZvQZ.
+* Pruned :ARCHIVE:
+#+NAME: tbl
+| QZsQZ |

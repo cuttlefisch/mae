@@ -1,0 +1,4 @@
+* Visible
+See[fn:x] QZvQZ.
+* Pruned :noexport:
+[fn:x] note QZsQZ

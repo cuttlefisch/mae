@@ -189,6 +189,11 @@ impl Rules {
             COMMENT_BLOCK => Some(Region::CommentBlock),
             EXPORT_BLOCK => Some(Region::ExportBlock),
             DRAWER if !items::is_item_property_drawer(node) => Some(Region::Drawer),
+            // A COMMENT subtree is deleted before anything is parsed, even
+            // inside an archived headline whose contents are parsed.
+            HEADLINE if self.headlines.get(&start(node)) == Some(&Region::CommentSubtree) => {
+                Some(Region::CommentSubtree)
+            }
             SECTION | HEADLINE if parent.as_ref().is_some_and(|p| self.contents_hidden(p)) => {
                 Some(Region::Archived)
             }

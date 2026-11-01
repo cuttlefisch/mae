@@ -1,0 +1,10 @@
+#+SELECT_TAGS: sel
+* Visible :sel:
+#+NAME: f
+#+begin_src none
+#+end_src
+
+QZvQZ
+* Pruned
+#+RESULTS: f
+: QZsQZ

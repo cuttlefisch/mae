@@ -147,7 +147,9 @@ impl Babel {
         };
         let mut named = NamedResults::default();
         let mut blocks = Vec::new();
-        for n in root.descendants() {
+        // Babel runs on the buffer without its COMMENT subtrees: a name or
+        // a results line there is none.
+        for n in crate::semantics::keywords::uncommented(&root) {
             named.add(&n);
             if let Some(name) = definition_name(&n) {
                 babel.defs.entry(name).or_insert(n.clone());

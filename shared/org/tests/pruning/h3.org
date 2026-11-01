@@ -1,0 +1,4 @@
+* Head [fn:x]
+** Sub :noexport:
+*** COMMENT hidden
+[fn:x] secret QZgQZ

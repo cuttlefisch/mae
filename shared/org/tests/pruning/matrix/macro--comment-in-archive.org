@@ -1,0 +1,5 @@
+* Visible
+Use {{{m}}} QZvQZ.
+* Arch :ARCHIVE:
+** COMMENT Pruned
+#+MACRO: m QZsQZ
