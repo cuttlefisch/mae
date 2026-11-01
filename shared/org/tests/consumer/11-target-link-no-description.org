@@ -1,0 +1,5 @@
+# Expected (Emacs): Emacs 30.2 ox-html (emacs -Q): the link text is "No description for this link" and the target is <a id="orgXXXXXXX">; the name SECRETbare appears nowhere.
+# Observed (mae-org): mae-org b2824246: link text "SECRETbare" (the hidden target name becomes visible text), id="t-SECRETbare".
+# Synthetic; SEC… strings are markers that must not reach the output where Emacs hides them.
+#+title: Target link with no description
+Hidden target <<SECRETbare>> here; a link to it with no description: [[SECRETbare]].

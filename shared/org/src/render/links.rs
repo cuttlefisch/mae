@@ -241,9 +241,10 @@ impl Builder<'_> {
         }
     }
 
-    /// What a same-page anchor `#ID` lands on, as rendered (a heading's
-    /// title, a KB item's title, a target's text: see `Table::shown`); the
-    /// placeholder when that is empty or unknown.
+    /// What a same-page anchor `#ID` lands on, as rendered: a heading's or
+    /// a KB item's title, which the page shows (`Table::shown`); the
+    /// placeholder anywhere else, a dedicated target included, whose name
+    /// Org never shows.
     fn local_text(&self, href: &str) -> Vec<Node> {
         let id = href.strip_prefix('#').unwrap_or(href);
         match self.table.shown.get(id).filter(|s| !s.is_empty()) {

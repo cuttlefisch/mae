@@ -689,7 +689,7 @@
                         "children": [
                           {
                             "type": "text",
-                            "value": "a target"
+                            "value": "[?]"
                           }
                         ],
                         "properties": {
@@ -699,7 +699,7 @@
                           "dataOrgC": "1",
                           "dataOrgRel": "references",
                           "dataOrgW": "1",
-                          "href": "#t-a.20target"
+                          "href": "#t-1"
                         },
                         "tagName": "a",
                         "type": "element"
@@ -728,7 +728,7 @@
                           "className": [
                             "org-target"
                           ],
-                          "id": "t-a.20target"
+                          "id": "t-1"
                         },
                         "tagName": "span",
                         "type": "element"

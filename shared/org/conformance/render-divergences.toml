@@ -218,3 +218,11 @@ org = "CUSTOM_ID as written, else a generated org1a2b3c4 id"
 mae = "h-<slug(title)> on every heading (letters and digits of any script, lower-cased by Emacs's case table, every other run one '-'; h for an empty slug), a repeated title's heading h-<slug>--2, --3, …; id-/cid- prefixed node and custom ids on the section"
 reason = "Ids collision-free by construction (a slug never holds '--', so a repeat never spells another title's anchor), stable across renders and toolchains, and a KB link #fragment can name a heading by its title in any script (ADR-030)."
 test = "every_heading_carries_its_slug_anchor_whatever_the_mode"
+
+[[divergence]]
+id = "target-links"
+what = "a link without a description that lands on a dedicated <<target>>"
+org = "shows \"No description for this link\" (ox-html's literal), the target an anchor with a generated id"
+mae = "shows the resolver's placeholder (the [?] default), the target an anchor t-N: no output spells a target's name"
+reason = "Org never shows a dedicated target's name, so neither its anchor nor a link to it may (review round 5); an English literal is not MAE's to emit, the caller's placeholder is."
+test = "a_target_name_reaches_no_output"

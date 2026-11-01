@@ -74,7 +74,7 @@
 //! | entity | its UTF-8 (`org-entities`) |
 //! | subscript, superscript | `<sub>`, `<sup>` |
 //! | line break | `<br>` |
-//! | target, radio target | `<span class="org-target" id="t-…">` (empty), `<span class="org-radio-target" id="r-…">` text |
+//! | target, radio target | `<span class="org-target" id="t-N">` (empty), `<span class="org-radio-target" id="r-N">` text: N numbers them in order of first appearance, so no id spells a name (see [`encode_id`]'s module) |
 //! | radio link | `<a class="org-radio" href="#r-…">`, or its text if the target is not rendered |
 //! | statistics cookie | `<span class="org-cookie">` |
 //! | LaTeX fragment, environment | `<code class="org-latex">`, `<pre class="org-latex-environment"><code>`: the source as text, never MathML |

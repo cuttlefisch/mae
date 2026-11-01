@@ -596,9 +596,9 @@ fn macro_templates_hide_as_org_expands_them() {
     // document renders nothing (Emacs shows it; registered: macros).
     let chain = |n: usize| -> String {
         let mut d: String = (1..n)
-            .map(|i| format!("#+MACRO: c{i} <{{{{{{c{}($1)}}}}}}>\n", i + 1))
+            .map(|i| format!("#+MACRO: c{i} ({{{{{{c{}($1)}}}}}})\n", i + 1))
             .collect();
-        d.push_str(&format!("#+MACRO: c{n} <$1>\nA {{{{{{c1(QCHAIN)}}}}}} B\n"));
+        d.push_str(&format!("#+MACRO: c{n} ($1)\nA {{{{{{c1(QCHAIN)}}}}}} B\n"));
         d
     };
     let shown = |doc: &str| outputs(doc).iter().any(|(_, s)| s.contains("QCHAIN"));

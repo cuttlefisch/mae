@@ -42,8 +42,8 @@ pub(crate) struct Table {
     pub radios: HashMap<String, String>,
     pub nodes: HashMap<String, String>,
     /// Anchor id → what a link without a description that lands there
-    /// shows: a heading's (or KB node's) title as rendered inline-only, a
-    /// target's text (which its id already spells).
+    /// shows: a heading's (or KB node's) title as rendered inline-only,
+    /// which the page shows too. Never a target's name (Org shows none).
     pub shown: HashMap<String, String>,
     /// The notes (numbers) referenced from outside [`Builder::blank`].
     pub outside_notes: HashSet<usize>,

@@ -476,5 +476,5 @@ fn a_link_in_a_title_slugs_as_its_description() {
 #[test]
 fn a_target_matches_its_link_in_any_case_and_spacing() {
     let h = html("Para <<Foo   Bar>> x.\n\nSee [[foo bar]] and [[Foo Bar]] y.\n");
-    assert_eq!(h.matches("href=\"#t-Foo.20Bar\"").count(), 2, "{h}");
+    assert_eq!(h.matches("href=\"#t-1\"").count(), 2, "{h}");
 }

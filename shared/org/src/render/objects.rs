@@ -1,6 +1,5 @@
 //! Objects (inline): emphasis, code, entities, scripts, targets, …
 
-use super::anchors::encode_id;
 use super::build::{Builder, Mode};
 use super::tree::{push, text, Attr, Element, Node, Tag};
 use crate::kind::SyntaxKind::{self, *};
@@ -196,14 +195,17 @@ impl Builder<'_> {
         if self.mode == Mode::Meta {
             return;
         }
-        let written = collapse(&inner_text(n));
-        let key = name_key(&written);
+        let key = name_key(&collapse(&inner_text(n)));
         let mut e = Element::new(Tag::Span).class("org-target");
         if !key.is_empty() && !self.found.targets.contains_key(&key) {
-            if let Some(id) = self.ids.try_claim(format!("t-{}", encode_id(&written))) {
-                // A target's text holds no object (Org reads it as text),
-                // and its id already spells it.
-                self.found.shown.insert(id.clone(), written);
+            // Opaque, numbered in order of first appearance: Org never shows
+            // a target's name (ox-html gives it a generated id), so no
+            // attribute spells it either.
+            let n = self.found.targets.len() + 1;
+            if let Some(id) = self.ids.try_claim(format!("t-{n}")) {
+                // Nor does a link landing here without a description show
+                // it: Org shows "No description for this link", MAE the
+                // resolver's placeholder (registered: target-links).
                 self.found.targets.insert(key, id.clone());
                 e = e.attr(Attr::Id, id);
             }
@@ -218,7 +220,10 @@ impl Builder<'_> {
         let mut e = Element::new(Tag::Span).class("org-radio-target");
         let key = name_key(&inner_text(n));
         if self.mode != Mode::Meta && !key.is_empty() && !self.found.radios.contains_key(&key) {
-            if let Some(id) = self.ids.try_claim(format!("r-{}", encode_id(&key))) {
+            // Numbered, as ox-html's generated reference: the text is shown,
+            // the id does not spell it.
+            let n = self.found.radios.len() + 1;
+            if let Some(id) = self.ids.try_claim(format!("r-{n}")) {
                 self.found.radios.insert(key, id.clone());
                 e = e.attr(Attr::Id, id);
             }

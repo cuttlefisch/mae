@@ -53,6 +53,10 @@ const UNRENDERED: &[&str] = &[
     "#+begin_src sh :exports NONE\n{M}\n#+end_src\n\n#+begin_src sh :exports (identity \"code\")\n{M}\n#+end_src\n",
     "Inline src_sh{{M}} and src_sh[:exports none]{{M}} {{{results(={M}=)}}} and src_sh[:exports code]{shown} {{{results(={M}=)}}}.\n",
     "#+CAPTION: {M} <<{M}>>\nsrc_sh{{M}}\n\n",
+    // Review round 5: a dedicated target's name is never shown (its anchor
+    // is t-N; a link landing on it without a description: see
+    // tests/render_consumer.rs, as this resolver resolves every marker).
+    "Hidden target <<{M}>> here.\n",
 ];
 
 /// A document: pieces in order, each unrendered one with its own marker.

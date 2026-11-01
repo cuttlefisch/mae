@@ -1,0 +1,5 @@
+# Expected (Emacs): Emacs 30.2 ox-html (emacs -Q): the target becomes <a id="orgXXXXXXX"> (generated id) and the link href="#orgXXXXXXX"; the name SECRETtarget appears nowhere in the HTML.
+# Observed (mae-org): mae-org b2824246: id="t-SECRETtarget" and href="#t-SECRETtarget" (the name leaks into attributes). Accepted as tag-gating (opaque t-N).
+# Synthetic; SEC… strings are markers that must not reach the output where Emacs hides them.
+#+title: Target name in id
+Text with a hidden target <<SECRETtarget>> here, and a link to it: [[SECRETtarget][go to target]].

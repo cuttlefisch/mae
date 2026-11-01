@@ -331,7 +331,7 @@
                   "className": [
                     "org-target"
                   ],
-                  "id": "t-a.20target"
+                  "id": "t-1"
                 },
                 "tagName": "span",
                 "type": "element"
@@ -365,7 +365,7 @@
                   "className": [
                     "org-radio-target"
                   ],
-                  "id": "r-radio.20word"
+                  "id": "r-1"
                 },
                 "tagName": "span",
                 "type": "element"
@@ -385,7 +385,7 @@
                   "className": [
                     "org-radio"
                   ],
-                  "href": "#r-radio.20word"
+                  "href": "#r-1"
                 },
                 "tagName": "a",
                 "type": "element"
@@ -405,7 +405,7 @@
                   "className": [
                     "org-radio"
                   ],
-                  "href": "#r-radio.20word"
+                  "href": "#r-1"
                 },
                 "tagName": "a",
                 "type": "element"

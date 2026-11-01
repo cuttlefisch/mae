@@ -62,7 +62,10 @@ export interface Rendered<T> {
      * differ only in case, punctuation or blanks share a slug, so `A b` and
      * `A-b` are `h-a-b` and `h-a-b--2`; a link in a title adds only its
      * description). Null for the
-     * file node. Percent-encode it to put it in another page's URL.
+     * file node. Percent-encode it to put it in another page's URL. The
+     * page's other anchors: `t-N` for its N-th `<<target>>` and `r-N` for
+     * its N-th radio target (opaque: no id spells a target's name), `fn-N`
+     * and `fnr-N` for footnotes.
      */
     anchor: string | null;
     title: T;

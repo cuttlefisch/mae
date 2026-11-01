@@ -7,7 +7,11 @@
 //! - `h-` + [`slug`] of the headline's title (`h` when the slug is empty),
 //!   on EVERY headline's heading: the anchor a KB link's `#fragment` lands
 //!   on. A repeat gets `--2`, `--3`, … until free;
-//! - `t-` + enc(text) for a `<<target>>`; `r-` + enc(text) for a radio target;
+//! - `t-N` for the N-th distinct `<<target>>` of the page and `r-N` for the
+//!   N-th radio target, in order of first appearance: opaque, as ox-html's
+//!   generated ids are, so no attribute spells a target's name (Org never
+//!   shows a dedicated target's text). Targets are file-local: a link
+//!   reaches one only on its own page, by name, through the page's map;
 //! - `fn-N` and `fnr-N` (`fnr-N-K` for the K-th repeat) for footnotes.
 //!
 //! The prefixes are distinct and none is a prefix of another, and within a

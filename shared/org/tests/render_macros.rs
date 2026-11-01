@@ -355,7 +355,7 @@ fn built_in_macros_expand_as_org_expands_them() {
             // The outer macro's arguments end at the FIRST `)}}}`, so
             // `{{{w({{{w(y)}}})}}}` is `{{{w({{{w(y)}}}` then `)}}}`, and
             // Emacs exports a target `<<y>>`.
-            "<p>A &lt;x&gt; &lt;k&gt; <span class=\"org-target\" id=\"t-y\"></span> B</p>",
+            "<p>A &lt;x&gt; &lt;k&gt; <span class=\"org-target\" id=\"t-1\"></span> B</p>",
         ),
         // `ITEM` and `TODO`, read from the headline (Emacs: `A H B`).
         ("* TODO [#A] H :t:\nA {{{property(ITEM)}}} {{{property(todo)}}} B\n", "<p>A H TODO B</p>"),
