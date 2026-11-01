@@ -37,6 +37,20 @@ const UNRENDERED: &[&str] = &[
     "Snippet @@html:<a href=\"{M}\">{M}</a>@@ here.\n",
     "#+ATTR_HTML: :id {M} :onclick {M} :class {M}\nAttributed paragraph.\n",
     "Inline call_{M}({M}) here.\n",
+    // Babel's `:exports` (ob-exp), resolved from every source Org reads,
+    // and the existing results it removes; each hidden block also carries
+    // a caption with a target and a dangling footnote reference.
+    "#+begin_src sh :exports none\n{M}\n#+end_src\n\n#+RESULTS:\n: {M}\n\n",
+    "#+HEADER: :exports none\n#+CAPTION: {M} <<{M}>> [fn:{M}]\n#+begin_src sh\n{M}\n#+end_src\n",
+    "* Babel\n:PROPERTIES:\n:header-args: :exports none\n:END:\n** Inherited\n#+begin_src sh\n{M}\n#+end_src\n* Next\n",
+    "#+PROPERTY: header-args:sh :exports none\n#+NAME: {M}\n#+CAPTION: {M}\n#+begin_src sh\n{M}\n#+end_src\n",
+    "#+PROPERTY: header-args :exports none\n#+begin_src elisp\n{M}\n#+end_src\n",
+    "#+CAPTION: {M} <<{M}>>\n#+begin_src sh :exports results\n{M}\n#+end_src\n\n#+RESULTS:\n: a result\n\n",
+    "#+begin_src sh :exports code\nshown code\n#+end_src\n\n#+RESULTS:\n: {M}\n\n",
+    "#+NAME: nm{M}\n#+begin_src sh :exports code\nshown\n#+end_src\n\nBetween.\n\n#+CAPTION: {M}\n#+RESULTS: nm{M}\n: {M}\n\n",
+    "#+begin_src sh :exports NONE\n{M}\n#+end_src\n\n#+begin_src sh :exports (identity \"code\")\n{M}\n#+end_src\n",
+    "Inline src_sh{{M}} and src_sh[:exports none]{{M}} {{{results(={M}=)}}} and src_sh[:exports code]{shown} {{{results(={M}=)}}}.\n",
+    "#+CAPTION: {M} <<{M}>>\nsrc_sh{{M}}\n\n",
 ];
 
 /// A document: pieces in order, each unrendered one with its own marker.

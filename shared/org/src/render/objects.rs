@@ -78,8 +78,28 @@ impl Builder<'_> {
         push(out, e.with(inner).into());
     }
 
-    /// One object, then its post-blank.
+    /// Whether Org's export removes object `n` for babel's `:exports`: an
+    /// inline src block that does not export its code, or the results macro
+    /// of one that does not keep its results.
+    pub fn babel_hides_object(&self, n: &SyntaxNode) -> bool {
+        match n.kind() {
+            INLINE_SRC_BLOCK => !self.babel.inline_exports(n, self.position(n)).shows_code(),
+            MACRO => super::babel::results_macro_owner(n).is_some_and(|src| {
+                !self
+                    .babel
+                    .inline_exports(&src, self.position(&src))
+                    .keeps_results()
+            }),
+            _ => false,
+        }
+    }
+
+    /// One object, then its post-blank (nothing, post-blank included, for
+    /// an object Org's export removes).
     pub fn object(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
+        if self.babel_hides_object(n) {
+            return;
+        }
         let span = |c: &str| Element::new(Tag::Span).class(c);
         let code = |c: Option<&str>, s: String| {
             let e = Element::new(Tag::Code);

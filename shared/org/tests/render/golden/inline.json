@@ -342,7 +342,7 @@
               },
               {
                 "type": "text",
-                "value": ".\nBabel  gone.\nTargets: "
+                "value": "; by default (results only) shows nothing.\nBabel  gone.\nTargets: "
               },
               {
                 "children": [],

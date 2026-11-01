@@ -7,6 +7,7 @@
 //! construction, and a same-page link can only name an id that exists.
 
 use super::anchors::Ids;
+use super::babel::Babel;
 use super::notes::Notes;
 use super::tree::{push, text, Element, Node, Tag};
 use super::{RenderDiagnostic, RenderOptions, Resolver, RENDER_MAX_DEPTH};
@@ -62,6 +63,8 @@ pub(crate) struct Builder<'a> {
     /// This pass's anchors.
     pub found: Table,
     pub notes: Notes,
+    /// What Org's export removes for babel's `:exports` (see `babel`).
+    pub babel: Babel,
     /// The offset of the text being rendered in the document: `Some(0)` for
     /// the document, a value's offset for a keyword or property value, and
     /// `None` for text with no place in it (an alias), whose links are
@@ -144,6 +147,7 @@ impl<'a> Builder<'a> {
             table,
             found: Table::default(),
             notes: Notes::new(doc, sem),
+            babel: Babel::new(doc),
             base: Some(0),
             scope: None,
             in_link: false,
@@ -172,6 +176,11 @@ impl<'a> Builder<'a> {
     pub fn semantic_link(&self, start: u32) -> Option<&'a SemanticLink> {
         let at = self.base?.checked_add(start)?;
         self.links.get(&at).copied()
+    }
+
+    /// Where `n` (a node of the text being rendered) is in the document.
+    pub fn position(&self, n: &SyntaxNode) -> Option<u32> {
+        self.base?.checked_add(Span::of(n).start)
     }
 
     /// Runs `f` on text at `base` (see the field).
@@ -211,7 +220,11 @@ impl<'a> Builder<'a> {
     }
 
     fn element(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
-        if self.skipped(n) {
+        // Hidden means hidden: an element the semantics skip, or one Org's
+        // export removes for its `:exports`, is not rendered with anything
+        // attached to it (its affiliated keywords: a caption, the targets
+        // and footnote references in it).
+        if self.skipped(n) || self.babel.hides(n) {
             return;
         }
         if let Some(scope) = self.scope {
@@ -276,6 +289,12 @@ impl<'a> Builder<'a> {
         out: &mut Vec<Node>,
         render: impl FnOnce(&mut Self, &mut Vec<Node>),
     ) {
+        // A paragraph that shows nothing (only an export snippet, or an
+        // inline src block its `:exports` removes) takes its caption with
+        // it, as the caption of a removed block goes with the block.
+        if n.kind() == PARAGRAPH && self.shows_nothing(n) {
+            return;
+        }
         let caption = self.caption(n);
         if caption.is_empty() {
             return render(self, out);
@@ -305,6 +324,20 @@ impl<'a> Builder<'a> {
         }
         trim_text(&mut out);
         out
+    }
+
+    /// Whether paragraph `n` renders to nothing: blanks, affiliated
+    /// keywords, and objects that are never shown.
+    fn shows_nothing(&self, n: &SyntaxNode) -> bool {
+        n.children_with_tokens().all(|c| match c {
+            NodeOrToken::Token(t) => t.text().chars().all(char::is_whitespace),
+            NodeOrToken::Node(o) => {
+                matches!(
+                    o.kind(),
+                    AFFILIATED_KEYWORD | EXPORT_SNIPPET | INLINE_BABEL_CALL
+                ) || self.babel_hides_object(&o)
+            }
+        })
     }
 
     fn paragraph(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {

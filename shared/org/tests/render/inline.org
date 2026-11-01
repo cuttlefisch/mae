@@ -5,7 +5,7 @@ A line break \\
 next line.
 Cookies [1/3] [50%], a timestamp <2026-10-31 Sat 10:00>--<2026-11-01 Sun> and [2026-01-01 Thu].
 Macro {{{title}}}, citation [cite:@key], snippet @@html:<b>bold</b>@@ gone.
-Inline src src_python{print("<x>")} and src_sh[:x 1]{ls} and src_"><b>{x}.
+Inline src src_python[:exports code]{print("<x>")} and src_sh[:x 1 :exports both]{ls} and src_"><b>[:exports code]{x}; by default (results only) src_sh{echo hidden} shows nothing.
 Babel call_f(x=1) gone.
 Targets: <<a target>> and <<a target>> again; radio <<<Radio Word>>> then radio word, RADIO   WORD.
 Entities in /\alpha italic/ and *nested /emph/*.

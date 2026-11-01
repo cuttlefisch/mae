@@ -21,6 +21,15 @@
 //!   what [`Semantics::unrendered`] lists (the decision `semantics()` made,
 //!   reused, never re-derived), and draws footnotes only from
 //!   [`Semantics::footnotes`].
+//! - **What Org's export removes for babel's `:exports` is not rendered.**
+//!   A src block, inline src block or existing results that `:exports`
+//!   removes (resolved as Org resolves it: the block, `#+HEADER:`,
+//!   inherited `header-args[:LANG]` properties and `#+PROPERTY:`; never
+//!   evaluated) is skipped. This decision is the renderer's, as it is
+//!   export's in Org: [`Semantics`] still reads such an element.
+//! - **Hidden means hidden.** A skipped element takes everything attached
+//!   to it: its affiliated keywords (a `#+CAPTION:`, and the targets and
+//!   footnote references in one) are not rendered, anchored or numbered.
 //! - **Deterministic.** The same document, semantics, options and resolver
 //!   give the same tree, byte for byte, natively and in WASM.
 //!
@@ -38,7 +47,7 @@
 //! | table | `<table>`; the first row group is `<thead>` (`<th scope="col">`) when a rule separates it from another group (Org's rule); each later group a `<tbody>`; `#+TBLFM` omitted; a table.el table `<pre class="org-table-el">` |
 //! | quote, center, special, dynamic block | `<blockquote>`, `<div class="org-center">`, `<div class="org-special-block" data-org-block>`, `<div class="org-dynamic-block">` |
 //! | verse block | `<p class="org-verse">`, lines joined by `<br>`, leading spaces as no-break spaces |
-//! | src, example block, fixed width | `<pre class="org-src|org-example|org-fixed-width"><code>`, verbatim (Org's comma escapes removed; `: ` prefixes removed); src gets `language-L` for a valid language name. Never highlighted, never evaluated |
+//! | src, example block, fixed width | `<pre class="org-src|org-example|org-fixed-width"><code>`, verbatim (Org's comma escapes removed; `: ` prefixes removed); src gets `language-L` for a valid language name. Never highlighted, never evaluated. A src block whose `:exports` is `none` or `results` is not rendered, nor are the existing results (`#+RESULTS:`) of one whose `:exports` is `none` or `code` |
 //! | caption (`#+CAPTION`) | a table's `<caption>`; around a paragraph or src/example block, `<figure class="org-figure">` with `<figcaption>` |
 //! | horizontal rule | `<hr>` |
 //! | footnote reference | `<sup class="org-footnote-ref"><a id="fnr-N" href="#fn-N">N</a></sup>`; definitions in `<section class="org-footnotes">` as `<div class="org-footnote" id="fn-N">`, numbered in order of first reference; a reference with no definition is its text |
@@ -50,7 +59,7 @@
 //! | radio link | `<a class="org-radio" href="#r-…">`, or its text if the target is not rendered |
 //! | statistics cookie | `<span class="org-cookie">` |
 //! | LaTeX fragment, environment | `<code class="org-latex">`, `<pre class="org-latex-environment"><code>`: the source as text, never MathML |
-//! | inline src block | `<code class="org-inline-src">` with its body (+ `language-L`) |
+//! | inline src block | `<code class="org-inline-src">` with its body (+ `language-L`) when its `:exports` is `code` or `both`; by Org's inline default (`results`) nothing. Its `{{{results(…)}}}` macro is removed unless `:exports` keeps results |
 //! | macro, citation | `<span class="org-macro">`, `<span class="org-citation">`: the source as text (not expanded) |
 //! | `#+TRANSCLUDE:` | `<p class="org-transclusion">` holding a link to its member |
 //! | property drawer | omitted unless [`RenderOptions::property_drawers`]: `<dl class="org-properties">`, values plain text with only bracket links as links; always in [`Rendered::nodes`] as data |
@@ -58,6 +67,7 @@
 //! | omitted with a [`RenderDiagnostic`] | content past [`RENDER_MAX_DEPTH`], and text the parser left opaque (its nesting cap) or unplaced: unparsed text is never shown, as it may hold an unrendered region |
 
 mod anchors;
+mod babel;
 mod build;
 mod hast;
 mod html;

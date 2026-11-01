@@ -7,7 +7,7 @@ use super::HeadlineIds;
 use crate::kind::SyntaxKind::*;
 use crate::kind::{SyntaxNode, SyntaxToken};
 use crate::semantics::plain::plain_text;
-use crate::views::{Block, Headline};
+use crate::views::Headline;
 use crate::Span;
 use rowan::NodeOrToken;
 
@@ -325,14 +325,15 @@ impl Builder<'_> {
         push(out, p.into());
     }
 
+    /// A src block `:exports` shows the code of (`element` skips the others).
     pub fn src(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
-        let params = Block::cast(n.clone()).and_then(|b| b.parameters());
-        if params.as_deref().is_some_and(hides_code) {
-            return;
-        }
-        let lang = params
-            .and_then(|p| p.split([' ', '\t']).next().map(str::to_string))
-            .filter(|l| super::links::is_valid_language(l));
+        let line = n
+            .children()
+            .find(|c| c.kind() == BLOCK_BEGIN)
+            .map(|l| l.to_string())
+            .unwrap_or_default();
+        let (lang, _) = super::babel::src_line(&line);
+        let lang = Some(lang).filter(|l| super::links::is_valid_language(l));
         let mut code = Element::new(Tag::Code);
         if let Some(l) = lang {
             code = code.class(&format!("language-{l}"));
@@ -401,25 +402,6 @@ fn without_footnote_refs(nodes: &[Node]) -> Vec<Node> {
             t => t.clone(),
         })
         .collect()
-}
-
-/// Whether a src block's own header says its code is not exported
-/// (`:exports none` or `:exports results`; results are never computed
-/// here, and a `#+RESULTS:` block already in the text renders on its own).
-/// Inherited header arguments (`#+PROPERTY: header-args`, drawers) are not
-/// read.
-fn hides_code(params: &str) -> bool {
-    let words: Vec<&str> = params
-        .split([' ', '\t'])
-        .filter(|w| !w.is_empty())
-        .collect();
-    // The last `:exports` wins, as in Org's header-argument merge.
-    let value = words
-        .windows(2)
-        .rev()
-        .find(|w| w[0].eq_ignore_ascii_case(":exports"))
-        .map(|w| w[1]);
-    value.is_some_and(|v| v.eq_ignore_ascii_case("none") || v.eq_ignore_ascii_case("results"))
 }
 
 /// `[@N]`'s N when it is a decimal number.
