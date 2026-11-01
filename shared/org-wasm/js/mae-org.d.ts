@@ -66,6 +66,13 @@ export interface Rendered<T> {
   diagnostics: { kind: string; start: number; end: number }[];
 }
 
+/**
+ * The KB projection. Its node titles, aliases, property values and link
+ * descriptions are the SOURCE as plain text: an inline src block, a babel
+ * call or an export snippet the export hides is spelled out in them. Never
+ * show them to a reader: display text comes from a render's `nodes`
+ * (`title`, `title_unlinked`, `aliases`, `properties`) or from `text`.
+ */
 export interface SemanticsResult {
   semantics: {
     file_tags: string[];
@@ -114,6 +121,7 @@ export declare class MaeOrg {
   /** Throws a TypeError for a request that is not a string, and an Error for an unknown `op`, before touching the instance. */
   callRaw(op: Op, request: string): string;
   call(op: Op, request?: Request): unknown;
+  /** KB data, not display text: see SemanticsResult. */
   semantics(request: Request): SemanticsResult;
   renderHast(request: Request): Rendered<HastRoot>;
   renderHtml(request: Request): Rendered<string>;

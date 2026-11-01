@@ -109,6 +109,9 @@ export class MaeOrg {
     return response.result;
   }
 
+  // KB data, not display text: titles, aliases, property values and link
+  // descriptions are the source, hidden constructs spelled out. Show a
+  // render's `nodes` (title_unlinked …) or `text` instead.
   semantics(request) { return this.call('semantics', request); }
   renderHast(request) { return this.call('renderHast', request); }
   renderHtml(request) { return this.call('renderHtml', request); }

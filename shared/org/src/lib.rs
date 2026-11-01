@@ -21,6 +21,14 @@
 //! [`to_html`], [`to_hast`], [`text`], [`normalise`], [`node_source`])
 //! draw only what it renders.
 //!
+//! **Source is not display text.** [`semantics`] reads titles, aliases,
+//! property values and link descriptions as plain SOURCE text, so an inline
+//! src block, a babel call or an export snippet the export hides is spelled
+//! out in them. Anything shown to a reader (a page, a title in a list, a
+//! search result) comes from the renderers ([`NodeMeta`]'s `title`,
+//! `title_unlinked`, `aliases` and `properties`, [`node_text`], [`text`]),
+//! which hide exactly what the export hides; never from [`semantics`].
+//!
 //! **Offsets.** Every span this crate reports, in Rust and in its JSON
 //! ([`Span`], diagnostics, semantics, render diagnostics), is a UTF-8 BYTE
 //! offset into the text that was parsed. A JavaScript consumer must slice

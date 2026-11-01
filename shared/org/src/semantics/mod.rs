@@ -198,6 +198,14 @@ pub enum NodeOrigin {
 }
 
 /// A KB node: the file, a headline or a list item with an `:ID:`.
+///
+/// **Not display text.** `title`, `aliases` and `properties` are the
+/// node's SOURCE read as plain text: an inline src block, a babel call or
+/// an export snippet the export hides is spelled out in them, as written
+/// (`Notes src_sh[:exports none]{cat key}`). That is what a KB index needs;
+/// a page, a list or a search result must show [`crate::NodeMeta`]'s
+/// `title`, `title_unlinked`, `aliases` and `properties` ([`crate::render`])
+/// or [`crate::node_text`] instead, which hide what the export hides.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SemanticNode {
@@ -238,7 +246,9 @@ pub struct SemanticLink {
     pub weight: f64,
     pub confidence: f64,
     pub attrs: Vec<(String, String)>,
-    /// Plain text of the link's description, or the store form's.
+    /// Plain text of the link's description, or the store form's: SOURCE,
+    /// not display text (a hidden construct in it is spelled out; see
+    /// [`SemanticNode`]). A renderer shows the description as rendered.
     pub description: Option<String>,
     /// The link, without the blanks Org counts after it.
     pub span: Span,
