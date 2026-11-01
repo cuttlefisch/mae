@@ -114,6 +114,12 @@ if (broken.ok !== false) fail('broken JSON did not give an error response');
 // carry it in any attribute.)
 const rendered = wasmOut.filter((_, i) => requests[i][0] === OPS.renderHast || requests[i][0] === OPS.renderHtml);
 if (rendered.some((r) => /href[^,}]*javascript:/i.test(r))) fail('a hostile href reached a rendering');
+// The shape mae-org.d.ts declares for a node's metadata.
+const meta = org.renderHtml({ text: '* T [[https://x.example][l]]\n:PROPERTIES:\n:ID: t\n:END:\n' }).nodes[0];
+for (const k of ['id', 'anchor', 'title', 'title_unlinked', 'aliases', 'properties']) {
+  if (!(k in meta)) fail(`node metadata has no ${k}`);
+}
+if (/<a\b/.test(meta.title_unlinked)) fail(`title_unlinked holds a link: ${meta.title_unlinked}`);
 const v = org.version();
 console.log(`version: api ${v.api}, crate ${v.crate}`);
 

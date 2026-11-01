@@ -44,65 +44,9 @@ fn check_edit(text: &str, i: usize, new_body: &str) -> Result<bool, TestCaseErro
     let Some(node) = sem.nodes.get(i) else {
         return Ok(false);
     };
-    let eol = doc.line_ending();
     match replace_body(text, &doc, node, new_body) {
         Ok(out) => {
-            prop_assert_eq!(&out, &expected(text, node, new_body, eol));
-            let again = parse(&out, &ParseOptions::default());
-            prop_assert_eq!(again.line_ending(), eol);
-            let sem2 = semantics(&again);
-            let edited = sem2.nodes.iter().find(|n| n.id == node.id);
-            prop_assert!(edited.is_some(), "the node is gone:\n{out:?}");
-            let edited = edited.unwrap();
-            // Its body reads back as what was written (one final ending
-            // added when missing).
-            let mut want = new_body.to_string();
-            if eol == LineEnding::Cr {
-                want = want.replace('\r', "\n");
-            }
-            if !want.is_empty() && !want.ends_with('\n') {
-                want.push('\n');
-            }
-            let lf_body = node_source(&again, edited);
-            // Leading blank lines are the drawer's post-blank to Org, so the
-            // body read back may omit them; nothing else.
-            let at = want.find(&lf_body).unwrap_or(usize::MAX);
-            prop_assert!(at != usize::MAX, "{lf_body:?} not in {want:?}");
-            let (head, tail) = (&want[..at], &want[at + lf_body.len()..]);
-            prop_assert!(
-                head.trim().is_empty() && tail.trim().is_empty(),
-                "{lf_body:?} vs {want:?}"
-            );
-            let want = lf_body.clone();
-            prop_assert_eq!(lf_body, want);
-            // Every other node: the same, its spans moved by the edit.
-            let (s, e) = (node.body_span.start, node.body_span.end);
-            let delta = out.len() as i64 - text.len() as i64;
-            let mv = |p: u32| if p >= e { (p as i64 + delta) as u32 } else { p };
-            for n in sem.nodes.iter().filter(|n| n.id != node.id) {
-                prop_assert!(n.body_span.end <= s || n.body_span.start >= e);
-                let m = sem2.nodes.iter().find(|m| m.id == n.id);
-                prop_assert!(m.is_some(), "{} is gone", n.id);
-                let m = m.unwrap();
-                prop_assert_eq!(&m.title, &n.title);
-                prop_assert_eq!(&m.properties, &n.properties);
-                prop_assert_eq!(&m.own_tags, &n.own_tags);
-                prop_assert_eq!(m.level, n.level);
-                prop_assert_eq!(
-                    m.span,
-                    Span {
-                        start: mv(n.span.start),
-                        end: mv(n.span.end)
-                    }
-                );
-                prop_assert_eq!(
-                    m.body_span,
-                    Span {
-                        start: mv(n.body_span.start),
-                        end: mv(n.body_span.end)
-                    }
-                );
-            }
+            check_written(text, &sem.nodes, node, new_body, doc.line_ending(), &out)?;
             Ok(true)
         }
         Err(BodyEditError::HeadlineLine { .. }) => {
@@ -126,6 +70,71 @@ fn check_edit(text: &str, i: usize, new_body: &str) -> Result<bool, TestCaseErro
             Ok(false)
         }
     }
+}
+
+/// A written edit: the exact bytes, the body read back, every other node.
+fn check_written(
+    text: &str,
+    nodes: &[SemanticNode],
+    node: &SemanticNode,
+    new_body: &str,
+    eol: LineEnding,
+    out: &str,
+) -> Result<(), TestCaseError> {
+    prop_assert_eq!(out, &expected(text, node, new_body, eol));
+    let again = parse(out, &ParseOptions::default());
+    prop_assert_eq!(again.line_ending(), eol);
+    let sem2 = semantics(&again);
+    let edited = sem2.nodes.iter().find(|n| n.id == node.id);
+    prop_assert!(edited.is_some(), "the node is gone:\n{out:?}");
+    check_body_reads_back(&node_source(&again, edited.unwrap()), new_body, eol)?;
+    // Every other node: the same, its spans moved by the edit.
+    let (s, e) = (node.body_span.start, node.body_span.end);
+    let delta = out.len() as i64 - text.len() as i64;
+    let mv = |p: u32| if p >= e { (p as i64 + delta) as u32 } else { p };
+    for n in nodes.iter().filter(|n| n.id != node.id) {
+        prop_assert!(n.body_span.end <= s || n.body_span.start >= e);
+        let m = sem2.nodes.iter().find(|m| m.id == n.id);
+        prop_assert!(m.is_some(), "{} is gone", n.id);
+        let m = m.unwrap();
+        prop_assert_eq!(&m.title, &n.title);
+        prop_assert_eq!(&m.properties, &n.properties);
+        prop_assert_eq!(&m.own_tags, &n.own_tags);
+        prop_assert_eq!(m.level, n.level);
+        let span = |a: u32, b: u32| Span {
+            start: mv(a),
+            end: mv(b),
+        };
+        prop_assert_eq!(m.span, span(n.span.start, n.span.end));
+        prop_assert_eq!(m.body_span, span(n.body_span.start, n.body_span.end));
+    }
+    Ok(())
+}
+
+/// The body read back is what was written (one final ending added when
+/// missing; a CR a line ending in a CR file). Leading blank lines are the
+/// drawer's post-blank to Org, so they may be missing; nothing else.
+fn check_body_reads_back(
+    lf_body: &str,
+    new_body: &str,
+    eol: LineEnding,
+) -> Result<(), TestCaseError> {
+    let mut want = new_body.to_string();
+    if eol == LineEnding::Cr {
+        want = want.replace('\r', "\n");
+    }
+    if !want.is_empty() && !want.ends_with('\n') {
+        want.push('\n');
+    }
+    let at = want.find(lf_body);
+    prop_assert!(at.is_some(), "{lf_body:?} not in {want:?}");
+    let at = at.unwrap();
+    let (head, tail) = (&want[..at], &want[at + lf_body.len()..]);
+    prop_assert!(
+        head.trim().is_empty() && tail.trim().is_empty(),
+        "{lf_body:?} vs {want:?}"
+    );
+    Ok(())
 }
 
 /// Every corpus file (and the render fixtures) that has a node, in its

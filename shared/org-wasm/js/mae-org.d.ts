@@ -51,6 +51,8 @@ export interface Rendered<T> {
     id: string;
     anchor: string | null;
     title: T;
+    /** The title with links replaced by what they show: no <a> inside, to wrap in a link. */
+    title_unlinked: T;
     aliases: T[];
     properties: { key: string; value: T }[];
   }[];

@@ -56,35 +56,48 @@ fn register() -> Vec<Entry> {
     out
 }
 
-/// Every `#[test]` function in `src/` and `tests/` (proptest's included).
+/// The `#[test]` functions defined in `source` (proptest's included).
+fn tests_in(source: &str, out: &mut HashSet<String>) {
+    let lines: Vec<&str> = source.lines().map(str::trim).collect();
+    for (i, l) in lines.iter().enumerate() {
+        let Some(rest) = l.strip_prefix("fn ") else {
+            continue;
+        };
+        let name = rest.split(['(', '<']).next().unwrap_or("");
+        let mut attrs = lines[..i]
+            .iter()
+            .rev()
+            .take_while(|p| p.starts_with("#[") || p.starts_with("//"));
+        if attrs.any(|p| *p == "#[test]") {
+            out.insert(name.to_string());
+        }
+    }
+}
+
+/// Every `.rs` file under `dir`.
+fn rust_files(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// Every `#[test]` function in `src/` and `tests/`.
 fn test_functions() -> HashSet<String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut names = HashSet::new();
     for dir in ["src", "tests"] {
-        let mut stack = vec![root.join(dir)];
-        while let Some(d) = stack.pop() {
-            for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    stack.push(p);
-                } else if p.extension().is_some_and(|x| x == "rs") {
-                    let src = support::read(&p);
-                    let lines: Vec<&str> = src.lines().map(str::trim).collect();
-                    for (i, l) in lines.iter().enumerate() {
-                        let Some(rest) = l.strip_prefix("fn ") else {
-                            continue;
-                        };
-                        let name = rest.split(['(', '<']).next().unwrap_or("");
-                        let attrs = lines[..i]
-                            .iter()
-                            .rev()
-                            .take_while(|p| p.starts_with("#[") || p.starts_with("//"));
-                        if attrs.into_iter().any(|p| *p == "#[test]") {
-                            names.insert(name.to_string());
-                        }
-                    }
-                }
-            }
+        for f in rust_files(&root.join(dir)) {
+            tests_in(&support::read(&f), &mut names);
         }
     }
     names
