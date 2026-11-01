@@ -5,8 +5,9 @@
 //! is observed, so a setter that silently did nothing fails here.
 
 use mae_org::{
-    parse, render, semantics_with, ArchivedTrees, DiagnosticKind, HeadlineIds, LinkTypes, Node,
-    ParseOptions, RenderOptions, Resolved, Resolver, SemanticsOptions, TodoSequence, API_VERSION,
+    parse, parse_fragment, render, semantics_with, ArchivedTrees, DiagnosticKind, FragmentContext,
+    HeadlineIds, LineEnding, LinkFormat, LinkTypes, Node, ParseOptions, RenderOptions, Resolved,
+    Resolver, SemanticsOptions, TodoSequence, API_VERSION,
 };
 
 fn html(nodes: &[Node]) -> String {
@@ -100,4 +101,54 @@ fn an_unlinked_title_holds_no_anchor() {
         "{unlinked}"
     );
     assert!(unlinked.contains("<strong>a</strong>"), "{unlinked}");
+}
+
+#[test]
+fn a_fragment_context_builds_from_a_document_or_by_setter() {
+    let text = "#+TODO: WAIT | GONE\n<<<Widget>>> here\n* H\nWAIT a Widget\n";
+    let doc = parse(text, &ParseOptions::default());
+    let ctx = FragmentContext::from_document(&doc, 1);
+    assert_eq!(ctx.level, 1);
+    assert_eq!(ctx.line_ending, LineEnding::Lf);
+    assert_eq!(
+        ctx.radio_targets.as_deref(),
+        Some(&["Widget".to_string()][..])
+    );
+    let by_setter = FragmentContext::new(9, LineEnding::CrLf)
+        .with_level(1)
+        .with_line_ending(LineEnding::Lf)
+        .with_radio_targets(["Widget"])
+        .with_todo_sequences(vec![TodoSequence::new(["WAIT"], ["GONE"])]);
+    assert_eq!(by_setter, ctx);
+    let mut by_field = FragmentContext::new(1, LineEnding::Lf);
+    by_field.radio_targets = Some(vec!["Widget".into()]);
+    by_field.todo_sequences = Some(doc.todo_sequences().to_vec());
+    assert_eq!(by_field, ctx);
+    let frag = parse_fragment("WAIT a Widget\n", &ParseOptions::default(), &ctx);
+    assert_eq!(frag.radio_targets(), ["Widget".to_string()]);
+    assert_eq!(frag.todo_sequences(), doc.todo_sequences());
+}
+
+#[test]
+fn views_are_read_from_outside() {
+    let doc = parse(
+        "* H\n:PROPERTIES:\n:Key+: v\n:END:\n[[https://x.example/a][d]]\n",
+        &ParseOptions::default(),
+    );
+    let h = doc.headlines().next().unwrap();
+    let p = &h.property_drawer().unwrap().properties()[0];
+    assert_eq!((p.key.as_str(), p.value.as_str()), ("KEY+", "v"));
+    assert_eq!(p.key_as_written(), "Key+");
+    assert!(p.is_append());
+    let link = doc
+        .syntax()
+        .descendants()
+        .find_map(mae_org::Link::cast)
+        .unwrap();
+    let info = link.info(&["https"]);
+    assert_eq!(info.link_type, "https");
+    assert_eq!(info.path, "//x.example/a");
+    assert_eq!(info.format, LinkFormat::Bracket);
+    assert!(info.type_explicit && info.search_option.is_none() && info.application.is_none());
+    assert_eq!(info.raw_link, "https://x.example/a");
 }

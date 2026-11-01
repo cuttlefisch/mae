@@ -48,8 +48,10 @@ impl LinkFormat {
     }
 }
 
-/// A link's properties as `org-element-link-parser` computes them.
+/// A link's properties as `org-element-link-parser` computes them. Read,
+/// never built outside this crate (`#[non_exhaustive]`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct LinkInfo {
     /// `:type`: a registered type as written (`https`, `HTTPS`, `file`), or
     /// `radio`, `fuzzy`, `custom-id`, `coderef`.

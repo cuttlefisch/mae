@@ -122,8 +122,10 @@ impl Headline {
     }
 }
 
-/// One `:KEY: value` line of a property drawer.
+/// One `:KEY: value` line of a property drawer. Read, never built outside
+/// this crate (`#[non_exhaustive]`).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Property {
     /// The key in canonical form: Org property keys are case-insensitive,
     /// so keys that Emacs's case folding equates are equal here (ASCII shown
