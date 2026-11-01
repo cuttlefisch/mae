@@ -288,7 +288,6 @@ pub const CLASSES: &[&str] = &[
     "org-latex",
     "org-latex-environment",
     "org-link",
-    "org-macro",
     "org-opaque",
     "org-priority",
     "org-properties",

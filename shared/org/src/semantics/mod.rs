@@ -83,7 +83,7 @@
 //!   others are unrendered ([`Region::OverriddenFootnote`]).
 
 pub(crate) mod items;
-mod keywords;
+pub(crate) mod keywords;
 pub(crate) mod plain;
 pub(crate) mod regions;
 
@@ -414,6 +414,9 @@ pub struct Semantics {
     pub unrendered: Vec<Unrendered>,
     /// Every rendered footnote definition element, in document order.
     pub footnotes: Vec<RenderedFootnote>,
+    /// The options these were derived with: a renderer derives the
+    /// semantics of the text it renders (its macros expanded) with them.
+    pub(crate) options: SemanticsOptions,
 }
 
 impl Semantics {
@@ -471,6 +474,7 @@ pub fn semantics_with(doc: &Document, options: &SemanticsOptions) -> Semantics {
     w.setup_files(doc);
     w.attribute_notes(&order);
     let mut out = w.out;
+    out.options = options.clone();
     clip_bodies(&mut out.nodes);
     out.diagnostics.sort_by_key(|d| (d.span(), d.kind_name()));
     out.unrendered
@@ -569,7 +573,7 @@ fn property_pairs(d: &PropertyDrawer) -> Vec<(String, String)> {
 /// is (so `:K+: b` before `:K: a` gives `a b`), joined with a space; a
 /// value that is exactly `nil` is none (`org-not-nil`), and a key left with
 /// none is dropped. Linear: each key is found through a map.
-fn resolve_properties(pairs: Vec<(String, String)>) -> Vec<(String, String)> {
+pub(crate) fn resolve_properties(pairs: Vec<(String, String)>) -> Vec<(String, String)> {
     let mut keys: Vec<(String, Option<String>, Vec<String>)> = Vec::new();
     let mut at: HashMap<String, usize> = HashMap::new();
     for (key, value) in pairs {

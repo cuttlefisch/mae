@@ -245,26 +245,7 @@
               },
               {
                 "type": "text",
-                "value": ".\nMacro "
-              },
-              {
-                "children": [
-                  {
-                    "type": "text",
-                    "value": "{{{title}}}"
-                  }
-                ],
-                "properties": {
-                  "className": [
-                    "org-macro"
-                  ]
-                },
-                "tagName": "span",
-                "type": "element"
-              },
-              {
-                "type": "text",
-                "value": ", citation "
+                "value": ".\nMacro , citation "
               },
               {
                 "children": [

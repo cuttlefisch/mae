@@ -2,7 +2,7 @@
 //! only, link descriptions and never targets, entities decoded, footnote
 //! definitions included and their markers not.
 
-use super::build::{node_text_trees, page, Mode};
+use super::build::{node_text_trees, page_with, Mode};
 use super::tree::{Node, Tag};
 use super::{RenderOptions, Resolver};
 use crate::{Document, Semantics};
@@ -54,10 +54,16 @@ fn text_resolver() -> Resolver {
     }
 }
 
-/// The search text of `doc`.
+/// The search text of `doc`, its macros expanded as [`super::render`]
+/// expands them (empty when they cannot be).
 pub fn text(doc: &Document, sem: &Semantics) -> String {
+    let p = super::prepared::prepare(doc, sem);
+    if p.failed.is_some() {
+        return String::new();
+    }
     let opts = RenderOptions::default();
-    text_of(&page(doc, sem, &opts, &text_resolver(), Mode::Text, None).body)
+    let r = text_resolver();
+    text_of(&page_with(&p.doc, p.cx(), &opts, &r, Mode::Text, None).body)
 }
 
 /// The search text of KB node `id`: its title, then its body (the text of
@@ -65,12 +71,20 @@ pub fn text(doc: &Document, sem: &Semantics) -> String {
 /// footnote the title or body references, wherever the note is defined.
 /// An element that crosses the edge of `body_span` belongs to the node it
 /// starts in: it is in this text whole if it starts inside, else not at
-/// all. `None` if `doc` has no such node.
+/// all. `None` if `doc` has no such node; empty when its macros cannot be
+/// expanded, or their expansion removed it.
 pub fn node_text(doc: &Document, sem: &Semantics, id: &str) -> Option<String> {
-    let node = sem.nodes.iter().find(|n| n.id == id)?;
+    sem.nodes.iter().find(|n| n.id == id)?;
+    let p = super::prepared::prepare(doc, sem);
+    if p.failed.is_some() {
+        return Some(String::new());
+    }
+    let Some(node) = p.sem.nodes.iter().find(|n| n.id == id) else {
+        return Some(String::new());
+    };
     // The title as rendered (link descriptions, no snippet), not the
     // semantics' plain title, which spells a link without one as its target.
-    let (title, body) = node_text_trees(doc, sem, node, &text_resolver());
+    let (title, body) = node_text_trees(&p, node, &text_resolver());
     let title = text_of(&title);
     let title = crate::semantics::plain::collapse(&title);
     let body = text_of(&body);
@@ -94,7 +108,8 @@ mod tests {
         let sem = crate::semantics(&d);
         let opts = RenderOptions::default();
         let scope = Some(Span { start, end });
-        text_of(&page(&d, &sem, &opts, &text_resolver(), Mode::Text, scope).body)
+        let cx = super::super::build::DocCx::new(&d, &sem);
+        text_of(&page_with(&d, cx, &opts, &text_resolver(), Mode::Text, scope).body)
     }
 
     #[test]

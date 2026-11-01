@@ -67,7 +67,8 @@ pub(crate) struct DocCx<'a> {
     babel: Babel,
     note_defs: Rc<HashMap<String, SyntaxNode>>,
     eol: LineEnding,
-    macros: super::macros::Macros,
+    /// Headline start → the source text of its title (see `prepared`).
+    titles: HashMap<u32, String>,
 }
 
 pub(crate) struct Builder<'a> {
@@ -120,19 +121,7 @@ thread_local! {
     pub(crate) static RUNS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// Builds the page of `doc` in `mode` (two passes).
-pub(crate) fn page(
-    doc: &Document,
-    sem: &Semantics,
-    opts: &RenderOptions,
-    resolver: &Resolver,
-    mode: Mode,
-    scope: Option<Span>,
-) -> Page {
-    page_with(doc, DocCx::new(doc, sem), opts, resolver, mode, scope)
-}
-
-/// [`page`] over an already-read document.
+/// Builds the page of an already-read document in `mode` (two passes).
 pub(crate) fn page_with<'a>(
     doc: &Document,
     cx: Rc<DocCx<'a>>,
@@ -157,6 +146,16 @@ pub(crate) fn page_with<'a>(
 
 impl<'a> DocCx<'a> {
     pub fn new(doc: &Document, sem: &'a Semantics) -> Rc<DocCx<'a>> {
+        DocCx::with_titles(doc, sem, HashMap::new())
+    }
+
+    /// [`DocCx::new`], each headline's slug made from `titles`' text for
+    /// it (the source of an expanded title).
+    pub fn with_titles(
+        doc: &Document,
+        sem: &'a Semantics,
+        titles: HashMap<u32, String>,
+    ) -> Rc<DocCx<'a>> {
         let skip = sem
             .unrendered
             .iter()
@@ -187,8 +186,8 @@ impl<'a> DocCx<'a> {
             done,
             babel: Babel::new(doc),
             note_defs: Rc::new(Notes::defs(doc, sem)),
-            macros: super::macros::Macros::new(doc),
             eol: doc.line_ending(),
+            titles,
         })
     }
 }
@@ -245,9 +244,10 @@ impl<'a> Builder<'a> {
         self.cx.node_ids.get(&start).copied()
     }
 
-    /// Whether macro object `n` renders nothing (see `macros`).
-    pub fn macro_hidden(&self, n: &SyntaxNode) -> bool {
-        self.cx.macros.hides(n)
+    /// The source text of the title of the headline starting at `start`,
+    /// when it differs from the rendered one (its macros expanded).
+    pub fn title_source(&self, start: u32) -> Option<&str> {
+        self.cx.titles.get(&start).map(String::as_str)
     }
 
     /// Whether `kw` is a done keyword.
@@ -602,23 +602,13 @@ fn is_container(kind: SyntaxKind) -> bool {
 /// the note is defined. One builder, so a note the title and the body both
 /// reference appears once.
 pub(crate) fn node_text_trees(
-    doc: &Document,
-    sem: &Semantics,
-    node: &crate::SemanticNode,
-    resolver: &Resolver,
-) -> (Vec<Node>, Vec<Node>) {
-    node_text_trees_with(doc, DocCx::new(doc, sem), node, resolver)
-}
-
-fn node_text_trees_with(
-    doc: &Document,
-    cx: Rc<DocCx<'_>>,
+    p: &super::prepared::Prepared,
     node: &crate::SemanticNode,
     resolver: &Resolver,
 ) -> (Vec<Node>, Vec<Node>) {
     let opts = RenderOptions::default();
-    let root = doc.syntax();
-    let mut b = Builder::with_cx(cx, &opts, resolver, Mode::Text, Table::default());
+    let root = p.doc.syntax();
+    let mut b = Builder::with_cx(p.cx(), &opts, resolver, Mode::Text, Table::default());
     let title = b.node_title(&root, node);
     b.scope = Some(node.body_span);
     let body = b.run(&root);
@@ -638,15 +628,22 @@ pub(crate) fn rendering_without(
     out: Span,
 ) -> String {
     let opts = RenderOptions::default();
-    let cx = DocCx::new(doc, sem);
-    let root = doc.syntax();
+    let p = super::prepared::prepare(doc, sem);
+    // Nothing renders, before and after alike, wherever the failing macro
+    // stands.
+    if let Some(f) = p.failed {
+        return f.kind_name().to_string();
+    }
+    let out = p.to_rendered(out);
+    let cx = p.cx();
+    let root = p.doc.syntax();
     let mut first = Builder::with_cx(cx.clone(), &opts, resolver, Mode::Page, Table::default());
     first.exclude = Some(out);
     first.run(&root);
     let mut second = Builder::with_cx(cx, &opts, resolver, Mode::Page, first.found);
     second.exclude = Some(out);
     let body = second.run(&root);
-    let nodes = super::meta::nodes(doc, sem, &opts, resolver, &second.found);
+    let nodes = super::meta::nodes(&p, sem, &opts, resolver, &second.found);
     let rendered = super::Rendered {
         body,
         nodes,

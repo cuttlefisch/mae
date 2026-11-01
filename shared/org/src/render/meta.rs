@@ -9,64 +9,102 @@ use crate::kind::SyntaxKind::*;
 use crate::kind::SyntaxNode;
 use crate::semantics::file_title_source;
 use crate::semantics::items::{item_drawer, item_title_parts};
-use crate::{Document, NodeOrigin, SemanticNode, Semantics};
+use crate::{NodeOrigin, SemanticNode, Semantics};
 
+/// The metadata of every node of `source` (the source's semantics), in
+/// its order, read from its counterpart in the rendered document `p`
+/// (its macros expanded); a node the expansion removed has none.
 pub(crate) fn nodes(
-    doc: &Document,
-    sem: &Semantics,
+    p: &super::prepared::Prepared,
+    source: &Semantics,
     opts: &RenderOptions,
     resolver: &Resolver,
     page: &Table,
 ) -> Vec<NodeMeta> {
-    let root = doc.syntax();
-    let mut b = Builder::new(doc, sem, opts, resolver, Mode::Meta, Table::default());
-    sem.nodes
-        .iter()
-        .map(|n| {
-            let mut title = b.node_title(&root, n);
-            trim_text(&mut title);
-            // As inside a link's description: links show their text, no
-            // `<a>` (nor a footnote marker) is made.
-            b.in_link = true;
-            let mut title_unlinked = b.node_title(&root, n);
-            b.in_link = false;
-            trim_text(&mut title_unlinked);
-            unwrap_plain(&mut title_unlinked);
-            // Aliases and property values are the semantics' strings, read
-            // from the node's drawer: no place of their own, but they sit in
-            // the node, so their `:exports` scope is the node's (review
-            // round 2: an alias read the file's and showed hidden code).
-            let at = Some(n.span.start);
-            // The aliases are the ALIASES value split at its commas, and a
-            // split can cut a construct the whole value hides (a macro's
-            // arguments hold commas too): when the whole value hides
-            // anything, no alias is shown (fail closed).
-            let whole = n.properties.iter().find(|(k, _)| k == "ALIASES");
-            let cut = whole.is_some_and(|(_, v)| b.placeless(at, |b| b.value_hides(v)));
-            let aliases = n
-                .aliases
-                .iter()
-                .filter(|_| !cut)
-                .map(|a| b.placeless(at, |b| b.inline_text(a)))
-                .collect();
-            let properties = n
-                .properties
-                .iter()
-                .map(|(k, v)| {
-                    let v = b.placeless(at, |b| b.property_value(v));
-                    (k.clone(), v)
-                })
-                .collect();
-            NodeMeta {
-                id: n.id.clone(),
-                anchor: page.nodes.get(&n.id).cloned(),
-                title,
-                title_unlinked,
-                aliases,
-                properties,
-            }
+    let root = p.doc.syntax();
+    let mut b = Builder::new(&p.doc, &p.sem, opts, resolver, Mode::Meta, Table::default());
+    p.counterparts(source)
+        .into_iter()
+        .map(|(s, n)| match n {
+            Some(n) => b.node_meta(&root, n, page),
+            None => NodeMeta {
+                id: s.id.clone(),
+                anchor: None,
+                title: Vec::new(),
+                title_unlinked: Vec::new(),
+                aliases: Vec::new(),
+                properties: Vec::new(),
+            },
         })
         .collect()
+}
+
+impl Builder<'_> {
+    fn node_meta(&mut self, root: &SyntaxNode, n: &SemanticNode, page: &Table) -> NodeMeta {
+        let b = self;
+        let mut title = b.node_title(root, n);
+        trim_text(&mut title);
+        // As inside a link's description: links show their text, no
+        // `<a>` (nor a footnote marker) is made.
+        b.in_link = true;
+        let mut title_unlinked = b.node_title(root, n);
+        b.in_link = false;
+        trim_text(&mut title_unlinked);
+        unwrap_plain(&mut title_unlinked);
+        // Aliases and property values are the semantics' strings, read
+        // from the node's drawer: no place of their own, but they sit in
+        // the node, so their `:exports` scope is the node's (review
+        // round 2: an alias read the file's and showed hidden code).
+        let at = Some(n.span.start);
+        // The aliases are the ALIASES value split at its commas, and a
+        // split can cut a construct the whole value hides (a macro's
+        // arguments hold commas too): when the whole value hides
+        // anything, no alias is shown (fail closed).
+        let whole = alias_source(root, n);
+        let cut = whole.is_some_and(|v| b.placeless(at, |b| b.value_hides(&v)));
+        let aliases = n
+            .aliases
+            .iter()
+            .filter(|_| !cut)
+            .map(|a| b.placeless(at, |b| b.inline_text(a)))
+            .collect();
+        let properties = n
+            .properties
+            .iter()
+            .map(|(k, v)| {
+                let v = b.placeless(at, |b| b.property_value(v));
+                (k.clone(), v)
+            })
+            .collect();
+        NodeMeta {
+            id: n.id.clone(),
+            anchor: page.nodes.get(&n.id).cloned(),
+            title,
+            title_unlinked,
+            aliases,
+            properties,
+        }
+    }
+}
+
+/// The whole value node `n`'s aliases were split from: for the file node
+/// its last `#+aliases:` keyword (which wins over the drawer), else the
+/// `ALIASES` property (its `+` lines appended).
+fn alias_source(root: &SyntaxNode, n: &SemanticNode) -> Option<String> {
+    if n.origin == NodeOrigin::File {
+        let section = root.children().next().filter(|s| s.kind() == SECTION);
+        let keyword = section.and_then(|s| {
+            s.children()
+                .filter_map(crate::Keyword::cast)
+                .filter(|k| k.key().eq_ignore_ascii_case("aliases"))
+                .last()
+        });
+        if let Some(k) = keyword {
+            return Some(k.value());
+        }
+    }
+    let p = n.properties.iter().find(|(k, _)| k == "ALIASES");
+    p.map(|(_, v)| v.clone())
 }
 
 /// `text` as Org objects, inline-only (no document around it).
@@ -171,9 +209,8 @@ impl Builder<'_> {
         let tree = crate::green::objects(value, PARAGRAPH);
         let mut objects = tree.descendants().skip(1);
         objects.any(|d| {
-            matches!(d.kind(), INLINE_BABEL_CALL | EXPORT_SNIPPET)
+            matches!(d.kind(), INLINE_BABEL_CALL | EXPORT_SNIPPET | MACRO)
                 || self.babel_hides_object(&d)
-                || (d.kind() == MACRO && self.macro_hidden(&d))
         })
     }
 }

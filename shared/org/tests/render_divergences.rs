@@ -178,12 +178,14 @@ fn options_keywords_are_not_read() {
 #[test]
 fn latex_timestamps_macros_and_citations_render_as_their_source() {
     let out = html(
-        "\\(x^2\\) <2026-01-01 Thu> {{{title}}} [cite:@k]\n\\begin{equation}\ny\n\\end{equation}\n",
+        "\\(x^2\\) <2026-01-01 Thu> {{{results(r)}}} [cite:@k]\n\\begin{equation}\ny\n\\end{equation}\n",
     );
     for want in [
         "<code class=\"org-latex\">\\(x^2\\)</code>",
         "<time class=\"org-timestamp\">&lt;2026-01-01 Thu&gt;</time>",
-        "<span class=\"org-macro\">{{{title}}}</span>",
+        // A lone results macro (babel's, left by expansion) is its
+        // argument, as Org prints it after babel.
+        "</time> r <span",
         "<span class=\"org-citation\">[cite:@k]</span>",
         "<pre class=\"org-latex-environment\"><code>\\begin{equation}",
     ] {

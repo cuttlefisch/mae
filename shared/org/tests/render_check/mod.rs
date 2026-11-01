@@ -147,7 +147,6 @@ fn is_class(c: &str) -> bool {
         "org-latex",
         "org-latex-environment",
         "org-link",
-        "org-macro",
         "org-priority",
         "org-properties",
         "org-radio",

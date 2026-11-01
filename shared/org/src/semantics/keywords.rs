@@ -246,27 +246,51 @@ fn alist_to_groups(alist: &[Token]) -> Vec<(String, Vec<String>)> {
 pub(crate) fn title(doc: &Document) -> Option<String> {
     let text = doc.syntax().to_string();
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-    let mut joined: Option<String> = None;
-    for line in buffer_lines(text, doc.line_ending()) {
-        let l = line.trim_start_matches([' ', '\t']);
-        let is_title = l.len() >= 8 && l.as_bytes()[..8].eq_ignore_ascii_case(b"#+title:");
-        if !is_title {
-            continue;
-        }
-        let rest = &l[2..];
-        let word = rest.find(is_space).unwrap_or(rest.len());
-        let colon = rest[..word].rfind(':').unwrap_or(5);
-        let j = joined.get_or_insert_with(String::new);
-        j.push(' ');
-        j.push_str(org_trim(&rest[colon + 1..]));
-    }
-    joined
-        .map(|j| org_trim(&j).to_string())
+    let lines = buffer_lines(text, doc.line_ending());
+    keyword_value(lines.into_iter(), "title", true)
+        .map(|t| org_trim(&t).to_string())
         .filter(|t| !t.is_empty())
 }
 
+/// `org-macro--find-keyword-value`: the value of the first `#+NAME:` line
+/// of `lines` (any case, as Emacs folds it), or with `collect` every one's,
+/// each after a space, the whole trimmed; `None` when no line matches. A
+/// line matches Org's regexp `^[ \t]*#\+NAME:` and then is read by its
+/// keyword parser: the key runs to the LAST colon of the word after `#+`
+/// (`#+title:x: y` has the value `y`), the value is the rest, trimmed.
+pub(crate) fn keyword_value<'a>(
+    lines: impl Iterator<Item = &'a str>,
+    name: &str,
+    collect: bool,
+) -> Option<String> {
+    let mut joined: Option<String> = None;
+    for line in lines {
+        let l = line.trim_start_matches([' ', '\t']);
+        let Some(rest) = l.strip_prefix("#+") else {
+            continue;
+        };
+        let mut chars = rest.chars();
+        let named = name
+            .chars()
+            .all(|c| chars.next().map(crate::chars::canon) == Some(crate::chars::canon(c)));
+        if !named || chars.next() != Some(':') {
+            continue;
+        }
+        let word = rest.find(is_space).unwrap_or(rest.len());
+        let colon = rest[..word].rfind(':').unwrap_or(name.len());
+        let value = org_trim(&rest[colon + 1..]);
+        if !collect {
+            return Some(value.to_string());
+        }
+        let j = joined.get_or_insert_with(String::new);
+        j.push(' ');
+        j.push_str(value);
+    }
+    joined.map(|j| org_trim(&j).to_string())
+}
+
 /// The lines of `text` as Emacs's buffer holds them under `eol`.
-fn buffer_lines(text: &str, eol: LineEnding) -> Vec<&str> {
+pub(crate) fn buffer_lines(text: &str, eol: LineEnding) -> Vec<&str> {
     match eol {
         LineEnding::Lf => text.split('\n').collect(),
         LineEnding::CrLf => text.split("\r\n").collect(),

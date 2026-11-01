@@ -32,12 +32,26 @@
 //!   footnote references in one) are not rendered, anchored or numbered.
 //! - **Deterministic.** The same document, semantics, options and resolver
 //!   give the same tree, byte for byte, natively and in WASM.
+//! - **Macros.** What renders is the document as Org's export reads it:
+//!   its macros expanded as `org-export-as` expands them (COMMENT subtrees
+//!   dropped first, templates collected, each macro replaced where Org
+//!   finds one; after babel, each results macro it keeps replaced by its
+//!   argument), then the expanded text parsed again. Whatever an expansion
+//!   makes (a comment, a COMMENT headline, a `:noexport:` tag, an inline
+//!   src block a later `}` completes) is read as Org reads it. Where Org's
+//!   export would fail (an undefined macro, a circular expansion) or MAE
+//!   cannot expand from the text alone (an `(eval …)` template, a lookup
+//!   outside the file) or within a bound linear in the source, the render
+//!   is EMPTY but for a [`RenderDiagnostic::MacroFailed`]. Every span still
+//!   points into the source; heading anchors are made from the titles as
+//!   written, every macro contributing nothing. [`Semantics`] stays the
+//!   source's (registered: `macros`).
 //!
 //! Per construct (what is shown, and what is deliberately not):
 //!
 //! | Construct | Rendered as |
 //! |---|---|
-//! | headline | `<section class="org-section org-level-N">` (with `id` = the node's or custom id under [`HeadlineIds::Explicit`]) holding `<hN id="h-SLUG">` (`h` for a title with no letter or digit, a repeat `h-SLUG--2`, `--3`, …; h6 below 6; see [`heading_anchor`] and [`slug`]: the title as rendered inline-only, babel objects dropped, its letters and digits of any script case-folded by Emacs's table): TODO keyword `<span class="org-todo">` (+ `org-done`), priority `<span class="org-priority">`, title, tags `<span class="org-tags">` of `<span class="org-tag">` |
+//! | headline | `<section class="org-section org-level-N">` (with `id` = the node's or custom id under [`HeadlineIds::Explicit`]) holding `<hN id="h-SLUG">` (`h` for a title with no letter or digit, a repeat `h-SLUG--2`, `--3`, …; h6 below 6; see [`heading_anchor`] and [`slug`]: the title AS WRITTEN rendered inline-only, babel objects and macros dropped (so no `#+MACRO:` line moves an anchor), its letters and digits of any script case-folded by Emacs's table): TODO keyword `<span class="org-todo">` (+ `org-done`), priority `<span class="org-priority">`, title, tags `<span class="org-tags">` of `<span class="org-tag">` |
 //! | section, zeroth section | its elements, unwrapped |
 //! | paragraph | `<p>` |
 //! | bold, italic, underline, strike-through | `<strong>`, `<em>`, `<span class="org-underline">`, `<del>` |
@@ -59,8 +73,9 @@
 //! | radio link | `<a class="org-radio" href="#r-…">`, or its text if the target is not rendered |
 //! | statistics cookie | `<span class="org-cookie">` |
 //! | LaTeX fragment, environment | `<code class="org-latex">`, `<pre class="org-latex-environment"><code>`: the source as text, never MathML |
-//! | inline src block | `<code class="org-inline-src">` with its body (+ `language-L`) when its `:exports` is `code` or `both`; by Org's inline default (`results`) nothing. Its `{{{results(…)}}}` macro is removed unless `:exports` keeps results |
-//! | macro, citation | `<span class="org-macro">`, `<span class="org-citation">`: the source as text (not expanded); a macro whose arguments or template (transitively) hold an inline src block, babel call, export snippet or results macro, or whose template is unknown (`(eval …)`, undefined), renders nothing, and a citation holding such a construct or macro only its keys (fail closed; see `macros`) |
+//! | inline src block | `<code class="org-inline-src">` with its body (+ `language-L`) when its `:exports` is `code` or `both`; by Org's inline default (`results`) nothing. Its `{{{results(…)}}}` macro is removed unless `:exports` keeps results, and then (as any results macro babel keeps) replaced by its first argument before the page is parsed |
+//! | macro | expanded as Org's export expands it, before anything is rendered (see **Macros** above); a macro left in the parse (in a property value, under a COMMENT headline) renders nothing |
+//! | citation | `<span class="org-citation">`: the source as text; one holding an inline src block, babel call, export snippet, results macro or macro only its keys (fail closed) |
 //! | `#+TRANSCLUDE:` | `<p class="org-transclusion">` holding a link to its member |
 //! | property drawer | omitted unless [`RenderOptions::property_drawers`]: `<dl class="org-properties">`, values plain text with only bracket links as links; always in [`Rendered::nodes`] as data |
 //! | omitted (as Org's export omits them by default) | keywords, planning, clock, diary sexp, babel call, inline babel call, export snippets and blocks for other backends, comment, comment blocks |
@@ -77,13 +92,14 @@
 mod anchors;
 mod babel;
 mod build;
+mod expand;
 mod hast;
 mod html;
 mod links;
-mod macros;
 mod meta;
 mod notes;
 mod objects;
+mod prepared;
 mod source;
 mod structure;
 mod text;
@@ -166,7 +182,9 @@ impl Default for Resolver {
     }
 }
 
-/// Content the renderer left out rather than guess at.
+/// Content the renderer left out rather than guess at, or substituted.
+/// Spans are in the SOURCE text (the text the document was parsed from),
+/// whatever its macros expanded to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum RenderDiagnostic {
@@ -174,6 +192,37 @@ pub enum RenderDiagnostic {
     TooDeep(Span),
     /// Text the parser left opaque (its nesting cap) or could not place.
     Unparsed(Span),
+    /// The document's macros could not be expanded as Org's export expands
+    /// them (at the macro the span covers): as Org's export produces no
+    /// output then, the render is EMPTY (no body, no node metadata) and
+    /// this is its only diagnostic but [`RenderDiagnostic::MacroEnvironment`].
+    MacroFailed(MacroFailure, Span),
+    /// A `{{{time(…)}}}` or `{{{modification-time(…)}}}` macro expanded
+    /// with a fixed time (1970-01-01 00:00:00 UTC), or an
+    /// `{{{input-file}}}` with nothing: Org reads the clock or the file
+    /// there, and MAE's output depends on the text only (ADR-112 D4).
+    MacroEnvironment(Span),
+}
+
+/// Why a document's macros could not be expanded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[non_exhaustive]
+pub enum MacroFailure {
+    /// A macro with no template (`Undefined Org macro`, as in Org).
+    Undefined,
+    /// The same macro, with the same arguments, at the same place again
+    /// (`Circular macro expansion`, as in Org).
+    Circular,
+    /// An `(eval …)` template: Org evaluates Lisp, MAE never does.
+    Eval,
+    /// A macro whose value MAE cannot know from the text: `property` with
+    /// a search location or of a special property, `date` with a format,
+    /// a `time` format outside the supported directives, `keyword` or
+    /// `property` without a name, a counter past `u64`.
+    Unsupported,
+    /// The expansion would do more work, or grow larger, than a bound
+    /// linear in the source allows (or nest deeper than it).
+    Budget,
 }
 
 impl RenderDiagnostic {
@@ -182,12 +231,33 @@ impl RenderDiagnostic {
         match self {
             RenderDiagnostic::TooDeep(_) => "too_deep",
             RenderDiagnostic::Unparsed(_) => "unparsed",
+            RenderDiagnostic::MacroFailed(f, _) => match f {
+                MacroFailure::Undefined => "macro_undefined",
+                MacroFailure::Circular => "macro_circular",
+                MacroFailure::Eval => "macro_eval",
+                MacroFailure::Unsupported => "macro_unsupported",
+                MacroFailure::Budget => "macro_budget",
+            },
+            RenderDiagnostic::MacroEnvironment(_) => "macro_environment",
         }
     }
 
     pub fn span(&self) -> Span {
         match self {
-            RenderDiagnostic::TooDeep(s) | RenderDiagnostic::Unparsed(s) => *s,
+            RenderDiagnostic::TooDeep(s)
+            | RenderDiagnostic::Unparsed(s)
+            | RenderDiagnostic::MacroFailed(_, s)
+            | RenderDiagnostic::MacroEnvironment(s) => *s,
+        }
+    }
+
+    /// The same diagnostic at span `s`.
+    pub(crate) fn at(self, s: Span) -> RenderDiagnostic {
+        match self {
+            RenderDiagnostic::TooDeep(_) => RenderDiagnostic::TooDeep(s),
+            RenderDiagnostic::Unparsed(_) => RenderDiagnostic::Unparsed(s),
+            RenderDiagnostic::MacroFailed(f, _) => RenderDiagnostic::MacroFailed(f, s),
+            RenderDiagnostic::MacroEnvironment(_) => RenderDiagnostic::MacroEnvironment(s),
         }
     }
 }
@@ -240,20 +310,35 @@ pub enum TreeFormat {
     Html,
 }
 
-/// Renders `doc` (whose semantics are `sem`).
+/// Renders `doc` (whose semantics are `sem`): its macros expanded as
+/// Org's export expands them, then the expanded text parsed and rendered
+/// (see `expand`). When they cannot be, the render is empty but for a
+/// [`RenderDiagnostic::MacroFailed`].
 pub fn render(
     doc: &Document,
     sem: &Semantics,
     options: &RenderOptions,
     resolver: &Resolver,
 ) -> Rendered {
-    let page = build::page(doc, sem, options, resolver, build::Mode::Page, None);
-    let nodes = meta::nodes(doc, sem, options, resolver, &page.table);
-    let mut diagnostics = page.diagnostics;
+    let p = prepared::prepare(doc, sem);
+    let mut diagnostics = p.notes.clone();
+    let (body, nodes) = match p.failed {
+        Some(f) => {
+            diagnostics.push(f);
+            (Vec::new(), Vec::new())
+        }
+        None => {
+            let cx = p.cx();
+            let page = build::page_with(&p.doc, cx, options, resolver, build::Mode::Page, None);
+            let nodes = meta::nodes(&p, sem, options, resolver, &page.table);
+            diagnostics.extend(page.diagnostics.into_iter().map(|d| p.to_source(d)));
+            (page.body, nodes)
+        }
+    };
     diagnostics.sort();
     diagnostics.dedup();
     Rendered {
-        body: page.body,
+        body,
         nodes,
         diagnostics,
     }

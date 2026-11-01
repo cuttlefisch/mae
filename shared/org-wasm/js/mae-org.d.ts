@@ -66,13 +66,29 @@ export interface Rendered<T> {
     aliases: T[];
     properties: { key: string; value: T }[];
   }[];
+  /**
+   * Spans in the request's `text` (the source), even where macros expanded.
+   * `kind` is one of:
+   * - `too_deep`, `unparsed`: content left out (nested past the renderer's
+   *   depth, or text the parser left opaque);
+   * - `macro_undefined`, `macro_circular`, `macro_eval`, `macro_unsupported`,
+   *   `macro_budget`: the document's macros could not be expanded as Org's
+   *   export expands them (an undefined macro, a circular expansion, an
+   *   `(eval …)` template, a value MAE cannot know from the text, or an
+   *   expansion past a bound linear in the source). As Org's export then
+   *   produces nothing, `body` and `nodes` are EMPTY;
+   * - `macro_environment`: a `{{{time}}}`/`{{{modification-time}}}` macro
+   *   expanded with a fixed time (1970-01-01 00:00:00 UTC), or an
+   *   `{{{input-file}}}` with nothing (informational).
+   */
   diagnostics: { kind: string; start: number; end: number }[];
 }
 
 /**
  * The KB projection. Its node titles, aliases, property values, link
  * descriptions and link fragments are the SOURCE as plain text: an inline src block, a babel
- * call or an export snippet the export hides is spelled out in them. Never
+ * call or an export snippet the export hides is spelled out in them, and macros are not
+ * expanded (a render expands them as Org's export does). Never
  * show them to a reader: display text comes from a render's `nodes`
  * (`title`, `title_unlinked`, `aliases`, `properties`) or from `text`.
  */
@@ -128,6 +144,7 @@ export declare class MaeOrg {
   semantics(request: Request): SemanticsResult;
   renderHast(request: Request): Rendered<HastRoot>;
   renderHtml(request: Request): Rendered<string>;
+  /** Search text, macros expanded as a render expands them: empty when they cannot be (see `Rendered.diagnostics`). */
   text(request: Request): string;
   classifyLink(request: Request): LinkClass;
   version(): { api: string; crate: string };

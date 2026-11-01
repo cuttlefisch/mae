@@ -52,7 +52,6 @@ const HIDDEN: &[(&str, &str)] = &[
     // expands it, then exports what it became), defined in POSTAMBLE.
     ("macro template: inline src", "{{{mh({M})}}}"),
     ("macro template: export snippet", "{{{ms({M})}}}"),
-    ("macro template: results macro", "{{{mr({M})}}}"),
     ("macro template: babel call", "{{{mc({M})}}}"),
     ("macro template: through another macro", "{{{mt({M})}}}"),
     ("macro template: (eval …)", "{{{me({M})}}}"),
@@ -168,18 +167,18 @@ const CONTAINERS: &[(&str, &str)] = &[
     ("table header", "| h [[id:nowhere][{X}]] |\n|---|\n| b |\n"),
     ("labelled inline footnote", "Footnote[fn:lbl:inline {X}] here.\n"),
     ("sub-heading", "* Parent\n** Child {X}\nbody\n"),
-    // Review round 2: Org expands a macro and prints its argument; MAE
-    // prints macros and citations as source, so one whose arguments hold a
-    // hidden construct must not print them (fail closed).
+    // Review round 2: Org expands a macro and prints its argument, and so
+    // does MAE (round 4); a citation is printed as source, so one holding a
+    // hidden construct must not print it (fail closed).
     ("macro argument", "#+MACRO: m $1\nSee {{{m({X})}}} end.\n"),
     ("citation prefix", "See [cite:pre {X} @key suf] end.\n"),
     ("citation suffix", "See [cite:@key suf {X}] end.\n"),
 ];
 
-/// Containers that hide more than Org by design (a macro or citation whose
-/// arguments hold any babel object or snippet shows no argument at all):
-/// a VISIBLE construct in them is not shown either.
-const FAIL_CLOSED: &[&str] = &["macro argument", "citation prefix", "citation suffix"];
+/// Containers that hide more than Org by design (a citation holding any
+/// babel object or snippet shows only its keys): a VISIBLE construct in
+/// them is not shown either.
+const FAIL_CLOSED: &[&str] = &["citation prefix", "citation suffix"];
 
 /// The called block of the inline calls, visible and harmless; after the
 /// container, which may need to start the file.
@@ -190,11 +189,11 @@ const POSTAMBLE: &str = "\n#+NAME: fn\n#+begin_src sh :exports both\necho visibl
 #+MACRO: mc call_fn($1)\n\
 #+MACRO: mt <{{{mh($1)}}}>\n\
 #+MACRO: me (eval (concat \"$1\"))\n\
-#+MACRO: ca <{{{cb($1)}}}>\n\
-#+MACRO: cb <{{{ca($1)}}}>\n\
+#+MACRO: ca {{{cb($1)}}}\n\
+#+MACRO: cb {{{ca($1)}}}\n\
 #+MACRO: mu src_sh[:exports none]{echo $1\n\
 #+MACRO: mp <$1>\n\
-#+MACRO: mq <{{{mp($1)}}}>\n\
+#+MACRO: mq [{{{mp($1)}}}]\n\
 #+MACRO: cat $1$2\n";
 
 fn resolver() -> Resolver {
@@ -469,10 +468,10 @@ fn a_construct_shown_by_its_own_scope_is_shown_in_every_container() {
     );
     let outs = outputs(&doc);
     for (i, (cname, _)) in SCOPED.iter().enumerate() {
-        // Fail closed by design: a macro or citation holding any babel
-        // object shows none of it, and a property value never shows one
+        // Fail closed by design: a citation holding any babel object shows
+        // none of it, and a property value never shows one
         // (property-value-babel).
-        if matches!(*cname, "macro argument" | "citation" | "property value") {
+        if matches!(*cname, "citation" | "property value") {
             continue;
         }
         let m = format!("QZW{i:02}QZW");
@@ -485,7 +484,8 @@ fn a_construct_shown_by_its_own_scope_is_shown_in_every_container() {
 
 /// The reviewer's inputs (round 2), as written: Emacs 30.2 exports the
 /// macro lines as `See and end.` and prints the citation's inline src code
-/// and snippet HTML; MAE shows none of them, nor the macro arguments.
+/// and snippet HTML; MAE expands the macros as Emacs does, and shows none
+/// of the citation's.
 #[test]
 fn the_reviewers_macro_and_citation_show_none_of_their_hidden_text() {
     let doc = "#+MACRO: m $1\nSee {{{m(src_sh[:exports none]{echo SECRET6})}}} and {{{m(@@latex:SECRET7@@)}}} end.\n\nSee [cite:pre src_sh[:exports none]{echo SECRET8} @key suf @@html:SECRET9@@] end.\n";
@@ -494,7 +494,7 @@ fn the_reviewers_macro_and_citation_show_none_of_their_hidden_text() {
     }
     let d = parse(doc, &ParseOptions::default());
     let html = mae_org::render_html(&d, &semantics(&d), &RenderOptions::default(), &resolver());
-    assert!(html.contains("<p>See  and  end.</p>"), "{html}");
+    assert!(html.contains("<p>See and  end.</p>"), "{html}");
     assert!(
         html.contains("<span class=\"org-citation\">[cite:@key]</span>"),
         "{html}"
@@ -502,23 +502,34 @@ fn the_reviewers_macro_and_citation_show_none_of_their_hidden_text() {
 }
 
 /// The positive twin of the template rows: a macro whose template shows
-/// its argument (`<$1>`, through another macro, a built-in) still shows it,
-/// as source, in every container that is not fail-closed.
+/// its argument (`<$1>`, through another macro, a results macro, a join)
+/// shows it in every container that is not fail-closed.
 #[test]
 fn a_macro_whose_template_shows_its_argument_is_shown() {
     for (ci, (cname, container)) in CONTAINERS.iter().enumerate() {
-        if FAIL_CLOSED.contains(cname) {
+        // Org expands no macro in a property value (an alias is one); one
+        // left there shows nothing.
+        if FAIL_CLOSED.contains(cname)
+            || cname.starts_with("property value")
+            || cname.starts_with("alias")
+        {
             continue;
         }
         for (k, x) in [
             "{{{mp({M})}}}",
             "{{{mq({M})}}}",
-            "{{{keyword({M})}}}",
+            "{{{mr({M})}}}",
             "{{{cat(<,{M}>)}}}",
         ]
         .iter()
         .enumerate()
         {
+            // In another macro's arguments, which end at the first `)}}}`
+            // and split at its commas, `{{{cat(<,M>)}}}` is cut in two (as
+            // in Org): `{{{m({{{cat(<,M>)}}})}}}` keeps only `<`.
+            if *cname == "macro argument" && x.contains(',') {
+                continue;
+            }
             let m = format!("QZP{ci:02}x{k}QZP");
             let doc = format!(
                 "{}{POSTAMBLE}",
@@ -578,10 +589,10 @@ fn macro_templates_hide_as_org_expands_them() {
     let outs = outputs(doc);
     assert!(outs.iter().any(|(_, s)| s.contains("QPOS")), "{doc}");
     assert!(outs.iter().any(|(_, s)| s.contains("QE")), "{doc}");
-    // The check is bounded: a chain of plain templates longer than it
-    // follows (16 calls) hides, a short one shows; and a template that
-    // calls its successor twice, 12 deep (4,096 calls, past the 256 it
-    // expands), hides rather than costing exponential work.
+    // Expansion is bounded by the source's size, not by a depth: a chain
+    // of plain templates shows its argument however long, and so does a
+    // template calling its successor twice, 12 deep (4,096 calls), as in
+    // Emacs (the exponential shape fails: tests/render_macros.rs).
     let chain = |n: usize| -> String {
         let mut d: String = (1..n)
             .map(|i| format!("#+MACRO: c{i} <{{{{{{c{}($1)}}}}}}>\n", i + 1))
@@ -591,7 +602,7 @@ fn macro_templates_hide_as_org_expands_them() {
     };
     let shown = |doc: &str| outputs(doc).iter().any(|(_, s)| s.contains("QCHAIN"));
     assert!(shown(&chain(5)), "{}", chain(5));
-    assert!(!shown(&chain(20)), "{}", chain(20));
+    assert!(shown(&chain(20)), "{}", chain(20));
     let mut twice: String = (1..12)
         .map(|i| {
             format!(
@@ -601,13 +612,14 @@ fn macro_templates_hide_as_org_expands_them() {
         })
         .collect();
     twice.push_str("#+MACRO: t12 <$1>\nA {{{t1(QCHAIN)}}} B\n");
-    assert!(!shown(&twice), "{twice}");
+    assert!(shown(&twice), "{twice}");
     let d = parse(
         "#+MACRO: m src_sh[:exports none]{echo $1}\n* T\nSee {{{m(SECRETA)}}} end.\n",
         &ParseOptions::default(),
     );
     let html = mae_org::render_html(&d, &semantics(&d), &RenderOptions::default(), &resolver());
-    assert!(html.contains("<p>See  end.</p>"), "{html}");
+    // Emacs: `See end.` (the inline src block goes with its blank).
+    assert!(html.contains("<p>See end.</p>"), "{html}");
 }
 
 /// The second reviewer's property values (round 3), as written.

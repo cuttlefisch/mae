@@ -155,18 +155,16 @@ impl Builder<'_> {
             STATISTICS_COOKIE => push(out, span("org-cookie").with(vec![text(&raw(n))]).into()),
             LATEX_FRAGMENT => push(out, code(Some("org-latex"), raw(n))),
             INLINE_SRC_BLOCK => self.inline_src(n, out),
-            // A macro or citation is drawn as written, unless, expanded, it
-            // would put a construct the export hides where it stands (its
-            // arguments, its template, an unknown template: see `macros`):
-            // then, failing closed, a macro shows nothing and a citation
-            // only its keys (registered: macros-citations).
-            MACRO if self.macro_hidden(n) => {}
-            MACRO => push(out, span("org-macro").with(vec![text(&raw(n))]).into()),
-            CITATION
-                if holds_hidden(n)
-                    || n.descendants()
-                        .any(|d| d.kind() == MACRO && self.macro_hidden(&d)) =>
-            {
+            // Every macro Org's export expands was expanded before this
+            // parse, a results macro babel keeps included (see `expand`),
+            // and one babel removes was dropped above. A macro left was
+            // never one to Org's export where it stands (a property value,
+            // a COMMENT subtree): it shows nothing.
+            MACRO => {}
+            // A citation is drawn as written; one holding a construct the
+            // export hides, or a macro, only its keys (fail closed,
+            // registered: macros-citations).
+            CITATION if holds_hidden(n) || n.descendants().any(|d| d.kind() == MACRO) => {
                 let keys = span("org-citation").with(vec![text(&citation_keys(n))]);
                 push(out, keys.into())
             }

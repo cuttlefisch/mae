@@ -93,7 +93,7 @@ impl Builder<'_> {
         let (shown, slugged) = match (&title_node, self.mode) {
             (Some(t), Mode::Page | Mode::Text) => (
                 self.meta_text(|b, out| b.objects(t, out)),
-                self.slug_text(|b, out| b.objects(t, out)),
+                self.title_slug_text(n, t),
             ),
             _ => (String::new(), String::new()),
         };
@@ -113,6 +113,20 @@ impl Builder<'_> {
             wrapper = wrapper.attr(Attr::Id, id);
         }
         push(out, wrapper.with(section).into());
+    }
+
+    /// The text headline `n`'s slug is made from: its title as WRITTEN
+    /// (`t`, or the source of an expanded one), every macro contributing
+    /// nothing, so an anchor never depends on a `#+MACRO:` line and a link
+    /// fragment that spells the title lands on it from any document.
+    fn title_slug_text(&mut self, n: &SyntaxNode, t: &SyntaxNode) -> String {
+        match self.title_source(Span::of(n).start).map(str::to_string) {
+            Some(src) => {
+                let tree = crate::green::objects(&src, HEADLINE_TITLE);
+                self.slug_text(|b, out| b.placeless(None, |b| b.objects(&tree, out)))
+            }
+            None => self.slug_text(|b, out| b.objects(t, out)),
+        }
     }
 
     /// The headline's line: TODO keyword, priority, title and tags.

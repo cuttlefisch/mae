@@ -718,6 +718,31 @@ const RENDER_FAMILIES: &[Family] = &[
         5_000,
     ),
     (
+        "render: N macros expanding plainly",
+        |n| {
+            format!(
+                "#+MACRO: m <$1>\n#+MACRO: w {{{{{{m($1)}}}}}}\n{}\n",
+                "{{{w(x)}}} {{{n}}} ".repeat(n)
+            )
+        },
+        2_000,
+    ),
+    (
+        // Review round 4 (B7): a template of thousands of words called
+        // hundreds of times by another, called N times; fails within the
+        // expansion budget, which is linear in the source.
+        "render: the exponential macro shape",
+        |n| {
+            format!(
+                "#+MACRO: b {}\n#+MACRO: a {}\n{}\n",
+                "x ".repeat(3000),
+                "{{{b}}}".repeat(255),
+                "{{{a}}} ".repeat(n)
+            )
+        },
+        25,
+    ),
+    (
         "render: N headline nodes with titles",
         |n| {
             (0..n)
@@ -815,7 +840,10 @@ fn every_family_parses_and_round_trips_at_8n() {
             &RenderOptions::default(),
             &resolver(),
         );
-        assert!(!out.body.is_empty(), "{name}");
+        assert!(
+            !out.body.is_empty() || name.contains("exponential"),
+            "{name}"
+        );
     }
 }
 

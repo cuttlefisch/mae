@@ -109,9 +109,9 @@ pub use render::{
     encode_id, heading_anchor, is_valid_id, is_valid_language, node_source, node_text, normalise,
     render, render_hast, render_html, render_inline, replace_body, safe_external_url,
     safe_resolver_href, slug, text, text_of, to_hast, to_html, with_line_ending, Attr,
-    BodyEditError, Element, HeadlineIds, Node, NodeMeta, RenderDiagnostic, RenderOptions, Rendered,
-    Resolved, Resolver, Tag, TreeFormat, ATTRIBUTES, CLASSES, DECLARATION_KEYWORDS,
-    DEFAULT_PLACEHOLDER, RENDER_MAX_DEPTH, SLUG_MAX, TAGS,
+    BodyEditError, Element, HeadlineIds, MacroFailure, Node, NodeMeta, RenderDiagnostic,
+    RenderOptions, Rendered, Resolved, Resolver, Tag, TreeFormat, ATTRIBUTES, CLASSES,
+    DECLARATION_KEYWORDS, DEFAULT_PLACEHOLDER, RENDER_MAX_DEPTH, SLUG_MAX, TAGS,
 };
 /// The tree is a rowan tree; `node.text_range()` returns rowan types. The
 /// re-export makes that coupling explicit and versioned: plain-data results
@@ -140,7 +140,29 @@ pub struct Document {
     line_ending: LineEnding,
     contents: span::ContentsTable,
     radio_targets: Vec<String>,
+    /// How the text was read, so a text derived from it (its macros
+    /// expanded) is read the same way.
+    reading: Reading,
 }
+
+/// What [`Document::reparse`] reads a derived text with: the options, the
+/// start (a document or a body) and the fragment context of the parse.
+#[derive(Debug, Clone)]
+struct Reading {
+    options: ParseOptions,
+    start: builder::Start,
+    fragment: Option<FragmentContext>,
+}
+
+/// Not part of what a document IS: two parses with the same tree,
+/// diagnostics and readings are equal however they were asked for.
+impl PartialEq for Reading {
+    fn eq(&self, _: &Reading) -> bool {
+        true
+    }
+}
+
+impl Eq for Reading {}
 
 /// Parses `text`. Total: any input gives a document whose tree prints back
 /// to `text`, except inputs over `u32::MAX` bytes, which give an empty
@@ -286,8 +308,13 @@ fn parse_with(
     fragment: Option<&FragmentContext>,
 ) -> Document {
     let text = src.text;
+    let reading = Reading {
+        options: options.clone(),
+        start,
+        fragment: fragment.cloned(),
+    };
     if exceeds_tree_limit(text.len()) {
-        return Document::too_large();
+        return Document::too_large(reading);
     }
     let ix = index::Index::build(&src);
     let built = builder::build(&src, &ix, options, start);
@@ -327,6 +354,7 @@ fn parse_with(
         line_ending: src.eol,
         contents,
         radio_targets,
+        reading,
     }
 }
 
@@ -336,7 +364,17 @@ fn exceeds_tree_limit(len: usize) -> bool {
 }
 
 impl Document {
-    fn too_large() -> Document {
+    /// `text`, derived from this document's text, read as this document
+    /// was: same options, same start, same line-ending convention.
+    pub(crate) fn reparse(&self, text: &str) -> Document {
+        let r = &self.reading;
+        // A body never starts its file (a leading BOM is content there).
+        let at_file_start = r.start == builder::Start::Document;
+        let src = text::Source::with(text, self.line_ending, at_file_start);
+        parse_with(src, &r.options, r.start, r.fragment.as_ref())
+    }
+
+    fn too_large(reading: Reading) -> Document {
         let mut b = rowan::GreenNodeBuilder::new();
         b.start_node(<OrgLanguage as rowan::Language>::kind_to_raw(
             SyntaxKind::DOCUMENT,
@@ -350,6 +388,7 @@ impl Document {
             line_ending: LineEnding::Lf,
             contents: span::ContentsTable::default(),
             radio_targets: Vec::new(),
+            reading,
         }
     }
 
@@ -427,7 +466,11 @@ mod tests {
         // function `parse` consults, pinned at its boundary.
         assert!(!exceeds_tree_limit(u32::MAX as usize));
         assert!(exceeds_tree_limit(u32::MAX as usize + 1));
-        let doc = Document::too_large();
+        let doc = Document::too_large(Reading {
+            options: ParseOptions::default(),
+            start: builder::Start::Document,
+            fragment: None,
+        });
         assert_eq!(doc.syntax().to_string(), "");
         assert_eq!(doc.diagnostics()[0].kind, DiagnosticKind::InputTooLarge);
     }
