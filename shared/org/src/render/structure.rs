@@ -277,13 +277,7 @@ impl Builder<'_> {
         let skip = usize::from(special_column);
         for c in row.children().filter(|c| c.kind() == TABLE_CELL).skip(skip) {
             let mut inner = Vec::new();
-            for part in c.children_with_tokens() {
-                match part {
-                    NodeOrToken::Token(t) if t.kind() == MARKUP => {}
-                    NodeOrToken::Token(t) => push(&mut inner, text(t.text())),
-                    NodeOrToken::Node(o) => self.deeper(&o, |b| b.object(&o, &mut inner)),
-                }
-            }
+            self.parts(c.children_with_tokens(), true, &mut inner);
             trim_text(&mut inner);
             let cell = if head {
                 Element::new(Tag::Th).attr(Attr::Scope, "col")

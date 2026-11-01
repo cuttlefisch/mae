@@ -138,12 +138,7 @@ impl Builder<'_> {
     fn description(&mut self, link: &Link) -> Vec<Node> {
         let mut out = Vec::new();
         let outer = std::mem::replace(&mut self.in_link, true);
-        for e in link.description().unwrap_or_default() {
-            match e {
-                rowan::NodeOrToken::Token(t) => push(&mut out, text(t.text())),
-                rowan::NodeOrToken::Node(o) => self.deeper(&o, |b| b.object(&o, &mut out)),
-            }
-        }
+        self.parts(link.description().unwrap_or_default(), false, &mut out);
         self.in_link = outer;
         trim_text(&mut out);
         out

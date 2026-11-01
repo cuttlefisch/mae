@@ -264,11 +264,6 @@ impl Builder<'_> {
         if !shown {
             return;
         }
-        for c in parts {
-            match c {
-                NodeOrToken::Token(t) => push(out, text(t.text())),
-                NodeOrToken::Node(o) => self.deeper(o, |b| b.object(o, out)),
-            }
-        }
+        self.parts(parts.iter().cloned(), false, out);
     }
 }

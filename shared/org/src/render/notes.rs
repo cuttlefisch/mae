@@ -280,14 +280,7 @@ impl Builder<'_> {
             NoteSource::Element(d) => self.elements(d, &mut body),
             NoteSource::Inline(r) => {
                 let mut inner = Vec::new();
-                for e in inline_parts(r).unwrap_or_default() {
-                    match e {
-                        rowan::NodeOrToken::Token(t) => push(&mut inner, text(t.text())),
-                        rowan::NodeOrToken::Node(o) => {
-                            self.deeper(&o, |b| b.object(&o, &mut inner))
-                        }
-                    }
-                }
+                self.parts(inline_parts(r).unwrap_or_default(), false, &mut inner);
                 trim_text(&mut inner);
                 push(&mut body, Element::new(Tag::P).with(inner).into());
             }

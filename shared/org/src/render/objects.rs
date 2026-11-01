@@ -40,6 +40,41 @@ fn token_text(n: &SyntaxNode, kind: SyntaxKind) -> String {
         .collect()
 }
 
+/// `org-html-convert-special-strings` (`org-export-with-special-strings`,
+/// on by default) on one plain-text object, its regexps in their order,
+/// each over the whole string left to right: `\-` a soft hyphen, `---`
+/// then `--` before a character that is not `-` an em and an en dash,
+/// `...` an ellipsis. A string's last dashes, with nothing after them in
+/// the same object, stay.
+pub(crate) fn special_strings(s: &str) -> String {
+    let s = s.replace("\\-", "\u{ad}");
+    let s = dashes(&s, 3, '\u{2014}');
+    let s = dashes(&s, 2, '\u{2013}');
+    s.replace("...", "\u{2026}")
+}
+
+/// `-{n}([^-])` becomes `with` and the character, scanned left to right.
+fn dashes(s: &str, n: usize, with: char) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(c) = rest.chars().next() {
+        let run = rest.bytes().take(n).take_while(|&b| b == b'-').count();
+        let next = rest[run..].chars().next();
+        match next {
+            Some(after) if run == n && after != '-' => {
+                out.push(with);
+                out.push(after);
+                rest = &rest[n + after.len_utf8()..];
+            }
+            _ => {
+                out.push(c);
+                rest = &rest[c.len_utf8()..];
+            }
+        }
+    }
+    out
+}
+
 /// The key of a NAME: what a radio target and its links share, what a
 /// target and a link searching for it share (Org matches both with blanks
 /// collapsed and case folded, as Emacs folds it), and what `replace_body`
@@ -52,25 +87,55 @@ pub(crate) fn name_key(s: &str) -> String {
 impl Builder<'_> {
     /// The objects under `n` (tokens are text).
     pub fn objects(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
-        for c in n.children_with_tokens() {
-            match c {
-                NodeOrToken::Token(t) => push(out, text(t.text())),
-                NodeOrToken::Node(o) if o.kind() == AFFILIATED_KEYWORD => {}
-                NodeOrToken::Node(o) => self.deeper(&o, |b| b.object(&o, out)),
-            }
-        }
+        self.parts(n.children_with_tokens(), false, out);
     }
 
     /// An object's contents: its children but its delimiters and post-blank.
     fn contents(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
         let parts: Vec<_> = n.children_with_tokens().collect();
         let end = parts.len() - usize::from(post_blank(n).is_some());
-        for c in parts.into_iter().take(end) {
+        self.parts(parts.into_iter().take(end), true, out);
+    }
+
+    /// Objects and the plain text between them, in order: each run of
+    /// tokens is one plain-text object ([`Builder::plain_text`]). With
+    /// `markup`, a markup token (a delimiter) ends a run and shows
+    /// nothing; an affiliated keyword shows nothing.
+    pub fn parts(
+        &mut self,
+        parts: impl IntoIterator<Item = crate::kind::SyntaxElement>,
+        markup: bool,
+        out: &mut Vec<Node>,
+    ) {
+        let mut plain = String::new();
+        for c in parts {
             match c {
-                NodeOrToken::Token(t) if t.kind() == MARKUP => {}
-                NodeOrToken::Token(t) => push(out, text(t.text())),
-                NodeOrToken::Node(o) => self.deeper(&o, |b| b.object(&o, out)),
+                NodeOrToken::Token(t) if markup && t.kind() == MARKUP => {
+                    self.plain_text(&mut plain, out)
+                }
+                NodeOrToken::Token(t) => plain.push_str(t.text()),
+                NodeOrToken::Node(o) if o.kind() == AFFILIATED_KEYWORD => {}
+                NodeOrToken::Node(o) => {
+                    self.plain_text(&mut plain, out);
+                    self.deeper(&o, |b| b.object(&o, out));
+                }
             }
+        }
+        self.plain_text(&mut plain, out);
+    }
+
+    /// One plain-text object (`plain`, emptied): its special strings
+    /// converted as ox-html converts them, on a page and in metadata; not
+    /// in search text or a slug.
+    fn plain_text(&self, plain: &mut String, out: &mut Vec<Node>) {
+        if plain.is_empty() {
+            return;
+        }
+        let s = std::mem::take(plain);
+        if self.mode == Mode::Text || self.slugging {
+            push(out, text(&s));
+        } else {
+            push(out, text(&special_strings(&s)));
         }
     }
 
@@ -80,11 +145,6 @@ impl Builder<'_> {
         push(out, e.with(inner).into());
     }
 
-    /// Whether Org's export removes object `n` for babel's `:exports`: an
-    /// inline src block that does not export its code, or the results macro
-    /// of one, or of an inline babel call, that does not keep its results
-    /// (Org keeps an inline call's: a registered divergence,
-    /// `inline-call-results`).
     /// Whether results macro `n` is one Org's babel leaves as written
     /// (see [`super::babel::Babel::left_as_written`]), though MAE hides it.
     pub fn org_keeps_results(&self, n: &SyntaxNode) -> bool {
@@ -94,6 +154,11 @@ impl Builder<'_> {
         })
     }
 
+    /// Whether Org's export removes object `n` for babel's `:exports`: an
+    /// inline src block that does not export its code, or the results macro
+    /// of one, or of an inline babel call, that does not keep its results
+    /// (Org keeps an inline call's: a registered divergence,
+    /// `inline-call-results`).
     pub fn babel_hides_object(&self, n: &SyntaxNode) -> bool {
         match n.kind() {
             INLINE_SRC_BLOCK if self.slugging || self.in_value => true,

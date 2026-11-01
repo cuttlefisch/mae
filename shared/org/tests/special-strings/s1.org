@@ -1,0 +1,19 @@
+* A -- B
+P1 A -- B --- C ... D \- E
+
+P2 a--b a---
+
+P3 =a -- b= ~c...d~ src_sh[:exports code]{a--b}
+
+P4 [[https://e.com/a--b][x -- y]] *b* -- c
+
+P5 a-@@latex:x@@-b and a ---- b
+
+P6 [cite:pre -- x @k s ... t]
+
+P7 x--
+y
+
+| a -- b |
+
+P8 a\-b \\- c
