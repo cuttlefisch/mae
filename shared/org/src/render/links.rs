@@ -344,7 +344,7 @@ impl Builder<'_> {
             let tree = crate::green::objects(v.text(), PARAGRAPH);
             if let Some(l) = tree.descendants().find(|c| c.kind() == LINK) {
                 let mut out = Vec::new();
-                self.with_base(Some(base), |b| b.link(&l, &mut out));
+                self.with_base(base, |b| b.link(&l, &mut out));
                 return out;
             }
         }

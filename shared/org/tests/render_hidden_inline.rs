@@ -117,7 +117,37 @@ const CONTAINERS: &[(&str, &str)] = &[
         "file title",
         ":PROPERTIES:\n:ID: f1\n:END:\n#+TITLE: T {X}\n",
     ),
+    ("emphasis", "*bold {X} bold* and /it {X}/ and _u {X}_ and +s {X}+\n"),
+    ("sub- and superscript", "x^{a {X}} and y_{b {X}}\n"),
+    (
+        "image link description",
+        "See [[https://example.com/a.png][{X}]] here.\n",
+    ),
+    (
+        "emphasis in a link description",
+        "See [[https://example.com/ok][*b {X}*]] here.\n",
+    ),
+    ("TODO heading with priority and tags", "* TODO [#A] {X} :tag:\n"),
+    ("quote block", "#+begin_quote\nQ {X}\n#+end_quote\n"),
+    ("center block", "#+begin_center\nC {X}\n#+end_center\n"),
+    ("verse block", "#+begin_verse\nV {X}\n#+end_verse\n"),
+    ("special block", "#+begin_foo\nS {X}\n#+end_foo\n"),
+    ("checkbox items", "- [ ] item {X}\n  1. nested {X}\n"),
+    ("table header", "| h [[id:nowhere][{X}]] |\n|---|\n| b |\n"),
+    ("labelled inline footnote", "Footnote[fn:lbl:inline {X}] here.\n"),
+    ("sub-heading", "* Parent\n** Child {X}\nbody\n"),
+    // Review round 2: Org expands a macro and prints its argument; MAE
+    // prints macros and citations as source, so one whose arguments hold a
+    // hidden construct must not print them (fail closed).
+    ("macro argument", "#+MACRO: m $1\nSee {{{m({X})}}} end.\n"),
+    ("citation prefix", "See [cite:pre {X} @key suf] end.\n"),
+    ("citation suffix", "See [cite:@key suf {X}] end.\n"),
 ];
+
+/// Containers that hide more than Org by design (a macro or citation whose
+/// arguments hold any babel object or snippet shows no argument at all):
+/// a VISIBLE construct in them is not shown either.
+const FAIL_CLOSED: &[&str] = &["macro argument", "citation prefix", "citation suffix"];
 
 /// The called block of the inline calls, visible and harmless; after the
 /// container, which may need to start the file.
@@ -163,6 +193,12 @@ fn no_hidden_inline_construct_reaches_any_output_in_any_container() {
     let mut leaks = Vec::new();
     for (ci, (cname, container)) in CONTAINERS.iter().enumerate() {
         for (hi, (hname, hidden)) in HIDDEN.iter().enumerate() {
+            // Before a citation's key, `@@html:…@@` IS the key (Org's key
+            // syntax takes `@` and `:`): no snippet there to hide, and Org
+            // prints no key either (`??`).
+            if *cname == "citation prefix" && hname.contains("export snippet") {
+                continue;
+            }
             let m = format!("QZH{ci:02}x{hi:02}QZH");
             let x = hidden.replace("{M}", &m);
             let doc = format!("{}{POSTAMBLE}", container.replace("{X}", &x));
@@ -188,6 +224,9 @@ fn no_hidden_inline_construct_reaches_any_output_in_any_container() {
 #[test]
 fn a_visible_construct_in_every_container_is_shown() {
     for (ci, (cname, container)) in CONTAINERS.iter().enumerate() {
+        if FAIL_CLOSED.contains(cname) {
+            continue;
+        }
         let m = format!("QZV{ci:02}QZV");
         let x = format!("src_sh[:exports code]{{{m}}}");
         let doc = format!("{}{POSTAMBLE}", container.replace("{X}", &x));
@@ -251,4 +290,169 @@ fn a_same_page_link_shows_the_title_it_lands_on() {
     let p = &html[html.rfind("<p>").unwrap()..];
     assert_eq!(p.matches(">Kinds here</a>").count(), 4, "{p}");
     assert!(p.contains(">tag :: an item node</a>"), "{p}");
+}
+
+/// Where `:exports` is set, review round 2: an alias was rendered with no
+/// place in the document, so its inline src block read the FILE's
+/// `header-args` (`:exports code`) instead of its heading's (`:exports
+/// none`) and showed the code. Every scope Org reads a block's `:exports`
+/// from, against a broader or unrelated scope that says the opposite, with
+/// the construct in every container of the scoped heading.
+const SCOPES: &[(&str, &str, &str, &str)] = &[
+    // (name, file keyword lines, outer heading drawer lines, inner heading
+    // drawer lines)
+    (
+        "#+PROPERTY",
+        "#+PROPERTY: header-args :exports none\n",
+        "",
+        "",
+    ),
+    (
+        "heading drawer",
+        "#+PROPERTY: header-args :exports both\n",
+        "",
+        ":header-args: :exports none\n",
+    ),
+    (
+        "inherited from an ancestor heading",
+        "#+PROPERTY: header-args :exports both\n",
+        ":header-args: :exports none\n",
+        "",
+    ),
+    (
+        "header-args:LANG in the drawer",
+        "#+PROPERTY: header-args :exports both\n",
+        "",
+        ":header-args:sh: :exports none\n",
+    ),
+    (
+        "#+PROPERTY header-args:LANG",
+        "#+PROPERTY: header-args :exports both\n#+PROPERTY: header-args:sh :exports none\n",
+        "",
+        "",
+    ),
+];
+
+/// Containers under the scoped heading `Inner`; `{X}` is the construct.
+const SCOPED: &[(&str, &str)] = &[
+    ("title", "TITLE"),
+    ("alias", "ALIAS"),
+    ("property value", "PROP"),
+    ("paragraph", "Para {X} end.\n"),
+    ("external link", "See [[https://example.com/ok][{X}]].\n"),
+    ("resolved KB link", "See [[id:shown][{X}]].\n"),
+    ("unresolved KB link", "See [[id:nowhere][{X}]].\n"),
+    ("item tag", "- {X} :: body\n- other :: more\n\n"),
+    (
+        "item node title",
+        "- {X} :: body\n  :PROPERTIES:\n  :ID: si\n  :END:\n\n",
+    ),
+    ("table cell link", "| [[id:nowhere][{X}]] |\n\n"),
+    ("caption", "#+CAPTION: {X}\n| a |\n\n"),
+    (
+        "footnote definition",
+        "Ref[fn:s1].\n\n[fn:s1] Note {X}.\n\n",
+    ),
+    ("inline footnote", "Ref[fn:: note {X}].\n"),
+    ("macro argument", "{{{m({X})}}}\n"),
+    ("citation", "[cite:pre {X} @k]\n"),
+    ("sub-heading", "SUB"),
+];
+
+/// The scoped document: `x(i)` is container `i`'s construct.
+fn scoped_doc(scope: (&str, &str, &str), x: &dyn Fn(usize) -> String) -> String {
+    let (file, outer, inner) = scope;
+    let at = |name: &str| SCOPED.iter().position(|c| c.1 == name).unwrap();
+    let mut body = String::new();
+    for (i, (_, c)) in SCOPED.iter().enumerate() {
+        if !matches!(*c, "TITLE" | "ALIAS" | "PROP" | "SUB") {
+            body.push_str(&c.replace("{X}", &x(i)));
+        }
+    }
+    format!(
+        "{file}#+MACRO: m $1\n* Other\n:PROPERTIES:\n:header-args: :exports both\n:END:\nother\n\
+         * Outer\n:PROPERTIES:\n{outer}:END:\n\
+         ** Inner {title}\n:PROPERTIES:\n:ID: inner\n{inner}:ALIASES: al {alias}\n:PROP: v {prop}\n:END:\n\
+         {body}*** Sub {sub}\nsub body\n* After\n:PROPERTIES:\n:header-args: :exports both\n:END:\n",
+        title = x(at("TITLE")),
+        alias = x(at("ALIAS")),
+        prop = x(at("PROP")),
+        sub = x(at("SUB")),
+    )
+}
+
+#[test]
+fn hidden_constructs_follow_their_own_scope_in_every_container() {
+    let mut leaks = Vec::new();
+    for (si, (sname, file, outer, inner)) in SCOPES.iter().enumerate() {
+        let marker = |i: usize| format!("QZS{si}x{i:02}QZS");
+        let x = |i: usize| {
+            let m = marker(i);
+            format!("src_sh{{echo {m}}} {{{{{{results(={m}=)}}}}}}")
+        };
+        let doc = scoped_doc((file, outer, inner), &x);
+        for (surface, s) in outputs(&doc) {
+            for (i, (cname, _)) in SCOPED.iter().enumerate() {
+                if s.contains(&marker(i)) {
+                    leaks.push(format!("{sname}: {cname} -> {surface}"));
+                }
+            }
+        }
+    }
+    leaks.sort();
+    leaks.dedup_by(|a, b| a.split(" -> ").next() == b.split(" -> ").next());
+    assert!(
+        leaks.is_empty(),
+        "{} leaks:\n{}",
+        leaks.len(),
+        leaks.join("\n")
+    );
+}
+
+/// Not vacuous: with the heading's scope SHOWING code (`:exports both`)
+/// under a file that hides it, every container but the fail-closed ones
+/// shows its marker, so each is read at the heading's place.
+#[test]
+fn a_construct_shown_by_its_own_scope_is_shown_in_every_container() {
+    let x = |i: usize| format!("src_sh{{echo QZW{i:02}QZW}}");
+    let doc = scoped_doc(
+        (
+            "#+PROPERTY: header-args :exports none\n",
+            "",
+            ":header-args: :exports both\n",
+        ),
+        &x,
+    );
+    let outs = outputs(&doc);
+    for (i, (cname, _)) in SCOPED.iter().enumerate() {
+        // Fail closed by design: a macro or citation holding any babel
+        // object shows none of it, and a property value never shows one
+        // (property-value-babel).
+        if matches!(*cname, "macro argument" | "citation" | "property value") {
+            continue;
+        }
+        let m = format!("QZW{i:02}QZW");
+        assert!(
+            outs.iter().any(|(_, s)| s.contains(&m)),
+            "{cname}: shown nowhere:\n{doc}"
+        );
+    }
+}
+
+/// The reviewer's inputs (round 2), as written: Emacs 30.2 exports the
+/// macro lines as `See and end.` and prints the citation's inline src code
+/// and snippet HTML; MAE shows none of them, nor the macro arguments.
+#[test]
+fn the_reviewers_macro_and_citation_show_none_of_their_hidden_text() {
+    let doc = "#+MACRO: m $1\nSee {{{m(src_sh[:exports none]{echo SECRET6})}}} and {{{m(@@latex:SECRET7@@)}}} end.\n\nSee [cite:pre src_sh[:exports none]{echo SECRET8} @key suf @@html:SECRET9@@] end.\n";
+    for (surface, s) in outputs(doc) {
+        assert!(!s.contains("SECRET"), "{surface}:\n{s}");
+    }
+    let d = parse(doc, &ParseOptions::default());
+    let html = mae_org::render_html(&d, &semantics(&d), &RenderOptions::default(), &resolver());
+    assert!(html.contains("<p>See  and  end.</p>"), "{html}");
+    assert!(
+        html.contains("<span class=\"org-citation\">[cite:@key]</span>"),
+        "{html}"
+    );
 }

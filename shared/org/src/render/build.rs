@@ -16,6 +16,7 @@ use crate::kind::{SyntaxElement, SyntaxNode};
 use crate::{Document, LineEnding, SemanticLink, Semantics, Span, Transclusion};
 use rowan::NodeOrToken;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 /// What is being built.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,24 +54,32 @@ pub(crate) struct Page {
     pub diagnostics: Vec<RenderDiagnostic>,
 }
 
-pub(crate) struct Builder<'a> {
-    pub opts: &'a RenderOptions,
-    pub resolver: &'a Resolver,
-    pub mode: Mode,
+/// What a builder reads from the document and its semantics, the same for
+/// every build of it: made once, shared (`Rc`) by every builder of the
+/// document (both passes of a page, every node's rendering).
+pub(crate) struct DocCx<'a> {
     skip: HashSet<(u32, u32, SyntaxKind)>,
     links: HashMap<u32, &'a SemanticLink>,
     transclusions: HashMap<u32, &'a Transclusion>,
     /// Headline and item starts → the KB node id they carry.
-    pub node_ids: HashMap<u32, &'a str>,
-    pub done: HashSet<String>,
+    node_ids: HashMap<u32, &'a str>,
+    done: HashSet<String>,
+    babel: Babel,
+    note_defs: Rc<HashMap<String, SyntaxNode>>,
+    eol: LineEnding,
+}
+
+pub(crate) struct Builder<'a> {
+    pub opts: &'a RenderOptions,
+    pub resolver: &'a Resolver,
+    pub mode: Mode,
+    cx: Rc<DocCx<'a>>,
     pub ids: Ids,
     /// The previous pass's anchors (empty in the first pass).
     pub table: Table,
     /// This pass's anchors.
     pub found: Table,
     pub notes: Notes,
-    /// What Org's export removes for babel's `:exports` (see `babel`).
-    pub babel: Babel,
     /// The document's line-ending convention: where verbatim text splits
     /// into lines.
     pub eol: LineEnding,
@@ -79,6 +88,15 @@ pub(crate) struct Builder<'a> {
     /// `None` for text with no place in it (an alias), whose links are
     /// classified on their own.
     base: Option<u32>,
+    /// Where text with no place of its own (`base` `None`: an alias, a
+    /// property value read from the semantics) sits in the document, for
+    /// what depends on the place: the `:exports` scope of its inline src
+    /// blocks. `None`: the top of the file.
+    pub scope_at: Option<u32>,
+    /// Inline-only text for a slug: every babel object and export snippet
+    /// is dropped whatever its `:exports`, so a slug never depends on where
+    /// it is read (a title and a link fragment naming it agree).
+    pub slugging: bool,
     /// Render only what lies in this span (a node's body).
     scope: Option<Span>,
     /// Inside a link's description: a nested link or footnote reference
@@ -98,11 +116,23 @@ pub(crate) fn page(
     mode: Mode,
     scope: Option<Span>,
 ) -> Page {
+    page_with(doc, DocCx::new(doc, sem), opts, resolver, mode, scope)
+}
+
+/// [`page`] over an already-read document.
+pub(crate) fn page_with<'a>(
+    doc: &Document,
+    cx: Rc<DocCx<'a>>,
+    opts: &'a RenderOptions,
+    resolver: &'a Resolver,
+    mode: Mode,
+    scope: Option<Span>,
+) -> Page {
     let root = doc.syntax();
-    let mut first = Builder::new(doc, sem, opts, resolver, mode, Table::default());
+    let mut first = Builder::with_cx(cx.clone(), opts, resolver, mode, Table::default());
     first.scope = scope;
     first.run(&root);
-    let mut second = Builder::new(doc, sem, opts, resolver, mode, first.found);
+    let mut second = Builder::with_cx(cx, opts, resolver, mode, first.found);
     second.scope = scope;
     let body = second.run(&root);
     Page {
@@ -112,15 +142,8 @@ pub(crate) fn page(
     }
 }
 
-impl<'a> Builder<'a> {
-    pub fn new(
-        doc: &Document,
-        sem: &'a Semantics,
-        opts: &'a RenderOptions,
-        resolver: &'a Resolver,
-        mode: Mode,
-        table: Table,
-    ) -> Builder<'a> {
+impl<'a> DocCx<'a> {
+    pub fn new(doc: &Document, sem: &'a Semantics) -> Rc<DocCx<'a>> {
         let skip = sem
             .unrendered
             .iter()
@@ -143,27 +166,72 @@ impl<'a> Builder<'a> {
             .iter()
             .flat_map(|s| s.done.iter().cloned())
             .collect();
-        Builder {
-            opts,
-            resolver,
-            mode,
+        Rc::new(DocCx {
             skip,
             links,
             transclusions,
             node_ids,
             done,
+            babel: Babel::new(doc),
+            note_defs: Rc::new(Notes::defs(doc, sem)),
+            eol: doc.line_ending(),
+        })
+    }
+}
+
+impl<'a> Builder<'a> {
+    pub fn new(
+        doc: &Document,
+        sem: &'a Semantics,
+        opts: &'a RenderOptions,
+        resolver: &'a Resolver,
+        mode: Mode,
+        table: Table,
+    ) -> Builder<'a> {
+        Builder::with_cx(DocCx::new(doc, sem), opts, resolver, mode, table)
+    }
+
+    /// A builder over an already-read document (see [`DocCx`]).
+    pub fn with_cx(
+        cx: Rc<DocCx<'a>>,
+        opts: &'a RenderOptions,
+        resolver: &'a Resolver,
+        mode: Mode,
+        table: Table,
+    ) -> Builder<'a> {
+        Builder {
+            opts,
+            resolver,
+            mode,
             ids: Ids::default(),
             table,
             found: Table::default(),
-            notes: Notes::new(doc, sem),
-            babel: Babel::new(doc),
-            eol: doc.line_ending(),
+            notes: Notes::with_defs(cx.note_defs.clone()),
+            eol: cx.eol,
+            cx,
             base: Some(0),
+            scope_at: None,
+            slugging: false,
             scope: None,
             in_link: false,
             depth: 0,
             diagnostics: Vec::new(),
         }
+    }
+
+    /// What Org's export removes for babel's `:exports` (see `babel`).
+    pub fn babel(&self) -> &Babel {
+        &self.cx.babel
+    }
+
+    /// The KB node id a headline or item starting at `start` carries.
+    pub fn node_id(&self, start: u32) -> Option<&'a str> {
+        self.cx.node_ids.get(&start).copied()
+    }
+
+    /// Whether `kw` is a done keyword.
+    pub fn is_done(&self, kw: &str) -> bool {
+        self.cx.done.contains(kw)
     }
 
     fn run(&mut self, root: &SyntaxNode) -> Vec<Node> {
@@ -183,14 +251,14 @@ impl<'a> Builder<'a> {
     /// Whether the semantics skipped `n`.
     pub fn skipped(&self, n: &SyntaxNode) -> bool {
         let s = Span::of(n);
-        self.skip.contains(&(s.start, s.end, n.kind()))
+        self.cx.skip.contains(&(s.start, s.end, n.kind()))
     }
 
     /// The semantics' reading of the link object starting at `start` (in
     /// the text being rendered).
     pub fn semantic_link(&self, start: u32) -> Option<&'a SemanticLink> {
         let at = self.base?.checked_add(start)?;
-        self.links.get(&at).copied()
+        self.cx.links.get(&at).copied()
     }
 
     /// Where `n` (a node of the text being rendered) is in the document.
@@ -198,9 +266,31 @@ impl<'a> Builder<'a> {
         self.base?.checked_add(Span::of(n).start)
     }
 
-    /// Runs `f` on text at `base` (see the field).
-    pub fn with_base<R>(&mut self, base: Option<usize>, f: impl FnOnce(&mut Self) -> R) -> R {
-        let base = base.map(|b| u32::try_from(b).unwrap_or(u32::MAX));
+    /// Where `:exports` is read for `n`: its own place, else the place of
+    /// the text it was read from ([`Builder::scope_at`]).
+    pub fn babel_position(&self, n: &SyntaxNode) -> Option<u32> {
+        self.position(n).or(self.scope_at)
+    }
+
+    /// Runs `f` on text with no place of its own in the document (an alias,
+    /// a property value from the semantics) that sits at `at`: its links
+    /// are classified on their own, and its `:exports` scope is `at`'s
+    /// (`None`: the top of the file). The one way to render such text, so
+    /// none can forget its scope.
+    pub fn placeless<R>(&mut self, at: Option<u32>, f: impl FnOnce(&mut Self) -> R) -> R {
+        let old = std::mem::replace(&mut self.scope_at, at);
+        let r = self.based(None, f);
+        self.scope_at = old;
+        r
+    }
+
+    /// Runs `f` on text at offset `base` of the document (see the field).
+    pub fn with_base<R>(&mut self, base: usize, f: impl FnOnce(&mut Self) -> R) -> R {
+        let base = Some(u32::try_from(base).unwrap_or(u32::MAX));
+        self.based(base, f)
+    }
+
+    fn based<R>(&mut self, base: Option<u32>, f: impl FnOnce(&mut Self) -> R) -> R {
         let old = std::mem::replace(&mut self.base, base);
         let r = f(self);
         self.base = old;
@@ -253,7 +343,7 @@ impl<'a> Builder<'a> {
         // export removes for its `:exports`, is not rendered with anything
         // attached to it (its affiliated keywords: a caption, the targets
         // and footnote references in it).
-        if self.skipped(n) || self.babel.hides(n) {
+        if self.skipped(n) || self.cx.babel.hides(n) {
             return;
         }
         if let Some(scope) = self.scope {
@@ -388,7 +478,7 @@ impl<'a> Builder<'a> {
     }
 
     fn keyword(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
-        let Some(t) = self.transclusions.get(&Span::of(n).start).copied() else {
+        let Some(t) = self.cx.transclusions.get(&Span::of(n).start).copied() else {
             return;
         };
         let link = self.transclusion(n, t);
@@ -430,7 +520,7 @@ impl Builder<'_> {
         let mut dl = Vec::new();
         for (key, value, at) in props {
             push(&mut dl, Element::new(Tag::Dt).with(vec![text(&key)]).into());
-            let v = self.with_base(Some(at), |b| b.property_value(&value));
+            let v = self.with_base(at, |b| b.property_value(&value));
             push(&mut dl, Element::new(Tag::Dd).with(v).into());
         }
         let dl = Element::new(Tag::Dl).class("org-properties").with(dl);

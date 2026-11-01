@@ -28,7 +28,7 @@ pub(crate) enum NoteSource {
 
 #[derive(Debug, Default)]
 pub(crate) struct Notes {
-    defs: HashMap<String, SyntaxNode>,
+    defs: std::rc::Rc<HashMap<String, SyntaxNode>>,
     numbers: HashMap<String, usize>,
     /// Per note (number - 1): its source and how many references it has.
     queue: Vec<(NoteSource, usize)>,
@@ -55,7 +55,8 @@ pub(crate) fn node_at(
 }
 
 impl Notes {
-    pub fn new(doc: &Document, sem: &Semantics) -> Notes {
+    /// Each footnote label's definition element.
+    pub fn defs(doc: &Document, sem: &Semantics) -> HashMap<String, SyntaxNode> {
         let root = doc.syntax();
         let mut defs = HashMap::new();
         for f in &sem.footnotes {
@@ -66,6 +67,10 @@ impl Notes {
                 defs.insert(f.label.clone(), n);
             }
         }
+        defs
+    }
+
+    pub fn with_defs(defs: std::rc::Rc<HashMap<String, SyntaxNode>>) -> Notes {
         Notes {
             defs,
             ..Notes::default()

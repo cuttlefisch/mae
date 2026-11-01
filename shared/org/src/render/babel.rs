@@ -257,12 +257,10 @@ impl Babel {
         if at >= u32::from(self.root.text_range().end()) {
             return None;
         }
-        let range = rowan::TextRange::empty(at.into());
-        let start = match self.root.covering_element(range) {
-            rowan::NodeOrToken::Node(n) => n,
-            rowan::NodeOrToken::Token(t) => t.parent()?,
-        };
-        start.ancestors().find(|a| a.kind() == HEADLINE)
+        // The token STARTING at `at` (right-biased): at a headline's first
+        // byte, the one before it ends the previous headline's section.
+        let token = self.root.token_at_offset(at.into()).right_biased()?;
+        token.parent()?.ancestors().find(|a| a.kind() == HEADLINE)
     }
 
     fn resolve(

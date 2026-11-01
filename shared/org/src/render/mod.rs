@@ -60,7 +60,7 @@
 //! | statistics cookie | `<span class="org-cookie">` |
 //! | LaTeX fragment, environment | `<code class="org-latex">`, `<pre class="org-latex-environment"><code>`: the source as text, never MathML |
 //! | inline src block | `<code class="org-inline-src">` with its body (+ `language-L`) when its `:exports` is `code` or `both`; by Org's inline default (`results`) nothing. Its `{{{results(…)}}}` macro is removed unless `:exports` keeps results |
-//! | macro, citation | `<span class="org-macro">`, `<span class="org-citation">`: the source as text (not expanded) |
+//! | macro, citation | `<span class="org-macro">`, `<span class="org-citation">`: the source as text (not expanded); a macro whose arguments hold an inline src block, babel call, export snippet or results macro renders nothing, and such a citation only its keys (fail closed) |
 //! | `#+TRANSCLUDE:` | `<p class="org-transclusion">` holding a link to its member |
 //! | property drawer | omitted unless [`RenderOptions::property_drawers`]: `<dl class="org-properties">`, values plain text with only bracket links as links; always in [`Rendered::nodes`] as data |
 //! | omitted (as Org's export omits them by default) | keywords, planning, clock, diary sexp, babel call, inline babel call, export snippets and blocks for other backends, comment, comment blocks |

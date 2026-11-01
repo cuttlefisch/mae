@@ -45,8 +45,8 @@ impl Builder<'_> {
         // headline): Org's export still gives the headline its CUSTOM_ID.
         let custom = h.property_drawer().and_then(|d| d.get("CUSTOM_ID"));
         let custom = custom.filter(|c| !c.is_empty());
-        let node = self.node_ids.get(&start).copied();
         let heading = self.ids.claim(heading_anchor(shown));
+        let node = self.node_id(start);
         self.found.headings.insert(heading.clone());
         let mut section = None;
         if self.opts.headline_ids == HeadlineIds::Explicit {
@@ -115,7 +115,7 @@ impl Builder<'_> {
         let mut line = Vec::new();
         if let Some(kw) = h.todo() {
             let mut span = Element::new(Tag::Span).class("org-todo");
-            if self.done.contains(&kw) {
+            if self.is_done(&kw) {
                 span = span.class("org-done");
             }
             push(&mut line, span.with(vec![text(&kw)]).into());
@@ -170,7 +170,7 @@ impl Builder<'_> {
         if self.mode == Mode::Meta {
             return None;
         }
-        let id = self.node_ids.get(&Span::of(item).start).copied()?;
+        let id = self.node_id(Span::of(item).start)?;
         let anchor = self.ids.try_claim(format!("id-{}", encode_id(id)))?;
         self.found
             .nodes

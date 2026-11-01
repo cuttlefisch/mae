@@ -54,10 +54,10 @@ test = "latex_timestamps_macros_and_citations_render_as_their_source"
 [[divergence]]
 id = "macros-citations"
 what = "macros and citations"
-org = "expands macros ({{{title}}}, user #+MACRO:) and processes citations with a cite processor"
-mae = "their source as text in <span class=\"org-macro\"> / <span class=\"org-citation\">"
-reason = "Expansion is evaluation (a macro can be (eval …)) and a citation needs a bibliography read from disk: no I/O, no code (D1, D4)."
-test = "latex_timestamps_macros_and_citations_render_as_their_source"
+org = "expands macros ({{{title}}}, user #+MACRO:) and processes citations with a cite processor; a macro argument's babel objects and snippets are then exported as anywhere (#+MACRO: m $1 with {{{m(src_sh[:exports none]{x})}}} shows nothing of x), while the basic processor prints a citation's prefix and suffix, inline src code included, and no key (??)"
+mae = "their source as text in <span class=\"org-macro\"> / <span class=\"org-citation\">, EXCEPT when what they hold has an inline src block, an inline babel call, an export snippet or a results macro (a macro's arguments read as objects, a citation's prefixes and suffixes as parsed): then a macro renders nothing and a citation only its keys ([cite:@a;@b]). Fail closed, hiding more than Org, never less; expanding macros is later work (O4 or after)"
+reason = "Expansion is evaluation (a macro can be (eval …)) and a citation needs a bibliography read from disk: no I/O, no code (D1, D4). Printed as source, an argument would spell out code and HTML the export hides (review round 2, ADR-112 D3)."
+test = "no_hidden_inline_construct_reaches_any_output_in_any_container"
 
 [[divergence]]
 id = "raw-html"

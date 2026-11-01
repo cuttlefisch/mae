@@ -33,15 +33,23 @@ pub(crate) fn nodes(
             b.in_link = false;
             trim_text(&mut title_unlinked);
             unwrap_plain(&mut title_unlinked);
+            // Aliases and property values are the semantics' strings, read
+            // from the node's drawer: no place of their own, but they sit in
+            // the node, so their `:exports` scope is the node's (review
+            // round 2: an alias read the file's and showed hidden code).
+            let at = Some(n.span.start);
             let aliases = n
                 .aliases
                 .iter()
-                .map(|a| b.with_base(None, |b| b.inline_text(a)))
+                .map(|a| b.placeless(at, |b| b.inline_text(a)))
                 .collect();
             let properties = n
                 .properties
                 .iter()
-                .map(|(k, v)| (k.clone(), b.with_base(None, |b| b.property_value(v))))
+                .map(|(k, v)| {
+                    let v = b.placeless(at, |b| b.property_value(v));
+                    (k.clone(), v)
+                })
                 .collect();
             NodeMeta {
                 id: n.id.clone(),
@@ -60,7 +68,7 @@ pub(crate) fn inline(text: &str, opts: &RenderOptions, resolver: &Resolver) -> V
     let doc = crate::parse("", &crate::ParseOptions::default());
     let sem = Semantics::default();
     let mut b = Builder::new(&doc, &sem, opts, resolver, Mode::Meta, Table::default());
-    b.with_base(None, |b| b.inline_text(text))
+    b.placeless(None, |b| b.inline_text(text))
 }
 
 impl Builder<'_> {
@@ -70,7 +78,7 @@ impl Builder<'_> {
             NodeOrigin::File => {
                 if let Some((value, at)) = file_title_source(root) {
                     let tree = crate::green::objects(&value, PARAGRAPH);
-                    self.with_base(Some(at), |b| b.objects(&tree, &mut out));
+                    self.with_base(at, |b| b.objects(&tree, &mut out));
                 }
             }
             NodeOrigin::Headline => {
