@@ -822,6 +822,9 @@ mod tests {
     /// Review round 4 (M4): the checks were quadratic (each node of one
     /// side looked up by a scan of the other), 11.2 s for 32,000 nodes.
     /// Counted, not timed: the steps of the checks grow as the nodes do.
+    /// Only the `step()` call sites count (the checks' loops over nodes,
+    /// links, elements and names), not every operation: the timed splice
+    /// families in tests/scaling.rs cover the rest.
     #[test]
     fn the_edit_checks_take_steps_linear_in_the_nodes() {
         let steps = |nodes: usize| {
