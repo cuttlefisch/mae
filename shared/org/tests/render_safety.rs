@@ -315,10 +315,28 @@ fn resolver_hrefs_that_are_not_pages_are_refused() {
         "/a\\b",
         "\u{a0}/x",
         "",
+        // Character references: harmless in this crate's own HTML (its
+        // serialiser escapes `&`), but a hast consumer that writes
+        // attribute values unescaped would hand a browser `javascript:`.
+        "javascript&#58;alert(1)",
+        "javascript&#x3a;alert(1)",
+        "javascript&colon;alert(1)",
+        "/n?a=1&amp;b=2",
+        "https://h/x?a&#38;b",
+        // Any `&NAME;` is refused, a real entity name or not: the check is
+        // the shape, not HTML's 2,231-name table.
+        "/n?q=a&b;c",
     ] {
         assert_eq!(mae_org::safe_resolver_href(bad), None, "{bad:?}");
     }
-    for good in ["/n/x.html", "n/x?y=1#z", "https://h/x", "mailto:a@b"] {
+    for good in [
+        "/n/x.html",
+        "n/x?y=1#z",
+        "https://h/x",
+        "mailto:a@b",
+        "/n?a=1&b=2&c",
+        "/n?a=b;c&d",
+    ] {
         assert!(mae_org::safe_resolver_href(good).is_some(), "{good:?}");
     }
 }

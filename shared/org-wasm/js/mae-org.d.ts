@@ -21,7 +21,11 @@ export interface Request {
     link_exclude_properties?: string[];
   };
   render?: { headline_ids?: 'explicit' | 'slug'; images?: boolean; property_drawers?: boolean };
-  /** KB node id -> where it renders. An unresolved link shows its description or `placeholder`. */
+  /**
+   * KB node id -> where it renders. An unresolved link shows its description or `placeholder`.
+   * An `href` must be an http(s)/mailto URL or a scheme-less reference, already URL-encoded;
+   * one holding a character reference (`&#…`, `&name;`) is refused like any unsafe href.
+   */
   resolver?: { targets?: Record<string, { href: string; title?: string | null }>; placeholder?: string };
   /** For `text`: the KB node whose title and body to read. */
   node?: string;

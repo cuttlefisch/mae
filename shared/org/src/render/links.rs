@@ -58,8 +58,14 @@ pub fn safe_external_url(url: &str) -> Option<String> {
 /// anything a URL must percent-encode (blanks, which a browser strips;
 /// quotes; `\`, which a browser reads as `/`; controls; non-ASCII): the
 /// caller supplies URLs, already encoded.
+///
+/// Also refused: a character reference, `&#` or `&NAME;` with NAME letters
+/// and digits (`javascript&#58;…`, `&colon;`, `&amp;`). This crate's HTML
+/// escapes every `&`, so none is decoded here, but a hast consumer that
+/// serialises attribute values without escaping `&` would let the browser
+/// decode one into a scheme. A plain query (`?a=1&b=2`) is not affected.
 pub fn safe_resolver_href(href: &str) -> Option<String> {
-    if href.is_empty() || !href.bytes().all(url_safe) {
+    if href.is_empty() || !href.bytes().all(url_safe) || has_char_ref(href) {
         return None;
     }
     if scheme(href).is_some() {
@@ -70,6 +76,18 @@ pub fn safe_resolver_href(href: &str) -> Option<String> {
     // resolver cannot know it exists.
     let ok = !href.starts_with("//") && !href.starts_with('#') && !first.contains(':');
     ok.then(|| href.to_string())
+}
+
+/// Whether `s` holds `&#` or `&NAME;` (NAME letters and digits).
+fn has_char_ref(s: &str) -> bool {
+    s.match_indices('&').any(|(i, _)| {
+        let rest = &s[i + 1..];
+        let name = rest.len()
+            - rest
+                .trim_start_matches(|c: char| c.is_ascii_alphanumeric())
+                .len();
+        rest.starts_with('#') || (name > 0 && rest[name..].starts_with(';'))
+    })
 }
 
 /// A src block's or inline src's language name usable in a class:
