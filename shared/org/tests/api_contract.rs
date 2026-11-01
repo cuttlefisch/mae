@@ -107,8 +107,9 @@ fn an_unlinked_title_holds_no_anchor() {
 fn a_fragment_context_builds_from_a_document_or_by_setter() {
     let text = "#+TODO: WAIT | GONE\n<<<Widget>>> here\n* H\nWAIT a Widget\n";
     let doc = parse(text, &ParseOptions::default());
-    let ctx = FragmentContext::from_document(&doc, 1);
+    let ctx = FragmentContext::from_document(&doc, doc.headlines().next().as_ref());
     assert_eq!(ctx.level, 1);
+    assert_eq!(ctx.ancestors, 1);
     assert_eq!(ctx.line_ending, LineEnding::Lf);
     assert_eq!(
         ctx.radio_targets.as_deref(),
@@ -116,6 +117,7 @@ fn a_fragment_context_builds_from_a_document_or_by_setter() {
     );
     let by_setter = FragmentContext::new(9, LineEnding::CrLf)
         .with_level(1)
+        .with_ancestors(1)
         .with_line_ending(LineEnding::Lf)
         .with_radio_targets(["Widget"])
         .with_todo_sequences(vec![TodoSequence::new(["WAIT"], ["GONE"])]);

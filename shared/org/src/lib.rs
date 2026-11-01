@@ -155,6 +155,12 @@ pub struct FragmentContext {
     /// The level of the headline whose body this is; 0 for the text before
     /// the first headline (the start of the file).
     pub level: usize,
+    /// How many headlines the FILE has above the body, its own included
+    /// (its ancestors are not every lower level: `* a` then `*** b` makes
+    /// `b` the second). The file's nesting cap
+    /// ([`ParseOptions::max_depth`]) counts them, so the fragment's
+    /// contents nest exactly as there only with this set. 0 at level 0.
+    pub ancestors: usize,
     /// The FILE's line-ending convention ([`LineEnding::detect`] on the whole
     /// file, or [`Document::line_ending`] of its parse). A fragment's own
     /// endings can say otherwise: a CRLF body in a file with one LF line is a
@@ -172,22 +178,35 @@ pub struct FragmentContext {
 }
 
 impl FragmentContext {
-    /// A body at `level` in a file with `line_ending`, nothing else known.
+    /// A body at `level` in a file with `line_ending`, nothing else known
+    /// (as many ancestors as the level says: a headline whose every level
+    /// above it is a headline).
     pub fn new(level: usize, line_ending: LineEnding) -> FragmentContext {
         FragmentContext {
             level,
+            ancestors: level,
             line_ending,
             radio_targets: None,
             todo_sequences: None,
         }
     }
 
-    /// The context of a body at `level` in `doc`, the parse of its whole
-    /// file: the file's line ending, radio targets and TODO sequences, so
-    /// [`parse_fragment`] reads the body exactly as `doc`'s parse did.
-    pub fn from_document(doc: &Document, level: usize) -> FragmentContext {
+    /// The context of the body of `headline` (`None`: the text before the
+    /// first headline) in `doc`, the parse of its whole file: its level and
+    /// ancestors, and the file's line ending, radio targets and TODO
+    /// sequences, so [`parse_fragment`] reads the body exactly as `doc`'s
+    /// parse did.
+    pub fn from_document(doc: &Document, headline: Option<&Headline>) -> FragmentContext {
+        let (level, ancestors) = headline.map_or((0, 0), |h| {
+            let n = h
+                .syntax()
+                .ancestors()
+                .filter(|a| a.kind() == SyntaxKind::HEADLINE);
+            (h.level(), n.count())
+        });
         FragmentContext {
             level,
+            ancestors,
             line_ending: doc.line_ending(),
             radio_targets: Some(doc.radio_targets().to_vec()),
             todo_sequences: Some(doc.todo_sequences().to_vec()),
@@ -196,6 +215,11 @@ impl FragmentContext {
 
     pub fn with_level(mut self, level: usize) -> Self {
         self.level = level;
+        self
+    }
+
+    pub fn with_ancestors(mut self, ancestors: usize) -> Self {
+        self.ancestors = ancestors;
         self
     }
 
@@ -237,7 +261,10 @@ impl FragmentContext {
 pub fn parse_fragment(text: &str, options: &ParseOptions, context: &FragmentContext) -> Document {
     let start = match context.level {
         0 => builder::Start::Document,
-        level => builder::Start::Fragment { level },
+        level => builder::Start::Fragment {
+            level,
+            ancestors: context.ancestors,
+        },
     };
     let src = text::Source::with(text, context.line_ending, context.level == 0);
     parse_with(src, options, start, Some(context))

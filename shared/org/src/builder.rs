@@ -39,10 +39,20 @@ pub(crate) struct Built {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Start {
     Document,
-    Fragment { level: usize },
+    /// `ancestors`: the headlines the file has above the body (its own
+    /// headline included), frames that count against the nesting cap there.
+    Fragment {
+        level: usize,
+        ancestors: usize,
+    },
 }
 
 pub(crate) fn build(src: &Source, ix: &Index, opts: &ParseOptions, start: Start) -> Built {
+    if let Start::Fragment { ancestors, .. } = start {
+        if ancestors >= opts.max_depth.min(MAX_DEPTH_CEILING) {
+            return opaque_body(src);
+        }
+    }
     let mut b = Builder::new(src, ix, opts, start);
     while !b.stack.is_empty() {
         b.step();
@@ -53,6 +63,30 @@ pub(crate) fn build(src: &Source, ix: &Index, opts: &ParseOptions, start: Start)
         contents: b.contents,
         diagnostics: b.cx.diagnostics,
         in_file_todo: b.todo,
+    }
+}
+
+/// A body whose headline in its file already sits at the nesting cap: the
+/// file keeps it as one opaque token, and so does its fragment.
+fn opaque_body(src: &Source) -> Built {
+    // As `leaf::headline` cuts it: blank lines first (the headline's own),
+    // then the contents, opaque.
+    let len = src.len();
+    let cb = src.skip_blank(0, len);
+    let mut em = Emitter::new(src);
+    em.start(DOCUMENT);
+    em.lines(0, cb, TEXT);
+    let mut diagnostics = Vec::new();
+    if cb < len {
+        em.tok(OPAQUE, cb, len);
+        diagnostics.push(Diagnostic::new(DiagnosticKind::DepthLimit, cb, len));
+    }
+    em.finish();
+    Built {
+        events: em.events,
+        contents: ContentsTable::default(),
+        diagnostics,
+        in_file_todo: Vec::new(),
     }
 }
 
@@ -91,7 +125,16 @@ impl<'a> Builder<'a> {
             mode,
             list: None,
         };
-        let cap = opts.max_depth.min(MAX_DEPTH_CEILING);
+        // A fragment's headlines in its file are frames the cap counts: the
+        // same cap, less them, nests its contents exactly as the file did.
+        let ancestors = match start {
+            Start::Fragment { ancestors, .. } => ancestors,
+            Start::Document => 0,
+        };
+        let cap = opts
+            .max_depth
+            .min(MAX_DEPTH_CEILING)
+            .saturating_sub(ancestors);
         Builder {
             cx,
             em,
@@ -148,7 +191,7 @@ impl<'a> Builder<'a> {
             self.contents
                 .push(el.kind, el.begin, el.end, Span::new(a, b));
         }
-        if let (HEADLINE, Start::Fragment { level }) = (el.kind, self.start) {
+        if let (HEADLINE, Start::Fragment { level, .. }) = (el.kind, self.start) {
             let line = src.lines[src.line_of(el.begin)];
             if scan::headline_level(src.content(src.line_of(el.begin))).is_some_and(|l| l <= level)
             {

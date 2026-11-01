@@ -45,7 +45,8 @@ fn check(name: &str, body: &str, level: usize, eol: &str) -> Result<(), String> 
     if eol == "\r" && file_eol != LineEnding::Cr {
         return Ok(());
     }
-    let ctx = FragmentContext::new(level, file_eol);
+    // The wrapper is the body's one headline in its file.
+    let ctx = FragmentContext::new(level, file_eol).with_ancestors(1);
     let frag = parse_fragment(body, &ParseOptions::default(), &ctx);
     if frag.syntax().to_string() != body {
         return Err(format!("{name} L{level}: not lossless"));
@@ -211,8 +212,9 @@ fn bodies_match_their_file(
         let Some((base, rest)) = body_of(&h) else {
             continue;
         };
-        let level = mae_org::Headline::cast(h.clone()).map_or(1, |h| h.level());
-        let ctx = FragmentContext::from_document(&doc, level);
+        let headline = mae_org::Headline::cast(h.clone());
+        let ctx = FragmentContext::from_document(&doc, headline.as_ref());
+        let level = ctx.level;
         let body = &text[base as usize..u32::from(h.text_range().end()) as usize];
         let frag = parse_fragment(body, options, &ctx);
         let want = flatten(rest.into_iter(), base);
@@ -279,7 +281,7 @@ fn a_body_links_to_a_radio_target_elsewhere_in_its_file() {
     };
     let alone = parse_fragment(body, &options, &FragmentContext::new(1, LineEnding::Lf));
     assert_eq!(links(&alone), 0);
-    let ctx = FragmentContext::from_document(&doc, 1);
+    let ctx = FragmentContext::from_document(&doc, doc.headlines().next().as_ref());
     assert_eq!(links(&parse_fragment(body, &options, &ctx)), 1);
     // The setters say the same as the document.
     let by_hand = FragmentContext::new(1, LineEnding::Lf)
@@ -317,5 +319,38 @@ proptest! {
         let text = parts.concat();
         bodies_match_their_file("generated", &text, &ParseOptions::default())
             .map_err(TestCaseError::fail)?;
+    }
+}
+
+/// Review round 2 (M2): near the nesting cap, the file's headlines are
+/// frames the cap counts, so a fragment parsed from scratch nested deeper
+/// than its file did. The reviewer's case, and generated files at every
+/// small cap: lists, quotes and drawers under headlines of sparse levels
+/// (`* a` then `*** b`: b's second ancestor is a, not a level-2 headline).
+#[test]
+fn a_body_near_the_nesting_cap_nests_as_in_its_file() {
+    let lists: String = (0..10)
+        .map(|i| format!("{}- l{i}\n", "  ".repeat(i)))
+        .collect();
+    let text = format!("* H\n{lists}");
+    let options = ParseOptions::default().with_max_depth(6);
+    assert!(bodies_match_their_file("review", &text, &options).is_ok_and(|n| n == 1));
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(600))]
+
+    #[test]
+    fn bodies_near_the_cap_parse_as_in_their_file(
+        parts in prop::collection::vec(prop::sample::select(&[
+            "* a\n", "** b\n", "*** c\n", "***** e\n", "- x\n", "  - y\n", "    - z\n",
+            "      - w\n", "#+begin_quote\n", "#+end_quote\n", ":D:\n", ":END:\n", "text\n",
+            "\n",
+        ][..]), 0..40),
+        cap in 1usize..12,
+    ) {
+        let text = parts.concat();
+        let options = ParseOptions::default().with_max_depth(cap);
+        bodies_match_their_file("near the cap", &text, &options).map_err(TestCaseError::fail)?;
     }
 }
