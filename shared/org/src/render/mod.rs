@@ -77,7 +77,7 @@
 //! | macro | expanded as Org's export expands it, before anything is rendered (see **Macros** above); a macro left in the parse (in a property value, under a COMMENT headline) renders nothing |
 //! | citation | `<span class="org-citation">`: the source as text; one holding an inline src block, babel call, export snippet, results macro or macro only its keys (fail closed) |
 //! | `#+TRANSCLUDE:` | `<p class="org-transclusion">` holding a link to its member |
-//! | property drawer | omitted unless [`RenderOptions::property_drawers`]: `<dl class="org-properties">`, values plain text with only bracket links as links; always in [`Rendered::nodes`] as data |
+//! | property drawer | omitted unless [`RenderOptions::property_drawers`]: `<dl class="org-properties">`, one row per key with its value as [`Rendered::nodes`] reads it (`KEY` then every `KEY+` joined, `nil` none), plain text with only bracket links as links; always in [`Rendered::nodes`] as data |
 //! | omitted (as Org's export omits them by default) | keywords, planning, clock, diary sexp, babel call, inline babel call, export snippets and blocks for other backends, comment, comment blocks |
 //! | omitted (MAE's choice, unlike Org: see below) | every drawer but the property drawer (ADR-112 D2; Org's default exports all but `LOGBOOK`), `#+HTML:` and HTML export blocks and snippets (D3), affiliated keywords other than CAPTION (`#+ATTR_*` included) |
 //! | omitted with a [`RenderDiagnostic`] | content past [`RENDER_MAX_DEPTH`], and text the parser left opaque (its nesting cap) or unplaced: unparsed text is never shown, as it may hold an unrendered region |

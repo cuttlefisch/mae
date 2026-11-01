@@ -488,6 +488,24 @@ fn an_exponential_macro_fails_within_the_budget() {
     assert!(t.elapsed().as_secs() < 5, "{:?}", t.elapsed());
 }
 
+/// Review round 4 (M6): a rendered property drawer shows each key once,
+/// its value joined as the node metadata reads it (`P` then every `P+`),
+/// so a `P+` line cannot complete what its `P` line opened.
+#[test]
+fn a_drawer_shows_each_key_once_with_its_joined_value() {
+    let opts = RenderOptions::default().with_property_drawers(true);
+    let doc = "* H\n:PROPERTIES:\n:ID: h\n:P1: src_sh[:exports none]{echo\n:P1+: SECRET}\n:Q: a\n:q+: b\n:R: nil\n:END:\nbody\n";
+    let d = parse(doc, &ParseOptions::default());
+    let r = render(&d, &semantics(&d), &opts, &Resolver::default());
+    let h = r.to_json(TreeFormat::Html);
+    assert!(!h.contains("SECRET") && !h.contains("echo"), "{h}");
+    let body = mae_org::to_html(&r.body);
+    assert!(
+        body.contains("<dl class=\"org-properties\"><dt>ID</dt><dd>h</dd><dt>P1</dt><dd></dd><dt>Q</dt><dd>a b</dd></dl>"),
+        "{body}"
+    );
+}
+
 /// What an expansion makes changes how Org reads the rest, as it scans:
 /// a headline made COMMENT has its macros skipped (an undefined one there
 /// is no error), a verbatim opened before a macro makes it text, and a

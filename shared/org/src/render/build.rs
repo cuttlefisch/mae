@@ -539,13 +539,17 @@ impl<'a> Builder<'a> {
 
 impl Builder<'_> {
     /// A property drawer (a headline's, the file's or an item's), when
-    /// they are rendered: keys canonical, values plain text in which only
-    /// bracket links are links.
+    /// they are rendered: one row per key, canonical, its value as the
+    /// node metadata reads it (`org-entry-get`: the last `KEY` line, every
+    /// `KEY+` appended, `nil` none) rendered as plain text in which only
+    /// bracket links are links. A value is never shown line by line: a
+    /// `KEY+` line can complete a construct its `KEY` line opens (review
+    /// round 4, M6).
     fn drawer(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
         if !self.opts.property_drawers || self.mode == Mode::Meta {
             return;
         }
-        let props: Vec<(String, String, usize)> = if n.kind() == PROPERTY_DRAWER {
+        let pairs: Vec<(String, String)> = if n.kind() == PROPERTY_DRAWER {
             n.children()
                 .filter(|c| c.kind() == NODE_PROPERTY)
                 .filter_map(|p| {
@@ -553,24 +557,23 @@ impl Builder<'_> {
                         .children_with_tokens()
                         .filter_map(SyntaxElement::into_token)
                         .find(|t| t.kind() == NAME)?;
-                    let key = crate::views::canonical_key(key.text());
-                    let (value, at) = crate::semantics::value_token(&p).unwrap_or_default();
-                    Some((key, value, at))
+                    let (value, _) = crate::semantics::value_token(&p).unwrap_or_default();
+                    Some((key.text().to_string(), value))
                 })
                 .collect()
         } else {
             match crate::semantics::items::item_property_drawer(n) {
-                Some(ps) => ps
-                    .into_iter()
-                    .map(|p| (crate::views::canonical_key(&p.key), p.value, p.value_start))
-                    .collect(),
+                Some(ps) => ps.into_iter().map(|p| (p.key, p.value)).collect(),
                 None => return,
             }
         };
+        // The values have no single place: they sit in the drawer, whose
+        // `:exports` scope is theirs.
+        let at = Some(Span::of(n).start);
         let mut dl = Vec::new();
-        for (key, value, at) in props {
+        for (key, value) in crate::semantics::resolve_properties(pairs) {
             push(&mut dl, Element::new(Tag::Dt).with(vec![text(&key)]).into());
-            let v = self.with_base(at, |b| b.property_value(&value));
+            let v = self.placeless(at, |b| b.property_value(&value));
             push(&mut dl, Element::new(Tag::Dd).with(v).into());
         }
         let dl = Element::new(Tag::Dl).class("org-properties").with(dl);
