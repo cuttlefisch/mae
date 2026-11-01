@@ -226,6 +226,22 @@ fn o(kind: &str, begin: usize, end: usize) -> (String, usize, usize) {
 /// before point is not a link at point. So mae-org makes the radio link
 /// `x`, then parses the `[` as anything else would be parsed there: a
 /// bracket link `[[x]]` in the first file, nothing in the others.
+/// One radio target of 2,800 words: Emacs cannot compile the regexp
+/// ("Regular expression too big", the golden is #error) and parses
+/// nothing; mae-org makes the link it describes (registered).
+#[test]
+fn an_over_large_radio_regexp_still_makes_its_links() {
+    let words = 2_800;
+    let target = 3 + 2 * words - 1;
+    assert_eq!(
+        objects_of("objects-radio-regexp-too-big.org"),
+        [
+            o("radio-target", 0, target + 3),
+            o("link", target + 5, target + 5 + 2 * words - 1)
+        ]
+    );
+}
+
 #[test]
 fn emacs_does_not_terminate_on_a_radio_link_before_a_bracket() {
     assert_eq!(

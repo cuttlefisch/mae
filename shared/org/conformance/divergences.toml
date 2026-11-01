@@ -192,6 +192,21 @@ begin = 23
 reason = "Emacs emits a radio link overlapping the previous one; a tree cannot hold it, mae-org keeps only the first"
 test = "a_radio_link_never_overlaps_the_object_before_it"
 
+# A radio target set whose regexp Emacs cannot compile: one target of 2,800
+# words (each space a `\s-+`; 2,700 is enough, 2,400 is not), or, per the
+# pre-tag review, 1,500 nine-word targets. Org's split keeps each regexp
+# under 8192 CHARS, but the compiled pattern can still pass Emacs's own
+# size limit, and `org-update-radio-target-regexp' signals "Regular
+# expression too big": Org parses nothing (the golden is #error). mae-org
+# has no compiled-size limit (its matcher is linear in the text), so it
+# makes the radio links the regexp describes. Reproducing a C regex
+# engine's internal size limit would make the parse depend on it.
+[[divergence]]
+kind = "*"
+file = "shared/org/tests/fixtures/objects-radio-regexp-too-big.org"
+reason = "Emacs signals Regular expression too big and parses nothing; mae-org makes the radio link the regexp describes"
+test = "an_over_large_radio_regexp_still_makes_its_links"
+
 # A `#+LINK:` replacement that calls a function, `%(fn)`: Org runs the
 # function when it is marked safe or `pure` (`concat` is), so `[[c:y]]`
 # with `#+LINK: c %(concat)` becomes `y`, and refuses it otherwise

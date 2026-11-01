@@ -63,6 +63,7 @@ shared/org/tests/fixtures/objects-links.org
 shared/org/tests/fixtures/objects-misc.org
 shared/org/tests/fixtures/objects-multibrace.org
 shared/org/tests/fixtures/objects-radio-overlap.org
+shared/org/tests/fixtures/objects-radio-regexp-too-big.org
 shared/org/tests/fixtures/objects-radio-split-glossary.org
 shared/org/tests/fixtures/objects-radio-split-regexp.org
 shared/org/tests/fixtures/objects-radio.org
