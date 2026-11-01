@@ -86,13 +86,17 @@ impl Builder<'_> {
     }
 
     fn item_title(&mut self, root: &SyntaxNode, n: &SemanticNode, out: &mut Vec<Node>) {
-        let Some(item) = node_at(root, n.span, ITEM) else {
+        if let Some(item) = node_at(root, n.span, ITEM) {
+            self.item_node_title(&item, out);
+        }
+    }
+
+    /// A KB item's title: its tag and its first paragraph, rendered.
+    pub fn item_node_title(&mut self, item: &SyntaxNode, out: &mut Vec<Node>) {
+        let Some((drawer, _)) = item_drawer(item) else {
             return;
         };
-        let Some((drawer, _)) = item_drawer(&item) else {
-            return;
-        };
-        let (tag, first) = item_title_parts(&item, &drawer);
+        let (tag, first) = item_title_parts(item, &drawer);
         let mut tag_nodes = Vec::new();
         if let Some(t) = tag {
             self.objects(&t, &mut tag_nodes);
@@ -121,6 +125,13 @@ impl Builder<'_> {
     }
 
     /// A property value: plain text in which only bracket links are links.
+    ///
+    /// Org reads a value as text and shows it as written. MAE parses it as
+    /// objects and shows each one but a bracket link as its source, except
+    /// what the body would hide: an inline src block, an inline babel call,
+    /// an export snippet and the results macro after one of the first two
+    /// show nothing (ADR-112 D3: a construct hidden in the body is hidden
+    /// everywhere; a registered divergence, `property-value-babel`).
     pub fn property_value(&mut self, value: &str) -> Vec<Node> {
         let tree = crate::green::objects(value, PARAGRAPH);
         let mut out = Vec::new();
@@ -129,12 +140,22 @@ impl Builder<'_> {
                 rowan::NodeOrToken::Node(l) if l.kind() == LINK && is_bracket(&l) => {
                     self.deeper(&l, |b| b.object(&l, &mut out))
                 }
+                rowan::NodeOrToken::Node(o) if hidden_in_a_value(&o) => {}
                 other => push(&mut out, text(&other.to_string())),
             }
         }
         trim_text(&mut out);
         out
     }
+}
+
+/// Whether object `o` of a property value shows nothing (see
+/// [`Builder::property_value`]).
+fn hidden_in_a_value(o: &SyntaxNode) -> bool {
+    matches!(
+        o.kind(),
+        INLINE_SRC_BLOCK | INLINE_BABEL_CALL | EXPORT_SNIPPET
+    ) || (o.kind() == MACRO && super::babel::results_macro_owner(o).is_some())
 }
 
 /// Replaces each class-less `<span>` (a link shown as plain text) by its

@@ -132,6 +132,22 @@ reason = "Nothing is evaluated (D1, D4); hiding is the only answer that cannot p
 test = "exports_decide_what_is_rendered_as_emacs_decides"
 
 [[divergence]]
+id = "property-value-babel"
+what = "an inline src block, inline babel call, export snippet or results macro in a property value (rendered with property_drawers, and in Rendered::nodes)"
+org = "a property value is text, shown as written"
+mae = "those objects show nothing; the rest of the value is shown as written, bracket links as links"
+reason = "A construct the body hides is hidden everywhere (ADR-112 D3): a value must not publish the code or HTML its spelling would in the body."
+test = "no_hidden_inline_construct_reaches_any_output_in_any_container"
+
+[[divergence]]
+id = "same-page-link-text"
+what = "a link without a description (or one rendering empty) to a headline, custom id or KB node on the same page"
+org = "the headline's section number (num:t, the default), else its title"
+mae = "the title of what it lands on, as rendered (a KB item's tag and first paragraph); the placeholder if that is empty. A resolved KB link without a resolver title shows the placeholder, never the id as written"
+reason = "Numbering is an exporter choice (#+OPTIONS is not read); the link's path is source text and may spell a construct the title hides (ADR-112 D3)."
+test = "a_same_page_link_shows_the_title_it_lands_on"
+
+[[divergence]]
 id = "results-named-and-adjacent"
 what = "a named block followed by anonymous #+RESULTS:"
 org = "removes only the named results; the adjacent anonymous ones stay"

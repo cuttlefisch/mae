@@ -166,19 +166,28 @@ impl Builder<'_> {
             Some(l) => l.clone(),
             None => fallback(&link),
         };
+        // What the link shows is only ever RENDERED text (ADR-112 D3, review
+        // B1): its description as rendered, and when that is empty (it had
+        // none, or every object in it is hidden) what a link without one
+        // shows. Never the description's source text, which would spell out
+        // an inline src block, a call or an export snippet the export hides.
         let mut desc = self.description(&link);
         if desc.is_empty() {
-            // The store form's description, `D` of `[[T|D]]`.
-            if let Some(d) = class.description.clone().filter(|d| !d.is_empty()) {
+            // The store form's description, `D` of `[[T|D]]` (ADR-030): part
+            // of the path, never parsed as objects, so it holds no construct
+            // to hide. Read from the path alone, not from the semantics'
+            // `description`, which is the bracket description's plain text.
+            if let Some(d) = fallback(&link).description.filter(|d| !d.is_empty()) {
                 desc = vec![text(&d)];
             }
         }
         let target = self.link_target(class, desc.is_empty() && !self.in_link);
         let shown = match &target {
             _ if !desc.is_empty() || self.mode == Mode::Text => desc,
-            Target::Href(_, Some(l)) => self.resolved_text(l),
-            // A same-page link reads as Org displays it (`#kinds`, `*Title`).
-            Target::Href(h, None) if h.starts_with('#') => vec![text(&plain::link_text(n))],
+            Target::Href(h, Some(l)) => self.resolved_text(h, l),
+            // A same-page link shows what it lands on: the heading's title as
+            // rendered (Org shows its number or title), never its own path.
+            Target::Href(h, None) if h.starts_with('#') => self.local_text(h),
             Target::Href(h, None) => vec![text(h.strip_prefix("mailto:").unwrap_or(h))],
             _ => self.placeholder(),
         };
@@ -197,17 +206,30 @@ impl Builder<'_> {
         vec![text(&self.resolver.placeholder)]
     }
 
-    /// A resolved KB link without a description: the resolver's title, else
-    /// the target as written (the resolver vouched for it).
-    fn resolved_text(&self, l: &crate::SemanticLink) -> Vec<Node> {
-        match self
+    /// A resolved KB link without a description: the resolver's title; for
+    /// a link landing on this page, what it lands on; else the placeholder.
+    /// Never the target as written: it is source text.
+    fn resolved_text(&self, href: &str, l: &crate::SemanticLink) -> Vec<Node> {
+        let title = self
             .resolver
             .targets
             .get(&l.target)
-            .and_then(|r| r.title.clone())
-        {
+            .and_then(|r| r.title.clone());
+        match title {
             Some(t) => vec![text(&t)],
-            None => vec![text(&l.target)],
+            None if href.starts_with('#') => self.local_text(href),
+            None => self.placeholder(),
+        }
+    }
+
+    /// What a same-page anchor `#ID` lands on, as rendered (a heading's
+    /// title, a KB item's title, a target's text: see `Table::shown`); the
+    /// placeholder when that is empty or unknown.
+    fn local_text(&self, href: &str) -> Vec<Node> {
+        let id = href.strip_prefix('#').unwrap_or(href);
+        match self.table.shown.get(id).filter(|s| !s.is_empty()) {
+            Some(s) => vec![text(s)],
+            None => self.placeholder(),
         }
     }
 

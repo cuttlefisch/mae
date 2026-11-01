@@ -53,7 +53,7 @@
                         "children": [
                           {
                             "type": "text",
-                            "value": "known"
+                            "value": "[?]"
                           }
                         ],
                         "properties": {
@@ -612,7 +612,7 @@
                         "children": [
                           {
                             "type": "text",
-                            "value": "#kinds"
+                            "value": "Kinds"
                           }
                         ],
                         "properties": {
@@ -904,7 +904,7 @@
                 "children": [
                   {
                     "type": "text",
-                    "value": "here"
+                    "value": "Same page node"
                   }
                 ],
                 "properties": {

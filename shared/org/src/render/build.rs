@@ -40,6 +40,10 @@ pub(crate) struct Table {
     pub targets: HashMap<String, String>,
     pub radios: HashMap<String, String>,
     pub nodes: HashMap<String, String>,
+    /// Anchor id → what a link without a description that lands there
+    /// shows: a heading's (or KB node's) title as rendered inline-only, a
+    /// target's text (which its id already spells).
+    pub shown: HashMap<String, String>,
 }
 
 /// A built page.
@@ -201,6 +205,20 @@ impl<'a> Builder<'a> {
         let r = f(self);
         self.base = old;
         r
+    }
+
+    /// The text `f` renders inline-only ([`Mode::Meta`]: no id claimed, no
+    /// footnote numbered, no same-page link), whatever this builder's mode:
+    /// the same in both passes, so what is derived from it (a heading's
+    /// slug) is too.
+    pub fn meta_text(&mut self, f: impl FnOnce(&mut Self, &mut Vec<Node>)) -> String {
+        let mode = std::mem::replace(&mut self.mode, Mode::Meta);
+        let in_link = std::mem::replace(&mut self.in_link, false);
+        let mut out = Vec::new();
+        f(self, &mut out);
+        self.mode = mode;
+        self.in_link = in_link;
+        crate::semantics::plain::collapse(&super::text::text_of(&out))
     }
 
     /// Runs `f` one level deeper, or records `n` as too deep and skips it.

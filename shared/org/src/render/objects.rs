@@ -163,6 +163,9 @@ impl Builder<'_> {
         let mut e = Element::new(Tag::Span).class("org-target");
         if !key.is_empty() && !self.found.targets.contains_key(&key) {
             if let Some(id) = self.ids.try_claim(format!("t-{}", encode_id(&key))) {
+                // A target's text holds no object (Org reads it as text),
+                // and its id already spells it.
+                self.found.shown.insert(id.clone(), key.clone());
                 self.found.targets.insert(key, id.clone());
                 e = e.attr(Attr::Id, id);
             }

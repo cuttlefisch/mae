@@ -27,8 +27,10 @@ impl Builder<'_> {
     /// [`HeadlineIds::Explicit`] the section's `id-`/`cid-` anchor when the
     /// headline is a KB node or has a `CUSTOM_ID`. `title` is the title as
     /// written (the key `[[*Title]]` links find it by); `shown` is its
-    /// rendered text, which the slug is made from, so an id never spells a
-    /// link target or snippet the title does not show. `None`s in Meta mode.
+    /// text rendered inline-only ([`Builder::meta_text`]), which the slug is
+    /// made from, so an id never spells a link target or snippet the title
+    /// does not show, and both passes claim the same ids. `None`s in Meta
+    /// mode.
     fn headline_anchors(
         &mut self,
         n: &SyntaxNode,
@@ -54,6 +56,10 @@ impl Builder<'_> {
                     .as_deref()
                     .and_then(|c| self.ids.try_claim(format!("cid-{}", encode_id(c))));
             }
+        }
+        self.found.shown.insert(heading.clone(), shown.to_string());
+        if let Some(s) = &section {
+            self.found.shown.insert(s.clone(), shown.to_string());
         }
         let target = section.clone().unwrap_or_else(|| heading.clone());
         if let Some(k) = node {
@@ -82,7 +88,10 @@ impl Builder<'_> {
         if let Some(t) = &title_node {
             self.objects(t, &mut title);
         }
-        let shown = super::text::text_of(&without_footnote_refs(&title));
+        let shown = match (&title_node, self.mode) {
+            (Some(t), Mode::Page | Mode::Text) => self.meta_text(|b, out| b.objects(t, out)),
+            _ => String::new(),
+        };
         let (heading, section_id) = self.headline_anchors(n, &h, (&plain, &shown));
         let mut head = Element::new(Tag::heading(h.level()));
         if let Some(id) = heading {
@@ -167,6 +176,8 @@ impl Builder<'_> {
             .nodes
             .entry(id.to_string())
             .or_insert(anchor.clone());
+        let shown = self.meta_text(|b, out| b.item_node_title(item, out));
+        self.found.shown.insert(anchor.clone(), shown);
         Some(anchor)
     }
 
@@ -401,25 +412,6 @@ impl Builder<'_> {
             .with(vec![code.into()]);
         push(out, pre.into());
     }
-}
-
-/// `nodes` without footnote references: a slug must not carry a note's
-/// number, which an unrelated earlier note would change.
-fn without_footnote_refs(nodes: &[Node]) -> Vec<Node> {
-    nodes
-        .iter()
-        .filter(
-            |n| !matches!(n, Node::Element(e) if e.get(Attr::Class) == Some("org-footnote-ref")),
-        )
-        .map(|n| match n {
-            Node::Element(e) => {
-                let mut e = e.clone();
-                e.children = without_footnote_refs(&e.children);
-                Node::Element(e)
-            }
-            t => t.clone(),
-        })
-        .collect()
 }
 
 /// `[@N]`'s N when it is a decimal number.
