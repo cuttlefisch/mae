@@ -1,0 +1,180 @@
+# Deliberate differences between mae-org's renderers (render, to_html,
+# to_hast, text) and Org's own HTML export, `org-html-export-as-html` in
+# `emacs -Q` (Org 9.7.11), as ADR-112 D3 and D5 ask: identical except for
+# listed, pinned divergences.
+#
+# This lists differences of CONTENT (what is shown, hidden, linked or
+# evaluated), not of markup: the element names, classes and anchor ids are
+# MAE's own contract (src/render/mod.rs), not Org's `outline-container-…`
+# HTML, and are not repeated here.
+#
+# tests/render_divergences.rs checks the file: every entry has every field,
+# ids are unique, and `test` names a #[test] function of this crate that
+# pins MAE's side.
+#
+# Fields: id     = a stable name
+#         what   = the construct
+#         org    = what Org's export does
+#         mae    = what mae-org does
+#         reason = why
+#         test   = the #[test] that pins it
+
+[[divergence]]
+id = "drawers"
+what = "drawers other than the property drawer"
+org = "exports every drawer but LOGBOOK (org-export-with-drawers = (not \"LOGBOOK\"))"
+mae = "renders none; property drawers only with RenderOptions::property_drawers"
+reason = "ADR-112 D2: a non-property drawer is a region the semantics do not read (logs, notes, machine state), so no renderer draws it; one rule for the graph and the page."
+test = "drawers_other_than_properties_are_never_rendered"
+
+[[divergence]]
+id = "options-keyword"
+what = "#+OPTIONS: (and the export settings it carries)"
+org = "applies it: todo:, tags:, ^:, toc:, num:, H:, … change what is exported"
+mae = "not read: the render is a function of the tree, its semantics and RenderOptions"
+reason = "#+OPTIONS configures an exporter run; MAE renders one page per node for a host that decides its own chrome. ADR-112 D4 lets declared config change the parse, not an exporter's choices; a caller wanting them sets RenderOptions."
+test = "options_keywords_are_not_read"
+
+[[divergence]]
+id = "latex"
+what = "LaTeX fragments and environments"
+org = "passes them to MathJax (or images, per org-html-with-latex)"
+mae = "their source as code: <code class=\"org-latex\">, <pre class=\"org-latex-environment\">"
+reason = "No script and no image generation in the output (D3's allowlist); the source is the honest text. A host may typeset it."
+test = "latex_timestamps_macros_and_citations_render_as_their_source"
+
+[[divergence]]
+id = "timestamps"
+what = "timestamps"
+org = "a timestamp-wrapper span, the date formatted in the locale (org-display-custom-times)"
+mae = "<time class=\"org-timestamp\"> holding the timestamp as written"
+reason = "Locale-dependent formatting would make the render depend on the machine (D4 determinism)."
+test = "latex_timestamps_macros_and_citations_render_as_their_source"
+
+[[divergence]]
+id = "macros-citations"
+what = "macros and citations"
+org = "expands macros ({{{title}}}, user #+MACRO:) and processes citations with a cite processor"
+mae = "their source as text in <span class=\"org-macro\"> / <span class=\"org-citation\">"
+reason = "Expansion is evaluation (a macro can be (eval …)) and a citation needs a bibliography read from disk: no I/O, no code (D1, D4)."
+test = "latex_timestamps_macros_and_citations_render_as_their_source"
+
+[[divergence]]
+id = "raw-html"
+what = "#+HTML:, export blocks, export snippets"
+org = "inserts their HTML into the page"
+mae = "never rendered"
+reason = "D3: no raw HTML passthrough in any form; the allowlist is by construction."
+test = "export_blocks_snippets_and_html_keywords_never_render"
+
+[[divergence]]
+id = "attr-html"
+what = "#+ATTR_HTML: and the other #+ATTR_* keywords"
+org = "applied as attributes"
+mae = "not read"
+reason = "D3: attributes are the allowlist's, never the document's."
+test = "no_marker_from_an_unrendered_region_reaches_any_output"
+
+[[divergence]]
+id = "paragraph-caption"
+what = "#+CAPTION on a paragraph that is not an image"
+org = "ignored"
+mae = "<figure class=\"org-figure\"> with a <figcaption>"
+reason = "The caption is the author's text; dropping it silently loses content. Removed with its paragraph when the paragraph shows nothing."
+test = "a_paragraph_caption_is_a_figure"
+
+[[divergence]]
+id = "file-links-images"
+what = "file: links and local images"
+org = "links file:x.org to x.html, inlines ./img.png"
+mae = "the description (or the placeholder); <img> only for an http(s) image with RenderOptions::images"
+reason = "Closure (D3): every href is a resolver target, an allowlisted URL or an anchor of the page; a path on the author's disk is none of them."
+test = "file_links_and_local_images_are_not_links"
+
+[[divergence]]
+id = "render-depth"
+what = "content nested deeper than RENDER_MAX_DEPTH (256 levels)"
+org = "exports it"
+mae = "omitted with a RenderDiagnostic::TooDeep"
+reason = "Bounds the renderer's recursion so a hostile document cannot exhaust a stack (native or WASM)."
+test = "deep_nesting_degrades_to_a_diagnostic"
+
+[[divergence]]
+id = "footnote-in-link"
+what = "a footnote reference inside a link's description"
+org = "an <a> inside the link's <a>, which an HTML parser splits"
+mae = "nothing at that place (the note is not numbered from there)"
+reason = "The tree must be what a browser builds (no nested anchors)."
+test = "nothing_in_a_link_description_is_an_anchor"
+
+[[divergence]]
+id = "exports-case"
+what = ":exports values and header-argument names in another case (:exports NONE)"
+org = "warns \"Unknown value\" and exports the block as written"
+mae = "matched case-insensitively: NONE hides"
+reason = "Privacy first (ADR-112 O5): the author's intent is plain, and MAE never shows what Org would not unless Org shows it by accident."
+test = "exports_decide_what_is_rendered_as_emacs_decides"
+
+[[divergence]]
+id = "exports-unknown-word"
+what = "an :exports value with an extra word (:exports none foo)"
+org = "the whole value is unknown: exported as written"
+mae = "unknown words are ignored; none, code, results or both decides"
+reason = "Privacy first: a typo next to `none` must not publish the code."
+test = "exports_decide_what_is_rendered_as_emacs_decides"
+
+[[divergence]]
+id = "exports-evaluated"
+what = "an :exports value Org would evaluate (Lisp, or a number)"
+org = "evaluates the Lisp (a number makes the export fail)"
+mae = "hides the code and the results"
+reason = "Nothing is evaluated (D1, D4); hiding is the only answer that cannot publish what the value would have hidden."
+test = "exports_decide_what_is_rendered_as_emacs_decides"
+
+[[divergence]]
+id = "results-named-and-adjacent"
+what = "a named block followed by anonymous #+RESULTS:"
+org = "removes only the named results; the adjacent anonymous ones stay"
+mae = "removes both when :exports does not keep results"
+reason = "Privacy first: adjacent results are the block's to the reader."
+test = "exports_decide_what_is_rendered_as_emacs_decides"
+
+[[divergence]]
+id = "results-keywords"
+what = "affiliated keywords written above a removed #+RESULTS: line"
+org = "deletes from the #+RESULTS: line down, so those keywords attach to the next element"
+mae = "the results element is removed with all its affiliated keywords"
+reason = "Hidden means hidden: no orphaned caption."
+test = "exports_decide_what_is_rendered_as_emacs_decides"
+
+[[divergence]]
+id = "archived-exports"
+what = "src blocks under an archived headline exported whole (ArchivedTrees::All)"
+org = "the babel pass skips archived subtrees: every block exported as written"
+mae = "follows each block's :exports"
+reason = "Privacy first: archiving a subtree must not publish code it hid."
+test = "archived_blocks_follow_their_exports"
+
+[[divergence]]
+id = "colgroups"
+what = "table column groups and alignment cookies"
+org = "<colgroup>s from the / row, alignment classes from the cookies"
+mae = "the special rows and column are dropped; no <colgroup>, no alignment"
+reason = "A smaller allowlist; alignment is a host's style."
+test = "special_rows_and_columns_render_as_org_exports_them"
+
+[[divergence]]
+id = "verse-tabs"
+what = "a verse line left with 8 or more columns of indentation"
+org = "re-indented with indent-tabs-mode on: each tab one no-break space"
+mae = "one no-break space per column"
+reason = "The indentation the author sees, not an artefact of the exporter's tab setting."
+test = "shared_indentation_is_removed_as_org_removes_it"
+
+[[divergence]]
+id = "heading-anchors"
+what = "headline anchor ids"
+org = "CUSTOM_ID as written, else a generated org1a2b3c4 id"
+mae = "h-<slug(title)> on every heading; id-/cid- prefixed node and custom ids on the section"
+reason = "Ids collision-free by construction, stable across renders, and a KB link #fragment can name a heading by its title (ADR-030)."
+test = "every_heading_carries_its_slug_anchor_whatever_the_mode"

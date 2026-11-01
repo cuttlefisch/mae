@@ -63,8 +63,16 @@
 //! | macro, citation | `<span class="org-macro">`, `<span class="org-citation">`: the source as text (not expanded) |
 //! | `#+TRANSCLUDE:` | `<p class="org-transclusion">` holding a link to its member |
 //! | property drawer | omitted unless [`RenderOptions::property_drawers`]: `<dl class="org-properties">`, values plain text with only bracket links as links; always in [`Rendered::nodes`] as data |
-//! | omitted (as Org's export omits them by default) | keywords, planning, clock, diary sexp, babel call, inline babel call, export snippet, comment, comment and export blocks, non-property drawers, affiliated keywords other than CAPTION |
+//! | omitted (as Org's export omits them by default) | keywords, planning, clock, diary sexp, babel call, inline babel call, export snippets and blocks for other backends, comment, comment blocks |
+//! | omitted (MAE's choice, unlike Org: see below) | every drawer but the property drawer (ADR-112 D2; Org's default exports all but `LOGBOOK`), `#+HTML:` and HTML export blocks and snippets (D3), affiliated keywords other than CAPTION (`#+ATTR_*` included) |
 //! | omitted with a [`RenderDiagnostic`] | content past [`RENDER_MAX_DEPTH`], and text the parser left opaque (its nesting cap) or unplaced: unparsed text is never shown, as it may hold an unrendered region |
+
+//!
+//! Every deliberate difference from Org's own HTML export
+//! (`org-html-export-as-html`) in what is shown, hidden or linked is listed,
+//! with its reason and pinning test, in
+//! `conformance/render-divergences.toml` (checked by
+//! `tests/render_divergences.rs`).
 
 mod anchors;
 mod babel;
