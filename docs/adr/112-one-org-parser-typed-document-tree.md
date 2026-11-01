@@ -167,7 +167,11 @@ layer on it becomes the cheaper path.
   radio regexps, keywords read as Org reads them, `#+LINK` expansion) took it to 707,647 bytes, and
   the gate failed as intended. The budget was raised once, to **800,000 bytes** (~13% over the
   tagged size): the module runs at build time in Node, so the budget guards against accidental
-  bloat, not a download size, and `"z"`'s ~75% per-call slowdown is the worse trade.
+  bloat, not a download size, and `"z"`'s ~75% per-call slowdown is the worse trade. The final
+  pre-tag review's fixes (rendered text never falling back to source, babel calls' `:exports`,
+  heading anchors in every script, an incremental split radio search, a `replace_body` that
+  re-reads the file fresh, `parse_fragment` reading its file's radio targets) took it to 755,498
+  bytes, inside that budget.
   `mae-org` and `mae-org-wasm` carry their own
   version (`API_VERSION`, 0.1.0), not MAE's, so a MAE release does not change the artifact; every
   deliberate difference from Org's HTML export is in `conformance/render-divergences.toml`.
