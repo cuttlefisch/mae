@@ -27,7 +27,8 @@ import { fileURLToPath } from 'node:url';
 // `:exports`, anchors, special table rows, the splice); 707,647 bytes
 // after the parser's own review fixes (Org's split radio regexps, keyword
 // reading, `#+LINK` expansion); 755,498 bytes after the final pre-tag
-// review's fixes, 761,547 after its second round. The first budget, 700,000 (~15% over the
+// review's fixes, 761,547 after its second round, 772,721 after its
+// third. The first budget, 700,000 (~15% over the
 // first measurement), caught that growth as it should; it was raised once,
 // to 800,000 (~13% over the tagged size), as recorded in ADR-112's O3
 // note. The module runs at build time in Node, so the budget guards

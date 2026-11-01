@@ -174,7 +174,9 @@ layer on it becomes the cheaper path.
   bytes, and a second round's (metadata read at its own `:exports` scope, macros and citations
   failing closed, link fragments rendered as titles, `replace_body` refusing names and other
   nodes' rendering changes, fragments counting their headlines against the nesting cap) to
-  761,547 bytes, inside that budget.
+  761,547 bytes, and a third's (macro templates read without expansion, property values rendered
+  through the one object path, `replace_body` comparing the whole document once per side,
+  resolver-independent anchors) to 772,721 bytes, inside that budget.
   `mae-org` and `mae-org-wasm` carry their own
   version (`API_VERSION`, 0.1.0), not MAE's, so a MAE release does not change the artifact; every
   deliberate difference from Org's HTML export is in `conformance/render-divergences.toml`.
