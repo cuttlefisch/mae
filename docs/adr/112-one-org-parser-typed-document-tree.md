@@ -181,7 +181,11 @@ layer on it becomes the cheaper path.
   buffer, the built-ins, a fixed clock, a linear budget) replaced the fail-closed hiding and took
   it to 846,219 bytes, then 868,108 with round 5's fixes (the consumer's exposures included).
   That is the deliberate cost of the macro-expansion decision, and the budget was raised a
-  second time, to **900,000 bytes**, for it (Hayden, 2026-11-01).
+  second time, to **900,000 bytes**, for it (Hayden, 2026-11-01). Review round 6 (macro
+  expansions judged by the parser's own line classifier, the name tables ox.el consults, citations
+  parsed after expansion, special strings, a `replace_body` that refuses edits breaking the page)
+  took it to 906,436 bytes, and the budget was raised a third time, to **1,000,000 bytes**
+  (Hayden, 2026-11-01).
   `mae-org` and `mae-org-wasm` carry their own
   version (`API_VERSION`, 0.1.0), not MAE's, so a MAE release does not change the artifact; every
   deliberate difference from Org's HTML export is in `conformance/render-divergences.toml`.
