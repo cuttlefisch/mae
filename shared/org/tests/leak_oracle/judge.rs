@@ -3,6 +3,7 @@
 use super::channels::{Channel, Kind, MaeView};
 use super::emacs::EmacsOut;
 use super::gen::{Allow, Site, Sites};
+use super::register::lookup;
 use super::view::{scan, strip_attr};
 use std::collections::BTreeSet;
 
@@ -39,15 +40,6 @@ pub enum Verdict {
     Missing,
 }
 
-/// Emacs errors where the register (`conformance/render-divergences.toml`)
-/// lets MAE render with a warning: (error text, divergence id).
-pub const REGISTERED_ERRORS: &[(&str, &str)] = &[
-    ("Unknown Babel reference", "call-unknown-reference"),
-    ("Wrong type argument: stringp", "exports-no-known-word"),
-    ("input-file", "macros"),
-    ("modification-time", "macros"),
-];
-
 /// An Emacs error with markers and numbers abstracted, for grouping.
 pub fn error_class(e: &str) -> String {
     let mut out = String::new();
@@ -77,11 +69,16 @@ pub fn judge(emacs: &EmacsOut, mae: &MaeView, sites: &Sites, text: &str) -> Verd
         EmacsOut::Error(_) if mae.empty => Verdict::BothFail,
         EmacsOut::Error(e) => Verdict::EmacsErrorMaeRenders {
             class: error_class(e),
-            registered: REGISTERED_ERRORS
-                .iter()
-                .find(|(pat, _)| e.contains(pat))
-                .map(|(_, id)| *id),
+            registered: lookup(e, &mae.diags).map(|r| r.id.as_str()),
         },
+        EmacsOut::Registered { .. } if mae.failed || mae.empty => Verdict::FailClosed,
+        EmacsOut::Registered { error, .. } if lookup(error, &mae.diags).is_none() => {
+            Verdict::EmacsErrorMaeRenders {
+                class: format!("{} (without the registered diagnostic)", error_class(error)),
+                registered: None,
+            }
+        }
+        EmacsOut::Registered { html, .. } => compare(html, mae, sites, text),
         EmacsOut::Html(_) if mae.failed || mae.empty => Verdict::FailClosed,
         EmacsOut::Html(h) => compare(h, mae, sites, text),
     }
@@ -92,6 +89,21 @@ struct Cx<'a> {
     shown: &'a BTreeSet<u32>,
     present: &'a BTreeSet<u32>,
     sites: &'a Sites,
+    text: &'a str,
+}
+
+impl Cx<'_> {
+    /// Whether exposure line `x` still shows its value to Org: Org shows
+    /// its marker, and the line is still `P qzXqz {{{…}}}` (a minimised
+    /// document can keep the marker and lose the macro call).
+    fn exposes(&self, x: u32) -> bool {
+        let head = format!("P {} {{{{{{", super::view::marker(x));
+        self.shown.contains(&x)
+            && self
+                .text
+                .lines()
+                .any(|l| l.starts_with(&head) && l.trim_end().ends_with("}}}"))
+    }
 }
 
 fn compare(html: &str, mae: &MaeView, sites: &Sites, text: &str) -> Verdict {
@@ -101,6 +113,7 @@ fn compare(html: &str, mae: &MaeView, sites: &Sites, text: &str) -> Verdict {
         shown: &shown,
         present: &present,
         sites,
+        text,
     };
     let mut leaks: Vec<Leak> = Vec::new();
     for ch in &mae.channels {
@@ -194,11 +207,12 @@ fn allowed(site: Option<&Site>, ch: &Channel, cx: &Cx, outside_href: bool) -> bo
     let Some(site) = site else {
         return false;
     };
-    let unexposed = site.exposure.is_some_and(|x| !cx.shown.contains(&x));
+    let unexposed = site.exposure.is_some_and(|x| !cx.exposes(x));
     let meta = match site.allow {
         Allow::Meta(h) => h.is_none_or(|h| cx.shown.contains(&h) || !cx.present.contains(&h)),
         _ => unexposed,
     };
     let href = site.allow == Allow::Href && !outside_href;
-    (meta && (ch.kind == Kind::Meta || ch.pd)) || href
+    let with = matches!(site.allow, Allow::With(w) if cx.shown.contains(&w));
+    (meta && (ch.kind == Kind::Meta || ch.pd)) || href || with
 }

@@ -128,8 +128,10 @@ impl Gen {
 
     fn store_form_link(&mut self) -> String {
         let node = self.node_ref();
-        let m = self.m("id-store-desc");
-        format!("[[id:{node}|{m}]]")
+        let beside = self.next;
+        let w = self.m("text");
+        let m = self.mark("id-store-desc", Allow::With(beside));
+        format!("w {w} [[id:{node}|{m}]]")
     }
 
     /// A link to a target, headline or custom id planted earlier (else a

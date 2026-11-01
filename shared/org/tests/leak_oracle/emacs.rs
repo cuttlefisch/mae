@@ -16,6 +16,13 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmacsOut {
     Html(String),
+    /// The export failed with an error the register covers by rendering
+    /// through (`error`); `html` is the export with the divergence applied
+    /// (`leak-export.el`: an undefined footnote's references deleted).
+    Registered {
+        html: String,
+        error: String,
+    },
     Error(String),
     /// Emacs did not finish it: `timeout`, `killed`, `oom` or `crash`.
     Hang(&'static str),
@@ -107,8 +114,12 @@ impl Emacs {
         let mut culprit_found = false;
         for (k, &i) in pending.iter().enumerate() {
             let base = res.join(format!("d{k:06}"));
+            let registered = std::fs::read_to_string(base.with_extension("registered"));
             if let Ok(h) = std::fs::read_to_string(base.with_extension("html")) {
-                out[i] = EmacsOut::Html(h);
+                out[i] = match registered {
+                    Ok(error) => EmacsOut::Registered { html: h, error },
+                    Err(_) => EmacsOut::Html(h),
+                };
             } else if let Ok(e) = std::fs::read_to_string(base.with_extension("error")) {
                 out[i] = EmacsOut::Error(e);
             } else if let Exit::Bad(why) = exit {

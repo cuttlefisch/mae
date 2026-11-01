@@ -15,7 +15,7 @@
 //! `LEAK_ORACLE_TIMEOUT` seconds per Emacs process (default 20, at most
 //! 120; a chunk exports in about 2 s, so this bounds what a document that
 //! makes Emacs loop costs), `LEAK_ORACLE_MINIMISE` minimised repros per category (default 1;
-//! 0 for none; one for all of a citation's contents), `LEAK_ORACLE_BUDGET`
+//! 0 for none), `LEAK_ORACLE_BUDGET`
 //! Emacs runs per minimisation (default 40, each with a 5 s timeout), `LEAK_ORACLE_FIXED=0` to skip the fixed cases,
 //! `LEAK_ORACLE_NO_SCOPE=1` to use `ulimit -v` instead of `systemd-run`.
 //!
@@ -27,9 +27,13 @@
 //! is a marker
 //! MAE shows in any channel that Emacs's HTML (attributes included) does
 //! not, except a plain property value, alias or title in a metadata
-//! channel, and an id link's `#fragment` inside an `href`. Where Emacs's
-//! export fails, MAE must render nothing, except for the errors the
-//! register lists ([`leak_oracle::judge::REGISTERED_ERRORS`]). MAE hiding
+//! channel, an id link's `#fragment` inside an `href`, and a store-form
+//! link's description (`[[id:X|D]]`) wherever Org shows the text beside
+//! it. Where Emacs's export fails, MAE must render nothing, except for
+//! the errors `conformance/render-divergences.toml` registers
+//! ([`leak_oracle::register`]: quoted in an entry's `org`, with the
+//! diagnostic its `mae` names). An undefined footnote is exported again
+//! with its references deleted, and compared marker by marker. MAE hiding
 //! more is counted (lost, fail-closed), never failed. Every failure
 //! category is minimised by delta debugging and printed with both outputs.
 //! The corpus, scratch HOME and report go under `target/leak-oracle/`.
@@ -235,7 +239,6 @@ fn targets(docs: &[Doc], outcomes: &[Outcome], fixed: usize, per: usize) -> Vec<
         let ts: Vec<Target> = match &o.verdict {
             Verdict::Compared { leaks, .. } => leaks
                 .iter()
-                .filter(|l| !l.category.starts_with("citation>") || l.leaf.ends_with("cite-key"))
                 .map(|l| Target::Leak(l.category.clone()))
                 .collect(),
             Verdict::EmacsErrorMaeRenders {
@@ -321,6 +324,9 @@ fn repro(doc: &Doc, target: &Target, emacs: &Emacs, budget: usize) -> String {
     );
     let emacs_text = match &e {
         EmacsOut::Html(h) => h.clone(),
+        EmacsOut::Registered { html, error } => {
+            format!("{error}\n(registered; with it applied:)\n{html}")
+        }
         other => format!("{other:?}"),
     };
     let _ = writeln!(s, "-- Emacs:\n{}", emacs_text.trim_end());

@@ -10,7 +10,7 @@ impl Gen {
         if self.deep() {
             return format!("P {}\n", self.inline());
         }
-        match self.rng.below(22) {
+        match self.rng.below(24) {
             0..=3 => self.paragraph(),
             4 => self.comment_line(),
             5 => self.comment_block(),
@@ -27,6 +27,7 @@ impl Gen {
             18 => self.line_macro(),
             19 => self.fixed_width(),
             20 => self.item_node(),
+            21 | 22 => self.first_token(),
             _ => self.footnote_definition(),
         }
     }
@@ -187,19 +188,15 @@ impl Gen {
     /// closers and openers interleaved in a random order.
     pub fn region_pair(&mut self) -> String {
         let (label, om, o, cm, c) = self.pick(REGION_PAIRS);
-        let open = if self.chance(70) {
-            Gen::call(om, &[])
-        } else {
-            o.to_string()
-        };
+        let open = if self.chance(70) { om } else { o };
         self.within(label, |g| {
             let mut s = format!("{open}\n");
             let mut content = false;
             for _ in 0..2 + g.rng.below(3) {
                 let line = match g.rng.below(4) {
-                    0 => Gen::call(cm, &[]),
+                    0 => cm.to_string(),
                     1 => c.to_string(),
-                    2 if g.chance(30) => Gen::call(om, &[]),
+                    2 if g.chance(30) => om.to_string(),
                     _ => {
                         content = true;
                         format!("P {}", g.m("region-content"))
@@ -233,6 +230,51 @@ impl Gen {
                 let open = Gen::call("id", &["#+begin_src sh :exports none".into()]);
                 format!("{open}\necho {}\n#+end_src\n", g.m("src-body"))
             }
+        })
+    }
+
+    /// A macro glued into a line's first token, so the line's kind is
+    /// decided by the expansion: `#+BEGIN{{{bc}}}`, `#+BEGIN_{{{wc}}}`,
+    /// `#{{{plus}}}begin_comment`, `#+{{{kw}}}`, `#+HTML{{{colon}}}`,
+    /// `:{{{dn}}}`, `\begin{{{env}}}`, `*{{{star}}} COMMENT`, `1{{{dot}}}`,
+    /// `|{{{pipe}}}`, `[fn:{{{lab}}}]`, `-{{{star}}}`.
+    pub fn first_token(&mut self) -> String {
+        let variants: &[(&'static str, &str, &str)] = &[
+            ("first-token:begin", "#+BEGIN{{{bc}}}\n", "#+END_comment\n"),
+            (
+                "first-token:begin_",
+                "#+BEGIN_{{{wc}}}\n",
+                "#+END_comment\n",
+            ),
+            (
+                "first-token:hash",
+                "#{{{plus}}}begin_comment\n",
+                "#+end_comment\n",
+            ),
+            ("first-token:keyword", "#+{{{kw}}} ", "\n"),
+            ("first-token:keyword-colon", "#+HTML{{{colon}}} ", "\n"),
+            ("first-token:drawer", ":{{{dn}}}\n", ":END:\n"),
+            (
+                "first-token:latex",
+                "\\begin{{{env}}}\n",
+                "\\end{comment}\n",
+            ),
+            ("first-token:heading", "*{{{star}}} COMMENT ", "\n"),
+            ("first-token:item", "1{{{dot}}} ", "\n"),
+            ("first-token:table", "|{{{pipe}}} ", " |\n"),
+            ("first-token:footnote", "[fn:{{{lab}}}] ", "\n"),
+            ("first-token:dash", "-{{{star}}} ", "\n"),
+        ];
+        let (label, open, close) = self.pick(variants);
+        self.within(label, |g| {
+            let m = g.m("first-token-content");
+            let sep = if open.ends_with('\n') { "P " } else { "" };
+            let tail = if close == "\n" || close == " |\n" {
+                ""
+            } else {
+                "\n"
+            };
+            format!("{open}{sep}{m}{tail}{close}")
         })
     }
 

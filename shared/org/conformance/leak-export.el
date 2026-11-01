@@ -61,25 +61,63 @@
 (setq org-babel-default-inline-header-args
       (cons '(:eval . "never-export") org-babel-default-inline-header-args))
 
+;; The undefined-footnote divergence (render-divergences.toml): where Org's
+;; export fails on a reference with no definition, MAE renders the page and
+;; the reference as nothing. So the oracle can still compare every marker,
+;; such a failure is retried with that label's references deleted, and the
+;; result is written as NAME.html beside NAME.registered (the first error).
+(defconst leak-export-footnote-error
+  "Definition not found for footnote \\(.+\\)"
+  "The error of a reference with no definition; group 1 is the label.")
+
+(defun leak-export-try ()
+  "Export the current buffer: (ok . HTML) or (error . MESSAGE)."
+  (condition-case err
+      (cons 'ok (org-export-as 'html nil nil t nil))
+    (error (cons 'error (format "%S" err)))))
+
+(defun leak-export-drop-references (label)
+  "Delete every reference to footnote LABEL ([fn:LABEL]) from the buffer."
+  (goto-char (point-min))
+  (let ((case-fold-search nil))
+    (while (search-forward (format "[fn:%s]" label) nil t)
+      (replace-match "" t t))))
+
 (defun leak-export-one (file)
-  "Export FILE; return (ok . HTML) or (error . MESSAGE)."
+  "Export FILE: (ok . HTML), (error . MESSAGE) or (registered HTML . MESSAGE)."
   (with-temp-buffer
     (insert-file-contents file)
     (org-mode)
-    (condition-case err
-        (cons 'ok (org-export-as 'html nil nil t nil))
-      (error (cons 'error (format "%S" err))))))
+    (let ((res (leak-export-try)) (first nil) (tries 0))
+      (while (and (eq (car res) 'error) (< tries 20)
+                  (string-match leak-export-footnote-error (cdr res)))
+        (setq first (or first (cdr res)) tries (1+ tries))
+        (leak-export-drop-references
+         (string-trim (match-string 1 (cdr res)) nil "\")*"))
+        (org-mode)
+        (setq res (leak-export-try)))
+      (if (and first (eq (car res) 'ok))
+          (cons (list 'registered (cdr res)) first)
+        res))))
+
+(defun leak-export-write (file text)
+  "Write TEXT to FILE, UTF-8."
+  (with-temp-file file
+    (set-buffer-file-coding-system 'utf-8-unix)
+    (insert text)))
 
 (let* ((in (nth 0 command-line-args-left))
        (out (nth 1 command-line-args-left)))
   (setq command-line-args-left nil)
   (dolist (f (sort (directory-files in t "\\.org\\'") #'string<))
-    (let* ((base (file-name-sans-extension (file-name-nondirectory f)))
+    (let* ((base (expand-file-name
+                  (file-name-sans-extension (file-name-nondirectory f)) out))
            (res (leak-export-one f)))
-      (with-temp-file (expand-file-name
-                       (concat base (if (eq (car res) 'ok) ".html" ".error"))
-                       out)
-        (set-buffer-file-coding-system 'utf-8-unix)
-        (insert (cdr res))))))
+      (pcase res
+        (`((registered ,html) . ,err)
+         (leak-export-write (concat base ".registered") err)
+         (leak-export-write (concat base ".html") html))
+        (`(ok . ,html) (leak-export-write (concat base ".html") html))
+        (`(error . ,err) (leak-export-write (concat base ".error") err))))))
 
 ;;; leak-export.el ends here

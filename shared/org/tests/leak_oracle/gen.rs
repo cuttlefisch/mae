@@ -49,6 +49,10 @@ pub enum Allow {
     Meta(Option<u32>),
     /// Inside `href` values only (an id link's `#fragment`, by design).
     Href,
+    /// Anywhere, while Org shows marker `w` (plain text planted beside it
+    /// in the same container): MAE's own syntax for text the author wants
+    /// shown (a store-form link's `[[id:X|D]]` description, ADR-030).
+    With(u32),
 }
 
 /// One planting site.
@@ -113,6 +117,21 @@ pub const LIBRARY: &[(&str, &str)] = &[
     ("eq", "#+end_quote"),
     ("hc", "* COMMENT"),
     ("nx", ":noexport:"),
+    // Glued into a line's first token (`gen_blocks::first_token`).
+    ("bc", "_comment"),
+    ("wc", "comment"),
+    ("kw", "HTML:"),
+    ("colon", ":"),
+    ("dn", "LOGBOOK:"),
+    ("env", "{comment}"),
+    ("star", "*"),
+    ("dot", "."),
+    ("pipe", "|"),
+    ("lab", "lz"),
+    ("plus", "+"),
+    ("en", "END:"),
+    ("xh", "export html"),
+    ("xe", "export"),
 ];
 
 /// Inline construct pairs: (label, opener macro, opener, closer macro,
@@ -132,30 +151,66 @@ pub const INLINE_PAIRS: &[(&str, &str, &str, &str, &str)] = &[
     ("pair:link", "ol", "[[https://e.com/l][", "cl", "]]"),
 ];
 
-/// Block pairs: (label, opener macro, opener, closer macro, closer).
+/// Block pairs: (label, opener by macro, opener, closer by macro, closer).
+/// The `-glued` ones glue the macro into the line's first token
+/// (`#+END{{{bc}}}`, `:{{{en}}}`), so the line's kind is the expansion's.
 pub const REGION_PAIRS: &[(&str, &str, &str, &str, &str)] = &[
     (
         "region:comment",
-        "oc",
+        "{{{oc}}}",
         "#+begin_comment",
-        "ec",
+        "{{{ec}}}",
         "#+end_comment",
     ),
     (
         "region:src",
-        "ob",
+        "{{{ob}}}",
         "#+begin_src sh :exports none",
-        "eb",
+        "{{{eb}}}",
         "#+end_src",
     ),
     (
         "region:export",
-        "ox",
+        "{{{ox}}}",
         "#+begin_export html",
-        "ex",
+        "{{{ex}}}",
         "#+end_export",
     ),
-    ("region:quote", "oq", "#+begin_quote", "eq", "#+end_quote"),
+    (
+        "region:quote",
+        "{{{oq}}}",
+        "#+begin_quote",
+        "{{{eq}}}",
+        "#+end_quote",
+    ),
+    (
+        "region:comment-glued",
+        "#+BEGIN{{{bc}}}",
+        "#+begin_comment",
+        "#+END{{{bc}}}",
+        "#+end_comment",
+    ),
+    (
+        "region:export-glued",
+        "#+BEGIN_{{{xh}}}",
+        "#+begin_export html",
+        "#+END_{{{xe}}}",
+        "#+end_export",
+    ),
+    (
+        "region:drawer-glued",
+        ":{{{dn}}}",
+        ":LOGBOOK:",
+        ":{{{en}}}",
+        ":END:",
+    ),
+    (
+        "region:latex-glued",
+        "\\begin{{{env}}}",
+        "\\begin{comment}",
+        "\\end{{{env}}}",
+        "\\end{comment}",
+    ),
 ];
 
 /// The generator's state for one document.

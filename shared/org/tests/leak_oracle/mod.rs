@@ -12,5 +12,6 @@ pub mod gen_doc;
 pub mod gen_objects;
 pub mod judge;
 pub mod minimise;
+pub mod register;
 pub mod report;
 pub mod view;
