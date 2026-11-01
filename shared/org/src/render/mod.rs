@@ -43,7 +43,8 @@
 //!   cannot expand from the text alone (an `(eval …)` template, a lookup
 //!   outside the file) or within a bound linear in the source, the render
 //!   is EMPTY but for a [`RenderDiagnostic::MacroFailed`]. Every span still
-//!   points into the source. A heading's anchor
+//!   points into the source; a render node is a source node (matched by
+//!   place, never by an id an expansion may have made). A heading's anchor
 //!   is made from its title as shown, so one whose title holds a macro
 //!   depends on the `#+MACRO:` lines; a KB link fragment holding a macro
 //!   is expanded with its own page's macros, and to another page goes to
@@ -304,7 +305,10 @@ pub struct NodeMeta {
 pub struct Rendered {
     /// The page body: the children of the hast root.
     pub body: Vec<Node>,
-    /// One per KB node, in [`Semantics::nodes`] order.
+    /// One per KB node the page EXPORTS, in [`Semantics::nodes`] order: a
+    /// node in a COMMENT or `:noexport:` subtree (as written, or as its
+    /// macros expanded) has none, and a headline a macro made is never
+    /// one. What to publish is these, not [`Semantics::nodes`].
     pub nodes: Vec<NodeMeta>,
     /// Sorted by span, then kind.
     pub diagnostics: Vec<RenderDiagnostic>,

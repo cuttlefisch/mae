@@ -67,6 +67,9 @@ pub(crate) fn prepare<'d>(doc: &'d Document, sem: &'d Semantics) -> Prepared<'d>
             }
         }
     }
+    if let Some(m) = &map {
+        p.keep_source_nodes(sem, m);
+    }
     p.map = map;
     p
 }
@@ -144,16 +147,49 @@ impl<'d> Prepared<'d> {
         self.map.as_ref().map_or(s, |m| m.to_expanded(s))
     }
 
-    /// Each node of `source` (the source's semantics) and its node in the
-    /// rendered text: the one with its id (the n-th of that id for the
-    /// n-th), or none when the expansion removed it.
+    /// The rendered text's KB nodes are those that come from the source's
+    /// (the node of an expanded headline, item or file that stands where a
+    /// source node stands, with its id); a headline or drawer an expansion
+    /// made is never one, and lends nobody its id (review round 4, M6).
+    fn keep_source_nodes(&mut self, source: &Semantics, map: &super::expand::Map) {
+        let at: HashMap<(u32, crate::NodeOrigin), &str> = source
+            .nodes
+            .iter()
+            .map(|n| ((n.span.start, n.origin), n.id.as_str()))
+            .collect();
+        let real = |n: &SemanticNode| {
+            let s = map.to_source(Span::new(n.span.start as usize, n.span.start as usize));
+            at.get(&(s.start, n.origin)) == Some(&n.id.as_str())
+        };
+        if self.sem.nodes.iter().all(real) {
+            return;
+        }
+        // A node the expansion made can hold an id a real node has, and
+        // the semantics keep only the first of an id: derive them again
+        // with the made nodes' ids masked (byte for byte, so every span
+        // stays), then drop the made nodes.
+        let mut bytes = self.doc.syntax().to_string().into_bytes();
+        for n in self.sem.nodes.iter().filter(|n| !real(n)) {
+            mask_ids(
+                &mut bytes,
+                n.span.start as usize,
+                n.body_span.start as usize,
+            );
+        }
+        let masked = String::from_utf8(bytes).expect("whole characters masked");
+        let mut sem = crate::semantics_with(&self.doc.reparse(&masked), &self.sem.options);
+        sem.nodes.retain(real);
+        self.sem = Cow::Owned(sem);
+    }
+
+    /// Each node of `source` (the source's semantics) that the rendered
+    /// page exports, with its node in the rendered text. The semantics list
+    /// only exported nodes, so a node an expansion put in a COMMENT or
+    /// `:noexport:` subtree (or removed) has none.
     pub fn counterparts<'s>(
         &'s self,
         source: &'s Semantics,
-    ) -> Vec<(&'s SemanticNode, Option<&'s SemanticNode>)> {
-        if self.map.is_none() {
-            return source.nodes.iter().map(|n| (n, Some(n))).collect();
-        }
+    ) -> Vec<(&'s SemanticNode, &'s SemanticNode)> {
         let mut by_id: HashMap<&str, Vec<&SemanticNode>> = HashMap::new();
         for n in &self.sem.nodes {
             by_id.entry(n.id.as_str()).or_default().push(n);
@@ -162,12 +198,37 @@ impl<'d> Prepared<'d> {
         source
             .nodes
             .iter()
-            .map(|n| {
+            .filter_map(|n| {
                 let k = seen.entry(n.id.as_str()).or_insert(0);
                 let m = by_id.get(n.id.as_str()).and_then(|v| v.get(*k)).copied();
                 *k += 1;
-                (n, m)
+                m.map(|m| (n, m))
             })
             .collect()
+    }
+}
+/// Masks the value of every `:ID:` line in `bytes[a..b]` (a node's header):
+/// each of its bytes becomes `\x01`, which no id is made of.
+fn mask_ids(bytes: &mut [u8], a: usize, b: usize) {
+    let b = b.min(bytes.len());
+    let mut line = a;
+    while line < b {
+        let end = bytes[line..b]
+            .iter()
+            .position(|&c| c == b'\n' || c == b'\r')
+            .map_or(b, |k| line + k);
+        let text = &bytes[line..end];
+        let lead = text
+            .iter()
+            .take_while(|c| matches!(c, b' ' | b'\t'))
+            .count();
+        if text.len() >= lead + 4 && text[lead..lead + 4].eq_ignore_ascii_case(b":ID:") {
+            for c in &mut bytes[line + lead + 4..end] {
+                if !matches!(*c, b' ' | b'\t') {
+                    *c = 1;
+                }
+            }
+        }
+        line = end + 1;
     }
 }

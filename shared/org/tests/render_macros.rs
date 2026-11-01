@@ -439,25 +439,36 @@ fn a_heading_anchor_is_made_from_its_title_as_shown() {
     );
 }
 
-/// Nodes are matched to their source nodes by id: offsets moved by an
-/// expansion change nothing, and a node the expansion removes renders no
-/// metadata.
+/// Render nodes come from source nodes through the span map (review round
+/// 5, M6): a headline (and its drawer) an expansion makes is no KB node and
+/// takes nobody's id; and render `nodes` lists only what the page exports
+/// (a node in a COMMENT or `:noexport:` subtree, made so by an expansion
+/// or written so, has no entry). Offsets moved by an expansion change
+/// nothing.
 #[test]
-fn node_metadata_follows_the_node_through_the_expansion() {
-    let doc = "#+MACRO: long a much longer text than the macro\n#+MACRO: id $1\nA {{{long}}}.\n* T {{{long}}}\n:PROPERTIES:\n:ID: t\n:END:\nbody\n* {{{id(COMMENT)}}} Gone\n:PROPERTIES:\n:ID: g\n:END:\nSECRET\n";
+fn render_nodes_are_the_source_nodes_the_page_exports() {
+    let doc = "#+MACRO: long a much longer text than the macro\n#+MACRO: id $1\nA {{{long}}}.\n* T {{{long}}}\n:PROPERTIES:\n:ID: t\n:END:\nbody\n* {{{id(COMMENT)}}} Gone\n:PROPERTIES:\n:ID: g\n:END:\nSECRET\n* Kept :noexport:\n:PROPERTIES:\n:ID: k\n:END:\nkept\n";
     let d = parse(doc, &ParseOptions::default());
     let sem = semantics(&d);
     let r = render(&d, &sem, &RenderOptions::default(), &Resolver::default());
     let ids: Vec<_> = r.nodes.iter().map(|n| n.id.as_str()).collect();
-    assert_eq!(ids, ["t", "g"]);
+    assert_eq!(ids, ["t"]);
     assert_eq!(
         mae_org::to_html(&r.nodes[0].title),
         "T a much longer text than the macro"
     );
     assert_eq!(r.nodes[0].anchor.as_deref(), Some("id-t"));
-    assert!(r.nodes[1].title.is_empty() && r.nodes[1].anchor.is_none());
-    assert_eq!(node_text(&d, &sem, "g").as_deref(), Some(""));
     assert!(!r.to_json(TreeFormat::Html).contains("SECRET"));
+    let fake = "#+MACRO: h * Fake\n{{{h}}}\n:PROPERTIES:\n:ID: b\n:FAKEPROP: SECRETPROP\n:END:\nfake body\n\n* Real\n:PROPERTIES:\n:ID: b\n:END:\nreal body\n";
+    let d = parse(fake, &ParseOptions::default());
+    let sem = semantics(&d);
+    let r = render(&d, &sem, &RenderOptions::default(), &Resolver::default());
+    assert_eq!(r.nodes.len(), 1);
+    assert_eq!(mae_org::to_html(&r.nodes[0].title), "Real");
+    assert!(r.nodes[0].properties.iter().all(|(k, _)| k != "FAKEPROP"));
+    let html = mae_org::to_html(&r.body);
+    assert!(html.contains("id=\"id-b\"><h1 id=\"h-real\">"), "{html}");
+    assert_eq!(node_text(&d, &sem, "b").as_deref(), Some("Real\nreal body"));
 }
 
 /// Diagnostics of the expanded text are reported where the text is in the

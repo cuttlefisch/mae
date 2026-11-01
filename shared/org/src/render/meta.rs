@@ -11,9 +11,11 @@ use crate::semantics::file_title_source;
 use crate::semantics::items::{item_drawer, item_title_parts};
 use crate::{NodeOrigin, SemanticNode, Semantics};
 
-/// The metadata of every node of `source` (the source's semantics), in
-/// its order, read from its counterpart in the rendered document `p`
-/// (its macros expanded); a node the expansion removed has none.
+/// The metadata of every node of `source` (the source's semantics) that
+/// the page exports, in its order, read from its counterpart in the
+/// rendered document `p` (its macros expanded): a node the expansion
+/// removed, or in a subtree the export drops (COMMENT, `:noexport:`), has
+/// no entry. What to publish is these nodes, not the semantics'.
 pub(crate) fn nodes(
     p: &super::prepared::Prepared,
     source: &Semantics,
@@ -25,17 +27,7 @@ pub(crate) fn nodes(
     let mut b = Builder::new(&p.doc, &p.sem, opts, resolver, Mode::Meta, Table::default());
     p.counterparts(source)
         .into_iter()
-        .map(|(s, n)| match n {
-            Some(n) => b.node_meta(&root, n, page),
-            None => NodeMeta {
-                id: s.id.clone(),
-                anchor: None,
-                title: Vec::new(),
-                title_unlinked: Vec::new(),
-                aliases: Vec::new(),
-                properties: Vec::new(),
-            },
-        })
+        .map(|(_, n)| b.node_meta(&root, n, page))
         .collect()
 }
 

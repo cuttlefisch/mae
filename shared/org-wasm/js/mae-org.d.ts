@@ -47,6 +47,11 @@ export interface HastRoot { type: 'root'; children: (HastElement | HastText)[] }
 
 export interface Rendered<T> {
   body: T;
+  /**
+   * One per KB node the page EXPORTS (none for a node in a COMMENT or
+   * `:noexport:` subtree, as written or as its macros expanded; a headline a
+   * macro made is never one). What to publish is these, not `semantics`.
+   */
   nodes: {
     id: string;
     /**
