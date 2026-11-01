@@ -1,0 +1,6 @@
+#+MACRO: p {{{property(P)}}}
+* H
+:PROPERTIES:
+:P: src_sh[:exports none]{echo SECRET}
+:END:
+A {{{p}}} B

@@ -1,0 +1,4 @@
+#+MACRO: a @@latex:
+#+MACRO: b @@
+X {{{a}}}
+{{{b}}} SECRET@@ Y

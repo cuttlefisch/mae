@@ -1,0 +1,13 @@
+#+MACRO: h * Fake
+{{{h}}}
+:PROPERTIES:
+:ID: b
+:FAKEPROP: SECRETPROP
+:END:
+fake body
+
+* Real
+:PROPERTIES:
+:ID: b
+:END:
+real body

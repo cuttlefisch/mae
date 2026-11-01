@@ -1,0 +1,6 @@
+#+MACRO: b #+begin_export latex
+#+MACRO: e #+end_export
+{{{b}}}
+{{{e}}}
+SECRET
+#+end_export

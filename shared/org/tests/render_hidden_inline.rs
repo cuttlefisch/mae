@@ -590,9 +590,10 @@ fn macro_templates_hide_as_org_expands_them() {
     assert!(outs.iter().any(|(_, s)| s.contains("QPOS")), "{doc}");
     assert!(outs.iter().any(|(_, s)| s.contains("QE")), "{doc}");
     // Expansion is bounded by the source's size, not by a depth: a chain
-    // of plain templates shows its argument however long, and so does a
-    // template calling its successor twice, 12 deep (4,096 calls), as in
-    // Emacs (the exponential shape fails: tests/render_macros.rs).
+    // of plain templates shows its argument however long. A template
+    // calling its successor twice, 12 deep (4,096 calls, each read again in
+    // its paragraph as the scan reaches it), costs past the bound: the
+    // document renders nothing (Emacs shows it; registered: macros).
     let chain = |n: usize| -> String {
         let mut d: String = (1..n)
             .map(|i| format!("#+MACRO: c{i} <{{{{{{c{}($1)}}}}}}>\n", i + 1))
@@ -612,7 +613,7 @@ fn macro_templates_hide_as_org_expands_them() {
         })
         .collect();
     twice.push_str("#+MACRO: t12 <$1>\nA {{{t1(QCHAIN)}}} B\n");
-    assert!(shown(&twice), "{twice}");
+    assert!(!shown(&twice), "{twice}");
     let d = parse(
         "#+MACRO: m src_sh[:exports none]{echo $1}\n* T\nSee {{{m(SECRETA)}}} end.\n",
         &ParseOptions::default(),

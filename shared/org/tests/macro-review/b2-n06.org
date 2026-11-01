@@ -1,0 +1,15 @@
+:PROPERTIES:
+:ID: file
+:END:
+#+TITLE: Doc
+#+MACRO: b #+begin_comment
+#+MACRO: e #+end_comment
+* Note
+:PROPERTIES:
+:ID: n1
+:END:
+{{{b}}}
+private draft
+{{{e}}}
+SECRET
+#+end_comment

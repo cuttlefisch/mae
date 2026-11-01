@@ -548,3 +548,57 @@ fn what_an_expansion_makes_is_read_as_org_reads_it() {
         }
     }
 }
+
+/// Review round 5 (blocker 1): every macro is judged against the buffer as
+/// it stands when the scan reaches it. A later macro an earlier expansion
+/// put in a comment block, a COMMENT subtree, an export snippet or an
+/// inline src block is not a macro to Org, so it is not expanded, and
+/// cannot close what hides it (Emacs 30.2: SECRET nowhere).
+#[test]
+fn a_later_macro_is_judged_in_the_buffer_as_it_then_stands() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/macro-review");
+    for name in [
+        "b1-m01", "b1-m05", "b2-n01", "b2-n02", "b2-n03", "b2-n05", "b2-n06", "b6-s01", "b6-s03",
+        "b6-s04", "b6-s05", "b6-s07",
+    ] {
+        let doc = std::fs::read_to_string(dir.join(format!("{name}.org"))).unwrap();
+        for (surface, s) in outputs(&doc) {
+            assert!(!s.contains("SECRET"), "{name} {surface}:\n{doc}\n{s}");
+        }
+    }
+    // An undefined macro a comment block holds by then is no failure.
+    let h = html(&std::fs::read_to_string(dir.join("b6-s06.org")).unwrap());
+    assert!(h.contains("<p>visible</p>"), "{h}");
+    // The snippet the first expansion opens spans the next line (Emacs:
+    // `X` and `Y`).
+    let h = html(&std::fs::read_to_string(dir.join("b6-s01.org")).unwrap());
+    assert!(h.contains("<p>X  Y</p>"), "{h}");
+}
+
+/// Ordinary documents stay within the budget: 14,000 paragraphs, each
+/// with a counter and a macro that expands to markup (1 MB), and one long
+/// line of 60,000 counters, render.
+#[test]
+fn many_macros_in_ordinary_paragraphs_stay_within_the_budget() {
+    let paragraphs: String = (0..14_000)
+        .map(|i| format!("Para {i} {{{{{{n}}}}}} and {{{{{{m(word)}}}}}} with some text to fill the line.\n\n"))
+        .collect();
+    let doc = format!("#+MACRO: m *$1*\n{paragraphs}");
+    assert!(doc.len() > 900_000, "{}", doc.len());
+    let line = format!("{}\n", "{{{n}}} abcdefgh ".repeat(60_000));
+    for doc in [doc, line] {
+        let r = rendered(&doc);
+        assert!(r.diagnostics.is_empty(), "{:?}", &r.diagnostics[..1]);
+        assert!(!r.body.is_empty());
+    }
+}
+
+/// In a parsed keyword Org's regexp reads a macro's arguments past the
+/// line's end (`[^\000]*?` to the first `)}}}`), so the macro takes the
+/// next line with it (Emacs 30.2: `QZB` is nowhere on the page).
+#[test]
+fn a_keyword_macro_takes_the_lines_its_arguments_span() {
+    let doc = "#+MACRO: m <$1>\n#+TITLE: T {{{m(  QZA \n QZB )}}}\nBody QZC.\n";
+    let h = html(doc);
+    assert!(h.contains("QZC") && !h.contains("QZB"), "{h}");
+}

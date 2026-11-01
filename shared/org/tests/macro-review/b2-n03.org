@@ -1,0 +1,6 @@
+#+MACRO: b #+begin_src sh :exports none
+#+MACRO: e #+end_src
+{{{b}}}
+{{{e}}}
+echo SECRET
+#+end_src

@@ -1,0 +1,5 @@
+#+MACRO: m #+TODO: FOO | DONE
+{{{m}}}
+
+* FOO COMMENT x
+SECRET

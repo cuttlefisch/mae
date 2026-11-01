@@ -1,0 +1,7 @@
+#+MACRO: m #+SELECT_TAGS: pub
+{{{m}}}
+
+* A :pub:
+ok
+* B
+SECRET

@@ -1,0 +1,10 @@
+* A
+:PROPERTIES:
+:ID: a
+:END:
+hello
+* B
+:PROPERTIES:
+:ID: b
+:END:
+oops {{{nosuch}}}

@@ -1,0 +1,7 @@
+#+MACRO: m #+EXCLUDE_TAGS: priv
+{{{m}}}
+
+* Public
+pub
+* Hidden :priv:
+SECRET

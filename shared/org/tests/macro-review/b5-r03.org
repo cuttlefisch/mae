@@ -1,0 +1,3 @@
+#+MACRO: m src_sh[:exports none]{echo $1}
+#+TITLE: T {{{m(x)}}} {{{results(SECRET)}}}
+body {{{title}}}

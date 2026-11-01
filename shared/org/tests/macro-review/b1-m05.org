@@ -1,0 +1,5 @@
+#+MACRO: b #+begin_comment
+#+MACRO: e #+end_comment
+{{{b}}}
+SECRET
+{{{e}}}

@@ -1,0 +1,1 @@
+A src_sh[:exports none]{echo x} {{{RESULTS(SECRET)}}} B

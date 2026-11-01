@@ -644,6 +644,18 @@ const SPLICE_FAMILIES: &[Family] = &[
         splice_nodes_one_target,
         2_000,
     ),
+    // Review round 5 (blocker 3): an edit of a document with a long line of
+    // counters (the line's start and end were searched per macro).
+    (
+        "splice: a line of N counters",
+        |n| {
+            format!(
+                "* A\n:PROPERTIES:\n:ID: a\n:END:\nbody\n* B\n{}\n",
+                "{{{n}}} abcdefgh ".repeat(n)
+            )
+        },
+        16_000,
+    ),
 ];
 
 fn splice_nodes_one_target(n: usize) -> String {
@@ -738,11 +750,29 @@ const RENDER_FAMILIES: &[Family] = &[
         5_000,
     ),
     (
-        "render: N macros expanding plainly",
+        // Review round 5 (blocker 3): the scan searched the line's start
+        // and end per macro, quadratic in the line (1 MB took 6.8 s, 2 MB
+        // 22.6 s). One line, then one per line. Sized so the quadratic
+        // term shows: at b2824246 this family measures x27.1 and the
+        // splice one x35.6 (both past 24); smaller bases hide it (x14.7).
+        "render: a line of N counters",
+        |n| format!("{}\n", "{{{n}}} abcdefgh ".repeat(n)),
+        16_000,
+    ),
+    (
+        "render: N lines of counters",
+        |n| "{{{n}}} abcdefgh\n".repeat(n),
+        4_000,
+    ),
+    (
+        // One paragraph each: an expansion that is not a plain word has its
+        // paragraph read again, so thousands in ONE paragraph cost past the
+        // budget (registered: macros).
+        "render: N paragraphs of macros expanding plainly",
         |n| {
             format!(
-                "#+MACRO: m <$1>\n#+MACRO: w {{{{{{m($1)}}}}}}\n{}\n",
-                "{{{w(x)}}} {{{n}}} ".repeat(n)
+                "#+MACRO: m <$1>\n#+MACRO: w {{{{{{m($1)}}}}}}\n{}",
+                "{{{w(x)}}} and {{{n}}} text\n\n".repeat(n)
             )
         },
         2_000,

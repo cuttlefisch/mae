@@ -1,0 +1,6 @@
+#+MACRO: c call_f()
+#+NAME: f
+#+begin_src sh :exports none
+echo
+#+end_src
+A {{{c}}} {{{results(SECRET)}}} B
