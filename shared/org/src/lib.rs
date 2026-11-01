@@ -21,6 +21,19 @@
 //! [`to_html`], [`to_hast`], [`text`], [`normalise`], [`node_source`])
 //! draw only what it renders.
 //!
+//! **Offsets.** Every span this crate reports, in Rust and in its JSON
+//! ([`Span`], diagnostics, semantics, render diagnostics), is a UTF-8 BYTE
+//! offset into the text that was parsed. A JavaScript consumer must slice
+//! the UTF-8 bytes (`TextEncoder`), not the string, which counts UTF-16
+//! code units.
+//!
+//! **Versioning.** The crate has its own version, independent of MAE's
+//! workspace version, and [`API_VERSION`] is it: the renderers' output, the
+//! JSON shapes and the WASM facade's ABI are the contract the
+//! `mae-org-vX.Y.Z` tags name. Every option and result type is
+//! `#[non_exhaustive]` and built from `Default` (see each type's `with_*`
+//! setters), so adding a field is a minor version.
+//!
 //! Properties the crate guarantees, each pinned by tests:
 //! - **Total:** `parse` never panics and never fails; malformed input
 //!   becomes text plus [`Diagnostic`]s.
@@ -38,6 +51,7 @@
 
 mod blocks;
 mod builder;
+mod builders;
 mod chars;
 mod chartables;
 mod diagnostic;
@@ -64,10 +78,11 @@ mod tokens;
 mod views;
 
 /// The version of mae-org's public contract: the renderers' output, the
-/// JSON shapes and the WASM facade's ABI. The `mae-org-vX.Y.Z` tags name it;
-/// it is independent of the workspace version, which every MAE release
-/// bumps whether or not this contract changed.
-pub const API_VERSION: &str = "0.1.0";
+/// JSON shapes and the WASM facade's ABI. The `mae-org-vX.Y.Z` tags name it.
+/// It IS the crate's own version (`shared/org/Cargo.toml`), which MAE's
+/// release bump does not touch: the workspace version changes on every MAE
+/// release whether or not this contract did.
+pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The Emacs version the character classes and case folding were generated
 /// from (`conformance/gen-char-tables.el`).
@@ -82,9 +97,9 @@ pub use options::{
     ParseOptions, TodoSequence, DEFAULT_LINK_TYPES, DEFAULT_MAX_DEPTH, MAX_DEPTH_CEILING,
 };
 pub use render::{
-    encode_id, is_valid_id, is_valid_language, node_source, node_text, normalise, render,
-    render_hast, render_html, render_inline, safe_external_url, safe_resolver_href, slug, text,
-    text_of, to_hast, to_html, with_line_ending, Attr, Element, HeadlineIds, Node, NodeMeta,
+    encode_id, heading_anchor, is_valid_id, is_valid_language, node_source, node_text, normalise,
+    render, render_hast, render_html, render_inline, safe_external_url, safe_resolver_href, slug,
+    text, text_of, to_hast, to_html, with_line_ending, Attr, Element, HeadlineIds, Node, NodeMeta,
     RenderDiagnostic, RenderOptions, Rendered, Resolved, Resolver, Tag, TreeFormat, ATTRIBUTES,
     CLASSES, DEFAULT_PLACEHOLDER, RENDER_MAX_DEPTH, SLUG_MAX, TAGS,
 };

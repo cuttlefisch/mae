@@ -187,7 +187,7 @@
               }
             ],
             "properties": {
-              "id": "id-kb.3aheadline.2fone"
+              "id": "h-a-headline-node"
             },
             "tagName": "h1",
             "type": "element"
@@ -458,7 +458,8 @@
           "className": [
             "org-section",
             "org-level-1"
-          ]
+          ],
+          "id": "id-kb.3aheadline.2fone"
         },
         "tagName": "section",
         "type": "element"
@@ -769,6 +770,30 @@
           }
         ],
         "type": "root"
+      },
+      "title_unlinked": {
+        "children": [
+          {
+            "type": "text",
+            "value": "The "
+          },
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "file"
+              }
+            ],
+            "properties": {},
+            "tagName": "strong",
+            "type": "element"
+          },
+          {
+            "type": "text",
+            "value": " title"
+          }
+        ],
+        "type": "root"
       }
     },
     {
@@ -856,6 +881,15 @@
           }
         ],
         "type": "root"
+      },
+      "title_unlinked": {
+        "children": [
+          {
+            "type": "text",
+            "value": "A headline node"
+          }
+        ],
+        "type": "root"
       }
     },
     {
@@ -884,6 +918,15 @@
           }
         ],
         "type": "root"
+      },
+      "title_unlinked": {
+        "children": [
+          {
+            "type": "text",
+            "value": "An item node"
+          }
+        ],
+        "type": "root"
       }
     },
     {
@@ -905,6 +948,15 @@
         }
       ],
       "title": {
+        "children": [
+          {
+            "type": "text",
+            "value": "term :: tagged item"
+          }
+        ],
+        "type": "root"
+      },
+      "title_unlinked": {
         "children": [
           {
             "type": "text",

@@ -64,6 +64,7 @@ use std::sync::OnceLock;
 
 /// What a link points at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[non_exhaustive]
 pub enum LinkKind {
     /// A KB node (`id:UUID`, `concept:x`, a bare id, a fuzzy `[[name]]`).
     Kb,
@@ -101,6 +102,7 @@ impl LinkKind {
 
 /// A classified link path.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct LinkClass {
     pub kind: LinkKind,
     /// For a KB link, the node id (no `id:`, store-form description, query,
@@ -185,6 +187,7 @@ pub const OTHER_SCHEMES: &[&str] = &[
 /// case-insensitively. A scheme in none of the lists, other than `id`, is a
 /// KB link.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LinkTypes {
     pub web: Vec<String>,
     pub mail: Vec<String>,

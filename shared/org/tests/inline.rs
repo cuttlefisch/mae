@@ -92,10 +92,7 @@ fn objects_nested_5000_deep_parse_on_a_small_stack_within_the_cap() {
         let ok = std::thread::Builder::new()
             .stack_size(1 << 20)
             .spawn(move || {
-                let opts = ParseOptions {
-                    max_depth: usize::MAX,
-                    ..ParseOptions::default()
-                };
+                let opts = ParseOptions::default().with_max_depth(usize::MAX);
                 let doc = parse(&text, &opts);
                 assert_eq!(doc.syntax().to_string(), text);
                 assert!(doc == parse(&text, &opts));
@@ -148,10 +145,7 @@ fn objects_past_the_default_cap_are_plain_text() {
         assert!(parse_default(&text).diagnostics().is_empty());
     }
     let text = format!("{}z{}\n", "*a ".repeat(300), "*".repeat(300));
-    let opts = ParseOptions {
-        max_depth: 400,
-        ..ParseOptions::default()
-    };
+    let opts = ParseOptions::default().with_max_depth(400);
     assert!(parse(&text, &opts).diagnostics().is_empty());
 }
 

@@ -116,6 +116,8 @@ pub(crate) fn rendered_json(r: &Rendered, format: TreeFormat) -> String {
         }
         out.push_str(",\"title\":");
         tree(&n.title, format, &mut out);
+        out.push_str(",\"title_unlinked\":");
+        tree(&n.title_unlinked, format, &mut out);
         out.push_str(",\"aliases\":[");
         for (j, a) in n.aliases.iter().enumerate() {
             if j > 0 {

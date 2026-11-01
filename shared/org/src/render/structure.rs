@@ -1,6 +1,6 @@
 //! Headlines, lists, tables and the verbatim blocks.
 
-use super::anchors::{encode_id, slug};
+use super::anchors::{encode_id, heading_anchor};
 use super::build::{trim_text, Builder, Mode};
 use super::tree::{push, text, Attr, Element, Node, Tag};
 use super::HeadlineIds;
@@ -22,57 +22,54 @@ fn token_text(n: &SyntaxNode, kind: crate::SyntaxKind) -> Option<String> {
 }
 
 impl Builder<'_> {
-    /// The anchor of a headline, claimed now (same order in both passes).
-    /// `title` is the title as written (the key `[[*Title]]` links find it
-    /// by); `shown` is its rendered text, which the slug is made from, so
-    /// an id never spells a link target or snippet the title does not show.
-    fn headline_anchor(
+    /// The anchors of a headline, claimed now (same order in both passes):
+    /// the heading's `h-` slug anchor, always, and with
+    /// [`HeadlineIds::Explicit`] the section's `id-`/`cid-` anchor when the
+    /// headline is a KB node or has a `CUSTOM_ID`. `title` is the title as
+    /// written (the key `[[*Title]]` links find it by); `shown` is its
+    /// rendered text, which the slug is made from, so an id never spells a
+    /// link target or snippet the title does not show. `None`s in Meta mode.
+    fn headline_anchors(
         &mut self,
         n: &SyntaxNode,
         h: &Headline,
         (title, shown): (&str, &str),
-    ) -> Option<String> {
+    ) -> (Option<String>, Option<String>) {
         if self.mode == Mode::Meta {
-            return None;
+            return (None, None);
         }
         let start = Span::of(n).start;
-        // An archived headline's drawer is not rendered (its section is
-        // unrendered), so its CUSTOM_ID is not read either.
-        let hidden = h.section().is_some_and(|s| self.skipped(&s));
-        let custom = h.property_drawer().filter(|_| !hidden);
-        let custom = custom.and_then(|d| d.get("CUSTOM_ID"));
+        // Read even when the headline's section is unrendered (an archived
+        // headline): Org's export still gives the headline its CUSTOM_ID.
+        let custom = h.property_drawer().and_then(|d| d.get("CUSTOM_ID"));
         let custom = custom.filter(|c| !c.is_empty());
-        let explicit = self.opts.headline_ids == HeadlineIds::Explicit;
         let node = self.node_ids.get(&start).copied();
-        let mut id = None;
-        if explicit {
-            id = node.and_then(|k| self.ids.try_claim(format!("id-{}", encode_id(k))));
-            if id.is_none() {
-                id = custom
+        let heading = self.ids.claim(heading_anchor(shown));
+        self.found.headings.insert(heading.clone());
+        let mut section = None;
+        if self.opts.headline_ids == HeadlineIds::Explicit {
+            section = node.and_then(|k| self.ids.try_claim(format!("id-{}", encode_id(k))));
+            if section.is_none() {
+                section = custom
                     .as_deref()
                     .and_then(|c| self.ids.try_claim(format!("cid-{}", encode_id(c))));
             }
         }
-        let id = id.unwrap_or_else(|| {
-            let s = slug(shown);
-            let base = if s.is_empty() {
-                "h".to_string()
-            } else {
-                format!("h-{s}")
-            };
-            self.ids.claim(base)
-        });
+        let target = section.clone().unwrap_or_else(|| heading.clone());
         if let Some(k) = node {
-            self.found.nodes.entry(k.to_string()).or_insert(id.clone());
+            self.found
+                .nodes
+                .entry(k.to_string())
+                .or_insert(target.clone());
         }
         if let Some(c) = custom {
-            self.found.custom_ids.entry(c).or_insert(id.clone());
+            self.found.custom_ids.entry(c).or_insert(target);
         }
         self.found
             .titles
             .entry(title.to_string())
-            .or_insert(id.clone());
-        Some(id)
+            .or_insert(heading.clone());
+        (Some(heading), section)
     }
 
     pub fn headline(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
@@ -86,20 +83,22 @@ impl Builder<'_> {
             self.objects(t, &mut title);
         }
         let shown = super::text::text_of(&without_footnote_refs(&title));
-        let anchor = self.headline_anchor(n, &h, (&plain, &shown));
+        let (heading, section_id) = self.headline_anchors(n, &h, (&plain, &shown));
         let mut head = Element::new(Tag::heading(h.level()));
-        if let Some(id) = anchor {
+        if let Some(id) = heading {
             head = head.attr(Attr::Id, id);
         }
         let head = head.with(self.headline_line(&h, title));
         let level = format!("org-level-{}", h.level());
         let mut section = vec![head.into()];
         self.elements(n, &mut section);
-        let wrapper = Element::new(Tag::Section)
+        let mut wrapper = Element::new(Tag::Section)
             .class("org-section")
-            .class(&level)
-            .with(section);
-        push(out, wrapper.into());
+            .class(&level);
+        if let Some(id) = section_id {
+            wrapper = wrapper.attr(Attr::Id, id);
+        }
+        push(out, wrapper.with(section).into());
     }
 
     /// The headline's line: TODO keyword, priority, title and tags.

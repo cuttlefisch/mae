@@ -11,7 +11,7 @@
               }
             ],
             "properties": {
-              "id": "cid-kinds"
+              "id": "h-kinds"
             },
             "tagName": "h1",
             "type": "element"
@@ -169,7 +169,7 @@
                           "dataOrgC": "1",
                           "dataOrgRel": "references",
                           "dataOrgW": "1",
-                          "href": "/notes/known.html#Frag.20ment"
+                          "href": "/notes/known.html#h-frag-ment"
                         },
                         "tagName": "a",
                         "type": "element"
@@ -599,7 +599,7 @@
                           "className": [
                             "org-link"
                           ],
-                          "href": "#cid-kinds"
+                          "href": "#h-kinds"
                         },
                         "tagName": "a",
                         "type": "element"
@@ -850,7 +850,8 @@
           "className": [
             "org-section",
             "org-level-1"
-          ]
+          ],
+          "id": "cid-kinds"
         },
         "tagName": "section",
         "type": "element"
@@ -865,7 +866,7 @@
               }
             ],
             "properties": {
-              "id": "id-here"
+              "id": "h-same-page-node"
             },
             "tagName": "h1",
             "type": "element"
@@ -932,7 +933,8 @@
           "className": [
             "org-section",
             "org-level-1"
-          ]
+          ],
+          "id": "id-here"
         },
         "tagName": "section",
         "type": "element"
@@ -991,6 +993,15 @@
           }
         ],
         "type": "root"
+      },
+      "title_unlinked": {
+        "children": [
+          {
+            "type": "text",
+            "value": "Links with a link in the title"
+          }
+        ],
+        "type": "root"
       }
     },
     {
@@ -1012,6 +1023,15 @@
         }
       ],
       "title": {
+        "children": [
+          {
+            "type": "text",
+            "value": "Same page node"
+          }
+        ],
+        "type": "root"
+      },
+      "title_unlinked": {
         "children": [
           {
             "type": "text",

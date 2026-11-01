@@ -235,10 +235,10 @@ fn parse_options(j: Option<&Json>) -> Result<ParseOptions, String> {
             .iter()
             .map(|s| {
                 known_keys(s, &["todo", "done"], "parse.todo")?;
-                Ok(TodoSequence {
-                    todo: strs(s.get("todo"), "todo")?.unwrap_or_default(),
-                    done: strs(s.get("done"), "done")?.unwrap_or_default(),
-                })
+                Ok(TodoSequence::new(
+                    strs(s.get("todo"), "todo")?.unwrap_or_default(),
+                    strs(s.get("done"), "done")?.unwrap_or_default(),
+                ))
             })
             .collect::<Result<_, String>>()?;
     }
@@ -291,12 +291,17 @@ fn semantics_options(j: Option<&Json>) -> Result<SemanticsOptions, String> {
     };
     if let Some(lt) = j.get("link_types").filter(|v| **v != Json::Null) {
         known_keys(lt, &["web", "mail", "other"], "semantics.link_types")?;
-        let d = LinkTypes::default();
-        o.link_types = LinkTypes {
-            web: strs(lt.get("web"), "web")?.unwrap_or(d.web),
-            mail: strs(lt.get("mail"), "mail")?.unwrap_or(d.mail),
-            other: strs(lt.get("other"), "other")?.unwrap_or(d.other),
-        };
+        let mut t = LinkTypes::default();
+        if let Some(v) = strs(lt.get("web"), "web")? {
+            t.web = v;
+        }
+        if let Some(v) = strs(lt.get("mail"), "mail")? {
+            t.mail = v;
+        }
+        if let Some(v) = strs(lt.get("other"), "other")? {
+            t.other = v;
+        }
+        o.link_types = t;
     }
     Ok(o)
 }
@@ -313,7 +318,10 @@ fn render_options(j: Option<&Json>) -> Result<RenderOptions, String> {
     };
     let images = opt_bool(j.get("images"), "images")?.unwrap_or(false);
     let drawers = opt_bool(j.get("property_drawers"), "property_drawers")?.unwrap_or(false);
-    Ok(RenderOptions::new(ids, images, drawers))
+    Ok(RenderOptions::default()
+        .with_headline_ids(ids)
+        .with_images(images)
+        .with_property_drawers(drawers))
 }
 
 fn resolver(j: Option<&Json>) -> Result<Resolver, String> {
@@ -333,7 +341,9 @@ fn resolver(j: Option<&Json>) -> Result<Resolver, String> {
                 let href = opt_str(v.get("href"), "href")?
                     .ok_or_else(|| format!("resolver target {id:?} has no href"))?;
                 let title = opt_str(v.get("title"), "title")?;
-                r.targets.insert(id.clone(), Resolved { href, title });
+                let mut target = Resolved::new(href);
+                target.title = title;
+                r.targets.insert(id.clone(), target);
             }
         }
         Some(_) => return Err("resolver.targets must be an object".into()),

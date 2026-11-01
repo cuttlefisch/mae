@@ -1,7 +1,7 @@
 //! The link policy: what a link may point at, and what it shows when it may
 //! not (ADR-112 D3).
 
-use super::anchors::encode_id;
+use super::anchors::heading_anchor;
 use super::build::{trim_text, Builder, Mode};
 use super::objects::radio_key;
 use super::tree::{push, text, Attr, Element, Node, Tag};
@@ -203,30 +203,47 @@ impl Builder<'_> {
                 None => Target::None,
             },
             LinkKind::Kb => self.kb_target(class),
-            LinkKind::Heading => self.local(|t| t.titles.get(&class.target).cloned()),
-            LinkKind::CustomId => self.local(|t| t.custom_ids.get(&class.target).cloned()),
+            LinkKind::Heading => self.local_target(|t| t.titles.get(&class.target).cloned()),
+            LinkKind::CustomId => self.local_target(|t| t.custom_ids.get(&class.target).cloned()),
             _ => Target::None,
         }
     }
 
     /// A same-page anchor, if the page has it (never in titles: they may be
     /// shown on another page).
-    fn local(&self, find: impl Fn(&super::build::Table) -> Option<String>) -> Target {
+    fn local(&self, find: impl FnOnce(&super::build::Table) -> Option<String>) -> Option<String> {
         if self.mode == Mode::Meta {
-            return Target::None;
+            return None;
         }
-        find(&self.table).map_or(Target::None, |id| Target::Href(format!("#{id}"), None))
+        find(&self.table)
     }
 
+    fn local_target(&self, find: impl FnOnce(&super::build::Table) -> Option<String>) -> Target {
+        self.local(find)
+            .map_or(Target::None, |id| Target::Href(format!("#{id}"), None))
+    }
+
+    /// A KB link's target. Its `#fragment` names a heading by its title
+    /// (ADR-030): it becomes the heading's `h-` anchor ([`heading_anchor`]
+    /// of the fragment, [`super::slug`] being idempotent), appended to the
+    /// resolver's href, unless that href already has a fragment, which
+    /// wins. On this page it lands on that heading when the page has it,
+    /// and on the node's own anchor when it does not (never dropped
+    /// silently). A fragment with no ASCII letter or digit names nothing.
     fn kb_target(&mut self, l: crate::SemanticLink) -> Target {
+        let heading = l
+            .fragment
+            .as_deref()
+            .filter(|f| !super::slug(f).is_empty())
+            .map(heading_anchor);
         if let Some(href) = self
             .resolver
             .targets
             .get(&l.target)
             .and_then(|r| safe_resolver_href(&r.href))
         {
-            let href = match &l.fragment {
-                Some(f) if !href.contains('#') => format!("{href}#{}", encode_id(f)),
+            let href = match &heading {
+                Some(h) if !href.contains('#') => format!("{href}#{h}"),
                 _ => href,
             };
             return Target::Href(href, Some(Box::new(l)));
@@ -235,20 +252,28 @@ impl Builder<'_> {
         // link without `id:`) a target or headline of this page.
         let target = l.target.clone();
         let fuzzy = !l.path.to_ascii_lowercase().starts_with("id:");
-        match self.local(|t| {
-            t.nodes.get(&target).cloned().or_else(|| {
+        match self
+            .local(|t| {
+                let node = t.nodes.get(&target)?;
+                Some(match &heading {
+                    Some(h) if t.headings.contains(h) => h.clone(),
+                    _ => node.clone(),
+                })
+            })
+            .or_else(|| {
                 fuzzy
                     .then(|| {
-                        t.targets
-                            .get(&target)
-                            .or_else(|| t.titles.get(&target))
-                            .cloned()
+                        self.local(|t| {
+                            t.targets
+                                .get(&target)
+                                .or_else(|| t.titles.get(&target))
+                                .cloned()
+                        })
                     })
                     .flatten()
-            })
-        }) {
-            Target::Href(h, _) => Target::Href(h, Some(Box::new(l))),
-            other => other,
+            }) {
+            Some(h) => Target::Href(format!("#{h}"), Some(Box::new(l))),
+            None => Target::None,
         }
     }
 
@@ -256,8 +281,10 @@ impl Builder<'_> {
         let desc = self.description(link);
         let key = radio_key(&link.description_text().unwrap_or_default());
         match self.local(|t| t.radios.get(&key).cloned()) {
-            Target::Href(h, _) if !self.in_link => {
-                let a = Element::new(Tag::A).class("org-radio").attr(Attr::Href, h);
+            Some(h) if !self.in_link => {
+                let a = Element::new(Tag::A)
+                    .class("org-radio")
+                    .attr(Attr::Href, format!("#{h}"));
                 push(out, a.with(desc).into());
             }
             _ => desc.into_iter().for_each(|d| push(out, d)),

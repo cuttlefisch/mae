@@ -31,7 +31,9 @@ const UNRENDERED: &[&str] = &[
     ":LOGBOOK:\n{M} [[id:{M}][{M}]] <<{M}>> [[{M}]]\n:END:\n",
     "* COMMENT {M}\n:PROPERTIES:\n:ID: {M}\n:CUSTOM_ID: {M}\n:END:\n{M} [[id:{M}][{M}]] <<{M}>>\n#+TRANSCLUDE: {M}\n* Next\n",
     "* {M} :noexport:\n:PROPERTIES:\n:ID: {M}\n:END:\n{M} [[id:{M}]] <<{M}>>\n** {M}\n* Next\n",
-    "* Kept :ARCHIVE:\n:PROPERTIES:\n:ID: {M}\n:CUSTOM_ID: {M}\n:END:\n{M} [[id:{M}][{M}]]\n** {M}\n* Next\n",
+    // (An archived headline's CUSTOM_ID is its anchor, as in Org's export:
+    // tests/render_anchors.rs.)
+    "* Kept :ARCHIVE:\n:PROPERTIES:\n:ID: {M}\n:END:\n{M} [[id:{M}][{M}]]\n** {M}\n* Next\n",
     "[fn:{M}] {M} [[id:{M}][{M}]] <<{M}>>\n\n\n",
     "#+HTML: <b id=\"{M}\">{M}</b>\n",
     "Snippet @@html:<a href=\"{M}\">{M}</a>@@ here.\n",
@@ -94,13 +96,8 @@ fn resolver(markers: &[String]) -> Resolver {
     let mut r = Resolver::default();
     for m in markers.iter().chain(std::iter::once(&"shown".to_string())) {
         let href = format!("/{m}.html");
-        r.targets.insert(
-            m.clone(),
-            Resolved {
-                href,
-                title: Some(m.clone()),
-            },
-        );
+        r.targets
+            .insert(m.clone(), Resolved::new(href).with_title(m.clone()));
     }
     r
 }
@@ -112,8 +109,10 @@ fn outputs(doc: &str, markers: &[String]) -> Vec<(String, String)> {
     let r = resolver(markers);
     let mut out = Vec::new();
     for opts in [
-        RenderOptions::new(HeadlineIds::Explicit, true, true),
-        RenderOptions::new(HeadlineIds::Slug, false, false),
+        RenderOptions::default()
+            .with_images(true)
+            .with_property_drawers(true),
+        RenderOptions::default().with_headline_ids(HeadlineIds::Slug),
     ] {
         let rendered = render(&d, &sem, &opts, &r);
         out.push(("hast".into(), rendered.to_json(TreeFormat::Hast)));

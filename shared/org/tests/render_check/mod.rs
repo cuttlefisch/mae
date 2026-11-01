@@ -336,8 +336,7 @@ pub fn adversarial_resolver(targets: &[String]) -> Resolver {
             _ => continue,
         };
         let title = (i % 3 == 0).then(|| format!("T{i}"));
-        r.targets
-            .insert((*t).clone(), mae_org::Resolved { href, title });
+        r.targets.insert((*t).clone(), resolved(href, title));
     }
     r
 }
@@ -357,4 +356,11 @@ pub fn tag_counts(nodes: &[Dom], out: &mut HashMap<String, usize>) {
             tag_counts(ch, out);
         }
     }
+}
+
+/// A resolver target, built as an external crate must build it.
+pub fn resolved(href: String, title: Option<String>) -> mae_org::Resolved {
+    let mut r = mae_org::Resolved::new(href);
+    r.title = title;
+    r
 }

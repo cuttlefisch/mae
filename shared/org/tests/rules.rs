@@ -155,10 +155,7 @@ fn todo_keywords_come_from_the_file_then_from_options() {
     assert_eq!(todo, vec![Some("A".into()), Some("C".into()), None]);
     assert_eq!(
         doc.todo_sequences()[0],
-        TodoSequence {
-            todo: vec!["A".into(), "B".into()],
-            done: vec!["C".into()]
-        }
+        TodoSequence::new(["A", "B"], ["C"])
     );
     // The declaration may come AFTER the headlines (Emacs reads it buffer-wide)…
     let late = parse_default("* A x\n#+TODO: A | C\n");
@@ -170,13 +167,8 @@ fn todo_keywords_come_from_the_file_then_from_options() {
     let hidden = parse_default("* A x\n#+begin_example\n#+TODO: A | C\n#+end_example\n");
     assert_eq!(hidden.headlines().next().and_then(|h| h.todo()), None);
     // Without in-file keywords the configured sequences apply.
-    let opts = ParseOptions {
-        todo_sequences: vec![TodoSequence {
-            todo: vec!["NEXT".into()],
-            done: vec!["DONE".into()],
-        }],
-        ..ParseOptions::default()
-    };
+    let opts =
+        ParseOptions::default().with_todo_sequences(vec![TodoSequence::new(["NEXT"], ["DONE"])]);
     let doc = parse("* NEXT a\n* TODO b\n", &opts);
     let todo: Vec<Option<String>> = doc.headlines().map(|h| h.todo()).collect();
     assert_eq!(todo, vec![Some("NEXT".into()), None]);
@@ -272,10 +264,7 @@ fn a_list_item_id_drawer_is_a_drawer_inside_the_item() {
 
 #[test]
 fn nesting_beyond_the_cap_is_opaque_with_a_diagnostic_not_recursion() {
-    let opts = ParseOptions {
-        max_depth: 10,
-        ..ParseOptions::default()
-    };
+    let opts = ParseOptions::default().with_max_depth(10);
     let open: String = (0..50).map(|i| format!("#+begin_b{i}\n")).collect();
     let close: String = (0..50).rev().map(|i| format!("#+end_b{i}\n")).collect();
     let text = format!("{open}core\n{close}");
@@ -436,10 +425,7 @@ fn an_unbounded_max_depth_is_clamped_so_deep_input_fits_a_small_stack() {
         let ok = std::thread::Builder::new()
             .stack_size(1 << 20)
             .spawn(move || {
-                let opts = ParseOptions {
-                    max_depth: usize::MAX,
-                    ..ParseOptions::default()
-                };
+                let opts = ParseOptions::default().with_max_depth(usize::MAX);
                 let doc = parse(&text, &opts);
                 assert_eq!(doc.syntax().to_string(), text);
                 assert!(doc == parse(&text, &opts));

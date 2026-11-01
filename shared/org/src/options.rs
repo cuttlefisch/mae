@@ -5,6 +5,7 @@
 /// One TODO sequence: the keywords before `|` are "todo" states, those after
 /// are "done" states.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TodoSequence {
     pub todo: Vec<String>,
     pub done: Vec<String>,
@@ -69,6 +70,7 @@ fn keyword_name(word: &str) -> &str {
 /// Everything that can change the SHAPE of the tree. Settings that only
 /// change how a tree is read (export tags, link types) belong to later phases.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ParseOptions {
     /// TODO sequences used when the file declares none of its own. In-file
     /// `#+TODO:`/`#+SEQ_TODO:`/`#+TYP_TODO:` lines replace these, as in Emacs.

@@ -560,13 +560,8 @@ fn todo_keywords_are_declared_data() {
     // Without an in-file declaration the configured sequences decide.
     let text = "* NEXT x\n:PROPERTIES:\n:ID: n\n:END:\n";
     assert_eq!(sem(text).nodes[0].todo, None);
-    let opts = ParseOptions {
-        todo_sequences: vec![TodoSequence {
-            todo: vec!["NEXT".into()],
-            done: vec!["DONE".into()],
-        }],
-        ..ParseOptions::default()
-    };
+    let opts =
+        ParseOptions::default().with_todo_sequences(vec![TodoSequence::new(["NEXT"], ["DONE"])]);
     assert_eq!(
         semantics(&parse(text, &opts)).nodes[0].todo.as_deref(),
         Some("NEXT")
@@ -752,10 +747,7 @@ fn exclude_tags_are_declared_data() {
     assert_eq!(ids(&sem(text)), vec!["f", "a"]);
     let plain =
         "* A :secret:\n:PROPERTIES:\n:ID: a\n:END:\n* B :noexport:\n:PROPERTIES:\n:ID: b\n:END:\n";
-    let opts = SemanticsOptions {
-        exclude_tags: vec!["secret".into()],
-        ..SemanticsOptions::default()
-    };
+    let opts = SemanticsOptions::default().with_exclude_tags(["secret"]);
     let s = semantics_with(&parse(plain, &ParseOptions::default()), &opts);
     assert_eq!(ids(&s), vec!["b"]);
     assert_eq!(ids(&sem(plain)), vec!["a"]);

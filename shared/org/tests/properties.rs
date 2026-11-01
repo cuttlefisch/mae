@@ -84,20 +84,11 @@ fn check_all(text: &str) -> Result<(), TestCaseError> {
     check_tree(&doc, text, opts.max_depth).map_err(TestCaseError::fail)?;
     prop_assert_eq!(&doc, &parse(text, &opts), "parse is not deterministic");
     // A tiny nesting cap must still give a lossless tree within the cap.
-    let shallow = ParseOptions {
-        max_depth: 3,
-        ..ParseOptions::default()
-    };
+    let shallow = ParseOptions::default().with_max_depth(3);
     let doc = parse(text, &shallow);
     check_tree(&doc, text, 3).map_err(TestCaseError::fail)?;
     // Configured TODO keywords change tokens, never the text.
-    let todo = ParseOptions {
-        todo_sequences: vec![TodoSequence {
-            todo: vec!["A".into()],
-            done: vec!["B".into()],
-        }],
-        ..ParseOptions::default()
-    };
+    let todo = ParseOptions::default().with_todo_sequences(vec![TodoSequence::new(["A"], ["B"])]);
     prop_assert_eq!(parse(text, &todo).syntax().to_string(), text);
     Ok(())
 }

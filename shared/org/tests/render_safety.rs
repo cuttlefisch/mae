@@ -24,8 +24,11 @@ use std::path::Path;
 fn option_sets() -> Vec<RenderOptions> {
     vec![
         RenderOptions::default(),
-        RenderOptions::new(HeadlineIds::Slug, true, true),
-        RenderOptions::new(HeadlineIds::Explicit, true, false),
+        RenderOptions::default()
+            .with_headline_ids(HeadlineIds::Slug)
+            .with_images(true)
+            .with_property_drawers(true),
+        RenderOptions::default().with_images(true),
     ]
 }
 
@@ -130,7 +133,9 @@ fn hostile_inputs_never_reach_an_attribute_or_markup() {
     for (input, needle) in cases {
         let doc = parse(input, &ParseOptions::default());
         let sem = semantics(&doc);
-        let opts = RenderOptions::new(HeadlineIds::Explicit, true, true);
+        let opts = RenderOptions::default()
+            .with_images(true)
+            .with_property_drawers(true);
         let out = render(&doc, &sem, &opts, &Resolver::default());
         let html = mae_org::to_html(&out.body);
         assert!(
@@ -260,10 +265,7 @@ fn deep_nesting_degrades_to_a_diagnostic() {
     let close: String = (0..1000).rev().map(|i| format!("#+end_b{i}\n")).collect();
     let quotes = format!("{open}x\n{close}");
     let emph = format!("{}x{}\n", "*/_+".repeat(300), "+_/*".repeat(300));
-    let opts = ParseOptions {
-        max_depth: mae_org::MAX_DEPTH_CEILING,
-        ..ParseOptions::default()
-    };
+    let opts = ParseOptions::default().with_max_depth(mae_org::MAX_DEPTH_CEILING);
     for text in [list, quotes, emph] {
         let doc = parse(&text, &opts);
         let sem = semantics(&doc);

@@ -54,6 +54,8 @@ fn diags(s: &Semantics) -> Vec<(&'static str, String, &'static str)> {
             }
             SemanticDiagnostic::DuplicateId { id, .. } => (d.kind_name(), id.clone(), ""),
             SemanticDiagnostic::SetupFileNotRead { file, .. } => (d.kind_name(), file.clone(), ""),
+            // `SemanticDiagnostic` is non-exhaustive: a new kind shows here.
+            _ => (d.kind_name(), String::new(), ""),
         })
         .collect()
 }
@@ -150,13 +152,7 @@ fn transclusions_in_unrendered_regions_are_diagnosed() {
 /// read like `#+title`).
 #[test]
 fn select_tags_render_only_the_selected_trees() {
-    let org = SemanticsOptions {
-        select_tags: ORG_EXPORT_SELECT_TAGS
-            .iter()
-            .map(|t| t.to_string())
-            .collect(),
-        ..SemanticsOptions::default()
-    };
+    let org = SemanticsOptions::default().with_select_tags(ORG_EXPORT_SELECT_TAGS.iter().copied());
     let sem = |text: &str| sem_with(text, &org);
     let text = ":PROPERTIES:\n:ID: f\n:END:\n#+title: T [[id:in-title]]\nZeroth [[id:zeroth]].\n* A\n:PROPERTIES:\n:ID: a\n:END:\nA's text [[id:a-text]].\n** B :export:\n:PROPERTIES:\n:ID: b\n:END:\n[[id:b-text]]\n*** B1\n:PROPERTIES:\n:ID: b1\n:END:\n** C\n:PROPERTIES:\n:ID: c\n:END:\n[[id:c-text]]\n* D\n[[id:d-text]]\n";
     let s = sem(text);
@@ -184,10 +180,7 @@ fn select_tags_render_only_the_selected_trees() {
     let s = sem(by_file);
     assert_eq!(ids(&s), vec!["f", "a"]);
     assert!(edges(&s).is_empty());
-    let opts = SemanticsOptions {
-        select_tags: vec!["pick".into()],
-        ..SemanticsOptions::default()
-    };
+    let opts = SemanticsOptions::default().with_select_tags(["pick"]);
     let configured =
         "* A :export:\n:PROPERTIES:\n:ID: a\n:END:\n* B :pick:\n:PROPERTIES:\n:ID: b\n:END:\n";
     assert_eq!(ids(&sem_with(configured, &opts)), vec!["b"]);
@@ -240,10 +233,7 @@ fn an_archived_headline_renders_without_its_contents() {
         .map(|d| d.1)
         .collect();
     assert_eq!(archived, vec!["a", "id:a-text", "a1"]);
-    let with = |mode| SemanticsOptions {
-        archived_trees: mode,
-        ..SemanticsOptions::default()
-    };
+    let with = |mode| SemanticsOptions::default().with_archived_trees(mode);
     assert_eq!(
         ids(&sem_with(text, &with(ArchivedTrees::All))),
         vec!["a", "a1", "b"]
@@ -251,10 +241,7 @@ fn an_archived_headline_renders_without_its_contents() {
     let none = sem_with(text, &with(ArchivedTrees::None));
     assert_eq!(ids(&none), vec!["b"]);
     assert!(none.links.is_empty(), "{:?}", none.links);
-    let tag = SemanticsOptions {
-        archive_tag: "archive".into(),
-        ..SemanticsOptions::default()
-    };
+    let tag = SemanticsOptions::default().with_archive_tag("archive");
     assert_eq!(ids(&sem_with(text, &tag)), vec!["a", "a1"]);
 }
 

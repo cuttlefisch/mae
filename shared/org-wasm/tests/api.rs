@@ -27,13 +27,8 @@ fn results_are_mae_orgs_own() {
     let doc = mae_org::parse(DOC, &mae_org::ParseOptions::default());
     let sem = mae_org::semantics(&doc);
     let mut r = mae_org::Resolver::default();
-    r.targets.insert(
-        "a".into(),
-        mae_org::Resolved {
-            href: "/a.html".into(),
-            title: None,
-        },
-    );
+    r.targets
+        .insert("a".into(), mae_org::Resolved::new("/a.html"));
     let want = mae_org::render(&doc, &sem, &mae_org::RenderOptions::default(), &r);
     let got = call(2, req);
     assert_eq!(
@@ -52,6 +47,32 @@ fn results_are_mae_orgs_own() {
     assert!(html["body"].as_str().unwrap().contains("href=\"/a.html\""));
     assert_eq!(ok(5, r##"{"path": "id:x#f?rel=r"}"##)["rel"], "r");
     assert_eq!(ok(6, "")["api"], mae_org::API_VERSION);
+}
+
+/// The facade and the parser are versioned together, and neither inherits
+/// MAE's workspace version (whose every release would otherwise change the
+/// version the module reports, and so its bytes).
+#[test]
+fn the_module_reports_the_contract_version_it_is() {
+    let v = ok(6, "");
+    assert_eq!(
+        v["api"], v["crate"],
+        "mae-org and mae-org-wasm must move together"
+    );
+    assert_eq!(mae_org::API_VERSION, env!("CARGO_PKG_VERSION"));
+    let workspace =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.toml"))
+            .expect("the workspace manifest");
+    let mae = workspace
+        .split("[workspace.package]")
+        .nth(1)
+        .and_then(|t| t.lines().find_map(|l| l.strip_prefix("version = ")))
+        .expect("the workspace version");
+    assert_ne!(
+        mae.trim_matches('"'),
+        mae_org::API_VERSION,
+        "the contract version must not be MAE's workspace version"
+    );
 }
 
 #[test]

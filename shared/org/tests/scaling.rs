@@ -509,8 +509,7 @@ fn resolver() -> Resolver {
     let mut r = Resolver::default();
     for i in 0..50 {
         let href = format!("/t{i}.html");
-        r.targets
-            .insert(format!("t{i}"), Resolved { href, title: None });
+        r.targets.insert(format!("t{i}"), Resolved::new(href));
     }
     r
 }

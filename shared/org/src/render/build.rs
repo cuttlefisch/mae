@@ -35,6 +35,8 @@ pub(crate) enum Mode {
 pub(crate) struct Table {
     pub custom_ids: HashMap<String, String>,
     pub titles: HashMap<String, String>,
+    /// Every heading's `h-` anchor.
+    pub headings: HashSet<String>,
     pub targets: HashMap<String, String>,
     pub radios: HashMap<String, String>,
     pub nodes: HashMap<String, String>,

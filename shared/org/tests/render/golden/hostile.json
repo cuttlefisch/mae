@@ -11,7 +11,7 @@
               }
             ],
             "properties": {
-              "id": "id-a.22b.3cc.20d"
+              "id": "h-hostile-script-heading"
             },
             "tagName": "h1",
             "type": "element"
@@ -351,7 +351,8 @@
           "className": [
             "org-section",
             "org-level-1"
-          ]
+          ],
+          "id": "id-a.22b.3cc.20d"
         },
         "tagName": "section",
         "type": "element"
@@ -366,7 +367,7 @@
               }
             ],
             "properties": {
-              "id": "id-.d0.b0pple"
+              "id": "h-confusable"
             },
             "tagName": "h1",
             "type": "element"
@@ -398,7 +399,8 @@
           "className": [
             "org-section",
             "org-level-1"
-          ]
+          ],
+          "id": "id-.d0.b0pple"
         },
         "tagName": "section",
         "type": "element"
@@ -428,7 +430,7 @@
               }
             ],
             "properties": {
-              "id": "id-plan-node"
+              "id": "h-plan"
             },
             "tagName": "h1",
             "type": "element"
@@ -438,7 +440,8 @@
           "className": [
             "org-section",
             "org-level-1"
-          ]
+          ],
+          "id": "id-plan-node"
         },
         "tagName": "section",
         "type": "element"
@@ -474,6 +477,15 @@
           }
         ],
         "type": "root"
+      },
+      "title_unlinked": {
+        "children": [
+          {
+            "type": "text",
+            "value": "Hostile \"<script>\" heading"
+          }
+        ],
+        "type": "root"
       }
     },
     {
@@ -502,6 +514,15 @@
           }
         ],
         "type": "root"
+      },
+      "title_unlinked": {
+        "children": [
+          {
+            "type": "text",
+            "value": "Confusable"
+          }
+        ],
+        "type": "root"
       }
     },
     {
@@ -523,6 +544,30 @@
         }
       ],
       "title": {
+        "children": [
+          {
+            "type": "text",
+            "value": "Plan "
+          },
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "[?]"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-unresolved"
+              ]
+            },
+            "tagName": "span",
+            "type": "element"
+          }
+        ],
+        "type": "root"
+      },
+      "title_unlinked": {
         "children": [
           {
             "type": "text",

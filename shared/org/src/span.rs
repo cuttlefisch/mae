@@ -9,7 +9,10 @@ use crate::kind::SyntaxKind::{self, *};
 use crate::kind::SyntaxNode;
 use crate::text::{ws_len, Source};
 
-/// A half-open byte range `[start, end)` into the parsed text.
+/// A half-open byte range `[start, end)` into the parsed text: UTF-8 BYTE
+/// offsets, as everywhere in this crate's API and JSON, never character
+/// counts and never JavaScript string (UTF-16) indices. Exhaustive: a span
+/// is two offsets and nothing else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Span {
     pub start: u32,

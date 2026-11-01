@@ -26,6 +26,13 @@ pub(crate) fn nodes(
         .map(|n| {
             let mut title = b.node_title(&root, n);
             trim_text(&mut title);
+            // As inside a link's description: links show their text, no
+            // `<a>` (nor a footnote marker) is made.
+            b.in_link = true;
+            let mut title_unlinked = b.node_title(&root, n);
+            b.in_link = false;
+            trim_text(&mut title_unlinked);
+            unwrap_plain(&mut title_unlinked);
             let aliases = n
                 .aliases
                 .iter()
@@ -40,6 +47,7 @@ pub(crate) fn nodes(
                 id: n.id.clone(),
                 anchor: page.nodes.get(&n.id).cloned(),
                 title,
+                title_unlinked,
                 aliases,
                 properties,
             }
@@ -126,5 +134,24 @@ impl Builder<'_> {
         }
         trim_text(&mut out);
         out
+    }
+}
+
+/// Replaces each class-less `<span>` (a link shown as plain text) by its
+/// children, recursively, so an unlinked title is the link text itself.
+fn unwrap_plain(nodes: &mut Vec<Node>) {
+    let old = std::mem::take(nodes);
+    for n in old {
+        match n {
+            Node::Element(mut e) => {
+                unwrap_plain(&mut e.children);
+                if e.tag == super::tree::Tag::Span && e.attrs.is_empty() {
+                    e.children.into_iter().for_each(|c| push(nodes, c));
+                } else {
+                    push(nodes, Node::Element(e));
+                }
+            }
+            t => push(nodes, t),
+        }
     }
 }

@@ -20,10 +20,8 @@ use std::path::{Path, PathBuf};
 pub fn golden_resolver() -> Resolver {
     let mut r = Resolver::default();
     let mut add = |id: &str, href: &str, title: Option<&str>| {
-        let resolved = Resolved {
-            href: href.to_string(),
-            title: title.map(str::to_string),
-        };
+        let mut resolved = Resolved::new(href);
+        resolved.title = title.map(str::to_string);
         r.targets.insert(id.to_string(), resolved);
     };
     add("known", "/notes/known.html", None);
@@ -36,9 +34,9 @@ pub fn golden_resolver() -> Resolver {
 /// The options a fixture is rendered with.
 fn options_for(name: &str) -> RenderOptions {
     match name {
-        "links" => RenderOptions::new(HeadlineIds::Explicit, true, false),
-        "nodes" => RenderOptions::new(HeadlineIds::Explicit, false, true),
-        "inline" => RenderOptions::new(HeadlineIds::Slug, false, false),
+        "links" => RenderOptions::default().with_images(true),
+        "nodes" => RenderOptions::default().with_property_drawers(true),
+        "inline" => RenderOptions::default().with_headline_ids(HeadlineIds::Slug),
         _ => RenderOptions::default(),
     }
 }

@@ -57,14 +57,10 @@ use support::{bundled_corpus, read, rel};
 /// mae-kb hard-codes these TODO keywords; the differential declares the same
 /// set (ADR-112 D4: they are data), so only in-file `#+TODO` lines differ.
 fn options() -> ParseOptions {
-    let words = |ws: &[&str]| ws.iter().map(|w| w.to_string()).collect();
-    ParseOptions {
-        todo_sequences: vec![TodoSequence {
-            todo: words(&["TODO", "NEXT", "WAIT"]),
-            done: words(&["DONE", "CANCELLED", "DEFERRED"]),
-        }],
-        ..ParseOptions::default()
-    }
+    ParseOptions::default().with_todo_sequences(vec![TodoSequence::new(
+        ["TODO", "NEXT", "WAIT"],
+        ["DONE", "CANCELLED", "DEFERRED"],
+    )])
 }
 
 #[derive(Debug, Clone)]

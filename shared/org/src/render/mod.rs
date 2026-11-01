@@ -37,7 +37,7 @@
 //!
 //! | Construct | Rendered as |
 //! |---|---|
-//! | headline | `<section class="org-section org-level-N">` with `<hN id>` (h6 below 6): TODO keyword `<span class="org-todo">` (+ `org-done`), priority `<span class="org-priority">`, title, tags `<span class="org-tags">` of `<span class="org-tag">` |
+//! | headline | `<section class="org-section org-level-N">` (with `id` = the node's or custom id under [`HeadlineIds::Explicit`]) holding `<hN id="h-SLUG">` (h6 below 6; see [`heading_anchor`]): TODO keyword `<span class="org-todo">` (+ `org-done`), priority `<span class="org-priority">`, title, tags `<span class="org-tags">` of `<span class="org-tag">` |
 //! | section, zeroth section | its elements, unwrapped |
 //! | paragraph | `<p>` |
 //! | bold, italic, underline, strike-through | `<strong>`, `<em>`, `<span class="org-underline">`, `<del>` |
@@ -80,7 +80,7 @@ mod structure;
 mod text;
 mod tree;
 
-pub use anchors::{encode_id, is_valid_id, slug, SLUG_MAX};
+pub use anchors::{encode_id, heading_anchor, is_valid_id, slug, SLUG_MAX};
 pub(crate) use hast::json_str;
 pub use hast::to_hast;
 pub use html::to_html;
@@ -92,14 +92,19 @@ pub use tree::{Attr, Element, Node, Tag, ATTRIBUTES, CLASSES, TAGS};
 use crate::{Document, Semantics, Span};
 use std::collections::HashMap;
 
-/// How headlines get their anchor ids.
+/// Which anchors a headline gets besides the one every rendered headline's
+/// heading carries, `h-` + [`slug`] of its title ([`heading_anchor`]),
+/// which is where a KB link's `#fragment` lands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum HeadlineIds {
-    /// A KB node's `:ID:` (`id-…`), else its `CUSTOM_ID` (`cid-…`), else a
-    /// slug of its title (`h-…`).
+    /// The section also carries the KB node's `:ID:` (`id-…`), else the
+    /// `CUSTOM_ID` (`cid-…`), when there is one: links to the node or the
+    /// custom id land there.
     #[default]
     Explicit,
-    /// A slug of the title (`h-…`) for every headline.
+    /// Only the heading's `h-` anchor; links to the node or custom id land
+    /// on it.
     Slug,
 }
 
@@ -117,19 +122,10 @@ pub struct RenderOptions {
     pub property_drawers: bool,
 }
 
-impl RenderOptions {
-    pub fn new(headline_ids: HeadlineIds, images: bool, property_drawers: bool) -> RenderOptions {
-        RenderOptions {
-            headline_ids,
-            images,
-            property_drawers,
-        }
-    }
-}
-
 /// Where a KB link goes: caller-supplied data, never a callback (no
 /// re-entrancy across WASM).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Resolved {
     /// The link target. Validated with [`safe_resolver_href`]: a target
     /// it refuses leaves the link unresolved.
@@ -140,6 +136,7 @@ pub struct Resolved {
 
 /// KB node id → [`Resolved`], and the text of an unresolved link.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Resolver {
     pub targets: HashMap<String, Resolved>,
     /// The text of a link that resolves nowhere and has no description.
@@ -193,11 +190,17 @@ pub const RENDER_MAX_DEPTH: usize = 256;
 /// path as the body (inline elements only: no block element, no id, no
 /// footnote, and no same-page link, since it may be shown on another page).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct NodeMeta {
     pub id: String,
     /// The node's anchor id on this page; `None` for the file node.
     pub anchor: Option<String>,
     pub title: Vec<Node>,
+    /// The title with every link replaced by what it shows (its
+    /// description, else its resolved title or the placeholder), and no
+    /// `<a>` anywhere: for a consumer that wraps the title in its own link,
+    /// which must not hold another (an HTML parser would split them).
+    pub title_unlinked: Vec<Node>,
     pub aliases: Vec<Vec<Node>>,
     /// The node's properties (canonical keys, as [`crate::SemanticNode`]),
     /// each value plain text in which only bracket links are links.
@@ -206,6 +209,7 @@ pub struct NodeMeta {
 
 /// A rendered document.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Rendered {
     /// The page body: the children of the hast root.
     pub body: Vec<Node>,
@@ -217,6 +221,7 @@ pub struct Rendered {
 
 /// Which serialisation [`Rendered::to_json`] embeds trees as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum TreeFormat {
     /// Each tree as a hast root object.
     Hast,
@@ -271,7 +276,8 @@ pub fn render_inline(text: &str, options: &RenderOptions, resolver: &Resolver) -
 
 impl Rendered {
     /// The whole result as JSON: `{"body": T, "nodes": [{"id", "anchor",
-    /// "title": T, "aliases": [T], "properties": [{"key", "value": T}]}],
+    /// "title": T, "title_unlinked": T, "aliases": [T], "properties":
+    /// [{"key", "value": T}]}],
     /// "diagnostics": [{"kind", "start", "end"}]}`, each tree `T` in
     /// `format`.
     pub fn to_json(&self, format: TreeFormat) -> String {

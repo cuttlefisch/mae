@@ -61,7 +61,10 @@ fn round_trips(text_in: &str) -> Result<(), String> {
     let resolver = adversarial_resolver(&kb_targets(&sem));
     for opts in [
         RenderOptions::default(),
-        RenderOptions::new(HeadlineIds::Slug, true, true),
+        RenderOptions::default()
+            .with_headline_ids(HeadlineIds::Slug)
+            .with_images(true)
+            .with_property_drawers(true),
     ] {
         let out = render(&doc, &sem, &opts, &resolver);
         let mut trees = vec![out.body.clone()];

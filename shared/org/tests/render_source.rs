@@ -86,6 +86,7 @@ fn fingerprint(text: &str) -> Vec<String> {
             }
             SemanticDiagnostic::DuplicateId { id, .. } => id.clone(),
             SemanticDiagnostic::SetupFileNotRead { file, .. } => file.clone(),
+            _ => d.kind_name().to_string(),
         };
         out.push(format!("diag {} {what}", d.kind_name()));
     }

@@ -1,9 +1,11 @@
 //! Anchor ids: one namespace per page, collision-free by construction.
 //!
 //! Every id is a fixed PREFIX naming its kind, then a body:
-//! - `id-` + enc(`:ID:`) for a KB node (a headline or list item);
-//! - `cid-` + enc(`CUSTOM_ID`) for a headline's custom id;
-//! - `h-` + a slug of the headline's title, for any other headline;
+//! - `id-` + enc(`:ID:`) for a KB node (a headline's section, or a list
+//!   item);
+//! - `cid-` + enc(`CUSTOM_ID`) for a headline's section;
+//! - `h-` + a slug of the headline's title, on EVERY headline's heading
+//!   (the anchor a KB link's `#fragment` lands on, see [`slug`]);
 //! - `t-` + enc(text) for a `<<target>>`; `r-` + enc(text) for a radio target;
 //! - `fn-N` and `fnr-N` (`fnr-N-K` for the K-th repeat) for footnotes.
 //!
@@ -45,24 +47,42 @@ pub const SLUG_MAX: usize = 64;
 /// A headline title as a slug: ASCII letters and digits, lower-cased; every
 /// run of anything else is one `-`; no `-` at either end; at most
 /// [`SLUG_MAX`] bytes. Empty when the title has no ASCII letter or digit.
+///
+/// Idempotent (`slug(slug(t)) == slug(t)`), so a KB link fragment written
+/// as a slug (`id:x#rope-internals`) and one written as the title
+/// (`id:x#Rope internals`) name the same heading.
 pub fn slug(title: &str) -> String {
     let mut out = String::new();
     let mut dash = false;
     for c in title.chars() {
         if c.is_ascii_alphanumeric() {
-            if dash && !out.is_empty() {
+            let sep = dash && !out.is_empty();
+            // The separator and the character must both fit: a slug never
+            // ends in `-` and never exceeds the limit.
+            if out.len() + usize::from(sep) + 1 > SLUG_MAX {
+                break;
+            }
+            if sep {
                 out.push('-');
             }
             dash = false;
-            if out.len() >= SLUG_MAX {
-                break;
-            }
             out.push(c.to_ascii_lowercase());
         } else {
             dash = true;
         }
     }
     out
+}
+
+/// The anchor every rendered headline's heading carries: `h-` + the slug of
+/// its title, or `h` when the slug is empty (before any repeat suffix).
+pub fn heading_anchor(title: &str) -> String {
+    let s = slug(title);
+    if s.is_empty() {
+        "h".to_string()
+    } else {
+        format!("h-{s}")
+    }
 }
 
 /// The ids already given on a page.

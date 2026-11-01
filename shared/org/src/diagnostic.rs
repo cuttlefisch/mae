@@ -50,6 +50,7 @@ impl DiagnosticKind {
 
 /// A diagnostic and the bytes it concerns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Diagnostic {
     pub span: Span,
     pub kind: DiagnosticKind,

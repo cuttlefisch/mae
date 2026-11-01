@@ -106,6 +106,7 @@ pub enum ArchivedTrees {
 
 /// Declared configuration the projection reads (ADR-112 D4).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SemanticsOptions {
     /// Subtrees tagged with one of these (or every subtree, when the file
     /// tags carry one) are not rendered. In-file `#+EXCLUDE_TAGS:` lines
@@ -180,6 +181,7 @@ impl Default for SemanticsOptions {
 
 /// Which element a node is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[non_exhaustive]
 pub enum NodeOrigin {
     File,
     Headline,
@@ -188,6 +190,7 @@ pub enum NodeOrigin {
 
 /// A KB node: the file, a headline or a list item with an `:ID:`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SemanticNode {
     pub id: String,
     pub origin: NodeOrigin,
@@ -211,6 +214,7 @@ pub struct SemanticNode {
 
 /// A link in a rendered region.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct SemanticLink {
     /// The node the link belongs to (see the module doc).
     pub from: Option<String>,
@@ -233,6 +237,7 @@ pub struct SemanticLink {
 
 /// A `#+TRANSCLUDE:` line in a rendered region.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Transclusion {
     pub from: Option<String>,
     /// MAE's `MEMBER`, or the target of org-transclusion's link (the id of
@@ -249,6 +254,7 @@ pub struct Transclusion {
 
 /// A region the semantics do not read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[non_exhaustive]
 pub enum Region {
     CommentLine,
     CommentBlock,
@@ -284,6 +290,7 @@ impl Region {
 
 /// What the projection reports instead of deriving.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SemanticDiagnostic {
     /// An `:ID: value` line (possibly commented out with `#`) in an
     /// unrendered region: no node comes from it. `span` is the line.
@@ -343,6 +350,7 @@ impl SemanticDiagnostic {
 /// An element the projection does not read, so no renderer may draw: the
 /// decision renderers reuse (ADR-112 D2/D3) rather than re-derive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[non_exhaustive]
 pub struct Unrendered {
     /// The element's span; with `element` it identifies one node of the tree.
     pub span: Span,
@@ -355,6 +363,7 @@ pub struct Unrendered {
 /// text references (Org renders it in the footnotes section, wherever it
 /// sits, unless a region Org never parses holds it).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RenderedFootnote {
     pub label: String,
     /// The `FOOTNOTE_DEFINITION` element.
@@ -363,6 +372,7 @@ pub struct RenderedFootnote {
 
 /// Everything the projection derives, each list in document order.
 #[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
 pub struct Semantics {
     /// The file's tags (`#+filetags`), each once, in order: every node's.
     pub file_tags: Vec<String>,
