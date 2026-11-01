@@ -8,14 +8,29 @@
 //! The inputs stay small enough that a regression shows here as a failed
 //! ratio, not as an OOM kill of the test process.
 //!
-//! Measured on the development machine (2026-10-31, release), peak heap at
-//! N -> 8N (the radio families failed before the linear matcher: nested
-//! targets 18.6 MB -> 303 MB for 12 KB -> 94 KB, normalised x2.08):
-//! - nested radio targets: 661 KB -> 5172 KB for 12 KB -> 94 KB, normalised x1.00
-//! - blank-start radio target: 635 KB -> 5059 KB for 7 KB -> 62 KB, normalised x1.00
-//! - nested tab radio targets: 661 KB -> 5172 KB for 12 KB -> 94 KB, normalised x1.00
-//! - nested mixed radio targets: 802 KB -> 6267 KB for 17 KB -> 141 KB, normalised x0.99
-//! - plain words: 85 KB -> 669 KB for 19 KB -> 156 KB, normalised x0.98
+//! A ratio alone passes memory that is linear with a huge constant: the
+//! review's mixed-target families were x1.0 here at 540-650 B per input
+//! byte (2.4 MB of input took 1.33 GB). So every family is also held to an
+//! ABSOLUTE ceiling, [`MAX_BYTES_PER_BYTE`], at both sizes.
+//!
+//! Measured on the development machine (2026-11-01, release, after the fix
+//! round), peak heap at N -> 8N and bytes per input byte at 8N (the radio
+//! families failed before the linear matcher: nested targets 18.6 MB ->
+//! 303 MB for 12 KB -> 94 KB, normalised x2.08; the mixed-target ones
+//! before the fix round: case variants 540, nested blank-start 650 and
+//! 515, distinct targets on one node 736 B/byte):
+//! - nested radio targets: 697 KB -> 5434 KB for 12 KB -> 94 KB, x1.00, 57 B/byte
+//! - blank-start radio target: 239 KB -> 1891 KB for 7 KB -> 62 KB, x0.99, 30 B/byte
+//! - nested tab radio targets: 697 KB -> 5434 KB for 12 KB -> 94 KB, x1.00, 57 B/byte
+//! - nested mixed radio targets: 838 KB -> 6527 KB for 17 KB -> 141 KB, x0.99, 46 B/byte
+//! - plain words: 85 KB -> 669 KB for 19 KB -> 156 KB, x0.98, 4 B/byte
+//! - case-variant blank-start mixed targets: 1827 KB -> 14597 KB for 37 KB -> 301 KB, x1.00, 48 B/byte
+//! - nested blank-start mixed targets, lead fails: 959 KB -> 7387 KB for 16 KB -> 126 KB, x0.99, 58 B/byte
+//! - nested blank-start mixed targets, lead matches: 831 KB -> 6363 KB for 20 KB -> 157 KB, x0.98, 40 B/byte
+//! - distinct mixed targets on one node: 1491 KB -> 20441 KB for 27 KB -> 395 KB, x0.96, 52 B/byte
+//! - target of N distinct ascending chars: 1033 KB -> 8251 KB for 23 KB -> 187 KB, x1.00, 44 B/byte
+//! - split radio regexps (glossary): 7429 KB -> 59907 KB for 100 KB -> 841 KB, x0.96, 71 B/byte
+//! - realistic document: 1625 KB -> 12978 KB for 44 KB -> 363 KB, x0.98, 36 B/byte
 
 use mae_org::{parse, ParseOptions};
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -106,6 +121,83 @@ fn nested_mixed_targets(n: usize) -> String {
     s
 }
 
+/// Review F2: many case variants of one blank-start mixed target on one
+/// trie node, then a long text of near-misses (2.4 MB took 1.33 GB).
+fn case_variant_targets(n: usize) -> String {
+    let word = "abcdefghijklmnop";
+    let targets: String = (0..(n / 40).clamp(2, 1 << 16))
+        .map(|v| {
+            let w: String = word
+                .chars()
+                .enumerate()
+                .map(|(i, c)| {
+                    if v >> i & 1 == 1 {
+                        c.to_ascii_uppercase()
+                    } else {
+                        c
+                    }
+                })
+                .collect();
+            format!("<<<\u{a0} {w}>>>\n")
+        })
+        .collect();
+    format!("{targets}\n{}\n", "  abcdefghijklmnop".repeat(n / 2))
+}
+
+/// Review F2: nested blank-start mixed targets (4.1 MB took 2.6 GB).
+fn nested_blank_start(n: usize, unit: &str) -> String {
+    let k = (n as f64).sqrt() as usize;
+    let targets: String = (1..=k)
+        .map(|j| format!("<<<\u{a0}{}>>>\n", " a".repeat(j)))
+        .collect();
+    format!("{targets}\n{}\n", unit.repeat(n))
+}
+
+/// Distinct mixed targets on one node over text holding tabs.
+fn distinct_mixed_on_one_node(n: usize) -> String {
+    let targets: String = (3..3 + n / 50)
+        .map(|i| format!("<<<x {}y>>>\n", "\t".repeat(i)))
+        .collect();
+    format!("{targets}\n{}\n", "x \t\ty ".repeat(n))
+}
+
+/// One target of N distinct chars in ascending order.
+fn distinct_char_target(n: usize) -> String {
+    let t: String = (0..n as u32)
+        .filter_map(|i| char::from_u32(0x4E00 + i))
+        .collect();
+    format!("<<<{t}>>>\n\n{t}\n")
+}
+
+/// N glossary terms (past Org's regexp limit, so split), then text.
+fn glossary(n: usize) -> String {
+    let word = |i: usize| format!("w{}", i % 211);
+    let term = |i: usize| format!("{} t{i}", word(i * 7));
+    let defs: String = (0..n)
+        .map(|i| format!("- <<<{}>>> :: d\n", term(i)))
+        .collect();
+    let uses: String = (0..n)
+        .map(|i| format!("{} {} and {} ", word(i), term((i * 13) % n), term(i)))
+        .collect();
+    format!("{defs}\n{uses}\n")
+}
+
+/// A realistic document: headings, lists, links, emphasis, a table.
+fn realistic(n: usize) -> String {
+    (0..n)
+        .map(|i| {
+            format!(
+                "* Heading {i} :tag:\n:PROPERTIES:\n:ID: id-{i}\n:END:\n\
+                 Some *bold* and /italic/ text with [[id:id-{}][a link]] and\n\
+                 https://example.org/{i}, a footnote[fn:{i}].\n\
+                 - item one\n- item =two=\n| a | b |\n|---+---|\n| 1 | 2 |\n\n\
+                 [fn:{i}] The note.\n",
+                i / 2
+            )
+        })
+        .collect()
+}
+
 type Family = (&'static str, fn(usize) -> String, usize);
 
 const FAMILIES: &[Family] = &[
@@ -114,7 +206,43 @@ const FAMILIES: &[Family] = &[
     ("nested tab radio targets", nested_tab_targets, 4_000),
     ("nested mixed radio targets", nested_mixed_targets, 4_000),
     ("plain words", |n| "word ".repeat(n), 4_000),
+    (
+        "case-variant blank-start mixed targets",
+        case_variant_targets,
+        4_000,
+    ),
+    (
+        "nested blank-start mixed targets, lead fails",
+        |n| nested_blank_start(n, "\t a"),
+        4_000,
+    ),
+    (
+        "nested blank-start mixed targets, lead matches",
+        |n| nested_blank_start(n, "\u{a0} a"),
+        4_000,
+    ),
+    (
+        "distinct mixed targets on one node",
+        distinct_mixed_on_one_node,
+        4_000,
+    ),
+    (
+        "target of N distinct ascending chars",
+        distinct_char_target,
+        4_000,
+    ),
+    ("split radio regexps (glossary)", glossary, 2_000),
+    ("realistic document", realistic, 200),
 ];
+
+/// The absolute ceiling on peak heap per input byte, for every family at
+/// every size measured. A realistic document measures about 33 B/byte
+/// (the tree, its index and the inline tables); the radio matcher's own
+/// tables add about 20 B per text byte at most, and its memo of failed
+/// states is capped at one entry per two text bytes. A ratio gate alone
+/// would pass memory that is linear with a huge constant (the review's
+/// 560-650 B/byte); this bounds the constant.
+const MAX_BYTES_PER_BYTE: f64 = 100.0;
 
 #[test]
 fn peak_heap_grows_linearly() {
@@ -134,9 +262,22 @@ fn peak_heap_grows_linearly() {
         if ratio >= 2.0 {
             failures.push(format!("{name}: x{ratio:.2}"));
         }
+        for (peak, input) in [(p1, small.len()), (p8, large.len())] {
+            let per_byte = peak as f64 / input as f64;
+            eprintln!(
+                "//!   {name}: {per_byte:.1} B per input byte at {} KB",
+                input / 1024
+            );
+            if per_byte >= MAX_BYTES_PER_BYTE {
+                failures.push(format!(
+                    "{name}: {per_byte:.0} B/byte at {} KB",
+                    input / 1024
+                ));
+            }
+        }
     }
     assert!(
         failures.is_empty(),
-        "super-linear peak memory: {failures:?}"
+        "super-linear or oversized peak memory: {failures:?}"
     );
 }

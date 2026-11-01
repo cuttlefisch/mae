@@ -63,17 +63,36 @@
 //! - [cite: unclosed: 3.33 ms -> 26.86 ms for x8 bytes, normalised x8.1
 //! - \( unclosed: 1.72 ms -> 14.11 ms for x8 bytes, normalised x8.2
 //! - table cells: 3.09 ms -> 26.85 ms for x8 bytes, normalised x8.7
-//! - radio links: 7.57 ms -> 65.11 ms for x8 bytes, normalised x8.6
-//! - long radio target: 4.81 ms -> 41.56 ms for x8 bytes, normalised x8.6
-//! - radio candidates rejected: 3.58 ms -> 29.45 ms for x8 bytes, normalised x8.2
-//! - blank-start radio target: 1.93 ms -> 15.48 ms for x8 bytes, normalised x8.1
+//!
+//! The radio families, re-measured 2026-11-01 after the fix round (review
+//! F1-F3, F10). From "nested radio targets" on, the larger input's targets
+//! pass Org's 8192-char regexp limit, so it is matched as split regexps
+//! (`org-target-link-regexps`) and the smaller is not: the ratio includes
+//! that change of mode. "distinct mixed targets on one node" spends the work
+//! budget (RadioLinkBudget) by design; time stays linear.
+//! - radio links: 7.54 ms -> 65.15 ms for x8 bytes, normalised x8.6
+//! - long radio target: 9.65 ms -> 85.33 ms for x8 bytes, normalised x8.9
+//! - radio candidates rejected: 4.02 ms -> 34.35 ms for x8 bytes, normalised x8.5
+//! - blank-start radio target: 2.71 ms -> 21.60 ms for x8 bytes, normalised x8.0
 //!   (before the linear matcher: 680 ms -> 43,105 ms, x63.5)
-//! - nested radio targets: 2.12 ms -> 15.49 ms for x8 bytes, normalised x7.5
+//! - nested radio targets: 2.69 ms -> 23.68 ms for x8 bytes, normalised x9.0
 //!   (before: 18.24 ms -> 524.87 ms, x29.5)
-//! - nested tab radio targets: 2.13 ms -> 16.17 ms for x8 bytes, normalised x7.8
-//! - nested mixed radio targets: 3.52 ms -> 27.18 ms for x8 bytes, normalised x7.8
-//! - mixed radio targets failing late: 39.71 ms -> 281.76 ms for x8 bytes, normalised x7.3
-//! - radio link before [[ (Emacs loops): 9.69 ms -> 87.19 ms for x8 bytes, normalised x9.0
+//! - nested tab radio targets: 3.10 ms -> 26.85 ms for x8 bytes, normalised x8.9
+//! - nested mixed radio targets: 3.75 ms -> 42.56 ms for x8 bytes, normalised x11.5
+//! - mixed radio targets failing late: 32.11 ms -> 184.84 ms for x8 bytes, normalised x5.9
+//! - case-variant blank-start mixed targets: 5.10 ms -> 42.36 ms for x8 bytes, normalised x8.3
+//! - nested blank-start mixed targets, lead fails: 3.94 ms -> 33.41 ms for x8 bytes, normalised x8.7
+//! - nested blank-start mixed targets, lead matches: 3.94 ms -> 33.76 ms for x8 bytes, normalised x8.7
+//! - distinct mixed targets on one node: 34.89 ms -> 417.62 ms for x14 bytes, normalised x6.7
+//! - target of N distinct ascending chars: 3.26 ms -> 27.34 ms for x8 bytes, normalised x8.4
+//!   (before: a sorted transition list per state, 2.86 ms -> 102.11 ms, x35.7)
+//! - split radio regexps (glossary): 27.19 ms -> 253.21 ms for x8 bytes, normalised x8.9
+//! - radio link before [[ (Emacs loops): 9.96 ms -> 87.96 ms for x8 bytes, normalised x8.8
+//!
+//! The per-candidate work on mixed targets (review F3 a, b) grew as N^1.5,
+//! which at these sizes is only x22.6 per 8x and hides under this bound; it
+//! is gated exactly, by counting visits, in `inline::radio`'s
+//! `mixed_target_work_per_candidate_is_bounded`.
 //!
 //! The `semantics()` families (2026-10-31, after the review fixes; before
 //! them the first six were x47–x391: a scan of the item's children per
@@ -92,6 +111,11 @@
 //! - sem: N links in one paragraph: 8.79 ms -> 68.77 ms for x8 bytes, normalised x7.8
 //! - sem: one drawer, N KEY+ appends: 10.46 ms -> 85.37 ms for x8 bytes, normalised x8.2
 //! - sem: N transclusions: 25.99 ms -> 218.40 ms for x8 bytes, normalised x8.4
+//! - sem: N links and N kept notes in one unrendered region (review F4, 2026-11-01):
+//!   10.54 ms -> 88.12 ms for x9 bytes, normalised x7.8 (before: a scan of every
+//!   kept definition per link, 17.90 ms -> 601.17 ms, x31.3)
+//! - sem: N chained tag groups (review F5): 26.01 ms -> 219.46 ms for x9 bytes,
+//!   normalised x7.9
 //!
 //! The renderer families (2026-10-31; `render()`, `to_html` and `to_hast`
 //! timed together on a parsed, projected document). "deep list" is cut by
@@ -259,6 +283,45 @@ const FAMILIES: &[Family] = &[
         mixed_failing_late,
         4_000,
     ),
+    // Review F2/F3: many case variants of one blank-start mixed target on
+    // one trie node (each was tried per candidate, and its failed states
+    // memoised: 2.4 MB of input took 1.33 GB).
+    (
+        "case-variant blank-start mixed targets",
+        case_variant_targets,
+        4_000,
+    ),
+    // Nested blank-start mixed targets: the walk up the chain was O(√N) per
+    // candidate. Their leading stretch fails (the text has a tab where the
+    // targets have a no-break space), and passes.
+    (
+        "nested blank-start mixed targets, lead fails",
+        |n| nested_blank_start(n, "\t a"),
+        4_000,
+    ),
+    (
+        "nested blank-start mixed targets, lead matches",
+        |n| nested_blank_start(n, "\u{a0} a"),
+        4_000,
+    ),
+    // Distinct mixed targets on one node (they differ only in a stretch),
+    // over text that holds tabs: each candidate tries them until the work
+    // budget is spent (RadioLinkBudget), so time stays linear.
+    (
+        "distinct mixed targets on one node",
+        distinct_mixed_on_one_node,
+        4_000,
+    ),
+    // One target of N distinct chars in ascending order: building the suffix
+    // automaton inserted into a sorted list per state (9.8 s at 1.2 MB).
+    (
+        "target of N distinct ascending chars",
+        distinct_char_target,
+        4_000,
+    ),
+    // Enough targets that Org splits its regexp (org-target-link-regexps):
+    // the search takes each regexp's leftmost match and the earliest end.
+    ("split radio regexps (glossary)", glossary, 2_000),
     // The shape on which Emacs never terminates, repeated.
     (
         "radio link before [[ (Emacs loops)",
@@ -266,6 +329,69 @@ const FAMILIES: &[Family] = &[
         3_000,
     ),
 ];
+
+/// `<<<\u{a0} abcdefghijklmnop>>>` in N/40 case variants, then the word
+/// after two ASCII spaces, N/2 times.
+fn case_variant_targets(n: usize) -> String {
+    let word = "abcdefghijklmnop";
+    let targets: String = (0..(n / 40).clamp(2, 1 << 16))
+        .map(|v| {
+            let w: String = word
+                .chars()
+                .enumerate()
+                .map(|(i, c)| {
+                    if v >> i & 1 == 1 {
+                        c.to_ascii_uppercase()
+                    } else {
+                        c
+                    }
+                })
+                .collect();
+            format!("<<<\u{a0} {w}>>>\n")
+        })
+        .collect();
+    format!("{targets}\n{}\n", "  abcdefghijklmnop".repeat(n / 2))
+}
+
+/// Targets `\u{a0} a`, `\u{a0} a a`, … (√N of them), then `unit` N times.
+fn nested_blank_start(n: usize, unit: &str) -> String {
+    let k = (n as f64).sqrt() as usize;
+    let targets: String = (1..=k)
+        .map(|j| format!("<<<\u{a0}{}>>>\n", " a".repeat(j)))
+        .collect();
+    format!("{targets}\n{}\n", unit.repeat(n))
+}
+
+/// `x` + space + i tabs + `y`, for i up to N/50: one run-collapsed shape,
+/// N/50 distinct targets; then `x \t\ty ` N times (none matches it).
+fn distinct_mixed_on_one_node(n: usize) -> String {
+    let targets: String = (3..3 + n / 50)
+        .map(|i| format!("<<<x {}y>>>\n", "\t".repeat(i)))
+        .collect();
+    format!("{targets}\n{}\n", "x \t\ty ".repeat(n))
+}
+
+/// One radio target of N distinct chars, ascending, then the same text.
+fn distinct_char_target(n: usize) -> String {
+    let t: String = (0..n as u32)
+        .filter_map(|i| char::from_u32(0x4E00 + i))
+        .collect();
+    format!("<<<{t}>>>\n\n{t}\n")
+}
+
+/// N two-word glossary terms (their regexp is far past Org's 8192-char
+/// limit), then text using them, with words that are not terms between.
+fn glossary(n: usize) -> String {
+    let word = |i: usize| format!("w{}", i % 211);
+    let term = |i: usize| format!("{} t{i}", word(i * 7));
+    let defs: String = (0..n)
+        .map(|i| format!("- <<<{}>>> :: d\n", term(i)))
+        .collect();
+    let uses: String = (0..n)
+        .map(|i| format!("{} {} and {} ", word(i), term((i * 13) % n), term(i)))
+        .collect();
+    format!("{defs}\n{uses}\n")
+}
 
 /// Mixed targets whose last stretch fails at every word: bounded by the
 /// work budget, not by targets × length per word.
@@ -352,6 +478,16 @@ const SEMANTIC_FAMILIES: &[Family] = &[
         },
         5_000,
     ),
+    // Review F4: N links and N kept footnote definitions in one unrendered
+    // region (each link was checked against every kept definition).
+    (
+        "sem: N links and N kept notes in one unrendered region",
+        links_and_kept_notes,
+        2_000,
+    ),
+    // Review F5: N chained tag groups expanded from N exclude tags (each
+    // tag's expansion must not walk the chain again).
+    ("sem: N chained tag groups", chained_tag_groups, 2_000),
     (
         "sem: N transclusions",
         |n| {
@@ -363,6 +499,24 @@ const SEMANTIC_FAMILIES: &[Family] = &[
         5_000,
     ),
 ];
+
+fn links_and_kept_notes(n: usize) -> String {
+    let refs: String = (0..n).map(|i| format!("r[fn:{i}] ")).collect();
+    let links: String = (0..n).map(|i| format!("[[id:x{i}]]\n")).collect();
+    let defs: String = (0..n).map(|i| format!("[fn:{i}] d\n\n")).collect();
+    format!(":PROPERTIES:\n:ID: f\n:END:\n{refs}\n* H :noexport:\n{links}\n{defs}")
+}
+
+fn chained_tag_groups(n: usize) -> String {
+    let groups: String = (0..n)
+        .map(|i| format!("#+TAGS: [ g{i} : g{} ]\n", i + 1))
+        .collect();
+    let exclude: Vec<String> = (0..n).map(|i| format!("g{i}")).collect();
+    let heads: String = (0..n)
+        .map(|i| format!("* h{i} :q{i}:\n:PROPERTIES:\n:ID: h{i}\n:END:\n"))
+        .collect();
+    format!("#+EXCLUDE_TAGS: {}\n{groups}{heads}", exclude.join(" "))
+}
 
 fn item_with_drawers(n: usize) -> String {
     format!(

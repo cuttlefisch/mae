@@ -11,7 +11,7 @@
 //!    end. NOT trimmed: Org reads the type from the path's first character,
 //!    so `[[ id:x]]` is the fuzzy link ` id:x`, not an id link.
 //! 2. **Kind, as `org-element-link-parser` decides the type**, in its order:
-//!    a path that is a file name (`/…`, `~/…`, `./…`, `../…`) is a file link,
+//!    a path that is a file name (`/…`, `~…`, `./…`, `../…`) is a file link,
 //!    [`LinkKind::Other`]; then a known scheme `TYPE:` (ASCII
 //!    case-insensitive, as Org matches it: `Mailto:`, `ID:`): `id` is a KB
 //!    link with the prefix stripped, the [`LinkTypes`] web schemes (`http`,
@@ -224,10 +224,15 @@ pub fn classify_link(raw: &str) -> LinkClass {
 /// `raw` is a path as Emacs's buffer holds it: line endings as `\n` (see
 /// [`crate::Link`]'s path for a parsed link).
 pub fn classify_link_with(raw: &str, types: &LinkTypes) -> LinkClass {
-    let path = normalize_path(raw);
-    let path = path.as_str();
-    let is_file_name = ["/", "~/", "./", "../"].iter().any(|p| path.starts_with(p));
-    if is_file_name {
+    classify_normalized(&normalize_path(raw), types)
+}
+
+/// [`classify_link_with`] on a path already normalised (and, for a
+/// bracket link, its `#+LINK` abbreviation expanded: see
+/// [`crate::LinkAbbrevs::bracket_path`]). Normalising twice would unescape
+/// twice.
+pub(crate) fn classify_normalized(path: &str, types: &LinkTypes) -> LinkClass {
+    if is_file_name(path) {
         return file_link(path);
     }
     let scheme = path.split_once(':').map(|(s, _)| s);
@@ -262,6 +267,15 @@ pub fn classify_link_with(raw: &str, types: &LinkTypes) -> LinkClass {
         return LinkClass::whole(LinkKind::Heading, org_trim(rest));
     }
     kb_link(path, false)
+}
+
+/// Is `path` a file name to Org (`org-element-link-parser` asks
+/// `file-name-absolute-p`, and checks `./` and `../`)? `/` and `~`
+/// paths are absolute. For `~user` Emacs's answer depends on the machine
+/// (whether that user exists); here it is always a file name, so the
+/// answer is the same on every peer (registered: `objects-link-view.org`).
+pub(crate) fn is_file_name(path: &str) -> bool {
+    ["/", "~", "./", "../"].iter().any(|p| path.starts_with(p))
 }
 
 /// Org's `org-trim`: space, tab, LF and CR at both ends; any other

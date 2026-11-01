@@ -47,6 +47,12 @@ impl ParseOptions {
         self.link_types = strings(types);
         self
     }
+
+    /// [`ParseOptions::radio_regexp_limit`].
+    pub fn with_radio_regexp_limit(mut self, limit: usize) -> Self {
+        self.radio_regexp_limit = limit;
+        self
+    }
 }
 
 impl LinkTypes {

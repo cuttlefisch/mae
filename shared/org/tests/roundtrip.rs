@@ -119,3 +119,37 @@ fn the_bundled_corpus_is_exactly_the_tracked_org_files() {
     walked.sort();
     assert_eq!(walked, tracked);
 }
+
+/// Review F12: the corpus is the files git TRACKS, not "not ignored": an
+/// untracked file (a scratch note, a file `:kb-register` wrote) must not
+/// enter it. A scratch repository holds one of each kind; only the tracked
+/// file is listed. Skipped without git.
+#[test]
+fn untracked_and_ignored_files_are_not_in_the_corpus() {
+    let dir = std::env::temp_dir().join(format!("mae-org-corpus-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("tests")).unwrap();
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .is_ok_and(|o| o.status.success())
+    };
+    if !git(&["init", "-q"]) {
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    for f in [
+        "tests/tracked.org",
+        "tests/untracked.org",
+        "tests/ignored.org",
+    ] {
+        std::fs::write(dir.join(f), "* h\n").unwrap();
+    }
+    std::fs::write(dir.join(".gitignore"), "tests/ignored.org\n").unwrap();
+    assert!(git(&["add", "tests/tracked.org", ".gitignore"]));
+    let got = support::tracked_org_files(&dir, &["tests/*.org"]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(got, Some(vec![dir.join("tests/tracked.org")]));
+}

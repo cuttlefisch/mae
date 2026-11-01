@@ -1,0 +1,17 @@
+:PROPERTIES:
+:ID: sem-idplus-file
+:ID+: part
+:END:
+#+title: KEY+ appends as org-entry-get reads it
+
+* A headline whose id an earlier ID+ extends
+:PROPERTIES:
+:ID+: tail
+:ID: sem-idplus-heading
+:END:
+
+- An item whose id is appended
+  :PROPERTIES:
+  :ID: sem-idplus-item
+  :ID+: more
+  :END:

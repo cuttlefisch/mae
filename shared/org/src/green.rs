@@ -29,10 +29,10 @@ pub(crate) fn to_green(
     expand(cx, events, todo, contents, &mut |ev| {
         simple(&mut b, text, ev)
     });
-    if radio.as_ref().is_some_and(Radio::budget_exhausted) {
+    if let Some(from) = radio.as_ref().and_then(Radio::exhausted_at) {
         cx.diagnostics.borrow_mut().push(crate::Diagnostic::new(
             crate::DiagnosticKind::RadioLinkBudget,
-            0,
+            from,
             text.len(),
         ));
     }
@@ -105,6 +105,7 @@ pub(crate) fn objects(text: &str, container: SyntaxKind) -> crate::SyntaxNode {
         // A radio link reads as its own text, so a plain-text value is the
         // same without the document's radio targets.
         radio: None,
+        radio_limit: crate::ParseOptions::ORG_TARGET_LINK_REGEXP_LIMIT,
         diagnostics: &diagnostics,
     };
     let mut events = vec![Event::Start(container)];

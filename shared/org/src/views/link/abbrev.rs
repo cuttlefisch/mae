@@ -16,14 +16,25 @@ pub struct LinkAbbrevs {
 impl LinkAbbrevs {
     /// The `#+LINK: KEY REPLACEMENT` keywords of the document under `root`.
     pub fn of(root: &SyntaxNode) -> LinkAbbrevs {
-        let mut entries: Vec<(String, String)> = root
-            .descendants()
-            .filter_map(Keyword::cast)
+        Self::of_keywords(root.descendants().filter_map(Keyword::cast))
+    }
+
+    /// The abbreviations the `#+LINK:` keywords among `keywords` declare.
+    pub(crate) fn of_keywords(keywords: impl Iterator<Item = Keyword>) -> LinkAbbrevs {
+        let mut entries: Vec<(String, String)> = keywords
             .filter(|k| k.key().eq_ignore_ascii_case("LINK"))
             .filter_map(|k| parse(&k.value()))
             .collect();
         entries.reverse();
         LinkAbbrevs { entries }
+    }
+
+    /// A bracket link's raw link as `org-element-link-parser` makes it: the
+    /// path normalised (unescaped, line breaks as one space), then its
+    /// abbreviation expanded. The one place both the link view and
+    /// `semantics()` get it from (principle #8).
+    pub(crate) fn bracket_path(&self, raw: &str) -> String {
+        self.expand(&crate::link_grammar::normalize_path(raw))
     }
 
     /// `org-link-expand-abbrev`: `KEY` or `KEY:TAG` (`KEY::TAG`) with a

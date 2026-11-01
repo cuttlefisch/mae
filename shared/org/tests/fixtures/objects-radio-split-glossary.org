@@ -1,0 +1,90 @@
+#+title: Radio targets past org-target-link-regexp-limit
+
+Reduced from the review's 1,000-term glossary: Org splits these
+targets into two regexps, so which radio link wins depends on it.
+
+* Glossary
+<<<peer user>>> <<<node civil>>> <<<user graph loi>>> <<<article de user>>> <<<article data de key>>> <<<de graph la la>>> <<<store article>>> <<<sync sync the>>> <<<user of sync peer>>> <<<edge n° store>>> <<<user model node the>>> <<<de sync>>> <<<data key>>> <<<peer loi>>> <<<network la>>> <<<key la>>> <<<node article model>>> <<<de peer>>> <<<civil la>>> <<<edge loi store store>>>
+
+<<<n° data loi code>>> <<<n° de loi la>>> <<<edge store>>> <<<key peer>>> <<<loi la node>>> <<<key graph the>>> <<<graph key>>> <<<data sync the edge>>> <<<of the>>> <<<loi n°>>> <<<code user civil de>>> <<<la model node model>>> <<<la model model>>> <<<the article user>>> <<<article article>>> <<<node la sync>>> <<<sync la>>> <<<peer data>>> <<<loi data>>> <<<de de graph>>>
+
+<<<node article n° peer>>> <<<peer civil la>>> <<<edge graph node>>> <<<the de la>>> <<<n° sync of>>> <<<civil code user>>> <<<code peer>>> <<<the model>>> <<<la loi civil key>>> <<<code model>>> <<<network model civil>>> <<<loi data>>> <<<article code>>> <<<de sync>>> <<<model n° loi graph>>> <<<graph article model de>>> <<<n° n°>>> <<<code model code>>> <<<n° user la model>>> <<<the key>>>
+
+<<<of la la>>> <<<graph loi code of>>> <<<network data sync>>> <<<the key edge>>> <<<key edge>>> <<<article of>>> <<<of key code>>> <<<n° graph user>>> <<<edge n°>>> <<<data of>>> <<<peer edge>>> <<<de user network>>> <<<the of network model>>> <<<user model of>>> <<<the civil>>> <<<peer store article article>>> <<<n° model>>> <<<loi code la article>>> <<<the user key>>> <<<network store>>>
+
+<<<network de data>>> <<<n° peer peer article>>> <<<de data edge>>> <<<article de>>> <<<key edge>>> <<<edge peer>>> <<<peer sync of store>>> <<<code user key>>> <<<of article store>>> <<<store edge data>>> <<<store de>>> <<<civil de loi>>> <<<loi of sync>>> <<<loi node code>>> <<<article key n°>>> <<<user article>>> <<<the model>>> <<<data article user article>>> <<<of key>>> <<<loi model civil peer>>>
+
+<<<store article the network>>> <<<graph of>>> <<<article network graph peer>>> <<<article sync>>> <<<peer network graph>>> <<<node data of>>> <<<civil civil model>>> <<<article peer data>>> <<<la civil graph>>> <<<network network>>> <<<graph edge peer>>> <<<model de data n°>>> <<<network loi user>>> <<<n° store of key>>> <<<de n° the key>>> <<<code user>>> <<<loi n°>>> <<<network civil node>>> <<<article civil store>>> <<<store n° sync>>>
+
+<<<of n° network network>>> <<<model store>>> <<<peer n° data de>>> <<<store sync>>> <<<de the>>> <<<model network>>> <<<model data data the>>> <<<node user>>> <<<code code edge edge>>> <<<n° model of>>> <<<model node user node>>> <<<of of network graph>>> <<<graph the node>>> <<<sync article>>> <<<graph code civil user>>> <<<article n°>>> <<<edge node>>> <<<user n°>>> <<<key network>>> <<<n° sync data sync>>>
+
+<<<code code de data>>> <<<node key>>> <<<model the>>> <<<la article loi data>>> <<<la la of store>>> <<<peer peer civil of>>> <<<sync loi>>> <<<n° of>>> <<<civil node>>> <<<n° node la>>> <<<peer key>>> <<<code de graph>>> <<<civil the edge>>> <<<n° store data>>> <<<the edge article data>>> <<<sync node the peer>>> <<<code node edge n°>>> <<<la data graph store>>> <<<key peer graph>>> <<<edge la>>>
+
+<<<article data>>> <<<user key code de>>> <<<article loi de>>> <<<civil network>>> <<<peer store de>>> <<<sync network model node>>> <<<civil code>>> <<<user data loi user>>> <<<code the>>> <<<edge la>>> <<<model the peer data>>> <<<model network la key>>> <<<the loi article civil>>> <<<n° network peer>>> <<<node sync peer>>> <<<the of>>> <<<key data key model>>> <<<n° the of model>>> <<<de node>>> <<<data article data>>>
+
+<<<graph key>>> <<<la network>>> <<<key graph edge>>> <<<model network>>> <<<model edge>>> <<<civil data>>> <<<network key>>> <<<article of code store>>> <<<data civil>>> <<<civil of sync>>> <<<civil n°>>> <<<node of of civil>>> <<<article key code de>>> <<<code loi key edge>>> <<<edge edge n°>>> <<<node model de code>>> <<<la loi>>> <<<de edge>>> <<<graph peer de n°>>> <<<sync edge graph the>>>
+
+<<<loi civil the>>> <<<of article code model>>> <<<graph model la>>> <<<store store>>> <<<article node peer>>> <<<sync data>>> <<<n° sync>>> <<<civil code n° graph>>> <<<node graph>>> <<<user peer>>> <<<loi n° edge the>>> <<<of key network n°>>> <<<code peer store>>> <<<sync article loi de>>> <<<the key>>> <<<graph la>>> <<<code peer loi>>> <<<loi de edge the>>> <<<civil graph n° article>>> <<<user the>>>
+
+<<<user the network loi>>> <<<loi node of key>>> <<<model civil key n°>>> <<<n° article network store>>> <<<store model sync>>> <<<loi code la>>> <<<sync key>>> <<<de loi edge sync>>> <<<graph model user sync>>> <<<de n° code network>>> <<<graph edge>>> <<<article de>>> <<<civil graph model>>> <<<the article>>> <<<user n°>>> <<<la store network>>> <<<civil user peer>>> <<<data node>>> <<<sync de graph>>> <<<loi model user the>>>
+
+<<<model civil edge>>> <<<code data sync>>> <<<n° of key>>> <<<edge graph node>>> <<<loi store>>> <<<node model n° key>>> <<<network la code>>> <<<network loi>>> <<<network user edge>>> <<<code peer loi>>> <<<key store>>> <<<loi edge civil>>> <<<peer article>>> <<<of store network key>>> <<<code graph>>> <<<node of>>> <<<code graph key>>> <<<code graph>>> <<<data graph of code>>> <<<the node edge>>>
+
+<<<of network>>> <<<network of>>> <<<n° graph node>>> <<<graph of key>>> <<<data loi n°>>> <<<la store>>> <<<de user code de>>> <<<data sync store data>>> <<<loi sync network>>> <<<sync civil peer store>>> <<<la the n° node>>> <<<key code user>>> <<<loi loi>>> <<<code key model>>> <<<network edge sync>>> <<<code the model n°>>> <<<network network>>> <<<article node graph code>>> <<<article network article de>>> <<<article loi code store>>>
+
+<<<de loi civil>>> <<<store code code n°>>> <<<code store n°>>> <<<node de loi article>>> <<<loi edge>>> <<<civil node de key>>> <<<key data store model>>> <<<article key civil>>> <<<user node node>>> <<<node graph>>> <<<data node sync n°>>> <<<loi code peer graph>>> <<<node node n°>>> <<<the de de edge>>> <<<store network data key>>> <<<user data>>> <<<n° loi>>> <<<of article key la>>> <<<peer la loi>>> <<<code user la>>>
+
+<<<the code of article>>> <<<civil article>>> <<<key edge>>> <<<graph store civil la>>> <<<of model civil network>>> <<<de of store>>> <<<data network code civil>>> <<<key the data>>> <<<civil the>>> <<<sync article>>> <<<sync la civil>>> <<<peer la of de>>> <<<graph key>>> <<<loi key edge>>> <<<de graph graph model>>> <<<n° n°>>> <<<la sync>>> <<<edge n° node>>> <<<loi n° network>>> <<<de peer edge graph>>>
+
+<<<node of article>>> <<<model key code>>> <<<store code key article>>> <<<network peer user>>> <<<model store store model>>> <<<n° network loi network>>> <<<model data>>> <<<sync edge model loi>>> <<<civil de model user>>> <<<model of n° de>>> <<<user code model>>> <<<article node de key>>> <<<model the loi loi>>> <<<user the network loi>>> <<<data civil of>>> <<<article data sync n°>>> <<<article key user edge>>> <<<user loi sync>>> <<<of n° store la>>> <<<graph code store de>>>
+
+<<<civil of node>>> <<<code edge>>> <<<of code key>>> <<<node loi la data>>> <<<of node network>>> <<<node store data>>> <<<data loi article user>>> <<<sync de>>> <<<article article loi model>>> <<<model data model network>>> <<<la civil civil>>> <<<code store>>> <<<sync sync user the>>> <<<sync user the>>> <<<la user sync>>> <<<network store>>> <<<data civil data civil>>> <<<graph user>>> <<<store model of>>> <<<model node n°>>>
+
+<<<data loi key>>> <<<article graph>>> <<<edge code article n°>>> <<<la la edge model>>> <<<loi peer peer>>> <<<la la>>> <<<article edge>>> <<<of edge>>> <<<code model>>> <<<node peer of article>>> <<<of edge>>> <<<graph code loi>>> <<<peer network model node>>> <<<n° edge>>> <<<user code>>> <<<loi the>>> <<<data graph store code>>> <<<the code>>> <<<peer sync user>>> <<<data node of>>>
+
+<<<de model>>> <<<n° la edge>>> <<<sync code>>> <<<code the n° data>>> <<<sync n° la node>>> <<<model peer key network>>> <<<sync user>>> <<<key graph>>> <<<model network model model>>> <<<network peer store the>>> <<<data de la node>>> <<<key graph>>> <<<civil network>>> <<<node la n°>>> <<<sync of the the>>> <<<de data de node>>> <<<network loi key>>> <<<of key>>> <<<article n°>>> <<<peer la>>>
+
+<<<loi civil the article>>> <<<loi of key>>> <<<data store data user>>> <<<graph de loi>>> <<<code node key>>> <<<n° peer article the>>> <<<peer la key>>> <<<civil article>>> <<<code civil>>> <<<sync de of of>>> <<<of the>>> <<<node civil data la>>> <<<key network store la>>> <<<n° graph la>>> <<<peer loi code graph>>> <<<edge civil>>> <<<store edge de edge>>> <<<graph data of>>> <<<n° edge code>>> <<<de node>>>
+
+<<<de of edge n°>>> <<<the loi>>> <<<edge de>>> <<<code loi loi node>>> <<<store the user peer>>> <<<sync of network article>>> <<<code sync>>> <<<data of>>> <<<of key loi>>> <<<graph de>>> <<<n° de>>> <<<peer data sync>>> <<<loi civil>>> <<<store model peer of>>> <<<edge code>>> <<<edge code user>>> <<<store article code>>> <<<the model peer>>> <<<network of code edge>>> <<<node peer>>>
+
+<<<sync data civil data>>> <<<article key code>>> <<<peer data key sync>>> <<<of loi peer la>>> <<<key key of>>> <<<edge user>>> <<<key user civil>>> <<<user user>>> <<<data node key>>> <<<sync store civil key>>> <<<data de>>> <<<la n° edge la>>> <<<node civil data edge>>> <<<of loi code>>> <<<user the article key>>> <<<the de la>>> <<<edge of graph>>> <<<graph loi article key>>> <<<network n°>>> <<<n° loi model article>>>
+
+<<<user edge>>> <<<loi peer store>>> <<<edge la de civil>>> <<<article node la node>>> <<<store the graph civil>>> <<<graph of node>>> <<<data loi>>> <<<data model de>>> <<<data store de data>>> <<<n° edge graph edge>>> <<<graph model>>> <<<code graph data>>> <<<model n° civil>>> <<<of article>>> <<<article model peer graph>>> <<<civil peer key code>>> <<<data data>>> <<<civil store>>> <<<network n° network n°>>> <<<code store the>>>
+
+<<<store model code>>> <<<user peer>>> <<<the of key>>> <<<edge network>>> <<<graph key>>> <<<de loi article la>>> <<<sync network>>> <<<loi user>>> <<<node la de civil>>> <<<key of graph peer>>> <<<the data article>>> <<<loi code node key>>> <<<data data>>> <<<de key>>> <<<model network store of>>> <<<graph code edge data>>> <<<the model the graph>>> <<<of model>>> <<<de key the>>> <<<node graph article>>>
+
+<<<store edge of>>> <<<of store user sync>>> <<<de store>>> <<<article of civil peer>>> <<<the store model network>>> <<<civil la graph user>>> <<<sync data>>> <<<key the>>> <<<la user user>>> <<<de user>>> <<<n° graph>>> <<<network data key graph>>> <<<civil la la>>> <<<model of data la>>> <<<civil code>>> <<<of model of civil>>> <<<edge network>>> <<<store of peer>>> <<<data n° edge de>>> <<<la code key loi>>>
+
+<<<store loi de>>> <<<model edge loi sync>>> <<<code key>>> <<<la code of>>> <<<n° civil de of>>> <<<key code article>>> <<<code user node>>> <<<store edge sync civil>>> <<<loi model>>> <<<model loi of>>> <<<key loi>>> <<<user key>>> <<<store loi article network>>> <<<data of user>>> <<<peer loi article>>> <<<article key>>> <<<sync model of>>> <<<key sync>>> <<<node user node la>>> <<<the article store>>>
+
+<<<code code edge>>> <<<article node edge>>> <<<user user la>>> <<<loi store civil loi>>> <<<user article graph>>> <<<article peer data edge>>> <<<loi article>>> <<<la civil>>> <<<user data code model>>> <<<graph article>>> <<<the article peer edge>>> <<<node data user>>> <<<peer the>>> <<<n° node user la>>> <<<network network de edge>>> <<<edge loi graph>>> <<<code civil code>>> <<<sync node n°>>> <<<la model user>>> <<<la data data>>>
+
+<<<store store of>>> <<<edge node edge model>>> <<<article n°>>> <<<edge n° the civil>>> <<<graph network key graph>>> <<<de sync key data>>> <<<civil peer>>> <<<node peer user>>> <<<data n° the>>> <<<node article>>> <<<la the>>> <<<n° graph key>>> <<<node la la>>> <<<de peer loi of>>> <<<la edge network civil>>> <<<civil of of>>> <<<de code>>> <<<store of loi>>> <<<civil de>>> <<<edge of edge la>>>
+
+<<<key article la civil>>> <<<la loi la>>> <<<user de article loi>>> <<<store de>>> <<<model loi peer peer>>> <<<la peer civil>>> <<<code model>>> <<<model user user>>> <<<key loi de n°>>> <<<loi node>>> <<<the loi loi>>> <<<edge user>>> <<<user code user>>> <<<n° the>>> <<<civil of>>> <<<edge store la>>> <<<data model>>> <<<sync n° sync user>>> <<<network data la>>> <<<key network edge peer>>>
+
+<<<user graph>>> <<<network sync>>> <<<user of the store>>> <<<model data network n°>>> <<<article data model network>>> <<<graph article loi>>> <<<of loi sync civil>>> <<<of user de>>> <<<node graph>>> <<<the de n°>>> <<<user code key>>> <<<de the graph loi>>> <<<de civil sync>>> <<<de de>>> <<<peer the loi peer>>> <<<key node loi>>> <<<network node>>> <<<the of>>> <<<civil code la loi>>> <<<loi de>>>
+
+<<<n° n° network node>>> <<<network loi data>>> <<<de model la>>> <<<article network>>> <<<civil node>>> <<<data key>>> <<<model sync>>> <<<edge network model n°>>> <<<de the>>> <<<edge peer key>>> <<<sync key>>> <<<network n° la peer>>> <<<sync data>>> <<<edge article graph civil>>> <<<model key graph>>> <<<article de key loi>>> <<<n° the>>> <<<article store key civil>>> <<<civil civil of>>> <<<store the>>>
+
+<<<store n° the article>>> <<<user key>>> <<<of store de user>>> <<<data sync model user>>> <<<data de de>>> <<<store article>>> <<<peer store de loi>>> <<<sync network peer graph>>> <<<user article code>>> <<<store code user>>> <<<edge data>>> <<<network code sync>>> <<<sync la user>>> <<<of peer>>> <<<peer sync>>> <<<peer user>>> <<<node loi>>> <<<user civil n°>>> <<<data node>>> <<<sync user the peer>>>
+
+<<<loi code of model>>> <<<the edge>>> <<<of data node>>> <<<civil graph peer n°>>> <<<store de user de>>> <<<of store>>> <<<node user code civil>>> <<<n° sync>>> <<<edge sync store edge>>> <<<sync user store>>> <<<model de code>>> <<<code of loi model>>> <<<node model>>> <<<sync data graph node>>> <<<loi peer>>> <<<store of of loi>>> <<<civil network data>>> <<<civil article sync>>> <<<loi network>>> <<<data peer>>>
+
+* Text
+loi loi data la de code data n° civil de of node de node sync model model civil data data graph store code de model node node network : model network store of peer peer n° node node user : sync article node sync loi n° of edge sync of user code node the key user the article n° la loi graph node store edge n° node the graph 
+
+sync sync loi store n° key network data n° n° node of key the graph n° graph user of loi code edge network store code store the user peer edge civil de sync loi model peer data article model code node sync network user of the store edge n° graph network store sync peer model graph n° peer article the node : de : 
+
+data edge store graph model : civil graph peer n° article peer article key : graph n° de network peer store the de the network data edge : graph de loi store user article article : code loi la key model loi peer peer peer model the user civil peer node key la : peer model sync edge of peer n° graph la store user : peer 
+
+peer n° peer model edge la edge the article data de key user model article : of loi sync civil article of civil peer n° n° article la loi model edge peer data de loi store n° user data n° graph article la the n° model of n° key n° data the store sync model data data the : loi data graph graph model node key store code user peer store de loi article code key : civil 
+
+store user node node sync the loi de graph of of network user code peer network code loi loi edge network n° graph : graph graph of node graph data of code n° node loi store key article n° edge code edge edge la la loi la of store code graph data store the model peer graph node of civil article data graph of code peer graph 
+
+of key la : la user civil edge civil de model key de loi node sync n° network edge node : data key key network node user edge sync loi code user article node of of civil n° graph la : data graph of code : data : user model edge : the de article network store of n° civil peer key code article edge key 
+
+loi n° edge key store civil graph loi article key key loi de n° the loi model la civil the network of civil code code civil user de data network peer store the civil de model user : n° peer peer store de user de edge network of civil loi network model store loi code loi loi node loi code node key network n° la node user store edge loi store edge node edge model graph of 
+
+the data article graph peer code peer the key edge loi civil peer model sync code edge code network code of model civil network sync data peer de article key n° the sync de data la key network model edge loi sync of node network peer store de loi sync key the la store sync la sync node loi civil civil of data store key key of graph network n° the 

@@ -193,6 +193,7 @@ fn parse_with(src: text::Source, options: &ParseOptions, start: builder::Start) 
         ix: &ix,
         link_types: &link_types,
         radio: None,
+        radio_limit: options.radio_regexp_limit,
         diagnostics: &inline_diagnostics,
     };
     let mut contents = built.contents;

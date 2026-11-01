@@ -7,6 +7,8 @@
 # Fields: kind  = org-element type, or "*" for every kind
 #         file  = repo-relative path (a trailing * makes it a prefix)
 #         begin = optional byte offset of the differing element
+#         field = optional: a typed view's field of the element at begin
+#                 (required with it); the entry excuses that field only
 #         reason, test = why, and the test that pins mae-org's side
 
 # Inside a plain list, org-element--list-struct skips a block by searching
@@ -18,16 +20,140 @@
 # names (exponential backtracking is a DoS risk, and names such as `[' make
 # Emacs signal an error), for a difference that only arises when a block
 # name contains a regexp metacharacter (. * + ? [ ^ $ \).
+# Each element that differs is listed (kind and begin), not the whole file,
+# so a difference of any other kind in these files still fails.
+
 [[divergence]]
-kind = "*"
+kind = "item"
 file = "shared/org/tests/fixtures/list-block-name-cpp.org"
-reason = "list scanner: Emacs reads the block name c++ as a regexp; mae-org reads names literally, as Org's block parser does"
+begin = 0
+reason = "list scanner: Emacs reads the block name c++ as a regexp, so the block never ends and the item and list end before it; mae-org reads names literally, as Org's block parser does"
 test = "inside_a_list_block_names_are_literal_not_regexps"
 
 [[divergence]]
-kind = "*"
+kind = "item"
+file = "shared/org/tests/fixtures/list-block-name-cpp.org"
+begin = 32
+reason = "list scanner: Emacs reads the block name c++ as a regexp, so the block never ends and the item and list end before it; mae-org reads names literally, as Org's block parser does"
+test = "inside_a_list_block_names_are_literal_not_regexps"
+
+[[divergence]]
+kind = "paragraph"
+file = "shared/org/tests/fixtures/list-block-name-cpp.org"
+begin = 2
+reason = "list scanner: Emacs reads the block name c++ as a regexp, so the block never ends and the item and list end before it; mae-org reads names literally, as Org's block parser does"
+test = "inside_a_list_block_names_are_literal_not_regexps"
+
+[[divergence]]
+kind = "paragraph"
+file = "shared/org/tests/fixtures/list-block-name-cpp.org"
+begin = 18
+reason = "list scanner: Emacs reads the block name c++ as a regexp, so the block never ends and the item and list end before it; mae-org reads names literally, as Org's block parser does"
+test = "inside_a_list_block_names_are_literal_not_regexps"
+
+[[divergence]]
+kind = "plain-list"
+file = "shared/org/tests/fixtures/list-block-name-cpp.org"
+begin = 0
+reason = "list scanner: Emacs reads the block name c++ as a regexp, so the block never ends and the item and list end before it; mae-org reads names literally, as Org's block parser does"
+test = "inside_a_list_block_names_are_literal_not_regexps"
+
+[[divergence]]
+kind = "plain-list"
+file = "shared/org/tests/fixtures/list-block-name-cpp.org"
+begin = 32
+reason = "list scanner: Emacs reads the block name c++ as a regexp, so the block never ends and the item and list end before it; mae-org reads names literally, as Org's block parser does"
+test = "inside_a_list_block_names_are_literal_not_regexps"
+
+[[divergence]]
+kind = "subscript"
+file = "shared/org/tests/fixtures/list-block-name-cpp.org"
+begin = 13
+reason = "list scanner: Emacs reads the block name c++ as a regexp, so the block never ends and the item and list end before it; mae-org reads names literally, as Org's block parser does"
+test = "inside_a_list_block_names_are_literal_not_regexps"
+
+[[divergence]]
+kind = "subscript"
+file = "shared/org/tests/fixtures/list-block-name-cpp.org"
+begin = 27
+reason = "list scanner: Emacs reads the block name c++ as a regexp, so the block never ends and the item and list end before it; mae-org reads names literally, as Org's block parser does"
+test = "inside_a_list_block_names_are_literal_not_regexps"
+
+[[divergence]]
+kind = "special-block"
+file = "shared/org/tests/fixtures/list-block-name-cpp.org"
+begin = 4
+reason = "list scanner: Emacs reads the block name c++ as a regexp, so the block never ends and the item and list end before it; mae-org reads names literally, as Org's block parser does"
+test = "inside_a_list_block_names_are_literal_not_regexps"
+
+[[divergence]]
+kind = "item"
 file = "shared/org/tests/fixtures/list-block-name-regex.org"
-reason = "list scanner: Emacs reads the block name a.b as a regexp (closed by end_aXb); mae-org reads names literally"
+begin = 0
+reason = "list scanner: Emacs reads the block name a.b as a regexp (closed by end_aXb); mae-org reads names literally, so the block runs to end_a.b"
+test = "inside_a_list_block_names_are_literal_not_regexps"
+
+[[divergence]]
+kind = "item"
+file = "shared/org/tests/fixtures/list-block-name-regex.org"
+begin = 32
+reason = "list scanner: Emacs reads the block name a.b as a regexp (closed by end_aXb); mae-org reads names literally, so the block runs to end_a.b"
+test = "inside_a_list_block_names_are_literal_not_regexps"
+
+[[divergence]]
+kind = "paragraph"
+file = "shared/org/tests/fixtures/list-block-name-regex.org"
+begin = 2
+reason = "list scanner: Emacs reads the block name a.b as a regexp (closed by end_aXb); mae-org reads names literally, so the block runs to end_a.b"
+test = "inside_a_list_block_names_are_literal_not_regexps"
+
+[[divergence]]
+kind = "paragraph"
+file = "shared/org/tests/fixtures/list-block-name-regex.org"
+begin = 18
+reason = "list scanner: Emacs reads the block name a.b as a regexp (closed by end_aXb); mae-org reads names literally, so the block runs to end_a.b"
+test = "inside_a_list_block_names_are_literal_not_regexps"
+
+[[divergence]]
+kind = "paragraph"
+file = "shared/org/tests/fixtures/list-block-name-regex.org"
+begin = 34
+reason = "list scanner: Emacs reads the block name a.b as a regexp (closed by end_aXb); mae-org reads names literally, so the block runs to end_a.b"
+test = "inside_a_list_block_names_are_literal_not_regexps"
+
+[[divergence]]
+kind = "plain-list"
+file = "shared/org/tests/fixtures/list-block-name-regex.org"
+begin = 32
+reason = "list scanner: Emacs reads the block name a.b as a regexp (closed by end_aXb); mae-org reads names literally, so the block runs to end_a.b"
+test = "inside_a_list_block_names_are_literal_not_regexps"
+
+[[divergence]]
+kind = "special-block"
+file = "shared/org/tests/fixtures/list-block-name-regex.org"
+begin = 4
+reason = "list scanner: Emacs reads the block name a.b as a regexp (closed by end_aXb); mae-org reads names literally, so the block runs to end_a.b"
+test = "inside_a_list_block_names_are_literal_not_regexps"
+
+[[divergence]]
+kind = "subscript"
+file = "shared/org/tests/fixtures/list-block-name-regex.org"
+begin = 13
+reason = "list scanner: Emacs reads the block name a.b as a regexp (closed by end_aXb); mae-org reads names literally, so the block runs to end_a.b"
+test = "inside_a_list_block_names_are_literal_not_regexps"
+
+[[divergence]]
+kind = "subscript"
+file = "shared/org/tests/fixtures/list-block-name-regex.org"
+begin = 27
+reason = "list scanner: Emacs reads the block name a.b as a regexp (closed by end_aXb); mae-org reads names literally, so the block runs to end_a.b"
+test = "inside_a_list_block_names_are_literal_not_regexps"
+
+[[divergence]]
+kind = "subscript"
+file = "shared/org/tests/fixtures/list-block-name-regex.org"
+begin = 43
+reason = "list scanner: Emacs reads the block name a.b as a regexp (closed by end_aXb); mae-org reads names literally, so the block runs to end_a.b"
 test = "inside_a_list_block_names_are_literal_not_regexps"
 
 # Emacs does not terminate on these (it allocates until the oracle's memory
@@ -66,16 +192,46 @@ begin = 23
 reason = "Emacs emits a radio link overlapping the previous one; a tree cannot hold it, mae-org keeps only the first"
 test = "a_radio_link_never_overlaps_the_object_before_it"
 
-# Above org-target-link-regexp-limit (8192 chars of regexp) Org splits the
-# radio regexp and takes the match that ENDS first across the parts, so
-# which link wins depends on where the split falls. The limit is a size
-# constant of Org's regexp engine, not the document's text or declared
-# configuration (ADR-112 D4); mae-org matches as one regexp at any size.
+# A `#+LINK:` replacement that calls a function, `%(fn)`: Org runs the
+# function when it is marked safe or `pure` (`concat` is), so `[[c:y]]`
+# with `#+LINK: c %(concat)` becomes `y`, and refuses it otherwise
+# (`%(upcase)`: unchanged, as here). Running author-chosen code is never
+# done (ADR-112 D4): mae-org leaves every such link as written.
 [[divergence]]
 kind = "link"
-file = "shared/org/tests/fixtures/objects-radio-split-regexp.org"
-reason = "Org splits its radio regexp above 8192 chars and picks the earliest-ending match; mae-org matches as one regexp (the long target, not bar)"
-test = "radio_targets_match_as_one_regexp_however_many_there_are"
+file = "shared/org/tests/fixtures/objects-link-view.org"
+begin = 42
+field = "path"
+reason = "Emacs runs %(concat) (a pure function) to expand [[c:y]] to y; mae-org never runs code and leaves c:y"
+test = "a_function_link_abbreviation_is_never_run"
+
+[[divergence]]
+kind = "link"
+file = "shared/org/tests/fixtures/objects-link-view.org"
+begin = 42
+field = "raw_link"
+reason = "Emacs runs %(concat) (a pure function) to expand [[c:y]] to y; mae-org never runs code and leaves c:y"
+test = "a_function_link_abbreviation_is_never_run"
+
+# `[[~user]]` is a file link to Org only if that user exists on the machine
+# (`file-name-absolute-p`); otherwise fuzzy. A parse must not depend on the
+# machine (every peer must agree, ADR-112 D4), so mae-org reads every `~`
+# path as a file name. The golden's `~root` agrees; `~no-such-user` does not.
+[[divergence]]
+kind = "link"
+file = "shared/org/tests/fixtures/objects-link-view.org"
+begin = 83
+field = "link_type"
+reason = "Emacs: fuzzy, since this user does not exist on the oracle's machine; mae-org: a file link on every machine"
+test = "a_tilde_path_is_a_file_link"
+
+[[divergence]]
+kind = "link"
+file = "shared/org/tests/fixtures/objects-link-view.org"
+begin = 109
+field = "link_type"
+reason = "Emacs: fuzzy, since this user does not exist on the oracle's machine; mae-org: a file link on every machine"
+test = "a_tilde_path_is_a_file_link"
 
 # `<2024-1-1 x+1d>` matches org-element--timestamp-regexp's repeater
 # alternative (any digit counts), then org-parse-time-string signals "Not an

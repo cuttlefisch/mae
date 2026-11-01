@@ -274,18 +274,103 @@ fn a_radio_link_never_overlaps_the_object_before_it() {
 
 /// Org splits its radio regexp into several above
 /// `org-target-link-regexp-limit` (8192 chars) and then takes, among the
-/// regexps' matches, the one that ENDS first (`org--re-list-search-forward`)
-/// — not the leftmost match of one alternation. In the fixture the split
-/// falls between `foo y… bar zz` and `bar`, so Emacs links `bar` (8277..8281)
-/// instead of the long target. The limit is a constant of Org's
-/// implementation (a regexp-engine size limit), not a property of the
-/// document or a declared setting (ADR-112 D4), so mae-org matches as one
-/// regexp at any size: the long target, as Emacs does below the limit.
+/// regexps' leftmost matches, the one that ENDS first
+/// (`org--re-list-search-forward`) — not the leftmost match of one
+/// alternation. In the fixture the split falls between `foo y… bar zz` and
+/// `bar`, so Emacs links `bar` (8277..8281) instead of the long target, and
+/// so does mae-org (oracle; the golden agrees with no divergence). The split
+/// is a function of the text and Org's constant, reproduced exactly.
 #[test]
-fn radio_targets_match_as_one_regexp_however_many_there_are() {
+fn split_radio_regexps_take_the_match_that_ends_first() {
     let objects = objects_of("objects-radio-split-regexp.org");
-    assert_eq!(objects.last(), Some(&o("link", 8172, 8284)));
+    assert_eq!(objects.last(), Some(&o("link", 8277, 8281)));
     assert_eq!(objects.iter().filter(|x| x.0 == "link").count(), 1);
+    // Below the limit the same targets are one regexp: the long target.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/objects-radio-split-regexp.org");
+    let text = read(&path);
+    let opts = ParseOptions::default().with_radio_regexp_limit(usize::MAX);
+    let doc = parse(&text, &opts);
+    let links: Vec<(usize, usize)> = doc
+        .syntax()
+        .descendants()
+        .filter(|n| n.kind() == LINK)
+        .map(|n| (n.text_range().start().into(), n.text_range().end().into()))
+        .collect();
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0].0, 8172);
+}
+
+/// The review's 1,000-term glossary, reduced to 680 terms (still past the
+/// limit: two regexps) and eight paragraphs: the golden agrees with Emacs
+/// with no divergence, and the fixture is one the split changes — matched
+/// as one regexp, some of its links come out different.
+#[test]
+fn a_glossary_past_the_limit_links_as_org_splits_it() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/objects-radio-split-glossary.org");
+    let text = read(&path);
+    let spans = |limit: usize| -> Vec<(usize, usize)> {
+        let opts = ParseOptions::default().with_radio_regexp_limit(limit);
+        let doc = parse(&text, &opts);
+        assert!(doc.diagnostics().is_empty(), "{:?}", doc.diagnostics());
+        doc.syntax()
+            .descendants()
+            .filter(|n| n.kind() == LINK)
+            .map(|n| (n.text_range().start().into(), n.text_range().end().into()))
+            .collect()
+    };
+    let (split, one) = (
+        spans(ParseOptions::ORG_TARGET_LINK_REGEXP_LIMIT),
+        spans(usize::MAX),
+    );
+    assert_eq!(split.len(), 152);
+    let differ = split.iter().filter(|s| !one.contains(s)).count();
+    assert_eq!(differ, 13, "links that depend on the split");
+}
+
+/// A `%(fn)` replacement in `#+LINK:` is code. Org runs it when the
+/// function is marked safe or `pure` (`concat`: `[[c:y]]` becomes `y`) and
+/// refuses it otherwise (`upcase`: left alone). mae-org never runs it, so
+/// every such link stays as written (registered: objects-link-view.org).
+#[test]
+fn a_function_link_abbreviation_is_never_run() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/objects-link-view.org");
+    let raw: Vec<String> = links(&read(&path))
+        .iter()
+        .take(2)
+        .map(|l| l.info(&ParseOptions::default().link_types).raw_link)
+        .collect();
+    assert_eq!(raw, ["c:y", "up:x"]);
+}
+
+/// Review (suspected): `[[~]]`, `[[~/x]]` and `[[~user]]` are file links.
+/// Emacs asks `file-name-absolute-p`, which for `~user` depends on the
+/// machine (`~root` is a file link, `~no-such-user` fuzzy); mae-org reads
+/// every `~` path as a file name, deterministically (registered:
+/// `objects-link-view.org`).
+#[test]
+fn a_tilde_path_is_a_file_link() {
+    for p in ["~", "~/x", "~root", "~no-such-user-mae-org/x"] {
+        let c = mae_org::classify_link(p);
+        assert_eq!(c.kind, mae_org::LinkKind::Other, "{p}");
+        assert_eq!(c.target, p, "{p}");
+    }
+    let doc = mae_org::parse(
+        "[[~]] [[~no-such-user-mae-org]]\n",
+        &mae_org::ParseOptions::default(),
+    );
+    let types: Vec<String> = doc
+        .syntax()
+        .descendants()
+        .filter_map(mae_org::Link::cast)
+        .map(|l| {
+            l.info(&mae_org::ParseOptions::default().link_types)
+                .link_type
+        })
+        .collect();
+    assert_eq!(types, ["file", "file"]);
 }
 
 fn links(text: &str) -> Vec<Link> {

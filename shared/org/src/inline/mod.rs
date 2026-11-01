@@ -242,6 +242,9 @@ pub(crate) struct InlineCx<'a> {
     pub link_types: &'a [String],
     /// The document's radio targets (`org-target-link-regexp`), if any.
     pub radio: Option<&'a radio::Radio>,
+    /// `org-target-link-regexp-limit`: see
+    /// [`crate::ParseOptions::radio_regexp_limit`].
+    pub radio_limit: usize,
     /// Where inline parsing reports diagnostics.
     pub diagnostics: &'a std::cell::RefCell<Vec<crate::Diagnostic>>,
 }

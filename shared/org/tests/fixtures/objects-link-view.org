@@ -1,0 +1,4 @@
+#+LINK: c %(concat)
+#+LINK: up %(upcase)
+
+[[c:y]] [[up:x]] [[~]] [[~/x]] [[~root]] [[~no-such-user-mae-org]] [[~no-such-user-mae-org/x]]
