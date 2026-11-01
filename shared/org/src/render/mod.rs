@@ -85,7 +85,7 @@ pub(crate) use hast::json_str;
 pub use hast::to_hast;
 pub use html::to_html;
 pub use links::{is_valid_language, safe_external_url, safe_resolver_href};
-pub use source::{node_source, normalise, with_line_ending};
+pub use source::{node_source, normalise, replace_body, with_line_ending, BodyEditError};
 pub use text::{node_text, text, text_of};
 pub use tree::{Attr, Element, Node, Tag, ATTRIBUTES, CLASSES, TAGS};
 
