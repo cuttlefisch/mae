@@ -417,6 +417,9 @@ pub struct Semantics {
     /// The options these were derived with: a renderer derives the
     /// semantics of the text it renders (its macros expanded) with them.
     pub(crate) options: SemanticsOptions,
+    /// The footnote labels with a definition Org's export can use (see
+    /// `regions::choose_definitions`), referenced or not.
+    pub(crate) defined_notes: std::collections::BTreeSet<String>,
 }
 
 impl Semantics {
@@ -450,6 +453,7 @@ pub fn semantics_with(doc: &Document, options: &SemanticsOptions) -> Semantics {
         .filter(|t| !t.is_empty());
     let mut rules = Rules::new(&root, options, &exclude, &select, &header.tags);
     rules.chosen = regions::choose_definitions(&root, &rules);
+    let defined_notes = rules.chosen.keys().cloned().collect();
     let (referenced, order) = regions::referenced_footnotes(&root, &rules);
     rules.referenced = Some(referenced);
     let mut w = Walk {
@@ -475,6 +479,7 @@ pub fn semantics_with(doc: &Document, options: &SemanticsOptions) -> Semantics {
     w.attribute_notes(&order);
     let mut out = w.out;
     out.options = options.clone();
+    out.defined_notes = defined_notes;
     clip_bodies(&mut out.nodes);
     out.diagnostics.sort_by_key(|d| (d.span(), d.kind_name()));
     out.unrendered

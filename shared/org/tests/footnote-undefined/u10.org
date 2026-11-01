@@ -1,0 +1,3 @@
+X
+
+Para [fn:a:inline [fn:Y]].

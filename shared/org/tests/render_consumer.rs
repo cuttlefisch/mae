@@ -185,3 +185,40 @@ fn the_fixtures_that_match_emacs_render_as_they_did() {
         assert!(h.contains(want), "{name}: {h}");
     }
 }
+
+/// Review round 6 (K): Org's export fails at every undefined footnote
+/// reference it visits, rendered or not: one in a drawer it exports (any
+/// but LOGBOOK, which MAE does not draw, registered: drawers; an item's
+/// property drawer is one), and one in a definition nothing references.
+/// Each gets the diagnostic exactly when Emacs 30.2 fails
+/// (`tests/footnote-undefined/`): not in a LOGBOOK, a `:noexport:`,
+/// archived or unselected subtree, a headline's property drawer, a comment
+/// block or an example block.
+#[test]
+fn every_undefined_reference_org_visits_is_reported() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/footnote-undefined");
+    let emacs_fails = [1, 2, 7, 9, 10, 11, 13];
+    let mut failures = Vec::new();
+    for i in 1..=14 {
+        let doc = std::fs::read_to_string(dir.join(format!("u{i}.org"))).unwrap();
+        let d = mae_org::parse(&doc, &mae_org::ParseOptions::default());
+        let sem = mae_org::semantics(&d);
+        for pd in [false, true] {
+            let opts = mae_org::RenderOptions::default().with_property_drawers(pd);
+            let r = mae_org::render(&d, &sem, &opts, &mae_org::Resolver::default());
+            let flagged: Vec<_> = r
+                .diagnostics
+                .iter()
+                .filter(|d| d.kind_name() == "footnote_undefined")
+                .collect();
+            let want = usize::from(emacs_fails.contains(&i));
+            let at_y = flagged
+                .iter()
+                .all(|d| &doc[d.span().start as usize..d.span().end as usize] == "[fn:Y]");
+            if flagged.len() != want || !at_y {
+                failures.push(format!("u{i} (pd {pd}): {flagged:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

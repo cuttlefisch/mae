@@ -1,0 +1,5 @@
+#+SELECT_TAGS: sel
+* H
+ref [fn:Y]
+* V :sel:
+x

@@ -1,0 +1,4 @@
+* H
+#+begin_example
+ref [fn:Y]
+#+end_example

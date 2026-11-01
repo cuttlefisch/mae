@@ -372,7 +372,8 @@ pub fn render(
             let cx = p.cx();
             let page = build::page_with(&p.doc, cx, options, resolver, build::Mode::Page, None);
             let (nodes, notes) = meta::nodes(&p, sem, options, resolver, &page.table);
-            let found = page.diagnostics.into_iter().chain(notes);
+            let unseen = notes::unrendered_undefined(&p.doc, &p.sem);
+            let found = page.diagnostics.into_iter().chain(notes).chain(unseen);
             diagnostics.extend(found.map(|d| p.to_source(d)));
             (page.body, nodes)
         }

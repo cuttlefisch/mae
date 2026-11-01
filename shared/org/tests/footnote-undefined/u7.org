@@ -1,0 +1,5 @@
+See[fn:a].
+
+[fn:a] one
+
+[fn:a] two [fn:Y]

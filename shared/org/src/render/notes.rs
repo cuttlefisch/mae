@@ -104,6 +104,68 @@ fn inline_parts(n: &SyntaxNode) -> Option<Vec<SyntaxElement>> {
     (open < close).then(|| parts[open + 1..close].to_vec())
 }
 
+/// The undefined footnote references Org's export visits that the page
+/// does not render, so its builder never saw: those in a drawer Org
+/// exports (any but LOGBOOK; MAE draws none, registered: drawers) and in a
+/// definition nothing references, which Org still transcodes. Org's export
+/// fails at each ("Definition not found for footnote"); each gets the
+/// [`super::RenderDiagnostic::FootnoteUndefined`] a rendered one gets.
+pub(crate) fn unrendered_undefined(
+    doc: &crate::Document,
+    sem: &Semantics,
+) -> Vec<super::RenderDiagnostic> {
+    use crate::semantics::Region;
+    let regions: HashMap<(u32, u32, crate::kind::SyntaxKind), Region> = sem
+        .unrendered
+        .iter()
+        .map(|u| ((u.span.start, u.span.end, u.element), u.region))
+        .collect();
+    // Whether Org's export reaches inside `a`, and whether MAE renders it.
+    let visit = |a: &SyntaxNode| -> (bool, bool) {
+        let s = Span::of(a);
+        let region = regions.get(&(s.start, s.end, a.kind())).copied();
+        match (a.kind(), region) {
+            (PROPERTY_DRAWER | COMMENT_BLOCK | EXPORT_BLOCK | COMMENT, _) => (false, false),
+            (DRAWER, _) => {
+                let first = a.to_string();
+                let line = first.lines().next().unwrap_or("");
+                let name = crate::scan::drawer_name(line).map(|(x, y)| &line[x..y]);
+                (name != Some("LOGBOOK"), false)
+            }
+            (_, Some(Region::UnreferencedFootnote | Region::OverriddenFootnote)) => (true, false),
+            (_, Some(_)) => (false, false),
+            (_, None) => (true, true),
+        }
+    };
+    let mut out = Vec::new();
+    for r in doc
+        .syntax()
+        .descendants()
+        .filter(|d| d.kind() == FOOTNOTE_REFERENCE)
+    {
+        let Some(label) = reference_label(&r) else {
+            continue;
+        };
+        if sem.defined_notes.contains(&label) || inline_parts(&r).is_some() {
+            continue;
+        }
+        let (mut reached, mut rendered) = (true, true);
+        for a in r.ancestors().skip(1) {
+            let (v, shown) = visit(&a);
+            reached &= v;
+            rendered &= shown;
+        }
+        if reached && !rendered {
+            let at = Span::of(&r).start as usize;
+            out.push(super::RenderDiagnostic::FootnoteUndefined(Span::new(
+                at,
+                at + raw(&r).len(),
+            )));
+        }
+    }
+    out
+}
+
 impl Builder<'_> {
     pub fn footnote_reference(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
         // Not in titles (shown anywhere) nor inside a link's description

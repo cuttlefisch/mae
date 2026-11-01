@@ -1,0 +1,3 @@
+X
+
+[fn:a] def [fn:Y]

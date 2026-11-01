@@ -1,0 +1,4 @@
+* H
+:LOGBOOK:
+ref [fn:Y]
+:END:
