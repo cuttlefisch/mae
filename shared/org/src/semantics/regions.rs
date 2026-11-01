@@ -97,7 +97,21 @@ impl Rules {
             };
             own.push((n, h.tags(), h.is_commented()));
         }
-        let selected = selected_headlines(&own, &select, file_selected);
+        // Org deletes the COMMENT subtrees before it selects: a select tag
+        // under a COMMENT headline selects nothing.
+        let mut commented: HashSet<u32> = HashSet::new();
+        for (n, _, c) in &own {
+            let parent = n.parent().filter(|p| p.kind() == HEADLINE);
+            if *c || parent.is_some_and(|p| commented.contains(&start(&p))) {
+                commented.insert(start(n));
+            }
+        }
+        let live: Vec<_> = own
+            .iter()
+            .filter(|h| !commented.contains(&start(&h.0)))
+            .cloned()
+            .collect();
+        let selected = selected_headlines(&live, &select, file_selected);
         let mut headlines = HashMap::new();
         let mut archived = HashSet::new();
         for (n, tags, commented) in &own {
