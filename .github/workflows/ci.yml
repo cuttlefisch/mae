@@ -793,6 +793,18 @@ jobs:
           node-version: "22"
       - name: Build twice, require identical bytes
         run: make org-wasm-repro
+      # The bytes a mae-org-vX tag pins, as the pinned toolchain produced
+      # them: in the log and the run summary, so a tag can be checked against
+      # the run that built it. MAE's own version is not compiled in (the
+      # crates carry their own), so a MAE release does not change them.
+      - name: Record the artifact's size and sha256
+        run: |
+          a=target/wasm32-unknown-unknown/wasm/mae_org_wasm.wasm
+          size=$(wc -c <"$a" | tr -d ' ')
+          sum=$(sha256sum "$a" | cut -d' ' -f1)
+          line="mae_org_wasm.wasm: $size bytes, sha256 $sum, $(rustc --version)"
+          echo "$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
       - name: Size budget, native-vs-WASM differential, memory over 10,000 calls
         run: make org-wasm-test
 

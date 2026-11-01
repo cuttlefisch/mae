@@ -23,8 +23,10 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 // Measured with rustc 1.98, `--profile wasm` (opt-level "s"): 611,525 bytes
-// on 2026-11-01. The budget leaves ~15% for growth; raising it is a
-// decision to record in ADR-112's O3 note, not a number to bump.
+// on 2026-11-01; 648,998 bytes after the pre-tag review fixes (babel
+// `:exports`, anchors, special table rows, the splice). The budget was set
+// with ~15% headroom and is unchanged; raising it is a decision to record
+// in ADR-112's O3 note, not a number to bump.
 const SIZE_BUDGET = 700_000;
 const OPS = { semantics: 1, renderHast: 2, renderHtml: 3, text: 4, classifyLink: 5, version: 6 };
 

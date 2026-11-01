@@ -160,7 +160,12 @@ layer on it becomes the cheaper path.
   normalised org source; `mae-org-wasm` (no bindings generator, a synchronous loader). The size
   budget D5 asks for, measured: 611,525 bytes with rustc 1.98 at `opt-level = "s"` (no `wasm-opt`;
   `"z"` is 508,112 bytes but ~75% slower per call), held to **700,000 bytes** by the CI job, which
-  pins its toolchain so the reproducible build is the same bytes on every run.
+  pins its toolchain so the reproducible build is the same bytes on every run. Before the tag, an
+  independent review's fixes (babel `:exports` resolved as Org resolves it, special table rows,
+  heading anchors that KB link fragments land on, the `replace_body` splice O4 writes through)
+  grew it to 648,998 bytes, inside the same budget. `mae-org` and `mae-org-wasm` carry their own
+  version (`API_VERSION`, 0.1.0), not MAE's, so a MAE release does not change the artifact; every
+  deliberate difference from Org's HTML export is in `conformance/render-divergences.toml`.
 - **O4** MAE switches ingest, export and read mode to it, with the repair path; the span-based write
   path lands on the same spans.
 - **O5** the remaining constructs by measured use, privacy-relevant regions first.
