@@ -254,28 +254,6 @@ fn markers(s: &str) -> BTreeSet<String> {
     out
 }
 
-/// `s` without the ids MAE spells a target's text in (`t-…`, and the
-/// links to them): a target's text is the author's anchor, which Org's
-/// export keeps out of the page by giving it a random id instead (the
-/// table in `render/mod.rs`; not hidden content).
-fn without_target_ids(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(i) = rest.find("t-").filter(|_| !rest.is_empty()) {
-        let quoted = rest[..i].ends_with('"') || rest[..i].ends_with('#');
-        out.push_str(&rest[..i]);
-        if quoted {
-            let end = rest[i..].find(['"', '\\']).map_or(rest.len(), |k| i + k);
-            rest = &rest[end..];
-        } else {
-            out.push_str("t-");
-            rest = &rest[i + 2..];
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
 /// `html` without its tags: what a reader sees.
 fn visible(html: &str) -> String {
     let mut text = String::new();
@@ -311,12 +289,8 @@ fn mae(doc: &str) -> Option<(BTreeSet<String>, BTreeSet<String>)> {
         {
             return None;
         }
-        raw.extend(markers(&without_target_ids(
-            &r.to_json(mae_org::TreeFormat::Html),
-        )));
-        raw.extend(markers(&without_target_ids(
-            &r.to_json(mae_org::TreeFormat::Hast),
-        )));
+        raw.extend(markers(&r.to_json(mae_org::TreeFormat::Html)));
+        raw.extend(markers(&r.to_json(mae_org::TreeFormat::Hast)));
         shown.extend(markers(&visible(&render_html(
             &d,
             &sem,
