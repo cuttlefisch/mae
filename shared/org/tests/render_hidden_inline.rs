@@ -48,6 +48,31 @@ const HIDDEN: &[(&str, &str)] = &[
         "call_fn()[:exports code] {{{results(={M}=)}}}",
     ),
     ("an HTML export snippet", "@@html:<b>{M}</b>@@"),
+    // Review round 3: a macro whose TEMPLATE hides its argument (Org
+    // expands it, then exports what it became), defined in POSTAMBLE.
+    ("macro template: inline src", "{{{mh({M})}}}"),
+    ("macro template: export snippet", "{{{ms({M})}}}"),
+    ("macro template: results macro", "{{{mr({M})}}}"),
+    ("macro template: babel call", "{{{mc({M})}}}"),
+    ("macro template: through another macro", "{{{mt({M})}}}"),
+    ("macro template: (eval …)", "{{{me({M})}}}"),
+    ("macro template: a cycle", "{{{ca({M})}}}"),
+    (
+        "macro template: unclosed, closed by the text after",
+        "{{{mu({M})}}}}",
+    ),
+    ("macro: undefined", "{{{nosuch({M})}}}"),
+    // Round 3 (the second reviewer): arguments that form a hidden
+    // construct only once substituted into `$1$2` (no argument alone
+    // holds even the start of one).
+    (
+        "macro template: arguments joined by the template",
+        "{{{cat(src,_sh[:exports none]{echo {M}})}}}",
+    ),
+    (
+        "macro template: the reviewer's split arguments",
+        "{{{cat(src_sh[:exports none],{echo {M}})}}}",
+    ),
     ("a LaTeX export snippet", "@@latex:\\textbf{{M}}@@"),
 ];
 
@@ -151,7 +176,19 @@ const FAIL_CLOSED: &[&str] = &["macro argument", "citation prefix", "citation su
 
 /// The called block of the inline calls, visible and harmless; after the
 /// container, which may need to start the file.
-const POSTAMBLE: &str = "\n#+NAME: fn\n#+begin_src sh :exports both\necho visible\n#+end_src\n";
+const POSTAMBLE: &str = "\n#+NAME: fn\n#+begin_src sh :exports both\necho visible\n#+end_src\n\n\
+#+MACRO: mh src_sh[:exports none]{echo $1}\n\
+#+MACRO: ms @@latex:\\textbf{$1}@@\n\
+#+MACRO: mr {{{results($1)}}}\n\
+#+MACRO: mc call_fn($1)\n\
+#+MACRO: mt <{{{mh($1)}}}>\n\
+#+MACRO: me (eval (concat \"$1\"))\n\
+#+MACRO: ca <{{{cb($1)}}}>\n\
+#+MACRO: cb <{{{ca($1)}}}>\n\
+#+MACRO: mu src_sh[:exports none]{echo $1\n\
+#+MACRO: mp <$1>\n\
+#+MACRO: mq <{{{mp($1)}}}>\n\
+#+MACRO: cat $1$2\n";
 
 fn resolver() -> Resolver {
     Resolver::default()
@@ -455,4 +492,113 @@ fn the_reviewers_macro_and_citation_show_none_of_their_hidden_text() {
         html.contains("<span class=\"org-citation\">[cite:@key]</span>"),
         "{html}"
     );
+}
+
+/// The positive twin of the template rows: a macro whose template shows
+/// its argument (`<$1>`, through another macro, a built-in) still shows it,
+/// as source, in every container that is not fail-closed.
+#[test]
+fn a_macro_whose_template_shows_its_argument_is_shown() {
+    for (ci, (cname, container)) in CONTAINERS.iter().enumerate() {
+        if FAIL_CLOSED.contains(cname) {
+            continue;
+        }
+        for (k, x) in [
+            "{{{mp({M})}}}",
+            "{{{mq({M})}}}",
+            "{{{keyword({M})}}}",
+            "{{{cat(<,{M}>)}}}",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let m = format!("QZP{ci:02}x{k}QZP");
+            let doc = format!(
+                "{}{POSTAMBLE}",
+                container.replace("{X}", &x.replace("{M}", &m))
+            );
+            let shown = outputs(&doc).iter().any(|(_, s)| s.contains(&m));
+            assert!(shown, "{cname}, {x}: shown nowhere:\n{doc}");
+        }
+    }
+}
+
+/// Round 3, against Emacs 30.2 (`emacs -Q`, ox-html): each export below,
+/// and which definition Org uses (the first `#+MACRO:` of a name, names
+/// compared case-insensitively; `#+TITLE:` over a `title` macro).
+#[test]
+fn macro_templates_hide_as_org_expands_them() {
+    let cases: &[(&str, &str, &str)] = &[
+        // (document, Emacs's paragraph, what MAE must not show)
+        (
+            "#+MACRO: m src_sh[:exports none]{echo $1}\n* T\nSee {{{m(SECRETA)}}} end.\n",
+            "See end.",
+            "SECRETA",
+        ),
+        (
+            "#+MACRO: d src_sh[:exports none]{echo $1}\n#+MACRO: D <$1>\nA {{{d(QD1)}}} B\n",
+            "A B",
+            "QD1",
+        ),
+        (
+            "#+TITLE: x src_sh[:exports none]{echo $1}\n#+MACRO: title <$1>\nA {{{title(QT1)}}} B\n",
+            "A x B",
+            "QT1",
+        ),
+        (
+            "#+MACRO: u src_sh[:exports none]{echo $1\nA {{{u(QU1)}}}} B\n",
+            "A B",
+            "QU1",
+        ),
+        (
+            "#+MACRO: cat $1$2\nA {{{cat(src_sh[:exports none],{echo SECRETTWO})}}} B {{{cat(src,_sh[:exports none]{echo SECRETSPLIT})}}} C\n",
+            "A B C",
+            "SECRET",
+        ),
+    ];
+    for (doc, _emacs, secret) in cases {
+        for (surface, s) in outputs(doc) {
+            assert!(!s.contains(secret), "{surface}:\n{doc}\n{s}");
+        }
+    }
+    // The first definition wins: with the plain one first, Emacs shows
+    // `A <QD2> B`, and MAE shows the argument (as source).
+    let doc = "#+MACRO: d <$1>\n#+MACRO: D src_sh[:exports none]{echo $1}\nA {{{d(QD2)}}} B\n";
+    assert!(outputs(doc).iter().any(|(_, s)| s.contains("QD2")), "{doc}");
+    // Emacs: `C <QPOS> D a,bQE E`: a plain join shows, an escaped comma
+    // is one argument.
+    let doc = "#+MACRO: cat $1$2\nC {{{cat(<,QPOS>)}}} D {{{cat(a\\,b,QE)}}} E\n";
+    let outs = outputs(doc);
+    assert!(outs.iter().any(|(_, s)| s.contains("QPOS")), "{doc}");
+    assert!(outs.iter().any(|(_, s)| s.contains("QE")), "{doc}");
+    // The check is bounded: a chain of plain templates longer than it
+    // follows (16 calls) hides, a short one shows; and a template that
+    // calls its successor twice, 12 deep (4,096 calls, past the 256 it
+    // expands), hides rather than costing exponential work.
+    let chain = |n: usize| -> String {
+        let mut d: String = (1..n)
+            .map(|i| format!("#+MACRO: c{i} <{{{{{{c{}($1)}}}}}}>\n", i + 1))
+            .collect();
+        d.push_str(&format!("#+MACRO: c{n} <$1>\nA {{{{{{c1(QCHAIN)}}}}}} B\n"));
+        d
+    };
+    let shown = |doc: &str| outputs(doc).iter().any(|(_, s)| s.contains("QCHAIN"));
+    assert!(shown(&chain(5)), "{}", chain(5));
+    assert!(!shown(&chain(20)), "{}", chain(20));
+    let mut twice: String = (1..12)
+        .map(|i| {
+            format!(
+                "#+MACRO: t{i} {{{{{{t{0}($1)}}}}}}{{{{{{t{0}($1)}}}}}}\n",
+                i + 1
+            )
+        })
+        .collect();
+    twice.push_str("#+MACRO: t12 <$1>\nA {{{t1(QCHAIN)}}} B\n");
+    assert!(!shown(&twice), "{twice}");
+    let d = parse(
+        "#+MACRO: m src_sh[:exports none]{echo $1}\n* T\nSee {{{m(SECRETA)}}} end.\n",
+        &ParseOptions::default(),
+    );
+    let html = mae_org::render_html(&d, &semantics(&d), &RenderOptions::default(), &resolver());
+    assert!(html.contains("<p>See  end.</p>"), "{html}");
 }

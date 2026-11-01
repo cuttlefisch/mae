@@ -67,6 +67,7 @@ pub(crate) struct DocCx<'a> {
     babel: Babel,
     note_defs: Rc<HashMap<String, SyntaxNode>>,
     eol: LineEnding,
+    macros: super::macros::Macros,
 }
 
 pub(crate) struct Builder<'a> {
@@ -174,6 +175,7 @@ impl<'a> DocCx<'a> {
             done,
             babel: Babel::new(doc),
             note_defs: Rc::new(Notes::defs(doc, sem)),
+            macros: super::macros::Macros::new(doc),
             eol: doc.line_ending(),
         })
     }
@@ -227,6 +229,11 @@ impl<'a> Builder<'a> {
     /// The KB node id a headline or item starting at `start` carries.
     pub fn node_id(&self, start: u32) -> Option<&'a str> {
         self.cx.node_ids.get(&start).copied()
+    }
+
+    /// Whether macro object `n` renders nothing (see `macros`).
+    pub fn macro_hidden(&self, n: &SyntaxNode) -> bool {
+        self.cx.macros.hides(n)
     }
 
     /// Whether `kw` is a done keyword.

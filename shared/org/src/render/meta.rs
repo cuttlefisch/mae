@@ -38,9 +38,16 @@ pub(crate) fn nodes(
             // the node, so their `:exports` scope is the node's (review
             // round 2: an alias read the file's and showed hidden code).
             let at = Some(n.span.start);
+            // The aliases are the ALIASES value split at its commas, and a
+            // split can cut a construct the whole value hides (a macro's
+            // arguments hold commas too): when the whole value hides
+            // anything, no alias is shown (fail closed).
+            let whole = n.properties.iter().find(|(k, _)| k == "ALIASES");
+            let cut = whole.is_some_and(|(_, v)| b.placeless(at, |b| b.value_hides(v)));
             let aliases = n
                 .aliases
                 .iter()
+                .filter(|_| !cut)
                 .map(|a| b.placeless(at, |b| b.inline_text(a)))
                 .collect();
             let properties = n
@@ -137,8 +144,9 @@ impl Builder<'_> {
     /// Org reads a value as text and shows it as written. MAE parses it as
     /// objects and shows each one but a bracket link as its source, except
     /// what the body would hide: an inline src block, an inline babel call,
-    /// an export snippet and the results macro after one of the first two
-    /// show nothing (ADR-112 D3: a construct hidden in the body is hidden
+    /// an export snippet, the results macro after one of the first two and
+    /// a macro that renders nothing in the body (`macros`) show nothing
+    /// (ADR-112 D3: a construct hidden in the body is hidden
     /// everywhere; a registered divergence, `property-value-babel`).
     pub fn property_value(&mut self, value: &str) -> Vec<Node> {
         let tree = crate::green::objects(value, PARAGRAPH);
@@ -148,7 +156,7 @@ impl Builder<'_> {
                 rowan::NodeOrToken::Node(l) if l.kind() == LINK && is_bracket(&l) => {
                     self.deeper(&l, |b| b.object(&l, &mut out))
                 }
-                rowan::NodeOrToken::Node(o) if hidden_in_a_value(&o) => {}
+                rowan::NodeOrToken::Node(o) if self.hidden_in_a_value(&o) => {}
                 other => push(&mut out, text(&other.to_string())),
             }
         }
@@ -157,13 +165,31 @@ impl Builder<'_> {
     }
 }
 
-/// Whether object `o` of a property value shows nothing (see
-/// [`Builder::property_value`]).
-fn hidden_in_a_value(o: &SyntaxNode) -> bool {
-    matches!(
-        o.kind(),
-        INLINE_SRC_BLOCK | INLINE_BABEL_CALL | EXPORT_SNIPPET
-    ) || (o.kind() == MACRO && super::babel::results_macro_owner(o).is_some())
+impl Builder<'_> {
+    /// Whether `value`, read as objects at this builder's place, holds
+    /// anything the renderer hides: an inline src block or results macro
+    /// its `:exports` hides, a babel call, an export snippet, or a macro
+    /// that renders nothing.
+    pub fn value_hides(&self, value: &str) -> bool {
+        let tree = crate::green::objects(value, PARAGRAPH);
+        let mut objects = tree.descendants().skip(1);
+        objects.any(|d| {
+            matches!(d.kind(), INLINE_BABEL_CALL | EXPORT_SNIPPET)
+                || self.babel_hides_object(&d)
+                || (d.kind() == MACRO && self.macro_hidden(&d))
+        })
+    }
+
+    /// Whether object `o` of a property value shows nothing (see
+    /// [`Builder::property_value`]): what the body would hide, a macro
+    /// that renders nothing included.
+    fn hidden_in_a_value(&self, o: &SyntaxNode) -> bool {
+        matches!(
+            o.kind(),
+            INLINE_SRC_BLOCK | INLINE_BABEL_CALL | EXPORT_SNIPPET
+        ) || (o.kind() == MACRO
+            && (super::babel::results_macro_owner(o).is_some() || self.macro_hidden(o)))
+    }
 }
 
 /// Replaces each class-less `<span>` (a link shown as plain text) by its

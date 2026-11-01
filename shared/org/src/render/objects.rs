@@ -155,18 +155,21 @@ impl Builder<'_> {
             STATISTICS_COOKIE => push(out, span("org-cookie").with(vec![text(&raw(n))]).into()),
             LATEX_FRAGMENT => push(out, code(Some("org-latex"), raw(n))),
             INLINE_SRC_BLOCK => self.inline_src(n, out),
-            // A macro or citation is drawn as written, unless what it holds
-            // has a construct the export hides (Org would expand the macro
-            // and drop it): then, failing closed, a macro shows nothing and
-            // a citation only its keys (registered: macros-citations).
-            MACRO if macro_holds_hidden(n) => {}
+            // A macro or citation is drawn as written, unless, expanded, it
+            // would put a construct the export hides where it stands (its
+            // arguments, its template, an unknown template: see `macros`):
+            // then, failing closed, a macro shows nothing and a citation
+            // only its keys (registered: macros-citations).
+            MACRO if self.macro_hidden(n) => {}
             MACRO => push(out, span("org-macro").with(vec![text(&raw(n))]).into()),
-            CITATION if holds_hidden(n) => push(
-                out,
-                span("org-citation")
-                    .with(vec![text(&citation_keys(n))])
-                    .into(),
-            ),
+            CITATION
+                if holds_hidden(n)
+                    || n.descendants()
+                        .any(|d| d.kind() == MACRO && self.macro_hidden(&d)) =>
+            {
+                let keys = span("org-citation").with(vec![text(&citation_keys(n))]);
+                push(out, keys.into())
+            }
             CITATION => push(out, span("org-citation").with(vec![text(&raw(n))]).into()),
             EXPORT_SNIPPET | INLINE_BABEL_CALL => {}
             // Not reached (see above); drawn as written rather than lost.
@@ -224,20 +227,13 @@ impl Builder<'_> {
 /// Whether an object a babel `:exports` or the HTML export can hide (an
 /// inline src block, an inline babel call, an export snippet, or a results
 /// macro) is in `n`.
-fn holds_hidden(n: &SyntaxNode) -> bool {
+pub(crate) fn holds_hidden(n: &SyntaxNode) -> bool {
     n.descendants().skip(1).any(|d| {
         matches!(
             d.kind(),
             INLINE_SRC_BLOCK | INLINE_BABEL_CALL | EXPORT_SNIPPET
         ) || (d.kind() == MACRO && token_text(&d, NAME).eq_ignore_ascii_case("results"))
     })
-}
-
-/// Whether macro `n`'s arguments, read as the objects they become once
-/// Org expands the macro into its paragraph, hold one ([`holds_hidden`]).
-fn macro_holds_hidden(n: &SyntaxNode) -> bool {
-    let args = token_text(n, VALUE);
-    !args.is_empty() && holds_hidden(&crate::green::objects(&args, PARAGRAPH))
 }
 
 /// A citation as its keys only: `[cite:@a;@b]`.
