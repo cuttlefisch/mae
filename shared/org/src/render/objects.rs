@@ -100,6 +100,15 @@ impl Builder<'_> {
 
     /// One object, then its post-blank (nothing, post-blank included, for
     /// an object Org's export removes).
+    ///
+    /// Where an object is shown as its source text (`raw`), that IS what is
+    /// shown, never a fallback for something hidden (review B1): a cookie,
+    /// a LaTeX fragment, a macro and a citation are drawn as written
+    /// (registered: latex, macros-citations; a results macro Org's export
+    /// removes was dropped above); an entity is only parsed for a name in
+    /// `org-entities`, so its source is never reached; and no other object
+    /// kind reaches the last arm (a table cell is drawn by its row, a
+    /// citation reference inside its citation).
     pub fn object(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
         if self.babel_hides_object(n) {
             return;
@@ -142,6 +151,7 @@ impl Builder<'_> {
             MACRO => push(out, span("org-macro").with(vec![text(&raw(n))]).into()),
             CITATION => push(out, span("org-citation").with(vec![text(&raw(n))]).into()),
             EXPORT_SNIPPET | INLINE_BABEL_CALL => {}
+            // Not reached (see above); drawn as written rather than lost.
             _ => push(out, text(&raw(n))),
         }
         if let Some(p) = post_blank(n) {

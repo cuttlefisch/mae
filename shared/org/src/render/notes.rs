@@ -113,6 +113,9 @@ impl Builder<'_> {
             (None, None) if inline => Some(self.notes.add(NoteSource::Inline(n.clone()))),
             (None, None) => None,
         };
+        // A dangling reference (no definition anywhere, none inline) is its
+        // source text, `[fn:LABEL]`, as Org exports it: a label holds no
+        // object, so nothing hidden can be spelled there.
         let Some(k) = number else {
             return push(out, text(&raw(n)));
         };
