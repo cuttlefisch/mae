@@ -11,11 +11,14 @@
 //! collect them once with [`LinkAbbrevs::of`] and use [`Link::info_with`].
 //!
 //! Not modelled: `org-link-abbrev-alist` (global, nil in `emacs -Q`),
-//! abbreviations whose replacement calls a function (`%(fn)`: Org refuses
-//! them unless the function is marked safe, and deletes them from the
-//! buffer's list, so later links may see an older duplicate; here they never
-//! expand), `#+LINK:` lines in a `#+SETUPFILE:`, and
-//! `org-link-translation-function` (nil in `emacs -Q`).
+//! abbreviations whose replacement calls a function (`%(fn)`: Org runs it
+//! when the function is marked safe or `pure`, as `concat` is, and
+//! otherwise refuses it and deletes it from the buffer's list, so later
+//! links may see an older duplicate; here no code is ever run and they
+//! never expand: registered, `objects-link-view.org`), `#+LINK:` lines in a
+//! `#+SETUPFILE:`, and `org-link-translation-function` (nil in `emacs -Q`).
+//! A `~user` path is a file link whether or not that user exists (see
+//! `link_grammar::is_file_name`; registered too).
 
 use crate::kind::SyntaxKind::*;
 use crate::kind::{SyntaxElement, SyntaxNode};
@@ -258,10 +261,9 @@ fn typed<S: AsRef<str>>(
 /// then a file, a registered type, a coderef, a custom id or fuzzy.
 fn bracket_info<S: AsRef<str>>(raw: &str, link_types: &[S], abbrevs: &LinkAbbrevs) -> LinkInfo {
     // One normaliser for link paths (principle #8): the link grammar's.
-    let raw_link = abbrevs.expand(&crate::link_grammar::normalize_path(raw));
+    let raw_link = abbrevs.bracket_path(raw);
     let format = LinkFormat::Bracket;
-    let absolute = raw_link.starts_with('/') || raw_link == "~" || raw_link.starts_with("~/");
-    if absolute || raw_link.starts_with("./") || raw_link.starts_with("../") {
+    if crate::link_grammar::is_file_name(&raw_link) {
         return LinkInfo::untyped("file", raw_link, format);
     }
     if let Some(n) = type_prefix(&raw_link, link_types) {

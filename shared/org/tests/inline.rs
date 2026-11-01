@@ -341,6 +341,50 @@ fn a_glossary_past_the_limit_links_as_org_splits_it() {
     assert_eq!(differ, 13, "links that depend on the split");
 }
 
+/// A `%(fn)` replacement in `#+LINK:` is code. Org runs it when the
+/// function is marked safe or `pure` (`concat`: `[[c:y]]` becomes `y`) and
+/// refuses it otherwise (`upcase`: left alone). mae-org never runs it, so
+/// every such link stays as written (registered: objects-link-view.org).
+#[test]
+fn a_function_link_abbreviation_is_never_run() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/objects-link-view.org");
+    let raw: Vec<String> = links(&read(&path))
+        .iter()
+        .take(2)
+        .map(|l| l.info(&ParseOptions::default().link_types).raw_link)
+        .collect();
+    assert_eq!(raw, ["c:y", "up:x"]);
+}
+
+/// Review (suspected): `[[~]]`, `[[~/x]]` and `[[~user]]` are file links.
+/// Emacs asks `file-name-absolute-p`, which for `~user` depends on the
+/// machine (`~root` is a file link, `~no-such-user` fuzzy); mae-org reads
+/// every `~` path as a file name, deterministically (registered:
+/// `objects-link-view.org`).
+#[test]
+fn a_tilde_path_is_a_file_link() {
+    for p in ["~", "~/x", "~root", "~no-such-user-mae-org/x"] {
+        let c = mae_org::classify_link(p);
+        assert_eq!(c.kind, mae_org::LinkKind::Other, "{p}");
+        assert_eq!(c.target, p, "{p}");
+    }
+    let doc = mae_org::parse(
+        "[[~]] [[~no-such-user-mae-org]]\n",
+        &mae_org::ParseOptions::default(),
+    );
+    let types: Vec<String> = doc
+        .syntax()
+        .descendants()
+        .filter_map(mae_org::Link::cast)
+        .map(|l| {
+            l.info(&mae_org::ParseOptions::default().link_types)
+                .link_type
+        })
+        .collect();
+    assert_eq!(types, ["file", "file"]);
+}
+
 fn links(text: &str) -> Vec<Link> {
     parse_default(text)
         .syntax()

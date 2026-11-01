@@ -39,17 +39,33 @@ struct Divergence {
     kind: String,
     file: String,
     begin: Option<usize>,
+    /// A typed view's field (`raw_link`, `link_type`, …): the entry excuses
+    /// that field of the element at `begin`, not the element itself.
+    field: Option<String>,
     reason: String,
     test: String,
 }
 
 impl Divergence {
+    fn file_ok(&self, file: &str) -> bool {
+        self.file == file
+            || (self.file.ends_with('*') && file.starts_with(self.file.trim_end_matches('*')))
+    }
+
     fn covers(&self, file: &str, el: &El) -> bool {
-        let file_ok = self.file == file
-            || (self.file.ends_with('*') && file.starts_with(self.file.trim_end_matches('*')));
-        file_ok
+        self.field.is_none()
+            && self.file_ok(file)
             && (self.kind == "*" || self.kind == el.kind)
             && self.begin.is_none_or(|b| b == el.begin)
+    }
+
+    /// Whether this entry excuses a view mismatch, as `compare_views`
+    /// reports it (`KIND @BEGIN FIELD: oracle … mae …`).
+    fn covers_view(&self, file: &str, mismatch: &str) -> bool {
+        let (Some(field), Some(begin)) = (&self.field, self.begin) else {
+            return false;
+        };
+        self.file_ok(file) && mismatch.starts_with(&format!("{} @{begin} {field}:", self.kind))
     }
 }
 
@@ -93,6 +109,7 @@ fn load_register() -> Vec<Divergence> {
                 begin: m
                     .get("begin")
                     .map(|b| b.parse().expect("begin is an integer")),
+                field: m.get("field").cloned(),
                 reason: get("reason"),
                 test: get("test"),
             }
@@ -147,7 +164,7 @@ fn goldens_agree_with_emacs_except_registered_divergences() {
     let stale: Vec<_> = register
         .iter()
         .zip(&used)
-        .filter(|(_, u)| !**u)
+        .filter(|(d, u)| !**u && d.field.is_none())
         .map(|(d, _)| format!("{d:?}"))
         .collect();
     assert!(
@@ -281,6 +298,8 @@ fn every_divergence_names_a_reason_and_an_existing_pinning_test() {
 /// views, not just the spans.
 #[test]
 fn typed_views_agree_with_the_oracles_properties() {
+    let register = load_register();
+    let mut used = vec![false; register.len()];
     let mut compared = BTreeMap::<String, usize>::new();
     let mut mismatches = Vec::new();
     for rel in corpus_list() {
@@ -291,13 +310,29 @@ fn typed_views_agree_with_the_oracles_properties() {
         for (k, n) in counts {
             *compared.entry(k).or_default() += n;
         }
-        mismatches.extend(bad.into_iter().map(|m| format!("{rel}: {m}")));
+        for m in bad {
+            match register.iter().position(|d| d.covers_view(&rel, &m)) {
+                Some(i) => used[i] = true,
+                None => mismatches.push(format!("{rel}: {m}")),
+            }
+        }
     }
     eprintln!("view fields compared: {compared:?}");
     assert!(
         mismatches.is_empty(),
         "view mismatches:\n{}",
         mismatches.join("\n")
+    );
+    let stale: Vec<_> = register
+        .iter()
+        .zip(&used)
+        .filter(|(d, u)| !**u && d.field.is_some())
+        .map(|(d, _)| format!("{d:?}"))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "divergences.toml view entries that no longer occur:\n{}",
+        stale.join("\n")
     );
     // Floors just under what the goldens hold (1436/434/117/597/401 on
     // 2026-10-31), so a matcher that silently stops finding nodes fails.

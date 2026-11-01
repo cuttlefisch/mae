@@ -58,6 +58,7 @@ shared/org/tests/fixtures/objects-emacs-nonterminating-verse.org
 shared/org/tests/fixtures/objects-eol-mac.org
 shared/org/tests/fixtures/objects-eol-values.org
 shared/org/tests/fixtures/objects-link-eol-paths.org
+shared/org/tests/fixtures/objects-link-view.org
 shared/org/tests/fixtures/objects-links.org
 shared/org/tests/fixtures/objects-misc.org
 shared/org/tests/fixtures/objects-multibrace.org
