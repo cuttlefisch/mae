@@ -590,57 +590,14 @@ impl Radio {
         self.charge()?;
         let w = cur.window.get_or_insert_with(Box::default);
         let passed = |p: usize| p < s0 || (p == s0 && !cx.at_bol(p, floor));
-        // Matches the search start has passed: their regexps' fronts move.
-        let mut moved = HashSet::new();
-        while let Some((&p, _)) = w.hits.first_key_value().filter(|(&p, _)| passed(p)) {
-            #[cfg(test)]
-            tests::VISITS.with(|v| v.set(v.get() + 1));
-            self.charge()?;
-            let table = w.hits.remove(&p).unwrap_or_default();
-            for (j, _, _) in table {
-                w.of.entry(j).or_default().remove(&p);
-                if w.front.get(&j).is_some_and(|f| f.0 == p) {
-                    w.clear_front(j);
-                    moved.insert(j);
-                }
-            }
-        }
-        while w.skipped.front().is_some_and(|&p| passed(p)) {
-            #[cfg(test)]
-            tests::VISITS.with(|v| v.set(v.get() + 1));
-            self.charge()?;
-            w.skipped.pop_front();
-        }
-        // A moved front is the regexp's next examined match, unless a
-        // skipped candidate before it holds one: those are examined first,
-        // in order, until none is left before it.
-        let pending: Vec<u32> = moved.iter().copied().collect();
-        for j in pending {
-            loop {
-                let next = w.first_of(j);
-                let Some(&p) = w.skipped.front().filter(|&&p| next.is_none_or(|n| p < n.0)) else {
-                    if let Some((p, m0)) = next {
-                        w.set_front(j, p, m0);
-                    }
-                    break;
-                };
-                #[cfg(test)]
-                tests::VISITS.with(|v| v.set(v.get() + 1));
-                self.charge()?;
-                w.skipped.pop_front();
-                let table = self.examine(cx, p, (floor, end))?;
-                w.record(p, table, &moved);
-            }
-            moved.remove(&j);
-        }
+        let moved = self.drop_passed(w, &passed)?;
+        self.refront(cx, w, moved, (floor, end))?;
         w.scan = w.scan.max(self.starts.partition_point(|&p| p < s0));
         while let Some(&p) = self.starts.get(w.scan).filter(|&&p| p < end) {
             if w.best().is_some_and(|b| p >= b.m0) {
                 break;
             }
-            #[cfg(test)]
-            tests::VISITS.with(|v| v.set(v.get() + 1));
-            self.charge()?;
+            self.visit()?;
             w.scan += 1;
             if passed(p) {
                 continue;
@@ -648,7 +605,7 @@ impl Radio {
             match self.regexps_at(p, end) {
                 Some((lo, hi)) if !w.all_covered(lo, hi) => {
                     let table = self.examine(cx, p, (floor, end))?;
-                    w.record(p, table, &moved);
+                    w.record(p, table, &HashSet::new());
                 }
                 // No regexp can match here, or each that can has an earlier
                 // front: nothing to learn unless a front moves past it.
@@ -668,6 +625,65 @@ impl Radio {
         let link = self.looking_at_with(cx, m.p, (floor, end), &known)?;
         w.last = Some((m, link));
         Ok(Some((m, link)))
+    }
+
+    /// One candidate visited: charged (and counted, under test).
+    fn visit(&self) -> Work<()> {
+        #[cfg(test)]
+        tests::VISITS.with(|v| v.set(v.get() + 1));
+        self.charge()
+    }
+
+    /// Drops the matches and skipped candidates the search start has
+    /// `passed`; the regexps whose fronts were among them.
+    fn drop_passed(&self, w: &mut Window, passed: &dyn Fn(usize) -> bool) -> Work<HashSet<u32>> {
+        let mut moved = HashSet::new();
+        while let Some((&p, _)) = w.hits.first_key_value().filter(|(&p, _)| passed(p)) {
+            self.visit()?;
+            let table = w.hits.remove(&p).unwrap_or_default();
+            for (j, _, _) in table {
+                w.of.entry(j).or_default().remove(&p);
+                if w.front.get(&j).is_some_and(|f| f.0 == p) {
+                    w.clear_front(j);
+                    moved.insert(j);
+                }
+            }
+        }
+        while w.skipped.front().is_some_and(|&p| passed(p)) {
+            self.visit()?;
+            w.skipped.pop_front();
+        }
+        Ok(moved)
+    }
+
+    /// A moved front is its regexp's next examined match, unless a skipped
+    /// candidate before it holds one: those are examined first, in order,
+    /// until none is left before it.
+    fn refront(
+        &self,
+        cx: &InlineCx,
+        w: &mut Window,
+        mut moved: HashSet<u32>,
+        region: (usize, usize),
+    ) -> Work<()> {
+        let pending: Vec<u32> = moved.iter().copied().collect();
+        for j in pending {
+            loop {
+                let next = w.first_of(j);
+                let Some(&p) = w.skipped.front().filter(|&&p| next.is_none_or(|n| p < n.0)) else {
+                    if let Some((p, m0)) = next {
+                        w.set_front(j, p, m0);
+                    }
+                    break;
+                };
+                self.visit()?;
+                w.skipped.pop_front();
+                let table = self.examine(cx, p, region)?;
+                w.record(p, table, &moved);
+            }
+            moved.remove(&j);
+        }
+        Ok(())
     }
 
     /// Every regexp's first target matching at candidate `p` (reachable
@@ -2314,13 +2330,15 @@ mod tests {
     /// search must examine each candidate O(1) times per region, every step
     /// charged. Counted, not timed: the steps per input byte are bounded,
     /// and grow no faster than the input.
-    #[test]
-    fn radio_work_per_input_byte_is_bounded() {
+    type WorkGen = Box<dyn Fn(usize) -> String>;
+
+    /// The families `radio_work_per_input_byte_is_bounded` counts: name,
+    /// radio regexp limit, generator.
+    fn work_families() -> Vec<(&'static str, usize, WorkGen)> {
         let fill = "q".repeat(8150);
         // Org's limit: the 8150-char target alone passes it, so these split.
         let org = crate::ParseOptions::ORG_TARGET_LINK_REGEXP_LIMIT;
-        type Gen = Box<dyn Fn(usize) -> String>;
-        let families: Vec<(&str, usize, Gen)> = vec![
+        vec![
             // The reviewer's gen3: a lone no-break-space target makes every
             // char of a long run a candidate; `a b` matches across it.
             (
@@ -2384,7 +2402,12 @@ mod tests {
                     )
                 }),
             ),
-        ];
+        ]
+    }
+
+    #[test]
+    fn radio_work_per_input_byte_is_bounded() {
+        let families = work_families();
         let mut failures = Vec::new();
         for (name, limit, gen) in families {
             let (small, large) = (gen(500), gen(4_000));
