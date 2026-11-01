@@ -7,9 +7,9 @@
 # Usage (from anywhere):  shared/org/conformance/gen-semantics-titles.sh
 #
 # Requires: emacs (batch) and git. The corpus is every .org file under
-# assets/ and tests/ that git does not ignore (the differential's bundled
-# corpus, tests/support/mod.rs) plus the tests/semantics/ fixtures. POSIX sh
-# (principle #13).
+# assets/ and tests/ that git TRACKS (the differential's bundled corpus,
+# tests/support/mod.rs), plus the tests/semantics/ fixtures: an untracked
+# file in the checkout changes neither. POSIX sh (principle #13).
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -22,7 +22,7 @@ manifest=$(mktemp "${TMPDIR:-/tmp}/mae-org-titles.XXXXXX")
 body=$(mktemp "${TMPDIR:-/tmp}/mae-org-titles-out.XXXXXX")
 trap 'rm -f "$manifest" "$body"' EXIT INT TERM
 
-(cd "$root" && git ls-files --cached --others --exclude-standard -- 'assets/*.org' 'tests/*.org' 'shared/org/tests/semantics/*.org') |
+(cd "$root" && git ls-files -- 'assets/*.org' 'tests/*.org' 'shared/org/tests/semantics/*.org') |
     sort | while IFS= read -r rel; do
         printf '%s\t%s\n' "$root/$rel" "$rel"
     done > "$manifest"
