@@ -69,8 +69,12 @@ pub(crate) struct DocCx<'a> {
     babel: Babel,
     note_defs: Rc<HashMap<String, SyntaxNode>>,
     eol: LineEnding,
-    /// Headline start → the source text of its title (see `prepared`).
-    titles: HashMap<u32, String>,
+    /// The ids of the KB nodes on this page.
+    page_ids: HashSet<&'a str>,
+    /// The document as written, when this is its expansion: a link
+    /// fragment naming a heading by a title with macros is expanded with
+    /// its templates.
+    source: Option<&'a Document>,
 }
 
 pub(crate) struct Builder<'a> {
@@ -153,15 +157,14 @@ pub(crate) fn page_with<'a>(
 
 impl<'a> DocCx<'a> {
     pub fn new(doc: &Document, sem: &'a Semantics) -> Rc<DocCx<'a>> {
-        DocCx::with_titles(doc, sem, HashMap::new())
+        DocCx::with_source(doc, sem, None)
     }
 
-    /// [`DocCx::new`], each headline's slug made from `titles`' text for
-    /// it (the source of an expanded title).
-    pub fn with_titles(
+    /// [`DocCx::new`] over the expansion of `source`.
+    pub fn with_source(
         doc: &Document,
         sem: &'a Semantics,
-        titles: HashMap<u32, String>,
+        source: Option<&'a Document>,
     ) -> Rc<DocCx<'a>> {
         let skip = sem
             .unrendered
@@ -194,7 +197,8 @@ impl<'a> DocCx<'a> {
             babel: Babel::new(doc),
             note_defs: Rc::new(Notes::defs(doc, sem)),
             eol: doc.line_ending(),
-            titles,
+            page_ids: sem.nodes.iter().map(|n| n.id.as_str()).collect(),
+            source,
         })
     }
 }
@@ -261,10 +265,18 @@ impl<'a> Builder<'a> {
         self.blank = blank;
     }
 
-    /// The source text of the title of the headline starting at `start`,
-    /// when it differs from the rendered one (its macros expanded).
-    pub fn title_source(&self, start: u32) -> Option<&str> {
-        self.cx.titles.get(&start).map(String::as_str)
+    /// Whether KB node `id` is on this page.
+    pub fn on_page(&self, id: &str) -> bool {
+        self.cx.page_ids.contains(id)
+    }
+
+    /// `text`, a link fragment of this page, its macros expanded with the
+    /// page's templates (`None` when they cannot be).
+    pub fn expand_fragment(&self, text: &str) -> Option<String> {
+        match self.cx.source {
+            Some(src) => super::expand::expand_text(src, text),
+            None => super::expand::expand_text(&crate::parse("", &Default::default()), text),
+        }
     }
 
     /// Whether `kw` is a done keyword.

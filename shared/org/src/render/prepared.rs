@@ -15,9 +15,8 @@ pub(crate) struct Prepared<'d> {
     pub sem: Cow<'d, Semantics>,
     /// `None`: nothing was expanded.
     map: Option<Map>,
-    /// Expanded headline start → the source text of its title, which its
-    /// slug is made from (anchors do not depend on macro definitions).
-    titles: HashMap<u32, String>,
+    /// The document as written.
+    source: &'d Document,
     /// Why nothing renders.
     pub failed: Option<RenderDiagnostic>,
     /// Environment substitutions (`MacroEnvironment`).
@@ -32,7 +31,7 @@ pub(crate) fn prepare<'d>(doc: &'d Document, sem: &'d Semantics) -> Prepared<'d>
         doc: Cow::Borrowed(doc),
         sem: Cow::Borrowed(sem),
         map: None,
-        titles: HashMap::new(),
+        source: doc,
         failed: None,
         notes: Vec::new(),
     };
@@ -68,10 +67,7 @@ pub(crate) fn prepare<'d>(doc: &'d Document, sem: &'d Semantics) -> Prepared<'d>
             }
         }
     }
-    if let Some(m) = map {
-        p.titles = titles(&p.doc, &m, &source);
-        p.map = Some(m);
-    }
+    p.map = map;
     p
 }
 
@@ -121,20 +117,6 @@ fn removed_results(doc: &Document, sem: &Semantics) -> HashSet<usize> {
     out
 }
 
-/// Each expanded headline's title, as written in the source.
-fn titles(doc: &Document, map: &Map, source: &str) -> HashMap<u32, String> {
-    doc.syntax()
-        .descendants()
-        .filter(|n| n.kind() == HEADLINE_TITLE)
-        .filter_map(|t| {
-            let h = t.parent()?;
-            let s = map.to_source(Span::of(&t));
-            let text = source.get(s.range())?.to_string();
-            Some((Span::of(&h).start, text))
-        })
-        .collect()
-}
-
 impl<'d> Prepared<'d> {
     /// Renders `d` (an expansion of the source) from now on, with its
     /// semantics derived under the source's options.
@@ -146,7 +128,7 @@ impl<'d> Prepared<'d> {
 
     /// The builders' shared reading of the document.
     pub fn cx(&self) -> Rc<DocCx<'_>> {
-        DocCx::with_titles(&self.doc, &self.sem, self.titles.clone())
+        DocCx::with_source(&self.doc, &self.sem, Some(self.source))
     }
 
     /// A diagnostic of the rendered text, at its place in the source.

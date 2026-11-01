@@ -291,8 +291,25 @@ impl Builder<'_> {
     /// lands on that heading when the page has it, and on the node's own
     /// anchor when it does not (never dropped silently). A fragment with no
     /// letter or digit names nothing.
+    ///
+    /// A fragment holding a macro names the heading by its title as the
+    /// page with the heading renders it, which depends on that page's
+    /// templates: on this page it is expanded with this page's; to another
+    /// page the link goes to the node alone, with a
+    /// [`super::RenderDiagnostic::FragmentMacro`].
     fn kb_target(&mut self, l: crate::SemanticLink) -> Target {
-        let heading = l.fragment.as_deref().and_then(|f| self.fragment_anchor(f));
+        let heading = match l.fragment.as_deref() {
+            Some(f) if f.contains("{{{") && self.on_page(&l.target) => self
+                .expand_fragment(f)
+                .and_then(|f| self.fragment_anchor(&f)),
+            Some(f) if f.contains("{{{") => {
+                let d = super::RenderDiagnostic::FragmentMacro(l.span);
+                self.diagnostics.push(d);
+                None
+            }
+            Some(f) => self.fragment_anchor(f),
+            None => None,
+        };
         if let Some(href) = self
             .resolver
             .targets

@@ -79,7 +79,10 @@ export interface Rendered<T> {
    *   produces nothing, `body` and `nodes` are EMPTY;
    * - `macro_environment`: a `{{{time}}}`/`{{{modification-time}}}` macro
    *   expanded with a fixed time (1970-01-01 00:00:00 UTC), or an
-   *   `{{{input-file}}}` with nothing (informational).
+   *   `{{{input-file}}}` with nothing (informational);
+   * - `fragment_macro`: a KB link's `#fragment` holds a macro and names a
+   *   heading on another page, whose macros this render cannot know: the
+   *   link goes to the node without the fragment.
    */
   diagnostics: { kind: string; start: number; end: number }[];
 }

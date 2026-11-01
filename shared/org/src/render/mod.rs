@@ -43,15 +43,18 @@
 //!   cannot expand from the text alone (an `(eval …)` template, a lookup
 //!   outside the file) or within a bound linear in the source, the render
 //!   is EMPTY but for a [`RenderDiagnostic::MacroFailed`]. Every span still
-//!   points into the source; heading anchors are made from the titles as
-//!   written, every macro contributing nothing. [`Semantics`] stays the
-//!   source's (registered: `macros`).
+//!   points into the source. A heading's anchor
+//!   is made from its title as shown, so one whose title holds a macro
+//!   depends on the `#+MACRO:` lines; a KB link fragment holding a macro
+//!   is expanded with its own page's macros, and to another page goes to
+//!   the node alone ([`RenderDiagnostic::FragmentMacro`]). [`Semantics`]
+//!   stays the source's (registered: `macros`).
 //!
 //! Per construct (what is shown, and what is deliberately not):
 //!
 //! | Construct | Rendered as |
 //! |---|---|
-//! | headline | `<section class="org-section org-level-N">` (with `id` = the node's or custom id under [`HeadlineIds::Explicit`]) holding `<hN id="h-SLUG">` (`h` for a title with no letter or digit, a repeat `h-SLUG--2`, `--3`, …; h6 below 6; see [`heading_anchor`] and [`slug`]: the title AS WRITTEN rendered inline-only, babel objects and macros dropped (so no `#+MACRO:` line moves an anchor), its letters and digits of any script case-folded by Emacs's table): TODO keyword `<span class="org-todo">` (+ `org-done`), priority `<span class="org-priority">`, title, tags `<span class="org-tags">` of `<span class="org-tag">` |
+//! | headline | `<section class="org-section org-level-N">` (with `id` = the node's or custom id under [`HeadlineIds::Explicit`]) holding `<hN id="h-SLUG">` (`h` for a title with no letter or digit, a repeat `h-SLUG--2`, `--3`, …; h6 below 6; see [`heading_anchor`] and [`slug`]: the title as rendered inline-only (its macros expanded), babel objects dropped, its letters and digits of any script case-folded by Emacs's table): TODO keyword `<span class="org-todo">` (+ `org-done`), priority `<span class="org-priority">`, title, tags `<span class="org-tags">` of `<span class="org-tag">` |
 //! | section, zeroth section | its elements, unwrapped |
 //! | paragraph | `<p>` |
 //! | bold, italic, underline, strike-through | `<strong>`, `<em>`, `<span class="org-underline">`, `<del>` |
@@ -202,6 +205,10 @@ pub enum RenderDiagnostic {
     /// `{{{input-file}}}` with nothing: Org reads the clock or the file
     /// there, and MAE's output depends on the text only (ADR-112 D4).
     MacroEnvironment(Span),
+    /// A KB link's `#fragment` holds a macro and names a heading on another
+    /// page, whose templates this render cannot know: the link goes to the
+    /// node, without the fragment.
+    FragmentMacro(Span),
 }
 
 /// Why a document's macros could not be expanded.
@@ -239,6 +246,7 @@ impl RenderDiagnostic {
                 MacroFailure::Budget => "macro_budget",
             },
             RenderDiagnostic::MacroEnvironment(_) => "macro_environment",
+            RenderDiagnostic::FragmentMacro(_) => "fragment_macro",
         }
     }
 
@@ -247,7 +255,8 @@ impl RenderDiagnostic {
             RenderDiagnostic::TooDeep(s)
             | RenderDiagnostic::Unparsed(s)
             | RenderDiagnostic::MacroFailed(_, s)
-            | RenderDiagnostic::MacroEnvironment(s) => *s,
+            | RenderDiagnostic::MacroEnvironment(s)
+            | RenderDiagnostic::FragmentMacro(s) => *s,
         }
     }
 
@@ -258,6 +267,7 @@ impl RenderDiagnostic {
             RenderDiagnostic::Unparsed(_) => RenderDiagnostic::Unparsed(s),
             RenderDiagnostic::MacroFailed(f, _) => RenderDiagnostic::MacroFailed(f, s),
             RenderDiagnostic::MacroEnvironment(_) => RenderDiagnostic::MacroEnvironment(s),
+            RenderDiagnostic::FragmentMacro(_) => RenderDiagnostic::FragmentMacro(s),
         }
     }
 }

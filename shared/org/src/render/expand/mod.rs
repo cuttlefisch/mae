@@ -255,6 +255,20 @@ pub(crate) fn expand(doc: &Document) -> Result<Option<Expansion>, RenderDiagnost
     engine.run(Map::default(), HashSet::new())
 }
 
+/// `text` (a link fragment) with its macros expanded with the templates
+/// of `doc`; `None` when they cannot be.
+pub(crate) fn expand_text(doc: &Document, text: &str) -> Option<String> {
+    let source = doc.syntax().to_string();
+    let templates = value::templates(doc, &source);
+    let d = crate::parse(text, &crate::ParseOptions::default());
+    let engine = scan::Engine::new(&d, text.len(), templates);
+    match engine.run(Map::default(), HashSet::new()) {
+        Ok(Some(e)) => Some(e.text),
+        Ok(None) => Some(text.to_string()),
+        Err(_) => None,
+    }
+}
+
 /// Org's second expansion, after babel (`org-macro-replace-all` with only
 /// `results` as `$1`): every results macro of `doc` (the parse of an
 /// expansion whose map is `map`, of a source of `source_len` bytes) that

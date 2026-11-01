@@ -395,26 +395,48 @@ fn a_parsed_keyword_has_its_macros_expanded() {
     );
 }
 
-/// Anchors do not depend on macro definitions (review M5): a heading's
-/// slug is its title as written, its macros contributing nothing, so the
-/// title spelled in a link fragment lands on it from any document.
+/// A heading whose title holds a macro is slugged from its title as the
+/// page shows it (review round 5, revising round 4's M5): nothing the
+/// expansion hides reaches its anchor, in either HeadlineIds mode. A link
+/// fragment holding a macro is expanded with its own page's macros when
+/// it names a heading on that page; to another page, whose macros this
+/// render cannot know, the link goes to the node alone, with a
+/// diagnostic. A title without macros is slugged as before.
 #[test]
-fn a_heading_anchor_ignores_its_macros() {
+fn a_heading_anchor_is_made_from_its_title_as_shown() {
+    let hides = "#+MACRO: o src_sh[:exports none]{echo\n* Foo {{{o}}} secretword}\n:PROPERTIES:\n:ID: f\n:END:\nbody\n";
+    for ids in [HeadlineIds::Explicit, HeadlineIds::Slug] {
+        let d = parse(hides, &ParseOptions::default());
+        let opts = RenderOptions::default().with_headline_ids(ids);
+        let r = render(&d, &semantics(&d), &opts, &Resolver::default());
+        let all = r.to_json(TreeFormat::Html) + &r.to_json(TreeFormat::Hast);
+        assert!(!all.to_lowercase().contains("secretword"), "{all}");
+        assert!(
+            mae_org::to_html(&r.body).contains("<h1 id=\"h-foo\">Foo</h1>"),
+            "{all}"
+        );
+    }
     let one = "#+MACRO: m $1\n\n* Intro {{{m(x)}}}\n:PROPERTIES:\n:ID: n1\n:END:\nbody [[id:n1#Intro {{{m(x)}}}]]\n";
     let other = "* Other\n:PROPERTIES:\n:ID: n2\n:END:\nlink [[id:n1#Intro {{{m(x)}}}]]\n";
     let r = Resolver::default().with_target("n1", Resolved::new("/r/n1"));
-    let render_html = |doc: &str| {
+    let rendered_with = |doc: &str| {
         let d = parse(doc, &ParseOptions::default());
-        mae_org::render_html(&d, &semantics(&d), &RenderOptions::default(), &r)
+        render(&d, &semantics(&d), &RenderOptions::default(), &r)
     };
-    let h1 = render_html(one);
-    assert!(h1.contains("<h1 id=\"h-intro\">Intro x</h1>"), "{h1}");
-    assert!(h1.contains("#h-intro\""), "{h1}");
-    // Another definition of `m`: the same anchor.
-    let h2 = render_html(&one.replace("#+MACRO: m $1", "#+MACRO: m other words $1"));
-    assert!(h2.contains("<h1 id=\"h-intro\">"), "{h2}");
-    let h3 = render_html(other);
-    assert!(h3.contains("href=\"/r/n1#h-intro\""), "{h3}");
+    let h1 = mae_org::to_html(&rendered_with(one).body);
+    assert!(h1.contains("<h1 id=\"h-intro-x\">Intro x</h1>"), "{h1}");
+    assert!(h1.contains("/r/n1#h-intro-x\""), "{h1}");
+    let o = rendered_with(other);
+    let h3 = mae_org::to_html(&o.body);
+    assert!(h3.contains("href=\"/r/n1\""), "{h3}");
+    let at = other.find("[[id:n1").unwrap() as u32;
+    assert!(
+        o.diagnostics
+            .iter()
+            .any(|d| matches!(d, RenderDiagnostic::FragmentMacro(s) if s.start == at)),
+        "{:?}",
+        o.diagnostics
+    );
 }
 
 /// Nodes are matched to their source nodes by id: offsets moved by an
