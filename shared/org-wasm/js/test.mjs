@@ -24,10 +24,16 @@ import { fileURLToPath } from 'node:url';
 
 // Measured with rustc 1.98, `--profile wasm` (opt-level "s"): 611,525 bytes
 // on 2026-11-01; 648,998 bytes after the pre-tag review fixes (babel
-// `:exports`, anchors, special table rows, the splice). The budget was set
-// with ~15% headroom and is unchanged; raising it is a decision to record
-// in ADR-112's O3 note, not a number to bump.
-const SIZE_BUDGET = 700_000;
+// `:exports`, anchors, special table rows, the splice); 707,647 bytes
+// after the parser's own review fixes (Org's split radio regexps, keyword
+// reading, `#+LINK` expansion). The first budget, 700,000 (~15% over the
+// first measurement), caught that growth as it should; it was raised once,
+// to 800,000 (~13% over the tagged size), as recorded in ADR-112's O3
+// note. The module runs at build time in Node, so the budget guards
+// against accidental bloat (a stray dependency, a generic blow-up), not a
+// download size; raising it again is a decision to record there, not a
+// number to bump.
+const SIZE_BUDGET = 800_000;
 const OPS = { semantics: 1, renderHast: 2, renderHtml: 3, text: 4, classifyLink: 5, version: 6 };
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../../..');

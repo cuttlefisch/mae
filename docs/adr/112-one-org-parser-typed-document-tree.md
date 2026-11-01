@@ -163,7 +163,12 @@ layer on it becomes the cheaper path.
   pins its toolchain so the reproducible build is the same bytes on every run. Before the tag, an
   independent review's fixes (babel `:exports` resolved as Org resolves it, special table rows,
   heading anchors that KB link fragments land on, the `replace_body` splice O4 writes through)
-  grew it to 648,998 bytes, inside the same budget. `mae-org` and `mae-org-wasm` carry their own
+  grew it to 648,998 bytes, inside the same budget; the parser's own review fixes (Org's split
+  radio regexps, keywords read as Org reads them, `#+LINK` expansion) took it to 707,647 bytes, and
+  the gate failed as intended. The budget was raised once, to **800,000 bytes** (~13% over the
+  tagged size): the module runs at build time in Node, so the budget guards against accidental
+  bloat, not a download size, and `"z"`'s ~75% per-call slowdown is the worse trade.
+  `mae-org` and `mae-org-wasm` carry their own
   version (`API_VERSION`, 0.1.0), not MAE's, so a MAE release does not change the artifact; every
   deliberate difference from Org's HTML export is in `conformance/render-divergences.toml`.
 - **O4** MAE switches ingest, export and read mode to it, with the repair path; the span-based write
