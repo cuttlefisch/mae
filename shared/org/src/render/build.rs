@@ -165,7 +165,12 @@ impl<'a> Builder<'a> {
     fn run(&mut self, root: &SyntaxNode) -> Vec<Node> {
         let mut body = Vec::new();
         self.elements(root, &mut body);
-        if let Some(section) = self.footnotes_section() {
+        // A note is drawn wherever it is defined: a scope (a node's body)
+        // bounds what references it, not where its definition may be.
+        let scope = self.scope.take();
+        let notes = self.footnotes_section();
+        self.scope = scope;
+        if let Some(section) = notes {
             push(&mut body, section.into());
         }
         body
@@ -239,8 +244,16 @@ impl<'a> Builder<'a> {
                 return;
             }
             if s.start < scope.start || s.end > scope.end {
-                // Around the scope: only what is inside it.
-                return self.elements(n, out);
+                // Across the scope's edge: a container contributes what is
+                // inside the scope; any other element belongs to the node it
+                // STARTS in, whole or not at all, so no element is split or
+                // counted in two nodes' text.
+                if is_container(n.kind()) {
+                    return self.elements(n, out);
+                }
+                if s.start < scope.start {
+                    return;
+                }
             }
         }
         match n.kind() {
@@ -405,6 +418,44 @@ impl Builder<'_> {
         let dl = Element::new(Tag::Dl).class("org-properties").with(dl);
         push(out, dl.into());
     }
+}
+
+/// Elements whose children are elements (what a scope may cut through).
+fn is_container(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        DOCUMENT
+            | SECTION
+            | HEADLINE
+            | PLAIN_LIST
+            | ITEM
+            | QUOTE_BLOCK
+            | CENTER_BLOCK
+            | SPECIAL_BLOCK
+            | DYNAMIC_BLOCK
+            | DRAWER
+            | PROPERTY_DRAWER
+            | FOOTNOTE_DEFINITION
+    )
+}
+
+/// The search-text trees of KB node `node`: its title, and its body (its
+/// `body_span`) followed by every footnote either references, wherever
+/// the note is defined. One builder, so a note the title and the body both
+/// reference appears once.
+pub(crate) fn node_text_trees(
+    doc: &Document,
+    sem: &Semantics,
+    node: &crate::SemanticNode,
+    resolver: &Resolver,
+) -> (Vec<Node>, Vec<Node>) {
+    let opts = RenderOptions::default();
+    let root = doc.syntax();
+    let mut b = Builder::new(doc, sem, &opts, resolver, Mode::Text, Table::default());
+    let title = b.node_title(&root, node);
+    b.scope = Some(node.body_span);
+    let body = b.run(&root);
+    (title, body)
 }
 
 fn is_caption(affiliated: &SyntaxNode) -> bool {
