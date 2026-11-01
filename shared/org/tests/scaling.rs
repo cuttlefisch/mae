@@ -140,6 +140,10 @@
 //! - render: N headlines, one title: 10.59 ms -> 95.50 ms for x8 bytes, normalised x9.0
 //! - render: N radio links and targets: 17.23 ms -> 147.56 ms for x8 bytes, normalised x8.6
 //! - render: N headline nodes with titles: 17.25 ms -> 167.52 ms for x8 bytes, normalised x9.2
+//!
+//! `replace_body` (review round 3, 2026-11-01; before, its rendering check
+//! rendered every node's page and 8,000 nodes took 12.8 s):
+//! - splice: N nodes with links: 60.52 ms -> 654.95 ms for x9 bytes, normalised x10.1
 
 use mae_org::{parse, render, semantics, ParseOptions, RenderOptions, Resolved, Resolver};
 #[cfg(not(debug_assertions))]
@@ -628,6 +632,36 @@ fn headline_ids(n: usize) -> String {
 /// the clock. Each is a shape on which a per-element scan of a growing
 /// collection would go quadratic: anchors claimed so far (N headlines with
 /// one title), notes numbered so far, links resolved so far, cells.
+/// `replace_body` on the first node of N (review round 3: its rendering
+/// check rendered every node's page, 8,000 nodes took 12.8 s); the walks
+/// per edit are also counted, exactly, in `render::source`'s unit test.
+const SPLICE_FAMILIES: &[Family] = &[("splice: N nodes with links", splice_nodes, 500)];
+
+fn splice_nodes(n: usize) -> String {
+    (0..n)
+        .map(|i| format!("* N{i}\n:PROPERTIES:\n:ID: n{i}\n:END:\nbody {i} [[id:n{}]] note[fn:{i}]\n\n[fn:{i}] note {i}\n", (i + 1) % n))
+        .collect()
+}
+
+#[cfg(not(debug_assertions))]
+fn time_splice(text: &str) -> Duration {
+    let (popts, sopts) = (
+        ParseOptions::default(),
+        mae_org::SemanticsOptions::default(),
+    );
+    let doc = parse(text, &popts);
+    let sem = semantics(&doc);
+    let mut best = Duration::MAX;
+    for _ in 0..3 {
+        let t = Instant::now();
+        let out = mae_org::replace_body(text, &doc, &sem.nodes[0], "new body\n", &popts, &sopts);
+        let d = t.elapsed();
+        assert!(out.is_ok(), "{out:?}");
+        best = best.min(d);
+    }
+    best
+}
+
 const RENDER_FAMILIES: &[Family] = &[
     (
         "render: deep list",
@@ -761,6 +795,17 @@ fn every_family_parses_and_round_trips_at_8n() {
         let s = semantics(&parse(&text, &ParseOptions::default()));
         assert!(!s.nodes.is_empty() || name.contains("EXCLUDE"), "{name}");
     }
+    for (name, gen, base) in SPLICE_FAMILIES {
+        let text = gen(*base);
+        let (popts, sopts) = (
+            ParseOptions::default(),
+            mae_org::SemanticsOptions::default(),
+        );
+        let doc = parse(&text, &popts);
+        let sem = semantics(&doc);
+        let out = mae_org::replace_body(&text, &doc, &sem.nodes[0], "new\n", &popts, &sopts);
+        assert!(out.is_ok(), "{name}: {out:?}");
+    }
     for (name, gen, base) in RENDER_FAMILIES {
         let text = gen(*base);
         let doc = parse(&text, &ParseOptions::default());
@@ -807,7 +852,13 @@ fn parse_and_semantics_time_grow_roughly_linearly() {
     let render_families = RENDER_FAMILIES
         .iter()
         .map(|f| (f, time_render as fn(&str) -> Duration));
-    let families = parse_families.chain(sem_families).chain(render_families);
+    let splice_families = SPLICE_FAMILIES
+        .iter()
+        .map(|f| (f, time_splice as fn(&str) -> Duration));
+    let families = parse_families
+        .chain(sem_families)
+        .chain(render_families)
+        .chain(splice_families);
     for ((name, gen, base), time) in families {
         let (small, large) = (gen(*base), gen(base * 8));
         let (t1, t8) = (time(&small), time(&large));

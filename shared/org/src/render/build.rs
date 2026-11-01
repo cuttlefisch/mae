@@ -104,12 +104,20 @@ pub(crate) struct Builder<'a> {
     pub in_value: bool,
     /// Render only what lies in this span (a node's body).
     scope: Option<Span>,
+    /// Leave out every element inside this span (`rendering_without`).
+    exclude: Option<Span>,
     /// Inside a link's description: a nested link or footnote reference
     /// (Org allows one inside emphasis there) must not become an `<a>`
     /// inside an `<a>`, which an HTML parser would restructure.
     pub in_link: bool,
     depth: usize,
     pub diagnostics: Vec<RenderDiagnostic>,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Walks of a whole document by a builder (every pass of every page).
+    pub(crate) static RUNS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Builds the page of `doc` in `mode` (two passes).
@@ -220,6 +228,7 @@ impl<'a> Builder<'a> {
             slugging: false,
             in_value: false,
             scope: None,
+            exclude: None,
             in_link: false,
             depth: 0,
             diagnostics: Vec::new(),
@@ -247,13 +256,17 @@ impl<'a> Builder<'a> {
     }
 
     fn run(&mut self, root: &SyntaxNode) -> Vec<Node> {
+        #[cfg(test)]
+        RUNS.with(|r| r.set(r.get() + 1));
         let mut body = Vec::new();
         self.elements(root, &mut body);
         // A note is drawn wherever it is defined: a scope (a node's body)
         // bounds what references it, not where its definition may be.
         let scope = self.scope.take();
+        let exclude = self.exclude.take();
         let notes = self.footnotes_section();
         self.scope = scope;
+        self.exclude = exclude;
         if let Some(section) = notes {
             push(&mut body, section.into());
         }
@@ -376,6 +389,12 @@ impl<'a> Builder<'a> {
         // and footnote references in it).
         if self.skipped(n) || self.cx.babel.hides(n) {
             return;
+        }
+        if let Some(out) = self.exclude {
+            let s = Span::of(n);
+            if s.start >= out.start && s.end <= out.end && s.start < s.end {
+                return;
+            }
         }
         if let Some(scope) = self.scope {
             let s = Span::of(n);
@@ -606,35 +625,34 @@ fn node_text_trees_with(
     (title, body)
 }
 
-/// Every KB node's own rendering, as one string per node id: its body
-/// rendered as a page alone (a fixed resolver and options; hast, ids and
-/// footnotes as that page has them) and its search text. One read of the
-/// document for all of them. What `replace_body` compares for every node
-/// it did not edit.
-pub(crate) fn node_renderings(doc: &Document, sem: &Semantics) -> HashMap<String, String> {
-    let cx = DocCx::new(doc, sem);
+/// The whole page of `doc` with the elements inside `out` left out (as if
+/// they were not there: nothing in them numbered or claimed), and every
+/// node's metadata, as one string: what `replace_body` compares on both
+/// sides of an edit of the body `out`. Footnote definitions are drawn
+/// wherever they are, `out` included, when referenced from elsewhere.
+/// One render (two passes) of the document, whatever its number of nodes.
+pub(crate) fn rendering_without(
+    doc: &Document,
+    sem: &Semantics,
+    resolver: &Resolver,
+    out: Span,
+) -> String {
     let opts = RenderOptions::default();
-    let resolver = Resolver::default();
-    let mut out = HashMap::new();
-    for n in &sem.nodes {
-        let page = page_with(
-            doc,
-            cx.clone(),
-            &opts,
-            &resolver,
-            Mode::Page,
-            Some(n.body_span),
-        );
-        let (title, body) = node_text_trees_with(doc, cx.clone(), n, &resolver);
-        let rendering = format!(
-            "{}\n{}\n{}",
-            super::to_hast(&page.body),
-            super::text::text_of(&title),
-            super::text::text_of(&body)
-        );
-        out.insert(n.id.clone(), rendering);
-    }
-    out
+    let cx = DocCx::new(doc, sem);
+    let root = doc.syntax();
+    let mut first = Builder::with_cx(cx.clone(), &opts, resolver, Mode::Page, Table::default());
+    first.exclude = Some(out);
+    first.run(&root);
+    let mut second = Builder::with_cx(cx, &opts, resolver, Mode::Page, first.found);
+    second.exclude = Some(out);
+    let body = second.run(&root);
+    let nodes = super::meta::nodes(doc, sem, &opts, resolver, &second.found);
+    let rendered = super::Rendered {
+        body,
+        nodes,
+        diagnostics: Vec::new(),
+    };
+    super::hast::rendered_json(&rendered, super::TreeFormat::Hast)
 }
 
 fn is_caption(affiliated: &SyntaxNode) -> bool {

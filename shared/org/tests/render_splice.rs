@@ -408,14 +408,11 @@ fn an_edit_that_changes_what_the_file_declares_or_links_is_refused() {
             "{node} gets {id}"
         );
     }
-    // A new id is a new name (and a new node nested in the body, which
-    // would end the body at it): refused, though not as a duplicate.
+    // A new id nothing refers to is a new node nested in the body, which
+    // would end the body at it: refused, though not as a duplicate.
     assert_eq!(
         edit(ids, "a", &item("c")),
-        Err(BodyEditError::ChangesName {
-            kind: "ID".into(),
-            name: "c".into()
-        })
+        Err(BodyEditError::ChangesNode { id: "a".into() })
     );
 }
 
@@ -460,14 +457,17 @@ fn an_edit_that_adds_or_removes_a_name_is_refused() {
         "{:?}",
         edit(text, s1)
     );
+    // Each a name the rest of the file refers to (`[fn:x]`, `[[tgt]]`,
+    // `#+CALL: fn()`), or one it names itself (`CUSTOM_ID` of Other).
+    let text = text.replace(":ID: o1\n", ":ID: o1\n:CUSTOM_ID: c\n");
+    let text = text.as_str();
     let cases = [
         ("footnote", "x", "[fn:x] a definition\n"),
         ("footnote", "x", "inline[fn:x:defined here]\n"),
         ("target", "tgt", "a <<tgt>> here\n"),
-        ("radio target", "word", "a <<<word>>> here\n"),
         ("name", "fn", "#+NAME: fn\n| a |\n"),
-        ("name", "unused", "#+NAME: unused\n| a |\n"),
-        ("results", "fn", "#+RESULTS: fn\n: r\n"),
+        ("name", "tgt", "#+TBLNAME: tgt\n| a |\n"),
+        ("name", "tgt", "#+SRCNAME: tgt\n| a |\n"),
         (
             "CUSTOM_ID",
             "c",
@@ -495,6 +495,20 @@ fn an_edit_that_adds_or_removes_a_name_is_refused() {
     );
     assert!(edit(&with, "kept <<tgt>> still\n").is_ok());
     assert!(edit(text, "plain new words\n").is_ok());
+    // Round 3: a name the body defines and only the body refers to (or
+    // nothing does) is the body's own; so are a new paragraph and a
+    // footnote whose reference and definition are both in the body.
+    for body in [
+        "plain new words\n\nand a second paragraph\n",
+        "a <<own>> target, see [[own]]\n",
+        "a <<<nobody>>> radio target\n",
+        "#+NAME: unused\n| a |\n",
+        "#+RESULTS: lonely\n: r\n",
+        "a note[fn:mine] here\n\n[fn:mine] the body's own note\n",
+    ] {
+        let r = edit(text, body);
+        assert!(r.is_ok(), "{body:?}: {r:?}");
+    }
 }
 
 /// The last line of defence, which no precise check covers: every other
@@ -509,7 +523,9 @@ fn an_edit_that_changes_how_another_node_renders_is_refused() {
     let e1 = sem.nodes.iter().find(|n| n.id == "e1").unwrap();
     assert_eq!(
         replace_body(text, &doc, e1, "new body\n\n[fn:x] the note reworded\n"),
-        Err(BodyEditError::ChangesRendering { id: "o1".into() })
+        Err(BodyEditError::ChangesRendering {
+            what: "the page".into()
+        })
     );
     // The same definition, kept as it was: fine.
     assert!(replace_body(text, &doc, e1, "new body\n\n[fn:x] the note as it was\n").is_ok());
@@ -546,4 +562,90 @@ fn an_edit_that_changes_another_nodes_links_is_refused() {
         "Body A, reworded.\n\n[fn:x] See [[id:one?k=v1][it]].\n"
     )
     .is_ok());
+}
+
+/// Round 3 (the second reviewer): accepted edits that changed the output
+/// OUTSIDE every KB node, or the edited node's own metadata, or published
+/// a footnote definition elsewhere. Each document has a SECRET the edit
+/// would publish; each edit is refused.
+#[test]
+fn an_edit_that_changes_anything_rendered_outside_its_body_is_refused() {
+    let named = "#+NAME: fn\n#+begin_src sh\nprint(1)\n#+end_src\n";
+    let cases: &[(&str, &str, &str)] = &[
+        // A `#+CALL:` under a heading that is no node: the called block's
+        // language decides `header-args:python :exports none`.
+        (
+            "#+PROPERTY: header-args:python :exports none\n* Not a node\n#+CALL: fn()\n\n#+RESULTS:\n: SECRETRESULT\n\n* A\n:PROPERTIES:\n:ID: a\n:END:\n#+NAME: fn\n#+begin_src python\nprint(1)\n#+end_src\n",
+            "a",
+            named,
+        ),
+        (
+            "#+PROPERTY: header-args:python :exports none\n* Title call_fn() {{{results(=SECRETINL=)}}}\nText call_fn() {{{results(=SECRETINL2=)}}} end.\n* A\n:PROPERTIES:\n:ID: a\n:END:\n#+NAME: fn\n#+begin_src python\nprint(1)\n#+end_src\n",
+            "a",
+            named,
+        ),
+        (
+            "#+PROPERTY: header-args:python :exports none\n#+CALL: fn()\n\n#+RESULTS:\n: SECRETZERO\n\n* A\n:PROPERTIES:\n:ID: a\n:END:\n#+NAME: fn\n#+begin_src python\nprint(1)\n#+end_src\n",
+            "a",
+            named,
+        ),
+        // The edited node's own title and alias.
+        (
+            "#+PROPERTY: header-args:python :exports none\n* A call_fn() {{{results(=SECRETOWN=)}}}\n:PROPERTIES:\n:ID: a\n:ALIASES: x call_fn() {{{results(=SECRETALIAS=)}}}\n:END:\n#+NAME: fn\n#+begin_src python\nprint(1)\n#+end_src\n",
+            "a",
+            named,
+        ),
+        // A block's :exports decides named results elsewhere.
+        (
+            "* Not a node\n#+RESULTS: fn\n: SECRETNAMED\n\n* A\n:PROPERTIES:\n:ID: a\n:END:\n#+NAME: fn\n#+begin_src sh :exports code\necho hi\n#+end_src\n",
+            "a",
+            "#+NAME: fn\n#+begin_src sh :exports both\necho hi\n#+end_src\n",
+        ),
+        // A reference added in the body publishes another node's, or the
+        // zeroth section's, definition.
+        (
+            "* A\n:PROPERTIES:\n:ID: a\n:END:\nBody A.\n* B\n:PROPERTIES:\n:ID: b\n:END:\nBody B.\n\n[fn:x] Def SECRETDEF with [[id:other][a link]].\n",
+            "a",
+            "Body A[fn:x].\n",
+        ),
+        (
+            "Zeroth[fn:x].\n* A\n:PROPERTIES:\n:ID: a\n:END:\nBody A.\n* B\n:PROPERTIES:\n:ID: b\n:END:\nBody B.\n\n[fn:y] Unreferenced SECRETY def.\n",
+            "a",
+            "Body A[fn:y].\n",
+        ),
+        // A definition in the body that the zeroth section references.
+        (
+            "Zeroth text[fn:z].\n* A\n:PROPERTIES:\n:ID: a\n:END:\nBody A.\n\n[fn:z] Old SECRETOLD def.\n",
+            "a",
+            "Body A.\n\n[fn:z] New SECRETNEW def.\n",
+        ),
+    ];
+    for (text, id, body) in cases {
+        let doc = parse(text, &ParseOptions::default());
+        let sem = semantics(&doc);
+        let n = sem.nodes.iter().find(|n| n.id == *id).unwrap();
+        let r = replace_body(text, &doc, n, body);
+        assert!(
+            r.is_err(),
+            "accepted:\n{text}\n--- body:\n{body}\n--- gives:\n{r:?}"
+        );
+    }
+}
+
+/// What only the probing resolver sees: a note in A's body that A cites
+/// first (so its links are A's own, which the link comparison leaves to
+/// A) and B cites too. Retargeting its link changes what B's page shows,
+/// but under a resolver that resolves nothing both targets render alike.
+#[test]
+fn a_retargeted_link_in_a_shared_note_is_refused() {
+    let text = "* A\n:PROPERTIES:\n:ID: a\n:END:\nSee[fn:x].\n\n[fn:x] See [[id:one][it]].\n* B\n:PROPERTIES:\n:ID: b\n:END:\nBody B[fn:x].\n";
+    let doc = parse(text, &ParseOptions::default());
+    let sem = semantics(&doc);
+    let a = sem.nodes.iter().find(|n| n.id == "a").unwrap();
+    assert_eq!(
+        replace_body(text, &doc, a, "See[fn:x].\n\n[fn:x] See [[id:two][it]].\n"),
+        Err(BodyEditError::ChangesRendering {
+            what: "the page".into()
+        })
+    );
 }

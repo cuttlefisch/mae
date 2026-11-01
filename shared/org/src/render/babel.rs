@@ -499,6 +499,15 @@ fn results_of(n: &SyntaxNode, named: &mut NamedResults) -> Vec<SyntaxNode> {
     out
 }
 
+/// The name a `#+CALL:` line or `call_…()` object calls, if `n` is one.
+pub(crate) fn call_name(n: &SyntaxNode) -> Option<String> {
+    match n.kind() {
+        BABEL_CALL => Some(block_call(&token(n, VALUE).unwrap_or_default()).name),
+        INLINE_BABEL_CALL => Some(inline_call(n).name),
+        _ => None,
+    }
+}
+
 /// What a babel call names and its header arguments.
 struct Call {
     /// `:call`, as written.

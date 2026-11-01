@@ -25,6 +25,8 @@
 //! convention (one lone LF in a DOS file makes Emacs read the WHOLE file as
 //! unix, turning every CR into content).
 
+use std::collections::HashSet;
+
 use crate::{
     Document, LineEnding, ParseOptions, SemanticDiagnostic, SemanticNode, Semantics,
     SemanticsOptions, Span,
@@ -105,22 +107,26 @@ pub enum BodyEditError {
     /// title, properties, tags or place (a list item's body can end its
     /// list, for one).
     ChangesNode { id: String },
-    /// The body would add, remove or change a name the rest of the file can
-    /// resolve (review round 2: another node's `[fn:x]`, `[[tgt]]` or
-    /// `#+CALL: fn()` would then render something else): `kind` is
-    /// `footnote` (a definition, or an inline one with a label), `target`
-    /// (`<<x>>`), `radio target`, `name` (`#+NAME:` and its aliases on any
-    /// element), `results` (a named `#+RESULTS:`), `CUSTOM_ID` or `ID`.
+    /// The body would add, remove or change a name that the rest of the
+    /// file refers to, or that something outside the body also names
+    /// (review round 2: another node's `[fn:x]`, `[[tgt]]` or `#+CALL: fn()`
+    /// would then render something else). A name defined and referred to
+    /// only inside the body is the body's own. `kind` is `footnote` (a
+    /// definition, or an inline one with a label), `target` (`<<x>>`),
+    /// `radio target`, `name` (`#+NAME:` and its aliases on any element),
+    /// `results` (a named `#+RESULTS:`), `CUSTOM_ID` or `ID`.
     ChangesName { kind: String, name: String },
     /// The edit would change the links or transclusions of another node
     /// (`id`, or `None` for text outside every node): every field the
     /// semantics give a link, those no rendering shows included (a
     /// footnote definition's links belong to the node that references it).
     ChangesLinks { id: Option<String> },
-    /// Node `id` (not the edited one) would render differently: its body
-    /// rendered alone or its search text. The last line of defence, behind
-    /// the precise checks.
-    ChangesRendering { id: String },
+    /// The document would render differently outside the edited body
+    /// (`what`: `the page`, `the footnotes`), or any node's metadata (the
+    /// edited node's included) would: the last line of defence, behind the
+    /// precise checks. Rendered whole with a resolver that gives every KB
+    /// target its own href and title, so a changed target shows.
+    ChangesRendering { what: String },
     /// The edit would change how text outside the body parses: an element
     /// or object there (at `offset` in the new text) differs, as when a
     /// radio target in the body makes a radio link elsewhere.
@@ -177,8 +183,8 @@ impl std::fmt::Display for BodyEditError {
             BodyEditError::ChangesLinks { id: None } => {
                 write!(f, "the edit would change links outside every node")
             }
-            BodyEditError::ChangesRendering { id } => {
-                write!(f, "the edit would change how node {id:?} renders")
+            BodyEditError::ChangesRendering { what } => {
+                write!(f, "the edit would change how {what} renders")
             }
             BodyEditError::ChangesOutside { offset } => {
                 write!(f, "the edit would change the text's reading at {offset}")
@@ -214,11 +220,15 @@ impl std::error::Error for BodyEditError {}
 /// moved by the edit), this node's own metadata, any link or transclusion
 /// whose source is not this node, any file-level declaration
 /// ([`DECLARATION_KEYWORDS`]), an `:ID:` the new body would repeat (in
-/// either order), any name the rest of the file can resolve that the body
-/// adds, removes or changes (a footnote label, a target, a radio target, a
-/// `#+NAME:`, a named `#+RESULTS:`, a `CUSTOM_ID` or `ID`), any element,
-/// object or token outside the body, or, last, how any other node renders
-/// (its body rendered alone, and its search text). A new node
+/// either order), any name the body adds, removes or changes that the
+/// rest of the file refers to or names itself (a footnote label, a target,
+/// a radio target, a `#+NAME:`, a named `#+RESULTS:`, a `CUSTOM_ID` or
+/// `ID`; one the body alone defines and uses is its own), any element,
+/// object or token outside the body, or, last, how anything renders
+/// outside the body: the whole page with the body left out, every node's
+/// metadata (this node's included) and which footnote definitions outside
+/// the body are drawn, under a resolver giving every KB target its own
+/// href and title. One render per side, whatever the nodes. A new node
 /// in the body is refused too: a body runs to the first node nested in it,
 /// so the edited node's body would change.
 ///
@@ -364,35 +374,69 @@ impl Edit<'_> {
     /// The names the rest of the file can resolve are the same in the old
     /// body and the new one ([`BodyEditError::ChangesName`]).
     fn check_names(&self, old: &Document, new: &Document) -> Result<(), BodyEditError> {
-        let mut was = names_in(old, self.range);
-        let mut now = names_in(new, self.new_range);
+        let mut was = names_in(old, self.range, true);
+        let mut now = names_in(new, self.new_range, true);
         was.sort();
         now.sort();
-        let differs = was
-            .iter()
-            .zip(&now)
-            .find(|(a, b)| a != b)
-            .map(|(a, b)| a.min(b).clone())
-            .or_else(|| was.get(now.len()).or(now.get(was.len())).cloned());
-        match differs {
-            Some((kind, name)) => Err(BodyEditError::ChangesName { kind, name }),
+        // What the rest of the file refers to, or names itself, on either
+        // side: a name the body adds, removes or changes must be none of it.
+        let mut taken = refs_outside(old, self.range);
+        taken.extend(refs_outside(new, self.new_range));
+        let outside = names_in(old, self.range, false).into_iter().chain(names_in(
+            new,
+            self.new_range,
+            false,
+        ));
+        taken.extend(outside.map(|(_, n)| crate::chars::fold(&n)));
+        let changed = |n: &(String, String)| taken.contains(&crate::chars::fold(&n.1));
+        let gone = was.iter().filter(|n| !now.contains(n));
+        let new = now.iter().filter(|n| !was.contains(n));
+        match gone.chain(new).find(|n| changed(n)) {
+            Some((kind, name)) => Err(BodyEditError::ChangesName {
+                kind: kind.clone(),
+                name: name.clone(),
+            }),
             None => Ok(()),
         }
     }
 
-    /// Every node but the edited one renders as before (its body as a page
-    /// alone, and its search text), under a fixed resolver and options.
+    /// The document renders the same outside the body, every node's
+    /// metadata included, under a resolver that gives every KB target on
+    /// either side its own href and title; and the footnote definitions
+    /// rendered from outside the body are the same ones (a reference the
+    /// body adds may publish a definition elsewhere). One render per side.
     fn check_renderings(
         &self,
         (old, before): (&Document, &Semantics),
         (new, after): (&Document, &Semantics),
     ) -> Result<(), BodyEditError> {
-        let was = super::build::node_renderings(old, before);
-        let now = super::build::node_renderings(new, after);
-        for n in &before.nodes {
-            if n.id != self.edited.id && was.get(&n.id) != now.get(&n.id) {
-                return Err(BodyEditError::ChangesRendering { id: n.id.clone() });
-            }
+        let resolver = probing_resolver([before, after]);
+        let (s, e) = self.range;
+        let (ns, ne) = self.new_range;
+        let was = super::build::rendering_without(old, before, &resolver, Span::new(s, e));
+        let now = super::build::rendering_without(new, after, &resolver, Span::new(ns, ne));
+        if was != now {
+            return Err(BodyEditError::ChangesRendering {
+                what: "the page".into(),
+            });
+        }
+        let in_old = |sp: Span| sp.start as usize >= s && sp.end as usize <= e;
+        let notes_was: Vec<_> = before
+            .footnotes
+            .iter()
+            .filter(|f| !in_old(f.span))
+            .map(|f| (f.label.clone(), self.moved_span(f.span)))
+            .collect();
+        let notes_now: Vec<_> = after
+            .footnotes
+            .iter()
+            .filter(|f| !self.inside_new(f.span))
+            .map(|f| (f.label.clone(), Some(f.span)))
+            .collect();
+        if notes_was != notes_now {
+            return Err(BodyEditError::ChangesRendering {
+                what: "the footnotes".into(),
+            });
         }
         Ok(())
     }
@@ -556,9 +600,87 @@ impl Edit<'_> {
     }
 }
 
-/// `(kind, name)` of every name in `doc` within `range` that the rest of the
-/// file can resolve (see [`BodyEditError::ChangesName`]).
-fn names_in(doc: &Document, (a, b): (usize, usize)) -> Vec<(String, String)> {
+/// A resolver giving every KB target either semantics link to (or
+/// transclude) its own href and title, derived from the target: under it,
+/// a link whose target changes renders differently.
+fn probing_resolver(sems: [&Semantics; 2]) -> super::Resolver {
+    let mut r = super::Resolver::default();
+    for sem in sems {
+        let targets = sem.links.iter().map(|l| l.target.clone());
+        let members = sem.transclusions.iter().map(|t| t.member.clone());
+        for t in targets.chain(members) {
+            let href = format!("/probe/{}", super::encode_id(&t));
+            let resolved = super::Resolved::new(href).with_title(format!("probe {t}"));
+            r.targets.entry(t).or_insert(resolved);
+        }
+    }
+    r
+}
+
+/// What the text of `doc` outside `range` refers to by name, folded: the
+/// labels its footnote references use, its links' targets (the path, and
+/// what follows `*`, `#`, a `type:` or a `::`), the names its babel calls
+/// call, the names its `#+RESULTS:` lines give.
+fn refs_outside(doc: &Document, (a, b): (usize, usize)) -> HashSet<String> {
+    use crate::kind::SyntaxKind::*;
+    let mut out = HashSet::new();
+    let mut add = |s: &str| {
+        let s = s.trim();
+        if !s.is_empty() {
+            out.insert(crate::chars::fold(s));
+        }
+    };
+    for n in doc.syntax().descendants() {
+        let sp = Span::of(&n);
+        if (sp.start as usize) >= a && sp.end as usize <= b {
+            continue;
+        }
+        match n.kind() {
+            FOOTNOTE_REFERENCE => {
+                if let Some(l) = crate::semantics::regions::reference_label(&n) {
+                    add(&l);
+                }
+            }
+            LINK => {
+                let path = crate::semantics::plain::link_path(&n).unwrap_or_default();
+                add(&path);
+                add(path.trim_start_matches(['*', '#']));
+                if let Some((_, rest)) = path.split_once(':') {
+                    add(rest.trim_start_matches(['*', '#']));
+                }
+                if let Some((_, rest)) = path.split_once("::") {
+                    add(rest.trim_start_matches(['*', '#']));
+                }
+                if let Some((_, frag)) = path.split_once('#') {
+                    add(frag);
+                }
+                // A radio link's text is the radio target it names.
+                if let Some(l) = crate::views::Link::cast(n.clone()) {
+                    if l.is_radio() {
+                        add(&l.description_text().unwrap_or_default());
+                    }
+                }
+            }
+            BABEL_CALL | INLINE_BABEL_CALL => {
+                if let Some(c) = super::babel::call_name(&n) {
+                    add(&c);
+                }
+            }
+            _ => {}
+        }
+        for (k, v) in super::babel::affiliated(&n) {
+            if k == "RESULTS" {
+                add(&v);
+            }
+        }
+    }
+    out
+}
+
+/// `(kind, name)` of every name in `doc` within `range` (`inside`), or
+/// outside it, that the rest of the file can resolve (see
+/// [`BodyEditError::ChangesName`]).
+fn names_in(doc: &Document, (a, b): (usize, usize), inside: bool) -> Vec<(String, String)> {
     use crate::kind::SyntaxKind::*;
     let mut out = Vec::new();
     let token = |n: &crate::SyntaxNode, kind: crate::SyntaxKind| {
@@ -569,7 +691,8 @@ fn names_in(doc: &Document, (a, b): (usize, usize)) -> Vec<(String, String)> {
     };
     for n in doc.syntax().descendants() {
         let sp = Span::of(&n);
-        if (sp.start as usize) < a || sp.end as usize > b {
+        let within = (sp.start as usize) >= a && sp.end as usize <= b;
+        if within != inside {
             continue;
         }
         let mut add = |kind: &str, name: String| out.push((kind.to_string(), name));
@@ -613,4 +736,39 @@ fn names_in(doc: &Document, (a, b): (usize, usize)) -> Vec<(String, String)> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Review round 3: the rendering check rendered every node's page, so
+    /// an edit of a file of 8,000 nodes took 12.8 s. Counted, not timed:
+    /// one edit walks the document a fixed number of times (two passes
+    /// for each side's page, one for each side's node metadata), whatever
+    /// its number of nodes.
+    #[test]
+    fn an_edit_renders_each_side_once_whatever_the_nodes() {
+        let walks = |nodes: usize| {
+            let text: String = (0..nodes)
+                .map(|i| format!("* N{i}\n:PROPERTIES:\n:ID: n{i}\n:END:\nbody {i} [[id:n0]]\n"))
+                .collect();
+            let doc = crate::parse(&text, &ParseOptions::default());
+            let sem = crate::semantics(&doc);
+            super::super::build::RUNS.with(|r| r.set(0));
+            let r = replace_body(
+                &text,
+                &doc,
+                &sem.nodes[0],
+                "a new body\n",
+                &ParseOptions::default(),
+                &SemanticsOptions::default(),
+            );
+            assert!(r.is_ok(), "{r:?}");
+            super::super::build::RUNS.with(std::cell::Cell::get)
+        };
+        let (few, many) = (walks(10), walks(400));
+        assert_eq!(few, many, "walks grow with the nodes: {few} -> {many}");
+        assert!(many <= 4, "{many} walks");
+    }
 }
