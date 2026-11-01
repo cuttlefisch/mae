@@ -1,0 +1,8 @@
+#+MACRO: all $0
+#+MACRO: id $1
+* H
+:PROPERTIES:
+:ID: n1
+:ALIASES: {{{all({{{id(QZmQZ)}}},[fn:: QZnQZ{{{cb}}})}}}
+:END:
+P {{{property(ALIASES)}}}

@@ -1,0 +1,31 @@
+:PROPERTIES:
+:ID: sem-items-file
+:END:
+#+title: List-item nodes
+
+* Heading
+:PROPERTIES:
+:ID: sem-items-heading
+:END:
+- [ ] A checkbox item whose first line
+  wraps onto a second
+  :PROPERTIES:
+  :ID: sem-items-checkbox
+  :KIND: task
+  :Item-Key: an item's key, written in mixed case
+  :END:
+  Its body [[id:sem-items-checkbox-link]].
+- term :: a descriptive item
+  :PROPERTIES:
+  :ID: sem-items-descriptive
+  :END:
+- An item whose drawer is not a property drawer
+  :PROPERTIES:
+  :ID: sem-items-not-props
+  free text in the drawer
+  :END:
+
+A paragraph, not an item
+:PROPERTIES:
+:ID: sem-items-paragraph-drawer
+:END:

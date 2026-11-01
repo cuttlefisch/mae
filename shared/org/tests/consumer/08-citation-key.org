@@ -1,0 +1,5 @@
+# Expected (Emacs): Emacs 30.2 with no citation processor configured: "A citation (??, ????) in the text." (the key is NOT shown).
+# Observed (mae-org): mae-org b2824246: renders <span class="org-citation">[cite:@SECcitekey]</span> (the key IS shown). Possible divergence: Org hides the key.
+# Synthetic; SEC… strings are markers that must not reach the output where Emacs hides them.
+#+title: Citation key
+A citation [cite:@SECcitekey] in the text.

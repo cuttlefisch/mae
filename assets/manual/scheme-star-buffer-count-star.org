@@ -2,7 +2,7 @@
 :ID: scheme:*buffer-count*
 :KIND: scheme_api
 :END:
-#+title: Scheme: *buffer-count*
+#+title: Scheme: =*buffer-count*=
 #+filetags: :scheme:api:variable:
 
 *Type:* integer

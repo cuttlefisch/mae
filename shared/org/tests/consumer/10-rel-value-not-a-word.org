@@ -1,0 +1,8 @@
+# Expected (Emacs): Emacs 30.2 (emacs -Q): export errors (id links need ID tracking); not comparable. MAE ADR-030 typed links.
+# Observed (mae-org): mae-org b2824246: data-org-rel="dddddddd-0000-0000-0000-0000000000ff"; the invalid w "1e9;x" is silently replaced by data-org-w="1" (no diagnostic). Accepted as tag-gating: omit both + warning diagnostic.
+# Synthetic; SEC… strings are markers that must not reach the output where Emacs hides them.
+#+title: rel value that is not a link type (MAE ADR-030 typed links)
+:PROPERTIES:
+:ID: aaaaaaaa-0000-0000-0000-000000000002
+:END:
+[[id:aaaaaaaa-0000-0000-0000-000000000002?rel=dddddddd-0000-0000-0000-0000000000ff&w=1e9;x][typed]]

@@ -1,0 +1,86 @@
+{"type":"#file","bytes":1847,"eol":"unix","unmodified":true}
+{"type":"section","begin":0,"end":309,"contents_begin":0,"contents_end":309,"parent_type":"org-data","parent_begin":0}
+{"type":"property-drawer","begin":0,"end":68,"contents_begin":13,"contents_end":62,"parent_type":"section","parent_begin":0}
+{"type":"node-property","begin":13,"end":35,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"ID","value":"hub:code-quality"}
+{"type":"node-property","begin":35,"end":46,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"ROLE","value":"hub"}
+{"type":"node-property","begin":46,"end":62,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"KIND","value":"category"}
+{"type":"keyword","begin":68,"end":90,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"Code Quality"}
+{"type":"keyword","begin":90,"end":121,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":hub:devpractice:"}
+{"type":"paragraph","begin":121,"end":309,"contents_begin":121,"contents_end":308,"parent_type":"section","parent_begin":0}
+{"type":"headline","begin":309,"end":1444,"contents_begin":329,"contents_end":1444,"parent_type":"org-data","parent_begin":0,"level":1,"true_level":1,"raw_title":"Design principles","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":329,"end":1444,"contents_begin":329,"contents_end":1444,"parent_type":"headline","parent_begin":309}
+{"type":"plain-list","begin":329,"end":1444,"contents_begin":329,"contents_end":1443,"parent_type":"section","parent_begin":329}
+{"type":"item","begin":329,"end":399,"contents_begin":331,"contents_end":399,"parent_type":"plain-list","parent_begin":329,"bullet":"- "}
+{"type":"paragraph","begin":331,"end":399,"contents_begin":331,"contents_end":399,"parent_type":"item","parent_begin":329}
+{"type":"link","begin":331,"end":398,"contents_begin":372,"contents_end":396,"parent_type":"paragraph","parent_begin":331,"link_type":"id","path":"principle:concurrency-safety-first","raw_link":"id:principle:concurrency-safety-first","format":"bracket"}
+{"type":"item","begin":399,"end":457,"contents_begin":401,"contents_end":457,"parent_type":"plain-list","parent_begin":329,"bullet":"- "}
+{"type":"paragraph","begin":401,"end":457,"contents_begin":401,"contents_end":457,"parent_type":"item","parent_begin":399}
+{"type":"link","begin":401,"end":456,"contents_begin":436,"contents_end":454,"parent_type":"paragraph","parent_begin":401,"link_type":"id","path":"principle:modular-boundaries","raw_link":"id:principle:modular-boundaries","format":"bracket"}
+{"type":"item","begin":457,"end":511,"contents_begin":459,"contents_end":511,"parent_type":"plain-list","parent_begin":329,"bullet":"- "}
+{"type":"paragraph","begin":459,"end":511,"contents_begin":459,"contents_end":511,"parent_type":"item","parent_begin":457}
+{"type":"link","begin":459,"end":510,"contents_begin":492,"contents_end":508,"parent_type":"paragraph","parent_begin":459,"link_type":"id","path":"principle:ai-as-peer-actor","raw_link":"id:principle:ai-as-peer-actor","format":"bracket"}
+{"type":"item","begin":511,"end":559,"contents_begin":513,"contents_end":559,"parent_type":"plain-list","parent_begin":329,"bullet":"- "}
+{"type":"paragraph","begin":513,"end":559,"contents_begin":513,"contents_end":559,"parent_type":"item","parent_begin":511}
+{"type":"link","begin":513,"end":558,"contents_begin":543,"contents_end":556,"parent_type":"paragraph","parent_begin":513,"link_type":"id","path":"principle:no-hardcoding","raw_link":"id:principle:no-hardcoding","format":"bracket"}
+{"type":"item","begin":559,"end":645,"contents_begin":561,"contents_end":645,"parent_type":"plain-list","parent_begin":329,"bullet":"- "}
+{"type":"paragraph","begin":561,"end":645,"contents_begin":561,"contents_end":645,"parent_type":"item","parent_begin":559}
+{"type":"link","begin":561,"end":644,"contents_begin":610,"contents_end":642,"parent_type":"paragraph","parent_begin":561,"link_type":"id","path":"principle:single-source-shared-computation","raw_link":"id:principle:single-source-shared-computation","format":"bracket"}
+{"type":"item","begin":645,"end":721,"contents_begin":647,"contents_end":721,"parent_type":"plain-list","parent_begin":329,"bullet":"- "}
+{"type":"paragraph","begin":647,"end":721,"contents_begin":647,"contents_end":721,"parent_type":"item","parent_begin":645}
+{"type":"link","begin":647,"end":720,"contents_begin":691,"contents_end":718,"parent_type":"paragraph","parent_begin":647,"link_type":"id","path":"principle:downstream-impact-checklist","raw_link":"id:principle:downstream-impact-checklist","format":"bracket"}
+{"type":"item","begin":721,"end":785,"contents_begin":723,"contents_end":785,"parent_type":"plain-list","parent_begin":329,"bullet":"- "}
+{"type":"paragraph","begin":723,"end":785,"contents_begin":723,"contents_end":785,"parent_type":"item","parent_begin":721}
+{"type":"link","begin":723,"end":784,"contents_begin":761,"contents_end":782,"parent_type":"paragraph","parent_begin":723,"link_type":"id","path":"principle:cross-platform-parity","raw_link":"id:principle:cross-platform-parity","format":"bracket"}
+{"type":"item","begin":785,"end":851,"contents_begin":787,"contents_end":851,"parent_type":"plain-list","parent_begin":329,"bullet":"- "}
+{"type":"paragraph","begin":787,"end":851,"contents_begin":787,"contents_end":851,"parent_type":"item","parent_begin":785}
+{"type":"link","begin":787,"end":850,"contents_begin":826,"contents_end":848,"parent_type":"paragraph","parent_begin":787,"link_type":"id","path":"principle:bugs-are-drift-signals","raw_link":"id:principle:bugs-are-drift-signals","format":"bracket"}
+{"type":"item","begin":851,"end":907,"contents_begin":853,"contents_end":907,"parent_type":"plain-list","parent_begin":329,"bullet":"- "}
+{"type":"paragraph","begin":853,"end":907,"contents_begin":853,"contents_end":907,"parent_type":"item","parent_begin":851}
+{"type":"link","begin":853,"end":906,"contents_begin":887,"contents_end":904,"parent_type":"paragraph","parent_begin":853,"link_type":"id","path":"principle:no-weakened-tests","raw_link":"id:principle:no-weakened-tests","format":"bracket"}
+{"type":"item","begin":907,"end":957,"contents_begin":909,"contents_end":957,"parent_type":"plain-list","parent_begin":329,"bullet":"- "}
+{"type":"paragraph","begin":909,"end":957,"contents_begin":909,"contents_end":957,"parent_type":"item","parent_begin":907}
+{"type":"link","begin":909,"end":956,"contents_begin":940,"contents_end":954,"parent_type":"paragraph","parent_begin":909,"link_type":"id","path":"principle:fix-root-cause","raw_link":"id:principle:fix-root-cause","format":"bracket"}
+{"type":"item","begin":957,"end":1011,"contents_begin":959,"contents_end":1011,"parent_type":"plain-list","parent_begin":329,"bullet":"- "}
+{"type":"paragraph","begin":959,"end":1011,"contents_begin":959,"contents_end":1011,"parent_type":"item","parent_begin":957}
+{"type":"link","begin":959,"end":1010,"contents_begin":992,"contents_end":1008,"parent_type":"paragraph","parent_begin":959,"link_type":"id","path":"principle:no-deferred-bugs","raw_link":"id:principle:no-deferred-bugs","format":"bracket"}
+{"type":"item","begin":1011,"end":1085,"contents_begin":1013,"contents_end":1085,"parent_type":"plain-list","parent_begin":329,"bullet":"- "}
+{"type":"paragraph","begin":1013,"end":1085,"contents_begin":1013,"contents_end":1085,"parent_type":"item","parent_begin":1011}
+{"type":"link","begin":1013,"end":1084,"contents_begin":1056,"contents_end":1082,"parent_type":"paragraph","parent_begin":1013,"link_type":"id","path":"principle:validate-against-prior-art","raw_link":"id:principle:validate-against-prior-art","format":"bracket"}
+{"type":"item","begin":1085,"end":1133,"contents_begin":1087,"contents_end":1133,"parent_type":"plain-list","parent_begin":329,"bullet":"- "}
+{"type":"paragraph","begin":1087,"end":1133,"contents_begin":1087,"contents_end":1133,"parent_type":"item","parent_begin":1085}
+{"type":"link","begin":1087,"end":1132,"contents_begin":1117,"contents_end":1130,"parent_type":"paragraph","parent_begin":1087,"link_type":"id","path":"principle:tests-as-spec","raw_link":"id:principle:tests-as-spec","format":"bracket"}
+{"type":"item","begin":1133,"end":1201,"contents_begin":1135,"contents_end":1201,"parent_type":"plain-list","parent_begin":329,"bullet":"- "}
+{"type":"paragraph","begin":1135,"end":1201,"contents_begin":1135,"contents_end":1201,"parent_type":"item","parent_begin":1133}
+{"type":"link","begin":1135,"end":1200,"contents_begin":1175,"contents_end":1198,"parent_type":"paragraph","parent_begin":1135,"link_type":"id","path":"principle:explicit-design-stances","raw_link":"id:principle:explicit-design-stances","format":"bracket"}
+{"type":"item","begin":1201,"end":1259,"contents_begin":1203,"contents_end":1259,"parent_type":"plain-list","parent_begin":329,"bullet":"- "}
+{"type":"paragraph","begin":1203,"end":1259,"contents_begin":1203,"contents_end":1259,"parent_type":"item","parent_begin":1201}
+{"type":"link","begin":1203,"end":1258,"contents_begin":1238,"contents_end":1256,"parent_type":"paragraph","parent_begin":1203,"link_type":"id","path":"principle:rich-agent-context","raw_link":"id:principle:rich-agent-context","format":"bracket"}
+{"type":"item","begin":1259,"end":1325,"contents_begin":1261,"contents_end":1325,"parent_type":"plain-list","parent_begin":329,"bullet":"- "}
+{"type":"paragraph","begin":1261,"end":1325,"contents_begin":1261,"contents_end":1325,"parent_type":"item","parent_begin":1259}
+{"type":"link","begin":1261,"end":1324,"contents_begin":1300,"contents_end":1322,"parent_type":"paragraph","parent_begin":1261,"link_type":"id","path":"principle:runtime-redefinability","raw_link":"id:principle:runtime-redefinability","format":"bracket"}
+{"type":"item","begin":1325,"end":1385,"contents_begin":1327,"contents_end":1385,"parent_type":"plain-list","parent_begin":329,"bullet":"- "}
+{"type":"paragraph","begin":1327,"end":1385,"contents_begin":1327,"contents_end":1385,"parent_type":"item","parent_begin":1325}
+{"type":"link","begin":1327,"end":1384,"contents_begin":1363,"contents_end":1382,"parent_type":"paragraph","parent_begin":1327,"link_type":"id","path":"principle:multi-caller-safety","raw_link":"id:principle:multi-caller-safety","format":"bracket"}
+{"type":"item","begin":1385,"end":1443,"contents_begin":1387,"contents_end":1443,"parent_type":"plain-list","parent_begin":329,"bullet":"- "}
+{"type":"paragraph","begin":1387,"end":1443,"contents_begin":1387,"contents_end":1443,"parent_type":"item","parent_begin":1385}
+{"type":"link","begin":1387,"end":1442,"contents_begin":1422,"contents_end":1440,"parent_type":"paragraph","parent_begin":1387,"link_type":"id","path":"principle:local-first-design","raw_link":"id:principle:local-first-design","format":"bracket"}
+{"type":"headline","begin":1444,"end":1670,"contents_begin":1474,"contents_end":1670,"parent_type":"org-data","parent_begin":0,"level":1,"true_level":1,"raw_title":"Code annotation conventions","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1474,"end":1670,"contents_begin":1474,"contents_end":1670,"parent_type":"headline","parent_begin":1444}
+{"type":"plain-list","begin":1474,"end":1670,"contents_begin":1474,"contents_end":1669,"parent_type":"section","parent_begin":1474}
+{"type":"item","begin":1474,"end":1521,"contents_begin":1476,"contents_end":1521,"parent_type":"plain-list","parent_begin":1474,"bullet":"- "}
+{"type":"paragraph","begin":1476,"end":1521,"contents_begin":1476,"contents_end":1521,"parent_type":"item","parent_begin":1474}
+{"type":"link","begin":1476,"end":1520,"contents_begin":1505,"contents_end":1518,"parent_type":"paragraph","parent_begin":1476,"link_type":"id","path":"practice:flag-comments","raw_link":"id:practice:flag-comments","format":"bracket"}
+{"type":"item","begin":1521,"end":1614,"contents_begin":1523,"contents_end":1614,"parent_type":"plain-list","parent_begin":1474,"bullet":"- "}
+{"type":"paragraph","begin":1523,"end":1614,"contents_begin":1523,"contents_end":1614,"parent_type":"item","parent_begin":1521}
+{"type":"link","begin":1523,"end":1613,"contents_begin":1558,"contents_end":1611,"parent_type":"paragraph","parent_begin":1523,"link_type":"id","path":"practice:caution-annotations","raw_link":"id:practice:caution-annotations","format":"bracket"}
+{"type":"item","begin":1614,"end":1669,"contents_begin":1616,"contents_end":1669,"parent_type":"plain-list","parent_begin":1474,"bullet":"- "}
+{"type":"paragraph","begin":1616,"end":1669,"contents_begin":1616,"contents_end":1669,"parent_type":"item","parent_begin":1614}
+{"type":"link","begin":1616,"end":1668,"contents_begin":1649,"contents_end":1666,"parent_type":"paragraph","parent_begin":1616,"link_type":"id","path":"practice:stability-markers","raw_link":"id:practice:stability-markers","format":"bracket"}
+{"type":"headline","begin":1670,"end":1847,"contents_begin":1692,"contents_end":1847,"parent_type":"org-data","parent_begin":0,"level":1,"true_level":1,"raw_title":"Operational tooling","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1692,"end":1847,"contents_begin":1692,"contents_end":1847,"parent_type":"headline","parent_begin":1670}
+{"type":"plain-list","begin":1692,"end":1804,"contents_begin":1692,"contents_end":1803,"parent_type":"section","parent_begin":1692}
+{"type":"item","begin":1692,"end":1803,"contents_begin":1694,"contents_end":1803,"parent_type":"plain-list","parent_begin":1692,"bullet":"- "}
+{"type":"paragraph","begin":1694,"end":1803,"contents_begin":1694,"contents_end":1803,"parent_type":"item","parent_begin":1692}
+{"type":"link","begin":1694,"end":1802,"contents_begin":1732,"contents_end":1800,"parent_type":"paragraph","parent_begin":1694,"link_type":"id","path":"practice:mutating-script-safety","raw_link":"id:practice:mutating-script-safety","format":"bracket"}
+{"type":"paragraph","begin":1804,"end":1847,"contents_begin":1804,"contents_end":1847,"parent_type":"section","parent_begin":1692}
+{"type":"link","begin":1812,"end":1845,"contents_begin":1833,"contents_end":1843,"parent_type":"paragraph","parent_begin":1804,"link_type":"id","path":"hub:start-here","raw_link":"id:hub:start-here","format":"bracket"}

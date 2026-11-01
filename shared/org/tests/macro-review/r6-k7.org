@@ -1,0 +1,9 @@
+#+MACRO: p +
+#+KEYK: SECRETLEAKB
+
++--+
+|a |
++--+
+{{{p}}}x
+| {{{keyword(KEYK)}}} |
++--+

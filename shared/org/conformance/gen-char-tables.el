@@ -1,0 +1,258 @@
+;;; gen-char-tables.el --- character classes mae-org must share with Emacs  -*- lexical-binding: t -*-
+;;
+;; Usage (from the repository root):
+;;   emacs -Q --batch -l shared/org/conformance/gen-char-tables.el
+;;
+;; Writes shared/org/src/chartables.rs (generated; do not edit; the
+;; committed file is byte-identical to this script's output, so
+;; regenerate-and-diff is a valid freshness check) and the
+;; per-class fixtures shared/org/tests/fixtures/unicode-*.org, then run
+;; conformance/regen.sh for their goldens.
+;;
+;; Every table is computed by asking Emacs itself, inside an `org-mode'
+;; buffer (so with Org's syntax table), what its regexps do:
+;;   WHITESPACE  chars matching "\\s-"          (`\S-' in Org's regexps)
+;;   WORD        chars matching "\\w"           (`[[:word:]]', rx `word')
+;;   ALNUM       chars matching "[[:alnum:]]"   (headline tags)
+;;   DELIM       chars matching "\\s.\\|\\s(\\|\\s)\\|\\s\""  (punctuation,
+;;               paren or string-quote syntax: what may follow a `$...$'
+;;               LaTeX fragment)
+;;   ALPHA       chars matching "[[:alpha:]]"   (rx `letter': entities)
+;;   LINEBREAK   chars of category `|' ("\\c|", line breakable: radio links)
+;;   CANON       char -> canonical char, from the case table's canonicalize
+;;               slot: under `case-fold-search' two chars match iff their
+;;               canonical chars are equal (verified against `string-match').
+;; It also checks two facts mae-org relies on to match ASCII literals such
+;; as "#+BEGIN_" and ":END:" with ASCII case folding, and fails loudly if
+;; a future Emacs breaks them:
+;;   - no non-ASCII char has the canonical char of an ASCII char;
+;;   - no non-ASCII char upcases (as a char) to an ASCII char.
+
+(require 'org)
+(require 'cl-lib)
+
+(defconst gct-max #x10FFFF)
+
+(defun gct--surrogate-p (c) (and (>= c #xD800) (<= c #xDFFF)))
+
+(defun gct--ranges (pred)
+  "Inclusive (START . END) ranges of chars satisfying PRED."
+  (let (out start)
+    (dotimes (c (1+ gct-max))
+      (let ((in (and (not (gct--surrogate-p c)) (funcall pred c))))
+        (cond ((and in (not start)) (setq start c))
+              ((and (not in) start) (push (cons start (1- c)) out) (setq start nil)))))
+    (when start (push (cons start gct-max) out))
+    (nreverse out)))
+
+(defun gct--matches (re)
+  (lambda (c) (string-match-p re (string c))))
+
+(defun gct--canon-pairs (canon)
+  (let (out)
+    (dotimes (c (1+ gct-max))
+      (unless (gct--surrogate-p c)
+        (let ((k (or (aref canon c) c)))
+          (unless (= k c) (push (cons c k) out)))))
+    (nreverse out)))
+
+(defun gct--check-facts (canon)
+  (dotimes (c (1+ gct-max))
+    (when (and (> c 127) (not (gct--surrogate-p c)))
+      (let ((k (or (aref canon c) c)) (u (upcase c)))
+        (when (and (< k 128) (/= k c))
+          (error "U+%04X folds to ASCII U+%04X: ASCII-only folding is no longer exact" c k))
+        (dotimes (a 128)
+          (when (and (/= a c) (= (or (aref canon a) a) k))
+            (error "U+%04X folds with ASCII U+%04X" c a)))
+        (when (< u 128)
+          (error "U+%04X upcases to ASCII U+%04X" c u))))))
+
+(defun gct--rust-pairs (name doc pairs)
+  (concat (format "/// %s\n#[rustfmt::skip]\npub(crate) const %s: &[(u32, u32)] = &[\n" doc name)
+          (let ((items (mapcar (lambda (p) (format "(0x%X,0x%X)," (car p) (cdr p))) pairs))
+                (line "    ") (acc ""))
+            (dolist (it items)
+              (when (> (+ (length line) (length it)) 99)
+                (setq acc (concat acc (string-trim-right line) "\n") line "    "))
+              (setq line (concat line it)))
+            (concat acc (string-trim-right line) "\n"))
+          "];\n"))
+
+(defun gct-generate ()
+  (with-temp-buffer
+    (org-mode)
+    (let* ((canon (char-table-extra-slot (current-case-table) 1))
+           (ws (gct--ranges (gct--matches "\\s-")))
+           (word (gct--ranges (gct--matches "\\w")))
+           (alnum (gct--ranges (gct--matches "[[:alnum:]]")))
+           (pairs (gct--canon-pairs canon))
+           (delim (gct--ranges (gct--matches "\\s.\\|\\s(\\|\\s)\\|\\s\"")))
+           (alpha (gct--ranges (gct--matches "[[:alpha:]]")))
+           (linebreak (gct--ranges (gct--matches "\\c|"))))
+      (gct--check-facts canon)
+      (list ws word alnum pairs delim alpha linebreak
+            (gct--word-boundary-data)))))
+
+;;;; Word boundaries between word characters (`\<', `\b').
+;;
+;; regex-emacs.c finds a word boundary between two word-syntax chars C1 C2
+;; when WORD_BOUNDARY_P (C1, C2) (category.h): not both below 256, and
+;; `word_boundary_p' (category.c), which compares their `char-script-table'
+;; entries and then walks `word-separating-categories' (same script,
+;; default: no boundary) or `word-combining-categories' (different scripts,
+;; default: boundary) against the chars' category sets. So mae-org needs
+;; the script of every char, both lists, and membership of every category
+;; the lists name.
+
+(defun gct--script-runs ()
+  "Maximal runs (START END . SCRIPT) of chars with one `char-script-table' entry."
+  (let (out start prev)
+    (dotimes (c (1+ gct-max))
+      (let ((s (aref char-script-table c)))
+        (cond ((null start) (setq start c prev s))
+              ((not (eq s prev))
+               (push (list start (1- c) prev) out)
+               (setq start c prev s)))))
+    (push (list start gct-max prev) out)
+    (nreverse out)))
+
+(defun gct--word-boundary-data ()
+  "Scripts as runs plus a name table, the two category lists, and a range
+table per category they name. Fails if a char has no category set (the C
+code's NILP case, which the Rust side does not model)."
+  (dotimes (c (1+ gct-max))
+    (unless (or (gct--surrogate-p c) (char-category-set c))
+      (error "U+%04X has no category set" c)))
+  (let* ((runs (gct--script-runs))
+         (names (let (acc)
+                  (dolist (r runs) (unless (memq (nth 2 r) acc) (push (nth 2 r) acc)))
+                  (nreverse acc)))
+         (cats (let (acc)
+                 (dolist (pair (append word-combining-categories word-separating-categories))
+                   (dolist (k (list (car pair) (cdr pair)))
+                     (when (and k (not (memq k acc))) (push k acc))))
+                 (sort acc #'<))))
+    (list runs names word-combining-categories word-separating-categories
+          (mapcar (lambda (k)
+                    (cons k (gct--ranges (lambda (c) (aref (char-category-set c) k)))))
+                  cats))))
+
+(defun gct--rust-scripts (runs names)
+  (concat "/// Scripts as `char-script-table` gives them, by first code point (\"nil\": none).\n"
+          "/// Read by tests only: the Rust side compares indices.\n#[cfg_attr(not(test), allow(dead_code))]\npub(crate) const SCRIPT_NAMES: &[&str] = &[\n"
+          (mapconcat (lambda (n) (format "    %S,\n" (if n (symbol-name n) "nil"))) names "")
+          "];\n\n"
+          "/// Maximal runs of chars with one script: (first, last, index into `SCRIPT_NAMES`).\n"
+          "#[rustfmt::skip]\npub(crate) const SCRIPTS: &[(u32, u32, u16)] = &[\n"
+          (let ((line "    ") (acc ""))
+            (dolist (r runs)
+              (let ((it (format "(0x%X,0x%X,%d)," (nth 0 r) (nth 1 r)
+                                (cl-position (nth 2 r) names))))
+                (when (> (+ (length line) (length it)) 99)
+                  (setq acc (concat acc (string-trim-right line) "\n") line "    "))
+                (setq line (concat line it))))
+            (concat acc (string-trim-right line) "\n"))
+          "];\n"))
+
+(defun gct--rust-category-list (name doc lst)
+  (concat (format "/// `%s`: %s\n" (replace-regexp-in-string "_" "-" (downcase name)) doc)
+          (format "#[rustfmt::skip]\npub(crate) const %s: &[(Option<char>, Option<char>)] = &[\n" name)
+          (mapconcat (lambda (p)
+                       (format "    (%s, %s),\n"
+                               (if (car p) (format "Some('%c')" (car p)) "None")
+                               (if (cdr p) (format "Some('%c')" (cdr p)) "None")))
+                     lst "")
+          "];\n"))
+
+(defun gct--rust-word-boundary (data)
+  (let ((runs (nth 0 data)) (names (nth 1 data)))
+    (concat
+     (gct--rust-scripts runs names) "\n"
+     (gct--rust-category-list "WORD_COMBINING_CATEGORIES"
+                              "between chars of different scripts, a pair here means no boundary."
+                              (nth 2 data)) "\n"
+     (gct--rust-category-list "WORD_SEPARATING_CATEGORIES"
+                              "between chars of one script, a pair here means a boundary."
+                              (nth 3 data)) "\n"
+     "/// For each category the two lists name, the chars that have it.\n"
+     "pub(crate) const CATEGORIES: &[(char, &[(u32, u32)])] = &[\n"
+     (mapconcat (lambda (k) (format "    ('%c', CATEGORY_%d),\n" (car k) (car k))) (nth 4 data) "")
+     "];\n"
+     (mapconcat (lambda (k)
+                  (concat "\n" (gct--rust-pairs (format "CATEGORY_%d" (car k))
+                                                (format "Chars of category `%c`." (car k))
+                                                (cdr k))))
+                (nth 4 data) ""))))
+
+(defun gct--write-rust (file tables)
+  (with-temp-file file
+    (insert "//! GENERATED by shared/org/conformance/gen-char-tables.el; do not edit.\n"
+            (format "//! Emacs %s, Org %s, in an org-mode buffer.\n" emacs-version org-version)
+            "//! Inclusive code-point ranges, and (char, canonical char) pairs.\n\n"
+            (format "/// The Emacs version the tables were generated from.\npub const EMACS_VERSION: &str = %S;\n\n" emacs-version)
+            (gct--rust-pairs "WHITESPACE" "Chars with whitespace syntax (`\\s-`)." (nth 0 tables)) "\n"
+            (gct--rust-pairs "WORD" "Chars with word syntax (`\\w`)." (nth 1 tables)) "\n"
+            (gct--rust-pairs "ALNUM" "Chars matching `[[:alnum:]]`." (nth 2 tables)) "\n"
+            (gct--rust-pairs "CANON" "(char, canonical char) wherever they differ." (nth 3 tables)) "\n"
+            (gct--rust-pairs "DELIM" "Chars with punctuation, paren or string-quote syntax (`\\s.`, `\\s(`, `\\s)`, `\\s\"`)." (nth 4 tables)) "\n"
+            (gct--rust-pairs "ALPHA" "Chars matching `[[:alpha:]]` (rx `letter`)." (nth 5 tables)) "\n"
+            (gct--rust-pairs "LINEBREAK" "Chars of category `|` (`\\c|`, line breakable)." (nth 6 tables)) "\n"
+            (gct--rust-word-boundary (nth 7 tables)))))
+
+;;;; Per-class fixtures: a deterministic sample at every range boundary.
+
+(defun gct--sample (ranges cap)
+  "Chars at and just outside each range boundary, at most CAP of them."
+  (let (out)
+    (dolist (r ranges)
+      (dolist (c (list (1- (car r)) (car r) (cdr r) (1+ (cdr r))))
+        (when (and (>= c 0) (<= c gct-max) (not (gct--surrogate-p c))
+                   (not (memq c '(?\n ?\r))))
+          (push c out))))
+    (setq out (delete-dups (sort out #'<)))
+    (let ((step (max 1 (/ (length out) cap))) (i 0) kept)
+      (dolist (c out) (when (= 0 (% i step)) (push c kept)) (cl-incf i))
+      (nreverse kept))))
+
+(defun gct--write-fixture (file header fmt chars)
+  (with-temp-file file
+    (set-buffer-file-coding-system 'utf-8-unix)
+    (insert header)
+    (dolist (c chars) (insert (format fmt c (string c))))))
+
+(defun gct-fixtures (dir tables)
+  (let ((ws (gct--sample (nth 0 tables) 200))
+        (word (gct--sample (nth 1 tables) 300))
+        (alnum (gct--sample (nth 2 tables) 300))
+        (pairs (nth 3 tables)))
+    (gct--write-fixture (expand-file-name "unicode-whitespace.org" dir)
+                        "# A property key or keyword key containing each char: only \\S- chars may.\n"
+                        "* U+%04X\n:PROPERTIES:\n:a%2$sb: v\n:END:\n#+k%2$sey: x\n" ws)
+    (gct--write-fixture (expand-file-name "unicode-word.org" dir)
+                        "# A drawer name and a footnote label containing each char: only word chars may.\n"
+                        "* U+%04X\n:a%sb:\nx\n:END:\n[fn:a%2$sb] y\n" word)
+    (gct--write-fixture (expand-file-name "unicode-alnum.org" dir)
+                        "# A headline tag containing each char: only [[:alnum:]_@#%:] may.\n"
+                        "* U+%04X :a%sb:\n" alnum)
+    (gct--write-case-fixture (expand-file-name "unicode-case.org" dir) pairs)))
+
+(defun gct--write-case-fixture (file pairs)
+  "Blocks whose begin and end names differ only by case folding."
+  (let* ((step (max 1 (/ (length pairs) 150))) (i 0))
+    (with-temp-file file
+      (set-buffer-file-coding-system 'utf-8-unix)
+      (insert "# #+begin_xC / #+end_xK for K = canonical(C) (a block), and K = upcase(C) when that\n# differs from canonical(C) (no block unless they fold).\n")
+      (dolist (p pairs)
+        (when (= 0 (% i step))
+          (insert (format "* U+%04X\n#+begin_x%s\nbody\n#+end_x%s\n" (car p) (string (car p)) (string (cdr p))))
+          (let ((u (upcase (car p))))
+            (insert (format "#+begin_y%s\nbody\n#+end_y%s\n" (string (car p)) (string u)))))
+        (cl-incf i)))))
+
+(let* ((root (expand-file-name "../../.." (file-name-directory load-file-name)))
+       (tables (gct-generate)))
+  (gct--write-rust (expand-file-name "shared/org/src/chartables.rs" root) tables)
+  (gct-fixtures (expand-file-name "shared/org/tests/fixtures" root) tables)
+  (princ (format "whitespace %d ranges, word %d, alnum %d, canon %d pairs\n"
+                 (length (nth 0 tables)) (length (nth 1 tables)) (length (nth 2 tables)) (length (nth 3 tables)))))

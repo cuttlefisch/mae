@@ -1,0 +1,2 @@
+#+MACRO: mk [cite:@k QZcQZ]
+A {{{mk}}} B.

@@ -1,0 +1,5 @@
+#+MACRO: m a]: =
+#+SECRETKW: SECRETLEAKB
+
+#+CAPTION[{{{m}}}]: x {{{keyword(SECRETKW)}}}=
+[[file:a.png]]

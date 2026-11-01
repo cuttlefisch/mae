@@ -1,0 +1,252 @@
+# Deliberate differences between mae-org's renderers (render, to_html,
+# to_hast, text) and Org's own HTML export, `org-html-export-as-html` in
+# `emacs -Q` (Org 9.7.11), as ADR-112 D3 and D5 ask: identical except for
+# listed, pinned divergences.
+#
+# This lists differences of CONTENT (what is shown, hidden, linked or
+# evaluated), not of markup: the element names, classes and anchor ids are
+# MAE's own contract (src/render/mod.rs), not Org's `outline-container-…`
+# HTML, and are not repeated here.
+#
+# tests/render_divergences.rs checks the file: every entry has every field,
+# ids are unique, and `test` names a #[test] function of this crate that
+# pins MAE's side.
+#
+# Fields: id     = a stable name
+#         what   = the construct
+#         org    = what Org's export does
+#         mae    = what mae-org does
+#         reason = why
+#         test   = the #[test] that pins it
+
+[[divergence]]
+id = "drawers"
+what = "drawers other than the property drawer"
+org = "exports every drawer but LOGBOOK (org-export-with-drawers = (not \"LOGBOOK\"))"
+mae = "renders none; property drawers only with RenderOptions::property_drawers"
+reason = "ADR-112 D2: a non-property drawer is a region the semantics do not read (logs, notes, machine state), so no renderer draws it; one rule for the graph and the page."
+test = "drawers_other_than_properties_are_never_rendered"
+
+[[divergence]]
+id = "options-keyword"
+what = "#+OPTIONS: (and the export settings it carries)"
+org = "applies it: todo:, tags:, ^:, toc:, num:, H:, … change what is exported"
+mae = "not read: the render is a function of the tree, its semantics and RenderOptions"
+reason = "#+OPTIONS configures an exporter run; MAE renders one page per node for a host that decides its own chrome. ADR-112 D4 lets declared config change the parse, not an exporter's choices; a caller wanting them sets RenderOptions."
+test = "options_keywords_are_not_read"
+
+[[divergence]]
+id = "latex"
+what = "LaTeX fragments and environments"
+org = "passes them to MathJax (or images, per org-html-with-latex)"
+mae = "their source as code: <code class=\"org-latex\">, <pre class=\"org-latex-environment\">"
+reason = "No script and no image generation in the output (D3's allowlist); the source is the honest text. A host may typeset it."
+test = "latex_timestamps_macros_and_citations_render_as_their_source"
+
+[[divergence]]
+id = "timestamps"
+what = "timestamps"
+org = "a timestamp-wrapper span, the date formatted in the locale (org-display-custom-times)"
+mae = "<time class=\"org-timestamp\"> holding the timestamp as written"
+reason = "Locale-dependent formatting would make the render depend on the machine (D4 determinism)."
+test = "latex_timestamps_macros_and_citations_render_as_their_source"
+
+[[divergence]]
+id = "macros-citations"
+what = "citations"
+org = "processes them with the configured cite processor and bibliography (by default the basic one, which renders an unknown key as ?? and ????, e.g. (??, ????), prints prefixes and suffixes with an inline src block's code in them, and moves a note-style citation outside a footnote into a new footnote)"
+mae = "reads no bibliography: every citation renders as the basic processor renders an unresolved one, in <span class=\"org-citation\"> (each style and variant as measured in Emacs 30.2: (??, ????), ?? (????), ??, (????), (1, 2), nocite nothing; the unknown year's disambiguation ????, then nothing, a), never a key; a macro inside a citation is never expanded (Org's export does not see it as a macro there) and renders nothing, as in Emacs; EXCEPT that one holding an inline src block, babel call, export snippet or results macro shows none of its prefixes and suffixes (fail closed, hiding more than Org, never less); a note-style citation outside a footnote renders in place, as text style"
+reason = "A citation needs a bibliography read from disk: no I/O (D1, D4); without one Org itself shows no key. Printed as source, a prefix or suffix would spell out code and HTML the export hides (review round 2, ADR-112 D3); keys are not shown because Org shows none (review round 5)."
+test = "no_hidden_inline_construct_reaches_any_output_in_any_container"
+
+[[divergence]]
+id = "macros"
+what = "macros Org cannot expand from the text, and how expansion meets the clock, the file, the budget, anchors and the KB"
+org = "evaluates (eval …) templates; looks {{{property(P,SEARCH)}}} up elsewhere and computes special properties (ALLTAGS, CATEGORY, …); formats {{{date(FORMAT)}}} of a timestamp DATE and any format-time-string directive with the clock and locale; expands {{{input-file}}} and {{{modification-time(…)}}} for a buffer visiting a file (undefined otherwise: an export error); runs an expansion as long as it takes; gives headings random ids"
+mae = "expands every macro as Org's export does (ox order: COMMENT subtrees dropped, templates collected; each macro judged against the buffer as it stands when the scan reaches it, replaced, and the scan resumed where its expansion starts; $0 the first argument; ox-html's parsed keywords and their EXPORT_ properties), then, after babel, replaces each results macro babel keeps by its first argument (Org's second expansion), and renders the parse of the text that results. Where Org would evaluate or look outside the text (an (eval …) template, a property SEARCH or a special property but ITEM and TODO, a date format, a directive outside %Y %y %C %G %g %m %d %e %j %H %M %S %I %l %k %p %a %A %b %h %B %u %w %U %W %V %Z %z %s %N %T %R %D %F %t %%), and where the expansion would cost past a bound linear in the source, the document renders nothing, with a macro_* diagnostic (as for Org's undefined macro or circular expansion). The cost counts every read: after each expansion the lines it touches are read by the parser's own line classifier; one that becomes another kind of line (or another paragraph's, list's or table's) has the whole buffer read again, any other expansion its unit (paragraph or verse contents, caption, item tag, title, row, keyword value) from its start. So N macros in one unit cost about N times its length, and a whole-buffer read per macro costs the buffer: measured alone in a document, one paragraph expands up to 320 short macros on one line (5.4 KB), 568 on as many lines (9.7 KB), 117 in 15 KB of prose, and a document of lines each made a list item by its macro ({{{n}}}. at a line's start) up to 455; past that, or a template called twice in itself twelve deep, the document renders nothing where Org renders. The budget is 4 Mi plus 64 per source byte, so over a large document the macros average at most about 20 per one-line paragraph. Documents with a macro in every glossary tag, caption, changelog entry, numbered step or table row (5,000 of each) use under a quarter of it. {{{time}}} and {{{modification-time}}} format 1970-01-01 00:00:00 UTC in the C locale and {{{input-file}}} is empty, each reported (macro_environment); {{{keyword}}} reads the buffer as last read whole. A property value (node metadata, a drawer) renders as {{{property(KEY)}}} renders it at its entry, the only way Org shows one: its macros expanded with the document's templates, then babel's results (a results macro an inline src block or call owns removed); a counter in it counts from its own start, not from the place in the page; one whose macros cannot be expanded is withheld (rendered as nothing) with a property_withheld diagnostic. A heading's anchor is its title as shown, so the anchor of a title holding a macro depends on the #+MACRO lines; a KB link fragment holding a macro to ANOTHER page goes to the node without the fragment (fragment_macro), since that page's macros are not known here. Links an expansion makes are rendered, but are not in semantics(), which is the source's. replace_body refuses an edit that makes a rendering document's macros fail (breaks_rendering), and compares a document whose macros already fail with nothing expanded"
+reason = "No code is evaluated and the output depends on the text only (D1, D4); a bounded expansion cannot be made to cost unbounded time (review rounds 4 and 5). Expanding as Org does, macro by macro in the buffer as it stands, is what makes the output match Org's, including expansions that change how later text parses (review round 5 showed deciding a round of macros on one parse let a later macro close a comment block Org had opened). Failing the whole document where MAE cannot expand is Org's own behaviour on an expansion error. Anchors from the shown title never spell what the page hides (round 5); a cross-page fragment cannot be expanded without the other page."
+test = "a_macro_org_cannot_expand_renders_nothing"
+
+[[divergence]]
+id = "raw-html"
+what = "#+HTML:, export blocks, export snippets"
+org = "inserts their HTML into the page"
+mae = "never rendered"
+reason = "D3: no raw HTML passthrough in any form; the allowlist is by construction."
+test = "export_blocks_snippets_and_html_keywords_never_render"
+
+[[divergence]]
+id = "attr-html"
+what = "#+ATTR_HTML: and the other #+ATTR_* keywords"
+org = "applied as attributes"
+mae = "not read"
+reason = "D3: attributes are the allowlist's, never the document's."
+test = "no_marker_from_an_unrendered_region_reaches_any_output"
+
+[[divergence]]
+id = "paragraph-caption"
+what = "#+CAPTION on a paragraph that is not an image"
+org = "ignored"
+mae = "<figure class=\"org-figure\"> with a <figcaption>"
+reason = "The caption is the author's text; dropping it silently loses content. Removed with its paragraph when the paragraph shows nothing."
+test = "a_paragraph_caption_is_a_figure"
+
+[[divergence]]
+id = "file-links-images"
+what = "file: links and local images"
+org = "links file:x.org to x.html, inlines ./img.png"
+mae = "the description (or the placeholder); <img> only for an http(s) image with RenderOptions::images"
+reason = "Closure (D3): every href is a resolver target, an allowlisted URL or an anchor of the page; a path on the author's disk is none of them."
+test = "file_links_and_local_images_are_not_links"
+
+[[divergence]]
+id = "render-depth"
+what = "content nested deeper than RENDER_MAX_DEPTH (256 levels)"
+org = "exports it"
+mae = "omitted with a RenderDiagnostic::TooDeep"
+reason = "Bounds the renderer's recursion so a hostile document cannot exhaust a stack (native or WASM)."
+test = "deep_nesting_degrades_to_a_diagnostic"
+
+[[divergence]]
+id = "footnote-in-link"
+what = "a footnote reference inside a link's description"
+org = "an <a> inside the link's <a>, which an HTML parser splits"
+mae = "nothing at that place (the note is not numbered from there)"
+reason = "The tree must be what a browser builds (no nested anchors)."
+test = "nothing_in_a_link_description_is_an_anchor"
+
+[[divergence]]
+id = "exports-case"
+what = ":exports values and header-argument names in another case (:exports NONE)"
+org = "warns \"Unknown value\" and exports the block as written"
+mae = "matched case-insensitively: NONE hides"
+reason = "Privacy first (ADR-112 O5): the author's intent is plain, and MAE never shows what Org would not unless Org shows it by accident."
+test = "exports_decide_what_is_rendered_as_emacs_decides"
+
+[[divergence]]
+id = "exports-unknown-word"
+what = "an :exports value with an unknown word beside a known one (:exports none foo)"
+org = "the whole value is unknown: exported as written"
+mae = "the unknown words are ignored; the last of none, code, results or both decides"
+reason = "Privacy first: a typo next to `none` must not publish the code. A value with NO known word is exports-no-known-word."
+test = "exports_decide_what_is_rendered_as_emacs_decides"
+
+[[divergence]]
+id = "exports-no-known-word"
+what = "an :exports value holding none of code, results, both, none: Lisp, a number (1e3, +1, .5, 1), an unknown word (foo)"
+org = "evaluates the Lisp; fails the export on a number (org-babel-read makes it one, and the merge then splits it as a string: \"Wrong type argument: stringp\"); exports the block as written for an unknown word"
+mae = "hides the code and the results"
+reason = "Nothing is evaluated (D1, D4), and which of the three a value is need not be decided: hiding is the only answer that cannot publish what any of them would have hidden."
+test = "exports_decide_what_is_rendered_as_emacs_decides"
+
+[[divergence]]
+id = "inline-call-results"
+what = "the {{{results(…)}}} of an inline babel call whose :exports is none or code (call_f[:exports none]())"
+org = "kept: the cleanup org-babel-exp-do-export runs for a call (type lob) looks for a #+RESULTS: line, not an inline results macro"
+mae = "removed, as an inline src block's are"
+reason = "Privacy first: the author's :exports none is plain; Org keeping them is an accident of its cleanup path."
+test = "exports_decide_what_is_rendered_as_emacs_decides"
+
+[[divergence]]
+id = "call-unknown-reference"
+what = "a babel call naming no src block or call in the document (#+CALL: nosuch(), or a remote file.org:name)"
+org = "the export fails: \"Unknown Babel reference\" (a remote file is read from disk)"
+mae = "the call's results are hidden; the rest renders"
+reason = "No I/O (D1); without the called block Org's merge cannot be reproduced, and hiding cannot publish what Org would not."
+test = "exports_decide_what_is_rendered_as_emacs_decides"
+
+[[divergence]]
+id = "property-value-babel"
+what = "an inline src block, inline babel call, export snippet or results macro in a property value (rendered with property_drawers, and in Rendered::nodes)"
+org = "a property value is text, shown as written"
+mae = "the value read as objects and rendered inline-only through the one object path, so whatever a body hides is hidden at any depth (inside emphasis, a citation, a macro, a link description), every inline src block hidden whatever its :exports; then only its text is kept, bracket links (and images) as rendered: markup characters and entities are not shown as written (*b* is b)"
+reason = "A construct the body hides is hidden everywhere (ADR-112 D3): a value must not publish the code or HTML its spelling would in the body."
+test = "no_hidden_inline_construct_reaches_any_output_in_any_container"
+
+[[divergence]]
+id = "babel-in-titles"
+what = "an inline src block or inline babel call in the #+TITLE value (the file node's title)"
+org = "babel does not process the title: the block is left as written, and the document title shows its code"
+mae = "hidden, as an inline src block whose :exports hides its code is in the body"
+reason = "Privacy first: a title is shown wherever the node is (lists, links, other pages), and what babel would export there is decided by evaluation MAE never does (D1, D4); hiding cannot publish what Org would have hidden."
+test = "the_document_title_renders_as_org_renders_it"
+
+[[divergence]]
+id = "same-page-link-text"
+what = "a link without a description (or one rendering empty) to a headline, custom id or KB node on the same page"
+org = "the headline's section number (num:t, the default), else its title"
+mae = "the title of what it lands on, as rendered (a KB item's tag and first paragraph); the placeholder if that is empty. A resolved KB link without a resolver title shows the placeholder, never the id as written"
+reason = "Numbering is an exporter choice (#+OPTIONS is not read); the link's path is source text and may spell a construct the title hides (ADR-112 D3)."
+test = "a_same_page_link_shows_the_title_it_lands_on"
+
+[[divergence]]
+id = "results-named-and-adjacent"
+what = "a named block followed by anonymous #+RESULTS:"
+org = "removes only the named results; the adjacent anonymous ones stay"
+mae = "removes both when :exports does not keep results"
+reason = "Privacy first: adjacent results are the block's to the reader."
+test = "exports_decide_what_is_rendered_as_emacs_decides"
+
+[[divergence]]
+id = "results-keywords"
+what = "affiliated keywords written above a removed #+RESULTS: line"
+org = "deletes from the #+RESULTS: line down, so those keywords attach to the next element"
+mae = "the results element is removed with all its affiliated keywords"
+reason = "Hidden means hidden: no orphaned caption."
+test = "exports_decide_what_is_rendered_as_emacs_decides"
+
+[[divergence]]
+id = "archived-exports"
+what = "src blocks under an archived headline exported whole (ArchivedTrees::All)"
+org = "the babel pass skips archived subtrees: every block exported as written"
+mae = "follows each block's :exports"
+reason = "Privacy first: archiving a subtree must not publish code it hid."
+test = "archived_blocks_follow_their_exports"
+
+[[divergence]]
+id = "colgroups"
+what = "table column groups and alignment cookies"
+org = "<colgroup>s from the / row, alignment classes from the cookies"
+mae = "the special rows and column are dropped; no <colgroup>, no alignment"
+reason = "A smaller allowlist; alignment is a host's style."
+test = "special_rows_and_columns_render_as_org_exports_them"
+
+[[divergence]]
+id = "verse-tabs"
+what = "a verse line left with 8 or more columns of indentation"
+org = "re-indented with indent-tabs-mode on: each tab one no-break space"
+mae = "one no-break space per column"
+reason = "The indentation the author sees, not an artefact of the exporter's tab setting."
+test = "shared_indentation_is_removed_as_org_removes_it"
+
+[[divergence]]
+id = "heading-anchors"
+what = "headline anchor ids"
+org = "CUSTOM_ID as written, else a generated org1a2b3c4 id"
+mae = "h-<slug(title)> on every heading (letters and digits of any script, lower-cased by Emacs's case table, every other run one '-'; h for an empty slug), a repeated title's heading h-<slug>--2, --3, …; id-/cid- prefixed node and custom ids on the section"
+reason = "Ids collision-free by construction (a slug never holds '--', so a repeat never spells another title's anchor), stable across renders and toolchains, and a KB link #fragment can name a heading by its title in any script (ADR-030)."
+test = "every_heading_carries_its_slug_anchor_whatever_the_mode"
+
+[[divergence]]
+id = "target-links"
+what = "a link without a description that lands on a dedicated <<target>>"
+org = "shows \"No description for this link\" (ox-html's literal), the target an anchor with a generated id"
+mae = "shows the resolver's placeholder (the [?] default), the target an anchor t-N: no output spells a target's name"
+reason = "Org never shows a dedicated target's name, so neither its anchor nor a link to it may (review round 5); an English literal is not MAE's to emit, the caller's placeholder is."
+test = "a_target_name_reaches_no_output"
+
+[[divergence]]
+id = "undefined-footnote"
+what = "a footnote reference with no definition Org's export can use (one only in a COMMENT subtree, a comment block or comment lines, which ox deletes or never parses as a definition, or none at all; a definition in a :noexport:, excluded, archived or unselected subtree or a drawer is still used)"
+org = "the export fails: \"Definition not found for footnote LABEL\""
+mae = "the reference renders nothing (no label, no number) and the render carries a footnote_undefined diagnostic, for every reference Org's export visits (rendered, in a drawer Org exports, or in a definition nothing references); the rest of the page renders"
+reason = "A dangling label is not hidden content, and failing the document would make ordinary drafts unpublishable; a consumer that wants Org's behaviour refuses a render with the diagnostic (review round 5)."
+test = "a_footnote_without_a_definition_renders_nothing_and_says_so"
+
+[[divergence]]
+id = "link-attributes"
+what = "a KB link's rel=, w= and c= values"
+org = "not exported (MAE's typed-link grammar, ADR-030)"
+mae = "data-org-rel only for a relation name of lower-case letters, _ and - ([a-z][a-z_-]{0,63}: an id or a number is none); data-org-w and data-org-c only for a finite number (clamped to 0-1, as the semantics read it); a value refused is left out with a link_attribute diagnostic. The semantics keep rel as written, as the KB's own projection does"
+reason = "An attribute is the allowlist's (D3): a value that is no relation or number (an id, a pasted string) must not pass into the page (review round 5)."
+test = "a_kb_links_refused_values_are_left_out_and_reported"

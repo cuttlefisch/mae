@@ -1,0 +1,12 @@
+:PROPERTIES:
+:ID: sem-split-file
+:END:
+#+title: Where the three old splitters disagree
+
+Description and store form together: [[sem-split-a|b][c]].
+Query before fragment: [[id:sem-split-q?rel=cites#frag]].
+Fragment before query: [[id:sem-split-f#frag?rel=cites&w=0.5&c=2&by=ai]].
+Malformed numbers: [[sem-split-m?w=abc&c=NaN&rel=]].
+A stray bracket: [[[id:sem-split-stray]]].
+Two links on a line: [[sem-split-one]] and [[sem-split-two][two]].
+Store form with a query mark in the description: [[sem-split-s|What? #1]].

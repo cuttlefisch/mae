@@ -1,0 +1,2 @@
+* Heading
+last line without newline

@@ -1,0 +1,38 @@
+[package]
+name = "mae-org"
+description = "MAE's org-mode parser: a lossless syntax tree with typed views (ADR-112)"
+# Its own version, not the workspace's: this is the contract the
+# `mae-org-vX.Y.Z` tags name (`API_VERSION` is this value), and MAE's
+# release bump (.github/workflows/version-bump.yml) edits only the root
+# workspace version and the crates it lists, so a MAE release changes
+# neither this number nor the WASM artifact's bytes. Bump it by hand
+# when the contract changes; mae-org-wasm moves with it.
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# ADR-112 D1: rowan is the ONLY dependency. No I/O, no regex engine, nothing
+# that would stop a `wasm32-unknown-unknown` build. Adding a dependency here is
+# an ADR-level decision, not a convenience.
+[dependencies]
+rowan = "0.17"
+
+[dev-dependencies]
+proptest = "1"
+# Reads the Emacs goldens (JSON lines) in the conformance test, and checks
+# the renderers' JSON is JSON.
+serde_json = "1"
+# The renderers' HTML parse-back test (tests/render_html_parse.rs): Servo's
+# implementation of the WHATWG tree-construction algorithm, so the test sees
+# exactly what a browser builds (auto-closed <p>, foster-parented table text,
+# the newline a <pre> drops, CR and NUL normalisation). A hand-written
+# re-parser would share the renderer's assumptions. Dev-only.
+html5ever = "0.39"
+markup5ever_rcdom = "0.39"
+# The semantics differential (tests/semantics_differential.rs) compares
+# `semantics()` with mae-kb's org parser, the projection it replaces. A
+# dev-dependency only: mae-org itself stays rowan-only (ADR-112 D1). Once
+# mae-kb depends on mae-org (O4) this edge would be a cycle, so the
+# differential moves into mae-kb then.
+mae-kb = { path = "../kb" }

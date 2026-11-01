@@ -1,0 +1,6 @@
+Intro line.
+#+begin_example
+literal
+* Not literal: a headline
+more
+#+end_example

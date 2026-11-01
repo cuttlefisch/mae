@@ -1,0 +1,4 @@
+* :ARCHIVE:
+{{{code(\(qz20qz\))}}} {{{res({{{cat(t qz22qz)}}})}}}
+#+MACRO: code src_sh[:exports code]{echo $1}
+#+MACRO: res {{{results($1)}}}

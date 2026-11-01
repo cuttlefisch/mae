@@ -97,6 +97,7 @@ jobs:
       containers: ${{ steps.filter.outputs.containers }}
       adr: ${{ steps.filter.outputs.adr }}
       export-js: ${{ steps.filter.outputs.export-js }}
+      org-wasm: ${{ steps.filter.outputs.org-wasm }}
       version-bump-only: ${{ steps.version-bump-only.outputs.result }}
     steps:
       - uses: actions/checkout@v7
@@ -135,6 +136,16 @@ jobs:
             export-js:
               - 'crates/export/assets/graph.js'
               - '.github/workflows/ci.yml'
+            org-wasm:
+              - 'shared/org/**'
+              - 'shared/org-wasm/**'
+              - 'scripts/org-wasm.sh'
+              - 'tests/**/*.org'
+              - 'assets/**/*.org'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/ci.yml'
+              - '.github/actions/**'
       # Untrusted commit-message content is passed via `env:`, never
       # interpolated directly into the script body -- avoids the classic
       # GitHub Actions script-injection footgun (a `${{ }}` expression
@@ -756,6 +767,46 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: node --check crates/export/assets/graph.js
+
+  # ADR-112 D5: mae-org's WASM module builds, is reproducible, stays under
+  # its size budget, and answers every request byte for byte as the same
+  # code built natively. The toolchain is PINNED (unlike every stable leg):
+  # the artifact is a published contract an external renderer pins
+  # (mae-org-vX tags), so the same source must give the same bytes on every
+  # run, and a toolchain bump is a deliberate, reviewed change here. Keep it
+  # equal to the rustc the size budget in shared/org-wasm/js/test.mjs was
+  # measured with.
+  org-wasm:
+    name: mae-org WASM (reproducible build, size budget, Node differential)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: changes
+    if: needs.changes.outputs.org-wasm == 'true'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.98.0"
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Build twice, require identical bytes
+        run: make org-wasm-repro
+      # The bytes a mae-org-vX tag pins, as the pinned toolchain produced
+      # them: in the log and the run summary, so a tag can be checked against
+      # the run that built it. MAE's own version is not compiled in (the
+      # crates carry their own), so a MAE release does not change them.
+      - name: Record the artifact's size and sha256
+        run: |
+          a=target/wasm32-unknown-unknown/wasm/mae_org_wasm.wasm
+          size=$(wc -c <"$a" | tr -d ' ')
+          sum=$(sha256sum "$a" | cut -d' ' -f1)
+          line="mae_org_wasm.wasm: $size bytes, sha256 $sum, $(rustc --version)"
+          echo "$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+      - name: Size budget, native-vs-WASM differential, memory over 10,000 calls
+        run: make org-wasm-test
 
   lint-nonrust:
     name: shell + yaml + ansible lint

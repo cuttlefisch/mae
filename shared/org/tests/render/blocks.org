@@ -1,0 +1,63 @@
+#+title: Blocks
+Before the first headline.
+
+* Quote and center
+#+begin_quote
+A quote with *bold*.
+
+Two paragraphs.
+#+end_quote
+#+begin_center
+Centred.
+#+end_center
+* Verse
+#+begin_verse
+  Indented line
+Second line \\ not a break here
+
+After a blank line
+#+end_verse
+#+begin_verse
+   
+last line ends in a break \\
+#+end_verse
+
+
+* Code
+#+CAPTION: A caption with =code=
+#+begin_src emacs-lisp :results silent
+(message "<b>")
+,* escaped headline
+,#+not a keyword
+#+end_src
+#+begin_example
+example <text> & more
+#+end_example
+: fixed width
+:   indented
+#+begin_src
+no language
+#+end_src
+#+begin_src sh :exports none
+hidden setup
+#+end_src
+#+begin_src sh :exports results :exports code
+shown: the last :exports wins
+#+end_src
+* Special and dynamic
+#+begin_note
+A /special/ block.
+#+end_note
+#+begin_warning-2
+Hyphenated name.
+#+end_warning-2
+#+BEGIN: clocktable :scope file
+| dynamic | table |
+#+END:
+* LaTeX
+\begin{align}
+a &= b \\
+c &< d
+\end{align}
+Inline \(x < y\) and \[x\] and $x$.
+-----

@@ -1,0 +1,2 @@
+#+MACRO: e @@latex:$1@@
+A {{{e(SECRET)}}} B

@@ -1,0 +1,11 @@
+:PROPERTIES:
+:ID: file
+:END:
+#+MACRO: o src_sh[:exports none]{echo
+#+TITLE: Doc {{{o}}} secretword}
+#+MACRO: t @@latex:
+* Bar {{{t}}}secretword@@
+:PROPERTIES:
+:ID: g
+:END:
+body {{{title}}}

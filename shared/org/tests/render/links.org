@@ -1,0 +1,23 @@
+:PROPERTIES:
+:ID: links-file
+:END:
+#+title: Links with [[id:known][a link]] in the title
+* Kinds
+:PROPERTIES:
+:CUSTOM_ID: kinds
+:END:
+- KB resolved: [[id:known][Known]] and [[id:known]] and [[id:titled]] and [[known2|Store form]]
+- KB metadata: [[id:known?rel=depends-on&w=0.25&c=0.5&x=1][Meta]] [[id:known#Frag ment][Frag]] [[id:known?rel=bad rel][Bad rel]]
+- KB unresolved: [[id:missing][Has desc]] and [[id:missing]] and [[fuzzy name]]
+- Web: [[https://example.org/a?b=c&d][Example]] <https://example.org/angle> https://example.org/plain
+- Mail: [[mailto:a@example.org]] and mailto:b@example.org
+- Images: [[https://example.org/i.png]] [[file:local.png]] [[./local.jpg]] [[https://example.org/i.png][described]]
+- Other: [[file:notes.org][A file]] [[elisp:(kill-emacs)]] [[shell:rm -rf /][Shell]] [[ftp://x.org]]
+- Local: [[*Kinds][to kinds]] [[#kinds]] [[*Missing heading]] [[#missing]] [[(ref)]] [[a target]]
+- Target: <<a target>>
+- Nested: [[https://a.org][see *https://b.org*]] [[id:known][known, /see https://c.org/]]
+* Same page node
+:PROPERTIES:
+:ID: here
+:END:
+Linked from [[id:here][itself]] and [[here]].

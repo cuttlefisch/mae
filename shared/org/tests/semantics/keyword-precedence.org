@@ -1,0 +1,12 @@
+:PROPERTIES:
+:ID: sem-kw-file
+:KIND: concept
+:ALIASES: from-drawer
+:END:
+#+title: Keyword precedence: the last one wins, an empty one clears
+#+todo_state: TODO
+#+priority: A
+#+aliases: from-keyword-1
+#+aliases: from-keyword-2
+#+todo_state:
+#+kind: lesson

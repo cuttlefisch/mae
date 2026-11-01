@@ -1,0 +1,1051 @@
+{
+  "body": {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "Kinds"
+              }
+            ],
+            "properties": {
+              "id": "h-kinds"
+            },
+            "tagName": "h1",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "KB resolved: "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "Known"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-link"
+                          ],
+                          "dataOrgC": "1",
+                          "dataOrgRel": "references",
+                          "dataOrgW": "1",
+                          "href": "/notes/known.html"
+                        },
+                        "tagName": "a",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " and "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "[?]"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-link"
+                          ],
+                          "dataOrgC": "1",
+                          "dataOrgRel": "references",
+                          "dataOrgW": "1",
+                          "href": "/notes/known.html"
+                        },
+                        "tagName": "a",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " and "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "A <Titled> & Node"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-link"
+                          ],
+                          "dataOrgC": "1",
+                          "dataOrgRel": "references",
+                          "dataOrgW": "1",
+                          "href": "/notes/titled.html"
+                        },
+                        "tagName": "a",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " and "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "Store form"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-link"
+                          ],
+                          "dataOrgC": "1",
+                          "dataOrgRel": "references",
+                          "dataOrgW": "1",
+                          "href": "notes/known2"
+                        },
+                        "tagName": "a",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "li",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "KB metadata: "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "Meta"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-link"
+                          ],
+                          "dataOrgC": "0.5",
+                          "dataOrgRel": "depends-on",
+                          "dataOrgW": "0.25",
+                          "href": "/notes/known.html"
+                        },
+                        "tagName": "a",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "Frag"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-link"
+                          ],
+                          "dataOrgC": "1",
+                          "dataOrgRel": "references",
+                          "dataOrgW": "1",
+                          "href": "/notes/known.html#h-frag-ment"
+                        },
+                        "tagName": "a",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "Bad rel"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-link"
+                          ],
+                          "dataOrgC": "1",
+                          "dataOrgW": "1",
+                          "href": "/notes/known.html"
+                        },
+                        "tagName": "a",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "li",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "KB unresolved: "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "Has desc"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-unresolved"
+                          ]
+                        },
+                        "tagName": "span",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " and "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "[?]"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-unresolved"
+                          ]
+                        },
+                        "tagName": "span",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " and "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "[?]"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-unresolved"
+                          ]
+                        },
+                        "tagName": "span",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "li",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "Web: "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "Example"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-link"
+                          ],
+                          "href": "https://example.org/a?b=c&d"
+                        },
+                        "tagName": "a",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "https://example.org/angle"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-link"
+                          ],
+                          "href": "https://example.org/angle"
+                        },
+                        "tagName": "a",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "https://example.org/plain"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-link"
+                          ],
+                          "href": "https://example.org/plain"
+                        },
+                        "tagName": "a",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "li",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "Mail: "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "a@example.org"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-link"
+                          ],
+                          "href": "mailto:a@example.org"
+                        },
+                        "tagName": "a",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " and "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "b@example.org"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-link"
+                          ],
+                          "href": "mailto:b@example.org"
+                        },
+                        "tagName": "a",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "li",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "Images: "
+                      },
+                      {
+                        "children": [],
+                        "properties": {
+                          "alt": "i.png",
+                          "src": "https://example.org/i.png"
+                        },
+                        "tagName": "img",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "[?]"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-unresolved"
+                          ]
+                        },
+                        "tagName": "span",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "[?]"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-unresolved"
+                          ]
+                        },
+                        "tagName": "span",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "described"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-link"
+                          ],
+                          "href": "https://example.org/i.png"
+                        },
+                        "tagName": "a",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "li",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "Other: "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "A file"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-unresolved"
+                          ]
+                        },
+                        "tagName": "span",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "[?]"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-unresolved"
+                          ]
+                        },
+                        "tagName": "span",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "Shell"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-unresolved"
+                          ]
+                        },
+                        "tagName": "span",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "[?]"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-unresolved"
+                          ]
+                        },
+                        "tagName": "span",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "li",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "Local: "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "to kinds"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-link"
+                          ],
+                          "href": "#h-kinds"
+                        },
+                        "tagName": "a",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "Kinds"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-link"
+                          ],
+                          "href": "#cid-kinds"
+                        },
+                        "tagName": "a",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "[?]"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-unresolved"
+                          ]
+                        },
+                        "tagName": "span",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "[?]"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-unresolved"
+                          ]
+                        },
+                        "tagName": "span",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "[?]"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-unresolved"
+                          ]
+                        },
+                        "tagName": "span",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "[?]"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-link"
+                          ],
+                          "dataOrgC": "1",
+                          "dataOrgRel": "references",
+                          "dataOrgW": "1",
+                          "href": "#t-1"
+                        },
+                        "tagName": "a",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "li",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "Target: "
+                      },
+                      {
+                        "children": [],
+                        "properties": {
+                          "className": [
+                            "org-target"
+                          ],
+                          "id": "t-1"
+                        },
+                        "tagName": "span",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "li",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "Nested: "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "see "
+                          },
+                          {
+                            "children": [
+                              {
+                                "children": [
+                                  {
+                                    "type": "text",
+                                    "value": "https://b.org"
+                                  }
+                                ],
+                                "properties": {},
+                                "tagName": "span",
+                                "type": "element"
+                              }
+                            ],
+                            "properties": {},
+                            "tagName": "strong",
+                            "type": "element"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-link"
+                          ],
+                          "href": "https://a.org"
+                        },
+                        "tagName": "a",
+                        "type": "element"
+                      },
+                      {
+                        "type": "text",
+                        "value": " "
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "known, "
+                          },
+                          {
+                            "children": [
+                              {
+                                "type": "text",
+                                "value": "see "
+                              },
+                              {
+                                "children": [
+                                  {
+                                    "type": "text",
+                                    "value": "https://c.org"
+                                  }
+                                ],
+                                "properties": {},
+                                "tagName": "span",
+                                "type": "element"
+                              }
+                            ],
+                            "properties": {},
+                            "tagName": "em",
+                            "type": "element"
+                          }
+                        ],
+                        "properties": {
+                          "className": [
+                            "org-link"
+                          ],
+                          "dataOrgC": "1",
+                          "dataOrgRel": "references",
+                          "dataOrgW": "1",
+                          "href": "/notes/known.html"
+                        },
+                        "tagName": "a",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "li",
+                "type": "element"
+              }
+            ],
+            "properties": {},
+            "tagName": "ul",
+            "type": "element"
+          }
+        ],
+        "properties": {
+          "className": [
+            "org-section",
+            "org-level-1"
+          ],
+          "id": "cid-kinds"
+        },
+        "tagName": "section",
+        "type": "element"
+      },
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "Same page node"
+              }
+            ],
+            "properties": {
+              "id": "h-same-page-node"
+            },
+            "tagName": "h1",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "Linked from "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "itself"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-link"
+                  ],
+                  "dataOrgC": "1",
+                  "dataOrgRel": "references",
+                  "dataOrgW": "1",
+                  "href": "#id-here"
+                },
+                "tagName": "a",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " and "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "Same page node"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-link"
+                  ],
+                  "dataOrgC": "1",
+                  "dataOrgRel": "references",
+                  "dataOrgW": "1",
+                  "href": "#id-here"
+                },
+                "tagName": "a",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": "."
+              }
+            ],
+            "properties": {},
+            "tagName": "p",
+            "type": "element"
+          }
+        ],
+        "properties": {
+          "className": [
+            "org-section",
+            "org-level-1"
+          ],
+          "id": "id-here"
+        },
+        "tagName": "section",
+        "type": "element"
+      }
+    ],
+    "type": "root"
+  },
+  "diagnostics": [
+    {
+      "end": 358,
+      "kind": "link_attribute",
+      "start": 325
+    }
+  ],
+  "nodes": [
+    {
+      "aliases": [],
+      "anchor": null,
+      "id": "links-file",
+      "properties": [
+        {
+          "key": "ID",
+          "value": {
+            "children": [
+              {
+                "type": "text",
+                "value": "links-file"
+              }
+            ],
+            "type": "root"
+          }
+        }
+      ],
+      "title": {
+        "children": [
+          {
+            "type": "text",
+            "value": "Links with "
+          },
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "a link"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-link"
+              ],
+              "dataOrgC": "1",
+              "dataOrgRel": "references",
+              "dataOrgW": "1",
+              "href": "/notes/known.html"
+            },
+            "tagName": "a",
+            "type": "element"
+          },
+          {
+            "type": "text",
+            "value": " in the title"
+          }
+        ],
+        "type": "root"
+      },
+      "title_unlinked": {
+        "children": [
+          {
+            "type": "text",
+            "value": "Links with a link in the title"
+          }
+        ],
+        "type": "root"
+      }
+    },
+    {
+      "aliases": [],
+      "anchor": "id-here",
+      "id": "here",
+      "properties": [
+        {
+          "key": "ID",
+          "value": {
+            "children": [
+              {
+                "type": "text",
+                "value": "here"
+              }
+            ],
+            "type": "root"
+          }
+        }
+      ],
+      "title": {
+        "children": [
+          {
+            "type": "text",
+            "value": "Same page node"
+          }
+        ],
+        "type": "root"
+      },
+      "title_unlinked": {
+        "children": [
+          {
+            "type": "text",
+            "value": "Same page node"
+          }
+        ],
+        "type": "root"
+      }
+    }
+  ]
+}

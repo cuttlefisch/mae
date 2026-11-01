@@ -1,0 +1,6 @@
+:PROPERTIES:
+:ID: n9
+:END:
+#+MACRO: m QZdQZ
+#+TITLE: [[https://e.com/{{{m}}}][d]] x
+P {{{title}}}

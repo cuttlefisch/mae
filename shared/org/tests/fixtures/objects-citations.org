@@ -1,0 +1,27 @@
+* A title citing [cite:@key] and [cite/t:@a;@b]
+
+Simple: [cite:@key] [cite:@key1;@key2] [cite: @key] [cite:  @spaced  ]
+Styles: [cite/t:@a] [cite/text/b:@a] [cite/a_b-c:@a] [cite/:@a] [cite/t @a]
+Prefix and suffix: [cite:see *this* ;@a p. 12;@b /ital/ x; and =more=]
+Common prefix only: [cite:global prefix;@a;@b] [cite:;@a] [cite: ;@a]
+Common suffix only: [cite:@a;@b;global suffix] [cite:@a;] [cite:@a; ]
+Per reference: [cite:pre1 @a suf1;pre2 @b suf2]
+Keys: [cite:@a.b-c:d?e!f`g'h/i*j@k+l|m(n)o{p}q<r>s&t_u^v$w#x%y~z] [cite:@日本]
+Nested brackets: [cite:@a [p. 1]] [cite:[pre] @a] [cite:@a]] [[cite:@a]
+Across lines: [cite:@a;
+  @b
+  ] [cite:pre
+@c post]
+Not citations: [cite:] [cite:no key] [cite:@] [cite @a] [cite:@a [CITE:@b] [Cite:@c]
+Unclosed: [cite:@a and [cite:@b;@c
+Objects in prefix: [cite:\alpha $x$ [[link]] [fn:1] @a]
+Citations in citations: [cite:[cite:@inner] @outer]
+
+- [cite:@a] :: tag citation
+- term :: [cite:@b]
+
+| [cite:@a] | [cite:pre @b;@c post] |
+
+#+CAPTION: Caption [cite:@cap]
+#+NAME: c
+| a |

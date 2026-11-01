@@ -1,0 +1,6 @@
+* Visible
+See [[tgt]] QZvQZ.
+
+#+begin_comment
+Here <<tgt>> QZsQZ
+#+end_comment

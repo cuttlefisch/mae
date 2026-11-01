@@ -775,6 +775,18 @@ path), E2E per KB covers confidentiality from the proxy, and ADR-099's WebSocket
 remote client with a server-enforced token-refresh deadline. Raw-TCP collab and iroh stay for the P2P
 mesh and private links. Read its "What exists" section: an MCP client cannot yet search a hub at all.
 
+**ADR-112** (*accepted, design; phased O0–O5 + OS*) — **one org parser produces a lossless document
+tree; every consumer derives from it.** MAE had four org parsers that disagreed (KB ingest, export,
+the highlighter, read mode) plus ad-hoc text munging in editor commands. `mae-org` (`shared/org`,
+rowan-based, no I/O, WASM-capable) prints every unedited file byte for byte, and MAE's KB semantics
+are one projection of its tree. The parse depends on the text and *declared* configuration only
+(in-file `#+TODO`, the KB's own settings) — deliberately stricter than Emacs, whose parse reads user
+options — so every peer and the daemon derive the same graph; Emacs-level flexibility lives in a
+per-user Scheme layer (org-roam-equivalent derivation hooks) and, later, owner-signed KB-carried
+derivation in a deterministic sandbox. Conformance gate: identical to Emacs `org-element` except
+for a test-pinned divergence register, plus round-trip, linear-scaling and fuzz gates. No existing
+Rust parser passed a maintenance gate; see `docs/research/112-org-parser-prior-art.md`.
+
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
 > from it entirely until 2026-08-04, i.e. every ADR from the KB-visualization arc and the whole
 > pre-v0.15 audit set, so agents rediscovered decisions that already existed. `docs/adr/` is the

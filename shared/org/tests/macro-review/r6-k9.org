@@ -1,0 +1,4 @@
+#+MACRO: m ::
+#+SECRETKW: SECRETLEAKB
+
+- *a {{{m}}} =b* {{{keyword(SECRETKW)}}}=

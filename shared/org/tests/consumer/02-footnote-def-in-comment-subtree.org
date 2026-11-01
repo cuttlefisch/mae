@@ -1,0 +1,8 @@
+# Expected (Emacs): Emacs 30.2: export FAILS with user-error "Definition not found for footnote c".
+# Observed (mae-org): mae-org b2824246: renders "A reference[fn:c] here." (raw label as text), no diagnostic. Accepted as tag-gating: render nothing + footnote_undefined warning.
+# Synthetic; SEC… strings are markers that must not reach the output where Emacs hides them.
+#+title: Footnote defined only in a COMMENT subtree
+A reference[fn:c] here.
+
+* COMMENT Hidden
+[fn:c] The definition, inside a comment subtree.

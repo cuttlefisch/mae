@@ -1,0 +1,12 @@
+#+MACRO: h * X :noexport:
+* P
+** A
+:PROPERTIES:
+:ID: a
+:END:
+body a
+** C
+:PROPERTIES:
+:ID: c
+:END:
+body c

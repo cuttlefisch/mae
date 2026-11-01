@@ -1,0 +1,16 @@
+:PROPERTIES:
+:ID: sem-dup-file
+:END:
+#+title: Duplicate ids
+
+* First
+:PROPERTIES:
+:ID: sem-dup
+:END:
+First body [[id:sem-dup-first-link]].
+
+* Second, same id
+:PROPERTIES:
+:ID: sem-dup
+:END:
+Second body [[id:sem-dup-second-link]].

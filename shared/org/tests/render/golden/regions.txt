@@ -1,0 +1,7 @@
+Visible zeroth section.
+Visible
+Body.
+Archived ARCHIVE
+Visible again
+Reference to the rescued note.
+Rescued from an excluded subtree.

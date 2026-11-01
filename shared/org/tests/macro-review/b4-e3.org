@@ -1,0 +1,10 @@
+* A
+:PROPERTIES:
+:ID: a
+:END:
+Look {{{keyword(T)}}} here.
+* B
+:PROPERTIES:
+:ID: b
+:END:
+#+T: x

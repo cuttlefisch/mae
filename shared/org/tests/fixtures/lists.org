@@ -1,0 +1,37 @@
+- a
+  - nested
+    - deeper
+  - back
+- b
+
+  still b after one blank
+- c
+
+
+Not in the list (two blanks).
+
+1. one
+2) two
+   10. ten
+3. [@5] counter
+- [ ] box
+- [X] done box
+- term :: description
+- ordered? :: no
+  1. x :: kept in contents
+
++ plus
+ * star bullet (indented)
++ plus again
+  #+begin_src sh
+- not an item: inside a block
+  #+end_src
+  text in item
+back at column 0 ends it
+- item with drawer
+  :NOTES:
+- not an item, inside drawer
+  :END:
+-
+- empty above
+	- tab indented

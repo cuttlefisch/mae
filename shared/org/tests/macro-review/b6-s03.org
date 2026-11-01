@@ -1,0 +1,4 @@
+#+MACRO: a src_sh[:exports none]{echo
+#+MACRO: b }
+X {{{a}}}
+{{{b}}} SECRET} Y

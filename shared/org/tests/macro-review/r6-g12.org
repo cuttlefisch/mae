@@ -1,0 +1,6 @@
+#+MACRO: e
+#+SECRETKW: SECRETLEAKB
+
+:LOG{{{e}}}BOOK:
+{{{keyword(SECRETKW)}}}
+:END:

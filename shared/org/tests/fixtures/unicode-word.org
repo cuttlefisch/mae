@@ -1,0 +1,1936 @@
+# A drawer name and a footnote label containing each char: only word chars may.
+* U+0023
+:a#b:
+x
+:END:
+[fn:a#b] y
+* U+0024
+:a$b:
+x
+:END:
+[fn:a$b] y
+* U+0025
+:a%b:
+x
+:END:
+[fn:a%b] y
+* U+0026
+:a&b:
+x
+:END:
+[fn:a&b] y
+* U+0027
+:a'b:
+x
+:END:
+[fn:a'b] y
+* U+0028
+:a(b:
+x
+:END:
+[fn:a(b] y
+* U+002F
+:a/b:
+x
+:END:
+[fn:a/b] y
+* U+0030
+:a0b:
+x
+:END:
+[fn:a0b] y
+* U+0039
+:a9b:
+x
+:END:
+[fn:a9b] y
+* U+003A
+:a:b:
+x
+:END:
+[fn:a:b] y
+* U+0040
+:a@b:
+x
+:END:
+[fn:a@b] y
+* U+0041
+:aAb:
+x
+:END:
+[fn:aAb] y
+* U+005A
+:aZb:
+x
+:END:
+[fn:aZb] y
+* U+005B
+:a[b:
+x
+:END:
+[fn:a[b] y
+* U+0060
+:a`b:
+x
+:END:
+[fn:a`b] y
+* U+0061
+:aab:
+x
+:END:
+[fn:aab] y
+* U+007A
+:azb:
+x
+:END:
+[fn:azb] y
+* U+007B
+:a{b:
+x
+:END:
+[fn:a{b] y
+* U+007F
+:ab:
+x
+:END:
+[fn:ab] y
+* U+0080
+:ab:
+x
+:END:
+[fn:ab] y
+* U+009F
+:ab:
+x
+:END:
+[fn:ab] y
+* U+00A0
+:a b:
+x
+:END:
+[fn:a b] y
+* U+00A4
+:a¤b:
+x
+:END:
+[fn:a¤b] y
+* U+00A5
+:a¥b:
+x
+:END:
+[fn:a¥b] y
+* U+00A6
+:a¦b:
+x
+:END:
+[fn:a¦b] y
+* U+00B1
+:a±b:
+x
+:END:
+[fn:a±b] y
+* U+00B2
+:a²b:
+x
+:END:
+[fn:a²b] y
+* U+00B3
+:a³b:
+x
+:END:
+[fn:a³b] y
+* U+00B4
+:a´b:
+x
+:END:
+[fn:a´b] y
+* U+00B5
+:aµb:
+x
+:END:
+[fn:aµb] y
+* U+00B6
+:a¶b:
+x
+:END:
+[fn:a¶b] y
+* U+00B7
+:a·b:
+x
+:END:
+[fn:a·b] y
+* U+00B8
+:a¸b:
+x
+:END:
+[fn:a¸b] y
+* U+00B9
+:a¹b:
+x
+:END:
+[fn:a¹b] y
+* U+00BA
+:aºb:
+x
+:END:
+[fn:aºb] y
+* U+00BF
+:a¿b:
+x
+:END:
+[fn:a¿b] y
+* U+00C0
+:aÀb:
+x
+:END:
+[fn:aÀb] y
+* U+00D6
+:aÖb:
+x
+:END:
+[fn:aÖb] y
+* U+00D7
+:a×b:
+x
+:END:
+[fn:a×b] y
+* U+00D8
+:aØb:
+x
+:END:
+[fn:aØb] y
+* U+00F6
+:aöb:
+x
+:END:
+[fn:aöb] y
+* U+00F7
+:a÷b:
+x
+:END:
+[fn:a÷b] y
+* U+00F8
+:aøb:
+x
+:END:
+[fn:aøb] y
+* U+02C6
+:aˆb:
+x
+:END:
+[fn:aˆb] y
+* U+02C7
+:aˇb:
+x
+:END:
+[fn:aˇb] y
+* U+02C8
+:aˈb:
+x
+:END:
+[fn:aˈb] y
+* U+02C9
+:aˉb:
+x
+:END:
+[fn:aˉb] y
+* U+02CA
+:aˊb:
+x
+:END:
+[fn:aˊb] y
+* U+02CF
+:aˏb:
+x
+:END:
+[fn:aˏb] y
+* U+02D0
+:aːb:
+x
+:END:
+[fn:aːb] y
+* U+02D1
+:aˑb:
+x
+:END:
+[fn:aˑb] y
+* U+02D7
+:a˗b:
+x
+:END:
+[fn:a˗b] y
+* U+02D8
+:a˘b:
+x
+:END:
+[fn:a˘b] y
+* U+02DB
+:a˛b:
+x
+:END:
+[fn:a˛b] y
+* U+02DC
+:a˜b:
+x
+:END:
+[fn:a˜b] y
+* U+02DD
+:a˝b:
+x
+:END:
+[fn:a˝b] y
+* U+02DE
+:a˞b:
+x
+:END:
+[fn:a˞b] y
+* U+0383
+:a΃b:
+x
+:END:
+[fn:a΃b] y
+* U+0384
+:a΄b:
+x
+:END:
+[fn:a΄b] y
+* U+0385
+:a΅b:
+x
+:END:
+[fn:a΅b] y
+* U+0386
+:aΆb:
+x
+:END:
+[fn:aΆb] y
+* U+05BD
+:aֽb:
+x
+:END:
+[fn:aֽb] y
+* U+05BE
+:a־b:
+x
+:END:
+[fn:a־b] y
+* U+05BF
+:aֿb:
+x
+:END:
+[fn:aֿb] y
+* U+05C0
+:a׀b:
+x
+:END:
+[fn:a׀b] y
+* U+05C1
+:aׁb:
+x
+:END:
+[fn:aׁb] y
+* U+05C2
+:aׂb:
+x
+:END:
+[fn:aׂb] y
+* U+05C3
+:a׃b:
+x
+:END:
+[fn:a׃b] y
+* U+05C4
+:aׄb:
+x
+:END:
+[fn:aׄb] y
+* U+05C5
+:aׅb:
+x
+:END:
+[fn:aׅb] y
+* U+05C6
+:a׆b:
+x
+:END:
+[fn:a׆b] y
+* U+05C7
+:aׇb:
+x
+:END:
+[fn:aׇb] y
+* U+0E2E
+:aฮb:
+x
+:END:
+[fn:aฮb] y
+* U+0E2F
+:aฯb:
+x
+:END:
+[fn:aฯb] y
+* U+0E30
+:aะb:
+x
+:END:
+[fn:aะb] y
+* U+0E3E
+:a฾b:
+x
+:END:
+[fn:a฾b] y
+* U+0E3F
+:a฿b:
+x
+:END:
+[fn:a฿b] y
+* U+0E40
+:aเb:
+x
+:END:
+[fn:aเb] y
+* U+0E45
+:aๅb:
+x
+:END:
+[fn:aๅb] y
+* U+0E46
+:aๆb:
+x
+:END:
+[fn:aๆb] y
+* U+0E47
+:a็b:
+x
+:END:
+[fn:a็b] y
+* U+0E4E
+:a๎b:
+x
+:END:
+[fn:a๎b] y
+* U+0E4F
+:a๏b:
+x
+:END:
+[fn:a๏b] y
+* U+0E50
+:a๐b:
+x
+:END:
+[fn:a๐b] y
+* U+0E59
+:a๙b:
+x
+:END:
+[fn:a๙b] y
+* U+0E5A
+:a๚b:
+x
+:END:
+[fn:a๚b] y
+* U+0E5B
+:a๛b:
+x
+:END:
+[fn:a๛b] y
+* U+0E5C
+:a๜b:
+x
+:END:
+[fn:a๜b] y
+* U+0EAE
+:aຮb:
+x
+:END:
+[fn:aຮb] y
+* U+0EAF
+:aຯb:
+x
+:END:
+[fn:aຯb] y
+* U+0EB0
+:aະb:
+x
+:END:
+[fn:aະb] y
+* U+0EC5
+:a໅b:
+x
+:END:
+[fn:a໅b] y
+* U+0EC6
+:aໆb:
+x
+:END:
+[fn:aໆb] y
+* U+0EC7
+:a໇b:
+x
+:END:
+[fn:a໇b] y
+* U+0EFF
+:a໿b:
+x
+:END:
+[fn:a໿b] y
+* U+0F00
+:aༀb:
+x
+:END:
+[fn:aༀb] y
+* U+0F0B
+:a་b:
+x
+:END:
+[fn:a་b] y
+* U+0F0C
+:a༌b:
+x
+:END:
+[fn:a༌b] y
+* U+0F0D
+:a།b:
+x
+:END:
+[fn:a།b] y
+* U+0F18
+:a༘b:
+x
+:END:
+[fn:a༘b] y
+* U+0F19
+:a༙b:
+x
+:END:
+[fn:a༙b] y
+* U+0F1A
+:a༚b:
+x
+:END:
+[fn:a༚b] y
+* U+0F1F
+:a༟b:
+x
+:END:
+[fn:a༟b] y
+* U+0F20
+:a༠b:
+x
+:END:
+[fn:a༠b] y
+* U+0F33
+:a༳b:
+x
+:END:
+[fn:a༳b] y
+* U+0F34
+:a༴b:
+x
+:END:
+[fn:a༴b] y
+* U+0F35
+:a༵b:
+x
+:END:
+[fn:a༵b] y
+* U+0F36
+:a༶b:
+x
+:END:
+[fn:a༶b] y
+* U+0F37
+:a༷b:
+x
+:END:
+[fn:a༷b] y
+* U+0F38
+:a༸b:
+x
+:END:
+[fn:a༸b] y
+* U+0F3F
+:a༿b:
+x
+:END:
+[fn:a༿b] y
+* U+0F40
+:aཀb:
+x
+:END:
+[fn:aཀb] y
+* U+0F7E
+:aཾb:
+x
+:END:
+[fn:aཾb] y
+* U+0F7F
+:aཿb:
+x
+:END:
+[fn:aཿb] y
+* U+0F80
+:aྀb:
+x
+:END:
+[fn:aྀb] y
+* U+0F84
+:a྄b:
+x
+:END:
+[fn:a྄b] y
+* U+0F85
+:a྅b:
+x
+:END:
+[fn:a྅b] y
+* U+0F86
+:a྆b:
+x
+:END:
+[fn:a྆b] y
+* U+0FBD
+:a྽b:
+x
+:END:
+[fn:a྽b] y
+* U+0FBE
+:a྾b:
+x
+:END:
+[fn:a྾b] y
+* U+0FCF
+:a࿏b:
+x
+:END:
+[fn:a࿏b] y
+* U+0FD0
+:a࿐b:
+x
+:END:
+[fn:a࿐b] y
+* U+1360
+:a፠b:
+x
+:END:
+[fn:a፠b] y
+* U+1361
+:a፡b:
+x
+:END:
+[fn:a፡b] y
+* U+1368
+:a፨b:
+x
+:END:
+[fn:a፨b] y
+* U+1369
+:a፩b:
+x
+:END:
+[fn:a፩b] y
+* U+17FF
+:a៿b:
+x
+:END:
+[fn:a៿b] y
+* U+1800
+:a᠀b:
+x
+:END:
+[fn:a᠀b] y
+* U+180A
+:a᠊b:
+x
+:END:
+[fn:a᠊b] y
+* U+180B
+:a᠋b:
+x
+:END:
+[fn:a᠋b] y
+* U+1FFF
+:a῿b:
+x
+:END:
+[fn:a῿b] y
+* U+2000
+:a b:
+x
+:END:
+[fn:a b] y
+* U+2026
+:a…b:
+x
+:END:
+[fn:a…b] y
+* U+2027
+:a‧b:
+x
+:END:
+[fn:a‧b] y
+* U+202E
+:a‮b:
+x
+:END:
+[fn:a‮b] y
+* U+202F
+:a b:
+x
+:END:
+[fn:a b] y
+* U+205F
+:a b:
+x
+:END:
+[fn:a b] y
+* U+2060
+:a⁠b:
+x
+:END:
+[fn:a⁠b] y
+* U+207C
+:a⁼b:
+x
+:END:
+[fn:a⁼b] y
+* U+207D
+:a⁽b:
+x
+:END:
+[fn:a⁽b] y
+* U+207E
+:a⁾b:
+x
+:END:
+[fn:a⁾b] y
+* U+207F
+:aⁿb:
+x
+:END:
+[fn:aⁿb] y
+* U+208C
+:a₌b:
+x
+:END:
+[fn:a₌b] y
+* U+208D
+:a₍b:
+x
+:END:
+[fn:a₍b] y
+* U+208E
+:a₎b:
+x
+:END:
+[fn:a₎b] y
+* U+208F
+:a₏b:
+x
+:END:
+[fn:a₏b] y
+* U+20AB
+:a₫b:
+x
+:END:
+[fn:a₫b] y
+* U+20AC
+:a€b:
+x
+:END:
+[fn:a€b] y
+* U+20AD
+:a₭b:
+x
+:END:
+[fn:a₭b] y
+* U+2102
+:aℂb:
+x
+:END:
+[fn:aℂb] y
+* U+2103
+:a℃b:
+x
+:END:
+[fn:a℃b] y
+* U+2104
+:a℄b:
+x
+:END:
+[fn:a℄b] y
+* U+2108
+:a℈b:
+x
+:END:
+[fn:a℈b] y
+* U+2109
+:a℉b:
+x
+:END:
+[fn:a℉b] y
+* U+210A
+:aℊb:
+x
+:END:
+[fn:aℊb] y
+* U+2115
+:aℕb:
+x
+:END:
+[fn:aℕb] y
+* U+2116
+:a№b:
+x
+:END:
+[fn:a№b] y
+* U+2117
+:a℗b:
+x
+:END:
+[fn:a℗b] y
+* U+2120
+:a℠b:
+x
+:END:
+[fn:a℠b] y
+* U+2121
+:a℡b:
+x
+:END:
+[fn:a℡b] y
+* U+2122
+:a™b:
+x
+:END:
+[fn:a™b] y
+* U+2123
+:a℣b:
+x
+:END:
+[fn:a℣b] y
+* U+2152
+:a⅒b:
+x
+:END:
+[fn:a⅒b] y
+* U+2153
+:a⅓b:
+x
+:END:
+[fn:a⅓b] y
+* U+2154
+:a⅔b:
+x
+:END:
+[fn:a⅔b] y
+* U+2155
+:a⅕b:
+x
+:END:
+[fn:a⅕b] y
+* U+215A
+:a⅚b:
+x
+:END:
+[fn:a⅚b] y
+* U+215B
+:a⅛b:
+x
+:END:
+[fn:a⅛b] y
+* U+215E
+:a⅞b:
+x
+:END:
+[fn:a⅞b] y
+* U+215F
+:a⅟b:
+x
+:END:
+[fn:a⅟b] y
+* U+218F
+:a↏b:
+x
+:END:
+[fn:a↏b] y
+* U+2190
+:a←b:
+x
+:END:
+[fn:a←b] y
+* U+244F
+:a⑏b:
+x
+:END:
+[fn:a⑏b] y
+* U+2450
+:a⑐b:
+x
+:END:
+[fn:a⑐b] y
+* U+245F
+:a⑟b:
+x
+:END:
+[fn:a⑟b] y
+* U+2460
+:a①b:
+x
+:END:
+[fn:a①b] y
+* U+246E
+:a⑮b:
+x
+:END:
+[fn:a⑮b] y
+* U+246F
+:a⑯b:
+x
+:END:
+[fn:a⑯b] y
+* U+2473
+:a⑳b:
+x
+:END:
+[fn:a⑳b] y
+* U+2474
+:a⑴b:
+x
+:END:
+[fn:a⑴b] y
+* U+24B5
+:a⒵b:
+x
+:END:
+[fn:a⒵b] y
+* U+24B6
+:aⒶb:
+x
+:END:
+[fn:aⒶb] y
+* U+24FF
+:a⓿b:
+x
+:END:
+[fn:a⓿b] y
+* U+2500
+:a─b:
+x
+:END:
+[fn:a─b] y
+* U+254B
+:a╋b:
+x
+:END:
+[fn:a╋b] y
+* U+254C
+:a╌b:
+x
+:END:
+[fn:a╌b] y
+* U+2591
+:a░b:
+x
+:END:
+[fn:a░b] y
+* U+2592
+:a▒b:
+x
+:END:
+[fn:a▒b] y
+* U+2593
+:a▓b:
+x
+:END:
+[fn:a▓b] y
+* U+259F
+:a▟b:
+x
+:END:
+[fn:a▟b] y
+* U+25A0
+:a■b:
+x
+:END:
+[fn:a■b] y
+* U+25A1
+:a□b:
+x
+:END:
+[fn:a□b] y
+* U+25A2
+:a▢b:
+x
+:END:
+[fn:a▢b] y
+* U+25A3
+:a▣b:
+x
+:END:
+[fn:a▣b] y
+* U+25A9
+:a▩b:
+x
+:END:
+[fn:a▩b] y
+* U+25AA
+:a▪b:
+x
+:END:
+[fn:a▪b] y
+* U+25B1
+:a▱b:
+x
+:END:
+[fn:a▱b] y
+* U+25B2
+:a▲b:
+x
+:END:
+[fn:a▲b] y
+* U+25B3
+:a△b:
+x
+:END:
+[fn:a△b] y
+* U+25B4
+:a▴b:
+x
+:END:
+[fn:a▴b] y
+* U+25B5
+:a▵b:
+x
+:END:
+[fn:a▵b] y
+* U+25B6
+:a▶b:
+x
+:END:
+[fn:a▶b] y
+* U+25B7
+:a▷b:
+x
+:END:
+[fn:a▷b] y
+* U+25B8
+:a▸b:
+x
+:END:
+[fn:a▸b] y
+* U+25BB
+:a▻b:
+x
+:END:
+[fn:a▻b] y
+* U+25BC
+:a▼b:
+x
+:END:
+[fn:a▼b] y
+* U+25BD
+:a▽b:
+x
+:END:
+[fn:a▽b] y
+* U+25BE
+:a▾b:
+x
+:END:
+[fn:a▾b] y
+* U+25BF
+:a▿b:
+x
+:END:
+[fn:a▿b] y
+* U+25C0
+:a◀b:
+x
+:END:
+[fn:a◀b] y
+* U+25C1
+:a◁b:
+x
+:END:
+[fn:a◁b] y
+* U+25C2
+:a◂b:
+x
+:END:
+[fn:a◂b] y
+* U+25C5
+:a◅b:
+x
+:END:
+[fn:a◅b] y
+* U+25C6
+:a◆b:
+x
+:END:
+[fn:a◆b] y
+* U+25C8
+:a◈b:
+x
+:END:
+[fn:a◈b] y
+* U+25C9
+:a◉b:
+x
+:END:
+[fn:a◉b] y
+* U+25CA
+:a◊b:
+x
+:END:
+[fn:a◊b] y
+* U+25CB
+:a○b:
+x
+:END:
+[fn:a○b] y
+* U+25CC
+:a◌b:
+x
+:END:
+[fn:a◌b] y
+* U+25CD
+:a◍b:
+x
+:END:
+[fn:a◍b] y
+* U+25CE
+:a◎b:
+x
+:END:
+[fn:a◎b] y
+* U+25D1
+:a◑b:
+x
+:END:
+[fn:a◑b] y
+* U+25D2
+:a◒b:
+x
+:END:
+[fn:a◒b] y
+* U+25EE
+:a◮b:
+x
+:END:
+[fn:a◮b] y
+* U+25EF
+:a◯b:
+x
+:END:
+[fn:a◯b] y
+* U+25F0
+:a◰b:
+x
+:END:
+[fn:a◰b] y
+* U+2604
+:a☄b:
+x
+:END:
+[fn:a☄b] y
+* U+2605
+:a★b:
+x
+:END:
+[fn:a★b] y
+* U+2606
+:a☆b:
+x
+:END:
+[fn:a☆b] y
+* U+2607
+:a☇b:
+x
+:END:
+[fn:a☇b] y
+* U+260D
+:a☍b:
+x
+:END:
+[fn:a☍b] y
+* U+260E
+:a☎b:
+x
+:END:
+[fn:a☎b] y
+* U+260F
+:a☏b:
+x
+:END:
+[fn:a☏b] y
+* U+2610
+:a☐b:
+x
+:END:
+[fn:a☐b] y
+* U+261B
+:a☛b:
+x
+:END:
+[fn:a☛b] y
+* U+261C
+:a☜b:
+x
+:END:
+[fn:a☜b] y
+* U+261D
+:a☝b:
+x
+:END:
+[fn:a☝b] y
+* U+261E
+:a☞b:
+x
+:END:
+[fn:a☞b] y
+* U+261F
+:a☟b:
+x
+:END:
+[fn:a☟b] y
+* U+263F
+:a☿b:
+x
+:END:
+[fn:a☿b] y
+* U+2640
+:a♀b:
+x
+:END:
+[fn:a♀b] y
+* U+2641
+:a♁b:
+x
+:END:
+[fn:a♁b] y
+* U+2642
+:a♂b:
+x
+:END:
+[fn:a♂b] y
+* U+2643
+:a♃b:
+x
+:END:
+[fn:a♃b] y
+* U+265F
+:a♟b:
+x
+:END:
+[fn:a♟b] y
+* U+2660
+:a♠b:
+x
+:END:
+[fn:a♠b] y
+* U+2661
+:a♡b:
+x
+:END:
+[fn:a♡b] y
+* U+2662
+:a♢b:
+x
+:END:
+[fn:a♢b] y
+* U+2663
+:a♣b:
+x
+:END:
+[fn:a♣b] y
+* U+2665
+:a♥b:
+x
+:END:
+[fn:a♥b] y
+* U+2666
+:a♦b:
+x
+:END:
+[fn:a♦b] y
+* U+2667
+:a♧b:
+x
+:END:
+[fn:a♧b] y
+* U+266A
+:a♪b:
+x
+:END:
+[fn:a♪b] y
+* U+266B
+:a♫b:
+x
+:END:
+[fn:a♫b] y
+* U+266C
+:a♬b:
+x
+:END:
+[fn:a♬b] y
+* U+266D
+:a♭b:
+x
+:END:
+[fn:a♭b] y
+* U+266E
+:a♮b:
+x
+:END:
+[fn:a♮b] y
+* U+266F
+:a♯b:
+x
+:END:
+[fn:a♯b] y
+* U+2670
+:a♰b:
+x
+:END:
+[fn:a♰b] y
+* U+2767
+:a❧b:
+x
+:END:
+[fn:a❧b] y
+* U+2768
+:a❨b:
+x
+:END:
+[fn:a❨b] y
+* U+276D
+:a❭b:
+x
+:END:
+[fn:a❭b] y
+* U+276E
+:a❮b:
+x
+:END:
+[fn:a❮b] y
+* U+276F
+:a❯b:
+x
+:END:
+[fn:a❯b] y
+* U+2770
+:a❰b:
+x
+:END:
+[fn:a❰b] y
+* U+2775
+:a❵b:
+x
+:END:
+[fn:a❵b] y
+* U+2776
+:a❶b:
+x
+:END:
+[fn:a❶b] y
+* U+27E5
+:a⟥b:
+x
+:END:
+[fn:a⟥b] y
+* U+27E6
+:a⟦b:
+x
+:END:
+[fn:a⟦b] y
+* U+27EB
+:a⟫b:
+x
+:END:
+[fn:a⟫b] y
+* U+27EC
+:a⟬b:
+x
+:END:
+[fn:a⟬b] y
+* U+2982
+:a⦂b:
+x
+:END:
+[fn:a⦂b] y
+* U+2983
+:a⦃b:
+x
+:END:
+[fn:a⦃b] y
+* U+2998
+:a⦘b:
+x
+:END:
+[fn:a⦘b] y
+* U+2999
+:a⦙b:
+x
+:END:
+[fn:a⦙b] y
+* U+29FB
+:a⧻b:
+x
+:END:
+[fn:a⧻b] y
+* U+29FC
+:a⧼b:
+x
+:END:
+[fn:a⧼b] y
+* U+29FD
+:a⧽b:
+x
+:END:
+[fn:a⧽b] y
+* U+29FE
+:a⧾b:
+x
+:END:
+[fn:a⧾b] y
+* U+29FF
+:a⧿b:
+x
+:END:
+[fn:a⧿b] y
+* U+2A00
+:a⨀b:
+x
+:END:
+[fn:a⨀b] y
+* U+2BFF
+:a⯿b:
+x
+:END:
+[fn:a⯿b] y
+* U+2C00
+:aⰀb:
+x
+:END:
+[fn:aⰀb] y
+* U+2DFF
+:aⷿb:
+x
+:END:
+[fn:aⷿb] y
+* U+2E00
+:a⸀b:
+x
+:END:
+[fn:a⸀b] y
+* U+2E7F
+:a⹿b:
+x
+:END:
+[fn:a⹿b] y
+* U+2E80
+:a⺀b:
+x
+:END:
+[fn:a⺀b] y
+* U+2FFF
+:a⿿b:
+x
+:END:
+[fn:a⿿b] y
+* U+3000
+:a　b:
+x
+:END:
+[fn:a　b] y
+* U+3003
+:a〃b:
+x
+:END:
+[fn:a〃b] y
+* U+3004
+:a〄b:
+x
+:END:
+[fn:a〄b] y
+* U+3007
+:a〇b:
+x
+:END:
+[fn:a〇b] y
+* U+3008
+:a〈b:
+x
+:END:
+[fn:a〈b] y
+* U+301C
+:a〜b:
+x
+:END:
+[fn:a〜b] y
+* U+301D
+:a〝b:
+x
+:END:
+[fn:a〝b] y
+* U+30FA
+:aヺb:
+x
+:END:
+[fn:aヺb] y
+* U+30FB
+:a・b:
+x
+:END:
+[fn:a・b] y
+* U+30FC
+:aーb:
+x
+:END:
+[fn:aーb] y
+* U+31FF
+:aㇿb:
+x
+:END:
+[fn:aㇿb] y
+* U+3200
+:a㈀b:
+x
+:END:
+[fn:a㈀b] y
+* U+321C
+:a㈜b:
+x
+:END:
+[fn:a㈜b] y
+* U+321D
+:a㈝b:
+x
+:END:
+[fn:a㈝b] y
+* U+321F
+:a㈟b:
+x
+:END:
+[fn:a㈟b] y
+* U+3220
+:a㈠b:
+x
+:END:
+[fn:a㈠b] y
+* U+3229
+:a㈩b:
+x
+:END:
+[fn:a㈩b] y
+* U+322A
+:a㈪b:
+x
+:END:
+[fn:a㈪b] y
+* U+325F
+:a㉟b:
+x
+:END:
+[fn:a㉟b] y
+* U+3260
+:a㉠b:
+x
+:END:
+[fn:a㉠b] y
+* U+327B
+:a㉻b:
+x
+:END:
+[fn:a㉻b] y
+* U+327C
+:a㉼b:
+x
+:END:
+[fn:a㉼b] y
+* U+327D
+:a㉽b:
+x
+:END:
+[fn:a㉽b] y
+* U+327E
+:a㉾b:
+x
+:END:
+[fn:a㉾b] y
+* U+327F
+:a㉿b:
+x
+:END:
+[fn:a㉿b] y
+* U+3280
+:a㊀b:
+x
+:END:
+[fn:a㊀b] y
+* U+337F
+:a㍿b:
+x
+:END:
+[fn:a㍿b] y
+* U+3380
+:a㎀b:
+x
+:END:
+[fn:a㎀b] y
+* U+3384
+:a㎄b:
+x
+:END:
+[fn:a㎄b] y
+* U+3385
+:a㎅b:
+x
+:END:
+[fn:a㎅b] y
+* U+3387
+:a㎇b:
+x
+:END:
+[fn:a㎇b] y
+* U+3388
+:a㎈b:
+x
+:END:
+[fn:a㎈b] y
+* U+33CA
+:a㏊b:
+x
+:END:
+[fn:a㏊b] y
+* U+33CB
+:a㏋b:
+x
+:END:
+[fn:a㏋b] y
+* U+33CE
+:a㏎b:
+x
+:END:
+[fn:a㏎b] y
+* U+33CF
+:a㏏b:
+x
+:END:
+[fn:a㏏b] y
+* U+33D0
+:a㏐b:
+x
+:END:
+[fn:a㏐b] y
+* U+33D1
+:a㏑b:
+x
+:END:
+[fn:a㏑b] y
+* U+33D2
+:a㏒b:
+x
+:END:
+[fn:a㏒b] y
+* U+33D3
+:a㏓b:
+x
+:END:
+[fn:a㏓b] y
+* U+33D4
+:a㏔b:
+x
+:END:
+[fn:a㏔b] y
+* U+33D5
+:a㏕b:
+x
+:END:
+[fn:a㏕b] y
+* U+33D6
+:a㏖b:
+x
+:END:
+[fn:a㏖b] y
+* U+33D7
+:a㏗b:
+x
+:END:
+[fn:a㏗b] y
+* U+33D8
+:a㏘b:
+x
+:END:
+[fn:a㏘b] y
+* U+33D9
+:a㏙b:
+x
+:END:
+[fn:a㏙b] y
+* U+33DA
+:a㏚b:
+x
+:END:
+[fn:a㏚b] y
+* U+33DB
+:a㏛b:
+x
+:END:
+[fn:a㏛b] y
+* U+33DD
+:a㏝b:
+x
+:END:
+[fn:a㏝b] y
+* U+33DE
+:a㏞b:
+x
+:END:
+[fn:a㏞b] y
+* U+AADA
+:a꫚b:
+x
+:END:
+[fn:a꫚b] y
+* U+AADB
+:aꫛb:
+x
+:END:
+[fn:aꫛb] y
+* U+AADF
+:a꫟b:
+x
+:END:
+[fn:a꫟b] y
+* U+AAE0
+:aꫠb:
+x
+:END:
+[fn:aꫠb] y
+* U+D7FF
+:a퟿b:
+x
+:END:
+[fn:a퟿b] y
+* U+E000
+:ab:
+x
+:END:
+[fn:ab] y
+* U+FD3D
+:aﴽb:
+x
+:END:
+[fn:aﴽb] y
+* U+FD3E
+:a﴾b:
+x
+:END:
+[fn:a﴾b] y
+* U+FD3F
+:a﴿b:
+x
+:END:
+[fn:a﴿b] y
+* U+FD40
+:a﵀b:
+x
+:END:
+[fn:a﵀b] y
+* U+FE34
+:a︴b:
+x
+:END:
+[fn:a︴b] y
+* U+FE35
+:a︵b:
+x
+:END:
+[fn:a︵b] y
+* U+FE44
+:a﹄b:
+x
+:END:
+[fn:a﹄b] y
+* U+FE45
+:a﹅b:
+x
+:END:
+[fn:a﹅b] y
+* U+FE58
+:a﹘b:
+x
+:END:
+[fn:a﹘b] y
+* U+FE59
+:a﹙b:
+x
+:END:
+[fn:a﹙b] y
+* U+FE5E
+:a﹞b:
+x
+:END:
+[fn:a﹞b] y
+* U+FE5F
+:a﹟b:
+x
+:END:
+[fn:a﹟b] y
+* U+FF00
+:a＀b:
+x
+:END:
+[fn:a＀b] y
+* U+FF01
+:a！b:
+x
+:END:
+[fn:a！b] y
+* U+FF0F
+:a／b:
+x
+:END:
+[fn:a／b] y
+* U+FF10
+:a０b:
+x
+:END:
+[fn:a０b] y
+* U+FF1A
+:a：b:
+x
+:END:
+[fn:a：b] y
+* U+FF1B
+:a；b:
+x
+:END:
+[fn:a；b] y
+* U+FF20
+:a＠b:
+x
+:END:
+[fn:a＠b] y
+* U+FF21
+:aＡb:
+x
+:END:
+[fn:aＡb] y
+* U+FF3A
+:aＺb:
+x
+:END:
+[fn:aＺb] y
+* U+FF3B
+:a［b:
+x
+:END:
+[fn:a［b] y
+* U+FF40
+:a｀b:
+x
+:END:
+[fn:a｀b] y
+* U+FF41
+:aａb:
+x
+:END:
+[fn:aａb] y
+* U+FF5A
+:aｚb:
+x
+:END:
+[fn:aｚb] y
+* U+FF5B
+:a｛b:
+x
+:END:
+[fn:a｛b] y
+* U+FF65
+:a･b:
+x
+:END:
+[fn:a･b] y
+* U+FF66
+:aｦb:
+x
+:END:
+[fn:aｦb] y
+* U+FFDF
+:a￟b:
+x
+:END:
+[fn:a￟b] y
+* U+FFE0
+:a￠b:
+x
+:END:
+[fn:a￠b] y
+* U+FFE3
+:a￣b:
+x
+:END:
+[fn:a￣b] y
+* U+FFE4
+:a￤b:
+x
+:END:
+[fn:a￤b] y
+* U+FFE5
+:a￥b:
+x
+:END:
+[fn:a￥b] y
+* U+FFE6
+:a￦b:
+x
+:END:
+[fn:a￦b] y
+* U+1165F
+:a𑙟b:
+x
+:END:
+[fn:a𑙟b] y
+* U+11660
+:a𑙠b:
+x
+:END:
+[fn:a𑙠b] y
+* U+1166C
+:a𑙬b:
+x
+:END:
+[fn:a𑙬b] y
+* U+1166D
+:a𑙭b:
+x
+:END:
+[fn:a𑙭b] y
+* U+1FAFF
+:a🫿b:
+x
+:END:
+[fn:a🫿b] y
+* U+1FB00
+:a🬀b:
+x
+:END:
+[fn:a🬀b] y
+* U+1FBFF
+:a🯿b:
+x
+:END:
+[fn:a🯿b] y
+* U+1FC00
+:a🰀b:
+x
+:END:
+[fn:a🰀b] y
+* U+10FFFF
+:a􏿿b:
+x
+:END:
+[fn:a􏿿b] y

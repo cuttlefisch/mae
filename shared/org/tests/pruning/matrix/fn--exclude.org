@@ -1,0 +1,5 @@
+#+EXCLUDE_TAGS: ex
+* Visible
+See[fn:x] QZvQZ.
+* Pruned :ex:
+[fn:x] note QZsQZ

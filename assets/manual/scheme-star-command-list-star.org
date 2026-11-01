@@ -2,7 +2,7 @@
 :ID: scheme:*command-list*
 :KIND: scheme_api
 :END:
-#+title: Scheme: *command-list*
+#+title: Scheme: =*command-list*=
 #+filetags: :scheme:api:variable:
 
 *Type:* list of (name doc source)

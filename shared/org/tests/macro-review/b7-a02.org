@@ -1,0 +1,3 @@
+#+MACRO: o @@latex:
+* Foo {{{o}}}secretword@@
+body

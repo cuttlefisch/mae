@@ -1080,6 +1080,70 @@
         }
       ]
     },
+    "mae-org": {
+      "path": "shared/org/src/lib.rs",
+      "dependencies": [
+        "mae-kb"
+      ],
+      "public_items": [
+        {
+          "name": "API_VERSION",
+          "kind": "const"
+        },
+        {
+          "name": "Document",
+          "kind": "struct"
+        },
+        {
+          "name": "parse",
+          "kind": "fn"
+        },
+        {
+          "name": "FragmentContext",
+          "kind": "struct"
+        },
+        {
+          "name": "parse_fragment",
+          "kind": "fn"
+        }
+      ]
+    },
+    "mae-org-wasm": {
+      "path": "shared/org-wasm/src/lib.rs",
+      "dependencies": [
+        "mae-org"
+      ],
+      "public_items": [
+        {
+          "name": "api",
+          "kind": "mod"
+        },
+        {
+          "name": "json",
+          "kind": "mod"
+        },
+        {
+          "name": "mae_org_alloc",
+          "kind": "fn"
+        },
+        {
+          "name": "mae_org_call",
+          "kind": "fn"
+        },
+        {
+          "name": "mae_org_result_ptr",
+          "kind": "fn"
+        },
+        {
+          "name": "mae_org_result_free",
+          "kind": "fn"
+        },
+        {
+          "name": "mae_org_live_bytes",
+          "kind": "fn"
+        }
+      ]
+    },
     "mae-renderer": {
       "path": "crates/renderer/src/lib.rs",
       "dependencies": [

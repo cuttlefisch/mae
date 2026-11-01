@@ -1,0 +1,3 @@
+#+MACRO: x {{{keyword(K)}}}
+#+K: src_sh[:exports none]{echo SECRET}
+A {{{x}}} B

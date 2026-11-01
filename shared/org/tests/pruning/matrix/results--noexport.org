@@ -1,0 +1,9 @@
+* Visible
+#+NAME: f
+#+begin_src none
+#+end_src
+
+QZvQZ
+* Pruned :noexport:
+#+RESULTS: f
+: QZsQZ

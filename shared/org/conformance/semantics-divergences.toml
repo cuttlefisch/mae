@@ -1,0 +1,790 @@
+# Intended differences between mae-org's semantics() and mae-kb's org parser
+# (parse_org_multi_result, and parse_org_multi for bodies), the projection it
+# replaces (ADR-112 D2, D5), plus mae-org's agreement with the Emacs oracle
+# for titles and levels (semantics-titles.tsv).
+#
+# tests/semantics_differential.rs gives every difference a CLASS by a
+# mechanical check (see its classify_* functions and compare_body), then
+# requires an entry here for it. It fails on a difference no entry covers, on
+# an entry that covers nothing, on an entry whose pinning test is not a
+# #[test] function, and on a wildcard entry whose hit count changed.
+#
+# Fields: what   = node | title | level | tags | kind | aliases | properties |
+#                  todo | priority | body | link | transclusion
+#         class  = the classifier's class, or "unclassified"
+#         file   = repo-relative path; a trailing * makes it a prefix, and
+#                  "*" alone means every file
+#         detail = substring of the difference's text: REQUIRED unless file is
+#                  "*", so an entry names the difference it excuses
+#         count  = REQUIRED for a wildcard (file ending in *): exactly how
+#                  many differences the entry covers
+#         reason, test = why it is intended, and the #[test] that pins
+#                  mae-org's side
+
+# ---------------------------------------------------------------- whole corpus
+
+[[divergence]]
+what = "properties"
+class = "property_key_case"
+file = "*"
+count = "95"
+reason = "Property keys are canonical (Emacs case folding, ASCII shown upper case: Property::key); mae-kb lower-cased them. The class requires mae-org's key to be exactly the upper case of mae-kb's, with the same value: a key left as written is unclassified."
+test = "property_keys_are_canonical_and_repeats_resolve_like_org"
+
+[[divergence]]
+what = "title"
+class = "title_matches_emacs"
+file = "assets/manual/scheme-star-*"
+detail = "\"Scheme: =*"
+count = "18"
+reason = "The manual names each Scheme variable as verbatim (#+title: Scheme: =*buffer-count*=; written as *x* it was bold in Org). Org's plain reading (semantics-titles.tsv, from Emacs) drops the delimiters; mae-kb kept the raw markup."
+test = "titles_are_plain_text"
+
+# ---------------------------------------------------------------- one file each
+
+[[divergence]]
+what = "link"
+class = "verbatim_object"
+file = "assets/devpractices/practice-mutating-script-safety.org"
+detail = "from: \"practice:mutating-script-safety\", p: Payload { target: \"-z \\"$X\\"\""
+reason = "The bash test `if [[ -z \"$X\" ]]` was Markdown backticks, which Org reads as a fuzzy link; the corpus now writes it as Org verbatim. mae-kb's scanner skips a link only right after = or ~, so it still makes an edge."
+test = "verbatim_text_holds_no_links_or_directives"
+
+[[divergence]]
+what = "transclusion"
+class = "verbatim_block"
+file = "assets/manual/concept-org-link-syntax.org"
+detail = "only mae-kb: (\"concept:org-link-syntax\", \"concept:buffer-view\", \"content\")"
+reason = "A #+TRANSCLUDE line inside an example or src block is example text, not a directive; mae-kb scanned every line of the file."
+test = "verbatim_text_holds_no_links_or_directives"
+
+[[divergence]]
+what = "transclusion"
+class = "verbatim_block"
+file = "assets/manual/concept-org-link-syntax.org"
+detail = "only mae-kb: (\"concept:org-link-syntax\", \"concept:rope-internals\", \"reference\")"
+reason = "A #+TRANSCLUDE line inside an example or src block is example text, not a directive; mae-kb scanned every line of the file."
+test = "verbatim_text_holds_no_links_or_directives"
+
+[[divergence]]
+what = "node"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/drawer-after-blank.org"
+detail = "only mae-kb: sem-blank-heading"
+reason = "A property drawer after a blank line is not the headline's; Org reads it as a plain drawer, so its id is no node."
+test = "a_property_drawer_after_a_blank_line_is_a_plain_drawer"
+
+[[divergence]]
+what = "link"
+class = "source_not_a_node"
+file = "shared/org/tests/semantics/drawer-after-blank.org"
+detail = "from: \"sem-blank-heading\", p: Payload { target: \"sem-blank-target\""
+reason = "The heading is no node, so its link belongs to the file."
+test = "a_property_drawer_after_a_blank_line_is_a_plain_drawer"
+
+[[divergence]]
+what = "body"
+class = "body_past_nested_node"
+file = "shared/org/tests/semantics/duplicates.org"
+detail = "sem-dup-file:"
+reason = "mae-kb's body ran on past the first node nested in the element (a child headline node or a list-item node), so writing it would rewrite that node, its drawer and its :ID:. mae-org's body stops at the first nested node (F3: two bodies never overlap)."
+test = "an_items_body_ends_at_the_first_nested_node"
+
+[[divergence]]
+what = "body"
+class = "body_front_matter"
+file = "shared/org/tests/semantics/duplicates.org"
+detail = "sem-dup:"
+reason = "mae-kb's heading and item bodies began at the element's own line, so they held its title line, planning line and property drawer (the :ID: included); mae-org's body is the text after that front matter, the unit ADR-092's write path splices."
+test = "a_headlines_body_runs_through_children_without_ids"
+
+[[divergence]]
+what = "link"
+class = "duplicate_id"
+file = "shared/org/tests/semantics/duplicates.org"
+detail = "from: \"sem-dup\", p: Payload { target: \"sem-dup-second-link\""
+reason = "A repeated id is a diagnostic, not a second node; its content belongs to the node around it."
+test = "duplicate_ids_are_diagnosed_and_not_nodes"
+
+[[divergence]]
+what = "link"
+class = "id_search_option"
+file = "shared/org/tests/semantics/external-links.org"
+detail = "from: \"sem-external-file\", p: Payload { target: \"sem-external-search::*A heading\""
+reason = "[[id:X::SEARCH]] is the id X with Org's search option (org-id-open splits at the first ::, org-roam stores it, Org 9.7 writes it by default); mae-kb kept ::SEARCH in the target, an id that never exists. Intended fix for mae-kb too."
+test = "id_and_file_links_split_their_search_option"
+
+[[divergence]]
+what = "link"
+class = "external_classifier"
+file = "shared/org/tests/semantics/external-links.org"
+detail = "from: \"sem-external-file\", p: Payload { target: \"help:org-mode\""
+reason = "A scheme that can never be a node id is not an edge: help:, file+sys: (Org link types mae-kb's exclude list lacked) and the bibliography schemes roam:, cite:, zotero:."
+test = "every_non_kb_scheme_is_pinned"
+
+[[divergence]]
+what = "link"
+class = "external_classifier"
+file = "shared/org/tests/semantics/external-links.org"
+detail = "from: \"sem-external-file\", p: Payload { target: \"file+sys:/bin/sh\""
+reason = "A scheme that can never be a node id is not an edge: help:, file+sys: (Org link types mae-kb's exclude list lacked) and the bibliography schemes roam:, cite:, zotero:."
+test = "every_non_kb_scheme_is_pinned"
+
+[[divergence]]
+what = "link"
+class = "local_target"
+file = "shared/org/tests/semantics/external-links.org"
+detail = "from: \"sem-external-file\", p: Payload { target: \"\""
+reason = "[[#custom-id]], [[*Heading]] and [[(coderef)]] are targets in the same file (Org's custom-id, headline search and coderef types), never KB edges; mae-kb made an edge to an id that cannot exist (#c became a fragment of an empty target)."
+test = "kinds_are_read_as_org_reads_types"
+
+[[divergence]]
+what = "link"
+class = "local_target"
+file = "shared/org/tests/semantics/external-links.org"
+detail = "from: \"sem-external-file\", p: Payload { target: \"*A heading\""
+reason = "[[#custom-id]], [[*Heading]] and [[(coderef)]] are targets in the same file (Org's custom-id, headline search and coderef types), never KB edges; mae-kb made an edge to an id that cannot exist (#c became a fragment of an empty target)."
+test = "kinds_are_read_as_org_reads_types"
+
+[[divergence]]
+what = "link"
+class = "local_target"
+file = "shared/org/tests/semantics/external-links.org"
+detail = "from: \"sem-external-file\", p: Payload { target: \"(ref)\""
+reason = "[[#custom-id]], [[*Heading]] and [[(coderef)]] are targets in the same file (Org's custom-id, headline search and coderef types), never KB edges; mae-kb made an edge to an id that cannot exist (#c became a fragment of an empty target)."
+test = "kinds_are_read_as_org_reads_types"
+
+[[divergence]]
+what = "link"
+class = "external_classifier"
+file = "shared/org/tests/semantics/external-links.org"
+detail = "from: \"sem-external-file\", p: Payload { target: \"roam:Some title\""
+reason = "A scheme that can never be a node id is not an edge: help:, file+sys: (Org link types mae-kb's exclude list lacked) and the bibliography schemes roam:, cite:, zotero:."
+test = "every_non_kb_scheme_is_pinned"
+
+[[divergence]]
+what = "link"
+class = "external_classifier"
+file = "shared/org/tests/semantics/external-links.org"
+detail = "from: \"sem-external-file\", p: Payload { target: \"cite:key2026\""
+reason = "A scheme that can never be a node id is not an edge: help:, file+sys: (Org link types mae-kb's exclude list lacked) and the bibliography schemes roam:, cite:, zotero:."
+test = "every_non_kb_scheme_is_pinned"
+
+[[divergence]]
+what = "link"
+class = "external_classifier"
+file = "shared/org/tests/semantics/external-links.org"
+detail = "from: \"sem-external-file\", p: Payload { target: \"zotero://select/items/X\""
+reason = "A scheme that can never be a node id is not an edge: help:, file+sys: (Org link types mae-kb's exclude list lacked) and the bibliography schemes roam:, cite:, zotero:."
+test = "every_non_kb_scheme_is_pinned"
+
+[[divergence]]
+what = "tags"
+class = "unclassified"
+file = "shared/org/tests/semantics/file-tags.org"
+detail = "sem-tags-file: [\"alpha\", \"beta\", \"gamma\", \"delta\", \"declared-tag-set not-filetags\"] vs [\"alpha\", \"beta\", \"gamma\", \"delta\"]"
+reason = "#+tags declares the allowed tag set, not file tags (mae-kb read it as file tags); a tag is listed once even when a headline repeats a file tag."
+test = "filetags_split_like_org_and_tags_appear_once"
+
+[[divergence]]
+what = "body"
+class = "body_past_nested_node"
+file = "shared/org/tests/semantics/file-tags.org"
+detail = "sem-tags-file:"
+reason = "mae-kb's body ran on past the first node nested in the element (a child headline node or a list-item node), so writing it would rewrite that node, its drawer and its :ID:. mae-org's body stops at the first nested node (F3: two bodies never overlap)."
+test = "an_items_body_ends_at_the_first_nested_node"
+
+[[divergence]]
+what = "tags"
+class = "unclassified"
+file = "shared/org/tests/semantics/file-tags.org"
+detail = "sem-tags-heading: [\"alpha\", \"beta\", \"gamma\", \"delta\", \"declared-tag-set not-filetags\", \"beta\", \"own\"] vs [\"alpha\", \"beta\", \"gamma\", \"delta\", \"own\"]"
+reason = "#+tags declares the allowed tag set, not file tags (mae-kb read it as file tags); a tag is listed once even when a headline repeats a file tag."
+test = "filetags_split_like_org_and_tags_appear_once"
+
+[[divergence]]
+what = "body"
+class = "body_front_matter"
+file = "shared/org/tests/semantics/file-tags.org"
+detail = "sem-tags-heading:"
+reason = "mae-kb's heading and item bodies began at the element's own line, so they held its title line, planning line and property drawer (the :ID: included); mae-org's body is the text after that front matter, the unit ADR-092's write path splices."
+test = "a_headlines_body_runs_through_children_without_ids"
+
+[[divergence]]
+what = "node"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/indented-stars.org"
+detail = "only mae-kb: sem-indented-item"
+reason = "Indented stars are not headlines; the drawers sit outside any item, so they are plain drawers and their ids are no nodes."
+test = "indented_stars_are_never_headlines"
+
+[[divergence]]
+what = "node"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/indented-stars.org"
+detail = "only mae-kb: sem-indented-text"
+reason = "Indented stars are not headlines; the drawers sit outside any item, so they are plain drawers and their ids are no nodes."
+test = "indented_stars_are_never_headlines"
+
+[[divergence]]
+what = "link"
+class = "source_not_a_node"
+file = "shared/org/tests/semantics/indented-stars.org"
+detail = "from: \"sem-indented-item\", p: Payload { target: \"sem-target-item\""
+reason = "When mae-kb's source is not a node in Org's reading (an indented-star line, a drawer after a blank line), the link belongs to the node around it."
+test = "indented_stars_are_never_headlines"
+
+[[divergence]]
+what = "link"
+class = "source_not_a_node"
+file = "shared/org/tests/semantics/indented-stars.org"
+detail = "from: \"sem-indented-item\", p: Payload { target: \"sem-target-text\""
+reason = "When mae-kb's source is not a node in Org's reading (an indented-star line, a drawer after a blank line), the link belongs to the node around it."
+test = "indented_stars_are_never_headlines"
+
+[[divergence]]
+what = "link"
+class = "unclassified"
+file = "shared/org/tests/semantics/indented-stars.org"
+detail = "only mae-kb: Edge { from: \"sem-indented-text\", p: Payload { target: \"sem-target-text\", fragment: None, rel: \"references\", weight: \"1\", confidence: \"1\", attrs: [] } }"
+reason = "mae-kb read `  * x` and `  ** y` as nested headlines, so `y`'s link was counted for both; in Org neither is a headline and the link is the file's (paired with one of the two by source_not_a_node)."
+test = "indented_stars_are_never_headlines"
+
+[[divergence]]
+what = "body"
+class = "body_past_nested_node"
+file = "shared/org/tests/semantics/items.org"
+detail = "sem-items-file:"
+reason = "mae-kb's body ran on past the first node nested in the element (a child headline node or a list-item node), so writing it would rewrite that node, its drawer and its :ID:. mae-org's body stops at the first nested node (F3: two bodies never overlap)."
+test = "an_items_body_ends_at_the_first_nested_node"
+
+[[divergence]]
+what = "body"
+class = "body_front_matter+body_past_nested_node"
+file = "shared/org/tests/semantics/items.org"
+detail = "sem-items-heading:"
+reason = "Both of the above: mae-kb's body held the element's front matter and ran past its first nested node."
+test = "a_headlines_body_runs_through_children_without_ids"
+
+[[divergence]]
+what = "body"
+class = "body_front_matter"
+file = "shared/org/tests/semantics/items.org"
+detail = "sem-items-checkbox:"
+reason = "mae-kb's heading and item bodies began at the element's own line, so they held its title line, planning line and property drawer (the :ID: included); mae-org's body is the text after that front matter, the unit ADR-092's write path splices."
+test = "a_headlines_body_runs_through_children_without_ids"
+
+[[divergence]]
+what = "body"
+class = "body_front_matter"
+file = "shared/org/tests/semantics/items.org"
+detail = "sem-items-descriptive:"
+reason = "mae-kb's heading and item bodies began at the element's own line, so they held its title line, planning line and property drawer (the :ID: included); mae-org's body is the text after that front matter, the unit ADR-092's write path splices."
+test = "a_headlines_body_runs_through_children_without_ids"
+
+[[divergence]]
+what = "node"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/items.org"
+detail = "only mae-kb: sem-items-not-props"
+reason = "An id only in an unrendered region (comment block or line, COMMENT or noexport subtree, a drawer Org does not read as properties) is not a node, only a diagnostic (D2, consumer note a). mae-kb read every :PROPERTIES: line it found."
+test = "unrendered_regions_yield_only_diagnostics"
+
+[[divergence]]
+what = "node"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/items.org"
+detail = "only mae-kb: sem-items-paragraph-drawer"
+reason = "An id only in an unrendered region (comment block or line, COMMENT or noexport subtree, a drawer Org does not read as properties) is not a node, only a diagnostic (D2, consumer note a). mae-kb read every :PROPERTIES: line it found."
+test = "unrendered_regions_yield_only_diagnostics"
+
+[[divergence]]
+what = "link"
+class = "ancestor_double_count"
+file = "shared/org/tests/semantics/items.org"
+detail = "from: \"sem-items-heading\", p: Payload { target: \"sem-items-checkbox-link\""
+reason = "A link belongs to the innermost node only. mae-kb's headline body ran to the next headline of the same level, so a child's links were also its parent's."
+test = "a_link_belongs_to_the_innermost_node_only"
+
+[[divergence]]
+what = "node"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/keyword-before-drawer.org"
+detail = "only mae-kb: sem-kw-late-drawer"
+reason = "A property drawer after a keyword is not the file's (Org reads one only at the top), so no file node; mae-kb read any drawer before the first headline."
+test = "keyword_precedence_fixtures"
+
+[[divergence]]
+what = "todo"
+class = "unclassified"
+file = "shared/org/tests/semantics/keyword-precedence.org"
+detail = "sem-kw-file: Some(\"TODO\") vs None"
+reason = "One rule for every file keyword, Org's: document order, the last wins, an empty last value clears. mae-kb ignored an empty #+todo_state, so the earlier TODO survived."
+test = "file_keywords_last_wins_and_an_empty_value_clears"
+
+[[divergence]]
+what = "body"
+class = "body_past_nested_node"
+file = "shared/org/tests/semantics/parent-child-links.org"
+detail = "sem-pc-file:"
+reason = "mae-kb's body ran on past the first node nested in the element (a child headline node or a list-item node), so writing it would rewrite that node, its drawer and its :ID:. mae-org's body stops at the first nested node (F3: two bodies never overlap)."
+test = "an_items_body_ends_at_the_first_nested_node"
+
+[[divergence]]
+what = "body"
+class = "body_front_matter+body_past_nested_node"
+file = "shared/org/tests/semantics/parent-child-links.org"
+detail = "sem-pc-parent:"
+reason = "Both of the above: mae-kb's body held the element's front matter and ran past its first nested node."
+test = "a_headlines_body_runs_through_children_without_ids"
+
+[[divergence]]
+what = "body"
+class = "body_front_matter"
+file = "shared/org/tests/semantics/parent-child-links.org"
+detail = "sem-pc-child:"
+reason = "mae-kb's heading and item bodies began at the element's own line, so they held its title line, planning line and property drawer (the :ID: included); mae-org's body is the text after that front matter, the unit ADR-092's write path splices."
+test = "a_headlines_body_runs_through_children_without_ids"
+
+[[divergence]]
+what = "link"
+class = "ancestor_double_count"
+file = "shared/org/tests/semantics/parent-child-links.org"
+detail = "from: \"sem-pc-parent\", p: Payload { target: \"sem-pc-c\""
+reason = "A link belongs to the innermost node only. mae-kb's headline body ran to the next headline of the same level, so a child's links were also its parent's."
+test = "a_link_belongs_to_the_innermost_node_only"
+
+[[divergence]]
+what = "link"
+class = "ancestor_double_count"
+file = "shared/org/tests/semantics/parent-child-links.org"
+detail = "from: \"sem-pc-parent\", p: Payload { target: \"sem-pc-shared\""
+reason = "A link belongs to the innermost node only. mae-kb's headline body ran to the next headline of the same level, so a child's links were also its parent's."
+test = "a_link_belongs_to_the_innermost_node_only"
+
+[[divergence]]
+what = "link"
+class = "file_link_dedup"
+file = "shared/org/tests/semantics/parent-child-links.org"
+detail = "from: \"sem-pc-file\", p: Payload { target: \"sem-pc-shared\""
+reason = "The file's own link is the file's even when a headline links the same target. mae-kb scanned the whole file for the file node, then dropped every file edge whose target a headline also had."
+test = "a_link_belongs_to_the_innermost_node_only"
+
+[[divergence]]
+what = "body"
+class = "body_past_nested_node"
+file = "shared/org/tests/semantics/properties.org"
+detail = "sem-props-file:"
+reason = "mae-kb's body ran on past the first node nested in the element (a child headline node or a list-item node), so writing it would rewrite that node, its drawer and its :ID:. mae-org's body stops at the first nested node (F3: two bodies never overlap)."
+test = "an_items_body_ends_at_the_first_nested_node"
+
+[[divergence]]
+what = "properties"
+class = "unclassified"
+file = "shared/org/tests/semantics/properties.org"
+detail = "sem-props-heading: EMPTY: only mae-org \"\""
+reason = "KEY+ appends to KEY and an empty value is kept, as in Org; mae-kb stored `multi+` as its own key and dropped empty values."
+test = "property_keys_are_canonical_and_repeats_resolve_like_org"
+
+[[divergence]]
+what = "properties"
+class = "unclassified"
+file = "shared/org/tests/semantics/properties.org"
+detail = "sem-props-heading: MULTI: \"one\" vs \"one two\""
+reason = "KEY+ appends to KEY and an empty value is kept, as in Org; mae-kb stored `multi+` as its own key and dropped empty values."
+test = "property_keys_are_canonical_and_repeats_resolve_like_org"
+
+[[divergence]]
+what = "properties"
+class = "unclassified"
+file = "shared/org/tests/semantics/properties.org"
+detail = "sem-props-heading: multi+: only mae-kb \"two\""
+reason = "KEY+ appends to KEY and an empty value is kept, as in Org; mae-kb stored `multi+` as its own key and dropped empty values."
+test = "property_keys_are_canonical_and_repeats_resolve_like_org"
+
+[[divergence]]
+what = "body"
+class = "body_front_matter"
+file = "shared/org/tests/semantics/properties.org"
+detail = "sem-props-heading:"
+reason = "mae-kb's heading and item bodies began at the element's own line, so they held its title line, planning line and property drawer (the :ID: included); mae-org's body is the text after that front matter, the unit ADR-092's write path splices."
+test = "a_headlines_body_runs_through_children_without_ids"
+
+[[divergence]]
+what = "link"
+class = "unclassified"
+file = "shared/org/tests/semantics/split-orders.org"
+detail = "only mae-kb: Edge { from: \"sem-split-file\", p: Payload { target: \"sem-split-a|b\", fragment: None, rel: \"references\", weight: \"1\", confidence: \"1\", attrs: [] } }"
+reason = "In [[a|b][c]] the tree's path is `a|b` and the store form's `|` ends the target: `a`. mae-kb took `a|b`, an id that can never exist."
+test = "the_three_old_split_orders_and_the_chosen_one"
+
+[[divergence]]
+what = "link"
+class = "unclassified"
+file = "shared/org/tests/semantics/split-orders.org"
+detail = "only mae-org: Edge { from: \"sem-split-file\", p: Payload { target: \"sem-split-a\", fragment: None, rel: \"references\", weight: \"1\", confidence: \"1\", attrs: [] } }"
+reason = "In [[a|b][c]] the tree's path is `a|b` and the store form's `|` ends the target: `a`. mae-kb took `a|b`, an id that can never exist."
+test = "the_three_old_split_orders_and_the_chosen_one"
+
+[[divergence]]
+what = "title"
+class = "title_matches_emacs"
+file = "shared/org/tests/semantics/titles.org"
+detail = "sem-title-file:"
+reason = "mae-org's title is Org's own plain-text reading of it (conformance/semantics-titles.tsv, generated by Emacs): emphasis delimiters dropped, a link reads as its description or path. mae-kb kept the raw markup."
+test = "titles_are_plain_text"
+
+[[divergence]]
+what = "body"
+class = "body_past_nested_node"
+file = "shared/org/tests/semantics/titles.org"
+detail = "sem-title-file:"
+reason = "mae-kb's body ran on past the first node nested in the element (a child headline node or a list-item node), so writing it would rewrite that node, its drawer and its :ID:. mae-org's body stops at the first nested node (F3: two bodies never overlap)."
+test = "an_items_body_ends_at_the_first_nested_node"
+
+[[divergence]]
+what = "title"
+class = "title_matches_emacs"
+file = "shared/org/tests/semantics/titles.org"
+detail = "sem-title-heading:"
+reason = "mae-org's title is Org's own plain-text reading of it (conformance/semantics-titles.tsv, generated by Emacs): emphasis delimiters dropped, a link reads as its description or path. mae-kb kept the raw markup."
+test = "titles_are_plain_text"
+
+[[divergence]]
+what = "body"
+class = "body_front_matter"
+file = "shared/org/tests/semantics/titles.org"
+detail = "sem-title-heading:"
+reason = "mae-kb's heading and item bodies began at the element's own line, so they held its title line, planning line and property drawer (the :ID: included); mae-org's body is the text after that front matter, the unit ADR-092's write path splices."
+test = "a_headlines_body_runs_through_children_without_ids"
+
+[[divergence]]
+what = "title"
+class = "title_matches_emacs"
+file = "shared/org/tests/semantics/titles.org"
+detail = "sem-title-bare-heading:"
+reason = "mae-org's title is Org's own plain-text reading of it (conformance/semantics-titles.tsv, generated by Emacs): emphasis delimiters dropped, a link reads as its description or path. mae-kb kept the raw markup."
+test = "titles_are_plain_text"
+
+[[divergence]]
+what = "body"
+class = "body_front_matter"
+file = "shared/org/tests/semantics/titles.org"
+detail = "sem-title-bare-heading:"
+reason = "mae-kb's heading and item bodies began at the element's own line, so they held its title line, planning line and property drawer (the :ID: included); mae-org's body is the text after that front matter, the unit ADR-092's write path splices."
+test = "a_headlines_body_runs_through_children_without_ids"
+
+[[divergence]]
+what = "body"
+class = "body_front_matter"
+file = "shared/org/tests/semantics/titles.org"
+detail = "sem-title-objects:"
+reason = "mae-kb's heading and item bodies began at the element's own line, so they held its title line, planning line and property drawer (the :ID: included); mae-org's body is the text after that front matter, the unit ADR-092's write path splices."
+test = "a_headlines_body_runs_through_children_without_ids"
+
+[[divergence]]
+what = "body"
+class = "body_past_nested_node"
+file = "shared/org/tests/semantics/todo-in-file.org"
+detail = "sem-todo-file:"
+reason = "mae-kb's body ran on past the first node nested in the element (a child headline node or a list-item node), so writing it would rewrite that node, its drawer and its :ID:. mae-org's body stops at the first nested node (F3: two bodies never overlap)."
+test = "an_items_body_ends_at_the_first_nested_node"
+
+[[divergence]]
+what = "title"
+class = "in_file_todo"
+file = "shared/org/tests/semantics/todo-in-file.org"
+detail = "sem-todo-open:"
+reason = "TODO keywords are declared data (D4): an in-file #+TODO replaces the configured ones, as in Org. mae-kb hard-coded six keywords."
+test = "todo_keywords_are_declared_data"
+
+[[divergence]]
+what = "todo"
+class = "in_file_todo"
+file = "shared/org/tests/semantics/todo-in-file.org"
+detail = "sem-todo-open: None vs Some(\"OPEN\")"
+reason = "As above: OPEN is a keyword in this file, NEXT is not."
+test = "todo_keywords_are_declared_data"
+
+[[divergence]]
+what = "priority"
+class = "in_file_todo"
+file = "shared/org/tests/semantics/todo-in-file.org"
+detail = "sem-todo-open:"
+reason = "As above: mae-kb did not see the keyword, so it did not reach the priority cookie after it."
+test = "todo_keywords_are_declared_data"
+
+[[divergence]]
+what = "body"
+class = "body_front_matter"
+file = "shared/org/tests/semantics/todo-in-file.org"
+detail = "sem-todo-open:"
+reason = "mae-kb's heading and item bodies began at the element's own line, so they held its title line, planning line and property drawer (the :ID: included); mae-org's body is the text after that front matter, the unit ADR-092's write path splices."
+test = "a_headlines_body_runs_through_children_without_ids"
+
+[[divergence]]
+what = "title"
+class = "in_file_todo"
+file = "shared/org/tests/semantics/todo-in-file.org"
+detail = "sem-todo-next:"
+reason = "TODO keywords are declared data (D4): an in-file #+TODO replaces the configured ones, as in Org. mae-kb hard-coded six keywords."
+test = "todo_keywords_are_declared_data"
+
+[[divergence]]
+what = "todo"
+class = "in_file_todo"
+file = "shared/org/tests/semantics/todo-in-file.org"
+detail = "sem-todo-next: Some(\"NEXT\") vs None"
+reason = "As above: OPEN is a keyword in this file, NEXT is not."
+test = "todo_keywords_are_declared_data"
+
+[[divergence]]
+what = "body"
+class = "body_front_matter"
+file = "shared/org/tests/semantics/todo-in-file.org"
+detail = "sem-todo-next:"
+reason = "mae-kb's heading and item bodies began at the element's own line, so they held its title line, planning line and property drawer (the :ID: included); mae-org's body is the text after that front matter, the unit ADR-092's write path splices."
+test = "a_headlines_body_runs_through_children_without_ids"
+
+[[divergence]]
+what = "body"
+class = "body_past_nested_node"
+file = "shared/org/tests/semantics/transclusions.org"
+detail = "sem-tr-file:"
+reason = "mae-kb's body ran on past the first node nested in the element (a child headline node or a list-item node), so writing it would rewrite that node, its drawer and its :ID:. mae-org's body stops at the first nested node (F3: two bodies never overlap)."
+test = "an_items_body_ends_at_the_first_nested_node"
+
+[[divergence]]
+what = "body"
+class = "body_front_matter"
+file = "shared/org/tests/semantics/transclusions.org"
+detail = "sem-tr-heading:"
+reason = "mae-kb's heading and item bodies began at the element's own line, so they held its title line, planning line and property drawer (the :ID: included); mae-org's body is the text after that front matter, the unit ADR-092's write path splices."
+test = "a_headlines_body_runs_through_children_without_ids"
+
+[[divergence]]
+what = "transclusion"
+class = "innermost_node"
+file = "shared/org/tests/semantics/transclusions.org"
+detail = "(\"sem-tr-file\", \"sem-tr-member-d\", \"content\") -> sem-tr-heading"
+reason = "A #+TRANSCLUDE under a headline node belongs to that node; mae-kb gave every directive in the file to the file node."
+test = "a_link_belongs_to_the_innermost_node_only"
+
+[[divergence]]
+what = "transclusion"
+class = "verbatim_block"
+file = "shared/org/tests/semantics/transclusions.org"
+detail = "only mae-kb: (\"sem-tr-file\", \"sem-tr-in-example\", \"content\")"
+reason = "A #+TRANSCLUDE line inside an example or src block is example text, not a directive; mae-kb scanned every line of the file."
+test = "verbatim_text_holds_no_links_or_directives"
+
+[[divergence]]
+what = "transclusion"
+class = "keyword_case"
+file = "shared/org/tests/semantics/transclusions.org"
+detail = "only mae-org: (\"sem-tr-file\", \"sem-tr-member-c\", \"transclusion\")"
+reason = "Org keywords are case-insensitive (#+Transclude:); mae-kb matched only TRANSCLUDE and transclude."
+test = "transclude_keywords_are_case_insensitive"
+
+[[divergence]]
+what = "body"
+class = "body_past_nested_node"
+file = "shared/org/tests/semantics/unrendered.org"
+detail = "sem-unr-file:"
+reason = "mae-kb's body ran on past the first node nested in the element (a child headline node or a list-item node), so writing it would rewrite that node, its drawer and its :ID:. mae-org's body stops at the first nested node (F3: two bodies never overlap)."
+test = "an_items_body_ends_at_the_first_nested_node"
+
+[[divergence]]
+what = "node"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/unrendered.org"
+detail = "only mae-kb: sem-unr-comment-heading"
+reason = "An id only in an unrendered region (comment block or line, COMMENT or noexport subtree, a drawer Org does not read as properties) is not a node, only a diagnostic (D2, consumer note a). mae-kb read every :PROPERTIES: line it found."
+test = "unrendered_regions_yield_only_diagnostics"
+
+[[divergence]]
+what = "node"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/unrendered.org"
+detail = "only mae-kb: sem-unr-noexport-heading"
+reason = "An id only in an unrendered region (comment block or line, COMMENT or noexport subtree, a drawer Org does not read as properties) is not a node, only a diagnostic (D2, consumer note a). mae-kb read every :PROPERTIES: line it found."
+test = "unrendered_regions_yield_only_diagnostics"
+
+[[divergence]]
+what = "node"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/unrendered.org"
+detail = "only mae-kb: sem-unr-noexport-child"
+reason = "An id only in an unrendered region (comment block or line, COMMENT or noexport subtree, a drawer Org does not read as properties) is not a node, only a diagnostic (D2, consumer note a). mae-kb read every :PROPERTIES: line it found."
+test = "unrendered_regions_yield_only_diagnostics"
+
+[[divergence]]
+what = "body"
+class = "body_front_matter"
+file = "shared/org/tests/semantics/unrendered.org"
+detail = "sem-unr-visible-heading:"
+reason = "mae-kb's heading and item bodies began at the element's own line, so they held its title line, planning line and property drawer (the :ID: included); mae-org's body is the text after that front matter, the unit ADR-092's write path splices."
+test = "a_headlines_body_runs_through_children_without_ids"
+
+[[divergence]]
+what = "node"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/unrendered.org"
+detail = "only mae-kb: sem-unr-in-comment-block"
+reason = "An id only in an unrendered region (comment block or line, COMMENT or noexport subtree, a drawer Org does not read as properties) is not a node, only a diagnostic (D2, consumer note a). mae-kb read every :PROPERTIES: line it found."
+test = "unrendered_regions_yield_only_diagnostics"
+
+[[divergence]]
+what = "link"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/unrendered.org"
+detail = "from: \"sem-unr-file\", p: Payload { target: \"sem-unr-comment-line-link\""
+reason = "A link in an unrendered region is no edge, only a diagnostic (D2)."
+test = "unrendered_regions_yield_only_diagnostics"
+
+[[divergence]]
+what = "link"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/unrendered.org"
+detail = "from: \"sem-unr-file\", p: Payload { target: \"sem-unr-logbook-link\""
+reason = "A link in an unrendered region is no edge, only a diagnostic (D2)."
+test = "unrendered_regions_yield_only_diagnostics"
+
+[[divergence]]
+what = "link"
+class = "verbatim_block"
+file = "shared/org/tests/semantics/unrendered.org"
+detail = "from: \"sem-unr-file\", p: Payload { target: \"sem-unr-fixed-width-link\""
+reason = "A link in a fixed-width line is verbatim text in Org; mae-kb's code-range scan only knew src/example/export blocks."
+test = "verbatim_text_holds_no_links_or_directives"
+
+[[divergence]]
+what = "link"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/unrendered.org"
+detail = "from: \"sem-unr-comment-heading\", p: Payload { target: \"sem-unr-comment-heading-link\""
+reason = "A link in an unrendered region is no edge, only a diagnostic (D2)."
+test = "unrendered_regions_yield_only_diagnostics"
+
+[[divergence]]
+what = "link"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/unrendered.org"
+detail = "from: \"sem-unr-noexport-heading\", p: Payload { target: \"sem-unr-noexport-link\""
+reason = "A link in an unrendered region is no edge, only a diagnostic (D2)."
+test = "unrendered_regions_yield_only_diagnostics"
+
+[[divergence]]
+what = "link"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/unrendered.org"
+detail = "from: \"sem-unr-visible-heading\", p: Payload { target: \"sem-unr-comment-block-link\""
+reason = "A link in an unrendered region is no edge, only a diagnostic (D2)."
+test = "unrendered_regions_yield_only_diagnostics"
+
+[[divergence]]
+what = "link"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/unrendered.org"
+detail = "from: \"sem-unr-visible-heading\", p: Payload { target: \"sem-unr-footnote-link\""
+reason = "A link in an unrendered region is no edge, only a diagnostic (D2)."
+test = "unrendered_regions_yield_only_diagnostics"
+
+[[divergence]]
+what = "link"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/unrendered.org"
+detail = "from: \"sem-unr-in-comment-block\", p: Payload { target: \"sem-unr-comment-block-link\""
+reason = "A link in an unrendered region is no edge, only a diagnostic (D2)."
+test = "unrendered_regions_yield_only_diagnostics"
+
+[[divergence]]
+what = "link"
+class = "unrendered_region"
+file = "shared/org/tests/semantics/unrendered.org"
+detail = "from: \"sem-unr-in-comment-block\", p: Payload { target: \"sem-unr-footnote-link\""
+reason = "A link in an unrendered region is no edge, only a diagnostic (D2)."
+test = "unrendered_regions_yield_only_diagnostics"
+
+[[divergence]]
+what = "title"
+class = "title_matches_emacs"
+file = "shared/org/tests/semantics/zeroth-section-drawers.org"
+detail = "sem-zeroth-item:"
+reason = "As above: mae-kb gave the item the file's title; mae-org's is Emacs's."
+test = "only_the_leading_property_drawer_is_the_files"
+
+[[divergence]]
+what = "body"
+class = "unclassified"
+file = "shared/org/tests/semantics/zeroth-section-drawers.org"
+detail = "sem-zeroth-item: 232 bytes vs 41 bytes"
+reason = "As above: mae-kb took the item's body from the whole zeroth section; the item's body is its own text after its drawer."
+test = "only_the_leading_property_drawer_is_the_files"
+
+[[divergence]]
+what = "node"
+class = "unclassified"
+file = "shared/org/tests/semantics/zeroth-section-drawers.org"
+detail = "only mae-org: sem-zeroth-file"
+reason = "Only the zeroth section's leading property drawer is the file's. mae-kb's header scan read every PROPERTIES drawer before the first headline, so a list item's drawer replaced the file's id and the file node vanished."
+test = "only_the_leading_property_drawer_is_the_files"
+
+
+[[divergence]]
+what = "link"
+class = "plain_link"
+file = "shared/org/tests/semantics/external-links.org"
+detail = "from: \"sem-external-file\", p: Payload { target: \"sem-external-plain\""
+reason = "A plain link (`type:path` in prose, no brackets) is a link in Org, and Org registers `id` (org-modules), so `id:sem-external-plain` is an id link; mae-kb read bracket links only. The class requires a plain link making exactly this edge (same source, same payload)."
+test = "plain_id_links_are_links"
+
+# ---------------------------------------------------------------- KEY+ ids (review F9)
+
+[[divergence]]
+what = "node"
+class = "property_value"
+file = "shared/org/tests/semantics/id-append.org"
+detail = "only mae-kb: sem-idplus-file"
+reason = "An id is read as org-entry-get reads it: the last :ID: line, then every :ID+: value, joined with a space (the Emacs oracle agrees: semantics-titles.tsv). mae-kb ignored :ID+:, so each node has another id there."
+test = "key_plus_reads_as_org_entry_get"
+
+[[divergence]]
+what = "node"
+class = "property_value"
+file = "shared/org/tests/semantics/id-append.org"
+detail = "only mae-kb: sem-idplus-heading"
+reason = "An id is read as org-entry-get reads it: the last :ID: line, then every :ID+: value, joined with a space (the Emacs oracle agrees: semantics-titles.tsv). mae-kb ignored :ID+:, so each node has another id there."
+test = "key_plus_reads_as_org_entry_get"
+
+[[divergence]]
+what = "node"
+class = "not_a_link_in_org"
+file = "shared/org/tests/semantics/id-append.org"
+detail = "only mae-kb: sem-idplus-item"
+reason = "An id is read as org-entry-get reads it: the last :ID: line, then every :ID+: value, joined with a space (the Emacs oracle agrees: semantics-titles.tsv). mae-kb ignored :ID+:, so each node has another id there."
+test = "key_plus_reads_as_org_entry_get"
+
+[[divergence]]
+what = "node"
+class = "unclassified"
+file = "shared/org/tests/semantics/id-append.org"
+detail = "only mae-org: sem-idplus-file part"
+reason = "An id is read as org-entry-get reads it: the last :ID: line, then every :ID+: value, joined with a space (the Emacs oracle agrees: semantics-titles.tsv). mae-kb ignored :ID+:, so each node has another id there."
+test = "key_plus_reads_as_org_entry_get"
+
+[[divergence]]
+what = "node"
+class = "unclassified"
+file = "shared/org/tests/semantics/id-append.org"
+detail = "only mae-org: sem-idplus-heading tail"
+reason = "An id is read as org-entry-get reads it: the last :ID: line, then every :ID+: value, joined with a space (the Emacs oracle agrees: semantics-titles.tsv). mae-kb ignored :ID+:, so each node has another id there."
+test = "key_plus_reads_as_org_entry_get"
+
+[[divergence]]
+what = "node"
+class = "unclassified"
+file = "shared/org/tests/semantics/id-append.org"
+detail = "only mae-org: sem-idplus-item more"
+reason = "An id is read as org-entry-get reads it: the last :ID: line, then every :ID+: value, joined with a space (the Emacs oracle agrees: semantics-titles.tsv). mae-kb ignored :ID+:, so each node has another id there."
+test = "key_plus_reads_as_org_entry_get"

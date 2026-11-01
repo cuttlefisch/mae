@@ -1,0 +1,2 @@
+#+MACRO: id $1
+A [cite:@k;{{{id(QZfQZ)}}} @j] B.

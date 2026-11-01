@@ -1,0 +1,5 @@
+#+MACRO: b #+begin_comment
+{{{b}}}
+{{{results(#+end_comment)}}}
+SECRET
+#+end_comment

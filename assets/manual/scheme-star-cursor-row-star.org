@@ -2,7 +2,7 @@
 :ID: scheme:*cursor-row*
 :KIND: scheme_api
 :END:
-#+title: Scheme: *cursor-row*
+#+title: Scheme: =*cursor-row*=
 #+filetags: :scheme:api:variable:
 
 *Type:* integer

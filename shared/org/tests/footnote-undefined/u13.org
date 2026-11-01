@@ -1,0 +1,5 @@
+X[fn:a]
+
+[fn:a] def [fn:b]
+
+[fn:b] in b [fn:Y]

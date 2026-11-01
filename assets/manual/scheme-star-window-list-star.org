@@ -2,7 +2,7 @@
 :ID: scheme:*window-list*
 :KIND: scheme_api
 :END:
-#+title: Scheme: *window-list*
+#+title: Scheme: =*window-list*=
 #+filetags: :scheme:api:variable:
 
 *Type:* list of (id buffer-idx cursor-row cursor-col)

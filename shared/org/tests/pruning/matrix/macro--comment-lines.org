@@ -1,0 +1,4 @@
+* Visible
+Use {{{m}}} QZvQZ.
+
+# #+MACRO: m QZsQZ

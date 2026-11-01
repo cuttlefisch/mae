@@ -1,0 +1,4 @@
+#+MACRO: v ** Visible
+* Hidden :noexport:
+{{{v}}}
+SECRET

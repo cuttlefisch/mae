@@ -2,7 +2,7 @@
 :ID: scheme:*buffer-list*
 :KIND: scheme_api
 :END:
-#+title: Scheme: *buffer-list*
+#+title: Scheme: =*buffer-list*=
 #+filetags: :scheme:api:variable:
 
 *Type:* list of (index name kind modified?)

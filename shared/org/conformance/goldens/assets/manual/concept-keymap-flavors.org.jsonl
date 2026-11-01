@@ -1,0 +1,129 @@
+{"type":"#file","bytes":3673,"eol":"unix","unmodified":true}
+{"type":"section","begin":0,"end":408,"contents_begin":0,"contents_end":408,"parent_type":"org-data","parent_begin":0}
+{"type":"property-drawer","begin":0,"end":62,"contents_begin":13,"contents_end":56,"parent_type":"section","parent_begin":0}
+{"type":"node-property","begin":13,"end":41,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"ID","value":"concept:keymap-flavors"}
+{"type":"node-property","begin":41,"end":56,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"KIND","value":"concept"}
+{"type":"keyword","begin":62,"end":106,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"Keymap Flavors & the Leader Keypad"}
+{"type":"keyword","begin":106,"end":182,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":keybindings:modal-editing:non-modal:extensibility:onboarding:"}
+{"type":"paragraph","begin":182,"end":408,"contents_begin":182,"contents_end":407,"parent_type":"section","parent_begin":0}
+{"type":"bold","begin":182,"end":199,"contents_begin":183,"contents_end":197,"parent_type":"paragraph","parent_begin":182}
+{"type":"bold","begin":387,"end":393,"contents_begin":388,"contents_end":391,"parent_type":"paragraph","parent_begin":182}
+{"type":"headline","begin":408,"end":844,"contents_begin":436,"contents_end":844,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"The two shipped flavors","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":436,"end":844,"contents_begin":436,"contents_end":844,"parent_type":"headline","parent_begin":408}
+{"type":"table","begin":436,"end":699,"contents_begin":436,"contents_end":698,"parent_type":"section","parent_begin":436}
+{"type":"table-row","begin":436,"end":492,"contents_begin":437,"contents_end":491,"parent_type":"table","parent_begin":436}
+{"type":"table-cell","begin":437,"end":446,"contents_begin":438,"contents_end":444,"parent_type":"table-row","parent_begin":436}
+{"type":"table-cell","begin":446,"end":454,"contents_begin":447,"contents_end":452,"parent_type":"table-row","parent_begin":436}
+{"type":"table-cell","begin":454,"end":469,"contents_begin":455,"contents_end":467,"parent_type":"table-row","parent_begin":436}
+{"type":"table-cell","begin":469,"end":485,"contents_begin":470,"contents_end":483,"parent_type":"table-row","parent_begin":436}
+{"type":"table-cell","begin":485,"end":491,"contents_begin":486,"contents_end":489,"parent_type":"table-row","parent_begin":436}
+{"type":"table-row","begin":492,"end":548,"contents_begin":null,"contents_end":null,"parent_type":"table","parent_begin":436}
+{"type":"table-row","begin":548,"end":624,"contents_begin":549,"contents_end":623,"parent_type":"table","parent_begin":436}
+{"type":"table-cell","begin":549,"end":568,"contents_begin":550,"contents_end":566,"parent_type":"table-row","parent_begin":548}
+{"type":"code","begin":550,"end":557,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":549}
+{"type":"table-cell","begin":568,"end":588,"contents_begin":569,"contents_end":586,"parent_type":"table-row","parent_begin":548}
+{"type":"table-cell","begin":588,"end":597,"contents_begin":589,"contents_end":595,"parent_type":"table-row","parent_begin":548}
+{"type":"table-cell","begin":597,"end":605,"contents_begin":598,"contents_end":603,"parent_type":"table-row","parent_begin":548}
+{"type":"code","begin":598,"end":603,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":597}
+{"type":"table-cell","begin":605,"end":623,"contents_begin":606,"contents_end":621,"parent_type":"table-row","parent_begin":548}
+{"type":"table-row","begin":624,"end":698,"contents_begin":625,"contents_end":697,"parent_type":"table","parent_begin":436}
+{"type":"table-cell","begin":625,"end":638,"contents_begin":626,"contents_end":636,"parent_type":"table-row","parent_begin":624}
+{"type":"code","begin":626,"end":636,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":625}
+{"type":"table-cell","begin":638,"end":656,"contents_begin":639,"contents_end":654,"parent_type":"table-row","parent_begin":624}
+{"type":"table-cell","begin":656,"end":665,"contents_begin":657,"contents_end":663,"parent_type":"table-row","parent_begin":624}
+{"type":"table-cell","begin":665,"end":673,"contents_begin":666,"contents_end":671,"parent_type":"table-row","parent_begin":624}
+{"type":"code","begin":666,"end":671,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":665}
+{"type":"table-cell","begin":673,"end":697,"contents_begin":674,"contents_end":695,"parent_type":"table-row","parent_begin":624}
+{"type":"paragraph","begin":699,"end":844,"contents_begin":699,"contents_end":843,"parent_type":"section","parent_begin":436}
+{"type":"bold","begin":708,"end":733,"contents_begin":709,"contents_end":731,"parent_type":"paragraph","parent_begin":699}
+{"type":"bold","begin":783,"end":791,"contents_begin":784,"contents_end":789,"parent_type":"paragraph","parent_begin":699}
+{"type":"headline","begin":844,"end":1689,"contents_begin":897,"contents_end":1689,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"The leader keypad (God-Mode / Meow-Keypad model)","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":897,"end":1689,"contents_begin":897,"contents_end":1689,"parent_type":"headline","parent_begin":844}
+{"type":"paragraph","begin":897,"end":1139,"contents_begin":897,"contents_end":1138,"parent_type":"section","parent_begin":897}
+{"type":"bold","begin":926,"end":944,"contents_begin":927,"contents_end":943,"parent_type":"paragraph","parent_begin":897}
+{"type":"code","begin":1024,"end":1035,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":897}
+{"type":"code","begin":1098,"end":1104,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":897}
+{"type":"code","begin":1106,"end":1112,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":897}
+{"type":"plain-list","begin":1139,"end":1441,"contents_begin":1139,"contents_end":1440,"parent_type":"section","parent_begin":897}
+{"type":"item","begin":1139,"end":1202,"contents_begin":1141,"contents_end":1202,"parent_type":"plain-list","parent_begin":1139,"bullet":"- "}
+{"type":"paragraph","begin":1141,"end":1202,"contents_begin":1141,"contents_end":1202,"parent_type":"item","parent_begin":1139}
+{"type":"code","begin":1144,"end":1150,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1141}
+{"type":"code","begin":1152,"end":1158,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1141}
+{"type":"item","begin":1202,"end":1440,"contents_begin":1204,"contents_end":1440,"parent_type":"plain-list","parent_begin":1139,"bullet":"- "}
+{"type":"paragraph","begin":1204,"end":1440,"contents_begin":1204,"contents_end":1440,"parent_type":"item","parent_begin":1202}
+{"type":"code","begin":1207,"end":1217,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1204}
+{"type":"code","begin":1219,"end":1225,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1204}
+{"type":"code","begin":1332,"end":1338,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1204}
+{"type":"code","begin":1354,"end":1361,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1204}
+{"type":"code","begin":1398,"end":1406,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1204}
+{"type":"paragraph","begin":1441,"end":1584,"contents_begin":1441,"contents_end":1583,"parent_type":"section","parent_begin":897}
+{"type":"bold","begin":1467,"end":1474,"contents_begin":1468,"contents_end":1473,"parent_type":"paragraph","parent_begin":1441}
+{"type":"paragraph","begin":1584,"end":1689,"contents_begin":1584,"contents_end":1688,"parent_type":"section","parent_begin":897}
+{"type":"code","begin":1584,"end":1595,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1584}
+{"type":"code","begin":1627,"end":1633,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1584}
+{"type":"code","begin":1639,"end":1645,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1584}
+{"type":"code","begin":1651,"end":1657,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1584}
+{"type":"code","begin":1663,"end":1669,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1584}
+{"type":"code","begin":1675,"end":1681,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1584}
+{"type":"headline","begin":1689,"end":2329,"contents_begin":1715,"contents_end":2329,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Selecting & switching","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1715,"end":2329,"contents_begin":1715,"contents_end":2329,"parent_type":"headline","parent_begin":1689}
+{"type":"plain-list","begin":1715,"end":2329,"contents_begin":1715,"contents_end":2328,"parent_type":"section","parent_begin":1715}
+{"type":"item","begin":1715,"end":1893,"contents_begin":1717,"contents_end":1893,"parent_type":"plain-list","parent_begin":1715,"bullet":"- "}
+{"type":"paragraph","begin":1717,"end":1893,"contents_begin":1717,"contents_end":1893,"parent_type":"item","parent_begin":1715}
+{"type":"bold","begin":1741,"end":1762,"contents_begin":1742,"contents_end":1760,"parent_type":"paragraph","parent_begin":1717}
+{"type":"code","begin":1786,"end":1808,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1717}
+{"type":"item","begin":1893,"end":2024,"contents_begin":1895,"contents_end":2024,"parent_type":"plain-list","parent_begin":1715,"bullet":"- "}
+{"type":"paragraph","begin":1895,"end":2024,"contents_begin":1895,"contents_end":2024,"parent_type":"item","parent_begin":1893}
+{"type":"code","begin":1911,"end":1954,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1895}
+{"type":"code","begin":1957,"end":1967,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1895}
+{"type":"code","begin":1997,"end":2010,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1895}
+{"type":"item","begin":2024,"end":2188,"contents_begin":2026,"contents_end":2188,"parent_type":"plain-list","parent_begin":1715,"bullet":"- "}
+{"type":"paragraph","begin":2026,"end":2188,"contents_begin":2026,"contents_end":2188,"parent_type":"item","parent_begin":2024}
+{"type":"code","begin":2032,"end":2062,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2026}
+{"type":"item","begin":2188,"end":2328,"contents_begin":2190,"contents_end":2328,"parent_type":"plain-list","parent_begin":1715,"bullet":"- "}
+{"type":"paragraph","begin":2190,"end":2328,"contents_begin":2190,"contents_end":2328,"parent_type":"item","parent_begin":2188}
+{"type":"code","begin":2190,"end":2205,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2190}
+{"type":"code","begin":2206,"end":2215,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2190}
+{"type":"code","begin":2217,"end":2225,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2190}
+{"type":"code","begin":2298,"end":2311,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2190}
+{"type":"headline","begin":2329,"end":3072,"contents_begin":2363,"contents_end":3072,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Extending (no kernel patches)","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":2363,"end":3072,"contents_begin":2363,"contents_end":3072,"parent_type":"headline","parent_begin":2329}
+{"type":"plain-list","begin":2363,"end":3072,"contents_begin":2363,"contents_end":3071,"parent_type":"section","parent_begin":2363}
+{"type":"item","begin":2363,"end":2568,"contents_begin":2365,"contents_end":2568,"parent_type":"plain-list","parent_begin":2363,"bullet":"- "}
+{"type":"paragraph","begin":2365,"end":2452,"contents_begin":2365,"contents_end":2452,"parent_type":"item","parent_begin":2363}
+{"type":"bold","begin":2365,"end":2386,"contents_begin":2366,"contents_end":2384,"parent_type":"paragraph","parent_begin":2365}
+{"type":"src-block","begin":2452,"end":2568,"contents_begin":null,"contents_end":null,"parent_type":"item","parent_begin":2363,"language":"scheme"}
+{"type":"item","begin":2568,"end":2835,"contents_begin":2570,"contents_end":2835,"parent_type":"plain-list","parent_begin":2363,"bullet":"- "}
+{"type":"paragraph","begin":2570,"end":2835,"contents_begin":2570,"contents_end":2835,"parent_type":"item","parent_begin":2568}
+{"type":"bold","begin":2570,"end":2583,"contents_begin":2571,"contents_end":2581,"parent_type":"paragraph","parent_begin":2570}
+{"type":"code","begin":2594,"end":2610,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2570}
+{"type":"code","begin":2630,"end":2645,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2570}
+{"type":"code","begin":2653,"end":2668,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2570}
+{"type":"code","begin":2690,"end":2707,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2570}
+{"type":"code","begin":2744,"end":2754,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2570}
+{"type":"code","begin":2780,"end":2809,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2570}
+{"type":"code","begin":2814,"end":2833,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2570}
+{"type":"item","begin":2835,"end":3071,"contents_begin":2837,"contents_end":3071,"parent_type":"plain-list","parent_begin":2363,"bullet":"- "}
+{"type":"paragraph","begin":2837,"end":3071,"contents_begin":2837,"contents_end":3071,"parent_type":"item","parent_begin":2835}
+{"type":"bold","begin":2837,"end":2868,"contents_begin":2838,"contents_end":2866,"parent_type":"paragraph","parent_begin":2837}
+{"type":"code","begin":2879,"end":2892,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2837}
+{"type":"code","begin":2894,"end":2910,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2837}
+{"type":"code","begin":2940,"end":2955,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2837}
+{"type":"code","begin":2957,"end":2981,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2837}
+{"type":"code","begin":3001,"end":3016,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2837}
+{"type":"code","begin":3030,"end":3039,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2837}
+{"type":"link","begin":3052,"end":3069,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2837,"link_type":"fuzzy","path":"concept:hooks","raw_link":"concept:hooks","format":"bracket"}
+{"type":"headline","begin":3072,"end":3673,"contents_begin":3089,"contents_end":3673,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Architecture","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":3089,"end":3673,"contents_begin":3089,"contents_end":3673,"parent_type":"headline","parent_begin":3072}
+{"type":"paragraph","begin":3089,"end":3542,"contents_begin":3089,"contents_end":3541,"parent_type":"section","parent_begin":3089}
+{"type":"code","begin":3142,"end":3151,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":3089}
+{"type":"code","begin":3185,"end":3201,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":3089}
+{"type":"code","begin":3245,"end":3251,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":3089}
+{"type":"code","begin":3311,"end":3326,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":3089}
+{"type":"paragraph","begin":3542,"end":3673,"contents_begin":3542,"contents_end":3673,"parent_type":"section","parent_begin":3089}
+{"type":"link","begin":3552,"end":3569,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":3542,"link_type":"fuzzy","path":"concept:hooks","raw_link":"concept:hooks","format":"bracket"}
+{"type":"link","begin":3571,"end":3601,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":3542,"link_type":"fuzzy","path":"concept:keymap-inheritance","raw_link":"concept:keymap-inheritance","format":"bracket"}
+{"type":"link","begin":3603,"end":3619,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":3542,"link_type":"fuzzy","path":"concept:mode","raw_link":"concept:mode","format":"bracket"}
+{"type":"link","begin":3621,"end":3640,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":3542,"link_type":"fuzzy","path":"concept:modules","raw_link":"concept:modules","format":"bracket"}
+{"type":"link","begin":3642,"end":3661,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":3542,"link_type":"fuzzy","path":"term:leader-key","raw_link":"term:leader-key","format":"bracket"}
+{"type":"link","begin":3663,"end":3672,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":3542,"link_type":"fuzzy","path":"index","raw_link":"index","format":"bracket"}

@@ -1,0 +1,4 @@
+- item
+  :PROPERTIES:
+  :P: ref [fn:Y]
+  :END:

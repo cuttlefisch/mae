@@ -1,0 +1,12 @@
+#+SELECT_TAGS: sel
+* Visible :sel:
+#+CALL: f()
+
+QZvQZ
+* Pruned
+#+NAME: f
+#+begin_src elisp :exports both
+(+ 1 2)
+#+end_src
+#+RESULTS: f
+: QZsQZ

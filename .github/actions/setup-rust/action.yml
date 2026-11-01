@@ -19,6 +19,10 @@ inputs:
     description: Extra rustup components, comma-separated (e.g. "clippy, rustfmt")
     required: false
     default: ""
+  targets:
+    description: Extra compilation targets, comma-separated (e.g. "wasm32-unknown-unknown")
+    required: false
+    default: ""
   workspaces:
     description: >
       Passed through to Swatinem/rust-cache's `workspaces` input. Multi-line
@@ -102,6 +106,7 @@ runs:
       with:
         toolchain: ${{ inputs.toolchain }}
         components: ${{ inputs.components }}
+        targets: ${{ inputs.targets }}
     - uses: Swatinem/rust-cache@v2
       with:
         workspaces: ${{ inputs.workspaces }}

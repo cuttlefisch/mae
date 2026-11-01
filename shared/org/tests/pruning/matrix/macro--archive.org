@@ -1,0 +1,4 @@
+* Visible
+Use {{{m}}} QZvQZ.
+* Pruned :ARCHIVE:
+#+MACRO: m QZsQZ

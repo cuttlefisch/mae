@@ -1,0 +1,7 @@
+* Visible
+See [[tbl]] QZvQZ.
+
+:NOTES:
+#+NAME: tbl
+| QZsQZ |
+:END:

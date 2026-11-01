@@ -1,0 +1,6 @@
+#+MACRO: m {equation}
+#+SECRETKW: SECRETLEAKB
+
+\begin{{{m}}}
+x {{{keyword(SECRETKW)}}}
+\end{equation}

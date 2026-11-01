@@ -1,0 +1,63 @@
+:PROPERTIES:
+:ID: sem-unr-file
+:END:
+#+title: Unrendered regions contribute nothing
+
+Rendered: [[id:sem-unr-visible]].
+
+# :PROPERTIES:
+# :ID: sem-unr-commented-drawer
+# :END:
+# [[id:sem-unr-comment-line-link]]
+
+#+begin_export html
+<a href="x">[[id:sem-unr-export-link]]</a>
+#+end_export
+
+:LOGBOOK:
+- Note taken, see [[id:sem-unr-logbook-link]]
+:END:
+
+#+begin_example
+[[id:sem-unr-example-link]]
+#+end_example
+
+#+begin_src org
+[[id:sem-unr-src-link]]
+#+end_src
+
+Verbatim =[[id:sem-unr-verbatim-link]]= and code ~[[id:sem-unr-code-link]]~.
+
+: [[id:sem-unr-fixed-width-link]]
+
+* COMMENT A commented subtree
+:PROPERTIES:
+:ID: sem-unr-comment-heading
+:END:
+[[id:sem-unr-comment-heading-link]]
+
+* Excluded :noexport:
+:PROPERTIES:
+:ID: sem-unr-noexport-heading
+:END:
+[[id:sem-unr-noexport-link]]
+
+** Its child
+:PROPERTIES:
+:ID: sem-unr-noexport-child
+:END:
+
+* Visible heading
+:PROPERTIES:
+:ID: sem-unr-visible-heading
+:END:
+Body.
+
+#+begin_comment
+:PROPERTIES:
+:ID: sem-unr-in-comment-block
+:END:
+[[id:sem-unr-comment-block-link]]
+#+end_comment
+
+[fn:orphan] An unreferenced footnote with [[id:sem-unr-footnote-link]].

@@ -1,0 +1,10 @@
+#+EXCLUDE_TAGS: ex
+* Visible
+#+NAME: f
+#+begin_src none
+#+end_src
+
+QZvQZ
+* Pruned :ex:
+#+RESULTS: f
+: QZsQZ

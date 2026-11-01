@@ -1,0 +1,15 @@
+| a | b |
+|---+---|
+| 1 | 2 |
+#+TBLFM: @2$2=1
+#+TBLFM: second
+
+text
++---+---+
+| x | y |
++---+---+
+
++--+
++ not table
+|starts a row
+  | indented row

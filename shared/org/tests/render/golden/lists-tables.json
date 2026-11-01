@@ -1,0 +1,734 @@
+{
+  "body": {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "Lists"
+              }
+            ],
+            "properties": {
+              "id": "h-lists"
+            },
+            "tagName": "h1",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "unordered"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "children": [
+                              {
+                                "type": "text",
+                                "value": "nested\n    continued"
+                              }
+                            ],
+                            "properties": {},
+                            "tagName": "p",
+                            "type": "element"
+                          }
+                        ],
+                        "properties": {},
+                        "tagName": "li",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "ul",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "li",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "[X]"
+                      }
+                    ],
+                    "properties": {
+                      "className": [
+                        "org-checkbox"
+                      ]
+                    },
+                    "tagName": "code",
+                    "type": "element"
+                  },
+                  {
+                    "type": "text",
+                    "value": " "
+                  },
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "done"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "li",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "[ ]"
+                      }
+                    ],
+                    "properties": {
+                      "className": [
+                        "org-checkbox"
+                      ]
+                    },
+                    "tagName": "code",
+                    "type": "element"
+                  },
+                  {
+                    "type": "text",
+                    "value": " "
+                  },
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "todo"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "li",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "[-]"
+                      }
+                    ],
+                    "properties": {
+                      "className": [
+                        "org-checkbox"
+                      ]
+                    },
+                    "tagName": "code",
+                    "type": "element"
+                  },
+                  {
+                    "type": "text",
+                    "value": " "
+                  },
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "partial"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "li",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "ordered"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "li",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "counter"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {
+                  "value": "5"
+                },
+                "tagName": "li",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "paren"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "li",
+                "type": "element"
+              }
+            ],
+            "properties": {},
+            "tagName": "ul",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "a. alpha"
+              }
+            ],
+            "properties": {},
+            "tagName": "p",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "term"
+                  }
+                ],
+                "properties": {},
+                "tagName": "dt",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "description"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "dd",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "bold term"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "strong",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "dt",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "second"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "dd",
+                "type": "element"
+              },
+              {
+                "children": [],
+                "properties": {},
+                "tagName": "dt",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "no tag in a descriptive list"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "p",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "dd",
+                "type": "element"
+              }
+            ],
+            "properties": {},
+            "tagName": "dl",
+            "type": "element"
+          }
+        ],
+        "properties": {
+          "className": [
+            "org-section",
+            "org-level-1"
+          ]
+        },
+        "tagName": "section",
+        "type": "element"
+      },
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "Tables"
+              }
+            ],
+            "properties": {
+              "id": "h-tables"
+            },
+            "tagName": "h1",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "Name"
+                          }
+                        ],
+                        "properties": {
+                          "scope": "col"
+                        },
+                        "tagName": "th",
+                        "type": "element"
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "Value"
+                          }
+                        ],
+                        "properties": {
+                          "scope": "col"
+                        },
+                        "tagName": "th",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "tr",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "thead",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "a"
+                          }
+                        ],
+                        "properties": {},
+                        "tagName": "td",
+                        "type": "element"
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "1"
+                          }
+                        ],
+                        "properties": {},
+                        "tagName": "td",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "tr",
+                    "type": "element"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "b"
+                          }
+                        ],
+                        "properties": {},
+                        "tagName": "td",
+                        "type": "element"
+                      },
+                      {
+                        "children": [
+                          {
+                            "children": [
+                              {
+                                "type": "text",
+                                "value": "2"
+                              }
+                            ],
+                            "properties": {},
+                            "tagName": "strong",
+                            "type": "element"
+                          }
+                        ],
+                        "properties": {},
+                        "tagName": "td",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "tr",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "tbody",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "sum"
+                          }
+                        ],
+                        "properties": {},
+                        "tagName": "td",
+                        "type": "element"
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "3"
+                          }
+                        ],
+                        "properties": {},
+                        "tagName": "td",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "tr",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "tbody",
+                "type": "element"
+              }
+            ],
+            "properties": {},
+            "tagName": "table",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "no"
+                          }
+                        ],
+                        "properties": {},
+                        "tagName": "td",
+                        "type": "element"
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "header"
+                          }
+                        ],
+                        "properties": {},
+                        "tagName": "td",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "tr",
+                    "type": "element"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "just"
+                          }
+                        ],
+                        "properties": {},
+                        "tagName": "td",
+                        "type": "element"
+                      },
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "rows"
+                          }
+                        ],
+                        "properties": {},
+                        "tagName": "td",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "tr",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "tbody",
+                "type": "element"
+              }
+            ],
+            "properties": {},
+            "tagName": "table",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "leading rule"
+                          }
+                        ],
+                        "properties": {
+                          "scope": "col"
+                        },
+                        "tagName": "th",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "tr",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "thead",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "body"
+                          }
+                        ],
+                        "properties": {},
+                        "tagName": "td",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "tr",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "tbody",
+                "type": "element"
+              }
+            ],
+            "properties": {},
+            "tagName": "table",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "Captioned"
+                  }
+                ],
+                "properties": {},
+                "tagName": "caption",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "c"
+                          }
+                        ],
+                        "properties": {},
+                        "tagName": "td",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "tr",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "tbody",
+                "type": "element"
+              }
+            ],
+            "properties": {},
+            "tagName": "table",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "+---+---+\n| table.el |\n+---+---+"
+                  }
+                ],
+                "properties": {},
+                "tagName": "code",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-table-el"
+              ]
+            },
+            "tagName": "pre",
+            "type": "element"
+          }
+        ],
+        "properties": {
+          "className": [
+            "org-section",
+            "org-level-1"
+          ]
+        },
+        "tagName": "section",
+        "type": "element"
+      }
+    ],
+    "type": "root"
+  },
+  "diagnostics": [],
+  "nodes": []
+}

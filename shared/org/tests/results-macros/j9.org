@@ -1,0 +1,3 @@
+#+MACRO: res {{{results($1)}}}
+#+MACRO: cat $1$2
+A src_sh[:exports foo none]{echo x} {{{res({{{cat(QZaQZ,b)}}})}}} B.

@@ -1,0 +1,33 @@
+* Entities \alpha and $x^2$ in a title
+
+Entities: \alpha \Alpha \ALPHA \alpha{} \alpha{}x \alphax \alpha1 \alpha_ \alpha.
+Special names: \there4 \there4x \THERE4 \sup1 \sup2x \sup4 \frac12 \frac34 \frac14x \fracx
+Whitespace entities: \_ a \_  b \_   c \_                    d \_                     e \_x
+Tabs after: \_	t \alpha	\beta  \gamma
+At line end: \alpha
+\nbsp
+Unicode after: \alphaé \alpha日 \alpha· \alpha—
+Not entities: \notanentity \x \\ \( \[ \{ \1 \_
+Backslash run: \\alpha \\\alpha
+
+LaTeX inline: \(a + b\) \(unclosed and \[x = 1\] \[unclosed
+Display: $$a^2 + b^2$$ $$unclosed $$ and $$x$$y$$
+Display across lines: $$a
++ b$$ and \(c
+= d\)
+Dollars: $x$ $x$. $x$, $x$; $x$' $x$" $x$) $x$- $x$a $ x$ $x $ $,x$ $x,$
+Dollar rules: a$x$ 5$ and $5 and $$ and $$$ and $$$$ x$$ $a$$b$
+Money: it costs $5 and $10 dollars.
+Macros: \frac{a}{b} \sqrt[3]{x} \textbf{bold}[x] \cmd* \cmd*{a} \cmd{a\nb} \cmd[a{b}]
+\cmd{a{b}c} \cmd[a][b]{c}{d} \cmd{unclosed \cmd[unclosed \x[]{}
+
+A dollar after a dollar starts nothing: x$$y$ z.
+
+- \alpha :: \(x\) tag
+- $y$ :: def
+
+| \alpha | $x$ | \(y\) | \frac{1}{2} |
+
+#+CAPTION: Caption with \beta and $z$
+#+NAME: cap
+| a |

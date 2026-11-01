@@ -23,6 +23,8 @@ members = [
     "shared/sync",
     "shared/mcp",
     "shared/effect-sandbox",
+    "shared/org",
+    "shared/org-wasm",
 ]
 exclude = ["tools/code-map", "tools/audit-metrics", "daemon"]
 resolver = "2"
@@ -59,3 +61,17 @@ tracing = "0.1"
 # REMOVE THIS BLOCK (both workspaces) when #644 lands upstream and yrs releases it.
 [patch.crates-io]
 yrs = { git = "https://github.com/cuttlefisch/y-crdt", rev = "40a08982b4e95fe8d06c84e4df5a5713eca11c25" }
+
+# The WASM facade's build (`make org-wasm`, shared/org-wasm): one codegen
+# unit, LTO, no unwinding and no symbols, so the artifact is small and the
+# same bytes on every build. Selected only by `--profile wasm`; nothing else
+# uses it.
+[profile.wasm]
+inherits = "release"
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = false
+incremental = false

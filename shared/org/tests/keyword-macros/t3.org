@@ -1,0 +1,6 @@
+:PROPERTIES:
+:ID: n9
+:END:
+#+MACRO: id $1
+#+TITLE: [cite:{{{id(t QZcQZ)}}} @k]
+P {{{title}}}

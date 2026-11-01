@@ -1,0 +1,23 @@
+:PROPERTIES:
+:ID: sem-title-file
+:KIND: concept
+:END:
+#+title: First title
+#+title: A [[id:sem-title-target][linked]] and *bold*   title
+#+kind: lesson
+#+aliases: one, two
+
+* TODO [#A] A /styled/ headline with ~code~ and [[id:sem-title-h][a link]] :tag:
+:PROPERTIES:
+:ID: sem-title-heading
+:END:
+
+* [[id:sem-title-bare]] only
+:PROPERTIES:
+:ID: sem-title-bare-heading
+:END:
+
+* Objects [1/2] \alpha <2026-10-31 Sat> {{{macro}}} stay as written
+:PROPERTIES:
+:ID: sem-title-objects
+:END:

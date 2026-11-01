@@ -1,0 +1,5 @@
+#+MACRO: q #+$1_comment
+{{{q(begin)}}}
+{{{q(end)}}}
+SECRET
+#+end_comment

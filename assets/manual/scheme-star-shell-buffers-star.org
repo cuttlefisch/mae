@@ -2,7 +2,7 @@
 :ID: scheme:*shell-buffers*
 :KIND: scheme_api
 :END:
-#+title: Scheme: *shell-buffers*
+#+title: Scheme: =*shell-buffers*=
 #+filetags: :scheme:api:variable:
 
 *Type:* list of integers

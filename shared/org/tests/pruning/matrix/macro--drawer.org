@@ -1,0 +1,6 @@
+* Visible
+Use {{{m}}} QZvQZ.
+
+:NOTES:
+#+MACRO: m QZsQZ
+:END:

@@ -1,0 +1,5 @@
+#+MACRO: h * COMMENT x
+#+MACRO: v * Visible
+{{{h}}}
+{{{v}}}
+SECRET

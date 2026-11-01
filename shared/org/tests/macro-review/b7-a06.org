@@ -1,0 +1,10 @@
+#+MACRO: o src_sh[:exports none]{echo
+:PROPERTIES:
+:ID: file
+:END:
+#+TITLE: Doc {{{o}}} secretword}
+* Foo src_sh[:exports none]{echo literalsecret}
+:PROPERTIES:
+:ID: f
+:END:
+body {{{title}}}

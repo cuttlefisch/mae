@@ -1,0 +1,19 @@
+:PROPERTIES:
+:ID: sem-indented-file
+:END:
+#+title: Indented stars are not headlines
+
+Org reads an indented single star as a list bullet and an indented run of
+stars as text, never as a headline.
+
+  * A list item, not a headline
+  :PROPERTIES:
+  :ID: sem-indented-item
+  :END:
+  Body of the item with [[id:sem-target-item]].
+
+  ** Text, not a headline :tagged:
+  :PROPERTIES:
+  :ID: sem-indented-text
+  :END:
+  More text [[id:sem-target-text]].

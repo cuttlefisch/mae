@@ -1,0 +1,15 @@
+:PROPERTIES:
+:ID: sem-external-file
+:END:
+#+title: External link classification
+
+Web: [[https://example.invalid/a?b=c#d][a page]] and [[HTTP://EXAMPLE.INVALID]].
+Mail: [[mailto:someone@example.invalid][mail]].
+Other, known to both classifiers: [[file:notes.org][file]], [[doi:10.1000/1]].
+Other, newly known: [[help:org-mode][help]], [[file+sys:/bin/sh][sys]].
+Unknown scheme stays a KB link (exclude list): [[ssh://host.invalid][ssh]].
+A bare id and a namespaced one: [[0f1e2d3c-0000-4000-8000-00000000abcd]] and [[concept:buffer][buffer]].
+A custom id, a heading and a code reference in this file, never edges: [[#custom-id][here]], [[*A heading]], [[(ref)]]. An empty id: [[id:]].
+Bibliography schemes, never node ids: [[roam:Some title]], [[cite:key2026]], [[zotero://select/items/X]].
+Search options: [[id:sem-external-search::*A heading][searched]] and [[file:notes.org::*h][in a file]].
+A plain id link in prose, which mae-kb never read: id:sem-external-plain.

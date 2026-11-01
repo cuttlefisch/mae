@@ -1,0 +1,6 @@
+:PROPERTIES:
+:ID: n9
+:END:
+#+MACRO: m QZeQZ
+#+TITLE: src_sh{echo {{{m}}}} x
+P {{{title}}}

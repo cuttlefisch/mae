@@ -1,0 +1,596 @@
+{
+  "body": {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "Hostile \"<script>\" heading"
+              }
+            ],
+            "properties": {
+              "id": "h-hostile-script-heading"
+            },
+            "tagName": "h1",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "Plain <script>alert(1)</script> & text.\n"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "js"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-unresolved"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "[?]"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-unresolved"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "data"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-unresolved"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "vb"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-unresolved"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": "\n"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "entity"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-unresolved"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "space"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-unresolved"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "tab"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-unresolved"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": "\n"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "protocol-relative"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-unresolved"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "quote"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-link"
+                  ],
+                  "href": "https://x.org/%22onmouseover=alert(1)"
+                },
+                "tagName": "a",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "https://x.org/a%3Eb"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-link"
+                  ],
+                  "href": "https://x.org/a%3Eb"
+                },
+                "tagName": "a",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": "\n"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "newline"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-link"
+                  ],
+                  "href": "https://x.org/a%20b"
+                },
+                "tagName": "a",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "bidi"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-link"
+                  ],
+                  "href": "https://x.org/%E2%80%AE"
+                },
+                "tagName": "a",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": " "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "space in url"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-link"
+                  ],
+                  "href": "https://x.org/x%20y"
+                },
+                "tagName": "a",
+                "type": "element"
+              },
+              {
+                "type": "text",
+                "value": "\n snippet"
+              }
+            ],
+            "properties": {},
+            "tagName": "p",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "https://example.org/i.png"
+                      }
+                    ],
+                    "properties": {
+                      "className": [
+                        "org-link"
+                      ],
+                      "href": "https://example.org/i.png"
+                    },
+                    "tagName": "a",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "p",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "caption"
+                  }
+                ],
+                "properties": {},
+                "tagName": "figcaption",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-figure"
+              ]
+            },
+            "tagName": "figure",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "code"
+                  }
+                ],
+                "properties": {},
+                "tagName": "code",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-src"
+              ]
+            },
+            "tagName": "pre",
+            "type": "element"
+          }
+        ],
+        "properties": {
+          "className": [
+            "org-section",
+            "org-level-1"
+          ],
+          "id": "id-a.22b.3cc.20d"
+        },
+        "tagName": "section",
+        "type": "element"
+      },
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "Confusable"
+              }
+            ],
+            "properties": {
+              "id": "h-confusable"
+            },
+            "tagName": "h1",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "special"
+                  }
+                ],
+                "properties": {},
+                "tagName": "p",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-special-block"
+              ]
+            },
+            "tagName": "div",
+            "type": "element"
+          }
+        ],
+        "properties": {
+          "className": [
+            "org-section",
+            "org-level-1"
+          ],
+          "id": "id-.d0.b0pple"
+        },
+        "tagName": "section",
+        "type": "element"
+      },
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "Plan "
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "[?]"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-unresolved"
+                  ]
+                },
+                "tagName": "span",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "id": "h-plan"
+            },
+            "tagName": "h1",
+            "type": "element"
+          }
+        ],
+        "properties": {
+          "className": [
+            "org-section",
+            "org-level-1"
+          ],
+          "id": "id-plan-node"
+        },
+        "tagName": "section",
+        "type": "element"
+      }
+    ],
+    "type": "root"
+  },
+  "diagnostics": [],
+  "nodes": [
+    {
+      "aliases": [],
+      "anchor": "id-a.22b.3cc.20d",
+      "id": "a\"b<c d",
+      "properties": [
+        {
+          "key": "ID",
+          "value": {
+            "children": [
+              {
+                "type": "text",
+                "value": "a\"b<c d"
+              }
+            ],
+            "type": "root"
+          }
+        }
+      ],
+      "title": {
+        "children": [
+          {
+            "type": "text",
+            "value": "Hostile \"<script>\" heading"
+          }
+        ],
+        "type": "root"
+      },
+      "title_unlinked": {
+        "children": [
+          {
+            "type": "text",
+            "value": "Hostile \"<script>\" heading"
+          }
+        ],
+        "type": "root"
+      }
+    },
+    {
+      "aliases": [],
+      "anchor": "id-.d0.b0pple",
+      "id": "аpple",
+      "properties": [
+        {
+          "key": "ID",
+          "value": {
+            "children": [
+              {
+                "type": "text",
+                "value": "аpple"
+              }
+            ],
+            "type": "root"
+          }
+        }
+      ],
+      "title": {
+        "children": [
+          {
+            "type": "text",
+            "value": "Confusable"
+          }
+        ],
+        "type": "root"
+      },
+      "title_unlinked": {
+        "children": [
+          {
+            "type": "text",
+            "value": "Confusable"
+          }
+        ],
+        "type": "root"
+      }
+    },
+    {
+      "aliases": [],
+      "anchor": "id-plan-node",
+      "id": "plan-node",
+      "properties": [
+        {
+          "key": "ID",
+          "value": {
+            "children": [
+              {
+                "type": "text",
+                "value": "plan-node"
+              }
+            ],
+            "type": "root"
+          }
+        }
+      ],
+      "title": {
+        "children": [
+          {
+            "type": "text",
+            "value": "Plan "
+          },
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "[?]"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-unresolved"
+              ]
+            },
+            "tagName": "span",
+            "type": "element"
+          }
+        ],
+        "type": "root"
+      },
+      "title_unlinked": {
+        "children": [
+          {
+            "type": "text",
+            "value": "Plan "
+          },
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "[?]"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-unresolved"
+              ]
+            },
+            "tagName": "span",
+            "type": "element"
+          }
+        ],
+        "type": "root"
+      }
+    }
+  ]
+}

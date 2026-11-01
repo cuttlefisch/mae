@@ -1,0 +1,8 @@
+#+MACRO: cat $1$2
+#+MACRO: res {{{results($1)}}}
+* H
+:PROPERTIES:
+:ID: n1
+:Q: {{{cat({{{res(t QZeQZ)}}},<<<r QZfQZ>>>)}}}
+:END:
+P {{{property(Q)}}}

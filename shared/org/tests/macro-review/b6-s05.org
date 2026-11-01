@@ -1,0 +1,5 @@
+#+MACRO: c COMMENT
+#+MACRO: v * V
+* {{{c}}} t
+{{{v}}}
+SECRET

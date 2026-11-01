@@ -1,0 +1,15 @@
+{"type":"#file","bytes":144,"eol":"unix","unmodified":true}
+{"type":"section","begin":0,"end":144,"contents_begin":0,"contents_end":144,"parent_type":"org-data","parent_begin":0}
+{"type":"plain-list","begin":0,"end":144,"contents_begin":0,"contents_end":144,"parent_type":"section","parent_begin":0}
+{"type":"item","begin":0,"end":144,"contents_begin":2,"contents_end":144,"parent_type":"plain-list","parent_begin":0,"bullet":"- "}
+{"type":"paragraph","begin":2,"end":4,"contents_begin":2,"contents_end":4,"parent_type":"item","parent_begin":0}
+{"type":"plain-list","begin":4,"end":125,"contents_begin":4,"contents_end":125,"parent_type":"item","parent_begin":0}
+{"type":"item","begin":4,"end":125,"contents_begin":10,"contents_end":125,"parent_type":"plain-list","parent_begin":4,"bullet":"- "}
+{"type":"paragraph","begin":10,"end":24,"contents_begin":10,"contents_end":24,"parent_type":"item","parent_begin":4}
+{"type":"plain-list","begin":24,"end":125,"contents_begin":24,"contents_end":125,"parent_type":"item","parent_begin":4}
+{"type":"item","begin":24,"end":125,"contents_begin":27,"contents_end":125,"parent_type":"plain-list","parent_begin":24,"bullet":"- "}
+{"type":"paragraph","begin":27,"end":80,"contents_begin":27,"contents_end":80,"parent_type":"item","parent_begin":24}
+{"type":"plain-list","begin":80,"end":125,"contents_begin":80,"contents_end":125,"parent_type":"item","parent_begin":24}
+{"type":"item","begin":80,"end":125,"contents_begin":85,"contents_end":125,"parent_type":"plain-list","parent_begin":80,"bullet":"- "}
+{"type":"paragraph","begin":85,"end":125,"contents_begin":85,"contents_end":125,"parent_type":"item","parent_begin":80}
+{"type":"paragraph","begin":125,"end":144,"contents_begin":125,"contents_end":144,"parent_type":"item","parent_begin":0}

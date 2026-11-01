@@ -2,7 +2,7 @@
 :ID: scheme:*keymap-list*
 :KIND: scheme_api
 :END:
-#+title: Scheme: *keymap-list*
+#+title: Scheme: =*keymap-list*=
 #+filetags: :scheme:api:variable:
 
 *Type:* list of strings

@@ -1,0 +1,7 @@
+#+MACRO: ol [[https://e.com/l][
+* H
+:PROPERTIES:
+:ID: n1
+:Q: x {{{ol}}} QZlQZ]] y
+:END:
+P {{{property(Q)}}}

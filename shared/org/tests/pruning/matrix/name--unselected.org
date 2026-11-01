@@ -1,0 +1,6 @@
+#+SELECT_TAGS: sel
+* Visible :sel:
+See [[tbl]] QZvQZ.
+* Pruned
+#+NAME: tbl
+| QZsQZ |

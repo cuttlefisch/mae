@@ -1,0 +1,2 @@
+#+MACRO: res {{{results($1)}}}
+A {{{res({{{res(t QZgQZ)}}})}}} B.

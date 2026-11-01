@@ -1,0 +1,6 @@
+#+MACRO: t :noexport:
+* T {{{t}}}
+:PROPERTIES:
+:ID: t1
+:END:
+SECRET

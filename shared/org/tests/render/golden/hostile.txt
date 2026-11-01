@@ -1,0 +1,12 @@
+Hostile "<script>" heading
+Plain <script>alert(1)</script> & text.
+js  data vb
+entity space tab
+protocol-relative quote 
+newline bidi space in url
+ snippet
+caption
+code
+Confusable
+special
+Plan 

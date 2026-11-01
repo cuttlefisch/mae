@@ -1,0 +1,5 @@
+#+MACRO: m  x
+#+SECRETKW: SECRETLEAKB
+
+- a
+{{{m(  x)}}}y {{{keyword(SECRETKW)}}}

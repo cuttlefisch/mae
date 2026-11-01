@@ -1,0 +1,6 @@
+#+MACRO: p {{{property(P)}}}
+* H
+:PROPERTIES:
+:P: @@latex:SECRET@@
+:END:
+A {{{p}}} B

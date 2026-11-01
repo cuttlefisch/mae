@@ -1,0 +1,2 @@
+#+MACRO: o src_sh[:exports none]{echo
+A {{{o}}} x} {{{results(SECRET)}}} B

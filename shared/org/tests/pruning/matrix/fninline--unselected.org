@@ -1,0 +1,5 @@
+#+SELECT_TAGS: sel
+* Visible :sel:
+See[fn:x] QZvQZ.
+* Pruned
+Inline[fn:x: note QZsQZ] here.

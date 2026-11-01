@@ -1,0 +1,5 @@
+#+MACRO: b #+begin_comment
+{{{b}}}
+{{{nosuch}}}
+#+end_comment
+visible

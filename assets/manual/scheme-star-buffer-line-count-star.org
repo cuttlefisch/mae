@@ -2,7 +2,7 @@
 :ID: scheme:*buffer-line-count*
 :KIND: scheme_api
 :END:
-#+title: Scheme: *buffer-line-count*
+#+title: Scheme: =*buffer-line-count*=
 #+filetags: :scheme:api:variable:
 
 *Type:* integer

@@ -1,0 +1,3 @@
+#+MACRO: o {{{results(
+* Foo src_sh[:exports none]{echo x} {{{o}}}secretword)}}}
+body

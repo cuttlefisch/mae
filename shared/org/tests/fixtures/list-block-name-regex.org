@@ -1,0 +1,6 @@
+- a
+  #+begin_a.b
+x
+  #+end_aXb
+- b
+  #+end_a.b

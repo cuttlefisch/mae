@@ -1,0 +1,623 @@
+{
+  "body": {
+    "children": [
+      {
+        "children": [
+          {
+            "type": "text",
+            "value": "Text with a note"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "1"
+                  }
+                ],
+                "properties": {
+                  "href": "#fn-1",
+                  "id": "fnr-1"
+                },
+                "tagName": "a",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-footnote-ref"
+              ]
+            },
+            "tagName": "sup",
+            "type": "element"
+          },
+          {
+            "type": "text",
+            "value": ", a named one"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "2"
+                  }
+                ],
+                "properties": {
+                  "href": "#fn-2",
+                  "id": "fnr-2"
+                },
+                "tagName": "a",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-footnote-ref"
+              ]
+            },
+            "tagName": "sup",
+            "type": "element"
+          },
+          {
+            "type": "text",
+            "value": ", an inline one"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "3"
+                  }
+                ],
+                "properties": {
+                  "href": "#fn-3",
+                  "id": "fnr-3"
+                },
+                "tagName": "a",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-footnote-ref"
+              ]
+            },
+            "tagName": "sup",
+            "type": "element"
+          },
+          {
+            "type": "text",
+            "value": ",\nan anonymous one"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "4"
+                  }
+                ],
+                "properties": {
+                  "href": "#fn-4",
+                  "id": "fnr-4"
+                },
+                "tagName": "a",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-footnote-ref"
+              ]
+            },
+            "tagName": "sup",
+            "type": "element"
+          },
+          {
+            "type": "text",
+            "value": " and the first again"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "1"
+                  }
+                ],
+                "properties": {
+                  "href": "#fn-1",
+                  "id": "fnr-1-2"
+                },
+                "tagName": "a",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-footnote-ref"
+              ]
+            },
+            "tagName": "sup",
+            "type": "element"
+          },
+          {
+            "type": "text",
+            "value": ".\nA dangling one and a nested one"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "5"
+                  }
+                ],
+                "properties": {
+                  "href": "#fn-5",
+                  "id": "fnr-5"
+                },
+                "tagName": "a",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-footnote-ref"
+              ]
+            },
+            "tagName": "sup",
+            "type": "element"
+          },
+          {
+            "type": "text",
+            "value": "."
+          }
+        ],
+        "properties": {},
+        "tagName": "p",
+        "type": "element"
+      },
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "type": "text",
+                "value": "Heading with a note"
+              },
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "6"
+                      }
+                    ],
+                    "properties": {
+                      "href": "#fn-6",
+                      "id": "fnr-6"
+                    },
+                    "tagName": "a",
+                    "type": "element"
+                  }
+                ],
+                "properties": {
+                  "className": [
+                    "org-footnote-ref"
+                  ]
+                },
+                "tagName": "sup",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "id": "h-heading-with-a-note"
+            },
+            "tagName": "h1",
+            "type": "element"
+          }
+        ],
+        "properties": {
+          "className": [
+            "org-section",
+            "org-level-1"
+          ]
+        },
+        "tagName": "section",
+        "type": "element"
+      },
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "1"
+                      }
+                    ],
+                    "properties": {
+                      "className": [
+                        "org-footnote-back"
+                      ],
+                      "href": "#fnr-1"
+                    },
+                    "tagName": "a",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "sup",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "The first note."
+                  }
+                ],
+                "properties": {},
+                "tagName": "p",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-footnote"
+              ],
+              "id": "fn-1"
+            },
+            "tagName": "div",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "2"
+                      }
+                    ],
+                    "properties": {
+                      "className": [
+                        "org-footnote-back"
+                      ],
+                      "href": "#fnr-2"
+                    },
+                    "tagName": "a",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "sup",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "A named note\nwith two lines."
+                  }
+                ],
+                "properties": {},
+                "tagName": "p",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-footnote"
+              ],
+              "id": "fn-2"
+            },
+            "tagName": "div",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "3"
+                      }
+                    ],
+                    "properties": {
+                      "className": [
+                        "org-footnote-back"
+                      ],
+                      "href": "#fnr-3"
+                    },
+                    "tagName": "a",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "sup",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "Inline "
+                  },
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "def"
+                      }
+                    ],
+                    "properties": {},
+                    "tagName": "strong",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "p",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-footnote"
+              ],
+              "id": "fn-3"
+            },
+            "tagName": "div",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "4"
+                      }
+                    ],
+                    "properties": {
+                      "className": [
+                        "org-footnote-back"
+                      ],
+                      "href": "#fnr-4"
+                    },
+                    "tagName": "a",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "sup",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "Anonymous"
+                  }
+                ],
+                "properties": {},
+                "tagName": "p",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-footnote"
+              ],
+              "id": "fn-4"
+            },
+            "tagName": "div",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "5"
+                      }
+                    ],
+                    "properties": {
+                      "className": [
+                        "org-footnote-back"
+                      ],
+                      "href": "#fnr-5"
+                    },
+                    "tagName": "a",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "sup",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "Outer refers to"
+                  },
+                  {
+                    "children": [
+                      {
+                        "children": [
+                          {
+                            "type": "text",
+                            "value": "7"
+                          }
+                        ],
+                        "properties": {
+                          "href": "#fn-7",
+                          "id": "fnr-7"
+                        },
+                        "tagName": "a",
+                        "type": "element"
+                      }
+                    ],
+                    "properties": {
+                      "className": [
+                        "org-footnote-ref"
+                      ]
+                    },
+                    "tagName": "sup",
+                    "type": "element"
+                  },
+                  {
+                    "type": "text",
+                    "value": "."
+                  }
+                ],
+                "properties": {},
+                "tagName": "p",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-footnote"
+              ],
+              "id": "fn-5"
+            },
+            "tagName": "div",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "6"
+                      }
+                    ],
+                    "properties": {
+                      "className": [
+                        "org-footnote-back"
+                      ],
+                      "href": "#fnr-6"
+                    },
+                    "tagName": "a",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "sup",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "From a heading."
+                  }
+                ],
+                "properties": {},
+                "tagName": "p",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-footnote"
+              ],
+              "id": "fn-6"
+            },
+            "tagName": "div",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "children": [
+                      {
+                        "type": "text",
+                        "value": "7"
+                      }
+                    ],
+                    "properties": {
+                      "className": [
+                        "org-footnote-back"
+                      ],
+                      "href": "#fnr-7"
+                    },
+                    "tagName": "a",
+                    "type": "element"
+                  }
+                ],
+                "properties": {},
+                "tagName": "sup",
+                "type": "element"
+              },
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "Inner."
+                  }
+                ],
+                "properties": {},
+                "tagName": "p",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-footnote"
+              ],
+              "id": "fn-7"
+            },
+            "tagName": "div",
+            "type": "element"
+          }
+        ],
+        "properties": {
+          "className": [
+            "org-footnotes"
+          ]
+        },
+        "tagName": "section",
+        "type": "element"
+      }
+    ],
+    "type": "root"
+  },
+  "diagnostics": [
+    {
+      "end": 167,
+      "kind": "footnote_undefined",
+      "start": 158
+    }
+  ],
+  "nodes": []
+}

@@ -1,0 +1,2 @@
+#+MACRO: oh @@
+A [cite:{{{oh}}} @QZdQZ] B.

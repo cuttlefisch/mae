@@ -1,0 +1,3 @@
+#+MACRO: c COMMENT
+* {{{c}}} T
+SECRET

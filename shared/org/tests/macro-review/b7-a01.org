@@ -1,0 +1,6 @@
+#+MACRO: o src_sh[:exports none]{echo
+* Foo {{{o}}} secretword}
+:PROPERTIES:
+:ID: f
+:END:
+body

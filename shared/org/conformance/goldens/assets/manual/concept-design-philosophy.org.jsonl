@@ -1,0 +1,83 @@
+{"type":"#file","bytes":2170,"eol":"unix","unmodified":true}
+{"type":"section","begin":0,"end":245,"contents_begin":0,"contents_end":245,"parent_type":"org-data","parent_begin":0}
+{"type":"property-drawer","begin":0,"end":65,"contents_begin":13,"contents_end":59,"parent_type":"section","parent_begin":0}
+{"type":"node-property","begin":13,"end":44,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"ID","value":"concept:design-philosophy"}
+{"type":"node-property","begin":44,"end":59,"contents_begin":null,"contents_end":null,"parent_type":"property-drawer","parent_begin":0,"key":"KIND","value":"concept"}
+{"type":"keyword","begin":65,"end":92,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"TITLE","value":"Design Philosophy"}
+{"type":"keyword","begin":92,"end":142,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":0,"key":"FILETAGS","value":":modules:architecture:extensibility:"}
+{"type":"paragraph","begin":142,"end":245,"contents_begin":142,"contents_end":244,"parent_type":"section","parent_begin":0}
+{"type":"bold","begin":148,"end":168,"contents_begin":149,"contents_end":166,"parent_type":"paragraph","parent_begin":142}
+{"type":"headline","begin":245,"end":484,"contents_begin":280,"contents_end":484,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"1. Composition over inheritance","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":280,"end":484,"contents_begin":280,"contents_end":484,"parent_type":"headline","parent_begin":245}
+{"type":"plain-list","begin":280,"end":484,"contents_begin":280,"contents_end":483,"parent_type":"section","parent_begin":280}
+{"type":"item","begin":280,"end":316,"contents_begin":282,"contents_end":316,"parent_type":"plain-list","parent_begin":280,"bullet":"- "}
+{"type":"paragraph","begin":282,"end":316,"contents_begin":282,"contents_end":316,"parent_type":"item","parent_begin":280}
+{"type":"item","begin":316,"end":358,"contents_begin":318,"contents_end":358,"parent_type":"plain-list","parent_begin":280,"bullet":"- "}
+{"type":"paragraph","begin":318,"end":358,"contents_begin":318,"contents_end":358,"parent_type":"item","parent_begin":316}
+{"type":"item","begin":358,"end":429,"contents_begin":360,"contents_end":429,"parent_type":"plain-list","parent_begin":280,"bullet":"- "}
+{"type":"paragraph","begin":360,"end":429,"contents_begin":360,"contents_end":429,"parent_type":"item","parent_begin":358}
+{"type":"item","begin":429,"end":483,"contents_begin":431,"contents_end":483,"parent_type":"plain-list","parent_begin":280,"bullet":"- "}
+{"type":"paragraph","begin":431,"end":483,"contents_begin":431,"contents_end":483,"parent_type":"item","parent_begin":429}
+{"type":"headline","begin":484,"end":755,"contents_begin":513,"contents_end":755,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"2. Single source of truth","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":513,"end":755,"contents_begin":513,"contents_end":755,"parent_type":"headline","parent_begin":484}
+{"type":"paragraph","begin":513,"end":755,"contents_begin":513,"contents_end":754,"parent_type":"section","parent_begin":513}
+{"type":"code","begin":577,"end":591,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":513}
+{"type":"code","begin":737,"end":752,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":513}
+{"type":"headline","begin":755,"end":1083,"contents_begin":781,"contents_end":1083,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"3. Stable API contract","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":781,"end":1083,"contents_begin":781,"contents_end":1083,"parent_type":"headline","parent_begin":755}
+{"type":"paragraph","begin":781,"end":892,"contents_begin":781,"contents_end":892,"parent_type":"section","parent_begin":781}
+{"type":"plain-list","begin":892,"end":1083,"contents_begin":892,"contents_end":1082,"parent_type":"section","parent_begin":781}
+{"type":"item","begin":892,"end":943,"contents_begin":894,"contents_end":943,"parent_type":"plain-list","parent_begin":892,"bullet":"- "}
+{"type":"paragraph","begin":894,"end":943,"contents_begin":894,"contents_end":943,"parent_type":"item","parent_begin":892}
+{"type":"bold","begin":894,"end":906,"contents_begin":895,"contents_end":904,"parent_type":"paragraph","parent_begin":894}
+{"type":"item","begin":943,"end":1009,"contents_begin":945,"contents_end":1009,"parent_type":"plain-list","parent_begin":892,"bullet":"- "}
+{"type":"paragraph","begin":945,"end":1009,"contents_begin":945,"contents_end":1009,"parent_type":"item","parent_begin":943}
+{"type":"bold","begin":945,"end":964,"contents_begin":946,"contents_end":962,"parent_type":"paragraph","parent_begin":945}
+{"type":"item","begin":1009,"end":1082,"contents_begin":1011,"contents_end":1082,"parent_type":"plain-list","parent_begin":892,"bullet":"- "}
+{"type":"paragraph","begin":1011,"end":1082,"contents_begin":1011,"contents_end":1082,"parent_type":"item","parent_begin":1009}
+{"type":"code","begin":1011,"end":1025,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1011}
+{"type":"code","begin":1039,"end":1053,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":1011}
+{"type":"headline","begin":1083,"end":1462,"contents_begin":1110,"contents_end":1462,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"4. No framework, no SDK","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1110,"end":1462,"contents_begin":1110,"contents_end":1462,"parent_type":"headline","parent_begin":1083}
+{"type":"paragraph","begin":1110,"end":1176,"contents_begin":1110,"contents_end":1176,"parent_type":"section","parent_begin":1110}
+{"type":"src-block","begin":1176,"end":1462,"contents_begin":null,"contents_end":null,"parent_type":"section","parent_begin":1110,"language":"scheme"}
+{"type":"headline","begin":1462,"end":1651,"contents_begin":1481,"contents_end":1651,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Kernel boundary","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1481,"end":1651,"contents_begin":1481,"contents_end":1651,"parent_type":"headline","parent_begin":1462}
+{"type":"paragraph","begin":1481,"end":1651,"contents_begin":1481,"contents_end":1650,"parent_type":"section","parent_begin":1481}
+{"type":"bold","begin":1491,"end":1605,"contents_begin":1492,"contents_end":1603,"parent_type":"paragraph","parent_begin":1481}
+{"type":"code","begin":1504,"end":1511,"contents_begin":null,"contents_end":null,"parent_type":"bold","parent_begin":1491}
+{"type":"headline","begin":1651,"end":2170,"contents_begin":1672,"contents_end":2170,"parent_type":"org-data","parent_begin":0,"level":2,"true_level":2,"raw_title":"Pitfall avoidance","todo":null,"priority":null,"tags":[],"commentedp":null}
+{"type":"section","begin":1672,"end":2170,"contents_begin":1672,"contents_end":2170,"parent_type":"headline","parent_begin":1651}
+{"type":"table","begin":1672,"end":2105,"contents_begin":1672,"contents_end":2104,"parent_type":"section","parent_begin":1672}
+{"type":"table-row","begin":1672,"end":1709,"contents_begin":1673,"contents_end":1708,"parent_type":"table","parent_begin":1672}
+{"type":"table-cell","begin":1673,"end":1683,"contents_begin":1674,"contents_end":1681,"parent_type":"table-row","parent_begin":1672}
+{"type":"table-cell","begin":1683,"end":1692,"contents_begin":1684,"contents_end":1690,"parent_type":"table-row","parent_begin":1672}
+{"type":"table-cell","begin":1692,"end":1708,"contents_begin":1693,"contents_end":1706,"parent_type":"table-row","parent_begin":1672}
+{"type":"table-row","begin":1709,"end":1746,"contents_begin":null,"contents_end":null,"parent_type":"table","parent_begin":1672}
+{"type":"table-row","begin":1746,"end":1826,"contents_begin":1747,"contents_end":1825,"parent_type":"table","parent_begin":1672}
+{"type":"table-cell","begin":1747,"end":1769,"contents_begin":1748,"contents_end":1767,"parent_type":"table-row","parent_begin":1746}
+{"type":"table-cell","begin":1769,"end":1777,"contents_begin":1770,"contents_end":1775,"parent_type":"table-row","parent_begin":1746}
+{"type":"table-cell","begin":1777,"end":1825,"contents_begin":1778,"contents_end":1823,"parent_type":"table-row","parent_begin":1746}
+{"type":"code","begin":1798,"end":1815,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":1777}
+{"type":"table-row","begin":1826,"end":1893,"contents_begin":1827,"contents_end":1892,"parent_type":"table","parent_begin":1672}
+{"type":"table-cell","begin":1827,"end":1845,"contents_begin":1828,"contents_end":1843,"parent_type":"table-row","parent_begin":1826}
+{"type":"table-cell","begin":1845,"end":1853,"contents_begin":1846,"contents_end":1851,"parent_type":"table-row","parent_begin":1826}
+{"type":"table-cell","begin":1853,"end":1892,"contents_begin":1854,"contents_end":1890,"parent_type":"table-row","parent_begin":1826}
+{"type":"table-row","begin":1893,"end":1976,"contents_begin":1894,"contents_end":1975,"parent_type":"table","parent_begin":1672}
+{"type":"table-cell","begin":1894,"end":1921,"contents_begin":1895,"contents_end":1919,"parent_type":"table-row","parent_begin":1893}
+{"type":"table-cell","begin":1921,"end":1929,"contents_begin":1922,"contents_end":1927,"parent_type":"table-row","parent_begin":1893}
+{"type":"table-cell","begin":1929,"end":1975,"contents_begin":1930,"contents_end":1973,"parent_type":"table-row","parent_begin":1893}
+{"type":"table-row","begin":1976,"end":2036,"contents_begin":1977,"contents_end":2035,"parent_type":"table","parent_begin":1672}
+{"type":"table-cell","begin":1977,"end":2000,"contents_begin":1978,"contents_end":1998,"parent_type":"table-row","parent_begin":1976}
+{"type":"table-cell","begin":2000,"end":2008,"contents_begin":2001,"contents_end":2006,"parent_type":"table-row","parent_begin":1976}
+{"type":"table-cell","begin":2008,"end":2035,"contents_begin":2009,"contents_end":2033,"parent_type":"table-row","parent_begin":1976}
+{"type":"code","begin":2020,"end":2033,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":2008}
+{"type":"table-row","begin":2036,"end":2104,"contents_begin":2037,"contents_end":2103,"parent_type":"table","parent_begin":1672}
+{"type":"table-cell","begin":2037,"end":2054,"contents_begin":2038,"contents_end":2052,"parent_type":"table-row","parent_begin":2036}
+{"type":"table-cell","begin":2054,"end":2061,"contents_begin":2055,"contents_end":2059,"parent_type":"table-row","parent_begin":2036}
+{"type":"table-cell","begin":2061,"end":2103,"contents_begin":2062,"contents_end":2101,"parent_type":"table-row","parent_begin":2036}
+{"type":"code","begin":2080,"end":2101,"contents_begin":null,"contents_end":null,"parent_type":"table-cell","parent_begin":2061}
+{"type":"paragraph","begin":2105,"end":2170,"contents_begin":2105,"contents_end":2170,"parent_type":"section","parent_begin":1672}
+{"type":"link","begin":2115,"end":2134,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2105,"link_type":"fuzzy","path":"concept:modules","raw_link":"concept:modules","format":"bracket"}
+{"type":"link","begin":2136,"end":2158,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2105,"link_type":"fuzzy","path":"concept:ai-as-peer","raw_link":"concept:ai-as-peer","format":"bracket"}
+{"type":"link","begin":2160,"end":2169,"contents_begin":null,"contents_end":null,"parent_type":"paragraph","parent_begin":2105,"link_type":"fuzzy","path":"index","raw_link":"index","format":"bracket"}

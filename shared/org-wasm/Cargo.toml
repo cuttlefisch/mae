@@ -1,0 +1,31 @@
+[package]
+name = "mae-org-wasm"
+description = "mae-org's WASM facade: JSON in, JSON out, over a hand-rolled ABI (ADR-112 D5)"
+# Its own version, not the workspace's: this is the contract the
+# `mae-org-vX.Y.Z` tags name (`API_VERSION` is this value), and MAE's
+# release bump (.github/workflows/version-bump.yml) edits only the root
+# workspace version and the crates it lists, so a MAE release changes
+# neither this number nor the WASM artifact's bytes. Bump it by hand
+# when the contract changes; it moves with mae-org (tests/api.rs).
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# cdylib: the .wasm module (`make org-wasm`). rlib: the same code natively,
+# for its tests and the native side of the Node differential.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# mae-org is the only dependency. No wasm-bindgen: the ABI is four exported
+# functions (src/lib.rs) and a checked-in loader (js/mae-org.mjs), so the
+# build needs rustc alone, and nothing drifts between a generator's version
+# and its runtime.
+[dependencies]
+mae-org = { path = "../org" }
+
+[dev-dependencies]
+proptest = "1"
+# The differential test of the hand-rolled JSON reader, and the check that
+# every response is JSON.
+serde_json = "1"
