@@ -1,0 +1,6 @@
+#+MACRO: e
+* Note
+:PROPERTIES:
+:SECRET: SECRETLEAKP
+:END:
+:{{{e}}} {{{property(SECRET)}}}

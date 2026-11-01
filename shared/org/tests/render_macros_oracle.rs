@@ -6,8 +6,8 @@
 //!
 //! Generates a corpus of documents (template shapes × argument shapes ×
 //! the places a macro stands; macro PAIRS that open a construct on one line
-//! and close it on another, in every kind of element; the reviewers'
-//! inputs from `tests/macro-review/`), each holding markers (`QZ…QZ`, or
+//! and close it on another, in every kind of element; a macro GLUED into a
+//! line's first token; the reviewers' inputs from `tests/macro-review/`), each holding markers (`QZ…QZ`, or
 //! the reviewers' `SECRET…`); exports every one through Emacs's ox-html
 //! (`conformance/macro-export.el`: body only, no file visited, babel never
 //! evaluated) in one bounded `emacs -Q --batch`; and compares markers,
@@ -217,6 +217,95 @@ fn pairs() -> Vec<(String, String)> {
     out
 }
 
+/// Review round 6 (blocker 1): a macro glued into a line's first token,
+/// whose value makes the line another element (a block, a fixed-width
+/// line, a drawer, a LaTeX environment, a comment, a keyword, a headline,
+/// an item, a table row or rule, a footnote definition), with a macro
+/// reading a marker after it; and the lines whose kind stays text but
+/// whose reading changes (a paragraph's end, a list's, a table.el
+/// table's, an item's tag, a priority cookie). `{{{g}}}` is the glued
+/// macro, its template the first field.
+const GLUED: &[(&str, &str)] = &[
+    (
+        "_EXAMPLE",
+        "#+BEGIN{{{g}}}\n{{{keyword(K)}}}\n#+END_EXAMPLE\n",
+    ),
+    (
+        "_COMMENT",
+        "#+BEGIN{{{g}}}\n{{{keyword(K)}}}\n#+END_COMMENT\n",
+    ),
+    (
+        "_SRC sh :exports none",
+        "#+BEGIN{{{g}}}\necho {{{keyword(K)}}}\n#+END_SRC\n",
+    ),
+    (
+        "_SRC",
+        "- item\n  #+BEGIN{{{g}}}\n  {{{keyword(K)}}}\n  #+END_SRC\n",
+    ),
+    (
+        "XAMPLE",
+        "#+BEGIN_E{{{g}}}\n{{{keyword(K)}}}\n#+END_EXAMPLE\n",
+    ),
+    ("", ":{{{g}}} {{{keyword(K)}}}\n"),
+    ("", "#+NAME: x\n:{{{g}}} {{{keyword(K)}}}\n"),
+    // A LOGBOOK, which Org does not export (MAE draws no drawer).
+    ("BOOK:", ":LOG{{{g}}}\n{{{keyword(K)}}}\n:END:\n"),
+    (
+        "{equation}",
+        "\\begin{{{g}}}\nx {{{keyword(K)}}}\n\\end{equation}\n",
+    ),
+    ("", "#{{{g}}} {{{keyword(K)}}}\n"),
+    (
+        "+begin_comment",
+        "#{{{g}}}\n{{{keyword(K)}}}\n#+end_comment\n",
+    ),
+    (":", "#+KW{{{g}}} {{{keyword(K)}}}\n"),
+    ("", "#+CAPTION{{{g}}}: {{{keyword(K)}}}\n| t |\n"),
+    ("", "*{{{g}}} {{{keyword(K)}}}\n"),
+    ("", "*{{{g}}} COMMENT h\n{{{keyword(K)}}}\n* After\nshown\n"),
+    ("", "-{{{g}}} {{{keyword(K)}}}\n"),
+    ("", "+{{{g}}} {{{keyword(K)}}}\n"),
+    ("----", "-{{{g}}}\n{{{keyword(K)}}}\n"),
+    ("", "|{{{g}}} {{{keyword(K)}}} |\n"),
+    ("-", "| a |\n|{{{g}}}--|\n| {{{keyword(K)}}} |\n"),
+    (".", "1{{{g}}} {{{keyword(K)}}}\n"),
+    (")", "Para.\n1{{{g}}} {{{keyword(K)}}}\n"),
+    (":1]", "Ref[fn:1].\n\n[fn{{{g}}} {{{keyword(K)}}}\n"),
+    (":1]", "[fn{{{g}}} {{{keyword(K)}}}\n"),
+    ("", "- item\n  :{{{g}}} {{{keyword(K)}}}\n"),
+    (
+        "+",
+        "+--+\n|a |\n+--+\n{{{g}}}x\n| {{{keyword(K)}}} |\n+--+\n",
+    ),
+    ("*", "A *b\n{{{g}}}\t=v* {{{keyword(K)}}}=\n"),
+    ("", "- a =x\n{{{g}}} y {{{keyword(K)}}}=\n"),
+    ("::", "- *a {{{g}}} =b* {{{keyword(K)}}}=\n"),
+    ("[#A]", "* {{{g}}}=x {{{keyword(K)}}}=\n"),
+    (
+        "src",
+        "Run {{{g}}}_sh[:exports code]{echo {{{keyword(K)}}}} now.\n",
+    ),
+    (
+        "a]: =",
+        "#+CAPTION[{{{g}}}]: x {{{keyword(K)}}}=\n[[file:a.png]]\n",
+    ),
+    (
+        "CLOSED: [2024-01-01 Mon]",
+        "* H\n{{{g}}} {{{keyword(K)}}}\n",
+    ),
+];
+
+fn glued() -> Vec<(String, String)> {
+    GLUED
+        .iter()
+        .enumerate()
+        .map(|(i, (v, body))| {
+            let doc = format!("#+MACRO: g {v}\n#+K: QZk{i}QZ\n\n{body}");
+            (format!("f{i:02}"), doc)
+        })
+        .collect()
+}
+
 /// The reviewers' inputs, as written.
 fn review() -> Vec<(String, String)> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/macro-review");
@@ -314,6 +403,7 @@ fn mae(doc: &str) -> Option<(BTreeSet<String>, BTreeSet<String>)> {
 fn macro_oracle() {
     let mut corpus = corpus();
     corpus.extend(pairs());
+    corpus.extend(glued());
     corpus.extend(review());
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("mae-org-macro-oracle-{}", std::process::id()));

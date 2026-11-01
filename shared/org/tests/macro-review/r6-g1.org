@@ -1,0 +1,4 @@
+#+MACRO: m src
+#+SECRETKW: SECRETLEAKB
+
+Run {{{m}}}_sh[:exports code]{echo {{{keyword(SECRETKW)}}}} now.

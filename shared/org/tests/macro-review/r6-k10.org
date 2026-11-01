@@ -1,0 +1,4 @@
+#+MACRO: m [#A]
+#+SECRETKW: SECRETLEAKB
+
+* {{{m}}}=x {{{keyword(SECRETKW)}}}=

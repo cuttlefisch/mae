@@ -1,0 +1,7 @@
+#+MACRO: m <$1>
+#+SECRETKW: SECRETSHOWN
+#+TITLE: T {{{m(a
+#+BEGIN_EXAMPLE
+)}}}
+{{{keyword(SECRETKW)}}} here
+#+END_EXAMPLE

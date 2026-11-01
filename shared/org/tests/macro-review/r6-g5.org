@@ -1,0 +1,4 @@
+#+MACRO: e .
+#+SECRETKW: SECRETLEAKB
+
+1{{{e}}} {{{keyword(SECRETKW)}}}

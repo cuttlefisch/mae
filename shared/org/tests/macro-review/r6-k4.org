@@ -1,0 +1,7 @@
+#+MACRO: m \end{x}
+#+SECRETKW: SECRETLEAKB
+
+\begin{x}
+a {{{m}}}
+b {{{keyword(SECRETKW)}}}
+\end{x}

@@ -1,0 +1,7 @@
+#+MACRO: m :
+#+SECRETKW: SECRETLEAKB
+
+- a
+- b
+
+[fn{{{m}}}1] {{{keyword(SECRETKW)}}}

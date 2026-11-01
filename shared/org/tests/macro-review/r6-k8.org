@@ -1,0 +1,6 @@
+#+MACRO: m XAMPLE
+#+SECRETKW: SECRETLEAKB
+
+#+BEGIN_E{{{m}}}
+{{{keyword(SECRETKW)}}}
+#+END_EXAMPLE

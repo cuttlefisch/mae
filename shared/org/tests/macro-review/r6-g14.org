@@ -1,0 +1,8 @@
+#+MACRO: m EXAMPLE
+#+SECRETKW: SECRETLEAKB
+
+#+BEGIN_SRC
+{{{keyword(SECRETKW)}}}
+#+END_{{{m}}}
+x {{{keyword(SECRETKW)}}}
+#+END_EXAMPLE
