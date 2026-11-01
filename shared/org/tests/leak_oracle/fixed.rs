@@ -22,6 +22,9 @@ pub const CASES: &[(&str, &str)] = &[
     ("known-d-citation-key", "A citation [cite:@«d-cite-key»] in the text «d-visible».\n"),
     // Emacs (the id path stood in for): <a href="https://kb.invalid/">typed</a>.
     ("known-e-rel-value", ":PROPERTIES:\n:ID: aaaa\n:END:\n[[id:aaaa?rel=«e-link-rel»&w=1e9;x][typed «e-visible»]]\n"),
+    // Emacs: nothing (the block opened by #+BEGIN{{{bc}}} runs to the
+    // literal #+end_comment; the glued closer inside it is never expanded).
+    ("known-f-macro-glued-into-first-token", "#+MACRO: bc _comment\n#+BEGIN{{{bc}}}\n#+END{{{bc}}}\n«f-secret»\n#+end_comment\nafter «f-visible»\n"),
     // Consumer 01. Emacs: <a id="orgXXXXXXX"> and href="#orgXXXXXXX"; the
     // name appears nowhere.
     ("consumer-01-target-name-in-id", "#+title: Target name in id\nText with a hidden target <<«target-name=s»>> here, and a link to it: [[«target-name=s»][go to target]].\n"),

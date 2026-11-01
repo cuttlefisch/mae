@@ -19,7 +19,7 @@ pub struct Outcome {
 /// The confirmed leak shapes the oracle must rediscover:
 /// (a) a macro pair across a comment block, (b) a macro in a headline
 /// title reaching its anchor, (c) a target name, (d) a citation key,
-/// (e) a `?rel=` value.
+/// (e) a `?rel=` value; and (f) a macro glued into a line's first token.
 /// Inside a citation every leaf is shape (d)'s, and only its key counts.
 pub fn shape(l: &Leak) -> Option<char> {
     let leaf = l.leaf;
@@ -35,6 +35,8 @@ pub fn shape(l: &Leak) -> Option<char> {
         Some('e')
     } else if leaf.ends_with("target-name") || leaf == "c-target" {
         Some('c')
+    } else if l.path.contains("first-token:") || l.path.contains("-glued") || leaf == "f-secret" {
+        Some('f')
     } else if l.path.contains("region:comment") || leaf == "a-secret" {
         Some('a')
     } else if ((l.path.contains("headline-title") && l.path.contains("pair:"))
@@ -176,8 +178,8 @@ impl Tally {
     }
 
     fn render_shapes(&self, s: &mut String) {
-        let _ = writeln!(s, "-- known shapes (a)-(e):");
-        for c in ['a', 'b', 'c', 'd', 'e'] {
+        let _ = writeln!(s, "-- known shapes (a)-(f):");
+        for c in ['a', 'b', 'c', 'd', 'e', 'f'] {
             let st = self.shapes.get(&c).cloned().unwrap_or_default();
             let first = st.first_index.map_or("not found".into(), |i| {
                 format!("first at generated doc #{i}")
