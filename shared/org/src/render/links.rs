@@ -161,6 +161,18 @@ impl Builder<'_> {
         if link.is_radio() {
             return self.radio_link(&link, out);
         }
+        if self.in_value {
+            // In a property value only a bracket link is a link: another is
+            // its text, as a link nested in a description is. A bracket
+            // link's description renders as anywhere.
+            let plain = self.in_link || !is_bracket(n);
+            let outer = std::mem::replace(&mut self.in_link, plain);
+            self.in_value = false;
+            self.link(n, out);
+            self.in_value = true;
+            self.in_link = outer;
+            return;
+        }
         let class = match self.semantic_link(Span::of(n).start) {
             Some(l) => l.clone(),
             None => fallback(&link),

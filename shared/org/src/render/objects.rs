@@ -85,13 +85,13 @@ impl Builder<'_> {
     /// `inline-call-results`).
     pub fn babel_hides_object(&self, n: &SyntaxNode) -> bool {
         match n.kind() {
-            INLINE_SRC_BLOCK if self.slugging => true,
+            INLINE_SRC_BLOCK if self.slugging || self.in_value => true,
             INLINE_SRC_BLOCK => !self
                 .babel()
                 .inline_exports(n, self.babel_position(n))
                 .shows_code(),
             MACRO => super::babel::results_macro_owner(n).is_some_and(|owner| {
-                if self.slugging {
+                if self.slugging || self.in_value {
                     return true;
                 }
                 let at = self.babel_position(&owner);

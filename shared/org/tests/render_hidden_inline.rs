@@ -138,6 +138,13 @@ const CONTAINERS: &[(&str, &str)] = &[
         "alias",
         "* A\n:PROPERTIES:\n:ID: a1\n:ALIASES: al {X}, other\n:END:\n",
     ),
+    // Round 3 (the second reviewer): a property value dropped hidden
+    // objects at its top level only; nested in another object they were
+    // shown as written.
+    (
+        "property value, nested in other objects",
+        "* PN\n:PROPERTIES:\n:ID: pn\n:A: *bold {X}*\n:B: [cite:@a {X}]\n:C: {{{mp({X})}}}\n:D: _u {X}_\n:E: [[https://example.com/ok][*d {X}*]]\n:ALIASES: [[https://example.com/ok][*d {X}*]]\n:END:\n",
+    ),
     (
         "file title",
         ":PROPERTIES:\n:ID: f1\n:END:\n#+TITLE: T {X}\n",
@@ -601,4 +608,33 @@ fn macro_templates_hide_as_org_expands_them() {
     );
     let html = mae_org::render_html(&d, &semantics(&d), &RenderOptions::default(), &resolver());
     assert!(html.contains("<p>See  end.</p>"), "{html}");
+}
+
+/// The second reviewer's property values (round 3), as written.
+#[test]
+fn property_values_hide_what_their_nested_objects_hide() {
+    let doc = "* H\n:PROPERTIES:\n:ID: h\n:A: *bold src_sh[:exports none]{echo SECRETBOLD}*\n:B: [cite:@a src_sh[:exports none]{echo SECRETCITE}]\n:C: {{{m(src_sh[:exports none]{echo SECRETMAC})}}}\n:D: _u @@latex:SECRETSNIP@@_\n:E: plain src_sh[:exports none]{echo HIDDENOK}\n:END:\nBody.\n";
+    for (surface, s) in outputs(doc) {
+        assert!(
+            !s.contains("SECRET") && !s.contains("HIDDENOK"),
+            "{surface}:\n{s}"
+        );
+    }
+    let d = parse(doc, &ParseOptions::default());
+    let r = render(&d, &semantics(&d), &RenderOptions::default(), &resolver());
+    let a = &r.nodes[0]
+        .properties
+        .iter()
+        .find(|(k, _)| k == "A")
+        .unwrap()
+        .1;
+    assert_eq!(mae_org::to_html(a), "bold", "{a:?}");
+    // In a value an inline src block is hidden whatever its `:exports`
+    // (property-value-babel), even one its scope would show.
+    let doc = "* H\n:PROPERTIES:\n:ID: h\n:header-args: :exports both\n:F: shown src_sh[:exports code]{echo QZVALUE}\n:END:\nBody src_sh[:exports code]{echo QZBODY}.\n";
+    let outs = outputs(doc);
+    assert!(outs.iter().any(|(_, s)| s.contains("QZBODY")), "{doc}");
+    for (surface, s) in outs {
+        assert!(!s.contains("QZVALUE"), "{surface}:\n{s}");
+    }
 }

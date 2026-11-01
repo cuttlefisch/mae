@@ -2,7 +2,6 @@
 //! through the same builder as the body.
 
 use super::build::{trim_text, Builder, Mode, Table};
-use super::links::is_bracket;
 use super::notes::node_at;
 use super::tree::{push, text, Node};
 use super::{NodeMeta, RenderOptions, Resolver};
@@ -141,25 +140,23 @@ impl Builder<'_> {
 
     /// A property value: plain text in which only bracket links are links.
     ///
-    /// Org reads a value as text and shows it as written. MAE parses it as
-    /// objects and shows each one but a bracket link as its source, except
-    /// what the body would hide: an inline src block, an inline babel call,
-    /// an export snippet, the results macro after one of the first two and
-    /// a macro that renders nothing in the body (`macros`) show nothing
-    /// (ADR-112 D3: a construct hidden in the body is hidden
-    /// everywhere; a registered divergence, `property-value-babel`).
+    /// Org reads a value as text and shows it as written. MAE reads it as
+    /// objects and renders them inline-only through the one object path
+    /// (so whatever the body hides is hidden at any depth: an inline src
+    /// block or babel call, an export snippet, a macro that renders
+    /// nothing, a citation's hidden parts), every inline src block hidden
+    /// whatever its `:exports`; then keeps only its text, bracket links
+    /// (and images) as rendered (registered: `property-value-babel`).
     pub fn property_value(&mut self, value: &str) -> Vec<Node> {
         let tree = crate::green::objects(value, PARAGRAPH);
+        let mode = std::mem::replace(&mut self.mode, Mode::Meta);
+        let in_value = std::mem::replace(&mut self.in_value, true);
+        let mut rendered = Vec::new();
+        self.objects(&tree, &mut rendered);
+        self.mode = mode;
+        self.in_value = in_value;
         let mut out = Vec::new();
-        for c in tree.children_with_tokens() {
-            match c {
-                rowan::NodeOrToken::Node(l) if l.kind() == LINK && is_bracket(&l) => {
-                    self.deeper(&l, |b| b.object(&l, &mut out))
-                }
-                rowan::NodeOrToken::Node(o) if self.hidden_in_a_value(&o) => {}
-                other => push(&mut out, text(&other.to_string())),
-            }
-        }
+        flatten_value(rendered, &mut out);
         trim_text(&mut out);
         out
     }
@@ -179,16 +176,25 @@ impl Builder<'_> {
                 || (d.kind() == MACRO && self.macro_hidden(&d))
         })
     }
+}
 
-    /// Whether object `o` of a property value shows nothing (see
-    /// [`Builder::property_value`]): what the body would hide, a macro
-    /// that renders nothing included.
-    fn hidden_in_a_value(&self, o: &SyntaxNode) -> bool {
-        matches!(
-            o.kind(),
-            INLINE_SRC_BLOCK | INLINE_BABEL_CALL | EXPORT_SNIPPET
-        ) || (o.kind() == MACRO
-            && (super::babel::results_macro_owner(o).is_some() || self.macro_hidden(o)))
+/// A rendered property value as its text, but for the links: an `<a>`, an
+/// `<img>` and an unresolved link's span stay as rendered; every other
+/// element is replaced by its children.
+fn flatten_value(nodes: Vec<Node>, out: &mut Vec<Node>) {
+    use super::tree::Tag;
+    for n in nodes {
+        match n {
+            Node::Element(e)
+                if matches!(e.tag, Tag::A | Tag::Img)
+                    || (e.tag == Tag::Span
+                        && e.get(super::tree::Attr::Class) == Some("org-unresolved")) =>
+            {
+                push(out, Node::Element(e))
+            }
+            Node::Element(e) => flatten_value(e.children, out),
+            t => push(out, t),
+        }
     }
 }
 

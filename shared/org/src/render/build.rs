@@ -98,6 +98,10 @@ pub(crate) struct Builder<'a> {
     /// is dropped whatever its `:exports`, so a slug never depends on where
     /// it is read (a title and a link fragment naming it agree).
     pub slugging: bool,
+    /// Rendering a property value ([`Builder::property_value`]): a link
+    /// that is not a bracket link is its text, and every inline src block
+    /// is hidden.
+    pub in_value: bool,
     /// Render only what lies in this span (a node's body).
     scope: Option<Span>,
     /// Inside a link's description: a nested link or footnote reference
@@ -214,6 +218,7 @@ impl<'a> Builder<'a> {
             base: Some(0),
             scope_at: None,
             slugging: false,
+            in_value: false,
             scope: None,
             in_link: false,
             depth: 0,

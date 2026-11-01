@@ -151,7 +151,7 @@ test = "exports_decide_what_is_rendered_as_emacs_decides"
 id = "property-value-babel"
 what = "an inline src block, inline babel call, export snippet or results macro in a property value (rendered with property_drawers, and in Rendered::nodes)"
 org = "a property value is text, shown as written"
-mae = "those objects, and a macro that renders nothing in a body (see macros-citations), show nothing; the rest of the value is shown as written, bracket links as links"
+mae = "the value read as objects and rendered inline-only through the one object path, so whatever a body hides is hidden at any depth (inside emphasis, a citation, a macro, a link description), every inline src block hidden whatever its :exports; then only its text is kept, bracket links (and images) as rendered: markup characters and entities are not shown as written (*b* is b)"
 reason = "A construct the body hides is hidden everywhere (ADR-112 D3): a value must not publish the code or HTML its spelling would in the body."
 test = "no_hidden_inline_construct_reaches_any_output_in_any_container"
 
