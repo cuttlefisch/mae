@@ -3,16 +3,27 @@
 //!
 //! Unrendered, as Org's exporter prunes them (`org-export--skip-p`,
 //! `org-export--prune-tree`, Org 9.7.11): comment lines, comment and export
-//! blocks, every drawer except a property drawer (and MAE's list-item
-//! property drawer), a `COMMENT` subtree, a subtree whose own tags or the
-//! file's tags carry an exclude tag, the contents of an archived headline,
-//! and, when some headline carries a select tag, every headline outside the
-//! selected trees and their ancestors, plus the zeroth section's content
-//! (not the file's property drawer, which defines the file node). A footnote
-//! definition is rendered exactly when rendered text references it, wherever
-//! it is, unless it sits in a region Org never parses (a `COMMENT` subtree,
-//! which the exporter deletes before parsing, or a block or comment): Org
-//! re-adds a definition from a pruned region (`org-export--missing-definitions`).
+//! blocks, a `COMMENT` subtree, a subtree whose own tags or the file's tags
+//! carry an exclude tag (select and exclude tags expanded through the
+//! file's `#+TAGS:` groups, `org-tags-expand`), the contents of an archived
+//! headline, and, when some headline carries a select tag, every headline
+//! outside the selected trees and their ancestors, plus the zeroth
+//! section's content (not the file's property drawer, which defines the
+//! file node).
+//!
+//! Drawers are NOT Org's rule: Org's default (`org-export-with-drawers`,
+//! `(not "LOGBOOK")`) exports every drawer but LOGBOOK. ADR-112 D2 chose to
+//! leave every drawer but a property drawer (and MAE's list-item property
+//! drawer) unrendered, so a drawer's links and ids are never edges.
+//!
+//! A footnote definition is rendered when rendered text references its
+//! label and it is the ONE definition Org's export uses for that label
+//! (`org-export-get-footnote-definition`): the last of the label's
+//! definitions, standalone or inline (`[fn:n:text]`), left in the pruned
+//! tree; failing that, the first in a region Org parses before pruning it
+//! (`org-export--missing-definitions` re-adds it). A region Org never
+//! parses (a `COMMENT` subtree, which the exporter deletes before parsing,
+//! or a block or comment) holds no definition at all.
 //!
 //! Every headline's region is decided once, in [`Rules::new`], so the cost of
 //! reading tags is paid once per headline, whatever asks.
@@ -36,6 +47,9 @@ pub(crate) struct Rules {
     /// Referenced footnote labels, each with the start of the reference that
     /// first made it referenced; `None` while they are being computed.
     pub referenced: Option<HashMap<String, u32>>,
+    /// For each footnote label, the start of the definition Org uses (see
+    /// the module doc): a standalone definition or an inline reference.
+    pub chosen: HashMap<String, u32>,
     /// Keyword keys (upper case) whose values are not read for links.
     pub link_exclude_keywords: HashSet<String>,
     /// Property keys (canonical) whose values are not read for links.
@@ -44,11 +58,18 @@ pub(crate) struct Rules {
 
 impl Region {
     /// Whether Org parses this region's contents before pruning it, so a
-    /// footnote definition inside can still be re-added by a reference.
+    /// footnote definition inside can still be the one Org uses: re-added
+    /// by a reference from a pruned region, or an inline definition inside
+    /// a definition Org does not render.
     pub(crate) fn parses_contents(self) -> bool {
         matches!(
             self,
-            Region::ExcludedSubtree | Region::Drawer | Region::Unselected | Region::Archived
+            Region::ExcludedSubtree
+                | Region::Drawer
+                | Region::Unselected
+                | Region::Archived
+                | Region::UnreferencedFootnote
+                | Region::OverriddenFootnote
         )
     }
 }
@@ -113,6 +134,7 @@ impl Rules {
             archived,
             zeroth,
             referenced: None,
+            chosen: HashMap::new(),
             link_exclude_keywords: upper(&options.link_exclude_keywords),
             link_exclude_properties: options
                 .link_exclude_properties
@@ -127,11 +149,20 @@ impl Rules {
         let kind = node.kind();
         if kind == FOOTNOTE_DEFINITION {
             let label = definition_label(node);
-            let referenced = match (&self.referenced, label) {
-                (Some(map), Some(l)) => map.contains_key(&l),
+            let referenced = match (&self.referenced, &label) {
+                (Some(map), Some(l)) => map.contains_key(l),
                 _ => false,
             };
-            return (!referenced).then_some(Region::UnreferencedFootnote);
+            if !referenced {
+                return Some(Region::UnreferencedFootnote);
+            }
+            return (!self.is_chosen(label.as_deref(), node)).then_some(Region::OverriddenFootnote);
+        }
+        if kind == FOOTNOTE_REFERENCE {
+            // An inline definition Org does not use renders nothing (the
+            // reference itself still references its label).
+            let label = inline_label(node)?;
+            return (!self.is_chosen(Some(&label), node)).then_some(Region::OverriddenFootnote);
         }
         let parent = node.parent();
         if let Some(z) = &self.zeroth {
@@ -150,6 +181,11 @@ impl Rules {
             HEADLINE => self.headlines.get(&start(node)).copied(),
             _ => None,
         }
+    }
+
+    /// Whether `node` is the definition Org uses for `label`.
+    fn is_chosen(&self, label: Option<&str>, node: &SyntaxNode) -> bool {
+        label.is_some_and(|l| self.chosen.get(l) == Some(&start(node)))
     }
 
     /// Whether `headline` is archived, so rendered without its contents.
@@ -172,7 +208,9 @@ fn selected_headlines(
     file_selected: bool,
 ) -> Option<HashSet<u32>> {
     if file_selected {
-        return Some(own.iter().map(|h| start(&h.0)).collect());
+        // Every headline is selected; with none, nothing is (nil), so the
+        // zeroth section stays rendered, as in Org.
+        return (!own.is_empty()).then(|| own.iter().map(|h| start(&h.0)).collect());
     }
     // In a selected tree, and ancestors of one: separate sets, or a
     // selected tree's ancestor would pass selection on to its other
@@ -213,6 +251,62 @@ pub(crate) fn definition_label(def: &SyntaxNode) -> Option<String> {
     Some(label.to_string()).filter(|l| !l.is_empty())
 }
 
+/// `LABEL` of an inline definition `[fn:LABEL:text]`; `None` for a plain
+/// reference `[fn:LABEL]` or an anonymous `[fn::text]`.
+pub(crate) fn inline_label(reference: &SyntaxNode) -> Option<String> {
+    let text = reference.to_string();
+    let rest = text.strip_prefix("[fn:")?;
+    let end = rest.find([':', ']'])?;
+    (rest.as_bytes()[end] == b':' && end > 0).then(|| rest[..end].to_string())
+}
+
+/// For each label, the start of the definition Org's export uses (see the
+/// module doc): the last of the label's definitions outside every pruned
+/// region, else the first inside one. One walk; regions Org never parses
+/// are skipped.
+pub(crate) fn choose_definitions(root: &SyntaxNode, rules: &Rules) -> HashMap<String, u32> {
+    // Per label: the last rendered candidate, and the first pruned one.
+    let mut found: HashMap<String, (Option<u32>, Option<u32>)> = HashMap::new();
+    let mut pruned: Vec<SyntaxNode> = Vec::new();
+    let mut walk = root.preorder();
+    while let Some(ev) = walk.next() {
+        let n = match ev {
+            WalkEvent::Enter(n) => n,
+            WalkEvent::Leave(n) => {
+                if pruned.last() == Some(&n) {
+                    pruned.pop();
+                }
+                continue;
+            }
+        };
+        let label = match n.kind() {
+            FOOTNOTE_DEFINITION => definition_label(&n),
+            FOOTNOTE_REFERENCE => inline_label(&n),
+            _ => {
+                match rules.region(&n) {
+                    Some(r) if r.parses_contents() => pruned.push(n),
+                    Some(_) => walk.skip_subtree(),
+                    None => {}
+                }
+                continue;
+            }
+        };
+        if let Some(label) = label {
+            let at = start(&n);
+            let e = found.entry(label).or_default();
+            if pruned.is_empty() {
+                e.0 = Some(at);
+            } else if e.1.is_none() {
+                e.1 = Some(at);
+            }
+        }
+    }
+    found
+        .into_iter()
+        .filter_map(|(l, (rendered, first_pruned))| rendered.or(first_pruned).map(|at| (l, at)))
+        .collect()
+}
+
 /// `LABEL` of a reference `[fn:LABEL]` or `[fn:LABEL:inline definition]`;
 /// `None` for an anonymous `[fn::…]`.
 pub(crate) fn reference_label(reference: &SyntaxNode) -> Option<String> {
@@ -225,18 +319,19 @@ pub(crate) fn reference_label(reference: &SyntaxNode) -> Option<String> {
 /// The footnote labels rendered text references, each with the start of the
 /// reference that first made it referenced, and the labels in that order.
 ///
-/// References in rendered text (outside every unrendered region) come first,
-/// in document order; then, breadth first, the references inside each
-/// referenced definition. A definition counts wherever Org's exporter can
-/// still find it: anywhere but under a region it never parses (see
-/// [`Region::parses_contents`]). A worklist: each label's definitions are
-/// read once, so a chain of N definitions costs O(N).
+/// References in rendered text (outside every unrendered region and every
+/// definition) come first, in document order; then, breadth first, the
+/// references inside the definition Org uses for each referenced label
+/// ([`Rules::chosen`]: references inside a definition it does not use
+/// reference nothing). A worklist: each label's definition is read once,
+/// so a chain of N definitions costs O(N).
 pub(crate) fn referenced_footnotes(
     root: &SyntaxNode,
     rules: &Rules,
 ) -> (HashMap<String, u32>, Vec<String>) {
     let mut outside: Vec<(String, u32)> = Vec::new();
-    let mut defs: HashMap<String, Vec<SyntaxNode>> = HashMap::new();
+    // The definition Org uses for each label, by its start.
+    let mut defs: HashMap<u32, SyntaxNode> = HashMap::new();
     let mut hidden: Vec<SyntaxNode> = Vec::new();
     let mut walk = root.preorder();
     while let Some(ev) = walk.next() {
@@ -249,19 +344,31 @@ pub(crate) fn referenced_footnotes(
                 continue;
             }
         };
-        if n.kind() == FOOTNOTE_DEFINITION {
-            if let Some(label) = definition_label(&n) {
-                defs.entry(label).or_default().push(n);
+        let kind = n.kind();
+        if kind == FOOTNOTE_DEFINITION || kind == FOOTNOTE_REFERENCE {
+            if kind == FOOTNOTE_REFERENCE && hidden.is_empty() {
+                outside.extend(reference_label(&n).map(|l| (l, start(&n))));
             }
-            walk.skip_subtree();
+            let label = match kind {
+                FOOTNOTE_DEFINITION => definition_label(&n),
+                _ => inline_label(&n),
+            };
+            if label
+                .as_ref()
+                .is_some_and(|l| rules.chosen.get(l) == Some(&start(&n)))
+            {
+                defs.insert(start(&n), n.clone());
+            }
+            // A definition's text is read through the worklist below.
+            if label.is_some() || kind == FOOTNOTE_DEFINITION {
+                hidden.push(n);
+            }
         } else if let Some(r) = rules.region(&n) {
             if r.parses_contents() {
                 hidden.push(n);
             } else {
                 walk.skip_subtree();
             }
-        } else if n.kind() == FOOTNOTE_REFERENCE && hidden.is_empty() {
-            outside.extend(reference_label(&n).map(|l| (l, start(&n))));
         }
     }
     let mut first: HashMap<String, u32> = HashMap::new();
@@ -278,45 +385,61 @@ pub(crate) fn referenced_footnotes(
         add(l, at, &mut queue);
     }
     while let Some(label) = queue.pop_front() {
-        for def in defs.remove(&label).unwrap_or_default() {
-            for c in def.children() {
-                for (l, at) in references_under(&c, rules) {
-                    add(l, at, &mut queue);
-                }
+        let def = rules.chosen.get(&label).and_then(|at| defs.remove(at));
+        for c in def.iter().flat_map(|d| d.children()) {
+            for (l, at) in references_under(&c, rules) {
+                add(l, at, &mut queue);
             }
         }
     }
     (first, order)
 }
 
-/// References under `start` outside every unrendered region, in order.
+/// References under `start` outside every unrendered region, in order; an
+/// inline definition's own text is not read (the worklist reads the one Org
+/// uses).
 fn references_under(start: &SyntaxNode, rules: &Rules) -> Vec<(String, u32)> {
     let mut out = Vec::new();
     let mut walk = start.preorder();
     while let Some(ev) = walk.next() {
         let WalkEvent::Enter(n) = ev else { continue };
-        if n.kind() == FOOTNOTE_DEFINITION || rules.region(&n).is_some() {
-            walk.skip_subtree();
-        } else if n.kind() == FOOTNOTE_REFERENCE {
+        if n.kind() == FOOTNOTE_REFERENCE {
             out.extend(reference_label(&n).map(|l| (l, self::start(&n))));
+            walk.skip_subtree();
+        } else if n.kind() == FOOTNOTE_DEFINITION || rules.region(&n).is_some() {
+            walk.skip_subtree();
         }
     }
     out
 }
 
-/// The referenced footnote definitions under an unrendered `region` that
-/// Org still renders (only when the region's contents are parsed), in
-/// document order.
+/// The footnote definitions under an unrendered `region` that Org still
+/// renders (only when the region's contents are parsed): each referenced
+/// label's chosen definition, standalone or inline, in document order.
 pub(crate) fn rendered_definitions(region: &SyntaxNode, rules: &Rules) -> Vec<SyntaxNode> {
+    let referenced = |label: Option<String>| {
+        label.is_some_and(|l| {
+            rules
+                .referenced
+                .as_ref()
+                .is_some_and(|m| m.contains_key(&l))
+        })
+    };
     let mut out = Vec::new();
     let mut walk = region.preorder();
     walk.next(); // the region itself
     while let Some(ev) = walk.next() {
         let WalkEvent::Enter(n) = ev else { continue };
-        if n.kind() == FOOTNOTE_DEFINITION {
-            if rules.region(&n).is_none() {
-                out.push(n);
+        let rendered = match n.kind() {
+            FOOTNOTE_DEFINITION => rules.region(&n).is_none(),
+            FOOTNOTE_REFERENCE => {
+                let label = inline_label(&n);
+                label.is_some() && rules.region(&n).is_none() && referenced(label)
             }
+            _ => false,
+        };
+        if rendered {
+            out.push(n);
             walk.skip_subtree();
         } else if rules.region(&n).is_some_and(|r| !r.parses_contents()) {
             walk.skip_subtree();

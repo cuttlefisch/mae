@@ -70,8 +70,12 @@ fn unrendered_links(s: &Semantics) -> Vec<(String, Region)> {
 fn titles_are_plain_text() {
     let s = sem(&fixture("titles.org"));
     let file = &s.nodes[0];
-    // The last #+title wins; link → description; markup dropped; blanks collapsed.
-    assert_eq!(file.title.as_deref(), Some("A linked and bold title"));
+    // Every #+title, joined (org-get-title); link → description; markup
+    // dropped; blanks collapsed.
+    assert_eq!(
+        file.title.as_deref(),
+        Some("First title A linked and bold title")
+    );
     // #+kind replaces :KIND:, #+aliases are comma-separated.
     assert_eq!(file.kind.as_deref(), Some("lesson"));
     assert_eq!(file.aliases, vec!["one", "two"]);
@@ -338,9 +342,11 @@ fn file_keywords_last_wins_and_an_empty_value_clears() {
         (Some("lesson"), vec!["k1".to_string(), "k2".to_string()])
     );
     let n = file("#+todo_state: TODO\n#+todo_state:\n#+priority: B\n#+priority:\n#+kind: lesson\n#+kind:\n#+aliases: k1\n#+aliases:\n#+title: T\n#+title:\n");
+    // MAE's keywords clear; the title is Org's (`org-get-title`): an empty
+    // `#+title:` adds nothing and clears nothing.
     assert_eq!(
-        (n.todo, n.priority, n.kind, n.title),
-        (None, None, None, None)
+        (n.todo, n.priority, n.kind, n.title.as_deref()),
+        (None, None, None, Some("T"))
     );
     assert!(n.aliases.is_empty(), "{:?}", n.aliases);
     let n = file("#+todo_state: WAIT\n#+todo_state: NEXT\n");
@@ -921,6 +927,74 @@ fn a_plain_link_ending_in_a_content_cr_keeps_it_in_its_span() {
         vec![
             ("http:x\r", "http:x\r"),
             ("https://a.b/c\r", "https://a.b/c\r")
+        ]
+    );
+}
+
+/// Review F9. A file's title is `org-get-title`'s (Emacs 30.2): every line
+/// starting `#+TITLE:` — in any context: a COMMENT subtree, a src block —
+/// the values joined with a space and trimmed, read as plain text. Emacs on
+/// this text: "First Second  InComment InBlock" (an empty value adds its
+/// space, a value never clears the title).
+#[test]
+fn the_file_title_is_org_get_title() {
+    let text = ":PROPERTIES:\n:ID: f\n:END:\n#+title: First\n#+title: Second\n#+title:\n\n* COMMENT c\n#+title: InComment\n* b\n#+begin_src text\n#+title: InBlock\n#+end_src\n";
+    assert_eq!(
+        sem(text).nodes[0].title.as_deref(),
+        Some("First Second InComment InBlock")
+    );
+    let title = |t: &str| {
+        sem(&format!(":PROPERTIES:\n:ID: f\n:END:\n{t}")).nodes[0]
+            .title
+            .clone()
+    };
+    // Markup spanning two values reads as one: Org joins before parsing.
+    assert_eq!(title("#+title: *a\n#+title: b*\n").as_deref(), Some("a b"));
+    // Only empty values: no title; a key runs to the last colon of its word.
+    assert_eq!(title("#+title:\n#+TITLE:  \n"), None);
+    assert_eq!(
+        title("  #+Title: x:y\n#+title:z:w\n").as_deref(),
+        Some("x:y w")
+    );
+    // `#+titles:` is another keyword.
+    assert_eq!(title("#+titles: no\n"), None);
+}
+
+/// MAE's own keywords (`#+kind`, `#+aliases`, `#+todo_state`,
+/// `#+priority`) have no Emacs reading: their rule is MAE's — the zeroth
+/// section, document order, the last wins, an empty value clears.
+#[test]
+fn maes_own_file_keywords_keep_maes_rule() {
+    let s = sem(
+        ":PROPERTIES:\n:ID: f\n:END:\n#+todo_state: TODO\n#+todo_state:\n#+kind: a\n#+kind: b\n",
+    );
+    assert_eq!(
+        (s.nodes[0].todo.as_deref(), s.nodes[0].kind.as_deref()),
+        (None, Some("b"))
+    );
+}
+
+/// Review F9: `KEY+` as `org-entry-get` reads it: the base is the last
+/// `KEY` line wherever it is, followed by every `KEY+` value in order (so a
+/// `KEY+` before `KEY` still appends), and a value that is exactly `nil` is
+/// no value. The same rule for an item's drawer, and so for its `:ID:`.
+#[test]
+fn key_plus_reads_as_org_entry_get() {
+    let s = sem("* h\n:PROPERTIES:\n:K+: b\n:K: a\n:K+: c\n:K: z\n:ID: h\n:ID+: more\n:N: nil\n:N+: kept\n:END:\n- item\n  :PROPERTIES:\n  :ID+: two\n  :ID: one\n  :END:\n");
+    let props = &s.nodes[0].properties;
+    let get = |k: &str| props.iter().find(|p| p.0 == k).map(|p| p.1.as_str());
+    assert_eq!(get("K"), Some("z b c"));
+    assert_eq!(get("N"), Some("kept"));
+    assert_eq!(s.nodes[0].id, "h more");
+    assert_eq!(s.nodes[1].id, "one two");
+    // The fixture the Emacs oracle reads too (semantics-titles.tsv, through
+    // `org-entry-get`): file, headline and item ids all appended.
+    assert_eq!(
+        ids(&sem(&fixture("id-append.org"))),
+        vec![
+            "sem-idplus-file part",
+            "sem-idplus-heading tail",
+            "sem-idplus-item more"
         ]
     );
 }

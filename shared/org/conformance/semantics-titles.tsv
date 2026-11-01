@@ -342,6 +342,9 @@ shared/org/tests/semantics/duplicates.org	sem-dup	12	1	Second, same id
 shared/org/tests/semantics/external-links.org	sem-external-file	1	0	External link classification
 shared/org/tests/semantics/file-tags.org	sem-tags-file	1	0	File tags
 shared/org/tests/semantics/file-tags.org	sem-tags-heading	9	1	Heading repeating a file tag
+shared/org/tests/semantics/id-append.org	sem-idplus-file part	1	0	KEY+ appends as org-entry-get reads it
+shared/org/tests/semantics/id-append.org	sem-idplus-heading tail	7	1	A headline whose id an earlier ID+ extends
+shared/org/tests/semantics/id-append.org	sem-idplus-item more	13	2	An item whose id is appended
 shared/org/tests/semantics/indented-stars.org	sem-indented-file	1	0	Indented stars are not headlines
 shared/org/tests/semantics/items.org	sem-items-file	1	0	List-item nodes
 shared/org/tests/semantics/items.org	sem-items-heading	6	1	Heading
@@ -354,7 +357,7 @@ shared/org/tests/semantics/parent-child-links.org	sem-pc-child	14	2	Child
 shared/org/tests/semantics/properties.org	sem-props-file	1	0	Property keys, repeats and appends
 shared/org/tests/semantics/properties.org	sem-props-heading	9	1	Heading with every property shape
 shared/org/tests/semantics/split-orders.org	sem-split-file	1	0	Where the three old splitters disagree
-shared/org/tests/semantics/titles.org	sem-title-file	1	0	A linked and bold title
+shared/org/tests/semantics/titles.org	sem-title-file	1	0	First title A linked and bold title
 shared/org/tests/semantics/titles.org	sem-title-heading	10	1	A styled headline with code and a link
 shared/org/tests/semantics/titles.org	sem-title-bare-heading	15	1	id:sem-title-bare only
 shared/org/tests/semantics/titles.org	sem-title-objects	20	1	Objects [1/2] \alpha <2026-10-31 Sat> {{{macro}}} stay as written

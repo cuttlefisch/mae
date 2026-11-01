@@ -292,3 +292,222 @@ fn many_tags_resolve_like_few() {
     );
     assert_eq!(ids(&sem(&text)), vec!["b"]);
 }
+
+/// Review F5. Org expands select and exclude tags through the file's
+/// `#+TAGS:` groups (`org-tags-expand TAG t`). Emacs (`org-export-as` on
+/// the same text): `[ noexport : private ]` makes `:private:` excluded;
+/// `#+EXCLUDE_TAGS: G` with `{ G : x y }` excludes `:x:`, `:y:` and `:G:`,
+/// not `:z:`; a group a nested brace destroys (`{ G : x { y z } }`)
+/// expands to G alone, so `#+SELECT_TAGS: G` selects nothing and every
+/// headline is rendered.
+#[test]
+fn select_and_exclude_tags_expand_through_tag_groups() {
+    let node = |id: &str, tags: &str| format!("* {id} {tags}\n:PROPERTIES:\n:ID: {id}\n:END:\n");
+    let text = format!(
+        "#+TAGS: [ noexport : private ]\n{}{}",
+        node("h1", ":private:"),
+        node("h2", "")
+    );
+    assert_eq!(ids(&sem(&text)), vec!["h2"]);
+    let text = format!(
+        "#+EXCLUDE_TAGS: G\n#+TAGS: {{ G : x y }}\n{}{}{}{}",
+        node("a", ":y:"),
+        node("b", ":x:"),
+        node("c", ":G:"),
+        node("d", ":z:")
+    );
+    assert_eq!(ids(&sem(&text)), vec!["d"]);
+    let text = format!(
+        "#+SELECT_TAGS: G\n#+TAGS: {{ G : x {{ y z }} }} [ y : w ]\n{}{}{}",
+        node("h1", ":w:"),
+        node("h2", ":z:"),
+        node("h3", ":x:")
+    );
+    assert_eq!(ids(&sem(&text)), vec!["h1", "h2", "h3"]);
+    // Groups chain: G reaches x through H.
+    let text = format!(
+        "#+EXCLUDE_TAGS: G\n#+TAGS: [ G : H ]\n#+TAGS: [ H : x ]\n{}{}",
+        node("a", ":x:"),
+        node("b", ":q:")
+    );
+    assert_eq!(ids(&sem(&text)), vec!["b"]);
+}
+
+/// Review F5: a regexp member (`{P@.+}`) is never run. Emacs's export
+/// compares the expanded tags with `member`, so the member matches only a
+/// tag spelled `{P@.+}`, which no headline can carry: with
+/// `#+EXCLUDE_TAGS: P` and `{ P : {P@.+} }`, Emacs keeps `:P@1:` and drops
+/// `:P:`. mae-org reads the member as that literal tag, which agrees.
+#[test]
+fn a_regexp_group_member_is_a_literal_tag_as_in_orgs_export() {
+    let text = "#+EXCLUDE_TAGS: P\n#+TAGS: { P : {P@.+} }\n* a :P@1:\n:PROPERTIES:\n:ID: a\n:END:\n* b :P:\n:PROPERTIES:\n:ID: b\n:END:\n";
+    assert_eq!(ids(&sem(text)), vec!["a"]);
+}
+
+/// Review F6. The export deletes COMMENT subtrees before it reads its
+/// options, so `#+SELECT_TAGS`, `#+EXCLUDE_TAGS` and `#+TAGS` inside one do
+/// not count, nor such a line in a block (Emacs: `:ex:`, `:sel:`,
+/// `:private:` and `:blk:` headlines are all exported).
+#[test]
+fn settings_in_a_comment_subtree_or_a_block_do_not_count() {
+    let node = |id: &str, tags: &str| format!("* {id} {tags}\n:PROPERTIES:\n:ID: {id}\n:END:\n");
+    let text = format!(
+        "* COMMENT c\n#+EXCLUDE_TAGS: ex\n#+SELECT_TAGS: sel\n#+TAGS: [ noexport : private ]\n{}{}{}#+begin_src text\n#+EXCLUDE_TAGS: blk\n#+end_src\n{}",
+        node("a", ":ex:"),
+        node("b", ":sel:"),
+        node("p", ":private:"),
+        node("c", ":blk:")
+    );
+    let opts = SemanticsOptions {
+        select_tags: ORG_EXPORT_SELECT_TAGS
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        ..SemanticsOptions::default()
+    };
+    assert_eq!(ids(&sem_with(&text, &opts)), vec!["a", "b", "p", "c"]);
+}
+
+/// Review F6/F8: `#+LINK` abbreviations in a COMMENT subtree. Emacs's
+/// export inherits the buffer's abbreviations and replaces them only when
+/// it finds a `#+LINK` outside COMMENT subtrees: with one there, the
+/// commented `gh` does not apply (`[[gh:x]]` stays as written); with none,
+/// it does (`[[https://github.com/x]]`).
+#[test]
+fn link_abbreviations_in_a_comment_subtree_apply_as_in_orgs_export() {
+    let head = ":PROPERTIES:\n:ID: f\n:END:\n";
+    let text = format!("{head}#+LINK: other https://o/%s\n* COMMENT c\n#+LINK: gh https://github.com/%s\n* a\n[[gh:x]] [[other:y]]\n");
+    let got: Vec<(LinkKind, String)> = sem(&text)
+        .links
+        .iter()
+        .map(|l| (l.kind, l.target.clone()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (LinkKind::Kb, "gh:x".to_string()),
+            (LinkKind::Web, "https://o/y".to_string())
+        ]
+    );
+    let text = format!("{head}* COMMENT c\n#+LINK: gh https://github.com/%s\n* a\n[[gh:x]]\n");
+    let got: Vec<(LinkKind, String)> = sem(&text)
+        .links
+        .iter()
+        .map(|l| (l.kind, l.target.clone()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![(LinkKind::Web, "https://github.com/x".to_string())]
+    );
+}
+
+/// Review F8. `semantics()` applies `#+LINK` abbreviations as Org does
+/// before it classifies a bracket link (Emacs parses `[[gh:mae]]` as https
+/// and `[[n:abc]]` as an id link to `abc`); `%h` hex-encodes; the key is
+/// case-sensitive (`[[GH:z]]` stays fuzzy). A `#+LINK` line's own value is
+/// not a link source.
+#[test]
+fn link_abbreviations_expand_before_classification() {
+    let text = ":PROPERTIES:\n:ID: f\n:END:\n#+LINK: gh https://github.com/%s\n#+LINK: n id:%s\n#+LINK: h https://x/%h\n[[gh:mae]] [[n:abc]] [[h:a b]] [[GH:z]]\n";
+    let got: Vec<(LinkKind, String)> = sem(text)
+        .links
+        .iter()
+        .map(|l| (l.kind, l.target.clone()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (LinkKind::Web, "https://github.com/mae".to_string()),
+            (LinkKind::Kb, "abc".to_string()),
+            (LinkKind::Web, "https://x/a%20b".to_string()),
+            (LinkKind::Kb, "GH:z".to_string()),
+        ]
+    );
+    // The view expands with the same function (principle #8).
+    let doc = parse(text, &ParseOptions::default());
+    let view: Vec<String> = doc
+        .syntax()
+        .descendants()
+        .filter_map(mae_org::Link::cast)
+        .map(|l| l.info(&ParseOptions::default().link_types).raw_link)
+        .collect();
+    assert_eq!(
+        view,
+        [
+            "https://github.com/mae",
+            "id:abc",
+            "https://x/a%20b",
+            "GH:z"
+        ]
+    );
+}
+
+/// Review F7. A FILETAGS select tag in a file with no headlines selects
+/// nothing (`org-export--selected-trees` is nil), so Emacs renders the
+/// zeroth section.
+#[test]
+fn a_select_file_tag_without_headlines_hides_nothing() {
+    let text =
+        ":PROPERTIES:\n:ID: f\n:END:\n#+FILETAGS: :sel:\n#+SELECT_TAGS: sel\nText [[id:x]]\n";
+    assert_eq!(edges(&sem(text)), pairs(&[("f", "x")]));
+}
+
+/// Review F11. Org's export uses ONE definition per label
+/// (`org-export-get-footnote-definition`): the last of those left in the
+/// pruned tree, standalone or inline; when none is left there, the first
+/// from a pruned region (`org-export--missing-definitions`). Emacs (ascii
+/// export): duplicates render the second; an inline named definition
+/// before a standalone renders the standalone, after it the inline; a
+/// rendered definition beats a later pruned one; of two pruned ones the
+/// first; and a reference inside a losing definition references nothing.
+#[test]
+fn one_definition_per_footnote_label_as_orgs_export_chooses() {
+    let head = ":PROPERTIES:\n:ID: f\n:END:\n";
+    let web = |s: &Semantics| -> Vec<String> {
+        s.links
+            .iter()
+            .filter(|l| l.kind == LinkKind::Web)
+            .map(|l| l.target.clone())
+            .collect()
+    };
+    let s = sem(&format!("{head}Ref[fn:a] text.\n\n[fn:a] FIRST https://x.org/first\n\n[fn:a] SECOND https://x.org/second\n"));
+    assert_eq!(web(&s), ["https://x.org/second"]);
+    assert_eq!(
+        diags(&s),
+        vec![link_diag("https://x.org/first", Region::OverriddenFootnote)]
+    );
+    let s = sem(&format!("{head}Ref[fn:n:INLINE https://x.org/inline] again[fn:n].\n\n[fn:n] STANDALONE https://x.org/standalone\n"));
+    assert_eq!(web(&s), ["https://x.org/standalone"]);
+    assert_eq!(
+        diags(&s),
+        vec![link_diag(
+            "https://x.org/inline",
+            Region::OverriddenFootnote
+        )]
+    );
+    let s = sem(&format!("{head}Ref[fn:n] x.\n\n[fn:n] STANDALONE https://x.org/s\n\nLater[fn:n:INLINE-LATER https://x.org/il].\n"));
+    assert_eq!(web(&s), ["https://x.org/il"]);
+    let s = sem(&format!(
+        "{head}Ref[fn:n:ONE https://x.org/i1] and[fn:n:TWO https://x.org/i2].\n"
+    ));
+    assert_eq!(web(&s), ["https://x.org/i2"]);
+    let s = sem(&format!("{head}Ref[fn:n] x.\n\n[fn:n] RENDERED https://x.org/r\n\n* hidden :noexport:\n[fn:n] HIDDEN https://x.org/h\n"));
+    assert_eq!(web(&s), ["https://x.org/r"]);
+    let s = sem(&format!("{head}Ref[fn:n] x.\n\n* h1 :noexport:\n[fn:n] ONE https://x.org/h1\n* h2 :noexport:\n[fn:n] TWO https://x.org/h2\n"));
+    assert_eq!(web(&s), ["https://x.org/h1"]);
+    let s = sem(&format!(
+        "{head}Ref[fn:a] x.\n\n[fn:a] A1 [fn:b]\n\n[fn:a] A2 plain\n\n[fn:b] B https://x.org/b\n"
+    ));
+    assert_eq!(web(&s), Vec::<String>::new());
+}
+
+/// Review (suspected): a footnote reference in an item's property drawer.
+/// Org reads that drawer as a drawer, which its export renders (`:with-drawers`
+/// excludes only LOGBOOK), so the reference renders the note (Emacs: PDEF
+/// is exported). The note belongs to the item, whose drawer references it,
+/// not to the headline its definition sits under.
+#[test]
+fn a_footnote_referenced_from_an_item_drawer_belongs_to_the_item() {
+    let text = "* H\n:PROPERTIES:\n:ID: h\n:END:\n- item\n  :PROPERTIES:\n  :ID: i\n  :NOTE: see[fn:p]\n  :END:\n\n[fn:p] PDEF [[id:pdef]]\n";
+    assert_eq!(edges(&sem(text)), pairs(&[("i", "pdef")]));
+}

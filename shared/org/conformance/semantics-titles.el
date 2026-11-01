@@ -12,18 +12,23 @@
 ;; Output: one line per node, "FILE<TAB>ID<TAB>LINE<TAB>LEVEL<TAB>TITLE",
 ;; LINE being the 1-based line the element starts on (the file node's is 1).
 ;;
-;; The rules restate mae-org's documented ones (src/semantics/plain.rs and
-;; items.rs) on Org's tree:
+;; Where Org has a reading, the oracle calls Org's own function: a file's
+;; title is `org-get-title', and a headline's or the file's id is
+;; `org-entry-get' (the last :ID: line, then every :ID+: value). The rest
+;; restates mae-org's documented rules (src/semantics/plain.rs and items.rs)
+;; on Org's tree, for what Org does not define:
 ;; - nodes: the file (an ID in the zeroth section's property drawer), every
 ;;   headline with an ID property, and every list item whose first element,
 ;;   or second after a paragraph, is a drawer named PROPERTIES holding only
-;;   `:KEY: value' lines, one of them ID. Every such element is listed,
-;;   rendered or not, duplicates included, in document order.
+;;   `:KEY: value' lines, one of them ID or ID+. Every such element is
+;;   listed, rendered or not, duplicates included, in document order. An
+;;   item's id reads its drawer as `org-entry-get' reads a headline's.
 ;; - level: 0 for the file, the headline's stars, and for an item its
 ;;   headline's level plus the items it is nested in, itself included.
-;; - title: the file's last #+title in the zeroth section; a headline's
-;;   title; an item's "TAG :: FIRST-PARAGRAPH" (either alone if the other is
-;;   empty). Plain text: bold, italic, underline and strike-through give
+;; - title: the file's `org-get-title' (every #+title line, joined); a
+;;   headline's title; an item's "TAG :: FIRST-PARAGRAPH" (either alone if
+;;   the other is empty), all read as plain text. Plain text: bold, italic,
+;;   underline and strike-through give
 ;;   their contents, verbatim and code their value; a link its description,
 ;;   else (an id or fuzzy link that is not a heading search) the text after
 ;;   the first `|' of its path (MAE's store form), else its path as Org
@@ -116,18 +121,25 @@ search and not one of MAE's non-KB schemes Org does not know)."
     n))
 
 (defun mae-titles--item-props (drawer)
-  "The ID among DRAWER's lines if every non-blank one is `:KEY: value'."
+  "The ID of DRAWER's lines if every non-blank one is `:KEY: value'.
+Read as `org-entry-get' reads a headline's: the last :ID: value, then
+every :ID+: value in order, joined with a space; \"nil\" is no value."
   (let* ((beg (org-element-property :contents-begin drawer))
          (end (org-element-property :contents-end drawer))
          (lines (if beg (split-string (buffer-substring-no-properties beg end) "[\n\r]") nil))
-         (id nil) (ok t))
+         (base nil) (extra nil) (ok t))
     (dolist (l lines)
       (unless (string-match-p "\\`[ \t]*\\'" l)
         (if (string-match "\\`[ \t]*:\\([^ \t]+\\):\\(?:[ \t]\\(.*\\)\\)?\\'" l)
-            (when (string= (upcase (match-string 1 l)) "ID")
-              (setq id (string-trim (or (match-string 2 l) "") "[ \t]+" "[ \t]+")))
+            (let ((key (upcase (match-string 1 l)))
+                  (value (string-trim (or (match-string 2 l) "") "[ \t]+" "[ \t]+")))
+              (cond ((string= key "ID") (setq base value))
+                    ((string= key "ID+") (push value extra))))
           (setq ok nil))))
-    (and ok id (not (string-empty-p id)) id)))
+    (let ((id (mapconcat #'identity
+                         (delq nil (mapcar #'org-not-nil (cons base (nreverse extra))))
+                         " ")))
+      (and ok (not (string-empty-p id)) id))))
 
 (defun mae-titles--item (item)
   "(ID LEVEL TITLE) if ITEM has its own property drawer, else nil."
@@ -156,24 +168,18 @@ search and not one of MAE's non-KB schemes Org does not know)."
                     (t (or tag text ""))))))))
 
 (defun mae-titles--file (data)
-  "(ID 0 TITLE) of the file node of DATA, or nil."
+  "(ID 0 TITLE) of the file node of DATA, or nil.
+The id is `org-entry-get' before the first headline (the zeroth section's
+property drawer); the title is `org-get-title', read as plain text."
   (let ((section (car (org-element-contents data))))
     (when (org-element-type-p section 'section)
       (let* ((kids (org-element-contents section))
              (drawer (cl-find-if (lambda (e) (org-element-type-p e 'property-drawer)) kids))
-             (id (and drawer
-                      (cl-loop for p in (org-element-contents drawer)
-                               when (string= (upcase (org-element-property :key p)) "ID")
-                               do (setq id (org-element-property :value p))
-                               finally return id)))
-             (title nil))
-        (dolist (k kids)
-          (when (and (org-element-type-p k 'keyword)
-                     (string= (upcase (org-element-property :key k)) "TITLE"))
-            (setq title (mae-titles--string
-                         (mae-titles--org-trim (org-element-property :value k))))))
+             (id (and drawer (org-entry-get (org-element-begin drawer) "ID")))
+             (title (org-get-title)))
         (when (and id (not (string-empty-p (mae-titles--org-trim id))))
-          (list (mae-titles--org-trim id) 0 (or title "")))))))
+          (list (mae-titles--org-trim id) 0
+                (if title (mae-titles--string title) "")))))))
 
 (defun mae-titles--emit (rel line row)
   (princ (format "%s\t%s\t%d\t%d\t%s\n" rel (nth 0 row) line (nth 1 row) (nth 2 row))))
@@ -194,7 +200,7 @@ search and not one of MAE's non-KB schemes Org does not know)."
         (lambda (el)
           (pcase (org-element-type el)
             ('headline
-             (let ((id (org-element-property :ID el)))
+             (let ((id (org-entry-get (org-element-begin el) "ID")))
                (when (and id (not (string-empty-p (mae-titles--org-trim id))))
                  (mae-titles--emit
                   rel (mae-titles--line el)

@@ -738,3 +738,53 @@ file = "shared/org/tests/semantics/external-links.org"
 detail = "from: \"sem-external-file\", p: Payload { target: \"sem-external-plain\""
 reason = "A plain link (`type:path` in prose, no brackets) is a link in Org, and Org registers `id` (org-modules), so `id:sem-external-plain` is an id link; mae-kb read bracket links only. The class requires a plain link making exactly this edge (same source, same payload)."
 test = "plain_id_links_are_links"
+
+# ---------------------------------------------------------------- KEY+ ids (review F9)
+
+[[divergence]]
+what = "node"
+class = "property_value"
+file = "shared/org/tests/semantics/id-append.org"
+detail = "only mae-kb: sem-idplus-file"
+reason = "An id is read as org-entry-get reads it: the last :ID: line, then every :ID+: value, joined with a space (the Emacs oracle agrees: semantics-titles.tsv). mae-kb ignored :ID+:, so each node has another id there."
+test = "key_plus_reads_as_org_entry_get"
+
+[[divergence]]
+what = "node"
+class = "property_value"
+file = "shared/org/tests/semantics/id-append.org"
+detail = "only mae-kb: sem-idplus-heading"
+reason = "An id is read as org-entry-get reads it: the last :ID: line, then every :ID+: value, joined with a space (the Emacs oracle agrees: semantics-titles.tsv). mae-kb ignored :ID+:, so each node has another id there."
+test = "key_plus_reads_as_org_entry_get"
+
+[[divergence]]
+what = "node"
+class = "not_a_link_in_org"
+file = "shared/org/tests/semantics/id-append.org"
+detail = "only mae-kb: sem-idplus-item"
+reason = "An id is read as org-entry-get reads it: the last :ID: line, then every :ID+: value, joined with a space (the Emacs oracle agrees: semantics-titles.tsv). mae-kb ignored :ID+:, so each node has another id there."
+test = "key_plus_reads_as_org_entry_get"
+
+[[divergence]]
+what = "node"
+class = "unclassified"
+file = "shared/org/tests/semantics/id-append.org"
+detail = "only mae-org: sem-idplus-file part"
+reason = "An id is read as org-entry-get reads it: the last :ID: line, then every :ID+: value, joined with a space (the Emacs oracle agrees: semantics-titles.tsv). mae-kb ignored :ID+:, so each node has another id there."
+test = "key_plus_reads_as_org_entry_get"
+
+[[divergence]]
+what = "node"
+class = "unclassified"
+file = "shared/org/tests/semantics/id-append.org"
+detail = "only mae-org: sem-idplus-heading tail"
+reason = "An id is read as org-entry-get reads it: the last :ID: line, then every :ID+: value, joined with a space (the Emacs oracle agrees: semantics-titles.tsv). mae-kb ignored :ID+:, so each node has another id there."
+test = "key_plus_reads_as_org_entry_get"
+
+[[divergence]]
+what = "node"
+class = "unclassified"
+file = "shared/org/tests/semantics/id-append.org"
+detail = "only mae-org: sem-idplus-item more"
+reason = "An id is read as org-entry-get reads it: the last :ID: line, then every :ID+: value, joined with a space (the Emacs oracle agrees: semantics-titles.tsv). mae-kb ignored :ID+:, so each node has another id there."
+test = "key_plus_reads_as_org_entry_get"

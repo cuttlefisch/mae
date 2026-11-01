@@ -111,6 +111,11 @@
 //! - sem: N links in one paragraph: 8.79 ms -> 68.77 ms for x8 bytes, normalised x7.8
 //! - sem: one drawer, N KEY+ appends: 10.46 ms -> 85.37 ms for x8 bytes, normalised x8.2
 //! - sem: N transclusions: 25.99 ms -> 218.40 ms for x8 bytes, normalised x8.4
+//! - sem: N links and N kept notes in one unrendered region (review F4, 2026-11-01):
+//!   10.54 ms -> 88.12 ms for x9 bytes, normalised x7.8 (before: a scan of every
+//!   kept definition per link, 17.90 ms -> 601.17 ms, x31.3)
+//! - sem: N chained tag groups (review F5): 26.01 ms -> 219.46 ms for x9 bytes,
+//!   normalised x7.9
 
 use mae_org::{parse, semantics, ParseOptions};
 #[cfg(not(debug_assertions))]
@@ -456,6 +461,16 @@ const SEMANTIC_FAMILIES: &[Family] = &[
         },
         5_000,
     ),
+    // Review F4: N links and N kept footnote definitions in one unrendered
+    // region (each link was checked against every kept definition).
+    (
+        "sem: N links and N kept notes in one unrendered region",
+        links_and_kept_notes,
+        2_000,
+    ),
+    // Review F5: N chained tag groups expanded from N exclude tags (each
+    // tag's expansion must not walk the chain again).
+    ("sem: N chained tag groups", chained_tag_groups, 2_000),
     (
         "sem: N transclusions",
         |n| {
@@ -467,6 +482,24 @@ const SEMANTIC_FAMILIES: &[Family] = &[
         5_000,
     ),
 ];
+
+fn links_and_kept_notes(n: usize) -> String {
+    let refs: String = (0..n).map(|i| format!("r[fn:{i}] ")).collect();
+    let links: String = (0..n).map(|i| format!("[[id:x{i}]]\n")).collect();
+    let defs: String = (0..n).map(|i| format!("[fn:{i}] d\n\n")).collect();
+    format!(":PROPERTIES:\n:ID: f\n:END:\n{refs}\n* H :noexport:\n{links}\n{defs}")
+}
+
+fn chained_tag_groups(n: usize) -> String {
+    let groups: String = (0..n)
+        .map(|i| format!("#+TAGS: [ g{i} : g{} ]\n", i + 1))
+        .collect();
+    let exclude: Vec<String> = (0..n).map(|i| format!("g{i}")).collect();
+    let heads: String = (0..n)
+        .map(|i| format!("* h{i} :q{i}:\n:PROPERTIES:\n:ID: h{i}\n:END:\n"))
+        .collect();
+    format!("#+EXCLUDE_TAGS: {}\n{groups}{heads}", exclude.join(" "))
+}
 
 fn item_with_drawers(n: usize) -> String {
     format!(

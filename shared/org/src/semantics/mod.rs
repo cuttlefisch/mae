@@ -11,15 +11,15 @@
 //!
 //! MAE's extensions to Org, each a documented delta:
 //! - `:KIND:` and `:ALIASES:` (comma-separated) properties;
-//! - file keywords `#+kind`, `#+aliases`, `#+todo_state`, `#+priority`,
-//!   alongside Org's `#+title` and `#+filetags`; all are read from the
-//!   zeroth section only (Org reads TITLE and FILETAGS buffer-wide). One
-//!   precedence rule for every one of them, Org's for keywords: document
-//!   order, the last wins, and an empty last value clears the field
-//!   (`#+todo_state: TODO` then `#+todo_state:` gives no state). The file's
-//!   property drawer always precedes its keywords (Org reads a drawer only
-//!   at the top), so `#+kind` and `#+aliases` win over `:KIND:` and
-//!   `:ALIASES:`. FILETAGS alone add up, as in Org;
+//! - file keywords `#+kind`, `#+aliases`, `#+todo_state`, `#+priority`.
+//!   Org has no reading of them, so their rule is MAE's: the zeroth section
+//!   only, document order, the last wins, and an empty last value clears
+//!   the field (`#+todo_state: TODO` then `#+todo_state:` gives no state).
+//!   The file's property drawer always precedes its keywords (Org reads a
+//!   drawer only at the top), so `#+kind` and `#+aliases` win over `:KIND:`
+//!   and `:ALIASES:`. Org's own keywords follow Org (see `keywords`): the
+//!   title is `org-get-title`'s, every `#+title` line joined; FILETAGS add
+//!   up, read from the zeroth section only (Org reads them buffer-wide);
 //! - list items with their own property drawer are nodes (see `items`);
 //! - `#+TRANSCLUDE: MEMBER [ROLE]`, and org-transclusion's
 //!   `#+TRANSCLUDE: [[LINK][DESC]] ARGS…`, whose member is the link's target;
@@ -54,11 +54,13 @@
 //!   be N² strings, a memory denial of service from a few hundred KB of
 //!   text (`tests/scaling.rs`);
 //! - `properties` are the node's property drawer with canonical keys
-//!   ([`crate::Property::key`]), `ID` included, in first-occurrence order; a
-//!   repeated key keeps its last value and `KEY+` appends to `KEY` with a
-//!   space, as Org does. Values are trimmed as Org trims them (space, tab,
-//!   LF, CR, never a no-break space), so the `ID` field and `properties`
-//!   always agree;
+//!   ([`crate::Property::key`]), `ID` included, in first-occurrence order,
+//!   each valued as `org-entry-get` reads it: the last `KEY` line, then
+//!   every `KEY+` value in order, joined with a space, wherever they are; a
+//!   value that is exactly `nil` is none, and a key with no value left is
+//!   not listed. Values are trimmed as Org trims them (space, tab, LF, CR,
+//!   never a no-break space), so the `ID` field and `properties` always
+//!   agree;
 //! - links belong to the innermost node around them (`from`), never also to
 //!   that node's ancestors; `None` outside every node. A link in a property
 //!   value belongs to the node whose drawer it is, and a link in a keyword
@@ -75,17 +77,21 @@
 //!   under: the first reference in rendered text, in document order, and
 //!   for a definition referenced only from another definition, that
 //!   definition's node. A node nested inside the definition still owns its
-//!   own links.
+//!   own links. A label has ONE definition, as Org's export uses one: the
+//!   last of those in rendered regions, standalone or inline
+//!   (`[fn:n:text]`); failing that, the first in a pruned region. The
+//!   others are unrendered ([`Region::OverriddenFootnote`]).
 
 mod items;
+mod keywords;
 mod plain;
 mod regions;
 
 use crate::kind::SyntaxKind::*;
 use crate::kind::SyntaxNode;
-use crate::link_grammar::{classify_link_with, org_trim, LinkKind, LinkTypes};
+use crate::link_grammar::{classify_link_with, classify_normalized, org_trim, LinkKind, LinkTypes};
 use crate::span::Span;
-use crate::views::{Headline, Keyword, PropertyDrawer};
+use crate::views::{Headline, Keyword, LinkAbbrevs, LinkFormat, PropertyDrawer};
 use crate::Document;
 use regions::Rules;
 use rowan::WalkEvent;
@@ -147,10 +153,13 @@ pub struct SemanticsOptions {
 pub const ORG_EXPORT_SELECT_TAGS: &[&str] = &["export"];
 
 /// Keywords whose values are not link sources: `TRANSCLUDE` (org-roam's
-/// `org-roam-db-extra-links-exclude-keys`), and the keywords whose value Org
-/// passes to an exporter as raw output, which is never parsed as Org.
+/// `org-roam-db-extra-links-exclude-keys`), `LINK` (an abbreviation's
+/// template), and the keywords whose value Org passes to an exporter as raw
+/// output, which is never parsed as Org.
 pub const LINK_EXCLUDE_KEYWORDS: &[&str] = &[
     "TRANSCLUDE",
+    // A `#+LINK:` value is an abbreviation's template, not a link.
+    "LINK",
     "ASCII",
     "BEAMER",
     "HTML",
@@ -257,6 +266,10 @@ pub enum Region {
     CommentSubtree,
     ExcludedSubtree,
     UnreferencedFootnote,
+    /// A footnote definition Org's export does not use: it uses ONE per
+    /// label (the last of those rendered, standalone or inline; failing
+    /// that, the first in a pruned region), so the others are not rendered.
+    OverriddenFootnote,
     /// Outside every selected tree, or the zeroth section's content, while a
     /// select tag is in force.
     Unselected,
@@ -276,6 +289,7 @@ impl Region {
             Region::CommentSubtree => "comment_subtree",
             Region::ExcludedSubtree => "excluded_subtree",
             Region::UnreferencedFootnote => "unreferenced_footnote",
+            Region::OverriddenFootnote => "overridden_footnote",
             Region::Unselected => "unselected",
             Region::Archived => "archived",
         }
@@ -369,15 +383,26 @@ pub fn semantics(doc: &Document) -> Semantics {
 /// The KB nodes, links and transclusions of `doc`.
 pub fn semantics_with(doc: &Document, options: &SemanticsOptions) -> Semantics {
     let root = doc.syntax();
-    let exclude = declared_tags(doc, "EXCLUDE_TAGS", &options.exclude_tags);
-    let select = declared_tags(doc, "SELECT_TAGS", &options.select_tags);
-    let header = FileHeader::read(&root);
+    // Settings as Org's export reads them: not from COMMENT subtrees.
+    let settings = keywords::outside_comment_trees(&root);
+    let groups = keywords::TagGroups::new(&settings);
+    let declared = |key: &str, configured: &[String]| {
+        groups.expand(&keywords::declared_tags(&settings, key, configured))
+    };
+    let exclude = declared("EXCLUDE_TAGS", &options.exclude_tags);
+    let select = declared("SELECT_TAGS", &options.select_tags);
+    let mut header = FileHeader::read(&root);
+    header.title = keywords::title(doc)
+        .map(|t| plain::plain_text(&crate::green::objects(&t, PARAGRAPH)))
+        .filter(|t| !t.is_empty());
     let mut rules = Rules::new(&root, options, &exclude, &select, &header.tags);
+    rules.chosen = regions::choose_definitions(&root, &rules);
     let (referenced, order) = regions::referenced_footnotes(&root, &rules);
     rules.referenced = Some(referenced);
     let mut w = Walk {
         rules,
         link_types: &options.link_types,
+        abbrevs: keywords::export_link_abbrevs(&root, &settings),
         file_tags: merge_tags(&header.tags, &HashSet::new()),
         file_tag_set: HashSet::new(),
         file_id: None,
@@ -399,33 +424,6 @@ pub fn semantics_with(doc: &Document, options: &SemanticsOptions) -> Semantics {
     clip_bodies(&mut out.nodes);
     out.diagnostics.sort_by_key(|d| (d.span(), d.kind_name()));
     out
-}
-
-/// The tags declared by every in-file `KEY` keyword (anywhere, as Org
-/// collects them), words split on Org's blanks; `configured` if there are
-/// none.
-fn declared_tags(doc: &Document, key: &str, configured: &[String]) -> Vec<String> {
-    let declared: Vec<Keyword> = doc
-        .keywords()
-        .filter(|k| k.key().eq_ignore_ascii_case(key))
-        .collect();
-    if declared.is_empty() {
-        return configured.to_vec();
-    }
-    declared
-        .iter()
-        .flat_map(|k| split_words(&k.value()))
-        .collect()
-}
-
-/// `split-string` with its default separators: runs of ASCII space, form
-/// feed, tab, LF, CR and vertical tab. A no-break space is not one.
-fn split_words(value: &str) -> Vec<String> {
-    value
-        .split([' ', '\x0c', '\t', '\n', '\r', '\x0b'])
-        .filter(|w| !w.is_empty())
-        .map(str::to_string)
-        .collect()
 }
 
 /// The file node's fields, from the zeroth section.
@@ -456,15 +454,13 @@ impl FileHeader {
         h
     }
 
-    /// One keyword, in document order: the last wins, an empty value clears.
+    /// One keyword, in document order: MAE's own keywords follow MAE's rule
+    /// (the last wins, an empty value clears); the title is not read here
+    /// (`keywords::title`, Org's rule).
     fn keyword(&mut self, key: &str, value: &str) {
         let value = org_trim(value);
         let some = || Some(value.to_string()).filter(|v| !v.is_empty());
         match key {
-            "title" => {
-                let t = plain::plain_text(&crate::green::objects(value, PARAGRAPH));
-                self.title = Some(t).filter(|t| !t.is_empty());
-            }
             "filetags" => self.tags.extend(split_filetags(value)),
             "kind" => self.kind = Some(some()),
             "aliases" => self.aliases = Some(split_commas(value)),
@@ -477,7 +473,7 @@ impl FileHeader {
 
 /// Org's FILETAGS reading: words split on blanks, each split on `:`.
 fn split_filetags(value: &str) -> Vec<String> {
-    split_words(value)
+    keywords::split_words(value)
         .iter()
         .flat_map(|w| w.split(':'))
         .filter(|t| !t.is_empty())
@@ -501,11 +497,14 @@ fn property_pairs(d: &PropertyDrawer) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Org's reading of a drawer's lines: keys canonical, the last value of a
-/// repeated key wins (in the first one's position), `KEY+` appends. Linear:
-/// each key is found through a map, not a scan of the keys so far.
+/// `org-entry-get`'s reading of a drawer's lines, for every key: keys
+/// canonical, in first-occurrence order; the value is the LAST `KEY` line
+/// (`plist-put` replaces), then every `KEY+` value in order wherever it
+/// is (so `:K+: b` before `:K: a` gives `a b`), joined with a space; a
+/// value that is exactly `nil` is none (`org-not-nil`), and a key left with
+/// none is dropped. Linear: each key is found through a map.
 fn resolve_properties(pairs: Vec<(String, String)>) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = Vec::new();
+    let mut keys: Vec<(String, Option<String>, Vec<String>)> = Vec::new();
     let mut at: HashMap<String, usize> = HashMap::new();
     for (key, value) in pairs {
         let key = crate::views::canonical_key(&key);
@@ -513,19 +512,26 @@ fn resolve_properties(pairs: Vec<(String, String)>) -> Vec<(String, String)> {
             Some(b) if !b.is_empty() => (b.to_string(), true),
             _ => (key, false),
         };
-        match at.get(&base) {
-            Some(&i) if append => {
-                out[i].1.push(' ');
-                out[i].1.push_str(&value);
-            }
-            Some(&i) => out[i].1 = value,
-            None => {
-                at.insert(base.clone(), out.len());
-                out.push((base, value));
-            }
+        let i = *at.entry(base.clone()).or_insert_with(|| {
+            keys.push((base, None, Vec::new()));
+            keys.len() - 1
+        });
+        if append {
+            keys[i].2.push(value);
+        } else {
+            keys[i].1 = Some(value);
         }
     }
-    out
+    keys.into_iter()
+        .filter_map(|(key, base, extra)| {
+            let values: Vec<String> = base
+                .into_iter()
+                .chain(extra)
+                .filter(|v| v != "nil")
+                .collect();
+            (!values.is_empty()).then(|| (key, values.join(" ")))
+        })
+        .collect()
 }
 
 fn property<'a>(props: &'a [(String, String)], key: &str) -> Option<&'a str> {
@@ -563,6 +569,8 @@ enum Owner {
 struct Walk<'o> {
     rules: Rules,
     link_types: &'o LinkTypes,
+    /// The `#+LINK:` abbreviations Org's export applies.
+    abbrevs: LinkAbbrevs,
     file_tags: Vec<String>,
     /// The same, as a set, built once.
     file_tag_set: HashSet<String>,
@@ -622,6 +630,10 @@ impl Walk<'_> {
                     continue;
                 }
             };
+            if n.kind() == FOOTNOTE_REFERENCE {
+                // A reference, even one whose inline definition Org drops.
+                self.note_reference(&n);
+            }
             if let Some(region) = self.rules.region(&n) {
                 self.unrendered(&n, region);
                 walk.skip_subtree();
@@ -633,9 +645,18 @@ impl Walk<'_> {
                 LINK => self.link(&n, 0),
                 KEYWORD => self.keyword(&n),
                 PROPERTY_DRAWER => self.property_drawer_links(&n),
-                DRAWER => self.item_drawer_links(&n),
-                FOOTNOTE_DEFINITION => self.enter_note(&n),
-                FOOTNOTE_REFERENCE => self.note_reference(&n),
+                DRAWER => self.item_drawer(&n),
+                FOOTNOTE_DEFINITION => {
+                    if let Some(label) = regions::definition_label(&n) {
+                        self.enter_note(&n, label);
+                    }
+                }
+                // An inline definition Org uses: its text is the note's.
+                FOOTNOTE_REFERENCE => {
+                    if let Some(label) = regions::inline_label(&n) {
+                        self.enter_note(&n, label);
+                    }
+                }
                 _ => {}
             }
             if matches!(n.kind(), LINK | PROPERTY_DRAWER | DRAWER) {
@@ -792,7 +813,14 @@ impl Walk<'_> {
         let (Some(path), Some(buffer)) = (plain::link_path(n), plain::link_path_buffer(n)) else {
             return;
         };
-        let c = classify_link_with(&buffer, self.link_types);
+        let bracket =
+            crate::views::Link::cast(n.clone()).is_some_and(|l| l.format() == LinkFormat::Bracket);
+        let c = if bracket {
+            // As Org makes a bracket link's raw link (the view's function).
+            classify_normalized(&self.abbrevs.bracket_path(&buffer), self.link_types)
+        } else {
+            classify_link_with(&buffer, self.link_types)
+        };
         let description = plain::description(n).or(c.description);
         let span = object_span(n);
         let (from, note) = self.from();
@@ -860,6 +888,19 @@ impl Walk<'_> {
         }
     }
 
+    /// An item's property drawer: the links in its values, and the
+    /// footnotes it references (Org renders that drawer, so its references
+    /// count, and a note it references first belongs to the item).
+    fn item_drawer(&mut self, drawer: &SyntaxNode) {
+        self.item_drawer_links(drawer);
+        for r in drawer
+            .descendants()
+            .filter(|d| d.kind() == FOOTNOTE_REFERENCE)
+        {
+            self.note_reference(&r);
+        }
+    }
+
     /// Links in the values of an item's property drawer.
     fn item_drawer_links(&mut self, drawer: &SyntaxNode) {
         for p in items::item_property_drawer(drawer).unwrap_or_default() {
@@ -871,12 +912,10 @@ impl Walk<'_> {
         }
     }
 
-    /// A rendered footnote definition: what it holds belongs to the node of
-    /// the text referencing it, resolved once the walk is done.
-    fn enter_note(&mut self, n: &SyntaxNode) {
-        let Some(label) = regions::definition_label(n) else {
-            return;
-        };
+    /// A rendered footnote definition (standalone, or an inline one Org
+    /// uses): what it holds belongs to the node of the text referencing it,
+    /// resolved once the walk is done.
+    fn enter_note(&mut self, n: &SyntaxNode, label: String) {
         let place = self.owner();
         self.note_place.entry(label.clone()).or_insert(place);
         self.owners.push((n.clone(), Owner::Note(label)));
@@ -934,10 +973,27 @@ impl Walk<'_> {
         } else {
             Vec::new()
         };
+        // Whether a position is in no kept definition: the kept ranges
+        // sorted by start, with the greatest end so far, so each check is a
+        // binary search, not a scan of every kept definition.
+        let mut ranges: Vec<(usize, usize)> = kept
+            .iter()
+            .map(|d| {
+                (
+                    usize::from(d.text_range().start()),
+                    usize::from(d.text_range().end()),
+                )
+            })
+            .collect();
+        ranges.sort_unstable();
+        let mut reach = Vec::with_capacity(ranges.len());
+        for &(_, b) in &ranges {
+            reach.push(reach.last().map_or(b, |&r: &usize| r.max(b)));
+        }
         let outside = |s: Span| {
-            !kept
-                .iter()
-                .any(|d| Span::of(d).range().contains(&(s.start as usize)))
+            let at = s.start as usize;
+            let i = ranges.partition_point(|&(a, _)| a <= at);
+            i == 0 || reach[i - 1] <= at
         };
         let base = usize::from(n.text_range().start());
         for (id, span) in regions::id_lines(&n.to_string(), base) {
