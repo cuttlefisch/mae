@@ -655,6 +655,7 @@ fn a_retargeted_link_in_a_shared_note_is_refused() {
 /// outside it.
 const NOTES: &str = "* A\n:PROPERTIES:\n:ID: a\n:END:\nold body\n\n* B\n:PROPERTIES:\n:ID: b\n:END:\nsee[fn:b]\n\n[fn:b] the b note\n";
 const NAMES: &str = "* A\n:PROPERTIES:\n:ID: a\n:END:\nold body\n\n* B\n:PROPERTIES:\n:ID: b\n:END:\nsee [[foo bar]] and [[Intro]].\n\n* Intro\nintro text\n\n* foo bar\nx\n";
+const DRAWER: &str = "* A\n:PROPERTIES:\n:ID: a\n:END:\nold body\n\n* Plain heading\n:PROPERTIES:\n:P: {{{m(word)}}}\n:END:\ntext\n";
 const COUNTERS: &str = "* A\n:PROPERTIES:\n:ID: a\n:END:\nold body\n\n* B\n:PROPERTIES:\n:ID: b\n:END:\nnumber {{{n}}}\n";
 const KEYWORD: &str = "* A\n:PROPERTIES:\n:ID: a\n:END:\nold body\n\n* B\n:PROPERTIES:\n:ID: b\n:END:\nsays {{{keyword(K)}}}\n";
 
@@ -720,4 +721,11 @@ fn a_name_that_differs_only_in_blanks_or_case_is_the_same_name() {
         ("target", NAMES, "here <<foo   bar>> it is\n"),
         ("target, case", NAMES, "here <<INTRO>> it is\n"),
     ]);
+}
+
+/// M3: a `#+MACRO:` line in the body changes what every macro of the file
+/// expands to: a declaration, refused as `#+TODO:` is.
+#[test]
+fn an_edit_that_adds_a_macro_template_is_refused() {
+    refused(&[("macro", DRAWER, "new body\n#+MACRO: m $1\n")]);
 }

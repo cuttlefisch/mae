@@ -144,7 +144,8 @@ pub enum BodyEditError {
 
 /// The file-level keywords that change how the whole file parses or reads
 /// (TODO keywords, link abbreviations, tags, inherited properties, a setup
-/// file): [`replace_body`] refuses an edit that changes any of them.
+/// file, macro templates): [`replace_body`] refuses an edit that changes
+/// any of them.
 pub const DECLARATION_KEYWORDS: &[&str] = &[
     "TODO",
     "SEQ_TODO",
@@ -156,6 +157,8 @@ pub const DECLARATION_KEYWORDS: &[&str] = &[
     "FILETAGS",
     "PROPERTY",
     "SETUPFILE",
+    // A template can change what every macro of the file renders.
+    "MACRO",
 ];
 
 impl std::fmt::Display for BodyEditError {
