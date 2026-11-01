@@ -95,7 +95,10 @@ export interface Rendered<T> {
    *   definition in the exported document (only in a COMMENT or
    *   `:noexport:` subtree, or nowhere); it renders nothing. The label is
    *   the source text at the span. Org's export fails there; refuse such a
-   *   document if that matters to you.
+   *   document if that matters to you;
+   * - `link_attribute`: a KB link's `rel=`, `w=` or `c=` that is not a
+   *   valid value (a relation name `[a-z][a-z_-]{0,63}`: no digit; a finite
+   *   number); its `data-org-*` attribute is left out.
    */
   diagnostics: { kind: string; start: number; end: number }[];
 }

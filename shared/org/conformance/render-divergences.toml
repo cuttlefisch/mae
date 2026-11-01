@@ -234,3 +234,11 @@ org = "the export fails: \"Definition not found for footnote LABEL\""
 mae = "the reference renders nothing (no label, no number) and the render carries a footnote_undefined diagnostic; the rest of the page renders"
 reason = "A dangling label is not hidden content, and failing the document would make ordinary drafts unpublishable; a consumer that wants Org's behaviour refuses a render with the diagnostic (review round 5)."
 test = "a_footnote_without_a_definition_renders_nothing_and_says_so"
+
+[[divergence]]
+id = "link-attributes"
+what = "a KB link's rel=, w= and c= values"
+org = "not exported (MAE's typed-link grammar, ADR-030)"
+mae = "data-org-rel only for a relation name of lower-case letters, _ and - ([a-z][a-z_-]{0,63}: an id or a number is none); data-org-w and data-org-c only for a finite number (clamped to 0-1, as the semantics read it); a value refused is left out with a link_attribute diagnostic. The semantics keep rel as written, as the KB's own projection does"
+reason = "An attribute is the allowlist's (D3): a value that is no relation or number (an id, a pasted string) must not pass into the page (review round 5)."
+test = "a_kb_links_refused_values_are_left_out_and_reported"

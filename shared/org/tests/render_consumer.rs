@@ -5,7 +5,7 @@
 
 use mae_org::{
     node_text, parse, render, semantics, text, ParseOptions, RenderDiagnostic, RenderOptions,
-    Resolver, TreeFormat,
+    Resolved, Resolver, TreeFormat,
 };
 
 fn fixture(name: &str) -> String {
@@ -111,4 +111,44 @@ fn a_footnote_without_a_definition_renders_nothing_and_says_so() {
     assert!(out
         .to_json(TreeFormat::Html)
         .contains("\"kind\":\"footnote_undefined\""));
+}
+
+/// B (10): a relation that is no snake_case word and a weight that is no
+/// finite number are left out, with a link_attribute diagnostic; valid
+/// ones (and the defaults of absent ones) are kept.
+#[test]
+fn a_kb_links_refused_values_are_left_out_and_reported() {
+    let id = "aaaaaaaa-0000-0000-0000-000000000002";
+    let r = Resolver::default().with_target(id, Resolved::new("/r/a2"));
+    let doc = fixture("10-rel-value-not-a-word.org");
+    let d = parse(&doc, &ParseOptions::default());
+    let out = render(&d, &semantics(&d), &RenderOptions::default(), &r);
+    let h = mae_org::to_html(&out.body);
+    assert!(
+        h.contains("<a class=\"org-link\" href=\"/r/a2\" data-org-c=\"1\">typed</a>"),
+        "{h}"
+    );
+    assert!(
+        matches!(out.diagnostics[..], [RenderDiagnostic::LinkAttribute(_)]),
+        "{:?}",
+        out.diagnostics
+    );
+    let h = html(
+        &format!(
+            "[[id:{id}?rel=part_of&w=0.25&c=x][a]] [[id:{id}?rel=Teaches][b]] [[id:{id}][c]]\n"
+        ),
+        &r,
+    );
+    assert!(
+        h.contains("data-org-rel=\"part_of\" data-org-w=\"0.25\">a</a>"),
+        "{h}"
+    );
+    assert!(
+        h.contains("href=\"/r/a2\" data-org-w=\"1\" data-org-c=\"1\">b</a>"),
+        "{h}"
+    );
+    assert!(
+        h.contains("data-org-rel=\"references\" data-org-w=\"1\" data-org-c=\"1\">c</a>"),
+        "{h}"
+    );
 }

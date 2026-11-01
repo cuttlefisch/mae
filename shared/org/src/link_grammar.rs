@@ -357,6 +357,38 @@ struct Query {
     weight: Option<f64>,
     confidence: Option<f64>,
     attrs: Vec<(String, String)>,
+    /// The recognised keys written with a value refused (`rel`, `w`, `c`).
+    rejected: Vec<&'static str>,
+}
+
+/// A link relation name: a word of lower-case letters, `_` and `-`,
+/// `[a-z][a-z_-]{0,63}`. MAE's vocabulary is open (a KB registers its
+/// `rel_types`, ADR-030/101), so this is a shape: the one every relation
+/// MAE seeds has (`references`, `part_of`, `categorized_under` …),
+/// ADR-030's own (`teaches`, `cites`) and hyphenated ones
+/// (`depends-on`); an id or a number (any digit) is none. The renderer emits `data-org-rel` only for one; the
+/// semantics keep a `rel=` as written, as the KB's own projection does
+/// (the KB validates relations when it writes them, ADR-101).
+pub fn is_valid_rel(rel: &str) -> bool {
+    let b = rel.as_bytes();
+    !b.is_empty()
+        && b.len() <= 64
+        && b[0].is_ascii_lowercase()
+        && b.iter()
+            .all(|c| c.is_ascii_lowercase() || matches!(c, b'_' | b'-'))
+}
+
+/// The recognised query keys of KB link `path` (`rel`, `w`, `c`) written
+/// with a value the renderer refuses: a relation not of
+/// [`is_valid_rel`]'s shape, a weight or confidence that is not a finite
+/// number (which the semantics read as absent). Empty ones count as
+/// absent.
+pub(crate) fn rejected_query_keys(path: &str) -> Vec<&'static str> {
+    let target = path.split_once('|').map_or(path, |(t, _)| t);
+    target
+        .split_once('?')
+        .map(|(_, q)| parse_query(q).rejected)
+        .unwrap_or_default()
 }
 
 /// ADR-030's query: `&`-separated `KEY=VALUE` pairs, keys and values
@@ -371,8 +403,17 @@ fn parse_query(query: &str) -> Query {
         };
         match key {
             "" => {}
-            "rel" => q.rel = Some(value.to_string()).filter(|v| !v.is_empty()).or(q.rel),
+            "rel" => {
+                if !value.is_empty() && !is_valid_rel(value) {
+                    q.rejected.push("rel");
+                }
+                q.rel = Some(value.to_string()).filter(|v| !v.is_empty()).or(q.rel)
+            }
+            "w" | "weight" if !value.is_empty() && unit(value).is_none() => q.rejected.push("w"),
             "w" | "weight" => q.weight = unit(value).or(q.weight),
+            "c" | "conf" | "confidence" if !value.is_empty() && unit(value).is_none() => {
+                q.rejected.push("c")
+            }
             "c" | "conf" | "confidence" => q.confidence = unit(value).or(q.confidence),
             _ => q.attrs.push((key.to_string(), value.to_string())),
         }

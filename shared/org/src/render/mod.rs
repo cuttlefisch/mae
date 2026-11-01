@@ -217,6 +217,11 @@ pub enum RenderDiagnostic {
     /// the span. Org's export stops there ("Definition not found for
     /// footnote"); MAE renders the rest, and a consumer can refuse it.
     FootnoteUndefined(Span),
+    /// A KB link's `rel=`, `w=` or `c=` written with a value the link
+    /// grammar refuses (a relation not `[a-z][a-z_-]{0,63}`, a weight or
+    /// confidence that is no finite number): its `data-org-*` attribute is
+    /// left out.
+    LinkAttribute(Span),
 }
 
 /// Why a document's macros could not be expanded.
@@ -256,6 +261,7 @@ impl RenderDiagnostic {
             RenderDiagnostic::MacroEnvironment(_) => "macro_environment",
             RenderDiagnostic::FragmentMacro(_) => "fragment_macro",
             RenderDiagnostic::FootnoteUndefined(_) => "footnote_undefined",
+            RenderDiagnostic::LinkAttribute(_) => "link_attribute",
         }
     }
 
@@ -266,7 +272,8 @@ impl RenderDiagnostic {
             | RenderDiagnostic::MacroFailed(_, s)
             | RenderDiagnostic::MacroEnvironment(s)
             | RenderDiagnostic::FragmentMacro(s)
-            | RenderDiagnostic::FootnoteUndefined(s) => *s,
+            | RenderDiagnostic::FootnoteUndefined(s)
+            | RenderDiagnostic::LinkAttribute(s) => *s,
         }
     }
 
@@ -279,6 +286,7 @@ impl RenderDiagnostic {
             RenderDiagnostic::MacroEnvironment(_) => RenderDiagnostic::MacroEnvironment(s),
             RenderDiagnostic::FragmentMacro(_) => RenderDiagnostic::FragmentMacro(s),
             RenderDiagnostic::FootnoteUndefined(_) => RenderDiagnostic::FootnoteUndefined(s),
+            RenderDiagnostic::LinkAttribute(_) => RenderDiagnostic::LinkAttribute(s),
         }
     }
 }

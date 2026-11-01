@@ -942,7 +942,13 @@
     ],
     "type": "root"
   },
-  "diagnostics": [],
+  "diagnostics": [
+    {
+      "end": 358,
+      "kind": "link_attribute",
+      "start": 325
+    }
+  ],
   "nodes": [
     {
       "aliases": [],

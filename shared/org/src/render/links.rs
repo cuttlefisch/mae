@@ -100,11 +100,6 @@ pub(crate) fn is_valid_block_name(name: &str) -> bool {
     token(name, 64, b"_-")
 }
 
-/// A KB link's `rel=`: `[A-Za-z0-9][A-Za-z0-9_.:-]*`, at most 64 bytes.
-pub(crate) fn is_valid_rel(rel: &str) -> bool {
-    token(rel, 64, b"_.:-")
-}
-
 fn token(s: &str, max: usize, extra: &[u8]) -> bool {
     let b = s.as_bytes();
     !b.is_empty()
@@ -299,6 +294,10 @@ impl Builder<'_> {
     /// page the link goes to the node alone, with a
     /// [`super::RenderDiagnostic::FragmentMacro`].
     fn kb_target(&mut self, l: crate::SemanticLink) -> Target {
+        if !crate::link_grammar::rejected_query_keys(&l.path).is_empty() {
+            let d = super::RenderDiagnostic::LinkAttribute(l.span);
+            self.diagnostics.push(d);
+        }
         let heading = match l.fragment.as_deref() {
             Some(f) if f.contains("{{{") && self.on_page(&l.target) => self
                 .expand_fragment(f)
@@ -425,14 +424,23 @@ fn link_element(target: Target, shown: Vec<Node>) -> Node {
     }
 }
 
-/// `data-org-*` from a KB link's query.
+/// `data-org-*` from a KB link's query: each value as the semantics read
+/// it, but none whose written value is refused (a relation of another
+/// shape, a weight or confidence that is no finite number;
+/// `kb_target` reports them).
 fn kb_attrs(a: Element, l: &crate::SemanticLink) -> Element {
+    let rejected = crate::link_grammar::rejected_query_keys(&l.path);
     let mut a = a;
-    if is_valid_rel(&l.rel) {
+    if !rejected.contains(&"rel") && crate::link_grammar::is_valid_rel(&l.rel) {
         a = a.attr(Attr::DataOrgRel, l.rel.clone());
     }
-    a.attr(Attr::DataOrgW, format!("{}", l.weight))
-        .attr(Attr::DataOrgC, format!("{}", l.confidence))
+    if !rejected.contains(&"w") {
+        a = a.attr(Attr::DataOrgW, format!("{}", l.weight));
+    }
+    if !rejected.contains(&"c") {
+        a = a.attr(Attr::DataOrgC, format!("{}", l.confidence));
+    }
+    a
 }
 
 /// A link the semantics did not read (a value they exclude, an alias):
