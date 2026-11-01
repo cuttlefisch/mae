@@ -635,7 +635,22 @@ fn headline_ids(n: usize) -> String {
 /// `replace_body` on the first node of N (review round 3: its rendering
 /// check rendered every node's page, 8,000 nodes took 12.8 s); the walks
 /// per edit are also counted, exactly, in `render::source`'s unit test.
-const SPLICE_FAMILIES: &[Family] = &[("splice: N nodes with links", splice_nodes, 500)];
+const SPLICE_FAMILIES: &[Family] = &[
+    ("splice: N nodes with links", splice_nodes, 500),
+    // Review round 4 (M4): every node linking the first, the reviewer's
+    // shape (32,000 nodes took 11.2 s; one render of them, 1 s).
+    (
+        "splice: N nodes linking one",
+        splice_nodes_one_target,
+        2_000,
+    ),
+];
+
+fn splice_nodes_one_target(n: usize) -> String {
+    (0..n)
+        .map(|i| format!("* N{i}\n:PROPERTIES:\n:ID: n{i}\n:END:\nbody {i} [[id:n0]]\n"))
+        .collect()
+}
 
 fn splice_nodes(n: usize) -> String {
     // The edited node (the first) holds no note: removing one numbered

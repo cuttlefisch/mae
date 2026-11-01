@@ -383,6 +383,8 @@ impl Edit<'_> {
         let mut now = names_in(new, self.new_range, true);
         was.sort();
         now.sort();
+        let (was_set, now_set): (HashSet<_>, HashSet<_>) =
+            (was.iter().collect(), now.iter().collect());
         // What the rest of the file refers to, or names itself, on either
         // side: a name the body adds, removes or changes must be none of it.
         // Every name compared by the renderer's own key (`name_key`).
@@ -395,8 +397,8 @@ impl Edit<'_> {
         ));
         taken.extend(outside.map(|(_, n)| name_key(&n)));
         let changed = |n: &(String, String)| taken.contains(&name_key(&n.1));
-        let gone = was.iter().filter(|n| !now.contains(n));
-        let new = now.iter().filter(|n| !was.contains(n));
+        let gone = was.iter().filter(|n| !now_set.contains(n));
+        let new = now.iter().filter(|n| !was_set.contains(n));
         match gone.chain(new).find(|n| changed(n)) {
             Some((kind, name)) => Err(BodyEditError::ChangesName {
                 kind: kind.clone(),
@@ -450,10 +452,12 @@ impl Edit<'_> {
     /// Every link and transclusion whose source is not the edited node (nor
     /// a node new in its body) is the same before and after, spans moved.
     fn check_links(&self, before: &Semantics, after: &Semantics) -> Result<(), BodyEditError> {
-        let new_ids: std::collections::HashSet<&str> = after
+        let old_ids: HashSet<&str> = before.nodes.iter().map(|n| n.id.as_str()).collect();
+        let new_ids: HashSet<&str> = after
             .nodes
             .iter()
-            .filter(|m| !before.nodes.iter().any(|n| n.id == m.id))
+            .inspect(|_| step())
+            .filter(|m| !old_ids.contains(m.id.as_str()))
             .map(|m| m.id.as_str())
             .collect();
         let others = |from: &Option<String>| {
@@ -469,6 +473,7 @@ impl Edit<'_> {
         let was: Vec<_> = before
             .links
             .iter()
+            .inspect(|_| step())
             .filter(|l| others(&l.from))
             .map(|l| {
                 let mut l = l.clone();
@@ -483,6 +488,7 @@ impl Edit<'_> {
         let now: Vec<_> = after
             .links
             .iter()
+            .inspect(|_| step())
             .filter(|l| others(&l.from))
             .map(|l| {
                 let mut l = l.clone();
@@ -531,6 +537,7 @@ impl Edit<'_> {
             d.syntax()
                 .descendants_with_tokens()
                 .filter_map(move |el| {
+                    step();
                     let r = el.text_range();
                     let (x, y) = (usize::from(r.start()), usize::from(r.end()));
                     (y < s || x >= b).then_some((el.kind(), x, y))
@@ -569,8 +576,16 @@ impl Edit<'_> {
     fn check_nodes(&self, before: &Semantics, after: &Semantics) -> Result<(), BodyEditError> {
         let (ns, ne) = self.new_range;
         let changed = |id: &str| BodyEditError::ChangesNode { id: id.to_string() };
+        // The first node of each id, as a search from the front finds it.
+        let mut by_id: std::collections::HashMap<&str, &SemanticNode> =
+            std::collections::HashMap::new();
+        for m in &after.nodes {
+            by_id.entry(m.id.as_str()).or_insert(m);
+        }
+        let old_ids: HashSet<&str> = before.nodes.iter().map(|n| n.id.as_str()).collect();
         for n in &before.nodes {
-            let Some(m) = after.nodes.iter().find(|m| m.id == n.id) else {
+            step();
+            let Some(&m) = by_id.get(n.id.as_str()) else {
                 return Err(changed(&n.id));
             };
             let mut want = n.clone();
@@ -597,13 +612,26 @@ impl Edit<'_> {
             }
         }
         for m in &after.nodes {
-            let new_node = !before.nodes.iter().any(|n| n.id == m.id);
+            step();
+            let new_node = !old_ids.contains(m.id.as_str());
             if new_node && !self.inside_new(m.span) {
                 return Err(changed(&m.id));
             }
         }
         Ok(())
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Steps of the edit checks: an element of a list or tree looked at.
+    pub(crate) static STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// One step of the edit checks (counted in tests).
+fn step() {
+    #[cfg(test)]
+    STEPS.with(|s| s.set(s.get() + 1));
 }
 
 /// A resolver giving every KB target either semantics link to (or
@@ -637,6 +665,7 @@ fn refs_outside(doc: &Document, (a, b): (usize, usize)) -> HashSet<String> {
         }
     };
     for n in doc.syntax().descendants() {
+        step();
         let sp = Span::of(&n);
         if (sp.start as usize) >= a && sp.end as usize <= b {
             continue;
@@ -696,6 +725,7 @@ fn names_in(doc: &Document, (a, b): (usize, usize), inside: bool) -> Vec<(String
             .map(|t| t.text().to_string())
     };
     for n in doc.syntax().descendants() {
+        step();
         let sp = Span::of(&n);
         let within = (sp.start as usize) >= a && sp.end as usize <= b;
         if within != inside {
@@ -777,5 +807,40 @@ mod tests {
         assert_eq!(few, many, "walks grow with the nodes: {few} -> {many}");
         // Two passes per side under each of the two HeadlineIds modes.
         assert!(many <= 8, "{many} walks");
+    }
+
+    /// Review round 4 (M4): the checks were quadratic (each node of one
+    /// side looked up by a scan of the other), 11.2 s for 32,000 nodes.
+    /// Counted, not timed: the steps of the checks grow as the nodes do.
+    #[test]
+    fn the_edit_checks_take_steps_linear_in_the_nodes() {
+        let steps = |nodes: usize| {
+            let text: String = (0..nodes)
+                .map(|i| format!("* N{i}\n:PROPERTIES:\n:ID: n{i}\n:END:\nbody {i} [[id:n0]]\n"))
+                .collect();
+            let doc = crate::parse(&text, &ParseOptions::default());
+            let sem = crate::semantics(&doc);
+            STEPS.with(|r| r.set(0));
+            let r = replace_body(
+                &text,
+                &doc,
+                &sem.nodes[0],
+                "a new body\n",
+                &ParseOptions::default(),
+                &SemanticsOptions::default(),
+            );
+            assert!(r.is_ok(), "{r:?}");
+            STEPS.with(std::cell::Cell::get)
+        };
+        let (few, many) = (steps(100), steps(1000));
+        // Linear: about 10 times the steps; quadratic: about 100.
+        assert!(
+            many <= 12 * few,
+            "{few} steps for 100 nodes, {many} for 1,000"
+        );
+        assert!(
+            many >= 9 * few,
+            "{few} steps for 100 nodes, {many} for 1,000"
+        );
     }
 }
