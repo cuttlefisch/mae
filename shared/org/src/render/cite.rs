@@ -15,9 +15,9 @@
 //! - `text`/`t` (and `note`/`ft`): `PRE REFS SUF`, each `pre ?? (YEAR) suf`
 //!   (bare: `pre ?? YEAR suf`);
 //! - `nocite`/`n`: nothing;
-//! - `numeric`/`nb`: `(PRE NUMBERS SUF)` with the affixes of the only
-//!   reference, else the citation's, and each key's number its order of
-//!   first citation in the page (`1, 2`, a run `1-3`).
+//! - `numeric`/`nb`: `(PRE NUMBERS SUF)`, a bare variant too, with the
+//!   affixes of the only reference, else the citation's, and each key's
+//!   number its order of first citation in the page (`1, 2`, a run `1-3`).
 //!
 //! The year of an unknown key is `oc-basic`'s disambiguation of the shared
 //! unknown author and year: the page's first key cited gets `????` the
@@ -211,11 +211,14 @@ impl Builder<'_> {
         if matches!(style, "nocite" | "n") {
             return;
         }
-        let paren = !bare && !matches!(style, "author" | "a" | "text" | "t" | "note" | "ft");
+        // `numeric` is parenthesised whatever the variant (`oc-basic`).
+        let numeric = matches!(style, "numeric" | "nb");
+        let paren =
+            numeric || !bare && !matches!(style, "author" | "a" | "text" | "t" | "note" | "ft");
         if paren {
             push(&mut inner, text("("));
         }
-        if matches!(style, "numeric" | "nb") {
+        if numeric {
             let source = match &p.references[..] {
                 [only] => (&only.prefix, &only.suffix),
                 _ => (&p.prefix, &p.suffix),

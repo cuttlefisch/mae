@@ -78,6 +78,12 @@ fn a_citation_renders_as_the_basic_processor_renders_an_unresolved_one() {
         ("[cite/numeric:@k3]", "A (1) B."),
         // A nocite citation numbers its key: Emacs `A (2) B.`.
         ("[cite/n:@k0] [cite/nb:@k3]", "A (2) B."),
+        // Numeric citations keep their parentheses whatever the variant
+        // (review round 6, minor 5).
+        ("[cite/nb/b:@k1]", "A (1) B."),
+        ("[cite/nb/bare:@k1;@k2]", "A (1, 2) B."),
+        ("[cite/numeric/bc:pre @k1 suf]", "A (pre 1 suf) B."),
+        ("[cite/nb/c:@k1]", "A (1) B."),
     ];
     let mut failures = Vec::new();
     for (cite, want) in cases {
