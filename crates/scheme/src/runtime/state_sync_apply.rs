@@ -390,31 +390,7 @@ impl SchemeRuntime {
         // (ADR-048 residency, epoch fencing) and federated-instance routing
         // are decided in exactly one place (CLAUDE.md principles #3 + #15).
         for op in state.pending_kb_node_ops.drain(..) {
-            let (label, result) = match op {
-                crate::runtime::kb_crud::KbNodeOp::Create {
-                    id,
-                    title,
-                    body,
-                    kind,
-                } => {
-                    let kind = mae_core::KbNodeKind::from_str_lossy(&kind);
-                    let r = editor.kb_create_node(&id, &title, &body, kind);
-                    (format!("kb-create {id}"), r)
-                }
-                crate::runtime::kb_crud::KbNodeOp::Update {
-                    id,
-                    title,
-                    body,
-                    tags,
-                } => {
-                    let r = editor.kb_update_node(&id, title.as_deref(), body.as_deref(), tags);
-                    (format!("kb-update {id}"), r)
-                }
-                crate::runtime::kb_crud::KbNodeOp::Delete { id } => {
-                    let r = editor.kb_delete_node(&id);
-                    (format!("kb-delete {id}"), r)
-                }
-            };
+            let (label, result) = apply_kb_node_op(editor, op);
             match result {
                 Ok(()) => debug!(op = %label, "kb node op applied from scheme"),
                 Err(e) => {
@@ -840,6 +816,47 @@ impl SchemeRuntime {
             match outcome {
                 Ok(msg) | Err(msg) => editor.set_status(msg),
             }
+        }
+    }
+}
+
+/// One queued Scheme KB node op, applied through the same `Editor` methods the
+/// MCP tools use; the op's label for logging and its result.
+fn apply_kb_node_op(
+    editor: &mut mae_core::Editor,
+    op: crate::runtime::kb_crud::KbNodeOp,
+) -> (String, Result<(), String>) {
+    match op {
+        crate::runtime::kb_crud::KbNodeOp::Create {
+            id,
+            title,
+            body,
+            kind,
+            kb,
+        } => {
+            let kind = mae_core::KbNodeKind::from_str_lossy(&kind);
+            let r = editor.kb_create_node_target(kb.as_deref(), &id, &title, &body, kind);
+            (format!("kb-create {id}"), r)
+        }
+        crate::runtime::kb_crud::KbNodeOp::Update {
+            id,
+            title,
+            body,
+            tags,
+            kb,
+        } => {
+            let r = editor.kb_update_node_target(
+                kb.as_deref(),
+                &id,
+                title.as_deref(),
+                body.as_deref(),
+                tags,
+            );
+            (format!("kb-update {id}"), r)
+        }
+        crate::runtime::kb_crud::KbNodeOp::Delete { id, kb } => {
+            let r = editor.kb_delete_node_target(kb.as_deref(), &id);
+            (format!("kb-delete {id}"), r)
         }
     }
 }

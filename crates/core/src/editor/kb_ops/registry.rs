@@ -1069,6 +1069,79 @@ impl Editor {
         matches!(store.source_file_key(path), Ok(Some(_))).then(|| inst.name.clone())
     }
 
+    /// The store a write that NAMES a KB acts on: `local` is the primary store;
+    /// any other name must be a registered instance that is loaded. Never a
+    /// fallback: an unknown or unloaded name is an error, so a write aimed at one
+    /// KB cannot land in another.
+    pub(crate) fn kb_resolve_target(&self, name: &str) -> Result<Option<String>, String> {
+        if name.eq_ignore_ascii_case("local") {
+            return Ok(None);
+        }
+        let entry = self
+            .kb
+            .registry
+            .find(name)
+            .ok_or_else(|| format!("No KB named '{name}'"))?;
+        if !self.kb.instances.contains_key(&entry.uuid) {
+            return Err(format!("KB '{name}' is registered but not loaded"));
+        }
+        Ok(Some(entry.uuid.clone()))
+    }
+
+    /// The owner a write to the existing node `id` acts on. With `target`, that
+    /// KB, which must hold `id`. Without, the owner [`Self::kb_owner_of`] finds,
+    /// unless `id` is held by more than one KB: then the write is refused and must
+    /// name one (it used to act on whichever instance a hash map yielded first).
+    pub(crate) fn kb_write_owner(
+        &self,
+        id: &str,
+        target: Option<&str>,
+    ) -> Result<Option<String>, String> {
+        if let Some(name) = target {
+            let owner = self.kb_resolve_target(name)?;
+            let holds = match &owner {
+                None => self.kb.primary.get(id).is_some(),
+                Some(uuid) => self
+                    .kb
+                    .instances
+                    .get(uuid)
+                    .is_some_and(|kb| kb.contains(id)),
+            };
+            return holds
+                .then_some(owner)
+                .ok_or_else(|| format!("No KB node '{id}' in KB '{name}'"));
+        }
+        let mut holders: Vec<String> = self
+            .kb
+            .instances
+            .iter()
+            .filter(|(_, kb)| kb.contains(id))
+            .map(|(uuid, _)| {
+                self.kb
+                    .registry
+                    .find_by_uuid(uuid)
+                    .map_or_else(|| uuid.clone(), |e| e.name.clone())
+            })
+            .collect();
+        let primary_holds = self
+            .kb
+            .primary
+            .get(id)
+            .is_some_and(|n| n.source != Some(mae_kb::NodeSource::Federation));
+        if primary_holds {
+            holders.push("local".to_string());
+        }
+        if holders.len() > 1 {
+            holders.sort();
+            return Err(format!(
+                "'{id}' exists in several KBs ({}); name the one to change",
+                holders.join(", ")
+            ));
+        }
+        self.kb_owner_of(id)
+            .ok_or_else(|| format!("No KB node: {id}"))
+    }
+
     pub(crate) fn kb_owner_of(&self, id: &str) -> Option<Option<String>> {
         // #76: pre-ADR-019 KB joins dumped nodes straight into `primary`;
         // the ADR-019 join path (`kb_register_joined_instance`) now creates
