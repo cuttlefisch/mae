@@ -20,7 +20,8 @@
 //!  "resolver": {"targets": {"KB id": {"href": "/x.html", "title": "X"}},
 //!               "placeholder": "[?]"},
 //!  "node": "KB id",
-//!  "path": "id:x?rel=r"}
+//!  "path": "id:x?rel=r",
+//!  "section": {…}, "file": {…}}            // syntaxSection: see `syntax.rs`
 //! ```
 //!
 //! Spans in results are UTF-8 BYTE offsets into `text`.
@@ -40,6 +41,8 @@ pub enum Op {
     Text = 4,
     ClassifyLink = 5,
     Version = 6,
+    Syntax = 7,
+    SyntaxSection = 8,
 }
 
 impl Op {
@@ -51,6 +54,8 @@ impl Op {
             Op::Text,
             Op::ClassifyLink,
             Op::Version,
+            Op::Syntax,
+            Op::SyntaxSection,
         ]
         .into_iter()
         .find(|o| *o as u32 == n)
@@ -91,6 +96,13 @@ fn run(op: Op, request: &str) -> Result<String, String> {
             Ok(mae_org::classify_link_with(path, &req.semantics.link_types).to_json())
         }
         Op::Version => Ok(version()),
+        Op::Syntax => Ok(crate::syntax::syntax(&req.text, &req.parse)),
+        Op::SyntaxSection => crate::syntax::syntax_section(
+            &req.text,
+            &req.parse,
+            req.section.as_ref(),
+            req.file.as_ref(),
+        ),
     }
 }
 
@@ -146,6 +158,9 @@ struct Request {
     resolver: Resolver,
     node: Option<String>,
     path: Option<String>,
+    /// For `syntaxSection`: the region and file facts `syntax` returned.
+    section: Option<Json>,
+    file: Option<Json>,
 }
 
 const KEYS: &[&str] = &[
@@ -156,6 +171,8 @@ const KEYS: &[&str] = &[
     "resolver",
     "node",
     "path",
+    "section",
+    "file",
 ];
 
 impl Request {
@@ -169,6 +186,8 @@ impl Request {
             resolver: resolver(j.get("resolver"))?,
             node: opt_str(j.get("node"), "node")?,
             path: opt_str(j.get("path"), "path")?,
+            section: j.get("section").filter(|v| **v != Json::Null).cloned(),
+            file: j.get("file").filter(|v| **v != Json::Null).cloned(),
         })
     }
 

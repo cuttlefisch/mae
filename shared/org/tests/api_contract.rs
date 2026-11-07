@@ -78,7 +78,7 @@ fn semantics_and_render_options_and_resolvers_build_from_outside() {
     assert!(body.contains("org-properties"), "{body}");
     assert!(body.contains("old body"), "{body}");
     assert!(!body.contains("Gone"), "{body}");
-    assert_eq!(API_VERSION, "0.1.0");
+    assert_eq!(API_VERSION, "0.2.0");
 }
 
 #[test]

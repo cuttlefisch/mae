@@ -434,6 +434,7 @@ Source: `shared/org-wasm/src/lib.rs`
 |------|------|
 | `api` | mod |
 | `json` | mod |
+| `syntax` | mod |
 | `mae_org_alloc` | fn |
 | `mae_org_call` | fn |
 | `mae_org_result_ptr` | fn |

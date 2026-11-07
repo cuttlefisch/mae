@@ -31,7 +31,55 @@ export interface Request {
   node?: string;
   /** For `classifyLink`: the link path. */
   path?: string;
+  /** For `syntaxSection`: one entry of a `syntax` result's `sections`, unchanged. */
+  section?: SyntaxSectionInfo;
+  /** For `syntaxSection`: the `file` object of the same `syntax` result, unchanged. */
+  file?: SyntaxFile;
 }
+
+/** File facts a section's re-highlight depends on, as `syntax` returns them. */
+export interface SyntaxFile {
+  line_ending: 'lf' | 'crlf' | 'cr';
+  radio_targets: string[];
+  todo: { todo: string[]; done: string[] }[];
+}
+
+/**
+ * A region `syntaxSection` can re-highlight alone: the text before the first
+ * headline, or one headline's own section (after its line, up to its first
+ * child headline). Byte offsets into the whole text.
+ */
+export interface SyntaxSectionInfo {
+  start: number;
+  end: number;
+  level: number;
+  ancestors: number;
+  declarations: number;
+  followed: boolean;
+}
+
+/**
+ * Highlighting spans: `spans` is flat, three numbers a span —
+ * `[kindIndex, start, end, …]`, `kindIndex` into `kinds` (SyntaxKind names
+ * such as "HEADLINE", "BOLD"). UTF-8 byte offsets into the WHOLE text.
+ * Plain text, spaces, line endings and blank lines are not listed.
+ */
+export interface SyntaxSpans {
+  kinds: string[];
+  spans: number[];
+}
+
+export interface SyntaxResult extends SyntaxSpans {
+  file: SyntaxFile;
+  sections: SyntaxSectionInfo[];
+}
+
+/**
+ * `needs_full`: the edit changed what the rest of the file reads (a headline
+ * line, a radio target or TODO keyword line, or the line ending before the
+ * next headline); send the whole text to `syntax` again.
+ */
+export type SyntaxSectionResult = SyntaxSpans | { needs_full: 'headline' | 'declarations' | 'boundary' };
 
 export interface Span { start: number; end: number }
 
@@ -172,6 +220,10 @@ export declare class MaeOrg {
   text(request: Request): string;
   classifyLink(request: Request): LinkClass;
   version(): { api: string; crate: string };
+  /** Spans for the whole `text`, plus the regions `syntaxSection` can redo alone. */
+  syntax(request: Request): SyntaxResult;
+  /** Spans for one region: `text` is the region's NEW text, `section`/`file` as `syntax` gave them. */
+  syntaxSection(request: Request): SyntaxSectionResult;
   liveBytes(): number;
 }
 
