@@ -57,16 +57,53 @@ pub enum KbNodeOp {
         title: String,
         body: String,
         kind: String,
+        /// The KB named by the caller (`None`: inferred from the id, as before).
+        kb: Option<String>,
     },
     Update {
         id: String,
         title: Option<String>,
         body: Option<String>,
         tags: Option<Vec<String>>,
+        kb: Option<String>,
     },
     Delete {
         id: String,
+        kb: Option<String>,
     },
+}
+
+/// `kb-update`'s optional TAGS: a list of strings, or `#f` / absence for none.
+fn opt_tags(arg: Option<&Value>) -> Result<Option<Vec<String>>, LispError> {
+    let other = match arg {
+        None | Some(Value::Bool(false)) => return Ok(None),
+        Some(v) => v,
+    };
+    let items = other.to_list().ok_or_else(|| {
+        LispError::type_error("list of strings or #f", format!("kb-update got {other:?}"))
+    })?;
+    let mut tags = Vec::with_capacity(items.len());
+    for item in &items {
+        match opt_string(item, "kb-update")? {
+            Some(t) => tags.push(t),
+            None => {
+                return Err(LispError::type_error(
+                    "string",
+                    "kb-update tag list contains #f".to_string(),
+                ))
+            }
+        }
+    }
+    Ok(Some(tags))
+}
+
+/// The optional string argument at `i` (a KB name, a title, a body): a string,
+/// or `#f` / absence for none.
+fn opt_kb(args: &[Value], i: usize, who: &str) -> Result<Option<String>, LispError> {
+    match args.get(i) {
+        None => Ok(None),
+        Some(v) => opt_string(v, who),
+    }
 }
 
 /// Every KB store to consult, primary first, **each exactly once**.
@@ -297,7 +334,8 @@ pub(super) fn register_kb_crud_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>
         "Create a KB node. ID must be non-empty and must not already exist. Optional KIND is one \
          of index|command|concept|key|note|project|category|lesson|tutorial|meta|block|task|view \
          (default \"note\"; an unrecognized kind falls back to note, matching the kb_create MCP \
-         tool). Returns #t once the create is queued; it is applied on the next editor tick via \
+         tool). Optional KB names the KB to create it in (`local` = the local KB); an unknown or \
+         unloaded KB is an error, never a fallback to another KB. Returns #t once the create is queued; it is applied on the next editor tick via \
          Editor::kb_create_node — the same method the kb_create MCP tool and the :kb-create \
          command use, which re-checks seed protection and KB write policy.",
         Arity::Variadic(3),
@@ -311,13 +349,15 @@ pub(super) fn register_kb_crud_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>
             }
             let title = arg_string(args, 1, "kb-create")?;
             let body = arg_string(args, 2, "kb-create")?;
-            let kind = if args.len() > 3 {
-                arg_string(args, 3, "kb-create")?
-            } else {
-                "note".to_string()
+            let kind = match args.get(3) {
+                None | Some(Value::Bool(false)) => "note".to_string(),
+                Some(_) => arg_string(args, 3, "kb-create")?,
             };
+            let kb = opt_kb(args, 4, "kb-create")?;
             let mut state = s.lock();
-            if lookup_node(&state, &id)?.is_some() {
+            // With a KB named, the id may exist in another KB: the editor checks
+            // the named one when it applies the create.
+            if kb.is_none() && lookup_node(&state, &id)?.is_some() {
                 return Err(LispError::internal(format!(
                     "kb-create: KB node already exists: {id}"
                 )));
@@ -327,6 +367,7 @@ pub(super) fn register_kb_crud_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>
                 title,
                 body,
                 kind,
+                kb,
             });
             Ok(Value::Bool(true))
         },
@@ -340,60 +381,28 @@ pub(super) fn register_kb_crud_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>
          leave it unchanged; TAGS, when given, is a list of strings that REPLACES the node's tag \
          set. Signals an error if no node with that id exists. Returns #t once the update is \
          queued; it is applied on the next editor tick via Editor::kb_update_node — the same \
-         method the kb_update MCP tool uses.",
+         method the kb_update MCP tool uses. Optional 5th argument KB names the KB holding the \
+         node; it is required when the id exists in more than one KB.",
         Arity::Variadic(1),
         tier::WRITE,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-update")?;
-            let title = if args.len() > 1 {
-                opt_string(&args[1], "kb-update")?
-            } else {
-                None
-            };
-            let body = if args.len() > 2 {
-                opt_string(&args[2], "kb-update")?
-            } else {
-                None
-            };
-            let tags = if args.len() > 3 {
-                match &args[3] {
-                    Value::Bool(false) => None,
-                    other => {
-                        let items = other.to_list().ok_or_else(|| {
-                            LispError::type_error(
-                                "list of strings or #f",
-                                format!("kb-update got {other:?}"),
-                            )
-                        })?;
-                        let mut tags = Vec::with_capacity(items.len());
-                        for item in &items {
-                            match opt_string(item, "kb-update")? {
-                                Some(t) => tags.push(t),
-                                None => {
-                                    return Err(LispError::type_error(
-                                        "string",
-                                        "kb-update tag list contains #f".to_string(),
-                                    ))
-                                }
-                            }
-                        }
-                        Some(tags)
-                    }
-                }
-            } else {
-                None
-            };
+            let title = opt_kb(args, 1, "kb-update")?;
+            let body = opt_kb(args, 2, "kb-update")?;
+            let tags = opt_tags(args.get(3))?;
             if title.is_none() && body.is_none() && tags.is_none() {
                 return Err(LispError::internal(
                     "kb-update: nothing to update (pass at least one of TITLE, BODY, TAGS)"
                         .to_string(),
                 ));
             }
+            let kb = opt_kb(args, 4, "kb-update")?;
             let mut state = s.lock();
             if lookup_node(&state, &id)?.is_none() {
                 return Err(LispError::internal(format!("kb-update: No KB node: {id}")));
             }
             state.pending_kb_node_ops.push(KbNodeOp::Update {
+                kb,
                 id,
                 title,
                 body,
@@ -410,16 +419,18 @@ pub(super) fn register_kb_crud_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>
         "Delete a KB node by ID. Signals an error if no node with that id exists. Returns #t once \
          the delete is queued; it is applied on the next editor tick via Editor::kb_delete_node — \
          the same method the kb_delete MCP tool uses, which refuses to delete a protected seed \
-         node.",
-        Arity::Fixed(1),
+         node. Optional KB names the KB holding the node; it is required when the id exists in \
+         more than one KB.",
+        Arity::Variadic(1),
         tier::WRITE,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-delete")?;
+            let kb = opt_kb(args, 1, "kb-delete")?;
             let mut state = s.lock();
             if lookup_node(&state, &id)?.is_none() {
                 return Err(LispError::internal(format!("kb-delete: No KB node: {id}")));
             }
-            state.pending_kb_node_ops.push(KbNodeOp::Delete { id });
+            state.pending_kb_node_ops.push(KbNodeOp::Delete { id, kb });
             Ok(Value::Bool(true))
         },
     );
