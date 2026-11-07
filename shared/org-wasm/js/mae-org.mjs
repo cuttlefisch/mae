@@ -19,6 +19,8 @@ const OPS = new Map([
   ['text', 4],
   ['classifyLink', 5],
   ['version', 6],
+  ['syntax', 7],
+  ['syntaxSection', 8],
 ]);
 
 const encoder = new TextEncoder();
@@ -118,6 +120,10 @@ export class MaeOrg {
   text(request) { return this.call('text', request); }
   classifyLink(request) { return this.call('classifyLink', request); }
   version() { return this.call('version'); }
+  // Highlighting spans for an editor (flat [kind, start, end] triples, UTF-8
+  // byte offsets) and the regions syntaxSection can re-highlight alone.
+  syntax(request) { return this.call('syntax', request); }
+  syntaxSection(request) { return this.call('syntaxSection', request); }
 
   /** Bytes the module has allocated and not freed (for leak checks). */
   liveBytes() { return this.exports.mae_org_live_bytes() >>> 0; }

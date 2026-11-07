@@ -68,6 +68,10 @@ mod element;
 mod entities;
 mod green;
 mod headline;
+mod highlight;
+pub use highlight::{
+    highlights, section_highlights, sections, Highlight, NeedsFull, Section, SectionHighlights,
+};
 mod index;
 mod inline;
 mod json;

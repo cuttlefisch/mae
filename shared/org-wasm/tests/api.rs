@@ -101,3 +101,65 @@ fn bad_requests_are_error_responses() {
     assert!(err(1, "[]").contains("object"));
     assert!(err(1, r##"{"parse": {"todo": "TODO DONE"}}"##).contains("parse.todo"));
 }
+
+/// `[kind name, start, end]` triples of a spans result.
+fn triples(r: &Value) -> Vec<(String, u64, u64)> {
+    let kinds = r["kinds"].as_array().expect("kinds");
+    r["spans"]
+        .as_array()
+        .expect("spans")
+        .chunks(3)
+        .map(|c| {
+            let k = kinds[c[0].as_u64().unwrap() as usize]
+                .as_str()
+                .unwrap()
+                .to_string();
+            (k, c[1].as_u64().unwrap(), c[2].as_u64().unwrap())
+        })
+        .collect()
+}
+
+const SYN: &str = "#+TODO: TODO | DONE\nintro <<<radio>>>\n* TODO A :t:\nalpha *b* radio\n** A1\nchild\n* B\nbeta\n";
+
+/// Through JSON both ways, a region re-highlighted from its unchanged text
+/// gives exactly the whole result's spans inside it; an edit that changes
+/// what the rest of the file reads is answered with `needs_full`.
+#[test]
+fn syntax_sections_round_trip_through_json() {
+    let whole = ok(7, &serde_json::json!({ "text": SYN }).to_string());
+    let all = triples(&whole);
+    assert!(all.iter().any(|t| t.0 == "TODO_KEYWORD"), "{all:?}");
+    let sections = whole["sections"].as_array().unwrap();
+    assert_eq!(sections.len(), 4);
+    for s in sections {
+        let (start, end) = (s["start"].as_u64().unwrap(), s["end"].as_u64().unwrap());
+        let region = &SYN[start as usize..end as usize];
+        let req = serde_json::json!({ "text": region, "section": s, "file": whole["file"] });
+        let got = triples(&ok(8, &req.to_string()));
+        let want: Vec<_> = all
+            .iter()
+            .filter(|t| t.1 >= start && t.2 <= end)
+            .cloned()
+            .collect();
+        assert_eq!(got, want, "section {start}..{end}");
+    }
+    let child = sections
+        .iter()
+        .find(|s| SYN[s["start"].as_u64().unwrap() as usize..].starts_with("child"))
+        .unwrap();
+    let edited =
+        serde_json::json!({ "text": "child\n* new\n", "section": child, "file": whole["file"] });
+    assert_eq!(
+        ok(8, &edited.to_string()),
+        serde_json::json!({ "needs_full": "headline" })
+    );
+}
+
+#[test]
+fn a_malformed_section_request_is_an_error() {
+    assert!(err(8, r#"{"text": "x"}"#).contains("section"));
+    let bad = r#"{"text": "x", "file": {"line_ending": "lf"}, "section": {"start": -1, "end": 1, "level": 0, "ancestors": 0, "declarations": 0, "followed": false}}"#;
+    assert!(err(8, bad).contains("section.start"));
+    let eol = r#"{"text": "x", "file": {"line_ending": "dos"}, "section": {"start": 0, "end": 1, "level": 0, "ancestors": 0, "declarations": 0, "followed": false}}"#;
+    assert!(err(8, eol).contains("line_ending"));
+}
