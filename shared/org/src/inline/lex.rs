@@ -125,7 +125,9 @@ fn backslash_candidate(cx: &InlineCx, i: usize, end: usize, lim: usize) -> bool 
 
 /// `\(?:call\|src\)_`, ignoring case.
 fn babel_candidate(cx: &InlineCx, i: usize, lim: usize) -> bool {
-    cx.starts_ci(i, lim, "call_") || cx.starts_ci(i, lim, "src_")
+    // Both start with `c` or `s`: most positions are rejected on one byte.
+    matches!(cx.bytes()[i] | 0x20, b'c' | b's')
+        && (cx.starts_ci(i, lim, "call_") || cx.starts_ci(i, lim, "src_"))
 }
 
 /// A registered link type name at `i` (no colon required: `<\(?:TYPES\)`),
@@ -141,6 +143,16 @@ fn type_name_at(cx: &InlineCx, i: usize, lim: usize) -> Option<usize> {
 /// `\<` is Emacs's, so a word char after one of another script starts a
 /// word (`参见https:`); see [`word_start`].
 fn plain_link_candidate(cx: &InlineCx, i: usize, lim: usize, floor: usize) -> bool {
+    // Tried at every character of every paragraph. A type `t` matches only
+    // with `:` at `i + len(t)`, `1 <= len(t) <= longest` (`link_types` is
+    // longest first), so without a `:` in that window nothing can match:
+    // reject it before the word-start test and the comparison with each type.
+    let b = cx.bytes();
+    let longest = cx.link_types.first().map_or(0, String::len);
+    let window = b.get(i + 1..lim.min(i + longest + 1)).unwrap_or_default();
+    if !window.contains(&b':') {
+        return false;
+    }
     cx.char_at(i)
         .is_some_and(|c| word_start(cx.ch_before(i, floor), c))
         && link::type_at(cx, i, lim).is_some()

@@ -159,6 +159,22 @@ use SyntaxKind::*;
 impl SyntaxKind {
     /// Inverse of `as u16`. `None` for a value no kind has.
     pub fn from_raw(raw: u16) -> Option<SyntaxKind> {
+        // Called for every `.kind()` of every tree walk: the kinds are three
+        // dense runs (tokens from 0, elements from 1000, objects from 2000),
+        // so the index is computed; the search is only the fallback, which
+        // keeps this exact whatever the numbering.
+        let i = match raw {
+            r if r < FIRST_NODE => usize::from(r),
+            r if r < FIRST_OBJECT => RUN_LENS[0] + usize::from(r - FIRST_NODE),
+            r => RUN_LENS[0] + RUN_LENS[1] + usize::from(r - FIRST_OBJECT),
+        };
+        match ALL.get(i) {
+            Some(k) if *k as u16 == raw => Some(*k),
+            _ => Self::from_raw_searched(raw),
+        }
+    }
+
+    fn from_raw_searched(raw: u16) -> Option<SyntaxKind> {
         ALL.binary_search_by_key(&raw, |k| *k as u16)
             .ok()
             .map(|i| ALL[i])
@@ -237,6 +253,24 @@ impl SyntaxKind {
 /// The first node kind's value; tokens are below it. Elements are numbered
 /// from 1000 and objects (inline) from 2000.
 const FIRST_NODE: u16 = 1000;
+
+/// The first object kind's value.
+const FIRST_OBJECT: u16 = 2000;
+
+/// How many kinds are tokens, and how many elements (the rest are objects).
+const RUN_LENS: [usize; 2] = {
+    let (mut tokens, mut elements, mut i) = (0, 0, 0);
+    while i < ALL.len() {
+        let v = ALL[i] as u16;
+        if v < FIRST_NODE {
+            tokens += 1;
+        } else if v < FIRST_OBJECT {
+            elements += 1;
+        }
+        i += 1;
+    }
+    [tokens, elements]
+};
 
 /// Every kind, in ascending value order.
 const ALL: &[SyntaxKind] = &[
@@ -360,6 +394,18 @@ pub type SyntaxElement = rowan::SyntaxElement<OrgLanguage>;
 
 #[cfg(test)]
 mod tests {
+    /// The computed index agrees with the search for every raw value.
+    #[test]
+    fn from_raw_matches_the_search_for_every_value() {
+        for raw in 0..=u16::MAX {
+            assert_eq!(
+                SyntaxKind::from_raw(raw),
+                SyntaxKind::from_raw_searched(raw),
+                "{raw}"
+            );
+        }
+    }
+
     use super::*;
 
     #[test]
