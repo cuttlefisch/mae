@@ -52,6 +52,26 @@ pub struct Section {
     pub followed_by_headline: bool,
 }
 
+impl Section {
+    /// A region as [`sections`] described it, rebuilt by a caller that kept
+    /// its fields (e.g. across a serialisation boundary).
+    pub fn new(
+        start: u32,
+        end: u32,
+        context: FragmentContext,
+        declarations: u32,
+        followed_by_headline: bool,
+    ) -> Section {
+        Section {
+            start,
+            end,
+            context,
+            declarations,
+            followed_by_headline,
+        }
+    }
+}
+
 /// Why [`section_highlights`] cannot answer from the region alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
