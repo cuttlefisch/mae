@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url';
 // reading, `#+LINK` expansion); 755,498 bytes after the final pre-tag
 // review's fixes, 761,547 after its second round, 772,721 after its
 // third; 846,219 once macros were expanded as Org's export does (review
-// round 4), 868,108 after round 5, 906,436 after round 6. The first budget, 700,000 (~15% over the
+// round 4), 868,108 after round 5, 906,436 after round 6, 928,440 with the syntax ops (v0.2.0). The first budget, 700,000 (~15% over the
 // first measurement), caught that growth as it should; it was raised to
 // 800,000 (~13% over the tagged size), then to 900,000 as the deliberate
 // cost of expanding macros, then to 1,000,000 for round 6's fixes, each recorded in ADR-112's O3 note. The
@@ -38,7 +38,8 @@ import { fileURLToPath } from 'node:url';
 // size; raising it again is a decision to record there, not a number to
 // bump.
 const SIZE_BUDGET = 1_000_000;
-const OPS = { semantics: 1, renderHast: 2, renderHtml: 3, text: 4, classifyLink: 5, version: 6 };
+const OPS = { semantics: 1, renderHast: 2, renderHtml: 3, text: 4, classifyLink: 5, version: 6, syntax: 7, syntaxSection: 8 };
+const encoder = new TextEncoder();
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../../..');
 const wasmPath = process.env.MAE_ORG_WASM;
@@ -91,6 +92,14 @@ for (const f of files) {
   requests.push([OPS.text, { text }]);
   if (sem.nodes.length) requests.push([OPS.text, { text, node: sem.nodes[sem.nodes.length - 1].id }]);
   for (const l of sem.links.slice(0, 5)) requests.push([OPS.classifyLink, { path: l.path }]);
+  requests.push([OPS.syntax, { text }]);
+  // Each of a few regions, re-highlighted from its own (unchanged) text.
+  const syn = org.syntax({ text });
+  const bytes = encoder.encode(text);
+  for (const section of syn.sections.slice(0, 3)) {
+    const region = new TextDecoder().decode(bytes.slice(section.start, section.end));
+    requests.push([OPS.syntaxSection, { text: region, section, file: syn.file }]);
+  }
 }
 requests.push([OPS.version, {}]);
 requests.push([OPS.renderHast, { text: 'x', bogus: 1 }]);
