@@ -185,10 +185,14 @@ impl DocScope {
             | Method::SyncAwareness
             | Method::SyncFullState
             | Method::SyncDiff
-            | Method::SyncResync
-            | Method::SyncShare => Self::SelfGatedNamedDoc,
+            | Method::SyncResync => Self::SelfGatedNamedDoc,
 
-            Method::DocsContent
+            // `sync/share` replaces a document wholesale from the caller's
+            // bytes (delete + create). A KB document is never shared this way
+            // -- KB sharing goes through the access-gated `kb/*` surface -- and
+            // replacing a `kbc:` doc would replace a KB's membership.
+            Method::SyncShare
+            | Method::DocsContent
             | Method::DocsStats
             | Method::DocsMetadata
             | Method::DocsSaveIntent
