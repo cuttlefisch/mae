@@ -1,5 +1,8 @@
 use crate::types::*;
 
+/// The `kb` argument of the KB write tools.
+const KB_TARGET: &str = "Target KB by name (`local` = the local KB). Required when the id exists in more than one KB; an unknown or unloaded KB is an error, never a fallback to another KB.";
+
 use super::tool_def::ToolDefBuilder;
 
 /// Knowledge base tool definitions: get, search, list, links, graph, help, org.
@@ -283,9 +286,11 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         // --- KB CRUD tools ---
         ToolDefBuilder::new(
             "kb_create",
-            "Create a new node in the local knowledge base. Cannot overwrite MAE manual (builtin) nodes.",
+            "Create a new node. Without `kb`, it goes to the instance its id is prefixed with (`Name:…`), else the local KB; name `kb` to create it anywhere else. Cannot overwrite MAE manual (builtin) nodes.",
         )
         .prop("id", "string", "Node id (e.g. 'user:my-note', 'concept:my-concept')")
+        .prop("kb", "string", KB_TARGET)
+
         .prop("title", "string", "Human-readable title")
         .prop("body", "string", "Markdown body (may contain [[link]] markers)")
         .prop_enum(
@@ -302,6 +307,8 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "Update fields on an existing KB node. Cannot modify MAE manual (builtin) nodes. Only provided fields are changed.",
         )
         .prop("id", "string", "Node id to update")
+        .prop("kb", "string", KB_TARGET)
+
         .prop("title", "string", "New title (optional)")
         .prop("body", "string", "New body (optional)")
         .prop("tags", "array", "New tags array (optional, replaces existing)")
@@ -313,6 +320,8 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "Delete a node from the local knowledge base. Cannot delete MAE manual (builtin) nodes.",
         )
         .prop("id", "string", "Node id to delete")
+        .prop("kb", "string", KB_TARGET)
+
         .required(["id"])
         .permission(PermissionTier::Write)
         .build(),
@@ -338,9 +347,10 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .build(),
         ToolDefBuilder::new(
             "kb_add_link",
-            "Add a typed relationship between two KB nodes. Relationship types: implements, extends, contradicts, explains, references, supersedes, part_of, related_to. Weight defaults to 1.0. Requires CozoDB backend.",
+            "Add a typed relationship between two KB nodes, written as text (ADR-030): appends `[[dst?rel=TYPE&w=WEIGHT][dst]]` to the source node's body, so it is reviewable like any other edit. Relationship types: implements, extends, contradicts, explains, references, supersedes, part_of, related_to. Weight defaults to 1.0.",
         )
         .prop("src", "string", "Source node id")
+        .prop("kb", "string", "The KB holding the SOURCE node (see kb_update's `kb`)")
         .prop("dst", "string", "Target node id")
         .prop_enum(
             "rel_type",
@@ -513,6 +523,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "Set a KB node's molecular-note role: source (raw external material), atom (established knowledge in your own words), molecule (personal synthesis/insight), or hub (organized map-of-content linking related notes). Stamped as a :role: PROPERTIES-drawer field, orthogonal to the node's existing kind (MAE's own doc taxonomy) -- a node can be both kind=concept and role=atom at once. Freely overwritable as understanding matures.",
         )
         .prop("id", "string", "KB node id")
+        .prop("kb", "string", KB_TARGET)
         .prop_enum(
             "role",
             "string",
