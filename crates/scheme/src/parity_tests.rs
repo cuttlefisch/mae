@@ -899,3 +899,71 @@ fn dap_start_rejects_a_malformed_argument_list() {
     rt.eval(r#"(dap-start "lldb" "/bin/true")"#)
         .expect("ARGS is optional");
 }
+
+/// A plain (unshared) instance named `Beta`, loaded in memory.
+fn editor_with_beta() -> Editor {
+    let mut editor = Editor::new();
+    editor
+        .kb
+        .instances
+        .insert("uuid-beta".into(), mae_kb::KnowledgeBase::new());
+    editor
+        .kb
+        .registry
+        .instances
+        .push(mae_kb::federation::KbInstance {
+            uuid: "uuid-beta".into(),
+            name: "Beta".into(),
+            org_dir: std::path::PathBuf::new(),
+            db_path: std::path::PathBuf::new(),
+            primary: false,
+            enabled: true,
+            last_import: None,
+            collab_id: None,
+            shared: false,
+            remote_peers: Vec::new(),
+            last_sync: None,
+            ai_residency: mae_kb::federation::AiResidency::default(),
+            project_root: None,
+            project_key: None,
+            kind: mae_kb::federation::KbInstanceKind::default(),
+            ingest_policy: Default::default(),
+            import_record: None,
+            priority: 0,
+            remote_hub: None,
+        });
+    editor
+}
+
+/// ADVERSARIAL: a Scheme create that names a KB lands there whatever the id,
+/// and one naming an unknown KB writes nothing anywhere -- never the primary.
+#[test]
+fn kb_create_with_a_kb_lands_in_that_kb_never_the_primary() {
+    let mut rt = new_runtime();
+    let mut editor = editor_with_beta();
+    rt.inject_editor_state(&editor);
+    assert_eq!(
+        rt.eval(r#"(kb-create "0c1d-x" "T" "b" #f "Beta")"#)
+            .unwrap(),
+        "#t"
+    );
+    assert_eq!(
+        rt.eval(r#"(kb-create "0c1d-y" "T" "b" #f "Nope")"#)
+            .unwrap(),
+        "#t"
+    );
+    rt.apply_to_editor(&mut editor);
+    assert!(
+        editor.kb.instances["uuid-beta"].get("0c1d-x").is_some(),
+        "not in Beta"
+    );
+    assert!(
+        editor.kb.primary.get("0c1d-x").is_none(),
+        "landed in the primary KB"
+    );
+    assert!(
+        editor.kb.primary.get("0c1d-y").is_none(),
+        "unknown KB fell back to primary"
+    );
+    assert!(editor.kb.instances["uuid-beta"].get("0c1d-y").is_none());
+}

@@ -221,6 +221,26 @@ impl Editor {
         self.kb_create_node_in(owner, id, title, body, kind)
     }
 
+    /// [`Editor::kb_create_node`] in the KB named `kb` (`local` = the primary
+    /// store), whatever the id: an unknown or unloaded KB is an error, never a
+    /// fallback. `None` infers the KB from the id as before.
+    pub fn kb_create_node_target(
+        &mut self,
+        kb: Option<&str>,
+        id: &str,
+        title: &str,
+        body: &str,
+        kind: mae_kb::NodeKind,
+    ) -> Result<(), String> {
+        match kb {
+            None => self.kb_create_node(id, title, body, kind),
+            Some(name) => {
+                let owner = self.kb_resolve_target(name)?;
+                self.kb_create_node_in(owner, id, title, body, kind)
+            }
+        }
+    }
+
     /// Refuse an AI-originated create of an id that one of MAE's system KBs
     /// (manual, guidance corpora) already holds.
     ///
@@ -282,6 +302,15 @@ impl Editor {
     ) -> Result<(), String> {
         self.kb_write_blocked()?;
         self.kb_refuse_agent_shadowing_system_node(id)?;
+        // A write aimed at an instance that is not loaded must fail here, before
+        // anything persists: it used to land in the primary KB instead.
+        if let Some(uuid) = &owner {
+            if !self.kb.instances.contains_key(uuid) {
+                return Err(format!(
+                    "KB instance '{uuid}' is not loaded; '{id}' was not created"
+                ));
+            }
+        }
         // Guard: refuse to overwrite seed nodes
         if let Some(existing) = self.kb.primary.get(id) {
             if existing.source == Some(mae_kb::NodeSource::Seed) {
@@ -305,14 +334,11 @@ impl Editor {
             self.kb_enqueue_manifest_op(&kb_id, id, title, true);
         } else {
             match &owner {
-                Some(uuid) => match self.kb.instances.get_mut(uuid) {
-                    Some(kb) => {
+                Some(uuid) => {
+                    if let Some(kb) = self.kb.instances.get_mut(uuid) {
                         kb.insert(node);
                     }
-                    None => {
-                        self.kb.primary.insert(node);
-                    }
-                },
+                }
                 None => {
                     self.kb.primary.insert(node);
                 }
@@ -328,13 +354,17 @@ impl Editor {
     /// Delete a KB node from the local knowledge base.
     /// Rejects deleting seed nodes (built-in help).
     pub fn kb_delete_node(&mut self, id: &str) -> Result<(), String> {
+        self.kb_delete_node_target(None, id)
+    }
+
+    /// [`Editor::kb_delete_node`] in the KB named `kb`, which must hold `id`.
+    /// Without one, an id held by more than one KB is refused.
+    pub fn kb_delete_node_target(&mut self, kb: Option<&str>, id: &str) -> Result<(), String> {
         self.kb_write_blocked()?;
         // Phase D3: lazily load the node into the thin-startup mirror so it resolves.
         self.kb_ensure_node_loaded(id);
         // Resolve across primary ∪ federated instances (I-9), like update/read.
-        let owner = self
-            .kb_owner_of(id)
-            .ok_or_else(|| format!("No KB node: {}", id))?;
+        let owner = self.kb_write_owner(id, kb)?;
         let node = match &owner {
             None => self.kb.primary.get(id),
             Some(uuid) => self.kb.instances.get(uuid).and_then(|kb| kb.get(id)),
@@ -528,7 +558,20 @@ impl Editor {
         body: Option<&str>,
         tags: Option<Vec<String>>,
     ) -> Result<(), String> {
-        self.kb_update_node_with(id, |updated| {
+        self.kb_update_node_target(None, id, title, body, tags)
+    }
+
+    /// [`Editor::kb_update_node`] in the KB named `kb`, which must hold `id`.
+    /// Without one, an id held by more than one KB is refused.
+    pub fn kb_update_node_target(
+        &mut self,
+        kb: Option<&str>,
+        id: &str,
+        title: Option<&str>,
+        body: Option<&str>,
+        tags: Option<Vec<String>>,
+    ) -> Result<(), String> {
+        self.kb_update_node_with_target(kb, id, |updated| {
             if let Some(t) = title {
                 updated.title = t.to_string();
             }
@@ -551,6 +594,16 @@ impl Editor {
     /// to any non-`:ID:` heading property — no new parsing code, just a new recognized
     /// value written through the existing update path.
     pub fn kb_set_role(&mut self, id: &str, role: &str) -> Result<String, String> {
+        self.kb_set_role_target(None, id, role)
+    }
+
+    /// [`Editor::kb_set_role`] in the KB named `kb`, which must hold `id`.
+    pub fn kb_set_role_target(
+        &mut self,
+        kb: Option<&str>,
+        id: &str,
+        role: &str,
+    ) -> Result<String, String> {
         let role = role.to_ascii_lowercase();
         if !["source", "atom", "molecule", "hub"].contains(&role.as_str()) {
             return Err(format!(
@@ -558,7 +611,7 @@ impl Editor {
                 role
             ));
         }
-        self.kb_update_node_with(id, |updated| {
+        self.kb_update_node_with_target(kb, id, |updated| {
             updated.properties.insert("role".to_string(), role.clone());
         })?;
         let msg = format!("KB node '{}' role set to {}", id, role);
@@ -575,6 +628,17 @@ impl Editor {
         id: &str,
         mutate: impl FnOnce(&mut mae_kb::Node),
     ) -> Result<(), String> {
+        self.kb_update_node_with_target(None, id, mutate)
+    }
+
+    /// [`Editor::kb_update_node_with`] in the KB named `kb` (see
+    /// [`Editor::kb_write_owner`]).
+    pub(super) fn kb_update_node_with_target(
+        &mut self,
+        kb: Option<&str>,
+        id: &str,
+        mutate: impl FnOnce(&mut mae_kb::Node),
+    ) -> Result<(), String> {
         self.kb_write_blocked()?;
         // Phase D3: thin-startup mirror may not hold this node yet — lazily load it
         // (with its CRDT lineage) from the open store before resolving the owner.
@@ -583,9 +647,7 @@ impl Editor {
         // KB lives in `instances` on the host that registered it, and in
         // `primary` on a peer that joined it. The write path must find it in
         // either, mirroring the read path — not primary-only.
-        let owner = self
-            .kb_owner_of(id)
-            .ok_or_else(|| format!("No KB node: {}", id))?;
+        let owner = self.kb_write_owner(id, kb)?;
         let existing = match &owner {
             None => self.kb.primary.get(id),
             Some(uuid) => self.kb.instances.get(uuid).and_then(|kb| kb.get(id)),
