@@ -1320,6 +1320,31 @@ pub async fn require_node_in_kb(
     }
 }
 
+/// The gate for `sync/awareness`. Relaying awareness subscribes the session
+/// to the doc (a standing feed of its updates) and shows its members where the
+/// sender is, so a KB doc -- node or collection -- needs read access to the KB
+/// its address names. Unlike [`deny_kb_doc_read`] a node is not refused
+/// outright: a member co-editing a node relays cursors on that node's doc.
+/// Exhaustive on purpose, as [`deny_kb_doc_read`] is.
+async fn deny_kb_awareness(
+    doc_store: &DocStore,
+    doc_name: &str,
+    principal: Option<&str>,
+    transport: Transport,
+) -> Result<(), String> {
+    let kb_id = match mae_sync::DocAddress::parse(doc_name) {
+        Some(mae_sync::DocAddress::KbCollection { kb_id })
+        | Some(mae_sync::DocAddress::KbNode { kb_id, .. }) => kb_id,
+        Some(mae_sync::DocAddress::Shared { .. })
+        | Some(mae_sync::DocAddress::File { .. })
+        | None => return Ok(()),
+    };
+    match kb_access(doc_store, &kb_id, principal, KbOp::Read, transport).await? {
+        AccessDecision::Allow => Ok(()),
+        _ => Err(format!("not authorized for KB '{kb_id}' (members only)")),
+    }
+}
+
 /// Complete-mediation for RAW doc READS (`sync/full_state`, `sync/state_vector`). These
 /// generic sync methods otherwise return a doc's yrs state for ANY caller-supplied name,
 /// bypassing the `kb_access(Read)` gate that `kb/node_fetch`/`kb/join` enforce — a
@@ -1496,11 +1521,13 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        Method::SyncAwareness => {
-            sync_methods::handle_sync_awareness(
+        Method::SyncAwareness | Method::SyncShare => {
+            let who = (session_id, auth_label, auth_principal, transport);
+            sync_methods::relay(
+                method,
+                doc_store,
                 broadcaster,
-                session_id,
-                auth_label,
+                who,
                 session_docs,
                 id,
                 &params,
@@ -1560,18 +1587,6 @@ async fn handle_doc_request_inner(
                 broadcaster,
                 session_id,
                 auth_label,
-                id,
-                &params,
-            )
-            .await
-        }
-
-        Method::SyncShare => {
-            sync_methods::handle_sync_share(
-                doc_store,
-                broadcaster,
-                session_id,
-                session_docs,
                 id,
                 &params,
             )

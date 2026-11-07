@@ -230,3 +230,115 @@ async fn raw_sync_methods_cannot_read_a_node_belonging_to_another_kb() {
         );
     }
 }
+
+/// ADVERSARIAL: `sync/share` and `sync/awareness` are classified as gating
+/// themselves (`DocScope::SelfGatedNamedDoc`), so the dispatcher lets them
+/// through. An outsider aiming them at another KB's node or collection doc
+/// must be refused, must not be subscribed to it, and must not be able to
+/// replace it: a replaced `kbc:` doc is a replaced membership.
+#[tokio::test]
+async fn share_and_awareness_cannot_touch_another_kbs_documents() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut mallory_docs = HashSet::new();
+    kb_share_as(
+        &store,
+        &bc,
+        Some("mallory"),
+        Some(&fp("mallory")),
+        "kb-a",
+        "mallory",
+        &mut mallory_docs,
+    )
+    .await;
+    let mut victim_docs = HashSet::new();
+    kb_share_as(
+        &store,
+        &bc,
+        Some("victim"),
+        Some(&fp("victim")),
+        "kb-b",
+        "victim",
+        &mut victim_docs,
+    )
+    .await;
+    let add = |node: &str| {
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"kb/collection_node_add",
+            "params":{"kb_id":"kb-b","node_id":node,"title":"B"}})
+    };
+    let added = dispatch_as(
+        &store,
+        &bc,
+        Some("victim"),
+        Some(&fp("victim")),
+        add("concept:b-secret"),
+        &mut victim_docs,
+    )
+    .await;
+    assert!(added.error.is_none(), "seed failed: {:?}", added.error);
+
+    for doc in ["kbn:kb-b:concept:b-secret", "kbc:kb-b"] {
+        for (method, extra) in [
+            ("sync/share", serde_json::json!({"update": "AAA="})),
+            (
+                "sync/awareness",
+                serde_json::json!({"state": {"cursor": 1}}),
+            ),
+        ] {
+            let before = mallory_docs.len();
+            let mut params = extra.clone();
+            params["doc"] = serde_json::json!(doc);
+            let attack = dispatch_as(
+                &store,
+                &bc,
+                Some("mallory"),
+                Some(&fp("mallory")),
+                serde_json::json!({"jsonrpc":"2.0","id":9,"method":method,"params":params}),
+                &mut mallory_docs,
+            )
+            .await;
+            assert!(
+                attack.error.is_some(),
+                "{method} on {doc} accepted from an outsider: {:?}",
+                attack.result
+            );
+            assert_eq!(
+                mallory_docs.len(),
+                before,
+                "{method} subscribed an outsider to {doc}"
+            );
+        }
+    }
+    // A member's own cursors still relay: the gate is access, not a ban.
+    let own = dispatch_as(
+        &store,
+        &bc,
+        Some("victim"),
+        Some(&fp("victim")),
+        serde_json::json!({"jsonrpc":"2.0","id":3,"method":"sync/awareness",
+            "params":{"doc":"kbn:kb-b:concept:b-secret","state":{"cursor":1}}}),
+        &mut victim_docs,
+    )
+    .await;
+    assert!(
+        own.error.is_none(),
+        "a member's awareness on its own KB was refused: {:?}",
+        own.error
+    );
+    // The load-bearing half for share: the victim still owns kb-b and can
+    // still write to it, so its collection was not replaced.
+    let again = dispatch_as(
+        &store,
+        &bc,
+        Some("victim"),
+        Some(&fp("victim")),
+        add("concept:b-two"),
+        &mut victim_docs,
+    )
+    .await;
+    assert!(
+        again.error.is_none(),
+        "kb-b's collection was replaced by an outsider: {:?}",
+        again.error
+    );
+}
