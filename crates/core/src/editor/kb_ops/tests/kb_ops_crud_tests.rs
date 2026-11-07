@@ -388,3 +388,114 @@ fn kb_update_node_unshared_instance_does_not_queue() {
         "unshared KB must not broadcast even with a stale cache entry"
     );
 }
+
+// ---- Instance targeting (a write aimed at a named KB lands there or fails
+// loudly; it never lands in the primary KB). ----
+
+/// An editor with two loaded, non-primary instances.
+fn two_instances() -> (Editor, String, String, Vec<tempfile::TempDir>) {
+    let a = create_test_org_dir();
+    let b = create_test_org_dir();
+    let mut editor = Editor::new();
+    let dirs = with_test_dirs(&mut editor);
+    let ua = editor.kb_register("Alpha", a.path()).unwrap().uuid;
+    let ub = editor.kb_register("Beta", b.path()).unwrap().uuid;
+    (editor, ua, ub, vec![a, b, dirs])
+}
+
+fn in_instance(editor: &Editor, uuid: &str, id: &str) -> bool {
+    editor
+        .kb
+        .instances
+        .get(uuid)
+        .is_some_and(|kb| kb.get(id).is_some())
+}
+
+#[test]
+fn a_create_aimed_at_an_unloaded_instance_fails_and_never_lands_in_primary() {
+    let mut editor = Editor::new();
+    let _dirs = with_test_dirs(&mut editor);
+    let r = editor.kb_create_node_in(
+        Some("uuid-not-loaded".into()),
+        "plain-id",
+        "T",
+        "b",
+        mae_kb::NodeKind::Note,
+    );
+    assert!(
+        r.is_err(),
+        "a create aimed at an unloaded instance succeeded"
+    );
+    assert!(
+        editor.kb.primary.get("plain-id").is_none(),
+        "it landed in the primary KB"
+    );
+}
+
+#[test]
+fn a_create_names_its_kb_whatever_its_id() {
+    let (mut editor, ua, ub, _d) = two_instances();
+    editor
+        .kb_create_node_target(
+            Some("Beta"),
+            "3f9c-uuid-like",
+            "T",
+            "b",
+            mae_kb::NodeKind::Note,
+        )
+        .unwrap();
+    assert!(
+        in_instance(&editor, &ub, "3f9c-uuid-like"),
+        "not in the named KB"
+    );
+    assert!(!in_instance(&editor, &ua, "3f9c-uuid-like"));
+    assert!(
+        editor.kb.primary.get("3f9c-uuid-like").is_none(),
+        "landed in primary"
+    );
+    let err = editor
+        .kb_create_node_target(Some("NoSuchKb"), "x", "T", "b", mae_kb::NodeKind::Note)
+        .unwrap_err();
+    assert!(err.contains("NoSuchKb"), "{err}");
+    assert!(editor.kb.primary.get("x").is_none());
+}
+
+#[test]
+fn an_update_or_delete_of_an_id_held_by_two_kbs_needs_a_kb() {
+    let (mut editor, ua, ub, _d) = two_instances();
+    for kb in ["Alpha", "Beta"] {
+        editor
+            .kb_create_node_target(Some(kb), "dup", kb, "b", mae_kb::NodeKind::Note)
+            .unwrap();
+    }
+    let err = editor
+        .kb_update_node("dup", Some("new"), None, None)
+        .unwrap_err();
+    assert!(err.contains("Alpha") && err.contains("Beta"), "{err}");
+    editor
+        .kb_update_node_target(Some("Beta"), "dup", Some("new"), None, None)
+        .unwrap();
+    let title = |u: &str| editor.kb.instances[u].get("dup").unwrap().title.clone();
+    assert_eq!(
+        (title(&ua), title(&ub)),
+        ("Alpha".to_string(), "new".to_string())
+    );
+    assert!(
+        editor.kb_delete_node("dup").is_err(),
+        "ambiguous delete succeeded"
+    );
+    editor.kb_delete_node_target(Some("Alpha"), "dup").unwrap();
+    assert!(!in_instance(&editor, &ua, "dup") && in_instance(&editor, &ub, "dup"));
+}
+
+#[test]
+fn a_targeted_update_of_an_id_the_kb_does_not_hold_fails() {
+    let (mut editor, _ua, _ub, _d) = two_instances();
+    editor
+        .kb_create_node_target(Some("Alpha"), "only-a", "T", "b", mae_kb::NodeKind::Note)
+        .unwrap();
+    let err = editor
+        .kb_update_node_target(Some("Beta"), "only-a", Some("x"), None, None)
+        .unwrap_err();
+    assert!(err.contains("Beta"), "{err}");
+}

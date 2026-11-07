@@ -15,6 +15,31 @@ use mae_core::Editor;
 /// without an extra round-trip.  `NodeKind` is serialized via its serde
 /// `#[serde(rename_all = "lowercase")]` so the wire shape matches
 /// what `kb_search` / `kb_list` would produce on the same node.
+/// The `kb` argument of the KB write tools: the KB a write names, if any.
+fn kb_arg(args: &serde_json::Value) -> Option<&str> {
+    args.get("kb").and_then(|v| v.as_str())
+}
+
+/// The node `id` after a write, as `kb_get` shows it: from the KB the write
+/// named, so a duplicate id elsewhere is never shown in its place.
+fn written_node(editor: &Editor, id: &str, kb: Option<&str>, verb: &str) -> Result<String, String> {
+    if let Some(kb) = kb {
+        return execute_kb_get(editor, &serde_json::json!({ "id": id, "kb": kb }))
+            .or_else(|_| Ok(format!("{verb} node: {id} (KB {kb})")));
+    }
+    // The write already succeeded, so a failure fetching the display JSON
+    // degrades to the plain confirmation rather than a tool error — logged,
+    // not swallowed (ADR-086 read-side twin).
+    match node_json(editor, id) {
+        Ok(Some(v)) => serde_json::to_string_pretty(&v).map_err(|e| e.to_string()),
+        Ok(None) => Ok(format!("{verb} node: {id}")),
+        Err(e) => {
+            tracing::warn!(error = %e, id, "{verb}: node_json fetch failed after a successful write");
+            Ok(format!("{verb} node: {id}"))
+        }
+    }
+}
+
 fn node_json(editor: &Editor, id: &str) -> Result<Option<serde_json::Value>, String> {
     // `kb_resolve_anywhere` is the single source of truth for the
     // query-layer-then-in-memory(-then-federated-instance) fallback order —
@@ -1091,20 +1116,8 @@ pub fn execute_kb_create(editor: &mut Editor, args: &serde_json::Value) -> Resul
         _ => mae_core::KbNodeKind::Note,
     };
 
-    editor.kb_create_node(id, title, body, kind)?;
-
-    // Return the created node. The create itself already succeeded (the postcondition
-    // holds) by this point, so a failure fetching the display JSON degrades to the
-    // plain-text confirmation rather than turning an already-successful create into a
-    // tool error — but it's logged, not silently swallowed (ADR-086 read-side twin).
-    match node_json(editor, id) {
-        Ok(Some(v)) => serde_json::to_string_pretty(&v).map_err(|e| e.to_string()),
-        Ok(None) => Ok(format!("Created node: {}", id)),
-        Err(e) => {
-            tracing::warn!(error = %e, id, "kb_create: node_json fetch failed after successful create");
-            Ok(format!("Created node: {}", id))
-        }
-    }
+    editor.kb_create_node_target(kb_arg(args), id, title, body, kind)?;
+    written_node(editor, id, kb_arg(args), "Created")
 }
 
 pub fn execute_kb_update(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
@@ -1122,19 +1135,8 @@ pub fn execute_kb_update(editor: &mut Editor, args: &serde_json::Value) -> Resul
         })
     });
 
-    editor.kb_update_node(id, title, body, tags)?;
-
-    // Same rationale as `execute_kb_create` above: the update already succeeded, so a
-    // display-JSON fetch failure degrades to the plain-text confirmation instead of
-    // turning the already-successful update into a tool error — logged, not swallowed.
-    match node_json(editor, id) {
-        Ok(Some(v)) => serde_json::to_string_pretty(&v).map_err(|e| e.to_string()),
-        Ok(None) => Ok(format!("Updated node: {}", id)),
-        Err(e) => {
-            tracing::warn!(error = %e, id, "kb_update: node_json fetch failed after successful update");
-            Ok(format!("Updated node: {}", id))
-        }
-    }
+    editor.kb_update_node_target(kb_arg(args), id, title, body, tags)?;
+    written_node(editor, id, kb_arg(args), "Updated")
 }
 
 // --- Native KB graph view (Part C Phase 1) ---
@@ -1459,7 +1461,7 @@ pub fn execute_kb_delete(editor: &mut Editor, args: &serde_json::Value) -> Resul
         .get("id")
         .and_then(|v| v.as_str())
         .ok_or("Missing required parameter: id")?;
-    editor.kb_delete_node(id)?;
+    editor.kb_delete_node_target(kb_arg(args), id)?;
     Ok(format!("Deleted node: {}", id))
 }
 
@@ -1567,7 +1569,7 @@ pub fn execute_kb_set_role(
         .get("role")
         .and_then(|v| v.as_str())
         .ok_or("Missing required parameter: role")?;
-    editor.kb_set_role(id, role)
+    editor.kb_set_role_target(kb_arg(args), id, role)
 }
 
 pub fn execute_kb_set_ai_residency(
@@ -2047,12 +2049,18 @@ pub fn execute_kb_add_link(
     // with a wrong/empty body would corrupt the node), not be conflated with the
     // distinct "no such node" case (ADR-086 read-side twin: `?` propagates the real
     // error; only a genuine `Ok(None)`/missing-body falls through to "No KB node").
-    let current_body = node_json(editor, src)?
-        .and_then(|v| v.get("body").and_then(|b| b.as_str()).map(str::to_string))
-        .ok_or_else(|| format!("No KB node: {}", src))?;
+    let kb = kb_arg(args);
+    let current_body = match kb {
+        // From the KB the write names, so a duplicate id elsewhere never
+        // supplies the body the link is appended to.
+        Some(kb) => editor.kb_get_in(kb, src)?.map(|s| s.node.body),
+        None => node_json(editor, src)?
+            .and_then(|v| v.get("body").and_then(|b| b.as_str()).map(str::to_string)),
+    }
+    .ok_or_else(|| format!("No KB node: {}", src))?;
     let link_line = format!("\n[[{dst}?rel={rel_type}&w={weight}][{dst}]]");
     let new_body = format!("{current_body}{link_line}");
-    editor.kb_update_node(src, None, Some(&new_body), None)?;
+    editor.kb_update_node_target(kb, src, None, Some(&new_body), None)?;
 
     Ok(serde_json::json!({
         "status": "ok",
@@ -2558,6 +2566,88 @@ mod tests {
             priority: 0,
             remote_hub: None,
         }
+    }
+
+    /// Two plain (unshared) instances, `Alpha` and `Beta`, loaded in memory.
+    fn editor_with_two_plain_instances() -> Editor {
+        let mut editor = Editor::new();
+        for (uuid, name) in [("uuid-alpha", "Alpha"), ("uuid-beta", "Beta")] {
+            editor
+                .kb
+                .instances
+                .insert(uuid.to_string(), mae_kb::KnowledgeBase::new());
+            let mut inst = lifecycle_instance();
+            inst.uuid = uuid.into();
+            inst.name = name.into();
+            inst.collab_id = None;
+            inst.shared = false;
+            editor.kb.registry.instances.push(inst);
+        }
+        editor
+    }
+
+    fn held_by(editor: &Editor, uuid: &str, id: &str) -> Option<String> {
+        editor.kb.instances[uuid].get(id).map(|n| n.body.clone())
+    }
+
+    /// ADVERSARIAL: a write aimed at a named, non-primary KB lands there or
+    /// fails loudly -- never in the primary KB, whatever the id looks like.
+    #[test]
+    fn mcp_writes_aimed_at_a_named_kb_land_there_or_fail() {
+        let mut editor = editor_with_two_plain_instances();
+        let create = |kb: &str, body: &str| serde_json::json!({ "id": "0c1d-uuid", "title": "T", "body": body, "kb": kb });
+        execute_kb_create(&mut editor, &create("Beta", "in beta")).unwrap();
+        assert_eq!(
+            held_by(&editor, "uuid-beta", "0c1d-uuid").as_deref(),
+            Some("in beta")
+        );
+        assert!(
+            editor.kb.primary.get("0c1d-uuid").is_none(),
+            "landed in primary"
+        );
+        assert!(held_by(&editor, "uuid-alpha", "0c1d-uuid").is_none());
+
+        let err = execute_kb_create(&mut editor, &create("Nope", "x")).unwrap_err();
+        assert!(err.contains("Nope"), "{err}");
+
+        // The same id in a second KB: an unnamed write is refused, a named one
+        // changes exactly that KB's copy.
+        execute_kb_create(&mut editor, &create("Alpha", "in alpha")).unwrap();
+        let upd = |kb: Option<&str>| {
+            let mut a = serde_json::json!({ "id": "0c1d-uuid", "body": "changed" });
+            if let Some(kb) = kb {
+                a["kb"] = kb.into();
+            }
+            a
+        };
+        assert!(execute_kb_update(&mut editor, &upd(None)).is_err());
+        execute_kb_update(&mut editor, &upd(Some("Alpha"))).unwrap();
+        assert_eq!(
+            held_by(&editor, "uuid-alpha", "0c1d-uuid").as_deref(),
+            Some("changed")
+        );
+        assert_eq!(
+            held_by(&editor, "uuid-beta", "0c1d-uuid").as_deref(),
+            Some("in beta")
+        );
+
+        // A link is appended to the named KB's copy of the source, not another's.
+        let link = serde_json::json!({ "src": "0c1d-uuid", "dst": "x", "rel_type": "part_of", "kb": "Beta" });
+        execute_kb_add_link(&mut editor, &link).unwrap();
+        let beta = held_by(&editor, "uuid-beta", "0c1d-uuid").unwrap();
+        assert!(
+            beta.starts_with("in beta") && beta.contains("[[x?rel=part_of"),
+            "{beta}"
+        );
+        assert_eq!(
+            held_by(&editor, "uuid-alpha", "0c1d-uuid").as_deref(),
+            Some("changed")
+        );
+
+        let del = serde_json::json!({ "id": "0c1d-uuid", "kb": "Beta" });
+        execute_kb_delete(&mut editor, &del).unwrap();
+        assert!(held_by(&editor, "uuid-beta", "0c1d-uuid").is_none());
+        assert!(held_by(&editor, "uuid-alpha", "0c1d-uuid").is_some());
     }
 
     /// End-to-end regression for #303's actual promise: every CRUD path an
