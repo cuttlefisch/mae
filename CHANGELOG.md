@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.133] - 2026-11-07
+
+
+
+
+### Bug Fixes
+
+- *(kb)* A write aimed at a named KB lands there or fails, never in another ([28fb7d8](https://github.com/cuttlefisch/mae/commit/28fb7d8748c49b3e16f8728a790e10d6d231c453))
+
 ## [0.14.132] - 2026-11-07
 
 
@@ -14,6 +23,10 @@ All notable changes to this project will be documented in this file.
 ### Refactor
 
 - *(daemon)* Route sync/awareness and sync/share through one dispatcher arm ([087b033](https://github.com/cuttlefisch/mae/commit/087b0333c8e7c35ead6ff7102704cce4b989ccea))
+
+### Miscellaneous
+
+- Bump version to 0.14.132 ([366b601](https://github.com/cuttlefisch/mae/commit/366b6018c8fa7daa2f08092a255b2374864af805))
 
 ## [mae-org-v0.1.0] - 2026-11-01
 
