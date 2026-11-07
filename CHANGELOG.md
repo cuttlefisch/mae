@@ -2,6 +2,194 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.132] - 2026-11-07
+
+
+
+
+### Bug Fixes
+
+- *(daemon)* Sync/share and sync/awareness check KB access ([2220c21](https://github.com/cuttlefisch/mae/commit/2220c21f07369246dae3d035d5189124fe0b2d04))
+
+### Refactor
+
+- *(daemon)* Route sync/awareness and sync/share through one dispatcher arm ([087b033](https://github.com/cuttlefisch/mae/commit/087b0333c8e7c35ead6ff7102704cce4b989ccea))
+
+## [mae-org-v0.1.0] - 2026-11-01
+
+
+
+
+### Bug Fixes
+
+- *(org)* A macro expansion that changes what a line is re-reads the buffer ([07c5262](https://github.com/cuttlefisch/mae/commit/07c52625f29c38b5e74d0795975ceee8c2fceb2f))
+- *(org)* A caption, an item tag or a verse block re-reads its own unit ([29b5ef6](https://github.com/cuttlefisch/mae/commit/29b5ef6870833db41dcb3279ad96385a111697bf))
+- *(org)* Finding whether a macro is under an expanded COMMENT is logarithmic ([fbb28a5](https://github.com/cuttlefisch/mae/commit/fbb28a5ffd9325f3e03b7d59f68daf99f27db5e2))
+- *(org)* Replace_body refuses an edit that makes the page fail to render ([8beb153](https://github.com/cuttlefisch/mae/commit/8beb153cc47af0ca366137efdd4b9c4030e62972))
+- *(org)* A numeric citation keeps its parentheses whatever the variant ([9d684ed](https://github.com/cuttlefisch/mae/commit/9d684ed673b2f38d8a8a982208f2034bf348a183))
+- *(org)* A property value renders as {{{property(KEY)}}} renders it ([8dbea79](https://github.com/cuttlefisch/mae/commit/8dbea79c9f0515229171e4a9b9661322e33a6738))
+- *(org)* A select tag under a COMMENT headline selects nothing ([0e7199c](https://github.com/cuttlefisch/mae/commit/0e7199ca73d0d33c4dd7bd2a6b189c1c9c9ca5bd))
+- *(org)* A COMMENT subtree holds no definition any table resolves ([622cd93](https://github.com/cuttlefisch/mae/commit/622cd93f6c85ba00f1f55e4d1eb2a5da3a6ece22))
+- *(org)* A macro in a citation is never expanded, and renders nothing ([ce033cf](https://github.com/cuttlefisch/mae/commit/ce033cfba8407f1f3e7891eff2ba5d45b75e311f))
+- *(org)* An inline footnote definition in a pruned subtree is still used ([2148007](https://github.com/cuttlefisch/mae/commit/21480072254d0c4f46dfbef02798783602be6316))
+- *(org)* A results macro Org keeps must expand, or the page fails ([7d3d862](https://github.com/cuttlefisch/mae/commit/7d3d862e3c0354cda1554b51675e84e869e521e1))
+- *(org)* Every undefined footnote reference Org visits is reported ([c87a615](https://github.com/cuttlefisch/mae/commit/c87a61581e1c4b773f4776f57d596fee514fe48c))
+- *(org)* A citation in the document title renders nothing ([575c9a9](https://github.com/cuttlefisch/mae/commit/575c9a98d55ec48f31e46aa2fbb8e95ba869ed79))
+- *(org)* The source's COMMENT subtrees are deleted before expansion ([1bfddc8](https://github.com/cuttlefisch/mae/commit/1bfddc803a828662860d2fa368fa30032c80d5da))
+- *(org)* Special strings convert as ox-html converts them ([31f9f8d](https://github.com/cuttlefisch/mae/commit/31f9f8dd6b1103c6c8c891f951313d9422bd6981))
+- *(org)* Raise the WASM size budget to 1,000,000 for review round 6 ([87fa53a](https://github.com/cuttlefisch/mae/commit/87fa53a70426963224a88ed180d5e4b488332370))
+
+### Testing
+
+- *(org)* The macro oracle glues a macro into a line's first token ([7398e21](https://github.com/cuttlefisch/mae/commit/7398e211eed972998fd31cf86df51abd1fb86a57))
+- *(org)* Leak oracle channels and marker scanning ([d4d592b](https://github.com/cuttlefisch/mae/commit/d4d592bb3a16f2321df37aa331bad729e93a23a9))
+- *(org)* Bounded Emacs export for the leak oracle ([316bc3c](https://github.com/cuttlefisch/mae/commit/316bc3c0149eac90d539dbf78577e68fa5cc0300))
+- *(org)* Seeded document generator for the leak oracle ([af9f986](https://github.com/cuttlefisch/mae/commit/af9f986d41e6a0903162c81bc2292031798bfca7))
+- *(org)* Generative leak differential against Emacs ox-html ([62561f7](https://github.com/cuttlefisch/mae/commit/62561f7bd0f636e7f19ac17ed38876d823071f8e))
+- *(org)* Probe example and cmp.sh for reviewing leaks ([1f88bcc](https://github.com/cuttlefisch/mae/commit/1f88bcc45de42434fcdb5245591c3c8c820f7b88))
+- *(org)* The leak oracle's workers are functions of their own ([46037a0](https://github.com/cuttlefisch/mae/commit/46037a040f6cf8f3ac0d3456a82dca17ec4a51d5))
+- *(org)* The leak oracle reads the divergence register ([94ae433](https://github.com/cuttlefisch/mae/commit/94ae4335d21207a7062b0c978ddb0f51f4191921))
+- *(org)* The leak oracle tracks the first-token shape ([611bc2b](https://github.com/cuttlefisch/mae/commit/611bc2bbfbe98594d4c5f381afddfdff1cba8fa9))
+
+## [mae-org-v0.1.0-rc1] - 2026-11-01
+
+
+
+
+### Features
+
+- *(org)* Add mae-org, a lossless org block-structure parser (ADR-112 O1) ([037773d](https://github.com/cuttlefisch/mae/commit/037773de45a30a9abe686e5d67e29b01e98f3998))
+- *(org)* O2 checkpoint: inline object framework, emphasis and links ([24345a3](https://github.com/cuttlefisch/mae/commit/24345a34430dc21dbf980a74c20e6dfa78885eb7))
+- *(org)* Every inline object parser, transcribed from org-element 9.7.11 ([519251f](https://github.com/cuttlefisch/mae/commit/519251f808df4777fbd059e3dc1738dafd091aab))
+- *(org)* A typed Link view; conformance fixtures for every object kind ([0ee6050](https://github.com/cuttlefisch/mae/commit/0ee6050fb560adc5d0c58cecb54405b0e8e05c79))
+- *(org)* One link grammar and the semantics projection (ADR-112 O2) ([261749b](https://github.com/cuttlefisch/mae/commit/261749b4fd98a6d316e845f7a5c5c16ffafd4233))
+- *(org)* Renderers: one element tree for HTML, hast and search text ([b01cb11](https://github.com/cuttlefisch/mae/commit/b01cb115027e60b60e948d5f4a525916f6367397))
+- *(org)* Mae-org-wasm, a JSON-in/JSON-out WASM facade with a sync loader ([6cd71ad](https://github.com/cuttlefisch/mae/commit/6cd71adbaf2a9158f8a0d5827ac856bb3d752284))
+- *(org)* Settle the public API and the anchor scheme for mae-org-v0.1.0 ([3fc59ad](https://github.com/cuttlefisch/mae/commit/3fc59ad8a7aac97fa3cf30b4e74af8dee67133e5))
+- *(org)* Replace_body, the splice the O4 write path lands on ([fe99e66](https://github.com/cuttlefisch/mae/commit/fe99e665ee94e92da13340af772351cd7b9d1f18))
+
+### Bug Fixes
+
+- *(org)* Address the O1 review: Emacs EOL and character rules, TODO, contents ([bbc08f0](https://github.com/cuttlefisch/mae/commit/bbc08f0747767b12b5a4dd40e637a94404e77ffd))
+- *(org)* Fragment line endings, clock-prefix orphans, org-trim'd views ([8c60f52](https://github.com/cuttlefisch/mae/commit/8c60f524fb6faf89ec2bc1b285b7b4497499b64b))
+- *(org)* Drop a gitignored, machine-generated file from the conformance corpus ([1430816](https://github.com/cuttlefisch/mae/commit/1430816bfe5c667b7e93f0c5f9e2db6b1e542f79))
+- *(org)* Close the gaps the semantics mutation run found ([6d7a2f5](https://github.com/cuttlefisch/mae/commit/6d7a2f5ab040bc9c2b0ade4a65f5a309550be6d4))
+- *(org)* Write Org syntax as Org in the bundled corpus ([81e8167](https://github.com/cuttlefisch/mae/commit/81e81676c9a9b18613ab4587d4fba8d891de7738))
+- *(org)* Read link types, search options and trims as Org does ([4eb3ab3](https://github.com/cuttlefisch/mae/commit/4eb3ab311bf45f8a07941e22f76b57540da80600))
+- *(org)* Linear semantics(), bodies that never overlap, Org's pruning ([9291794](https://github.com/cuttlefisch/mae/commit/9291794ea285fca3e5be580f152527064276259e))
+- *(org)* A KB selects no subtrees unless it says so ([abba863](https://github.com/cuttlefisch/mae/commit/abba86321bc83fc2aa8ea4b6510d5ce5fb4c2ac9))
+- *(org)* Bound every Emacs oracle run and decode files as find-file does ([ff9c986](https://github.com/cuttlefisch/mae/commit/ff9c986446be457f5e0019f7e765358b8de1e738))
+- *(org)* Index the digit run before each `>` so repeater checks are linear ([c01b319](https://github.com/cuttlefisch/mae/commit/c01b319e90ab63353816226663a28b40cd9ff8d8))
+- *(org)* Find Emacs's word starts between word chars of different scripts ([6365660](https://github.com/cuttlefisch/mae/commit/6365660cc61d42726644210023ec7ab689bdbd05))
+- *(org)* Transcribe org-create-multibrace-regexp's depth rule exactly ([76ca230](https://github.com/cuttlefisch/mae/commit/76ca230cf7ac5dcba9f5562834b37686d63f94a1))
+- *(org)* A bracket path that is only a line ending is still a path ([4180e72](https://github.com/cuttlefisch/mae/commit/4180e72a6fae513d20057d7ce9aff2b9fa162447))
+- *(org)* Orphaned affiliated keywords are re-read as their first line ([0a361e6](https://github.com/cuttlefisch/mae/commit/0a361e6c7e6fbf669237ec56768508b507351746))
+- *(org)* A headline title's objects keep a content CR, as Org's do ([59d951e](https://github.com/cuttlefisch/mae/commit/59d951e210796e5ca24beb208080e31a92f58749))
+- *(org)* Match radio links in linear time and memory ([669187e](https://github.com/cuttlefisch/mae/commit/669187ed1490ed8f71f6bf9e17df81a6850ab600))
+- *(org)* Report the nesting cap where objects past it stay plain text ([d2e7033](https://github.com/cuttlefisch/mae/commit/d2e70339f699116a2d7a3d0d0fd122dd3626f1a4))
+- *(org)* Keep chartables.rs byte-identical to its generator after rustfmt ([98a2659](https://github.com/cuttlefisch/mae/commit/98a265935a5be8fb97d183a26dba476965de2c44))
+- *(org)* A semantic link's span keeps a plain link's content CR ([daf9dbd](https://github.com/cuttlefisch/mae/commit/daf9dbdd4929d3856e768586a9dc5cb58f4847b6))
+- *(org)* A verse's last line break and its post-blank render as Org's ([5139477](https://github.com/cuttlefisch/mae/commit/51394776c819443b6003b65939baee7fc140e819))
+- *(org)* Close the renderer gaps an independent review found ([f78e4ca](https://github.com/cuttlefisch/mae/commit/f78e4cac5dafcf2499d272db632937ade327eab6))
+- *(org)* The WASM loader reads u32s unsigned and drops a trapped instance ([81f897e](https://github.com/cuttlefisch/mae/commit/81f897ecfd4169d965d4d2d24a4c65f2d4a453ff))
+- *(org)* Regen.sh passes shellcheck: probed ulimit -v, quoted assignments ([14bf45a](https://github.com/cuttlefisch/mae/commit/14bf45aae6b093dfbedaca5049a2b03c1e2454b8))
+- *(org)* The WASM loader retires an instance after ANY failed call ([70cab88](https://github.com/cuttlefisch/mae/commit/70cab88d956fb2a81b2f5f2100fb1aad87b37017))
+- *(org)* Resolve :exports as Org does; a removed block takes its keywords ([0def0af](https://github.com/cuttlefisch/mae/commit/0def0af8f3a12aaa12e6370d0d4c30c314b2c59e))
+- *(org)* Org's special table rows and column are not rendered as data ([38f2f4b](https://github.com/cuttlefisch/mae/commit/38f2f4b98eba5c017c416c2b2089910e1bb96cb4))
+- *(org)* Split verbatim text by the document's line-ending convention ([9921467](https://github.com/cuttlefisch/mae/commit/9921467e67a5d82c939d720a5e93561133967248))
+- *(org)* Node_text keeps the notes it references; a scope cuts no element ([651246f](https://github.com/cuttlefisch/mae/commit/651246f6cb49316559d900a4baee28b87ab8db7c))
+- *(org)* Refuse character references in resolver hrefs ([565cc4d](https://github.com/cuttlefisch/mae/commit/565cc4d93df80efd1d9c5f49bdba30999766c4da))
+- *(org)* A verse block loses the indentation its lines share, as in Org ([7ff46a1](https://github.com/cuttlefisch/mae/commit/7ff46a1173319553dfd49f8e58078ee449fd4d10))
+- *(org)* Radio links follow Org's split regexps, in bounded work and memory ([14ae475](https://github.com/cuttlefisch/mae/commit/14ae4758a751a6ae8af8ab31b5839ce8198fddf8))
+- *(org)* The bundled corpus is the files git tracks, not "not ignored" ([dcfef28](https://github.com/cuttlefisch/mae/commit/dcfef28fdcbd8e88a11baa0c529f445b89d37bc3))
+- *(org)* One link-path rule for view and semantics; register view divergences ([2565dee](https://github.com/cuttlefisch/mae/commit/2565deed0c1d8a1c03d01b3a59240a52322cabff))
+- *(org)* Keep the radio matcher inside the audit ceilings and O(regexps) per search ([1352836](https://github.com/cuttlefisch/mae/commit/1352836421250a45aa74f11b6bda66d4c7f60c43))
+- *(org)* Semantics() reads Org's settings, titles and footnotes as Org does ([d3441f2](https://github.com/cuttlefisch/mae/commit/d3441f28c36acbce49ebef65aaa5a36422c0dbd6))
+- *(org)* Rendered output never falls back to a link's source text ([a536695](https://github.com/cuttlefisch/mae/commit/a536695e6838a7f32347c809cd9497337a301a8d))
+- *(org)* A babel call's :exports removes its results, as Org's does ([4b098b8](https://github.com/cuttlefisch/mae/commit/4b098b8b90de0c0b07d730c91ffb6bc132446fa1))
+- *(org)* Heading anchors that cannot collide, in every script ([4cc0495](https://github.com/cuttlefisch/mae/commit/4cc04955b3447451aa132f4c0ef9eb0296c1fed8))
+- *(org)* The split radio search examines each candidate once per region ([fac62d7](https://github.com/cuttlefisch/mae/commit/fac62d73ed02f647679f0511a23ec73ce62fa11a))
+- *(org)* Replace_body re-reads the file fresh and refuses any change outside the body ([28c0ab1](https://github.com/cuttlefisch/mae/commit/28c0ab1f5c64c35785bebb97451798c0bede96ba))
+- *(org)* Parse_fragment reads its file's radio targets and TODO keywords ([e4c200c](https://github.com/cuttlefisch/mae/commit/e4c200c11d5ab7d67c2d977d59156a75bac01187))
+- *(org)* The WASM loader checks its inputs before touching the instance ([b241138](https://github.com/cuttlefisch/mae/commit/b2411387eac8ed851c93c194b38868c582057199))
+- *(org)* Property and LinkInfo are #[non_exhaustive], as the contract says ([49eac96](https://github.com/cuttlefisch/mae/commit/49eac9645e71db9ebb1a1a164c9012bbc1dbfc1e))
+- *(org)* Say why each remaining source-text rendering is not a fallback ([609b8ae](https://github.com/cuttlefisch/mae/commit/609b8aec1115faaba65e7c24fbf03e9bfebe0b0f))
+- *(org)* The split radio search in steps the function ceiling allows ([3b8f8e0](https://github.com/cuttlefisch/mae/commit/3b8f8e035c0f7520957358cea00e3d1de7b4d77d))
+- *(org)* Record the WASM size after the final pre-tag review ([c42c0ed](https://github.com/cuttlefisch/mae/commit/c42c0ed28d7f67fa83675d9baf0b14bd08756c66))
+- *(org)* Metadata reads :exports where it sits; macros and citations fail closed ([f4a7169](https://github.com/cuttlefisch/mae/commit/f4a71694d7b0a51bfb86b47d3ec9afb0244a7983))
+- *(org)* A link fragment written as its title lands on it, objects and all ([2f7933c](https://github.com/cuttlefisch/mae/commit/2f7933c46f06bc2ba780f4786a21d94856a2f812))
+- *(org)* Replace_body refuses names the rest of the file resolves, and any change in how another node renders ([17916ee](https://github.com/cuttlefisch/mae/commit/17916ee7c832a64f9024ff758a5257460e37a6cb))
+- *(org)* Parse_fragment counts its file's headlines against the nesting cap ([a30411d](https://github.com/cuttlefisch/mae/commit/a30411dd2276b610bea36e0002a86982b1ac8bf1))
+- *(org)* Say that semantics() text is source, never display text ([dc61cfe](https://github.com/cuttlefisch/mae/commit/dc61cfe31535e74189267093af47773e8d779691))
+- *(org)* Record the WASM size after the second review round ([5842dfe](https://github.com/cuttlefisch/mae/commit/5842dfe92aeaeba056e9f540b8c20fa088644c3a))
+- *(org)* A macro hides when its template, expanded, would hide its arguments ([5935619](https://github.com/cuttlefisch/mae/commit/5935619551dc59f2627803300ecd0b4388c48955))
+- *(org)* A property value is its objects rendered, hidden parts dropped at any depth ([5391d26](https://github.com/cuttlefisch/mae/commit/5391d26bbb75a7294468e9fd0a39f545e1c056f6))
+- *(org)* Replace_body compares other nodes' links again ([48652bf](https://github.com/cuttlefisch/mae/commit/48652bf6ef72d1706e5a75c2363e03cda2d477e5))
+- *(org)* Replace_body compares the whole document once per side, and lets a body keep its own names ([e31ae1e](https://github.com/cuttlefisch/mae/commit/e31ae1e87f023b70d4a7e576e0f2933350125d6f))
+- *(org)* Heading anchors do not depend on the resolver ([19714eb](https://github.com/cuttlefisch/mae/commit/19714ebf09e475186c0348afcfab69d60bfc6a6f))
+- *(org)* Record the WASM size after the third review round ([3aa3d7a](https://github.com/cuttlefisch/mae/commit/3aa3d7a8e1a54e65af594aea2dd6e6b14d6ed9f1))
+- *(org)* Expand macros as Org's export expands them before rendering ([37e663d](https://github.com/cuttlefisch/mae/commit/37e663d0c0a9dcb981013de9602b95b8e87ef810))
+- *(org)* A rendered property drawer shows each key once, its value joined ([0698279](https://github.com/cuttlefisch/mae/commit/0698279abdc939dee178cfbb7b73d30ca15eb46e))
+- *(org)* Replace_body compares the page with the body present ([07f7d53](https://github.com/cuttlefisch/mae/commit/07f7d53651cfc8e13724d124595ad1e4a76ffde9))
+- *(org)* One name key for targets, their links and replace_body ([8821933](https://github.com/cuttlefisch/mae/commit/88219331f528d42ca445f34d972da709a8fad294))
+- *(org)* A #+MACRO line is a declaration to replace_body ([f26751b](https://github.com/cuttlefisch/mae/commit/f26751bd5f99ff31e9b89066ca3064cc530cf647))
+- *(org)* Replace_body's checks are linear in the nodes ([b282424](https://github.com/cuttlefisch/mae/commit/b28242464d8c9a6c2bd9bac7de05b7cc91671a0e))
+- *(org)* Judge each macro against the buffer as it stands ([5ca2571](https://github.com/cuttlefisch/mae/commit/5ca25715e69c8b2a2f9fa16679aea07be313c856))
+- *(org)* A heading's anchor is its title as the page shows it ([be54c66](https://github.com/cuttlefisch/mae/commit/be54c664c99f51bac97abc803fcad97f7eff6f8e))
+- *(org)* Render nodes are the source nodes the page exports ([703e245](https://github.com/cuttlefisch/mae/commit/703e245978b5b52f5fb58425face6e7ae4e22ec8))
+- *(org)* Replace_body compares expansion-made links and failing documents ([86bc107](https://github.com/cuttlefisch/mae/commit/86bc10735a3d2cdce2449eab2379b996dcce08c3))
+- *(org)* Raise the WASM budget to 900,000 for macro expansion ([3825d4a](https://github.com/cuttlefisch/mae/commit/3825d4ace989682856b5a2b5079563fc5a741802))
+- *(org)* A target's anchor is opaque, and no link shows its name ([5e6bfa3](https://github.com/cuttlefisch/mae/commit/5e6bfa38d4f6bcc453dc47b3bbf64431ae89b3a0))
+- *(org)* An undefined footnote reference renders nothing, with a diagnostic ([7e119cd](https://github.com/cuttlefisch/mae/commit/7e119cd4a78fa5c531ab25d235c7d6e139ee1342))
+- *(org)* A KB link's refused rel=, w= and c= values are left out and reported ([8bfa3bf](https://github.com/cuttlefisch/mae/commit/8bfa3bf276348709efb610bb852888bdef576606))
+- *(org)* A citation renders as Org's basic processor renders an unresolved one ([f6849cf](https://github.com/cuttlefisch/mae/commit/f6849cffa0b47af1b01fe66b3b2d36ba795e4628))
+- *(org)* Record the WASM size after round 5 ([ca22c58](https://github.com/cuttlefisch/mae/commit/ca22c580335cf37d6a2f2a666796087d815262f3))
+
+### Refactor
+
+- *(org)* Split the radio matcher's two long functions; record the scaling numbers ([b8a3c8d](https://github.com/cuttlefisch/mae/commit/b8a3c8df5c1b313d43106c86c56ca5235a2e89c4))
+
+### Documentation
+
+- *(adr)* ADR-112 — one org parser, a lossless tree every consumer derives from ([b8e5d5c](https://github.com/cuttlefisch/mae/commit/b8e5d5c3e219505a3eec9e9b651db0ec6d6ce7c9))
+- *(org)* Record ADR-112 O3 as built, with the measured WASM size budget ([1a82110](https://github.com/cuttlefisch/mae/commit/1a821106dedecdc7a8fa509a8346fda068410547))
+- *(org)* A render divergence register, and the drawer claim corrected ([edeef59](https://github.com/cuttlefisch/mae/commit/edeef591faf7a31699b58213482dded9b5f527a8))
+
+### Testing
+
+- *(org)* Emacs org-element differential, goldens and divergence register ([eefe5e5](https://github.com/cuttlefisch/mae/commit/eefe5e55b45ee44eb8e18c140b9e35d33cfacf2c))
+- *(org)* Round-trip, property, rules and scaling gates for mae-org ([1347a77](https://github.com/cuttlefisch/mae/commit/1347a77c7d1eed8a1a0d2238523e62591bf50ef2))
+- *(org)* Scaling gate for every inline object shape ([c6a47d7](https://github.com/cuttlefisch/mae/commit/c6a47d744ce76a179115c41ee3ebf5e5516fa363))
+- *(org)* Semantics differential against mae-kb's org parser ([d96a6da](https://github.com/cuttlefisch/mae/commit/d96a6da85870de6333eec0324d8c9dd1c2488bc2))
+- *(org)* Pin the corpus walk and multi-line link paths in every convention ([67b1a1a](https://github.com/cuttlefisch/mae/commit/67b1a1a8939a35457973ee3cfbeefcc2fcd9bbe3))
+- *(org)* No two node bodies overlap ([28806d8](https://github.com/cuttlefisch/mae/commit/28806d851a34a80e43b0061579bb6bd6a6c289ee))
+- *(org)* Pruned regions as Org's exporter prunes them ([93cd914](https://github.com/cuttlefisch/mae/commit/93cd91435c4d51539dbe59ada810093f26afe45c))
+- *(org)* An Emacs oracle for titles and levels; a selective register ([d9d6ead](https://github.com/cuttlefisch/mae/commit/d9d6eadef0896f9513e0ee6b7ff13800c3493cbc))
+- *(org)* Register what Emacs cannot parse, and Org's size-dependent radio split ([0ffb415](https://github.com/cuttlefisch/mae/commit/0ffb4156f10d66daf8a0ff4178703325d7476dbd))
+- *(org)* Compare every object field the oracle dumps ([efc73eb](https://github.com/cuttlefisch/mae/commit/efc73ebea97431c1984e4abb570d004516f6a899))
+- *(org)* Read an object value that is only a line ending ([19008ad](https://github.com/cuttlefisch/mae/commit/19008ad23b1979c1ffe0bc4eb0535127239a62e8))
+- *(org)* The renderers' safety properties, goldens and scaling ([e58a053](https://github.com/cuttlefisch/mae/commit/e58a053725fa951e49146f642ecd64c51784aee7))
+- *(org)* Nesting past the render depth cap degrades to a diagnostic ([3c6d017](https://github.com/cuttlefisch/mae/commit/3c6d017e91bdaa4e58e44263977925c649fb1000))
+- *(org)* Kill the review's surviving mutants ([6c01dc1](https://github.com/cuttlefisch/mae/commit/6c01dc173358cc50f9ce01f346dfce96ed676b74))
+- *(org)* The loader's types name title_unlinked; split two long tests ([499b1c9](https://github.com/cuttlefisch/mae/commit/499b1c9a11e189fd53910ee9d53235f40cd5eb3e))
+- *(org)* Register the radio regexps Emacs is too small to compile ([aee2db0](https://github.com/cuttlefisch/mae/commit/aee2db06ca5475c025ee9e52b829eb3213c0e96b))
+- *(org)* The macro oracle reads every channel, case folded ([ce83bd4](https://github.com/cuttlefisch/mae/commit/ce83bd4c724cbe515836af54c28892d9b410d4bf))
+- *(org)* Say what the replace_body step count counts ([748d188](https://github.com/cuttlefisch/mae/commit/748d188efcd7540f42092e4d67021ca78aac34ac))
+- *(org)* The macro oracle no longer sets target ids aside ([e07f768](https://github.com/cuttlefisch/mae/commit/e07f768fe8d9f657c9ef1722fe3b334e76ead53a))
+
+### Build System
+
+- *(org)* Raise the WASM size budget once, to 800,000 bytes, on the record ([760b5ee](https://github.com/cuttlefisch/mae/commit/760b5ee303f0af6162a85324022ef420fdaf17fd))
+
+### CI
+
+- *(org)* Build the mae-org WASM module twice, check its budget, diff it against native ([7166b55](https://github.com/cuttlefisch/mae/commit/7166b55a20901817ecefb2726070b3fa6f26c80c))
+- *(org)* Record the WASM artifact's size and sha256 in the run ([5db59f4](https://github.com/cuttlefisch/mae/commit/5db59f4c322999698bf14f13e12f251cbbb85a2a))
+
+### Miscellaneous
+
+- *(org)* Lock mae-org at the workspace version after the 0.14.131 bump ([a5db515](https://github.com/cuttlefisch/mae/commit/a5db515fb6eb3e51c8a7200b8a65e1d668d335ed))
+
 ## [0.14.131] - 2026-10-31
 
 
@@ -22,6 +210,10 @@ All notable changes to this project will be documented in this file.
 ### Testing
 
 - *(headless)* Build the stale-socket fixture from a socket that never listens ([cf7f7ff](https://github.com/cuttlefisch/mae/commit/cf7f7ff1f3d9b37be84305e5a76a4b818364d6c8))
+
+### Miscellaneous
+
+- Bump version to 0.14.131 ([4c6b405](https://github.com/cuttlefisch/mae/commit/4c6b405fa5305dd08857b1093536613cc00dcdce))
 
 ## [0.14.130] - 2026-10-30
 
