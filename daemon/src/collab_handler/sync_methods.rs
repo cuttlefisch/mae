@@ -235,10 +235,14 @@ pub(super) async fn handle_sync_update(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_sync_awareness(
+    doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
     session_id: u64,
     auth_label: Option<&str>,
+    auth_principal: Option<&str>,
+    transport: Transport,
     session_docs: &mut HashSet<String>,
     id: serde_json::Value,
     params: &serde_json::Value,
@@ -246,6 +250,12 @@ pub(super) async fn handle_sync_awareness(
     // Pure relay: broadcast awareness to all other clients on same doc.
     // No persistence — awareness is ephemeral.
     let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+    // Relaying subscribes the session to the doc (a standing feed of its
+    // updates): a KB doc needs read access to its KB first.
+    if let Err(msg) = deny_kb_awareness(doc_store, &doc_name, auth_principal, transport).await {
+        warn!(session = session_id, doc = %doc_name, reason = %msg, "sync/awareness denied");
+        return JsonRpcResponse::error(id, McpError::internal_error(msg));
+    }
     let state = &params["state"];
     debug!(
         session = session_id,
