@@ -235,6 +235,40 @@ pub(super) async fn handle_sync_update(
     }
 }
 
+/// `sync/awareness` and `sync/share`, routed here so the dispatcher (whose
+/// length is ratcheted) holds one arm for both.
+pub(super) async fn relay(
+    method: super::method_authz::Method,
+    doc_store: &DocStore,
+    broadcaster: &SharedBroadcaster,
+    (session_id, auth_label, auth_principal, transport): (
+        u64,
+        Option<&str>,
+        Option<&str>,
+        Transport,
+    ),
+    session_docs: &mut HashSet<String>,
+    id: serde_json::Value,
+    params: &serde_json::Value,
+) -> JsonRpcResponse {
+    if method == super::method_authz::Method::SyncShare {
+        return handle_sync_share(doc_store, broadcaster, session_id, session_docs, id, params)
+            .await;
+    }
+    handle_sync_awareness(
+        doc_store,
+        broadcaster,
+        session_id,
+        auth_label,
+        auth_principal,
+        transport,
+        session_docs,
+        id,
+        params,
+    )
+    .await
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_sync_awareness(
     doc_store: &DocStore,

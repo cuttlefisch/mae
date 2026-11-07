@@ -1521,14 +1521,13 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        Method::SyncAwareness => {
-            sync_methods::handle_sync_awareness(
+        Method::SyncAwareness | Method::SyncShare => {
+            let who = (session_id, auth_label, auth_principal, transport);
+            sync_methods::relay(
+                method,
                 doc_store,
                 broadcaster,
-                session_id,
-                auth_label,
-                auth_principal,
-                transport,
+                who,
                 session_docs,
                 id,
                 &params,
@@ -1588,18 +1587,6 @@ async fn handle_doc_request_inner(
                 broadcaster,
                 session_id,
                 auth_label,
-                id,
-                &params,
-            )
-            .await
-        }
-
-        Method::SyncShare => {
-            sync_methods::handle_sync_share(
-                doc_store,
-                broadcaster,
-                session_id,
-                session_docs,
                 id,
                 &params,
             )
