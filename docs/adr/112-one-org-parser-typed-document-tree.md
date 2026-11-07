@@ -189,6 +189,12 @@ layer on it becomes the cheaper path.
   `mae-org` and `mae-org-wasm` carry their own
   version (`API_VERSION`, 0.1.0), not MAE's, so a MAE release does not change the artifact; every
   deliberate difference from Org's HTML export is in `conformance/render-divergences.toml`.
+- **O3.1** (`mae-org-v0.2.0`) highlighting for editors: `highlights`, `sections` and
+  `section_highlights`, and the WASM `syntax` / `syntaxSection` operations. A headline's own
+  section re-highlighted alone, with the `FragmentContext` its file gives it, yields exactly the
+  whole parse's spans there (corpus and property tests). An edit that changes what the rest of the
+  file reads (a headline line, a radio target or TODO keyword line, the line ending before the
+  next headline) answers `needs_full` instead. WASM 928,440 bytes.
 - **O4** MAE switches ingest, export and read mode to it, with the repair path; the span-based write
   path lands on the same spans.
 - **O5** the remaining constructs by measured use, privacy-relevant regions first.

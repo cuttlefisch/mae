@@ -1123,6 +1123,10 @@
           "kind": "mod"
         },
         {
+          "name": "syntax",
+          "kind": "mod"
+        },
+        {
           "name": "mae_org_alloc",
           "kind": "fn"
         },

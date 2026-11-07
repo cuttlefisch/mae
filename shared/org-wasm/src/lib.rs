@@ -21,6 +21,7 @@
 
 pub mod api;
 pub mod json;
+pub mod syntax;
 
 #[cfg(target_arch = "wasm32")]
 use std::alloc::{GlobalAlloc, Layout, System};
