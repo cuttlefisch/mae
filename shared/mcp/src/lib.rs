@@ -745,6 +745,36 @@ fn parse_unlocked_tools_from_request_tools_output(tool_name: &str, output: &str)
 /// Handles protocol methods (initialize, ping, subscribe, health, etc.)
 /// and dispatches tool calls and sync methods via the `tool_tx` channel.
 /// Reusable by any server (editor MCP, daemon) that needs JSON-RPC dispatch.
+/// `notifications/subscribe`: ADD each requested event type, never replace
+/// the broadcaster's list. It also holds types granted elsewhere (`kb/join`
+/// adds `sync_update` as of its snapshot), which this session's own set never
+/// saw, so replacing it with that set would silently drop them.
+fn subscribe_events(
+    params: Option<&serde_json::Value>,
+    session: &mut ClientSession,
+    broadcaster: &broadcast::SharedBroadcaster,
+) {
+    let Some(types) = params
+        .and_then(|p| p.get("types"))
+        .and_then(|v| v.as_array())
+    else {
+        return;
+    };
+    let mut bc = broadcaster.lock().unwrap();
+    for t in types {
+        if let Some(s) = t.as_str() {
+            session.subscriptions.insert(s.to_string());
+            bc.add_event_sub(session.id, s);
+        }
+    }
+    drop(bc);
+    debug!(
+        session = session.id,
+        subscriptions = ?session.subscriptions,
+        "client subscribed to events"
+    );
+}
+
 pub async fn handle_request(
     msg: &str,
     tool_definitions: &[ToolInfo],
@@ -886,29 +916,7 @@ pub async fn handle_request(
             JsonRpcResponse::success(id, serde_json::json!("pong"))
         }
         "notifications/subscribe" => {
-            if let Some(ref params) = request.params {
-                if let Some(types) = params.get("types").and_then(|v| v.as_array()) {
-                    // ADD each type: never replace the broadcaster's list. It
-                    // also holds types granted elsewhere (`kb/join` adds
-                    // `sync_update` as of its snapshot), which this session's
-                    // own set never saw, so replacing it with that set silently
-                    // dropped them: a client subscribing to `awareness_update`
-                    // after a join stopped receiving the KB's edits.
-                    let mut bc = broadcaster.lock().unwrap();
-                    for t in types {
-                        if let Some(s) = t.as_str() {
-                            session.subscriptions.insert(s.to_string());
-                            bc.add_event_sub(session.id, s);
-                        }
-                    }
-                    drop(bc);
-                    debug!(
-                        session = session.id,
-                        subscriptions = ?session.subscriptions,
-                        "client subscribed to events"
-                    );
-                }
-            }
+            subscribe_events(request.params.as_ref(), session, broadcaster);
             JsonRpcResponse::success(id, serde_json::Value::Null)
         }
         "$/health" => {
