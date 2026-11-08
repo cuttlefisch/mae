@@ -9,8 +9,8 @@
 
 use crate::chars::fold;
 use crate::scan;
+use crate::seeded::HashMap;
 use crate::text::Source;
-use std::collections::HashMap;
 
 pub(crate) struct Index {
     block_ends: HashMap<String, Vec<usize>>,
@@ -52,8 +52,8 @@ impl Index {
 
     fn empty() -> Index {
         Index {
-            block_ends: HashMap::new(),
-            latex_ends: HashMap::new(),
+            block_ends: HashMap::default(),
+            latex_ends: HashMap::default(),
             drawer_ends: Vec::new(),
             dynamic_ends: Vec::new(),
             dynamic_ends_colon: Vec::new(),

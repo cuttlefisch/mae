@@ -577,7 +577,7 @@ pub fn compare_views(
     let mut counts = std::collections::BTreeMap::new();
     let mut bad = Vec::new();
     // One pass over the tree, not one per golden element.
-    let mut by_span = std::collections::HashMap::new();
+    let mut by_span = mae_org::seeded::HashMap::default();
     for n in doc.syntax().descendants() {
         if let Some(name) = kind_name(n.kind()) {
             let r = n.text_range();

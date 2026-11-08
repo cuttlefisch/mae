@@ -119,7 +119,7 @@ proptest! {
         for ids in [HeadlineIds::Explicit, HeadlineIds::Slug] {
             let out = html_with(&doc, ids, &Resolver::default());
             let all = ids_of(&out);
-            let unique: std::collections::HashSet<&String> = all.iter().collect();
+            let unique: mae_org::seeded::HashSet<&String> = all.iter().collect();
             prop_assert_eq!(unique.len(), all.len(), "{}", out);
             for id in &all {
                 prop_assert!(mae_org::is_valid_id(id), "{id:?}");

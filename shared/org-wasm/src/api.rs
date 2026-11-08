@@ -78,6 +78,9 @@ fn run(op: Op, request: &str) -> Result<String, String> {
     if op == Op::Version {
         return Ok(version());
     }
+    if !mae_org::seeded::is_seeded() {
+        return Err("the module is not seeded: call mae_org_seed first (the loader does)".into());
+    }
     let req = Request::read(&parse(request)?)?;
     match op {
         Op::Semantics => Ok(semantics(&req)),

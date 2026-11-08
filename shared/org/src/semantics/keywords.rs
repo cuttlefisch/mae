@@ -26,11 +26,12 @@
 use crate::chars::{is_alnum, is_space};
 use crate::kind::SyntaxNode;
 use crate::link_grammar::org_trim;
+use crate::seeded::{HashMap, HashSet};
 use crate::text::LineEnding;
 use crate::views::{Headline, Keyword, LinkAbbrevs};
 use crate::Document;
 use rowan::WalkEvent;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
 
 /// Every keyword element outside COMMENT subtrees, in document order.
 pub(crate) fn outside_comment_trees(root: &SyntaxNode) -> Vec<Keyword> {
@@ -121,7 +122,7 @@ impl TagGroups {
             .filter(|k| k.key().eq_ignore_ascii_case("TAGS"))
             .map(|k| k.value())
             .collect();
-        let mut groups: HashMap<String, Vec<String>> = HashMap::new();
+        let mut groups: HashMap<String, Vec<String>> = HashMap::default();
         for (tag, members) in alist_to_groups(&string_to_alist(&values.join("\n"))) {
             groups.entry(tag).or_insert(members);
         }
@@ -135,7 +136,7 @@ impl TagGroups {
     /// it with `member`, so it matches only a tag spelled `{regexp}` (none
     /// can be: braces are not tag chars), and no regexp is ever run.
     pub(crate) fn expand(&self, tags: &[String]) -> Vec<String> {
-        let mut seen: HashSet<&str> = HashSet::new();
+        let mut seen: HashSet<&str> = HashSet::default();
         let mut out = Vec::new();
         let mut queue: VecDeque<&str> = tags.iter().map(String::as_str).collect();
         while let Some(t) = queue.pop_front() {
@@ -158,7 +159,7 @@ impl TagGroups {
 /// when already listed.
 fn string_to_alist(s: &str) -> Vec<Token> {
     let mut alist: Vec<Token> = Vec::new();
-    let mut listed: HashSet<String> = HashSet::new();
+    let mut listed: HashSet<String> = HashSet::default();
     let mut group_flag = false;
     for line in s.split('\n').filter(|l| !l.is_empty()) {
         let tokens = split_words(line);

@@ -31,10 +31,11 @@
 use super::{items, Region, SemanticsOptions};
 use crate::kind::SyntaxKind::*;
 use crate::kind::SyntaxNode;
+use crate::seeded::{HashMap, HashSet};
 use crate::span::Span;
 use crate::views::Headline;
 use rowan::WalkEvent;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
 
 /// What decides whether a node is rendered.
 pub(crate) struct Rules {
@@ -99,7 +100,7 @@ impl Rules {
         }
         // Org deletes the COMMENT subtrees before it selects: a select tag
         // under a COMMENT headline selects nothing.
-        let mut commented: HashSet<u32> = HashSet::new();
+        let mut commented: HashSet<u32> = HashSet::default();
         for (n, _, c) in own.iter().filter(|_| !options.comments_deleted) {
             let parent = n.parent().filter(|p| p.kind() == HEADLINE);
             if *c || parent.is_some_and(|p| commented.contains(&start(&p))) {
@@ -112,8 +113,8 @@ impl Rules {
             .cloned()
             .collect();
         let selected = selected_headlines(&live, &select, file_selected);
-        let mut headlines = HashMap::new();
-        let mut archived = HashSet::new();
+        let mut headlines = HashMap::default();
+        let mut archived = HashSet::default();
         for (n, tags, commented) in &own {
             let at = u32::from(n.text_range().start());
             let excluded = file_excluded || tags.iter().any(|t| exclude.contains(t.as_str()));
@@ -151,7 +152,7 @@ impl Rules {
             archived,
             zeroth,
             referenced: None,
-            chosen: HashMap::new(),
+            chosen: HashMap::default(),
             link_exclude_keywords: upper(&options.link_exclude_keywords),
             link_exclude_properties: options
                 .link_exclude_properties
@@ -237,8 +238,8 @@ fn selected_headlines(
     // In a selected tree, and ancestors of one: separate sets, or a
     // selected tree's ancestor would pass selection on to its other
     // children (Emacs renders the ancestor, not its siblings' trees).
-    let mut in_tree: HashSet<u32> = HashSet::new();
-    let mut ancestors: HashSet<u32> = HashSet::new();
+    let mut in_tree: HashSet<u32> = HashSet::default();
+    let mut ancestors: HashSet<u32> = HashSet::default();
     let mut any = false;
     for (n, tags, _) in own {
         let root = tags.iter().any(|t| select.contains(t.as_str()));
@@ -288,7 +289,7 @@ pub(crate) fn inline_label(reference: &SyntaxNode) -> Option<String> {
 /// are skipped.
 pub(crate) fn choose_definitions(root: &SyntaxNode, rules: &Rules) -> HashMap<String, u32> {
     // Per label: the last rendered candidate, and the first pruned one.
-    let mut found: HashMap<String, (Option<u32>, Option<u32>)> = HashMap::new();
+    let mut found: HashMap<String, (Option<u32>, Option<u32>)> = HashMap::default();
     let mut pruned: Vec<SyntaxNode> = Vec::new();
     let mut walk = root.preorder();
     while let Some(ev) = walk.next() {
@@ -353,7 +354,7 @@ pub(crate) fn referenced_footnotes(
 ) -> (HashMap<String, u32>, Vec<String>) {
     let mut outside: Vec<(String, u32)> = Vec::new();
     // The definition Org uses for each label, by its start.
-    let mut defs: HashMap<u32, SyntaxNode> = HashMap::new();
+    let mut defs: HashMap<u32, SyntaxNode> = HashMap::default();
     let mut hidden: Vec<SyntaxNode> = Vec::new();
     let mut walk = root.preorder();
     while let Some(ev) = walk.next() {
@@ -393,7 +394,7 @@ pub(crate) fn referenced_footnotes(
             }
         }
     }
-    let mut first: HashMap<String, u32> = HashMap::new();
+    let mut first: HashMap<String, u32> = HashMap::default();
     let mut order: Vec<String> = Vec::new();
     let mut queue: VecDeque<String> = VecDeque::new();
     let mut add = |l: String, at: u32, queue: &mut VecDeque<String>| {
