@@ -22,19 +22,34 @@ fn bind_is_loopback(addr: &SocketAddr) -> bool {
 /// `principal == None`, which returns `AccessDecision::Allow`. So
 /// `--bind 0.0.0.0` on a stock config granted Manage on every KB to every host
 /// that could reach the port, while `doctor` printed "collab config: OK".
-/// `psk` is plaintext on the wire and no better off-host.
+/// `psk` is plaintext on the wire and no better off-host. Nor is `key` with
+/// `tls = false`: its JSON handshake authenticates the peers, but everything
+/// after it, every KB document included, crosses the network in the clear and
+/// unprotected against tampering. Off-host, collab requires key auth over TLS.
 ///
 /// This is an ERROR, not a warning: a warning gets read past, and the shipped
 /// `assets/daemon-config.toml` has no `[collab.auth]` block at all while
 /// DAEMON_ADMIN tells operators to start from it.
 pub fn unauthenticated_bind_issues(c: &CollabConfig) -> Vec<String> {
-    if c.enabled && !bind_is_loopback(&c.bind) && c.auth.mode != "key" {
+    if !c.enabled || bind_is_loopback(&c.bind) {
+        return Vec::new();
+    }
+    if c.auth.mode != "key" {
         return vec![format!(
             "collab.bind is {} (reachable off-host) but collab.auth.mode is \
              '{}' — that accepts any client that can reach the port. Set \
              [collab.auth] mode = \"key\" (Ed25519 mTLS), or bind to loopback \
              and put a reverse proxy or VPN in front.",
             c.bind, c.auth.mode
+        )];
+    }
+    if !c.auth.tls {
+        return vec![format!(
+            "collab.bind is {} (reachable off-host) but collab.auth.tls is \
+             false — sessions would cross the network unencrypted. Set \
+             [collab.auth] tls = true, or bind to loopback and put a reverse \
+             proxy or VPN in front.",
+            c.bind
         )];
     }
     Vec::new()
