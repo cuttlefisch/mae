@@ -169,6 +169,7 @@ impl super::Editor {
             "kb_watcher_enabled" => self.kb.watcher_enabled.to_string(),
             "kb_watcher_debounce_ms" => self.kb.watcher_debounce_ms.to_string(),
             "kb_max_drain_events" => self.kb.max_drain_events.to_string(),
+            "kb_max_node_bytes" => self.kb.max_node_bytes.to_string(),
             "kb_search_excerpt_length" => self.kb.search_excerpt_length.to_string(),
             "kb_search_max_results" => self.kb.search_max_results.to_string(),
             "kb_auto_register" => self.kb.auto_register.to_string(),
@@ -927,6 +928,11 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.kb.max_drain_events = v.clamp(1, 10_000);
+            }
+            "kb_max_node_bytes" => {
+                self.kb.max_node_bytes = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
             }
             "kb_search_excerpt_length" => {
                 let v: usize = value

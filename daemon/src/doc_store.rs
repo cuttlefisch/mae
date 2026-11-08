@@ -80,7 +80,8 @@ pub struct DocStore {
     max_documents: usize,
     /// Maximum WAL entries before forced compaction (0 = no forced compaction).
     max_wal_entries: u64,
-    /// Maximum document size in bytes before warning (0 = unlimited).
+    /// Largest payload (a KB node's body, or a text document's content) an
+    /// update may grow a document to, in UTF-8 bytes (0 = unlimited). ADR-109 D6.
     max_document_size_bytes: usize,
     /// Maximum single sync-update payload size in bytes (0 = use the built-in
     /// default). Operator-tunable via `daemon.toml` `[collab.sync]
@@ -456,7 +457,7 @@ impl DocStore {
         self
     }
 
-    /// Set maximum document size (bytes) before warning. 0 = unlimited.
+    /// Set the document payload limit (bytes; see the field). 0 = unlimited.
     pub fn with_max_document_size(mut self, max: usize) -> Self {
         self.max_document_size_bytes = max;
         self
@@ -540,29 +541,8 @@ impl DocStore {
             }
         }
 
-        let (sync, wal_seq) = match self.storage.load_document(doc_name).await? {
-            Some(state) => {
-                let mut sync = if let Some(snapshot) = state.snapshot {
-                    TextSync::from_state(&snapshot)
-                        .map_err(|e| StorageError::Sqlite(format!("bad snapshot: {e}")))?
-                } else {
-                    TextSync::empty_relay()
-                };
-
-                let mut last_id = 0u64;
-                for entry in &state.wal_tail {
-                    sync.apply_update(&entry.update)
-                        .map_err(|e| StorageError::Sqlite(format!("WAL replay: {e}")))?;
-                    last_id = entry.id;
-                }
-
-                info!(
-                    doc = doc_name,
-                    wal_entries = state.wal_tail.len(),
-                    "recovered document from storage"
-                );
-                (sync, last_id)
-            }
+        let (sync, wal_seq) = match self.load_from_storage(doc_name).await? {
+            Some(loaded) => loaded,
             None => {
                 // ADR-105: the chokepoint. A durable doc that does not exist is not
                 // created by whoever asked about it — that is how `kb/join` on an
@@ -591,7 +571,69 @@ impl DocStore {
         Ok(entry)
     }
 
-    /// Apply an update to a document: validate -> WAL append -> apply in memory.
+    /// A document as storage holds it: its snapshot with the WAL tail replayed,
+    /// and the last WAL id. `None` if storage has never seen it.
+    async fn load_from_storage(
+        &self,
+        doc_name: &str,
+    ) -> Result<Option<(TextSync, u64)>, StorageError> {
+        let Some(state) = self.storage.load_document(doc_name).await? else {
+            return Ok(None);
+        };
+        let mut sync = if let Some(snapshot) = state.snapshot {
+            TextSync::from_state(&snapshot)
+                .map_err(|e| StorageError::Sqlite(format!("bad snapshot: {e}")))?
+        } else {
+            TextSync::empty_relay()
+        };
+        let mut last_id = 0u64;
+        for entry in &state.wal_tail {
+            sync.apply_update(&entry.update)
+                .map_err(|e| StorageError::Sqlite(format!("WAL replay: {e}")))?;
+            last_id = entry.id;
+        }
+        info!(
+            doc = doc_name,
+            wal_entries = state.wal_tail.len(),
+            "recovered document from storage"
+        );
+        Ok(Some((sync, last_id)))
+    }
+
+    /// Put `doc` back to what storage holds, after an update was applied in
+    /// memory but not logged (refused, or the WAL append failed). Every update
+    /// that IS logged is logged under the same lock that applied it, so storage
+    /// is exactly the in-memory state minus that one update.
+    async fn restore_from_storage(
+        &self,
+        doc_name: &str,
+        doc: &mut DocEntry,
+    ) -> Result<(), StorageError> {
+        let (sync, wal_seq) = self
+            .load_from_storage(doc_name)
+            .await?
+            .unwrap_or_else(|| (TextSync::empty_relay(), 0));
+        doc.sync = sync;
+        doc.wal_seq = wal_seq;
+        Ok(())
+    }
+
+    /// ADR-109 D6: whether a document that held `before` payload bytes may
+    /// now hold `after`. A document may not GROW past the limit; one already
+    /// past it (stored before the limit existed) may still shrink or stay, so
+    /// its owner can bring it back under.
+    fn size_refusal(&self, doc_name: &str, before: usize, after: usize) -> Option<StorageError> {
+        let limit = self.max_document_size_bytes;
+        (limit > 0 && after > limit && after > before).then(|| StorageError::TooLarge {
+            doc: doc_name.to_string(),
+            size: after,
+            limit,
+        })
+    }
+
+    /// Apply an update to a document: validate -> apply in memory -> size check
+    /// (ADR-109 D6) -> WAL append, under the document's lock; a refused or
+    /// unlogged update is taken back by reloading from storage.
     /// Returns the update bytes for broadcasting.
     pub async fn apply_update(
         &self,
@@ -603,45 +645,56 @@ impl DocStore {
         validate_update(update)
             .map_err(|e| StorageError::Sqlite(format!("invalid update: {e}")))?;
 
-        // WAL append first (durability).
-        let wal_id = self.storage.wal_append(doc_name, update, client_id).await?;
-        debug!(
-            doc = doc_name,
-            update_len = update.len(),
-            wal_id,
-            "apply_update: WAL appended"
-        );
-
-        // Apply to in-memory document.
         // ADR-105: a peer's update may legitimately be the first thing that brings a
         // KB doc into existence here — join and mesh relay both deliver content before
         // the manifest entry that lists it (the reason D6 was withdrawn in Stage 2).
         let entry = self.get_or_create_allowing_durable(doc_name).await?;
-        let should_compact = {
+
+        // Apply, measure, log — all under the document's lock, so no other update
+        // interleaves and no reader sees a state that is then taken back.
+        //
+        // @ai-caution: [sync] The size check measures the document AFTER applying,
+        // never "size before + update length": yrs holds an update whose
+        // dependencies are missing as pending, and a later small update integrates
+        // it, so an update's length does not bound how much the document grows.
+        let (should_compact, wal_id) = {
             let mut doc = entry.lock().await;
+            let before = doc.sync.payload_bytes();
             doc.sync
                 .apply_update(update)
                 .map_err(|e| StorageError::Sqlite(format!("apply failed: {e}")))?;
+            let after = doc.sync.payload_bytes();
+            if let Some(refused) = self.size_refusal(doc_name, before, after) {
+                self.restore_from_storage(doc_name, &mut doc).await?;
+                warn!(
+                    doc = doc_name,
+                    size = after,
+                    "refused an update over the document size limit"
+                );
+                return Err(refused);
+            }
+
+            // WAL append (durability) before the update is acknowledged or relayed.
+            let wal_id = match self.storage.wal_append(doc_name, update, client_id).await {
+                Ok(id) => id,
+                Err(e) => {
+                    self.restore_from_storage(doc_name, &mut doc).await?;
+                    return Err(e);
+                }
+            };
+            debug!(
+                doc = doc_name,
+                update_len = update.len(),
+                wal_id,
+                "apply_update: WAL appended"
+            );
             doc.wal_seq = wal_id;
             doc.update_count += 1;
             doc.last_activity = std::time::Instant::now();
 
-            // Warn if document exceeds max size (don't reject — CRDT convergence).
-            if self.max_document_size_bytes > 0 {
-                let content_len = doc.sync.content().len();
-                if content_len > self.max_document_size_bytes {
-                    warn!(
-                        doc = doc_name,
-                        size = content_len,
-                        limit = self.max_document_size_bytes,
-                        "document exceeds max size limit"
-                    );
-                }
-            }
-
             // Force compaction at WAL entry hard limit.
             let forced = self.max_wal_entries > 0 && doc.update_count >= self.max_wal_entries;
-            forced || doc.update_count >= self.compact_threshold
+            (forced || doc.update_count >= self.compact_threshold, wal_id)
         };
 
         if should_compact {
@@ -1015,6 +1068,24 @@ impl DocStore {
         // Validate before touching anything.
         validate_update(update)
             .map_err(|e| StorageError::Sqlite(format!("invalid update: {e}")))?;
+
+        // ADR-109 D6: a share is the document's whole state, so measure it on its
+        // own before the old document is deleted — a refused share changes nothing.
+        // Against the document it replaces: a reseal or rebirth (E2E key rotation)
+        // of a node already past the limit re-shares it at the same size, and
+        // must not be refused for it.
+        let before = match self.get_or_create(doc_name).await {
+            Ok(entry) => entry.lock().await.sync.payload_bytes(),
+            Err(StorageError::DurableDocMissing(_)) => 0,
+            Err(e) => return Err(e),
+        };
+        let mut probe = TextSync::empty_relay();
+        probe
+            .apply_update(update)
+            .map_err(|e| StorageError::Sqlite(format!("apply failed: {e}")))?;
+        if let Some(refused) = self.size_refusal(doc_name, before, probe.payload_bytes()) {
+            return Err(refused);
+        }
 
         // Delete old doc from storage. Log errors — silent swallow could
         // lead to corrupted recovery if WAL append succeeds but old data remains.
@@ -1672,24 +1743,197 @@ mod tests {
         assert_eq!(store.find_doc_by_suffix("test.txt").await, None);
     }
 
+    // ---- ADR-109 D6: the document size limit ----
+
+    fn sized_store(backend: &Arc<SqliteBackend>, limit: usize) -> DocStore {
+        DocStore::new(Arc::clone(backend) as Arc<dyn StorageBackend>, 500)
+            .with_max_document_size(limit)
+    }
+
+    fn assert_too_large(r: Result<ApplyResult, StorageError>, what: &str) {
+        match r {
+            Err(StorageError::TooLarge { size, limit, .. }) => assert!(size > limit, "{what}"),
+            Err(e) => panic!("{what}: wrong error {e}"),
+            Ok(_) => panic!("{what}: accepted"),
+        }
+    }
+
+    /// An edit that would grow a document past the limit is refused, and
+    /// neither memory nor storage keeps any of it: a fresh store over the same
+    /// database sees the document as it was.
     #[tokio::test]
-    async fn large_document_warns_but_accepts() {
+    async fn an_update_past_the_limit_is_refused_and_leaves_nothing() {
         let backend = Arc::new(SqliteBackend::open_memory().unwrap());
-        // Set max_document_size to 5 bytes — any real content will exceed it.
-        let store = DocStore::new(backend, 500).with_max_document_size(5);
-
+        let store = sized_store(&backend, 16);
         let mut ts = TextSync::with_client_id("", 1);
-        let update = ts.insert(0, "hello world, this exceeds the limit");
+        store
+            .apply_update("doc1", &ts.insert(0, "hello"), Some(1))
+            .await
+            .unwrap();
 
-        // Should succeed (warning only, no rejection).
-        let result = store.apply_update("doc1", &update, Some(1)).await;
-        assert!(
-            result.is_ok(),
-            "large document should be accepted with warning"
+        let grow = ts.insert(5, " world, past sixteen bytes");
+        assert_too_large(
+            store.apply_update("doc1", &grow, Some(1)).await,
+            "growth past 16 bytes",
+        );
+        assert_eq!(
+            store.content("doc1").await.unwrap(),
+            "hello",
+            "memory kept the refused edit"
+        );
+        let reopened = sized_store(&backend, 16);
+        assert_eq!(
+            reopened.content("doc1").await.unwrap(),
+            "hello",
+            "storage logged the refused edit"
         );
 
-        let content = store.content("doc1").await.unwrap();
-        assert_eq!(content, "hello world, this exceeds the limit");
+        // The document still takes an edit that fits.
+        let mut ok = TextSync::from_state(&store.encode_state("doc1").await.unwrap()).unwrap();
+        store
+            .apply_update("doc1", &ok.insert(5, "!"), Some(2))
+            .await
+            .unwrap();
+        assert_eq!(store.content("doc1").await.unwrap(), "hello!");
+    }
+
+    /// A KB node is measured by its body. The check this replaced read only a
+    /// text document's `content` root, so a node of any size passed it.
+    #[tokio::test]
+    async fn a_kb_node_body_past_the_limit_is_refused() {
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+        let store = sized_store(&backend, 64);
+        let name = mae_sync::kb_node_doc_name("kb1", "n1");
+        let small = mae_sync::kb::KbNodeDoc::new("n1", "Title", &"x".repeat(60), &[]);
+        store
+            .apply_update(&name, &small.encode(), None)
+            .await
+            .unwrap();
+
+        let big = mae_sync::kb::KbNodeDoc::new("n2", "Title", &"y".repeat(65), &[]);
+        let other = mae_sync::kb_node_doc_name("kb1", "n2");
+        assert_too_large(
+            store.apply_update(&other, &big.encode(), None).await,
+            "65-byte body",
+        );
+        // Bytes, not characters: 20 four-byte characters are 80 bytes.
+        let wide = mae_sync::kb::KbNodeDoc::new("n3", "T", &"\u{1F600}".repeat(20), &[]);
+        let third = mae_sync::kb_node_doc_name("kb1", "n3");
+        assert_too_large(
+            store.apply_update(&third, &wide.encode(), None).await,
+            "80 UTF-8 bytes",
+        );
+    }
+
+    /// A document stored before the limit existed (or under a larger one) may
+    /// shrink or stay, so its owner can bring it back under; it may not grow.
+    #[tokio::test]
+    async fn a_document_already_past_the_limit_may_shrink_but_not_grow() {
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+        let mut ts = TextSync::with_client_id("", 1);
+        let unlimited = sized_store(&backend, 0);
+        unlimited
+            .apply_update("doc1", &ts.insert(0, &"a".repeat(50)), Some(1))
+            .await
+            .unwrap();
+
+        let store = sized_store(&backend, 10);
+        store
+            .apply_update("doc1", &ts.delete(0, 5), Some(1))
+            .await
+            .unwrap();
+        assert_eq!(
+            store.content("doc1").await.unwrap().len(),
+            45,
+            "a shrink is accepted"
+        );
+        assert_too_large(
+            store
+                .apply_update("doc1", &ts.insert(0, "b"), Some(1))
+                .await,
+            "growth of a doc already past the limit",
+        );
+        assert_eq!(store.content("doc1").await.unwrap().len(), 45);
+    }
+
+    /// The attack a "size before + update length" shortcut would let through:
+    /// an update whose dependency is missing is held pending (the document
+    /// does not change, so it is accepted), and a one-byte update that supplies
+    /// the dependency then integrates it. Measured after applying, the second
+    /// update is what crosses the limit, so it is refused.
+    #[tokio::test]
+    async fn a_pending_update_cannot_smuggle_growth_past_the_limit() {
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+        let store = sized_store(&backend, 32);
+        let mut ts = TextSync::with_client_id("", 1);
+        let first = ts.insert(0, "a");
+        let bulk = ts.insert(1, &"b".repeat(100));
+
+        store.apply_update("doc1", &bulk, Some(1)).await.unwrap();
+        assert_eq!(
+            store.content("doc1").await.unwrap(),
+            "",
+            "premise: the bulk is pending"
+        );
+        assert_too_large(
+            store.apply_update("doc1", &first, Some(1)).await,
+            "the update that integrates the bulk",
+        );
+        assert_eq!(store.content("doc1").await.unwrap(), "");
+        let reopened = sized_store(&backend, 32);
+        assert_eq!(reopened.content("doc1").await.unwrap(), "");
+    }
+
+    /// Two edits that each fit but together do not: the check and the log
+    /// happen under the document's lock, so exactly one of them lands.
+    #[tokio::test]
+    async fn two_concurrent_updates_cannot_together_pass_the_limit() {
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+        let store = Arc::new(sized_store(&backend, 30));
+        let a = TextSync::with_client_id("", 1).insert(0, &"a".repeat(20));
+        let b = TextSync::with_client_id("", 2).insert(0, &"b".repeat(20));
+        let (s1, s2) = (Arc::clone(&store), Arc::clone(&store));
+        let (r1, r2) = tokio::join!(
+            tokio::spawn(async move { s1.apply_update("doc1", &a, Some(1)).await.is_ok() }),
+            tokio::spawn(async move { s2.apply_update("doc1", &b, Some(2)).await.is_ok() }),
+        );
+        assert_eq!(
+            [r1.unwrap(), r2.unwrap()].iter().filter(|ok| **ok).count(),
+            1
+        );
+        assert_eq!(store.content("doc1").await.unwrap().len(), 20);
+    }
+
+    /// A share over the limit is refused before the document it would replace
+    /// is deleted; a re-share at a size the document already had (a reseal or
+    /// rebirth, E2E key rotation) is accepted even past the limit.
+    #[tokio::test]
+    async fn a_share_is_measured_against_the_document_it_replaces() {
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+        let store = sized_store(&backend, 16);
+        store
+            .share_doc("doc1", &TextSync::with_client_id("", 1).insert(0, "kept"))
+            .await
+            .unwrap();
+        let over = TextSync::with_client_id("", 2).insert(0, &"z".repeat(17));
+        match store.share_doc("doc1", &over).await {
+            Err(StorageError::TooLarge { .. }) => {}
+            other => panic!(
+                "an oversized share was not refused: {:?}",
+                other.map(|r| r.wal_seq)
+            ),
+        }
+        assert_eq!(store.content("doc1").await.unwrap(), "kept");
+
+        let big = TextSync::with_client_id("", 3).insert(0, &"q".repeat(40));
+        sized_store(&backend, 0)
+            .share_doc("doc2", &big)
+            .await
+            .unwrap();
+        let reseal = TextSync::with_client_id("", 4).insert(0, &"r".repeat(40));
+        let fresh = sized_store(&backend, 16);
+        fresh.share_doc("doc2", &reseal).await.unwrap();
+        assert_eq!(fresh.content("doc2").await.unwrap(), "r".repeat(40));
     }
 
     #[tokio::test]

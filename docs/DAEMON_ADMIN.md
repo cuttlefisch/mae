@@ -201,7 +201,12 @@ max_update_size_bytes = 4194304                 # 4 MiB — a single update is R
                                                 #   (DoS bound). Raise for KBs with large
                                                 #   individual nodes (a node's full-state push
                                                 #   on reseal/share must fit under it).
-max_document_size_bytes = 10485760              # 10 MB — WARN-only (CRDT convergence; see §6)
+max_document_size_bytes = 10485760              # 10 MB — an update that would GROW a document
+                                                #   (a KB node's body, or a text doc) past this
+                                                #   is REFUSED (`quota_exceeded`); a doc already
+                                                #   past it may still shrink. The editor caps
+                                                #   nodes lower first (`kb_max_node_bytes`,
+                                                #   1 MiB). ADR-109 D6.
 ```
 
 > [!TIP]

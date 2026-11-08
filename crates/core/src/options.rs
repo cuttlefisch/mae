@@ -496,6 +496,13 @@ impl OptionRegistry {
                 opt!("kb_max_drain_events", &["kb-max-drain-events"],
                     "Max events processed per idle tick (prevents stalls on burst writes)",
                     OptionKind::Int, "100", Some("kb.max_drain_events"), &[]),
+                opt!("kb_max_node_bytes", &["kb-max-node-bytes"],
+                    "Largest body, in UTF-8 bytes, an edit may give a KB node (0 = unlimited). \
+                     An edit that would grow a node past it is refused, and a node already past it \
+                     may still shrink. Real KBs' largest nodes are a few hundred KB; every reader \
+                     parses and renders the whole body, so split very large notes into linked ones. \
+                     The daemon refuses past its own, larger limit (ADR-109 D6).",
+                    OptionKind::Int, "1048576", Some("kb.max_node_bytes"), &[]),
                 opt!("kb_search_excerpt_length", &["kb-search-excerpt-length"],
                     "Max bytes for RAG excerpt truncation in kb_search_context",
                     OptionKind::Int, "500", Some("kb.search_excerpt_length"), &[]),

@@ -27,6 +27,14 @@ pub enum StorageError {
     /// branch on it: "this KB is not here" is an ordinary answer for a read and a
     /// hard error for a write, and neither is a storage fault.
     DurableDocMissing(String),
+    /// An update would take a document's payload (a KB node's body, or a text
+    /// document's content) over `[collab.sync] max_document_size_bytes`
+    /// (ADR-109 D6). Refused before it is logged or applied, so nothing changes.
+    TooLarge {
+        doc: String,
+        size: usize,
+        limit: usize,
+    },
 }
 
 impl std::fmt::Display for StorageError {
@@ -35,6 +43,11 @@ impl std::fmt::Display for StorageError {
             Self::Sqlite(msg) => write!(f, "sqlite: {msg}"),
             Self::Io(msg) => write!(f, "io: {msg}"),
             Self::DurableDocMissing(doc) => write!(f, "no such document: {doc}"),
+            Self::TooLarge { doc, size, limit } => write!(
+                f,
+                "{doc} would hold {size} bytes, over the {limit}-byte limit \
+                 ([collab.sync] max_document_size_bytes)"
+            ),
         }
     }
 }
