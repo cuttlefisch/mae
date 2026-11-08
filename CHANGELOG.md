@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.134] - 2026-11-08
+
+
+
+
+### Bug Fixes
+
+- *(daemon)* Bind the principal the collab handshake proved ([449ab1e](https://github.com/cuttlefisch/mae/commit/449ab1e2fb7d9c5d572ca9cffdc6e84933734250))
+- *(daemon)* An off-host collab bind requires key auth over TLS ([dd7bde9](https://github.com/cuttlefisch/mae/commit/dd7bde936c795762f787778c612f2d9bf3a4df31))
+
+### Performance
+
+- *(org)* Plain property values skip the object parser; entry text only when used ([d8ba15c](https://github.com/cuttlefisch/mae/commit/d8ba15c7af7d716e8f6014f30e8c28a21a590f54))
+- *(org)* Cheap rejects in the inline lexer; kinds looked up in O(1) ([31db075](https://github.com/cuttlefisch/mae/commit/31db075997cfdac1c10f15b6788b1804a15dfc03))
+- *(org)* Render copies and builds only what a document needs ([2572af9](https://github.com/cuttlefisch/mae/commit/2572af9c1cc5b82a0c932d22ddd963d0bcc8f262))
+- *(org)* The inline index and lexer read bytes, not characters ([2a8763a](https://github.com/cuttlefisch/mae/commit/2a8763adba19359e5238011b732561adb786257e))
+- *(org)* No printed copies of whole trees, no object parse of plain values ([92c0af7](https://github.com/cuttlefisch/mae/commit/92c0af78cb0dc9dd8dd735d0d5d737b06cb4c534))
+- *(org)* One reading of the document per render; settings walks skip objects ([85db1a1](https://github.com/cuttlefisch/mae/commit/85db1a107afc55b0799f5e1c14d9309cb0c02223))
+- *(org)* A document knows which node kinds it holds; walks for absent ones are skipped ([dade3c9](https://github.com/cuttlefisch/mae/commit/dade3c9ea5798def5281d0d90870d9129f516ad6))
+- *(org)* A page whose first pass looks up no anchor is built once ([f800313](https://github.com/cuttlefisch/mae/commit/f80031358c43d209f861671360185690f42d3dd3))
+- *(org)* Highlights read the green tree; headline walks visit only headlines ([7bec786](https://github.com/cuttlefisch/mae/commit/7bec786fb2ec2dd67a119b6dccd420aa61187e46))
+- *(org)* Build green trees directly, sharing short tokens through a slot cache ([d6d2740](https://github.com/cuttlefisch/mae/commit/d6d2740bf5aa1ef54276facdd28d9103c23be7f3))
+
 ## [0.14.133] - 2026-11-07
 
 
@@ -10,6 +33,10 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 
 - *(kb)* A write aimed at a named KB lands there or fails, never in another ([28fb7d8](https://github.com/cuttlefisch/mae/commit/28fb7d8748c49b3e16f8728a790e10d6d231c453))
+
+### Miscellaneous
+
+- Bump version to 0.14.133 ([fffd314](https://github.com/cuttlefisch/mae/commit/fffd3148e495c450ca4fa8cd191eb2605470c01d))
 
 ## [0.14.132] - 2026-11-07
 
@@ -27,6 +54,16 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - Bump version to 0.14.132 ([366b601](https://github.com/cuttlefisch/mae/commit/366b6018c8fa7daa2f08092a255b2374864af805))
+
+## [mae-org-v0.2.0] - 2026-11-07
+
+
+
+
+### Features
+
+- *(org)* Highlighting spans and section-incremental re-highlighting ([898d8d8](https://github.com/cuttlefisch/mae/commit/898d8d89b5e07cf1e955c019f989dfb7612961b6))
+- *(org-wasm)* Syntax and syntaxSection operations; mae-org 0.2.0 ([d2e7c0e](https://github.com/cuttlefisch/mae/commit/d2e7c0e8885b0dca6c9091ff4032bb6b8758fcb9))
 
 ## [mae-org-v0.1.0] - 2026-11-01
 
