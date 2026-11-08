@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.136] - 2026-11-08
+
+
+
+
+### Bug Fixes
+
+- *(kb,daemon)* Checkpoint KB stores, and stop rewriting a whole KB per file change ([225c5a2](https://github.com/cuttlefisch/mae/commit/225c5a2b23ba59602e0e42dd0e00b87f30b4dabb))
+
 ## [0.14.135] - 2026-11-08
 
 
@@ -14,6 +23,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - *(hooks)* Pre-push allows mirrors listed in local git config ([98a3936](https://github.com/cuttlefisch/mae/commit/98a3936ad425c46294c4045858b9d58ebd86b409))
+- Bump version to 0.14.135 ([1104b78](https://github.com/cuttlefisch/mae/commit/1104b78be5e38ec92fa4639a78592f2fc088fdf1))
 
 ## [0.14.134] - 2026-11-08
 
