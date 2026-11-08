@@ -37,7 +37,7 @@ pub(super) fn next_object(cx: &InlineCx, f: &mut Frame) -> Option<Obj> {
                     return Some(o);
                 }
             }
-            i += cx.char_at(i).map_or(1, char::len_utf8);
+            i += cx.char_len(i);
         }
         // No object before the radio link: parse it (Org calls the link
         // parser one character before the bound).

@@ -114,6 +114,9 @@ pub(crate) fn unrendered_undefined(
     doc: &crate::Document,
     sem: &Semantics,
 ) -> Vec<super::RenderDiagnostic> {
+    if !doc.has_kind(crate::SyntaxKind::FOOTNOTE_REFERENCE) {
+        return Vec::new();
+    }
     use crate::semantics::Region;
     let regions: HashMap<(u32, u32, crate::kind::SyntaxKind), Region> = sem
         .unrendered

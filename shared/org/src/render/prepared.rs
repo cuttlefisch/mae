@@ -40,7 +40,7 @@ pub(crate) fn prepare<'d>(doc: &'d Document, sem: &'d Semantics) -> Prepared<'d>
     };
     let source = crate::text::source_of(&doc.syntax());
     let mut map = None;
-    match super::expand::expand(doc) {
+    match super::expand::expand(doc, &source) {
         Ok(None) => {}
         Err(d) => {
             p.failed = Some(d);

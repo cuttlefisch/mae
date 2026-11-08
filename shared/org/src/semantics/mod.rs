@@ -458,9 +458,21 @@ pub fn semantics_with(doc: &Document, options: &SemanticsOptions) -> Semantics {
         .map(|t| plain::plain_text(&crate::green::objects(&t, PARAGRAPH)))
         .filter(|t| !t.is_empty());
     let mut rules = Rules::new(&root, options, &exclude, &select, &header.tags);
-    rules.chosen = regions::choose_definitions(&root, &rules);
+    // Footnote labels come from definitions and references (inline ones
+    // define): a document with neither has none to choose or follow.
+    let (refs, defs) = (
+        doc.has_kind(FOOTNOTE_REFERENCE),
+        doc.has_kind(FOOTNOTE_DEFINITION),
+    );
+    if refs || defs {
+        rules.chosen = regions::choose_definitions(&root, &rules);
+    }
     let defined_notes = rules.chosen.keys().cloned().collect();
-    let (referenced, order) = regions::referenced_footnotes(&root, &rules);
+    let (referenced, order) = if refs {
+        regions::referenced_footnotes(&root, &rules)
+    } else {
+        Default::default()
+    };
     rules.referenced = Some(referenced);
     let mut w = Walk {
         rules,

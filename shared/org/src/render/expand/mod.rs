@@ -250,12 +250,13 @@ type Stop = (MacroFailure, usize, usize);
 /// A macro found in a text: its start and end, name and raw arguments.
 type Found = (usize, usize, String, Option<String>);
 
-/// Expands the macros of `doc`, or `Ok(None)` when it has none to expand.
-pub(crate) fn expand(doc: &Document) -> Result<Option<Expansion>, RenderDiagnostic> {
-    let source = crate::text::source_of(&doc.syntax());
+/// Expands the macros of `doc` (whose text is `source`), or `Ok(None)`
+/// when it has none to expand.
+pub(crate) fn expand(doc: &Document, source: &str) -> Result<Option<Expansion>, RenderDiagnostic> {
+    debug_assert_eq!(source.len(), usize::from(doc.syntax().text_range().len()));
     // `org-export--delete-comment-trees`: the COMMENT subtrees go first,
     // from the text, before anything else reads it.
-    let (text, map) = without_comment_trees(doc, &source);
+    let (text, map) = without_comment_trees(doc, source);
     // Every macro, written or forced, opens with `{{{`: without one there
     // is nothing to expand, and what is left is the text without them.
     if !source.contains("{{{") {
@@ -266,7 +267,7 @@ pub(crate) fn expand(doc: &Document) -> Result<Option<Expansion>, RenderDiagnost
             work: 0,
         }));
     }
-    let templates = value::templates(doc, &source);
+    let templates = value::templates(doc, source);
     if map.pieces.is_empty() {
         return scan::Engine::new(doc, source.len(), templates).run(map, HashSet::new());
     }
@@ -583,7 +584,7 @@ mod tests {
     fn work(text: &str) -> (u64, Result<Option<Expansion>, RenderDiagnostic>) {
         WORK.with(|w| w.set(0));
         let doc = crate::parse(text, &crate::ParseOptions::default());
-        let r = expand(&doc);
+        let r = expand(&doc, text);
         (WORK.with(std::cell::Cell::get), r)
     }
 

@@ -118,6 +118,22 @@ pub(crate) fn is_post(c: char) -> bool {
     is_space(c) || "-.,;:!?'\")}\\[".contains(c)
 }
 
+/// Per byte, 1 + its index in [`MARKS`], or 0 for a byte that is no mark.
+const MARK_SLOTS: [u8; 256] = {
+    let mut t = [0u8; 256];
+    let mut k = 0;
+    while k < MARKS.len() {
+        t[MARKS[k] as usize] = k as u8 + 1;
+        k += 1;
+    }
+    t
+};
+
+/// The index in [`MARKS`] of `c`, on one lookup.
+fn mark_slot(c: u8) -> Option<usize> {
+    usize::from(MARK_SLOTS[usize::from(c)]).checked_sub(1)
+}
+
 /// The bytes [`needles_at`] or a bracket pair can start at: every other
 /// byte (most of any text) is passed over on one lookup.
 const MAY_INDEX: [bool; 256] = {
@@ -188,7 +204,7 @@ impl InlineIndex {
             if c == b']' && b.get(i + 1) == Some(&b']') {
                 double_close.push(i);
             }
-            if let Some(k) = MARKS.iter().position(|&m| m == c) {
+            if let Some(k) = mark_slot(c) {
                 let prev = text[..i].chars().next_back();
                 let next = text[i + 1..].chars().next();
                 let pre_ok = prev.is_some_and(|p| !is_space(p));
@@ -322,6 +338,14 @@ impl InlineIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The mark table answers as a search of [`MARKS`] does, for every byte.
+    #[test]
+    fn mark_slots_are_the_marks_positions() {
+        for c in 0..=255u8 {
+            assert_eq!(mark_slot(c), MARKS.iter().position(|&m| m == c), "{c:#x}");
+        }
+    }
 
     /// Every byte the index passes over starts no needle and no bracket,
     /// whatever follows it and whatever the line ending.
