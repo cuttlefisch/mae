@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.137] - 2026-11-08
+
+
+
+
+### Features
+
+- *(daemon,mcp)* Kb/query.get returns typed fields and whole bodies; subscribe adds ([9635239](https://github.com/cuttlefisch/mae/commit/96352397a299bebf9f309b38d88bf2514f420607))
+
+### Refactor
+
+- *(mcp)* Notifications/subscribe in its own function ([9c041e4](https://github.com/cuttlefisch/mae/commit/9c041e4894868fa6022f0da795caa9cb7acf1d3d))
+
 ## [0.14.136] - 2026-11-08
 
 
@@ -10,6 +23,10 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 
 - *(kb,daemon)* Checkpoint KB stores, and stop rewriting a whole KB per file change ([225c5a2](https://github.com/cuttlefisch/mae/commit/225c5a2b23ba59602e0e42dd0e00b87f30b4dabb))
+
+### Miscellaneous
+
+- Bump version to 0.14.136 ([566deec](https://github.com/cuttlefisch/mae/commit/566deec81724578c5cd178f23cc38257914d6a28))
 
 ## [0.14.135] - 2026-11-08
 
