@@ -32,7 +32,7 @@ pub(super) fn next_object(cx: &InlineCx, f: &mut Frame) -> Option<Obj> {
         let lim = radio.map_or(end, |p| cx.step(p));
         let mut i = from;
         while i < lim {
-            if is_candidate(cx, i, end, lim, floor) {
+            if is_candidate(cx, i, (end, lim, floor), &mut f.colon) {
                 if let Some(o) = dispatch(cx, i, end, floor, r) {
                     return Some(o);
                 }
@@ -61,7 +61,12 @@ fn fit(cx: &InlineCx, i: usize, lim: usize) -> Option<char> {
 
 /// Does `org-element--object-regexp` match at `i` without consuming past
 /// `lim`? (`$` and `\<` still look at the region up to `end`.)
-fn is_candidate(cx: &InlineCx, i: usize, end: usize, lim: usize, floor: usize) -> bool {
+fn is_candidate(
+    cx: &InlineCx,
+    i: usize,
+    (end, lim, floor): (usize, usize, usize),
+    colon: &mut Colon,
+) -> bool {
     let b = cx.bytes();
     let second = || fit(cx, i + 1, lim);
     match b[i] {
@@ -77,7 +82,7 @@ fn is_candidate(cx: &InlineCx, i: usize, end: usize, lim: usize, floor: usize) -
         }
         b'$' => true,
         b'\\' => backslash_candidate(cx, i, end, lim),
-        _ => plain_link_candidate(cx, i, lim, floor) || babel_candidate(cx, i, lim),
+        _ => plain_link_candidate(cx, i, (end, lim, floor), colon) || babel_candidate(cx, i, lim),
     }
 }
 
@@ -142,20 +147,64 @@ fn type_name_at(cx: &InlineCx, i: usize, lim: usize) -> Option<usize> {
 /// `\<TYPE:` — a word start followed by a registered link type and a colon.
 /// `\<` is Emacs's, so a word char after one of another script starts a
 /// word (`参见https:`); see [`word_start`].
-fn plain_link_candidate(cx: &InlineCx, i: usize, lim: usize, floor: usize) -> bool {
+fn plain_link_candidate(
+    cx: &InlineCx,
+    i: usize,
+    (end, lim, floor): (usize, usize, usize),
+    colon: &mut Colon,
+) -> bool {
     // Tried at every character of every paragraph. A type `t` matches only
     // with `:` at `i + len(t)`, `1 <= len(t) <= longest` (`link_types` is
     // longest first), so without a `:` in that window nothing can match:
     // reject it before the word-start test and the comparison with each type.
-    let b = cx.bytes();
     let longest = cx.link_types.first().map_or(0, String::len);
-    let window = b.get(i + 1..lim.min(i + longest + 1)).unwrap_or_default();
-    if !window.contains(&b':') {
+    if !colon.within(cx.bytes(), i, (end, lim), longest) {
         return false;
     }
     cx.char_at(i)
         .is_some_and(|c| word_start(cx.ch_before(i, floor), c))
         && link::type_at(cx, i, lim).is_some()
+}
+
+/// The first `:` after a position of a frame's region, kept between the
+/// positions the frame's searches try (its cursor moves on, so one scan
+/// serves every position up to the colon); recomputed for a position it
+/// does not answer.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Colon {
+    /// The position the scan started after, and the first `:` after it
+    /// before the region's end (`usize::MAX`: none).
+    from: usize,
+    at: usize,
+}
+
+impl Default for Colon {
+    fn default() -> Colon {
+        Colon {
+            from: usize::MAX,
+            at: 0,
+        }
+    }
+}
+
+impl Colon {
+    /// The first `:` in `b[i + 1..end]`, or `usize::MAX`.
+    fn after(&mut self, b: &[u8], i: usize, end: usize) -> usize {
+        if !(self.from <= i && i < self.at) {
+            self.from = i;
+            self.at = b[i + 1..end]
+                .iter()
+                .position(|&c| c == b':')
+                .map_or(usize::MAX, |k| i + 1 + k);
+        }
+        self.at
+    }
+
+    /// Whether `b[i + 1..]` holds a `:` within `longest` bytes, before `lim`
+    /// (`lim <= end`).
+    fn within(&mut self, b: &[u8], i: usize, (end, lim): (usize, usize), longest: usize) -> bool {
+        self.after(b, i, end) < lim.min(i + longest + 1)
+    }
 }
 
 /// The parsers tried at a candidate, in `org-element--object-lex`'s order.
@@ -229,6 +278,39 @@ fn bracket_dispatch(
                     None
                 }
             })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4000))]
+
+        /// The kept colon answers as a fresh search of the window would,
+        /// for positions asked in any order (backwards included) and any
+        /// bound and type length.
+        #[test]
+        fn a_kept_colon_answers_as_the_window_does(
+            text in "[ab:]{1,30}",
+            asks in proptest::collection::vec((0usize..30, 0usize..30, 0usize..12), 1..40),
+        ) {
+            let b = text.as_bytes();
+            let end = b.len();
+            let mut colon = Colon::default();
+            for (i, lim, longest) in asks {
+                let i = i % end;
+                let lim = i + 1 + lim % (end - i);
+                let window = &b[i + 1..lim.min(i + longest + 1).max(i + 1)];
+                prop_assert_eq!(
+                    colon.within(b, i, (end, lim), longest),
+                    window.contains(&b':'),
+                    "i {} lim {} longest {}", i, lim, longest
+                );
+            }
         }
     }
 }

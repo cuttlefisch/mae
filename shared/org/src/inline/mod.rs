@@ -364,6 +364,7 @@ pub(crate) struct Frame {
     /// region is done; `None` for the root.
     rest: Option<std::vec::IntoIter<Part>>,
     pub radio: radio::Cursor,
+    pub colon: lex::Colon,
 }
 
 impl Frame {
@@ -380,6 +381,7 @@ impl Frame {
             floor: beg,
             rest,
             radio: radio::Cursor::default(),
+            colon: lex::Colon::default(),
         }
     }
 }

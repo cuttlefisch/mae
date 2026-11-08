@@ -118,6 +118,19 @@ pub(crate) fn is_post(c: char) -> bool {
     is_space(c) || "-.,;:!?'\")}\\[".contains(c)
 }
 
+/// The bytes [`needles_at`] or a bracket pair can start at: every other
+/// byte (most of any text) is passed over on one lookup.
+const MAY_INDEX: [bool; 256] = {
+    let mut t = [false; 256];
+    let mut k = 0;
+    let bytes = b"$\\@;]>)\n\r \t[({}";
+    while k < bytes.len() {
+        t[bytes[k] as usize] = true;
+        k += 1;
+    }
+    t
+};
+
 /// The needles that start at byte `i`.
 fn needles_at(b: &[u8], i: usize, eol: LineEnding, out: &mut Vec<Needle>) {
     let c = b[i];
@@ -168,21 +181,22 @@ impl InlineIndex {
         let text = src.text;
         let mut closers: [Vec<usize>; 6] = Default::default();
         let mut double_close = Vec::new();
-        let mut prev: Option<char> = None;
-        let mut iter = text.char_indices().peekable();
-        while let Some((i, c)) = iter.next() {
-            let next = iter.peek().map(|&(_, n)| n);
-            if c == ']' && next == Some(']') {
+        // Byte by byte: the marks and `]` are ASCII, so a match is a char,
+        // and only a match's neighbours are decoded.
+        let b = text.as_bytes();
+        for (i, &c) in b.iter().enumerate() {
+            if c == b']' && b.get(i + 1) == Some(&b']') {
                 double_close.push(i);
             }
-            if let Some(k) = MARKS.iter().position(|&m| m as char == c) {
+            if let Some(k) = MARKS.iter().position(|&m| m == c) {
+                let prev = text[..i].chars().next_back();
+                let next = text[i + 1..].chars().next();
                 let pre_ok = prev.is_some_and(|p| !is_space(p));
                 let post_ok = next.is_none_or(|n| n == '\n' || is_post(n));
                 if pre_ok && post_ok {
                     closers[k].push(i);
                 }
             }
-            prev = Some(c);
         }
         let mut ix = InlineIndex {
             closers,
@@ -214,6 +228,9 @@ impl InlineIndex {
         let mut stacks: [Vec<(usize, u32, u32)>; 3] = Default::default();
         let mut found = Vec::with_capacity(4);
         for (i, &c) in b.iter().enumerate() {
+            if !MAY_INDEX[usize::from(c)] {
+                continue;
+            }
             found.clear();
             needles_at(b, i, eol, &mut found);
             for n in &found {
@@ -245,9 +262,8 @@ impl InlineIndex {
 
     fn index_cite_keys(&mut self, text: &str) {
         let keys = &mut self.needles[Needle::CiteKey.slot()];
-        let mut iter = text.char_indices().peekable();
-        while let Some((i, c)) = iter.next() {
-            if c == '@' && iter.peek().is_some_and(|&(_, n)| is_cite_key_char(n)) {
+        for (i, _) in text.bytes().enumerate().filter(|&(_, c)| c == b'@') {
+            if text[i + 1..].chars().next().is_some_and(is_cite_key_char) {
                 keys.push(i);
             }
         }
@@ -300,5 +316,28 @@ impl InlineIndex {
         let v = &self.pairs[kind as usize];
         let k = v.binary_search_by_key(&open, |p| p.open).ok()?;
         Some(v[k]).filter(|p| p.close < end)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every byte the index passes over starts no needle and no bracket,
+    /// whatever follows it and whatever the line ending.
+    #[test]
+    fn bytes_passed_over_index_nothing() {
+        let mut found = Vec::new();
+        for c in (0..=255u8).filter(|&c| !MAY_INDEX[usize::from(c)]) {
+            assert_eq!(Bracket::of(c), None, "byte {c:#x}");
+            for next in 0..=255u8 {
+                for eol in [LineEnding::Lf, LineEnding::Cr, LineEnding::CrLf] {
+                    for b in [&[c][..], &[c, next], &[c, next, b'}', b'}']] {
+                        needles_at(b, 0, eol, &mut found);
+                        assert!(found.is_empty(), "byte {c:#x} before {next:#x}: {found:?}");
+                    }
+                }
+            }
+        }
     }
 }
