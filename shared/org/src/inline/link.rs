@@ -90,7 +90,7 @@ fn scan_bracket_path(cx: &InlineCx, from: usize, end: usize) -> usize {
                         i = j;
                         break;
                     }
-                    Some(_) => i = j + cx.char_at(j).map_or(1, char::len_utf8),
+                    Some(_) => i = j + cx.char_len(j),
                     // `\+[^][]` needs a char after the run; pairs still match.
                     None => {
                         i += k - k % 2;
@@ -98,7 +98,7 @@ fn scan_bracket_path(cx: &InlineCx, from: usize, end: usize) -> usize {
                     }
                 }
             }
-            _ => i += cx.char_at(i).map_or(1, char::len_utf8),
+            _ => i += cx.char_len(i),
         }
     }
     i

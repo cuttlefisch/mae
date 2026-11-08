@@ -144,6 +144,8 @@ pub struct Document {
     line_ending: LineEnding,
     contents: span::ContentsTable,
     radio_targets: Vec<String>,
+    /// The node kinds the tree holds.
+    kinds: kind::KindSet,
     /// How the text was read, so a text derived from it (its macros
     /// expanded) is read the same way.
     reading: Reading,
@@ -352,6 +354,7 @@ fn parse_with(
         (None, false) => options.todo_sequences.clone(),
     };
     Document {
+        kinds: kind::KindSet::of(&green),
         green,
         diagnostics,
         todo_sequences,
@@ -368,6 +371,11 @@ fn exceeds_tree_limit(len: usize) -> bool {
 }
 
 impl Document {
+    /// Whether the tree holds a node of kind `k`.
+    pub(crate) fn has_kind(&self, k: SyntaxKind) -> bool {
+        self.kinds.has(k)
+    }
+
     /// `text`, derived from this document's text, read as this document
     /// was: same options, same start, same line-ending convention.
     pub(crate) fn reparse(&self, text: &str) -> Document {
@@ -385,8 +393,10 @@ impl Document {
         ));
         b.finish_node();
         let diagnostics = vec![Diagnostic::new(DiagnosticKind::InputTooLarge, 0, 0)];
+        let green = b.finish();
         Document {
-            green: b.finish(),
+            kinds: kind::KindSet::of(&green),
+            green,
             diagnostics,
             todo_sequences: Vec::new(),
             line_ending: LineEnding::Lf,

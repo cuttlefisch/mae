@@ -321,3 +321,47 @@ mod tests {
         assert_eq!(s.after_last_nonblank(6, 3), 6);
     }
 }
+
+/// The text of `n`: what its `to_string()` prints, read from its green
+/// tree into a string sized once. `Display` goes through a cursor node and
+/// a formatter for every token, which made printing a whole document
+/// a sizeable part of a render. Iterative, so a deep tree cannot exhaust
+/// the stack (WASM's is small).
+pub(crate) fn source_of(n: &crate::SyntaxNode) -> String {
+    let mut out = String::with_capacity(usize::from(n.text_range().len()));
+    let mut stack = vec![n.green().children()];
+    while let Some(top) = stack.last_mut() {
+        match top.next() {
+            Some(rowan::NodeOrToken::Node(g)) => stack.push(g.children()),
+            Some(rowan::NodeOrToken::Token(t)) => out.push_str(t.text()),
+            None => {
+                stack.pop();
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod source_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2000))]
+
+        /// Every node's text, read from its green tree, is what printing
+        /// the node gives: whole documents and every subtree, nested
+        /// headlines and objects included.
+        #[test]
+        fn source_of_prints_what_display_does(
+            text in "(\u{feff}|\\* |\\*\\* |x|é|[ \t]|\n|\r\n|\\[\\[a\\]\\[\\*b\\*\\]\\]|=v= |:PROPERTIES:\n:ID: a\n:END:\n|#\\+begin_src\n|#\\+end_src\n|- i\n){0,30}"
+        ) {
+            let doc = crate::parse(&text, &Default::default());
+            prop_assert_eq!(source_of(&doc.syntax()), text);
+            for n in doc.syntax().descendants() {
+                prop_assert_eq!(source_of(&n), n.to_string());
+            }
+        }
+    }
+}

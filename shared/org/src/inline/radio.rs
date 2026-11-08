@@ -501,7 +501,7 @@ impl Radio {
         // overlapping the previous one (registered divergence), which no
         // tree can hold, so it is skipped.
         let lbp = cx.src.lines[cx.src.line_of(from)].start.max(floor);
-        let after_lbp = lbp + cx.char_at(lbp).map_or(1, char::len_utf8);
+        let after_lbp = lbp + cx.char_len(lbp);
         let again = if from == after_lbp && m.g1 == from {
             m.m0
         } else {
