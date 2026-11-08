@@ -251,7 +251,7 @@ impl Builder<'_> {
                 NoteSource::Inline(r) => Span::of(r),
             };
             let inside = blank.is_some_and(|b| at.start >= b.start && at.end <= b.end);
-            if inside && !outside && !self.table.outside_notes.contains(&i) {
+            if inside && !outside && !self.previous().outside_notes.contains(&i) {
                 let was = std::mem::replace(&mut self.in_blank, true);
                 self.note(i, &source);
                 self.in_blank = was;

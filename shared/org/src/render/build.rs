@@ -87,8 +87,13 @@ pub(crate) struct Builder<'a> {
     pub mode: Mode,
     cx: Rc<DocCx<'a>>,
     pub ids: Ids,
-    /// The previous pass's anchors (empty in the first pass).
-    pub table: Table,
+    /// The previous pass's anchors (empty in the first pass); read only
+    /// through [`Builder::previous`].
+    table: Table,
+    /// Whether this pass has read [`Builder::table`]. A first pass that
+    /// never did built what a second would: nothing else differs between
+    /// them.
+    consulted: std::cell::Cell<bool>,
     /// This pass's anchors.
     pub found: Table,
     pub notes: Notes,
@@ -140,6 +145,18 @@ pub(crate) struct Builder<'a> {
 thread_local! {
     /// Walks of a whole document by a builder (every pass of every page).
     pub(crate) static RUNS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Every page built in two passes, read or not: what the skip is
+    /// checked against.
+    pub(crate) static TWO_PASSES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether a first pass that read no anchors stands as the page.
+fn one_pass_suffices(first: &Builder) -> bool {
+    #[cfg(test)]
+    if TWO_PASSES.with(std::cell::Cell::get) {
+        return false;
+    }
+    !first.consulted.get()
 }
 
 /// Builds the page of an already-read document in `mode` (two passes).
@@ -154,7 +171,15 @@ pub(crate) fn page_with<'a>(
     let root = doc.syntax();
     let mut first = Builder::with_cx(cx.clone(), opts, resolver, mode, Table::default());
     first.scope = scope;
-    first.run(&root);
+    let body = first.run(&root);
+    if one_pass_suffices(&first) {
+        // The second pass would read nothing either: the same page.
+        return Page {
+            body,
+            table: first.found,
+            diagnostics: first.diagnostics,
+        };
+    }
     let mut second = Builder::with_cx(cx, opts, resolver, mode, first.found);
     second.scope = scope;
     let body = second.run(&root);
@@ -227,6 +252,13 @@ impl<'a> Builder<'a> {
         Builder::with_cx(DocCx::new(doc, sem), opts, resolver, mode, table)
     }
 
+    /// The previous pass's anchors, for a link or note that lands on one;
+    /// every read is recorded (see [`Builder::consulted`]).
+    pub fn previous(&self) -> &Table {
+        self.consulted.set(true);
+        &self.table
+    }
+
     /// A builder over an already-read document (see [`DocCx`]).
     pub fn with_cx(
         cx: Rc<DocCx<'a>>,
@@ -241,6 +273,7 @@ impl<'a> Builder<'a> {
             mode,
             ids: Ids::default(),
             table,
+            consulted: std::cell::Cell::new(false),
             found: Table::default(),
             notes: Notes::with_defs(cx.note_defs.clone()),
             citations: Default::default(),
@@ -707,13 +740,18 @@ pub(crate) fn rendering_outside(
         };
         let mut first = Builder::with_cx(cx.clone(), &opts, resolver, Mode::Page, Table::default());
         first.blank = Some(body);
-        first.run(&root);
-        let mut second = Builder::with_cx(cx.clone(), &opts, resolver, Mode::Page, first.found);
-        second.blank = Some(body);
-        let body = second.run(&root);
-        let (nodes, _) = super::meta::nodes(p, cx.clone(), sem, &opts, resolver, &second.found);
+        let once = first.run(&root);
+        // As `page_with`: a first pass that read no anchors is the page.
+        let (built, found) = if one_pass_suffices(&first) {
+            (once, first.found)
+        } else {
+            let mut second = Builder::with_cx(cx.clone(), &opts, resolver, Mode::Page, first.found);
+            second.blank = Some(body);
+            (second.run(&root), second.found)
+        };
+        let (nodes, _) = super::meta::nodes(p, cx.clone(), sem, &opts, resolver, &found);
         let rendered = super::Rendered {
-            body,
+            body: built,
             nodes,
             diagnostics: Vec::new(),
         };
@@ -781,4 +819,121 @@ pub(crate) fn trim_eol(s: &str, eol: LineEnding) -> &str {
         s = r;
     }
     s
+}
+
+#[cfg(test)]
+mod pass_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn forced<R>(f: impl FnOnce() -> R) -> R {
+        TWO_PASSES.with(|t| t.set(true));
+        let r = f();
+        TWO_PASSES.with(|t| t.set(false));
+        r
+    }
+
+    /// A note defined and referenced only in the blanked body, but also
+    /// referenced from a note outside it that the footnotes loop reaches
+    /// later: only the previous pass knows it is referenced outside, so the
+    /// edit check must run both (and does: reading that is recorded).
+    #[test]
+    fn a_note_referenced_late_from_outside_gets_the_second_pass() {
+        let text = "* A\nx[fn:1]\n\n[fn:1] d1\n\n* B\ny[fn:2]\n\n[fn:2] d2 [fn:1]\n";
+        let doc = crate::parse(text, &Default::default());
+        let sem = crate::semantics(&doc);
+        let p = super::super::prepared::prepare(&doc, &sem);
+        let start = text.find("x[fn:1]").unwrap();
+        let body = Span::new(start, text.find("* B").unwrap());
+        let r = Resolver::default();
+        RUNS.with(|c| c.set(0));
+        let skip = rendering_outside(&p, &sem, &r, body);
+        assert_eq!(RUNS.with(std::cell::Cell::get), 4, "two passes per id mode");
+        let both = forced(|| rendering_outside(&p, &sem, &r, body));
+        assert_eq!(skip, both);
+        assert!(skip.contains("d1"), "the note shown outside: {skip}");
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(3000))]
+
+        /// A page and the edit check's rendering are the same with the
+        /// second pass skipped where the first read no anchor as with both
+        /// passes always run, over documents dense in what reads anchors:
+        /// links to headings and custom ids before and after them, targets,
+        /// radio targets, notes defined and referenced in and out of the
+        /// blanked body, ids, and in every mode of the edit check.
+        #[test]
+        fn skipping_an_unread_second_pass_changes_nothing(
+            parts in proptest::collection::vec(
+                "(\\* A\n|\\* B :t:\n|\\*\\* C\n|x |\\[\\[\\*A\\]\\] |\\[\\[\\*B\\]\\] |\\[\\[#c\\]\\] |\\[\\[t\\]\\] |<<t>> |<<<r>>> |r |\\[fn:1\\] |\\[fn:2\\] |\\[fn::i\\] |\n\\[fn:1\\] d1\n|\n\\[fn:2\\] d2 \\[fn:1\\]\n|:PROPERTIES:\n:CUSTOM_ID: c\n:END:\n|:PROPERTIES:\n:ID: n\n:END:\n|\\[\\[id:n\\]\\] |\n)",
+                0..24,
+            ),
+            cut in (0usize..400, 0usize..400),
+        ) {
+            let text: String = parts.concat();
+            let doc = crate::parse(&text, &Default::default());
+            let sem = crate::semantics(&doc);
+            let opts = RenderOptions::default();
+            let r = Resolver::default();
+            let skip = super::super::render(&doc, &sem, &opts, &r);
+            let both = forced(|| super::super::render(&doc, &sem, &opts, &r));
+            prop_assert_eq!(&skip, &both, "{:?}", text);
+            let p = super::super::prepared::prepare(&doc, &sem);
+            if p.failed.is_none() {
+                let n = text.len().max(1);
+                let (a, b) = (cut.0 % n, cut.1 % n);
+                let (a, b) = (a.min(b), a.max(b));
+                // The alphabet is ASCII: every offset is a char boundary.
+                let body = Span::new(a, b);
+                let skip = rendering_outside(&p, &sem, &r, body);
+                let both = forced(|| rendering_outside(&p, &sem, &r, body));
+                prop_assert_eq!(skip, both, "{:?} {:?}", text, body);
+            }
+        }
+    }
+
+    /// Walks of the document by one `render` of `text`, and its HTML.
+    fn render_walks(text: &str) -> (u64, String) {
+        let doc = crate::parse(text, &Default::default());
+        let sem = crate::semantics(&doc);
+        RUNS.with(|r| r.set(0));
+        let html =
+            super::super::render_html(&doc, &sem, &RenderOptions::default(), &Resolver::default());
+        (RUNS.with(std::cell::Cell::get), html)
+    }
+
+    /// A page whose first pass looks up no anchor is that pass: walked
+    /// once (notes number themselves in one pass outside an edit check).
+    #[test]
+    fn a_page_that_reads_no_anchor_is_walked_once() {
+        for text in [
+            "* A\ntext [[file:x.org][f]] *b*\n* B\nmore\n",
+            "* A\nnote[fn:1]\n* Footnotes\n[fn:1] the note\n",
+        ] {
+            let (walks, html) = render_walks(text);
+            assert_eq!(walks, 1, "{text:?}: {html}");
+        }
+    }
+
+    /// A link to a heading further down is resolved by the second pass
+    /// (the first has not reached the heading), so both run and the link
+    /// lands on the heading's id; a backward link runs both too.
+    #[test]
+    fn a_page_that_reads_anchors_gets_its_second_pass() {
+        for text in [
+            "* A\nsee [[*Later]]\n* Later\nx\n",
+            "* Later\nx\n* A\nsee [[*Later]]\n",
+        ] {
+            let (walks, html) = render_walks(text);
+            assert_eq!(walks, 2, "{text:?}: {html}");
+        }
+        let (_, html) = render_walks("* A\nsee [[*Later]]\n* Later\nx\n");
+        let id = html
+            .split("<h1 id=\"")
+            .nth(2)
+            .and_then(|s| s.split('"').next())
+            .expect("the second heading's id");
+        assert!(html.contains(&format!("href=\"#{id}\"")), "{html}");
+    }
 }
