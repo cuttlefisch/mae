@@ -289,13 +289,12 @@ fn without_comment_trees(doc: &Document, source: &str) -> (String, Map) {
     let mut text = String::with_capacity(source.len());
     let mut pieces = Vec::new();
     let mut at = 0;
-    let mut walk = doc.syntax().preorder();
-    while let Some(ev) = walk.next() {
-        let rowan::WalkEvent::Enter(n) = ev else {
+    for n in crate::views::headline_nodes(&doc.syntax()) {
+        // A headline inside a COMMENT subtree already gone goes with it.
+        if usize::from(n.text_range().start()) < at {
             continue;
-        };
+        }
         if crate::Headline::cast(n.clone()).is_some_and(|h| h.is_commented()) {
-            walk.skip_subtree();
             let (a, b) = (
                 usize::from(n.text_range().start()),
                 usize::from(n.text_range().end()),
@@ -713,5 +712,57 @@ mod tests {
         assert_eq!(m2.to_source(Span::new(4, 6)), Span::new(9, 11));
         assert_eq!(m2.to_source(Span::new(2, 4)), Span::new(2, 9));
         assert_eq!(m2.to_expanded(Span::new(9, 11)), Span::new(4, 6));
+    }
+}
+
+#[cfg(test)]
+mod comment_tree_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// The definition the headline walk replaces: every node visited, a
+    /// COMMENT subtree skipped whole.
+    fn by_preorder(doc: &Document, source: &str) -> (String, Map) {
+        let mut text = String::with_capacity(source.len());
+        let mut pieces = Vec::new();
+        let mut at = 0;
+        let mut walk = doc.syntax().preorder();
+        while let Some(ev) = walk.next() {
+            let rowan::WalkEvent::Enter(n) = ev else {
+                continue;
+            };
+            if crate::Headline::cast(n.clone()).is_some_and(|h| h.is_commented()) {
+                walk.skip_subtree();
+                let (a, b) = (
+                    usize::from(n.text_range().start()),
+                    usize::from(n.text_range().end()),
+                );
+                text.push_str(&source[at..a]);
+                pieces.push(Piece {
+                    src: (a, b),
+                    out: (text.len(), text.len()),
+                });
+                at = b;
+            }
+        }
+        text.push_str(&source[at..]);
+        (text, Map { pieces })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(3000))]
+
+        /// COMMENT subtrees at every level, nested in each other and in
+        /// plain headlines, come out as the full walk takes them.
+        #[test]
+        fn comment_trees_go_as_the_full_walk_takes_them(
+            text in "(\\* |\\*\\* |\\*\\*\\* |COMMENT |x |\\n|- i\\n|:PROPERTIES:\\n:ID: a\\n:END:\\n){0,30}"
+        ) {
+            let doc = crate::parse(&text, &Default::default());
+            prop_assert_eq!(
+                without_comment_trees(&doc, &text),
+                by_preorder(&doc, &text)
+            );
+        }
     }
 }

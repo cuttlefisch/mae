@@ -17,7 +17,7 @@
 //! ([`NeedsFull`]) instead of answering: the caller then parses the whole
 //! text again.
 
-use crate::kind::{SyntaxElement, SyntaxKind, SyntaxKind::*, SyntaxNode};
+use crate::kind::{SyntaxKind, SyntaxKind::*, SyntaxNode};
 use crate::views::{Headline, Keyword};
 use crate::{parse_fragment, DiagnosticKind, Document, FragmentContext, ParseOptions};
 
@@ -98,8 +98,10 @@ fn is_plain(kind: SyntaxKind) -> bool {
     matches!(kind, BOM | NEWLINE | WHITESPACE | BLANK_LINE | TEXT)
 }
 
-/// `e`'s range as a highlight, moved by `shift` (added), unless it is plain.
-fn highlight(e: &SyntaxElement, shift: u32) -> Option<Highlight> {
+/// `e`'s range as a highlight, moved by `shift` (added), unless it is plain:
+/// the definition [`spans_of`] computes for a whole tree at once.
+#[cfg(test)]
+fn highlight(e: &crate::kind::SyntaxElement, shift: u32) -> Option<Highlight> {
     if is_plain(e.kind()) {
         return None;
     }
@@ -114,11 +116,51 @@ fn highlight(e: &SyntaxElement, shift: u32) -> Option<Highlight> {
 /// Every node and structural token of `doc`, its root excepted, in
 /// document order.
 pub fn highlights(doc: &Document) -> Vec<Highlight> {
-    doc.syntax()
-        .descendants_with_tokens()
-        .skip(1)
-        .filter_map(|e| highlight(&e, 0))
-        .collect()
+    spans_of(&doc.syntax(), 0)
+}
+
+/// Every element under `root` (itself excepted) as a highlight, unless it
+/// is plain, moved by `shift`, in document order: what
+/// `descendants_with_tokens().skip(1)` with [`highlight`] gives, read from
+/// the green tree with a running offset rather than through a cursor
+/// (an allocation) per node and token.
+fn spans_of(root: &SyntaxNode, shift: u32) -> Vec<Highlight> {
+    let kind = |raw: rowan::SyntaxKind| <crate::OrgLanguage as rowan::Language>::kind_from_raw(raw);
+    let mut out = Vec::new();
+    let mut at = u32::from(root.text_range().start()) + shift;
+    let mut stack = vec![root.green().children()];
+    while let Some(top) = stack.last_mut() {
+        match top.next() {
+            Some(rowan::NodeOrToken::Node(g)) => {
+                let len = u32::from(g.text_len());
+                let k = kind(g.kind());
+                if !is_plain(k) {
+                    out.push(Highlight {
+                        kind: k,
+                        start: at,
+                        end: at + len,
+                    });
+                }
+                stack.push(g.children());
+            }
+            Some(rowan::NodeOrToken::Token(t)) => {
+                let len = u32::from(t.text_len());
+                let k = kind(t.kind());
+                if !is_plain(k) {
+                    out.push(Highlight {
+                        kind: k,
+                        start: at,
+                        end: at + len,
+                    });
+                }
+                at += len;
+            }
+            None => {
+                stack.pop();
+            }
+        }
+    }
+    out
 }
 
 /// Where `h`'s own section starts: after the line ending of its line.
@@ -149,9 +191,9 @@ pub fn sections(doc: &Document) -> Vec<Section> {
         .map_or(len, |h| h.text_range().start().into());
     // The few nodes that declare something, found once: a walk per
     // section would be quadratic in the headlines.
-    let decls: Vec<SyntaxNode> = root.descendants().filter(declares).collect();
+    let decls: Vec<SyntaxNode> = declaration_nodes(doc);
     let mut out = vec![section(doc, &decls, None, (0, first), len)];
-    for h in root.descendants().filter(|n| n.kind() == HEADLINE) {
+    for h in crate::views::headline_nodes(&root) {
         if let Some(start) = body_start(&h) {
             let headline = Headline::cast(h.clone());
             out.push(section(
@@ -197,6 +239,26 @@ fn fingerprint(nodes: impl Iterator<Item = SyntaxNode>) -> u32 {
         }
     }
     h
+}
+
+/// The nodes of `doc` that [`declares`] holds, in document order. A TODO
+/// keyword is an element, so objects are walked only when the document
+/// has a radio target among them.
+fn declaration_nodes(doc: &Document) -> Vec<SyntaxNode> {
+    let root = doc.syntax();
+    if doc.has_kind(RADIO_TARGET) {
+        return root.descendants().filter(declares).collect();
+    }
+    let mut out = Vec::new();
+    let mut walk = root.preorder();
+    while let Some(ev) = walk.next() {
+        match ev {
+            rowan::WalkEvent::Enter(n) if n.kind().is_object() => walk.skip_subtree(),
+            rowan::WalkEvent::Enter(n) if declares(&n) => out.push(n),
+            _ => {}
+        }
+    }
+    out
 }
 
 fn declares(n: &SyntaxNode) -> bool {
@@ -249,10 +311,83 @@ pub fn section_highlights(
     if fingerprint(root.descendants()) != section.declarations {
         return SectionHighlights::NeedsFull(NeedsFull::Declarations);
     }
-    let spans = root
-        .descendants_with_tokens()
-        .skip(1)
-        .filter_map(|e| highlight(&e, section.start))
-        .collect();
-    SectionHighlights::Spans(spans)
+    SectionHighlights::Spans(spans_of(&root, section.start))
+}
+
+#[cfg(test)]
+mod span_walk_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn by_cursor(root: &SyntaxNode, shift: u32) -> Vec<Highlight> {
+        root.descendants_with_tokens()
+            .skip(1)
+            .filter_map(|e| highlight(&e, shift))
+            .collect()
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2000))]
+
+        /// The green walk gives every element the cursor walk does, with
+        /// the same kind and range, in the same order, at any shift.
+        #[test]
+        fn the_span_walk_is_the_cursor_walk(
+            text in "(\u{feff}|\\* |\\*\\* T |x|é|[ \t]|\n|\r\n|\\[\\[a\\]\\[\\*b\\*\\]\\]|=v= |\\| c \\| d \\|\n|:PROPERTIES:\n:ID: a\n:END:\n|#\\+begin_src\n|#\\+end_src\n|- i\n|<<t>>|\\[fn:1\\]){0,30}",
+            shift in 0u32..1000,
+        ) {
+            let doc = crate::parse(&text, &Default::default());
+            let root = doc.syntax();
+            prop_assert_eq!(spans_of(&root, shift), by_cursor(&root, shift));
+        }
+    }
+
+    /// The pruned walks find what full walks do, on every corpus file:
+    /// every headline, and every declaring node.
+    #[test]
+    fn pruned_walks_find_what_full_walks_do_on_the_corpus() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let list = std::fs::read_to_string(dir.join("conformance/corpus.txt")).unwrap();
+        let (mut heads, mut decls) = (0, 0);
+        for rel in list
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        {
+            let text = std::fs::read_to_string(dir.join("../..").join(rel)).unwrap();
+            for text in [text.clone(), format!("#+TODO: A | B\n{text}")] {
+                let doc = crate::parse(&text, &Default::default());
+                let root = doc.syntax();
+                let all: Vec<_> = root
+                    .descendants()
+                    .filter(|n| n.kind() == HEADLINE)
+                    .collect();
+                assert_eq!(crate::views::headline_nodes(&root), all, "{rel}");
+                let d: Vec<_> = root.descendants().filter(declares).collect();
+                assert_eq!(declaration_nodes(&doc), d, "{rel}");
+                heads += all.len();
+                decls += d.len();
+            }
+        }
+        assert!(heads > 500 && decls > 100, "{heads} {decls}");
+    }
+
+    /// And on every file of the conformance corpus.
+    #[test]
+    fn the_span_walk_is_the_cursor_walk_on_the_corpus() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let list = std::fs::read_to_string(dir.join("conformance/corpus.txt")).unwrap();
+        let mut n = 0;
+        for rel in list
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        {
+            let text = std::fs::read_to_string(dir.join("../..").join(rel)).unwrap();
+            let doc = crate::parse(&text, &Default::default());
+            assert_eq!(highlights(&doc), by_cursor(&doc.syntax(), 0), "{rel}");
+            n += 1;
+        }
+        assert!(n > 100, "{n}");
+    }
 }

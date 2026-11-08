@@ -17,7 +17,8 @@
 //! on node ID with BODYFILE's text and prints every channel that changed.
 //! `sem` prints the semantics (its `Debug`).
 //! `rtime` times parse, semantics and render (min and median of N runs).
-//! `loop` runs one PHASE (parse, semantics, render or highlights) N times and
+//! `loop` runs one PHASE (parse, semantics, render, highlights or sections)
+//! N times and
 //! nothing else, so a sampling profiler sees that phase alone.
 //! `conformance/cmp.sh` puts `grep` beside Emacs's export.
 
@@ -199,6 +200,7 @@ fn phase_loop(text: &str, phase: &str, n: usize) -> Result<String, String> {
             "semantics" => drop(std::hint::black_box(semantics(&doc))),
             "render" => drop(std::hint::black_box(mae_org::render(&doc, &sem, &ro, &rs))),
             "highlights" => drop(std::hint::black_box(mae_org::highlights(&doc))),
+            "sections" => drop(std::hint::black_box(mae_org::sections(&doc))),
             _ => return Err(format!("unknown phase {phase}\n{USAGE}")),
         }
     }
