@@ -47,6 +47,10 @@ mod wal;
 pub struct CozoKbStore {
     db: DbInstance,
     path: PathBuf,
+    /// Checkpoints the WAL of a sqlite store, which cozo never does (see
+    /// `wal::Checkpointer`). `None` for an in-memory or sled store.
+    #[cfg(feature = "storage-sqlite")]
+    checkpointer: Option<wal::Checkpointer>,
 }
 
 impl std::fmt::Debug for CozoKbStore {

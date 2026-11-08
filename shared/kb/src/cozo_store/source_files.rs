@@ -37,6 +37,14 @@ impl CozoKbStore {
     ) -> Result<(), KbStoreError> {
         let prev_ids = self.get_source_file_node_ids(file_path)?;
         for old_id in prev_ids.iter().filter(|id| !node_ids.contains(id)) {
+            // An id another tracked file now claims has MOVED, not gone: a
+            // node split out into a new file that the walk reached first.
+            // Deleting it here removed a node that is still on disk (until the
+            // next full pass re-parsed its new file). If that claimant is
+            // itself a deleted file, the vanished-file sweep removes the node.
+            if self.claimed_by_another_file(old_id, file_path)? {
+                continue;
+            }
             self.delete_node(old_id)?;
         }
         let node_ids_json =
@@ -59,6 +67,22 @@ impl CozoKbStore {
         )
         .map_err(cozo_err)?;
         Ok(())
+    }
+    /// Whether a tracked source file other than `except` lists `id` among the
+    /// nodes it produced.
+    fn claimed_by_another_file(&self, id: &str, except: &str) -> Result<bool, KbStoreError> {
+        // `node_ids_json` is a JSON array of strings, so the id's own JSON
+        // encoding (quotes included) matches only a whole element.
+        let needle = serde_json::to_string(id).map_err(|e| KbStoreError::Storage(e.to_string()))?;
+        let result = self
+            .run_immut_params(
+                r#"?[fp] := *source_files{file_path: fp, node_ids_json},
+                            fp != $except, str_includes(node_ids_json, $needle)
+                   :limit 1"#,
+                btree_params([("except", dv_str(except)), ("needle", dv_str(&needle))]),
+            )
+            .map_err(cozo_err)?;
+        Ok(!result.rows.is_empty())
     }
     /// Get a source file's stored content hash (for change detection).
     pub fn get_source_file_hash(&self, file_path: &str) -> Result<Option<String>, KbStoreError> {
