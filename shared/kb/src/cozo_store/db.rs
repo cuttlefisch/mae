@@ -231,10 +231,12 @@ impl CozoKbStore {
     }
     /// Run a mutable CozoScript, retrying on SQLite BUSY/locked contention.
     pub(super) fn run_mut(&self, script: &str) -> Result<NamedRows, cozo::Error> {
-        self.run_with_busy_retry(|| {
+        let out = self.run_with_busy_retry(|| {
             self.db
                 .run_script(script, BTreeMap::new(), ScriptMutability::Mutable)
-        })
+        });
+        self.after_write();
+        out
     }
     /// Run a mutable CozoScript with parameters, retrying on BUSY/locked contention.
     pub(super) fn run_mut_params(
@@ -242,10 +244,36 @@ impl CozoKbStore {
         script: &str,
         params: BTreeMap<String, DataValue>,
     ) -> Result<NamedRows, cozo::Error> {
-        self.run_with_busy_retry(|| {
+        let out = self.run_with_busy_retry(|| {
             self.db
                 .run_script(script, params.clone(), ScriptMutability::Mutable)
-        })
+        });
+        self.after_write();
+        out
+    }
+    /// Every mutating script ends here, after cozo's transaction has closed:
+    /// count it toward the store's next explicit checkpoint (see
+    /// `wal::Checkpointer` for why cozo's own never happen). Counted even when
+    /// the script failed, since it may have committed part of its work first.
+    fn after_write(&self) {
+        #[cfg(feature = "storage-sqlite")]
+        if let Some(c) = &self.checkpointer {
+            c.note_write();
+        }
+    }
+    /// Fold the WAL back into the database now (a PASSIVE checkpoint from
+    /// MAE's own connection; never blocks). Returns `(busy, wal_frames,
+    /// checkpointed_frames)`, or `None` for a store with no WAL to checkpoint
+    /// (in-memory, sled) or when it could not run.
+    ///
+    /// Stores checkpoint themselves every few dozen writes; call this after a
+    /// bulk write, or from a maintenance pass.
+    pub fn checkpoint(&self) -> Option<(i64, i64, i64)> {
+        #[cfg(feature = "storage-sqlite")]
+        if let Some(c) = &self.checkpointer {
+            return c.checkpoint();
+        }
+        None
     }
     /// Retry a cozo op on SQLite BUSY / "database is locked" contention.
     ///

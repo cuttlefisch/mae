@@ -214,7 +214,14 @@ impl CozoKbStore {
         })?
         .map_err(|e| KbStoreError::Storage(format!("CozoDB open ({engine}) failed: {e}")))?;
 
-        let store = Self { db, path };
+        #[cfg(feature = "storage-sqlite")]
+        let checkpointer = (engine == "sqlite").then(|| super::wal::Checkpointer::new(&path));
+        let store = Self {
+            db,
+            path,
+            #[cfg(feature = "storage-sqlite")]
+            checkpointer,
+        };
         store.ensure_schema()?;
         Ok(store)
     }
@@ -225,6 +232,8 @@ impl CozoKbStore {
         let store = Self {
             db,
             path: PathBuf::from(":memory:"),
+            #[cfg(feature = "storage-sqlite")]
+            checkpointer: None,
         };
         store.ensure_schema()?;
         Ok(store)

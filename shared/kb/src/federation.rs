@@ -1305,7 +1305,18 @@ pub enum IngestMode {
     #[default]
     Full,
     /// Only re-parse files whose content hash has changed since last import.
+    /// Never removes anything: a deleted file's nodes stay.
     Incremental,
+    /// Re-parse only the files whose content changed, and remove the nodes of
+    /// files that are gone: what `Full` would produce for a store `Full` last
+    /// brought up to date, at an incremental pass's cost. Not a substitute for
+    /// `Full` after the ingest logic itself changes (an unchanged file is not
+    /// re-derived — see the note above), which is why the daemon's watcher runs
+    /// `Full` first and this after. An id declared by more than one file (an
+    /// error every import reports in `duplicate_ids`) can resolve differently,
+    /// as it does between two `Full` passes: which file wins depends on walk
+    /// order.
+    Sync,
 }
 
 impl IngestMode {
@@ -1558,6 +1569,7 @@ fn unchanged_fast_path(
     file_path_str: &str,
     content_hash: &str,
     report: &mut ImportReport,
+    seen_ids: Option<&mut std::collections::HashSet<String>>,
 ) -> bool {
     use crate::store::KbStore as _;
     let Ok(Some(stored_hash)) = store.get_source_file_hash(file_path_str) else {
@@ -1573,6 +1585,12 @@ fn unchanged_fast_path(
                 kb.insert(node);
             }
         }
+        // `Sync` removes vanished files' nodes afterwards, sparing every id it
+        // saw this pass; an unchanged file's ids are still on disk, so they
+        // count as seen (a node that moved into it from a deleted file stays).
+        if let Some(seen) = seen_ids {
+            seen.extend(node_ids);
+        }
     }
     report.nodes_unchanged += 1;
     true
@@ -1586,7 +1604,7 @@ fn refuse_full_ingest_of_missing_dir(
     org_dir: &Path,
     mode: &IngestMode,
 ) -> Result<(), KbStoreError> {
-    if matches!(mode, IngestMode::Full) && !org_dir.is_dir() {
+    if matches!(mode, IngestMode::Full | IngestMode::Sync) && !org_dir.is_dir() {
         return Err(KbStoreError::NotFound(format!(
             "org directory {} does not exist — refusing a full ingest that would \
              delete every node it tracks",
@@ -1673,8 +1691,15 @@ pub fn import_org_dir_to_store(
         let content_hash = source_content_hash(&content);
 
         // In incremental mode, skip files whose content hasn't changed.
-        if matches!(mode, IngestMode::Incremental)
-            && unchanged_fast_path(store, &mut kb, &file_path_str, &content_hash, &mut report)
+        if matches!(mode, IngestMode::Incremental | IngestMode::Sync)
+            && unchanged_fast_path(
+                store,
+                &mut kb,
+                &file_path_str,
+                &content_hash,
+                &mut report,
+                matches!(mode, IngestMode::Sync).then_some(&mut seen_ids),
+            )
         {
             accounted.push(path.to_path_buf());
             continue;
@@ -1767,9 +1792,12 @@ pub fn import_org_dir_to_store(
         report.path_to_ids.push((path.to_path_buf(), file_node_ids));
     }
 
-    if matches!(mode, IngestMode::Full) {
+    if matches!(mode, IngestMode::Full | IngestMode::Sync) {
         report.nodes_removed += remove_vanished_files(store, &visited_files, &seen_ids);
     }
+    // A bulk write: fold the WAL back now rather than at the store's next
+    // periodic checkpoint (see `CozoKbStore::checkpoint`).
+    let _ = store.checkpoint();
 
     reconcile_census(&mut report, census, &skipped_paths);
 
@@ -2811,6 +2839,10 @@ mod path_tests;
 #[cfg(test)]
 #[path = "federation_durability_tests.rs"]
 mod durability_tests;
+
+#[cfg(test)]
+#[path = "federation_sync_tests.rs"]
+mod sync_tests;
 
 #[cfg(test)]
 mod import_census_tests {

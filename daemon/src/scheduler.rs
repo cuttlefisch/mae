@@ -21,6 +21,12 @@ pub struct DaemonScheduler {
     /// registered and torn down when they're unregistered — `run()` only
     /// borrows `&self`, hence the `Mutex` for interior mutability.
     watchers: Arc<Mutex<HashMap<String, mae_kb::watch::OrgDirWatcher>>>,
+    /// Instances this process has fully reimported once. Their later changes
+    /// are reimported with `IngestMode::Sync` (only changed files parsed,
+    /// vanished files' nodes removed) instead of `Full` (every file re-derived
+    /// and rewritten). The first stays `Full` so a daemon running newer ingest
+    /// logic re-derives what older logic stored (#323).
+    fully_ingested: Arc<Mutex<std::collections::HashSet<String>>>,
     /// Last-seen mtime of `kb-registry.toml`, so the reload is one `stat` in
     /// the common case rather than a TOML parse every tick.
     registry_mtime: Arc<Mutex<Option<std::time::SystemTime>>>,
@@ -73,6 +79,7 @@ impl DaemonScheduler {
             state: Arc::new(Mutex::new(SchedulerState::default())),
             daemon_state,
             watchers: Arc::new(Mutex::new(HashMap::new())),
+            fully_ingested: Arc::new(Mutex::new(std::collections::HashSet::new())),
             registry_mtime: Arc::new(Mutex::new(None)),
         }
     }
@@ -201,6 +208,8 @@ impl DaemonScheduler {
         let live_uuids: std::collections::HashSet<&str> =
             targets.iter().map(|(u, _, _)| u.as_str()).collect();
         watchers.retain(|uuid, _| live_uuids.contains(uuid.as_str()));
+        let mut fully_ingested = self.fully_ingested.lock().await;
+        fully_ingested.retain(|uuid| live_uuids.contains(uuid.as_str()));
 
         for (uuid, org_dir, store) in &targets {
             if !watchers.contains_key(uuid) {
@@ -233,27 +242,33 @@ impl DaemonScheduler {
             );
             let org_dir = org_dir.clone();
             let store = Arc::clone(store);
+            let mode = reimport_mode(&fully_ingested, uuid);
+            let was_full = matches!(mode, mae_kb::federation::IngestMode::Full);
             // Off the async executor (ADR-054) — a synchronous whole-directory
             // reimport left inline here would starve every connection's I/O
             // sharing this worker thread for the reimport's duration.
             //
-            // Idempotent by construction: `IngestMode::Full` re-derives every
-            // node from current file content and upserts by id (deleted files'
-            // nodes are removed too), so a kill mid-reimport followed by a
-            // restart-and-retry naturally converges to the same end state —
-            // there is no partial-write state that needs explicit reconciling.
+            // Idempotent by construction: both modes re-derive nodes from
+            // current file content and upsert by id (deleted files' nodes are
+            // removed too), so a kill mid-reimport followed by a restart-and-retry
+            // converges to the same end state — a restart begins with `Full`.
             let result = tokio::task::spawn_blocking(move || {
-                mae_kb::federation::import_org_dir_to_store(
-                    &org_dir,
-                    &store,
-                    &mae_kb::federation::IngestMode::Full,
-                )
+                mae_kb::federation::import_org_dir_to_store(&org_dir, &store, &mode)
             })
             .await;
             match result {
                 Ok(Ok((_kb, report))) => {
+                    if was_full {
+                        fully_ingested.insert(uuid.clone());
+                    }
+                    // The watcher reports a deleted file by the ids it held, and
+                    // knows them only from here: unseeded, a deletion arrived as
+                    // no change at all and its nodes stayed until some unrelated
+                    // edit triggered a reimport.
+                    watcher.seed(report.path_to_ids.iter().cloned());
                     tracing::info!(
                         uuid,
+                        full = was_full,
                         imported = report.nodes_imported,
                         updated = report.nodes_updated,
                         removed = report.nodes_removed,
@@ -310,10 +325,7 @@ impl DaemonScheduler {
             let store = Arc::clone(store);
             // Off the async executor (ADR-054) — same rationale as the
             // hygiene/watcher ticks above.
-            let result = tokio::task::spawn_blocking(move || {
-                crate::maintenance::run_maintenance_scan(&store)
-            })
-            .await;
+            let result = tokio::task::spawn_blocking(move || scan_and_checkpoint(&store)).await;
             match result {
                 Ok(result) => {
                     if !result.integrity_failures.is_empty() {
@@ -479,6 +491,33 @@ impl DaemonScheduler {
 ///
 /// A dir-less instance (every joined collab KB) has no org directory to watch,
 /// and a disabled one is not loaded at all.
+/// One store's maintenance pass, then a WAL checkpoint. Stores checkpoint
+/// themselves as they write; this folds in whatever a quiet store was left
+/// holding (see `CozoKbStore::checkpoint`).
+fn scan_and_checkpoint(store: &Arc<CozoKbStore>) -> crate::maintenance::MaintenanceResult {
+    let scan = crate::maintenance::run_maintenance_scan(store);
+    let _ = store.checkpoint();
+    scan
+}
+
+/// The ingest mode for an instance's next watcher reimport.
+///
+/// @ai-caution: [storage] `Full` on every change rewrote every node of the KB
+/// (unchanged ones too) for each edit in its directory: a 7,500-node KB wrote
+/// ~105 MB per commit. The first reimport per instance in this process is
+/// `Full` (#323: re-derive what older ingest logic stored); after that, `Sync`
+/// parses only what changed and still removes vanished files' nodes.
+fn reimport_mode(
+    fully_ingested: &std::collections::HashSet<String>,
+    uuid: &str,
+) -> mae_kb::federation::IngestMode {
+    if fully_ingested.contains(uuid) {
+        mae_kb::federation::IngestMode::Sync
+    } else {
+        mae_kb::federation::IngestMode::Full
+    }
+}
+
 pub(crate) fn is_watcher_ingest_target(inst: &mae_kb::federation::KbInstance) -> bool {
     inst.enabled && !inst.org_dir.as_os_str().is_empty() && inst.allows_ingest()
 }
@@ -487,9 +526,22 @@ pub(crate) fn is_watcher_ingest_target(inst: &mae_kb::federation::KbInstance) ->
 mod tests {
     use super::*;
 
+    /// A config whose data dir is a fresh temp dir. The watcher tick reloads
+    /// `kb-registry.toml` from the data dir, and the default resolves to the
+    /// real XDG one: a test using it read the machine's actual KB registry,
+    /// one step from reimporting a real KB.
+    fn isolated_config() -> (DaemonConfig, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let config = DaemonConfig {
+            data_dir: Some(dir.path().to_path_buf()),
+            ..DaemonConfig::default()
+        };
+        (config, dir)
+    }
+
     #[tokio::test]
     async fn scheduler_starts_and_stops() {
-        let config = DaemonConfig::default();
+        let (config, _data) = isolated_config();
         let daemon_state = Arc::new(Mutex::new(DaemonState::new()));
         let scheduler = DaemonScheduler::new(config, daemon_state);
         let state = Arc::clone(&scheduler.state);
@@ -529,7 +581,7 @@ mod tests {
     /// stock 500ms default could ever produce.
     #[tokio::test]
     async fn scheduler_honors_the_config_it_is_constructed_with_not_a_default() {
-        let mut config = DaemonConfig::default();
+        let (mut config, _data) = isolated_config();
         assert_ne!(config.watcher_interval_ms, 20, "test needs a real override");
         config.watcher_interval_ms = 20;
         let daemon_state = Arc::new(Mutex::new(DaemonState::new()));
@@ -634,7 +686,7 @@ mod tests {
         // not org files). `run_watcher_tick` must handle this cleanly — no
         // panic, no spurious reimport attempt — not merely "eventually work
         // once instances exist".
-        let config = DaemonConfig::default();
+        let (config, _data) = isolated_config();
         let daemon_state = Arc::new(Mutex::new(DaemonState::new()));
         let scheduler = DaemonScheduler::new(config, daemon_state);
         let state = Arc::clone(&scheduler.state);
@@ -800,5 +852,123 @@ mod ingest_policy_tests {
             !is_watcher_ingest_target(&instance(IngestPolicy::FromOrgDir, "/tmp/org", false)),
             "a disabled instance is not loaded"
         );
+    }
+}
+
+/// The watcher tick against a real registered instance and real file events:
+/// the first reimport is `Full`, later ones `Sync`, and a deleted file takes
+/// its nodes with it (which needs the watcher seeded from the import).
+#[cfg(test)]
+mod watcher_reimport_tests {
+    use super::*;
+    use mae_kb::federation::{AiResidency, IngestPolicy, KbInstance, KbInstanceKind, KbRegistry};
+    use mae_kb::KbStore as _;
+
+    fn note(id: &str, body: &str) -> String {
+        format!(":PROPERTIES:\n:ID: {id}\n:END:\n#+title: {id}\n\n{body}\n")
+    }
+
+    /// Tick until `done` holds, or fail after a generous deadline: file events
+    /// arrive asynchronously, so the property is "eventually", checked often.
+    async fn tick_until(
+        s: &DaemonScheduler,
+        state: &Arc<Mutex<SchedulerState>>,
+        what: &str,
+        done: impl Fn() -> bool,
+    ) {
+        for _ in 0..200 {
+            s.run_watcher_tick(state).await;
+            if done() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!("timed out waiting for: {what}");
+    }
+
+    #[tokio::test]
+    async fn the_watcher_reimports_full_once_then_sync_and_a_deleted_file_takes_its_node() {
+        let data = tempfile::tempdir().unwrap();
+        let org = tempfile::tempdir().unwrap();
+        std::fs::write(org.path().join("a.org"), note("n:a", "v1")).unwrap();
+        std::fs::write(org.path().join("b.org"), note("n:b", "x")).unwrap();
+        let registry = KbRegistry {
+            instances: vec![KbInstance {
+                uuid: "u".into(),
+                name: "kb".into(),
+                org_dir: org.path().to_path_buf(),
+                db_path: data.path().join("kb.sqlite"),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: AiResidency::default(),
+                project_root: None,
+                project_key: None,
+                kind: KbInstanceKind::default(),
+                ingest_policy: IngestPolicy::FromOrgDir,
+                import_record: None,
+                priority: 0,
+                remote_hub: None,
+            }],
+            ..Default::default()
+        };
+        registry.save(data.path()).unwrap();
+        let store = Arc::new(CozoKbStore::open_mem().unwrap());
+        let mut ds = DaemonState::new();
+        ds.instance_stores.insert("u".into(), Arc::clone(&store));
+        let config = DaemonConfig {
+            data_dir: Some(data.path().to_path_buf()),
+            ..DaemonConfig::default()
+        };
+        let s = DaemonScheduler::new(config, Arc::new(Mutex::new(ds)));
+        let state = Arc::clone(&s.state);
+        s.run_watcher_tick(&state).await; // loads the registry, starts the watcher
+
+        std::fs::write(org.path().join("a.org"), note("n:a", "v2")).unwrap();
+        let body = |id: &str| store.get_node(id).unwrap().map(|n| n.body);
+        tick_until(&s, &state, "the edit to reach the store", || {
+            body("n:a").is_some_and(|b| b.contains("v2"))
+        })
+        .await;
+        assert!(
+            body("n:b").is_some(),
+            "the first (Full) pass ingests every file"
+        );
+        assert!(
+            s.fully_ingested.lock().await.contains("u"),
+            "later passes are Sync"
+        );
+
+        // A Sync pass leaves an unchanged file's node untouched; a Full one
+        // rewrites it (its stored `created_at` is re-stamped, whole seconds).
+        let stamp = |id: &str| {
+            store
+                .raw_query(&format!("?[c] := *nodes{{id: '{id}', created_at: c}}"))
+                .unwrap()
+                .1
+        };
+        let b_before = stamp("n:b");
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        std::fs::write(org.path().join("a.org"), note("n:a", "v3")).unwrap();
+        tick_until(&s, &state, "the second edit to reach the store", || {
+            body("n:a").is_some_and(|b| b.contains("v3"))
+        })
+        .await;
+        assert_eq!(
+            stamp("n:b"),
+            b_before,
+            "the second pass rewrote an unchanged file"
+        );
+
+        std::fs::remove_file(org.path().join("b.org")).unwrap();
+        tick_until(&s, &state, "the deleted file's node to go", || {
+            body("n:b").is_none()
+        })
+        .await;
+        assert!(body("n:a").is_some_and(|b| b.contains("v3")));
     }
 }
