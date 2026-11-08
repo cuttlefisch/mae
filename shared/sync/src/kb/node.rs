@@ -750,6 +750,71 @@ impl KbNodeDoc {
         hex::encode(hasher.finalize())
     }
 
+    /// A version marker for a reader: a digest of everything [`materialize`]
+    /// yields, so it changes iff something a reader of the node could see
+    /// changed (a third question, so a third hash: [`content_hash`] covers
+    /// only title, body and tags, and [`rebirth_hash`] is a rebirth's
+    /// signature). Not the state vector: a deletion does not advance it.
+    ///
+    /// Every field is length-prefixed, so no two different nodes share an
+    /// encoding; lists keep their order (a reader shows it); properties are
+    /// sorted by key (their stored order means nothing).
+    ///
+    /// [`materialize`]: Self::materialize
+    /// [`content_hash`]: Self::content_hash
+    /// [`rebirth_hash`]: Self::rebirth_hash
+    pub fn version(&self) -> String {
+        // No `..`: a field added to MaterializedNode must be added here too.
+        let MaterializedNode {
+            id,
+            title,
+            body,
+            tags,
+            links,
+            kind,
+            todo_state,
+            priority,
+            aliases,
+            properties,
+            source_version,
+            source,
+            created_at,
+        } = self.materialize();
+        let mut h = Sha256::new();
+        let mut put = |b: &[u8]| {
+            h.update((b.len() as u64).to_le_bytes());
+            h.update(b);
+        };
+        let opt = |o: Option<&str>| match o {
+            None => vec![0u8],
+            Some(s) => [&[1u8][..], s.as_bytes()].concat(),
+        };
+        put(b"maeversion/v1");
+        put(id.as_bytes());
+        put(title.as_bytes());
+        put(body.as_bytes());
+        for list in [&tags, &links, &aliases] {
+            put(&(list.len() as u64).to_le_bytes());
+            for item in list {
+                put(item.as_bytes());
+            }
+        }
+        put(&opt(kind.as_deref()));
+        put(&opt(todo_state.as_deref()));
+        put(&opt(priority.as_deref()));
+        put(&opt(source.as_deref()));
+        put(&opt(source_version.map(|v| v.to_string()).as_deref()));
+        put(&opt(created_at.map(|v| v.to_string()).as_deref()));
+        let mut props: Vec<(&String, &String)> = properties.iter().collect();
+        props.sort();
+        put(&(props.len() as u64).to_le_bytes());
+        for (k, v) in props {
+            put(k.as_bytes());
+            put(v.as_bytes());
+        }
+        hex::encode(&h.finalize()[..16])
+    }
+
     /// ADR-107: the hash a **rebirth** signs — covering everything the reborn
     /// document must reproduce.
     ///

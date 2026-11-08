@@ -1283,6 +1283,7 @@ async fn the_new_endpoints_refuse_a_non_member() {
             json!({"kb_id": "priv-kb", "node_id": "a"}),
         ),
         ("kb/query.titles", json!({"kb_id": "priv-kb"})),
+        ("kb/query.list", json!({"kb_id": "priv-kb"})),
     ] {
         let outcome = kb_query::dispatch(
             method,
@@ -1524,4 +1525,154 @@ async fn kb_query_get_returns_a_large_real_sized_note_whole_by_default() {
     let r = get_as_viewer(&doc_store, "big-kb", KbQueryLimits::default()).await;
     assert_eq!(r["body_truncated"], false);
     assert_eq!(r["body"].as_str().unwrap().len(), body.len());
+}
+
+// ---- kb/query.list: typed fields and a version per node, a page at a time ----
+
+const LIST_VIEWER: &str = "oauth:viewer@example.com";
+
+/// A KB with nodes `n1`..`n{count}` (manifest and documents), plus manifest
+/// entries in `dangling` that have no document.
+async fn seed_listed_kb(doc_store: &DocStore, kb_id: &str, count: usize, dangling: &[&str]) {
+    let owner = Arc::new(Identity::generate("owner"));
+    doc_store.set_signer(Arc::clone(&owner));
+    let mut coll = KbCollectionDoc::new_owned(kb_id, &owner.fingerprint(), "owner");
+    coll.set_transport_policy(TransportPolicy::Hub);
+    coll.upsert_member(LIST_VIEWER, "member", Role::Viewer);
+    for i in 1..=count {
+        let _ = coll.add_node(&format!("n{i}"), &format!("Node {i}"));
+    }
+    for id in dangling {
+        let _ = coll.add_node(id, "listed, never written");
+    }
+    doc_store
+        .share_doc(&format!("kbc:{kb_id}"), &coll.encode_state())
+        .await
+        .unwrap();
+    for i in 1..=count {
+        let id = format!("n{i}");
+        let node = KbNodeDoc::new(&id, &format!("Node {i}"), "body", &[]);
+        doc_store
+            .share_doc(
+                &mae_sync::kb_node_doc_name(kb_id, &id),
+                &node.encode_state(),
+            )
+            .await
+            .unwrap();
+    }
+}
+
+async fn list_page(
+    doc_store: &DocStore,
+    kb_id: &str,
+    after: Option<&str>,
+    limit: u64,
+    limits: KbQueryLimits,
+) -> serde_json::Value {
+    let mut params = json!({"kb_id": kb_id, "limit": limit});
+    if let Some(a) = after {
+        params["after"] = json!(a);
+    }
+    extract_result(
+        kb_query::dispatch(
+            "kb/query.list",
+            &params,
+            doc_store,
+            Some(LIST_VIEWER),
+            limits,
+        )
+        .await,
+    )
+}
+
+async fn list_all(doc_store: &DocStore, kb_id: &str, limit: u64) -> Vec<serde_json::Value> {
+    let (mut out, mut after) = (Vec::new(), None::<String>);
+    for _ in 0..100 {
+        let page = list_page(doc_store, kb_id, after.as_deref(), limit, wide_limits()).await;
+        out.extend(page["nodes"].as_array().unwrap().iter().cloned());
+        match page["next_after"].as_str() {
+            Some(a) => after = Some(a.to_string()),
+            None => return out,
+        }
+    }
+    panic!("pagination did not end");
+}
+
+#[tokio::test]
+async fn kb_query_list_pages_cover_every_node_once_in_order() {
+    let doc_store = fresh_doc_store().await;
+    seed_listed_kb(&doc_store, "list-kb", 5, &[]).await;
+    let nodes = list_all(&doc_store, "list-kb", 2).await;
+    let ids: Vec<&str> = nodes.iter().map(|n| n["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["n1", "n2", "n3", "n4", "n5"]);
+    assert!(nodes
+        .iter()
+        .all(|n| n["version"].is_string() && n["title"].is_string()));
+    assert!(
+        nodes.iter().all(|n| n.get("body").is_none()),
+        "list must not carry bodies"
+    );
+}
+
+/// A poll sees exactly what changed: after one node's TODO state changes,
+/// only its version moves, and `get` reports the same version `list` does.
+#[tokio::test]
+async fn kb_query_list_versions_move_only_for_the_node_that_changed() {
+    let doc_store = fresh_doc_store().await;
+    seed_listed_kb(&doc_store, "poll-kb", 4, &[]).await;
+    let before = list_all(&doc_store, "poll-kb", 10).await;
+
+    let name = mae_sync::kb_node_doc_name("poll-kb", "n3");
+    let mut n3 = KbNodeDoc::from_bytes(&doc_store.encode_state(&name).await.unwrap()).unwrap();
+    let update = n3.set_todo_state(Some("DONE"));
+    doc_store.apply_update(&name, &update, None).await.unwrap();
+
+    let after = list_all(&doc_store, "poll-kb", 10).await;
+    for (b, a) in before.iter().zip(&after) {
+        let changed = b["version"] != a["version"];
+        assert_eq!(
+            changed,
+            a["id"] == "n3",
+            "{} version changed: {changed}",
+            a["id"]
+        );
+    }
+    assert_eq!(after[2]["todo_state"], "DONE");
+    let got = extract_result(
+        kb_query::dispatch(
+            "kb/query.get",
+            &json!({"kb_id": "poll-kb", "node_id": "n3"}),
+            &doc_store,
+            Some(LIST_VIEWER),
+            wide_limits(),
+        )
+        .await,
+    );
+    assert_eq!(got["version"], after[2]["version"]);
+}
+
+/// A manifest entry whose document cannot be read is reported, never
+/// silently left out (a reader would take it as deleted).
+#[tokio::test]
+async fn kb_query_list_reports_a_listed_node_it_cannot_read() {
+    let doc_store = fresh_doc_store().await;
+    seed_listed_kb(&doc_store, "dangling-kb", 2, &["n9"]).await;
+    let nodes = list_all(&doc_store, "dangling-kb", 10).await;
+    let n9 = nodes.iter().find(|n| n["id"] == "n9").expect("n9 left out");
+    assert_eq!(n9["unavailable"], true);
+}
+
+/// The page size is bounded by `max_scan_nodes`, whatever the client asks.
+#[tokio::test]
+async fn kb_query_list_page_size_is_capped_by_the_scan_limit() {
+    let doc_store = fresh_doc_store().await;
+    seed_listed_kb(&doc_store, "cap-kb", 5, &[]).await;
+    let tight = KbQueryLimits {
+        max_body_bytes: 65_536,
+        max_scan_nodes: 2,
+        max_search_results: 20,
+    };
+    let page = list_page(&doc_store, "cap-kb", None, 1000, tight).await;
+    assert_eq!(page["nodes"].as_array().unwrap().len(), 2);
+    assert_eq!(page["next_after"], "n2");
 }
