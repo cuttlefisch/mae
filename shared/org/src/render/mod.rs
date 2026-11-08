@@ -369,9 +369,17 @@ pub fn render(
             (Vec::new(), Vec::new())
         }
         None => {
+            // One reading of the document for the page and its nodes.
             let cx = p.cx();
-            let page = build::page_with(&p.doc, cx, options, resolver, build::Mode::Page, None);
-            let (nodes, notes) = meta::nodes(&p, sem, options, resolver, &page.table);
+            let page = build::page_with(
+                &p.doc,
+                cx.clone(),
+                options,
+                resolver,
+                build::Mode::Page,
+                None,
+            );
+            let (nodes, notes) = meta::nodes(&p, cx, sem, options, resolver, &page.table);
             let unseen = notes::unrendered_undefined(&p.doc, &p.sem);
             let found = page.diagnostics.into_iter().chain(notes).chain(unseen);
             diagnostics.extend(found.map(|d| p.to_source(d)));

@@ -16,15 +16,16 @@ use crate::{NodeOrigin, RenderDiagnostic, SemanticNode, Semantics, Span};
 /// rendered document `p` (its macros expanded): a node the expansion
 /// removed, or in a subtree the export drops (COMMENT, `:noexport:`), has
 /// no entry. What to publish is these nodes, not the semantics'.
-pub(crate) fn nodes(
-    p: &super::prepared::Prepared,
+pub(crate) fn nodes<'a>(
+    p: &'a super::prepared::Prepared,
+    cx: std::rc::Rc<super::build::DocCx<'a>>,
     source: &Semantics,
     opts: &RenderOptions,
     resolver: &Resolver,
     page: &Table,
 ) -> (Vec<NodeMeta>, Vec<RenderDiagnostic>) {
     let root = p.doc.syntax();
-    let mut b = Builder::with_cx(p.cx(), opts, resolver, Mode::Meta, Table::default());
+    let mut b = Builder::with_cx(cx, opts, resolver, Mode::Meta, Table::default());
     let nodes = p
         .counterparts(source)
         .into_iter()
@@ -62,7 +63,15 @@ impl Builder<'_> {
             .filter(|_| !cut)
             .map(|a| b.placeless(at, |b| b.inline_text(a)))
             .collect();
-        let (entry, drawer) = node_entry(root, n);
+        // What `{{{property}}}` would read is built only when a value has a
+        // macro to expand with it: it stringifies the entry, which costs more
+        // than every plain value of a node together.
+        let has_macro = n.properties.iter().any(|(_, v)| v.contains("{{{"));
+        let (entry, drawer) = if has_macro {
+            node_entry(root, n)
+        } else {
+            (String::new(), n.span)
+        };
         let properties = n
             .properties
             .iter()
@@ -183,6 +192,15 @@ impl Builder<'_> {
     /// whatever its `:exports`; then keeps only its text, bracket links
     /// (and images) as rendered (registered: `property-value-babel`).
     pub fn property_value(&mut self, value: &str) -> Vec<Node> {
+        if let Some(plain) = plain_value(value) {
+            return plain;
+        }
+        self.property_value_parsed(value)
+    }
+
+    /// [`Builder::property_value`] by the object parser (always correct;
+    /// the oracle [`plain_value`] is tested against).
+    fn property_value_parsed(&mut self, value: &str) -> Vec<Node> {
         let tree = crate::green::objects(value, PARAGRAPH);
         let mode = std::mem::replace(&mut self.mode, Mode::Meta);
         let in_value = std::mem::replace(&mut self.in_value, true);
@@ -253,8 +271,12 @@ impl Builder<'_> {
     /// `drawer`. A value with no macro, or a document shown as written,
     /// is rendered as it is.
     pub fn macro_value(&mut self, entry: &str, value: &str, drawer: Span) -> Vec<Node> {
+        // The context is built on the first value with a macro, if any.
+        if !value.contains("{{{") {
+            return self.property_value(value);
+        }
         let expanded = match self.value_cx() {
-            Some(vcx) if value.contains("{{{") => {
+            Some(vcx) => {
                 let text = format!("{entry}x {value}\n");
                 match self.expand_value(vcx, &text) {
                     Ok(t) => t,
@@ -313,6 +335,26 @@ impl Builder<'_> {
     }
 }
 
+/// A property value that cannot hold any Org object, as
+/// [`Builder::property_value`] renders it (its trimmed text); `None` when it
+/// might hold one. Letters and digits of any script, spaces and a few
+/// punctuation marks start no object (no emphasis, link, entity, snippet,
+/// macro, timestamp, footnote or babel marker); a single `-` or `.` is safe,
+/// but `--` and `...` are special strings. Most property values (ids, names,
+/// dates written as words) take this path, which skips the object parser.
+fn plain_value(value: &str) -> Option<Vec<Node>> {
+    let safe = |c: char| c.is_alphanumeric() || " ,;!?'\"()#%&-.".contains(c);
+    if !value.chars().all(safe) || value.contains("--") || value.contains("...") {
+        return None;
+    }
+    let t = value.trim_matches(' ');
+    Some(if t.is_empty() {
+        Vec::new()
+    } else {
+        vec![super::tree::text(t)]
+    })
+}
+
 /// A rendered property value as its text, but for the links: an `<a>`, an
 /// `<img>` and an unresolved link's span stay as rendered; every other
 /// element is replaced by its children.
@@ -348,6 +390,78 @@ fn unwrap_plain(nodes: &mut Vec<Node>) {
                 }
             }
             t => push(nodes, t),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn both(value: &str) -> (Option<Vec<Node>>, Vec<Node>) {
+        let doc = crate::parse("", &crate::ParseOptions::default());
+        let sem = Semantics::default();
+        let (opts, res) = (RenderOptions::default(), Resolver::default());
+        let mut b = Builder::new(&doc, &sem, &opts, &res, Mode::Meta, Table::default());
+        let parsed = b.placeless(None, |b| b.property_value_parsed(value));
+        (plain_value(value), parsed)
+    }
+
+    #[test]
+    fn plain_values_render_as_the_object_parser_renders_them() {
+        for v in [
+            "n12",
+            " a b ",
+            "3f9c-1a2b",
+            "Ünïcødé 中文",
+            "a.b",
+            "x, y; z!",
+            "",
+        ] {
+            let (fast, parsed) = both(v);
+            assert_eq!(fast, Some(parsed), "{v:?}");
+        }
+        for v in [
+            "a--b",
+            "a...",
+            "*b*",
+            "x_y",
+            "[[l]]",
+            "https:x",
+            "\\alpha",
+            "src_sh{x}",
+            "a/b",
+        ] {
+            assert!(plain_value(v).is_none(), "{v:?} took the plain path");
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4000))]
+        /// Over the safe alphabet the plain path answers almost always; it
+        /// must answer exactly what the parser does.
+        #[test]
+        fn safe_values_render_the_same_both_ways(
+            v in "[a-zA-Z0-9 ,;!?'\"()#%&.\\-éß中]{0,24}"
+        ) {
+            let (fast, parsed) = both(&v);
+            if let Some(fast) = fast {
+                prop_assert_eq!(fast, parsed, "{:?}", v);
+            } else {
+                prop_assert!(v.contains("--") || v.contains("..."), "{:?}", v);
+            }
+        }
+
+        /// Whenever the plain path answers, it answers what the parser does.
+        #[test]
+        fn the_plain_path_never_disagrees_with_the_parser(
+            v in "[a-zA-Z0-9 ,;!?'\"()#%&.\\-éß中_*/=~+^<>\\[\\]{}@:$|]{0,24}"
+        ) {
+            let (fast, parsed) = both(&v);
+            if let Some(fast) = fast {
+                prop_assert_eq!(fast, parsed, "{:?}", v);
+            }
         }
     }
 }

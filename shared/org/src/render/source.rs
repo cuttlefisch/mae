@@ -73,7 +73,7 @@ pub fn normalise(text: &str) -> String {
 /// The text a KB node is edited in: its body (`body_span`), line endings
 /// as `\n`. Nothing else changes.
 pub fn node_source(doc: &Document, node: &SemanticNode) -> String {
-    let text = doc.syntax().to_string();
+    let text = crate::text::source_of(&doc.syntax());
     let body = text.get(node.body_span.range()).unwrap_or("");
     to_lf(body, doc.line_ending())
 }
@@ -803,6 +803,43 @@ fn names_in(doc: &Document, (a, b): (usize, usize), inside: bool) -> Vec<(String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A note defined in the edited body and referenced from outside it is
+    /// shown outside: changing its text changes the rendering there, and
+    /// the edit is refused; with no reference outside, it is the body's own.
+    /// (That the check's second pass runs when it must is held by
+    /// `build::pass_tests`.)
+    #[test]
+    fn a_note_the_body_defines_for_text_outside_it_is_checked() {
+        let text = "* A\n:PROPERTIES:\n:ID: a\n:END:\nbody[fn:1]\n\n[fn:1] old words\n\
+                    * B\n:PROPERTIES:\n:ID: b\n:END:\nsee[fn:1]\n";
+        let doc = crate::parse(text, &ParseOptions::default());
+        let sem = crate::semantics(&doc);
+        let a = sem.nodes.iter().find(|n| n.id == "a").expect("node a");
+        let r = replace_body(
+            text,
+            &doc,
+            a,
+            "body[fn:1]\n\n[fn:1] new words\n",
+            &ParseOptions::default(),
+            &SemanticsOptions::default(),
+        );
+        assert!(r.is_err(), "the note shown outside the body changed: {r:?}");
+        // The same edit with no reference outside is the body's own.
+        let alone = text.replace("see[fn:1]", "see");
+        let doc = crate::parse(&alone, &ParseOptions::default());
+        let sem = crate::semantics(&doc);
+        let a = sem.nodes.iter().find(|n| n.id == "a").expect("node a");
+        let r = replace_body(
+            &alone,
+            &doc,
+            a,
+            "body[fn:1]\n\n[fn:1] new words\n",
+            &ParseOptions::default(),
+            &SemanticsOptions::default(),
+        );
+        assert!(r.is_ok(), "{r:?}");
+    }
 
     /// Review round 3: the rendering check rendered every node's page, so
     /// an edit of a file of 8,000 nodes took 12.8 s. Counted, not timed:

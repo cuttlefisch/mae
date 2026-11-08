@@ -149,6 +149,25 @@ impl Property {
     }
 }
 
+/// The headlines under `root`, in document order. A headline is a child
+/// of the document or of a headline, so only those are descended into:
+/// the walk passes over sections, their elements and every object.
+pub(crate) fn headline_nodes(root: &SyntaxNode) -> Vec<SyntaxNode> {
+    let mut out = Vec::new();
+    let mut walk = root.preorder();
+    while let Some(ev) = walk.next() {
+        let rowan::WalkEvent::Enter(n) = ev else {
+            continue;
+        };
+        match n.kind() {
+            HEADLINE => out.push(n),
+            _ if n == *root => {}
+            _ => walk.skip_subtree(),
+        }
+    }
+    out
+}
+
 /// Two property keys are the same key iff Emacs's case folding says so.
 /// Folding maps ASCII letters to lower case and never maps anything else to
 /// ASCII (checked when the tables are generated), so upper-casing the ASCII

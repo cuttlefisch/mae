@@ -1,7 +1,7 @@
 //! Objects (inline): emphasis, code, entities, scripts, targets, …
 
 use super::build::{Builder, Mode};
-use super::tree::{push, text, Attr, Element, Node, Tag};
+use super::tree::{push, text, text_owned, Attr, Element, Node, Tag};
 use crate::kind::SyntaxKind::{self, *};
 use crate::kind::SyntaxNode;
 use crate::semantics::plain::collapse;
@@ -45,8 +45,19 @@ fn token_text(n: &SyntaxNode, kind: SyntaxKind) -> String {
 /// each over the whole string left to right: `\-` a soft hyphen, `---`
 /// then `--` before a character that is not `-` an em and an en dash,
 /// `...` an ellipsis. A string's last dashes, with nothing after them in
-/// the same object, stay.
-pub(crate) fn special_strings(s: &str) -> String {
+/// the same object, stay. A string holding none of `\-`, `--` and `...`
+/// is returned as it is, without a copy.
+pub(crate) fn special_strings(s: String) -> String {
+    // One pass for the pairs every rewrite needs (`...` holds `..`).
+    let rewrites = |w: &[u8]| matches!(w, [b'\\' | b'-', b'-'] | [b'.', b'.']);
+    if !s.as_bytes().windows(2).any(rewrites) {
+        return s;
+    }
+    rewrite_special_strings(&s)
+}
+
+/// [`special_strings`]' rewrites, run whatever `s` holds.
+fn rewrite_special_strings(s: &str) -> String {
     let s = s.replace("\\-", "\u{ad}");
     let s = dashes(&s, 3, '\u{2014}');
     let s = dashes(&s, 2, '\u{2013}');
@@ -133,9 +144,9 @@ impl Builder<'_> {
         }
         let s = std::mem::take(plain);
         if self.mode == Mode::Text || self.slugging {
-            push(out, text(&s));
+            push(out, text_owned(s));
         } else {
-            push(out, text(&special_strings(&s)));
+            push(out, text_owned(special_strings(s)));
         }
     }
 
@@ -331,4 +342,24 @@ pub(crate) fn inner_text(n: &SyntaxNode) -> String {
         .filter(|t| t.kind() != MARKUP)
         .map(|t| t.text().to_string())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4000))]
+
+        /// The no-copy path returns only what the rewrites would: over the
+        /// characters they read (and their neighbours), with `.` and `-`
+        /// common enough that `--`, `---`, `...` and `\-` all occur.
+        #[test]
+        fn special_strings_skips_only_what_it_would_not_change(
+            s in "[-.\\\\a é\n]{0,24}"
+        ) {
+            prop_assert_eq!(special_strings(s.clone()), rewrite_special_strings(&s));
+        }
+    }
 }

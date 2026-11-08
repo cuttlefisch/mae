@@ -157,8 +157,47 @@ pub enum SyntaxKind {
 use SyntaxKind::*;
 
 impl SyntaxKind {
+    /// Whether this is an object kind (inline: text, links, markup, ...),
+    /// which never holds an element.
+    pub(crate) fn is_object(self) -> bool {
+        self as u16 >= FIRST_OBJECT
+    }
+
+    /// This kind's position among all kinds (dense, from 0).
+    fn index(self) -> usize {
+        let raw = self as u16;
+        let i = match raw {
+            r if r < FIRST_NODE => usize::from(r),
+            r if r < FIRST_OBJECT => RUN_LENS[0] + usize::from(r - FIRST_NODE),
+            r => RUN_LENS[0] + RUN_LENS[1] + usize::from(r - FIRST_OBJECT),
+        };
+        match ALL.get(i) {
+            Some(k) if *k == self => i,
+            _ => ALL
+                .iter()
+                .position(|k| *k == self)
+                .expect("every kind is in ALL"),
+        }
+    }
+
     /// Inverse of `as u16`. `None` for a value no kind has.
     pub fn from_raw(raw: u16) -> Option<SyntaxKind> {
+        // Called for every `.kind()` of every tree walk: the kinds are three
+        // dense runs (tokens from 0, elements from 1000, objects from 2000),
+        // so the index is computed; the search is only the fallback, which
+        // keeps this exact whatever the numbering.
+        let i = match raw {
+            r if r < FIRST_NODE => usize::from(r),
+            r if r < FIRST_OBJECT => RUN_LENS[0] + usize::from(r - FIRST_NODE),
+            r => RUN_LENS[0] + RUN_LENS[1] + usize::from(r - FIRST_OBJECT),
+        };
+        match ALL.get(i) {
+            Some(k) if *k as u16 == raw => Some(*k),
+            _ => Self::from_raw_searched(raw),
+        }
+    }
+
+    fn from_raw_searched(raw: u16) -> Option<SyntaxKind> {
         ALL.binary_search_by_key(&raw, |k| *k as u16)
             .ok()
             .map(|i| ALL[i])
@@ -237,6 +276,24 @@ impl SyntaxKind {
 /// The first node kind's value; tokens are below it. Elements are numbered
 /// from 1000 and objects (inline) from 2000.
 const FIRST_NODE: u16 = 1000;
+
+/// The first object kind's value.
+const FIRST_OBJECT: u16 = 2000;
+
+/// How many kinds are tokens, and how many elements (the rest are objects).
+const RUN_LENS: [usize; 2] = {
+    let (mut tokens, mut elements, mut i) = (0, 0, 0);
+    while i < ALL.len() {
+        let v = ALL[i] as u16;
+        if v < FIRST_NODE {
+            tokens += 1;
+        } else if v < FIRST_OBJECT {
+            elements += 1;
+        }
+        i += 1;
+    }
+    [tokens, elements]
+};
 
 /// Every kind, in ascending value order.
 const ALL: &[SyntaxKind] = &[
@@ -360,6 +417,18 @@ pub type SyntaxElement = rowan::SyntaxElement<OrgLanguage>;
 
 #[cfg(test)]
 mod tests {
+    /// The computed index agrees with the search for every raw value.
+    #[test]
+    fn from_raw_matches_the_search_for_every_value() {
+        for raw in 0..=u16::MAX {
+            assert_eq!(
+                SyntaxKind::from_raw(raw),
+                SyntaxKind::from_raw_searched(raw),
+                "{raw}"
+            );
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -398,5 +467,75 @@ mod tests {
             got.join(" "),
             want.split_whitespace().collect::<Vec<_>>().join(" ")
         );
+    }
+}
+
+/// Which node kinds a tree holds: a walk looking only for kinds a document
+/// lacks (footnotes, macros, babel results) need not run.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct KindSet([u64; 4]);
+
+const _: () = assert!(ALL.len() <= 256, "KindSet holds 256 kinds");
+
+impl KindSet {
+    /// The node kinds of `green`, read from the green tree (no cursors).
+    pub(crate) fn of(green: &rowan::GreenNodeData) -> KindSet {
+        let mut set = KindSet::default();
+        let mut stack = vec![green];
+        while let Some(g) = stack.pop() {
+            if let Some(k) = SyntaxKind::from_raw(g.kind().0) {
+                let i = k.index();
+                set.0[i / 64] |= 1 << (i % 64);
+            }
+            stack.extend(g.children().filter_map(|c| c.into_node()));
+        }
+        set
+    }
+
+    pub(crate) fn has(&self, k: SyntaxKind) -> bool {
+        let i = k.index();
+        self.0[i / 64] & (1 << (i % 64)) != 0
+    }
+}
+
+#[cfg(test)]
+mod kind_set_tests {
+    use super::*;
+
+    /// A document's kind set holds exactly the node kinds of its tree,
+    /// across the conformance corpus (footnotes, macros, blocks, tables,
+    /// every object), and nothing for the kinds it lacks.
+    #[test]
+    fn a_kind_set_is_the_kinds_of_the_tree() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let list = std::fs::read_to_string(dir.join("conformance/corpus.txt")).unwrap();
+        let files: Vec<_> = list
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .collect();
+        let mut seen_anywhere = 0;
+        for rel in &files {
+            let text = std::fs::read_to_string(dir.join("../..").join(rel)).unwrap();
+            let doc = crate::parse(&text, &Default::default());
+            let root = doc.syntax();
+            let set = KindSet::of(root.green());
+            let present: std::collections::HashSet<SyntaxKind> =
+                root.descendants().map(|n| n.kind()).collect();
+            for &k in ALL.iter().filter(|k| k.is_node()) {
+                assert_eq!(set.has(k), present.contains(&k), "{rel}: {k:?}");
+            }
+            seen_anywhere += present.len();
+        }
+        assert!(seen_anywhere > 1000, "the corpus was read: {seen_anywhere}");
+    }
+
+    /// Every kind has its own index, so no two share a bit.
+    #[test]
+    fn kind_indexes_are_distinct() {
+        let mut seen = std::collections::HashSet::new();
+        for &k in ALL {
+            assert!(seen.insert(k.index()), "{k:?}");
+        }
     }
 }
