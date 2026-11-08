@@ -252,7 +252,7 @@ type Found = (usize, usize, String, Option<String>);
 
 /// Expands the macros of `doc`, or `Ok(None)` when it has none to expand.
 pub(crate) fn expand(doc: &Document) -> Result<Option<Expansion>, RenderDiagnostic> {
-    let source = doc.syntax().to_string();
+    let source = crate::text::source_of(&doc.syntax());
     // `org-export--delete-comment-trees`: the COMMENT subtrees go first,
     // from the text, before anything else reads it.
     let (text, map) = without_comment_trees(doc, &source);
@@ -314,7 +314,7 @@ fn without_comment_trees(doc: &Document, source: &str) -> (String, Map) {
 /// `text` (a link fragment) with its macros expanded with the templates
 /// of `doc`; `None` when they cannot be.
 pub(crate) fn expand_text(doc: &Document, text: &str) -> Option<String> {
-    let source = doc.syntax().to_string();
+    let source = crate::text::source_of(&doc.syntax());
     let templates = value::templates(doc, &source);
     let d = crate::parse(text, &crate::ParseOptions::default());
     let engine = scan::Engine::new(&d, text.len(), templates);

@@ -38,7 +38,7 @@ pub(crate) fn prepare<'d>(doc: &'d Document, sem: &'d Semantics) -> Prepared<'d>
         failed: None,
         notes: Vec::new(),
     };
-    let source = doc.syntax().to_string();
+    let source = crate::text::source_of(&doc.syntax());
     let mut map = None;
     match super::expand::expand(doc) {
         Ok(None) => {}
@@ -217,7 +217,7 @@ impl<'d> Prepared<'d> {
         // the semantics keep only the first of an id: derive them again
         // with the made nodes' ids masked (byte for byte, so every span
         // stays), then drop the made nodes.
-        let mut bytes = self.doc.syntax().to_string().into_bytes();
+        let mut bytes = crate::text::source_of(&self.doc.syntax()).into_bytes();
         for n in self.sem.nodes.iter().filter(|n| !real(n)) {
             mask_ids(
                 &mut bytes,

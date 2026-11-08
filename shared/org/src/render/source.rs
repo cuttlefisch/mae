@@ -73,7 +73,7 @@ pub fn normalise(text: &str) -> String {
 /// The text a KB node is edited in: its body (`body_span`), line endings
 /// as `\n`. Nothing else changes.
 pub fn node_source(doc: &Document, node: &SemanticNode) -> String {
-    let text = doc.syntax().to_string();
+    let text = crate::text::source_of(&doc.syntax());
     let body = text.get(node.body_span.range()).unwrap_or("");
     to_lf(body, doc.line_ending())
 }

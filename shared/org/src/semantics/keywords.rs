@@ -250,7 +250,7 @@ fn alist_to_groups(alist: &[Token]) -> Vec<(String, Vec<String>)> {
 /// no such line or the result is empty: so `#+title: a` then `#+title:`
 /// is `a`, and an empty value does not clear the title.
 pub(crate) fn title(doc: &Document) -> Option<String> {
-    let text = doc.syntax().to_string();
+    let text = crate::text::source_of(&doc.syntax());
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
     let lines = buffer_lines(text, doc.line_ending());
     keyword_value(lines.into_iter(), "title", true)

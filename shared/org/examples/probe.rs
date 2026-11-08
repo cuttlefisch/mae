@@ -6,6 +6,7 @@
 //! cargo run -p mae-org --example probe -- grep FILE NEEDLE
 //! cargo run -p mae-org --example probe -- splice FILE ID BODYFILE
 //! cargo run -p mae-org --example probe -- rtime FILE [N]
+//! cargo run -p mae-org --example probe -- sem FILE
 //! cargo run -p mae-org --example probe -- loop FILE PHASE N
 //! ```
 //!
@@ -14,6 +15,7 @@
 //! render mode) and the diagnostics. `grep` names the channels holding
 //! NEEDLE (case-insensitively), with context. `splice` runs `replace_body`
 //! on node ID with BODYFILE's text and prints every channel that changed.
+//! `sem` prints the semantics (its `Debug`).
 //! `rtime` times parse, semantics and render (min and median of N runs).
 //! `loop` runs one PHASE (parse, semantics, render or highlights) N times and
 //! nothing else, so a sampling profiler sees that phase alone.
@@ -50,6 +52,10 @@ fn main() -> ExitCode {
             .parse()
             .map_err(|_| USAGE.to_string())
             .and_then(|n| phase_loop(&t, &args[2], n)),
+        (Some("sem"), Some(Ok(t))) => Ok(format!(
+            "{:#?}\n",
+            semantics(&parse(&t, &ParseOptions::default()))
+        )),
         (_, Some(Err(e))) => Err(e),
         _ => Err(USAGE.to_string()),
     };

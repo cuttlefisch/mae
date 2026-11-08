@@ -97,6 +97,20 @@ fn expand(
     }
 }
 
+/// The default link types, longest first (as the lexer wants them), made
+/// once: [`objects`] runs for every keyword and property value.
+fn default_link_types() -> &'static [String] {
+    static TYPES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    TYPES.get_or_init(|| {
+        let mut types: Vec<String> = crate::DEFAULT_LINK_TYPES
+            .iter()
+            .map(|t| t.to_string())
+            .collect();
+        types.sort_by_key(|t| std::cmp::Reverse(t.len()));
+        types
+    })
+}
+
 /// `text` parsed as the objects of a `container` (as `org-element` parses a
 /// secondary string such as a keyword value), under a node of that kind.
 /// Link types are the default ones: they only decide which `type:path` text
@@ -105,17 +119,13 @@ fn expand(
 pub(crate) fn objects(text: &str, container: SyntaxKind) -> crate::SyntaxNode {
     let src = crate::text::Source::new(text);
     let ix = inline::InlineIndex::build(&src);
-    let mut link_types: Vec<String> = crate::DEFAULT_LINK_TYPES
-        .iter()
-        .map(|t| t.to_string())
-        .collect();
-    link_types.sort_by_key(|t| std::cmp::Reverse(t.len()));
+    let link_types = default_link_types();
     // A secondary string's diagnostics have no place in a document.
     let diagnostics = std::cell::RefCell::new(Vec::new());
     let cx = InlineCx {
         src: &src,
         ix: &ix,
-        link_types: &link_types,
+        link_types,
         // A radio link reads as its own text, so a plain-text value is the
         // same without the document's radio targets.
         radio: None,
