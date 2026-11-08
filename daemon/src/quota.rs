@@ -70,17 +70,19 @@ impl QuotaCharger for NoQuota {
 /// return. Both listeners need exactly this, so it lives here once rather than
 /// being spelled out at each door (CLAUDE.md principle #8).
 ///
-/// `Ok` carries the lease to hold for the request's duration.
+/// `Ok` carries the lease to hold for the request's duration; `Err` the
+/// response to send instead (boxed: a JSON-RPC response is large to return
+/// by value on the path every request takes).
 pub fn charge_or_reject(
     quota: &dyn QuotaCharger,
     principal: Option<&str>,
     method: &str,
     id: serde_json::Value,
-) -> Result<QuotaLease, mae_mcp::protocol::JsonRpcResponse> {
+) -> Result<QuotaLease, Box<mae_mcp::protocol::JsonRpcResponse>> {
     quota.charge(principal, method).map_err(|msg| {
-        mae_mcp::protocol::JsonRpcResponse::error(
+        Box::new(mae_mcp::protocol::JsonRpcResponse::error(
             id,
             mae_mcp::protocol::McpError::internal_error(msg),
-        )
+        ))
     })
 }

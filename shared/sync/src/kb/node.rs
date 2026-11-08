@@ -105,6 +105,22 @@ pub struct KbNodeDoc {
     doc: Doc,
 }
 
+/// UTF-8 bytes of the body of the KB node `doc` holds, 0 if it holds none.
+///
+/// Reads without creating anything: a document that is not a node gains no
+/// `node` root by being measured. The body is what every reader parses and
+/// renders, so it is what a node's size is (ADR-109 D6).
+pub fn body_bytes(doc: &Doc) -> usize {
+    let txn = doc.transact();
+    let Some(root) = txn.get_map("node") else {
+        return 0;
+    };
+    match root.get(&txn, BODY_KEY) {
+        Some(Out::YText(text)) => text.get_string(&txn).len(),
+        _ => 0,
+    }
+}
+
 impl KbNodeDoc {
     /// Create a new KB node document with UTF-16 offset kind.
     pub fn new(id: &str, title: &str, body: &str, tags: &[String]) -> Self {
@@ -250,6 +266,11 @@ impl KbNodeDoc {
             crate::text::reconcile_text_ref(&mut txn, &text, &current, title);
         }
         txn.encode_update_v1()
+    }
+
+    /// UTF-8 bytes of the body (see [`body_bytes`]).
+    pub fn body_bytes(&self) -> usize {
+        body_bytes(&self.doc)
     }
 
     /// Get body.

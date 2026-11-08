@@ -21,7 +21,7 @@ mod collection_oplog;
 mod collection_roles;
 mod node;
 
-pub use node::{KbNodeDoc, MaterializedNode};
+pub use node::{body_bytes, KbNodeDoc, MaterializedNode};
 
 /// Derive a stable yrs `client_id` for KB CRDT edits from a peer's durable collab
 /// identity `fingerprint` + its per-KB authorization `epoch` (ADR-020 B-16,
