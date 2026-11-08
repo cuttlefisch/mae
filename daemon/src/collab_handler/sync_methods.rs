@@ -573,6 +573,6 @@ pub(super) async fn handle_sync_share(
                 serde_json::json!({ "doc": doc_name, "wal_seq": result.wal_seq }),
             )
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+        Err(e) => JsonRpcResponse::error(id, super::write_failure("sync/share", e)),
     }
 }

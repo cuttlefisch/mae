@@ -607,6 +607,19 @@ impl TextSync {
         &self.rope
     }
 
+    /// UTF-8 bytes a reader of this document parses and renders: a text
+    /// document's content plus, for a KB node, its body. Measured without
+    /// creating any root, so it is safe on every kind of document.
+    pub fn payload_bytes(&self) -> usize {
+        let text = {
+            let txn = self.doc.transact();
+            txn.get_text(TEXT_NAME)
+                .map(|t| t.get_string(&txn).len())
+                .unwrap_or(0)
+        };
+        text + crate::kb::body_bytes(&self.doc)
+    }
+
     /// Get text content as string.
     pub fn content(&self) -> String {
         let text = self.doc.get_or_insert_text(TEXT_NAME);
@@ -857,6 +870,29 @@ impl TextSync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The daemon measures every document it applies an update to, of every
+    /// kind, so measuring must not add a root to any of them: a node gaining a
+    /// `content` text, or a text document a `node` map, would be a schema
+    /// change made by a size check.
+    #[test]
+    fn measuring_a_document_creates_no_root() {
+        let roots = |ts: &TextSync| ts.doc().transact().root_refs().count();
+        let text = TextSync::with_client_id("hello", 1);
+        let node =
+            TextSync::from_state(&crate::kb::KbNodeDoc::new("n", "T", "body text", &[]).encode())
+                .unwrap();
+        let empty = TextSync::empty_relay();
+        for (what, ts, bytes) in [("text", &text, 5), ("node", &node, 9), ("empty", &empty, 0)] {
+            let before = roots(ts);
+            assert_eq!(ts.payload_bytes(), bytes, "{what}");
+            assert_eq!(
+                roots(ts),
+                before,
+                "measuring added a root to the {what} document"
+            );
+        }
+    }
 
     /// B-17 regression: yrs `ClientID` is 53-bit; a full-u64 id panics in debug
     /// and silently truncates in release. `clamp_client_id_to_yrs` must fold any

@@ -491,7 +491,7 @@
       "max_nesting": 3
     },
     "crates/core/src/editor/option_ops.rs": {
-      "max_fn_lines": 1360,
+      "max_fn_lines": 1362,
       "max_nesting": 4
     },
     "crates/core/src/editor/render_ops.rs": {
@@ -559,7 +559,7 @@
       "max_nesting": 5
     },
     "crates/core/src/options.rs": {
-      "max_fn_lines": 1126,
+      "max_fn_lines": 1133,
       "max_nesting": 2
     },
     "crates/core/src/render_common/status.rs": {

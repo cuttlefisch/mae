@@ -38,7 +38,7 @@ This ADR establishes target metrics based on analysis of Notion, Google Docs, VS
 | Max documents in memory | 1,000 | `sync.max_documents` | Reject `get_or_create` when at capacity |
 | Max update payload | 1 MB | `sync.max_update_size_bytes` | Reject before WAL append |
 | Max WAL entries between compactions | 5,000 | `storage.max_wal_entries` | Force immediate compaction |
-| Max document size (warning) | 10 MB | `sync.max_document_size_bytes` | Log warning (don't reject — breaks convergence) |
+| Max document size | 10 MB | `sync.max_document_size_bytes` | ~~Log warning (don't reject — breaks convergence)~~ **Superseded by ADR-109 D6 (2026-11-08):** an update that would grow a document past it is refused; clients cap first (`kb_max_node_bytes`) so a compliant client never diverges |
 | Write timeout | 5s | `collaboration.write_timeout_ms` | Disconnect slow client |
 | Consecutive write failures before disconnect | 3 | Named constant | Disconnect poisoned client |
 

@@ -320,6 +320,12 @@ impl Editor {
                 ));
             }
         }
+        let replaced = match &owner {
+            None => self.kb.primary.get(id),
+            Some(uuid) => self.kb.instances.get(uuid).and_then(|kb| kb.get(id)),
+        }
+        .map_or(0, |n| n.body.len());
+        self.kb_refuse_oversized_body(id, replaced, body.len())?;
         let node =
             mae_kb::Node::new(id, title, kind, body).with_source(mae_kb::NodeSource::Manual, 0);
         // Persist to the OWNING store (primary or the matching instance store).
@@ -619,6 +625,29 @@ impl Editor {
         Ok(msg)
     }
 
+    /// ADR-109 D6: refuse a write that would grow node `id`'s body from
+    /// `before` to `after` bytes past `kb_max_node_bytes`. A node already past
+    /// the cap may shrink or stay, so its owner can split it.
+    ///
+    /// The client's own cap, below the daemon's: the daemon refusing an edit
+    /// leaves the author's copy holding it, so an edit must be stopped here,
+    /// where it is still the author's to change.
+    fn kb_refuse_oversized_body(
+        &self,
+        id: &str,
+        before: usize,
+        after: usize,
+    ) -> Result<(), String> {
+        let cap = self.kb.max_node_bytes;
+        if cap == 0 || after <= cap || after <= before {
+            return Ok(());
+        }
+        Err(format!(
+            "KB node '{id}' would be {after} bytes, over kb-max-node-bytes ({cap}). \
+             Split it into linked notes, or raise the option."
+        ))
+    }
+
     /// Shared resolve → mutate → persist skeleton behind `kb_update_node` and
     /// `kb_set_role` — the CRDT-enqueue-vs-direct-persist branching (ADR-019/ADR-020)
     /// is real, non-trivial logic; this avoids duplicating it for every field-specific
@@ -660,8 +689,10 @@ impl Editor {
                 id
             ));
         }
+        let before = existing.body.len();
         let mut updated = existing;
         mutate(&mut updated);
+        self.kb_refuse_oversized_body(id, before, updated.body.len())?;
 
         // Does this node's OWNING KB sync, per durable registry markers
         // (ADR-019)? Derived from the owning instance's `shared`/`collab_id`,

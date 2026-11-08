@@ -359,6 +359,9 @@ pub struct KbContext {
     pub watcher_debounce_ms: u64,
     /// KB option: max events processed per idle tick.
     pub max_drain_events: usize,
+    /// KB option: largest body (UTF-8 bytes) an edit may give a node; 0 =
+    /// unlimited (`kb_max_node_bytes`, ADR-109 D6).
+    pub max_node_bytes: usize,
     /// KB option: max bytes for RAG excerpt truncation.
     pub search_excerpt_length: usize,
     /// KB option: hard cap for kb_search_context results.
@@ -809,6 +812,7 @@ impl KbContext {
             watcher_enabled: true,
             watcher_debounce_ms: 500,
             max_drain_events: 100,
+            max_node_bytes: 1_048_576,
             search_excerpt_length: 500,
             search_max_results: 20,
             auto_register: false,
