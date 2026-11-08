@@ -32,6 +32,14 @@ case "$remote_url" in
     "") exit 0 ;;   # no URL supplied (e.g. some porcelain paths) — don't block
 esac
 
+# A downstream mirror the user has allowed explicitly, in LOCAL git config only
+# (`git config --add mae.pushMirror <exact url>`), is not a rewritten origin.
+# The list never enters the repository, so no private host is named here; a
+# URL a dependency build rewrote 'origin' to is not on it and stays refused.
+if git config --get-all mae.pushMirror 2>/dev/null | grep -Fqx -- "$remote_url"; then
+    exit 0
+fi
+
 cat >&2 <<MSG
 ✋ push refused: '$remote_url' is not this project's remote.
 
