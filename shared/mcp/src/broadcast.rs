@@ -139,6 +139,10 @@ struct ClientEntry {
     /// are only delivered if the client has subscribed to that document.
     /// Events without a `doc_id()` (global events) are always delivered.
     doc_subs: HashSet<String>,
+    /// Whether a document's events reach this client ONLY when it subscribed
+    /// to that document, even before it has subscribed to any (see
+    /// [`EventBroadcaster::subscribe_doc_scoped`]).
+    doc_scoped: bool,
     /// Bounded channel for event delivery.
     tx: mpsc::Sender<EditorEvent>,
 }
@@ -183,9 +187,30 @@ impl EventBroadcaster {
             ClientEntry {
                 event_subs: subscriptions,
                 doc_subs: HashSet::new(),
+                doc_scoped: false,
                 tx,
             },
         );
+        rx
+    }
+
+    /// As [`Self::subscribe`], for a client that must never see a document
+    /// it did not subscribe to: the daemon's collab sessions.
+    ///
+    /// @ai-caution: [security] A plain `subscribe` client with NO document
+    /// subscriptions receives every document's events (the editor's MCP
+    /// server relies on that). A client of a multi-KB host must use this
+    /// instead: there, every document is some KB's content, readable only
+    /// through an access-gated subscription.
+    pub fn subscribe_doc_scoped(
+        &mut self,
+        session_id: u64,
+        subscriptions: Vec<String>,
+    ) -> mpsc::Receiver<EditorEvent> {
+        let rx = self.subscribe(session_id, subscriptions);
+        if let Some(entry) = self.clients.get_mut(&session_id) {
+            entry.doc_scoped = true;
+        }
         rx
     }
 
@@ -240,7 +265,7 @@ impl EventBroadcaster {
         // only delivered to subscribed documents. If the client has NOT opted in
         // (empty doc_subs), all events pass through — backward compatible with
         // the editor's MCP server which doesn't use doc subscriptions.
-        if !entry.doc_subs.is_empty() {
+        if entry.doc_scoped || !entry.doc_subs.is_empty() {
             if let Some(doc) = event.doc_id() {
                 if !entry.doc_subs.contains(doc) {
                     return false;
