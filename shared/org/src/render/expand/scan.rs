@@ -214,7 +214,7 @@ impl Engine {
             },
             eol: doc.line_ending(),
             d: doc.clone(),
-            dtext: doc.syntax().to_string(),
+            dtext: crate::text::source_of(&doc.syntax()),
             map: Map::default(),
             segment: Vec::new(),
             skip: HashSet::new(),

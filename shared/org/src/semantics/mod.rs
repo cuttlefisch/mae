@@ -458,9 +458,21 @@ pub fn semantics_with(doc: &Document, options: &SemanticsOptions) -> Semantics {
         .map(|t| plain::plain_text(&crate::green::objects(&t, PARAGRAPH)))
         .filter(|t| !t.is_empty());
     let mut rules = Rules::new(&root, options, &exclude, &select, &header.tags);
-    rules.chosen = regions::choose_definitions(&root, &rules);
+    // Footnote labels come from definitions and references (inline ones
+    // define): a document with neither has none to choose or follow.
+    let (refs, defs) = (
+        doc.has_kind(FOOTNOTE_REFERENCE),
+        doc.has_kind(FOOTNOTE_DEFINITION),
+    );
+    if refs || defs {
+        rules.chosen = regions::choose_definitions(&root, &rules);
+    }
     let defined_notes = rules.chosen.keys().cloned().collect();
-    let (referenced, order) = regions::referenced_footnotes(&root, &rules);
+    let (referenced, order) = if refs {
+        regions::referenced_footnotes(&root, &rules)
+    } else {
+        Default::default()
+    };
     rules.referenced = Some(referenced);
     let mut w = Walk {
         rules,
@@ -926,6 +938,12 @@ impl Walk<'_> {
     /// The links of a keyword or property value, read as Org reads a
     /// secondary string (its objects), at `at` in the document.
     fn value_links(&mut self, value: &str, at: usize) {
+        // A link is bracketed (`[[`) or names its type before a `:` (plain
+        // and angle links); a value is read without radio targets, so it
+        // holds no radio link. Most values (ids, dates, words) hold neither.
+        if !may_hold_link(value) {
+            return;
+        }
         let tree = crate::green::objects(value, PARAGRAPH);
         for l in tree.descendants().filter(|n| n.kind() == LINK) {
             self.link(&l, at);
@@ -1222,17 +1240,36 @@ fn id_line_span(drawer: &SyntaxNode) -> Option<Span> {
 /// path may end in a content CR (`org-link-plain-re` takes it in an LF
 /// file), and an object never owns the newline after it.
 fn object_span(node: &SyntaxNode) -> Span {
-    let s = Span::of(node);
-    let kept = node.to_string().trim_end_matches([' ', '\t']).len();
-    Span::new(s.start as usize, s.start as usize + kept)
+    trimmed_span(node, &[' ', '\t'])
+}
+
+/// Whether a value read as objects without radio targets can hold a link.
+fn may_hold_link(value: &str) -> bool {
+    value.contains("[[") || value.contains(':')
 }
 
 /// An element's (a line's) span without trailing blanks and its line ending.
 fn without_trailing_blanks(node: &SyntaxNode) -> Span {
+    trimmed_span(node, &[' ', '\t', '\n', '\r'])
+}
+
+/// `node`'s span without the trailing run of `blanks`: its tokens read
+/// from the last back to the first that holds something else, rather than
+/// its whole text printed (a headline's is its subtree).
+fn trimmed_span(node: &SyntaxNode, blanks: &[char]) -> Span {
     let s = Span::of(node);
-    let text = node.to_string();
-    let kept = text.trim_end_matches([' ', '\t', '\n', '\r']).len();
-    Span::new(s.start as usize, s.start as usize + kept)
+    let start = s.start as usize;
+    let mut end = s.end as usize;
+    let mut tok = node.last_token();
+    while let Some(t) = tok.filter(|t| usize::from(t.text_range().start()) >= start) {
+        let kept = t.text().trim_end_matches(blanks).len();
+        end = usize::from(t.text_range().start()) + kept;
+        if kept > 0 {
+            break;
+        }
+        tok = t.prev_token();
+    }
+    Span::new(start, end)
 }
 
 /// A headline's body before clipping: after its planning line and property
@@ -1283,6 +1320,61 @@ fn clip_bodies(nodes: &mut [SemanticNode]) {
         let n = &mut nodes[i];
         if next < n.span.end && next < n.body_span.end {
             n.body_span.end = next.max(n.body_span.start);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// The definition the token walk replaces: the text printed, trimmed.
+    fn printed_trimmed(node: &SyntaxNode, blanks: &[char]) -> Span {
+        let s = Span::of(node);
+        let kept = node.to_string().trim_end_matches(blanks).len();
+        Span::new(s.start as usize, s.start as usize + kept)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4000))]
+
+        /// A value [`may_hold_link`] rejects parses to no link, over text
+        /// dense in everything that starts or ends one.
+        #[test]
+        fn a_value_said_to_hold_no_link_holds_none(
+            value in "(\\[|\\]|<|>|:|https|file|id|x| |/|\\(|\\)|\\*|=|\\{|\\}|@){0,24}"
+        ) {
+            if !may_hold_link(&value) {
+                let tree = crate::green::objects(&value, PARAGRAPH);
+                prop_assert!(
+                    tree.descendants().all(|n| n.kind() != LINK),
+                    "{:?}", value
+                );
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2000))]
+
+        /// For every node of a document built from headlines, drawers,
+        /// links, markup, blank lines and every line ending, the walk ends
+        /// where trimming the printed text does.
+        #[test]
+        fn a_trimmed_span_ends_where_the_trimmed_text_does(
+            text in "(\\* |\\*\\* |x|é|[ \t]|\n|\r\n|\r|\\[\\[a\\]\\]|=v= |https://e |:PROPERTIES:\n:ID: a \n:END:\n|#\\+title: t \n|- i\n|\\| c \\|\n){0,30}"
+        ) {
+            let doc = crate::parse(&text, &Default::default());
+            for n in doc.syntax().descendants() {
+                for blanks in [&[' ', '\t'][..], &[' ', '\t', '\n', '\r']] {
+                    prop_assert_eq!(
+                        trimmed_span(&n, blanks),
+                        printed_trimmed(&n, blanks),
+                        "{:?} in {:?}", n.kind(), text
+                    );
+                }
+            }
         }
     }
 }

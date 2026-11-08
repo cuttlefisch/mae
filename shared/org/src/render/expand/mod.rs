@@ -250,13 +250,24 @@ type Stop = (MacroFailure, usize, usize);
 /// A macro found in a text: its start and end, name and raw arguments.
 type Found = (usize, usize, String, Option<String>);
 
-/// Expands the macros of `doc`, or `Ok(None)` when it has none to expand.
-pub(crate) fn expand(doc: &Document) -> Result<Option<Expansion>, RenderDiagnostic> {
-    let source = doc.syntax().to_string();
-    let templates = value::templates(doc, &source);
+/// Expands the macros of `doc` (whose text is `source`), or `Ok(None)`
+/// when it has none to expand.
+pub(crate) fn expand(doc: &Document, source: &str) -> Result<Option<Expansion>, RenderDiagnostic> {
+    debug_assert_eq!(source.len(), usize::from(doc.syntax().text_range().len()));
     // `org-export--delete-comment-trees`: the COMMENT subtrees go first,
     // from the text, before anything else reads it.
-    let (text, map) = without_comment_trees(doc, &source);
+    let (text, map) = without_comment_trees(doc, source);
+    // Every macro, written or forced, opens with `{{{`: without one there
+    // is nothing to expand, and what is left is the text without them.
+    if !source.contains("{{{") {
+        return Ok((!map.pieces.is_empty()).then_some(Expansion {
+            text,
+            map,
+            notes: Vec::new(),
+            work: 0,
+        }));
+    }
+    let templates = value::templates(doc, source);
     if map.pieces.is_empty() {
         return scan::Engine::new(doc, source.len(), templates).run(map, HashSet::new());
     }
@@ -278,13 +289,12 @@ fn without_comment_trees(doc: &Document, source: &str) -> (String, Map) {
     let mut text = String::with_capacity(source.len());
     let mut pieces = Vec::new();
     let mut at = 0;
-    let mut walk = doc.syntax().preorder();
-    while let Some(ev) = walk.next() {
-        let rowan::WalkEvent::Enter(n) = ev else {
+    for n in crate::views::headline_nodes(&doc.syntax()) {
+        // A headline inside a COMMENT subtree already gone goes with it.
+        if usize::from(n.text_range().start()) < at {
             continue;
-        };
+        }
         if crate::Headline::cast(n.clone()).is_some_and(|h| h.is_commented()) {
-            walk.skip_subtree();
             let (a, b) = (
                 usize::from(n.text_range().start()),
                 usize::from(n.text_range().end()),
@@ -304,7 +314,7 @@ fn without_comment_trees(doc: &Document, source: &str) -> (String, Map) {
 /// `text` (a link fragment) with its macros expanded with the templates
 /// of `doc`; `None` when they cannot be.
 pub(crate) fn expand_text(doc: &Document, text: &str) -> Option<String> {
-    let source = doc.syntax().to_string();
+    let source = crate::text::source_of(&doc.syntax());
     let templates = value::templates(doc, &source);
     let d = crate::parse(text, &crate::ParseOptions::default());
     let engine = scan::Engine::new(&d, text.len(), templates);
@@ -573,7 +583,7 @@ mod tests {
     fn work(text: &str) -> (u64, Result<Option<Expansion>, RenderDiagnostic>) {
         WORK.with(|w| w.set(0));
         let doc = crate::parse(text, &crate::ParseOptions::default());
-        let r = expand(&doc);
+        let r = expand(&doc, text);
         (WORK.with(std::cell::Cell::get), r)
     }
 
@@ -702,5 +712,57 @@ mod tests {
         assert_eq!(m2.to_source(Span::new(4, 6)), Span::new(9, 11));
         assert_eq!(m2.to_source(Span::new(2, 4)), Span::new(2, 9));
         assert_eq!(m2.to_expanded(Span::new(9, 11)), Span::new(4, 6));
+    }
+}
+
+#[cfg(test)]
+mod comment_tree_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// The definition the headline walk replaces: every node visited, a
+    /// COMMENT subtree skipped whole.
+    fn by_preorder(doc: &Document, source: &str) -> (String, Map) {
+        let mut text = String::with_capacity(source.len());
+        let mut pieces = Vec::new();
+        let mut at = 0;
+        let mut walk = doc.syntax().preorder();
+        while let Some(ev) = walk.next() {
+            let rowan::WalkEvent::Enter(n) = ev else {
+                continue;
+            };
+            if crate::Headline::cast(n.clone()).is_some_and(|h| h.is_commented()) {
+                walk.skip_subtree();
+                let (a, b) = (
+                    usize::from(n.text_range().start()),
+                    usize::from(n.text_range().end()),
+                );
+                text.push_str(&source[at..a]);
+                pieces.push(Piece {
+                    src: (a, b),
+                    out: (text.len(), text.len()),
+                });
+                at = b;
+            }
+        }
+        text.push_str(&source[at..]);
+        (text, Map { pieces })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(3000))]
+
+        /// COMMENT subtrees at every level, nested in each other and in
+        /// plain headlines, come out as the full walk takes them.
+        #[test]
+        fn comment_trees_go_as_the_full_walk_takes_them(
+            text in "(\\* |\\*\\* |\\*\\*\\* |COMMENT |x |\\n|- i\\n|:PROPERTIES:\\n:ID: a\\n:END:\\n){0,30}"
+        ) {
+            let doc = crate::parse(&text, &Default::default());
+            prop_assert_eq!(
+                without_comment_trees(&doc, &text),
+                by_preorder(&doc, &text)
+            );
+        }
     }
 }
