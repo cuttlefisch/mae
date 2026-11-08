@@ -122,8 +122,8 @@ pub use source::{
 pub use text::{node_text, text, text_of};
 pub use tree::{Attr, Element, Node, Tag, ATTRIBUTES, CLASSES, TAGS};
 
+use crate::seeded::HashMap;
 use crate::{Document, Semantics, Span};
-use std::collections::HashMap;
 
 /// Which anchors a headline gets besides the one every rendered headline's
 /// heading carries, `h-` + [`slug`] of its title ([`heading_anchor`]),
@@ -182,7 +182,7 @@ pub const DEFAULT_PLACEHOLDER: &str = "[?]";
 impl Default for Resolver {
     fn default() -> Self {
         Resolver {
-            targets: HashMap::new(),
+            targets: HashMap::default(),
             placeholder: DEFAULT_PLACEHOLDER.to_string(),
         }
     }
