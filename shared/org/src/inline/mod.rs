@@ -258,6 +258,16 @@ impl InlineCx<'_> {
         self.src.text.get(i..).and_then(|s| s.chars().next())
     }
 
+    /// The length of the char at `i`, 1 where [`InlineCx::char_at`] has
+    /// none. An ASCII byte is a char of its own, so the lexer's scan steps
+    /// over most of a text without decoding it.
+    pub fn char_len(&self, i: usize) -> usize {
+        match self.bytes().get(i) {
+            Some(&b) if b.is_ascii() => 1,
+            _ => self.char_at(i).map_or(1, char::len_utf8),
+        }
+    }
+
     /// The char before byte `i`, if `i > floor`.
     pub fn char_before(&self, i: usize, floor: usize) -> Option<char> {
         (i > floor)
@@ -291,7 +301,7 @@ impl InlineCx<'_> {
     /// Where the char at `i` (as [`InlineCx::ch`] reads it) ends.
     pub fn step(&self, i: usize) -> usize {
         match self.eol_len(i) {
-            0 => i + self.char_at(i).map_or(1, char::len_utf8),
+            0 => i + self.char_len(i),
             n => i + n,
         }
     }
@@ -364,6 +374,7 @@ pub(crate) struct Frame {
     /// region is done; `None` for the root.
     rest: Option<std::vec::IntoIter<Part>>,
     pub radio: radio::Cursor,
+    pub colon: lex::Colon,
 }
 
 impl Frame {
@@ -380,6 +391,7 @@ impl Frame {
             floor: beg,
             rest,
             radio: radio::Cursor::default(),
+            colon: lex::Colon::default(),
         }
     }
 }

@@ -394,6 +394,14 @@ pub(crate) fn push(out: &mut Vec<Node>, node: Node) {
 /// character but tab, and DEL, as U+FFFD (an HTML parser drops or replaces
 /// NUL, and none of them is printable).
 pub(crate) fn clean_text(s: &str) -> String {
+    if is_clean(s) {
+        return s.to_owned();
+    }
+    clean_chars(s)
+}
+
+/// [`clean_text`]'s character pass, run whatever `s` holds.
+fn clean_chars(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
@@ -412,7 +420,41 @@ pub(crate) fn clean_text(s: &str) -> String {
     out
 }
 
+/// Whether [`clean_text`] leaves `s` as it is: no control character but
+/// tab and newline (a CR is one), no DEL.
+fn is_clean(s: &str) -> bool {
+    !s.bytes()
+        .any(|b| (b < 0x20 && b != b'\t' && b != b'\n') || b == 0x7f)
+}
+
 /// A text node of `s`, cleaned.
 pub(crate) fn text(s: &str) -> Node {
     Node::Text(clean_text(s))
+}
+
+/// [`text`] of an owned string, which it keeps when it is already clean.
+pub(crate) fn text_owned(s: String) -> Node {
+    Node::Text(if is_clean(&s) { s } else { clean_text(&s) })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4000))]
+
+        /// Text kept as it is (borrowed or owned) is exactly what the
+        /// character pass makes of it, over every control character, CR LF
+        /// pairs, DEL, C1 controls and multibyte text.
+        #[test]
+        fn clean_text_keeps_only_what_it_would_not_change(
+            s in "[\\x00-\\x1f\\x7f\\u{80}-\\u{9f}a é\r\n\t]{0,24}"
+        ) {
+            let slow = clean_chars(&s);
+            prop_assert_eq!(&clean_text(&s), &slow);
+            prop_assert!(matches!(text_owned(s), Node::Text(t) if t == slow));
+        }
+    }
 }
