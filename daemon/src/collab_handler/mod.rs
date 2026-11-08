@@ -297,11 +297,10 @@ async fn run_session<R, W>(
         }
     });
 
-    // Subscribe with empty subs — client opts in later.
-    let mut event_rx = {
-        let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
-        bc.subscribe(session_id, vec![])
-    };
+    // Subscribe with empty subs — client opts in later. Doc-scoped: a
+    // document's events reach this session only once it is subscribed to
+    // that document (which every doc method gates on access).
+    let mut event_rx = register_session(&broadcaster, session_id);
 
     let tool_defs: Vec<ToolInfo> = vec![];
     let mut consecutive_write_failures: u32 = 0;
@@ -353,7 +352,7 @@ async fn run_session<R, W>(
                 // Notifications must not generate a response — handle and continue.
                 if is_doc && is_notif {
                     debug!(session = session_id, "notification detected, handling without response");
-                    handle_doc_notification_inner(&msg, &doc_store, &broadcaster, session_id, auth_label.as_deref(), auth_principal.as_deref(), &mut session_docs).await;
+                    handle_doc_notification_inner(&msg, &doc_store, &broadcaster, session_id, auth_label.as_deref(), auth_principal.as_deref(), transport, &mut session_docs).await;
                     continue;
                 }
 
@@ -476,6 +475,18 @@ async fn run_session<R, W>(
 }
 
 /// Check if a raw JSON message is a doc-level sync method.
+/// Register a collab session for events: no event types yet (the client opts
+/// in), and doc-scoped from the start, so a document's events reach it only
+/// once it has subscribed to that document, which every doc method gates on
+/// access. See `EventBroadcaster::subscribe_doc_scoped`.
+pub(crate) fn register_session(
+    broadcaster: &SharedBroadcaster,
+    session_id: u64,
+) -> tokio::sync::mpsc::Receiver<EditorEvent> {
+    let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
+    bc.subscribe_doc_scoped(session_id, vec![])
+}
+
 /// The JSON-RPC error for a document write that storage refused or failed.
 /// A size refusal keeps its own code and `data.kind = "quota_exceeded"`, so a
 /// client can tell "this edit is too large" from a daemon fault (ADR-109 D6).
@@ -565,6 +576,7 @@ async fn handle_doc_notification(
         session_id,
         None,
         None,
+        Transport::Hub,
         session_docs,
     )
     .await
@@ -573,13 +585,12 @@ async fn handle_doc_notification(
 #[allow(clippy::too_many_arguments)]
 async fn handle_doc_notification_inner(
     msg: &str,
-    _doc_store: &DocStore,
+    doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
     session_id: u64,
     auth_label: Option<&str>,
-    // Used by the raw-`kbc:`/`kb:` sync/update owner gate (membership-smuggling
-    // defense); wired with the abuse tests.
-    _auth_principal: Option<&str>,
+    auth_principal: Option<&str>,
+    transport: Transport,
     session_docs: &mut HashSet<String>,
 ) {
     // Parse method and params manually — no JsonRpcRequest (requires `id`).
@@ -601,57 +612,24 @@ async fn handle_doc_notification_inner(
 
     match method {
         "sync/awareness" => {
-            let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
-            let state = &params["state"];
-            debug!(session = session_id, doc = %doc_name, "sync/awareness notification: relaying");
-            // Track doc for cleanup and doc-scoped broadcast filtering.
-            session_docs.insert(doc_name.clone());
-            {
-                let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
-                bc.subscribe_doc(session_id, &doc_name);
-                bc.broadcast_except(
-                    &EditorEvent::AwarenessUpdate {
-                        doc_id: doc_name,
-                        client_id: session_id,
-                        // Strict binding: an authenticated peer's cursor label is
-                        // its verified identity, not a self-claimed name.
-                        user_name: auth_label.map(str::to_string).unwrap_or_else(|| {
-                            state
-                                .get("user_name")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("unknown")
-                                .to_string()
-                        }),
-                        cursor_row: state
-                            .get("cursor_row")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0) as usize,
-                        cursor_col: state
-                            .get("cursor_col")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0) as usize,
-                        selection: state.get("selection").and_then(|v| {
-                            let arr = v.as_array()?;
-                            if arr.len() == 4 {
-                                Some((
-                                    arr[0].as_u64()? as usize,
-                                    arr[1].as_u64()? as usize,
-                                    arr[2].as_u64()? as usize,
-                                    arr[3].as_u64()? as usize,
-                                ))
-                            } else {
-                                None
-                            }
-                        }),
-                        mode: state
-                            .get("mode")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("normal")
-                            .to_string(),
-                    },
-                    session_id,
-                );
-            }
+            // @ai-caution: [security] The SAME handler as the request form,
+            // its response discarded (a notification gets none). Relaying
+            // subscribes the session to the doc, a standing feed of its
+            // updates, so a KB doc needs read access first. Never give this
+            // arm its own copy of the relay: two copies of an access check
+            // drift apart.
+            let _ = sync_methods::handle_sync_awareness(
+                doc_store,
+                broadcaster,
+                session_id,
+                auth_label,
+                auth_principal,
+                transport,
+                session_docs,
+                serde_json::Value::Null,
+                &params,
+            )
+            .await;
         }
         // Methods the daemon only handles as REQUESTS (apply/persist/respond). If one
         // arrives here it was sent without an `id` — a client protocol bug that would

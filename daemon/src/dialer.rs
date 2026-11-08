@@ -211,7 +211,7 @@ async fn peer_session(
     let mut local_rx = {
         // No `.await` while holding the std Mutex guard (it isn't Send).
         let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
-        let rx = bc.subscribe(dialer_sid, vec!["sync_update".to_string()]);
+        let rx = bc.subscribe_doc_scoped(dialer_sid, vec!["sync_update".to_string()]);
         bc.subscribe_doc(dialer_sid, &format!("kbc:{}", ticket.kb_id));
         for node in &node_docs {
             bc.subscribe_doc(dialer_sid, node);
