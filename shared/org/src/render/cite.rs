@@ -37,8 +37,8 @@ use super::objects::holds_hidden;
 use super::tree::{push, text, Element, Node, Tag};
 use crate::kind::SyntaxKind::*;
 use crate::kind::{SyntaxElement, SyntaxNode};
+use crate::seeded::HashMap;
 use rowan::NodeOrToken;
-use std::collections::HashMap;
 
 /// What a page's citations so far decide about the next ones.
 #[derive(Debug, Default)]

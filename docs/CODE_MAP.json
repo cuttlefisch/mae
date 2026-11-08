@@ -1087,6 +1087,10 @@
       ],
       "public_items": [
         {
+          "name": "seeded",
+          "kind": "mod"
+        },
+        {
           "name": "API_VERSION",
           "kind": "const"
         },
@@ -1140,6 +1144,10 @@
         },
         {
           "name": "mae_org_result_free",
+          "kind": "fn"
+        },
+        {
+          "name": "mae_org_seed",
           "kind": "fn"
         },
         {

@@ -30,8 +30,9 @@
 use super::InlineCx;
 use crate::chars::{canon, is_alnum, is_linebreak, is_space};
 use crate::kind::SyntaxKind::*;
+use crate::seeded::{HashMap, HashSet};
 use crate::span::ContentsTable;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
 
 /// The symbol a whitespace run reads as.
 const W: u32 = u32::MAX;
@@ -275,7 +276,7 @@ fn symbols(t: &Target) -> Vec<u32> {
 /// Each (item, position) state is entered once: the search returns at the
 /// first success, so a state seen again has already failed.
 fn exact(cx: &InlineCx, items: &[Item], p: usize, end: usize) -> Option<(usize, usize)> {
-    let mut seen: HashSet<(usize, usize)> = HashSet::new();
+    let mut seen: HashSet<(usize, usize)> = HashSet::default();
     let mut choices: Vec<(usize, Vec<usize>)> = Vec::new();
     let (mut k, mut pos) = (0, p);
     loop {
@@ -337,7 +338,7 @@ struct Automaton {
 impl Automaton {
     fn new(targets: &[Target]) -> Automaton {
         let mut a = Automaton {
-            goto_: HashMap::new(),
+            goto_: HashMap::default(),
             fail: vec![0],
             out: vec![Vec::new()],
             dict: vec![None],

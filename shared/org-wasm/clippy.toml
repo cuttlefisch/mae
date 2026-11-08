@@ -1,0 +1,7 @@
+# mae-org's maps are keyed by document text, and a document may come from
+# someone else. std's RandomState is not seeded on wasm32-unknown-unknown,
+# so maps use `mae_org::seeded` (SipHash under keys the host supplies).
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "unseeded on wasm32: use mae_org::seeded::HashMap" },
+    { path = "std::collections::HashSet", reason = "unseeded on wasm32: use mae_org::seeded::HashSet" },
+]

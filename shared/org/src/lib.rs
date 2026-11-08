@@ -84,6 +84,7 @@ mod options;
 mod paragraph;
 mod render;
 mod scan;
+pub mod seeded;
 mod semantics;
 mod span;
 mod text;

@@ -79,7 +79,7 @@ impl Reader<'_> {
         let mut out: Vec<(String, Json)> = Vec::new();
         // Where each key is, so a repeat is one lookup (a resolver can hold
         // many thousands of keys).
-        let mut at: std::collections::HashMap<String, usize> = Default::default();
+        let mut at: mae_org::seeded::HashMap<String, usize> = Default::default();
         self.ws();
         if self.eat("}") {
             return Ok(Json::Obj(out));

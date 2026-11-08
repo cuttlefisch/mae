@@ -90,12 +90,12 @@ pub(crate) mod regions;
 use crate::kind::SyntaxKind::{self, *};
 use crate::kind::SyntaxNode;
 use crate::link_grammar::{classify_link_with, classify_normalized, org_trim, LinkKind, LinkTypes};
+use crate::seeded::{HashMap, HashSet};
 use crate::span::Span;
 use crate::views::{Headline, Keyword, LinkAbbrevs, LinkFormat, PropertyDrawer};
 use crate::Document;
 use regions::Rules;
 use rowan::WalkEvent;
-use std::collections::{HashMap, HashSet};
 
 /// How an archived headline (one tagged with [`SemanticsOptions::archive_tag`])
 /// is rendered: `org-export-with-archived-trees`.
@@ -478,13 +478,13 @@ pub fn semantics_with(doc: &Document, options: &SemanticsOptions) -> Semantics {
         rules,
         link_types: &options.link_types,
         abbrevs: keywords::export_link_abbrevs(&root, &settings),
-        file_tags: merge_tags(&header.tags, &HashSet::new()),
-        file_tag_set: HashSet::new(),
+        file_tags: merge_tags(&header.tags, &HashSet::default()),
+        file_tag_set: HashSet::default(),
         file_id: None,
         owners: Vec::new(),
-        seen: HashMap::new(),
-        note_ctx: HashMap::new(),
-        note_place: HashMap::new(),
+        seen: HashMap::default(),
+        note_ctx: HashMap::default(),
+        note_place: HashMap::default(),
         pending_links: Vec::new(),
         pending_transclusions: Vec::new(),
         out: Semantics::default(),
@@ -598,7 +598,7 @@ fn property_pairs(d: &PropertyDrawer) -> Vec<(String, String)> {
 /// none is dropped. Linear: each key is found through a map.
 pub(crate) fn resolve_properties(pairs: Vec<(String, String)>) -> Vec<(String, String)> {
     let mut keys: Vec<(String, Option<String>, Vec<String>)> = Vec::new();
-    let mut at: HashMap<String, usize> = HashMap::new();
+    let mut at: HashMap<String, usize> = HashMap::default();
     for (key, value) in pairs {
         let key = crate::views::canonical_key(&key);
         let (base, append) = match key.strip_suffix('+') {
@@ -639,7 +639,7 @@ fn property<'a>(props: &'a [(String, String)], key: &str) -> Option<&'a str> {
 /// `tags` alone: `skip` is a set built once, so N file tags and N headlines
 /// cost O(N), not one set of N per headline.
 fn merge_tags(tags: &[String], skip: &HashSet<String>) -> Vec<String> {
-    let mut seen: HashSet<&str> = HashSet::new();
+    let mut seen: HashSet<&str> = HashSet::default();
     let mut out: Vec<String> = Vec::new();
     for t in tags {
         if !t.is_empty() && !skip.contains(t) && seen.insert(t.as_str()) {
@@ -1044,7 +1044,7 @@ impl Walk<'_> {
     /// labels became referenced, so a label referenced from inside another
     /// definition comes after that definition's label: one pass, no chains.
     fn attribute_notes(&mut self, order: &[String]) {
-        let mut resolved: HashMap<&str, Option<String>> = HashMap::new();
+        let mut resolved: HashMap<&str, Option<String>> = HashMap::default();
         for label in order {
             let ctx = self
                 .note_ctx

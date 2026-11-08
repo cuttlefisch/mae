@@ -30,7 +30,7 @@
 //! percent-encoded where it becomes part of another page's URL.
 
 use crate::chars::{canon, is_alnum};
-use std::collections::{HashMap, HashSet};
+use crate::seeded::{HashMap, HashSet};
 
 /// `enc` of the module doc.
 pub fn encode_id(raw: &str) -> String {
