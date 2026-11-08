@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.135] - 2026-11-08
+
+
+
+
+### Features
+
+- *(kb,daemon)* Bound a node's size, client first (ADR-109 D6) ([76f8f66](https://github.com/cuttlefisch/mae/commit/76f8f6653d2766d755131a9c75ed18568457c690))
+
+### Miscellaneous
+
+- *(hooks)* Pre-push allows mirrors listed in local git config ([98a3936](https://github.com/cuttlefisch/mae/commit/98a3936ad425c46294c4045858b9d58ebd86b409))
+
 ## [0.14.134] - 2026-11-08
 
 
@@ -11,6 +24,22 @@ All notable changes to this project will be documented in this file.
 
 - *(daemon)* Bind the principal the collab handshake proved ([449ab1e](https://github.com/cuttlefisch/mae/commit/449ab1e2fb7d9c5d572ca9cffdc6e84933734250))
 - *(daemon)* An off-host collab bind requires key auth over TLS ([dd7bde9](https://github.com/cuttlefisch/mae/commit/dd7bde936c795762f787778c612f2d9bf3a4df31))
+
+### Miscellaneous
+
+- Bump version to 0.14.134 ([1f96768](https://github.com/cuttlefisch/mae/commit/1f96768e2f0e4c57f9cb3d9fa0643f1baa4390ae))
+
+## [mae-org-v0.3.0] - 2026-11-08
+
+
+### ⚠ Breaking Changes
+- *(org)* Hash maps keyed with a host-supplied secret; mae-org 0.3.0 ([55b8879](https://github.com/cuttlefisch/mae/commit/55b8879935482aed00d8f221e19cddef4ff1a314))
+
+
+
+### Features
+
+- *(org)* Hash maps keyed with a host-supplied secret; mae-org 0.3.0 ([55b8879](https://github.com/cuttlefisch/mae/commit/55b8879935482aed00d8f221e19cddef4ff1a314))
 
 ### Performance
 
