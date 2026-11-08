@@ -237,7 +237,7 @@ impl Builder<'_> {
     /// Org never shows.
     fn local_text(&self, href: &str) -> Vec<Node> {
         let id = href.strip_prefix('#').unwrap_or(href);
-        match self.table.shown.get(id).filter(|s| !s.is_empty()) {
+        match self.previous().shown.get(id).filter(|s| !s.is_empty()) {
             Some(s) => vec![text(s)],
             None => self.placeholder(),
         }
@@ -265,7 +265,7 @@ impl Builder<'_> {
         if self.mode == Mode::Meta {
             return None;
         }
-        find(&self.table)
+        find(self.previous())
     }
 
     fn local_target(&self, find: impl FnOnce(&super::build::Table) -> Option<String>) -> Target {

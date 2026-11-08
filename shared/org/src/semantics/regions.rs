@@ -91,7 +91,7 @@ impl Rules {
         let file_excluded = file_tags.iter().any(|t| exclude.contains(t.as_str()));
         let file_selected = file_tags.iter().any(|t| select.contains(t.as_str()));
         let mut own: Vec<(SyntaxNode, Vec<String>, bool)> = Vec::new();
-        for n in root.descendants().filter(|n| n.kind() == HEADLINE) {
+        for n in crate::views::headline_nodes(root) {
             let Some(h) = Headline::cast(n.clone()) else {
                 continue;
             };
