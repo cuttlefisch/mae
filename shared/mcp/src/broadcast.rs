@@ -195,12 +195,6 @@ impl EventBroadcaster {
     }
 
     /// Update a client's event type subscription list.
-    pub fn update_subscriptions(&mut self, session_id: u64, subscriptions: Vec<String>) {
-        if let Some(entry) = self.clients.get_mut(&session_id) {
-            entry.event_subs = subscriptions;
-        }
-    }
-
     /// Add a single event-type subscription without clobbering existing ones
     /// (idempotent). Used by `kb/join` so a member is subscribed to `sync_update`
     /// AS OF the join snapshot — closing the window where the owner's edits between
