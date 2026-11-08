@@ -270,8 +270,12 @@ impl Builder<'_> {
     /// `drawer`. A value with no macro, or a document shown as written,
     /// is rendered as it is.
     pub fn macro_value(&mut self, entry: &str, value: &str, drawer: Span) -> Vec<Node> {
+        // The context is built on the first value with a macro, if any.
+        if !value.contains("{{{") {
+            return self.property_value(value);
+        }
         let expanded = match self.value_cx() {
-            Some(vcx) if value.contains("{{{") => {
+            Some(vcx) => {
                 let text = format!("{entry}x {value}\n");
                 match self.expand_value(vcx, &text) {
                     Ok(t) => t,

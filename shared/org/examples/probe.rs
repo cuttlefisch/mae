@@ -6,6 +6,7 @@
 //! cargo run -p mae-org --example probe -- grep FILE NEEDLE
 //! cargo run -p mae-org --example probe -- splice FILE ID BODYFILE
 //! cargo run -p mae-org --example probe -- rtime FILE [N]
+//! cargo run -p mae-org --example probe -- loop FILE PHASE N
 //! ```
 //!
 //! `show` prints every non-empty channel (body HTML and hast, `text()`,
@@ -14,6 +15,8 @@
 //! NEEDLE (case-insensitively), with context. `splice` runs `replace_body`
 //! on node ID with BODYFILE's text and prints every channel that changed.
 //! `rtime` times parse, semantics and render (min and median of N runs).
+//! `loop` runs one PHASE (parse, semantics, render or highlights) N times and
+//! nothing else, so a sampling profiler sees that phase alone.
 //! `conformance/cmp.sh` puts `grep` beside Emacs's export.
 
 #[path = "../tests/leak_oracle/channels.rs"]
@@ -25,7 +28,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 const USAGE: &str =
-    "usage: probe show FILE | grep FILE NEEDLE | splice FILE ID BODYFILE | rtime FILE [N]";
+    "usage: probe show FILE | grep FILE NEEDLE | splice FILE ID BODYFILE | rtime FILE [N] | loop FILE PHASE N";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -43,6 +46,10 @@ fn main() -> ExitCode {
             &t,
             args.get(2).and_then(|n| n.parse().ok()).unwrap_or(10),
         )),
+        (Some("loop"), Some(Ok(t))) if args.len() == 4 => args[3]
+            .parse()
+            .map_err(|_| USAGE.to_string())
+            .and_then(|n| phase_loop(&t, &args[2], n)),
         (_, Some(Err(e))) => Err(e),
         _ => Err(USAGE.to_string()),
     };
@@ -170,4 +177,24 @@ fn rtime(text: &str, n: usize) -> String {
         ));
     }
     out
+}
+
+/// Runs `phase` `n` times over `text`; its inputs are built once, outside the loop.
+fn phase_loop(text: &str, phase: &str, n: usize) -> Result<String, String> {
+    let doc = parse(text, &ParseOptions::default());
+    let sem = semantics(&doc);
+    let (ro, rs) = (
+        mae_org::RenderOptions::default(),
+        mae_org::Resolver::default(),
+    );
+    for _ in 0..n {
+        match phase {
+            "parse" => drop(std::hint::black_box(parse(text, &ParseOptions::default()))),
+            "semantics" => drop(std::hint::black_box(semantics(&doc))),
+            "render" => drop(std::hint::black_box(mae_org::render(&doc, &sem, &ro, &rs))),
+            "highlights" => drop(std::hint::black_box(mae_org::highlights(&doc))),
+            _ => return Err(format!("unknown phase {phase}\n{USAGE}")),
+        }
+    }
+    Ok(format!("{phase} x{n}\n"))
 }

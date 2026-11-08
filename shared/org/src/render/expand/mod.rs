@@ -253,10 +253,20 @@ type Found = (usize, usize, String, Option<String>);
 /// Expands the macros of `doc`, or `Ok(None)` when it has none to expand.
 pub(crate) fn expand(doc: &Document) -> Result<Option<Expansion>, RenderDiagnostic> {
     let source = doc.syntax().to_string();
-    let templates = value::templates(doc, &source);
     // `org-export--delete-comment-trees`: the COMMENT subtrees go first,
     // from the text, before anything else reads it.
     let (text, map) = without_comment_trees(doc, &source);
+    // Every macro, written or forced, opens with `{{{`: without one there
+    // is nothing to expand, and what is left is the text without them.
+    if !source.contains("{{{") {
+        return Ok((!map.pieces.is_empty()).then_some(Expansion {
+            text,
+            map,
+            notes: Vec::new(),
+            work: 0,
+        }));
+    }
+    let templates = value::templates(doc, &source);
     if map.pieces.is_empty() {
         return scan::Engine::new(doc, source.len(), templates).run(map, HashSet::new());
     }
