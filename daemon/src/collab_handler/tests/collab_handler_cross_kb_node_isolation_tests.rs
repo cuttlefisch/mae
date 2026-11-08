@@ -342,3 +342,134 @@ async fn share_and_awareness_cannot_touch_another_kbs_documents() {
         again.error
     );
 }
+
+/// ADVERSARIAL: the same awareness, sent as a NOTIFICATION (no `id`), which
+/// takes a different entry point and must apply the same access check. End
+/// to end: the outsider subscribes to every event type, sends the
+/// notification naming another KB's node, and the owner then writes; nothing
+/// may reach it. A member's notification still relays.
+#[tokio::test]
+async fn awareness_notification_cannot_subscribe_an_outsider_to_another_kbs_node() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let (mut mallory_docs, mut victim_docs) = (HashSet::new(), HashSet::new());
+    kb_share_as(
+        &store,
+        &bc,
+        Some("mallory"),
+        Some(&fp("mallory")),
+        "kb-a",
+        "mallory",
+        &mut mallory_docs,
+    )
+    .await;
+    kb_share_as(
+        &store,
+        &bc,
+        Some("victim"),
+        Some(&fp("victim")),
+        "kb-b",
+        "victim",
+        &mut victim_docs,
+    )
+    .await;
+    let node = "kbn:kb-b:concept:b-secret";
+
+    let (mallory, victim) = (7u64, 8u64);
+    let all = || vec!["sync_update".to_string(), "awareness_update".to_string()];
+    // Registered as the daemon registers every collab session, then opted in
+    // to every event type.
+    let mut mallory_rx = register_session(&bc, mallory);
+    let _victim_rx = register_session(&bc, victim);
+    for sid in [mallory, victim] {
+        for t in all() {
+            bc.lock().unwrap().add_event_sub(sid, &t);
+        }
+    }
+    let note = |doc: &str| {
+        serde_json::json!({"jsonrpc":"2.0","method":"sync/awareness",
+            "params":{"doc":doc,"state":{"cursor_row":0,"cursor_col":0}}})
+        .to_string()
+    };
+    let send = |sid: u64, who: &'static str, docs: &mut HashSet<String>| {
+        let (store, bc, msg) = (Arc::clone(&store), Arc::clone(&bc), note(node));
+        let mut owned = std::mem::take(docs);
+        async move {
+            handle_doc_notification_inner(
+                &msg,
+                &store,
+                &bc,
+                sid,
+                Some(who),
+                Some(&fp(who)),
+                Transport::Hub,
+                &mut owned,
+            )
+            .await;
+            owned
+        }
+    };
+
+    mallory_docs = send(mallory, "mallory", &mut mallory_docs).await;
+    assert!(
+        !mallory_docs.contains(node),
+        "the outsider's session tracked {node}"
+    );
+
+    // The owner writes to the node: the daemon broadcasts the update to the
+    // doc's subscribers. The outsider must not be one of them.
+    bc.lock().unwrap().broadcast(&EditorEvent::SyncUpdate {
+        buffer_name: node.to_string(),
+        update_base64: "AAA=".to_string(),
+        wal_seq: 1,
+        content_header: None,
+    });
+    assert!(
+        mallory_rx.try_recv().is_err(),
+        "an outsider received another KB's node update"
+    );
+
+    // A member's own cursor notification is still relayed and subscribed.
+    victim_docs = send(victim, "victim", &mut victim_docs).await;
+    assert!(
+        victim_docs.contains(node),
+        "a member's awareness notification was refused"
+    );
+}
+
+/// ADVERSARIAL: a collab session that subscribes to `sync_update` and touches
+/// no document at all receives no document's events. The broadcaster's
+/// default treats a client with no document subscriptions as wanting every
+/// document (the editor's MCP server relies on it); a daemon session must
+/// not, since its documents are other KBs' content.
+#[tokio::test]
+async fn a_session_subscribed_to_no_document_receives_no_documents_events() {
+    let bc = test_broadcaster();
+    let mut rx = register_session(&bc, 11);
+    bc.lock().unwrap().add_event_sub(11, "sync_update");
+    for doc in ["kbn:any-kb:any-node", "kbc:any-kb", "notes.org"] {
+        bc.lock().unwrap().broadcast(&EditorEvent::SyncUpdate {
+            buffer_name: doc.to_string(),
+            update_base64: "AAA=".to_string(),
+            wal_seq: 1,
+            content_header: None,
+        });
+    }
+    assert!(
+        rx.try_recv().is_err(),
+        "a session with no documents received a document's update"
+    );
+    // Once it subscribes to a document (which every doc method gates on
+    // access), that document's events do reach it.
+    bc.lock().unwrap().subscribe_doc(11, "notes.org");
+    bc.lock().unwrap().broadcast(&EditorEvent::SyncUpdate {
+        buffer_name: "notes.org".to_string(),
+        update_base64: "AAA=".to_string(),
+        wal_seq: 2,
+        content_header: None,
+    });
+    assert!(
+        rx.try_recv().is_ok(),
+        "a subscribed document's update did not arrive"
+    );
+}
