@@ -631,10 +631,9 @@ pub(super) async fn handle_kb_node_update(
             info!(session = session_id, kb_id = %kb_id, node_id = %node_id, wal_seq = result.wal_seq, reseal, "kb/node_update: applied");
             JsonRpcResponse::success(id, serde_json::json!({ "applied": true }))
         }
-        Err(e) => JsonRpcResponse::error(
-            id,
-            McpError::internal_error(format!("failed to apply node update: {e}")),
-        ),
+        Err(e) => {
+            JsonRpcResponse::error(id, super::write_failure("failed to apply node update", e))
+        }
     }
 }
 

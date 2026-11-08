@@ -450,7 +450,13 @@ pub struct SyncConfig {
     /// so a large node's full-state push (e.g. on reseal/share) must fit under it.
     /// Raise for KBs with large individual nodes.
     pub max_update_size_bytes: usize,
-    /// Maximum document size in bytes before warning (0 = unlimited).
+    /// Largest payload an update may grow one document to, in UTF-8 bytes
+    /// (0 = unlimited): a KB node's body, or a text document's content. An
+    /// update that would grow a document past it is REFUSED with a
+    /// `quota_exceeded` error, before it is logged or relayed; a document
+    /// already past it may still shrink. ADR-109 D6: the backstop for clients
+    /// that do not apply their own, smaller cap (the editor's
+    /// `kb_max_node_bytes`).
     pub max_document_size_bytes: usize,
 }
 

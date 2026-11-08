@@ -141,3 +141,69 @@ editing. That is an argument for building ADR-107, and this ADR should be revisi
 **Neutral.** The figures are Linux-only and will drift as the schema changes. That is why they live
 in a runnable benchmark and this ADR cites the command rather than freezing the numbers in prose
 alone — the same discipline `tools/audit-metrics` exists to enforce for file sizes.
+
+## Amendment (2026-11-08): D6 — a node's size is bounded, client first
+
+### Context
+
+D1 prices a node at a flat figure, but nothing bounded how large one node could grow. The daemon's
+`[collab.sync] max_document_size_bytes` (10 MB) only logged a warning, deliberately ("don't reject —
+CRDT convergence"), and measured a text document's `content` root, which a KB node does not use, so
+a node of any size passed it. `max_update_size_bytes` (4 MiB) bounds one message, not the document:
+repeated small updates grow a node without limit. Every reader then parses and renders the whole
+body — the browser editor on open, the render service on every change.
+
+Measured across 17 real local KBs (11,000+ nodes; sizes only, no content): the largest body is
+320 KB, the 99th percentile of every KB is under 50 KB, 16 nodes exceed 64 KB and none reaches
+1 MB. The large ones are long documents (hundreds of table rows, or about a thousand headlines). No
+body carries an image beyond one small pasted data URI (18 KB): MAE stores no image data in nodes,
+and mae-org renders only remote image links. In the browser build, rendering the largest real nodes
+costs up to ~80 ms and highlighting a whole one up to ~30 ms (instruction counts at the browser's
+measured speed); cost is linear in size, so 1 MiB is ~200 ms and 10 MB ~2 s.
+
+### D6. Clients cap a node's body; the daemon refuses past a larger backstop
+
+Supersedes ADR-008's "max document size: log a warning, don't reject — breaks convergence". The
+convergence concern is real and is why the cap is the client's first (item 1); the daemon's refusal
+is for a client that does not apply one, and the only peer it leaves diverged is that client.
+
+1. **The editor refuses an edit that would grow a node's body past `kb_max_node_bytes`** (default
+   1 MiB, about three times the largest real node; 0 = unlimited), on create and on update, through
+   the sole mutator (ADR-092 D1). Other clients apply their own cap the same way. The cap is
+   enforced where the edit is still the author's: once the daemon refuses an update, the author's
+   CRDT already holds it and re-sends it on every reconnect, so a refusal there is a divergence for
+   that client, acceptable only for a client that does not apply a cap.
+2. **The daemon refuses an update that would grow a document past `max_document_size_bytes`**
+   (still 10 MB), on every write path (hub sync, node update, mesh relay — all `DocStore::apply_update`
+   — and `share_doc`). It answers JSON-RPC code `-32006` (`DOCUMENT_TOO_LARGE`) with
+   `data: {"kind": "quota_exceeded", "size", "limit"}`, the first use of `error.data.kind`.
+3. **What is measured** is the payload a reader renders: a KB node's body (an E2E KB's ciphertext,
+   since the daemon is key-blind), or a text document's content, in UTF-8 bytes.
+4. **Only growth is refused.** A document already past the limit (stored before it existed, or under
+   a larger one) may shrink or keep its size, so its owner can split it; a reseal or rebirth (E2E key
+   rotation) re-shares it at the same size and is accepted.
+5. **The daemon measures after applying, never "size before + update length".** yrs holds an update
+   whose dependencies are missing as pending; a later one-byte update can integrate it, so an
+   update's length does not bound the growth it causes. The update is applied in memory, measured,
+   and then logged, all under the document's lock; a refused (or unlogged) update is taken back by
+   reloading the document from storage, which never saw it.
+
+### Why not chunking
+
+No real KB approaches the limit, so size alone does not motivate splitting a node's storage, and
+an edit already travels as a small CRDT delta whatever the node's size. What a large node costs is
+work that re-reads the whole document on every keystroke. The answer to that is section-scoped work
+— highlighting already re-parses only the edited section (`syntaxSection`); live preview gets the
+same treatment — with whole-document work done once on open, off the typing path, and in the render
+service. Chunking a node's text would split constructs that span it (links, macros, footnotes) and
+break one-document-per-node (ADR-105).
+
+### Not bounded here
+
+- **Collection documents** (`kbc:`): metadata, not rendered; their growth belongs with the op-log.
+- **CRDT history** (tombstones, ADR-107) and **version history** (ADR-106), as in D5.
+- **Images and attachments**: not stored in nodes at all today. Embedding them (base64) in a body
+  would put them in the CRDT history forever and in every parse; the intended design is a
+  content-addressed asset store on the daemon that a node references, which needs its own ADR.
+- **Render time**: the render service (outside MAE, ADR-074 feed) enforces its own per-node
+  deadline; D6 bounds its input.
