@@ -39,6 +39,44 @@ fn an_unauthenticated_off_host_bind_is_refused() {
     }
 }
 
+/// Key auth without TLS authenticates the handshake, then carries every KB
+/// document in the clear: off-host it is refused too, for every off-host
+/// address shape, and the message names the `tls` setting.
+#[test]
+fn key_auth_without_tls_off_host_is_refused() {
+    for bind in [
+        "0.0.0.0:9473",
+        "[::]:9473",
+        "10.0.0.5:9473",
+        "[2001:db8::1]:9473",
+    ] {
+        let mut c = cfg(bind, "key");
+        c.collab.auth.tls = false;
+        let issues = c.check_collab();
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.contains("reachable off-host") && i.contains("tls")),
+            "bind={bind} key without TLS must be refused, got: {issues:?}"
+        );
+    }
+}
+
+/// On loopback, key auth without TLS stays allowed (local development,
+/// tests), as do the other modes.
+#[test]
+fn key_auth_without_tls_on_loopback_is_accepted() {
+    for bind in ["127.0.0.1:9473", "[::1]:9473"] {
+        let mut c = cfg(bind, "key");
+        c.collab.auth.tls = false;
+        let issues = c.check_collab();
+        assert!(
+            !issues.iter().any(|i| i.contains("reachable off-host")),
+            "bind={bind} must be accepted, got: {issues:?}"
+        );
+    }
+}
+
 /// The three configurations that must NOT be refused. Without these the
 /// check above would be satisfied by a function that rejects everything,
 /// and loopback development would be broken.
