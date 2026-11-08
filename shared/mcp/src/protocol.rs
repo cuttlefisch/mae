@@ -71,6 +71,11 @@ impl JsonRpcResponse {
 pub struct McpError {
     pub code: i64,
     pub message: String,
+    /// JSON-RPC's optional `data` member. When present it carries `kind`, a
+    /// stable string a client branches on (never the message text). Boxed so
+    /// an error stays small on the paths that return one by value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<Box<serde_json::Value>>,
 }
 
 impl McpError {
@@ -78,6 +83,7 @@ impl McpError {
         McpError {
             code: -32700,
             message,
+            data: None,
         }
     }
 
@@ -85,6 +91,7 @@ impl McpError {
         McpError {
             code: -32601,
             message,
+            data: None,
         }
     }
 
@@ -92,6 +99,7 @@ impl McpError {
         McpError {
             code: -32600,
             message,
+            data: None,
         }
     }
 
@@ -99,6 +107,7 @@ impl McpError {
         McpError {
             code: -32603,
             message,
+            data: None,
         }
     }
 
@@ -108,6 +117,7 @@ impl McpError {
         McpError {
             code: -32000,
             message,
+            data: None,
         }
     }
 
@@ -115,6 +125,7 @@ impl McpError {
         McpError {
             code: -32001,
             message,
+            data: None,
         }
     }
 
@@ -122,6 +133,7 @@ impl McpError {
         McpError {
             code: -32002,
             message,
+            data: None,
         }
     }
 
@@ -129,6 +141,7 @@ impl McpError {
         McpError {
             code: -32003,
             message,
+            data: None,
         }
     }
 
@@ -136,6 +149,7 @@ impl McpError {
         McpError {
             code: -32004,
             message,
+            data: None,
         }
     }
 
@@ -149,9 +163,31 @@ impl McpError {
         McpError {
             code: KB_ID_OWNED_BY_ANOTHER,
             message,
+            data: None,
         }
     }
 }
+
+impl McpError {
+    /// An update would grow a document past the daemon's size limit (ADR-109
+    /// D6). Nothing was applied, logged or relayed. `data` is
+    /// `{"kind": "quota_exceeded", "size": <bytes it would hold>, "limit": <bytes>}`.
+    pub fn document_too_large(message: String, size: usize, limit: usize) -> Self {
+        McpError {
+            code: DOCUMENT_TOO_LARGE,
+            message,
+            data: Some(Box::new(serde_json::json!({
+                "kind": "quota_exceeded",
+                "size": size,
+                "limit": limit,
+            }))),
+        }
+    }
+}
+
+/// An update was refused: it would grow a document past the daemon's size
+/// limit (ADR-109 D6). See [`McpError::document_too_large`].
+pub const DOCUMENT_TOO_LARGE: i64 = -32006;
 
 /// `kb/share` refused: the id already belongs to a different owner (ADR-105 D5).
 ///
@@ -258,6 +294,28 @@ pub struct ContentItem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `data` is new on the wire: absent when unset (an old client sees
+    /// exactly what it saw before), and an error without it still parses.
+    #[test]
+    fn error_data_is_optional_on_the_wire() {
+        let plain = serde_json::to_value(McpError::internal_error("x".into())).unwrap();
+        assert_eq!(plain, serde_json::json!({"code": -32603, "message": "x"}));
+        let old: McpError = serde_json::from_str(r#"{"code":-32603,"message":"x"}"#).unwrap();
+        assert!(old.data.is_none());
+
+        let refused =
+            serde_json::to_value(McpError::document_too_large("big".into(), 11, 10)).unwrap();
+        assert_eq!(refused["code"], DOCUMENT_TOO_LARGE);
+        assert_eq!(refused["data"]["kind"], "quota_exceeded");
+        assert_eq!(
+            (
+                refused["data"]["size"].as_u64(),
+                refused["data"]["limit"].as_u64()
+            ),
+            (Some(11), Some(10))
+        );
+    }
 
     #[test]
     fn test_serialize_initialize_result() {

@@ -476,6 +476,48 @@ async fn run_session<R, W>(
 }
 
 /// Check if a raw JSON message is a doc-level sync method.
+/// The JSON-RPC error for a document write that storage refused or failed.
+/// A size refusal keeps its own code and `data.kind = "quota_exceeded"`, so a
+/// client can tell "this edit is too large" from a daemon fault (ADR-109 D6).
+fn write_failure(context: &str, e: crate::storage::StorageError) -> McpError {
+    match e {
+        crate::storage::StorageError::TooLarge { size, limit, .. } => {
+            McpError::document_too_large(format!("{context}: {e}"), size, limit)
+        }
+        e => McpError::internal_error(format!("{context}: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod write_failure_tests {
+    use super::*;
+    use crate::storage::StorageError;
+
+    /// Only a size refusal carries the quota kind; every other storage failure
+    /// stays an internal error, so a client never mistakes a daemon fault for
+    /// "your edit is too large" (or the reverse).
+    #[test]
+    fn only_a_size_refusal_is_reported_as_a_quota() {
+        let too_large = StorageError::TooLarge {
+            doc: "kbn:k:n".into(),
+            size: 11,
+            limit: 10,
+        };
+        let e = write_failure("node update", too_large);
+        assert_eq!(e.code, mae_mcp::protocol::DOCUMENT_TOO_LARGE);
+        assert_eq!(e.data.as_ref().unwrap()["kind"], "quota_exceeded");
+        assert!(
+            e.message.contains("max_document_size_bytes"),
+            "{}",
+            e.message
+        );
+
+        let fault = write_failure("node update", StorageError::Sqlite("disk".into()));
+        assert_eq!(fault.code, -32603);
+        assert!(fault.data.is_none());
+    }
+}
+
 fn is_doc_method(msg: &str) -> bool {
     // Quick string check before full parse.
     msg.contains("\"sync/state_vector\"")
@@ -1460,7 +1502,7 @@ async fn handle_doc_request_inner(
                     principal = auth_principal.unwrap_or("<none>"),
                     "collab request rejected by tenant quota"
                 );
-                return resp;
+                return *resp;
             }
         };
 
