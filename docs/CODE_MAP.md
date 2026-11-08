@@ -420,6 +420,7 @@ Source: `shared/org/src/lib.rs`
 
 | Item | Kind |
 |------|------|
+| `seeded` | mod |
 | `API_VERSION` | const |
 | `Document` | struct |
 | `parse` | fn |
@@ -439,6 +440,7 @@ Source: `shared/org-wasm/src/lib.rs`
 | `mae_org_call` | fn |
 | `mae_org_result_ptr` | fn |
 | `mae_org_result_free` | fn |
+| `mae_org_seed` | fn |
 | `mae_org_live_bytes` | fn |
 
 ## mae-renderer

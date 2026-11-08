@@ -21,10 +21,10 @@ use super::value::Template;
 use super::{Expansion, Found, MacroFailure, Map, Piece, Stop, PARSED_KEYWORDS};
 use crate::kind::SyntaxKind::*;
 use crate::kind::SyntaxNode;
+use crate::seeded::{HashMap, HashSet};
 use crate::views::{Headline, Keyword};
 use crate::{Document, LineEnding, RenderDiagnostic, Span};
 use rowan::WalkEvent;
-use std::collections::{HashMap, HashSet};
 
 /// What kind of element a unit is, which decides how it is read again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,8 +201,8 @@ impl Engine {
     ) -> Engine {
         Engine {
             templates,
-            counters: HashMap::new(),
-            record: HashSet::new(),
+            counters: HashMap::default(),
+            record: HashSet::default(),
             work: 0,
             work_limit: super::WORK_BASE + super::WORK_PER_BYTE * source_len as u64,
             size_limit: super::SIZE_BASE + super::SIZE_PER_BYTE * source_len,
@@ -217,12 +217,12 @@ impl Engine {
             dtext: crate::text::source_of(&doc.syntax()),
             map: Map::default(),
             segment: Vec::new(),
-            skip: HashSet::new(),
+            skip: HashSet::default(),
             commented: Vec::new(),
             lines: None,
             outer_lines: None,
-            keywords: HashMap::new(),
-            properties: HashMap::new(),
+            keywords: HashMap::default(),
+            properties: HashMap::default(),
         }
     }
 

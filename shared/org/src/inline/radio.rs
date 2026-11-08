@@ -77,9 +77,9 @@
 use super::{InlineCx, Obj};
 use crate::chars::{canon, is_alnum, is_linebreak, is_space};
 use crate::kind::SyntaxKind::*;
+use crate::seeded::{HashMap, HashSet};
 use crate::span::ContentsTable;
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
 
 /// No node / no target.
 const NONE: u32 = u32::MAX;
@@ -184,8 +184,8 @@ struct Memo {
 impl Memo {
     fn new(text_len: usize) -> Memo {
         Memo {
-            failed: HashSet::new(),
-            run_failed: HashMap::new(),
+            failed: HashSet::default(),
+            run_failed: HashMap::default(),
             cap: (text_len / 2).max(4_096),
         }
     }
@@ -381,7 +381,7 @@ impl Radio {
         }
         let mut table = ContentsTable::default();
         parse_all(cx, &mut table);
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         let mut values: Vec<&str> = Vec::new();
         for s in table.spans_of(RADIO_TARGET) {
             let v = &cx.src.text[s.range()];
@@ -605,7 +605,7 @@ impl Radio {
             match self.regexps_at(p, end) {
                 Some((lo, hi)) if !w.all_covered(lo, hi) => {
                     let table = self.examine(cx, p, (floor, end))?;
-                    w.record(p, table, &HashSet::new());
+                    w.record(p, table, &HashSet::default());
                 }
                 // No regexp can match here, or each that can has an earlier
                 // front: nothing to learn unless a front moves past it.
@@ -637,7 +637,7 @@ impl Radio {
     /// Drops the matches and skipped candidates the search start has
     /// `passed`; the regexps whose fronts were among them.
     fn drop_passed(&self, w: &mut Window, passed: &dyn Fn(usize) -> bool) -> Work<HashSet<u32>> {
-        let mut moved = HashSet::new();
+        let mut moved = HashSet::default();
         while let Some((&p, _)) = w.hits.first_key_value().filter(|(&p, _)| passed(p)) {
             self.visit()?;
             let table = w.hits.remove(&p).unwrap_or_default();
@@ -1212,7 +1212,7 @@ fn compile(value: &str) -> Target {
 fn assign_leads(targets: &mut [Target]) -> Vec<Vec<Item>> {
     let blank = |i: &Item| *i == Item::Run || matches!(i, Item::Lit(c) if is_space(*c));
     let mut leads: Vec<Vec<Item>> = Vec::new();
-    let mut ids: HashMap<Vec<Item>, u32> = HashMap::new();
+    let mut ids: HashMap<Vec<Item>, u32> = HashMap::default();
     for t in targets.iter_mut().filter(|t| t.shape == Shape::Mixed) {
         let Some(j) = t.items.iter().position(|i| !blank(i)).filter(|&j| j > 0) else {
             continue;
@@ -1332,7 +1332,7 @@ impl Symbols {
             odd: Vec::new(),
             plain: Vec::new(),
             exact: Vec::new(),
-            runs: HashMap::new(),
+            runs: HashMap::default(),
         };
         let mut i = cx.src.bom;
         let mut run = String::new();
@@ -1478,7 +1478,7 @@ impl Trie {
     /// The trie of `seqs`, with each node's edge symbol and the matched and
     /// mixed targets ending at it.
     fn insert(seqs: &[(u32, Vec<u32>, bool)]) -> Inserted {
-        let mut next: HashMap<(u32, u32), u32> = HashMap::new();
+        let mut next: HashMap<(u32, u32), u32> = HashMap::default();
         let (mut parent, mut depth, mut edge) = (vec![0u32], vec![0u32], vec![W]);
         let mut owns: Vec<Vec<u32>> = vec![Vec::new()];
         let mut mixed_of: Vec<Vec<u32>> = vec![Vec::new()];
@@ -1549,7 +1549,7 @@ impl Trie {
         self.own_at.push((a, self.own_list.len() as u32));
         let a = self.mixed_list.len() as u32;
         mixed.sort_unstable();
-        let mut kept: HashSet<(u32, &[Item])> = HashSet::new();
+        let mut kept: HashSet<(u32, &[Item])> = HashSet::default();
         mixed.retain(|&t| kept.insert((part[t as usize], &targets[t as usize].items[..])));
         let leads: HashSet<u32> = mixed.iter().map(|&t| targets[t as usize].lead).collect();
         self.mixed_list.extend(mixed);
@@ -1713,7 +1713,7 @@ impl Sam {
         let mut sam = Sam {
             len: vec![0],
             link: vec![NONE],
-            next: HashMap::new(),
+            next: HashMap::default(),
             syms: vec![Vec::new()],
         };
         let ends = seqs
@@ -2173,7 +2173,7 @@ mod tests {
 
     /// Targets in regexp order, as `Radio::find` sorts them.
     fn ordered(mut v: Vec<String>) -> Vec<String> {
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         v.retain(|s| seen.insert(s.clone()));
         v.sort_by_key(|s| std::cmp::Reverse(s.chars().count()));
         v

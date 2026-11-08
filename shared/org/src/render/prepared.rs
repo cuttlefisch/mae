@@ -5,9 +5,9 @@ use super::build::DocCx;
 use super::expand::Map;
 use super::RenderDiagnostic;
 use crate::kind::SyntaxKind::*;
+use crate::seeded::{HashMap, HashSet};
 use crate::{Document, SemanticNode, Semantics, Span};
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 pub(crate) struct Prepared<'d> {
@@ -117,8 +117,8 @@ fn removed_results(doc: &Document, sem: &Semantics) -> (HashSet<usize>, HashSet<
     let (opts, resolver) = (super::RenderOptions::default(), super::Resolver::default());
     let mode = super::build::Mode::Page;
     let mut b = super::build::Builder::new(doc, sem, &opts, &resolver, mode, Default::default());
-    let mut out = HashSet::new();
-    let mut kept = HashSet::new();
+    let mut out = HashSet::default();
+    let mut kept = HashSet::default();
     for n in doc.syntax().descendants() {
         if is_results(&n) {
             if b.babel_hides_object(&n) {
@@ -239,11 +239,11 @@ impl<'d> Prepared<'d> {
         &'s self,
         source: &'s Semantics,
     ) -> Vec<(&'s SemanticNode, &'s SemanticNode)> {
-        let mut by_id: HashMap<&str, Vec<&SemanticNode>> = HashMap::new();
+        let mut by_id: HashMap<&str, Vec<&SemanticNode>> = HashMap::default();
         for n in &self.sem.nodes {
             by_id.entry(n.id.as_str()).or_default().push(n);
         }
-        let mut seen: HashMap<&str, usize> = HashMap::new();
+        let mut seen: HashMap<&str, usize> = HashMap::default();
         source
             .nodes
             .iter()

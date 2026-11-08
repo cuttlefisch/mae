@@ -5,8 +5,8 @@
 //! change to those constants fails here until the contract is changed too.
 #![allow(dead_code)]
 
+use mae_org::seeded::{HashMap, HashSet};
 use mae_org::{Node, Resolver};
-use std::collections::{HashMap, HashSet};
 
 /// A parsed element or text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,7 +228,7 @@ fn ids(nodes: &[Dom], out: &mut Vec<String>) {
 pub fn check(nodes: &[Dom], c: &Contract) -> Result<(), String> {
     let mut all = Vec::new();
     ids(nodes, &mut all);
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     for id in &all {
         if !seen.insert(id.clone()) {
             return Err(format!("duplicate id {id:?}"));

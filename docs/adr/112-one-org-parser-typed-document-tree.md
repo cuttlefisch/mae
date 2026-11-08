@@ -195,6 +195,14 @@ layer on it becomes the cheaper path.
   whole parse's spans there (corpus and property tests). An edit that changes what the rest of the
   file reads (a headline line, a radio target or TODO keyword line, the line ending before the
   next headline) answers `needs_full` instead. WASM 928,440 bytes.
+- **O3.2** (`mae-org-v0.3.0`) the module is seeded: its hash maps are keyed by document text, and
+  std's `RandomState` is not seeded on wasm32-unknown-unknown (the same keys on every load), so
+  `mae_org::seeded` keys SipHash with 128 bits the host supplies through a sixth export,
+  `mae_org_seed`, which the loader calls from `crypto.getRandomValues` for every instance it
+  makes; every operation but `version` refuses to run unseeded. Natively the keys come from the
+  operating system. Chosen over ordered maps, which needed no secret but cost 74 KB (past the size
+  budget) and ~5% of `renderHtml` (Hayden, 2026-11-08). Also: parse, semantics and render about
+  2-2.5x cheaper in WASM with every output unchanged (PR #862).
 - **O4** MAE switches ingest, export and read mode to it, with the repair path; the span-based write
   path lands on the same spans.
 - **O5** the remaining constructs by measured use, privacy-relevant regions first.

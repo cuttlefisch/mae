@@ -7,11 +7,12 @@
 
 mod support;
 
+use mae_org::seeded::HashSet;
 use mae_org::{
     parse, render_html, semantics, semantics_with, ArchivedTrees, ParseOptions, RenderOptions,
     Resolver, SemanticsOptions,
 };
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 struct Entry {
@@ -94,7 +95,7 @@ fn rust_files(dir: &Path) -> Vec<std::path::PathBuf> {
 /// Every `#[test]` function in `src/` and `tests/`.
 fn test_functions() -> HashSet<String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut names = HashSet::new();
+    let mut names = HashSet::default();
     for dir in ["src", "tests"] {
         for f in rust_files(&root.join(dir)) {
             tests_in(&support::read(&f), &mut names);
@@ -108,7 +109,7 @@ fn the_render_register_is_complete_and_pinned() {
     let entries = register();
     assert!(entries.len() >= 15, "only {} entries", entries.len());
     let tests = test_functions();
-    let mut ids = HashSet::new();
+    let mut ids = HashSet::default();
     for e in &entries {
         for k in ["id", "what", "org", "mae", "reason", "test"] {
             let v = e.fields.get(k).map(String::as_str).unwrap_or("");

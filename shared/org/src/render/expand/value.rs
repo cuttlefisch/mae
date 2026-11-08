@@ -6,10 +6,10 @@ use super::syntax::{extract_arguments, fold, is_eval, substitute};
 use super::{MacroFailure, Stop, SPECIAL_PROPERTIES};
 use crate::kind::SyntaxKind::*;
 use crate::kind::SyntaxNode;
+use crate::seeded::HashMap;
 use crate::views::Headline;
 use crate::{Document, LineEnding};
 use rowan::WalkEvent;
-use std::collections::HashMap;
 
 /// A template, as `org-macro-initialize-templates` installs it.
 #[derive(Debug, Clone)]
@@ -291,7 +291,7 @@ pub(super) fn templates(doc: &Document, source: &str) -> HashMap<String, Templat
     // sensitive) overrides an earlier one when it has a value; a new name
     // is pushed in front.
     let mut set: Vec<(String, Template)> = Vec::new();
-    let mut at: HashMap<String, usize> = HashMap::new();
+    let mut at: HashMap<String, usize> = HashMap::default();
     for (name, value) in list {
         match (at.get(&name), value) {
             (Some(&i), Some(v)) => set[i].1 = v,
@@ -310,7 +310,7 @@ pub(super) fn templates(doc: &Document, source: &str) -> HashMap<String, Templat
         ("property", Template::Property),
         ("time", Template::Time),
     ];
-    let mut map = HashMap::new();
+    let mut map = HashMap::default();
     // `set` was pushed in front: the lookup reads it from the end.
     for (name, t) in set.into_iter().rev() {
         map.entry(fold(&name)).or_insert(t);
