@@ -888,17 +888,20 @@ pub async fn handle_request(
         "notifications/subscribe" => {
             if let Some(ref params) = request.params {
                 if let Some(types) = params.get("types").and_then(|v| v.as_array()) {
+                    // ADD each type: never replace the broadcaster's list. It
+                    // also holds types granted elsewhere (`kb/join` adds
+                    // `sync_update` as of its snapshot), which this session's
+                    // own set never saw, so replacing it with that set silently
+                    // dropped them: a client subscribing to `awareness_update`
+                    // after a join stopped receiving the KB's edits.
+                    let mut bc = broadcaster.lock().unwrap();
                     for t in types {
                         if let Some(s) = t.as_str() {
                             session.subscriptions.insert(s.to_string());
+                            bc.add_event_sub(session.id, s);
                         }
                     }
-                    // Update broadcaster so the event channel filters correctly.
-                    let subs: Vec<String> = session.subscriptions.iter().cloned().collect();
-                    broadcaster
-                        .lock()
-                        .unwrap()
-                        .update_subscriptions(session.id, subs);
+                    drop(bc);
                     debug!(
                         session = session.id,
                         subscriptions = ?session.subscriptions,
@@ -1127,6 +1130,55 @@ mod tests {
         let mut reader = BufReader::new(&data[..]);
         let msg = read_message(&mut reader).await.unwrap().unwrap();
         assert!(msg.contains("test"));
+    }
+
+    /// mae-web's sequence: `kb/join` grants `sync_update` straight on the
+    /// broadcaster, then the client subscribes to `awareness_update`. Both
+    /// must still be delivered: subscribing adds, it never replaces.
+    #[tokio::test]
+    async fn subscribing_adds_to_event_types_granted_elsewhere() {
+        let (tx, _rx) = mpsc::channel(1);
+        let mut session = ClientSession::new();
+        let bc = dummy_broadcaster();
+        let mut events = bc.lock().unwrap().subscribe(session.id, vec![]);
+        {
+            let mut b = bc.lock().unwrap();
+            b.subscribe_doc(session.id, "kbn:k:n");
+            b.add_event_sub(session.id, "sync_update"); // what kb/join does
+        }
+        let msg = r#"{"jsonrpc":"2.0","id":2,"method":"notifications/subscribe","params":{"types":["awareness_update"]}}"#;
+        assert!(handle_request(msg, &[], &tx, &mut session, &bc)
+            .await
+            .error
+            .is_none());
+
+        let sync = broadcast::EditorEvent::SyncUpdate {
+            buffer_name: "kbn:k:n".into(),
+            update_base64: String::new(),
+            wal_seq: 1,
+            content_header: None,
+        };
+        let presence = broadcast::EditorEvent::AwarenessUpdate {
+            doc_id: "kbn:k:n".into(),
+            client_id: 99,
+            user_name: "peer".into(),
+            cursor_row: 0,
+            cursor_col: 0,
+            selection: None,
+            mode: "insert".into(),
+        };
+        bc.lock().unwrap().broadcast(&sync);
+        bc.lock().unwrap().broadcast(&presence);
+        let got: Vec<&str> = [events.try_recv().ok(), events.try_recv().ok()]
+            .iter()
+            .flatten()
+            .map(|e| e.event_type())
+            .collect();
+        assert_eq!(
+            got,
+            ["sync_update", "awareness_update"],
+            "the join's sync_update was dropped"
+        );
     }
 
     #[tokio::test]

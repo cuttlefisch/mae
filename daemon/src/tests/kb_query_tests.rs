@@ -1408,3 +1408,120 @@ async fn a_search_satisfied_by_its_limit_is_not_truncated() {
         "scanned must count nodes actually examined, not min(total, cap): {result}"
     );
 }
+
+// ---- Package I: kb/query.get carries ADR-093's typed fields and the whole body ----
+
+/// Set schema-v2 fields on a seeded node through `KbNodeDoc`'s own setters,
+/// applied as real updates (what an editor's edit would send).
+async fn set_typed_fields(doc_store: &DocStore, kb_id: &str, node_id: &str) {
+    let name = mae_sync::kb_node_doc_name(kb_id, node_id);
+    let state = doc_store.encode_state(&name).await.unwrap();
+    let mut node = KbNodeDoc::from_bytes(&state).unwrap();
+    let props: std::collections::HashMap<String, String> = [
+        ("ROLE".to_string(), "atom".to_string()),
+        ("CUSTOM".to_string(), "x y".to_string()),
+    ]
+    .into_iter()
+    .collect();
+    for update in [
+        node.set_kind(Some("concept")),
+        node.set_todo_state(Some("TODO")),
+        node.set_priority(Some("A")),
+        node.set_aliases(&["First alias".to_string(), "Second".to_string()]),
+        node.set_properties(&props),
+    ] {
+        doc_store.apply_update(&name, &update, None).await.unwrap();
+    }
+}
+
+async fn get_as_viewer(
+    doc_store: &DocStore,
+    kb_id: &str,
+    limits: KbQueryLimits,
+) -> serde_json::Value {
+    extract_result(
+        kb_query::dispatch(
+            "kb/query.get",
+            &json!({"kb_id": kb_id, "node_id": "n1"}),
+            doc_store,
+            Some("oauth:viewer@example.com"),
+            limits,
+        )
+        .await,
+    )
+}
+
+#[tokio::test]
+async fn kb_query_get_returns_the_schema_v2_typed_fields() {
+    let doc_store = fresh_doc_store().await;
+    let owner = Arc::new(Identity::generate("owner"));
+    let viewer = Some(("oauth:viewer@example.com", Role::Viewer));
+    seed_unencrypted_kb(
+        &doc_store,
+        &owner,
+        "typed-kb",
+        viewer,
+        "n1",
+        "T",
+        "body",
+        &[],
+    )
+    .await;
+    set_typed_fields(&doc_store, "typed-kb", "n1").await;
+
+    let r = get_as_viewer(&doc_store, "typed-kb", KbQueryLimits::default()).await;
+    assert_eq!(r["kind"], "concept");
+    assert_eq!(r["todo_state"], "TODO");
+    assert_eq!(r["priority"], "A");
+    assert_eq!(r["aliases"], json!(["First alias", "Second"]));
+    assert_eq!(r["properties"], json!({"ROLE": "atom", "CUSTOM": "x y"}));
+    assert!(r["schema_v"].as_i64().unwrap() >= 2, "{r}");
+    assert_eq!(
+        (r["title"].as_str(), r["body"].as_str()),
+        (Some("T"), Some("body"))
+    );
+}
+
+/// A node that never set the typed fields reads them as absent (null, empty),
+/// not as an error and not as invented defaults: ADR-093's tolerant reader.
+#[tokio::test]
+async fn kb_query_get_reads_unset_typed_fields_as_absent() {
+    let doc_store = fresh_doc_store().await;
+    let owner = Arc::new(Identity::generate("owner"));
+    let viewer = Some(("oauth:viewer@example.com", Role::Viewer));
+    seed_unencrypted_kb(
+        &doc_store,
+        &owner,
+        "plain-kb",
+        viewer,
+        "n1",
+        "T",
+        "body",
+        &[],
+    )
+    .await;
+
+    let r = get_as_viewer(&doc_store, "plain-kb", KbQueryLimits::default()).await;
+    for field in ["kind", "todo_state", "priority"] {
+        assert!(r[field].is_null(), "{field}: {r}");
+    }
+    assert_eq!(r["aliases"], json!([]));
+    assert_eq!(r["properties"], json!({}));
+    assert!(r["schema_v"].is_i64(), "{r}");
+}
+
+/// The default cap returns a node as large as the largest one measured in
+/// real KBs (320 KB) whole. The old 64 KiB default truncated it, and a reader
+/// refuses to render a truncated body.
+#[tokio::test]
+async fn kb_query_get_returns_a_large_real_sized_note_whole_by_default() {
+    let doc_store = fresh_doc_store().await;
+    let owner = Arc::new(Identity::generate("owner"));
+    let viewer = Some(("oauth:viewer@example.com", Role::Viewer));
+    let body = "one line of a long reference note\n".repeat(10_000); // 340,000 bytes
+    seed_unencrypted_kb(&doc_store, &owner, "big-kb", viewer, "n1", "T", &body, &[]).await;
+
+    let r = get_as_viewer(&doc_store, "big-kb", KbQueryLimits::default()).await;
+    assert_eq!(r["body_truncated"], false);
+    assert_eq!(r["body"].as_str().unwrap().len(), body.len());
+}

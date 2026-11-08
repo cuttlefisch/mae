@@ -37,6 +37,16 @@ use mae_sync::membership;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 
+/// Default cap on one `kb/query.get` body: the node size backstop
+/// (`[collab.sync] max_document_size_bytes`, ADR-109 D6), so a stock daemon
+/// returns every node whole — a reader renders a node, and refuses a
+/// truncated one. ADR-053's "a get must not be a disguised bulk-content
+/// vector" is about MANY nodes, which the scan and result caps bound; one
+/// node is bounded by D6. An operator restricting live-query-only members
+/// (ADR-067) can still set it lower, and `body_truncated` then says so.
+/// Was 64 KiB, which truncated real notes (the largest measured: 320 KB).
+pub const DEFAULT_MAX_BODY_BYTES: usize = 10_485_760;
+
 /// Per-call caps (ADR-053 decision 3) — config-driven (principle #7), never
 /// hardcoded; threaded in from `OAuthConfig`'s `kb_query_*` fields.
 #[derive(Debug, Clone, Copy)]
@@ -57,7 +67,7 @@ impl Default for KbQueryLimits {
     /// needed a `KbQueryLimits` value).
     fn default() -> Self {
         KbQueryLimits {
-            max_body_bytes: 65_536,
+            max_body_bytes: DEFAULT_MAX_BODY_BYTES,
             max_scan_nodes: 500,
             max_search_results: 20,
         }
@@ -287,11 +297,26 @@ async fn get(
             } else {
                 body
             };
+            // ADR-093's schema-v2 fields, so a reader renders the node as an
+            // editor shows it without replicating its CRDT. Tolerant of a v1
+            // document: what it does not carry reads as null / empty, and
+            // `schema_v` says which it is.
+            let properties: serde_json::Map<String, Value> = doc
+                .properties()
+                .into_iter()
+                .map(|(k, v)| (k, Value::String(v)))
+                .collect();
             Ok(json!({
                 "kb_id": kb_id,
                 "node_id": node_id,
                 "encryption": "none",
+                "schema_v": doc.schema_version(),
                 "title": doc.title(),
+                "kind": doc.kind(),
+                "todo_state": doc.todo_state(),
+                "priority": doc.priority(),
+                "aliases": doc.aliases(),
+                "properties": properties,
                 "body": body,
                 "body_truncated": truncated,
                 "tags": doc.tags(),
