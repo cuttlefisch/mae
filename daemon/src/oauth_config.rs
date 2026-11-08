@@ -61,7 +61,10 @@ pub struct OAuthConfig {
     /// (unencrypted KBs only — an E2E KB's response is raw ciphertext,
     /// capped by nothing since the daemon can't inspect it to truncate it
     /// meaningfully; the op-set itself is already bounded elsewhere).
-    /// Prevents a single "get" from being a disguised bulk-content vector.
+    /// Default: the node size backstop, so every node is returned whole
+    /// (see `kb_query::DEFAULT_MAX_BODY_BYTES`); set it lower to stop a
+    /// live-query-only member reading whole bodies, and `body_truncated`
+    /// reports each cut.
     pub kb_query_max_body_bytes: usize,
     /// Cap on how many nodes a single `kb/query.search` call will
     /// materialize and scan (unencrypted KBs only) — bounds server-side
@@ -129,7 +132,7 @@ impl Default for OAuthConfig {
             key_path: PathBuf::new(),
             kb_query_enabled: false,
             max_request_body_bytes: 1_048_576,
-            kb_query_max_body_bytes: 65_536,
+            kb_query_max_body_bytes: mae_daemon::kb_query::DEFAULT_MAX_BODY_BYTES,
             kb_query_max_scan_nodes: 500,
             kb_query_max_search_results: 20,
             max_connections: 256,
