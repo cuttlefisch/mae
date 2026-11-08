@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.138] - 2026-11-08
+
+
+
+
+### Bug Fixes
+
+- *(daemon)* Collab sessions receive only the documents they subscribed to ([d7e8527](https://github.com/cuttlefisch/mae/commit/d7e85273f62b3d8f9103b3e927aaa44c52ca7812))
+
 ## [0.14.137] - 2026-11-08
 
 
@@ -14,6 +23,10 @@ All notable changes to this project will be documented in this file.
 ### Refactor
 
 - *(mcp)* Notifications/subscribe in its own function ([9c041e4](https://github.com/cuttlefisch/mae/commit/9c041e4894868fa6022f0da795caa9cb7acf1d3d))
+
+### Miscellaneous
+
+- Bump version to 0.14.137 ([e477dfd](https://github.com/cuttlefisch/mae/commit/e477dfdb79abd38547c965c84469332517deef44))
 
 ## [0.14.136] - 2026-11-08
 
