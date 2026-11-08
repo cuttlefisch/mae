@@ -167,7 +167,7 @@ impl Default for ParseOptions {
 /// keyword per headline was quadratic; review finding).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TodoKeywords {
-    words: std::collections::HashSet<String>,
+    words: crate::seeded::HashSet<String>,
 }
 
 impl TodoKeywords {

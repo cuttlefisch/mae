@@ -188,6 +188,21 @@ for (const thrown of [new WebAssembly.RuntimeError('unreachable'), new RangeErro
   if (refused !== 2) fail(`an instance was used again after a call threw ${thrown.constructor.name}`);
 }
 
+// 4. The module keys its hash maps with a secret the host supplies, and
+// refuses every operation but `version` until it has one: an instance made
+// without the loader is unseeded. The loader seeds every instance it makes
+// (test-stack.mjs checks the ones it makes after a failed call).
+{
+  const bare = new MaeOrg(new WebAssembly.Instance(module, {}), null);
+  const refused = JSON.parse(bare.callRaw('text', '{"text": "x"}'));
+  if (refused.ok || !/not seeded/.test(refused.error)) fail(`an unseeded instance ran: ${JSON.stringify(refused)}`);
+  if (!JSON.parse(bare.callRaw('version', '{}')).ok) fail('version refused unseeded');
+  bare.exports.mae_org_seed(1n, 2n);
+  if (!JSON.parse(bare.callRaw('text', '{"text": "x"}')).ok) fail('a seeded instance refused');
+  if (!org.text({ text: 'x' })) fail('the loader\'s instance is not seeded');
+  console.log('seed: unseeded instances refuse; the loader seeds');
+}
+
 // 4. The real thing: the host stack exhausted inside the module, in a
 // child Node with a small stack (test-stack.mjs). The loader retires the
 // instance and the next call runs in a fresh one.

@@ -68,8 +68,8 @@ use syntax::{extract_arguments, raw_macros, substitute};
 use value::epoch_format;
 
 use super::{MacroFailure, RenderDiagnostic};
+use crate::seeded::{HashMap, HashSet};
 use crate::{Document, Span};
-use std::collections::{HashMap, HashSet};
 
 /// The work an expansion may do: this much, plus [`WORK_PER_BYTE`] per
 /// byte of source. Work is every byte parsed, scanned or produced.
@@ -269,18 +269,20 @@ pub(crate) fn expand(doc: &Document, source: &str) -> Result<Option<Expansion>, 
     }
     let templates = value::templates(doc, source);
     if map.pieces.is_empty() {
-        return scan::Engine::new(doc, source.len(), templates).run(map, HashSet::new());
+        return scan::Engine::new(doc, source.len(), templates).run(map, HashSet::default());
     }
     let d = doc.reparse(&text);
     let engine = scan::Engine::new(&d, source.len(), templates);
-    Ok(Some(engine.run(map.clone(), HashSet::new())?.unwrap_or(
-        Expansion {
-            text,
-            map,
-            notes: Vec::new(),
-            work: 0,
-        },
-    )))
+    Ok(Some(
+        engine
+            .run(map.clone(), HashSet::default())?
+            .unwrap_or(Expansion {
+                text,
+                map,
+                notes: Vec::new(),
+                work: 0,
+            }),
+    ))
 }
 
 /// `source` (the text of `doc`) without its COMMENT subtrees (each from
@@ -318,7 +320,7 @@ pub(crate) fn expand_text(doc: &Document, text: &str) -> Option<String> {
     let templates = value::templates(doc, &source);
     let d = crate::parse(text, &crate::ParseOptions::default());
     let engine = scan::Engine::new(&d, text.len(), templates);
-    match engine.run(Map::default(), HashSet::new()) {
+    match engine.run(Map::default(), HashSet::default()) {
         Ok(Some(e)) => Some(e.text),
         Ok(None) => Some(text.to_string()),
         Err(_) => None,
@@ -365,7 +367,7 @@ impl ValueCx {
         let d = crate::parse(text, &self.opts);
         let mut engine = scan::Engine::new(&d, text.len(), self.templates.clone());
         engine.outer_lines = Some(self.lines.clone());
-        self.run(engine, Map::default(), HashSet::new())
+        self.run(engine, Map::default(), HashSet::default())
     }
 
     /// Org's second expansion of `doc` (what [`ValueCx::expand`] made,
@@ -377,7 +379,7 @@ impl ValueCx {
         removed: HashSet<usize>,
     ) -> Result<Option<Expansion>, MacroFailure> {
         let templates =
-            HashMap::from([("results".to_string(), value::Template::Text("$1".into()))]);
+            HashMap::from_iter([("results".to_string(), value::Template::Text("$1".into()))]);
         let len = doc.syntax().text().len().into();
         self.run(scan::Engine::new(doc, len, templates), map, removed)
     }
@@ -420,7 +422,8 @@ pub(crate) fn expand_results(
     source_len: usize,
     removed: HashSet<usize>,
 ) -> Result<Option<Expansion>, RenderDiagnostic> {
-    let templates = HashMap::from([("results".to_string(), value::Template::Text("$1".into()))]);
+    let templates =
+        HashMap::from_iter([("results".to_string(), value::Template::Text("$1".into()))]);
     scan::Engine::new(doc, source_len, templates).run(map, removed)
 }
 

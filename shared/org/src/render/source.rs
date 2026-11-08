@@ -25,7 +25,7 @@
 //! convention (one lone LF in a DOS file makes Emacs read the WHOLE file as
 //! unix, turning every CR into content).
 
-use std::collections::HashSet;
+use crate::seeded::HashSet;
 
 use super::objects::name_key;
 use super::prepared::{prepare, unexpanded};
@@ -603,8 +603,8 @@ impl Edit<'_> {
         let (ns, ne) = self.new_range;
         let changed = |id: &str| BodyEditError::ChangesNode { id: id.to_string() };
         // The first node of each id, as a search from the front finds it.
-        let mut by_id: std::collections::HashMap<&str, &SemanticNode> =
-            std::collections::HashMap::new();
+        let mut by_id: crate::seeded::HashMap<&str, &SemanticNode> =
+            crate::seeded::HashMap::default();
         for m in &after.nodes {
             by_id.entry(m.id.as_str()).or_insert(m);
         }
@@ -683,7 +683,7 @@ fn probing_resolver(sems: [&Semantics; 4]) -> super::Resolver {
 /// call, the names its `#+RESULTS:` lines give.
 fn refs_outside(doc: &Document, (a, b): (usize, usize)) -> HashSet<String> {
     use crate::kind::SyntaxKind::*;
-    let mut out = HashSet::new();
+    let mut out = HashSet::default();
     let mut add = |s: &str| {
         let s = name_key(s);
         if !s.is_empty() {

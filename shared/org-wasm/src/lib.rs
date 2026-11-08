@@ -1,7 +1,7 @@
 //! mae-org's WASM facade (ADR-112 D3, D5).
 //! @stability: experimental
 //!
-//! The ABI is five exported functions over linear memory, no bindings
+//! The ABI is six exported functions over linear memory, no bindings
 //! generator (see `js/mae-org.mjs`, which drives it):
 //!
 //! 1. `mae_org_alloc(len) -> ptr`: the caller reserves `len` bytes and
@@ -13,7 +13,10 @@
 //!    copies `len` bytes out;
 //! 4. `mae_org_result_free()`: drops the response;
 //! 5. `mae_org_live_bytes() -> n`: bytes allocated and not yet freed (a
-//!    counting allocator), for the leak test.
+//!    counting allocator), for the leak test;
+//! 6. `mae_org_seed(k0, k1)`: the keys of the module's hash maps, 128 bits
+//!    from the host's secure randomness. Called once per instance, before
+//!    any operation (every one but `version` refuses to run unseeded).
 //!
 //! The module is single-threaded and not re-entrant (no callback crosses
 //! it), so one response slot suffices. All `unsafe` is in this file, each
@@ -111,6 +114,16 @@ pub extern "C" fn mae_org_result_ptr() -> *const u8 {
 #[no_mangle]
 pub extern "C" fn mae_org_result_free() {
     RESULT.with(|r| *r.borrow_mut() = Vec::new());
+}
+
+/// Seeds the keys of mae-org's hash maps (`mae_org::seeded`) with 128 bits
+/// the host draws from a secure source (the loader: `crypto.getRandomValues`).
+/// Every operation but `version` refuses to run until this is called: the
+/// module's own source of randomness is fixed, and maps keyed by document
+/// text must not be predictable.
+#[no_mangle]
+pub extern "C" fn mae_org_seed(k0: u64, k1: u64) {
+    mae_org::seeded::seed(k0, k1);
 }
 
 /// Bytes allocated and not freed (0 natively, where nothing counts).

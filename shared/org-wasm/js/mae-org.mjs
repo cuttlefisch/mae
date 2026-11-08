@@ -1,7 +1,7 @@
 // mae-org's WASM loader: synchronous, dependency-free, host-neutral.
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// The module's ABI (shared/org-wasm/src/lib.rs) is five exports over
+// The module's ABI (shared/org-wasm/src/lib.rs) is six exports over
 // linear memory. This file is the only code that drives it; a request is a
 // plain object (serialised with JSON.stringify), a response is parsed
 // JSON, and an `{"ok": false}` response throws.
@@ -33,7 +33,23 @@ const decoder = new TextDecoder('utf-8', { fatal: true });
  */
 export function instantiate(bytes) {
   const module = bytes instanceof WebAssembly.Module ? bytes : new WebAssembly.Module(bytes);
-  return new MaeOrg(new WebAssembly.Instance(module, {}), module);
+  return new MaeOrg(seeded(new WebAssembly.Instance(module, {})), module);
+}
+
+/**
+ * Seeds an instance's hash-map keys with 128 random bits: the module keys
+ * maps by document text, and its own randomness is fixed, so it refuses to
+ * run unseeded. No secure source of randomness is an error, not a
+ * fallback.
+ */
+function seeded(instance) {
+  const crypto = globalThis.crypto;
+  if (!crypto || typeof crypto.getRandomValues !== 'function') {
+    throw new Error('mae-org needs crypto.getRandomValues to seed the module');
+  }
+  const keys = crypto.getRandomValues(new BigUint64Array(2));
+  instance.exports.mae_org_seed(keys[0], keys[1]);
+  return instance;
 }
 
 /**
@@ -80,7 +96,7 @@ export class MaeOrg {
       if (!this.module) {
         throw new Error(`mae-org instance unusable after a failed call: ${this.broken.message}`);
       }
-      this.exports = new WebAssembly.Instance(this.module, {}).exports;
+      this.exports = seeded(new WebAssembly.Instance(this.module, {})).exports;
       this.broken = null;
       this.restarts += 1;
     }

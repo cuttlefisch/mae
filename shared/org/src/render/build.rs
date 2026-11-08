@@ -13,9 +13,9 @@ use super::tree::{push, text, Element, Node, Tag};
 use super::{RenderDiagnostic, RenderOptions, Resolver, RENDER_MAX_DEPTH};
 use crate::kind::SyntaxKind::{self, *};
 use crate::kind::{SyntaxElement, SyntaxNode};
+use crate::seeded::{HashMap, HashSet};
 use crate::{Document, LineEnding, SemanticLink, Semantics, Span, Transclusion};
 use rowan::NodeOrToken;
-use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 /// What is being built.

@@ -46,11 +46,12 @@ mod support;
 
 use mae_kb::org::{parse_org_multi_result, rewrite_links, ParsedLink};
 use mae_kb::{Node, NodeKind};
+use mae_org::seeded::HashMap;
 use mae_org::{
     classify_link, parse, semantics, Document, LinkKind, NodeOrigin, ParseOptions,
     SemanticDiagnostic, SemanticNode, Semantics, SyntaxKind::*, TodoSequence,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use support::{bundled_corpus, read, rel};
 
@@ -190,7 +191,7 @@ fn oracle_path() -> PathBuf {
 }
 
 fn load_oracle() -> Oracle {
-    let mut out = Oracle::new();
+    let mut out = Oracle::default();
     for (n, line) in read(&oracle_path()).lines().enumerate() {
         if line.starts_with('#') || line.is_empty() {
             continue;
@@ -904,7 +905,7 @@ fn load_register() -> Vec<Entry> {
             continue;
         }
         if line == "[[divergence]]" {
-            rows.push((n + 1, HashMap::new()));
+            rows.push((n + 1, HashMap::default()));
             continue;
         }
         let (k, v) = line
@@ -1208,7 +1209,7 @@ fn the_differential_reports_an_injected_disagreement() {
 #[test]
 fn a_plain_link_excuses_only_its_own_edge() {
     let text = ":PROPERTIES:\n:ID: f\n:END:\n* A\n:PROPERTIES:\n:ID: a\n:END:\n[[id:tx]]\n* B\n:PROPERTIES:\n:ID: b\n:END:\nid:tx\n* C\n:PROPERTIES:\n:ID: c\n:END:\n";
-    let oracle = Oracle::new();
+    let oracle = Oracle::default();
     let kb = parse_org_multi_result(text);
     let doc = parse(text, &options());
     let run = |sem: &Semantics| {

@@ -57,10 +57,10 @@
 
 use crate::kind::SyntaxKind::{self, *};
 use crate::kind::{SyntaxElement, SyntaxNode};
+use crate::seeded::{HashMap, HashSet};
 use crate::views::{canonical_key, Headline, PropertyDrawer};
 use crate::{Document, Span};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
 
 /// What `:exports` resolves to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,11 +139,11 @@ impl Babel {
         let root = doc.syntax();
         let mut babel = Babel {
             root: root.clone(),
-            hidden: HashSet::new(),
+            hidden: HashSet::default(),
             global: global_properties(doc),
             file_drawer: doc.property_drawer(),
-            memo: RefCell::new(HashMap::new()),
-            defs: HashMap::new(),
+            memo: RefCell::new(HashMap::default()),
+            defs: HashMap::default(),
         };
         let mut named = NamedResults::default();
         let mut blocks = Vec::new();
@@ -411,7 +411,7 @@ fn local_values(drawer: Option<PropertyDrawer>, prop: &str) -> (Option<String>, 
 /// `#+PROPERTY: NAME VALUE` lines in order, a `NAME+` appending to `NAME`
 /// (`org--update-property-plist`).
 fn global_properties(doc: &Document) -> HashMap<String, String> {
-    let mut out: HashMap<String, String> = HashMap::new();
+    let mut out: HashMap<String, String> = HashMap::default();
     for k in doc.keywords() {
         if !k.key().eq_ignore_ascii_case("PROPERTY") {
             continue;
@@ -513,7 +513,7 @@ impl NamedResults {
         let k = name.matches(':').count();
         let lines = &self.lines;
         let map = self.by_colons.entry(k).or_insert_with(|| {
-            let mut m = HashMap::new();
+            let mut m = HashMap::default();
             for (rest, n) in lines {
                 // The name holds K colons, so the colon before it is the
                 // (K+1)-th from the end.

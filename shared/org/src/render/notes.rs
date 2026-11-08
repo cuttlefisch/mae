@@ -16,9 +16,9 @@ use super::objects::raw;
 use super::tree::{push, text, Attr, Element, Node, Tag};
 use crate::kind::SyntaxKind::*;
 use crate::kind::{SyntaxElement, SyntaxNode};
+use crate::seeded::HashMap;
 use crate::semantics::regions::reference_label;
 use crate::{Document, Semantics, Span};
-use std::collections::HashMap;
 
 /// Where a note's text comes from.
 #[derive(Debug, Clone)]
@@ -62,7 +62,7 @@ impl Notes {
     /// Each footnote label's definition element.
     pub fn defs(doc: &Document, sem: &Semantics) -> HashMap<String, SyntaxNode> {
         let root = doc.syntax();
-        let mut defs = HashMap::new();
+        let mut defs = HashMap::default();
         for f in &sem.footnotes {
             if defs.contains_key(&f.label) {
                 continue;

@@ -520,7 +520,7 @@ mod kind_set_tests {
             let doc = crate::parse(&text, &Default::default());
             let root = doc.syntax();
             let set = KindSet::of(root.green());
-            let present: std::collections::HashSet<SyntaxKind> =
+            let present: crate::seeded::HashSet<SyntaxKind> =
                 root.descendants().map(|n| n.kind()).collect();
             for &k in ALL.iter().filter(|k| k.is_node()) {
                 assert_eq!(set.has(k), present.contains(&k), "{rel}: {k:?}");
@@ -533,7 +533,7 @@ mod kind_set_tests {
     /// Every kind has its own index, so no two share a bit.
     #[test]
     fn kind_indexes_are_distinct() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = crate::seeded::HashSet::default();
         for &k in ALL {
             assert!(seen.insert(k.index()), "{k:?}");
         }
