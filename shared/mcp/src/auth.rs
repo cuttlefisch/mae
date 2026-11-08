@@ -37,6 +37,62 @@ type HmacSha256 = Hmac<Sha256>;
 pub struct AuthResult {
     /// Authenticated client identifier (for logging, not trust).
     pub client_label: String,
+    /// What the handshake proved about the client: the source of its access
+    /// principal (ADR-018). [`AuthResult::peer_identity`] maps it.
+    pub proof: AuthProof,
+}
+
+/// What a successful handshake proved about the client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthProof {
+    /// Nothing (`none` auth: a loopback-trusted session, no principal).
+    None,
+    /// Possession of the pre-shared key named `keyid`.
+    Psk { keyid: String },
+    /// Possession of the private half of this authorized Ed25519 key.
+    Key { pubkey: [u8; 32] },
+}
+
+impl AuthResult {
+    /// A client that proved possession of the authorized key `key`.
+    pub fn key(client_label: String, key: &crate::identity::PublicKey) -> Self {
+        Self {
+            client_label,
+            proof: AuthProof::Key {
+                pubkey: key.to_bytes(),
+            },
+        }
+    }
+
+    /// A client that proved the pre-shared key named `keyid` (its label).
+    pub fn psk(keyid: String) -> Self {
+        Self {
+            proof: AuthProof::Psk {
+                keyid: keyid.clone(),
+            },
+            client_label: keyid,
+        }
+    }
+
+    /// The identity to bind the session to. A key-authenticated client is its
+    /// key's fingerprint, exactly as over mTLS; a psk client the coarse
+    /// `psk:<keyid>` principal; only `none` binds an identity with no
+    /// principal. (A session with no principal is allowed every KB
+    /// operation, so binding one after a real handshake granted the client
+    /// every KB.)
+    pub fn peer_identity(&self) -> crate::identity::PeerIdentity {
+        match &self.proof {
+            AuthProof::Key { pubkey } => crate::identity::PeerIdentity {
+                label: self.client_label.clone(),
+                fingerprint: crate::identity::PublicKey::from_bytes(pubkey, None)
+                    .map(|k| k.fingerprint())
+                    .unwrap_or_default(),
+                pubkey: *pubkey,
+            },
+            AuthProof::Psk { keyid } => crate::identity::PeerIdentity::synthetic_psk(keyid),
+            AuthProof::None => crate::identity::PeerIdentity::synthetic(&self.client_label),
+        }
+    }
 }
 
 /// Authentication error.
@@ -111,6 +167,7 @@ impl AuthProvider for NoAuth {
         W: AsyncWrite + Unpin + Send,
     {
         Ok(AuthResult {
+            proof: AuthProof::None,
             client_label: "anonymous".to_string(),
         })
     }
@@ -350,7 +407,7 @@ impl AuthProvider for PskAuth {
         writer.flush().await?;
 
         info!(key = %client_label, "PSK auth succeeded");
-        Ok(AuthResult { client_label })
+        Ok(AuthResult::psk(client_label))
     }
 
     async fn client_handshake<R, W>(&self, reader: &mut R, writer: &mut W) -> Result<(), AuthError>
@@ -561,7 +618,7 @@ impl AuthProvider for KeyAuth {
                 };
                 send_ok(writer).await?;
                 info!(client = %client_label, fp = %client_pub.fingerprint(), "KeyAuth succeeded");
-                Ok(AuthResult { client_label })
+                Ok(AuthResult::key(client_label, &client_pub))
             }
             None => {
                 send_fail(writer, "public key not authorized").await?;
@@ -1162,6 +1219,44 @@ mod tests {
         assert!(c.is_ok(), "client: {:?}", c.err());
         assert_eq!(s.unwrap().client_label, "laptop");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A real key handshake binds the client's own fingerprint, exactly the
+    /// mTLS principal; never an identity without one (which every KB allows).
+    #[tokio::test]
+    async fn a_key_handshake_binds_the_clients_fingerprint() {
+        let server_id = Arc::new(Identity::generate("daemon"));
+        let client_id = Arc::new(Identity::generate("laptop"));
+        let dir = tempfile::tempdir().unwrap();
+        let mut authorized = AuthorizedKeys::load(&dir.path().join("authorized_keys"));
+        authorized.add(client_id.public()).unwrap();
+        let server = KeyAuth::server(server_id, Arc::new(authorized));
+        let client = KeyAuth::client(
+            client_id.clone(),
+            "daemon:9473".to_string(),
+            Arc::new(StubVerifier { accept: true }),
+        );
+        let (s, _) = run_key_handshake(server, client).await;
+        let peer = s.unwrap().peer_identity();
+        let fp = client_id.public().fingerprint();
+        assert_eq!(peer.principal(), Some(fp.as_str()));
+        assert!(peer.is_authenticated());
+    }
+
+    #[test]
+    fn psk_and_none_bind_their_documented_principals() {
+        let psk = AuthResult {
+            client_label: "team".into(),
+            proof: AuthProof::Psk {
+                keyid: "team".into(),
+            },
+        };
+        assert_eq!(psk.peer_identity().principal(), Some("psk:team"));
+        let none = AuthResult {
+            client_label: "anonymous".into(),
+            proof: AuthProof::None,
+        };
+        assert_eq!(none.peer_identity().principal(), None);
     }
 
     #[tokio::test]

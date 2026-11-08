@@ -106,9 +106,9 @@ pub async fn handle_client_with_auth<R, W, A>(
                 client = %result.client_label,
                 "auth handshake succeeded"
             );
-            // The JSON handshake proves a credential but carries no public key,
-            // so bind a synthetic identity from the authenticated label.
-            PeerIdentity::synthetic(&result.client_label)
+            // Bind what the handshake proved: a key's fingerprint, a psk's
+            // `psk:<keyid>`, or (`none` only) no principal at all.
+            result.peer_identity()
         }
         Err(_elapsed) => {
             warn!(

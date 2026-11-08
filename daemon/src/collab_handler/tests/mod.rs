@@ -18,6 +18,7 @@ mod collab_handler_kb_lifecycle_tests;
 mod collab_handler_kb_list_isolation_tests;
 mod collab_handler_kb_query_mtls_tests;
 mod collab_handler_kb_share_ownership_tests;
+mod collab_handler_keyauth_principal_tests;
 mod collab_handler_lease_race_tests;
 mod collab_handler_legacy_migration_tests;
 mod collab_handler_member_access_tests;
