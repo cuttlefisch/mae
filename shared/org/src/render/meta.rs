@@ -16,15 +16,16 @@ use crate::{NodeOrigin, RenderDiagnostic, SemanticNode, Semantics, Span};
 /// rendered document `p` (its macros expanded): a node the expansion
 /// removed, or in a subtree the export drops (COMMENT, `:noexport:`), has
 /// no entry. What to publish is these nodes, not the semantics'.
-pub(crate) fn nodes(
-    p: &super::prepared::Prepared,
+pub(crate) fn nodes<'a>(
+    p: &'a super::prepared::Prepared,
+    cx: std::rc::Rc<super::build::DocCx<'a>>,
     source: &Semantics,
     opts: &RenderOptions,
     resolver: &Resolver,
     page: &Table,
 ) -> (Vec<NodeMeta>, Vec<RenderDiagnostic>) {
     let root = p.doc.syntax();
-    let mut b = Builder::with_cx(p.cx(), opts, resolver, Mode::Meta, Table::default());
+    let mut b = Builder::with_cx(cx, opts, resolver, Mode::Meta, Table::default());
     let nodes = p
         .counterparts(source)
         .into_iter()

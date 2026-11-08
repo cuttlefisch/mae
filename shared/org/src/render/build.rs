@@ -698,20 +698,20 @@ pub(crate) fn rendering_outside(
     let body = p.to_rendered(body);
     let root = p.doc.syntax();
     let mut out = String::new();
+    let cx = p.cx();
     for ids in [super::HeadlineIds::Explicit, super::HeadlineIds::Slug] {
         let opts = RenderOptions {
             headline_ids: ids,
             images: true,
             property_drawers: true,
         };
-        let cx = p.cx();
         let mut first = Builder::with_cx(cx.clone(), &opts, resolver, Mode::Page, Table::default());
         first.blank = Some(body);
         first.run(&root);
-        let mut second = Builder::with_cx(cx, &opts, resolver, Mode::Page, first.found);
+        let mut second = Builder::with_cx(cx.clone(), &opts, resolver, Mode::Page, first.found);
         second.blank = Some(body);
         let body = second.run(&root);
-        let (nodes, _) = super::meta::nodes(p, sem, &opts, resolver, &second.found);
+        let (nodes, _) = super::meta::nodes(p, cx.clone(), sem, &opts, resolver, &second.found);
         let rendered = super::Rendered {
             body,
             nodes,

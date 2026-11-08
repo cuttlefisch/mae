@@ -34,16 +34,22 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Every keyword element outside COMMENT subtrees, in document order.
 pub(crate) fn outside_comment_trees(root: &SyntaxNode) -> Vec<Keyword> {
-    uncommented(root).filter_map(Keyword::cast).collect()
+    uncommented_elements(root)
+        .filter_map(Keyword::cast)
+        .collect()
 }
 
-/// Every node of `root`, in document order, outside the COMMENT subtrees:
-/// the buffer as Org's export reads it to collect settings and templates
-/// and to run babel, after `org-export--delete-comment-trees`.
-pub(crate) fn uncommented(root: &SyntaxNode) -> impl Iterator<Item = SyntaxNode> {
+/// Every element of `root`, in document order, outside the COMMENT
+/// subtrees: the buffer as Org's export reads it to collect settings and
+/// templates and to run babel, after `org-export--delete-comment-trees`.
+/// What is read there (keywords, blocks, affiliated keywords) is an element
+/// or an element's child, so objects, most of a document's nodes and never
+/// holding an element, are not walked.
+pub(crate) fn uncommented_elements(root: &SyntaxNode) -> impl Iterator<Item = SyntaxNode> {
     let mut walk = root.preorder();
     std::iter::from_fn(move || loop {
         match walk.next()? {
+            WalkEvent::Enter(n) if n.kind().is_object() => walk.skip_subtree(),
             WalkEvent::Enter(n) if Headline::cast(n.clone()).is_some_and(|h| h.is_commented()) => {
                 walk.skip_subtree()
             }
@@ -307,6 +313,30 @@ pub(crate) fn buffer_lines(text: &str, eol: LineEnding) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`uncommented_elements`] skips objects on this: across the
+    /// conformance corpus (Org's and Worg's files, every fixture), no
+    /// object holds an element, nor an affiliated keyword.
+    #[test]
+    fn no_object_holds_an_element() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = dir.join("../..");
+        let list = std::fs::read_to_string(dir.join("conformance/corpus.txt")).unwrap();
+        let files: Vec<_> = list
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .collect();
+        assert!(files.len() > 100, "corpus list read: {}", files.len());
+        for rel in files {
+            let text = std::fs::read_to_string(root.join(rel)).unwrap();
+            let doc = crate::parse(&text, &Default::default());
+            for o in doc.syntax().descendants().filter(|n| n.kind().is_object()) {
+                let inner = o.descendants().find(|d| !d.kind().is_object());
+                assert!(inner.is_none(), "{rel}: {:?} holds {:?}", o.kind(), inner);
+            }
+        }
+    }
 
     fn groups(tags_lines: &[&str]) -> Vec<(String, Vec<String>)> {
         alist_to_groups(&string_to_alist(&tags_lines.join("\n")))

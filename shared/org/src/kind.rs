@@ -157,6 +157,12 @@ pub enum SyntaxKind {
 use SyntaxKind::*;
 
 impl SyntaxKind {
+    /// Whether this is an object kind (inline: text, links, markup, ...),
+    /// which never holds an element.
+    pub(crate) fn is_object(self) -> bool {
+        self as u16 >= FIRST_OBJECT
+    }
+
     /// Inverse of `as u16`. `None` for a value no kind has.
     pub fn from_raw(raw: u16) -> Option<SyntaxKind> {
         // Called for every `.kind()` of every tree walk: the kinds are three
