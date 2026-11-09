@@ -20,6 +20,17 @@
 //! no "unknown". A write path that cannot say who it is acting for does not
 //! compile.
 //!
+//! **Who "the author" is — a stated assumption, not a guarantee.** The record
+//! names whoever SUBMITTED an update (and its verified ADR-036 signer, when it
+//! has one), not the authors of every struct inside it. A yrs update can carry
+//! another client's content the daemon never saw being written: a full state
+//! re-shared by Bob may include text Alice wrote elsewhere. Until the hub
+//! verifies a signature on every content op (#727, ADR-111 D3), a submitter is
+//! treated as the attributable author of everything in their update. Consumers
+//! must read the author set as "the principals accountable for these writes",
+//! which is what the approver-is-not-an-author rule needs; it is not a
+//! cryptographic statement of who typed which character.
+//!
 //! **What over-inclusion costs.** Every rule here errs toward recording someone
 //! as an author who maybe was not one, never the reverse: an extra author can
 //! only be refused approval of a revision (fail-closed), while a missing one
@@ -235,6 +246,20 @@ pub struct PendingChange {
 }
 
 impl PendingChange {
+    /// A share or restore replaces the whole document. A full state carries
+    /// the structs the old document held pending, so content held back from
+    /// earlier submitters may be installed by it — stamp every remembered
+    /// submitter (marks exist only while something is pending, so this needs
+    /// no check of the old document). `new_pending`: the new state still
+    /// holds structs back, so its sharer is remembered in turn.
+    pub fn replacing(new_pending: bool) -> Self {
+        PendingChange {
+            leaves_pending: new_pending,
+            integrated: true,
+            cleared: !new_pending,
+        }
+    }
+
     /// From the pending digests before and after an apply
     /// (`TextSync::pending_digest`).
     pub fn between(before: &Option<Vec<u8>>, after: &Option<Vec<u8>>) -> Self {
@@ -296,6 +321,13 @@ pub enum EditorsSince {
     /// Every editor whose latest update is after the cutoff. Empty means
     /// nobody edited it — never "there is no record".
     Known(Vec<EditorRecord>),
+    /// The cutoff is past this document's WAL high-water mark, so it was not
+    /// taken from this document (WAL ids are global to the database: it came
+    /// from another document, or another database). Nothing can be said.
+    CutoffAhead {
+        /// The largest WAL id this document has been written at.
+        high_water: u64,
+    },
     /// The cutoff precedes the point from which this document's edits are
     /// recorded (its record origin: the upgrade that introduced the record, or
     /// a restore or migration that installed content of unrecorded
@@ -309,6 +341,12 @@ pub enum EditorsSince {
 /// The ADR-113 author verdict for a change since a cutoff. Use this rather
 /// than reading [`EditorsSince`] rows directly, so the rule below cannot be
 /// forgotten.
+///
+/// **Assumption (see the module doc):** an author is a principal who submitted
+/// or signed an update since the cutoff; content they carried for someone else
+/// is attributed to them. Treat `Known` as "these principals are accountable
+/// for every change since the cutoff" — a known limit, not proof of who wrote
+/// each character.
 ///
 /// **Rule:** any row after the cutoff that is not a principal — an
 /// [`EditorKind::Internal`] writer, an unsigned [`EditorKind::MeshPeer`], or an
@@ -327,6 +365,9 @@ pub enum Authors {
 pub enum UnknownAuthors {
     /// The record does not reach back to the cutoff.
     RecordIncomplete { recorded_after_wal_id: u64 },
+    /// The cutoff does not belong to this document (see
+    /// [`EditorsSince::CutoffAhead`]).
+    CutoffAhead { high_water: u64 },
     /// These editors changed the document after the cutoff and name no author.
     NotPrincipals(Vec<EditorRecord>),
 }
@@ -340,6 +381,11 @@ impl EditorsSince {
             } => {
                 return Authors::Unknown(UnknownAuthors::RecordIncomplete {
                     recorded_after_wal_id: *recorded_after_wal_id,
+                })
+            }
+            Self::CutoffAhead { high_water } => {
+                return Authors::Unknown(UnknownAuthors::CutoffAhead {
+                    high_water: *high_water,
                 })
             }
             Self::Known(rows) => rows,

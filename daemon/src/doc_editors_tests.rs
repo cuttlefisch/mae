@@ -524,3 +524,155 @@ async fn authors_since_wal_refuses_when_an_author_is_hidden() {
         Authors::Unknown(UnknownAuthors::NotPrincipals(_))
     ));
 }
+
+/// N1, the reviewer's repro: a SHARE installs held-back text. Alice plants text
+/// on Bob's next item; the cutoff is taken; Bob's client syncs (the full state
+/// carries Alice's pending structs), edits, and shares its whole state. The
+/// document now holds Alice's text, so she is an editor after the cutoff.
+#[tokio::test]
+async fn a_share_installing_held_back_text_credits_its_author() {
+    let store = store();
+    let (_, planted) = planted_on_bobs_next_item();
+    let cut = store
+        .apply_update("doc1", &planted, None, ALICE)
+        .await
+        .unwrap()
+        .wal_seq;
+    let synced = store.encode_state("doc1").await.unwrap();
+    let mut bob = TextSync::from_state_with_client_id(&synced, 2).unwrap();
+    bob.insert(0, "gap ");
+    store
+        .share_doc("doc1", &bob.encode_state(), BOB)
+        .await
+        .unwrap();
+    assert_eq!(store.content("doc1").await.unwrap(), "gap PLANTED");
+
+    let rows = known(&store, "doc1", cut).await;
+    let mut got = who(&rows);
+    got.sort();
+    assert_eq!(got, vec![p("SHA256:alice"), p("SHA256:bob")]);
+}
+
+/// N3: WAL ids are global to the database, so a cutoff past this document's
+/// high-water mark came from somewhere else. It must not read as "nobody".
+#[tokio::test]
+async fn a_cutoff_past_the_documents_high_water_is_not_nobody() {
+    let store = store();
+    let mut a = TextSync::with_client_id("", 1);
+    let w1 = store
+        .apply_update("doc1", &a.insert(0, "a"), None, ALICE)
+        .await
+        .unwrap()
+        .wal_seq;
+    let mut b = TextSync::with_client_id("", 2);
+    let w2 = store
+        .apply_update("doc2", &b.insert(0, "b"), None, BOB)
+        .await
+        .unwrap()
+        .wal_seq;
+    let ahead = EditorsSince::CutoffAhead { high_water: w1 };
+    assert_eq!(store.editors_since_wal("doc1", w2).await.unwrap(), ahead);
+    assert_eq!(
+        store.authors_since_wal("doc1", w2).await.unwrap(),
+        Authors::Unknown(UnknownAuthors::CutoffAhead { high_water: w1 })
+    );
+    assert!(
+        known(&store, "doc1", w1).await.is_empty(),
+        "its own high water is fine"
+    );
+}
+
+/// Drive `state_with_high_water` against a concurrent `writer`: pause the
+/// reader between its two reads, give the writer up to 200ms to finish, then
+/// let the reader go. Returns `(content read, high water read, writer's WAL id)`.
+async fn race_high_water<F>(store: &Arc<DocStore>, writer: F) -> (String, u64, u64)
+where
+    F: std::future::Future<Output = u64> + Send + 'static,
+{
+    let pause = store.pause_next_high_water_read();
+    let reader = {
+        let s = Arc::clone(store);
+        tokio::spawn(async move { s.state_with_high_water("doc1").await.unwrap() })
+    };
+    pause.reached.notified().await;
+    let mut writer = tokio::spawn(writer);
+    let finished_first = tokio::time::timeout(std::time::Duration::from_millis(200), &mut writer)
+        .await
+        .is_ok();
+    pause.proceed.notify_one();
+    let (state, hw) = reader.await.unwrap();
+    let w = writer.await.unwrap();
+    assert!(!finished_first, "the writer ran inside the reader's freeze");
+    let content = TextSync::from_state(&state).unwrap().content();
+    (content, hw, w)
+}
+
+/// N2, the reviewer's interleaving, driven step by step: a share passes its
+/// size probe; a freeze then locks the OLD entry and reads its content; the
+/// share deletes storage, swaps the entry and appends its WAL row — none of
+/// which needs the entry lock — and only then does the freeze read the high
+/// water. Without the replace gate that pairs "OLD" with the share's WAL id,
+/// dropping the sharer from the next revision's authors.
+#[tokio::test]
+async fn a_freeze_and_a_share_never_interleave() {
+    let store = Arc::new(store());
+    let old = TextSync::with_client_id("", 1).insert(0, "OLD");
+    let w_old = store
+        .apply_update("doc1", &old, None, ALICE)
+        .await
+        .unwrap()
+        .wal_seq;
+
+    let replace_pause = store.pause_next_replace();
+    let share = {
+        let s = Arc::clone(&store);
+        let new = TextSync::with_client_id("", 2).insert(0, "NEW");
+        tokio::spawn(async move { s.share_doc("doc1", &new, BOB).await.unwrap().wal_seq })
+    };
+    replace_pause.reached.notified().await;
+
+    let read_pause = store.pause_next_high_water_read();
+    let reader = {
+        let s = Arc::clone(&store);
+        tokio::spawn(async move { s.state_with_high_water("doc1").await.unwrap() })
+    };
+    // With the gate the reader cannot get this far while the share is mid-way.
+    let window = std::time::Duration::from_millis(200);
+    let _ = tokio::time::timeout(window, read_pause.reached.notified()).await;
+    replace_pause.proceed.notify_one();
+    let w_share = share.await.unwrap();
+    read_pause.proceed.notify_one();
+    let (state, hw) = reader.await.unwrap();
+
+    let content = TextSync::from_state(&state).unwrap().content();
+    let consistent = [("OLD".to_string(), w_old), ("NEW".to_string(), w_share)];
+    assert!(
+        consistent.contains(&(content.clone(), hw)),
+        "froze {content:?} at WAL {hw}"
+    );
+}
+
+/// N2 / M8: `apply_update` appends to the WAL under the entry lock, so the
+/// freeze must hold that lock across BOTH reads; reading the high water after
+/// releasing it would pair the old content with the edit's WAL id.
+#[tokio::test]
+async fn a_freeze_and_an_edit_never_interleave() {
+    let store = Arc::new(store());
+    let mut a = TextSync::with_client_id("", 1);
+    let w_old = store
+        .apply_update("doc1", &a.insert(0, "OLD"), None, ALICE)
+        .await
+        .unwrap()
+        .wal_seq;
+    let s = Arc::clone(&store);
+    let edit = a.insert(3, "+bob");
+    let apply = async move {
+        s.apply_update("doc1", &edit, None, BOB)
+            .await
+            .unwrap()
+            .wal_seq
+    };
+    let (content, hw, w_edit) = race_high_water(&store, apply).await;
+    assert_eq!((content.as_str(), hw), ("OLD", w_old));
+    assert!(w_edit > w_old);
+}

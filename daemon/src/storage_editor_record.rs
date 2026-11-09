@@ -220,6 +220,10 @@ pub(super) fn editors_since_wal(
     doc_name: &str,
     after_wal_id: u64,
 ) -> Result<EditorsSince, StorageError> {
+    let high_water = high_water(conn, doc_name)?;
+    if after_wal_id > high_water {
+        return Ok(EditorsSince::CutoffAhead { high_water });
+    }
     let recorded_after_wal_id = origin(conn, doc_name)?;
     if after_wal_id < recorded_after_wal_id {
         return Ok(EditorsSince::Incomplete {

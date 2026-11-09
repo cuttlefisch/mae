@@ -128,6 +128,33 @@ pub struct DocStore {
     /// The clock the per-document editor record (ADR-113 D3) is stamped with.
     /// Wall clock in production; injectable so tests order edits without sleeping.
     clock: EditClock,
+    /// Striped per-document gates serializing a whole-document replace
+    /// (`share_doc`/`restore_doc`) against `state_with_high_water`. A replace
+    /// swaps the in-memory entry and rewrites storage OUTSIDE the entry lock, so
+    /// the entry lock alone cannot keep a reader from pairing the old content
+    /// with the new WAL high-water mark. Always taken before `docs` or an entry
+    /// lock. Striped (not per name) so it stays bounded; two documents sharing
+    /// a stripe only wait on each other.
+    replace_gates: Box<[Mutex<()>]>,
+    /// Test seams: pause `state_with_high_water` between its state and
+    /// high-water reads, and a replace between its size probe and its storage
+    /// swap, so the races between them can be driven deterministically.
+    #[cfg(test)]
+    high_water_pause: std::sync::Mutex<Option<HighWaterPause>>,
+    #[cfg(test)]
+    replace_pause: std::sync::Mutex<Option<HighWaterPause>>,
+}
+
+/// Number of [`DocStore::replace_gates`] stripes.
+const REPLACE_GATE_STRIPES: usize = 64;
+
+/// A one-shot pause (see `DocStore::high_water_pause`): the reader signals
+/// `reached` and waits for `proceed`.
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct HighWaterPause {
+    pub reached: Arc<tokio::sync::Notify>,
+    pub proceed: Arc<tokio::sync::Notify>,
 }
 
 /// A derived membership snapshot (ADR-042): the governance + valid-member set for a KB at a
@@ -242,6 +269,50 @@ impl DocStore {
             derive_cache: RwLock::new(HashMap::new()),
             authorized_keys_path: std::sync::OnceLock::new(),
             clock: crate::doc_editors::system_clock(),
+            replace_gates: (0..REPLACE_GATE_STRIPES).map(|_| Mutex::new(())).collect(),
+            #[cfg(test)]
+            high_water_pause: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            replace_pause: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// The gate for `doc_name` (see `replace_gates`).
+    fn replace_gate(&self, doc_name: &str) -> &Mutex<()> {
+        let hash = doc_name.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+            (h ^ b as u64).wrapping_mul(0x0100_0000_01b3)
+        });
+        &self.replace_gates[hash as usize % self.replace_gates.len()]
+    }
+
+    /// Arm a one-shot pause in the next `state_with_high_water`.
+    #[cfg(test)]
+    pub(crate) fn pause_next_high_water_read(&self) -> HighWaterPause {
+        Self::arm(&self.high_water_pause)
+    }
+
+    /// Arm a one-shot pause in the next share/restore, after its size probe.
+    #[cfg(test)]
+    pub(crate) fn pause_next_replace(&self) -> HighWaterPause {
+        Self::arm(&self.replace_pause)
+    }
+
+    #[cfg(test)]
+    fn arm(slot: &std::sync::Mutex<Option<HighWaterPause>>) -> HighWaterPause {
+        let pause = HighWaterPause {
+            reached: Arc::new(tokio::sync::Notify::new()),
+            proceed: Arc::new(tokio::sync::Notify::new()),
+        };
+        *slot.lock().unwrap() = Some(pause.clone());
+        pause
+    }
+
+    #[cfg(test)]
+    async fn pause_at(slot: &std::sync::Mutex<Option<HighWaterPause>>) {
+        let pause = slot.lock().unwrap().take();
+        if let Some(p) = pause {
+            p.reached.notify_one();
+            p.proceed.notified().await;
         }
     }
 
@@ -286,17 +357,23 @@ impl DocStore {
     }
 
     /// A document's full state together with the WAL high-water mark it
-    /// reflects, read under the document's lock so no update lands between the
-    /// two. The high-water mark is the cutoff to freeze for
-    /// [`Self::editors_since_wal`].
+    /// reflects — the cutoff to freeze for [`Self::editors_since_wal`]. Nothing
+    /// can land between the two reads: the replace gate excludes a share or
+    /// restore, and the entry lock (held across BOTH reads) excludes
+    /// `apply_update`, which appends to the WAL under that lock.
     pub async fn state_with_high_water(
         &self,
         doc_name: &str,
     ) -> Result<(Vec<u8>, u64), StorageError> {
+        let _gate = self.replace_gate(doc_name).lock().await;
         let entry = self.get_or_create(doc_name).await?;
         let doc = entry.lock().await;
+        let state = doc.sync.encode_state();
+        #[cfg(test)]
+        Self::pause_at(&self.high_water_pause).await;
         let high_water = self.storage.wal_high_water(doc_name).await?;
-        Ok((doc.sync.encode_state(), high_water))
+        drop(doc);
+        Ok((state, high_water))
     }
 
     /// Delete an evicted or deleted document's editor record — but only an
@@ -1189,6 +1266,7 @@ impl DocStore {
         // Validate before touching anything.
         validate_update(update)
             .map_err(|e| StorageError::Sqlite(format!("invalid update: {e}")))?;
+        let _gate = self.replace_gate(doc_name).lock().await;
 
         // ADR-109 D6: a share is the document's whole state, so measure it on its
         // own before the old document is deleted — a refused share changes nothing.
@@ -1207,6 +1285,8 @@ impl DocStore {
         if let Some(refused) = self.size_refusal(doc_name, before, probe.payload_bytes()) {
             return Err(refused);
         }
+        #[cfg(test)]
+        Self::pause_at(&self.replace_pause).await;
 
         // Delete old doc from storage. Log errors — silent swallow could
         // lead to corrupted recovery if WAL append succeeds but old data remains.
@@ -1220,16 +1300,10 @@ impl DocStore {
             docs.remove(doc_name);
         }
 
-        // WAL append first (durability). The old content, and anything it held
-        // pending, is gone: only the share's own pending structs remain.
+        // WAL append first (durability), with the editor record (ADR-113 D3).
         let mut stamp = self.stamp(by);
         stamp.resets_origin = resets_origin;
-        let held_back = probe.pending_digest().is_some();
-        stamp.pending = PendingChange {
-            leaves_pending: held_back,
-            integrated: false,
-            cleared: !held_back,
-        };
+        stamp.pending = PendingChange::replacing(probe.pending_digest().is_some());
         let wal_id = self
             .storage
             .wal_append(doc_name, update, None, &stamp)
