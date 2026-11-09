@@ -28,7 +28,7 @@ pub(super) async fn handle_kb_claim_lease(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             )
         }
     };
@@ -37,7 +37,7 @@ pub(super) async fn handle_kb_claim_lease(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'op_kind' field".to_string()),
+                McpError::invalid_params("op_kind", "missing 'op_kind' field".to_string()),
             )
         }
     };
@@ -48,17 +48,9 @@ pub(super) async fn handle_kb_claim_lease(
     // Any Editor may claim the lease — not owner-only (unlike `kb/collection_op`'s
     // Manage gate), since enrichment/embedding work is an ordinary editing
     // capability, not KB governance.
-    match kb_access(doc_store, &kb_id, auth_principal, KbOp::Edit, transport).await {
-        Ok(AccessDecision::Allow) => {}
-        Ok(AccessDecision::Deny(m)) | Err(m) => {
-            return JsonRpcResponse::error(id, McpError::internal_error(m))
-        }
-        Ok(_) => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::internal_error(format!("not authorized to edit KB '{kb_id}'")),
-            )
-        }
+    let decision = kb_access(doc_store, &kb_id, auth_principal, KbOp::Edit, transport).await;
+    if let Err(r) = require_allow(decision, || format!("not authorized to edit KB '{kb_id}'")) {
+        return JsonRpcResponse::error(id, r.into());
     }
     let holder_fp = auth_principal.unwrap_or("").to_string();
 
@@ -94,7 +86,7 @@ pub(super) async fn handle_kb_claim_lease(
                 }),
             )
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
+        Err(e) => JsonRpcResponse::error(id, McpError::internal_fault(e)),
     }
 }
 

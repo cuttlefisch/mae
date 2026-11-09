@@ -20,7 +20,7 @@ pub(crate) async fn kb_access(
     principal: Option<&str>,
     op: KbOp,
     transport: Transport,
-) -> Result<AccessDecision, String> {
+) -> Result<AccessDecision, Refusal> {
     kb_access_with_coll(doc_store, kb_id, principal, op, transport, None).await
 }
 
@@ -35,7 +35,7 @@ pub(crate) async fn kb_access_with_coll(
     op: KbOp,
     transport: Transport,
     coll: Option<&KbCollectionDoc>,
-) -> Result<AccessDecision, String> {
+) -> Result<AccessDecision, Refusal> {
     let principal = match principal {
         Some(p) => p,
         None => return Ok(AccessDecision::Allow),
@@ -89,8 +89,9 @@ pub(crate) async fn kb_access_with_coll(
             Transport::Hub => "the hub",
             Transport::P2p => "the P2P mesh",
         };
-        return Ok(AccessDecision::Deny(format!(
-            "KB '{kb_id}' is not shared over {t}"
+        return Ok(AccessDecision::Deny(Refusal::new(
+            RefusalKind::TransportForbidden { transport },
+            format!("KB '{kb_id}' is not shared over {t}"),
         )));
     }
     match role {
@@ -104,24 +105,26 @@ pub(crate) async fn kb_access_with_coll(
             // gets below (telling a genuine, restricted member they're "not a
             // member" would be actively misleading).
             if op == KbOp::Join && replication == ReplicationPolicy::QueryOnly {
-                return Ok(AccessDecision::Deny(format!(
-                    "member is restricted to live-query-only access for KB '{kb_id}' \
-                     and may not replicate it locally (ADR-067)"
+                return Ok(AccessDecision::Deny(Refusal::new(
+                    RefusalKind::ReplicationRestricted,
+                    format!(
+                        "member is restricted to live-query-only access for KB '{kb_id}' \
+                         and may not replicate it locally (ADR-067)"
+                    ),
                 )));
             }
             // Hierarchical RBAC: owner ⊇ editor ⊇ viewer.
-            let allowed = match op {
-                KbOp::Join | KbOp::Read => true,
-                KbOp::Edit => role.includes(SyncRole::Editor),
-                KbOp::Manage => role.includes(SyncRole::Owner),
+            let required = match op {
+                KbOp::Join | KbOp::Read => SyncRole::Viewer,
+                KbOp::Edit => SyncRole::Editor,
+                KbOp::Manage => SyncRole::Owner,
             };
-            if allowed {
+            if role.includes(required) {
                 Ok(AccessDecision::Allow)
             } else {
-                Ok(AccessDecision::Deny(format!(
-                    "role '{}' may not {:?} KB '{kb_id}'",
-                    role.as_str(),
-                    op
+                Ok(AccessDecision::Deny(Refusal::new(
+                    RefusalKind::RoleForbidden { required },
+                    format!("role '{}' may not {:?} KB '{kb_id}'", role.as_str(), op),
                 )))
             }
         }
@@ -130,13 +133,13 @@ pub(crate) async fn kb_access_with_coll(
             KbOp::Join => match coll.join_policy() {
                 JoinPolicy::Permissive => Ok(AccessDecision::AllowAutoJoin),
                 JoinPolicy::Invite => Ok(AccessDecision::Pending),
-                JoinPolicy::Restrictive => Ok(AccessDecision::Deny(format!(
+                JoinPolicy::Restrictive => Ok(AccessDecision::Deny(Refusal::not_member(format!(
                     "not a member of KB '{kb_id}'"
-                ))),
+                )))),
             },
-            _ => Ok(AccessDecision::Deny(format!(
+            _ => Ok(AccessDecision::Deny(Refusal::not_member(format!(
                 "not a member of KB '{kb_id}'"
-            ))),
+            )))),
         },
     }
 }
@@ -157,7 +160,7 @@ pub async fn check_kb_read_access(
     kb_id: &str,
     principal: Option<&str>,
     transport: Transport,
-) -> Result<AccessDecision, String> {
+) -> Result<AccessDecision, Refusal> {
     kb_access(doc_store, kb_id, principal, KbOp::Read, transport).await
 }
 

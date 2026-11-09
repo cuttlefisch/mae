@@ -43,10 +43,13 @@ pub(super) fn refuse_unaddressable_kb_id(
     );
     Some(JsonRpcResponse::error(
         id.clone(),
-        McpError::invalid_request(format!(
-            "KB id {kb_id:?} is not addressable: it must be non-empty and must not \
+        McpError::invalid_params(
+            "kb_id",
+            format!(
+                "KB id {kb_id:?} is not addressable: it must be non-empty and must not \
              contain ':' (it forms part of each node's document address, which \
              splits on the first colon)"
-        )),
+            ),
+        ),
     ))
 }

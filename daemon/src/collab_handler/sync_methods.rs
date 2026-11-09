@@ -18,14 +18,14 @@ pub(super) async fn handle_sync_state_vector(
     let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
     if let Err(msg) = deny_kb_doc_read(doc_store, &doc_name, auth_principal, transport).await {
         warn!(session = session_id, doc = %doc_name, reason = %msg, "sync/state_vector denied");
-        return JsonRpcResponse::error(id, McpError::internal_error(msg));
+        return JsonRpcResponse::error(id, msg.into());
     }
     match doc_store.state_vector(&doc_name).await {
         Ok(sv) => {
             let sv_b64 = update_to_base64(&sv);
             JsonRpcResponse::success(id, serde_json::json!({ "doc": doc_name, "sv": sv_b64 }))
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+        Err(e) => JsonRpcResponse::error(id, storage_error(e)),
     }
 }
 
@@ -46,7 +46,7 @@ pub(super) async fn handle_sync_update(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'doc' field".to_string()),
+                McpError::invalid_params("doc", "missing 'doc' field".to_string()),
             );
         }
     };
@@ -55,7 +55,7 @@ pub(super) async fn handle_sync_update(
     if let Err(e) = deny_collection_smuggling(doc_store, &doc_name, auth_principal, transport).await
     {
         warn!(session = session_id, doc = %doc_name, reason = %e, "sync/update denied (collection smuggling)");
-        return JsonRpcResponse::error(id, McpError::internal_error(e));
+        return JsonRpcResponse::error(id, e.into());
     }
     // Track this doc for disconnect cleanup and doc-scoped broadcast filtering.
     if session_docs.insert(doc_name.clone()) {
@@ -72,7 +72,7 @@ pub(super) async fn handle_sync_update(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'update' field".to_string()),
+                McpError::invalid_params("update", "missing 'update' field".to_string()),
             );
         }
     };
@@ -81,7 +81,7 @@ pub(super) async fn handle_sync_update(
         Err(e) => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error(format!("invalid base64: {e}")),
+                McpError::invalid_params("update", format!("invalid base64: {e}")),
             );
         }
     };
@@ -89,11 +89,15 @@ pub(super) async fn handle_sync_update(
     if update_bytes.len() > max_update {
         return JsonRpcResponse::error(
             id,
-            McpError::parse_error(format!(
-                "update too large: {} bytes (max {})",
+            McpError::update_too_large(
+                format!(
+                    "update too large: {} bytes (max {})",
+                    update_bytes.len(),
+                    max_update
+                ),
                 update_bytes.len(),
-                max_update
-            )),
+                max_update,
+            ),
         );
     }
     let client_id = params["client_id"].as_u64();
@@ -119,7 +123,7 @@ pub(super) async fn handle_sync_update(
             Ok(verified) => sync_content_header = verified,
             Err(e) => {
                 warn!(session = session_id, doc = %doc_name, reason = %e, "sync/update: SIGNED CONTENT OP REJECTED (ADR-036)");
-                return JsonRpcResponse::error(id, McpError::internal_error(e));
+                return JsonRpcResponse::error(id, e.into());
             }
         }
     }
@@ -156,19 +160,13 @@ pub(super) async fn handle_sync_update(
                 // second one has no default answer. Regression:
                 // `collab_handler_unauthorized_surface_tests::
                 // unsigned_sync_update_from_a_non_member_cannot_write_a_kb_node`.
-                match kb_access(doc_store, kb_id, auth_principal, KbOp::Edit, transport).await {
-                    Ok(AccessDecision::Allow) => {}
-                    Ok(AccessDecision::Deny(m)) | Err(m) => {
-                        warn!(session = session_id, doc = %doc_name, kb_id = %kb_id, reason = %m,
-                              "sync/update: kb node write DENIED (not a member / insufficient role)");
-                        return JsonRpcResponse::error(id, McpError::internal_error(m));
-                    }
-                    Ok(_) => {
-                        return JsonRpcResponse::error(
-                            id,
-                            McpError::internal_error(format!("cannot write to KB '{kb_id}'")),
-                        );
-                    }
+                let decision =
+                    kb_access(doc_store, kb_id, auth_principal, KbOp::Edit, transport).await;
+                if let Err(m) = require_allow(decision, || format!("cannot write to KB '{kb_id}'"))
+                {
+                    warn!(session = session_id, doc = %doc_name, kb_id = %kb_id, reason = %m,
+                          "sync/update: kb node write DENIED (not a member / insufficient role)");
+                    return JsonRpcResponse::error(id, m.into());
                 }
 
                 // Fence on the VERIFIED header author (a relayed op's true author —
@@ -188,7 +186,7 @@ pub(super) async fn handle_sync_update(
                     .await
                     {
                         warn!(session = session_id, doc = %doc_name, %reason, "sync/update: kb node REJECTED (epoch fence — #169 M1)");
-                        return JsonRpcResponse::error(id, McpError::internal_error(reason));
+                        return JsonRpcResponse::error(id, reason.into());
                     }
                 }
             }
@@ -196,7 +194,8 @@ pub(super) async fn handle_sync_update(
                 warn!(session = session_id, doc = %doc_name, "sync/update: kb node write WITHOUT kb_id — REJECTED (would bypass membership + epoch fence, #169 M1)");
                 return JsonRpcResponse::error(
                     id,
-                    McpError::internal_error(
+                    McpError::invalid_params(
+                        "kb_id",
                         "kb node writes via sync/update must carry kb_id".to_string(),
                     ),
                 );
@@ -231,7 +230,7 @@ pub(super) async fn handle_sync_update(
                 }),
             )
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+        Err(e) => JsonRpcResponse::error(id, storage_error(e)),
     }
 }
 
@@ -288,7 +287,7 @@ pub(super) async fn handle_sync_awareness(
     // updates): a KB doc needs read access to its KB first.
     if let Err(msg) = deny_kb_awareness(doc_store, &doc_name, auth_principal, transport).await {
         warn!(session = session_id, doc = %doc_name, reason = %msg, "sync/awareness denied");
-        return JsonRpcResponse::error(id, McpError::internal_error(msg));
+        return JsonRpcResponse::error(id, msg.into());
     }
     let state = &params["state"];
     debug!(
@@ -362,7 +361,7 @@ pub(super) async fn handle_sync_full_state(
     let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
     if let Err(msg) = deny_kb_doc_read(doc_store, &doc_name, auth_principal, transport).await {
         warn!(session = session_id, doc = %doc_name, reason = %msg, "sync/full_state denied");
-        return JsonRpcResponse::error(id, McpError::internal_error(msg));
+        return JsonRpcResponse::error(id, msg.into());
     }
     // Track this doc for disconnect cleanup and doc-scoped broadcast filtering.
     if session_docs.insert(doc_name.clone()) {
@@ -382,7 +381,7 @@ pub(super) async fn handle_sync_full_state(
                 serde_json::json!({ "doc": doc_name, "state": state_b64 }),
             )
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+        Err(e) => JsonRpcResponse::error(id, storage_error(e)),
     }
 }
 
@@ -402,14 +401,14 @@ pub(super) async fn handle_sync_diff(
     // collaboration is unaffected.
     if let Err(msg) = deny_kb_doc_read(doc_store, &doc_name, auth_principal, transport).await {
         warn!(doc = %doc_name, reason = %msg, "sync/diff denied");
-        return JsonRpcResponse::error(id, McpError::internal_error(msg));
+        return JsonRpcResponse::error(id, msg.into());
     }
     let sv_b64 = match params["sv"].as_str() {
         Some(s) => s,
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'sv' field".to_string()),
+                McpError::invalid_params("sv", "missing 'sv' field".to_string()),
             );
         }
     };
@@ -418,7 +417,7 @@ pub(super) async fn handle_sync_diff(
         Err(e) => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error(format!("invalid base64: {e}")),
+                McpError::invalid_params("sv", format!("invalid base64: {e}")),
             );
         }
     };
@@ -436,7 +435,7 @@ pub(super) async fn handle_sync_diff(
                 }),
             )
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+        Err(e) => JsonRpcResponse::error(id, storage_error(e)),
     }
 }
 
@@ -467,7 +466,7 @@ pub(super) async fn handle_sync_resync(
     // cannot be used to reach a `kb:` doc by another spelling.
     if let Err(msg) = deny_kb_doc_read(doc_store, &raw_name, auth_principal, transport).await {
         warn!(session = session_id, doc = %raw_name, reason = %msg, "sync/resync denied");
-        return JsonRpcResponse::error(id, McpError::internal_error(msg));
+        return JsonRpcResponse::error(id, msg.into());
     }
     // Resolve bare filenames via suffix matching (e.g. "test.txt" finds "file:no-project/test.txt").
     let doc_name = if doc_store.has_doc(&raw_name).await {
@@ -484,7 +483,7 @@ pub(super) async fn handle_sync_resync(
     if doc_name != raw_name {
         if let Err(msg) = deny_kb_doc_read(doc_store, &doc_name, auth_principal, transport).await {
             warn!(session = session_id, doc = %doc_name, reason = %msg, "sync/resync denied (resolved)");
-            return JsonRpcResponse::error(id, McpError::internal_error(msg));
+            return JsonRpcResponse::error(id, msg.into());
         }
     }
     // Track this doc for disconnect cleanup and doc-scoped broadcast filtering.
@@ -507,7 +506,7 @@ pub(super) async fn handle_sync_resync(
                 }),
             )
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+        Err(e) => JsonRpcResponse::error(id, storage_error(e)),
     }
 }
 
@@ -533,7 +532,7 @@ pub(super) async fn handle_sync_share(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'update' field".to_string()),
+                McpError::invalid_params("update", "missing 'update' field".to_string()),
             );
         }
     };
@@ -542,7 +541,7 @@ pub(super) async fn handle_sync_share(
         Err(e) => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error(format!("invalid base64: {e}")),
+                McpError::invalid_params("update", format!("invalid base64: {e}")),
             );
         }
     };

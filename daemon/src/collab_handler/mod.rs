@@ -30,9 +30,12 @@ pub mod kb_lease;
 mod kb_membership;
 mod kb_share_ownership;
 mod method_authz;
+mod refusal;
 mod sync_methods;
 
 pub(crate) use access::*;
+pub(crate) use refusal::{require_allow, storage_error};
+pub use refusal::{Refusal, RefusalKind};
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -490,13 +493,13 @@ pub(crate) fn register_session(
 
 /// The JSON-RPC error for a document write that storage refused or failed.
 /// A size refusal keeps its own code and `data.kind = "quota_exceeded"`, so a
-/// client can tell "this edit is too large" from a daemon fault (ADR-109 D6).
+/// client can tell "this edit is too large" from a daemon fault (ADR-109 D6);
+/// see [`storage_error`] for the rest of the mapping.
 fn write_failure(context: &str, e: crate::storage::StorageError) -> McpError {
-    match e {
-        crate::storage::StorageError::TooLarge { size, limit, .. } => {
-            McpError::document_too_large(format!("{context}: {e}"), size, limit)
-        }
-        e => McpError::internal_error(format!("{context}: {e}")),
+    let message = format!("{context}: {e}");
+    McpError {
+        message,
+        ..storage_error(e)
     }
 }
 
@@ -526,7 +529,8 @@ mod write_failure_tests {
 
         let fault = write_failure("node update", StorageError::Sqlite("disk".into()));
         assert_eq!(fault.code, -32603);
-        assert!(fault.data.is_none());
+        assert_eq!(fault.data.as_ref().unwrap()["kind"], "internal");
+        assert_eq!(fault.message, "node update: sqlite: disk");
     }
 }
 
@@ -758,7 +762,7 @@ pub enum AccessDecision {
     Allow,
     AllowAutoJoin,
     Pending,
-    Deny(String),
+    Deny(Refusal),
 }
 
 /// Load the collection doc for `kb_id` (`kbc:{kb_id}`).
@@ -773,7 +777,10 @@ pub enum AccessDecision {
 /// `check_kb_read_access` has already gated the call — a second small load of the
 /// same doc, not a second gate; simpler than threading a `_with_coll` variant
 /// through the public wrapper for a call path that isn't hot.
-pub async fn load_collection(doc_store: &DocStore, kb_id: &str) -> Result<KbCollectionDoc, String> {
+pub async fn load_collection(
+    doc_store: &DocStore,
+    kb_id: &str,
+) -> Result<KbCollectionDoc, Refusal> {
     let collection_doc = format!("kbc:{kb_id}");
     // ADR-105: a KB that does not exist must NOT be brought into existence by
     // someone asking about it. `encode_state_and_sv` goes through `get_or_create`,
@@ -787,14 +794,29 @@ pub async fn load_collection(doc_store: &DocStore, kb_id: &str) -> Result<KbColl
     // and lazy-reloaded (ADR-032 A2), so the memory-only check would report "not
     // found" for a live KB and turn this guard into an intermittent outage.
     if !doc_store.has_durable_doc(&collection_doc).await {
-        return Err(format!("KB '{kb_id}' not found"));
+        return Err(Refusal::new(
+            RefusalKind::KbNotFound,
+            format!("KB '{kb_id}' not found"),
+        ));
     }
+    // Past the check above, a read error is the collection being unreadable —
+    // unless it vanished in between, which is the KB being absent after all.
     let (state, _sv) = doc_store
         .encode_state_and_sv(&collection_doc)
         .await
-        .map_err(|e| format!("KB '{kb_id}' not found: {e}"))?;
-    let mut coll =
-        KbCollectionDoc::from_bytes(&state).map_err(|e| format!("bad collection: {e}"))?;
+        .map_err(|e| {
+            let kind = match e {
+                crate::storage::StorageError::DurableDocMissing(_) => RefusalKind::KbNotFound,
+                _ => RefusalKind::CollectionUnavailable,
+            };
+            Refusal::new(kind, format!("KB '{kb_id}' not found: {e}"))
+        })?;
+    let mut coll = KbCollectionDoc::from_bytes(&state).map_err(|e| {
+        Refusal::new(
+            RefusalKind::CollectionUnavailable,
+            format!("bad collection: {e}"),
+        )
+    })?;
     if let Some(ak_path) = doc_store.authorized_keys_path() {
         // I-10: re-read fresh so a since-authorized label resolves to its key.
         let authorized = AuthorizedKeys::load(ak_path);
@@ -832,7 +854,7 @@ pub async fn verify_content_op(
     kb_id: &str,
     anchor: &[u8; 32],
     signed: &SignedContentOp,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     verify_content_op_with_coll(doc_store, kb_id, anchor, signed, None).await
 }
 
@@ -845,7 +867,7 @@ pub async fn verify_content_op_with_coll(
     anchor: &[u8; 32],
     signed: &SignedContentOp,
     coll: Option<&KbCollectionDoc>,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let loaded;
     let coll = match coll {
         Some(c) => c,
@@ -857,9 +879,33 @@ pub async fn verify_content_op_with_coll(
     let dm = doc_store
         .derived_membership(kb_id, coll, anchor, now_unix())
         .await;
-    signed
-        .admit(&dm.members)
-        .map_err(|e| format!("signed content op rejected: {e:?}"))
+    signed.admit(&dm.members).map_err(|e| {
+        Refusal::new(
+            admission_kind(&e),
+            format!("signed content op rejected: {e:?}"),
+        )
+    })
+}
+
+/// The refusal kind for each ADR-036 admission failure. A stale epoch is the
+/// ADR-023 fence reached through the signed path, so it reports the same kind
+/// — with the op's own epoch, which a signed header (unlike a bare update) names.
+fn admission_kind(e: &mae_sync::content_ops::AdmissionError) -> RefusalKind {
+    use mae_sync::content_ops::AdmissionError;
+    match e {
+        AdmissionError::BadSignature => RefusalKind::SignatureInvalid,
+        AdmissionError::NotAMember => RefusalKind::NotMember,
+        AdmissionError::InsufficientRole => RefusalKind::RoleForbidden {
+            required: SyncRole::Editor,
+        },
+        AdmissionError::StaleEpoch {
+            op_epoch,
+            current_epoch,
+        } => RefusalKind::EpochFenced {
+            current_epoch: *current_epoch,
+            caller_epoch: Some(*op_epoch),
+        },
+    }
 }
 
 /// Resolve a KB's content trust anchor (the genesis owner pubkey): the registered
@@ -912,7 +958,7 @@ pub async fn verify_relayed_content_op(
     update: &[u8],
     header: Option<&serde_json::Value>,
     require_signed: bool,
-) -> Result<Option<serde_json::Value>, String> {
+) -> Result<Option<serde_json::Value>, Refusal> {
     // @ai-caution: [kb-scoping] (ADR-105 D1) Address TYPE, not string prefix — a node
     // doc that stops matching here returns `Ok(None)` ("not a content op"), which
     // SKIPS ADR-036 signature verification entirely.
@@ -928,8 +974,11 @@ pub async fn verify_relayed_content_op(
         Some(h) if h.get("sig").is_some() => h,
         _ => {
             return if require_signed {
-                Err(format!(
-                    "unsigned content op for KB '{kb_id}' node '{node_id}' rejected on the mesh (ADR-036 require-signed)"
+                Err(Refusal::new(
+                    RefusalKind::SignatureRequired,
+                    format!(
+                        "unsigned content op for KB '{kb_id}' node '{node_id}' rejected on the mesh (ADR-036 require-signed)"
+                    ),
                 ))
             } else {
                 // Counted, not merely permitted. This is the number that decides
@@ -943,8 +992,12 @@ pub async fn verify_relayed_content_op(
     let mut params = header.clone();
     params["kb_id"] = serde_json::json!(kb_id);
     params["node_id"] = serde_json::json!(node_id);
-    let signed = SignedContentOp::from_params(&params, update.to_vec())
-        .ok_or_else(|| "malformed signed content op header".to_string())?;
+    let signed = SignedContentOp::from_params(&params, update.to_vec()).ok_or_else(|| {
+        Refusal::new(
+            RefusalKind::SignatureInvalid,
+            "malformed signed content op header",
+        )
+    })?;
     verify_content_op(doc_store, kb_id, &anchor, &signed).await?;
     Ok(Some(signed.header_params()))
 }
@@ -1125,12 +1178,14 @@ async fn append_signed_revoke(
     kb_id: &str,
     coll: &mut KbCollectionDoc,
     subject: &str,
-) -> Result<(), String> {
-    let signer = doc_store
-        .signer()
-        .ok_or_else(|| "no signing identity (psk/none mode cannot revoke)".to_string())?;
+) -> Result<(), McpError> {
+    let signer = doc_store.signer().ok_or_else(|| {
+        McpError::signer_unavailable("no signing identity (psk/none mode cannot revoke)".into())
+    })?;
     if coll.oplog_head().is_none() {
-        return Err(format!("KB '{kb_id}' has no signed membership log"));
+        return Err(McpError::signer_unavailable(format!(
+            "KB '{kb_id}' has no signed membership log"
+        )));
     }
     // The genesis trust anchor: the external anchor registered for a JOINED KB,
     // else this daemon's own key (it IS the genesis owner of a KB it hosts).
@@ -1144,14 +1199,14 @@ async fn append_signed_revoke(
         .await;
     let signer_fp = signer.fingerprint();
     if dm.members.get(&signer_fp).map(|m| m.role) != Some(SyncRole::Owner) {
-        return Err(format!(
+        return Err(McpError::signer_unavailable(format!(
             "signer is not a current owner of KB '{kb_id}'; cannot revoke"
-        ));
+        )));
     }
     if !dm.members.contains_key(subject) {
-        return Err(format!(
+        return Err(McpError::subject_not_member(format!(
             "'{subject}' is not a current member of KB '{kb_id}'"
-        ));
+        )));
     }
     // Author = THIS signer (so distinct admins tally as distinct co-signatures).
     let secret = signer.secret_bytes();
@@ -1173,6 +1228,7 @@ async fn append_signed_revoke(
     persist_and_broadcast_collection(doc_store, broadcaster, session_id, kb_id, &update)
         .await
         .map(|_| ())
+        .map_err(McpError::internal_fault)
 }
 
 /// ADR-018 complete-mediation access engine: every KB operation routes through
@@ -1218,7 +1274,7 @@ pub async fn enforce_epoch_fence(
     node_doc: &str,
     update_bytes: &[u8],
     principal: &str,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     enforce_epoch_fence_with_coll(
         doc_store,
         kb_id,
@@ -1242,14 +1298,15 @@ pub async fn enforce_epoch_fence_with_coll(
     update_bytes: &[u8],
     principal: &str,
     coll: Option<&KbCollectionDoc>,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let loaded;
     let coll = match coll {
         Some(c) => c,
         None => {
-            loaded = load_collection(doc_store, kb_id)
-                .await
-                .map_err(|e| format!("epoch lookup failed for KB '{kb_id}': {e}"))?;
+            loaded = load_collection(doc_store, kb_id).await.map_err(|e| {
+                let message = format!("epoch lookup failed for KB '{kb_id}': {e}");
+                e.with_message(message)
+            })?;
             &loaded
         }
     };
@@ -1266,15 +1323,29 @@ pub async fn enforce_epoch_fence_with_coll(
     let base_state = match doc_store.encode_state_and_sv(node_doc).await {
         Ok((state, _sv)) => state,
         Err(crate::storage::StorageError::DurableDocMissing(_)) => return Ok(()),
-        Err(e) => return Err(format!("node state lookup failed for '{node_id}': {e}")),
+        Err(e) => {
+            return Err(Refusal::internal(format!(
+                "node state lookup failed for '{node_id}': {e}"
+            )))
+        }
     };
-    let authors = update_new_op_authors(update_bytes, &base_state)
-        .map_err(|e| format!("could not decode update: {e}"))?;
+    let authors = update_new_op_authors(update_bytes, &base_state).map_err(|e| {
+        Refusal::new(
+            RefusalKind::InvalidParams { param: "update" },
+            format!("could not decode update: {e}"),
+        )
+    })?;
     if let Some(stale) = authors.iter().find(|a| **a != c_now) {
-        return Err(format!(
-            "rebase required: node '{node_id}' carries an op from stale-epoch client {stale} \
-             (current-epoch author is {c_now}, epoch {epoch_now}); adopt authoritative state \
-             and re-author the edit"
+        return Err(Refusal::new(
+            RefusalKind::EpochFenced {
+                current_epoch: epoch_now,
+                caller_epoch: None,
+            },
+            format!(
+                "rebase required: node '{node_id}' carries an op from stale-epoch client {stale} \
+                 (current-epoch author is {c_now}, epoch {epoch_now}); adopt authoritative state \
+                 and re-author the edit"
+            ),
         ));
     }
     Ok(())
@@ -1289,16 +1360,20 @@ async fn deny_collection_smuggling(
     doc_name: &str,
     principal: Option<&str>,
     transport: Transport,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     // @ai-caution: [kb-scoping] (ADR-105 D1) Address TYPE, not string prefix — a
     // collection doc that stops matching here falls through ungated, and this is the
     // ADR-018 membership-smuggling defense (owner-only raw collection writes).
     match mae_sync::DocAddress::parse(doc_name) {
         Some(mae_sync::DocAddress::KbCollection { kb_id }) => {
+            // The message is the same for every denial, as it always was; the
+            // kind is the gate's own, so a non-member reads `not_member` and an
+            // editor `role_forbidden` — what the message already implied.
             match kb_access(doc_store, &kb_id, principal, KbOp::Manage, transport).await? {
                 AccessDecision::Allow => Ok(()),
-                _ => Err(format!(
-                    "only the owner may write the collection doc for KB '{kb_id}'"
+                other => Err(Refusal::new(
+                    denied_kind(other),
+                    format!("only the owner may write the collection doc for KB '{kb_id}'"),
                 )),
             }
         }
@@ -1312,10 +1387,22 @@ async fn deny_collection_smuggling(
     }
 }
 
-/// The single denial message for a node-scope refusal. One function so every
-/// call site is byte-identical — see [`require_node_in_kb`] for why that matters.
-fn node_scope_denial(kb_id: &str, node_id: &str) -> String {
-    format!("node '{node_id}' is not in KB '{kb_id}'")
+/// The kind of a non-`Allow` decision whose message the caller replaces.
+fn denied_kind(decision: AccessDecision) -> RefusalKind {
+    match decision {
+        AccessDecision::Deny(r) => r.kind,
+        _ => RefusalKind::NotMember,
+    }
+}
+
+/// The single denial for a node-scope refusal. One function so every call site
+/// is byte-identical — message AND kind — see [`require_node_in_kb`] for why
+/// that matters.
+fn node_scope_denial(kb_id: &str, node_id: &str) -> Refusal {
+    Refusal::new(
+        RefusalKind::NodeNotInKb,
+        format!("node '{node_id}' is not in KB '{kb_id}'"),
+    )
 }
 
 /// Complete-mediation for a CALLER-SUPPLIED `node_id` (#571).
@@ -1347,7 +1434,7 @@ pub async fn require_node_in_kb(
     kb_id: &str,
     node_id: &str,
     coll: Option<&KbCollectionDoc>,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let loaded;
     let coll = match coll {
         Some(c) => c,
@@ -1389,7 +1476,7 @@ async fn deny_kb_awareness(
     doc_name: &str,
     principal: Option<&str>,
     transport: Transport,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let kb_id = match mae_sync::DocAddress::parse(doc_name) {
         Some(mae_sync::DocAddress::KbCollection { kb_id })
         | Some(mae_sync::DocAddress::KbNode { kb_id, .. }) => kb_id,
@@ -1399,7 +1486,10 @@ async fn deny_kb_awareness(
     };
     match kb_access(doc_store, &kb_id, principal, KbOp::Read, transport).await? {
         AccessDecision::Allow => Ok(()),
-        _ => Err(format!("not authorized for KB '{kb_id}' (members only)")),
+        other => Err(Refusal::new(
+            denied_kind(other),
+            format!("not authorized for KB '{kb_id}' (members only)"),
+        )),
     }
 }
 
@@ -1417,7 +1507,7 @@ async fn deny_kb_doc_read(
     doc_name: &str,
     principal: Option<&str>,
     transport: Transport,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     // ADR-105 D1: match the ADDRESS TYPE, never a string prefix. The arms below are
     // exhaustive on purpose — adding or renaming a `DocAddress` variant must fail to
     // compile here rather than silently stop guarding. This gate previously read
@@ -1428,16 +1518,21 @@ async fn deny_kb_doc_read(
         Some(mae_sync::DocAddress::KbCollection { kb_id }) => {
             match kb_access(doc_store, &kb_id, principal, KbOp::Read, transport).await? {
                 AccessDecision::Allow => Ok(()),
-                _ => Err(format!(
-                    "not authorized to read the collection doc for KB '{kb_id}' (members only)"
+                other => Err(Refusal::new(
+                    denied_kind(other),
+                    format!(
+                        "not authorized to read the collection doc for KB '{kb_id}' (members only)"
+                    ),
                 )),
             }
         }
-        Some(mae_sync::DocAddress::KbNode { .. }) => Err(
+        // Says nothing about the node, so it is no existence oracle: the same
+        // refusal for any node name, member or not.
+        Some(mae_sync::DocAddress::KbNode { .. }) => Err(Refusal::new(
+            RefusalKind::DocUnavailable,
             "KB node content must be fetched via the access-gated `kb/node_fetch`, \
-             not the raw `sync/full_state` / `sync/state_vector` path"
-                .to_string(),
-        ),
+             not the raw `sync/full_state` / `sync/state_vector` path",
+        )),
         // Buffer collab: not KB content, so no KB gate applies. `sync/share` lets a
         // client pick an arbitrary doc name, so an unparseable name is ordinary
         // buffer collaboration, not something suspicious — gating it here would break
@@ -1930,7 +2025,7 @@ async fn handle_doc_request_inner(
             let Some(principal) = auth_principal else {
                 return JsonRpcResponse::error(
                     id,
-                    McpError::internal_error(
+                    McpError::not_authenticated(
                         "kb/query.self_token requires an authenticated connection".to_string(),
                     ),
                 );
@@ -1938,7 +2033,7 @@ async fn handle_doc_request_inner(
             let Some(si) = self_issue else {
                 return JsonRpcResponse::error(
                     id,
-                    McpError::internal_error(
+                    McpError::self_issue_disabled(
                         "self-issued tokens are not enabled on this daemon \
                          (oauth.self_issued_tokens_enabled is false, or no \
                          key-mode identity is configured)"
@@ -1963,7 +2058,7 @@ async fn handle_doc_request_inner(
                 ),
                 Err(e) => JsonRpcResponse::error(
                     id,
-                    McpError::internal_error(format!("failed to mint self-issued token: {e}")),
+                    McpError::internal_fault(format!("failed to mint self-issued token: {e}")),
                 ),
             }
         }

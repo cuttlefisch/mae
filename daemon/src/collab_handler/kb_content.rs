@@ -6,6 +6,15 @@
 
 use super::*;
 
+/// `kb/share`'s `collection_state`: required, and base64.
+fn collection_state_param(params: &serde_json::Value) -> Result<Vec<u8>, McpError> {
+    let invalid = |m: String| McpError::invalid_params("collection_state", m);
+    let b64 = params["collection_state"]
+        .as_str()
+        .ok_or_else(|| invalid("missing 'collection_state' field".to_string()))?;
+    base64_to_update(b64).map_err(|e| invalid(format!("invalid collection_state base64: {e}")))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_kb_share(
     doc_store: &DocStore,
@@ -22,7 +31,7 @@ pub(super) async fn handle_kb_share(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             );
         }
     };
@@ -39,23 +48,9 @@ pub(super) async fn handle_kb_share(
     );
 
     // Decode the collection doc.
-    let collection_b64 = match params["collection_state"].as_str() {
-        Some(s) => s,
-        None => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::parse_error("missing 'collection_state' field".to_string()),
-            );
-        }
-    };
-    let collection_bytes = match base64_to_update(collection_b64) {
+    let collection_bytes = match collection_state_param(params) {
         Ok(b) => b,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::parse_error(format!("invalid collection_state base64: {e}")),
-            );
-        }
+        Err(e) => return JsonRpcResponse::error(id, e),
     };
     // ADR-018 strict binding: bind the OWNER = the AUTHENTICATED principal
     // (key fingerprint), overriding whatever the client baked in. A
@@ -95,7 +90,7 @@ pub(super) async fn handle_kb_share(
         {
             return JsonRpcResponse::error(
                 id,
-                McpError::internal_error(format!("failed to share collection doc: {e}")),
+                McpError::internal_fault(format!("failed to share collection doc: {e}")),
             );
         }
     } else {
@@ -260,7 +255,7 @@ pub(super) async fn handle_kb_node_fetch(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             );
         }
     };
@@ -269,7 +264,7 @@ pub(super) async fn handle_kb_node_fetch(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'node_id' field".to_string()),
+                McpError::invalid_params("node_id", "missing 'node_id' field".to_string()),
             );
         }
     };
@@ -280,12 +275,12 @@ pub(super) async fn handle_kb_node_fetch(
         Ok(AccessDecision::Allow) | Ok(AccessDecision::AllowAutoJoin) => {}
         Ok(AccessDecision::Deny(msg)) | Err(msg) => {
             warn!(session = session_id, kb_id = %kb_id, reason = %msg, "kb/node_fetch denied");
-            return JsonRpcResponse::error(id, McpError::internal_error(msg));
+            return JsonRpcResponse::error(id, msg.into());
         }
-        Ok(_) => {
+        Ok(AccessDecision::Pending) => {
             return JsonRpcResponse::error(
                 id,
-                McpError::internal_error(format!("cannot read KB '{kb_id}'")),
+                McpError::not_member(format!("cannot read KB '{kb_id}'")),
             );
         }
     }
@@ -300,7 +295,7 @@ pub(super) async fn handle_kb_node_fetch(
     if let Err(msg) = super::require_node_in_kb(doc_store, &kb_id, &node_id, None).await {
         warn!(session = session_id, kb_id = %kb_id, node_id = %node_id,
               "kb/node_fetch denied: node is not in this KB");
-        return JsonRpcResponse::error(id, McpError::internal_error(msg));
+        return JsonRpcResponse::error(id, msg.into());
     }
 
     let node_doc = mae_sync::kb_node_doc_name(&kb_id, &node_id);
@@ -331,7 +326,7 @@ pub(super) async fn handle_kb_node_fetch(
         }
         Err(e) => JsonRpcResponse::error(
             id,
-            McpError::internal_error(format!("node fetch failed for '{node_id}': {e}")),
+            McpError::internal_fault(format!("node fetch failed for '{node_id}': {e}")),
         ),
     }
 }
@@ -383,16 +378,19 @@ impl NodeUpdateParams {
             params[name]
                 .as_str()
                 .map(|s| s.to_string())
-                .ok_or_else(|| McpError::parse_error(format!("missing '{name}' field")))
+                .ok_or_else(|| McpError::invalid_params(name, format!("missing '{name}' field")))
         };
         let kb_id = field("kb_id")?;
         let node_id = field("node_id")?;
-        let update_bytes = base64_to_update(&field("update")?)
-            .map_err(|e| McpError::parse_error(format!("invalid 'update' base64: {e}")))?;
+        let update_bytes = base64_to_update(&field("update")?).map_err(|e| {
+            McpError::invalid_params("update", format!("invalid 'update' base64: {e}"))
+        })?;
         if update_bytes.len() > max_update {
-            return Err(McpError::internal_error(format!(
-                "node update exceeds {max_update} bytes"
-            )));
+            return Err(McpError::update_too_large(
+                format!("node update exceeds {max_update} bytes"),
+                update_bytes.len(),
+                max_update,
+            ));
         }
         Ok(Self {
             kb_id,
@@ -441,7 +439,7 @@ pub(super) async fn handle_kb_node_update(
     // enforce_epoch_fence). `None` (a failed load) makes each gate load
     // itself, reproducing its exact original semantics.
     let pre_coll = load_collection(doc_store, &kb_id).await.ok();
-    match kb_access_with_coll(
+    let decision = kb_access_with_coll(
         doc_store,
         &kb_id,
         auth_principal,
@@ -449,20 +447,10 @@ pub(super) async fn handle_kb_node_update(
         transport,
         pre_coll.as_ref(),
     )
-    .await
-    {
-        Ok(AccessDecision::Allow) => {}
-        Ok(AccessDecision::Deny(msg)) | Err(msg) => {
-            warn!(session = session_id, kb_id = %kb_id, reseal, reason = %msg, "kb/node_update denied");
-            return JsonRpcResponse::error(id, McpError::internal_error(msg));
-        }
-        Ok(_) => {
-            warn!(session = session_id, kb_id = %kb_id, "kb/node_update denied");
-            return JsonRpcResponse::error(
-                id,
-                McpError::internal_error(format!("cannot edit KB '{kb_id}'")),
-            );
-        }
+    .await;
+    if let Err(msg) = require_allow(decision, || format!("cannot edit KB '{kb_id}'")) {
+        warn!(session = session_id, kb_id = %kb_id, reseal, reason = %msg, "kb/node_update denied");
+        return JsonRpcResponse::error(id, msg.into());
     }
 
     let node_doc = mae_sync::kb_node_doc_name(&kb_id, &node_id);
@@ -529,7 +517,7 @@ pub(super) async fn handle_kb_node_update(
                         author = %signed.op.author, reason = %e,
                         "kb/node_update: SIGNED CONTENT OP REJECTED (ADR-036)"
                     );
-                    return JsonRpcResponse::error(id, McpError::internal_error(e));
+                    return JsonRpcResponse::error(id, e.into());
                 }
                 Err(e) => {
                     // Owned KB, trusted local connection: don't hard-reject a
@@ -574,7 +562,7 @@ pub(super) async fn handle_kb_node_update(
                     session = session_id, kb_id = %kb_id, node_id = %node_id, %reason,
                     "kb/node_update: epoch fence rejected (B-19)"
                 );
-                return JsonRpcResponse::error(id, McpError::internal_error(reason));
+                return JsonRpcResponse::error(id, reason.into());
             }
         }
     }
@@ -680,7 +668,7 @@ async fn gate_rebirth(g: RebirthGate<'_>) -> Option<JsonRpcResponse> {
                 reason = %msg,
                 "kb/node_update: REBIRTH REJECTED (ADR-107)"
             );
-            Some(JsonRpcResponse::error(g.id, McpError::internal_error(msg)))
+            Some(JsonRpcResponse::error(g.id, msg.into()))
         }
     }
 }
@@ -707,36 +695,43 @@ async fn verify_rebirth_binding(
     node_id: &str,
     state: &[u8],
     pre_coll: Option<&KbCollectionDoc>,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
+    let unverified = |m: String| Refusal::new(RefusalKind::RebirthUnverified, m);
     let anchor = resolve_content_anchor_with_coll(doc_store, kb_id, pre_coll)
         .await
         .ok_or_else(|| {
-            format!("KB '{kb_id}' has no content anchor, so no rebirth can be verified")
+            unverified(format!(
+                "KB '{kb_id}' has no content anchor, so no rebirth can be verified"
+            ))
         })?;
     let loaded;
     let coll = match pre_coll {
         Some(c) => c,
         None => {
-            loaded = load_collection(doc_store, kb_id)
-                .await
-                .map_err(|e| format!("rebirth: could not load collection '{kb_id}': {e}"))?;
+            loaded = load_collection(doc_store, kb_id).await.map_err(|e| {
+                let m = format!("rebirth: could not load collection '{kb_id}': {e}");
+                e.with_message(m)
+            })?;
             &loaded
         }
     };
     let rebirths = mae_sync::membership::derive_rebirths(&coll.oplog_ops(), &anchor);
     let (_epoch, signed_hash) = rebirths.get(node_id).ok_or_else(|| {
-        format!(
+        unverified(format!(
             "rebirth: no owner-signed Rebirth op for node '{node_id}' in KB '{kb_id}'              -- author the op first, or this is not a rebirth"
-        )
+        ))
     })?;
 
-    let doc = mae_sync::kb::KbNodeDoc::from_bytes(state)
-        .map_err(|e| format!("rebirth: supplied state is not a decodable node doc: {e}"))?;
+    let doc = mae_sync::kb::KbNodeDoc::from_bytes(state).map_err(|e| {
+        unverified(format!(
+            "rebirth: supplied state is not a decodable node doc: {e}"
+        ))
+    })?;
     let actual = doc.rebirth_hash();
     if &actual != signed_hash {
-        return Err(format!(
+        return Err(unverified(format!(
             "rebirth: supplied state for '{node_id}' hashes to {actual} but the              owner signed {signed_hash} -- refusing to replace a node with content              the owner did not sign"
-        ));
+        )));
     }
     Ok(())
 }
@@ -764,7 +759,7 @@ pub(super) async fn handle_kb_collection_op(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             );
         }
     };
@@ -774,14 +769,14 @@ pub(super) async fn handle_kb_collection_op(
             Err(e) => {
                 return JsonRpcResponse::error(
                     id,
-                    McpError::parse_error(format!("invalid 'update' base64: {e}")),
+                    McpError::invalid_params("update", format!("invalid 'update' base64: {e}")),
                 );
             }
         },
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'update' field".to_string()),
+                McpError::invalid_params("update", "missing 'update' field".to_string()),
             );
         }
     };
@@ -789,7 +784,11 @@ pub(super) async fn handle_kb_collection_op(
     if update.len() > max_update {
         return JsonRpcResponse::error(
             id,
-            McpError::internal_error(format!("collection update exceeds {max_update} bytes")),
+            McpError::update_too_large(
+                format!("collection update exceeds {max_update} bytes"),
+                update.len(),
+                max_update,
+            ),
         );
     }
     // ADR-018: collection ops are owner-only (Manage) — with ONE narrow
@@ -827,16 +826,16 @@ pub(super) async fn handle_kb_collection_op(
                     pairs
                 }
                 Err(rebind_reason) => {
+                    // The refusal keeps the Manage gate's kind: a non-member is
+                    // `not_member`, a non-owner member `role_forbidden`.
                     let base = match other {
-                        Ok(AccessDecision::Deny(m)) | Err(m) => m,
-                        _ => format!("not authorized to manage KB '{kb_id}'"),
+                        Ok(AccessDecision::Deny(r)) | Err(r) => r,
+                        _ => Refusal::not_member(format!("not authorized to manage KB '{kb_id}'")),
                     };
-                    return JsonRpcResponse::error(
-                        id,
-                        McpError::internal_error(format!(
-                            "{base} (and not a member self-service identity op: {rebind_reason})"
-                        )),
+                    let message = format!(
+                        "{base} (and not a member self-service identity op: {rebind_reason})"
                     );
+                    return JsonRpcResponse::error(id, base.with_message(message).into());
                 }
             }
         }
@@ -891,7 +890,7 @@ pub(super) async fn handle_kb_collection_op(
                 serde_json::json!({ "applied": true, "wal_seq": wal_seq, "scrubbed": scrub }),
             )
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
+        Err(e) => JsonRpcResponse::error(id, McpError::internal_fault(e)),
     }
 }
 
@@ -918,7 +917,7 @@ pub(super) async fn handle_kb_collection_node_add_remove(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             );
         }
     };
@@ -927,26 +926,18 @@ pub(super) async fn handle_kb_collection_node_add_remove(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'node_id' field".to_string()),
+                McpError::invalid_params("node_id", "missing 'node_id' field".to_string()),
             );
         }
     };
     let title = params["title"].as_str().unwrap_or("");
-    match kb_access(doc_store, &kb_id, auth_principal, KbOp::Edit, transport).await {
-        Ok(AccessDecision::Allow) => {}
-        Ok(AccessDecision::Deny(m)) | Err(m) => {
-            return JsonRpcResponse::error(id, McpError::internal_error(m));
-        }
-        Ok(_) => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::internal_error(format!("not authorized to edit KB '{kb_id}'")),
-            );
-        }
+    let decision = kb_access(doc_store, &kb_id, auth_principal, KbOp::Edit, transport).await;
+    if let Err(r) = require_allow(decision, || format!("not authorized to edit KB '{kb_id}'")) {
+        return JsonRpcResponse::error(id, r.into());
     }
     let mut coll = match load_collection(doc_store, &kb_id).await {
         Ok(c) => c,
-        Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
+        Err(e) => return JsonRpcResponse::error(id, e.into()),
     };
     let update = if add {
         coll.add_node(&node_id, title)
@@ -963,6 +954,6 @@ pub(super) async fn handle_kb_collection_node_add_remove(
                 serde_json::json!({ "kb_id": kb_id, "node_id": node_id, "added": add }),
             )
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
+        Err(e) => JsonRpcResponse::error(id, McpError::internal_fault(e)),
     }
 }

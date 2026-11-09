@@ -19,7 +19,7 @@ pub(super) async fn handle_kb_set_policy(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             )
         }
     };
@@ -28,25 +28,22 @@ pub(super) async fn handle_kb_set_policy(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("policy must be restrictive|invite|permissive".to_string()),
+                McpError::invalid_params(
+                    "policy",
+                    "policy must be restrictive|invite|permissive".to_string(),
+                ),
             )
         }
     };
-    match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
-        Ok(AccessDecision::Allow) => {}
-        Ok(AccessDecision::Deny(m)) | Err(m) => {
-            return JsonRpcResponse::error(id, McpError::internal_error(m))
-        }
-        Ok(_) => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::internal_error(format!("not authorized to manage KB '{kb_id}'")),
-            )
-        }
+    let decision = kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await;
+    if let Err(r) = require_allow(decision, || {
+        format!("not authorized to manage KB '{kb_id}'")
+    }) {
+        return JsonRpcResponse::error(id, r.into());
     }
     let mut coll = match load_collection(doc_store, &kb_id).await {
         Ok(c) => c,
-        Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
+        Err(e) => return JsonRpcResponse::error(id, e.into()),
     };
     let update = coll.set_join_policy(policy);
     match persist_and_broadcast_collection(doc_store, broadcaster, session_id, &kb_id, &update)
@@ -59,7 +56,7 @@ pub(super) async fn handle_kb_set_policy(
                 serde_json::json!({ "kb_id": kb_id, "policy": policy.as_str() }),
             )
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
+        Err(e) => JsonRpcResponse::error(id, McpError::internal_fault(e)),
     }
 }
 
@@ -94,7 +91,7 @@ pub(super) async fn handle_kb_block_unblock_principal(
         _ => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             )
         }
     };
@@ -107,7 +104,8 @@ pub(super) async fn handle_kb_block_unblock_principal(
         _ => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error(
+                McpError::invalid_params(
+                    "fingerprint",
                     "missing 'fingerprint' field (the principal to block)".to_string(),
                 ),
             )
@@ -139,7 +137,7 @@ pub(super) async fn handle_kb_block_unblock_principal(
         }
         Err(e) => JsonRpcResponse::error(
             id,
-            McpError::internal_error(format!("blocklist update failed: {e}")),
+            McpError::internal_fault(format!("blocklist update failed: {e}")),
         ),
     }
 }
@@ -184,7 +182,7 @@ pub(super) async fn handle_kb_set_governance(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             )
         }
     };
@@ -196,27 +194,22 @@ pub(super) async fn handle_kb_set_governance(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error(
+                McpError::invalid_params(
+                    "governance",
                     "governance must be single-owner|quorum:N (N>=1)".to_string(),
                 ),
             )
         }
     };
-    match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
-        Ok(AccessDecision::Allow) => {}
-        Ok(AccessDecision::Deny(m)) | Err(m) => {
-            return JsonRpcResponse::error(id, McpError::internal_error(m))
-        }
-        Ok(_) => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::internal_error(format!("not authorized to manage KB '{kb_id}'")),
-            )
-        }
+    let decision = kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await;
+    if let Err(r) = require_allow(decision, || {
+        format!("not authorized to manage KB '{kb_id}'")
+    }) {
+        return JsonRpcResponse::error(id, r.into());
     }
     let mut coll = match load_collection(doc_store, &kb_id).await {
         Ok(c) => c,
-        Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
+        Err(e) => return JsonRpcResponse::error(id, e.into()),
     };
     // Only the genesis owner's signature counts toward `derive_governance`;
     // reject up front so the caller never sees a false success.
@@ -225,7 +218,7 @@ pub(super) async fn handle_kb_set_governance(
         _ => {
             return JsonRpcResponse::error(
                 id,
-                McpError::internal_error(format!(
+                McpError::signer_unavailable(format!(
                     "only the owner of KB '{kb_id}' may set its governance"
                 )),
             )
@@ -250,7 +243,7 @@ pub(super) async fn handle_kb_set_governance(
     if let Some(e) = appended.failure() {
         return JsonRpcResponse::error(
             id,
-            McpError::internal_error(format!("governance for KB '{kb_id}' was NOT changed: {e}")),
+            McpError::internal_fault(format!("governance for KB '{kb_id}' was NOT changed: {e}")),
         );
     }
     info!(session = session_id, kb_id = %kb_id, governance = %governance.to_spec(), "kb/set_governance");
@@ -280,7 +273,7 @@ pub(super) async fn handle_kb_revoke(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             )
         }
     };
@@ -289,25 +282,19 @@ pub(super) async fn handle_kb_revoke(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'member' field".to_string()),
+                McpError::invalid_params("member", "missing 'member' field".to_string()),
             )
         }
     };
-    match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
-        Ok(AccessDecision::Allow) => {}
-        Ok(AccessDecision::Deny(m)) | Err(m) => {
-            return JsonRpcResponse::error(id, McpError::internal_error(m))
-        }
-        Ok(_) => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::internal_error(format!("not authorized to manage KB '{kb_id}'")),
-            )
-        }
+    let decision = kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await;
+    if let Err(r) = require_allow(decision, || {
+        format!("not authorized to manage KB '{kb_id}'")
+    }) {
+        return JsonRpcResponse::error(id, r.into());
     }
     let mut coll = match load_collection(doc_store, &kb_id).await {
         Ok(c) => c,
-        Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
+        Err(e) => return JsonRpcResponse::error(id, e.into()),
     };
     match append_signed_revoke(
         doc_store,
@@ -326,6 +313,6 @@ pub(super) async fn handle_kb_revoke(
                 serde_json::json!({ "kb_id": kb_id, "member": member, "revoked": true }),
             )
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
+        Err(e) => JsonRpcResponse::error(id, e),
     }
 }

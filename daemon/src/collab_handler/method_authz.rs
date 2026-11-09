@@ -283,7 +283,7 @@ pub(super) fn authorize_named_doc(
         );
         return Some(JsonRpcResponse::error(
             id.clone(),
-            McpError::internal_error(format!("document '{doc_name}' is not available")),
+            McpError::doc_unavailable(format!("document '{doc_name}' is not available")),
         ));
     }
     None

@@ -624,7 +624,7 @@ pub(crate) async fn route_authenticated_request(
         // diagnostic the true no-body case gets.
         (Some(rpc), true, None) => serde_json::to_value(mae_mcp::protocol::JsonRpcResponse::error(
             rpc.id,
-            mae_mcp::protocol::McpError::internal_error(
+            mae_mcp::protocol::McpError::kb_query_unavailable(
                 "kb/query.* is enabled but no DocStore is available on this daemon \
                  (collab.enabled is false)"
                     .to_string(),
@@ -633,7 +633,7 @@ pub(crate) async fn route_authenticated_request(
         .unwrap_or(serde_json::Value::Null),
         (Some(rpc), false, _) => serde_json::to_value(mae_mcp::protocol::JsonRpcResponse::error(
             rpc.id,
-            mae_mcp::protocol::McpError::internal_error(
+            mae_mcp::protocol::McpError::kb_query_unavailable(
                 "kb/query.* is disabled on this daemon (oauth.kb_query_enabled is false)"
                     .to_string(),
             ),

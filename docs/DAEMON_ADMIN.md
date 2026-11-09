@@ -276,6 +276,63 @@ self_issued_token_max_ttl_secs = 86400          # ceiling `token mint --ttl` ref
   `data: {"kind": "invalid_params", "param": "<name>"}`; `null` counts as absent. Two ranges are
   clamped rather than refused, as before: `search`'s `limit` and `neighborhood`'s `depth` (1–3).
   `list`'s `limit` must be at least 1, and above `kb_query_max_scan_nodes` it is clamped to it.
+- **Every refusal names its reason in `error.data.kind`** — see [Error kinds](#error-kinds) below.
+
+#### Error kinds
+
+Every error the daemon returns on the collab listener's `kb/*`, `sync/*` and `docs/*` methods, and
+on `kb/query.*` (either listener), carries `error.data.kind`: a stable snake_case string. **A client
+branches on `kind`, never on the message text** — messages are for people and logs and may change.
+The JSON-RPC `code` is the one each refusal had before kinds existed (mostly `-32603`), so a client
+keyed on codes sees no change, but the code does not distinguish refusals; `kind` does. The list is
+`mae_mcp::protocol::ERROR_KINDS`, and a daemon test fails if this table and that list disagree.
+
+| `kind` | Meaning | Methods | Extra `data` |
+|--------|---------|---------|--------------|
+| `invalid_params` | A parameter is missing, of the wrong type, malformed (bad base64, an undecodable update) or out of range. Code `-32602`. | all | `param` |
+| `quota_exceeded` | The update would grow a document past `max_document_size_bytes`. Nothing was applied. Code `-32006`. | `kb/node_update`, `sync/update`, `sync/share` | `size`, `limit` |
+| `update_too_large` | One update is over `max_update_size_bytes`. Send smaller increments. | `kb/node_update`, `kb/collection_op`, `sync/update` | `size`, `limit` |
+| `tenant_quota_exceeded` | The caller's tenant is over its request quota or connection cap (ADR-060). Back off. | every method, both listeners | — |
+| `kb_id_owned_by_another` | `kb/share` of an id another principal already owns. Mint a new id. Code `-32005`. | `kb/share` | — |
+| `not_member` | The caller is not a member of the KB. A principal on this daemon's local blocklist is not a member. | every `kb/*` method that names a KB, `kb/query.*`, and the self-gated `sync/*` methods on a KB document | — |
+| `role_forbidden` | A member whose role does not permit the operation. | writes (`editor`); membership, policy, governance, `kb/collection_op`, reseal and rebirth (`owner`) | `required` |
+| `transport_forbidden` | The KB is not shared over the transport the request came in on. | as `not_member` | `transport` (`hub`/`p2p`) |
+| `replication_restricted` | A live-query-only member (ADR-067) asked to replicate the KB. Use `kb/query.*`. | `kb/join` | — |
+| `kb_not_found` | No KB with this id is hosted here. | as `not_member` | — |
+| `collection_unavailable` | The KB's collection document exists but cannot be read or decoded. | as `not_member`, `kb/share` | — |
+| `node_not_in_kb` | The caller may read the KB, and its manifest does not list the node. | `kb/node_fetch`, `kb/query.get`, `kb/query.links`, `kb/query.neighborhood` | — |
+| `epoch_fenced` | The write carries an op from a stale authorization epoch (ADR-023). Adopt the authoritative state (`kb/node_fetch`) and re-author under `current_epoch`. | `kb/node_update`, `sync/update` | `current_epoch`; `caller_epoch` for a signed op |
+| `signature_invalid` | A signed content op or its header does not verify. | `kb/node_update`, `sync/update` | — |
+| `signature_required` | An unsigned content op where signatures are required (the P2P mesh). | `sync/update` | — |
+| `rebirth_unverified` | A rebirth not bound to an owner-signed `Rebirth` op (ADR-107). | `kb/node_update` | — |
+| `doc_unavailable` | A KB document named on a raw method that cannot serve it (any node document; a collection on `sync/share` and `docs/*`). Use the `kb/*` methods. | `sync/*`, `docs/*` | — |
+| `doc_not_found` | A document that must already exist does not. | `sync/*`, `docs/*` | — |
+| `cannot_remove_owner` | `kb/remove_member` named the owner. | `kb/remove_member` | — |
+| `signer_unavailable` | This daemon cannot sign the membership op: no signing identity, not the KB's owner, or no signed log. | `kb/set_governance`, `kb/revoke` | — |
+| `subject_not_member` | `kb/revoke` named someone who is not a current member. | `kb/revoke` | — |
+| `not_authenticated` | The method needs an authenticated principal. | `kb/query.self_token`, `kb/query.my_wrapped_key` | — |
+| `self_issue_disabled` | This daemon does not issue tokens. | `kb/query.self_token` | — |
+| `no_content_anchor` | An E2E KB with no signed content anchor. | `kb/query.my_wrapped_key` | — |
+| `kb_query_unavailable` | The HTTPS listener does not serve `kb/query.*` here (`kb_query_enabled` off, or collab disabled). | `kb/query.*` (HTTPS) | — |
+| `e2e_unsupported` | A server-side operation the daemon cannot perform on an E2E KB. Code `-32600`. | `kb/query.search` | — |
+| `internal` | The daemon failed (storage, persistence, decoding its own state). Not a decision about the caller; a retry may succeed. | any | — |
+
+What a kind does **not** reveal is deliberate. A caller that is not a member gets `not_member` for any
+question about a KB's content — `kb/node_fetch` or `kb/query.get` of a node that exists, of one that
+does not, and of another KB's node all return the same error — so `node_not_in_kb` reaches members
+only. A KB document on a raw `sync/*` path is `doc_unavailable` whether or not it exists. Being on a
+daemon's local blocklist is reported as `not_member`, not as a kind of its own.
+
+On a **signed** content op (ADR-036), `not_member`, `role_forbidden` and `epoch_fenced` describe the
+op's signed *author* — the caller, unless the op is being relayed for someone else.
+
+`kb/join` also returns the caller's identity and fence input in its result: `principal` (the
+authenticated principal the daemon authorizes with; `null` with `auth.mode = none`) and `epoch` (the
+caller's ADR-023 authorization epoch in that KB — the value the write fence compares against, so a
+client authors under `derive_kb_client_id(principal, epoch)`; `null` without a principal). Epochs are
+per member, not per KB; one changes when that member's role changes or it is removed and re-admitted,
+and a client then re-joins (or reads `epoch_fenced`'s `current_epoch`). A `pending` join returns
+`principal` only.
 - **The HTML KB view takes its token in the URL fragment**:
   `https://<host>/kb/<kb_id>/view#access_token=<token>`. The fragment is never sent to the server,
   so it cannot land in a proxy access log; the page moves it into an `Authorization` header and

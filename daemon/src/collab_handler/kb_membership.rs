@@ -20,7 +20,7 @@ pub(super) async fn handle_kb_register(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             );
         }
     };
@@ -109,7 +109,7 @@ pub(super) async fn handle_kb_unregister(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             );
         }
     };
@@ -141,7 +141,7 @@ pub(super) async fn handle_kb_join(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             );
         }
     };
@@ -162,57 +162,7 @@ pub(super) async fn handle_kb_join(
     // explicitly approves, so recording a forwarded one is not privileged. Idempotent: skip
     // anyone already a member or already pending WITH a wrap key (don't re-broadcast on the
     // dialer's retry loop).
-    if let Some(arr) = params["pending_members"]
-        .as_array()
-        .filter(|a| !a.is_empty())
-    {
-        if let Ok(mut coll) = load_collection(doc_store, &kb_id).await {
-            let members: HashSet<String> = coll
-                .member_roles()
-                .into_iter()
-                .map(|m| m.fingerprint)
-                .collect();
-            let keyed_pending: HashSet<String> = coll
-                .pending()
-                .into_iter()
-                .filter(|p| p.wrap_pubkey.is_some())
-                .map(|p| p.fingerprint)
-                .collect();
-            for pm in arr {
-                let Some(fp) = pm["fp"].as_str() else {
-                    continue;
-                };
-                if members.contains(fp) || keyed_pending.contains(fp) {
-                    continue;
-                }
-                let hex32 = |v: &serde_json::Value| -> Option<[u8; 32]> {
-                    v.as_str()
-                        .and_then(|h| hex::decode(h).ok())
-                        .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok())
-                };
-                let wrap = hex32(&pm["wrap_pubkey"]);
-                let pk = hex32(&pm["pubkey"]);
-                let label = pm["label"].as_str().unwrap_or(fp);
-                let update = coll.add_pending(fp, label, &now_stamp(), pk.as_ref(), wrap.as_ref());
-                match persist_and_broadcast_collection(
-                    doc_store,
-                    broadcaster,
-                    session_id,
-                    &kb_id,
-                    &update,
-                )
-                .await
-                {
-                    Ok(_) => {
-                        info!(session = session_id, kb_id = %kb_id, member = %fp, "kb/join: recorded a forwarded pending member (#255 mesh key delivery)");
-                    }
-                    Err(e) => {
-                        warn!(session = session_id, kb_id = %kb_id, member = %fp, error = %e, "kb/join: failed to persist a forwarded pending member (#255 mesh key delivery) — not recorded");
-                    }
-                }
-            }
-        }
-    }
+    record_forwarded_pending(doc_store, broadcaster, session_id, &kb_id, params).await;
 
     // ADR-018 access gate (complete mediation): member → join; non-member
     // resolved by the KB's join policy (restrictive/invite/permissive).
@@ -269,21 +219,24 @@ pub(super) async fn handle_kb_join(
                     warn!(session = session_id, kb_id = %kb_id, principal = %principal, error = %e, "kb/join: failed to persist the pending join request");
                     return JsonRpcResponse::error(
                         id,
-                        McpError::internal_error(format!(
+                        McpError::internal_fault(format!(
                             "failed to record the pending join request: {e}"
                         )),
                     );
                 }
             }
             info!(session = session_id, kb_id = %kb_id, principal = ?auth_principal, "kb/join: pending");
+            // No `epoch`: a pending requester is not a member, so it has none.
             return JsonRpcResponse::success(
                 id,
-                serde_json::json!({ "kb_id": kb_id, "status": "pending" }),
+                serde_json::json!({
+                    "kb_id": kb_id, "status": "pending", "principal": auth_principal,
+                }),
             );
         }
         Ok(AccessDecision::Deny(msg)) | Err(msg) => {
             warn!(session = session_id, kb_id = %kb_id, reason = %msg, "kb/join denied");
-            return JsonRpcResponse::error(id, McpError::internal_error(msg));
+            return JsonRpcResponse::error(id, msg.into());
         }
     }
 
@@ -292,10 +245,12 @@ pub(super) async fn handle_kb_join(
     let (collection_state, _sv) = match doc_store.encode_state_and_sv(&collection_doc).await {
         Ok(pair) => pair,
         Err(e) => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::internal_error(format!("kb not found or failed to read collection: {e}")),
-            );
+            let kind = match e {
+                crate::storage::StorageError::DurableDocMissing(_) => RefusalKind::KbNotFound,
+                _ => RefusalKind::CollectionUnavailable,
+            };
+            let message = format!("kb not found or failed to read collection: {e}");
+            return JsonRpcResponse::error(id, Refusal::new(kind, message).into());
         }
     };
     session_docs.insert(collection_doc.clone());
@@ -310,24 +265,92 @@ pub(super) async fn handle_kb_join(
         bc.add_event_sub(session_id, "sync_update");
     }
 
-    // Parse collection to get the list of node IDs belonging to this KB.
-    let node_ids: Vec<String> = match KbCollectionDoc::from_bytes(&collection_state) {
-        Ok(coll) => coll
-            .list_nodes()
-            .into_iter()
-            .map(|(id, _title)| id)
-            .collect(),
+    // Parse collection to get the list of node IDs belonging to this KB, and the
+    // caller's authorization epoch in it.
+    let (node_ids, epoch) = match KbCollectionDoc::from_bytes(&collection_state) {
+        Ok(coll) => {
+            let ids: Vec<String> = coll.list_nodes().into_iter().map(|(id, _)| id).collect();
+            (
+                ids,
+                join_epoch(doc_store, &kb_id, &coll, auth_principal).await,
+            )
+        }
         Err(e) => {
             warn!(session = session_id, kb_id = %kb_id, error = %e,
                         "kb/join: failed to parse collection doc, falling back to empty node list");
-            Vec::new()
+            (Vec::new(), None)
         }
     };
 
-    // ADR-022: parse the member's per-node state vectors (optional). When
-    // present, reply with an incremental DIFF per node so the member can
-    // reconcile (merge, no clobber) instead of adopting a full snapshot.
-    // Absent (old editor, or a first-ever join) → full state, as before.
+    let joined = join_node_states(
+        doc_store,
+        broadcaster,
+        session_id,
+        session_docs,
+        &kb_id,
+        &node_ids,
+        params,
+    )
+    .await;
+
+    info!(
+        session = session_id, kb_id = %kb_id, node_count = joined.nodes.len(),
+        reconcile_mode = joined.reconcile_mode, diff_count = joined.diff_count,
+        "kb/join: complete"
+    );
+    JsonRpcResponse::success(
+        id,
+        serde_json::json!({
+            "kb_id": kb_id,
+            "collection_state": update_to_base64(&collection_state),
+            "nodes": joined.nodes,
+            "principal": auth_principal,
+            "epoch": epoch,
+        }),
+    )
+}
+
+/// The caller's ADR-023 authorization epoch in this KB, as `kb/join` reports
+/// it: the SAME value the write fence (`enforce_epoch_fence`) compares
+/// against, from the same function, so a client that authors under
+/// `derive_kb_client_id(principal, epoch)` is never fenced for a stale
+/// epoch it was just handed. Epochs are per member, not per KB.
+///
+/// `None` for an unauthenticated (`auth.mode = none`) session: there is no
+/// principal to derive an epoch for, and the fence does not run for one.
+async fn join_epoch(
+    doc_store: &DocStore,
+    kb_id: &str,
+    coll: &KbCollectionDoc,
+    principal: Option<&str>,
+) -> Option<u64> {
+    match principal {
+        Some(p) => Some(kb_member_epoch(doc_store, kb_id, coll, p).await),
+        None => None,
+    }
+}
+
+/// The per-node payload of a `kb/join` reply.
+struct JoinedNodes {
+    nodes: Vec<serde_json::Value>,
+    diff_count: usize,
+    reconcile_mode: bool,
+}
+
+/// Fetch the nodes the collection lists (not all `kb:` docs) and subscribe the
+/// session to each. ADR-022: when the member sent per-node state vectors
+/// (`node_svs`), reply with an incremental DIFF per node so it can reconcile
+/// (merge, no clobber) instead of adopting a full snapshot; absent (old editor,
+/// or a first-ever join) → full state, as before.
+async fn join_node_states(
+    doc_store: &DocStore,
+    broadcaster: &SharedBroadcaster,
+    session_id: u64,
+    session_docs: &mut HashSet<String>,
+    kb_id: &str,
+    node_ids: &[String],
+    params: &serde_json::Value,
+) -> JoinedNodes {
     let member_svs: std::collections::HashMap<String, Vec<u8>> = params["node_svs"]
         .as_array()
         .map(|arr| {
@@ -340,13 +363,13 @@ pub(super) async fn handle_kb_join(
                 .collect()
         })
         .unwrap_or_default();
-    let reconcile_mode = !member_svs.is_empty();
-
-    // Fetch only the nodes listed in the collection (not all kb: docs).
-    let mut nodes = Vec::new();
-    let mut diff_count = 0usize;
-    for node_id in &node_ids {
-        let doc_name = mae_sync::kb_node_doc_name(&kb_id, node_id);
+    let mut joined = JoinedNodes {
+        nodes: Vec::new(),
+        diff_count: 0,
+        reconcile_mode: !member_svs.is_empty(),
+    };
+    for node_id in node_ids {
+        let doc_name = mae_sync::kb_node_doc_name(kb_id, node_id);
         // Member sent an SV for this node → send only the ops it lacks.
         let encoded = match member_svs.get(node_id) {
             Some(member_sv) => doc_store
@@ -358,48 +381,99 @@ pub(super) async fn handle_kb_join(
                 .await
                 .map(|(state, sv)| (None, Some(state), sv)),
         };
-        match encoded {
-            Ok((diff, state, sv)) => {
-                session_docs.insert(doc_name.clone());
-                let _ = doc_store.track_client_connect(&doc_name).await;
-                broadcaster
-                    .lock()
-                    .unwrap()
-                    .subscribe_doc(session_id, &doc_name);
-                // Always carry the daemon's SV so the member can compute its
-                // local-ahead diff; carry `diff` (incremental) or `state`
-                // (full) depending on whether the member sent an SV.
-                let mut obj = serde_json::Map::new();
-                obj.insert("id".into(), serde_json::json!(node_id));
-                obj.insert("sv".into(), serde_json::json!(update_to_base64(&sv)));
-                if let Some(diff) = diff {
-                    diff_count += 1;
-                    obj.insert("diff".into(), serde_json::json!(update_to_base64(&diff)));
-                }
-                if let Some(state) = state {
-                    obj.insert("state".into(), serde_json::json!(update_to_base64(&state)));
-                }
-                nodes.push(serde_json::Value::Object(obj));
-            }
+        let (diff, state, sv) = match encoded {
+            Ok(triple) => triple,
             Err(e) => {
                 warn!(session = session_id, doc = %doc_name, error = %e, "kb/join: failed to read node doc");
+                continue;
+            }
+        };
+        session_docs.insert(doc_name.clone());
+        let _ = doc_store.track_client_connect(&doc_name).await;
+        broadcaster
+            .lock()
+            .unwrap()
+            .subscribe_doc(session_id, &doc_name);
+        // Always carry the daemon's SV so the member can compute its
+        // local-ahead diff; carry `diff` (incremental) or `state`
+        // (full) depending on whether the member sent an SV.
+        let mut obj = serde_json::Map::new();
+        obj.insert("id".into(), serde_json::json!(node_id));
+        obj.insert("sv".into(), serde_json::json!(update_to_base64(&sv)));
+        if let Some(diff) = diff {
+            joined.diff_count += 1;
+            obj.insert("diff".into(), serde_json::json!(update_to_base64(&diff)));
+        }
+        if let Some(state) = state {
+            obj.insert("state".into(), serde_json::json!(update_to_base64(&state)));
+        }
+        joined.nodes.push(serde_json::Value::Object(obj));
+    }
+    joined
+}
+
+/// #255: record the pending join requests a mesh relay forwarded on its local
+/// members' behalf (see the call site in [`handle_kb_join`]). Best-effort: a
+/// failure is logged and the join proceeds.
+async fn record_forwarded_pending(
+    doc_store: &DocStore,
+    broadcaster: &SharedBroadcaster,
+    session_id: u64,
+    kb_id: &str,
+    params: &serde_json::Value,
+) {
+    let kb_id = kb_id.to_string();
+    if let Some(arr) = params["pending_members"]
+        .as_array()
+        .filter(|a| !a.is_empty())
+    {
+        if let Ok(mut coll) = load_collection(doc_store, &kb_id).await {
+            let members: HashSet<String> = coll
+                .member_roles()
+                .into_iter()
+                .map(|m| m.fingerprint)
+                .collect();
+            let keyed_pending: HashSet<String> = coll
+                .pending()
+                .into_iter()
+                .filter(|p| p.wrap_pubkey.is_some())
+                .map(|p| p.fingerprint)
+                .collect();
+            for pm in arr {
+                let Some(fp) = pm["fp"].as_str() else {
+                    continue;
+                };
+                if members.contains(fp) || keyed_pending.contains(fp) {
+                    continue;
+                }
+                let hex32 = |v: &serde_json::Value| -> Option<[u8; 32]> {
+                    v.as_str()
+                        .and_then(|h| hex::decode(h).ok())
+                        .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok())
+                };
+                let wrap = hex32(&pm["wrap_pubkey"]);
+                let pk = hex32(&pm["pubkey"]);
+                let label = pm["label"].as_str().unwrap_or(fp);
+                let update = coll.add_pending(fp, label, &now_stamp(), pk.as_ref(), wrap.as_ref());
+                match persist_and_broadcast_collection(
+                    doc_store,
+                    broadcaster,
+                    session_id,
+                    &kb_id,
+                    &update,
+                )
+                .await
+                {
+                    Ok(_) => {
+                        info!(session = session_id, kb_id = %kb_id, member = %fp, "kb/join: recorded a forwarded pending member (#255 mesh key delivery)");
+                    }
+                    Err(e) => {
+                        warn!(session = session_id, kb_id = %kb_id, member = %fp, error = %e, "kb/join: failed to persist a forwarded pending member (#255 mesh key delivery) — not recorded");
+                    }
+                }
             }
         }
     }
-
-    info!(
-        session = session_id, kb_id = %kb_id, node_count = nodes.len(),
-        reconcile_mode, diff_count,
-        "kb/join: complete"
-    );
-    JsonRpcResponse::success(
-        id,
-        serde_json::json!({
-            "kb_id": kb_id,
-            "collection_state": update_to_base64(&collection_state),
-            "nodes": nodes,
-        }),
-    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -419,7 +493,7 @@ pub(super) async fn handle_kb_add_remove_member(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             );
         }
     };
@@ -429,7 +503,7 @@ pub(super) async fn handle_kb_add_remove_member(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'member' field".to_string()),
+                McpError::invalid_params("member", "missing 'member' field".to_string()),
             );
         }
     };
@@ -438,26 +512,20 @@ pub(super) async fn handle_kb_add_remove_member(
         .and_then(SyncRole::parse)
         .unwrap_or(SyncRole::Editor);
     // ADR-018: owner-only (Manage). The verified principal is the subject.
-    match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
-        Ok(AccessDecision::Allow) => {}
-        Ok(AccessDecision::Deny(m)) | Err(m) => {
-            return JsonRpcResponse::error(id, McpError::internal_error(m));
-        }
-        Ok(_) => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::internal_error(format!("not authorized to manage KB '{kb_id}'")),
-            );
-        }
+    let decision = kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await;
+    if let Err(r) = require_allow(decision, || {
+        format!("not authorized to manage KB '{kb_id}'")
+    }) {
+        return JsonRpcResponse::error(id, r.into());
     }
     let mut coll = match load_collection(doc_store, &kb_id).await {
         Ok(c) => c,
-        Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
+        Err(e) => return JsonRpcResponse::error(id, e.into()),
     };
     if !add && coll.owner() == member {
         return JsonRpcResponse::error(
             id,
-            McpError::internal_error(format!("cannot remove the owner of KB '{kb_id}'")),
+            McpError::cannot_remove_owner(format!("cannot remove the owner of KB '{kb_id}'")),
         );
     }
     let update = if add {
@@ -504,7 +572,7 @@ pub(super) async fn handle_kb_add_remove_member(
             }
             JsonRpcResponse::success(id, result)
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
+        Err(e) => JsonRpcResponse::error(id, McpError::internal_fault(e)),
     }
 }
 
@@ -520,25 +588,19 @@ pub(super) async fn handle_kb_list_pending(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             )
         }
     };
-    match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
-        Ok(AccessDecision::Allow) => {}
-        Ok(AccessDecision::Deny(m)) | Err(m) => {
-            return JsonRpcResponse::error(id, McpError::internal_error(m))
-        }
-        Ok(_) => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::internal_error(format!("not authorized to manage KB '{kb_id}'")),
-            )
-        }
+    let decision = kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await;
+    if let Err(r) = require_allow(decision, || {
+        format!("not authorized to manage KB '{kb_id}'")
+    }) {
+        return JsonRpcResponse::error(id, r.into());
     }
     let coll = match load_collection(doc_store, &kb_id).await {
         Ok(c) => c,
-        Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
+        Err(e) => return JsonRpcResponse::error(id, e.into()),
     };
     let pending: Vec<_> = coll
         .pending()
@@ -571,7 +633,7 @@ pub(super) async fn handle_kb_approve_member(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             )
         }
     };
@@ -580,7 +642,7 @@ pub(super) async fn handle_kb_approve_member(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'principal' field".to_string()),
+                McpError::invalid_params("principal", "missing 'principal' field".to_string()),
             )
         }
     };
@@ -588,21 +650,15 @@ pub(super) async fn handle_kb_approve_member(
         .as_str()
         .and_then(SyncRole::parse)
         .unwrap_or(SyncRole::Editor);
-    match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
-        Ok(AccessDecision::Allow) => {}
-        Ok(AccessDecision::Deny(m)) | Err(m) => {
-            return JsonRpcResponse::error(id, McpError::internal_error(m))
-        }
-        Ok(_) => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::internal_error(format!("not authorized to manage KB '{kb_id}'")),
-            )
-        }
+    let decision = kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await;
+    if let Err(r) = require_allow(decision, || {
+        format!("not authorized to manage KB '{kb_id}'")
+    }) {
+        return JsonRpcResponse::error(id, r.into());
     }
     let mut coll = match load_collection(doc_store, &kb_id).await {
         Ok(c) => c,
-        Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
+        Err(e) => return JsonRpcResponse::error(id, e.into()),
     };
     let update = coll.approve(&principal, role);
     match persist_and_broadcast_collection(doc_store, broadcaster, session_id, &kb_id, &update)
@@ -638,7 +694,7 @@ pub(super) async fn handle_kb_approve_member(
             }
             JsonRpcResponse::success(id, result)
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
+        Err(e) => JsonRpcResponse::error(id, McpError::internal_fault(e)),
     }
 }
 
@@ -655,7 +711,7 @@ pub(super) async fn handle_kb_leave(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             );
         }
     };
