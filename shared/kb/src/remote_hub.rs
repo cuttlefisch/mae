@@ -161,8 +161,8 @@ impl RemoteHubQueryLayer {
             .unwrap_or_default()
     }
 
-    /// (looping `get`). Titles live in the collection manifest the hub already
-    /// loads for any gated read, so this is one call and no per-node fetch.
+    /// (looping `get`). One call: the hub reads each title from the node's own
+    /// document (never the manifest's creation-time title) and caps the scan.
     fn id_title_pairs_impl(&self, prefix: Option<&str>) -> Vec<(String, String)> {
         let mut params = serde_json::Map::new();
         if let Some(p) = prefix {

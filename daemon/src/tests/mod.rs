@@ -58,6 +58,7 @@ mod kb_query_agenda_health_tests;
 mod kb_query_cross_kb_isolation_tests;
 mod kb_query_param_tests;
 mod kb_query_tests;
+mod kb_query_titles_tests;
 mod kb_socket_concurrency_tests;
 mod kb_socket_connection_limit_tests;
 mod kb_socket_malformed_and_disconnect_tests;
