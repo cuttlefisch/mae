@@ -916,10 +916,22 @@ pub async fn verify_relayed_content_op(
     // @ai-caution: [kb-scoping] (ADR-105 D1) Address TYPE, not string prefix — a node
     // doc that stops matching here returns `Ok(None)` ("not a content op"), which
     // SKIPS ADR-036 signature verification entirely.
-    let Some(mae_sync::DocAddress::KbNode { node_id, .. }) = mae_sync::DocAddress::parse(doc)
+    let Some(mae_sync::DocAddress::KbNode {
+        kb_id: doc_kb,
+        node_id,
+    }) = mae_sync::DocAddress::parse(doc)
     else {
         return Ok(None); // collection/non-KB doc — not a content op
     };
+    // @ai-caution: [kb-scoping] Every check below (anchor, signature, and the
+    // callers' membership and epoch fence) runs against `kb_id`. A node doc of
+    // a DIFFERENT KB must therefore never get here, or a caller cleared for
+    // one KB writes another KB's node.
+    if doc_kb != kb_id {
+        return Err(format!(
+            "document '{doc}' belongs to KB '{doc_kb}', not KB '{kb_id}'"
+        ));
+    }
     let node_id = &node_id;
     let Some(anchor) = resolve_content_anchor(doc_store, kb_id).await else {
         return Ok(None); // un-anchored + not ours — legacy gate applies
