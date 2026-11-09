@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.142] - 2026-11-09
+
+
+
+
+### Bug Fixes
+
+- *(daemon)* Classify collab messages from the parsed request ([d22d42c](https://github.com/cuttlefisch/mae/commit/d22d42c50a4d9687a912d23396ad57b325105191))
+
+## [mae-org-v0.4.0] - 2026-11-09
+
+
+
+
+### Features
+
+- *(org)* A span's own end, before its post-blank; mae-org 0.4.0 ([eff8f47](https://github.com/cuttlefisch/mae/commit/eff8f478fa71c5235dea19f822138808efe135d1))
+
 ## [0.14.141] - 2026-11-09
 
 
@@ -14,6 +32,10 @@ All notable changes to this project will be documented in this file.
 ### Documentation
 
 - *(adr)* ADR-113 — publication review: readers see approved revisions ([591fa76](https://github.com/cuttlefisch/mae/commit/591fa76e43e5a148fee6a1e83358f9a9de0dfac6))
+
+### Miscellaneous
+
+- Bump version to 0.14.141 ([87f0266](https://github.com/cuttlefisch/mae/commit/87f0266d426d7d9940a74baa9fb7e471b0d3e7ef))
 
 ## [0.14.140] - 2026-11-09
 
