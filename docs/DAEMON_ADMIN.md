@@ -271,6 +271,11 @@ self_issued_token_max_ttl_secs = 86400          # ceiling `token mint --ttl` ref
   `health`) examines at most `kb_query_max_scan_nodes` nodes and answers `"truncated": true` (plus
   the KB's `"total"`) when that cap, rather than the caller's result limit, ended the scan. A
   `RemoteHub` client reports such a result as partial. Raise the cap for KBs larger than it.
+- **A malformed parameter is refused, not ignored.** A `kb/query.*` parameter that is missing,
+  of the wrong type or out of range gets JSON-RPC `-32602` with
+  `data: {"kind": "invalid_params", "param": "<name>"}`; `null` counts as absent. Two ranges are
+  clamped rather than refused, as before: `search`'s `limit` and `neighborhood`'s `depth` (1–3).
+  `list`'s `limit` must be at least 1, and above `kb_query_max_scan_nodes` it is clamped to it.
 - **The HTML KB view takes its token in the URL fragment**:
   `https://<host>/kb/<kb_id>/view#access_token=<token>`. The fragment is never sent to the server,
   so it cannot land in a proxy access log; the page moves it into an `Authorization` header and

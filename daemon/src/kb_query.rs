@@ -85,11 +85,7 @@ pub async fn dispatch(
     principal: Option<&str>,
     limits: KbQueryLimits,
 ) -> Result<Value, McpError> {
-    let kb_id = params
-        .get("kb_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_request("missing 'kb_id'".to_string()))?
-        .to_string();
+    let kb_id = required_str(params, "kb_id")?.to_string();
 
     match method {
         "kb/query.capabilities" => capabilities(doc_store, &kb_id, principal).await,
@@ -105,16 +101,11 @@ pub async fn dispatch(
             .await
         }
         "kb/query.search" => {
-            let query = params
-                .get("query")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| McpError::invalid_request("missing 'query'".to_string()))?
-                .to_string();
-            let limit = params
-                .get("limit")
-                .and_then(|v| v.as_u64())
-                .map(|n| n as usize)
-                .unwrap_or(limits.max_search_results)
+            let query = required_str(params, "query")?.to_string();
+            // Clamped, not refused, below 1: the editor's hub client passes
+            // its caller's limit through and documents the clamp.
+            let limit = optional_u64(params, "limit")?
+                .map_or(limits.max_search_results, saturating_usize)
                 // `.min().max()`, NOT `.clamp(1, max)`: clamp PANICS when
                 // min > max, so a config with `max_search_results = 0` would
                 // abort the daemon instead of returning one result.
@@ -148,23 +139,22 @@ async fn dispatch_scanning(
             let node_id = required_node_id(params)?;
             // Default `both`: a caller asking for "this node's links" almost
             // always means the neighbourhood, and one round trip beats two.
-            let direction = params
-                .get("direction")
-                .and_then(|v| v.as_str())
+            let direction = optional_str(params, "direction")?
                 .unwrap_or("both")
                 .to_string();
             links(doc_store, kb_id, &node_id, &direction, principal, n).await
         }
         "kb/query.titles" => {
-            let prefix = params.get("prefix").and_then(|v| v.as_str());
+            let prefix = optional_str(params, "prefix")?;
             titles(doc_store, kb_id, prefix, principal, n).await
         }
         "kb/query.list" => {
-            let after = params.get("after").and_then(|v| v.as_str());
-            let limit = params
-                .get("limit")
-                .and_then(|v| v.as_u64())
-                .map_or(n, |l| (l as usize).min(n))
+            let after = optional_str(params, "after")?;
+            // Over the cap is clamped, not refused: the cap is the daemon's to
+            // choose and may differ between deployments, so a client cannot
+            // know it in advance. `.max(1)` only guards a config of 0.
+            let limit = optional_count(params, "limit")?
+                .map_or(n, |l| l.min(n))
                 .max(1);
             list(doc_store, kb_id, after, limit, principal).await
         }
@@ -172,19 +162,14 @@ async fn dispatch_scanning(
             let node_id = required_node_id(params)?;
             // Clamped to 3: each hop is a full backlink scan, so depth is a
             // multiplier on the most expensive operation this surface has.
-            let depth = params
-                .get("depth")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(1)
-                .clamp(1, 3) as u32;
+            // Clamped to 1..=3, not refused: the editor's hub client documents
+            // the clamp and may pass a depth of 0.
+            let depth = optional_u64(params, "depth")?.unwrap_or(1).clamp(1, 3) as u32;
             neighborhood(doc_store, kb_id, &node_id, depth, principal, n).await
         }
         "kb/query.agenda" => {
-            let filter = params
-                .get("filter")
-                .and_then(|v| v.as_str())
-                .unwrap_or("todo");
-            let value = params.get("value").and_then(|v| v.as_str());
+            let filter = optional_str(params, "filter")?.unwrap_or("todo");
+            let value = optional_str(params, "value")?;
             agenda(doc_store, kb_id, filter, value, principal, n).await
         }
         "kb/query.health" => health(doc_store, kb_id, principal, n).await,
@@ -470,11 +455,55 @@ async fn my_wrapped_key(
 /// source, so following it forwards is a lookup and backwards is a search.
 /// The `node_id` every per-node `kb/query.*` method requires.
 fn required_node_id(params: &Value) -> Result<String, McpError> {
-    Ok(params
-        .get("node_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| McpError::invalid_request("missing 'node_id'".to_string()))?
-        .to_string())
+    Ok(required_str(params, "node_id")?.to_string())
+}
+
+// Parameter readers. A parameter of the wrong type is refused with -32602,
+// never read as absent: reading it as absent turned a client bug (a numeric
+// `after`) into a poller that silently re-reads the first page forever.
+// `null` counts as absent, so a client may pass `next_after` back verbatim.
+
+/// A required string parameter.
+fn required_str<'a>(params: &'a Value, name: &str) -> Result<&'a str, McpError> {
+    optional_str(params, name)?
+        .ok_or_else(|| McpError::invalid_params(name, format!("missing '{name}'")))
+}
+
+/// An optional string parameter: absent or `null` is `None`.
+fn optional_str<'a>(params: &'a Value, name: &str) -> Result<Option<&'a str>, McpError> {
+    match params.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s)),
+        Some(_) => Err(McpError::invalid_params(
+            name,
+            format!("'{name}' must be a string"),
+        )),
+    }
+}
+
+/// An optional non-negative integer parameter.
+fn optional_u64(params: &Value, name: &str) -> Result<Option<u64>, McpError> {
+    match params.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_u64().map(Some).ok_or_else(|| {
+            McpError::invalid_params(name, format!("'{name}' must be a non-negative integer"))
+        }),
+    }
+}
+
+/// An optional count that must be at least 1 (`kb/query.list`'s `limit`).
+fn optional_count(params: &Value, name: &str) -> Result<Option<usize>, McpError> {
+    match optional_u64(params, name)? {
+        Some(0) => Err(McpError::invalid_params(
+            name,
+            format!("'{name}' must be an integer of at least 1"),
+        )),
+        n => Ok(n.map(saturating_usize)),
+    }
+}
+
+fn saturating_usize(n: u64) -> usize {
+    usize::try_from(n).unwrap_or(usize::MAX)
 }
 
 async fn links_from_node(doc_store: &DocStore, kb_id: &str, node_id: &str) -> Vec<String> {
@@ -563,9 +592,10 @@ async fn links(
     let want_from = matches!(direction, "from" | "both");
     let want_to = matches!(direction, "to" | "both");
     if !want_from && !want_to {
-        return Err(McpError::invalid_request(format!(
-            "unknown direction '{direction}' (expected 'from', 'to' or 'both')"
-        )));
+        return Err(McpError::invalid_params(
+            "direction",
+            format!("unknown direction '{direction}' (expected 'from', 'to' or 'both')"),
+        ));
     }
 
     let from = if want_from {
@@ -1005,11 +1035,14 @@ async fn agenda(
 ) -> Result<Value, McpError> {
     const SUPPORTED: &[&str] = &["todo", "priority", "tag", "orphan", "dead-end"];
     if !SUPPORTED.contains(&filter) {
-        return Err(McpError::invalid_request(format!(
-            "unsupported agenda filter '{filter}' (this surface serves {SUPPORTED:?}; \
-             'custom' Datalog is not served over the network at all — there is no \
-             Datalog engine behind this endpoint)"
-        )));
+        return Err(McpError::invalid_params(
+            "filter",
+            format!(
+                "unsupported agenda filter '{filter}' (this surface serves {SUPPORTED:?}; \
+                 'custom' Datalog is not served over the network at all — there is no \
+                 Datalog engine behind this endpoint)"
+            ),
+        ));
     }
     let (coll, encryption) = load_gated(doc_store, kb_id, principal).await?;
     if matches!(encryption, Encryption::E2e) {

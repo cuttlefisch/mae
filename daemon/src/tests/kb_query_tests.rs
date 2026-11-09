@@ -1529,11 +1529,16 @@ async fn kb_query_get_returns_a_large_real_sized_note_whole_by_default() {
 
 // ---- kb/query.list: typed fields and a version per node, a page at a time ----
 
-const LIST_VIEWER: &str = "oauth:viewer@example.com";
+pub(super) const LIST_VIEWER: &str = "oauth:viewer@example.com";
 
 /// A KB with nodes `n1`..`n{count}` (manifest and documents), plus manifest
 /// entries in `dangling` that have no document.
-async fn seed_listed_kb(doc_store: &DocStore, kb_id: &str, count: usize, dangling: &[&str]) {
+pub(super) async fn seed_listed_kb(
+    doc_store: &DocStore,
+    kb_id: &str,
+    count: usize,
+    dangling: &[&str],
+) {
     let owner = Arc::new(Identity::generate("owner"));
     doc_store.set_signer(Arc::clone(&owner));
     let mut coll = KbCollectionDoc::new_owned(kb_id, &owner.fingerprint(), "owner");
