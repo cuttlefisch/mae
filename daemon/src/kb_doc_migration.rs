@@ -45,6 +45,9 @@ pub struct Ambiguous {
 }
 
 /// What the migration's writes are recorded as (ADR-113 D3): the daemon itself.
+/// The copy is written with `restore_doc`, which RESETS the new document's
+/// record origin to the copy: the legacy document's editor rows are not carried
+/// over, so a cutoff before the copy reads as incomplete rather than empty.
 const MIGRATION: crate::doc_editors::Attribution<'static> =
     crate::doc_editors::Attribution::Internal(
         crate::doc_editors::InternalWriter::DocAddressMigration,
@@ -161,7 +164,7 @@ pub async fn migrate_legacy_node_docs(
                 continue;
             }
         };
-        if let Err(e) = doc_store.share_doc(scoped_name, &state, MIGRATION).await {
+        if let Err(e) = doc_store.restore_doc(scoped_name, &state, MIGRATION).await {
             warn!(from = %legacy_name, to = %scoped_name, error = %e,
                   "ADR-105 migration: write failed; the legacy document is left in place");
             continue;
@@ -342,15 +345,14 @@ mod tests {
             "the legacy document was left behind, so the next eviction still deletes it"
         );
 
-        // ADR-113 D3: the copy is the daemon's write, recorded as the migration.
-        let rows = ds.editors_since(&scoped, 0).await.unwrap();
-        let got: Vec<_> = rows.iter().map(|r| (r.kind, r.editor.as_str())).collect();
+        // ADR-113 D3: the copy carries content, not its authors, so it resets
+        // the new document's record origin: a cutoff before it is Incomplete.
+        let (_, hw) = ds.state_with_high_water(&scoped).await.unwrap();
         assert_eq!(
-            got,
-            vec![(
-                crate::doc_editors::EditorKind::Internal,
-                "doc-address-migration"
-            )]
+            ds.editors_since_wal(&scoped, 0).await.unwrap(),
+            crate::doc_editors::EditorsSince::Incomplete {
+                recorded_after_wal_id: hw
+            }
         );
     }
 

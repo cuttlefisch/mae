@@ -42,12 +42,16 @@ impl StorageBackend for FailingBackend {
         self.inner.wal_append(doc_name, update, client_id, by).await
     }
 
-    async fn editors_since(
+    async fn editors_since_wal(
         &self,
         doc_name: &str,
-        since_ms: u64,
-    ) -> Result<Vec<crate::doc_editors::EditorRecord>, StorageError> {
-        self.inner.editors_since(doc_name, since_ms).await
+        after_wal_id: u64,
+    ) -> Result<crate::doc_editors::EditorsSince, StorageError> {
+        self.inner.editors_since_wal(doc_name, after_wal_id).await
+    }
+
+    async fn wal_high_water(&self, doc_name: &str) -> Result<u64, StorageError> {
+        self.inner.wal_high_water(doc_name).await
     }
 
     async fn forget_editors(&self, doc_name: &str) -> Result<(), StorageError> {

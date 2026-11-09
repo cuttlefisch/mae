@@ -10,14 +10,13 @@ use super::*;
 pub(super) async fn handle_kb_share(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
-    session_id: u64,
+    (session_id, auth_principal, transport): (u64, Option<&str>, Transport),
     auth_label: Option<&str>,
-    auth_principal: Option<&str>,
     session_docs: &mut HashSet<String>,
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
-    let who = (session_id, Attribution::session(auth_principal, session_id));
+    let who = (session_id, Attribution::session(auth_principal, transport));
     let kb_id = match params["kb_id"].as_str() {
         Some(s) => s.to_string(),
         None => {
@@ -577,7 +576,8 @@ pub(super) async fn handle_kb_node_update(
         return resp;
     }
 
-    let by = Attribution::session(auth_principal, session_id);
+    let signer = crate::doc_editors::verified_signer(content_header.as_ref());
+    let by = Writer::signed(Attribution::session(auth_principal, transport), signer);
     let applied = write_node(doc_store, &node_doc, &update_bytes, reseal || rebirth, by).await;
     match applied {
         Ok(result) => {
@@ -613,7 +613,7 @@ async fn write_node(
     node_doc: &str,
     update: &[u8],
     replace: bool,
-    by: Attribution<'_>,
+    by: Writer<'_>,
 ) -> Result<crate::doc_store::ApplyResult, crate::storage::StorageError> {
     if replace {
         doc_store.share_doc(node_doc, update, by).await
@@ -767,7 +767,7 @@ pub(super) async fn handle_kb_collection_op(
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
-    let who = (session_id, Attribution::session(auth_principal, session_id));
+    let who = (session_id, Attribution::session(auth_principal, transport));
     // ADR-037 Phase 3a: the editor's outbound collection-write path. The owner
     // authors a signed collection delta LOCALLY (a signed membership op, an
     // encryption-flag flip, …) and ships the opaque bytes here. The daemon stays
@@ -928,7 +928,7 @@ pub(super) async fn handle_kb_collection_node_add_remove(
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
-    let who = (session_id, Attribution::session(auth_principal, session_id));
+    let who = (session_id, Attribution::session(auth_principal, transport));
     let add = method == "kb/collection_node_add";
     let kb_id = match params["kb_id"].as_str() {
         Some(s) => s.to_string(),

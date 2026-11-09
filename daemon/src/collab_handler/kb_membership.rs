@@ -136,7 +136,7 @@ pub(super) async fn handle_kb_join(
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
-    let who = (session_id, Attribution::session(auth_principal, session_id));
+    let who = (session_id, Attribution::session(auth_principal, transport));
     let kb_id = match params["kb_id"].as_str() {
         Some(s) => s.to_string(),
         None => {
@@ -398,7 +398,7 @@ pub(super) async fn handle_kb_add_remove_member(
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
-    let who = (session_id, Attribution::session(auth_principal, session_id));
+    let who = (session_id, Attribution::session(auth_principal, transport));
     let add = method == "kb/add_member";
     let kb_id = match params["kb_id"].as_str() {
         Some(s) => s.to_string(),
@@ -550,7 +550,7 @@ pub(super) async fn handle_kb_approve_member(
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
-    let who = (session_id, Attribution::session(auth_principal, session_id));
+    let who = (session_id, Attribution::session(auth_principal, transport));
     let kb_id = match params["kb_id"].as_str() {
         Some(s) => s.to_string(),
         None => {

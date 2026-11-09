@@ -56,7 +56,7 @@ use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use crate::doc_editors::{Attribution, InternalWriter};
+use crate::doc_editors::{Attribution, InternalWriter, Writer};
 use crate::doc_store::DocStore;
 use mae_mcp::auth::AuthProvider;
 
@@ -269,7 +269,7 @@ async fn run_session<R, W>(
                 &req.arguments,
                 &doc_store_for_tools,
                 &bc_for_tools,
-                Attribution::session(principal_for_tools.as_deref(), session_id),
+                Attribution::session(principal_for_tools.as_deref(), transport),
             )
             .await;
             let _ = req.reply.send(result);
@@ -1656,9 +1656,8 @@ async fn handle_doc_request_inner(
             kb_content::handle_kb_share(
                 doc_store,
                 broadcaster,
-                session_id,
+                (session_id, auth_principal, transport),
                 auth_label,
-                auth_principal,
                 session_docs,
                 id,
                 &params,

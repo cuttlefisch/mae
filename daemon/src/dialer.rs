@@ -597,7 +597,11 @@ async fn apply_doc(
     content_header: Option<Value>,
     from: Attribution<'_>,
 ) {
-    match doc_store.apply_update(doc_name, update, None, from).await {
+    // A verified signed header names the content's author (ADR-113 D3).
+    let signer = mae_daemon::doc_editors::verified_signer(content_header.as_ref());
+    let by = mae_daemon::doc_editors::Writer::signed(from, signer);
+    let applied = doc_store.apply_update(doc_name, update, None, by).await;
+    match applied {
         Ok(result) => {
             if let Some(bc) = broadcaster {
                 // `broadcast_except(exclude_sid)` so the dialer's own local
@@ -943,20 +947,35 @@ mod tests {
         peer.abort();
         assert!(landed, "B should apply the owner's live edit");
 
-        // ADR-113 D3: everything B applied from the mesh — the join pull and the
-        // live push — is recorded against the owner daemon as a RELAY, under its
-        // verified key fingerprint, and never as a principal.
+        // ADR-113 D3: everything B applied from the mesh is recorded against the
+        // owner daemon as a relay, under its verified key fingerprint. The join
+        // pull carries no signature (a bare `mesh-peer`: author unknown); the live
+        // push was signed by A, so it is a `signed-relay` PLUS A as a principal.
         let a_fp = a_id.fingerprint();
-        for doc in ["kbn:kbl:concept:n", "kbc:kbl"] {
-            let rows = b_store.editors_since(doc, 0).await.unwrap();
-            let got: Vec<_> = rows.iter().map(|r| (r.kind, r.editor.as_str())).collect();
-            assert_eq!(got, vec![(EditorKind::MeshPeer, a_fp.as_str())], "{doc}");
-        }
-        let node = b_store.editors_since("kbn:kbl:concept:n", 0).await.unwrap();
-        assert!(
-            node[0].updates >= 2,
-            "pull and live push both recorded: {node:?}"
+        let rows = |doc: &'static str| {
+            let s = Arc::clone(&b_store);
+            async move {
+                match s.editors_since_wal(doc, 0).await.unwrap() {
+                    mae_daemon::doc_editors::EditorsSince::Known(rows) => {
+                        let mut v: Vec<_> = rows.into_iter().map(|r| (r.kind, r.editor)).collect();
+                        v.sort();
+                        v
+                    }
+                    other => panic!("{doc}: {other:?}"),
+                }
+            }
+        };
+        let (fp, kinds) = (
+            a_fp.clone(),
+            [
+                EditorKind::Principal,
+                EditorKind::MeshPeer,
+                EditorKind::SignedRelay,
+            ],
         );
+        let want: Vec<_> = kinds.into_iter().map(|k| (k, fp.clone())).collect();
+        assert_eq!(rows("kbn:kbl:concept:n").await, want);
+        assert_eq!(rows("kbc:kbl").await, vec![(EditorKind::MeshPeer, a_fp)]);
     }
 
     /// ADR-036 mesh verification, the SELECTIVE oracle: B rejects three distinct bad

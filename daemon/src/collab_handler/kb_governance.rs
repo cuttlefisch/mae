@@ -14,7 +14,7 @@ pub(super) async fn handle_kb_set_policy(
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
-    let who = (session_id, Attribution::session(auth_principal, session_id));
+    let who = (session_id, Attribution::session(auth_principal, transport));
     let kb_id = match params["kb_id"].as_str() {
         Some(s) => s.to_string(),
         None => {
@@ -236,7 +236,7 @@ pub(super) async fn handle_kb_set_governance(
     let appended = append_signed_membership(
         doc_store,
         broadcaster,
-        (session_id, Attribution::session(auth_principal, session_id)),
+        (session_id, Attribution::session(auth_principal, transport)),
         &kb_id,
         &mut coll,
         MembershipAction::SetGovernance,
@@ -274,7 +274,7 @@ pub(super) async fn handle_kb_revoke(
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
-    let who = (session_id, Attribution::session(auth_principal, session_id));
+    let who = (session_id, Attribution::session(auth_principal, transport));
     let kb_id = match params["kb_id"].as_str() {
         Some(s) => s.to_string(),
         None => {

@@ -65,7 +65,7 @@ pub(super) async fn handle_kb_claim_lease(
     match claim_lease_and_report(
         doc_store,
         broadcaster,
-        (session_id, Attribution::session(auth_principal, session_id)),
+        (session_id, Attribution::session(auth_principal, transport)),
         &kb_id,
         &op_kind,
         &holder_fp,

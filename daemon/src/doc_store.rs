@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
-use crate::doc_editors::{Attribution, EditClock, EditStamp, EditorRecord};
+use crate::doc_editors::{Authors, EditClock, EditStamp, EditorsSince, PendingChange, Writer};
 use crate::storage::{StorageBackend, StorageError};
 
 /// Built-in default for the per-update size gate (bytes), used when the operator
@@ -251,18 +251,52 @@ impl DocStore {
         self
     }
 
-    /// Every editor of `doc_name` whose latest applied update was stamped strictly
-    /// after `since_ms` (ADR-113 D3: the authors of a node since its last approved
-    /// revision). Includes non-principal kinds — mesh relays, the daemon's own
-    /// writers, unauthenticated sessions — each marked by its `kind`; a caller
-    /// applying a principal-only rule must decide what each of those means rather
-    /// than having them silently dropped here.
-    pub async fn editors_since(
+    /// **The read API for ADR-113's author rule.** Who edited `doc_name` after
+    /// WAL id `after_wal_id`: every editor whose latest update (or whose held-back
+    /// content's integration) is after it — or [`EditorsSince::Incomplete`] when
+    /// the cutoff precedes the document's record origin, which is never the same
+    /// answer as "nobody".
+    ///
+    /// The cutoff is a WAL id, not a time: take it with the content it describes
+    /// from [`Self::state_with_high_water`] when a revision is frozen. WAL ids
+    /// order every write regardless of the wall clock.
+    ///
+    /// Rows include non-principal kinds. A consumer applying the author rule
+    /// should call [`Self::authors_since_wal`], which refuses to name the
+    /// authors when any change since the cutoff has none.
+    pub async fn editors_since_wal(
         &self,
         doc_name: &str,
-        since_ms: u64,
-    ) -> Result<Vec<EditorRecord>, StorageError> {
-        self.storage.editors_since(doc_name, since_ms).await
+        after_wal_id: u64,
+    ) -> Result<EditorsSince, StorageError> {
+        self.storage.editors_since_wal(doc_name, after_wal_id).await
+    }
+
+    /// The ADR-113 author verdict for `doc_name` since `after_wal_id` — see
+    /// [`Authors`] for the rule. `Unknown` means approval must be refused.
+    pub async fn authors_since_wal(
+        &self,
+        doc_name: &str,
+        after_wal_id: u64,
+    ) -> Result<Authors, StorageError> {
+        Ok(self
+            .editors_since_wal(doc_name, after_wal_id)
+            .await?
+            .authors())
+    }
+
+    /// A document's full state together with the WAL high-water mark it
+    /// reflects, read under the document's lock so no update lands between the
+    /// two. The high-water mark is the cutoff to freeze for
+    /// [`Self::editors_since_wal`].
+    pub async fn state_with_high_water(
+        &self,
+        doc_name: &str,
+    ) -> Result<(Vec<u8>, u64), StorageError> {
+        let entry = self.get_or_create(doc_name).await?;
+        let doc = entry.lock().await;
+        let high_water = self.storage.wal_high_water(doc_name).await?;
+        Ok((doc.sync.encode_state(), high_water))
     }
 
     /// Delete an evicted or deleted document's editor record — but only an
@@ -279,7 +313,7 @@ impl DocStore {
     }
 
     /// The stamp for an update applied now by `by`.
-    fn stamp(&self, by: Attribution<'_>) -> EditStamp {
+    fn stamp(&self, by: Writer<'_>) -> EditStamp {
         EditStamp::new(by, (self.clock)())
     }
 
@@ -687,7 +721,7 @@ impl DocStore {
         doc_name: &str,
         update: &[u8],
         client_id: Option<u64>,
-        by: Attribution<'_>,
+        by: impl Into<Writer<'_>>,
     ) -> Result<ApplyResult, StorageError> {
         // Validate before touching storage.
         validate_update(update)
@@ -707,7 +741,7 @@ impl DocStore {
         // it, so an update's length does not bound how much the document grows.
         let (should_compact, wal_id) = {
             let mut doc = entry.lock().await;
-            let before = doc.sync.payload_bytes();
+            let (before, pending_before) = (doc.sync.payload_bytes(), doc.sync.pending_digest());
             doc.sync
                 .apply_update(update)
                 .map_err(|e| StorageError::Sqlite(format!("apply failed: {e}")))?;
@@ -723,8 +757,10 @@ impl DocStore {
             }
 
             // WAL append (durability) before the update is acknowledged or relayed.
-            // The editor record commits with it, or neither does.
-            let stamp = self.stamp(by);
+            // The editor record commits with it, or neither does — including any
+            // held-back content this update integrated (`PendingChange`).
+            let mut stamp = self.stamp(by.into());
+            stamp.pending = PendingChange::between(&pending_before, &doc.sync.pending_digest());
             let wal_id = match self
                 .storage
                 .wal_append(doc_name, update, client_id, &stamp)
@@ -1124,7 +1160,31 @@ impl DocStore {
         &self,
         doc_name: &str,
         update: &[u8],
-        by: Attribution<'_>,
+        by: impl Into<Writer<'_>>,
+    ) -> Result<ApplyResult, StorageError> {
+        self.replace_doc(doc_name, update, by.into(), false).await
+    }
+
+    /// [`Self::share_doc`] for content whose authorship was never recorded — a
+    /// checkpoint restore, a migration copy. It also RESETS the document's
+    /// record origin to this write (ADR-113 D3), so any cutoff before it reads
+    /// as `EditorsSince::Incomplete` instead of crediting `by` with content it
+    /// only carried. Earlier editor rows are kept (over-inclusion is safe).
+    pub async fn restore_doc(
+        &self,
+        doc_name: &str,
+        update: &[u8],
+        by: impl Into<Writer<'_>>,
+    ) -> Result<ApplyResult, StorageError> {
+        self.replace_doc(doc_name, update, by.into(), true).await
+    }
+
+    async fn replace_doc(
+        &self,
+        doc_name: &str,
+        update: &[u8],
+        by: Writer<'_>,
+        resets_origin: bool,
     ) -> Result<ApplyResult, StorageError> {
         // Validate before touching anything.
         validate_update(update)
@@ -1160,8 +1220,16 @@ impl DocStore {
             docs.remove(doc_name);
         }
 
-        // WAL append first (durability).
-        let stamp = self.stamp(by);
+        // WAL append first (durability). The old content, and anything it held
+        // pending, is gone: only the share's own pending structs remain.
+        let mut stamp = self.stamp(by);
+        stamp.resets_origin = resets_origin;
+        let held_back = probe.pending_digest().is_some();
+        stamp.pending = PendingChange {
+            leaves_pending: held_back,
+            integrated: false,
+            cleared: !held_back,
+        };
         let wal_id = self
             .storage
             .wal_append(doc_name, update, None, &stamp)

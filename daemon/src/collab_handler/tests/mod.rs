@@ -14,13 +14,11 @@ pub(crate) async fn sorted_editors(
     store: &Arc<DocStore>,
     doc: &str,
 ) -> Vec<(crate::doc_editors::EditorKind, String)> {
-    let mut v: Vec<_> = store
-        .editors_since(doc, 0)
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|r| (r.kind, r.editor))
-        .collect();
+    let rows = match store.editors_since_wal(doc, 0).await.unwrap() {
+        crate::doc_editors::EditorsSince::Known(rows) => rows,
+        other => panic!("{doc}: expected a complete record, got {other:?}"),
+    };
+    let mut v: Vec<_> = rows.into_iter().map(|r| (r.kind, r.editor)).collect();
     v.sort_by(|a, b| (a.0.as_str(), &a.1).cmp(&(b.0.as_str(), &b.1)));
     v
 }

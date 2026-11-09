@@ -90,7 +90,7 @@ pub(super) async fn handle_sync_update(
         Err(e) => return JsonRpcResponse::error(id, e),
     };
     let client_id = params["client_id"].as_u64();
-    let by = Attribution::session(auth_principal, session_id);
+    let by = Attribution::session(auth_principal, transport);
 
     // ADR-036 §D3 (B→A): a content op arriving over the mesh — a peer daemon's
     // forwarded edit — is re-verified against THIS KB's membership before
@@ -198,10 +198,14 @@ pub(super) async fn handle_sync_update(
         }
     }
 
-    match doc_store
+    // ADR-113 D3: a verified signer is the content's author; record it beside
+    // the session (a relay, on the P2P transport) that delivered it.
+    let signer = crate::doc_editors::verified_signer(sync_content_header.as_ref());
+    let by = Writer::signed(by, signer);
+    let applied = doc_store
         .apply_update(&doc_name, &update_bytes, client_id, by)
-        .await
-    {
+        .await;
+    match applied {
         Ok(result) => {
             // Broadcast to other subscribers (skip sender to avoid echo).
             {
@@ -246,7 +250,7 @@ pub(super) async fn relay(
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
     if method == super::method_authz::Method::SyncShare {
-        let who = (session_id, auth_principal);
+        let who = (session_id, auth_principal, transport);
         return handle_sync_share(doc_store, broadcaster, who, session_docs, id, params).await;
     }
     handle_sync_awareness(
@@ -508,7 +512,7 @@ pub(super) async fn handle_sync_resync(
 pub(super) async fn handle_sync_share(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
-    (session_id, auth_principal): (u64, Option<&str>),
+    (session_id, auth_principal, transport): (u64, Option<&str>, Transport),
     session_docs: &mut HashSet<String>,
     id: serde_json::Value,
     params: &serde_json::Value,
@@ -541,7 +545,7 @@ pub(super) async fn handle_sync_share(
         }
     };
 
-    let by = Attribution::session(auth_principal, session_id);
+    let by = Attribution::session(auth_principal, transport);
     match doc_store.share_doc(&doc_name, &update_bytes, by).await {
         Ok(result) => {
             info!(session = session_id, doc = %doc_name, wal_seq = result.wal_seq,

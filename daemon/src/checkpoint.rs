@@ -93,10 +93,14 @@ pub async fn export_kb(doc_store: &DocStore, kb_id: &str) -> Result<Vec<u8>, Str
 
 /// Import (restore) a KB from an artifact: verify integrity, then write the collection +
 /// node docs into the doc_store. Restore semantics — replaces `kb_id` if it exists.
+///
+/// ADR-113 D3: the artifact carries content, not who wrote it, so every doc is
+/// written with `restore_doc`, which RESETS its record origin to the restore:
+/// a cutoff before the restore reads as incomplete, never as "the restorer".
 pub async fn import_kb(doc_store: &DocStore, artifact: &[u8]) -> Result<KbCheckpoint, String> {
     let cp = KbCheckpoint::from_bytes(artifact)?;
     doc_store
-        .share_doc(
+        .restore_doc(
             &format!("kbc:{}", cp.kb_id),
             &cp.collection_state,
             crate::doc_editors::Attribution::Internal(
@@ -107,7 +111,7 @@ pub async fn import_kb(doc_store: &DocStore, artifact: &[u8]) -> Result<KbCheckp
         .map_err(|e| format!("restore collection '{}': {e}", cp.kb_id))?;
     for (id, state) in &cp.nodes {
         doc_store
-            .share_doc(
+            .restore_doc(
                 &mae_sync::kb_node_doc_name(&cp.kb_id, id),
                 state,
                 crate::doc_editors::Attribution::Internal(
@@ -286,19 +290,18 @@ mod tests {
         let cp = import_kb(&dst, &artifact).await.unwrap();
         assert_eq!(cp.node_count(), 2);
 
-        // ADR-113 D3: a restore is the daemon writing, recorded as such — never
-        // as a principal, so it cannot enter an author set as a person.
+        // ADR-113 D3: a restore installs content whose authors were never
+        // recorded, so it resets each doc's record origin: a cutoff before the
+        // restore is Incomplete — never "the restorer", never "nobody".
+        use crate::doc_editors::{Authors, EditorsSince};
         for doc in ["kbc:kb1", "kbn:kb1:n1", "kbn:kb1:n2"] {
-            let rows = dst.editors_since(doc, 0).await.unwrap();
-            let got: Vec<_> = rows.iter().map(|r| (r.kind, r.editor.as_str())).collect();
-            assert_eq!(
-                got,
-                vec![(
-                    crate::doc_editors::EditorKind::Internal,
-                    "checkpoint-restore"
-                )],
-                "{doc}"
-            );
+            let (_, hw) = dst.state_with_high_water(doc).await.unwrap();
+            let since = dst.editors_since_wal(doc, 0).await.unwrap();
+            let want = EditorsSince::Incomplete {
+                recorded_after_wal_id: hw,
+            };
+            assert_eq!(since, want, "{doc}");
+            assert!(matches!(since.authors(), Authors::Unknown(_)), "{doc}");
         }
 
         // Collection manifest restored.
