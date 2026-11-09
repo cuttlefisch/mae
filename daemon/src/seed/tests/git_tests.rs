@@ -149,25 +149,24 @@ fn created_and_modified_are_the_first_add_and_last_change_at_the_tag() {
     r.write("dir/b.org", &note("b", "after the tag\n"));
     r.commit(1_700_009_999);
     let plan = r.plan("v1");
-    let times: Vec<(&str, i64, i64, bool)> = plan
+    let times: Vec<(&str, i64, i64)> = plan
         .nodes
         .iter()
-        .map(|n| {
-            (
-                n.path.as_str(),
-                n.created_at,
-                n.modified_at,
-                n.times_from_git,
-            )
-        })
+        .map(|n| (n.path.as_str(), n.created_at, n.modified_at))
         .collect();
     assert_eq!(
         times,
         vec![
-            ("a.org", 1_700_000_000, 1_700_000_500, true),
-            ("dir/b.org", 1_700_000_000, 1_700_000_000, true),
-            ("dir/c.org", 1_700_000_900, 1_700_000_900, true)
+            ("a.org", 1_700_000_000, 1_700_000_500),
+            ("dir/b.org", 1_700_000_000, 1_700_000_000),
+            ("dir/c.org", 1_700_000_900, 1_700_000_900)
         ]
+    );
+    assert!(
+        plan.nodes
+            .iter()
+            .all(|n| n.created_source == TimeSource::GitId
+                && n.modified_source == TimeSource::GitPath)
     );
 }
 
@@ -238,12 +237,14 @@ fn oracle(r: &Repo, path: &str) -> (i64, i64) {
     (last, modified.parse().unwrap())
 }
 
-/// The one-pass walk against per-file `git log --follow`. It must agree on
-/// renames (pure, with an edit, and several in one commit, under a rename
-/// limit that would make git skip them), and it differs, by decision and
-/// pinned here, on a re-added path and on a copy. Kills: swapping first and
-/// last, a walk that does not follow renames, dropping `-l0`, and continuing
-/// a deleted path's lineage into its re-add.
+/// The one-pass walk against per-file `git log --follow`. Every page here
+/// keeps its id along its path, so id and path agree, and the walk must agree
+/// with `--follow` on renames (pure, with an edit, and several in one commit,
+/// under a rename limit that would make git skip them). It differs, by
+/// decision and pinned here, where the id changed: a path re-added under a
+/// new id, and a copy that took its own id. Kills: swapping first and last, a
+/// walk that does not follow renames, dropping `-l0`, and continuing a deleted
+/// path's lineage into its re-add.
 #[test]
 fn the_history_walk_agrees_with_git_log_follow_except_where_decided() {
     let r = history_repo();
@@ -396,4 +397,109 @@ fn git_redirection_variables_are_removed() {
     ] {
         assert!(removed.iter().any(|r| r == var), "{var} is not removed");
     }
+}
+
+/// Q6 by id: a document's creation is the first commit in which its `:ID:`
+/// appeared, at any path. Each page below tells path-based dating apart from
+/// id-based dating. Kills: dating by path instead of by id, and keeping the
+/// LAST appearance of an id instead of the first.
+#[test]
+fn created_at_follows_the_id_not_the_path() {
+    let r = Repo::new();
+    r.write("notes/x/moved.org", &long_note("moved"));
+    r.write("restored.org", &long_note("restored"));
+    r.write("regen.org", &long_note("regen-old"));
+    r.write("a/first.org", &long_note("wanders"));
+    r.commit(T + 100);
+    r.git(&["rm", "-q", "notes/x/moved.org", "restored.org"]);
+    r.commit(T + 200); // a folder move begins as a delete, and a page is removed
+    r.write(
+        "notes/y/moved.org",
+        &(long_note("moved") + "editada al moverla\n"),
+    );
+    r.write("restored.org", &long_note("restored"));
+    r.commit(T + 300); // the move completes as an add; the page is restored
+    r.write("regen.org", &long_note("regen-new"));
+    r.write("b/second.org", &(long_note("wanders") + "ahora aquí\n"));
+    r.commit(T + 400); // regenerated under a new id; the id appears at path B
+    r.git(&["rm", "-q", "a/first.org"]);
+    r.commit(T + 500); // and is gone from path A
+    r.git(&["tag", "v1"]);
+    let plan = r.plan("v1");
+    assert!(plan.ok(), "{:?}", plan.refusals);
+    let got: HashMap<&str, (i64, i64)> = plan
+        .nodes
+        .iter()
+        .map(|n| (n.path.as_str(), (n.created_at, n.modified_at)))
+        .collect();
+    assert_eq!(
+        got["notes/y/moved.org"],
+        (T + 100, T + 300),
+        "a move by delete + add keeps the date"
+    );
+    assert_eq!(
+        got["restored.org"],
+        (T + 100, T + 300),
+        "a restore keeps the date"
+    );
+    assert_eq!(
+        got["regen.org"],
+        (T + 400, T + 400),
+        "a new id at the same path is a new document"
+    );
+    assert_eq!(
+        got["b/second.org"],
+        (T + 100, T + 400),
+        "the id's first path counts"
+    );
+    assert!(plan
+        .nodes
+        .iter()
+        .all(|n| n.created_source == TimeSource::GitId));
+    assert!(
+        plan.history_blobs_read >= 7,
+        "every version of every page was read once"
+    );
+}
+
+/// Copies: one that still shares its source's id at the rev is a duplicate-id
+/// refusal; one that later took its own id is created when that id appears,
+/// not when the copy was made. Kills: dating a copy by its path's add.
+#[test]
+fn a_copy_is_refused_while_it_shares_an_id_and_dated_by_its_own_id_after() {
+    let r = Repo::new();
+    r.write("src.org", &long_note("src"));
+    r.commit(T + 100);
+    r.write("copy.org", &long_note("src"));
+    r.commit(T + 200);
+    r.git(&["tag", "shared"]);
+    r.write(
+        "copy.org",
+        &long_note("src").replace(":ID: src", ":ID: copy"),
+    );
+    r.commit(T + 300);
+    r.git(&["tag", "own"]);
+
+    let shared = r.plan("shared");
+    let dup: Vec<&str> = shared
+        .refusals
+        .iter()
+        .filter(|x| x.kind == ProblemKind::DuplicateId)
+        .map(|x| x.path.as_str())
+        .collect();
+    assert_eq!(dup, vec!["copy.org", "src.org"]);
+
+    let own = r.plan("own");
+    assert!(own.ok(), "{:?}", own.refusals);
+    let got: HashMap<&str, (i64, i64)> = own
+        .nodes
+        .iter()
+        .map(|n| (n.path.as_str(), (n.created_at, n.modified_at)))
+        .collect();
+    assert_eq!(got["src.org"], (T + 100, T + 100));
+    assert_eq!(
+        got["copy.org"],
+        (T + 300, T + 300),
+        "created when its own id first appears"
+    );
 }

@@ -117,12 +117,24 @@ impl GitRepo {
 
     /// The bytes of each blob in `shas`, in the same order.
     pub fn read_blobs(&self, shas: &[String]) -> Result<Vec<Vec<u8>>, SeedError> {
+        let mut blobs = Vec::with_capacity(shas.len());
+        self.for_each_blob(shas, |bytes| blobs.push(bytes.to_vec()))?;
+        Ok(blobs)
+    }
+
+    /// Hand each blob in `shas` to `f`, in order, from ONE `cat-file --batch`
+    /// process, holding one blob in memory at a time.
+    pub fn for_each_blob(
+        &self,
+        shas: &[String],
+        mut f: impl FnMut(&[u8]),
+    ) -> Result<(), SeedError> {
         let mut child = self
             .command()
             .args(["cat-file", "--batch"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::null())
             .spawn()
             .map_err(|e| SeedError(format!("cannot run git cat-file: {e}")))?;
         let mut stdin = child.stdin.take().expect("piped stdin");
@@ -134,13 +146,20 @@ impl GitRepo {
         // the requests are written, and then both sides would wait forever.
         let writer = std::thread::spawn(move || stdin.write_all(&request));
         let mut reader = BufReader::new(child.stdout.take().expect("piped stdout"));
-        let blobs = shas
-            .iter()
-            .map(|sha| read_batch_object(&mut reader, sha))
-            .collect::<Result<Vec<_>, _>>();
+        let mut result = Ok(());
+        for sha in shas {
+            match read_batch_object(&mut reader, sha) {
+                Ok(bytes) => f(&bytes),
+                Err(e) => {
+                    result = Err(e);
+                    break;
+                }
+            }
+        }
+        drop(reader);
         let _ = writer.join();
         let _ = child.wait();
-        blobs
+        result
     }
 
     /// Like `run`, but a warning that git skipped part of its work (rename

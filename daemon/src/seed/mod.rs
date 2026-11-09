@@ -61,10 +61,10 @@ mod split;
 
 pub use git::{GitRepo, TreeEntry};
 pub use glob::{Glob, GlobError};
-pub use history::FileTimes;
+pub use history::{drawer_id, FileTimes, History};
 pub use plan::{
     plan, plan_entries, CheckoutAttr, PlanInput, PlanOptions, PlannedNode, Refusal, SeedPlan,
-    Source,
+    Source, TimeSource,
 };
 pub use report::{render_json, render_text};
 pub use split::{normalise, regen, split, SplitFile};

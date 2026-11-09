@@ -11,7 +11,7 @@ const T0: i64 = 1_700_000_000;
 fn input(files: &[(&str, Vec<u8>)]) -> PlanInput {
     let mut entries = Vec::new();
     let mut blobs = HashMap::new();
-    let mut file_times = HashMap::new();
+    let mut history = History::default();
     for (i, (path, bytes)) in files.iter().enumerate() {
         let sha = format!("{:040x}", i + 1);
         entries.push(TreeEntry {
@@ -22,13 +22,16 @@ fn input(files: &[(&str, Vec<u8>)]) -> PlanInput {
         });
         blobs.insert(sha, bytes.clone());
         let t = T0 + 10 * i as i64;
-        file_times.insert(
+        history.paths.insert(
             path.to_string(),
             FileTimes {
                 created: t,
                 modified: t + 5,
             },
         );
+        if let Some(id) = drawer_id(&String::from_utf8_lossy(bytes)) {
+            history.ids.insert(id, t - 1);
+        }
     }
     PlanInput {
         source: Source {
@@ -40,7 +43,7 @@ fn input(files: &[(&str, Vec<u8>)]) -> PlanInput {
         entries,
         blobs,
         attrs: Vec::new(),
-        file_times,
+        history,
         received_at: 42,
     }
 }
@@ -328,35 +331,64 @@ fn the_plan_hash_is_deterministic_and_covers_content_and_time() {
     edited[1].1 = page(&[("ID", "b")], Some("T"), None, "Texto de b!\n").into_bytes();
     assert_ne!(base, h(input(&edited)), "a body byte changes the hash");
     let mut later = input(&files);
-    later.file_times.get_mut("a.org").unwrap().created += 1;
+    *later.history.ids.get_mut("a").unwrap() += 1;
     assert_ne!(base, h(later), "created_at is in the hash");
     let mut later = input(&files);
-    later.file_times.get_mut("a.org").unwrap().modified += 1;
+    later.history.paths.get_mut("a.org").unwrap().modified += 1;
     assert_ne!(base, h(later), "modified_at is in the hash");
 }
 
+/// Creation by id first, then by path lineage, then the receipt time; each
+/// labelled. Kills: preferring the path lineage over the id, or an
+/// unlabelled fallback.
 #[test]
-fn the_times_come_from_git_or_from_the_receipt_time() {
-    let mut inp = input(&[("a.org", ok_page("a")), ("b.org", ok_page("b"))]);
-    inp.file_times.remove("b.org");
+fn the_times_come_from_the_id_then_the_path_then_the_receipt_time() {
+    let mut inp = input(&[
+        ("a.org", ok_page("a")),
+        ("b.org", ok_page("b")),
+        ("c.org", ok_page("c")),
+    ]);
+    inp.history.ids.remove("b");
+    inp.history.ids.remove("c");
+    inp.history.paths.remove("c.org");
     let plan = plan_entries(inp, &opts()).unwrap();
-    let (a, b) = (&plan.nodes[0], &plan.nodes[1]);
+    let got: Vec<(i64, &str, i64, &str)> = plan
+        .nodes
+        .iter()
+        .map(|n| {
+            (
+                n.created_at,
+                n.created_source.as_str(),
+                n.modified_at,
+                n.modified_source.as_str(),
+            )
+        })
+        .collect();
     assert_eq!(
-        (a.created_at, a.modified_at, a.times_from_git),
-        (T0, T0 + 5, true)
-    );
-    assert_eq!(
-        (b.created_at, b.modified_at, b.times_from_git),
-        (42, 42, false)
+        got,
+        vec![
+            (T0 - 1, "git-id", T0 + 5, "git-path"),
+            (T0 + 10, "git-path", T0 + 15, "git-path"),
+            (42, "received", 42, "received"),
+        ]
     );
     let json = render_json(&plan, &[]);
-    assert_eq!(json["nodes"][0]["created_at"], T0);
-    assert_eq!(json["nodes"][0]["modified_at"], T0 + 5);
-    assert_eq!(json["nodes"][0]["created_at_source"], "git");
-    assert_eq!(json["nodes"][1]["created_at_source"], "received");
-    assert_eq!(json["nodes"][1]["modified_at_source"], "received");
-    assert_eq!(json["counts"]["times_received"], 1);
-    assert!(render_text(&plan).contains("from git for 1, receipt time for 1 (not reproducible)"));
+    assert_eq!(json["nodes"][0]["created_at_source"], "git-id");
+    assert_eq!(json["nodes"][1]["created_at_source"], "git-path");
+    assert_eq!(json["nodes"][2]["modified_at_source"], "received");
+    for (k, v) in [
+        ("created_by_id", 1),
+        ("created_by_path", 1),
+        ("created_received", 1),
+        ("modified_received", 1),
+    ] {
+        assert_eq!(json["counts"][k], v, "{k}");
+    }
+    let text = render_text(&plan);
+    assert!(
+        text.contains("created_at  by :ID: first seen in history for 1, by path lineage for 1"),
+        "{text}"
+    );
 }
 
 /// `--code-property`: the code is reported per node (case-insensitive key);

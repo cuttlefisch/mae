@@ -193,6 +193,7 @@ proptest! {
     #[test]
     fn canonical_pages_split_and_regenerate_exactly(fields in page_fields()) {
         let f = regen(&fields);
+        prop_assert_eq!(drawer_id(&f), Some(fields.id.clone()), "the history reader agrees with split");
         let split_back = split(&f).map(sorted);
         prop_assert_eq!(split_back, Ok(fields));
         prop_assert_eq!(normalise(&f), Ok(f.clone()));
@@ -206,6 +207,7 @@ proptest! {
         let canonical = regen(&fields);
         let p = styled(&fields, &s);
         prop_assert!(p.ends_with(&fields.body));
+        prop_assert_eq!(drawer_id(&p), Some(fields.id.clone()), "the history reader agrees with split");
         let n = normalise(&p).expect("a styled header still splits");
         prop_assert_eq!(&n, &canonical);
         prop_assert_eq!(normalise(&n), Ok(n.clone()));

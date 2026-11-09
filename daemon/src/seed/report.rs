@@ -5,7 +5,7 @@
 
 use serde_json::{json, Value};
 
-use super::plan::{sha256_hex, PlannedNode, SeedPlan};
+use super::plan::{sha256_hex, PlannedNode, SeedPlan, TimeSource};
 use super::CONTRACT;
 
 /// The JSON report. Stable keys; see `render_text` for the meaning of each.
@@ -53,15 +53,17 @@ fn counts(plan: &SeedPlan) -> Value {
         "refusals": plan.refusals.len(),
         "excluded": plan.excluded.len(),
         "not_selected": plan.not_selected.len(),
-        "times_from_git": plan.nodes.iter().filter(|n| n.times_from_git).count(),
-        "times_received": plan.nodes.iter().filter(|n| !n.times_from_git).count(),
+        "created_by_id": count(plan, |n| n.created_source == TimeSource::GitId),
+        "created_by_path": count(plan, |n| n.created_source == TimeSource::GitPath),
+        "created_received": count(plan, |n| n.created_source == TimeSource::Received),
+        "modified_received": count(plan, |n| n.modified_source == TimeSource::Received),
+        "history_blobs_read": plan.history_blobs_read,
         "missing_code": plan.missing_code.len(),
     })
 }
 
 fn node_json(n: &PlannedNode) -> Value {
     let f = &n.file;
-    let source = if n.times_from_git { "git" } else { "received" };
     json!({
         "path": n.path,
         "blob": n.blob,
@@ -69,9 +71,9 @@ fn node_json(n: &PlannedNode) -> Value {
         "kind": f.kind(),
         "code": n.code,
         "created_at": n.created_at,
-        "created_at_source": source,
+        "created_at_source": n.created_source.as_str(),
         "modified_at": n.modified_at,
-        "modified_at_source": source,
+        "modified_at_source": n.modified_source.as_str(),
         "title": f.title,
         "filetags": f.filetags,
         "properties": f.properties,
@@ -122,8 +124,10 @@ fn summary(plan: &SeedPlan, out: &mut String) {
     let body_total: usize = plan.nodes.iter().map(|n| n.file.body.len()).sum();
     let largest = plan.nodes.iter().max_by_key(|n| n.file.body.len());
     let canonical = plan.nodes.iter().filter(|n| n.canonical).count();
-    let from_git = plan.nodes.iter().filter(|n| n.times_from_git).count();
-    let received = plan.nodes.len() - from_git;
+    let by_id = count(plan, |n| n.created_source == TimeSource::GitId);
+    let by_path = count(plan, |n| n.created_source == TimeSource::GitPath);
+    let created_received = count(plan, |n| n.created_source == TimeSource::Received);
+    let modified_received = count(plan, |n| n.modified_source == TimeSource::Received);
     let result = if plan.ok() {
         format!("OK: would create one KB with {} nodes", plan.nodes.len())
     } else {
@@ -162,8 +166,14 @@ fn summary(plan: &SeedPlan, out: &mut String) {
         ),
         format!("canonical   {canonical} of {}", plan.nodes.len()),
         format!(
-            "times       created_at and modified_at from git for {from_git}, \
-             receipt time for {received} (not reproducible)"
+            "created_at  by :ID: first seen in history for {by_id}, by path lineage for {by_path} \
+             (fallback), receipt time for {created_received} (not reproducible)"
+        ),
+        format!(
+            "modified_at by path lineage for {}, receipt time for {modified_received} (not \
+             reproducible); {} history blobs read",
+            plan.nodes.len() - modified_received,
+            plan.history_blobs_read
         ),
     ];
     for l in lines {
@@ -198,4 +208,8 @@ fn show_line(l: &str) -> String {
         Some(body) => body.to_string(),
         None => format!("{l}  (no newline at end of file)"),
     }
+}
+
+fn count(plan: &SeedPlan, pred: impl Fn(&PlannedNode) -> bool) -> usize {
+    plan.nodes.iter().filter(|n| pred(n)).count()
 }

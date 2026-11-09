@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 
 use super::git::{GitRepo, TreeEntry};
 use super::glob::Glob;
-use super::history::{self, FileTimes};
+use super::history::{self, History};
 use super::split::{regen, split, SplitFile};
 use super::{Problem, ProblemKind, SeedError, CONTRACT, DEFAULT_INCLUDE};
 
@@ -65,11 +65,31 @@ pub struct PlanInput {
     pub entries: Vec<TreeEntry>,
     pub blobs: HashMap<String, Vec<u8>>,
     pub attrs: Vec<CheckoutAttr>,
-    /// Per path at the rev, its creation and last modification
-    /// (`history::file_times`).
-    pub file_times: HashMap<String, FileTimes>,
+    /// The history walk: path lineages and the first appearance of each id.
+    pub history: History,
     /// When the plan was made: both times of a file git has no history for.
     pub received_at: i64,
+}
+
+/// Where a node's time came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeSource {
+    /// The first appearance of the node's `:ID:` in history (creation only).
+    GitId,
+    /// The file's path lineage at the rev.
+    GitPath,
+    /// No history: the time the plan was made. Not reproducible.
+    Received,
+}
+
+impl TimeSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TimeSource::GitId => "git-id",
+            TimeSource::GitPath => "git-path",
+            TimeSource::Received => "received",
+        }
+    }
 }
 
 /// One file that would become one node.
@@ -83,14 +103,14 @@ pub struct PlannedNode {
     /// For a non-canonical file: the lines of F and of N(F) that differ
     /// (common leading and trailing lines removed), each with its `\n`.
     pub header_diff: Option<(Vec<String>, Vec<String>)>,
-    /// Creation (unix seconds): the commit that added the file's content at
-    /// its path, following renames (`history`).
+    /// Creation (unix seconds): the first commit in which the node's `:ID:`
+    /// appeared, at any path (`history`).
     pub created_at: i64,
-    /// Last modification: the last commit that changed the file at the rev.
+    pub created_source: TimeSource,
+    /// Last modification: the last commit that changed the file's own path
+    /// lineage at the rev.
     pub modified_at: i64,
-    /// Whether both times came from git. When git has no history for the
-    /// file, both are the plan's `received_at`, which is not reproducible.
-    pub times_from_git: bool,
+    pub modified_source: TimeSource,
     /// The value of `--code-property` in the file drawer, if set and non-empty.
     pub code: Option<String>,
 }
@@ -123,6 +143,8 @@ pub struct SeedPlan {
     /// With `--code-property`: the planned nodes that have no code. Listed,
     /// not refused (no document codes exist yet).
     pub missing_code: Vec<String>,
+    /// How many history blobs were read to date the ids (the walk's cost).
+    pub history_blobs_read: usize,
 }
 
 impl SeedPlan {
@@ -158,7 +180,7 @@ pub fn plan(opts: &PlanOptions) -> Result<SeedPlan, SeedError> {
         .map(|(path, attr, value)| CheckoutAttr { path, attr, value })
         .collect();
     let blobs = shas.iter().cloned().zip(repo.read_blobs(&shas)?).collect();
-    let file_times = history::file_times(&repo, &commit)?;
+    let history = history::history(&repo, &commit)?;
     let received_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
@@ -174,7 +196,7 @@ pub fn plan(opts: &PlanOptions) -> Result<SeedPlan, SeedError> {
             entries,
             blobs,
             attrs,
-            file_times,
+            history,
             received_at,
         },
         opts,
@@ -233,6 +255,7 @@ pub fn plan_entries(input: PlanInput, opts: &PlanOptions) -> Result<SeedPlan, Se
         require_canonical: opts.require_canonical,
         code_property: opts.code_property.clone(),
         missing_code,
+        history_blobs_read: input.history.blobs_read,
         nodes,
         excluded: selection.excluded,
         not_selected: selection.not_selected,
@@ -240,20 +263,18 @@ pub fn plan_entries(input: PlanInput, opts: &PlanOptions) -> Result<SeedPlan, Se
     })
 }
 
-/// Creation time and document code, which depend on the run, not the file.
+/// Times and document code, which depend on the history and the run, not the file.
 fn stamp(node: &mut PlannedNode, input: &PlanInput, opts: &PlanOptions) {
-    let (times, from_git) = match input.file_times.get(&node.path) {
-        Some(t) => (*t, true),
-        None => (
-            FileTimes {
-                created: input.received_at,
-                modified: input.received_at,
-            },
-            false,
-        ),
+    let lineage = input.history.paths.get(&node.path);
+    (node.modified_at, node.modified_source) = match lineage {
+        Some(t) => (t.modified, TimeSource::GitPath),
+        None => (input.received_at, TimeSource::Received),
     };
-    (node.created_at, node.modified_at) = (times.created, times.modified);
-    node.times_from_git = from_git;
+    (node.created_at, node.created_source) = match (input.history.ids.get(&node.file.id), lineage) {
+        (Some(t), _) => (*t, TimeSource::GitId),
+        (None, Some(t)) => (t.created, TimeSource::GitPath),
+        (None, None) => (input.received_at, TimeSource::Received),
+    };
     node.code = opts.code_property.as_ref().and_then(|key| {
         node.file
             .properties
@@ -423,8 +444,9 @@ fn plan_file(
         file,
         canonical,
         created_at: 0,
+        created_source: TimeSource::Received,
         modified_at: 0,
-        times_from_git: false,
+        modified_source: TimeSource::Received,
         code: None,
     })
 }
