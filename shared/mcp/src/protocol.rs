@@ -169,6 +169,20 @@ impl McpError {
 }
 
 impl McpError {
+    /// JSON-RPC's -32602: a parameter is missing, has the wrong type or is out
+    /// of range. `data` is `{"kind": "invalid_params", "param": <name>}`, so a
+    /// client learns which parameter without parsing the message.
+    pub fn invalid_params(param: &str, message: String) -> Self {
+        McpError {
+            code: INVALID_PARAMS,
+            message,
+            data: Some(Box::new(serde_json::json!({
+                "kind": "invalid_params",
+                "param": param,
+            }))),
+        }
+    }
+
     /// An update would grow a document past the daemon's size limit (ADR-109
     /// D6). Nothing was applied, logged or relayed. `data` is
     /// `{"kind": "quota_exceeded", "size": <bytes it would hold>, "limit": <bytes>}`.
@@ -184,6 +198,9 @@ impl McpError {
         }
     }
 }
+
+/// JSON-RPC 2.0's "Invalid params". See [`McpError::invalid_params`].
+pub const INVALID_PARAMS: i64 = -32602;
 
 /// An update was refused: it would grow a document past the daemon's size
 /// limit (ADR-109 D6). See [`McpError::document_too_large`].
