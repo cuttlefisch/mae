@@ -332,8 +332,9 @@ async fn run_session<R, W>(
                 session.touch();
                 session.messages_received += 1;
                 // WU6: Log message classification for dispatch diagnostics.
-                let is_doc = is_doc_method(&msg);
-                let is_notif = is_notification(&msg);
+                let route = Route::of(&msg);
+                let is_doc = route.is_doc;
+                let is_notif = route.is_notification;
                 // ADR-087 / audit #594: JSON-RPC message content can carry
                 // arbitrary UTF-8 (e.g. synced document text); a fixed byte
                 // cut can land mid-character and panic. `daemon` is a
@@ -529,32 +530,69 @@ mod write_failure_tests {
     }
 }
 
-fn is_doc_method(msg: &str) -> bool {
-    // Quick string check before full parse.
-    msg.contains("\"sync/state_vector\"")
-        || msg.contains("\"sync/update\"")
-        || msg.contains("\"sync/full_state\"")
-        || msg.contains("\"sync/diff\"")
-        || msg.contains("\"sync/resync\"")
-        || msg.contains("\"sync/awareness\"")
-        || msg.contains("\"docs/list\"")
-        || msg.contains("\"docs/content\"")
-        || msg.contains("\"docs/stats\"")
-        || msg.contains("\"docs/save_intent\"")
-        || msg.contains("\"docs/save_committed\"")
-        || msg.contains("\"docs/delete\"")
-        || msg.contains("\"docs/metadata\"")
-        || msg.contains("\"sync/share\"")
-        || msg.contains("\"$/debug\"")
-        || msg.contains("\"kb/")
+/// The methods `handle_doc_request_inner` serves, with their access checks.
+/// `kb/*` methods are matched by prefix.
+const DOC_METHODS: &[&str] = &[
+    "sync/state_vector",
+    "sync/update",
+    "sync/full_state",
+    "sync/diff",
+    "sync/resync",
+    "sync/awareness",
+    "sync/share",
+    "docs/list",
+    "docs/content",
+    "docs/stats",
+    "docs/save_intent",
+    "docs/save_committed",
+    "docs/delete",
+    "docs/metadata",
+    "$/debug",
+];
+
+/// Where a message goes, decided from the PARSED message.
+///
+/// @ai-caution: [authz] Never classify by searching the raw text. JSON lets
+/// a method name be spelled with escapes (`"sync\/update"`,
+/// `"\u0073ync/update"`), which a substring test does not see but every
+/// parser reads as the same method: such a message used to miss the
+/// access-checked doc handler and reach `mae_mcp::handle_request`'s sync
+/// dispatch instead. The same holds for the `id` key that makes a message a
+/// request rather than a notification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Route {
+    /// Served by `handle_doc_request_inner` / `handle_doc_notification_inner`.
+    pub(super) is_doc: bool,
+    /// A JSON-RPC notification: a `method` and no `id` member.
+    pub(super) is_notification: bool,
+}
+
+impl Route {
+    pub(super) fn of(msg: &str) -> Route {
+        let Ok(serde_json::Value::Object(obj)) = serde_json::from_str::<serde_json::Value>(msg)
+        else {
+            // Not a JSON object: `handle_request` answers it with a parse or
+            // invalid-request error, and it never reaches a document.
+            return Route {
+                is_doc: false,
+                is_notification: false,
+            };
+        };
+        let method = obj.get("method").and_then(|m| m.as_str());
+        Route {
+            is_doc: method.is_some_and(|m| DOC_METHODS.contains(&m) || m.starts_with("kb/")),
+            is_notification: method.is_some() && !obj.contains_key("id"),
+        }
+    }
 }
 
 /// Check if a raw JSON message is a JSON-RPC notification (has `method`, no `id`).
 ///
 /// Notifications must not generate a response. Sending awareness as a notification
 /// is correct per JSON-RPC 2.0 — the server should relay without responding.
+#[cfg(test)]
 fn is_notification(msg: &str) -> bool {
-    msg.contains("\"method\"") && !msg.contains("\"id\"")
+    Route::of(msg).is_notification
 }
 
 /// Handle a JSON-RPC notification (no `id` field) for doc-level methods.
@@ -1933,91 +1971,28 @@ async fn handle_doc_request_inner(
 }
 
 /// Handle sync tool requests from mae_mcp::handle_request's sync/* dispatch.
+///
+/// Only `sync/enable` is answered here. Every method that reads or writes a
+/// document is served by `handle_doc_request_inner`, which checks access;
+/// [`Route::of`] sends them there. This path checks nothing, so it refuses
+/// them outright rather than relying on routing alone (defence in depth).
 async fn handle_sync_tool(
     tool_name: &str,
-    arguments: &serde_json::Value,
-    doc_store: &DocStore,
-    broadcaster: &SharedBroadcaster,
+    _arguments: &serde_json::Value,
+    _doc_store: &DocStore,
+    _broadcaster: &SharedBroadcaster,
 ) -> McpToolResult {
     match tool_name {
         "__mcp_sync_enable" => McpToolResult {
             success: true,
             output: serde_json::json!({ "sync_enabled": true }).to_string(),
         },
-        "__mcp_sync_state_vector" => {
-            let doc = arguments["doc"].as_str().unwrap_or("default");
-            match doc_store.state_vector(doc).await {
-                Ok(sv) => McpToolResult {
-                    success: true,
-                    output: serde_json::json!({
-                        "doc": doc,
-                        "sv": update_to_base64(&sv),
-                    })
-                    .to_string(),
-                },
-                Err(e) => McpToolResult {
-                    success: false,
-                    output: e.to_string(),
-                },
-            }
-        }
-        "__mcp_sync_update" => {
-            let doc = arguments["doc"].as_str().unwrap_or("default").to_string();
-            let update_b64 = arguments["update"].as_str().unwrap_or("");
-            let update_bytes = match base64_to_update(update_b64) {
-                Ok(b) => b,
-                Err(e) => {
-                    return McpToolResult {
-                        success: false,
-                        output: format!("invalid base64: {e}"),
-                    };
-                }
-            };
-            let client_id = arguments["client_id"].as_u64();
-            match doc_store.apply_update(&doc, &update_bytes, client_id).await {
-                Ok(result) => {
-                    let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
-                    bc.broadcast(&EditorEvent::SyncUpdate {
-                        buffer_name: doc.clone(),
-                        update_base64: update_to_base64(&result.update),
-                        wal_seq: result.wal_seq,
-                        content_header: None,
-                    });
-                    McpToolResult {
-                        success: true,
-                        output: serde_json::json!({
-                            "doc": doc,
-                            "wal_seq": result.wal_seq,
-                        })
-                        .to_string(),
-                    }
-                }
-                Err(e) => McpToolResult {
-                    success: false,
-                    output: e.to_string(),
-                },
-            }
-        }
-        "__mcp_sync_full_state" => {
-            let doc = arguments["doc"].as_str().unwrap_or("default");
-            match doc_store.encode_state(doc).await {
-                Ok(state) => McpToolResult {
-                    success: true,
-                    output: serde_json::json!({
-                        "doc": doc,
-                        "state": update_to_base64(&state),
-                    })
-                    .to_string(),
-                },
-                Err(e) => McpToolResult {
-                    success: false,
-                    output: e.to_string(),
-                },
-            }
-        }
         _ => McpToolResult {
             success: false,
-            output: format!("unknown sync tool: {tool_name}"),
+            output: format!(
+                "{tool_name} is not served on this path; document methods go through the \
+                 access-checked document handler"
+            ),
         },
     }
 }
