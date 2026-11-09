@@ -2708,6 +2708,7 @@ dependencies = [
  "rustls-pemfile",
  "serde",
  "serde_json",
+ "sha1_smol",
  "sha2 0.11.0",
  "sqlite",
  "tar",

@@ -59,6 +59,7 @@ fn counts(plan: &SeedPlan) -> Value {
         "created_received": count(plan, |n| n.created_source == TimeSource::Received),
         "modified_received": count(plan, |n| n.modified_source == TimeSource::Received),
         "history_blobs_read": plan.history_blobs_read,
+        "history_diff_entries": plan.history_diff_entries,
         "missing_code": plan.missing_code.len(),
     })
 }

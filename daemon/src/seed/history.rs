@@ -33,9 +33,16 @@
 //!
 //! Renames are not detected (`--no-renames`): identity comes from the id, and
 //! a path's last change does not care where its content came from.
+//!
+//! **Historical blobs are not hash-checked.** A prefix cannot be verified
+//! against an object name without reading the whole blob, which is what the
+//! prefix read avoids. A forged historical object can therefore change an
+//! id's date, and nothing else: content, fields and bodies come only from the
+//! selected blobs at the rev, each of which IS verified in full (`plan`).
+//! Paths are compared as raw bytes; only `*.org` entries are read.
 
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::process::Stdio;
 
 use super::git::GitRepo;
@@ -54,6 +61,8 @@ pub struct History {
     pub ids: HashMap<String, i64>,
     /// How many distinct blobs were read (prefix only) to find the ids.
     pub blobs_read: usize,
+    /// How many `*.org` diff entries the tree-diff pass parsed.
+    pub diff_entries: usize,
 }
 
 /// One commit: its committer time and parents, in order.
@@ -62,23 +71,35 @@ struct Commit {
     parents: Vec<String>,
 }
 
-/// The paths each commit changed against each parent (a root: against the
-/// empty tree, parent `None`), restricted to `wanted`. Keyed by the request
-/// itself, never by position: requests are sorted, parents are not.
-type Changed = HashMap<(String, Option<String>), HashSet<String>>;
+/// commit → parent (`""` for a root's empty tree) → the wanted paths changed,
+/// as raw bytes. Keyed by the request itself, never by position (requests are
+/// sorted, parents are not), and by bytes, never by a lossy decoding (a
+/// historical `a\xff.org` must not count as a change to a real `a\u{FFFD}.org`).
+type Changed = HashMap<String, HashMap<String, HashSet<Vec<u8>>>>;
+
+/// What the diff pass collected.
+struct Diffs {
+    changed: Changed,
+    /// Each `.org` blob any diff introduces: the earliest commit time.
+    introduced: HashMap<String, i64>,
+    /// How many diff entries were parsed (the pass's cost).
+    entries: usize,
+}
 
 /// The history of `commit` for the pages at `wanted` paths.
 pub fn history(repo: &GitRepo, commit: &str, wanted: &[String]) -> Result<History, SeedError> {
     let graph = commit_graph(repo, commit)?;
     let requests = diff_requests(&graph);
-    let out = diff_tree(repo, &requests)?;
-    let wanted_set: HashSet<&str> = wanted.iter().map(String::as_str).collect();
-    let (changed, introduced) = parse_diffs(&out, &requests, &graph, &wanted_set)?;
+    let wanted_set: HashSet<&[u8]> = wanted.iter().map(|p| p.as_bytes()).collect();
+    let diffs = diff_tree(repo, &requests, |tokens| {
+        parse_diffs(tokens, &requests, &graph, &wanted_set)
+    })?;
     let mut modified = HashMap::new();
     for path in wanted {
-        modified.insert(path.clone(), last_change(commit, path, &graph, &changed)?);
+        let t = last_change(commit, path.as_bytes(), &graph, &diffs.changed)?;
+        modified.insert(path.clone(), t);
     }
-    let mut blobs: Vec<(String, i64)> = introduced.into_iter().collect();
+    let mut blobs: Vec<(String, i64)> = diffs.introduced.into_iter().collect();
     blobs.sort();
     let shas: Vec<String> = blobs.iter().map(|(s, _)| s.clone()).collect();
     let mut ids: HashMap<String, i64> = HashMap::new();
@@ -94,6 +115,7 @@ pub fn history(repo: &GitRepo, commit: &str, wanted: &[String]) -> Result<Histor
         modified,
         ids,
         blobs_read: shas.len(),
+        diff_entries: diffs.entries,
     })
 }
 
@@ -135,7 +157,13 @@ fn diff_requests(graph: &HashMap<String, Commit>) -> Vec<(String, Option<String>
     out
 }
 
-fn diff_tree(repo: &GitRepo, requests: &[(String, Option<String>)]) -> Result<Vec<u8>, SeedError> {
+/// Run the batched diff, restricted to `*.org` paths, and hand its NUL
+/// separated output to `consume` as it streams: nothing is buffered whole.
+fn diff_tree<T>(
+    repo: &GitRepo,
+    requests: &[(String, Option<String>)],
+    consume: impl FnOnce(&mut dyn Iterator<Item = std::io::Result<Vec<u8>>>) -> Result<T, SeedError>,
+) -> Result<T, SeedError> {
     let mut child = repo
         .command()
         .args([
@@ -147,7 +175,7 @@ fn diff_tree(repo: &GitRepo, requests: &[(String, Option<String>)]) -> Result<Ve
             "--no-abbrev",
             "--no-renames",
         ])
-        .args(["--root", "--always"])
+        .args(["--root", "--always", "--", "*.org"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -162,91 +190,111 @@ fn diff_tree(repo: &GitRepo, requests: &[(String, Option<String>)]) -> Result<Ve
         })
         .collect();
     let writer = std::thread::spawn(move || stdin.write_all(&request));
-    let out = child.wait_with_output();
+    let reader = BufReader::new(child.stdout.take().expect("piped stdout"));
+    let result = consume(&mut reader.split(0));
     let _ = writer.join();
-    let out = out.map_err(|e| SeedError(format!("git diff-tree: {e}")))?;
-    if !out.status.success() {
-        return Err(SeedError("git diff-tree failed".to_string()));
+    let status = child
+        .wait()
+        .map_err(|e| SeedError(format!("git diff-tree: {e}")))?;
+    match result {
+        Ok(_) if !status.success() => Err(SeedError("git diff-tree failed".to_string())),
+        other => other,
     }
-    Ok(out.stdout)
 }
 
 /// Pair each answer with its request, collect the wanted paths each
 /// (commit, parent) changed, and the earliest time each `.org` blob appears.
 fn parse_diffs(
-    out: &[u8],
+    tokens: &mut dyn Iterator<Item = std::io::Result<Vec<u8>>>,
     requests: &[(String, Option<String>)],
     graph: &HashMap<String, Commit>,
-    wanted: &HashSet<&str>,
-) -> Result<(Changed, HashMap<String, i64>), SeedError> {
-    let bad = |what: &str| SeedError(format!("unexpected git diff-tree output: {what:?}"));
-    let mut changed: Changed = HashMap::new();
-    let mut introduced: HashMap<String, i64> = HashMap::new();
-    let mut tokens = out
-        .split(|b| *b == 0)
-        .map(|t| String::from_utf8_lossy(t).into_owned());
+    wanted: &HashSet<&[u8]>,
+) -> Result<Diffs, SeedError> {
+    let bad = |what: &[u8]| {
+        SeedError(format!(
+            "unexpected git diff-tree output: {:?}",
+            String::from_utf8_lossy(what)
+        ))
+    };
+    let mut diffs = Diffs {
+        changed: HashMap::new(),
+        introduced: HashMap::new(),
+        entries: 0,
+    };
     let mut request = requests.iter();
-    let mut current: Option<(&(String, Option<String>), i64)> = None;
+    let mut current: Option<(&str, &str, i64)> = None;
     while let Some(token) = tokens.next() {
+        let token = token.map_err(|e| SeedError(format!("git diff-tree: {e}")))?;
         if token.is_empty() {
             continue;
         }
-        let Some(meta) = token.strip_prefix(':') else {
+        let Some(meta) = token.strip_prefix(b":") else {
             // A header: the next request's answer begins.
-            let key = request
+            let (c, p) = request
                 .next()
-                .ok_or_else(|| bad("more answers than requests"))?;
-            if token != key.0 {
+                .ok_or_else(|| bad(b"more answers than requests"))?;
+            if token != c.as_bytes() {
                 return Err(bad(&token));
             }
-            changed.insert(key.clone(), HashSet::new());
-            current = Some((key, graph[&key.0].time));
+            let parent = p.as_deref().unwrap_or("");
+            diffs
+                .changed
+                .entry(c.clone())
+                .or_default()
+                .insert(parent.to_string(), HashSet::new());
+            current = Some((c, parent, graph[c].time));
             continue;
         };
-        let (key, time) = current.ok_or_else(|| bad("a change before any header"))?;
-        let path = tokens.next().ok_or_else(|| bad(meta))?;
+        let (c, parent, time) = current.ok_or_else(|| bad(b"a change before any header"))?;
+        let path = tokens
+            .next()
+            .ok_or_else(|| bad(meta))?
+            .map_err(|e| SeedError(format!("git diff-tree: {e}")))?;
+        let meta = std::str::from_utf8(meta).map_err(|_| bad(meta))?;
         let fields: Vec<&str> = meta.split(' ').collect();
         let [_, dst_mode, _, dst_sha, status] = fields.as_slice() else {
-            return Err(bad(meta));
+            return Err(bad(meta.as_bytes()));
         };
+        diffs.entries += 1;
         let adds_blob =
             matches!(*status, "A" | "M" | "T") && matches!(*dst_mode, "100644" | "100755");
-        if adds_blob && path.ends_with(".org") {
-            let e = introduced.entry(dst_sha.to_string()).or_insert(time);
+        if adds_blob && path.ends_with(b".org") {
+            let e = diffs.introduced.entry(dst_sha.to_string()).or_insert(time);
             *e = (*e).min(time);
         }
-        if wanted.contains(path.as_str()) {
-            if let Some(set) = changed.get_mut(key) {
+        if wanted.contains(path.as_slice()) {
+            if let Some(set) = diffs.changed.get_mut(c).and_then(|m| m.get_mut(parent)) {
                 set.insert(path);
             }
         }
     }
     if request.next().is_some() {
-        return Err(bad("fewer answers than requests"));
+        return Err(bad(b"fewer answers than requests"));
     }
-    Ok((changed, introduced))
+    Ok(diffs)
 }
 
 /// `git log -1 -- PATH` at `rev`: follow the first parent `path` is unchanged
 /// against; the first commit changed against every parent introduced it.
-fn last_change(
-    rev: &str,
-    path: &str,
-    graph: &HashMap<String, Commit>,
+fn last_change<'a>(
+    rev: &'a str,
+    path: &[u8],
+    graph: &'a HashMap<String, Commit>,
     changed: &Changed,
 ) -> Result<i64, SeedError> {
-    let mut at = rev.to_string();
+    let mut at: &'a str = rev;
     loop {
         let c = graph
-            .get(&at)
+            .get(at)
             .ok_or_else(|| SeedError(format!("commit {at} is not in the history walk")))?;
-        let changed_against = |parent: &String| {
-            changed
-                .get(&(at.clone(), Some(parent.clone())))
+        let per_parent = changed.get(at);
+        let changed_against = |parent: &str| {
+            per_parent
+                .and_then(|m| m.get(parent))
                 .is_some_and(|d| d.contains(path))
         };
         match c.parents.iter().find(|p| !changed_against(p)) {
-            Some(p) => at = p.clone(),
+            Some(p) => at = p,
             None => return Ok(c.time),
         }
     }
@@ -281,15 +329,20 @@ mod tests {
 
     const E: &str = ":000000 100644 0000 1111 A";
 
+    fn parse(out: &str, wanted: &HashSet<&[u8]>) -> Result<Diffs, SeedError> {
+        let mut tokens = out.as_bytes().split(|b| *b == 0).map(|t| Ok(t.to_vec()));
+        parse_diffs(&mut tokens, &requests(), &graph(), wanted)
+    }
+
     #[test]
     fn answers_pair_with_requests_and_a_mismatch_is_an_error() {
-        let wanted = HashSet::from(["p.org"]);
+        let wanted: HashSet<&[u8]> = HashSet::from([&b"p.org"[..]]);
         let ok = format!("aa\0{E}\0p.org\0bb\0");
-        let (changed, introduced) =
-            parse_diffs(ok.as_bytes(), &requests(), &graph(), &wanted).unwrap();
-        assert!(changed[&("aa".to_string(), None)].contains("p.org"));
-        assert!(changed[&("bb".to_string(), Some("aa".to_string()))].is_empty());
-        assert_eq!(introduced["1111"], 10);
+        let diffs = parse(&ok, &wanted).unwrap();
+        assert!(diffs.changed["aa"][""].contains(&b"p.org"[..]));
+        assert!(diffs.changed["bb"]["aa"].is_empty());
+        assert_eq!(diffs.introduced["1111"], 10);
+        assert_eq!(diffs.entries, 1);
         for bad in [
             format!("bb\0{E}\0p.org\0aa\0"),          // answers out of order
             format!("aa\0{E}\0p.org\0"),              // an answer missing
@@ -297,10 +350,7 @@ mod tests {
             format!("{E}\0p.org\0aa\0bb\0"),          // a change before any header
             "aa\0:100644 A\0p.org\0bb\0".to_string(), // a short entry
         ] {
-            assert!(
-                parse_diffs(bad.as_bytes(), &requests(), &graph(), &wanted).is_err(),
-                "{bad:?}"
-            );
+            assert!(parse(&bad, &wanted).is_err(), "{bad:?}");
         }
     }
 }

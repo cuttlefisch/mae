@@ -44,6 +44,8 @@ fn every_git_call_starts_from_a_pinned_environment() {
         ("GIT_CONFIG_NOSYSTEM", "1"),
         ("GIT_NO_REPLACE_OBJECTS", "1"),
         ("GIT_NO_LAZY_FETCH", "1"),
+        ("HOME", "/dev/null"),
+        ("GIT_GRAFT_FILE", "/dev/null"),
     ] {
         assert!(
             envs.contains(&(k.to_string(), Some(v.to_string()))),
@@ -67,6 +69,8 @@ fn every_git_call_starts_from_a_pinned_environment() {
         "core.fsmonitor=false",
         "protocol.allow=never",
         "core.attributesFile=/dev/null",
+        "core.commitGraph=false",
+        "core.multiPackIndex=false",
     ] {
         assert!(
             args.iter().any(|a| a == want),
@@ -186,8 +190,13 @@ fn a_subdirectory_of_the_repository_is_refused() {
 #[test]
 fn local_attributes_and_grafts_are_refused() {
     let r = tagged_repo();
-    std::fs::write(r.path().join(".git/info/attributes"), "# comment only\n\n").unwrap();
-    assert!(r.plan("v1").ok(), "a comment-only file changes nothing");
+    std::fs::write(r.path().join(".git/info/attributes"), "").unwrap();
+    assert!(r.plan("v1").ok(), "an empty file changes nothing");
+    std::fs::write(r.path().join(".git/info/attributes"), "# only a comment\n").unwrap();
+    assert!(
+        plan_err(r.path()).contains("info/attributes"),
+        "any byte refuses"
+    );
     std::fs::write(r.path().join(".git/info/attributes"), "*.org eol=crlf\n").unwrap();
     assert!(plan_err(r.path()).contains("info/attributes"));
     std::fs::remove_file(r.path().join(".git/info/attributes")).unwrap();

@@ -155,6 +155,8 @@ pub struct SeedPlan {
     pub allow_received_times: bool,
     /// How many history blobs were read to date the ids (the walk's cost).
     pub history_blobs_read: usize,
+    /// How many `*.org` tree-diff entries the history pass parsed.
+    pub history_diff_entries: usize,
 }
 
 impl SeedPlan {
@@ -198,11 +200,19 @@ pub fn plan(opts: &PlanOptions) -> Result<SeedPlan, SeedError> {
         .filter(|s| sizes[*s] <= limit)
         .cloned()
         .collect();
-    let blobs = readable
-        .iter()
-        .cloned()
-        .zip(repo.read_blobs(&readable)?)
-        .collect();
+    let format = repo.object_format()?;
+    let mut blobs = HashMap::new();
+    for (sha, bytes) in readable.iter().zip(repo.read_blobs(&readable)?) {
+        // The object store is input too: a loose object under a real name
+        // can hold other bytes (confirmed). Every selected blob read in full
+        // must hash to its name.
+        if super::git::blob_name(&format, &bytes) != *sha {
+            return Err(SeedError(format!(
+                "object {sha} does not hash to its name: the repository is corrupt or forged"
+            )));
+        }
+        blobs.insert(sha.clone(), bytes);
+    }
     let history = history::history(&repo, &commit, &paths)?;
     let received_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -270,6 +280,7 @@ pub fn plan_entries(input: PlanInput, opts: &PlanOptions) -> Result<SeedPlan, Se
         received_times,
         allow_received_times: opts.allow_received_times,
         history_blobs_read: input.history.blobs_read,
+        history_diff_entries: input.history.diff_entries,
         nodes,
         excluded: selection.excluded,
         not_selected: selection.not_selected,

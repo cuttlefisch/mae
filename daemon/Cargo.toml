@@ -60,6 +60,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "7"
 toml = "1.1"
 sha2 = "0.11"
+# `kb seed` verifies each selected blob against its sha1 object name. Already in
+# the lock (transitively), so this adds no crate.
+sha1_smol = "1"
 # `mae-daemon backup`: the archive format. No xattr feature: entries are
 # plain regular files written and read by this binary alone.
 tar = { version = "0.4", default-features = false }

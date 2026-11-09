@@ -21,6 +21,12 @@ pub(super) fn git_in(dir: &Path, args: &[&str], time: i64) -> String {
 /// Like [`git_in`], but reports failure (a merge that stops on a conflict)
 /// instead of panicking. Returns stdout, or stderr on failure.
 pub(super) fn git_in_status(dir: &Path, args: &[&str], time: i64) -> (bool, String) {
+    let args: Vec<&std::ffi::OsStr> = args.iter().map(std::ffi::OsStr::new).collect();
+    git_in_os(dir, &args, time)
+}
+
+/// [`git_in_status`] with arguments that need not be UTF-8 (a path that is not).
+pub(super) fn git_in_os(dir: &Path, args: &[&std::ffi::OsStr], time: i64) -> (bool, String) {
     let stamp = format!("{time} +0000");
     let mut c = Command::new("git");
     c.env_clear();

@@ -26,8 +26,9 @@ const NULL_DEVICE: &str = "NUL";
 const NULL_DEVICE: &str = "/dev/null";
 
 /// The only variables git inherits from the caller: where to find programs and
-/// temporary space. Everything else, every `GIT_*` included, is dropped.
-const INHERITED_ENV: &[&str] = &["PATH", "HOME", "SYSTEMROOT", "TMPDIR", "TEMP", "TMP"];
+/// temporary space. Everything else, every `GIT_*` and `HOME` included, is
+/// dropped.
+const INHERITED_ENV: &[&str] = &["PATH", "SYSTEMROOT", "TMPDIR", "TEMP", "TMP"];
 
 /// Set on every call.
 pub(super) const FORCED_ENV: &[(&str, &str)] = &[
@@ -36,6 +37,11 @@ pub(super) const FORCED_ENV: &[(&str, &str)] = &[
     ("GIT_CONFIG_NOSYSTEM", "1"),
     ("GIT_CONFIG_GLOBAL", NULL_DEVICE),
     ("GIT_ATTR_NOSYSTEM", "1"),
+    // `~` in a repository's `include.path` must not reach the operator's own
+    // files (their config would come back in through the repository's).
+    ("HOME", NULL_DEVICE),
+    // No grafts file, wherever the repository says it is.
+    ("GIT_GRAFT_FILE", NULL_DEVICE),
     // The objects are the commit's own: no replace refs, no lazy fetch.
     ("GIT_NO_REPLACE_OBJECTS", "1"),
     ("GIT_NO_LAZY_FETCH", "1"),
@@ -58,6 +64,11 @@ pub(super) const FORCED_CONFIG: &[(&str, &str)] = &[
     ("core.quotePath", "false"),
     ("log.showRoot", "true"),
     ("log.showSignature", "false"),
+    // The commit-graph and multi-pack-index files are caches the repository
+    // supplies; a forged commit-graph rewrote parents and trees (confirmed).
+    // Read the objects themselves.
+    ("core.commitGraph", "false"),
+    ("core.multiPackIndex", "false"),
 ];
 
 /// Attributes that make a checkout's bytes differ from the blob's. `text`
@@ -129,16 +140,27 @@ impl GitRepo {
             ("info/attributes", "sets attributes outside the commit"),
             ("info/grafts", "rewrites history outside the commit"),
         ] {
+            // Bytes, not text: a file that is not UTF-8 is still read by git
+            // (a non-UTF-8 grafts file passed a text check and was applied).
+            // Any byte at all refuses; comments are not worth the parser.
             let path = self.git_path(file)?;
-            let text = std::fs::read_to_string(&path).unwrap_or_default();
-            if text
-                .lines()
-                .any(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
-            {
-                return refuse(format!("{} is not empty: it {why}", path.display()));
+            match std::fs::read(&path) {
+                Ok(bytes) if bytes.is_empty() => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(_) => return refuse(format!("{} is not empty: it {why}", path.display())),
+                Err(e) => return refuse(format!("cannot read {}: {e}", path.display())),
             }
         }
         Ok(())
+    }
+
+    /// The repository's object format: `sha1` or `sha256`.
+    pub fn object_format(&self) -> Result<String, SeedError> {
+        let format = self.rev_parse_flag("--show-object-format")?;
+        match format.as_str() {
+            "sha1" | "sha256" => Ok(format),
+            other => Err(SeedError(format!("unsupported object format {other:?}"))),
+        }
     }
 
     /// The path must be the work tree's top level (or a bare repository's own
@@ -177,10 +199,18 @@ impl GitRepo {
         Ok(String::from_utf8_lossy(&out).trim().to_string())
     }
 
-    /// `rev-parse --git-path`, resolved against the repository path.
+    /// `file` inside the repository's common git directory, where `info/`
+    /// lives. Deliberately NOT `rev-parse --git-path`: that honours the very
+    /// overrides the pinned environment sets (`GIT_GRAFT_FILE`), and would
+    /// name the null device instead of the file the repository carries.
     fn git_path(&self, file: &str) -> Result<PathBuf, SeedError> {
-        let p = PathBuf::from(self.rev_parse_args(&["--git-path", file])?);
-        Ok(if p.is_absolute() { p } else { self.dir.join(p) })
+        let common = PathBuf::from(self.rev_parse_flag("--git-common-dir")?);
+        let common = if common.is_absolute() {
+            common
+        } else {
+            self.dir.join(common)
+        };
+        Ok(common.join(file))
     }
 
     /// Values of the repository's config keys matching `regex` (none is fine).
@@ -499,4 +529,22 @@ fn parse_check_attr(out: &[u8]) -> Vec<(String, String, String)> {
         .filter(|[_, _, value]| value != "unspecified" && value != "unset")
         .map(|[path, attr, value]| (path.clone(), attr.clone(), value.clone()))
         .collect()
+}
+
+/// The object name git would give `content` as a blob under `format`
+/// (`sha1` or `sha256`): the hash of `blob <len>\0<content>`.
+pub fn blob_name(format: &str, content: &[u8]) -> String {
+    let header = format!("blob {}\0", content.len());
+    if format == "sha256" {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(header.as_bytes());
+        h.update(content);
+        hex::encode(h.finalize())
+    } else {
+        let mut h = sha1_smol::Sha1::new();
+        h.update(header.as_bytes());
+        h.update(content);
+        h.digest().to_string()
+    }
 }
