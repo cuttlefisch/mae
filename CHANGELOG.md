@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.141] - 2026-11-09
+
+
+
+
+### Bug Fixes
+
+- *(daemon)* Kb/query titles come from the node's document, not the manifest ([70d7b80](https://github.com/cuttlefisch/mae/commit/70d7b809df9826bae8a44298cbb8a5f1e787ab27))
+
+### Documentation
+
+- *(adr)* ADR-113 — publication review: readers see approved revisions ([591fa76](https://github.com/cuttlefisch/mae/commit/591fa76e43e5a148fee6a1e83358f9a9de0dfac6))
+
 ## [0.14.140] - 2026-11-09
 
 
@@ -14,6 +27,10 @@ All notable changes to this project will be documented in this file.
 ### CI
 
 - *(docker-e2e)* Build the images in their own step ([bd61e25](https://github.com/cuttlefisch/mae/commit/bd61e25afe37a9996b1a0dd17c504a7390be030b))
+
+### Miscellaneous
+
+- Bump version to 0.14.140 ([c39454a](https://github.com/cuttlefisch/mae/commit/c39454aa01f8453e7494fc148b02c26dc9ea3274))
 
 ## [0.14.139] - 2026-11-09
 
