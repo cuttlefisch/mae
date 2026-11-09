@@ -126,11 +126,10 @@ async fn viewer_era_edits_do_not_cascade_on_grant() {
     // so "byte-identical before and after" compared an empty doc to an empty doc
     // and would have held no matter what the fence did. Surfaced when reads stopped
     // creating durable docs. Now the oracle has something to protect.
+    let canonical = make_test_node("concept:n", "N", "OWNER-CANONICAL", &[]);
+    let node_doc = "kbn:kbx:concept:n";
     store
-        .share_doc(
-            "kbn:kbx:concept:n",
-            &make_test_node("concept:n", "N", "OWNER-CANONICAL", &[]),
-        )
+        .share_doc(node_doc, &canonical, TEST_BY)
         .await
         .unwrap();
     let (before, _) = store

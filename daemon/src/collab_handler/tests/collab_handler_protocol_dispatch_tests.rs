@@ -218,7 +218,7 @@ async fn resync_with_suffix_matching() {
     let mut ts = TextSync::with_client_id("", 1);
     let update = ts.insert(0, "shared content");
     store
-        .apply_update("file:no-project/test.txt", &update, None)
+        .apply_update("file:no-project/test.txt", &update, None, TEST_BY)
         .await
         .unwrap();
 
@@ -256,7 +256,10 @@ async fn docs_metadata_returns_save_epoch() {
     // Create a doc and record a save.
     let mut ts = TextSync::with_client_id("", 1);
     let update = ts.insert(0, "hello");
-    store.apply_update("test", &update, Some(1)).await.unwrap();
+    store
+        .apply_update("test", &update, Some(1), TEST_BY)
+        .await
+        .unwrap();
     store.record_save("test", "alice").await.unwrap();
 
     let msg = serde_json::json!({

@@ -620,6 +620,31 @@ impl TextSync {
         text + crate::kb::body_bytes(&self.doc)
     }
 
+    /// The structs and deletes yrs is holding back because their dependencies
+    /// have not arrived, encoded so two calls can be compared; `None` when
+    /// nothing is pending. An update applied while its dependencies are missing
+    /// changes the document LATER, when another update fills the gap — so a
+    /// caller that attributes edits (the daemon's editor record, ADR-113 D3)
+    /// needs to see both when something becomes pending and when it drains.
+    pub fn pending_digest(&self) -> Option<Vec<u8>> {
+        let txn = self.doc.transact();
+        let store = txn.store();
+        let (update, deletes) = (store.pending_update(), store.pending_ds());
+        if update.is_none() && deletes.is_none() {
+            return None;
+        }
+        let mut out = Vec::new();
+        if let Some(p) = update {
+            out.extend(p.update.encode_v1());
+            out.extend(p.missing.encode_v1());
+        }
+        out.push(0xff); // separator: an update-only and a deletes-only digest never collide
+        if let Some(ds) = deletes {
+            out.extend(ds.encode_v1());
+        }
+        Some(out)
+    }
+
     /// Get text content as string.
     pub fn content(&self) -> String {
         let text = self.doc.get_or_insert_text(TEXT_NAME);

@@ -150,8 +150,14 @@ async fn handle_docs_list() {
     // Create two docs.
     let mut ts = TextSync::with_client_id("", 1);
     let update = ts.insert(0, "a");
-    store.apply_update("alpha", &update, None).await.unwrap();
-    store.apply_update("beta", &update, None).await.unwrap();
+    store
+        .apply_update("alpha", &update, None, TEST_BY)
+        .await
+        .unwrap();
+    store
+        .apply_update("beta", &update, None, TEST_BY)
+        .await
+        .unwrap();
 
     let msg = serde_json::json!({
         "jsonrpc": "2.0", "id": 1, "method": "docs/list"

@@ -21,6 +21,10 @@ use mae_daemon::kb_query::{self, KbQueryLimits};
 
 use super::kb_query_tests::{fresh_doc_store, generous_limits};
 
+/// Every test write is attributed; the editor-record tests use their own.
+const TEST_BY: mae_daemon::doc_editors::Attribution<'static> =
+    mae_daemon::doc_editors::Attribution::Principal("test-editor");
+
 struct Seed<'a> {
     id: &'a str,
     title: &'a str,
@@ -39,7 +43,7 @@ async fn seed_kb(doc_store: &DocStore, owner: &Arc<Identity>, kb_id: &str, seeds
         let _ = coll.add_node(s.id, s.title);
     }
     doc_store
-        .share_doc(&format!("kbc:{kb_id}"), &coll.encode_state())
+        .share_doc(&format!("kbc:{kb_id}"), &coll.encode_state(), TEST_BY)
         .await
         .unwrap();
 
@@ -58,6 +62,7 @@ async fn seed_kb(doc_store: &DocStore, owner: &Arc<Identity>, kb_id: &str, seeds
             .share_doc(
                 &mae_sync::kb_node_doc_name(kb_id, s.id),
                 &node.encode_state(),
+                TEST_BY,
             )
             .await
             .unwrap();

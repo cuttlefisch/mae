@@ -288,7 +288,7 @@ async fn an_idle_evicted_kb_is_still_found() {
     let mut coll = mae_sync::kb::KbCollectionDoc::new_owned(kb, "Alice's KB", "alice");
     coll.add_node(node, node);
     store
-        .share_doc(&format!("kbc:{kb}"), &coll.encode_state())
+        .share_doc(&format!("kbc:{kb}"), &coll.encode_state(), TEST_BY)
         .await
         .unwrap();
     store

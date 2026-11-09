@@ -56,6 +56,7 @@ use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use crate::doc_editors::{Attribution, InternalWriter, Writer};
 use crate::doc_store::DocStore;
 use mae_mcp::auth::AuthProvider;
 
@@ -804,7 +805,11 @@ pub async fn load_collection(doc_store: &DocStore, kb_id: &str) -> Result<KbColl
                 .map(|pk| (pk.fingerprint(), label.to_string()))
         };
         if let Some(update) = coll.migrate_if_legacy(resolver) {
-            if let Err(e) = doc_store.apply_update(&collection_doc, &update, None).await {
+            let by = Attribution::Internal(InternalWriter::CollectionMigration);
+            if let Err(e) = doc_store
+                .apply_update(&collection_doc, &update, None, by)
+                .await
+            {
                 warn!(kb_id, error = %e, "failed to persist legacy-collection migration (ADR-018 #73)");
             } else {
                 info!(
@@ -955,16 +960,20 @@ pub async fn verify_relayed_content_op(
 // This is inherent to CRDT/eventual-consistency (not a fixable bug), but it means access decisions
 // are "correct at the derivation point," not globally instantaneous. Security rests on every honest
 // peer converging to deny; a hostile peer is handled by the local blocklist (ADR-039), not timing.
+///
+/// `(session_id, by)`: the session to skip on broadcast, and who the write is
+/// recorded against (ADR-113 D3) — the requesting session's principal, even when
+/// the daemon signs the op itself on its behalf.
 async fn persist_and_broadcast_collection(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
-    session_id: u64,
+    (session_id, by): (u64, Attribution<'_>),
     kb_id: &str,
     update: &[u8],
 ) -> Result<u64, String> {
     let collection_doc = format!("kbc:{kb_id}");
     let result = doc_store
-        .apply_update(&collection_doc, update, None)
+        .apply_update(&collection_doc, update, None, by)
         .await
         .map_err(|e| format!("failed to persist collection: {e}"))?;
     broadcaster
@@ -1021,7 +1030,7 @@ fn now_unix() -> u64 {
 async fn append_signed_membership(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
-    session_id: u64,
+    who: (u64, Attribution<'_>),
     kb_id: &str,
     coll: &mut KbCollectionDoc,
     action: MembershipAction,
@@ -1058,8 +1067,7 @@ async fn append_signed_membership(
         let gsig = g.sign(&secret);
         let gupdate = coll.append_signed_op(&g, &gsig, &pubkey);
         if let Err(e) =
-            persist_and_broadcast_collection(doc_store, broadcaster, session_id, kb_id, &gupdate)
-                .await
+            persist_and_broadcast_collection(doc_store, broadcaster, who, kb_id, &gupdate).await
         {
             warn!(kb_id = %kb_id, error = %e, "failed to persist membership genesis op");
             return SignedAppend::Failed(format!("membership genesis op not persisted: {e}"));
@@ -1075,7 +1083,7 @@ async fn append_signed_membership(
     let sig = op.sign(&secret);
     let update = coll.append_signed_op(&op, &sig, &pubkey);
     if let Err(e) =
-        persist_and_broadcast_collection(doc_store, broadcaster, session_id, kb_id, &update).await
+        persist_and_broadcast_collection(doc_store, broadcaster, who, kb_id, &update).await
     {
         warn!(kb_id = %kb_id, error = %e, "failed to persist signed membership op");
         return SignedAppend::Failed(format!("signed membership op not persisted: {e}"));
@@ -1121,7 +1129,7 @@ impl SignedAppend {
 async fn append_signed_revoke(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
-    session_id: u64,
+    who: (u64, Attribution<'_>),
     kb_id: &str,
     coll: &mut KbCollectionDoc,
     subject: &str,
@@ -1170,7 +1178,7 @@ async fn append_signed_revoke(
     );
     let sig = op.sign(&secret);
     let update = coll.append_signed_op(&op, &sig, &pubkey);
-    persist_and_broadcast_collection(doc_store, broadcaster, session_id, kb_id, &update)
+    persist_and_broadcast_collection(doc_store, broadcaster, who, kb_id, &update)
         .await
         .map(|_| ())
 }
@@ -1684,9 +1692,8 @@ async fn handle_doc_request_inner(
             kb_content::handle_kb_share(
                 doc_store,
                 broadcaster,
-                session_id,
+                (session_id, auth_principal, transport),
                 auth_label,
-                auth_principal,
                 session_docs,
                 id,
                 &params,
