@@ -250,29 +250,6 @@ pub(crate) fn is_durable_doc(name: &str) -> bool {
     }
 }
 
-/// Pick the least-recently-used **idle** (no connected client) document to memory-evict
-/// when the in-memory working set is full (ADR-032 A2). Uses `try_lock`, so a busy doc is
-/// skipped (never evict an in-use entry); returns `None` when nothing is evictable. The
-/// caller removes only the in-memory entry — the doc stays on disk and lazy-reloads.
-fn pick_lru_evictable(docs: &HashMap<String, Arc<Mutex<DocEntry>>>) -> Option<String> {
-    let mut victim: Option<(String, std::time::Instant)> = None;
-    for (name, entry) in docs.iter() {
-        if let Ok(doc) = entry.try_lock() {
-            if doc.connected_clients != 0 {
-                continue;
-            }
-            let older = match &victim {
-                Some((_, t)) => doc.last_activity < *t,
-                None => true,
-            };
-            if older {
-                victim = Some((name.clone(), doc.last_activity));
-            }
-        }
-    }
-    victim.map(|(n, _)| n)
-}
-
 impl DocStore {
     pub fn new(storage: Arc<dyn StorageBackend>, compact_threshold: u64) -> Self {
         DocStore {
@@ -295,6 +272,31 @@ impl DocStore {
             #[cfg(test)]
             pauses: Pauses::default(),
         }
+    }
+
+    /// Memory-evict the least-recently-used **idle** (no connected client)
+    /// document to make room (ADR-032 A2) — the doc stays on disk and
+    /// lazy-reloads. Never an in-use entry: a candidate whose entry is locked,
+    /// or whose replace gate is held (an edit holding the entry before locking
+    /// it, a replace, a compaction), is skipped. Both checks use `try_*`: the
+    /// caller holds `docs` (and possibly a stripe shared), so waiting here could
+    /// deadlock. Returns the evicted name, `None` when nothing is evictable.
+    fn evict_lru(&self, docs: &mut HashMap<String, Arc<Mutex<DocEntry>>>) -> Option<String> {
+        let mut idle: Vec<(std::time::Instant, String)> = docs
+            .iter()
+            .filter_map(|(name, entry)| {
+                let doc = entry.try_lock().ok()?;
+                (doc.connected_clients == 0).then(|| (doc.last_activity, name.clone()))
+            })
+            .collect();
+        idle.sort();
+        for (_, name) in idle {
+            if let Ok(_gate) = self.replace_gate(&name).try_write() {
+                docs.remove(&name);
+                return Some(name);
+            }
+        }
+        None
     }
 
     /// The gate for `doc_name` (see `replace_gates`).
@@ -692,9 +694,8 @@ impl DocStore {
         // erroring. If every doc is actively connected, exceed the soft cap rather than
         // fail a load.
         if self.max_documents > 0 && docs.len() >= self.max_documents {
-            match pick_lru_evictable(&docs) {
+            match self.evict_lru(&mut docs) {
                 Some(victim) => {
-                    docs.remove(&victim);
                     debug!(doc = %victim, "lru-evicted idle doc from memory to make room (retained on disk)");
                 }
                 None => {
@@ -1132,6 +1133,44 @@ impl DocStore {
 
     /// Evict idle documents with no connected clients.
     /// Returns the names of evicted documents.
+    /// Evict `name` if it is still idle: drop its in-memory entry and — for an
+    /// EPHEMERAL doc (BUG B fix) — delete it from storage so recovery doesn't
+    /// reload it. ADR-032: durable KB content (kbc:/kb:) is memory-evicted ONLY,
+    /// never deleted, so a hosted KB with no connected client survives on disk
+    /// and lazy-reloads (it was compacted just before, so the snapshot is fresh).
+    ///
+    /// Under the doc's replace gate, EXCLUSIVELY: an edit that already holds the
+    /// entry but has not locked it yet looks idle, and evicting it would let a
+    /// later edit load a fresh entry while the first one applied to the dropped
+    /// one — memory and disk would then disagree. The caller must not hold the
+    /// gate (it is taken here, after `compact_doc` released its shared hold).
+    async fn evict_if_idle(&self, name: &str, max_idle_secs: u64) -> bool {
+        let _gate = self.replace_gate(name).write().await;
+        {
+            let mut docs = self.docs.write().await;
+            let Some(entry) = docs.get(name) else {
+                return false;
+            };
+            let doc = entry.lock().await;
+            let idle_secs = doc.last_activity.elapsed().as_secs();
+            if doc.connected_clients != 0 || idle_secs < max_idle_secs {
+                return false;
+            }
+            info!(doc = %name, idle_secs, "evict_idle: evicting document");
+            drop(doc);
+            docs.remove(name);
+        }
+        if is_durable_doc(name) {
+            debug!(doc = %name, "evict_idle: durable KB doc memory-evicted, retained on disk");
+        } else {
+            match self.storage.delete_document(name).await {
+                Ok(()) => self.forget_ephemeral_editors(name).await,
+                Err(e) => warn!(doc = %name, error = %e, "storage delete after eviction failed"),
+            }
+        }
+        true
+    }
+
     pub async fn evict_idle(&self, max_idle_secs: u64) -> Vec<String> {
         let mut to_evict = Vec::new();
 
@@ -1152,50 +1191,23 @@ impl DocStore {
             return Vec::new();
         }
 
-        // Compact before eviction, then remove.
+        // Compact before eviction, then remove. `compact_doc` takes the gate
+        // shared and releases it before `evict_if_idle` takes it exclusively.
         for name in &to_evict {
             if let Err(e) = self.compact_doc(name).await {
                 warn!(doc = %name, error = %e, "compaction before eviction failed");
             }
         }
 
-        let mut docs = self.docs.write().await;
         let mut evicted = Vec::new();
         for name in &to_evict {
-            // Re-check under write lock — a client may have connected.
-            if let Some(entry) = docs.get(name) {
-                let doc = entry.lock().await;
-                if doc.connected_clients == 0
-                    && doc.last_activity.elapsed().as_secs() >= max_idle_secs
-                {
-                    info!(doc = %name, idle_secs = doc.last_activity.elapsed().as_secs(), "evict_idle: evicting document");
-                    drop(doc);
-                    docs.remove(name);
-                    evicted.push(name.clone());
-                }
+            if self.evict_if_idle(name, max_idle_secs).await {
+                evicted.push(name.clone());
             }
         }
-
         if !evicted.is_empty() {
             info!(count = evicted.len(), "evicted idle documents");
         }
-
-        // BUG B fix: delete evicted EPHEMERAL docs from storage so recovery doesn't
-        // reload them. ADR-032: durable KB content (kbc:/kb:) is memory-evicted ONLY —
-        // never deleted — so a hosted KB with no connected client survives on disk and
-        // lazy-reloads on next access (it was compacted above, so the snapshot is fresh).
-        drop(docs); // release write lock before async storage calls
-        for name in &evicted {
-            if is_durable_doc(name) {
-                debug!(doc = %name, "evict_idle: durable KB doc memory-evicted, retained on disk");
-                continue;
-            }
-            match self.storage.delete_document(name).await {
-                Ok(()) => self.forget_ephemeral_editors(name).await,
-                Err(e) => warn!(doc = %name, error = %e, "storage delete after eviction failed"),
-            }
-        }
-
         evicted
     }
 
