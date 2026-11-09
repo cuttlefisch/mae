@@ -54,12 +54,14 @@
 
 mod git;
 mod glob;
+mod history;
 mod plan;
 mod report;
 mod split;
 
 pub use git::{GitRepo, TreeEntry};
 pub use glob::{Glob, GlobError};
+pub use history::FileTimes;
 pub use plan::{
     plan, plan_entries, CheckoutAttr, PlanInput, PlanOptions, PlannedNode, Refusal, SeedPlan,
     Source,

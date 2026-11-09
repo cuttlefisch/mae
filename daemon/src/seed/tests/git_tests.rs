@@ -2,6 +2,7 @@
 //! a fresh synthetic one in a temp dir; no global or system git config is read
 //! by the commands that build it.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
@@ -131,11 +132,11 @@ fn a_moved_tag_changes_the_commit_and_the_hash() {
     assert_ne!(before.plan_hash(), after.plan_hash());
 }
 
-/// Q6: each file's creation time is the last commit that changed it at the
-/// tag, from ONE `git log` pass. Kills: the tag's own time for every file,
-/// the first commit's time, or counting commits after the tag.
+/// Creation is the file's first add, modification its last change, both at
+/// the tag. Kills: swapping first and last, using the tag's own time, or
+/// counting a commit made after the tag.
 #[test]
-fn created_at_is_each_files_last_commit_time_at_the_tag() {
+fn created_and_modified_are_the_first_add_and_last_change_at_the_tag() {
     let r = Repo::new();
     r.write("a.org", &note("a", "1\n"));
     r.write("dir/b.org", &note("b", "1\n"));
@@ -148,19 +149,151 @@ fn created_at_is_each_files_last_commit_time_at_the_tag() {
     r.write("dir/b.org", &note("b", "after the tag\n"));
     r.commit(1_700_009_999);
     let plan = r.plan("v1");
-    let times: Vec<(&str, i64, bool)> = plan
+    let times: Vec<(&str, i64, i64, bool)> = plan
         .nodes
         .iter()
-        .map(|n| (n.path.as_str(), n.created_at, n.created_at_from_git))
+        .map(|n| {
+            (
+                n.path.as_str(),
+                n.created_at,
+                n.modified_at,
+                n.times_from_git,
+            )
+        })
         .collect();
     assert_eq!(
         times,
         vec![
-            ("a.org", 1_700_000_500, true),
-            ("dir/b.org", 1_700_000_000, true),
-            ("dir/c.org", 1_700_000_900, true)
+            ("a.org", 1_700_000_000, 1_700_000_500, true),
+            ("dir/b.org", 1_700_000_000, 1_700_000_000, true),
+            ("dir/c.org", 1_700_000_900, 1_700_000_900, true)
         ]
     );
+}
+
+/// A page with an id and twenty distinct lines, so git's similarity index
+/// sees a rename or copy as one.
+fn long_note(id: &str) -> String {
+    let body: String = (1..=20).map(|i| format!("línea {i} de {id}\n")).collect();
+    note(id, &body)
+}
+
+const T: i64 = 1_700_000_000;
+
+/// The history the comparison runs over, one scenario per file.
+fn history_repo() -> Repo {
+    let r = Repo::new();
+    for id in ["plain", "old-name", "re", "gone", "src", "b1", "b2", "b3"] {
+        r.write(&format!("{id}.org"), &long_note(id));
+    }
+    r.commit(T + 100);
+    r.git(&["mv", "old-name.org", "renamed.org"]);
+    r.commit(T + 200); // a pure rename
+    r.git(&["mv", "re.org", "re2.org"]);
+    r.write("re2.org", &(long_note("re") + "una línea más\n"));
+    r.commit(T + 300); // a rename and an edit in one commit
+    r.git(&["rm", "-q", "gone.org"]);
+    r.commit(T + 400);
+    r.write("gone.org", &long_note("gone-again"));
+    r.commit(T + 500); // the same path added again
+    r.write(
+        "copy.org",
+        &long_note("src").replace(":ID: src", ":ID: copy"),
+    );
+    r.commit(T + 600); // a copy (its id changed, so it is a distinct page)
+    std::fs::create_dir_all(r.path().join("bulk")).unwrap();
+    // New basenames: git pairs a file that keeps its basename across
+    // directories cheaply, before its rename limit applies, so only a renamed
+    // basename exercises the limit `-l0` lifts.
+    for b in ["b1", "b2", "b3"] {
+        r.git(&["mv", &format!("{b}.org"), &format!("bulk/moved-{b}.org")]);
+        r.write(
+            &format!("bulk/moved-{b}.org"),
+            &(long_note(b) + "editada\n"),
+        );
+    }
+    r.commit(T + 700); // several moves with edits in one commit
+    r.write("plain.org", &(long_note("plain") + "cambio\n"));
+    r.commit(T + 800);
+    r.git(&["tag", "v1"]);
+    r.write("renamed.org", &(long_note("old-name") + "después\n"));
+    r.commit(T + 900); // after the tag: must not count
+    r
+}
+
+/// What per-file `git log` says: `--diff-filter=A --follow … | tail -1` for
+/// creation, `-1` for the last change.
+fn oracle(r: &Repo, path: &str) -> (i64, i64) {
+    let created = r.git(&[
+        "log",
+        "--diff-filter=A",
+        "--follow",
+        "--format=%ct",
+        "v1",
+        "--",
+        path,
+    ]);
+    let modified = r.git(&["log", "-1", "--format=%ct", "v1", "--", path]);
+    let last = created.lines().last().unwrap().parse().unwrap();
+    (last, modified.parse().unwrap())
+}
+
+/// The one-pass walk against per-file `git log --follow`. It must agree on
+/// renames (pure, with an edit, and several in one commit, under a rename
+/// limit that would make git skip them), and it differs, by decision and
+/// pinned here, on a re-added path and on a copy. Kills: swapping first and
+/// last, a walk that does not follow renames, dropping `-l0`, and continuing
+/// a deleted path's lineage into its re-add.
+#[test]
+fn the_history_walk_agrees_with_git_log_follow_except_where_decided() {
+    let r = history_repo();
+    let paths = [
+        "plain.org",
+        "renamed.org",
+        "re2.org",
+        "gone.org",
+        "src.org",
+        "copy.org",
+        "bulk/moved-b1.org",
+        "bulk/moved-b2.org",
+        "bulk/moved-b3.org",
+    ];
+    let expected: Vec<(i64, i64)> = paths.iter().map(|p| oracle(&r, p)).collect();
+    // A rename limit git would apply to the walk; `-l0` must override it.
+    r.git(&["config", "diff.renameLimit", "1"]);
+    let plan = r.plan("v1");
+    assert!(plan.ok(), "{:?}", plan.refusals);
+    let walked: HashMap<&str, (i64, i64)> = plan
+        .nodes
+        .iter()
+        .map(|n| (n.path.as_str(), (n.created_at, n.modified_at)))
+        .collect();
+    for (path, (follow_created, last_change)) in paths.iter().zip(expected) {
+        let (created, modified) = walked[path];
+        assert_eq!(modified, last_change, "{path}: modified_at");
+        match *path {
+            "gone.org" => {
+                assert_eq!(follow_created, T + 100, "--follow reaches the first add");
+                assert_eq!(created, T + 500, "{path}: the re-add is the creation");
+            }
+            "copy.org" => {
+                assert_eq!(
+                    follow_created,
+                    T + 100,
+                    "--follow follows the copy to its source"
+                );
+                assert_eq!(created, T + 600, "{path}: a copy is created by the copy");
+            }
+            _ => assert_eq!(
+                created, follow_created,
+                "{path}: created_at agrees with --follow"
+            ),
+        }
+    }
+    assert_eq!(walked["renamed.org"], (T + 100, T + 200));
+    assert_eq!(walked["re2.org"], (T + 100, T + 300));
+    assert_eq!(walked["bulk/moved-b2.org"], (T + 100, T + 700));
+    assert_eq!(walked["plain.org"], (T + 100, T + 800));
 }
 
 /// Attributes are read from the commit, not the working copy. Kills: a check

@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 
 use super::git::{GitRepo, TreeEntry};
 use super::glob::Glob;
+use super::history::{self, FileTimes};
 use super::split::{regen, split, SplitFile};
 use super::{Problem, ProblemKind, SeedError, CONTRACT, DEFAULT_INCLUDE};
 
@@ -64,11 +65,10 @@ pub struct PlanInput {
     pub entries: Vec<TreeEntry>,
     pub blobs: HashMap<String, Vec<u8>>,
     pub attrs: Vec<CheckoutAttr>,
-    /// Per path, the committer time of the last commit that changed it
-    /// (`GitRepo::last_commit_times`).
-    pub commit_times: HashMap<String, i64>,
-    /// When the plan was made: the creation time of a file git has no
-    /// history for.
+    /// Per path at the rev, its creation and last modification
+    /// (`history::file_times`).
+    pub file_times: HashMap<String, FileTimes>,
+    /// When the plan was made: both times of a file git has no history for.
     pub received_at: i64,
 }
 
@@ -83,11 +83,14 @@ pub struct PlannedNode {
     /// For a non-canonical file: the lines of F and of N(F) that differ
     /// (common leading and trailing lines removed), each with its `\n`.
     pub header_diff: Option<(Vec<String>, Vec<String>)>,
-    /// The node's creation time (unix seconds): the last commit that changed
-    /// the file at the seeded commit, or the plan's `received_at` when git has
-    /// no history for it (`created_at_from_git == false`).
+    /// Creation (unix seconds): the commit that added the file's content at
+    /// its path, following renames (`history`).
     pub created_at: i64,
-    pub created_at_from_git: bool,
+    /// Last modification: the last commit that changed the file at the rev.
+    pub modified_at: i64,
+    /// Whether both times came from git. When git has no history for the
+    /// file, both are the plan's `received_at`, which is not reproducible.
+    pub times_from_git: bool,
     /// The value of `--code-property` in the file drawer, if set and non-empty.
     pub code: Option<String>,
 }
@@ -155,7 +158,7 @@ pub fn plan(opts: &PlanOptions) -> Result<SeedPlan, SeedError> {
         .map(|(path, attr, value)| CheckoutAttr { path, attr, value })
         .collect();
     let blobs = shas.iter().cloned().zip(repo.read_blobs(&shas)?).collect();
-    let commit_times = repo.last_commit_times(&commit)?;
+    let file_times = history::file_times(&repo, &commit)?;
     let received_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
@@ -171,7 +174,7 @@ pub fn plan(opts: &PlanOptions) -> Result<SeedPlan, SeedError> {
             entries,
             blobs,
             attrs,
-            commit_times,
+            file_times,
             received_at,
         },
         opts,
@@ -239,10 +242,18 @@ pub fn plan_entries(input: PlanInput, opts: &PlanOptions) -> Result<SeedPlan, Se
 
 /// Creation time and document code, which depend on the run, not the file.
 fn stamp(node: &mut PlannedNode, input: &PlanInput, opts: &PlanOptions) {
-    match input.commit_times.get(&node.path) {
-        Some(t) => (node.created_at, node.created_at_from_git) = (*t, true),
-        None => (node.created_at, node.created_at_from_git) = (input.received_at, false),
-    }
+    let (times, from_git) = match input.file_times.get(&node.path) {
+        Some(t) => (*t, true),
+        None => (
+            FileTimes {
+                created: input.received_at,
+                modified: input.received_at,
+            },
+            false,
+        ),
+    };
+    (node.created_at, node.modified_at) = (times.created, times.modified);
+    node.times_from_git = from_git;
     node.code = opts.code_property.as_ref().and_then(|key| {
         node.file
             .properties
@@ -412,7 +423,8 @@ fn plan_file(
         file,
         canonical,
         created_at: 0,
-        created_at_from_git: false,
+        modified_at: 0,
+        times_from_git: false,
         code: None,
     })
 }
@@ -471,6 +483,7 @@ fn plan_hash(nodes: &[PlannedNode]) -> String {
         field(&mut h, n.path.as_bytes());
         field(&mut h, f.id.as_bytes());
         h.update(n.created_at.to_le_bytes());
+        h.update(n.modified_at.to_le_bytes());
         count(&mut h, f.properties.len());
         for (k, v) in &f.properties {
             field(&mut h, k.as_bytes());

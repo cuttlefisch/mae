@@ -11,7 +11,6 @@
 //! confidence. That leak has already happened once in this project (a worktree
 //! commit's `GIT_DIR` reached a build).
 
-use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -144,27 +143,24 @@ impl GitRepo {
         blobs
     }
 
-    /// For every path changed in `commit`'s history, the latest committer time
-    /// (unix seconds) of a commit that changed it. ONE `git log` pass over the
-    /// whole history, not one per file.
-    ///
-    /// Committer time, because it is when the change entered the history the
-    /// tag names (an author time survives a rebase). The latest time, not the
-    /// first commit met in log order, so clock skew between branches cannot
-    /// pick an older commit. A merge commit lists no files (no `-m`), so a file
-    /// changed on a merged branch takes that branch commit's time.
-    pub fn last_commit_times(&self, commit: &str) -> Result<HashMap<String, i64>, SeedError> {
-        let out = self.run(&[
-            "log",
-            "--format=format:%x01%ct",
-            "--name-only",
-            "-z",
-            "--no-renames",
-            "--no-show-signature",
-            commit,
-            "--",
-        ])?;
-        Ok(parse_log_times(&out))
+    /// Like `run`, but a warning that git skipped part of its work (rename
+    /// detection past its limit) is an error rather than a quieter answer.
+    pub(super) fn run_checked(&self, args: &[&str]) -> Result<Vec<u8>, SeedError> {
+        let out = self
+            .command()
+            .args(args)
+            .output()
+            .map_err(|e| SeedError(format!("cannot run git: {e}")))?;
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if !out.status.success() || stderr.contains("skipped") {
+            return Err(SeedError(format!(
+                "git {} in {}: {}",
+                args.first().unwrap_or(&""),
+                self.dir.display(),
+                stderr.trim()
+            )));
+        }
+        Ok(out.stdout)
     }
 
     /// Checkout-affecting attributes set on `paths` by the `.gitattributes`
@@ -262,36 +258,6 @@ fn read_batch_object(reader: &mut impl BufRead, sha: &str) -> Result<Vec<u8>, Se
         .map_err(|e| SeedError(format!("git cat-file: short read of {sha}: {e}")))?;
     buf.pop(); // the LF after the contents
     Ok(buf)
-}
-
-/// `\x01CT \n PATH \0 PATH \0 … \0` per commit (the first path follows the
-/// time after a newline; a commit with no files has none).
-fn parse_log_times(out: &[u8]) -> HashMap<String, i64> {
-    let mut times: HashMap<String, i64> = HashMap::new();
-    let mut current: Option<i64> = None;
-    for token in out.split(|b| *b == 0) {
-        let path = match token.strip_prefix(b"\x01") {
-            Some(rest) => {
-                let (ct, first) = match rest.iter().position(|b| *b == b'\n') {
-                    Some(nl) => (&rest[..nl], &rest[nl + 1..]),
-                    None => (rest, &rest[rest.len()..]),
-                };
-                current = std::str::from_utf8(ct)
-                    .ok()
-                    .and_then(|s| s.trim().parse().ok());
-                first
-            }
-            None => token,
-        };
-        let (Some(t), Ok(p)) = (current, std::str::from_utf8(path)) else {
-            continue;
-        };
-        if !p.is_empty() {
-            let slot = times.entry(p.to_string()).or_insert(t);
-            *slot = (*slot).max(t);
-        }
-    }
-    times
 }
 
 /// `PATH NUL ATTR NUL VALUE NUL`, repeated; keeps only attributes that are set.

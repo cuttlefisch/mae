@@ -53,14 +53,15 @@ fn counts(plan: &SeedPlan) -> Value {
         "refusals": plan.refusals.len(),
         "excluded": plan.excluded.len(),
         "not_selected": plan.not_selected.len(),
-        "created_at_from_git": plan.nodes.iter().filter(|n| n.created_at_from_git).count(),
-        "created_at_received": plan.nodes.iter().filter(|n| !n.created_at_from_git).count(),
+        "times_from_git": plan.nodes.iter().filter(|n| n.times_from_git).count(),
+        "times_received": plan.nodes.iter().filter(|n| !n.times_from_git).count(),
         "missing_code": plan.missing_code.len(),
     })
 }
 
 fn node_json(n: &PlannedNode) -> Value {
     let f = &n.file;
+    let source = if n.times_from_git { "git" } else { "received" };
     json!({
         "path": n.path,
         "blob": n.blob,
@@ -68,7 +69,9 @@ fn node_json(n: &PlannedNode) -> Value {
         "kind": f.kind(),
         "code": n.code,
         "created_at": n.created_at,
-        "created_at_source": if n.created_at_from_git { "git" } else { "received" },
+        "created_at_source": source,
+        "modified_at": n.modified_at,
+        "modified_at_source": source,
         "title": f.title,
         "filetags": f.filetags,
         "properties": f.properties,
@@ -119,7 +122,7 @@ fn summary(plan: &SeedPlan, out: &mut String) {
     let body_total: usize = plan.nodes.iter().map(|n| n.file.body.len()).sum();
     let largest = plan.nodes.iter().max_by_key(|n| n.file.body.len());
     let canonical = plan.nodes.iter().filter(|n| n.canonical).count();
-    let from_git = plan.nodes.iter().filter(|n| n.created_at_from_git).count();
+    let from_git = plan.nodes.iter().filter(|n| n.times_from_git).count();
     let received = plan.nodes.len() - from_git;
     let result = if plan.ok() {
         format!("OK: would create one KB with {} nodes", plan.nodes.len())
@@ -158,7 +161,10 @@ fn summary(plan: &SeedPlan, out: &mut String) {
             ))
         ),
         format!("canonical   {canonical} of {}", plan.nodes.len()),
-        format!("created_at  {from_git} from git, {received} at receipt time (not reproducible)"),
+        format!(
+            "times       created_at and modified_at from git for {from_git}, \
+             receipt time for {received} (not reproducible)"
+        ),
     ];
     for l in lines {
         out.push_str(&l);

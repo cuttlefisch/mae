@@ -11,7 +11,7 @@ const T0: i64 = 1_700_000_000;
 fn input(files: &[(&str, Vec<u8>)]) -> PlanInput {
     let mut entries = Vec::new();
     let mut blobs = HashMap::new();
-    let mut commit_times = HashMap::new();
+    let mut file_times = HashMap::new();
     for (i, (path, bytes)) in files.iter().enumerate() {
         let sha = format!("{:040x}", i + 1);
         entries.push(TreeEntry {
@@ -21,7 +21,14 @@ fn input(files: &[(&str, Vec<u8>)]) -> PlanInput {
             path: Ok(path.to_string()),
         });
         blobs.insert(sha, bytes.clone());
-        commit_times.insert(path.to_string(), T0 + i as i64);
+        let t = T0 + 10 * i as i64;
+        file_times.insert(
+            path.to_string(),
+            FileTimes {
+                created: t,
+                modified: t + 5,
+            },
+        );
     }
     PlanInput {
         source: Source {
@@ -33,7 +40,7 @@ fn input(files: &[(&str, Vec<u8>)]) -> PlanInput {
         entries,
         blobs,
         attrs: Vec::new(),
-        commit_times,
+        file_times,
         received_at: 42,
     }
 }
@@ -321,21 +328,35 @@ fn the_plan_hash_is_deterministic_and_covers_content_and_time() {
     edited[1].1 = page(&[("ID", "b")], Some("T"), None, "Texto de b!\n").into_bytes();
     assert_ne!(base, h(input(&edited)), "a body byte changes the hash");
     let mut later = input(&files);
-    *later.commit_times.get_mut("a.org").unwrap() += 1;
+    later.file_times.get_mut("a.org").unwrap().created += 1;
     assert_ne!(base, h(later), "created_at is in the hash");
+    let mut later = input(&files);
+    later.file_times.get_mut("a.org").unwrap().modified += 1;
+    assert_ne!(base, h(later), "modified_at is in the hash");
 }
 
 #[test]
-fn created_at_is_the_commit_time_or_the_receipt_time() {
+fn the_times_come_from_git_or_from_the_receipt_time() {
     let mut inp = input(&[("a.org", ok_page("a")), ("b.org", ok_page("b"))]);
-    inp.commit_times.remove("b.org");
+    inp.file_times.remove("b.org");
     let plan = plan_entries(inp, &opts()).unwrap();
     let (a, b) = (&plan.nodes[0], &plan.nodes[1]);
-    assert_eq!((a.created_at, a.created_at_from_git), (T0, true));
-    assert_eq!((b.created_at, b.created_at_from_git), (42, false));
+    assert_eq!(
+        (a.created_at, a.modified_at, a.times_from_git),
+        (T0, T0 + 5, true)
+    );
+    assert_eq!(
+        (b.created_at, b.modified_at, b.times_from_git),
+        (42, 42, false)
+    );
     let json = render_json(&plan, &[]);
+    assert_eq!(json["nodes"][0]["created_at"], T0);
+    assert_eq!(json["nodes"][0]["modified_at"], T0 + 5);
+    assert_eq!(json["nodes"][0]["created_at_source"], "git");
     assert_eq!(json["nodes"][1]["created_at_source"], "received");
-    assert_eq!(json["counts"]["created_at_received"], 1);
+    assert_eq!(json["nodes"][1]["modified_at_source"], "received");
+    assert_eq!(json["counts"]["times_received"], 1);
+    assert!(render_text(&plan).contains("from git for 1, receipt time for 1 (not reproducible)"));
 }
 
 /// `--code-property`: the code is reported per node (case-insensitive key);
