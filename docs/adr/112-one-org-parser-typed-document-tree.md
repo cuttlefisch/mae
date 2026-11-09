@@ -203,6 +203,11 @@ layer on it becomes the cheaper path.
   operating system. Chosen over ordered maps, which needed no secret but cost 74 KB (past the size
   budget) and ~5% of `renderHtml` (Hayden, 2026-11-08). Also: parse, semantics and render about
   2-2.5x cheaper in WASM with every output unchanged (PR #862).
+- **O3.3** (`mae-org-v0.4.0`) a span's own end: `Highlight::own_end` is the node's end less its
+  post-blank (an object's trailing spaces, an element's trailing blank lines), for an editor that
+  styles a node or asks whether the cursor is in it; `end` keeps `org-element`'s extent. WASM
+  `syntax`/`syntaxSection` take `"post_blank": false` to end every span there instead, so the flat
+  triples keep their shape. `Highlight` is now `#[non_exhaustive]`, as the result types already were.
 - **O4** MAE switches ingest, export and read mode to it, with the repair path; the span-based write
   path lands on the same spans.
 - **O5** the remaining constructs by measured use, privacy-relevant regions first.

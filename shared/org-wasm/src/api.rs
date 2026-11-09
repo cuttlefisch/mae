@@ -99,12 +99,13 @@ fn run(op: Op, request: &str) -> Result<String, String> {
             Ok(mae_org::classify_link_with(path, &req.semantics.link_types).to_json())
         }
         Op::Version => Ok(version()),
-        Op::Syntax => Ok(crate::syntax::syntax(&req.text, &req.parse)),
+        Op::Syntax => Ok(crate::syntax::syntax(&req.text, &req.parse, req.post_blank)),
         Op::SyntaxSection => crate::syntax::syntax_section(
             &req.text,
             &req.parse,
             req.section.as_ref(),
             req.file.as_ref(),
+            req.post_blank,
         ),
     }
 }
@@ -164,6 +165,9 @@ struct Request {
     /// For `syntaxSection`: the region and file facts `syntax` returned.
     section: Option<Json>,
     file: Option<Json>,
+    /// For `syntax`/`syntaxSection`: whether a span's end includes its
+    /// post-blank (default true, as `org-element` reports it).
+    post_blank: bool,
 }
 
 const KEYS: &[&str] = &[
@@ -176,6 +180,7 @@ const KEYS: &[&str] = &[
     "path",
     "section",
     "file",
+    "post_blank",
 ];
 
 impl Request {
@@ -191,6 +196,7 @@ impl Request {
             path: opt_str(j.get("path"), "path")?,
             section: j.get("section").filter(|v| **v != Json::Null).cloned(),
             file: j.get("file").filter(|v| **v != Json::Null).cloned(),
+            post_blank: opt_bool(j.get("post_blank"), "post_blank")?.unwrap_or(true),
         })
     }
 

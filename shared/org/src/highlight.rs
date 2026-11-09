@@ -23,13 +23,22 @@ use crate::{parse_fragment, DiagnosticKind, Document, FragmentContext, ParseOpti
 
 /// One highlighted range: a node or a structural token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Highlight {
     /// What the range is.
     pub kind: SyntaxKind,
     /// UTF-8 byte offset where it starts, in the text the caller passed.
     pub start: u32,
-    /// UTF-8 byte offset where it ends.
+    /// UTF-8 byte offset where it ends. As in `org-element`, this includes
+    /// the node's post-blank: the spaces after an object (`*bold*  ` ends
+    /// after the spaces) and the blank lines after an element.
     pub end: u32,
+    /// Where the node's own text ends: [`end`](Self::end) less its
+    /// post-blank, so `*bold*  ` ends after the closing `*`. An editor that
+    /// styles a node, or decides whether the cursor is inside it, wants
+    /// this end; the post-blank belongs to neither. Equal to `end` for a
+    /// token and for a node with no post-blank.
+    pub own_end: u32,
 }
 
 /// A region [`section_highlights`] can re-highlight alone.
@@ -106,11 +115,43 @@ fn highlight(e: &crate::kind::SyntaxElement, shift: u32) -> Option<Highlight> {
         return None;
     }
     let r = e.text_range();
+    let end = u32::from(r.end()) + shift;
+    let blank = match e {
+        rowan::NodeOrToken::Node(n) => post_blank_len(e.kind(), n.green().children()),
+        rowan::NodeOrToken::Token(_) => 0,
+    };
     Some(Highlight {
         kind: e.kind(),
         start: u32::from(r.start()) + shift,
-        end: u32::from(r.end()) + shift,
+        end,
+        own_end: end - blank,
     })
+}
+
+/// Whether a token of `token` kind at the end of a `node` kind node is
+/// that node's post-blank: an object's trailing spaces, an element's
+/// trailing blank lines.
+fn is_post_blank(node: SyntaxKind, token: SyntaxKind) -> bool {
+    if node.is_object() {
+        token == WHITESPACE
+    } else {
+        token == BLANK_LINE
+    }
+}
+
+/// The byte length of the post-blank a `kind` node ends with: the run of
+/// [`is_post_blank`] tokens that are its last direct children.
+fn post_blank_len(kind: SyntaxKind, children: rowan::Children<'_>) -> u32 {
+    let raw = |r: rowan::SyntaxKind| <crate::OrgLanguage as rowan::Language>::kind_from_raw(r);
+    children
+        .rev()
+        .map_while(|c| match c {
+            rowan::NodeOrToken::Token(t) if is_post_blank(kind, raw(t.kind())) => {
+                Some(u32::from(t.text_len()))
+            }
+            _ => None,
+        })
+        .sum()
 }
 
 /// Every node and structural token of `doc`, its root excepted, in
@@ -139,6 +180,7 @@ fn spans_of(root: &SyntaxNode, shift: u32) -> Vec<Highlight> {
                         kind: k,
                         start: at,
                         end: at + len,
+                        own_end: at + len - post_blank_len(k, g.children()),
                     });
                 }
                 stack.push(g.children());
@@ -151,6 +193,7 @@ fn spans_of(root: &SyntaxNode, shift: u32) -> Vec<Highlight> {
                         kind: k,
                         start: at,
                         end: at + len,
+                        own_end: at + len,
                     });
                 }
                 at += len;

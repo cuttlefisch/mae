@@ -163,3 +163,54 @@ fn a_malformed_section_request_is_an_error() {
     let eol = r#"{"text": "x", "file": {"line_ending": "dos"}, "section": {"start": 0, "end": 1, "level": 0, "ancestors": 0, "declarations": 0, "followed": false}}"#;
     assert!(err(8, eol).contains("line_ending"));
 }
+
+/// `"post_blank": false` ends each span before its post-blank, in `syntax`
+/// and `syntaxSection` alike; the default keeps `org-element`'s ends; a
+/// non-boolean is refused.
+#[test]
+fn post_blank_false_ends_spans_before_the_spaces_after_them() {
+    let text = "un *negrita* y más\n\n* H\nver [[id:n1][Uno]] y\n";
+    let find = |r: &Value, kind: &str| {
+        triples(r)
+            .into_iter()
+            .find(|t| t.0 == kind)
+            .unwrap_or_else(|| panic!("no {kind}"))
+    };
+    let default = ok(7, &serde_json::json!({ "text": text }).to_string());
+    assert_eq!(find(&default, "BOLD"), ("BOLD".into(), 3, 13));
+    let own = ok(
+        7,
+        &serde_json::json!({ "text": text, "post_blank": false }).to_string(),
+    );
+    assert_eq!(find(&own, "BOLD"), ("BOLD".into(), 3, 12));
+    assert_eq!(find(&own, "PARAGRAPH"), ("PARAGRAPH".into(), 0, 20));
+
+    let link_section = own["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| text[s["start"].as_u64().unwrap() as usize..].starts_with("ver"))
+        .unwrap();
+    let (start, end) = (
+        link_section["start"].as_u64().unwrap() as usize,
+        link_section["end"].as_u64().unwrap() as usize,
+    );
+    let req = |post_blank: bool| {
+        serde_json::json!({
+            "text": &text[start..end], "section": link_section,
+            "file": own["file"], "post_blank": post_blank,
+        })
+        .to_string()
+    };
+    let link_at = start as u64 + 4;
+    assert_eq!(
+        find(&ok(8, &req(false)), "LINK"),
+        ("LINK".into(), link_at, link_at + 14)
+    );
+    assert_eq!(
+        find(&ok(8, &req(true)), "LINK"),
+        ("LINK".into(), link_at, link_at + 15)
+    );
+
+    assert!(err(7, r#"{"text": "x", "post_blank": "no"}"#).contains("post_blank"));
+}
