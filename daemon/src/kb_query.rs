@@ -683,12 +683,17 @@ async fn walk_neighborhood(
 ///
 /// `RemoteHubQueryLayer::id_title_pairs` refused to implement this by looping the
 /// `get` endpoint, calling that "an N+1 network-call performance trap". It was
-/// right, and the answer it named was a bulk endpoint. This is that endpoint, and
-/// it is nearly free: titles live in the collection manifest, which every gated
-/// read already loads, so no per-node document fetch happens at all.
+/// right, and the answer it named was a bulk endpoint. This is that endpoint: one
+/// network call, with the per-node reads done here, capped by `max_scan_nodes`.
 ///
-/// Titles are manifest metadata, not node body content -- but they are still
-/// content, so an E2E KB gets ids only, matching what `graph` already discloses.
+/// Each title is read from the node's own document, never from the collection
+/// manifest. The manifest's title is written once, when a node is added, and no
+/// update path refreshes it, so after a rename it is stale; serving it gave the
+/// same node two names depending on which endpoint a client asked. A node whose
+/// document cannot be read gets an empty title and is listed in `unavailable`.
+///
+/// Titles are content, so an E2E KB gets ids only, matching what `graph` already
+/// discloses.
 async fn titles(
     doc_store: &DocStore,
     kb_id: &str,
@@ -699,21 +704,41 @@ async fn titles(
     let (coll, encryption) = load_gated(doc_store, kb_id, principal).await?;
     let all = coll.list_nodes();
     let total = all.len();
-    let pairs: Vec<Value> = all
+    let (mut pairs, mut unavailable) = (Vec::new(), Vec::new());
+    let ids = all
         .into_iter()
-        .filter(|(id, _)| prefix.is_none_or(|p| id.starts_with(p)))
-        .take(max_scan_nodes)
-        .map(|(id, title)| match encryption {
-            Encryption::None => json!([id, title]),
-            Encryption::E2e => json!([id, ""]),
-        })
-        .collect();
+        .map(|(id, _manifest_title)| id)
+        .filter(|id| prefix.is_none_or(|p| id.starts_with(p)))
+        .take(max_scan_nodes);
+    for id in ids {
+        let title = match encryption {
+            Encryption::E2e => String::new(),
+            Encryption::None => match node_doc(doc_store, kb_id, &id).await {
+                Some(doc) => doc.title(),
+                None => {
+                    unavailable.push(id.clone());
+                    String::new()
+                }
+            },
+        };
+        pairs.push(json!([id, title]));
+    }
     Ok(json!({
         "kb_id": kb_id,
         "encryption": match encryption { Encryption::None => "none", Encryption::E2e => "e2e" },
         "pairs": pairs,
+        "unavailable": unavailable,
         "truncated": total > max_scan_nodes,
     }))
+}
+
+/// A node's document, if it exists and decodes.
+async fn node_doc(doc_store: &DocStore, kb_id: &str, id: &str) -> Option<KbNodeDoc> {
+    let state = doc_store
+        .encode_state(&mae_sync::kb_node_doc_name(kb_id, id))
+        .await
+        .ok()?;
+    KbNodeDoc::from_bytes(&state).ok()
 }
 
 /// The version of an E2E node, whose fields the daemon cannot read: a digest
@@ -748,7 +773,7 @@ async fn list(
         .collect();
     let more = rest.len() > limit;
     let mut nodes = Vec::with_capacity(limit.min(rest.len()));
-    for (id, manifest_title) in rest.into_iter().take(limit) {
+    for (id, _manifest_title) in rest.into_iter().take(limit) {
         let doc_name = mae_sync::kb_node_doc_name(kb_id, &id);
         let state = match doc_store.encode_state(&doc_name).await {
             Ok(state) => state,
@@ -779,7 +804,9 @@ async fn list(
                         "tags": doc.tags(),
                     })
                 }
-                Err(_) => json!({"id": id, "title": manifest_title, "unavailable": true}),
+                // No manifest title here: it is a stale creation-time hint
+                // (see `titles`), and a reader would show it as the node's.
+                Err(_) => json!({"id": id, "unavailable": true}),
             },
         });
     }
