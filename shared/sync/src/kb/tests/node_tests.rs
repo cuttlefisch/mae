@@ -317,3 +317,88 @@ fn meta_operations() {
     assert_eq!(node.get_meta("version"), Some("2".to_string()));
     assert_eq!(node.get_meta("missing"), None);
 }
+
+// ---- KbNodeDoc::version: a reader's change marker ----
+
+/// Every field a reader can see moves the version, and every state along the
+/// way has its own: a change to any one of them is never invisible.
+#[test]
+fn every_reader_visible_field_changes_the_version() {
+    let mut n = KbNodeDoc::new("n1", "Title", "body", &[]);
+    let mut seen = vec![n.version()];
+    let props: std::collections::HashMap<String, String> =
+        [("ROLE".to_string(), "atom".to_string())]
+            .into_iter()
+            .collect();
+    type Edit = Box<dyn Fn(&mut KbNodeDoc)>;
+    let edits: Vec<Edit> = vec![
+        Box::new(|n| drop(n.set_title("Title 2"))),
+        Box::new(|n| drop(n.set_body("body 2"))),
+        Box::new(|n| drop(n.set_tags(&["t".to_string()]))),
+        Box::new(|n| drop(n.add_link("other"))),
+        Box::new(|n| drop(n.set_kind(Some("concept")))),
+        Box::new(|n| drop(n.set_todo_state(Some("TODO")))),
+        Box::new(|n| drop(n.set_priority(Some("A")))),
+        Box::new(|n| drop(n.set_aliases(&["Alias".to_string()]))),
+        Box::new(move |n| drop(n.set_properties(&props))),
+        Box::new(|n| drop(n.set_source(Some("manual")))),
+        Box::new(|n| drop(n.set_source_version(Some(3)))),
+    ];
+    for (i, edit) in edits.iter().enumerate() {
+        edit(&mut n);
+        let v = n.version();
+        assert!(
+            !seen.contains(&v),
+            "edit {i} left the version at a value already seen"
+        );
+        seen.push(v);
+    }
+}
+
+/// Why it is not the state vector: a deletion records no new item, so the
+/// state vector stays put while the text a reader sees has changed.
+#[test]
+fn a_pure_deletion_changes_the_version_though_not_the_state_vector() {
+    let n = KbNodeDoc::new("n1", "Title", "abcdef", &[]);
+    let (sv, version) = (n.state_vector(), n.version());
+    {
+        use yrs::{Map, Out, Text, Transact};
+        let root = n.doc().get_or_insert_map("node");
+        let mut txn = n.doc().transact_mut();
+        let Some(Out::YText(body)) = root.get(&txn, "body") else {
+            panic!("no body")
+        };
+        body.remove_range(&mut txn, 3, 3); // a pure deletion: "abcdef" -> "abc"
+    }
+    assert_eq!(n.body(), "abc");
+    assert_eq!(
+        n.state_vector(),
+        sv,
+        "premise: a deletion leaves the state vector"
+    );
+    assert_ne!(
+        n.version(),
+        version,
+        "a deletion was invisible to the version"
+    );
+}
+
+/// The same content reads as the same version: on another copy of the
+/// document, and with its properties inserted in another order.
+#[test]
+fn the_same_content_has_the_same_version() {
+    let base = KbNodeDoc::new("n1", "Title", "body", &[]);
+    let mut a = KbNodeDoc::from_bytes(&base.encode_state()).unwrap();
+    let mut b = KbNodeDoc::from_bytes(&base.encode_state()).unwrap();
+    let mut pa = std::collections::HashMap::new();
+    let mut pb = std::collections::HashMap::new();
+    for (k, v) in [("A", "1"), ("B", "2"), ("C", "3"), ("D", "4")] {
+        pa.insert(k.to_string(), v.to_string());
+    }
+    for (k, v) in [("D", "4"), ("C", "3"), ("B", "2"), ("A", "1")] {
+        pb.insert(k.to_string(), v.to_string());
+    }
+    let _ = a.set_properties(&pa);
+    let _ = b.set_properties(&pb);
+    assert_eq!(a.version(), b.version());
+}

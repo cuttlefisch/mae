@@ -79,6 +79,7 @@ pub(super) enum Method {
     // --- kb/query.*: the ADR-053 read-through surface ---
     KbQueryCapabilities,
     KbQueryGet,
+    KbQueryList,
     KbQuerySearch,
     KbQueryGraph,
     KbQueryMyWrappedKey,
@@ -136,6 +137,7 @@ impl Method {
 
             "kb/query.capabilities" => Self::KbQueryCapabilities,
             "kb/query.get" => Self::KbQueryGet,
+            "kb/query.list" => Self::KbQueryList,
             "kb/query.search" => Self::KbQuerySearch,
             "kb/query.graph" => Self::KbQueryGraph,
             "kb/query.my_wrapped_key" => Self::KbQueryMyWrappedKey,
@@ -226,6 +228,7 @@ impl DocScope {
             | Method::KbLeave
             | Method::KbQueryCapabilities
             | Method::KbQueryGet
+            | Method::KbQueryList
             | Method::KbQuerySearch
             | Method::KbQueryGraph
             | Method::KbQueryMyWrappedKey
@@ -330,6 +333,20 @@ mod tests {
                 "{name} names a caller-supplied doc and has no membership model — \
                  it must refuse KB addresses"
             );
+        }
+    }
+
+    /// The `kb/query.*` methods the collab listener serves resolve to
+    /// themselves and are KB-gated (each calls the KB read check).
+    #[test]
+    fn served_kb_query_methods_route_and_are_kb_gated() {
+        for (name, want) in [
+            ("kb/query.get", Method::KbQueryGet),
+            ("kb/query.list", Method::KbQueryList),
+        ] {
+            let m = Method::parse(name).unwrap_or_else(|| panic!("{name} must parse"));
+            assert_eq!(m, want);
+            assert_eq!(DocScope::of(m), DocScope::KbGated, "{name}");
         }
     }
 

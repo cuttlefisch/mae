@@ -159,6 +159,15 @@ async fn dispatch_scanning(
             let prefix = params.get("prefix").and_then(|v| v.as_str());
             titles(doc_store, kb_id, prefix, principal, n).await
         }
+        "kb/query.list" => {
+            let after = params.get("after").and_then(|v| v.as_str());
+            let limit = params
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map_or(n, |l| (l as usize).min(n))
+                .max(1);
+            list(doc_store, kb_id, after, limit, principal).await
+        }
         "kb/query.neighborhood" => {
             let node_id = required_node_id(params)?;
             // Clamped to 3: each hop is a full backlink scan, so depth is a
@@ -311,6 +320,7 @@ async fn get(
                 "node_id": node_id,
                 "encryption": "none",
                 "schema_v": doc.schema_version(),
+                "version": doc.version(),
                 "title": doc.title(),
                 "kind": doc.kind(),
                 "todo_state": doc.todo_state(),
@@ -333,6 +343,7 @@ async fn get(
                 "kb_id": kb_id,
                 "node_id": node_id,
                 "encryption": "e2e",
+                "version": opaque_version(&state),
                 "ciphertext_b64": update_to_base64(&state),
             }))
         }
@@ -672,6 +683,89 @@ async fn titles(
         "encryption": match encryption { Encryption::None => "none", Encryption::E2e => "e2e" },
         "pairs": pairs,
         "truncated": total > max_scan_nodes,
+    }))
+}
+
+/// The version of an E2E node, whose fields the daemon cannot read: a digest
+/// of its encrypted state. It changes whenever that state does; it may also
+/// change without a visible edit (re-encoding), which costs a reader only a
+/// re-fetch.
+fn opaque_version(state: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(&Sha256::digest(state)[..16])
+}
+
+/// `kb/query.list`: every node of the KB with its typed fields and a
+/// `version` (see `KbNodeDoc::version`), a page at a time in node-id order,
+/// so a reader can poll for what changed without one `get` per node. No
+/// bodies: a body comes from `get` (ADR-053: listing is not a bulk-content
+/// channel). `after` is the last id of the previous page; `next_after` is
+/// null on the last page. A node the manifest lists whose document cannot be
+/// read is reported as `unavailable`, never silently left out.
+async fn list(
+    doc_store: &DocStore,
+    kb_id: &str,
+    after: Option<&str>,
+    limit: usize,
+    principal: Option<&str>,
+) -> Result<Value, McpError> {
+    let (coll, encryption) = load_gated(doc_store, kb_id, principal).await?;
+    let mut ids: Vec<(String, String)> = coll.list_nodes();
+    ids.sort();
+    let rest: Vec<(String, String)> = ids
+        .into_iter()
+        .filter(|(id, _)| after.is_none_or(|a| id.as_str() > a))
+        .collect();
+    let more = rest.len() > limit;
+    let mut nodes = Vec::with_capacity(limit.min(rest.len()));
+    for (id, manifest_title) in rest.into_iter().take(limit) {
+        let doc_name = mae_sync::kb_node_doc_name(kb_id, &id);
+        let state = match doc_store.encode_state(&doc_name).await {
+            Ok(state) => state,
+            Err(_) => {
+                nodes.push(json!({"id": id, "unavailable": true}));
+                continue;
+            }
+        };
+        nodes.push(match encryption {
+            Encryption::E2e => json!({"id": id, "version": opaque_version(&state)}),
+            Encryption::None => match KbNodeDoc::from_bytes(&state) {
+                Ok(doc) => {
+                    let properties: serde_json::Map<String, Value> = doc
+                        .properties()
+                        .into_iter()
+                        .map(|(k, v)| (k, Value::String(v)))
+                        .collect();
+                    json!({
+                        "id": id,
+                        "version": doc.version(),
+                        "schema_v": doc.schema_version(),
+                        "title": doc.title(),
+                        "kind": doc.kind(),
+                        "todo_state": doc.todo_state(),
+                        "priority": doc.priority(),
+                        "aliases": doc.aliases(),
+                        "properties": properties,
+                        "tags": doc.tags(),
+                    })
+                }
+                Err(_) => json!({"id": id, "title": manifest_title, "unavailable": true}),
+            },
+        });
+    }
+    let next_after = if more {
+        nodes
+            .last()
+            .and_then(|n| n["id"].as_str())
+            .map(str::to_string)
+    } else {
+        None
+    };
+    Ok(json!({
+        "kb_id": kb_id,
+        "encryption": match encryption { Encryption::None => "none", Encryption::E2e => "e2e" },
+        "nodes": nodes,
+        "next_after": next_after,
     }))
 }
 
