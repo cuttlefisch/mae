@@ -4,12 +4,15 @@
 //! A tagged commit is the unit of input because the source's own gate passed on
 //! exactly those bytes. A working copy can hold edits the gate never saw.
 //!
-//! @ai-caution: [git-env] Every invocation strips the `GIT_*` variables that
-//! redirect git to another repository or index. A seeder run from inside a git
-//! hook, or from a worktree build that exported `GIT_DIR`, would otherwise read a
-//! different repository than the one named, and report on it with full
-//! confidence. That leak has already happened once in this project (a worktree
-//! commit's `GIT_DIR` reached a build).
+//! @ai-caution: [git-env] Every git call goes through [`GitRepo::command`], which
+//! starts from an EMPTY environment and pins the configuration that could change
+//! an answer or run code. A repository is input, and its own config is attacker
+//! controlled: `core.fsmonitor` runs a command (confirmed: `check-attr` ran one),
+//! replace refs substitute blobs, and a partial clone fetches over the network.
+//! The caller's environment is no safer: `GIT_DIR` redirects git to another
+//! repository (that leak has already happened once in this project, through a
+//! worktree build), and `GIT_CONFIG_PARAMETERS` injects config. Do not add a git
+//! call that bypasses `command()`.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -17,17 +20,44 @@ use std::process::{Command, Stdio};
 
 use super::SeedError;
 
-/// Variables that point git at a different repository, index or object store.
-const REDIRECTING_ENV: &[&str] = &[
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_COMMON_DIR",
-    "GIT_NAMESPACE",
-    "GIT_CEILING_DIRECTORIES",
-    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+#[cfg(windows)]
+const NULL_DEVICE: &str = "NUL";
+#[cfg(not(windows))]
+const NULL_DEVICE: &str = "/dev/null";
+
+/// The only variables git inherits from the caller: where to find programs and
+/// temporary space. Everything else, every `GIT_*` included, is dropped.
+const INHERITED_ENV: &[&str] = &["PATH", "HOME", "SYSTEMROOT", "TMPDIR", "TEMP", "TMP"];
+
+/// Set on every call.
+pub(super) const FORCED_ENV: &[(&str, &str)] = &[
+    // No system or global config: the operator's settings must not change
+    // what the plan says.
+    ("GIT_CONFIG_NOSYSTEM", "1"),
+    ("GIT_CONFIG_GLOBAL", NULL_DEVICE),
+    ("GIT_ATTR_NOSYSTEM", "1"),
+    // The objects are the commit's own: no replace refs, no lazy fetch.
+    ("GIT_NO_REPLACE_OBJECTS", "1"),
+    ("GIT_NO_LAZY_FETCH", "1"),
+    ("GIT_TERMINAL_PROMPT", "0"),
+    // Reads only: no opportunistic index refresh.
+    ("GIT_OPTIONAL_LOCKS", "0"),
+    // Messages the code matches on (`skipped`) are git's English ones.
+    ("LC_ALL", "C"),
+];
+
+/// `-c` overrides on every call: they outrank the repository's own config.
+pub(super) const FORCED_CONFIG: &[(&str, &str)] = &[
+    ("core.fsmonitor", "false"),
+    ("core.hooksPath", NULL_DEVICE),
+    ("core.sshCommand", "false"),
+    ("protocol.allow", "never"),
+    ("core.attributesFile", NULL_DEVICE),
+    ("core.autocrlf", "false"),
+    ("core.eol", "lf"),
+    ("core.quotePath", "false"),
+    ("log.showRoot", "true"),
+    ("log.showSignature", "false"),
 ];
 
 /// Attributes that make a checkout's bytes differ from the blob's. `text`
@@ -62,14 +92,121 @@ impl GitRepo {
         &self.dir
     }
 
+    /// The one way this module runs git: an empty environment plus
+    /// [`INHERITED_ENV`] and [`FORCED_ENV`], and [`FORCED_CONFIG`] as `-c`.
     pub(super) fn command(&self) -> Command {
         let mut c = Command::new("git");
-        c.arg("-C").arg(&self.dir);
-        for var in REDIRECTING_ENV {
-            c.env_remove(var);
+        c.env_clear();
+        for var in INHERITED_ENV {
+            if let Some(v) = std::env::var_os(var) {
+                c.env(var, v);
+            }
+        }
+        c.envs(FORCED_ENV.iter().copied());
+        c.arg("--no-replace-objects").arg("-C").arg(&self.dir);
+        for (key, value) in FORCED_CONFIG {
+            c.arg("-c").arg(format!("{key}={value}"));
         }
         c.stdin(Stdio::null());
         c
+    }
+
+    /// Refuse a repository whose objects or attributes are not the commit's
+    /// alone, or a path that is not the repository's top level.
+    pub fn preflight(&self) -> Result<(), SeedError> {
+        self.require_top_level()?;
+        let refuse = |why: String| Err(SeedError(format!("{}: {why}", self.dir.display())));
+        if self.rev_parse_flag("--is-shallow-repository")? == "true" {
+            return refuse("a shallow clone: its history is cut, so dates would be wrong".into());
+        }
+        let partial = self.config_matches(r"^(extensions\.partialclone|remote\..*\.promisor)$")?;
+        if partial.iter().any(|v| v != "false") {
+            return refuse(
+                "a partial clone: blobs may be missing or fetched over the network".into(),
+            );
+        }
+        for (file, why) in [
+            ("info/attributes", "sets attributes outside the commit"),
+            ("info/grafts", "rewrites history outside the commit"),
+        ] {
+            let path = self.git_path(file)?;
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            if text
+                .lines()
+                .any(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'))
+            {
+                return refuse(format!("{} is not empty: it {why}", path.display()));
+            }
+        }
+        Ok(())
+    }
+
+    /// The path must be the work tree's top level (or a bare repository's own
+    /// directory): attributes and paths are read relative to it.
+    fn require_top_level(&self) -> Result<(), SeedError> {
+        let bare = self.rev_parse_flag("--is-bare-repository")? == "true";
+        let top = if bare {
+            self.rev_parse_flag("--absolute-git-dir")?
+        } else {
+            self.rev_parse_flag("--show-toplevel")?
+        };
+        let same = match (
+            std::fs::canonicalize(&self.dir),
+            std::fs::canonicalize(&top),
+        ) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        };
+        if !same {
+            return Err(SeedError(format!(
+                "--git {} is not the repository's top level ({top}); name the top level",
+                self.dir.display()
+            )));
+        }
+        Ok(())
+    }
+
+    fn rev_parse_flag(&self, flag: &str) -> Result<String, SeedError> {
+        self.rev_parse_args(&[flag])
+    }
+
+    fn rev_parse_args(&self, args: &[&str]) -> Result<String, SeedError> {
+        let mut all = vec!["rev-parse"];
+        all.extend_from_slice(args);
+        let out = self.run(&all)?;
+        Ok(String::from_utf8_lossy(&out).trim().to_string())
+    }
+
+    /// `rev-parse --git-path`, resolved against the repository path.
+    fn git_path(&self, file: &str) -> Result<PathBuf, SeedError> {
+        let p = PathBuf::from(self.rev_parse_args(&["--git-path", file])?);
+        Ok(if p.is_absolute() { p } else { self.dir.join(p) })
+    }
+
+    /// Values of the repository's config keys matching `regex` (none is fine).
+    fn config_matches(&self, regex: &str) -> Result<Vec<String>, SeedError> {
+        let out = self
+            .command()
+            .args(["config", "--get-regexp", regex])
+            .output()
+            .map_err(|e| SeedError(format!("cannot run git: {e}")))?;
+        match out.status.code() {
+            Some(0) => Ok(String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(|l| {
+                    l.split_once(' ')
+                        .map_or("", |(_, v)| v)
+                        .trim()
+                        .to_ascii_lowercase()
+                })
+                .collect()),
+            Some(1) => Ok(Vec::new()),
+            _ => Err(SeedError(format!(
+                "git config failed in {}: {}",
+                self.dir.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ))),
+        }
     }
 
     fn run(&self, args: &[&str]) -> Result<Vec<u8>, SeedError> {

@@ -169,6 +169,7 @@ impl SeedPlan {
 pub fn plan(opts: &PlanOptions) -> Result<SeedPlan, SeedError> {
     let globs = parse_globs(opts)?;
     let repo = GitRepo::new(&opts.repo);
+    repo.preflight()?;
     let (commit, tree) = repo.resolve(&opts.rev)?;
     let entries = repo.ls_tree(&commit)?;
     let selection = select(&entries, &globs, &opts.exclude);
@@ -212,7 +213,8 @@ pub fn plan_entries(input: PlanInput, opts: &PlanOptions) -> Result<SeedPlan, Se
         path: a.path.clone(),
         kind: ProblemKind::CheckoutAttribute,
         detail: format!(
-            "{}={} in .gitattributes: a checkout's bytes would differ from the commit's",
+            "{}={} is set by the commit's own .gitattributes: a checkout's bytes would \
+             differ from the commit's",
             a.attr, a.value
         ),
     }));

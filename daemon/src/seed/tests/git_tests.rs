@@ -6,15 +6,51 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
-use super::page;
+use super::{page, plan_opts};
 use crate::seed::*;
 
-struct Repo {
+/// Run the TEST's own git: an empty environment, no global or system config
+/// (the developer's must not leak in, and their commits must never be signed
+/// with the owner's key), fixed dates, and local clones allowed.
+pub(super) fn git_in(dir: &Path, args: &[&str], time: i64) -> String {
+    let stamp = format!("{time} +0000");
+    let mut c = Command::new("git");
+    c.env_clear();
+    if let Some(path) = std::env::var_os("PATH") {
+        c.env("PATH", path);
+    }
+    c.env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1");
+    c.env("GIT_AUTHOR_DATE", &stamp)
+        .env("GIT_COMMITTER_DATE", &stamp);
+    c.arg("-C").arg(dir);
+    for cfg in [
+        "user.name=seed-test",
+        "user.email=seed@test.invalid",
+        "commit.gpgsign=false",
+        "tag.gpgsign=false",
+        "core.hooksPath=/dev/null",
+        "protocol.file.allow=always",
+        "uploadpack.allowFilter=true",
+    ] {
+        c.args(["-c", cfg]);
+    }
+    c.args(args);
+    let out = c.output().unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+pub(super) struct Repo {
     dir: tempfile::TempDir,
 }
 
 impl Repo {
-    fn new() -> Repo {
+    pub(super) fn new() -> Repo {
         let r = Repo {
             dir: tempfile::tempdir().unwrap(),
         };
@@ -22,74 +58,36 @@ impl Repo {
         r
     }
 
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         self.dir.path()
     }
 
-    fn git_with_time(&self, args: &[&str], time: i64) -> String {
-        let stamp = format!("{time} +0000");
-        let mut c = Command::new("git");
-        c.arg("-C").arg(self.path());
-        c.args([
-            "-c",
-            "user.name=seed-test",
-            "-c",
-            "user.email=seed@test.invalid",
-        ]);
-        c.args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"]);
-        c.args(args);
-        for var in [
-            "GIT_DIR",
-            "GIT_WORK_TREE",
-            "GIT_INDEX_FILE",
-            "GIT_OBJECT_DIRECTORY",
-        ] {
-            c.env_remove(var);
-        }
-        c.env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1");
-        c.env("GIT_AUTHOR_DATE", &stamp)
-            .env("GIT_COMMITTER_DATE", &stamp);
-        let out = c.output().unwrap();
-        assert!(
-            out.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    pub(super) fn git_with_time(&self, args: &[&str], time: i64) -> String {
+        git_in(self.path(), args, time)
     }
 
-    fn git(&self, args: &[&str]) -> String {
+    pub(super) fn git(&self, args: &[&str]) -> String {
         self.git_with_time(args, 1_600_000_000)
     }
 
-    fn write(&self, rel: &str, text: &str) {
+    pub(super) fn write(&self, rel: &str, text: &str) {
         let p = self.path().join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, text).unwrap();
     }
 
-    fn commit(&self, time: i64) -> String {
+    pub(super) fn commit(&self, time: i64) -> String {
         self.git(&["add", "-A"]);
         self.git_with_time(&["commit", "-q", "-m", "c"], time);
         self.git(&["rev-parse", "HEAD"])
     }
 
-    fn plan(&self, rev: &str) -> SeedPlan {
-        plan(&PlanOptions {
-            repo: self.path().to_path_buf(),
-            rev: rev.into(),
-            include: Vec::new(),
-            exclude: Vec::new(),
-            max_body_bytes: DEFAULT_MAX_BODY_BYTES,
-            require_canonical: false,
-            code_property: None,
-        })
-        .unwrap()
+    pub(super) fn plan(&self, rev: &str) -> SeedPlan {
+        plan(&plan_opts(self.path(), rev)).unwrap()
     }
 }
 
-fn note(id: &str, body: &str) -> String {
+pub(super) fn note(id: &str, body: &str) -> String {
     page(&[("ID", id)], Some(id), None, body)
 }
 
@@ -172,7 +170,7 @@ fn created_and_modified_are_the_first_add_and_last_change_at_the_tag() {
 
 /// A page with an id and twenty distinct lines, so git's similarity index
 /// sees a rename or copy as one.
-fn long_note(id: &str) -> String {
+pub(super) fn long_note(id: &str) -> String {
     let body: String = (1..=20).map(|i| format!("línea {i} de {id}\n")).collect();
     note(id, &body)
 }
@@ -365,37 +363,10 @@ fn a_revision_that_is_not_a_commit_is_an_error() {
     r.commit(1_700_000_000);
     let tree = r.git(&["rev-parse", "HEAD^{tree}"]);
     for rev in ["no-such-tag", tree.as_str(), "-n", ""] {
-        let opts = PlanOptions {
-            repo: r.path().to_path_buf(),
-            rev: rev.into(),
-            include: Vec::new(),
-            exclude: Vec::new(),
-            max_body_bytes: DEFAULT_MAX_BODY_BYTES,
-            require_canonical: false,
-            code_property: None,
-        };
-        assert!(plan(&opts).is_err(), "{rev:?} must not plan");
-    }
-}
-
-/// The reader cannot be redirected to another repository by the environment
-/// it was started in (a hook's or a worktree build's `GIT_DIR`).
-#[test]
-fn git_redirection_variables_are_removed() {
-    let cmd = GitRepo::new("/r").command();
-    let removed: Vec<String> = cmd
-        .get_envs()
-        .filter(|(_, v)| v.is_none())
-        .map(|(k, _)| k.to_string_lossy().into_owned())
-        .collect();
-    for var in [
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_COMMON_DIR",
-    ] {
-        assert!(removed.iter().any(|r| r == var), "{var} is not removed");
+        assert!(
+            plan(&plan_opts(r.path(), rev)).is_err(),
+            "{rev:?} must not plan"
+        );
     }
 }
 

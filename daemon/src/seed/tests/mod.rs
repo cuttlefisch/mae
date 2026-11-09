@@ -2,6 +2,7 @@
 
 mod git_tests;
 mod glob_tests;
+mod hardening_tests;
 mod plan_tests;
 mod prop_tests;
 mod split_tests;
@@ -34,5 +35,18 @@ pub(super) fn problem_kinds(text: &str) -> Vec<ProblemKind> {
     match split(text) {
         Ok(_) => Vec::new(),
         Err(ps) => ps.into_iter().map(|p| p.kind).collect(),
+    }
+}
+
+/// Default options for planning `rev` of the repository at `repo`.
+pub(super) fn plan_opts(repo: &std::path::Path, rev: &str) -> PlanOptions {
+    PlanOptions {
+        repo: repo.to_path_buf(),
+        rev: rev.into(),
+        include: Vec::new(),
+        exclude: Vec::new(),
+        max_body_bytes: DEFAULT_MAX_BODY_BYTES,
+        require_canonical: false,
+        code_property: None,
     }
 }
