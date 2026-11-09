@@ -9,6 +9,7 @@ pub mod artifact_store;
 pub mod checkpoint;
 pub mod collab_handler;
 pub mod content_op_policy;
+pub mod doc_editors;
 pub mod doc_store;
 pub mod kb_doc_migration;
 pub mod kb_query;

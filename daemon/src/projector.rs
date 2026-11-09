@@ -452,6 +452,9 @@ fn kind_from_id(node_id: &str) -> NodeKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Every test write is attributed; the editor-record tests use their own.
+    const TEST_BY: crate::doc_editors::Attribution<'static> =
+        crate::doc_editors::Attribution::Principal("test-editor");
     use mae_kb::store::SearchHit;
 
     /// In-memory per-KB store provider for tests (creates an `open_mem` cozo per kb_id).
@@ -551,12 +554,12 @@ mod tests {
 
         let node = mae_sync::kb::KbNodeDoc::new("concept:x", "X", "x", &[]);
         doc_store
-            .apply_update("kbn:kb1:concept:x", &node.encode(), None)
+            .apply_update("kbn:kb1:concept:x", &node.encode(), None, TEST_BY)
             .await
             .unwrap();
         let scratch = mae_sync::kb::KbNodeDoc::new("s", "S", "s", &[]);
         doc_store
-            .apply_update("scratch:buf", &scratch.encode(), None)
+            .apply_update("scratch:buf", &scratch.encode(), None, TEST_BY)
             .await
             .unwrap();
 
@@ -583,19 +586,19 @@ mod tests {
         // Seed two node docs + a collection listing them.
         let a = mae_sync::kb::KbNodeDoc::new("concept:a", "A", "see [[concept:b]]", &[]);
         doc_store
-            .apply_update("kbn:kb1:concept:a", &a.encode(), None)
+            .apply_update("kbn:kb1:concept:a", &a.encode(), None, TEST_BY)
             .await
             .unwrap();
         let b = mae_sync::kb::KbNodeDoc::new("concept:b", "B", "b body", &[]);
         doc_store
-            .apply_update("kbn:kb1:concept:b", &b.encode(), None)
+            .apply_update("kbn:kb1:concept:b", &b.encode(), None, TEST_BY)
             .await
             .unwrap();
         let mut coll = mae_sync::kb::KbCollectionDoc::new("kb1", "owner");
         coll.add_node("concept:a", "A");
         coll.add_node("concept:b", "B");
         doc_store
-            .share_doc("kbc:kb1", &coll.encode_state())
+            .share_doc("kbc:kb1", &coll.encode_state(), TEST_BY)
             .await
             .unwrap();
 
@@ -614,7 +617,7 @@ mod tests {
         let mut a_doc = mae_sync::kb::KbNodeDoc::from_bytes_with_client_id(&a_state, 999).unwrap();
         let edit = a_doc.set_title("A2");
         doc_store
-            .apply_update("kbn:kb1:concept:a", &edit, None)
+            .apply_update("kbn:kb1:concept:a", &edit, None, TEST_BY)
             .await
             .unwrap();
         projector.project_doc("kbn:kb1:concept:a").await.unwrap();
@@ -624,7 +627,7 @@ mod tests {
         let mut coll2 = mae_sync::kb::KbCollectionDoc::from_bytes(&coll.encode_state()).unwrap();
         coll2.remove_node("concept:b");
         doc_store
-            .share_doc("kbc:kb1", &coll2.encode_state())
+            .share_doc("kbc:kb1", &coll2.encode_state(), TEST_BY)
             .await
             .unwrap();
         projector.project_doc("kbc:kb1").await.unwrap();
@@ -652,13 +655,13 @@ mod tests {
 
         let a = mae_sync::kb::KbNodeDoc::new("concept:a", "A", "a", &[]);
         doc_store
-            .apply_update("kbn:kb1:concept:a", &a.encode(), None)
+            .apply_update("kbn:kb1:concept:a", &a.encode(), None, TEST_BY)
             .await
             .unwrap();
         let mut coll = mae_sync::kb::KbCollectionDoc::new("kb1", "owner");
         coll.add_node("concept:a", "A");
         doc_store
-            .share_doc("kbc:kb1", &coll.encode_state())
+            .share_doc("kbc:kb1", &coll.encode_state(), TEST_BY)
             .await
             .unwrap();
 

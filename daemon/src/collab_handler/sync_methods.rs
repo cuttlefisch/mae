@@ -29,6 +29,24 @@ pub(super) async fn handle_sync_state_vector(
     }
 }
 
+/// `sync/update`'s `update` param: present, valid base64, and within the
+/// per-update size gate.
+fn update_param(params: &serde_json::Value, max_update: usize) -> Result<Vec<u8>, McpError> {
+    let update_b64 = params["update"]
+        .as_str()
+        .ok_or_else(|| McpError::parse_error("missing 'update' field".to_string()))?;
+    let update_bytes = base64_to_update(update_b64)
+        .map_err(|e| McpError::parse_error(format!("invalid base64: {e}")))?;
+    if update_bytes.len() > max_update {
+        return Err(McpError::parse_error(format!(
+            "update too large: {} bytes (max {})",
+            update_bytes.len(),
+            max_update
+        )));
+    }
+    Ok(update_bytes)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_sync_update(
     doc_store: &DocStore,
@@ -67,36 +85,12 @@ pub(super) async fn handle_sync_update(
             .subscribe_doc(session_id, &doc_name);
         debug!(session = session_id, doc = %doc_name, "sync/update: first interaction, tracking connect");
     }
-    let update_b64 = match params["update"].as_str() {
-        Some(s) => s,
-        None => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::parse_error("missing 'update' field".to_string()),
-            );
-        }
-    };
-    let update_bytes = match base64_to_update(update_b64) {
+    let update_bytes = match update_param(params, doc_store.max_update_size()) {
         Ok(b) => b,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::parse_error(format!("invalid base64: {e}")),
-            );
-        }
+        Err(e) => return JsonRpcResponse::error(id, e),
     };
-    let max_update = doc_store.max_update_size();
-    if update_bytes.len() > max_update {
-        return JsonRpcResponse::error(
-            id,
-            McpError::parse_error(format!(
-                "update too large: {} bytes (max {})",
-                update_bytes.len(),
-                max_update
-            )),
-        );
-    }
     let client_id = params["client_id"].as_u64();
+    let by = Attribution::session(auth_principal, session_id);
 
     // ADR-036 §D3 (B→A): a content op arriving over the mesh — a peer daemon's
     // forwarded edit — is re-verified against THIS KB's membership before
@@ -205,7 +199,7 @@ pub(super) async fn handle_sync_update(
     }
 
     match doc_store
-        .apply_update(&doc_name, &update_bytes, client_id)
+        .apply_update(&doc_name, &update_bytes, client_id, by)
         .await
     {
         Ok(result) => {
@@ -252,8 +246,8 @@ pub(super) async fn relay(
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
     if method == super::method_authz::Method::SyncShare {
-        return handle_sync_share(doc_store, broadcaster, session_id, session_docs, id, params)
-            .await;
+        let who = (session_id, auth_principal);
+        return handle_sync_share(doc_store, broadcaster, who, session_docs, id, params).await;
     }
     handle_sync_awareness(
         doc_store,
@@ -514,7 +508,7 @@ pub(super) async fn handle_sync_resync(
 pub(super) async fn handle_sync_share(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
-    session_id: u64,
+    (session_id, auth_principal): (u64, Option<&str>),
     session_docs: &mut HashSet<String>,
     id: serde_json::Value,
     params: &serde_json::Value,
@@ -547,7 +541,8 @@ pub(super) async fn handle_sync_share(
         }
     };
 
-    match doc_store.share_doc(&doc_name, &update_bytes).await {
+    let by = Attribution::session(auth_principal, session_id);
+    match doc_store.share_doc(&doc_name, &update_bytes, by).await {
         Ok(result) => {
             info!(session = session_id, doc = %doc_name, wal_seq = result.wal_seq,
                         update_len = result.update.len(), "sync/share: accepted");

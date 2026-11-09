@@ -26,6 +26,7 @@ use tracing::{info, warn};
 use crate::handler::DaemonState;
 use crate::p2p::MAE_ALPN;
 use crate::ticket::JoinTicket;
+use mae_daemon::doc_editors::Attribution;
 use mae_daemon::doc_store::DocStore;
 use mae_mcp::broadcast::{EditorEvent, SharedBroadcaster};
 use mae_sync::encoding::{base64_to_update, update_to_base64};
@@ -281,7 +282,7 @@ async fn peer_session(
                                 };
                                 match fence_reject {
                                     Some(reason) => warn!(kb_id = %ticket.kb_id, doc = %doc, %reason, "mesh: REJECTED relayed op (epoch fence — #157 N1)"),
-                                    None => apply_doc(doc_store, Some(broadcaster), dialer_sid, &doc, &update, verified).await,
+                                    None => apply_doc(doc_store, Some(broadcaster), dialer_sid, &doc, &update, verified, Attribution::MeshPeer(&mesh_peer_fp(ticket))).await,
                                 }
                             }
                             Err(e) => warn!(kb_id = %ticket.kb_id, doc = %doc, reason = %e, "mesh: REJECTED relayed content op (ADR-036)"),
@@ -324,6 +325,13 @@ async fn peer_session(
     reader_task.abort();
     // Read/forward/EOF failures are all network/protocol — transient, so reconnect.
     result.map_err(SessionEnd::Transient)
+}
+
+/// The owner daemon's key fingerprint, which the editor record names as the
+/// relay of everything this session applies (ADR-113 D3). `connect_verify_anchor`
+/// has already proven the connection is to this node-id.
+fn mesh_peer_fp(ticket: &JoinTicket) -> String {
+    mae_sync::membership::fingerprint_of(ticket.node_id().as_bytes())
 }
 
 /// The `kb:{node}` doc names currently in a KB's collection (for doc-scoped local
@@ -439,7 +447,17 @@ where
         .await
         .map_err(|e| format!("read kb/join: {e}"))?
         .ok_or_else(|| "owner closed without responding".to_string())?;
-    apply_join_response(&resp, &ticket.kb_id, doc_store, broadcaster, exclude_sid).await
+    let peer_fp = mesh_peer_fp(ticket);
+    let from = Attribution::MeshPeer(&peer_fp);
+    apply_join_response(
+        &resp,
+        &ticket.kb_id,
+        doc_store,
+        broadcaster,
+        exclude_sid,
+        from,
+    )
+    .await
 }
 
 /// Our per-node state vectors for the KB (so the owner replies with diffs, not full
@@ -502,6 +520,7 @@ async fn apply_join_response(
     doc_store: &Arc<DocStore>,
     broadcaster: Option<&SharedBroadcaster>,
     exclude_sid: u64,
+    from: Attribution<'_>,
 ) -> Result<JoinOutcome, String> {
     let v: Value = serde_json::from_str(resp).map_err(|e| format!("bad response json: {e}"))?;
     if let Some(err) = v.get("error") {
@@ -528,6 +547,7 @@ async fn apply_join_response(
         &format!("kbc:{kb_id}"),
         &coll_bytes,
         None,
+        from,
     )
     .await;
 
@@ -556,6 +576,7 @@ async fn apply_join_response(
                 &mae_sync::kb_node_doc_name(kb_id, id),
                 &update,
                 None,
+                from,
             )
             .await;
             nodes += 1;
@@ -574,8 +595,9 @@ async fn apply_doc(
     doc_name: &str,
     update: &[u8],
     content_header: Option<Value>,
+    from: Attribution<'_>,
 ) {
-    match doc_store.apply_update(doc_name, update, None).await {
+    match doc_store.apply_update(doc_name, update, None, from).await {
         Ok(result) => {
             if let Some(bc) = broadcaster {
                 // `broadcast_except(exclude_sid)` so the dialer's own local
@@ -619,8 +641,13 @@ fn parse_sync_update(msg: &str) -> Option<(String, Vec<u8>, Option<Value>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Every test write is attributed; the editor-record tests use their own.
+    const TEST_BY: mae_daemon::doc_editors::Attribution<'static> =
+        mae_daemon::doc_editors::Attribution::Principal("test-editor");
+    const PEER: Attribution<'static> = Attribution::MeshPeer("test-peer");
     use crate::p2p::{bind_endpoint, loopback_if_unspecified, serve};
     use iroh::{EndpointAddr, RelayMode, TransportAddr};
+    use mae_daemon::doc_editors::EditorKind;
     use mae_daemon::doc_store::DocStore;
     use mae_mcp::broadcast::{EventBroadcaster, SharedBroadcaster};
     use mae_mcp::identity::Identity;
@@ -690,7 +717,7 @@ mod tests {
             coll.append_signed_op(&admit, &asig, &pubkey);
         }
         a_store
-            .share_doc(&format!("kbc:{kb_id}"), &coll.encode_state())
+            .share_doc(&format!("kbc:{kb_id}"), &coll.encode_state(), TEST_BY)
             .await
             .unwrap();
         // The node doc is a plain text CRDT (the daemon stores yrs docs schema-
@@ -700,6 +727,7 @@ mod tests {
             .share_doc(
                 &mae_sync::kb_node_doc_name(kb_id, "concept:n"),
                 &node.encode(),
+                TEST_BY,
             )
             .await
             .unwrap();
@@ -885,7 +913,7 @@ mod tests {
         };
         let edit = a_node.insert(0, "LIVE-EDIT ");
         a_store
-            .apply_update("kbn:kbl:concept:n", &edit, None)
+            .apply_update("kbn:kbl:concept:n", &edit, None, TEST_BY)
             .await
             .unwrap();
         // A (the owner = a member) SIGNS the edit (ADR-036): the broadcast carries the
@@ -914,6 +942,21 @@ mod tests {
         .await;
         peer.abort();
         assert!(landed, "B should apply the owner's live edit");
+
+        // ADR-113 D3: everything B applied from the mesh — the join pull and the
+        // live push — is recorded against the owner daemon as a RELAY, under its
+        // verified key fingerprint, and never as a principal.
+        let a_fp = a_id.fingerprint();
+        for doc in ["kbn:kbl:concept:n", "kbc:kbl"] {
+            let rows = b_store.editors_since(doc, 0).await.unwrap();
+            let got: Vec<_> = rows.iter().map(|r| (r.kind, r.editor.as_str())).collect();
+            assert_eq!(got, vec![(EditorKind::MeshPeer, a_fp.as_str())], "{doc}");
+        }
+        let node = b_store.editors_since("kbn:kbl:concept:n", 0).await.unwrap();
+        assert!(
+            node[0].updates >= 2,
+            "pull and live push both recorded: {node:?}"
+        );
     }
 
     /// ADR-036 mesh verification, the SELECTIVE oracle: B rejects three distinct bad
@@ -1084,7 +1127,7 @@ mod tests {
         };
         let edit = b_node.insert(0, "B-EDIT ");
         b_store
-            .apply_update("kbn:kbo:concept:n", &edit, None)
+            .apply_update("kbn:kbo:concept:n", &edit, None, TEST_BY)
             .await
             .unwrap();
         let push_b = |header: Option<serde_json::Value>| {
@@ -1140,7 +1183,7 @@ mod tests {
     async fn apply_join_response_classifies_reject_vs_pending() {
         let store = mem_store();
         let reject = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"not a member of KB 'k'"}}"#;
-        match apply_join_response(reject, "k", &store, None, 7).await {
+        match apply_join_response(reject, "k", &store, None, 7, PEER).await {
             Ok(JoinOutcome::Rejected(why)) => {
                 assert!(
                     why.contains("not a member"),
@@ -1151,7 +1194,7 @@ mod tests {
         }
         let pending = r#"{"jsonrpc":"2.0","id":1,"result":{"status":"pending"}}"#;
         assert_eq!(
-            apply_join_response(pending, "k", &store, None, 7)
+            apply_join_response(pending, "k", &store, None, 7, PEER)
                 .await
                 .unwrap(),
             JoinOutcome::Pending

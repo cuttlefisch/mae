@@ -65,7 +65,7 @@ pub(super) async fn handle_kb_claim_lease(
     match claim_lease_and_report(
         doc_store,
         broadcaster,
-        session_id,
+        (session_id, Attribution::session(auth_principal, session_id)),
         &kb_id,
         &op_kind,
         &holder_fp,
@@ -104,10 +104,13 @@ pub(super) async fn handle_kb_claim_lease(
 /// `holder_fp` differs from `holder_fp` passed in). Used by both the external
 /// `kb/claim_lease` RPC (above, after its `kb_access` gate) and the enrichment
 /// scheduler's internal claim (`claim_lease_for_scheduler`, below).
+///
+/// `(session_id, by)`: the session to skip on broadcast, and who the write is
+/// recorded against (ADR-113 D3).
 async fn claim_lease_and_report(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
-    session_id: u64,
+    who: (u64, Attribution<'_>),
     kb_id: &str,
     op_kind: &str,
     holder_fp: &str,
@@ -117,8 +120,7 @@ async fn claim_lease_and_report(
     let now = now_unix();
     let update = coll.claim_lease(op_kind, holder_fp, ttl_secs, now);
     if !update.is_empty() {
-        persist_and_broadcast_collection(doc_store, broadcaster, session_id, kb_id, &update)
-            .await?;
+        persist_and_broadcast_collection(doc_store, broadcaster, who, kb_id, &update).await?;
     }
     coll.current_lease(op_kind, now)
         .ok_or_else(|| "lease claim produced no current holder".to_string())
@@ -148,7 +150,7 @@ pub async fn claim_lease_for_scheduler(
     claim_lease_and_report(
         doc_store,
         broadcaster,
-        0,
+        (0, Attribution::Internal(InternalWriter::Scheduler)),
         kb_id,
         op_kind,
         holder_fp,

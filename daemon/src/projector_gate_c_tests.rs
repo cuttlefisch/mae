@@ -7,6 +7,10 @@
 //! caught anything is indistinguishable from one that cannot.
 
 use super::*;
+
+/// Every test write is attributed; the editor-record tests use their own.
+const TEST_BY: crate::doc_editors::Attribution<'static> =
+    crate::doc_editors::Attribution::Principal("test-editor");
 use crate::storage::SqliteBackend;
 use mae_kb::store::SearchHit;
 use std::collections::HashMap;
@@ -34,13 +38,13 @@ async fn seed(doc_store: &Arc<DocStore>, kb_id: &str, nodes: &[(&str, &str, &str
     for (id, title, body) in nodes {
         let n = mae_sync::kb::KbNodeDoc::new(id, title, body, &[]);
         doc_store
-            .apply_update(&format!("kbn:kb1:{id}"), &n.encode(), None)
+            .apply_update(&format!("kbn:kb1:{id}"), &n.encode(), None, TEST_BY)
             .await
             .unwrap();
         coll.add_node(id, title);
     }
     doc_store
-        .apply_update(&format!("kbc:{kb_id}"), &coll.encode_state(), None)
+        .apply_update(&format!("kbc:{kb_id}"), &coll.encode_state(), None, TEST_BY)
         .await
         .unwrap();
 }
@@ -89,7 +93,7 @@ async fn a_crdt_node_write_becomes_visible_to_a_cozo_query() {
     .unwrap();
     let upd = edited.set_body("now mentions zippers instead");
     doc_store
-        .apply_update("kbn:kb1:concept:rope", &upd, None)
+        .apply_update("kbn:kb1:concept:rope", &upd, None, TEST_BY)
         .await
         .unwrap();
     projector.project_doc("kbn:kb1:concept:rope").await.unwrap();
@@ -213,7 +217,7 @@ async fn reconciliation_detects_and_heals_every_drift_class() {
     store.insert_node(&ghost).unwrap(); // extra
     let ghost_doc = mae_sync::kb::KbNodeDoc::new("concept:ghost", "Ghost", "not in the CRDT", &[]);
     doc_store
-        .apply_update("kbn:kb1:concept:ghost", &ghost_doc.encode(), None)
+        .apply_update("kbn:kb1:concept:ghost", &ghost_doc.encode(), None, TEST_BY)
         .await
         .unwrap();
 
@@ -285,11 +289,11 @@ async fn every_projected_field_is_drift_detectable() {
     let mut coll = mae_sync::kb::KbCollectionDoc::new("kb1", "owner");
     coll.add_node("n1", "Title");
     doc_store
-        .apply_update("kbn:kb1:n1", &node.encode(), None)
+        .apply_update("kbn:kb1:n1", &node.encode(), None, TEST_BY)
         .await
         .unwrap();
     doc_store
-        .apply_update("kbc:kb1", &coll.encode_state(), None)
+        .apply_update("kbc:kb1", &coll.encode_state(), None, TEST_BY)
         .await
         .unwrap();
 
@@ -389,13 +393,19 @@ async fn rebuild_is_keyed_on_the_minted_id_not_the_display_name() {
                 &mae_sync::kb_node_doc_name(minted_id, id),
                 &n.encode(),
                 None,
+                TEST_BY,
             )
             .await
             .unwrap();
         coll.add_node(id, title);
     }
     doc_store
-        .apply_update(&format!("kbc:{minted_id}"), &coll.encode_state(), None)
+        .apply_update(
+            &format!("kbc:{minted_id}"),
+            &coll.encode_state(),
+            None,
+            TEST_BY,
+        )
         .await
         .unwrap();
 
@@ -490,7 +500,7 @@ async fn heal_still_deletes_a_node_that_was_genuinely_removed() {
     let mut coll = mae_sync::kb::KbCollectionDoc::from_bytes(&state).unwrap();
     coll.remove_node("b");
     doc_store
-        .apply_update("kbc:kb1", &coll.encode_state(), None)
+        .apply_update("kbc:kb1", &coll.encode_state(), None, TEST_BY)
         .await
         .unwrap();
 
@@ -525,7 +535,7 @@ async fn heal_refuses_to_empty_a_projection_when_the_manifest_lists_nothing() {
     let _ = empty.add_node("placeholder", "p");
     empty.remove_node("placeholder");
     doc_store
-        .apply_update("kbc:kb1", &empty.encode_state(), None)
+        .apply_update("kbc:kb1", &empty.encode_state(), None, TEST_BY)
         .await
         .unwrap();
 

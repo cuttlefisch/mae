@@ -34,11 +34,24 @@ impl StorageBackend for FailingBackend {
         doc_name: &str,
         update: &[u8],
         client_id: Option<u64>,
+        by: &crate::doc_editors::EditStamp,
     ) -> Result<u64, StorageError> {
         if self.fail_writes.load(Ordering::SeqCst) {
             return Err(StorageError::Io("simulated disk failure".to_string()));
         }
-        self.inner.wal_append(doc_name, update, client_id).await
+        self.inner.wal_append(doc_name, update, client_id, by).await
+    }
+
+    async fn editors_since(
+        &self,
+        doc_name: &str,
+        since_ms: u64,
+    ) -> Result<Vec<crate::doc_editors::EditorRecord>, StorageError> {
+        self.inner.editors_since(doc_name, since_ms).await
+    }
+
+    async fn forget_editors(&self, doc_name: &str) -> Result<(), StorageError> {
+        self.inner.forget_editors(doc_name).await
     }
 
     async fn load_document(&self, doc_name: &str) -> Result<Option<DocumentState>, StorageError> {

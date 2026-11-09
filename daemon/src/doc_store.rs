@@ -17,6 +17,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
+use crate::doc_editors::{Attribution, EditClock, EditStamp, EditorRecord};
 use crate::storage::{StorageBackend, StorageError};
 
 /// Built-in default for the per-update size gate (bytes), used when the operator
@@ -124,6 +125,9 @@ pub struct DocStore {
     /// v2 automatically on load via `migrate_if_legacy`, instead of only on owner re-share.
     /// Re-read fresh from disk on every use (I-10: authorize/revoke take effect live).
     authorized_keys_path: std::sync::OnceLock<std::path::PathBuf>,
+    /// The clock the per-document editor record (ADR-113 D3) is stamped with.
+    /// Wall clock in production; injectable so tests order edits without sleeping.
+    clock: EditClock,
 }
 
 /// A derived membership snapshot (ADR-042): the governance + valid-member set for a KB at a
@@ -237,7 +241,46 @@ impl DocStore {
             kb_blocklists: RwLock::new(HashMap::new()),
             derive_cache: RwLock::new(HashMap::new()),
             authorized_keys_path: std::sync::OnceLock::new(),
+            clock: crate::doc_editors::system_clock(),
         }
+    }
+
+    /// Replace the editor-record clock (Unix ms). For tests.
+    pub fn with_clock(mut self, clock: EditClock) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// Every editor of `doc_name` whose latest applied update was stamped strictly
+    /// after `since_ms` (ADR-113 D3: the authors of a node since its last approved
+    /// revision). Includes non-principal kinds — mesh relays, the daemon's own
+    /// writers, unauthenticated sessions — each marked by its `kind`; a caller
+    /// applying a principal-only rule must decide what each of those means rather
+    /// than having them silently dropped here.
+    pub async fn editors_since(
+        &self,
+        doc_name: &str,
+        since_ms: u64,
+    ) -> Result<Vec<EditorRecord>, StorageError> {
+        self.storage.editors_since(doc_name, since_ms).await
+    }
+
+    /// Delete an evicted or deleted document's editor record — but only an
+    /// EPHEMERAL one. A durable KB doc's editors are the input to ADR-113's author
+    /// rule and are kept, as its content is (`is_durable_doc`). Best-effort: a
+    /// leftover row costs a little space and never under-reports an author.
+    async fn forget_ephemeral_editors(&self, doc_name: &str) {
+        if is_durable_doc(doc_name) {
+            return;
+        }
+        if let Err(e) = self.storage.forget_editors(doc_name).await {
+            warn!(doc = doc_name, error = %e, "could not drop the editor record");
+        }
+    }
+
+    /// The stamp for an update applied now by `by`.
+    fn stamp(&self, by: Attribution<'_>) -> EditStamp {
+        EditStamp::new(by, (self.clock)())
     }
 
     /// ADR-042 (#247): derive `kb_id`'s `(governance, valid_members)` with memoization. The
@@ -632,14 +675,19 @@ impl DocStore {
     }
 
     /// Apply an update to a document: validate -> apply in memory -> size check
-    /// (ADR-109 D6) -> WAL append, under the document's lock; a refused or
-    /// unlogged update is taken back by reloading from storage.
+    /// (ADR-109 D6) -> WAL append + editor record, under the document's lock; a
+    /// refused or unlogged update is taken back by reloading from storage.
     /// Returns the update bytes for broadcasting.
+    ///
+    /// `by` is who is applying it (ADR-113 D3). It is recorded only when the
+    /// update is persisted — in the WAL append's own transaction — so a refused
+    /// or failed update records nobody, and a persisted one is never unattributed.
     pub async fn apply_update(
         &self,
         doc_name: &str,
         update: &[u8],
         client_id: Option<u64>,
+        by: Attribution<'_>,
     ) -> Result<ApplyResult, StorageError> {
         // Validate before touching storage.
         validate_update(update)
@@ -675,7 +723,13 @@ impl DocStore {
             }
 
             // WAL append (durability) before the update is acknowledged or relayed.
-            let wal_id = match self.storage.wal_append(doc_name, update, client_id).await {
+            // The editor record commits with it, or neither does.
+            let stamp = self.stamp(by);
+            let wal_id = match self
+                .storage
+                .wal_append(doc_name, update, client_id, &stamp)
+                .await
+            {
                 Ok(id) => id,
                 Err(e) => {
                     self.restore_from_storage(doc_name, &mut doc).await?;
@@ -760,6 +814,7 @@ impl DocStore {
         }
         // Remove from persistent storage.
         self.storage.delete_document(doc_name).await?;
+        self.forget_ephemeral_editors(doc_name).await;
         info!(doc = doc_name, "document deleted");
         Ok(())
     }
@@ -1005,8 +1060,9 @@ impl DocStore {
                 debug!(doc = %name, "evict_idle: durable KB doc memory-evicted, retained on disk");
                 continue;
             }
-            if let Err(e) = self.storage.delete_document(name).await {
-                warn!(doc = %name, error = %e, "storage delete after eviction failed");
+            match self.storage.delete_document(name).await {
+                Ok(()) => self.forget_ephemeral_editors(name).await,
+                Err(e) => warn!(doc = %name, error = %e, "storage delete after eviction failed"),
             }
         }
 
@@ -1060,10 +1116,15 @@ impl DocStore {
 
     /// Atomically share a document: delete old, create new, apply update, set connected_clients=1.
     /// Used by `sync/share` to satisfy INV-5 (connected_clients accuracy).
+    ///
+    /// A share REPLACES the content, so it is an edit like any other for ADR-113
+    /// D3 and records `by` with its WAL entry. The delete below does not touch the
+    /// editor record: a reseal or rebirth must not wipe the node's earlier authors.
     pub async fn share_doc(
         &self,
         doc_name: &str,
         update: &[u8],
+        by: Attribution<'_>,
     ) -> Result<ApplyResult, StorageError> {
         // Validate before touching anything.
         validate_update(update)
@@ -1100,7 +1161,11 @@ impl DocStore {
         }
 
         // WAL append first (durability).
-        let wal_id = self.storage.wal_append(doc_name, update, None).await?;
+        let stamp = self.stamp(by);
+        let wal_id = self
+            .storage
+            .wal_append(doc_name, update, None, &stamp)
+            .await?;
 
         // Create new doc, apply update, set connected_clients=1.
         // ADR-105: share IS the creation path for a KB collection/node.
@@ -1201,6 +1266,9 @@ impl DocStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Every test write is attributed; the editor-record tests use their own.
+    const TEST_BY: crate::doc_editors::Attribution<'static> =
+        crate::doc_editors::Attribution::Principal("test-editor");
     use crate::storage::SqliteBackend;
     use mae_sync::text::TextSync;
 
@@ -1229,17 +1297,17 @@ mod tests {
         // Two collections + a node doc (which must NOT be counted as a collection).
         let c1 = mae_sync::kb::KbCollectionDoc::new("default", "owner");
         store
-            .share_doc("kbc:default", &c1.encode_state())
+            .share_doc("kbc:default", &c1.encode_state(), TEST_BY)
             .await
             .unwrap();
         let c2 = mae_sync::kb::KbCollectionDoc::new("notes", "owner");
         store
-            .share_doc("kbc:notes", &c2.encode_state())
+            .share_doc("kbc:notes", &c2.encode_state(), TEST_BY)
             .await
             .unwrap();
         let node = mae_sync::kb::KbNodeDoc::new("concept:x", "X", "body", &[]);
         store
-            .share_doc("kbn:testkb:concept:x", &node.encode())
+            .share_doc("kbn:testkb:concept:x", &node.encode(), TEST_BY)
             .await
             .unwrap();
 
@@ -1260,7 +1328,10 @@ mod tests {
         let mut ts = TextSync::with_client_id("", 1);
         let update = ts.insert(0, "hello world");
 
-        let result = store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        let result = store
+            .apply_update("doc1", &update, Some(1), TEST_BY)
+            .await
+            .unwrap();
         assert!(result.wal_seq > 0);
 
         let content = store.content("doc1").await.unwrap();
@@ -1273,7 +1344,10 @@ mod tests {
 
         let mut ts = TextSync::with_client_id("", 1);
         let update = ts.insert(0, "hello");
-        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        store
+            .apply_update("doc1", &update, Some(1), TEST_BY)
+            .await
+            .unwrap();
 
         let sv = store.state_vector("doc1").await.unwrap();
         assert!(!sv.is_empty());
@@ -1287,7 +1361,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_update_rejected() {
         let store = test_store();
-        let result = store.apply_update("doc1", b"garbage", None).await;
+        let result = store.apply_update("doc1", b"garbage", None, TEST_BY).await;
         assert!(result.is_err());
     }
 
@@ -1300,8 +1374,14 @@ mod tests {
         let u1 = ts1.insert(0, "doc1");
         let u2 = ts2.insert(0, "doc2");
 
-        store.apply_update("a", &u1, Some(1)).await.unwrap();
-        store.apply_update("b", &u2, Some(2)).await.unwrap();
+        store
+            .apply_update("a", &u1, Some(1), TEST_BY)
+            .await
+            .unwrap();
+        store
+            .apply_update("b", &u2, Some(2), TEST_BY)
+            .await
+            .unwrap();
 
         assert_eq!(store.content("a").await.unwrap(), "doc1");
         assert_eq!(store.content("b").await.unwrap(), "doc2");
@@ -1316,7 +1396,10 @@ mod tests {
         let mut ts = TextSync::with_client_id("", 1);
         for i in 0..5 {
             let update = ts.insert(i, "x");
-            store.apply_update("doc1", &update, Some(1)).await.unwrap();
+            store
+                .apply_update("doc1", &update, Some(1), TEST_BY)
+                .await
+                .unwrap();
         }
 
         // After 5 updates with threshold 3, compaction should have run.
@@ -1330,7 +1413,10 @@ mod tests {
         let store = test_store();
         let mut ts = TextSync::with_client_id("", 1);
         let update = ts.insert(0, "persist me");
-        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        store
+            .apply_update("doc1", &update, Some(1), TEST_BY)
+            .await
+            .unwrap();
 
         store.compact_all().await.unwrap();
         // No error — success.
@@ -1343,7 +1429,10 @@ mod tests {
 
         let mut ts = TextSync::with_client_id("", 1);
         let update = ts.insert(0, "hello");
-        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        store
+            .apply_update("doc1", &update, Some(1), TEST_BY)
+            .await
+            .unwrap();
 
         // WAL should have an entry.
         let state = backend.load_document("doc1").await.unwrap().unwrap();
@@ -1359,7 +1448,10 @@ mod tests {
             let store = DocStore::new(backend.clone(), 500);
             let mut ts = TextSync::with_client_id("", 1);
             let update = ts.insert(0, "persisted content");
-            store.apply_update("doc1", &update, Some(1)).await.unwrap();
+            store
+                .apply_update("doc1", &update, Some(1), TEST_BY)
+                .await
+                .unwrap();
             store.compact_doc("doc1").await.unwrap();
         }
 
@@ -1378,7 +1470,10 @@ mod tests {
 
         let mut ts = TextSync::with_client_id("", 1);
         let update = ts.insert(0, "evict me");
-        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        store
+            .apply_update("doc1", &update, Some(1), TEST_BY)
+            .await
+            .unwrap();
 
         // Evict with 0 idle threshold (immediate).
         let evicted = store.evict_idle(0).await;
@@ -1404,7 +1499,7 @@ mod tests {
         let mut ts = TextSync::with_client_id("", 1);
         let kb_update = ts.insert(0, "ZEPHYRINE");
         store
-            .share_doc("kbn:testkb:concept:x", &kb_update)
+            .share_doc("kbn:testkb:concept:x", &kb_update, TEST_BY)
             .await
             .unwrap();
         store
@@ -1415,7 +1510,10 @@ mod tests {
         // An ephemeral (non-KB) doc.
         let mut ts2 = TextSync::with_client_id("", 2);
         let eph_update = ts2.insert(0, "scratch");
-        store.share_doc("scratch:buf", &eph_update).await.unwrap();
+        store
+            .share_doc("scratch:buf", &eph_update, TEST_BY)
+            .await
+            .unwrap();
         store.track_client_disconnect("scratch:buf").await.unwrap();
 
         // Idle-evict everything (threshold 0).
@@ -1447,7 +1545,10 @@ mod tests {
 
         let mut ts = TextSync::with_client_id("", 1);
         let update = ts.insert(0, "active doc");
-        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        store
+            .apply_update("doc1", &update, Some(1), TEST_BY)
+            .await
+            .unwrap();
 
         // Mark as having a connected client.
         store.track_client_connect("doc1").await.unwrap();
@@ -1463,7 +1564,10 @@ mod tests {
 
         let mut ts = TextSync::with_client_id("", 1);
         let update = ts.insert(0, "compact me");
-        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        store
+            .apply_update("doc1", &update, Some(1), TEST_BY)
+            .await
+            .unwrap();
 
         store.compact_doc("doc1").await.unwrap();
 
@@ -1488,7 +1592,10 @@ mod tests {
             let mut ts = TextSync::with_client_id("", 1);
             for name in &["alpha", "beta", "gamma"] {
                 let update = ts.insert(0, name);
-                store.apply_update(name, &update, Some(1)).await.unwrap();
+                store
+                    .apply_update(name, &update, Some(1), TEST_BY)
+                    .await
+                    .unwrap();
                 store.compact_doc(name).await.unwrap();
             }
         }
@@ -1504,7 +1611,10 @@ mod tests {
 
         let mut ts = TextSync::with_client_id("", 1);
         let update = ts.insert(0, "consistent");
-        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        store
+            .apply_update("doc1", &update, Some(1), TEST_BY)
+            .await
+            .unwrap();
 
         // Atomic: both from same lock.
         let (state, sv) = store.encode_state_and_sv("doc1").await.unwrap();
@@ -1524,12 +1634,15 @@ mod tests {
         // Create an initial doc.
         let mut ts = TextSync::with_client_id("", 1);
         let update = ts.insert(0, "old content");
-        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        store
+            .apply_update("doc1", &update, Some(1), TEST_BY)
+            .await
+            .unwrap();
 
         // Share replaces with new content.
         let ts2 = TextSync::new("new content");
         let new_state = ts2.encode_state();
-        let result = store.share_doc("doc1", &new_state).await.unwrap();
+        let result = store.share_doc("doc1", &new_state, TEST_BY).await.unwrap();
         assert!(result.wal_seq > 0);
 
         // Content should be new, not concatenated.
@@ -1547,7 +1660,10 @@ mod tests {
 
         let mut ts = TextSync::with_client_id("", 1);
         let update = ts.insert(0, "test");
-        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        store
+            .apply_update("doc1", &update, Some(1), TEST_BY)
+            .await
+            .unwrap();
 
         store.track_client_connect("doc1").await.unwrap();
         let stats = store.doc_stats("doc1").await.unwrap();
@@ -1563,8 +1679,14 @@ mod tests {
         let store = test_store();
         let mut ts = TextSync::with_client_id("", 1);
         let u1 = ts.insert(0, "a");
-        store.apply_update("alpha", &u1, None).await.unwrap();
-        store.apply_update("beta", &u1, None).await.unwrap();
+        store
+            .apply_update("alpha", &u1, None, TEST_BY)
+            .await
+            .unwrap();
+        store
+            .apply_update("beta", &u1, None, TEST_BY)
+            .await
+            .unwrap();
 
         let mut names = store.document_names().await;
         names.sort();
@@ -1580,15 +1702,24 @@ mod tests {
 
         let mut ts1 = TextSync::with_client_id("", 1);
         let u1 = ts1.insert(0, "one");
-        store.apply_update("doc1", &u1, Some(1)).await.unwrap();
+        store
+            .apply_update("doc1", &u1, Some(1), TEST_BY)
+            .await
+            .unwrap();
         let mut ts2 = TextSync::with_client_id("", 2);
         let u2 = ts2.insert(0, "two");
-        store.apply_update("doc2", &u2, Some(2)).await.unwrap();
+        store
+            .apply_update("doc2", &u2, Some(2), TEST_BY)
+            .await
+            .unwrap();
 
         // The third load does NOT error — it LRU-evicts an idle doc from memory.
         let mut ts3 = TextSync::with_client_id("", 3);
         let u3 = ts3.insert(0, "three");
-        store.apply_update("doc3", &u3, Some(3)).await.unwrap();
+        store
+            .apply_update("doc3", &u3, Some(3), TEST_BY)
+            .await
+            .unwrap();
         assert!(
             store.document_count().await <= 2,
             "in-memory working set must respect the cap"
@@ -1611,7 +1742,12 @@ mod tests {
             let mut ts = TextSync::with_client_id("", i as u64 + 1);
             let u = ts.insert(0, &format!("node {i}"));
             store
-                .apply_update(&format!("kbn:testkb:node:{i}"), &u, Some(i as u64 + 1))
+                .apply_update(
+                    &format!("kbn:testkb:node:{i}"),
+                    &u,
+                    Some(i as u64 + 1),
+                    TEST_BY,
+                )
                 .await
                 .unwrap();
         }
@@ -1642,13 +1778,19 @@ mod tests {
         let u2 = ts.insert(5, " world");
 
         // Create both documents.
-        store.apply_update("doc1", &u1, Some(1)).await.unwrap();
-        store.apply_update("doc2", &u1, Some(2)).await.unwrap();
+        store
+            .apply_update("doc1", &u1, Some(1), TEST_BY)
+            .await
+            .unwrap();
+        store
+            .apply_update("doc2", &u1, Some(2), TEST_BY)
+            .await
+            .unwrap();
 
         // Applying a second update to an existing document must succeed even
         // though the map is at capacity — get_or_create takes the fast path.
         store
-            .apply_update("doc1", &u2, Some(1))
+            .apply_update("doc1", &u2, Some(1), TEST_BY)
             .await
             .expect("second update to existing doc must succeed at capacity");
 
@@ -1665,7 +1807,10 @@ mod tests {
         let mut ts = TextSync::with_client_id("", 1);
         for i in 0..5 {
             let update = ts.insert(i, "x");
-            store.apply_update("doc1", &update, Some(1)).await.unwrap();
+            store
+                .apply_update("doc1", &update, Some(1), TEST_BY)
+                .await
+                .unwrap();
         }
 
         // After 5 updates with max_wal_entries=3, forced compaction should have run.
@@ -1681,7 +1826,10 @@ mod tests {
         let store = test_store();
         let mut ts = TextSync::with_client_id("", 1);
         let update = ts.insert(0, "hello");
-        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        store
+            .apply_update("doc1", &update, Some(1), TEST_BY)
+            .await
+            .unwrap();
         assert!(store.has_doc("doc1").await);
         assert!(!store.has_doc("nonexistent").await);
     }
@@ -1692,7 +1840,7 @@ mod tests {
         let mut ts = TextSync::with_client_id("", 1);
         let update = ts.insert(0, "hello");
         store
-            .apply_update("test.txt", &update, Some(1))
+            .apply_update("test.txt", &update, Some(1), TEST_BY)
             .await
             .unwrap();
         assert_eq!(
@@ -1707,7 +1855,7 @@ mod tests {
         let mut ts = TextSync::with_client_id("", 1);
         let update = ts.insert(0, "hello");
         store
-            .apply_update("file:no-project/test.txt", &update, Some(1))
+            .apply_update("file:no-project/test.txt", &update, Some(1), TEST_BY)
             .await
             .unwrap();
         assert_eq!(
@@ -1721,7 +1869,10 @@ mod tests {
         let store = test_store();
         let mut ts = TextSync::with_client_id("", 1);
         let update = ts.insert(0, "hello");
-        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        store
+            .apply_update("doc1", &update, Some(1), TEST_BY)
+            .await
+            .unwrap();
         assert_eq!(store.find_doc_by_suffix("nonexistent").await, None);
     }
 
@@ -1732,11 +1883,11 @@ mod tests {
         let update = ts.insert(0, "hello");
         // Two docs that both end with /test.txt
         store
-            .apply_update("file:proj-a/test.txt", &update, Some(1))
+            .apply_update("file:proj-a/test.txt", &update, Some(1), TEST_BY)
             .await
             .unwrap();
         store
-            .apply_update("file:proj-b/test.txt", &update, Some(1))
+            .apply_update("file:proj-b/test.txt", &update, Some(1), TEST_BY)
             .await
             .unwrap();
         // Ambiguous — should return None
@@ -1767,13 +1918,13 @@ mod tests {
         let store = sized_store(&backend, 16);
         let mut ts = TextSync::with_client_id("", 1);
         store
-            .apply_update("doc1", &ts.insert(0, "hello"), Some(1))
+            .apply_update("doc1", &ts.insert(0, "hello"), Some(1), TEST_BY)
             .await
             .unwrap();
 
         let grow = ts.insert(5, " world, past sixteen bytes");
         assert_too_large(
-            store.apply_update("doc1", &grow, Some(1)).await,
+            store.apply_update("doc1", &grow, Some(1), TEST_BY).await,
             "growth past 16 bytes",
         );
         assert_eq!(
@@ -1791,7 +1942,7 @@ mod tests {
         // The document still takes an edit that fits.
         let mut ok = TextSync::from_state(&store.encode_state("doc1").await.unwrap()).unwrap();
         store
-            .apply_update("doc1", &ok.insert(5, "!"), Some(2))
+            .apply_update("doc1", &ok.insert(5, "!"), Some(2), TEST_BY)
             .await
             .unwrap();
         assert_eq!(store.content("doc1").await.unwrap(), "hello!");
@@ -1806,21 +1957,25 @@ mod tests {
         let name = mae_sync::kb_node_doc_name("kb1", "n1");
         let small = mae_sync::kb::KbNodeDoc::new("n1", "Title", &"x".repeat(60), &[]);
         store
-            .apply_update(&name, &small.encode(), None)
+            .apply_update(&name, &small.encode(), None, TEST_BY)
             .await
             .unwrap();
 
         let big = mae_sync::kb::KbNodeDoc::new("n2", "Title", &"y".repeat(65), &[]);
         let other = mae_sync::kb_node_doc_name("kb1", "n2");
         assert_too_large(
-            store.apply_update(&other, &big.encode(), None).await,
+            store
+                .apply_update(&other, &big.encode(), None, TEST_BY)
+                .await,
             "65-byte body",
         );
         // Bytes, not characters: 20 four-byte characters are 80 bytes.
         let wide = mae_sync::kb::KbNodeDoc::new("n3", "T", &"\u{1F600}".repeat(20), &[]);
         let third = mae_sync::kb_node_doc_name("kb1", "n3");
         assert_too_large(
-            store.apply_update(&third, &wide.encode(), None).await,
+            store
+                .apply_update(&third, &wide.encode(), None, TEST_BY)
+                .await,
             "80 UTF-8 bytes",
         );
     }
@@ -1833,13 +1988,13 @@ mod tests {
         let mut ts = TextSync::with_client_id("", 1);
         let unlimited = sized_store(&backend, 0);
         unlimited
-            .apply_update("doc1", &ts.insert(0, &"a".repeat(50)), Some(1))
+            .apply_update("doc1", &ts.insert(0, &"a".repeat(50)), Some(1), TEST_BY)
             .await
             .unwrap();
 
         let store = sized_store(&backend, 10);
         store
-            .apply_update("doc1", &ts.delete(0, 5), Some(1))
+            .apply_update("doc1", &ts.delete(0, 5), Some(1), TEST_BY)
             .await
             .unwrap();
         assert_eq!(
@@ -1849,7 +2004,7 @@ mod tests {
         );
         assert_too_large(
             store
-                .apply_update("doc1", &ts.insert(0, "b"), Some(1))
+                .apply_update("doc1", &ts.insert(0, "b"), Some(1), TEST_BY)
                 .await,
             "growth of a doc already past the limit",
         );
@@ -1869,14 +2024,17 @@ mod tests {
         let first = ts.insert(0, "a");
         let bulk = ts.insert(1, &"b".repeat(100));
 
-        store.apply_update("doc1", &bulk, Some(1)).await.unwrap();
+        store
+            .apply_update("doc1", &bulk, Some(1), TEST_BY)
+            .await
+            .unwrap();
         assert_eq!(
             store.content("doc1").await.unwrap(),
             "",
             "premise: the bulk is pending"
         );
         assert_too_large(
-            store.apply_update("doc1", &first, Some(1)).await,
+            store.apply_update("doc1", &first, Some(1), TEST_BY).await,
             "the update that integrates the bulk",
         );
         assert_eq!(store.content("doc1").await.unwrap(), "");
@@ -1894,8 +2052,12 @@ mod tests {
         let b = TextSync::with_client_id("", 2).insert(0, &"b".repeat(20));
         let (s1, s2) = (Arc::clone(&store), Arc::clone(&store));
         let (r1, r2) = tokio::join!(
-            tokio::spawn(async move { s1.apply_update("doc1", &a, Some(1)).await.is_ok() }),
-            tokio::spawn(async move { s2.apply_update("doc1", &b, Some(2)).await.is_ok() }),
+            tokio::spawn(
+                async move { s1.apply_update("doc1", &a, Some(1), TEST_BY).await.is_ok() }
+            ),
+            tokio::spawn(
+                async move { s2.apply_update("doc1", &b, Some(2), TEST_BY).await.is_ok() }
+            ),
         );
         assert_eq!(
             [r1.unwrap(), r2.unwrap()].iter().filter(|ok| **ok).count(),
@@ -1912,11 +2074,15 @@ mod tests {
         let backend = Arc::new(SqliteBackend::open_memory().unwrap());
         let store = sized_store(&backend, 16);
         store
-            .share_doc("doc1", &TextSync::with_client_id("", 1).insert(0, "kept"))
+            .share_doc(
+                "doc1",
+                &TextSync::with_client_id("", 1).insert(0, "kept"),
+                TEST_BY,
+            )
             .await
             .unwrap();
         let over = TextSync::with_client_id("", 2).insert(0, &"z".repeat(17));
-        match store.share_doc("doc1", &over).await {
+        match store.share_doc("doc1", &over, TEST_BY).await {
             Err(StorageError::TooLarge { .. }) => {}
             other => panic!(
                 "an oversized share was not refused: {:?}",
@@ -1927,12 +2093,12 @@ mod tests {
 
         let big = TextSync::with_client_id("", 3).insert(0, &"q".repeat(40));
         sized_store(&backend, 0)
-            .share_doc("doc2", &big)
+            .share_doc("doc2", &big, TEST_BY)
             .await
             .unwrap();
         let reseal = TextSync::with_client_id("", 4).insert(0, &"r".repeat(40));
         let fresh = sized_store(&backend, 16);
-        fresh.share_doc("doc2", &reseal).await.unwrap();
+        fresh.share_doc("doc2", &reseal, TEST_BY).await.unwrap();
         assert_eq!(fresh.content("doc2").await.unwrap(), "r".repeat(40));
     }
 
@@ -1943,14 +2109,17 @@ mod tests {
         // Create an initial document.
         let mut ts = TextSync::with_client_id("", 1);
         let initial = ts.insert(0, "old content");
-        store.apply_update("doc1", &initial, Some(1)).await.unwrap();
+        store
+            .apply_update("doc1", &initial, Some(1), TEST_BY)
+            .await
+            .unwrap();
 
         // share_doc replaces the document with brand-new content.
         // The happy path must still produce the correct content even after the
         // internal delete (which logs errors instead of swallowing them via `let _ =`).
         let ts2 = TextSync::new("replaced content");
         let new_state = ts2.encode_state();
-        let result = store.share_doc("doc1", &new_state).await;
+        let result = store.share_doc("doc1", &new_state, TEST_BY).await;
         assert!(
             result.is_ok(),
             "share_doc must succeed on the happy path: {:?}",
@@ -1973,7 +2142,7 @@ mod tests {
         let store = test_store();
         let ts = TextSync::new("content");
         let state = ts.encode_state();
-        store.share_doc("doc1", &state).await.unwrap();
+        store.share_doc("doc1", &state, TEST_BY).await.unwrap();
 
         // Initially no sharer.
         assert!(!store.is_sharer("doc1", 42).await);
@@ -1997,7 +2166,10 @@ mod tests {
         // Create initial doc.
         let mut ts = TextSync::with_client_id("", 1);
         let update = ts.insert(0, "base");
-        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        store
+            .apply_update("doc1", &update, Some(1), TEST_BY)
+            .await
+            .unwrap();
 
         // Spawn 10 concurrent tasks that all write to the same doc.
         let mut handles = Vec::new();
@@ -2010,7 +2182,7 @@ mod tests {
                 let _ = sv; // just ensure no deadlock
                 let update = ts.insert(0, &format!("{i}"));
                 store
-                    .apply_update("doc1", &update, Some(100 + i))
+                    .apply_update("doc1", &update, Some(100 + i), TEST_BY)
                     .await
                     .unwrap();
             }));
@@ -2042,7 +2214,10 @@ mod tests {
         let mut ts = TextSync::with_client_id("", 1);
         for i in 0u32..10 {
             let update = ts.insert(i, "x");
-            store.apply_update("doc1", &update, Some(1)).await.unwrap();
+            store
+                .apply_update("doc1", &update, Some(1), TEST_BY)
+                .await
+                .unwrap();
         }
 
         // Content must be intact despite multiple compactions.
@@ -2066,7 +2241,10 @@ mod tests {
 
         let mut ts = TextSync::with_client_id("", 1);
         let update = ts.insert(0, "evict after timeout");
-        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        store
+            .apply_update("doc1", &update, Some(1), TEST_BY)
+            .await
+            .unwrap();
 
         // With idle threshold 0, eviction is immediate.
         let evicted = store.evict_idle(0).await;
@@ -2084,7 +2262,10 @@ mod tests {
 
         let mut ts = TextSync::with_client_id("", 1);
         let update = ts.insert(0, "saveme");
-        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        store
+            .apply_update("doc1", &update, Some(1), TEST_BY)
+            .await
+            .unwrap();
 
         // Save intent with correct hash.
         let content = store.content("doc1").await.unwrap();
@@ -2111,7 +2292,10 @@ mod tests {
 
         let mut ts = TextSync::with_client_id("", 1);
         let update = ts.insert(0, "content");
-        store.apply_update("doc1", &update, Some(1)).await.unwrap();
+        store
+            .apply_update("doc1", &update, Some(1), TEST_BY)
+            .await
+            .unwrap();
 
         let result = store.check_save_intent("doc1", "wrong-hash").await.unwrap();
         match result {
@@ -2138,7 +2322,7 @@ mod tests {
         for i in 0..5 {
             let ts = TextSync::new(&format!("version {i}"));
             let state = ts.encode_state();
-            store.share_doc("doc1", &state).await.unwrap();
+            store.share_doc("doc1", &state, TEST_BY).await.unwrap();
         }
 
         let content = store.content("doc1").await.unwrap();
@@ -2153,7 +2337,10 @@ mod tests {
         let mut last_seq = 0u64;
         for i in 0u32..10 {
             let update = ts.insert(i, "x");
-            let result = store.apply_update("doc1", &update, Some(1)).await.unwrap();
+            let result = store
+                .apply_update("doc1", &update, Some(1), TEST_BY)
+                .await
+                .unwrap();
             assert!(
                 result.wal_seq > last_seq,
                 "wal_seq must increase monotonically"
