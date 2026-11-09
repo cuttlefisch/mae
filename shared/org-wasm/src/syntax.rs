@@ -14,7 +14,11 @@
 //! ```
 //!
 //! `spans` is flat (three numbers a span, `k` an index into `kinds`) to keep
-//! the response small. `syntaxSection` takes one region's NEW text as `text`
+//! the response small. A span's end includes its post-blank (the spaces
+//! after an object, the blank lines after an element), as `org-element`
+//! reports it; a request with `"post_blank": false` gets each span ending
+//! before it instead, for an editor that styles a node or tests whether the
+//! cursor is in it. `syntaxSection` takes one region's NEW text as `text`
 //! with its `section` and the `file` object as `syntax` gave them, and
 //! answers `{"kinds", "spans"}` with offsets in the whole text, or
 //! `{"needs_full": "headline" | "declarations" | "boundary"}` when the whole
@@ -26,8 +30,10 @@ use mae_org::{
     SectionHighlights, SyntaxKind, TodoSequence,
 };
 
-/// `{"kinds": […], "spans": […]}` without the braces.
-fn spans_json(spans: &[Highlight]) -> String {
+/// `{"kinds": […], "spans": […]}` without the braces. Each span ends at its
+/// `end`, or at its `own_end` (before its post-blank) when `post_blank` is
+/// false.
+fn spans_json(spans: &[Highlight], post_blank: bool) -> String {
     let mut kinds: Vec<SyntaxKind> = Vec::new();
     let mut flat = Vec::with_capacity(spans.len() * 3);
     for h in spans {
@@ -35,7 +41,8 @@ fn spans_json(spans: &[Highlight]) -> String {
             kinds.push(h.kind);
             kinds.len() - 1
         });
-        flat.push(format!("{k},{},{}", h.start, h.end));
+        let end = if post_blank { h.end } else { h.own_end };
+        flat.push(format!("{k},{},{end}", h.start));
     }
     let names: Vec<String> = kinds
         .iter()
@@ -92,7 +99,7 @@ fn section_json(s: &Section) -> String {
 }
 
 /// The `syntax` operation.
-pub fn syntax(text: &str, options: &ParseOptions) -> String {
+pub fn syntax(text: &str, options: &ParseOptions, post_blank: bool) -> String {
     let doc = mae_org::parse(text, options);
     let sections = mae_org::sections(&doc);
     let file = sections
@@ -101,7 +108,7 @@ pub fn syntax(text: &str, options: &ParseOptions) -> String {
     let secs: Vec<String> = sections.iter().map(section_json).collect();
     format!(
         "{{{},\"file\":{file},\"sections\":[{}]}}",
-        spans_json(&mae_org::highlights(&doc)),
+        spans_json(&mae_org::highlights(&doc), post_blank),
         secs.join(",")
     )
 }
@@ -177,12 +184,13 @@ pub fn syntax_section(
     options: &ParseOptions,
     section: Option<&Json>,
     file: Option<&Json>,
+    post_blank: bool,
 ) -> Result<String, String> {
     let section = section.ok_or("syntaxSection needs \"section\"")?;
     let file = file.ok_or("syntaxSection needs \"file\"")?;
     let s = read_section(section, file)?;
     Ok(match mae_org::section_highlights(text, options, &s) {
-        SectionHighlights::Spans(spans) => format!("{{{}}}", spans_json(&spans)),
+        SectionHighlights::Spans(spans) => format!("{{{}}}", spans_json(&spans, post_blank)),
         SectionHighlights::NeedsFull(why) => {
             let w = match why {
                 NeedsFull::Headline => "headline",

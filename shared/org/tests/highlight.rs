@@ -184,3 +184,75 @@ proptest! {
             .map_err(TestCaseError::fail)?;
     }
 }
+
+/// `(kind, start, end, own_end)` of every `kind` span in `text`.
+fn spans_of_kind(text: &str, kind: SyntaxKind) -> Vec<(u32, u32, u32)> {
+    highlights(&parse(text, &ParseOptions::default()))
+        .into_iter()
+        .filter(|h| h.kind == kind)
+        .map(|h| (h.start, h.end, h.own_end))
+        .collect()
+}
+
+/// An object's `end` keeps its post-blank, as `org-element` reports it;
+/// `own_end` stops after its closing markup. The offsets are a browser
+/// client's expectations for styling a node and for "is the cursor in it".
+#[test]
+fn an_objects_own_end_excludes_the_spaces_after_it() {
+    use SyntaxKind::*;
+    assert_eq!(spans_of_kind("un *negrita* y más\n", BOLD), [(3, 13, 12)]);
+    assert_eq!(
+        spans_of_kind("ver [[id:n1][Uno]] y más\n", LINK),
+        [(4, 19, 18)]
+    );
+    let t = "~code~ y =verb= y /it/ fin\n";
+    assert_eq!(spans_of_kind(t, CODE), [(0, 7, 6)]);
+    assert_eq!(spans_of_kind(t, VERBATIM), [(9, 16, 15)]);
+    assert_eq!(spans_of_kind(t, ITALIC), [(18, 23, 22)]);
+    assert_eq!(
+        spans_of_kind("a +s+   b _u_\tc\n", STRIKE_THROUGH),
+        [(2, 8, 5)]
+    );
+    assert_eq!(
+        spans_of_kind("a +s+   b _u_\tc\n", UNDERLINE),
+        [(10, 14, 13)]
+    );
+    // Punctuation, not space, follows: no post-blank, so the ends agree.
+    let p = "*a*, [[https://x.example][web]].\n";
+    assert_eq!(spans_of_kind(p, BOLD), [(0, 3, 3)]);
+    assert_eq!(spans_of_kind(p, LINK), [(5, 31, 31)]);
+}
+
+/// An element's post-blank is the blank lines after it: its own end keeps
+/// its last line ending and drops them.
+#[test]
+fn an_elements_own_end_excludes_the_blank_lines_after_it() {
+    use SyntaxKind::*;
+    assert_eq!(spans_of_kind("para\n\n\nnext\n", PARAGRAPH)[0], (0, 7, 5));
+    let src = "#+begin_src sh\necho\n#+end_src\n\n\nAfter\n";
+    assert_eq!(spans_of_kind(src, SRC_BLOCK), [(0, 32, 30)]);
+}
+
+/// Over every fixture and the bundled corpus: `own_end` lies within the
+/// span, only spaces, tabs and line endings follow it, and a token's equals
+/// its end.
+#[test]
+fn own_end_only_ever_drops_trailing_blank() {
+    for f in fixtures().into_iter().chain(bundled_corpus()) {
+        let text = read(&f);
+        for h in highlights(&parse(&text, &ParseOptions::default())) {
+            let (s, o, e) = (h.start as usize, h.own_end as usize, h.end as usize);
+            assert!(s <= o && o <= e, "{f:?}: {h:?}");
+            assert!(
+                text[o..e]
+                    .chars()
+                    .all(|c| matches!(c, ' ' | '\t' | '\n' | '\r')),
+                "{f:?}: {h:?} drops {:?}",
+                &text[o..e]
+            );
+            if !h.kind.is_node() {
+                assert_eq!(h.own_end, h.end, "{f:?}: token {h:?}");
+            }
+        }
+    }
+}
