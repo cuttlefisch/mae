@@ -13,6 +13,14 @@ use crate::seed::*;
 /// (the developer's must not leak in, and their commits must never be signed
 /// with the owner's key), fixed dates, and local clones allowed.
 pub(super) fn git_in(dir: &Path, args: &[&str], time: i64) -> String {
+    let (ok, out) = git_in_status(dir, args, time);
+    assert!(ok, "git {args:?}: {out}");
+    out
+}
+
+/// Like [`git_in`], but reports failure (a merge that stops on a conflict)
+/// instead of panicking. Returns stdout, or stderr on failure.
+pub(super) fn git_in_status(dir: &Path, args: &[&str], time: i64) -> (bool, String) {
     let stamp = format!("{time} +0000");
     let mut c = Command::new("git");
     c.env_clear();
@@ -37,12 +45,15 @@ pub(super) fn git_in(dir: &Path, args: &[&str], time: i64) -> String {
     }
     c.args(args);
     let out = c.output().unwrap();
-    assert!(
+    let text = if out.status.success() {
+        &out.stdout
+    } else {
+        &out.stderr
+    };
+    (
         out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).unwrap().trim().to_string()
+        String::from_utf8_lossy(text).trim().to_string(),
+    )
 }
 
 pub(super) struct Repo {
@@ -160,12 +171,10 @@ fn created_and_modified_are_the_first_add_and_last_change_at_the_tag() {
             ("dir/c.org", 1_700_000_900, 1_700_000_900)
         ]
     );
-    assert!(
-        plan.nodes
-            .iter()
-            .all(|n| n.created_source == TimeSource::GitId
-                && n.modified_source == TimeSource::GitPath)
-    );
+    assert!(plan
+        .nodes
+        .iter()
+        .all(|n| n.created_source == TimeSource::GitId && n.modified_source == TimeSource::Git));
 }
 
 /// A page with an id and twenty distinct lines, so git's similarity index

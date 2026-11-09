@@ -27,6 +27,7 @@ pub fn render_json(plan: &SeedPlan, exclude_requested: &[String]) -> Value {
             "max_body_bytes": plan.max_body_bytes,
             "require_canonical": plan.require_canonical,
             "code_property": plan.code_property,
+            "allow_received_times": plan.allow_received_times,
         },
         "counts": counts(plan),
         "nodes": plan.nodes.iter().map(node_json).collect::<Vec<_>>(),
@@ -38,6 +39,7 @@ pub fn render_json(plan: &SeedPlan, exclude_requested: &[String]) -> Value {
             "path": n.path, "removed": removed, "added": added,
         }))).collect::<Vec<_>>(),
         "not_selected": plan.not_selected,
+        "received_times": plan.received_times,
         "missing_code": plan.missing_code,
     })
 }
@@ -54,7 +56,6 @@ fn counts(plan: &SeedPlan) -> Value {
         "excluded": plan.excluded.len(),
         "not_selected": plan.not_selected.len(),
         "created_by_id": count(plan, |n| n.created_source == TimeSource::GitId),
-        "created_by_path": count(plan, |n| n.created_source == TimeSource::GitPath),
         "created_received": count(plan, |n| n.created_source == TimeSource::Received),
         "modified_received": count(plan, |n| n.modified_source == TimeSource::Received),
         "history_blobs_read": plan.history_blobs_read,
@@ -112,6 +113,10 @@ pub fn render_text(plan: &SeedPlan) -> String {
         "not selected by --include",
         plan.not_selected.iter().cloned(),
     );
+    if plan.allow_received_times {
+        let title = "receipt times, left out of plan_hash (--allow-received-times)";
+        section(&mut out, title, plan.received_times.iter().cloned());
+    }
     if let Some(key) = &plan.code_property {
         let title = format!("missing document code (--code-property {key})");
         section(&mut out, &title, plan.missing_code.iter().cloned());
@@ -125,7 +130,6 @@ fn summary(plan: &SeedPlan, out: &mut String) {
     let largest = plan.nodes.iter().max_by_key(|n| n.file.body.len());
     let canonical = plan.nodes.iter().filter(|n| n.canonical).count();
     let by_id = count(plan, |n| n.created_source == TimeSource::GitId);
-    let by_path = count(plan, |n| n.created_source == TimeSource::GitPath);
     let created_received = count(plan, |n| n.created_source == TimeSource::Received);
     let modified_received = count(plan, |n| n.modified_source == TimeSource::Received);
     let result = if plan.ok() {
@@ -166,11 +170,11 @@ fn summary(plan: &SeedPlan, out: &mut String) {
         ),
         format!("canonical   {canonical} of {}", plan.nodes.len()),
         format!(
-            "created_at  by :ID: first seen in history for {by_id}, by path lineage for {by_path} \
-             (fallback), receipt time for {created_received} (not reproducible)"
+            "created_at  by :ID: first seen in history for {by_id}, receipt time for \
+             {created_received} (not reproducible)"
         ),
         format!(
-            "modified_at by path lineage for {}, receipt time for {modified_received} (not \
+            "modified_at by git log -1 for {}, receipt time for {modified_received} (not \
              reproducible); {} history blobs read",
             plan.nodes.len() - modified_received,
             plan.history_blobs_read

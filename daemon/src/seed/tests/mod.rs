@@ -3,6 +3,7 @@
 mod git_tests;
 mod glob_tests;
 mod hardening_tests;
+mod merge_tests;
 mod plan_tests;
 mod prop_tests;
 mod split_tests;
@@ -48,5 +49,6 @@ pub(super) fn plan_opts(repo: &std::path::Path, rev: &str) -> PlanOptions {
         max_body_bytes: DEFAULT_MAX_BODY_BYTES,
         require_canonical: false,
         code_property: None,
+        allow_received_times: false,
     }
 }

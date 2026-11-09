@@ -27,6 +27,9 @@ pub struct PlanOptions {
     /// `--code-property`: the drawer key holding a page's document code
     /// (ADR-113 D2). `None`: no codes are reported or required.
     pub code_property: Option<String>,
+    /// `--allow-received-times`: accept a node whose time had to be the time
+    /// the plan was made. Such times are listed and left out of `plan_hash`.
+    pub allow_received_times: bool,
 }
 
 impl PlanOptions {
@@ -79,8 +82,8 @@ pub struct PlanInput {
 pub enum TimeSource {
     /// The first appearance of the node's `:ID:` in history (creation only).
     GitId,
-    /// The file's path lineage at the rev.
-    GitPath,
+    /// `git log -1 -- PATH` at the rev (modification only).
+    Git,
     /// No history: the time the plan was made. Not reproducible.
     Received,
 }
@@ -89,7 +92,7 @@ impl TimeSource {
     pub fn as_str(self) -> &'static str {
         match self {
             TimeSource::GitId => "git-id",
-            TimeSource::GitPath => "git-path",
+            TimeSource::Git => "git",
             TimeSource::Received => "received",
         }
     }
@@ -146,6 +149,10 @@ pub struct SeedPlan {
     /// With `--code-property`: the planned nodes that have no code. Listed,
     /// not refused (no document codes exist yet).
     pub missing_code: Vec<String>,
+    /// With `--allow-received-times`: the nodes with a receipt time, which
+    /// `plan_hash` leaves out. Without the flag each is a refusal instead.
+    pub received_times: Vec<String>,
+    pub allow_received_times: bool,
     /// How many history blobs were read to date the ids (the walk's cost).
     pub history_blobs_read: usize,
 }
@@ -196,7 +203,7 @@ pub fn plan(opts: &PlanOptions) -> Result<SeedPlan, SeedError> {
         .cloned()
         .zip(repo.read_blobs(&readable)?)
         .collect();
-    let history = history::history(&repo, &commit)?;
+    let history = history::history(&repo, &commit, &paths)?;
     let received_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
@@ -234,35 +241,9 @@ pub fn plan_entries(input: PlanInput, opts: &PlanOptions) -> Result<SeedPlan, Se
             a.attr, a.value
         ),
     }));
-    let mut nodes = Vec::new();
-    for (path, sha) in &selection.selected {
-        if let Some(size) = input.sizes.get(sha).filter(|s| **s > read_limit(opts)) {
-            refusals.push(refusal(
-                path,
-                ProblemKind::BodyTooLarge,
-                &format!(
-                    "the file is {size} bytes, more than the body limit ({}) plus {} bytes of \
-                     header; it was not read",
-                    opts.max_body_bytes,
-                    super::HEADER_ALLOWANCE_BYTES
-                ),
-            ));
-            continue;
-        }
-        let bytes = input
-            .blobs
-            .get(sha)
-            .cloned()
-            .ok_or_else(|| SeedError(format!("no bytes were read for {path} ({sha})")))?;
-        match plan_file(path, sha, bytes, opts) {
-            Ok(mut node) => {
-                stamp(&mut node, &input, opts);
-                nodes.push(node);
-            }
-            Err(problems) => refusals.extend(problems.into_iter().map(|p| at(path, p))),
-        }
-    }
+    let nodes = plan_files(&selection.selected, &input, opts, &mut refusals)?;
     refusals.extend(duplicate_ids(&nodes));
+    let received_times = received_times(&nodes, opts, &mut refusals);
     if opts.require_canonical {
         refusals.extend(nodes.iter().filter(|n| !n.canonical).map(|n| Refusal {
             path: n.path.clone(),
@@ -286,6 +267,8 @@ pub fn plan_entries(input: PlanInput, opts: &PlanOptions) -> Result<SeedPlan, Se
         require_canonical: opts.require_canonical,
         code_property: opts.code_property.clone(),
         missing_code,
+        received_times,
+        allow_received_times: opts.allow_received_times,
         history_blobs_read: input.history.blobs_read,
         nodes,
         excluded: selection.excluded,
@@ -294,17 +277,82 @@ pub fn plan_entries(input: PlanInput, opts: &PlanOptions) -> Result<SeedPlan, Se
     })
 }
 
+/// Size check, split and stamp each selected file; a file that cannot be
+/// planned adds its refusals instead of a node.
+fn plan_files(
+    selected: &[(String, String)],
+    input: &PlanInput,
+    opts: &PlanOptions,
+    refusals: &mut Vec<Refusal>,
+) -> Result<Vec<PlannedNode>, SeedError> {
+    let mut nodes = Vec::new();
+    for (path, sha) in selected {
+        if let Some(size) = input.sizes.get(sha).filter(|s| **s > read_limit(opts)) {
+            refusals.push(refusal(
+                path,
+                ProblemKind::BodyTooLarge,
+                &format!(
+                    "the file is {size} bytes, more than the body limit ({}) plus {} bytes of \
+                     header; it was not read",
+                    opts.max_body_bytes,
+                    super::HEADER_ALLOWANCE_BYTES
+                ),
+            ));
+            continue;
+        }
+        let bytes = input
+            .blobs
+            .get(sha)
+            .cloned()
+            .ok_or_else(|| SeedError(format!("no bytes were read for {path} ({sha})")))?;
+        match plan_file(path, sha, bytes, opts) {
+            Ok(mut node) => {
+                stamp(&mut node, input, opts);
+                nodes.push(node);
+            }
+            Err(problems) => refusals.extend(problems.into_iter().map(|p| at(path, p))),
+        }
+    }
+    Ok(nodes)
+}
+
+/// The nodes carrying a receipt time. Without `--allow-received-times` each
+/// is a refusal: the plan's hash would not reproduce.
+fn received_times(
+    nodes: &[PlannedNode],
+    opts: &PlanOptions,
+    refusals: &mut Vec<Refusal>,
+) -> Vec<String> {
+    let received: Vec<String> = nodes
+        .iter()
+        .filter(|n| {
+            n.created_source == TimeSource::Received || n.modified_source == TimeSource::Received
+        })
+        .map(|n| n.path.clone())
+        .collect();
+    if !opts.allow_received_times {
+        refusals.extend(received.iter().map(|p| {
+            refusal(
+                p,
+                ProblemKind::ReceivedTime,
+                "git gives no time for this page, so the plan would carry the time it was \
+                 made and its hash would not be reproducible (--allow-received-times accepts \
+                 it, leaving the time out of plan_hash)",
+            )
+        }));
+    }
+    received
+}
+
 /// Times and document code, which depend on the history and the run, not the file.
 fn stamp(node: &mut PlannedNode, input: &PlanInput, opts: &PlanOptions) {
-    let lineage = input.history.paths.get(&node.path);
-    (node.modified_at, node.modified_source) = match lineage {
-        Some(t) => (t.modified, TimeSource::GitPath),
+    (node.modified_at, node.modified_source) = match input.history.modified.get(&node.path) {
+        Some(t) => (*t, TimeSource::Git),
         None => (input.received_at, TimeSource::Received),
     };
-    (node.created_at, node.created_source) = match (input.history.ids.get(&node.file.id), lineage) {
-        (Some(t), _) => (*t, TimeSource::GitId),
-        (None, Some(t)) => (t.created, TimeSource::GitPath),
-        (None, None) => (input.received_at, TimeSource::Received),
+    (node.created_at, node.created_source) = match input.history.ids.get(&node.file.id) {
+        Some(t) => (*t, TimeSource::GitId),
+        None => (input.received_at, TimeSource::Received),
     };
     node.code = opts.code_property.as_ref().and_then(|key| {
         node.file
@@ -550,8 +598,10 @@ fn plan_hash(nodes: &[PlannedNode]) -> String {
         let f = &n.file;
         field(&mut h, n.path.as_bytes());
         field(&mut h, f.id.as_bytes());
-        h.update(n.created_at.to_le_bytes());
-        h.update(n.modified_at.to_le_bytes());
+        // A receipt time is the clock at planning, not a fact about the
+        // input: it stays out, so an accepted plan's hash still reproduces.
+        time(&mut h, n.created_at, n.created_source);
+        time(&mut h, n.modified_at, n.modified_source);
         count(&mut h, f.properties.len());
         for (k, v) in &f.properties {
             field(&mut h, k.as_bytes());
@@ -562,6 +612,16 @@ fn plan_hash(nodes: &[PlannedNode]) -> String {
         field(&mut h, f.body.as_bytes());
     }
     hex::encode(h.finalize())
+}
+
+fn time(h: &mut Sha256, t: i64, source: TimeSource) {
+    match source {
+        TimeSource::Received => h.update([0u8]),
+        _ => {
+            h.update([1u8]);
+            h.update(t.to_le_bytes());
+        }
+    }
 }
 
 fn field(h: &mut Sha256, bytes: &[u8]) {

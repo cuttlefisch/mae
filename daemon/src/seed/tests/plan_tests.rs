@@ -22,13 +22,7 @@ fn input(files: &[(&str, Vec<u8>)]) -> PlanInput {
         });
         blobs.insert(sha, bytes.clone());
         let t = T0 + 10 * i as i64;
-        history.paths.insert(
-            path.to_string(),
-            FileTimes {
-                created: t,
-                modified: t + 5,
-            },
-        );
+        history.modified.insert(path.to_string(), t + 5);
         if let Some(id) = drawer_id(&String::from_utf8_lossy(bytes)) {
             history.ids.insert(id, t - 1);
         }
@@ -58,6 +52,7 @@ fn opts() -> PlanOptions {
         max_body_bytes: DEFAULT_MAX_BODY_BYTES,
         require_canonical: false,
         code_property: None,
+        allow_received_times: false,
     }
 }
 
@@ -335,24 +330,23 @@ fn the_plan_hash_is_deterministic_and_covers_content_and_time() {
     *later.history.ids.get_mut("a").unwrap() += 1;
     assert_ne!(base, h(later), "created_at is in the hash");
     let mut later = input(&files);
-    later.history.paths.get_mut("a.org").unwrap().modified += 1;
+    *later.history.modified.get_mut("a.org").unwrap() += 1;
     assert_ne!(base, h(later), "modified_at is in the hash");
 }
 
-/// Creation by id first, then by path lineage, then the receipt time; each
-/// labelled. Kills: preferring the path lineage over the id, or an
-/// unlabelled fallback.
+/// Creation by id, modification by git; a missing time falls back to the
+/// time the plan was made, labelled, and REFUSES the plan unless allowed.
+/// Kills: an unlabelled fallback, or accepting a plan whose hash cannot
+/// reproduce.
 #[test]
-fn the_times_come_from_the_id_then_the_path_then_the_receipt_time() {
-    let mut inp = input(&[
-        ("a.org", ok_page("a")),
-        ("b.org", ok_page("b")),
-        ("c.org", ok_page("c")),
-    ]);
-    inp.history.ids.remove("b");
-    inp.history.ids.remove("c");
-    inp.history.paths.remove("c.org");
-    let plan = plan_entries(inp, &opts()).unwrap();
+fn a_receipt_time_is_labelled_and_refused_unless_allowed() {
+    let make = || {
+        let mut inp = input(&[("a.org", ok_page("a")), ("b.org", ok_page("b"))]);
+        inp.history.ids.remove("b");
+        inp.history.modified.remove("b.org");
+        inp
+    };
+    let plan = plan_entries(make(), &opts()).unwrap();
     let got: Vec<(i64, &str, i64, &str)> = plan
         .nodes
         .iter()
@@ -368,18 +362,19 @@ fn the_times_come_from_the_id_then_the_path_then_the_receipt_time() {
     assert_eq!(
         got,
         vec![
-            (T0 - 1, "git-id", T0 + 5, "git-path"),
-            (T0 + 10, "git-path", T0 + 15, "git-path"),
-            (42, "received", 42, "received"),
+            (T0 - 1, "git-id", T0 + 5, "git"),
+            (42, "received", 42, "received")
         ]
     );
+    assert_eq!(
+        refused(&plan),
+        vec![("b.org".to_string(), ProblemKind::ReceivedTime)]
+    );
+    assert_eq!(plan.plan_hash(), None);
     let json = render_json(&plan, &[]);
-    assert_eq!(json["nodes"][0]["created_at_source"], "git-id");
-    assert_eq!(json["nodes"][1]["created_at_source"], "git-path");
-    assert_eq!(json["nodes"][2]["modified_at_source"], "received");
+    assert_eq!(json["nodes"][1]["created_at_source"], "received");
     for (k, v) in [
         ("created_by_id", 1),
-        ("created_by_path", 1),
         ("created_received", 1),
         ("modified_received", 1),
     ] {
@@ -387,8 +382,36 @@ fn the_times_come_from_the_id_then_the_path_then_the_receipt_time() {
     }
     let text = render_text(&plan);
     assert!(
-        text.contains("created_at  by :ID: first seen in history for 1, by path lineage for 1"),
+        text.contains("created_at  by :ID: first seen in history for 1, receipt time for 1"),
         "{text}"
+    );
+}
+
+/// With `--allow-received-times` the plan is accepted, the receipt times are
+/// listed, and the hash does not depend on when it was made. Kills: hashing
+/// the clock.
+#[test]
+fn allowed_receipt_times_are_listed_and_stay_out_of_the_hash() {
+    let mut o = opts();
+    o.allow_received_times = true;
+    let at = |when: i64| {
+        let mut inp = input(&[("a.org", ok_page("a")), ("b.org", ok_page("b"))]);
+        inp.history.modified.remove("b.org");
+        inp.received_at = when;
+        plan_entries(inp, &o).unwrap()
+    };
+    let (early, late) = (at(42), at(4_200_000_000));
+    assert!(early.ok(), "{:?}", early.refusals);
+    assert_eq!(early.received_times, vec!["b.org"]);
+    assert_eq!(
+        early.plan_hash(),
+        late.plan_hash(),
+        "the receipt time is not in the hash"
+    );
+    assert!(render_text(&early).contains("(--allow-received-times) (1) ==\nb.org\n"));
+    assert_eq!(
+        render_json(&early, &[])["received_times"],
+        serde_json::json!(["b.org"])
     );
 }
 

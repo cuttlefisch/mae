@@ -261,9 +261,16 @@ impl GitRepo {
 
     /// Hand each blob in `shas` to `f`, in order, from ONE `cat-file --batch`
     /// process, holding one blob in memory at a time.
-    pub fn for_each_blob(
+    pub fn for_each_blob(&self, shas: &[String], f: impl FnMut(&[u8])) -> Result<(), SeedError> {
+        self.for_each_blob_prefix(shas, usize::MAX, f)
+    }
+
+    /// Like [`Self::for_each_blob`], but only the first `max` bytes of each
+    /// blob are held; the rest is read from the pipe and dropped.
+    pub fn for_each_blob_prefix(
         &self,
         shas: &[String],
+        max: usize,
         mut f: impl FnMut(&[u8]),
     ) -> Result<(), SeedError> {
         let mut child = self
@@ -285,7 +292,7 @@ impl GitRepo {
         let mut reader = BufReader::new(child.stdout.take().expect("piped stdout"));
         let mut result = Ok(());
         for sha in shas {
-            match read_batch_object(&mut reader, sha) {
+            match read_batch_object(&mut reader, sha, max) {
                 Ok(bytes) => f(&bytes),
                 Err(e) => {
                     result = Err(e);
@@ -443,8 +450,13 @@ fn parse_ls_tree_record(rec: &[u8]) -> Result<TreeEntry, SeedError> {
     })
 }
 
-/// One `cat-file --batch` answer: `SHA SP TYPE SP SIZE LF CONTENTS LF`.
-fn read_batch_object(reader: &mut impl BufRead, sha: &str) -> Result<Vec<u8>, SeedError> {
+/// One `cat-file --batch` answer: `SHA SP TYPE SP SIZE LF CONTENTS LF`. At
+/// most `max` bytes of the contents are kept; the rest is consumed and dropped.
+fn read_batch_object(
+    reader: &mut impl BufRead,
+    sha: &str,
+    max: usize,
+) -> Result<Vec<u8>, SeedError> {
     let mut header = String::new();
     reader
         .read_line(&mut header)
@@ -461,11 +473,17 @@ fn read_batch_object(reader: &mut impl BufRead, sha: &str) -> Result<Vec<u8>, Se
     let size: usize = size
         .parse()
         .map_err(|_| SeedError(format!("git cat-file: bad size in {header:?}")))?;
-    let mut buf = vec![0; size + 1];
-    reader
-        .read_exact(&mut buf)
-        .map_err(|e| SeedError(format!("git cat-file: short read of {sha}: {e}")))?;
-    buf.pop(); // the LF after the contents
+    let keep = size.min(max);
+    let mut buf = vec![0; keep];
+    let short = |e: std::io::Error| SeedError(format!("git cat-file: short read of {sha}: {e}"));
+    reader.read_exact(&mut buf).map_err(short)?;
+    // The rest of the contents, and the LF after them.
+    let rest = (size - keep) as u64 + 1;
+    let skipped =
+        std::io::copy(&mut reader.by_ref().take(rest), &mut std::io::sink()).map_err(short)?;
+    if skipped != rest {
+        return Err(SeedError(format!("git cat-file: short read of {sha}")));
+    }
     Ok(buf)
 }
 

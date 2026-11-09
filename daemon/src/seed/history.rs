@@ -1,309 +1,306 @@
-//! When each document was created and each file last modified, from ONE walk
-//! of history and ONE read of the blobs it names.
+//! When each document was created and each page last modified, from the
+//! commit graph, ONE batched tree-diff pass and ONE batched blob read.
 //!
-//! **A document's identity is its file-level `:ID:`, not its path.** So:
+//! **created** is by `:ID:` (a document's identity, not its path): the
+//! smallest committer time of any commit whose diff against one of its parents
+//! introduces a `.org` blob whose leading drawer carries that id ([`drawer_id`]).
+//! The MINIMUM, not the first in some walk order, so the answer does not depend
+//! on how git orders a history with branches. A page moved between folders as a
+//! delete and a later add keeps its date, as does a restored page; a page
+//! regenerated under a new id is created when that id first appears. A page
+//! created on a branch is created by the branch commit, not by the merge.
 //!
-//! - **created** is the committer time of the first commit, in walk order, in
-//!   which a blob whose file drawer carries that `:ID:` appeared, at ANY path.
-//!   A page moved between folders as a delete in one commit and an add in a
-//!   later one keeps its date. So does a page restored after a delete. A page
-//!   regenerated at the same path under a NEW id is created by the commit
-//!   that introduced the new id. A historical copy that later took its own id
-//!   is created when that id first appears. (A copy that still shares its id
-//!   at the rev is a duplicate-id refusal, so it never reaches this.)
-//! - **modified** is the committer time of the last commit that changed the
-//!   file's own path lineage at the rev: an add, an edit, or a rename onto its
-//!   current path (`git log -1 --format=%ct -- PATH`).
-//! - The path lineage also gives a fallback creation (the add at the path,
-//!   following renames), used only if a node's `:ID:` was never seen in history.
-//!   That should not happen for a file present at the rev; the report labels it
-//!   `git-path` when it does.
+//! **modified** is what `git log -1 --format=%ct -- PATH` reports at the rev:
+//! the commit that introduced the page's current content under git's default
+//! history simplification. From the rev, follow the FIRST parent the path is
+//! unchanged against (TREESAME); the first commit changed against every parent
+//! is the answer. So a change made on a branch and merged cleanly is dated by
+//! the branch commit, a conflict resolved in a merge by the merge, and a branch
+//! edit the merge discarded does not count at all. A root commit introduces
+//! everything in it.
 //!
-//! One `git log --reverse --raw -M -l0` pass gives every change with its new
-//! blob sha. Every distinct `.org` blob is then read in one `git cat-file
-//! --batch` pass and only its file drawer's `:ID:` is extracted
-//! ([`drawer_id`]), so the cost is one read of each version of each page.
+//! How:
+//! 1. `git log --format='%H %ct %P'`: the commit graph (one process).
+//! 2. `git diff-tree --stdin --always --root --no-renames`: one request per
+//!    (commit, parent) pair and one per root, in one process. `--always` makes
+//!    every request answer with its commit's header, so answers pair with
+//!    requests by position.
+//! 3. `git cat-file --batch`: every distinct `.org` blob those diffs introduce,
+//!    in one process, reading at most [`HISTORY_PREFIX_BYTES`] of each and
+//!    discarding the rest unread into memory. A drawer that does not end
+//!    within that prefix yields no id; no page approaches it (the page's own
+//!    header must fit the same allowance to be seeded at all).
 //!
-//! `-l0` lifts git's rename limit. Past it (`diff.renameLimit`, default 1000
-//! files), inexact renames silently turn into a delete plus an add. A git
-//! warning that detection was skipped is an error (`GitRepo::run_checked`).
-//!
-//! Merge commits list no files (no `-m`), so changes on a merged branch are
-//! seen through that branch's own commits. Walk order is git's default order,
-//! reversed. On a linear history that is commit order; across branches it is
-//! date order.
+//! Renames are not detected (`--no-renames`): identity comes from the id, and
+//! a path's last change does not care where its content came from.
 
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
+use std::process::Stdio;
 
 use super::git::GitRepo;
 use super::split::drawer_id;
-use super::SeedError;
+use super::{SeedError, HEADER_ALLOWANCE_BYTES};
 
-/// A path lineage's creation and last modification (committer unix seconds).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FileTimes {
-    pub created: i64,
-    pub modified: i64,
-}
+/// How much of each historical blob is read to find its id.
+pub const HISTORY_PREFIX_BYTES: usize = HEADER_ALLOWANCE_BYTES;
 
-/// What the walk learned.
+/// What the history says about the pages at the rev.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct History {
-    /// Every path present at the rev: its lineage's times.
-    pub paths: HashMap<String, FileTimes>,
-    /// Every file-level `:ID:` ever seen in a `.org` blob: when it first appeared.
+    /// For each requested path present at the rev: its last modification.
+    pub modified: HashMap<String, i64>,
+    /// Every file-level `:ID:` seen in a `.org` blob: its first appearance.
     pub ids: HashMap<String, i64>,
-    /// How many distinct blobs were read to find the ids.
+    /// How many distinct blobs were read (prefix only) to find the ids.
     pub blobs_read: usize,
 }
 
-/// One change in one commit, with the blob it leaves at its destination.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Change {
-    Add(String, Blob),
-    Modify(String, Blob),
-    Delete(String),
-    Rename(String, String, Blob),
+/// One commit: its committer time and parents, in order.
+struct Commit {
+    time: i64,
+    parents: Vec<String>,
 }
 
-/// A destination blob: its sha, and whether its mode is a regular file.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Blob {
-    sha: String,
-    regular: bool,
-}
+/// The paths each commit changed against each parent (a root: against the
+/// empty tree, parent `None`), restricted to `wanted`. Keyed by the request
+/// itself, never by position: requests are sorted, parents are not.
+type Changed = HashMap<(String, Option<String>), HashSet<String>>;
 
-type Commits = Vec<(i64, Vec<Change>)>;
-
-/// Walk `commit`'s history once, then read its `.org` blobs once.
-pub fn history(repo: &GitRepo, commit: &str) -> Result<History, SeedError> {
-    let out = repo.run_checked(&[
-        "log",
-        "--reverse",
-        "--format=format:%x01%ct",
-        "--raw",
-        "--no-abbrev",
-        "-M",
-        "-l0",
-        "-z",
-        "--no-show-signature",
-        commit,
-        "--",
-    ])?;
-    let commits = parse(&out)?;
-    let first_seen = blob_first_seen(&commits);
-    let shas: Vec<String> = first_seen.iter().map(|(sha, _)| sha.clone()).collect();
+/// The history of `commit` for the pages at `wanted` paths.
+pub fn history(repo: &GitRepo, commit: &str, wanted: &[String]) -> Result<History, SeedError> {
+    let graph = commit_graph(repo, commit)?;
+    let requests = diff_requests(&graph);
+    let out = diff_tree(repo, &requests)?;
+    let wanted_set: HashSet<&str> = wanted.iter().map(String::as_str).collect();
+    let (changed, introduced) = parse_diffs(&out, &requests, &graph, &wanted_set)?;
+    let mut modified = HashMap::new();
+    for path in wanted {
+        modified.insert(path.clone(), last_change(commit, path, &graph, &changed)?);
+    }
+    let mut blobs: Vec<(String, i64)> = introduced.into_iter().collect();
+    blobs.sort();
+    let shas: Vec<String> = blobs.iter().map(|(s, _)| s.clone()).collect();
     let mut ids: HashMap<String, i64> = HashMap::new();
     let mut at = 0;
-    repo.for_each_blob(&shas, |bytes| {
-        if let Some(id) = drawer_id(&String::from_utf8_lossy(bytes)) {
-            ids.entry(id).or_insert(first_seen[at].1);
+    repo.for_each_blob_prefix(&shas, HISTORY_PREFIX_BYTES, |prefix| {
+        if let Some(id) = drawer_id(&String::from_utf8_lossy(prefix)) {
+            let t = blobs[at].1;
+            ids.entry(id).and_modify(|e| *e = (*e).min(t)).or_insert(t);
         }
         at += 1;
     })?;
     Ok(History {
-        paths: fold(commits),
+        modified,
         ids,
         blobs_read: shas.len(),
     })
 }
 
-/// Distinct `.org` blobs in the order they first appear, with that commit's time.
-fn blob_first_seen(commits: &Commits) -> Vec<(String, i64)> {
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for (t, changes) in commits {
-        for c in changes {
-            let (path, blob) = match c {
-                Change::Add(p, b) | Change::Modify(p, b) | Change::Rename(_, p, b) => (p, b),
-                Change::Delete(_) => continue,
-            };
-            if blob.regular && path.ends_with(".org") && seen.insert(blob.sha.clone()) {
-                out.push((blob.sha.clone(), *t));
-            }
-        }
+fn commit_graph(repo: &GitRepo, commit: &str) -> Result<HashMap<String, Commit>, SeedError> {
+    let out = repo.run_checked(&["log", "--format=%H %ct %P", commit, "--"])?;
+    let mut graph = HashMap::new();
+    for line in String::from_utf8_lossy(&out).lines() {
+        let mut parts = line.split(' ');
+        let (Some(sha), Some(time)) = (parts.next(), parts.next()) else {
+            return Err(SeedError(format!("unexpected git log line: {line:?}")));
+        };
+        let time = time
+            .parse()
+            .map_err(|_| SeedError(format!("unexpected git log line: {line:?}")))?;
+        let parents = parts
+            .filter(|p| !p.is_empty())
+            .map(str::to_string)
+            .collect();
+        graph.insert(sha.to_string(), Commit { time, parents });
     }
+    Ok(graph)
+}
+
+/// `(commit, parent)` per parent, and `(commit, None)` for a root; sorted so
+/// the request (and so the run) is deterministic.
+fn diff_requests(graph: &HashMap<String, Commit>) -> Vec<(String, Option<String>)> {
+    let mut out: Vec<(String, Option<String>)> = graph
+        .iter()
+        .flat_map(|(sha, c)| {
+            let parents: Vec<Option<String>> = if c.parents.is_empty() {
+                vec![None]
+            } else {
+                c.parents.iter().cloned().map(Some).collect()
+            };
+            parents.into_iter().map(move |p| (sha.clone(), p))
+        })
+        .collect();
+    out.sort();
     out
 }
 
-/// `\x01CT\n:SRCMODE DSTMODE SRCSHA DSTSHA STATUS\0PATH\0[PATH\0]:…` per
-/// commit, oldest first.
-fn parse(out: &[u8]) -> Result<Commits, SeedError> {
-    let mut commits: Commits = Vec::new();
+fn diff_tree(repo: &GitRepo, requests: &[(String, Option<String>)]) -> Result<Vec<u8>, SeedError> {
+    let mut child = repo
+        .command()
+        .args([
+            "diff-tree",
+            "--stdin",
+            "-r",
+            "--raw",
+            "-z",
+            "--no-abbrev",
+            "--no-renames",
+        ])
+        .args(["--root", "--always"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| SeedError(format!("cannot run git diff-tree: {e}")))?;
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let request: Vec<u8> = requests
+        .iter()
+        .flat_map(|(c, p)| match p {
+            Some(p) => format!("{c} {p}\n").into_bytes(),
+            None => format!("{c}\n").into_bytes(),
+        })
+        .collect();
+    let writer = std::thread::spawn(move || stdin.write_all(&request));
+    let out = child.wait_with_output();
+    let _ = writer.join();
+    let out = out.map_err(|e| SeedError(format!("git diff-tree: {e}")))?;
+    if !out.status.success() {
+        return Err(SeedError("git diff-tree failed".to_string()));
+    }
+    Ok(out.stdout)
+}
+
+/// Pair each answer with its request, collect the wanted paths each
+/// (commit, parent) changed, and the earliest time each `.org` blob appears.
+fn parse_diffs(
+    out: &[u8],
+    requests: &[(String, Option<String>)],
+    graph: &HashMap<String, Commit>,
+    wanted: &HashSet<&str>,
+) -> Result<(Changed, HashMap<String, i64>), SeedError> {
+    let bad = |what: &str| SeedError(format!("unexpected git diff-tree output: {what:?}"));
+    let mut changed: Changed = HashMap::new();
+    let mut introduced: HashMap<String, i64> = HashMap::new();
     let mut tokens = out
         .split(|b| *b == 0)
         .map(|t| String::from_utf8_lossy(t).into_owned());
-    let bad = |what: &str| SeedError(format!("unexpected git log output: {what:?}"));
+    let mut request = requests.iter();
+    let mut current: Option<(&(String, Option<String>), i64)> = None;
     while let Some(token) = tokens.next() {
-        let token = token.trim_start_matches('\n');
-        let meta = match token.strip_prefix('\u{1}') {
-            Some(rest) => {
-                let (ct, meta) = rest.split_once('\n').unwrap_or((rest, ""));
-                let time = ct.trim().parse().map_err(|_| bad(ct))?;
-                commits.push((time, Vec::new()));
-                meta.to_string()
-            }
-            None => token.to_string(),
-        };
-        if meta.is_empty() {
+        if token.is_empty() {
             continue;
         }
-        let change = change(&meta, || {
-            tokens
+        let Some(meta) = token.strip_prefix(':') else {
+            // A header: the next request's answer begins.
+            let key = request
                 .next()
-                .filter(|p| !p.is_empty())
-                .ok_or_else(|| bad(&meta))
-        })?;
-        commits
-            .last_mut()
-            .ok_or_else(|| bad("a change before any commit"))?
-            .1
-            .push(change);
-    }
-    Ok(commits)
-}
-
-/// One `:SRCMODE DSTMODE SRCSHA DSTSHA STATUS` entry and its path(s).
-fn change(
-    meta: &str,
-    mut path: impl FnMut() -> Result<String, SeedError>,
-) -> Result<Change, SeedError> {
-    let bad = || SeedError(format!("unexpected git log --raw entry: {meta:?}"));
-    let fields: Vec<&str> = meta.strip_prefix(':').ok_or_else(bad)?.split(' ').collect();
-    let [_, dst_mode, _, dst_sha, status] = fields.as_slice() else {
-        return Err(bad());
-    };
-    let blob = Blob {
-        sha: dst_sha.to_string(),
-        regular: matches!(*dst_mode, "100644" | "100755"),
-    };
-    Ok(match status.as_bytes().first() {
-        Some(b'A') => Change::Add(path()?, blob),
-        Some(b'M' | b'T') => Change::Modify(path()?, blob),
-        Some(b'D') => Change::Delete(path()?),
-        Some(b'R') => {
-            let from = path()?;
-            Change::Rename(from, path()?, blob)
-        }
-        // A copy (only if the user's config turns copy detection on) is a new
-        // file at its destination; its creation comes from its own id.
-        Some(b'C') => {
-            path()?;
-            Change::Add(path()?, blob)
-        }
-        _ => return Err(bad()),
-    })
-}
-
-/// Apply each commit's changes in two phases, sources first, so a swap
-/// (`a→b`, `b→a`) in one commit cannot overwrite a lineage it still needs.
-fn fold(commits: Commits) -> HashMap<String, FileTimes> {
-    let mut files: HashMap<String, FileTimes> = HashMap::new();
-    for (t, changes) in commits {
-        let fresh = FileTimes {
-            created: t,
-            modified: t,
+                .ok_or_else(|| bad("more answers than requests"))?;
+            if token != key.0 {
+                return Err(bad(&token));
+            }
+            changed.insert(key.clone(), HashSet::new());
+            current = Some((key, graph[&key.0].time));
+            continue;
         };
-        let mut moved = Vec::new();
-        for c in &changes {
-            match c {
-                Change::Delete(p) => {
-                    files.remove(p);
-                }
-                Change::Rename(from, to, _) => {
-                    moved.push((to, files.remove(from).unwrap_or(fresh)))
-                }
-                _ => {}
-            }
+        let (key, time) = current.ok_or_else(|| bad("a change before any header"))?;
+        let path = tokens.next().ok_or_else(|| bad(meta))?;
+        let fields: Vec<&str> = meta.split(' ').collect();
+        let [_, dst_mode, _, dst_sha, status] = fields.as_slice() else {
+            return Err(bad(meta));
+        };
+        let adds_blob =
+            matches!(*status, "A" | "M" | "T") && matches!(*dst_mode, "100644" | "100755");
+        if adds_blob && path.ends_with(".org") {
+            let e = introduced.entry(dst_sha.to_string()).or_insert(time);
+            *e = (*e).min(time);
         }
-        for (to, lineage) in moved {
-            files.insert(
-                to.clone(),
-                FileTimes {
-                    modified: lineage.modified.max(t),
-                    ..lineage
-                },
-            );
-        }
-        for c in changes {
-            match c {
-                Change::Add(p, _) => {
-                    files.insert(p, fresh);
-                }
-                Change::Modify(p, _) => {
-                    let e = files.entry(p).or_insert(fresh);
-                    e.modified = e.modified.max(t);
-                }
-                Change::Delete(_) | Change::Rename(..) => {}
+        if wanted.contains(path.as_str()) {
+            if let Some(set) = changed.get_mut(key) {
+                set.insert(path);
             }
         }
     }
-    files
+    if request.next().is_some() {
+        return Err(bad("fewer answers than requests"));
+    }
+    Ok((changed, introduced))
+}
+
+/// `git log -1 -- PATH` at `rev`: follow the first parent `path` is unchanged
+/// against; the first commit changed against every parent introduced it.
+fn last_change(
+    rev: &str,
+    path: &str,
+    graph: &HashMap<String, Commit>,
+    changed: &Changed,
+) -> Result<i64, SeedError> {
+    let mut at = rev.to_string();
+    loop {
+        let c = graph
+            .get(&at)
+            .ok_or_else(|| SeedError(format!("commit {at} is not in the history walk")))?;
+        let changed_against = |parent: &String| {
+            changed
+                .get(&(at.clone(), Some(parent.clone())))
+                .is_some_and(|d| d.contains(path))
+        };
+        match c.parents.iter().find(|p| !changed_against(p)) {
+            Some(p) => at = p.clone(),
+            None => return Ok(c.time),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const Z: &str = "0000000000000000000000000000000000000000";
-
-    fn entry(status: &str, sha: &str) -> String {
-        format!(":100644 100644 {Z} {sha} {status}")
+    fn graph() -> HashMap<String, Commit> {
+        HashMap::from([
+            (
+                "aa".to_string(),
+                Commit {
+                    time: 10,
+                    parents: vec![],
+                },
+            ),
+            (
+                "bb".to_string(),
+                Commit {
+                    time: 20,
+                    parents: vec!["aa".to_string()],
+                },
+            ),
+        ])
     }
 
-    fn walk(out: &str) -> HashMap<String, FileTimes> {
-        fold(parse(out.as_bytes()).unwrap())
+    fn requests() -> Vec<(String, Option<String>)> {
+        vec![("aa".into(), None), ("bb".into(), Some("aa".into()))]
     }
 
-    fn ft(created: i64, modified: i64) -> FileTimes {
-        FileTimes { created, modified }
-    }
+    const E: &str = ":000000 100644 0000 1111 A";
 
     #[test]
-    fn a_swap_in_one_commit_keeps_both_lineages() {
-        let (a, m, r) = (entry("A", "aa"), entry("M", "bb"), entry("R100", "cc"));
-        let out = format!(
-            "\u{1}10\n{a}\0a\0{a}\0b\0\0\u{1}20\n{m}\0a\0\0\u{1}30\n{r}\0a\0b\0{r}\0b\0a\0"
-        );
-        let t = walk(&out);
-        assert_eq!(t["b"], ft(10, 30), "b now holds a's content, created at 10");
-        assert_eq!(t["a"], ft(10, 30));
-    }
-
-    #[test]
-    fn malformed_output_is_an_error_not_a_guess() {
-        let a = entry("A", "aa");
+    fn answers_pair_with_requests_and_a_mismatch_is_an_error() {
+        let wanted = HashSet::from(["p.org"]);
+        let ok = format!("aa\0{E}\0p.org\0bb\0");
+        let (changed, introduced) =
+            parse_diffs(ok.as_bytes(), &requests(), &graph(), &wanted).unwrap();
+        assert!(changed[&("aa".to_string(), None)].contains("p.org"));
+        assert!(changed[&("bb".to_string(), Some("aa".to_string()))].is_empty());
+        assert_eq!(introduced["1111"], 10);
         for bad in [
-            format!("\u{1}x\n{a}\0a\0"),
-            format!("\u{1}10\n{}\0a\0", entry("Q", "aa")),
-            format!("\u{1}10\n{}\0a\0", entry("R100", "aa")),
-            format!("{a}\0a\0"),
-            "\u{1}10\n:100644 A\0a\0".to_string(),
+            format!("bb\0{E}\0p.org\0aa\0"),          // answers out of order
+            format!("aa\0{E}\0p.org\0"),              // an answer missing
+            "aa\0bb\0bb\0".to_string(),               // an extra answer
+            format!("{E}\0p.org\0aa\0bb\0"),          // a change before any header
+            "aa\0:100644 A\0p.org\0bb\0".to_string(), // a short entry
         ] {
-            assert!(parse(bad.as_bytes()).is_err(), "{bad:?}");
+            assert!(
+                parse_diffs(bad.as_bytes(), &requests(), &graph(), &wanted).is_err(),
+                "{bad:?}"
+            );
         }
-    }
-
-    #[test]
-    fn the_drawer_id_is_read_only_from_a_leading_drawer() {
-        let id = |s: &str| drawer_id(s);
-        assert_eq!(
-            id(":PROPERTIES:\n:ID: ens:x\n:ROLE: a\n:END:\nbody"),
-            Some("ens:x".into())
-        );
-        assert_eq!(id(":properties:\n:id:   y  \n:end:\n"), Some("y".into()));
-        assert_eq!(
-            id("\n:PROPERTIES:\n:ID: x\n:END:\n"),
-            None,
-            "not the first line"
-        );
-        assert_eq!(id(":PROPERTIES:\n:ID: x\n:ID: y\n:END:\n"), None, "two ids");
-        assert_eq!(id(":PROPERTIES:\n:ID:\n:END:\n"), None, "empty id");
-        assert_eq!(id(":PROPERTIES:\n:ID: x\n"), None, "no :END:");
-        assert_eq!(
-            id("* H\n:PROPERTIES:\n:ID: x\n:END:\n"),
-            None,
-            "a headline drawer"
-        );
     }
 }

@@ -15,7 +15,8 @@ use mae_daemon::seed::{self, PlanOptions};
 
 const USAGE: &str = "usage: mae-daemon kb seed --dry-run --git <repo> --rev <tag-or-commit>\n\
      \x20   [--include <glob>]... [--exclude <path>]... [--require-canonical]\n\
-     \x20   [--max-body-bytes <n>] [--code-property <KEY>] [--json]\n\
+     \x20   [--max-body-bytes <n>] [--code-property <KEY>]\n\
+     \x20   [--allow-received-times] [--json]\n\
      \x20   [--name <name>] [--owner <principal>] [--owner-label <label>] [--kb-id <id>]\n\
      \x20 --include: repo-relative glob, repeatable; `**` crosses directories, `*` does not\n\
      \x20            (default: **/*.org)\n\
@@ -44,6 +45,7 @@ struct SeedArgs {
     exclude: Vec<String>,
     max_body_bytes: Option<usize>,
     require_canonical: bool,
+    allow_received_times: bool,
     json: bool,
     name: Option<String>,
     owner: Option<String>,
@@ -77,6 +79,7 @@ fn run_seed(args: &[String]) -> i32 {
             .unwrap_or(seed::DEFAULT_MAX_BODY_BYTES),
         require_canonical: parsed.require_canonical,
         code_property: parsed.code_property.clone(),
+        allow_received_times: parsed.allow_received_times,
     };
     match seed::plan(&opts) {
         Ok(plan) => {
@@ -140,6 +143,7 @@ fn switch<'a>(a: &'a mut SeedArgs, flag: &str) -> Option<&'a mut bool> {
     match flag {
         "--dry-run" => Some(&mut a.dry_run),
         "--require-canonical" => Some(&mut a.require_canonical),
+        "--allow-received-times" => Some(&mut a.allow_received_times),
         "--json" => Some(&mut a.json),
         _ => None,
     }
