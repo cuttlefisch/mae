@@ -52,6 +52,32 @@ pub(super) const FORCED_ENV: &[(&str, &str)] = &[
     ("LC_ALL", "C"),
 ];
 
+/// A `GIT_DIR` that names nothing: a git run with it discovers no repository
+/// and so loads no repository config.
+const NO_REPOSITORY: &str = "/nonexistent/mae-seed-no-repository";
+
+/// git with the pinned environment ([`INHERITED_ENV`], [`FORCED_ENV`]) and
+/// nothing else, before any `-C` or `-c`.
+fn pinned_git() -> Command {
+    let mut c = Command::new("git");
+    c.env_clear();
+    for var in INHERITED_ENV {
+        if let Some(v) = std::env::var_os(var) {
+            c.env(var, v);
+        }
+    }
+    c.envs(FORCED_ENV.iter().copied());
+    c.arg("--no-replace-objects");
+    c.stdin(Stdio::null());
+    c
+}
+
+fn add_forced_config(c: &mut Command) {
+    for (key, value) in FORCED_CONFIG {
+        c.arg("-c").arg(format!("{key}={value}"));
+    }
+}
+
 /// `-c` overrides on every call: they outrank the repository's own config.
 pub(super) const FORCED_CONFIG: &[(&str, &str)] = &[
     ("core.fsmonitor", "false"),
@@ -109,19 +135,9 @@ impl GitRepo {
     /// The one way this module runs git: an empty environment plus
     /// [`INHERITED_ENV`] and [`FORCED_ENV`], and [`FORCED_CONFIG`] as `-c`.
     pub(super) fn command(&self) -> Command {
-        let mut c = Command::new("git");
-        c.env_clear();
-        for var in INHERITED_ENV {
-            if let Some(v) = std::env::var_os(var) {
-                c.env(var, v);
-            }
-        }
-        c.envs(FORCED_ENV.iter().copied());
-        c.arg("--no-replace-objects").arg("-C").arg(&self.dir);
-        for (key, value) in FORCED_CONFIG {
-            c.arg("-c").arg(format!("{key}={value}"));
-        }
-        c.stdin(Stdio::null());
+        let mut c = pinned_git();
+        c.arg("-C").arg(&self.dir);
+        add_forced_config(&mut c);
         c
     }
 
@@ -233,28 +249,58 @@ impl GitRepo {
         }
     }
 
-    /// Refuse a repository whose own config (common or worktree) has an
-    /// `[include]` or `[includeIf …]` section. An include reads a file outside
-    /// the repository, and `~user/` in its path expands through the password
-    /// database to any account's home, the operator's included, which the
-    /// pinned `HOME` cannot stop.
+    /// Refuse a repository whose own config (common, worktree, or any linked
+    /// worktree's) has an `include.*` or `includeIf.*` key. An include reads a
+    /// file outside the repository, and `~user/` in its path expands through
+    /// the password database to any account's home, the operator's included,
+    /// which the pinned `HOME` cannot stop.
     ///
-    /// Read from the files themselves, BEFORE any git runs: git follows
-    /// includes while loading its own configuration, so even
-    /// `git config --no-includes` opened `~root/…` (measured).
+    /// git is the parser: `git config --file F --no-includes --name-only
+    /// --list`, run with no repository at all (`GIT_DIR` names nothing), lists
+    /// the keys exactly as git tokenises them (a BOM, `[core][include]` on one
+    /// line, any case, quoted subsections) WITHOUT opening the included file
+    /// (measured: an unreadable target is only touched with `--includes`).
+    /// A hand-written parser missed both of the first two. A file git cannot
+    /// parse refuses too.
     fn refuse_includes(&self) -> Result<(), SeedError> {
         for file in config_files(&self.dir) {
-            let Ok(bytes) = std::fs::read(&file) else {
+            if !file.is_file() {
                 continue;
-            };
-            if let Some(header) = include_header(&bytes) {
-                return Err(SeedError(format!(
-                    "{}: the repository's config includes other files ({header} in {}): an \
-                     include reads files outside the repository, including an operator's own \
-                     config through `~user/`; remove it to seed",
+            }
+            // Run from inside the repository on purpose: without the
+            // `GIT_DIR` that names nothing, git would discover it from here
+            // and load its config, includes and all, before reading `file`.
+            let mut c = pinned_git();
+            c.current_dir(&self.dir).env("GIT_DIR", NO_REPOSITORY);
+            let out = c
+                .arg("config")
+                .arg("--file")
+                .arg(&file)
+                .args(["--no-includes", "--name-only", "--list"])
+                .output()
+                .map_err(|e| SeedError(format!("cannot run git: {e}")))?;
+            let refuse = |why: String| {
+                Err(SeedError(format!(
+                    "{}: {why} ({}); an include reads files outside the repository, including \
+                     an operator's own config through `~user/`; remove it to seed",
                     self.dir.display(),
                     file.display()
-                )));
+                )))
+            };
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                return refuse(format!("git cannot read the config: {}", stderr.trim()));
+            }
+            let keys: Vec<String> = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter(|k| k.starts_with("include.") || k.starts_with("includeif."))
+                .map(str::to_string)
+                .collect();
+            if !keys.is_empty() {
+                return refuse(format!(
+                    "the repository's config includes other files ({})",
+                    keys.join(", ")
+                ));
             }
         }
         Ok(())
@@ -696,18 +742,15 @@ fn config_files(dir: &Path) -> Vec<PathBuf> {
     let common = std::fs::read_to_string(git_dir.join("commondir"))
         .map(|c| git_dir.join(c.trim()))
         .unwrap_or_else(|_| git_dir.clone());
-    vec![common.join("config"), git_dir.join("config.worktree")]
-}
-
-/// The first section header naming `include` or `includeIf` (any case, any
-/// subsection) in a config file's bytes.
-fn include_header(config: &[u8]) -> Option<String> {
-    config.split(|b| *b == b'\n').find_map(|line| {
-        let line = String::from_utf8_lossy(line);
-        let header = line.trim_start().strip_prefix('[')?;
-        let name = header.trim_start();
-        name.get(..7)
-            .filter(|n| n.eq_ignore_ascii_case("include"))
-            .map(|_| format!("[{}", header.split(']').next().unwrap_or(header)) + "]")
-    })
+    let mut files = vec![common.join("config"), git_dir.join("config.worktree")];
+    if let Ok(worktrees) = std::fs::read_dir(common.join("worktrees")) {
+        files.extend(
+            worktrees
+                .flatten()
+                .map(|w| w.path().join("config.worktree")),
+        );
+    }
+    files.sort();
+    files.dedup();
+    files
 }

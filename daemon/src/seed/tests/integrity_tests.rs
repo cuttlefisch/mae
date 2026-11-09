@@ -175,7 +175,10 @@ fn a_repository_config_with_includes_is_refused() {
         r.git(&["config", key, value]);
         let err = plan_err(r.path());
         assert!(err.contains("includes other files"), "{key}: {err}");
-        assert!(err.contains("[include"), "{key}: names the section: {err}");
+        assert!(
+            (err.contains("include.path") || err.contains("includeif.gitdir:/.path")),
+            "{key}: names the section: {err}"
+        );
     }
 }
 
@@ -193,4 +196,150 @@ fn a_surfaced_git_error_carries_no_advice() {
     std::fs::remove_file(loose(&r.path().join(".git/objects"), &c1)).unwrap();
     let err = plan_err(r.path());
     assert!(!err.is_empty());
+}
+
+/// A tagged repository whose `.git/<file>` is rewritten by `edit`, with an
+/// include target that is readable (so a missed include LOADS, as the review
+/// showed, rather than failing for some other reason).
+fn repo_with_config(
+    file: &str,
+    edit: impl Fn(&str, &[u8]) -> Vec<u8>,
+) -> (Repo, tempfile::TempDir) {
+    let r = Repo::new();
+    r.write("a.org", &long_note("a"));
+    r.commit(T);
+    r.git(&["tag", "v1"]);
+    let target = tempfile::tempdir().unwrap();
+    let target_file = target.path().join("x.config");
+    std::fs::write(&target_file, "[seedtest]\n\tincluded = yes\n").unwrap();
+    let path = r.path().join(".git").join(file);
+    let old = std::fs::read(&path).unwrap_or_default();
+    std::fs::write(&path, edit(&target_file.display().to_string(), &old)).unwrap();
+    (r, target)
+}
+
+/// A rewrite of a config file: (include target path, old bytes) → new bytes.
+type ConfigEdit = dyn Fn(&str, &[u8]) -> Vec<u8>;
+
+/// The review's S-L1 bypasses and the spellings around them: git loads every
+/// one of these includes, so every one must be refused. Kills: reading the
+/// config text with a parser that does not tokenise as git does.
+#[test]
+fn every_spelling_of_an_include_git_honours_is_refused() {
+    let cases: Vec<(&str, &str, Box<ConfigEdit>)> = vec![
+        (
+            "a BOM before [include]",
+            "config",
+            Box::new(|t, old| {
+                [
+                    b"\xef\xbb\xbf".as_slice(),
+                    format!("[include]\n\tpath = {t}\n").as_bytes(),
+                    old,
+                ]
+                .concat()
+            }),
+        ),
+        (
+            "[core][include] on one line",
+            "config",
+            Box::new(|t, old| {
+                [old, format!("[core][include]\n\tpath = {t}\n").as_bytes()].concat()
+            }),
+        ),
+        (
+            "[Include]",
+            "config",
+            Box::new(|t, old| [old, format!("[Include]\npath = {t}\n").as_bytes()].concat()),
+        ),
+        (
+            "[INCLUDEIF \"gitdir:/\"]",
+            "config",
+            Box::new(|t, old| {
+                [
+                    old,
+                    format!("[INCLUDEIF \"gitdir:/\"]\npath = {t}\n").as_bytes(),
+                ]
+                .concat()
+            }),
+        ),
+        (
+            "[include] after a comment line, with its own comment",
+            "config",
+            Box::new(|t, old| {
+                [
+                    old,
+                    format!("[core] ; a comment\n[include] # trailing\n\tpath = {t}\n").as_bytes(),
+                ]
+                .concat()
+            }),
+        ),
+        (
+            "a quoted subsection",
+            "config",
+            Box::new(|t, old| {
+                [old, format!("[include \"x\"]\n\tpath = {t}\n").as_bytes()].concat()
+            }),
+        ),
+        (
+            "the worktree config",
+            "config.worktree",
+            Box::new(|t, _| format!("[include]\n\tpath = {t}\n").into_bytes()),
+        ),
+    ];
+    let mut missed = Vec::new();
+    for (name, file, edit) in cases {
+        let (r, _target) = repo_with_config(file, edit);
+        match plan(&plan_opts(r.path(), "v1")) {
+            Ok(p) => missed.push(format!(
+                "{name}: planned ok={} with the include loaded",
+                p.ok()
+            )),
+            Err(e) if !e.0.contains("includes other files") => {
+                missed.push(format!("{name}: {}", e.0))
+            }
+            Err(_) => {}
+        }
+    }
+    assert!(
+        missed.is_empty(),
+        "not refused as an include:\n{}",
+        missed.join("\n")
+    );
+}
+
+/// An `[include]` that git reads as a comment is not an include, and a config
+/// without includes still plans: the check follows git, not the text.
+#[test]
+fn a_commented_out_include_is_not_an_include() {
+    let (r, _target) = repo_with_config("config", |t, old| {
+        [
+            old,
+            format!("[core] ; [include] path = {t}\n# [include]\n").as_bytes(),
+        ]
+        .concat()
+    });
+    let plan = r.plan("v1");
+    assert!(plan.ok(), "{:?}", plan.refusals);
+}
+
+/// The check reads the include KEYS without opening the included FILE: with
+/// an unreadable target it still refuses as an include, rather than failing
+/// on the file (which is what reading it would do). Kills: dropping
+/// `--no-includes`, and dropping the `GIT_DIR` that keeps git from loading
+/// the repository's own config first.
+#[cfg(unix)]
+#[test]
+fn the_include_check_never_opens_the_included_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let (r, target) = repo_with_config("config", |t, old| {
+        [old, format!("[include]\n\tpath = {t}\n").as_bytes()].concat()
+    });
+    let file = target.path().join("x.config");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&file).is_ok() {
+        return; // running as root: unreadable files are readable; nothing to show
+    }
+    let err = plan_err(r.path());
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(err.contains("includes other files (include.path)"), "{err}");
 }
