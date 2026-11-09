@@ -1858,6 +1858,7 @@ async fn handle_doc_request_inner(
         // function's own doc comment) — zero translation needed.
         Method::KbQueryCapabilities
         | Method::KbQueryGet
+        | Method::KbQueryList
         | Method::KbQuerySearch
         | Method::KbQueryGraph
         | Method::KbQueryMyWrappedKey => {
