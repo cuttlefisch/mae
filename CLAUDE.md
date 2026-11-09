@@ -796,6 +796,14 @@ principal) and refuses agent principals; named sets publish atomically; entry in
 derogation are recorded acts; revisions survive purge as the document-control record. Folds in
 ADR-101/103's agent-edits-pending-review.
 
+**ADR-114** (*accepted, design*) — **node kinds are an open, declared, multilingual vocabulary.** A
+node's `kind` is stored as written and never coerced to `note`; a KB may declare its kinds (immutable
+id, at most one behaviour class, labels and aliases per language, SKOS-style), resolved on read through
+one NFC + case-fold match key in a single cross-language namespace, with ties marked ambiguous rather
+than picked. Behaviour reads a class joined in the Cozo projection, never a raw string; built-in kinds
+ship as a frozen, versioned vocabulary (`mae-builtin/1`) so peers on different releases agree.
+Evidence in `docs/research/114-kind-vocabulary-prior-art.md`.
+
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
 > from it entirely until 2026-08-04, i.e. every ADR from the KB-visualization arc and the whole
 > pre-v0.15 audit set, so agents rediscovered decisions that already existed. `docs/adr/` is the
