@@ -1172,6 +1172,14 @@ jobs:
     if: needs.changes.outputs.version-bump-only != 'true'
     steps:
       - uses: actions/checkout@v7
+      # The images build from scratch on every run (two release workspaces,
+      # ~12-14 min on a hosted runner), so building inside the run step left the
+      # 15-minute budget with ~1 min for the daemon and the tests. Build first,
+      # under its own limit; the run step's `up --build` then hits the layer
+      # cache and its limit bounds only startup and the tests.
+      - name: Build collab E2E images
+        run: docker compose -f docker-compose.collab-test.yml build
+        timeout-minutes: 25
       - name: Run collab E2E
         run: make docker-collab-test
         timeout-minutes: 15
@@ -1184,6 +1192,10 @@ jobs:
     if: needs.changes.outputs.headless == 'true' && needs.changes.outputs.version-bump-only != 'true'
     steps:
       - uses: actions/checkout@v7
+      # Same split as collab-e2e: the image build is not the thing under test.
+      - name: Build headless E2E images
+        run: docker compose -f docker-compose.headless-e2e.yml build
+        timeout-minutes: 25
       - name: Run headless MAE service-mode E2E
         run: make docker-headless-e2e
         timeout-minutes: 15
