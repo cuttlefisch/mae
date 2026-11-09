@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.140] - 2026-11-09
+
+
+
+
+### Bug Fixes
+
+- *(daemon)* Refuse malformed kb/query parameters with -32602 ([30b7975](https://github.com/cuttlefisch/mae/commit/30b7975a2107f7521ce38256bec1e803c70b73b1))
+
+### CI
+
+- *(docker-e2e)* Build the images in their own step ([bd61e25](https://github.com/cuttlefisch/mae/commit/bd61e25afe37a9996b1a0dd17c504a7390be030b))
+
 ## [0.14.139] - 2026-11-09
 
 
@@ -10,6 +23,10 @@ All notable changes to this project will be documented in this file.
 ### Features
 
 - *(daemon,sync)* Kb/query.list and a per-node version for polling readers ([1dc5e16](https://github.com/cuttlefisch/mae/commit/1dc5e16c90caebf1c36a1a3b04e27db1d1df4b43))
+
+### Miscellaneous
+
+- Bump version to 0.14.139 ([ca97946](https://github.com/cuttlefisch/mae/commit/ca979463f9789aff39dfdaa97796193427619fbf))
 
 ## [0.14.138] - 2026-11-08
 
