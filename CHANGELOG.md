@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.139] - 2026-11-09
+
+
+
+
+### Features
+
+- *(daemon,sync)* Kb/query.list and a per-node version for polling readers ([1dc5e16](https://github.com/cuttlefisch/mae/commit/1dc5e16c90caebf1c36a1a3b04e27db1d1df4b43))
+
 ## [0.14.138] - 2026-11-08
 
 
@@ -10,6 +19,10 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 
 - *(daemon)* Collab sessions receive only the documents they subscribed to ([d7e8527](https://github.com/cuttlefisch/mae/commit/d7e85273f62b3d8f9103b3e927aaa44c52ca7812))
+
+### Miscellaneous
+
+- Bump version to 0.14.138 ([71c8dc9](https://github.com/cuttlefisch/mae/commit/71c8dc909ca0972babec18c62672c9676940c4f3))
 
 ## [0.14.137] - 2026-11-08
 
