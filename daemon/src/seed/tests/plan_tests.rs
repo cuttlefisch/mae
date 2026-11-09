@@ -39,6 +39,7 @@ fn input(files: &[(&str, Vec<u8>)]) -> PlanInput {
         sizes: HashMap::new(),
         attrs: Vec::new(),
         history,
+        objects_verified: 0,
         received_at: 42,
     }
 }

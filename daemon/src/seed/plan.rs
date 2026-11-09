@@ -73,6 +73,9 @@ pub struct PlanInput {
     pub attrs: Vec<CheckoutAttr>,
     /// The history walk: path lineages and the first appearance of each id.
     pub history: History,
+    /// How many tag, commit and tree objects were hash-checked
+    /// (`GitRepo::verify_objects`).
+    pub objects_verified: usize,
     /// When the plan was made: both times of a file git has no history for.
     pub received_at: i64,
 }
@@ -157,6 +160,8 @@ pub struct SeedPlan {
     pub history_blobs_read: usize,
     /// How many `*.org` tree-diff entries the history pass parsed.
     pub history_diff_entries: usize,
+    /// How many tag, commit and tree objects were hash-checked.
+    pub objects_verified: usize,
 }
 
 impl SeedPlan {
@@ -183,6 +188,8 @@ pub fn plan(opts: &PlanOptions) -> Result<SeedPlan, SeedError> {
     let repo = GitRepo::new(&opts.repo);
     repo.preflight()?;
     let (commit, tree) = repo.resolve(&opts.rev)?;
+    let format = repo.object_format()?;
+    let objects_verified = repo.verify_objects(&opts.rev, &commit, &format)?;
     let entries = repo.ls_tree(&commit)?;
     let selection = select(&entries, &globs, &opts.exclude);
     let paths: Vec<String> = selection.selected.iter().map(|(p, _)| p.clone()).collect();
@@ -200,7 +207,6 @@ pub fn plan(opts: &PlanOptions) -> Result<SeedPlan, SeedError> {
         .filter(|s| sizes[*s] <= limit)
         .cloned()
         .collect();
-    let format = repo.object_format()?;
     let mut blobs = HashMap::new();
     for (sha, bytes) in readable.iter().zip(repo.read_blobs(&readable)?) {
         // The object store is input too: a loose object under a real name
@@ -231,6 +237,7 @@ pub fn plan(opts: &PlanOptions) -> Result<SeedPlan, SeedError> {
             sizes,
             attrs,
             history,
+            objects_verified,
             received_at,
         },
         opts,
@@ -281,6 +288,7 @@ pub fn plan_entries(input: PlanInput, opts: &PlanOptions) -> Result<SeedPlan, Se
         allow_received_times: opts.allow_received_times,
         history_blobs_read: input.history.blobs_read,
         history_diff_entries: input.history.diff_entries,
+        objects_verified: input.objects_verified,
         nodes,
         excluded: selection.excluded,
         not_selected: selection.not_selected,

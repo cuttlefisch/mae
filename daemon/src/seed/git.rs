@@ -69,6 +69,9 @@ pub(super) const FORCED_CONFIG: &[(&str, &str)] = &[
     // Read the objects themselves.
     ("core.commitGraph", "false"),
     ("core.multiPackIndex", "false"),
+    // GIT_GRAFT_FILE (above) makes git print a deprecation hint into every
+    // error it reports; the hint is noise in a refusal.
+    ("advice.graftFileDeprecated", "false"),
 ];
 
 /// Attributes that make a checkout's bytes differ from the blob's. `text`
@@ -125,6 +128,7 @@ impl GitRepo {
     /// Refuse a repository whose objects or attributes are not the commit's
     /// alone, or a path that is not the repository's top level.
     pub fn preflight(&self) -> Result<(), SeedError> {
+        self.refuse_includes()?;
         self.require_top_level()?;
         let refuse = |why: String| Err(SeedError(format!("{}: {why}", self.dir.display())));
         if self.rev_parse_flag("--is-shallow-repository")? == "true" {
@@ -154,6 +158,72 @@ impl GitRepo {
         Ok(())
     }
 
+    /// Hash-check every object that decides WHICH content and WHICH dates the
+    /// plan carries: the tag chain from what `rev` names down to `commit`,
+    /// then every commit and every tree reachable from `commit`
+    /// (`rev-list --objects --filter=blob:none`). git does not check a loose or
+    /// packed object against its name, so a forged subtree (confirmed) or a
+    /// forged historical commit (confirmed: a rewritten root dated a page 1998)
+    /// would otherwise be read as real. Blobs are checked where they are read
+    /// (`plan`). Returns how many objects were checked.
+    pub fn verify_objects(
+        &self,
+        rev: &str,
+        commit: &str,
+        format: &str,
+    ) -> Result<usize, SeedError> {
+        let check = |sha: &str, kind: &str, bytes: &[u8]| {
+            if object_name(format, kind, bytes) == sha {
+                Ok(())
+            } else {
+                Err(SeedError(format!(
+                    "{kind} {sha} does not hash to its name: the repository is corrupt or forged"
+                )))
+            }
+        };
+        let mut checked = 0;
+        let mut oid = self.rev_parse(rev)?;
+        loop {
+            let mut next = None;
+            self.for_each_object(
+                std::slice::from_ref(&oid),
+                usize::MAX,
+                |sha, kind, bytes| {
+                    check(sha, kind, bytes)?;
+                    if kind == "tag" {
+                        next = tag_target(bytes);
+                        if next.is_none() {
+                            return Err(SeedError(format!("tag {sha} names no object")));
+                        }
+                    }
+                    Ok(())
+                },
+            )?;
+            checked += 1;
+            match next {
+                Some(target) => oid = target,
+                None => break,
+            }
+        }
+        if oid != commit {
+            return Err(SeedError(format!(
+                "--rev {rev:?} does not lead to commit {commit}"
+            )));
+        }
+        let listing =
+            self.run_checked(&["rev-list", "--objects", "--filter=blob:none", commit, "--"])?;
+        let shas: Vec<String> = String::from_utf8_lossy(&listing)
+            .lines()
+            .filter_map(|l| l.split(' ').next())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        self.for_each_object(&shas, usize::MAX, |sha, kind, bytes| {
+            check(sha, kind, bytes)
+        })?;
+        Ok(checked + shas.len())
+    }
+
     /// The repository's object format: `sha1` or `sha256`.
     pub fn object_format(&self) -> Result<String, SeedError> {
         let format = self.rev_parse_flag("--show-object-format")?;
@@ -161,6 +231,33 @@ impl GitRepo {
             "sha1" | "sha256" => Ok(format),
             other => Err(SeedError(format!("unsupported object format {other:?}"))),
         }
+    }
+
+    /// Refuse a repository whose own config (common or worktree) has an
+    /// `[include]` or `[includeIf …]` section. An include reads a file outside
+    /// the repository, and `~user/` in its path expands through the password
+    /// database to any account's home, the operator's included, which the
+    /// pinned `HOME` cannot stop.
+    ///
+    /// Read from the files themselves, BEFORE any git runs: git follows
+    /// includes while loading its own configuration, so even
+    /// `git config --no-includes` opened `~root/…` (measured).
+    fn refuse_includes(&self) -> Result<(), SeedError> {
+        for file in config_files(&self.dir) {
+            let Ok(bytes) = std::fs::read(&file) else {
+                continue;
+            };
+            if let Some(header) = include_header(&bytes) {
+                return Err(SeedError(format!(
+                    "{}: the repository's config includes other files ({header} in {}): an \
+                     include reads files outside the repository, including an operator's own \
+                     config through `~user/`; remove it to seed",
+                    self.dir.display(),
+                    file.display()
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// The path must be the work tree's top level (or a bare repository's own
@@ -303,6 +400,24 @@ impl GitRepo {
         max: usize,
         mut f: impl FnMut(&[u8]),
     ) -> Result<(), SeedError> {
+        self.for_each_object(shas, max, |sha, kind, bytes| {
+            if kind != "blob" {
+                return Err(SeedError(format!("object {sha} is a {kind}, not a blob")));
+            }
+            f(bytes);
+            Ok(())
+        })
+    }
+
+    /// Hand each object in `shas` (any type) to `f` with its type, in order,
+    /// from ONE `cat-file --batch` process, holding at most `max` bytes of one
+    /// object at a time. `f` may stop the pass with an error.
+    pub fn for_each_object(
+        &self,
+        shas: &[String],
+        max: usize,
+        mut f: impl FnMut(&str, &str, &[u8]) -> Result<(), SeedError>,
+    ) -> Result<(), SeedError> {
         let mut child = self
             .command()
             .args(["cat-file", "--batch"])
@@ -322,12 +437,11 @@ impl GitRepo {
         let mut reader = BufReader::new(child.stdout.take().expect("piped stdout"));
         let mut result = Ok(());
         for sha in shas {
-            match read_batch_object(&mut reader, sha, max) {
-                Ok(bytes) => f(&bytes),
-                Err(e) => {
-                    result = Err(e);
-                    break;
-                }
+            let step = read_batch_object(&mut reader, sha, max)
+                .and_then(|(kind, bytes)| f(sha, &kind, &bytes));
+            if let Err(e) = step {
+                result = Err(e);
+                break;
             }
         }
         drop(reader);
@@ -486,15 +600,16 @@ fn read_batch_object(
     reader: &mut impl BufRead,
     sha: &str,
     max: usize,
-) -> Result<Vec<u8>, SeedError> {
+) -> Result<(String, Vec<u8>), SeedError> {
     let mut header = String::new();
     reader
         .read_line(&mut header)
         .map_err(|e| SeedError(format!("git cat-file: {e}")))?;
     let fields: Vec<&str> = header.trim_end().split(' ').collect();
-    let [got, "blob", size] = fields.as_slice() else {
+    let [got, kind, size] = fields.as_slice() else {
         return Err(SeedError(format!(
-            "git cat-file: object {sha} is not a blob: {header:?}"
+            "git cat-file: object {sha} is missing or unreadable: {:?}",
+            header.trim_end()
         )));
     };
     if *got != sha {
@@ -514,7 +629,7 @@ fn read_batch_object(
     if skipped != rest {
         return Err(SeedError(format!("git cat-file: short read of {sha}")));
     }
-    Ok(buf)
+    Ok((kind.to_string(), buf))
 }
 
 /// `PATH NUL ATTR NUL VALUE NUL`, repeated; keeps only attributes that are set.
@@ -531,10 +646,15 @@ fn parse_check_attr(out: &[u8]) -> Vec<(String, String, String)> {
         .collect()
 }
 
-/// The object name git would give `content` as a blob under `format`
-/// (`sha1` or `sha256`): the hash of `blob <len>\0<content>`.
+/// The object name git would give `content` as a blob under `format`.
 pub fn blob_name(format: &str, content: &[u8]) -> String {
-    let header = format!("blob {}\0", content.len());
+    object_name(format, "blob", content)
+}
+
+/// The object name git would give `content` as an object of type `kind`
+/// under `format` (`sha1` or `sha256`): the hash of `<kind> <len>\0<content>`.
+pub fn object_name(format: &str, kind: &str, content: &[u8]) -> String {
+    let header = format!("{kind} {}\0", content.len());
     if format == "sha256" {
         use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
@@ -547,4 +667,47 @@ pub fn blob_name(format: &str, content: &[u8]) -> String {
         h.update(content);
         h.digest().to_string()
     }
+}
+
+/// The `object <name>` a tag object points at.
+fn tag_target(tag: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(tag).ok()?;
+    text.lines()
+        .next()?
+        .strip_prefix("object ")
+        .map(|s| s.trim().to_string())
+}
+
+/// The config files a repository at `dir` (a work tree's top level, a linked
+/// worktree, or a bare repository) carries, found without running git.
+fn config_files(dir: &Path) -> Vec<PathBuf> {
+    let dot_git = dir.join(".git");
+    let git_dir = if dot_git.is_dir() {
+        dot_git
+    } else if let Ok(text) = std::fs::read_to_string(&dot_git) {
+        // A linked worktree: `.git` is a file naming its git directory.
+        match text.trim().strip_prefix("gitdir:") {
+            Some(p) => dir.join(p.trim()),
+            None => return Vec::new(),
+        }
+    } else {
+        dir.to_path_buf() // bare
+    };
+    let common = std::fs::read_to_string(git_dir.join("commondir"))
+        .map(|c| git_dir.join(c.trim()))
+        .unwrap_or_else(|_| git_dir.clone());
+    vec![common.join("config"), git_dir.join("config.worktree")]
+}
+
+/// The first section header naming `include` or `includeIf` (any case, any
+/// subsection) in a config file's bytes.
+fn include_header(config: &[u8]) -> Option<String> {
+    config.split(|b| *b == b'\n').find_map(|line| {
+        let line = String::from_utf8_lossy(line);
+        let header = line.trim_start().strip_prefix('[')?;
+        let name = header.trim_start();
+        name.get(..7)
+            .filter(|n| n.eq_ignore_ascii_case("include"))
+            .map(|_| format!("[{}", header.split(']').next().unwrap_or(header)) + "]")
+    })
 }

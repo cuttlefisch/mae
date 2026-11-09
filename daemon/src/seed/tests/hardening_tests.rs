@@ -13,7 +13,14 @@ const T: i64 = 1_700_000_000;
 fn plan_err(repo: &Path) -> String {
     match plan(&plan_opts(repo, "v1")) {
         Ok(p) => panic!("planned {} nodes; expected a refusal", p.nodes.len()),
-        Err(e) => e.0,
+        Err(e) => {
+            assert!(
+                !e.0.contains("hint:"),
+                "git advice leaked into a refusal: {}",
+                e.0
+            );
+            e.0
+        }
     }
 }
 
