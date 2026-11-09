@@ -16,6 +16,7 @@ pub mod lease_fence;
 pub mod oauth_self_issue;
 pub mod projector;
 pub mod quota;
+pub mod seed;
 pub mod storage;
 
 /// Short git SHA of this build (`-dirty` if the tree had uncommitted changes,
