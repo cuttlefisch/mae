@@ -787,6 +787,15 @@ derivation in a deterministic sandbox. Conformance gate: identical to Emacs `org
 for a test-pinned divergence register, plus round-trip, linear-scaling and fuzz gates. No existing
 Rust parser passed a maintenance gate; see `docs/research/112-org-parser-prior-art.md`.
 
+**ADR-113** (*proposed, design*) — **publication review: readers see approved revisions, writers
+keep a live draft.** Per-KB and off by default. The node CRDT stays the working copy; revisions
+are frozen at review request and live, with the published pointer and a hash-chained, daemon-signed
+event log, in daemon tables outside the CRDT (ADR-106's placement). The daemon enforces approver ≠
+author (authors counted since the last approved revision, which needs `apply_update` to record its
+principal) and refuses agent principals; named sets publish atomically; entry into force and
+derogation are recorded acts; revisions survive purge as the document-control record. Folds in
+ADR-101/103's agent-edits-pending-review.
+
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
 > from it entirely until 2026-08-04, i.e. every ADR from the KB-visualization arc and the whole
 > pre-v0.15 audit set, so agents rediscovered decisions that already existed. `docs/adr/` is the
