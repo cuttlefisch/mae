@@ -161,3 +161,132 @@ async fn concurrent_edits_and_replaces_never_diverge_or_vanish() {
         }
     }
 }
+
+// ---- Eviction and compaction racing an in-flight edit ---------------------
+
+fn edits(store: &Arc<DocStore>, cid: u64, text: &'static str) -> tokio::task::JoinHandle<u64> {
+    let s = Arc::clone(store);
+    tokio::spawn(async move {
+        let edit = TextSync::with_client_id("", cid).insert(0, text);
+        s.apply_update(DOC, &edit, None).await.unwrap().wal_seq
+    })
+}
+
+/// After ONE and THREE: both are in memory and on disk.
+async fn assert_one_and_three_kept(store: &Arc<DocStore>, backend: &Arc<SqliteBackend>) {
+    let content = assert_consistent(store, backend).await;
+    assert!(
+        content.contains("ONE") && content.contains("THREE"),
+        "edit lost: {content:?}"
+    );
+}
+
+/// `evict_idle` path: edit ONE holds the entry but has not locked it; an
+/// idle-eviction drops that entry; edit THREE loads a fresh one; then ONE
+/// applies to the dropped entry while its WAL row lands on disk — memory
+/// "OLDTHREE", disk "OLDONETHREE". The eviction must wait for ONE.
+#[tokio::test]
+async fn idle_eviction_waits_for_an_edit_holding_the_entry() {
+    let (store, backend) = store_with_old().await;
+    let pause = store.pause_next(|p| &p.apply);
+    let one = edits(&store, 11, "ONE");
+    pause.reached.notified().await;
+
+    let evict = {
+        let s = Arc::clone(&store);
+        within_window(tokio::spawn(async move { s.evict_idle(0).await })).await
+    };
+    let ran_through = evict.is_ok();
+    let three = within_window(edits(&store, 13, "THREE")).await;
+    pause.proceed.notify_one();
+    one.await.unwrap();
+    finish(evict).await;
+    finish(three).await;
+
+    assert_one_and_three_kept(&store, &backend).await;
+    assert!(
+        !ran_through,
+        "eviction dropped an entry an edit was holding"
+    );
+}
+
+/// The same race through the LRU eviction in `get_or_create`, which runs when
+/// the in-memory working set is full and another document is loaded.
+#[tokio::test]
+async fn lru_eviction_skips_an_entry_an_edit_is_holding() {
+    let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+    let store = Arc::new(DocStore::new(backend.clone(), 500).with_max_documents(1));
+    let old = TextSync::with_client_id("", 1).insert(0, "OLD");
+    store.apply_update(DOC, &old, None).await.unwrap();
+
+    let pause = store.pause_next(|p| &p.apply);
+    let one = edits(&store, 11, "ONE");
+    pause.reached.notified().await;
+    // Loading another document fills the working set: DOC is the LRU victim.
+    let other = TextSync::with_client_id("", 5).insert(0, "other");
+    store
+        .apply_update("file:proj/other.txt", &other, None)
+        .await
+        .unwrap();
+    let three = within_window(edits(&store, 13, "THREE")).await;
+    pause.proceed.notify_one();
+    one.await.unwrap();
+    finish(three).await;
+
+    assert_one_and_three_kept(&store, &backend).await;
+}
+
+/// Two compactions of one document: A reads the state, an edit lands, B reads
+/// the newer state, writes its snapshot and trims the WAL up to the edit; then
+/// A writes. A's snapshot is stale — writing it would replace B's snapshot
+/// with one that lacks the edit whose WAL row B already trimmed, losing it on
+/// disk. A stale compaction must change nothing.
+#[tokio::test]
+async fn a_stale_compaction_never_overwrites_a_newer_snapshot() {
+    let (store, backend) = store_with_old().await;
+    let pause = store.pause_next(|p| &p.compact);
+    let stale = {
+        let s = Arc::clone(&store);
+        tokio::spawn(async move { s.compact_doc(DOC).await.unwrap() })
+    };
+    pause.reached.notified().await;
+    edits(&store, 11, "ONE").await.unwrap();
+    store.compact_doc(DOC).await.unwrap();
+    pause.proceed.notify_one();
+    stale.await.unwrap();
+
+    let content = assert_consistent(&store, &backend).await;
+    assert!(content.contains("ONE"), "edit lost: {content:?}");
+}
+
+/// Backstop: edits and idle-evictions (each compacting first) truly concurrent
+/// on a multi-threaded runtime. Every acknowledged edit is in memory and on disk.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_edits_and_evictions_never_lose_an_edit() {
+    const TEXTS: [&str; 4] = ["AAA", "BBB", "CCC", "DDD"];
+    for _ in 0..300 {
+        let (store, backend) = store_with_old().await;
+        let writers: Vec<_> = TEXTS
+            .iter()
+            .enumerate()
+            .map(|(i, t)| edits(&store, 20 + i as u64, t))
+            .collect();
+        let evictors: Vec<_> = (0..2)
+            .map(|_| {
+                let s = Arc::clone(&store);
+                tokio::spawn(async move { s.evict_idle(0).await })
+            })
+            .collect();
+        for w in writers {
+            w.await.unwrap();
+        }
+        for e in evictors {
+            e.await.unwrap();
+        }
+        let content = assert_consistent(&store, &backend).await;
+        assert!(
+            TEXTS.iter().all(|t| content.contains(t)),
+            "edit lost: {content:?}"
+        );
+    }
+}

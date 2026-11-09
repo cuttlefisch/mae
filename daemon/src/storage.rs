@@ -420,6 +420,17 @@ impl StorageBackend for SqliteBackend {
         // Atomic: snapshot write + WAL trim in a single transaction.
         conn.execute("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<(), sqlite::Error> {
+            // A STALE compaction changes nothing. A snapshot already covering a
+            // later WAL id means another compaction read a newer state and has
+            // trimmed the WAL up to it; replacing that snapshot with this older
+            // state would lose every update in between, on disk.
+            let mut newer =
+                conn.prepare("SELECT 1 FROM snapshots WHERE doc_name = ?1 AND wal_id > ?2")?;
+            newer.bind((1, doc_name))?;
+            newer.bind((2, up_to_wal_id as i64))?;
+            if let sqlite::State::Row = newer.next()? {
+                return Ok(());
+            }
             let mut snap_stmt = conn.prepare(
                 "INSERT OR REPLACE INTO snapshots (doc_name, state, wal_id, hash, updated_at)
                  VALUES (?1, ?2, ?3, ?4, datetime('now'))",
