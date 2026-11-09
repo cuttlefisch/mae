@@ -249,3 +249,31 @@ fn embeddings_is_created_lazily_at_the_models_width() {
         "the pinned width must be recorded so a later model change can re-pin"
     );
 }
+
+/// The collection `body_format` record survives a close and reopen — the whole
+/// reason it is kept in the store rather than in memory: it is what lets a
+/// restarted, offline editor still refuse to write a literal-org KB.
+#[cfg(feature = "storage-sqlite")]
+#[test]
+fn collection_body_format_survives_reopen_and_clears() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("bf_store");
+    {
+        let store = CozoKbStore::open_with_engine(&path, "sqlite").unwrap();
+        assert_eq!(store.collection_body_format().unwrap(), None);
+        store
+            .set_collection_body_format(Some("org-literal-v1"))
+            .unwrap();
+    }
+    {
+        let store = CozoKbStore::open_with_engine(&path, "sqlite").unwrap();
+        assert_eq!(
+            store.collection_body_format().unwrap().as_deref(),
+            Some("org-literal-v1"),
+            "a recorded format must be read back after reopening"
+        );
+        store.set_collection_body_format(None).unwrap();
+    }
+    let store = CozoKbStore::open_with_engine(&path, "sqlite").unwrap();
+    assert_eq!(store.collection_body_format().unwrap(), None);
+}

@@ -30,10 +30,7 @@ pub(super) fn handle_kb_shared_event(
                 }
             }
         }
-        editor
-            .collab
-            .kb_collection_state
-            .insert(kb_id.clone(), collection_state);
+        editor.kb_note_collection_state(&kb_id, collection_state);
     }
     // ADR-105 D4: which KB is this? `kb_id` is a collab id, not a name, so it
     // cannot be compared against "default"/"primary" any more. Prefer the in-flight
@@ -205,7 +202,19 @@ pub(super) fn handle_kb_joined_event(
     // (re)join even if their pending-queue row was lost in a crash. Per-node
     // decode/reconcile errors are tolerated (skipped + warned) inside the helper.
     let joined_node_ids: HashSet<String> = nodes.iter().map(|n| n.id.clone()).collect();
+    // C1: seed the local collection replica from the full join snapshot so
+    // subsequent live `kbc:` membership broadcasts can be applied as deltas
+    // and the epoch relearned without a reconnect. Seeded BEFORE registering
+    // the instance: the reconcile inside it must already know whether this KB
+    // declares a body format MAE does not write (it then withholds local-ahead
+    // ops rather than re-sending them).
+    editor
+        .collab
+        .kb_collection_state
+        .insert(kb_id.clone(), collection_state.clone());
     editor.kb_register_joined_instance(&kb_id, nodes);
+    // Now that the instance store exists, record the body format durably.
+    editor.kb_record_body_format(&kb_id);
     // Keep the transient index in sync as a cache.
     editor
         .collab
@@ -229,14 +238,6 @@ pub(super) fn handle_kb_joined_event(
             debug!(kb = %kb_id, epoch, "learned KB authorization epoch (ADR-023)");
         }
     }
-
-    // C1: seed the local collection replica from the full join snapshot so
-    // subsequent live `kbc:` membership broadcasts can be applied as deltas
-    // and the epoch relearned without a reconnect.
-    editor
-        .collab
-        .kb_collection_state
-        .insert(kb_id.clone(), collection_state);
 
     info!(kb = %kb_id, node_count, "KB join complete (merged)");
     editor.set_status(format!("Joined KB '{}' ({} nodes)", kb_id, node_count));

@@ -16,11 +16,13 @@ use crate::SyncError;
 mod collection_artifacts;
 mod collection_core;
 mod collection_crypto;
+mod collection_format;
 mod collection_lease;
 mod collection_oplog;
 mod collection_roles;
 mod node;
 
+pub use collection_format::BODY_FORMAT_ORG_LITERAL_V1;
 pub use node::{body_bytes, KbNodeDoc, MaterializedNode};
 
 /// Derive a stable yrs `client_id` for KB CRDT edits from a peer's durable collab
@@ -181,6 +183,9 @@ const COLL_ENCRYPTION_KEY: &str = "encryption"; // ADR-037: none|e2e (absent ⇒
 const COLL_EMBEDDING_MODEL_KEY: &str = "embedding_model"; // pinned model name (absent ⇒ none pinned)
 const COLL_CHUNK_VERSION_KEY: &str = "chunk_version"; // decimal (absent ⇒ 0)
 const COLL_SHARE_ARTIFACTS_KEY: &str = "share_derived_artifacts"; // "1"|"0" (absent ⇒ false, opt-in)
+/// How this KB's node bodies are stored. Absent ⇒ MAE's own format (what every
+/// KB had before the key existed). See `collection_format.rs`.
+const COLL_BODY_FORMAT_KEY: &str = "body_format";
 /// ADR-026 signed membership op-log: `YMap<chain_hash -> op record>` — the
 /// append-only, CRDT *set* of signed membership ops (keyed by each op's
 /// `chain_hash` so concurrent appends converge). Validity is *derived* by every

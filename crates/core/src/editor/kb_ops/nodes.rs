@@ -60,6 +60,10 @@ impl Editor {
             .find(|(_, kb)| kb.contains(node_id))
             .map(|(uuid, _)| uuid.clone())
             .ok_or_else(|| format!("No KB node: {}", node_id))?;
+        // Promotion deletes the instance copy (and its manifest entry) when it
+        // matches, and writes a MAE-format copy into the primary: both ends write.
+        self.kb_refuse_foreign_body_format(&Some(owner_uuid.clone()))?;
+        self.kb_refuse_foreign_body_format(&None)?;
         let instance = self
             .kb
             .registry
@@ -311,6 +315,8 @@ impl Editor {
                 ));
             }
         }
+        // A created node is minted from `Node`, i.e. in MAE's format.
+        self.kb_refuse_foreign_body_format(&owner)?;
         // Guard: refuse to overwrite seed nodes
         if let Some(existing) = self.kb.primary.get(id) {
             if existing.source == Some(mae_kb::NodeSource::Seed) {
@@ -371,6 +377,8 @@ impl Editor {
         self.kb_ensure_node_loaded(id);
         // Resolve across primary ∪ federated instances (I-9), like update/read.
         let owner = self.kb_write_owner(id, kb)?;
+        // A delete removes the node from the shared manifest for every peer.
+        self.kb_refuse_foreign_body_format(&owner)?;
         let node = match &owner {
             None => self.kb.primary.get(id),
             Some(uuid) => self.kb.instances.get(uuid).and_then(|kb| kb.get(id)),
@@ -677,6 +685,8 @@ impl Editor {
         // `primary` on a peer that joined it. The write path must find it in
         // either, mirroring the read path — not primary-only.
         let owner = self.kb_write_owner(id, kb)?;
+        // Before the mutate closure runs: a literal-org KB takes no MAE write.
+        self.kb_refuse_foreign_body_format(&owner)?;
         let existing = match &owner {
             None => self.kb.primary.get(id),
             Some(uuid) => self.kb.instances.get(uuid).and_then(|kb| kb.get(id)),
