@@ -33,6 +33,12 @@ export interface Request {
   path?: string;
   /** For `syntaxSection`: one entry of a `syntax` result's `sections`, unchanged. */
   section?: SyntaxSectionInfo;
+  /**
+   * For `syntax`/`syntaxSection`: whether a span's `end` includes the node's post-blank
+   * (the spaces after an object, the blank lines after an element). Default true, as
+   * `org-element` reports it; false ends `*bold*  ` after the closing `*`.
+   */
+  post_blank?: boolean;
   /** For `syntaxSection`: the `file` object of the same `syntax` result, unchanged. */
   file?: SyntaxFile;
 }
@@ -62,7 +68,8 @@ export interface SyntaxSectionInfo {
  * Highlighting spans: `spans` is flat, three numbers a span —
  * `[kindIndex, start, end, …]`, `kindIndex` into `kinds` (SyntaxKind names
  * such as "HEADLINE", "BOLD"). UTF-8 byte offsets into the WHOLE text.
- * Plain text, spaces, line endings and blank lines are not listed.
+ * Plain text, spaces, line endings and blank lines are not listed. A span's
+ * end includes its post-blank unless the request sets `post_blank: false`.
  */
 export interface SyntaxSpans {
   kinds: string[];
@@ -193,7 +200,9 @@ export interface LinkClass {
   description: string | null;
 }
 
-export type Op = 'semantics' | 'renderHast' | 'renderHtml' | 'text' | 'classifyLink' | 'version';
+export type Op =
+  | 'semantics' | 'renderHast' | 'renderHtml' | 'text' | 'classifyLink' | 'version'
+  | 'syntax' | 'syntaxSection';
 
 /**
  * The module, one instance at a time. Not re-entrant; calls are
