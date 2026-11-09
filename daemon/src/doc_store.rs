@@ -128,31 +128,53 @@ pub struct DocStore {
     /// The clock the per-document editor record (ADR-113 D3) is stamped with.
     /// Wall clock in production; injectable so tests order edits without sleeping.
     clock: EditClock,
-    /// Striped per-document gates serializing a whole-document replace
-    /// (`share_doc`/`restore_doc`) against `state_with_high_water`. A replace
-    /// swaps the in-memory entry and rewrites storage OUTSIDE the entry lock, so
-    /// the entry lock alone cannot keep a reader from pairing the old content
-    /// with the new WAL high-water mark. Always taken before `docs` or an entry
-    /// lock. Striped (not per name) so it stays bounded; two documents sharing
-    /// a stripe only wait on each other.
-    replace_gates: Box<[Mutex<()>]>,
-    /// Test seams: pause `state_with_high_water` between its state and
-    /// high-water reads, and a replace between its size probe and its storage
-    /// swap, so the races between them can be driven deterministically.
+    /// Striped per-document gates ordering every write against a
+    /// whole-document replace (`share_doc`/`restore_doc`), which takes its
+    /// stripe EXCLUSIVELY. A replace deletes storage, swaps the in-memory entry
+    /// and appends its WAL row outside any entry lock, so the entry lock alone
+    /// cannot order it against anyone holding the OLD entry: an edit that
+    /// grabbed the old entry could apply to it in memory while its WAL row
+    /// landed on the new document (memory and disk then disagree), or be
+    /// deleted with the old document after it was acknowledged. `apply_update`,
+    /// `compact_doc` and `state_with_high_water` take the stripe SHARED, so
+    /// they run alongside each other (the entry lock orders them) but never
+    /// across a replace: each is wholly before it or wholly after it.
+    ///
+    /// @ai-caution: [sync] Always taken BEFORE `docs` or an entry lock, never
+    /// while holding one, and never twice in one task (a queued replace would
+    /// deadlock a nested shared acquisition) — `apply_update` releases it
+    /// before compacting. Striped (not per name) so it stays bounded; two
+    /// documents sharing a stripe only wait on each other's replaces.
+    replace_gates: Box<[RwLock<()>]>,
+    /// Test seams: one-shot pauses at the points where the races between a
+    /// replace and the others can happen, so each interleaving is driven
+    /// deterministically.
     #[cfg(test)]
-    high_water_pause: std::sync::Mutex<Option<HighWaterPause>>,
-    #[cfg(test)]
-    replace_pause: std::sync::Mutex<Option<HighWaterPause>>,
+    pauses: Pauses,
+}
+
+/// The test seams (see `DocStore::pauses`).
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct Pauses {
+    /// `state_with_high_water`, between its state and high-water reads.
+    pub high_water: std::sync::Mutex<Option<Pause>>,
+    /// A replace, between its size probe and its storage swap.
+    pub replace: std::sync::Mutex<Option<Pause>>,
+    /// `apply_update`, after it has the entry and before it locks it.
+    pub apply: std::sync::Mutex<Option<Pause>>,
+    /// `compact_doc`, between reading the state and writing the snapshot.
+    pub compact: std::sync::Mutex<Option<Pause>>,
 }
 
 /// Number of [`DocStore::replace_gates`] stripes.
 const REPLACE_GATE_STRIPES: usize = 64;
 
-/// A one-shot pause (see `DocStore::high_water_pause`): the reader signals
+/// A one-shot pause (see `DocStore::pauses`): the paused task signals
 /// `reached` and waits for `proceed`.
 #[cfg(test)]
 #[derive(Clone)]
-pub(crate) struct HighWaterPause {
+pub(crate) struct Pause {
     pub reached: Arc<tokio::sync::Notify>,
     pub proceed: Arc<tokio::sync::Notify>,
 }
@@ -269,46 +291,36 @@ impl DocStore {
             derive_cache: RwLock::new(HashMap::new()),
             authorized_keys_path: std::sync::OnceLock::new(),
             clock: crate::doc_editors::system_clock(),
-            replace_gates: (0..REPLACE_GATE_STRIPES).map(|_| Mutex::new(())).collect(),
+            replace_gates: (0..REPLACE_GATE_STRIPES).map(|_| RwLock::new(())).collect(),
             #[cfg(test)]
-            high_water_pause: std::sync::Mutex::new(None),
-            #[cfg(test)]
-            replace_pause: std::sync::Mutex::new(None),
+            pauses: Pauses::default(),
         }
     }
 
     /// The gate for `doc_name` (see `replace_gates`).
-    fn replace_gate(&self, doc_name: &str) -> &Mutex<()> {
+    fn replace_gate(&self, doc_name: &str) -> &RwLock<()> {
         let hash = doc_name.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
             (h ^ b as u64).wrapping_mul(0x0100_0000_01b3)
         });
         &self.replace_gates[hash as usize % self.replace_gates.len()]
     }
 
-    /// Arm a one-shot pause in the next `state_with_high_water`.
+    /// Arm a one-shot pause at the seam `which` picks out of [`Pauses`].
     #[cfg(test)]
-    pub(crate) fn pause_next_high_water_read(&self) -> HighWaterPause {
-        Self::arm(&self.high_water_pause)
-    }
-
-    /// Arm a one-shot pause in the next share/restore, after its size probe.
-    #[cfg(test)]
-    pub(crate) fn pause_next_replace(&self) -> HighWaterPause {
-        Self::arm(&self.replace_pause)
-    }
-
-    #[cfg(test)]
-    fn arm(slot: &std::sync::Mutex<Option<HighWaterPause>>) -> HighWaterPause {
-        let pause = HighWaterPause {
+    pub(crate) fn pause_next(
+        &self,
+        which: fn(&Pauses) -> &std::sync::Mutex<Option<Pause>>,
+    ) -> Pause {
+        let pause = Pause {
             reached: Arc::new(tokio::sync::Notify::new()),
             proceed: Arc::new(tokio::sync::Notify::new()),
         };
-        *slot.lock().unwrap() = Some(pause.clone());
+        *which(&self.pauses).lock().unwrap() = Some(pause.clone());
         pause
     }
 
     #[cfg(test)]
-    async fn pause_at(slot: &std::sync::Mutex<Option<HighWaterPause>>) {
+    async fn pause_at(slot: &std::sync::Mutex<Option<Pause>>) {
         let pause = slot.lock().unwrap().take();
         if let Some(p) = pause {
             p.reached.notify_one();
@@ -365,12 +377,12 @@ impl DocStore {
         &self,
         doc_name: &str,
     ) -> Result<(Vec<u8>, u64), StorageError> {
-        let _gate = self.replace_gate(doc_name).lock().await;
+        let _gate = self.replace_gate(doc_name).read().await;
         let entry = self.get_or_create(doc_name).await?;
         let doc = entry.lock().await;
         let state = doc.sync.encode_state();
         #[cfg(test)]
-        Self::pause_at(&self.high_water_pause).await;
+        Self::pause_at(&self.pauses.high_water).await;
         let high_water = self.storage.wal_high_water(doc_name).await?;
         drop(doc);
         Ok((state, high_water))
@@ -804,10 +816,14 @@ impl DocStore {
         validate_update(update)
             .map_err(|e| StorageError::Sqlite(format!("invalid update: {e}")))?;
 
+        // Shared: wholly before or wholly after any replace (see `replace_gates`).
+        let gate = self.replace_gate(doc_name).read().await;
         // ADR-105: a peer's update may legitimately be the first thing that brings a
         // KB doc into existence here — join and mesh relay both deliver content before
         // the manifest entry that lists it (the reason D6 was withdrawn in Stage 2).
         let entry = self.get_or_create_allowing_durable(doc_name).await?;
+        #[cfg(test)]
+        Self::pause_at(&self.pauses.apply).await;
 
         // Apply, measure, log — all under the document's lock, so no other update
         // interleaves and no reader sees a state that is then taken back.
@@ -863,6 +879,7 @@ impl DocStore {
             let forced = self.max_wal_entries > 0 && doc.update_count >= self.max_wal_entries;
             (forced || doc.update_count >= self.compact_threshold, wal_id)
         };
+        drop(gate); // before compacting, which takes it again
 
         if should_compact {
             self.compact(doc_name).await?;
@@ -1266,7 +1283,7 @@ impl DocStore {
         // Validate before touching anything.
         validate_update(update)
             .map_err(|e| StorageError::Sqlite(format!("invalid update: {e}")))?;
-        let _gate = self.replace_gate(doc_name).lock().await;
+        let _gate = self.replace_gate(doc_name).write().await;
 
         // ADR-109 D6: a share is the document's whole state, so measure it on its
         // own before the old document is deleted — a refused share changes nothing.
@@ -1286,7 +1303,7 @@ impl DocStore {
             return Err(refused);
         }
         #[cfg(test)]
-        Self::pause_at(&self.replace_pause).await;
+        Self::pause_at(&self.pauses.replace).await;
 
         // Delete old doc from storage. Log errors — silent swallow could
         // lead to corrupted recovery if WAL append succeeds but old data remains.
@@ -1369,6 +1386,9 @@ impl DocStore {
 
     /// Compact a single document (public interface for background tasks).
     pub async fn compact_doc(&self, doc_name: &str) -> Result<(), StorageError> {
+        // Shared (see `replace_gates`): a snapshot of the OLD document written
+        // after a replace would overwrite the new one's storage.
+        let _gate = self.replace_gate(doc_name).read().await;
         let entry = self.get_or_create(doc_name).await?;
         let (state, wal_seq) = {
             let mut doc = entry.lock().await;
@@ -1377,6 +1397,8 @@ impl DocStore {
             doc.update_count = 0;
             (state, seq)
         };
+        #[cfg(test)]
+        Self::pause_at(&self.pauses.compact).await;
         self.storage.compact(doc_name, &state, wal_seq).await?;
         info!(
             doc = doc_name,
@@ -1404,6 +1426,10 @@ impl DocStore {
         self.kb_metas.write().await.remove(kb_id);
     }
 }
+
+#[cfg(test)]
+#[path = "doc_replace_race_tests.rs"]
+mod replace_race_tests;
 
 #[cfg(test)]
 mod tests {

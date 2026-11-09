@@ -463,9 +463,15 @@ impl StorageBackend for SqliteBackend {
         // Atomic: snapshot write + WAL trim in a single transaction.
         conn.execute("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<(), sqlite::Error> {
+            // `wal_id` never moves backwards: a document reloaded with no WAL
+            // tail compacts with `up_to_wal_id` 0, and the snapshot still holds
+            // everything the previous one did. Lowering it would lower the
+            // document's WAL high-water mark, which ADR-113 cutoffs compare to.
             let mut snap_stmt = conn.prepare(
                 "INSERT OR REPLACE INTO snapshots (doc_name, state, wal_id, hash, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, datetime('now'))",
+                 VALUES (?1, ?2, MAX(?3, COALESCE(
+                     (SELECT wal_id FROM snapshots WHERE doc_name = ?1), 0)),
+                     ?4, datetime('now'))",
             )?;
             snap_stmt.bind((1, doc_name))?;
             snap_stmt.bind((2, state))?;

@@ -589,7 +589,7 @@ async fn race_high_water<F>(store: &Arc<DocStore>, writer: F) -> (String, u64, u
 where
     F: std::future::Future<Output = u64> + Send + 'static,
 {
-    let pause = store.pause_next_high_water_read();
+    let pause = store.pause_next(|p| &p.high_water);
     let reader = {
         let s = Arc::clone(store);
         tokio::spawn(async move { s.state_with_high_water("doc1").await.unwrap() })
@@ -623,7 +623,7 @@ async fn a_freeze_and_a_share_never_interleave() {
         .unwrap()
         .wal_seq;
 
-    let replace_pause = store.pause_next_replace();
+    let replace_pause = store.pause_next(|p| &p.replace);
     let share = {
         let s = Arc::clone(&store);
         let new = TextSync::with_client_id("", 2).insert(0, "NEW");
@@ -631,7 +631,7 @@ async fn a_freeze_and_a_share_never_interleave() {
     };
     replace_pause.reached.notified().await;
 
-    let read_pause = store.pause_next_high_water_read();
+    let read_pause = store.pause_next(|p| &p.high_water);
     let reader = {
         let s = Arc::clone(&store);
         tokio::spawn(async move { s.state_with_high_water("doc1").await.unwrap() })
