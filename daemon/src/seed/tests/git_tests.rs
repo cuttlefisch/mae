@@ -474,3 +474,28 @@ fn a_copy_is_refused_while_it_shares_an_id_and_dated_by_its_own_id_after() {
         "created when its own id first appears"
     );
 }
+
+/// End to end: a selected file larger than the read limit is refused from its
+/// `cat-file --batch-check` size and never read.
+#[test]
+fn an_oversized_page_in_the_repository_is_refused_from_its_size() {
+    let r = Repo::new();
+    r.write("a.org", &long_note("a"));
+    r.write(
+        "big.org",
+        &note("big", &"x".repeat(HEADER_ALLOWANCE_BYTES + 200)),
+    );
+    r.commit(1_700_000_000);
+    r.git(&["tag", "v1"]);
+    let mut opts = plan_opts(r.path(), "v1");
+    opts.max_body_bytes = 100;
+    let plan = plan(&opts).unwrap();
+    let big: Vec<_> = plan
+        .refusals
+        .iter()
+        .filter(|x| x.path == "big.org")
+        .collect();
+    assert_eq!(big.len(), 1, "{:?}", plan.refusals);
+    assert_eq!(big[0].kind, ProblemKind::BodyTooLarge);
+    assert!(big[0].detail.contains("not read"), "{}", big[0].detail);
+}

@@ -61,13 +61,13 @@ mod split;
 
 pub use git::{GitRepo, TreeEntry};
 pub use glob::{Glob, GlobError};
-pub use history::{drawer_id, FileTimes, History};
+pub use history::{FileTimes, History};
 pub use plan::{
     plan, plan_entries, CheckoutAttr, PlanInput, PlanOptions, PlannedNode, Refusal, SeedPlan,
     Source, TimeSource,
 };
 pub use report::{render_json, render_text};
-pub use split::{normalise, regen, split, SplitFile};
+pub use split::{drawer_id, normalise, regen, split, SplitFile};
 
 /// The storage contract a plan is made under. It names the split and the
 /// normalisation above, and enters `plan_hash`, so a change to either is a new
@@ -78,6 +78,13 @@ pub const CONTRACT: &str = "org-literal-v1";
 /// 1 MiB). A larger file is refused. It is never truncated.
 pub const DEFAULT_MAX_BODY_BYTES: usize = 1_048_576;
 
+/// How much larger than the body limit a selected FILE may be and still be
+/// read: room for its drawer and header lines. A larger blob is refused from
+/// its size alone (`cat-file --batch-check`), without reading it. A body under
+/// the limit behind more than this much header is refused too, which no real
+/// page approaches.
+pub const HEADER_ALLOWANCE_BYTES: usize = 64 * 1024;
+
 /// The selection when no `--include` is given: every `.org` file in the tree.
 pub const DEFAULT_INCLUDE: &str = "**/*.org";
 
@@ -85,6 +92,7 @@ pub const DEFAULT_INCLUDE: &str = "**/*.org";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ProblemKind {
     NotUtf8,
+    NulByte,
     ByteOrderMark,
     CarriageReturn,
     NotLossless,
@@ -121,6 +129,7 @@ impl ProblemKind {
         use ProblemKind::*;
         match self {
             NotUtf8 => "not_utf8",
+            NulByte => "nul_byte",
             ByteOrderMark => "byte_order_mark",
             CarriageReturn => "carriage_return",
             NotLossless => "not_lossless",

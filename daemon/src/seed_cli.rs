@@ -37,6 +37,7 @@ pub(crate) fn run_kb(rest: &[String]) -> i32 {
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct SeedArgs {
+    dry_run: bool,
     git: Option<PathBuf>,
     rev: Option<String>,
     include: Vec<String>,
@@ -52,12 +53,9 @@ struct SeedArgs {
 }
 
 fn run_seed(args: &[String]) -> i32 {
-    // Checked first, on the raw arguments: without `--dry-run` nothing else is
-    // looked at, so no argument can make this command read or write anything.
-    if !args.iter().any(|a| a == "--dry-run") {
-        eprintln!("{APPLY_NOT_BUILT}");
-        return 2;
-    }
+    // Parsing reads nothing. `--dry-run` is a flag of the parse, not a word
+    // searched for in the raw arguments: `--name --dry-run` names a KB
+    // "--dry-run" (refused as a value) rather than passing the guard.
     let parsed = match parse_seed_args(args) {
         Ok(p) => p,
         Err(e) => {
@@ -65,6 +63,10 @@ fn run_seed(args: &[String]) -> i32 {
             return 2;
         }
     };
+    if !parsed.dry_run {
+        eprintln!("{APPLY_NOT_BUILT}");
+        return 2;
+    }
     let opts = PlanOptions {
         repo: parsed.git.clone().unwrap_or_default(),
         rev: parsed.rev.clone().unwrap_or_default(),
@@ -111,25 +113,36 @@ fn parse_seed_args(args: &[String]) -> Result<SeedArgs, String> {
             _ => (args[i].as_str(), None),
         };
         i += 1;
-        match flag {
-            "--dry-run" => {}
-            "--require-canonical" => a.require_canonical = true,
-            "--json" => a.json = true,
-            _ => {
-                let value = match inline {
-                    Some(v) => v,
-                    None => {
-                        i += 1;
-                        args.get(i - 1)
-                            .cloned()
-                            .ok_or_else(|| format!("{flag} needs a value"))?
-                    }
-                };
-                set_value(&mut a, flag, value)?;
+        if let Some(switch) = switch(&mut a, flag) {
+            if inline.is_some() {
+                return Err(format!("{flag} takes no value"));
             }
+            *switch = true;
+            continue;
         }
+        let value = match inline {
+            Some(v) => v,
+            None => {
+                i += 1;
+                args.get(i - 1)
+                    .filter(|v| !v.starts_with("--"))
+                    .cloned()
+                    .ok_or_else(|| format!("{flag} needs a value"))?
+            }
+        };
+        set_value(&mut a, flag, value)?;
     }
     validate(a)
+}
+
+/// The boolean flags.
+fn switch<'a>(a: &'a mut SeedArgs, flag: &str) -> Option<&'a mut bool> {
+    match flag {
+        "--dry-run" => Some(&mut a.dry_run),
+        "--require-canonical" => Some(&mut a.require_canonical),
+        "--json" => Some(&mut a.json),
+        _ => None,
+    }
 }
 
 fn set_value(a: &mut SeedArgs, flag: &str, value: String) -> Result<(), String> {
@@ -233,6 +246,33 @@ mod tests {
         assert_eq!(a.include, vec!["notes/**/*.org", "extra/*.org"]);
         assert_eq!(a.exclude, vec!["notes/a.org", "notes/b.org"]);
         assert!(a.json);
+    }
+
+    /// `--dry-run` must be parsed as the flag it is. Kills: searching the raw
+    /// arguments for the word, which `--name --dry-run` passed.
+    #[test]
+    fn dry_run_is_a_flag_not_a_word_in_the_arguments() {
+        let code = run_seed(&args(&[
+            "--git",
+            "/nonexistent/repo",
+            "--rev",
+            "v1",
+            "--name",
+            "--dry-run",
+        ]));
+        assert_eq!(code, 2);
+        assert!(parse_seed_args(&args(&[
+            "--git",
+            "/r",
+            "--rev",
+            "v1",
+            "--name",
+            "--dry-run"
+        ]))
+        .is_err());
+        assert!(parse_seed_args(&args(&["--dry-run=yes", "--git", "/r", "--rev", "v1"])).is_err());
+        let a = parse_seed_args(&args(&["--git", "/r", "--rev", "v1", "--name", "kb"])).unwrap();
+        assert!(!a.dry_run);
     }
 
     #[test]

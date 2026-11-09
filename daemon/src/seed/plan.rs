@@ -64,6 +64,9 @@ pub struct PlanInput {
     pub source: Source,
     pub entries: Vec<TreeEntry>,
     pub blobs: HashMap<String, Vec<u8>>,
+    /// Blob sizes from `cat-file --batch-check`, by sha. A selected blob over
+    /// [`read_limit`] has no bytes in `blobs` and is refused from its size.
+    pub sizes: HashMap<String, u64>,
     pub attrs: Vec<CheckoutAttr>,
     /// The history walk: path lineages and the first appearance of each id.
     pub history: History,
@@ -180,7 +183,19 @@ pub fn plan(opts: &PlanOptions) -> Result<SeedPlan, SeedError> {
         .into_iter()
         .map(|(path, attr, value)| CheckoutAttr { path, attr, value })
         .collect();
-    let blobs = shas.iter().cloned().zip(repo.read_blobs(&shas)?).collect();
+    // Sizes first: a blob too large to be a page is refused unread.
+    let sizes: HashMap<String, u64> = shas.iter().cloned().zip(repo.blob_sizes(&shas)?).collect();
+    let limit = read_limit(opts);
+    let readable: Vec<String> = shas
+        .iter()
+        .filter(|s| sizes[*s] <= limit)
+        .cloned()
+        .collect();
+    let blobs = readable
+        .iter()
+        .cloned()
+        .zip(repo.read_blobs(&readable)?)
+        .collect();
     let history = history::history(&repo, &commit)?;
     let received_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -196,6 +211,7 @@ pub fn plan(opts: &PlanOptions) -> Result<SeedPlan, SeedError> {
             source,
             entries,
             blobs,
+            sizes,
             attrs,
             history,
             received_at,
@@ -220,6 +236,19 @@ pub fn plan_entries(input: PlanInput, opts: &PlanOptions) -> Result<SeedPlan, Se
     }));
     let mut nodes = Vec::new();
     for (path, sha) in &selection.selected {
+        if let Some(size) = input.sizes.get(sha).filter(|s| **s > read_limit(opts)) {
+            refusals.push(refusal(
+                path,
+                ProblemKind::BodyTooLarge,
+                &format!(
+                    "the file is {size} bytes, more than the body limit ({}) plus {} bytes of \
+                     header; it was not read",
+                    opts.max_body_bytes,
+                    super::HEADER_ALLOWANCE_BYTES
+                ),
+            ));
+            continue;
+        }
         let bytes = input
             .blobs
             .get(sha)
@@ -285,6 +314,11 @@ fn stamp(node: &mut PlannedNode, input: &PlanInput, opts: &PlanOptions) {
             .map(|(_, v)| v.clone())
             .filter(|v| !v.is_empty())
     });
+}
+
+/// The largest selected file that is read at all.
+fn read_limit(opts: &PlanOptions) -> u64 {
+    (opts.max_body_bytes + super::HEADER_ALLOWANCE_BYTES) as u64
 }
 
 fn parse_globs(opts: &PlanOptions) -> Result<Vec<Glob>, SeedError> {
@@ -429,7 +463,7 @@ fn plan_file(
         ));
     }
     let normalised = regen(&file);
-    if !matches!(split(&normalised), Ok(ref again) if *again == file) {
+    if !round_trips(&file, &normalised) {
         problems.push(Problem::new(
             ProblemKind::NotRoundTrippable,
             "the regenerated file does not split back to the same fields and body",
@@ -451,6 +485,16 @@ fn plan_file(
         modified_source: TimeSource::Received,
         code: None,
     })
+}
+
+/// G2: the regenerated file splits back to exactly these fields and body.
+///
+/// No input `split` accepts is known to fail this (the property tests generate
+/// thousands and none does); it is kept because a failure would mean a seed
+/// whose export does not read back as what was seeded, which no other check
+/// would notice. Pinned by `plan_tests::the_round_trip_guard_rejects_a_file_that_does_not_read_back`.
+pub(crate) fn round_trips(file: &SplitFile, normalised: &str) -> bool {
+    matches!(split(normalised), Ok(ref again) if again == file)
 }
 
 /// Every id (file or anchor) that occurs in more than one file: one refusal

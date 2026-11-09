@@ -299,6 +299,59 @@ impl GitRepo {
         result
     }
 
+    /// The size of each blob in `shas`, in order, from ONE
+    /// `cat-file --batch-check` process, reading no contents.
+    pub fn blob_sizes(&self, shas: &[String]) -> Result<Vec<u64>, SeedError> {
+        if shas.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut child = self
+            .command()
+            .args([
+                "cat-file",
+                "--batch-check=%(objectname) %(objecttype) %(objectsize)",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| SeedError(format!("cannot run git cat-file: {e}")))?;
+        let mut stdin = child.stdin.take().expect("piped stdin");
+        let request: Vec<u8> = shas
+            .iter()
+            .flat_map(|s| format!("{s}\n").into_bytes())
+            .collect();
+        let writer = std::thread::spawn(move || stdin.write_all(&request));
+        let mut out = String::new();
+        let read = child
+            .stdout
+            .take()
+            .expect("piped stdout")
+            .read_to_string(&mut out);
+        let _ = writer.join();
+        let _ = child.wait();
+        read.map_err(|e| SeedError(format!("git cat-file --batch-check: {e}")))?;
+        let sizes: Vec<u64> = shas
+            .iter()
+            .zip(out.lines())
+            .map(
+                |(sha, line)| match line.split(' ').collect::<Vec<_>>().as_slice() {
+                    [got, "blob", size] if got == sha => size.parse().ok(),
+                    _ => None,
+                },
+            )
+            .collect::<Option<_>>()
+            .ok_or_else(|| {
+                SeedError("git cat-file --batch-check: unexpected answer".to_string())
+            })?;
+        if sizes.len() != shas.len() {
+            return Err(SeedError(
+                "git cat-file --batch-check: missing answers".to_string(),
+            ));
+        }
+        Ok(sizes)
+    }
+
     /// Like `run`, but a warning that git skipped part of its work (rename
     /// detection past its limit) is an error rather than a quieter answer.
     pub(super) fn run_checked(&self, args: &[&str]) -> Result<Vec<u8>, SeedError> {

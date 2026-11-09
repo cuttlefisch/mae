@@ -36,6 +36,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::git::GitRepo;
+use super::split::drawer_id;
 use super::SeedError;
 
 /// A path lineage's creation and last modification (committer unix seconds).
@@ -123,35 +124,6 @@ fn blob_first_seen(commits: &Commits) -> Vec<(String, i64)> {
         }
     }
     out
-}
-
-/// The file drawer's `:ID:`, read the way `split` reads it for a canonical
-/// header: the first line is `:PROPERTIES:`, the drawer ends at `:END:`, and
-/// exactly one `:ID:` line in it has a non-empty value. Anything else has no
-/// id here. (A property test checks this agrees with `split` on every
-/// generated page.)
-pub fn drawer_id(text: &str) -> Option<String> {
-    let mut lines = text.lines();
-    if !lines.next()?.trim().eq_ignore_ascii_case(":PROPERTIES:") {
-        return None;
-    }
-    let mut found = None;
-    for line in lines {
-        let line = line.trim();
-        if line.eq_ignore_ascii_case(":END:") {
-            return found;
-        }
-        let Some((key, value)) = line.strip_prefix(':').and_then(|l| l.split_once(':')) else {
-            continue;
-        };
-        if key.eq_ignore_ascii_case("ID") {
-            if found.is_some() {
-                return None;
-            }
-            found = Some(value.trim().to_string()).filter(|v| !v.is_empty());
-        }
-    }
-    None
 }
 
 /// `\x01CT\n:SRCMODE DSTMODE SRCSHA DSTSHA STATUS\0PATH\0[PATH\0]:…` per

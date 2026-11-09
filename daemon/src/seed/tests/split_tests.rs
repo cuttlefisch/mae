@@ -146,24 +146,6 @@ fn each_malformed_header_is_a_named_refusal() {
     }
 }
 
-/// A blank line or comment inside the drawer cannot be carried by typed
-/// fields, so the file is refused rather than silently tidied.
-#[test]
-fn a_drawer_with_a_non_property_line_is_refused() {
-    for text in [
-        ":PROPERTIES:\n:ID: x\n\n:ROLE: a\n:END:\n",
-        ":PROPERTIES:\n:ID: x\n# c\n:END:\n",
-    ] {
-        let kinds = problem_kinds(text);
-        assert!(
-            kinds.contains(&ProblemKind::UnrepresentableDrawer)
-                || kinds.contains(&ProblemKind::NoFileDrawer),
-            "{text:?}: {kinds:?}"
-        );
-        assert!(!kinds.is_empty());
-    }
-}
-
 /// Every problem in one file is listed, not just the first.
 #[test]
 fn a_file_with_several_problems_lists_all_of_them() {
@@ -201,4 +183,121 @@ fn the_kind_is_carried_raw() {
         split(&page(&[("ID", "k")], None, None, "")).unwrap().kind(),
         None
     );
+}
+
+/// An id with a character that renders as nothing or as a plain space looks
+/// identical to a different id. Kills: checking only ASCII whitespace and Cc.
+#[test]
+fn ids_with_invisible_or_blank_characters_are_refused() {
+    for id in [
+        "a\u{200B}b",
+        "a\u{00A0}b",
+        "a\u{FEFF}b",
+        "a\u{202E}b",
+        "a\u{0085}b",
+        "a\u{2060}b",
+        "a\u{E0041}b",
+    ] {
+        let kinds = problem_kinds(&page(&[("ID", id)], None, None, ""));
+        assert_eq!(kinds, vec![ProblemKind::InvalidId], "{id:?}");
+    }
+    assert!(problem_kinds(&page(&[("ID", "ñandú-ü:1")], None, None, "")).is_empty());
+}
+
+/// Kills: no NUL check (mae-org accepts the byte, and it would be stored).
+#[test]
+fn a_nul_byte_anywhere_is_refused() {
+    let f = page(&[("ID", "n")], None, None, "texto\0oculto\n");
+    assert_eq!(problem_kinds(&f), vec![ProblemKind::NulByte]);
+}
+
+/// Every keyword Org reads as a buffer setting is refused wherever it is.
+/// Kills: a list that stops at the TODO/MACRO/LINK/PROPERTY/SETUPFILE subset.
+#[test]
+fn every_buffer_setting_keyword_is_refused() {
+    for key in [
+        "ARCHIVE",
+        "BIND",
+        "CATEGORY",
+        "COLUMNS",
+        "CONSTANTS",
+        "EXCLUDE_TAGS",
+        "INCLUDE",
+        "LINK",
+        "MACRO",
+        "OPTIONS",
+        "PRIORITIES",
+        "PROPERTY",
+        "SELECT_TAGS",
+        "SEQ_TODO",
+        "SETUPFILE",
+        "STARTUP",
+        "TAGS",
+        "TODO",
+        "TYP_TODO",
+    ] {
+        for case in [key.to_string(), key.to_ascii_lowercase()] {
+            let f = page(
+                &[("ID", "d")],
+                Some("T"),
+                None,
+                &format!("texto\n#+{case}: x\n"),
+            );
+            assert!(
+                problem_kinds(&f).contains(&ProblemKind::Declaration),
+                "#+{case} must be refused"
+            );
+        }
+    }
+    let ok = page(
+        &[("ID", "d")],
+        Some("T"),
+        None,
+        "#+language: es\n#+author: a\n#+date: hoy\n",
+    );
+    assert!(
+        problem_kinds(&ok).is_empty(),
+        "export metadata keywords are body text"
+    );
+}
+
+/// `drawer_id` (history) and `split` read a file's identity through the same
+/// functions, so no drawer can make them disagree. Kills: a second, line-based
+/// drawer reader (the reviewer's `:ID:X: v` case read "X: v" as the id).
+#[test]
+fn the_history_id_reader_agrees_with_split_on_odd_drawers() {
+    for text in [
+        ":PROPERTIES:\n:ID:X: v\n:ID: real\n:END:\n#+title: t\n",
+        ":PROPERTIES:\n:ID: a\n:id: b\n:END:\n",
+        ":PROPERTIES:\n:ID+: a\n:END:\n",
+        ":properties:\n:id:  y  \n:end:\nx\n",
+        ":PROPERTIES:\n:ROLE: x\n:END:\n",
+        ":PROPERTIES:\n:ID: a\u{200B}\n:END:\n",
+        ":PROPERTIES:\n\n:ID: a\n:END:\n",
+        "  :PROPERTIES:\n  :ID: a\n  :END:\n",
+    ] {
+        let by_split = split(text).ok().map(|s| s.id);
+        assert_eq!(crate::seed::drawer_id(text), by_split, "{text:?}");
+    }
+    let first = split(":PROPERTIES:\n:ID:X: v\n:ID: real\n:END:\n").unwrap();
+    assert_eq!(first.id, "real", "Org reads `:ID:X:` as the key `ID:X`");
+}
+
+/// The drawer line-count guard in `split` targets a drawer holding a line that
+/// is not a property. mae-org (like Org) does not read such a drawer as a
+/// property drawer at all, so today these are refused before the guard runs;
+/// the guard stays for a mae-org change that would otherwise drop the line.
+#[test]
+fn drawer_lines_that_are_not_properties_never_reach_the_line_count_guard() {
+    for text in [
+        ":PROPERTIES:\n:ID: x\n\n:ROLE: a\n:END:\n",
+        ":PROPERTIES:\n:ID: x\n# c\n:END:\n",
+        ":PROPERTIES:\n:ID: x\nplain text\n:END:\n",
+    ] {
+        assert_eq!(
+            problem_kinds(text),
+            vec![ProblemKind::NoFileDrawer],
+            "{text:?}"
+        );
+    }
 }

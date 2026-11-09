@@ -11,16 +11,40 @@ use mae_org::{parse, semantics, NodeOrigin, ParseOptions, PropertyDrawer, Semant
 
 use super::{Problem, ProblemKind};
 
-/// Org's in-file declarations: they change how every node of the KB parses, so
-/// they belong to a per-KB declarations store, which does not exist yet.
+/// Keywords Org reads as settings for the whole buffer. They change how every
+/// node parses or renders, so they belong to a per-KB declarations store, which
+/// does not exist yet; a file carrying one is refused.
+///
+/// Sources (Org 9.7, as shipped with Emacs 30.2):
+/// - `org-set-regexps-and-options` (`org.el`) collects ARCHIVE, CATEGORY,
+///   COLUMNS, CONSTANTS, FILETAGS, LINK, OPTIONS, PRIORITIES, PROPERTY,
+///   SEQ_TODO, STARTUP, TAGS, TODO and TYP_TODO. FILETAGS is lifted into the
+///   tags field instead (see `mod.rs`).
+/// - The manual's "Summary of In-Buffer Settings" (17.8) adds SETUPFILE.
+/// - The export framework (`ox.el`, `org-macro.el`) reads MACRO, BIND,
+///   EXCLUDE_TAGS and SELECT_TAGS, and INCLUDE inserts another file; mae-org
+///   honours the tag and macro keywords (ADR-112 D4), and an INCLUDE names a
+///   file a KB does not have.
 const DECLARATION_KEYWORDS: &[&str] = &[
-    "TODO",
-    "SEQ_TODO",
-    "TYP_TODO",
-    "MACRO",
+    "ARCHIVE",
+    "BIND",
+    "CATEGORY",
+    "COLUMNS",
+    "CONSTANTS",
+    "EXCLUDE_TAGS",
+    "INCLUDE",
     "LINK",
+    "MACRO",
+    "OPTIONS",
+    "PRIORITIES",
     "PROPERTY",
+    "SELECT_TAGS",
+    "SEQ_TODO",
     "SETUPFILE",
+    "STARTUP",
+    "TAGS",
+    "TODO",
+    "TYP_TODO",
 ];
 
 /// MAE's own header keywords (`shared/kb/src/org.rs`). Each sets a typed field,
@@ -72,10 +96,12 @@ pub fn split(text: &str) -> Result<SplitFile, Vec<Problem>> {
             "mae-org does not print this file back byte for byte",
         )]);
     }
-    let drawer = file_drawer(&doc, text).map_err(|p| vec![p])?;
     let mut problems = Vec::new();
-    let properties = drawer_properties(&drawer.view, &mut problems);
-    let id = file_id(&properties, &mut problems);
+    let FileHeader {
+        drawer,
+        properties,
+        id,
+    } = file_header(&doc, text, &mut problems).map_err(|p| vec![p])?;
     let header = header_keywords(&doc, text, drawer.end, &mut problems);
     let anchors = anchors(&doc, &mut problems);
     if !problems.is_empty() {
@@ -93,6 +119,54 @@ pub fn split(text: &str) -> Result<SplitFile, Vec<Problem>> {
         body: remove_ranges(text, lifted),
         anchors,
     })
+}
+
+/// The file drawer, its properties and its `:ID:`: the ONE reading of a file's
+/// identity, shared by [`split`] and [`drawer_id`] so they cannot disagree.
+fn file_header(
+    doc: &mae_org::Document,
+    text: &str,
+    problems: &mut Vec<Problem>,
+) -> Result<FileHeader, Problem> {
+    let drawer = file_drawer(doc, text)?;
+    let properties = drawer_properties(&drawer.view, problems);
+    let id = file_id(&properties, problems);
+    Ok(FileHeader {
+        drawer,
+        properties,
+        id,
+    })
+}
+
+/// What [`file_header`] reads: the drawer, its properties, and the id
+/// (`None` when it is missing or ambiguous, with the problem recorded).
+struct FileHeader {
+    drawer: FileDrawer,
+    properties: Vec<(String, String)>,
+    id: Option<String>,
+}
+
+/// A file's `:ID:` exactly as [`split`] reads it, from the file's leading
+/// drawer alone: the text up to its first `:END:` line is parsed and read by
+/// the same functions. `None` whenever `split` would refuse the drawer or the
+/// id. Cheap enough for every historical version of every page, and safe on
+/// a truncated prefix of a large file (no `:END:` in it means no id).
+pub fn drawer_id(text: &str) -> Option<String> {
+    let end = lines_with_offsets(text)
+        .find(|(_, line)| line.trim().eq_ignore_ascii_case(":END:"))
+        .map(|(at, line)| at + line.len())?;
+    let prefix = &text[..end];
+    if !encoding_problems(prefix).is_empty() {
+        return None;
+    }
+    let doc = parse(prefix, &ParseOptions::default());
+    let mut problems = Vec::new();
+    let header = file_header(&doc, prefix, &mut problems).ok()?;
+    if problems.is_empty() {
+        header.id
+    } else {
+        None
+    }
 }
 
 /// Write the fields back in canonical form, followed by the body.
@@ -149,6 +223,12 @@ fn encoding_problems(text: &str) -> Vec<Problem> {
         out.push(Problem::new(
             ProblemKind::ByteOrderMark,
             "the file starts with a byte order mark",
+        ));
+    }
+    if let Some(at) = text.find('\0') {
+        out.push(Problem::new(
+            ProblemKind::NulByte,
+            format!("a NUL byte at offset {at}"),
         ));
     }
     if let Some(at) = text.find('\r') {
@@ -248,10 +328,16 @@ fn file_id(properties: &[(String, String)], problems: &mut Vec<Problem>) -> Opti
     };
     if id.is_empty() {
         problems.push(Problem::new(ProblemKind::EmptyId, "the :ID: is empty"));
-    } else if id.chars().any(|c| c.is_whitespace() || c.is_control()) {
+    } else if let Some(c) = id
+        .chars()
+        .find(|c| c.is_whitespace() || c.is_control() || is_format(*c))
+    {
         problems.push(Problem::new(
             ProblemKind::InvalidId,
-            format!("the :ID: {id:?} contains whitespace or a control character"),
+            format!(
+                "the :ID: {id:?} contains U+{:04X}, a blank, control or invisible format character",
+                c as u32
+            ),
         ));
     }
     Some(id)
@@ -445,4 +531,35 @@ fn remove_ranges(text: &str, mut ranges: Vec<Range<usize>>) -> String {
     }
     out.push_str(&text[at..]);
     out
+}
+
+/// Unicode general category Cf (format: zero-width and bidirectional controls,
+/// soft hyphen, tags, …), from Unicode 15.1 `DerivedGeneralCategory.txt`. An id
+/// carrying one looks identical to an id without it.
+fn is_format(c: char) -> bool {
+    const CF: &[(u32, u32)] = &[
+        (0x00AD, 0x00AD),
+        (0x0600, 0x0605),
+        (0x061C, 0x061C),
+        (0x06DD, 0x06DD),
+        (0x070F, 0x070F),
+        (0x0890, 0x0891),
+        (0x08E2, 0x08E2),
+        (0x180E, 0x180E),
+        (0x200B, 0x200F),
+        (0x202A, 0x202E),
+        (0x2060, 0x2064),
+        (0x2066, 0x206F),
+        (0xFEFF, 0xFEFF),
+        (0xFFF9, 0xFFFB),
+        (0x110BD, 0x110BD),
+        (0x110CD, 0x110CD),
+        (0x13430, 0x1343F),
+        (0x1BCA0, 0x1BCA3),
+        (0x1D173, 0x1D17A),
+        (0xE0001, 0xE0001),
+        (0xE0020, 0xE007F),
+    ];
+    let c = c as u32;
+    CF.iter().any(|&(lo, hi)| (lo..=hi).contains(&c))
 }

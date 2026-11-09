@@ -42,6 +42,7 @@ fn input(files: &[(&str, Vec<u8>)]) -> PlanInput {
         },
         entries,
         blobs,
+        sizes: HashMap::new(),
         attrs: Vec::new(),
         history,
         received_at: 42,
@@ -453,4 +454,36 @@ fn the_json_report_carries_every_section() {
         serde_json::json!([["ID", "ens:a"]])
     );
     assert_eq!(j["plan_hash"].as_str().unwrap().len(), 64);
+}
+
+/// A selected blob larger than the body limit plus the header allowance is
+/// refused from its size, without its bytes. Kills: reading every selected
+/// blob whatever its size.
+#[test]
+fn a_blob_too_large_to_be_a_page_is_refused_unread() {
+    let mut inp = input(&[("a.org", ok_page("a")), ("big.org", ok_page("big"))]);
+    let big_sha = inp.entries[1].sha.clone();
+    inp.blobs.remove(&big_sha);
+    inp.sizes.insert(
+        big_sha,
+        (DEFAULT_MAX_BODY_BYTES + HEADER_ALLOWANCE_BYTES + 1) as u64,
+    );
+    let plan = plan_entries(inp, &opts()).unwrap();
+    assert_eq!(
+        refused(&plan),
+        vec![("big.org".to_string(), ProblemKind::BodyTooLarge)]
+    );
+    assert!(plan.refusals[0].detail.contains("not read"));
+    assert_eq!(plan.nodes.len(), 1);
+}
+
+/// G2, pinned directly: a file whose regeneration does not split back is
+/// rejected. No input `split` accepts is known to reach it; this crafted one
+/// (a title holding a line break) shows the guard works.
+#[test]
+fn the_round_trip_guard_rejects_a_file_that_does_not_read_back() {
+    let mut f = split(&String::from_utf8(ok_page("g")).unwrap()).unwrap();
+    assert!(crate::seed::plan::round_trips(&f, &regen(&f)));
+    f.title = Some("T\n#+title: otro".into());
+    assert!(!crate::seed::plan::round_trips(&f, &regen(&f)));
 }
