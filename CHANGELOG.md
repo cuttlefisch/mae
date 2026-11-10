@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.144] - 2026-11-10
+
+
+
+
+### Features
+
+- *(daemon)* Stable error.data.kind on every KB refusal; kb/join returns principal and epoch ([b4a93a2](https://github.com/cuttlefisch/mae/commit/b4a93a2dc1ff1155b934bcd30b7874431200c639))
+- *(daemon)* Kinds for the cross-KB node document and blocklist refusals ([8cde16b](https://github.com/cuttlefisch/mae/commit/8cde16b202ce736ecd84ae533252193461e0e5ab))
+- *(kb)* Refuse MAE writes to KBs that store literal org bodies ([f996580](https://github.com/cuttlefisch/mae/commit/f9965808f0bb649a4f0bf2a13a9fad7a26daf9c3))
+
+### Bug Fixes
+
+- *(mcp,daemon)* No Nagle stall on back-to-back requests ([7af4304](https://github.com/cuttlefisch/mae/commit/7af430422a681c898735e6240fe1a11837721072))
+- *(daemon)* Sync/update checks the caller before the op's author ([1a4ce54](https://github.com/cuttlefisch/mae/commit/1a4ce54628eb091ef20a3ff58957359ba0e62284))
+- *(daemon)* The local KB blocklist is managed by the daemon's operator ([88c7d82](https://github.com/cuttlefisch/mae/commit/88c7d8274731214c7ed5209a5ad217f38d0d33a0))
+- *(kb)* Hold queued ops and refuse re-share on a literal KB ([61686eb](https://github.com/cuttlefisch/mae/commit/61686eb1de2670375020200773a1ef7fcb03bd40))
+- *(daemon)* Sync/update subscribes a session only after the write is authorized ([a278fe2](https://github.com/cuttlefisch/mae/commit/a278fe21f507692a1fe1d7141c259d26bbd5e177))
+- *(kb)* The outbound drain holds a KB whose format it cannot read ([61ab8cd](https://github.com/cuttlefisch/mae/commit/61ab8cdcd17fca7b303187c42ff659ef4cb93e32))
+
+### Testing
+
+- *(collab)* Inject write failures instead of relying on a peer hang-up ([6a13273](https://github.com/cuttlefisch/mae/commit/6a132738730e84c754d2374a5fe6de1d88919c6c))
+
 ## [0.14.143] - 2026-11-10
 
 
@@ -34,6 +58,10 @@ All notable changes to this project will be documented in this file.
 
 - *(adr)* ADR-114 — node kinds are an open, declared, multilingual vocabulary ([baf6d7d](https://github.com/cuttlefisch/mae/commit/baf6d7d1d85e1dcc228dbc76bcb0393724d6731a))
 - *(adr)* ADR-113 amendment 1 — authorship as built, and seeding ([478ed6b](https://github.com/cuttlefisch/mae/commit/478ed6b09d81b1a54b1bf2704111ed99d4dc83ab))
+
+### Miscellaneous
+
+- Bump version to 0.14.143 ([19a896c](https://github.com/cuttlefisch/mae/commit/19a896ce313cc861cc75fde0661d7eec2c932ae9))
 
 ## [0.14.142] - 2026-11-09
 
