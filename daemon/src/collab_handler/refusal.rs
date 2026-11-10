@@ -42,6 +42,9 @@ pub enum RefusalKind {
     RebirthUnverified,
     /// A KB document named on a raw path that cannot authorize one.
     DocUnavailable,
+    /// A node document whose address names a different KB from the request's
+    /// `kb_id`. Both come from the request, so this reveals nothing.
+    DocKbMismatch,
     /// A caller-supplied parameter is malformed (`param` names it).
     InvalidParams {
         param: &'static str,
@@ -129,6 +132,7 @@ impl From<Refusal> for McpError {
             RefusalKind::SignatureRequired => McpError::signature_required(m),
             RefusalKind::RebirthUnverified => McpError::rebirth_unverified(m),
             RefusalKind::DocUnavailable => McpError::doc_unavailable(m),
+            RefusalKind::DocKbMismatch => McpError::doc_kb_mismatch(m),
             RefusalKind::InvalidParams { param } => McpError::invalid_params(param, m),
             RefusalKind::Internal => McpError::internal_fault(m),
         }

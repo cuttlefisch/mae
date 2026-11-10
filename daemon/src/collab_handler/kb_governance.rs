@@ -74,7 +74,7 @@ fn is_daemon_operator(doc_store: &DocStore, auth_principal: Option<&str>) -> boo
 fn not_operator(id: serde_json::Value) -> JsonRpcResponse {
     JsonRpcResponse::error(
         id,
-        McpError::internal_error(
+        McpError::not_operator(
             "only this daemon's operator may read or change its local blocklist".to_string(),
         ),
     )

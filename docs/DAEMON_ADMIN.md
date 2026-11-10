@@ -306,11 +306,13 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `signature_required` | An unsigned content op where signatures are required (the P2P mesh). | `sync/update` | — |
 | `rebirth_unverified` | A rebirth not bound to an owner-signed `Rebirth` op (ADR-107). | `kb/node_update` | — |
 | `doc_unavailable` | A KB document named on a raw method that cannot serve it (any node document; a collection on `sync/share` and `docs/*`). Use the `kb/*` methods. | `sync/*`, `docs/*` | — |
+| `doc_kb_mismatch` | A KB node document whose address names a different KB from the request's `kb_id`. Every check runs against `kb_id`, so the write is refused. Send the KB the document belongs to. | `sync/update` | — |
 | `doc_not_found` | A document that must already exist does not. | `sync/*`, `docs/*` | — |
 | `cannot_remove_owner` | `kb/remove_member` named the owner. | `kb/remove_member` | — |
 | `signer_unavailable` | This daemon cannot sign the membership op: no signing identity, not the KB's owner, or no signed log. | `kb/set_governance`, `kb/revoke` | — |
 | `subject_not_member` | `kb/revoke` named someone who is not a current member. | `kb/revoke` | — |
 | `not_authenticated` | The method needs an authenticated principal. | `kb/query.self_token`, `kb/query.my_wrapped_key` | — |
+| `not_operator` | A daemon-local administrative method called by a principal other than this daemon's operator. | `kb/blocklist`, `kb/block_principal`, `kb/unblock_principal` | — |
 | `self_issue_disabled` | This daemon does not issue tokens. | `kb/query.self_token` | — |
 | `no_content_anchor` | An E2E KB with no signed content anchor. | `kb/query.my_wrapped_key` | — |
 | `kb_query_unavailable` | The HTTPS listener does not serve `kb/query.*` here (`kb_query_enabled` off, or collab disabled). | `kb/query.*` (HTTPS) | — |

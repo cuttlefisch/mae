@@ -318,6 +318,19 @@ impl McpError {
         Self::kinded(-32603, message, "doc_unavailable", serde_json::json!({}))
     }
 
+    /// A KB node document whose address names a different KB from the
+    /// request's `kb_id`. Every check on the request runs against `kb_id`, so
+    /// the write is refused rather than authorized against the wrong KB.
+    pub fn doc_kb_mismatch(message: String) -> Self {
+        Self::kinded(-32603, message, "doc_kb_mismatch", serde_json::json!({}))
+    }
+
+    /// A daemon-local administrative method (the local blocklist) called by
+    /// a principal that is not this daemon's operator.
+    pub fn not_operator(message: String) -> Self {
+        Self::kinded(-32603, message, "not_operator", serde_json::json!({}))
+    }
+
     /// A document that must already exist does not.
     pub fn doc_not_found(message: String) -> Self {
         Self::kinded(-32603, message, "doc_not_found", serde_json::json!({}))
@@ -430,6 +443,7 @@ pub const ERROR_KINDS: &[&str] = &[
     "signature_required",
     "rebirth_unverified",
     "doc_unavailable",
+    "doc_kb_mismatch",
     "doc_not_found",
     "tenant_quota_exceeded",
     "update_too_large",
@@ -437,6 +451,7 @@ pub const ERROR_KINDS: &[&str] = &[
     "signer_unavailable",
     "subject_not_member",
     "not_authenticated",
+    "not_operator",
     "self_issue_disabled",
     "no_content_anchor",
     "kb_query_unavailable",
@@ -599,6 +614,7 @@ mod tests {
             McpError::signature_required(m()),
             McpError::rebirth_unverified(m()),
             McpError::doc_unavailable(m()),
+            McpError::doc_kb_mismatch(m()),
             McpError::doc_not_found(m()),
             McpError::tenant_quota_exceeded(m()),
             McpError::update_too_large(m(), 2, 1),
@@ -606,6 +622,7 @@ mod tests {
             McpError::signer_unavailable(m()),
             McpError::subject_not_member(m()),
             McpError::not_authenticated(m()),
+            McpError::not_operator(m()),
             McpError::self_issue_disabled(m()),
             McpError::no_content_anchor(m()),
             McpError::kb_query_unavailable(m()),

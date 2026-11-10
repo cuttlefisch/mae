@@ -979,9 +979,10 @@ pub async fn verify_relayed_content_op(
     // a DIFFERENT KB must therefore never get here, or a caller cleared for
     // one KB writes another KB's node.
     if doc_kb != kb_id {
-        return Err(Refusal::internal(format!(
-            "document '{doc}' belongs to KB '{doc_kb}', not KB '{kb_id}'"
-        )));
+        return Err(Refusal::new(
+            RefusalKind::DocKbMismatch,
+            format!("document '{doc}' belongs to KB '{doc_kb}', not KB '{kb_id}'"),
+        ));
     }
     let node_id = &node_id;
     let Some(anchor) = resolve_content_anchor(doc_store, kb_id).await else {

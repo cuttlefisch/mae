@@ -47,11 +47,15 @@ async fn another_authenticated_client_cannot_read_or_change_the_blocklist() {
     for who in ["stranger", "mallory"] {
         for m in &cases {
             let r = dispatch_as(&store, &bc, Some(who), Some(&fp(who)), m.clone(), &mut docs).await;
-            assert!(
-                r.error.is_some(),
-                "{who}: {} was answered: {:?}",
-                m["method"],
-                r.result
+            let err = r
+                .error
+                .as_ref()
+                .unwrap_or_else(|| panic!("{who}: {} was answered: {:?}", m["method"], r.result));
+            assert_eq!(
+                err.data.as_deref().map(|d| d["kind"].clone()),
+                Some(serde_json::json!("not_operator")),
+                "{who}: {}",
+                m["method"]
             );
             let text = serde_json::to_string(&r).unwrap();
             assert!(
@@ -116,7 +120,8 @@ async fn without_a_daemon_identity_only_the_loopback_is_the_operator() {
         &mut docs,
     )
     .await;
-    assert!(r.error.is_some());
+    let kind = r.error.and_then(|e| e.data).map(|d| d["kind"].clone());
+    assert_eq!(kind, Some(serde_json::json!("not_operator")));
     let r = dispatch_as(
         &store,
         &bc,

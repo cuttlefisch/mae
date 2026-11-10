@@ -79,11 +79,12 @@ async fn a_write_naming_another_kb_cannot_reach_this_kbs_node() {
         &mut docs,
     )
     .await;
-    assert!(
-        reply.error.is_some(),
-        "the write was answered: {:?}",
-        reply.result
-    );
+    let err = reply
+        .error
+        .as_ref()
+        .unwrap_or_else(|| panic!("the write was answered: {:?}", reply.result));
+    let data = err.data.as_deref().cloned().unwrap_or_default();
+    assert_eq!(data["kind"], "doc_kb_mismatch", "{}", err.message);
     assert_eq!(
         store.encode_state("kbn:ek:concept:n").await.unwrap(),
         before
@@ -100,7 +101,7 @@ async fn the_content_op_check_refuses_a_node_of_another_kb() {
     let update = make_test_node("concept:n", "n", "x", &[]);
     let r =
         verify_relayed_content_op(&store, "theirs", "kbn:ek:concept:n", &update, None, false).await;
-    assert!(r.is_err(), "{r:?}");
+    assert_eq!(r.map_err(|e| e.kind), Err(RefusalKind::DocKbMismatch));
     let same =
         verify_relayed_content_op(&store, "ek", "kbn:ek:concept:n", &update, None, false).await;
     assert!(same.is_ok(), "{same:?}");
