@@ -196,7 +196,7 @@ Writer methods, on the OAuth listener: `kb/review.request`, `kb/review.act`
 approved, in force (since when). `kb/review.pending` lists open requests; the client diffs the
 frozen source against the published one.
 
-Refusals carry `error.data.kind`: `invalid_params`, `role_forbidden`, `not_reviewer`,
+Refusals carry `error.data.kind`: `invalid_params`, `role_forbidden`, `not_reviewer`, `authors_unknown`,
 `not_approver`, `author_cannot_approve`, `agent_forbidden`, `stale_version` (+`current`),
 `invalid_transition` (+`from`, `act`), `set_incomplete`, `doc_code_taken`, `unknown_request`,
 `node_not_in_kb`, `quota_exceeded` (+`size`, `limit`), `e2e_unsupported`, `review_not_enabled`.
@@ -224,6 +224,13 @@ Each fails without the rule it guards:
 - With review off, `view: "published"` is the working copy and `kb/review.request` →
   `review_not_enabled`.
 - The event chain verifies end to end, and fails to verify after any row is altered.
+- (A1) Text submitted ahead of another member's edit, and integrated by it, is credited to both
+  submitters, whether it integrates through an edit or through a share.
+- (A3) Approval is refused with `authors_unknown` for a document whose record starts after the
+  cutoff, for a cutoff past the document's high-water mark, and when an unsigned relay or the daemon
+  wrote in the window.
+- (A2) A share, a restore or an edit racing the freeze never yields content and cutoff that disagree.
+- (A4) The imported act is unreachable from `kb/review.*` and from an agent principal.
 
 ## Policy decisions
 
@@ -231,6 +238,70 @@ Each fails without the rule it guards:
 2. An approver who is not an author is enough; three distinct people are not required. Review
    itself is a per-KB switch, because a personal KB needs none of this.
 3. The first KB to use this is plaintext, so v1's `e2e_unsupported` costs nothing yet.
+
+## Amendment 1 (2026-11-09): authorship as built, and seeding
+
+Building the editor record (D3's prerequisite) and the native-KB seeder, and three rounds of
+independent review against them, settled details D3 left open. They are recorded here so the review
+methods are built against what exists.
+
+### A1. Who counts as an author
+
+The daemon records, per document, every party that applied a change to it (`DocStore`'s editor
+record), atomically with the write. Every content write path must say who it is; there is no default.
+
+- **A submitter is an author** of everything in its update. The record names who *submitted* an
+  update, not who wrote each piece of content it carries: an update can bring another client's text
+  the daemon never saw. Until the hub verifies content-op signatures on every write (#727), the
+  submitter is accountable for all of it. This is a stated limit, not a guarantee.
+- **A relay is recorded as a relay.** An edit forwarded by another daemon is recorded as that daemon
+  (a mesh peer), and, when the edit carries a content-op signature the daemon verified, the signer
+  is recorded as an author too. Recording a replayed old signature can only add an author, which
+  blocks an approval rather than permitting one; that is the safe direction.
+- **Content held back is credited when it appears.** A CRDT update that depends on content not yet
+  received is stored pending and becomes visible later, when the missing content arrives. Its
+  submitter is recorded again at that moment, including when a share or restore installs it, so text
+  planted ahead of someone else's edit cannot appear under only their name.
+- **Unauthenticated sessions** share one record per document, since they have no stable identity.
+
+### A2. The review cutoff is a WAL position, not a time
+
+A revision's author window is everything after the moment it was frozen. That moment is the
+document's WAL high-water mark, read together with the content under the same lock as every write
+and every share or restore (`state_with_high_water`). A wall-clock cutoff was rejected: a clock that
+steps back, or two edits in the same millisecond, would hide an author. Timestamps on the record are
+for display only.
+
+### A3. When authors are unknown, approval is refused
+
+`authors_since(revision cutoff)` answers either the set of authors or **unknown**. Unknown when:
+
+- the record for the document is incomplete before the cutoff (documents that existed before the
+  record did, or whose content was replaced by a restore or migration, start a new record there);
+- the cutoff lies beyond the document's high-water mark (a cutoff from another document or another
+  store);
+- any change in the window came from a writer that is not an identified person: the daemon itself,
+  an unsigned relay, or an unauthenticated session.
+
+`approve`, `act` and `enter_into_force` refuse with `author_cannot_approve` when the approver is a
+known author, and with **`authors_unknown`** when the set is unknown. Approval is never decided on
+an incomplete record.
+
+### A4. Seeded content enters as an imported, in-force revision
+
+A KB created by seeding from org files (the operator's `mae-daemon kb seed`) is published at seed:
+each seeded page becomes its first revision, **in force**, through an **imported** act. The act is
+distinct from approval, because no approver acts. It is recorded in the chain with:
+
+- the operator who ran it and when;
+- the source repository, revision, commit and tree, and the seed plan's hash;
+- per page, its content hash, its creation date (the first commit in which a file carrying its
+  `:ID:` appeared) and its last modification at the source revision;
+- `effective_at` = the source revision's commit time.
+
+Only an operator can perform it, through the CLI; it is not a `kb/review.*` method, and no agent
+principal can reach it. Every change after the seed goes through review. The source files are input
+only: the server's KB is the truth from then on.
 
 ## Consequences
 
@@ -250,3 +321,7 @@ Each fails without the rule it guards:
   can change between reading it and approving it.
 - **"Author" as the requester only.** A co-author who did not file the request could approve their
   own work, which V3 forbids.
+- **A wall-clock author window** (Amendment 1, A2). A clock stepping back, or an edit in the same
+  millisecond as the freeze, would drop an author.
+- **Seeded pages as unreviewed drafts** (Amendment 1, A4). The reader would serve nothing until
+  every page of an already-reviewed source was approved again.

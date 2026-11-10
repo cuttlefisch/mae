@@ -93,15 +93,31 @@ pub async fn export_kb(doc_store: &DocStore, kb_id: &str) -> Result<Vec<u8>, Str
 
 /// Import (restore) a KB from an artifact: verify integrity, then write the collection +
 /// node docs into the doc_store. Restore semantics — replaces `kb_id` if it exists.
+///
+/// ADR-113 D3: the artifact carries content, not who wrote it, so every doc is
+/// written with `restore_doc`, which RESETS its record origin to the restore:
+/// a cutoff before the restore reads as incomplete, never as "the restorer".
 pub async fn import_kb(doc_store: &DocStore, artifact: &[u8]) -> Result<KbCheckpoint, String> {
     let cp = KbCheckpoint::from_bytes(artifact)?;
     doc_store
-        .share_doc(&format!("kbc:{}", cp.kb_id), &cp.collection_state)
+        .restore_doc(
+            &format!("kbc:{}", cp.kb_id),
+            &cp.collection_state,
+            crate::doc_editors::Attribution::Internal(
+                crate::doc_editors::InternalWriter::CheckpointRestore,
+            ),
+        )
         .await
         .map_err(|e| format!("restore collection '{}': {e}", cp.kb_id))?;
     for (id, state) in &cp.nodes {
         doc_store
-            .share_doc(&mae_sync::kb_node_doc_name(&cp.kb_id, id), state)
+            .restore_doc(
+                &mae_sync::kb_node_doc_name(&cp.kb_id, id),
+                state,
+                crate::doc_editors::Attribution::Internal(
+                    crate::doc_editors::InternalWriter::CheckpointRestore,
+                ),
+            )
             .await
             .map_err(|e| format!("restore node '{id}': {e}"))?;
     }
@@ -200,6 +216,9 @@ fn checkpoint_hash(kb_id: &str, collection_state: &[u8], nodes: &[(String, Vec<u
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Every test write is attributed; the editor-record tests use their own.
+    const TEST_BY: crate::doc_editors::Attribution<'static> =
+        crate::doc_editors::Attribution::Principal("test-editor");
     use crate::storage::SqliteBackend;
     use std::sync::Arc;
 
@@ -208,14 +227,20 @@ mod tests {
         coll.add_node("n1", "Node 1");
         coll.add_node("n2", "Node 2");
         store
-            .share_doc("kbc:kb1", &coll.encode_state())
+            .share_doc("kbc:kb1", &coll.encode_state(), TEST_BY)
             .await
             .unwrap();
 
         let n1 = mae_sync::kb::KbNodeDoc::new("n1", "Node 1", "body one", &[]);
-        store.share_doc("kbn:kb1:n1", &n1.encode()).await.unwrap();
+        store
+            .share_doc("kbn:kb1:n1", &n1.encode(), TEST_BY)
+            .await
+            .unwrap();
         let n2 = mae_sync::kb::KbNodeDoc::new("n2", "Node 2", "body two", &[]);
-        store.share_doc("kbn:kb1:n2", &n2.encode()).await.unwrap();
+        store
+            .share_doc("kbn:kb1:n2", &n2.encode(), TEST_BY)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -244,7 +269,7 @@ mod tests {
         // A node-content change moves the hash.
         let n1 = mae_sync::kb::KbNodeDoc::new("n1", "Node 1", "EDITED", &[]);
         store
-            .apply_update("kbn:kb1:n1", &n1.encode(), None)
+            .apply_update("kbn:kb1:n1", &n1.encode(), None, TEST_BY)
             .await
             .unwrap();
         let c = checkpoint_kb(&store, "kb1").await.unwrap();
@@ -264,6 +289,20 @@ mod tests {
         let dst = DocStore::new(Arc::new(SqliteBackend::open_memory().unwrap()), 500);
         let cp = import_kb(&dst, &artifact).await.unwrap();
         assert_eq!(cp.node_count(), 2);
+
+        // ADR-113 D3: a restore installs content whose authors were never
+        // recorded, so it resets each doc's record origin: a cutoff before the
+        // restore is Incomplete — never "the restorer", never "nobody".
+        use crate::doc_editors::{Authors, EditorsSince};
+        for doc in ["kbc:kb1", "kbn:kb1:n1", "kbn:kb1:n2"] {
+            let (_, hw) = dst.state_with_high_water(doc).await.unwrap();
+            let since = dst.editors_since_wal(doc, 0).await.unwrap();
+            let want = EditorsSince::Incomplete {
+                recorded_after_wal_id: hw,
+            };
+            assert_eq!(since, want, "{doc}");
+            assert!(matches!(since.authors(), Authors::Unknown(_)), "{doc}");
+        }
 
         // Collection manifest restored.
         let (coll_state, _) = dst.encode_state_and_sv("kbc:kb1").await.unwrap();
@@ -317,6 +356,9 @@ mod tests {
 #[cfg(test)]
 mod rollback_tests {
     use super::*;
+    /// Every test write is attributed; the editor-record tests use their own.
+    const TEST_BY: crate::doc_editors::Attribution<'static> =
+        crate::doc_editors::Attribution::Principal("test-editor");
     use crate::storage::SqliteBackend;
 
     async fn store() -> std::sync::Arc<DocStore> {
@@ -349,13 +391,18 @@ mod rollback_tests {
         for (id, body) in nodes {
             let n = mae_sync::kb::KbNodeDoc::new(id, id, body, &[]);
             doc_store
-                .apply_update(&mae_sync::kb_node_doc_name(kb_id, id), &n.encode(), None)
+                .apply_update(
+                    &mae_sync::kb_node_doc_name(kb_id, id),
+                    &n.encode(),
+                    None,
+                    TEST_BY,
+                )
                 .await
                 .unwrap();
             coll.add_node(id, id);
         }
         doc_store
-            .apply_update(&format!("kbc:{kb_id}"), &coll.encode_state(), None)
+            .apply_update(&format!("kbc:{kb_id}"), &coll.encode_state(), None, TEST_BY)
             .await
             .unwrap();
     }
@@ -383,7 +430,10 @@ mod rollback_tests {
             let (state, _) = doc_store.encode_state_and_sv(&name).await.unwrap();
             let mut doc = mae_sync::kb::KbNodeDoc::from_bytes(&state).unwrap();
             let update = doc.set_body("CLOBBERED");
-            doc_store.apply_update(&name, &update, None).await.unwrap();
+            doc_store
+                .apply_update(&name, &update, None, TEST_BY)
+                .await
+                .unwrap();
         }
         let damaged = census(&doc_store, kb, &ids).await;
         assert_ne!(

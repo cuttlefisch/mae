@@ -10,13 +10,13 @@ use super::*;
 pub(super) async fn handle_kb_share(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
-    session_id: u64,
+    (session_id, auth_principal, transport): (u64, Option<&str>, Transport),
     auth_label: Option<&str>,
-    auth_principal: Option<&str>,
     session_docs: &mut HashSet<String>,
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
+    let who = (session_id, Attribution::session(auth_principal, transport));
     let kb_id = match params["kb_id"].as_str() {
         Some(s) => s.to_string(),
         None => {
@@ -90,7 +90,7 @@ pub(super) async fn handle_kb_share(
     // member/approve/policy methods, never through re-share.
     if !doc_store.has_doc(&collection_doc).await {
         if let Err(e) = doc_store
-            .share_doc(&collection_doc, &collection_bytes)
+            .share_doc(&collection_doc, &collection_bytes, who.1)
             .await
         {
             return JsonRpcResponse::error(
@@ -128,35 +128,7 @@ pub(super) async fn handle_kb_share(
         .unwrap_or_else(|e| e.into_inner())
         .subscribe_doc(session_id, &collection_doc);
 
-    // Transport exposure (ADR-018/025): the `transport` param (hub|p2p|both,
-    // default hub) WIDENS the KB's policy from its stored value, so a first
-    // p2p-share is P2p-only while `kb-share` + `kb-share-p2p` becomes Both
-    // (unlike membership, transport is owner-set metadata — safe on
-    // re-share). This is how `kb-share-p2p` *establishes* a mesh-exposed KB.
-    let requested_transport = params["transport"]
-        .as_str()
-        .and_then(mae_sync::kb::TransportPolicy::parse)
-        .unwrap_or(mae_sync::kb::TransportPolicy::Hub);
-    if let Ok(mut coll) = load_collection(doc_store, &kb_id).await {
-        let raw = coll.transport_policy_raw();
-        let new = raw.map_or(requested_transport, |c| c.union(requested_transport));
-        if Some(new) != raw {
-            let update = coll.set_transport_policy(new);
-            if let Err(e) = persist_and_broadcast_collection(
-                doc_store,
-                broadcaster,
-                session_id,
-                &kb_id,
-                &update,
-            )
-            .await
-            {
-                warn!(kb_id = %kb_id, error = %e, "kb/share: failed to set transport policy");
-            } else {
-                info!(kb_id = %kb_id, transport = %new.as_str(), "kb/share: transport exposure set");
-            }
-        }
-    }
+    widen_share_transport(doc_store, broadcaster, who, &kb_id, params).await;
 
     // Store each node doc.
     let nodes = params["nodes"].as_array();
@@ -186,12 +158,12 @@ pub(super) async fn handle_kb_share(
             // a clean idempotent merge. Create fresh only on the first share.
             let node_res = if doc_store.has_doc(&node_doc).await {
                 doc_store
-                    .apply_update(&node_doc, &state_bytes, None)
+                    .apply_update(&node_doc, &state_bytes, None, who.1)
                     .await
                     .map(|_| ())
             } else {
                 doc_store
-                    .share_doc(&node_doc, &state_bytes)
+                    .share_doc(&node_doc, &state_bytes, who.1)
                     .await
                     .map(|_| ())
             };
@@ -604,13 +576,9 @@ pub(super) async fn handle_kb_node_update(
         return resp;
     }
 
-    // #171: a reseal PURGES + replaces (delete plaintext snapshot+WAL, recreate
-    // from this ciphertext-only op); an ordinary edit MERGES into the CRDT.
-    let applied = if reseal || rebirth {
-        doc_store.share_doc(&node_doc, &update_bytes).await
-    } else {
-        doc_store.apply_update(&node_doc, &update_bytes, None).await
-    };
+    let signer = crate::doc_editors::verified_signer(content_header.as_ref());
+    let by = Writer::signed(Attribution::session(auth_principal, transport), signer);
+    let applied = write_node(doc_store, &node_doc, &update_bytes, reseal || rebirth, by).await;
     match applied {
         Ok(result) => {
             // Broadcast to other subscribers of the collection.
@@ -633,6 +601,55 @@ pub(super) async fn handle_kb_node_update(
         }
         Err(e) => {
             JsonRpcResponse::error(id, super::write_failure("failed to apply node update", e))
+        }
+    }
+}
+
+/// Write a `kb/node_update`. #171: a reseal or rebirth PURGES + replaces
+/// (delete plaintext snapshot+WAL, recreate from this ciphertext-only op); an
+/// ordinary edit MERGES into the CRDT. Either way `by` is recorded (ADR-113 D3).
+async fn write_node(
+    doc_store: &DocStore,
+    node_doc: &str,
+    update: &[u8],
+    replace: bool,
+    by: Writer<'_>,
+) -> Result<crate::doc_store::ApplyResult, crate::storage::StorageError> {
+    if replace {
+        doc_store.share_doc(node_doc, update, by).await
+    } else {
+        doc_store.apply_update(node_doc, update, None, by).await
+    }
+}
+
+/// Transport exposure (ADR-018/025): the `transport` param (hub|p2p|both,
+/// default hub) WIDENS the KB's policy from its stored value, so a first
+/// p2p-share is P2p-only while `kb-share` + `kb-share-p2p` becomes Both
+/// (unlike membership, transport is owner-set metadata — safe on
+/// re-share). This is how `kb-share-p2p` *establishes* a mesh-exposed KB.
+async fn widen_share_transport(
+    doc_store: &DocStore,
+    broadcaster: &SharedBroadcaster,
+    who: (u64, Attribution<'_>),
+    kb_id: &str,
+    params: &serde_json::Value,
+) {
+    let requested_transport = params["transport"]
+        .as_str()
+        .and_then(mae_sync::kb::TransportPolicy::parse)
+        .unwrap_or(mae_sync::kb::TransportPolicy::Hub);
+    if let Ok(mut coll) = load_collection(doc_store, kb_id).await {
+        let raw = coll.transport_policy_raw();
+        let new = raw.map_or(requested_transport, |c| c.union(requested_transport));
+        if Some(new) != raw {
+            let update = coll.set_transport_policy(new);
+            if let Err(e) =
+                persist_and_broadcast_collection(doc_store, broadcaster, who, kb_id, &update).await
+            {
+                warn!(kb_id = %kb_id, error = %e, "kb/share: failed to set transport policy");
+            } else {
+                info!(kb_id = %kb_id, transport = %new.as_str(), "kb/share: transport exposure set");
+            }
         }
     }
 }
@@ -750,6 +767,7 @@ pub(super) async fn handle_kb_collection_op(
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
+    let who = (session_id, Attribution::session(auth_principal, transport));
     // ADR-037 Phase 3a: the editor's outbound collection-write path. The owner
     // authors a signed collection delta LOCALLY (a signed membership op, an
     // encryption-flag flip, …) and ships the opaque bytes here. The daemon stays
@@ -848,9 +866,7 @@ pub(super) async fn handle_kb_collection_op(
     // `kbc:` WAL at rest. (The manifest doc is mutated in place, not replaced like a
     // node doc under #171.) Additive flag — an old daemon ignores it.
     let scrub = params["scrub"].as_bool().unwrap_or(false);
-    match persist_and_broadcast_collection(doc_store, broadcaster, session_id, &kb_id, &update)
-        .await
-    {
+    match persist_and_broadcast_collection(doc_store, broadcaster, who, &kb_id, &update).await {
         Ok(wal_seq) => {
             if scrub {
                 let coll_doc = format!("kbc:{kb_id}");
@@ -875,7 +891,7 @@ pub(super) async fn handle_kb_collection_op(
                         if let Err(e) = persist_and_broadcast_collection(
                             doc_store,
                             broadcaster,
-                            session_id,
+                            who,
                             &kb_id,
                             &u,
                         )
@@ -912,6 +928,7 @@ pub(super) async fn handle_kb_collection_node_add_remove(
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
+    let who = (session_id, Attribution::session(auth_principal, transport));
     let add = method == "kb/collection_node_add";
     let kb_id = match params["kb_id"].as_str() {
         Some(s) => s.to_string(),
@@ -953,9 +970,7 @@ pub(super) async fn handle_kb_collection_node_add_remove(
     } else {
         coll.remove_node(&node_id)
     };
-    match persist_and_broadcast_collection(doc_store, broadcaster, session_id, &kb_id, &update)
-        .await
-    {
+    match persist_and_broadcast_collection(doc_store, broadcaster, who, &kb_id, &update).await {
         Ok(_) => {
             info!(session = session_id, kb_id = %kb_id, node_id = %node_id, add, "kb collection-manifest change");
             JsonRpcResponse::success(

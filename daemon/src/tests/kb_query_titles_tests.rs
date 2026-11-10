@@ -14,6 +14,10 @@ use mae_daemon::kb_query;
 
 use super::kb_query_tests::{fresh_doc_store, generous_limits, LIST_VIEWER};
 
+/// Every test write is attributed; the editor-record tests use their own.
+const TEST_BY: mae_daemon::doc_editors::Attribution<'static> =
+    mae_daemon::doc_editors::Attribution::Principal("test-editor");
+
 const KB: &str = "titles-kb";
 
 /// `n1` is listed in the manifest as "Manifiesto" but its document says
@@ -27,12 +31,16 @@ async fn seed_renamed(doc_store: &DocStore) {
     let _ = coll.add_node("n1", "Manifiesto");
     let _ = coll.add_node("n2", "Fantasma");
     doc_store
-        .share_doc(&format!("kbc:{KB}"), &coll.encode_state())
+        .share_doc(&format!("kbc:{KB}"), &coll.encode_state(), TEST_BY)
         .await
         .unwrap();
     let node = KbNodeDoc::new("n1", "Nodo", "body", &[]);
     doc_store
-        .share_doc(&mae_sync::kb_node_doc_name(KB, "n1"), &node.encode_state())
+        .share_doc(
+            &mae_sync::kb_node_doc_name(KB, "n1"),
+            &node.encode_state(),
+            TEST_BY,
+        )
         .await
         .unwrap();
 }

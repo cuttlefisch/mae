@@ -9,6 +9,7 @@ pub mod artifact_store;
 pub mod checkpoint;
 pub mod collab_handler;
 pub mod content_op_policy;
+pub mod doc_editors;
 pub mod doc_store;
 pub mod kb_doc_migration;
 pub mod kb_query;
@@ -16,6 +17,7 @@ pub mod lease_fence;
 pub mod oauth_self_issue;
 pub mod projector;
 pub mod quota;
+pub mod seed;
 pub mod storage;
 
 /// Short git SHA of this build (`-dirty` if the tree had uncommitted changes,

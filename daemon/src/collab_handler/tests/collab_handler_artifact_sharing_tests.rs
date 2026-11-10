@@ -209,7 +209,7 @@ async fn a_member_fetches_a_cached_vector_once_sharing_is_enabled() {
         let mut coll = load_coll(&store, "kb-artifact-enabled").await;
         let update = coll.set_share_derived_artifacts(true);
         store
-            .apply_update("kbc:kb-artifact-enabled", &update, None)
+            .apply_update("kbc:kb-artifact-enabled", &update, None, TEST_BY)
             .await
             .unwrap();
     }
@@ -262,7 +262,7 @@ async fn a_cache_miss_is_reported_distinctly() {
         let mut coll = load_coll(&store, "kb-artifact-miss").await;
         let update = coll.set_share_derived_artifacts(true);
         store
-            .apply_update("kbc:kb-artifact-miss", &update, None)
+            .apply_update("kbc:kb-artifact-miss", &update, None, TEST_BY)
             .await
             .unwrap();
     }
