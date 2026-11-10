@@ -33,7 +33,7 @@ pub(super) async fn handle_docs_content(
         Ok(text) => {
             JsonRpcResponse::success(id, serde_json::json!({ "doc": doc_name, "content": text }))
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+        Err(e) => JsonRpcResponse::error(id, storage_error(e)),
     }
 }
 
@@ -47,7 +47,7 @@ pub(super) async fn handle_docs_stats(
         Ok(stats) => {
             JsonRpcResponse::success(id, serde_json::json!({ "doc": doc_name, "stats": stats }))
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+        Err(e) => JsonRpcResponse::error(id, storage_error(e)),
     }
 }
 
@@ -78,7 +78,7 @@ pub(super) async fn handle_docs_metadata(
                 }),
             )
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+        Err(e) => JsonRpcResponse::error(id, storage_error(e)),
     }
 }
 
@@ -94,7 +94,10 @@ pub(super) async fn handle_docs_save_intent(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'expected_hash' field".to_string()),
+                McpError::invalid_params(
+                    "expected_hash",
+                    "missing 'expected_hash' field".to_string(),
+                ),
             );
         }
     };
@@ -103,7 +106,7 @@ pub(super) async fn handle_docs_save_intent(
             debug!(session = session_id, doc = %doc_name, result = ?result, "docs/save_intent: checked");
             JsonRpcResponse::success(id, serde_json::json!({ "doc": doc_name, "result": result }))
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+        Err(e) => JsonRpcResponse::error(id, storage_error(e)),
     }
 }
 
@@ -163,7 +166,7 @@ pub(super) async fn handle_docs_delete(
         Ok(()) => {
             JsonRpcResponse::success(id, serde_json::json!({ "doc": doc_name, "deleted": true }))
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+        Err(e) => JsonRpcResponse::error(id, storage_error(e)),
     }
 }
 

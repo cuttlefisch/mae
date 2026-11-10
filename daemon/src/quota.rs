@@ -82,7 +82,7 @@ pub fn charge_or_reject(
     quota.charge(principal, method).map_err(|msg| {
         Box::new(mae_mcp::protocol::JsonRpcResponse::error(
             id,
-            mae_mcp::protocol::McpError::internal_error(msg),
+            mae_mcp::protocol::McpError::tenant_quota_exceeded(msg),
         ))
     })
 }
