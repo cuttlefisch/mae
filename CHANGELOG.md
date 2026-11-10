@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.143] - 2026-11-10
+
+
+
+
+### Features
+
+- *(daemon)* Plan a native KB seed from a tagged commit (dry run only) ([8460477](https://github.com/cuttlefisch/mae/commit/8460477bfa6abb53037f20044b6a85537c6a6dbf))
+- *(daemon)* Record who applied each document update (ADR-113 D3) ([109eec3](https://github.com/cuttlefisch/mae/commit/109eec3909484d3957fa1c4ddd18686324c5fb6d))
+
+### Bug Fixes
+
+- *(daemon)* An edit racing share_doc is never lost or split from disk ([925cfaf](https://github.com/cuttlefisch/mae/commit/925cfafc6cb5cec9ddc154a1bb05a66d8258475e))
+- *(daemon)* Eviction and compaction never drop an acknowledged edit ([336162d](https://github.com/cuttlefisch/mae/commit/336162de004679748c71fe6a030034f99f0c22ad))
+- *(daemon)* Seed plan separates created_at from modified_at ([25985dc](https://github.com/cuttlefisch/mae/commit/25985dc69143f38524fe74603015f366a0eaa073))
+- *(daemon)* Date a seeded document by its :ID:, not its path ([fce0e1c](https://github.com/cuttlefisch/mae/commit/fce0e1c7e267180a6001d6a71b9981269939f581))
+- *(daemon)* Seed planner runs git from a pinned environment ([fa5341b](https://github.com/cuttlefisch/mae/commit/fa5341b38329af5b683581df3fae1b3d848ec60c))
+- *(daemon)* Seed planner refuses more inputs and reads ids one way ([d1d88ef](https://github.com/cuttlefisch/mae/commit/d1d88ef5168177b2fc4d12b7cc36543cf7c15438))
+- *(daemon)* Seed plan dates pages correctly across merges ([a2a41e0](https://github.com/cuttlefisch/mae/commit/a2a41e0d537c20d60d8304fd111e989d16ec8772))
+- *(daemon)* Seed planner distrusts the repository's caches and objects ([26a5617](https://github.com/cuttlefisch/mae/commit/26a561780aeeccb70ae2d84355a30b262aa78bb9))
+- *(daemon)* Seed planner hash-checks every commit and tree it reads ([a1e14a3](https://github.com/cuttlefisch/mae/commit/a1e14a3201aeaee71f9d797670cc56baca8caf92))
+- *(daemon)* Seed planner lets git find config includes ([4c84511](https://github.com/cuttlefisch/mae/commit/4c84511b85a4a8325b57b3044deb7246443d849d))
+- *(daemon)* Close review gaps in the document editor record (ADR-113 D3) ([56c6476](https://github.com/cuttlefisch/mae/commit/56c64769d41babc1c9315d2302ffb0a37d333b60))
+- *(daemon)* Editor record — replace credits held-back text, atomic freeze point ([e1420fe](https://github.com/cuttlefisch/mae/commit/e1420fe97c8bc9994c48eac5948abb0d302c662e))
+- *(daemon)* Order every document write against a whole-document replace ([5967c68](https://github.com/cuttlefisch/mae/commit/5967c68871907360b5d51dc4f760a7af7a754469))
+- *(daemon)* Eviction and compaction never drop an acknowledged edit ([a40f608](https://github.com/cuttlefisch/mae/commit/a40f6089f5aea1aec0fc221dbd6d0b5f6f5436ee))
+- *(daemon)* A KB node document is checked as part of its own KB ([862f902](https://github.com/cuttlefisch/mae/commit/862f90221b96e4ee2c7b7638b10ad4e791edd33a))
+
+### Documentation
+
+- *(adr)* ADR-114 — node kinds are an open, declared, multilingual vocabulary ([baf6d7d](https://github.com/cuttlefisch/mae/commit/baf6d7d1d85e1dcc228dbc76bcb0393724d6731a))
+- *(adr)* ADR-113 amendment 1 — authorship as built, and seeding ([478ed6b](https://github.com/cuttlefisch/mae/commit/478ed6b09d81b1a54b1bf2704111ed99d4dc83ab))
+
 ## [0.14.142] - 2026-11-09
 
 
@@ -10,6 +43,10 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 
 - *(daemon)* Classify collab messages from the parsed request ([d22d42c](https://github.com/cuttlefisch/mae/commit/d22d42c50a4d9687a912d23396ad57b325105191))
+
+### Miscellaneous
+
+- Bump version to 0.14.142 ([915aa6e](https://github.com/cuttlefisch/mae/commit/915aa6e10e6e72196f7b04e7b273de9cb22d93d8))
 
 ## [mae-org-v0.4.0] - 2026-11-09
 
