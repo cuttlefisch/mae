@@ -464,3 +464,35 @@ fn reimport_is_refused_on_a_literal_kb_with_an_org_dir() {
         }
     }
 }
+
+/// At send time, no evidence of a KB's format is a hold, not a pass: a KB
+/// this editor no longer has registered (its store gone) and no replica
+/// holds its queued edits. A plain collection arriving releases them; a
+/// literal one keeps them held.
+#[test]
+fn the_drain_holds_a_kb_whose_format_it_cannot_read() {
+    let mut editor = Editor::new();
+    let kb = "kb-gone";
+    assert!(
+        editor.kb_refuse_outbound_to(kb).is_err(),
+        "no evidence must hold"
+    );
+    editor.collab.kb_collection_state.insert(
+        kb.to_string(),
+        KbCollectionDoc::new(kb, "owner").encode_state(),
+    );
+    assert!(
+        editor.kb_refuse_outbound_to(kb).is_ok(),
+        "a plain collection releases"
+    );
+    let mut lit = KbCollectionDoc::new(kb, "owner");
+    let _ = lit.set_body_format(BODY_FORMAT_ORG_LITERAL_V1);
+    editor
+        .collab
+        .kb_collection_state
+        .insert(kb.to_string(), lit.encode_state());
+    assert!(
+        editor.kb_refuse_outbound_to(kb).is_err(),
+        "a literal collection holds"
+    );
+}

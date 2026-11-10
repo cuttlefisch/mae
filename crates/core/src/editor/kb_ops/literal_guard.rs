@@ -152,6 +152,16 @@ impl Editor {
     /// a share confirmation or a live `kbc:` broadcast. Checking again when the
     /// row is about to be sent is what keeps that edit off every peer.
     pub fn kb_refuse_outbound_to(&self, kb_id: &str) -> Result<(), String> {
+        // Sending needs evidence of the format, not the absence of a refusal:
+        // an instance whose store did not open (a failed open, a disabled KB)
+        // or a KB no longer registered has no record to read, so its queued
+        // edits wait for the collection to arrive.
+        if !self.kb_has_format_evidence(kb_id) {
+            return Err(format!(
+                "KB '{kb_id}': its declared body format is not known yet; queued edits are \
+                 held until its collection arrives"
+            ));
+        }
         match self.kb.registry.target_of_collab_id(kb_id) {
             Some(mae_kb::KbTarget::Primary) => {
                 self.kb_refuse_foreign_body_format_of(kb_id, &None, "local")
@@ -168,6 +178,27 @@ impl Editor {
             // only the in-memory replica can speak for it.
             None => self.kb_refuse_foreign_body_format_of(kb_id, &None, kb_id),
         }
+    }
+
+    /// Whether the drain may decide this KB's format at all: a live,
+    /// non-empty replica of its collection; or the primary, which is never a
+    /// literal KB (one only arrives by join, as an instance); or an instance
+    /// whose store is open and can say what format was recorded. An instance
+    /// whose store did not open, or a KB no longer registered, has none.
+    fn kb_has_format_evidence(&self, kb_id: &str) -> bool {
+        let replica = self
+            .collab
+            .kb_collection_state
+            .get(kb_id)
+            .is_some_and(|b| !b.is_empty());
+        replica
+            || match self.kb.registry.target_of_collab_id(kb_id) {
+                Some(mae_kb::KbTarget::Primary) => true,
+                Some(mae_kb::KbTarget::Instance(uuid)) => {
+                    self.kb.instance_stores.contains_key(&uuid)
+                }
+                None => false,
+            }
     }
 
     /// [`Self::kb_refuse_outbound_to`] for the outbound drain, which runs every
