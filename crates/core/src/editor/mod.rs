@@ -340,6 +340,19 @@ pub struct ReauthorFields {
     pub tags: Vec<String>,
 }
 
+/// One KB's outbound hold — see [`CollabState::kb_outbound_held`].
+#[derive(Debug, Clone)]
+pub struct KbOutboundHold {
+    /// Hash of the collection replica the refusal was computed from (`None` =
+    /// no replica, i.e. it came from the store's durable record). A different
+    /// replica re-evaluates; only a refusal is ever cached, so a stale entry
+    /// can hold ops longer than necessary but can never release one.
+    pub replica_key: Option<u64>,
+    pub reason: String,
+    /// The "held locally" notification has been raised for this hold.
+    pub notified: bool,
+}
+
 /// Collaborative editing state extracted from Editor.
 /// All fields were previously `collab_*` on Editor; now accessed via `editor.collab.*`.
 #[derive(Debug)]
@@ -465,6 +478,12 @@ pub struct CollabState {
     /// drain from re-sending an in-flight row every tick; cleared on ack, requeue,
     /// or disconnect (so unconfirmed updates retry on reconnect).
     pub inflight_kb_updates: std::collections::HashSet<i64>,
+    /// KBs whose queued outbound ops the drain is holding back because the KB
+    /// declares a body format MAE does not write (`kb_ops::literal_guard`), by
+    /// collab id. Caches the refusal (decoding a large collection replica every
+    /// tick is milliseconds, and held rows never drain) and whether the user has
+    /// been told. The rows themselves stay in their queues, unsent.
+    pub kb_outbound_held: HashMap<String, KbOutboundHold>,
     /// Stable, per-peer yrs `client_id` for local KB CRDT edits (ADR-020 B-16),
     /// derived once at startup from the durable collab identity fingerprint. Two
     /// peers MUST have distinct client_ids or their concurrent edits to the same
@@ -567,6 +586,7 @@ impl CollabState {
             fence_resolution: "prompt".to_string(),
             pending_kb_updates: Vec::new(),
             inflight_kb_updates: std::collections::HashSet::new(),
+            kb_outbound_held: HashMap::new(),
             local_kb_client_id: 0,
             local_fingerprint: String::new(),
             kb_epochs: HashMap::new(),

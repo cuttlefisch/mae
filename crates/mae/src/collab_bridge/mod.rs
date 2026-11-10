@@ -852,11 +852,9 @@ fn handle_kbc_membership_broadcast(editor: &mut Editor, kb_id: &str, update_byte
         warn!(kb = %kb_id, error = %e, "kbc broadcast: apply_update failed");
         return;
     }
-    // Persist the advanced replica so the next broadcast composes on top of it.
-    editor
-        .collab
-        .kb_collection_state
-        .insert(kb_id.to_string(), coll.encode_state());
+    // Persist the advanced replica so the next broadcast composes on top of it
+    // (and record a body-format change durably — see `kb_note_collection_state`).
+    editor.kb_note_collection_state(kb_id, coll.encode_state());
 
     // Any membership change repaints the *KB Sharing* buffer (remote
     // promote/demote/approve/join shows live), even when our own epoch is

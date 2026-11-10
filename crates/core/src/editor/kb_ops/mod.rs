@@ -214,6 +214,7 @@ mod daily;
 pub(crate) mod dir_owner;
 mod dispatch;
 mod import_audit;
+mod literal_guard;
 pub(crate) mod node_buffer;
 mod nodes;
 pub(crate) mod registry;
