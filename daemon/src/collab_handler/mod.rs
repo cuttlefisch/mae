@@ -1940,7 +1940,9 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        Method::KbBlocklist => kb_governance::handle_kb_blocklist(doc_store, id, &params).await,
+        Method::KbBlocklist => {
+            kb_governance::handle_kb_blocklist(doc_store, auth_principal, id, &params).await
+        }
 
         Method::KbSetGovernance => {
             kb_governance::handle_kb_set_governance(
