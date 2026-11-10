@@ -804,6 +804,18 @@ than picked. Behaviour reads a class joined in the Cozo projection, never a raw 
 ship as a frozen, versioned vocabulary (`mae-builtin/1`) so peers on different releases agree.
 Evidence in `docs/research/114-kind-vocabulary-prior-art.md`.
 
+**ADR-115** (*proposed, design*) — **a KB's attachments live in a per-KB, content-addressed store,
+never in node text.** Bytes are immutable sha256-named files, deduplicated per KB only, with
+metadata and references in SQLite; access is the KB's own `kb_access` (no hash-as-capability, no
+existence oracle); upload and download stream over new HTTPS routes under a per-blob cap and a new
+per-tenant storage quota; the daemon sniffs, strips metadata from, re-orients and bounds images
+*before* hashing, so the server picks the address; the source keeps Org's own
+`[[attachment:NAME]]` link and the node CRDT maps names to hashes, a mapping that the node version,
+every history version, every revision and every export/seed fingerprint freeze; a mark-and-sweep
+under the binding lock, with a grace period, never collects what any history, revision, bin entry or
+hold references; mae-org's resolver renders a labelled placeholder for every non-resolved state. Evidence in
+`docs/research/115-attachment-store-prior-art.md`.
+
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
 > from it entirely until 2026-08-04, i.e. every ADR from the KB-visualization arc and the whole
 > pre-v0.15 audit set, so agents rediscovered decisions that already existed. `docs/adr/` is the
