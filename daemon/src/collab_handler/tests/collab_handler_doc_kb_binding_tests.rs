@@ -106,3 +106,35 @@ async fn the_content_op_check_refuses_a_node_of_another_kb() {
         verify_relayed_content_op(&store, "ek", "kbn:ek:concept:n", &update, None, false).await;
     assert!(same.is_ok(), "{same:?}");
 }
+
+/// A refused write leaves the caller subscribed to nothing: before, a
+/// non-member's refused `sync/update` still joined the node's live feed and
+/// received every later update to it.
+#[tokio::test]
+async fn a_refused_write_does_not_subscribe_the_caller() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    seed(&store, &bc).await;
+    let forged = make_test_node("concept:n", "n", "X", &[]);
+    for kb_id in ["ek", "theirs"] {
+        let mut docs = HashSet::new();
+        let reply = dispatch_as(
+            &store,
+            &bc,
+            Some(STRANGER),
+            Some(&fp(STRANGER)),
+            serde_json::json!({"jsonrpc":"2.0","id":4,"method":"sync/update",
+                "params":{"doc":"kbn:ek:concept:n","kb_id":kb_id,"update":update_to_base64(&forged)}}),
+            &mut docs,
+        )
+        .await;
+        assert!(
+            reply.error.is_some(),
+            "kb_id {kb_id}: the write was answered"
+        );
+        assert!(
+            docs.is_empty(),
+            "kb_id {kb_id}: a refused caller was subscribed to {docs:?}"
+        );
+    }
+}

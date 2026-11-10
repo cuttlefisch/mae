@@ -160,16 +160,6 @@ pub(super) async fn handle_sync_update(
         warn!(session = session_id, doc = %doc_name, reason = %e, "sync/update denied (collection smuggling)");
         return JsonRpcResponse::error(id, e.into());
     }
-    // Track this doc for disconnect cleanup and doc-scoped broadcast filtering.
-    if session_docs.insert(doc_name.clone()) {
-        // First interaction — track client connect + subscribe to doc events.
-        let _ = doc_store.track_client_connect(&doc_name).await;
-        broadcaster
-            .lock()
-            .unwrap()
-            .subscribe_doc(session_id, &doc_name);
-        debug!(session = session_id, doc = %doc_name, "sync/update: first interaction, tracking connect");
-    }
     let update_bytes = match update_param(params, doc_store.max_update_size()) {
         Ok(b) => b,
         Err(e) => return JsonRpcResponse::error(id, e),
@@ -193,6 +183,17 @@ pub(super) async fn handle_sync_update(
         }
         _ => None,
     };
+    // Track and subscribe only once the write is authorized: a refused caller
+    // must not join the document's live feed.
+    if session_docs.insert(doc_name.clone()) {
+        // First interaction — track client connect + subscribe to doc events.
+        let _ = doc_store.track_client_connect(&doc_name).await;
+        broadcaster
+            .lock()
+            .unwrap()
+            .subscribe_doc(session_id, &doc_name);
+        debug!(session = session_id, doc = %doc_name, "sync/update: first interaction, tracking connect");
+    }
 
     // ADR-113 D3: a verified signer is the content's author; record it beside
     // the session (a relay, on the P2P transport) that delivered it.
