@@ -23,6 +23,13 @@
 //! refusal (principle #3: one rule for both). The join path additionally
 //! withholds local-ahead ops ([`Editor::kb_withhold_local_ahead`]).
 //!
+//! Two bridge paths put a KB's local node documents on the wire without an
+//! `Editor` mutator, and check the same rule there: the outbound drain holds
+//! queued ops for a refused KB ([`Editor::kb_outbound_refusal`] — an edit
+//! accepted while the format was unknown is already queued when the marker is
+//! learned), and the share / set-encryption intents are refused outright, since
+//! both send every node's local document.
+//!
 //! # What the editor knows, and when
 //!
 //! The marker's truth is the KB's collection CRDT (`kbc:`). The editor holds a
@@ -71,10 +78,7 @@ impl Editor {
     /// - **A replica or record that cannot be read** (`Unreadable`): refused.
     ///   That is evidence the KB has a format declaration this editor failed to
     ///   see, and a transient read error must not be what lets a write through.
-    pub(crate) fn kb_refuse_foreign_body_format(
-        &self,
-        owner: &Option<String>,
-    ) -> Result<(), String> {
+    pub fn kb_refuse_foreign_body_format(&self, owner: &Option<String>) -> Result<(), String> {
         let Some(kb_id) = self.kb_format_collab_id(owner) else {
             return Ok(());
         };
@@ -136,6 +140,113 @@ impl Editor {
             );
             local_ahead.clear();
         }
+    }
+
+    /// The refusal for KB `kb_id` named by its **collab id** — the key every
+    /// outbound queue row carries. `Err` means: do not put this KB's queued ops
+    /// on the wire.
+    ///
+    /// This is the send-time half of the guard. The mutators refuse at edit
+    /// time, but an edit accepted while the format was `Unknown` (fail-open) is
+    /// already in the durable queue when the marker is learned — by a re-join,
+    /// a share confirmation or a live `kbc:` broadcast. Checking again when the
+    /// row is about to be sent is what keeps that edit off every peer.
+    pub fn kb_refuse_outbound_to(&self, kb_id: &str) -> Result<(), String> {
+        match self.kb.registry.target_of_collab_id(kb_id) {
+            Some(mae_kb::KbTarget::Primary) => {
+                self.kb_refuse_foreign_body_format_of(kb_id, &None, "local")
+            }
+            Some(mae_kb::KbTarget::Instance(uuid)) => {
+                let name = self
+                    .kb
+                    .registry
+                    .find_by_uuid(&uuid)
+                    .map_or_else(|| uuid.clone(), |i| i.name.clone());
+                self.kb_refuse_foreign_body_format_of(kb_id, &Some(uuid), &name)
+            }
+            // Not a KB this editor has registered (e.g. a legacy primary id):
+            // only the in-memory replica can speak for it.
+            None => self.kb_refuse_foreign_body_format_of(kb_id, &None, kb_id),
+        }
+    }
+
+    /// [`Self::kb_refuse_outbound_to`] for the outbound drain, which runs every
+    /// tick: `Some(reason)` = hold this KB's queued ops.
+    ///
+    /// A refusal is cached against the replica it was computed from, because a
+    /// held KB's rows are re-read every tick and never drain, and decoding a
+    /// large collection replica costs milliseconds. Only refusals are cached —
+    /// a sendable KB's rows leave the queue — so the cache can only err towards
+    /// holding.
+    pub fn kb_outbound_refusal(&mut self, kb_id: &str) -> Option<String> {
+        use std::hash::{Hash, Hasher};
+        let replica_key = self
+            .collab
+            .kb_collection_state
+            .get(kb_id)
+            .filter(|b| !b.is_empty())
+            .map(|b| {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                b.hash(&mut h);
+                h.finish()
+            });
+        if let Some(held) = self.collab.kb_outbound_held.get(kb_id) {
+            if held.replica_key == replica_key {
+                return Some(held.reason.clone());
+            }
+        }
+        match self.kb_refuse_outbound_to(kb_id) {
+            Ok(()) => {
+                self.collab.kb_outbound_held.remove(kb_id);
+                None
+            }
+            Err(reason) => {
+                let held = self
+                    .collab
+                    .kb_outbound_held
+                    .entry(kb_id.to_string())
+                    .or_insert_with(|| crate::editor::KbOutboundHold {
+                        replica_key,
+                        reason: String::new(),
+                        notified: false,
+                    });
+                held.replica_key = replica_key;
+                held.reason.clone_from(&reason);
+                Some(reason)
+            }
+        }
+    }
+
+    /// Tell the user, once per hold, that `count` queued ops for KB `kb_id` are
+    /// being kept back (see [`Self::kb_outbound_refusal`]).
+    ///
+    /// The held ops are **quarantined in place, not purged**: they stay in the
+    /// durable queue (or the in-memory fallback), so the edit is neither lost
+    /// nor sent, and the same check runs on every drain. Told again only after
+    /// the hold has lifted and come back.
+    pub fn kb_note_outbound_withheld(&mut self, kb_id: &str, count: usize) {
+        let Some(held) = self.collab.kb_outbound_held.get_mut(kb_id) else {
+            return;
+        };
+        if std::mem::replace(&mut held.notified, true) {
+            return;
+        }
+        let reason = held.reason.clone();
+        tracing::warn!(
+            target: "kb_sync", kb_id = %kb_id, count, reason = %reason,
+            "drain: holding queued KB op(s) locally — NOT sending to a KB MAE does not write"
+        );
+        self.notify(
+            crate::notifications::Notification::warning(
+                "collab",
+                format!("{count} queued KB edit(s) held locally, not sent"),
+            )
+            .key(format!("kb-outbound-withheld:{kb_id}"))
+            .body(format!(
+                "{reason} These edits were queued before this editor knew the KB's \
+                 format. They remain in your local copy and will not be sent to peers."
+            )),
+        );
     }
 
     /// The collab id the owning KB is — or was — shared under, whether or not it
