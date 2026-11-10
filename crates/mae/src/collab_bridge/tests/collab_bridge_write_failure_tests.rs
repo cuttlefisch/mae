@@ -381,7 +381,7 @@ async fn register_recovery_key_write_failure_reports_zero_registered() {
     let client_pub = client_id.public();
     let server_pub = server_id.public();
 
-    let (addr, hangup_tx, daemon_handle) = spawn_fake_daemon(server_id, client_pub).await;
+    let (addr, _hangup_tx, _daemon_handle) = spawn_fake_daemon(server_id, client_pub).await;
     let connect_id = Identity::from_seed(&[61u8; 32], "client");
     let (cmd_tx, mut evt_rx) = connect_client(addr, connect_id, server_pub).await;
 
@@ -395,14 +395,21 @@ async fn register_recovery_key_write_failure_reports_zero_registered() {
         })
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(150)).await;
-
-    let _ = hangup_tx.send(());
+    // Barrier, then arm the fault (as in the rotate-identity test above): the
+    // seeded state is processed before the command, and the command's write
+    // fails at the writer. A peer hang-up proved nothing reliable: TCP may
+    // accept the first write after a peer close, so whether the write failed
+    // depended on how many writes a frame took.
+    cmd_tx.send(CollabCommand::ShowStatus).await.unwrap();
+    let _ = recv_until(&mut evt_rx, |e| {
+        matches!(e, CollabEvent::StatusReport { .. })
+    })
+    .await;
+    crate::collab_bridge::write_fault::fail_writes_to(&addr.to_string());
     cmd_tx
         .send(CollabCommand::RegisterRecoveryKey)
         .await
         .unwrap();
-    let _ = daemon_handle.await;
 
     let ev = recv_until(&mut evt_rx, |e| {
         matches!(
@@ -447,7 +454,7 @@ async fn kb_remove_member_e2e_write_failure_does_not_remove_or_rekey() {
     let client_pub = client_id.public();
     let server_pub = server_id.public();
 
-    let (addr, hangup_tx, daemon_handle) = spawn_fake_daemon(server_id, client_pub).await;
+    let (addr, _hangup_tx, _daemon_handle) = spawn_fake_daemon(server_id, client_pub).await;
     let connect_id = Identity::from_seed(&[71u8; 32], "client");
     let (cmd_tx, mut evt_rx) = connect_client(addr, connect_id, server_pub).await;
 
@@ -461,9 +468,17 @@ async fn kb_remove_member_e2e_write_failure_does_not_remove_or_rekey() {
         })
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(150)).await;
-
-    let _ = hangup_tx.send(());
+    // Barrier, then arm the fault (as in the rotate-identity test above): the
+    // seeded state is processed before the command, and the command's write
+    // fails at the writer. A peer hang-up proved nothing reliable: TCP may
+    // accept the first write after a peer close, so whether the write failed
+    // depended on how many writes a frame took.
+    cmd_tx.send(CollabCommand::ShowStatus).await.unwrap();
+    let _ = recv_until(&mut evt_rx, |e| {
+        matches!(e, CollabEvent::StatusReport { .. })
+    })
+    .await;
+    crate::collab_bridge::write_fault::fail_writes_to(&addr.to_string());
     cmd_tx
         .send(CollabCommand::KbMember {
             kb_id: "kb-remove".to_string(),
@@ -473,7 +488,6 @@ async fn kb_remove_member_e2e_write_failure_does_not_remove_or_rekey() {
         })
         .await
         .unwrap();
-    let _ = daemon_handle.await;
 
     let ev = recv_until(&mut evt_rx, |e| matches!(e, CollabEvent::Error { .. })).await;
     match ev {
@@ -500,7 +514,7 @@ async fn kb_approve_member_e2e_write_failure_does_not_admit() {
     let client_pub = client_id.public();
     let server_pub = server_id.public();
 
-    let (addr, hangup_tx, daemon_handle) = spawn_fake_daemon(server_id, client_pub).await;
+    let (addr, _hangup_tx, _daemon_handle) = spawn_fake_daemon(server_id, client_pub).await;
     let connect_id = Identity::from_seed(&[81u8; 32], "client");
     let (cmd_tx, mut evt_rx) = connect_client(addr, connect_id, server_pub).await;
 
@@ -521,9 +535,17 @@ async fn kb_approve_member_e2e_write_failure_does_not_admit() {
         })
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(150)).await;
-
-    let _ = hangup_tx.send(());
+    // Barrier, then arm the fault (as in the rotate-identity test above): the
+    // seeded state is processed before the command, and the command's write
+    // fails at the writer. A peer hang-up proved nothing reliable: TCP may
+    // accept the first write after a peer close, so whether the write failed
+    // depended on how many writes a frame took.
+    cmd_tx.send(CollabCommand::ShowStatus).await.unwrap();
+    let _ = recv_until(&mut evt_rx, |e| {
+        matches!(e, CollabEvent::StatusReport { .. })
+    })
+    .await;
+    crate::collab_bridge::write_fault::fail_writes_to(&addr.to_string());
     cmd_tx
         .send(CollabCommand::KbApprove {
             kb_id: "kb-approve".to_string(),
@@ -532,7 +554,6 @@ async fn kb_approve_member_e2e_write_failure_does_not_admit() {
         })
         .await
         .unwrap();
-    let _ = daemon_handle.await;
 
     let ev = recv_until(&mut evt_rx, |e| matches!(e, CollabEvent::Error { .. })).await;
     match ev {

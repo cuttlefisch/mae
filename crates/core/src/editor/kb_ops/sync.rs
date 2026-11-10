@@ -150,6 +150,7 @@ impl Editor {
         // are recovered even if the original pending-queue row was lost in a crash.
         // Route them through the same durable pending queue the live edit path uses
         // (single emit source); the post-(re)connect drain ships them to the daemon.
+        self.kb_withhold_local_ahead(kb_id, &uuid, &mut local_ahead);
         if !local_ahead.is_empty() {
             tracing::info!(
                 target: "kb_sync", kb_id = %kb_id, count = local_ahead.len(),

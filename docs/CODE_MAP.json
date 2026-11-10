@@ -1071,6 +1071,14 @@
           "kind": "fn"
         },
         {
+          "name": "tune_request_stream",
+          "kind": "fn"
+        },
+        {
+          "name": "tuned",
+          "kind": "fn"
+        },
+        {
           "name": "read_message",
           "kind": "fn"
         },

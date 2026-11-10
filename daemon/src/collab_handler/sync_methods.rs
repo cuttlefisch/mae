@@ -18,14 +18,14 @@ pub(super) async fn handle_sync_state_vector(
     let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
     if let Err(msg) = deny_kb_doc_read(doc_store, &doc_name, auth_principal, transport).await {
         warn!(session = session_id, doc = %doc_name, reason = %msg, "sync/state_vector denied");
-        return JsonRpcResponse::error(id, McpError::internal_error(msg));
+        return JsonRpcResponse::error(id, msg.into());
     }
     match doc_store.state_vector(&doc_name).await {
         Ok(sv) => {
             let sv_b64 = update_to_base64(&sv);
             JsonRpcResponse::success(id, serde_json::json!({ "doc": doc_name, "sv": sv_b64 }))
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+        Err(e) => JsonRpcResponse::error(id, storage_error(e)),
     }
 }
 
@@ -34,17 +34,102 @@ pub(super) async fn handle_sync_state_vector(
 fn update_param(params: &serde_json::Value, max_update: usize) -> Result<Vec<u8>, McpError> {
     let update_b64 = params["update"]
         .as_str()
-        .ok_or_else(|| McpError::parse_error("missing 'update' field".to_string()))?;
+        .ok_or_else(|| McpError::invalid_params("update", "missing 'update' field".to_string()))?;
     let update_bytes = base64_to_update(update_b64)
-        .map_err(|e| McpError::parse_error(format!("invalid base64: {e}")))?;
+        .map_err(|e| McpError::invalid_params("update", format!("invalid base64: {e}")))?;
     if update_bytes.len() > max_update {
-        return Err(McpError::parse_error(format!(
-            "update too large: {} bytes (max {})",
+        return Err(McpError::update_too_large(
+            format!(
+                "update too large: {} bytes (max {})",
+                update_bytes.len(),
+                max_update
+            ),
             update_bytes.len(),
-            max_update
-        )));
+            max_update,
+        ));
     }
     Ok(update_bytes)
+}
+
+/// Mediate a `sync/update` write to a KB node document, in this order:
+///
+/// 1. the request names its KB (`kb_id`) — #169 M1: without it the write
+///    skipped membership, signature AND fence;
+/// 2. the CALLER may edit that KB (`kb_access`);
+/// 3. a signed op verifies, and its signed AUTHOR is an Editor+ member at
+///    the op's epoch (ADR-036 §D3, `verify_relayed_content_op`) — a peer
+///    daemon relaying a member's edit is untrusted, so the op is re-checked
+///    here; require-signed on P2p, legacy unsigned accepted on the hub;
+/// 4. the ADR-023 epoch fence, on the verified author.
+///
+/// Returns the verified header, carried onward with the broadcast.
+async fn authorize_node_write(
+    doc_store: &DocStore,
+    (session_id, auth_principal, transport): (u64, Option<&str>, Transport),
+    (doc_name, node_id): (&str, &str),
+    update_bytes: &[u8],
+    params: &serde_json::Value,
+) -> Result<Option<serde_json::Value>, McpError> {
+    let Some(kb_id) = params.get("kb_id").and_then(|v| v.as_str()) else {
+        warn!(session = session_id, doc = %doc_name, "sync/update: kb node write WITHOUT kb_id — REJECTED (would bypass membership + epoch fence, #169 M1)");
+        return Err(McpError::invalid_params(
+            "kb_id",
+            "kb node writes via sync/update must carry kb_id".to_string(),
+        ));
+    };
+    // Membership FIRST, and unconditionally — before anything that reads the
+    // op's header. Two reasons, each with a regression test:
+    //
+    // - Everything after this is conditional on a signature being present, and
+    //   the hub accepts unsigned ops by design, so without this gate a
+    //   non-member wrote any KB node by omitting the header (the write reached
+    //   the WAL and was replayed on every restart).
+    //   `collab_handler_unauthorized_surface_tests::
+    //   unsigned_sync_update_from_a_non_member_cannot_write_a_kb_node`.
+    // - The author checks below refuse with the AUTHOR's status (`not_member`,
+    //   `role_forbidden`, `epoch_fenced` with its epochs). Run before this
+    //   gate, they let a non-member holding someone's captured signed op learn
+    //   that author's standing in a KB it cannot see.
+    //   `collab_handler_error_kind_no_oracle_tests::
+    //   a_non_member_replaying_a_captured_op_learns_nothing_about_its_author`.
+    //
+    // @ai-caution: [dispatch-authz] Do NOT fold this gate into, or move it
+    // after, the signature checks. Signature verification answers "who wrote
+    // this"; `kb_access` answers "may the caller write here at all", and only
+    // the second may be answered to a stranger.
+    let decision = kb_access(doc_store, kb_id, auth_principal, KbOp::Edit, transport).await;
+    if let Err(m) = require_allow(decision, || format!("cannot write to KB '{kb_id}'")) {
+        warn!(session = session_id, doc = %doc_name, kb_id = %kb_id, reason = %m,
+              "sync/update: kb node write DENIED (not a member / insufficient role)");
+        return Err(m.into());
+    }
+    let header = verify_relayed_content_op(
+        doc_store,
+        kb_id,
+        doc_name,
+        update_bytes,
+        params.get("content_header"),
+        crate::content_op_policy::require_signed(transport),
+    )
+    .await
+    .map_err(|e| {
+        warn!(session = session_id, doc = %doc_name, reason = %e, "sync/update: SIGNED CONTENT OP REJECTED (ADR-036)");
+        McpError::from(e)
+    })?;
+    // Fence on the VERIFIED header author (a relayed op's true author — never
+    // the connection principal), mirroring the dialer's #157 N1 path.
+    if let Some(author) = header
+        .as_ref()
+        .and_then(|h| h.get("author").and_then(|a| a.as_str()))
+    {
+        if let Err(reason) =
+            enforce_epoch_fence(doc_store, kb_id, node_id, doc_name, update_bytes, author).await
+        {
+            warn!(session = session_id, doc = %doc_name, %reason, "sync/update: kb node REJECTED (epoch fence — #169 M1)");
+            return Err(reason.into());
+        }
+    }
+    Ok(header)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -64,7 +149,7 @@ pub(super) async fn handle_sync_update(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'doc' field".to_string()),
+                McpError::invalid_params("doc", "missing 'doc' field".to_string()),
             );
         }
     };
@@ -73,17 +158,7 @@ pub(super) async fn handle_sync_update(
     if let Err(e) = deny_collection_smuggling(doc_store, &doc_name, auth_principal, transport).await
     {
         warn!(session = session_id, doc = %doc_name, reason = %e, "sync/update denied (collection smuggling)");
-        return JsonRpcResponse::error(id, McpError::internal_error(e));
-    }
-    // Track this doc for disconnect cleanup and doc-scoped broadcast filtering.
-    if session_docs.insert(doc_name.clone()) {
-        // First interaction — track client connect + subscribe to doc events.
-        let _ = doc_store.track_client_connect(&doc_name).await;
-        broadcaster
-            .lock()
-            .unwrap()
-            .subscribe_doc(session_id, &doc_name);
-        debug!(session = session_id, doc = %doc_name, "sync/update: first interaction, tracking connect");
+        return JsonRpcResponse::error(id, e.into());
     }
     let update_bytes = match update_param(params, doc_store.max_update_size()) {
         Ok(b) => b,
@@ -92,110 +167,32 @@ pub(super) async fn handle_sync_update(
     let client_id = params["client_id"].as_u64();
     let by = Attribution::session(auth_principal, transport);
 
-    // ADR-036 §D3 (B→A): a content op arriving over the mesh — a peer daemon's
-    // forwarded edit — is re-verified against THIS KB's membership before
-    // apply, because the relaying peer is untrusted (even a member's *daemon*
-    // could lie). The joiner's dialer sends `kb_id`; require-signed on P2p, the
-    // hub accepts legacy unsigned during migration. Same shared check as the
-    // dialer's inbound path. On success the verified header is carried onward.
-    let mut sync_content_header: Option<serde_json::Value> = None;
-    if let Some(kb_id) = params.get("kb_id").and_then(|v| v.as_str()) {
-        match verify_relayed_content_op(
-            doc_store,
-            kb_id,
-            &doc_name,
-            &update_bytes,
-            params.get("content_header"),
-            crate::content_op_policy::require_signed(transport),
-        )
-        .await
-        {
-            Ok(verified) => sync_content_header = verified,
-            Err(e) => {
-                warn!(session = session_id, doc = %doc_name, reason = %e, "sync/update: SIGNED CONTENT OP REJECTED (ADR-036)");
-                return JsonRpcResponse::error(id, McpError::internal_error(e));
-            }
-        }
-    }
-
-    // #169 M1: a `kb:{node}` write arriving via `sync/update` must carry its `kb_id`
-    // and clear the ADR-023 epoch fence — the SAME mediation as `kb/node_update` and
-    // the mesh dialer. Before this, a bare `kb:` `sync/update` (no `kb_id`) skipped
-    // `verify_relayed_content_op` (it's gated on `kb_id`), `kb_access`, AND the fence,
-    // writing the node CRDT with no role/signature/epoch check, then broadcasting.
-    // Text buffers (non-`kb:` docs) are unaffected.
+    // A `kb:{node}` write is mediated before it is applied; any other document
+    // is not KB content (`verify_relayed_content_op` would pass it through).
     // @ai-caution: [kb-scoping] (ADR-105 D1) Address TYPE, not string prefix. A node
     // doc that stops matching here skips signature verification, `kb_access` AND the
-    // epoch fence — precisely the bypass the comment above records having fixed.
-    if let Some(mae_sync::DocAddress::KbNode { node_id, .. }) =
-        mae_sync::DocAddress::parse(&doc_name)
-    {
-        let node_id = &node_id;
-        match params.get("kb_id").and_then(|v| v.as_str()) {
-            Some(kb_id) => {
-                // Membership FIRST, and unconditionally. Everything below this
-                // point is conditional on a signature being present, and the hub
-                // accepts unsigned ops by design (`require_signed` is
-                // `matches!(transport, Transport::P2p)`), so before this check a
-                // non-member could write any KB node by simply omitting the
-                // header: `verify_relayed_content_op` returns `Ok(None)`,
-                // `sync_content_header` stays `None`, and the `if let
-                // Some(author)` fence block never runs. The write then reached
-                // the WAL and was replayed on every restart.
-                //
-                // @ai-caution: [dispatch-authz] This gate must NOT be folded into
-                // the signature branch, however tempting the symmetry. Signature
-                // verification answers "who wrote this"; `kb_access` answers "may
-                // they write here at all". They are different questions and the
-                // second one has no default answer. Regression:
-                // `collab_handler_unauthorized_surface_tests::
-                // unsigned_sync_update_from_a_non_member_cannot_write_a_kb_node`.
-                match kb_access(doc_store, kb_id, auth_principal, KbOp::Edit, transport).await {
-                    Ok(AccessDecision::Allow) => {}
-                    Ok(AccessDecision::Deny(m)) | Err(m) => {
-                        warn!(session = session_id, doc = %doc_name, kb_id = %kb_id, reason = %m,
-                              "sync/update: kb node write DENIED (not a member / insufficient role)");
-                        return JsonRpcResponse::error(id, McpError::internal_error(m));
-                    }
-                    Ok(_) => {
-                        return JsonRpcResponse::error(
-                            id,
-                            McpError::internal_error(format!("cannot write to KB '{kb_id}'")),
-                        );
-                    }
-                }
-
-                // Fence on the VERIFIED header author (a relayed op's true author —
-                // never the connection principal), mirroring the dialer's #157 N1 path.
-                if let Some(author) = sync_content_header
-                    .as_ref()
-                    .and_then(|h| h.get("author").and_then(|a| a.as_str()))
-                {
-                    if let Err(reason) = enforce_epoch_fence(
-                        doc_store,
-                        kb_id,
-                        node_id,
-                        &doc_name,
-                        &update_bytes,
-                        author,
-                    )
-                    .await
-                    {
-                        warn!(session = session_id, doc = %doc_name, %reason, "sync/update: kb node REJECTED (epoch fence — #169 M1)");
-                        return JsonRpcResponse::error(id, McpError::internal_error(reason));
-                    }
-                }
-            }
-            None => {
-                warn!(session = session_id, doc = %doc_name, "sync/update: kb node write WITHOUT kb_id — REJECTED (would bypass membership + epoch fence, #169 M1)");
-                return JsonRpcResponse::error(
-                    id,
-                    McpError::internal_error(
-                        "kb node writes via sync/update must carry kb_id".to_string(),
-                    ),
-                );
+    // epoch fence.
+    let sync_content_header = match mae_sync::DocAddress::parse(&doc_name) {
+        Some(mae_sync::DocAddress::KbNode { node_id, .. }) => {
+            let who = (session_id, auth_principal, transport);
+            let node = (doc_name.as_str(), node_id.as_str());
+            match authorize_node_write(doc_store, who, node, &update_bytes, params).await {
+                Ok(header) => header,
+                Err(e) => return JsonRpcResponse::error(id, e),
             }
         }
+        _ => None,
+    };
+    // Track and subscribe only once the write is authorized: a refused caller
+    // must not join the document's live feed.
+    if session_docs.insert(doc_name.clone()) {
+        // First interaction — track client connect + subscribe to doc events.
+        let _ = doc_store.track_client_connect(&doc_name).await;
+        broadcaster
+            .lock()
+            .unwrap()
+            .subscribe_doc(session_id, &doc_name);
+        debug!(session = session_id, doc = %doc_name, "sync/update: first interaction, tracking connect");
     }
 
     // ADR-113 D3: a verified signer is the content's author; record it beside
@@ -229,7 +226,7 @@ pub(super) async fn handle_sync_update(
                 }),
             )
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+        Err(e) => JsonRpcResponse::error(id, storage_error(e)),
     }
 }
 
@@ -286,7 +283,7 @@ pub(super) async fn handle_sync_awareness(
     // updates): a KB doc needs read access to its KB first.
     if let Err(msg) = deny_kb_awareness(doc_store, &doc_name, auth_principal, transport).await {
         warn!(session = session_id, doc = %doc_name, reason = %msg, "sync/awareness denied");
-        return JsonRpcResponse::error(id, McpError::internal_error(msg));
+        return JsonRpcResponse::error(id, msg.into());
     }
     let state = &params["state"];
     debug!(
@@ -360,7 +357,7 @@ pub(super) async fn handle_sync_full_state(
     let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
     if let Err(msg) = deny_kb_doc_read(doc_store, &doc_name, auth_principal, transport).await {
         warn!(session = session_id, doc = %doc_name, reason = %msg, "sync/full_state denied");
-        return JsonRpcResponse::error(id, McpError::internal_error(msg));
+        return JsonRpcResponse::error(id, msg.into());
     }
     // Track this doc for disconnect cleanup and doc-scoped broadcast filtering.
     if session_docs.insert(doc_name.clone()) {
@@ -380,7 +377,7 @@ pub(super) async fn handle_sync_full_state(
                 serde_json::json!({ "doc": doc_name, "state": state_b64 }),
             )
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+        Err(e) => JsonRpcResponse::error(id, storage_error(e)),
     }
 }
 
@@ -400,14 +397,14 @@ pub(super) async fn handle_sync_diff(
     // collaboration is unaffected.
     if let Err(msg) = deny_kb_doc_read(doc_store, &doc_name, auth_principal, transport).await {
         warn!(doc = %doc_name, reason = %msg, "sync/diff denied");
-        return JsonRpcResponse::error(id, McpError::internal_error(msg));
+        return JsonRpcResponse::error(id, msg.into());
     }
     let sv_b64 = match params["sv"].as_str() {
         Some(s) => s,
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'sv' field".to_string()),
+                McpError::invalid_params("sv", "missing 'sv' field".to_string()),
             );
         }
     };
@@ -416,7 +413,7 @@ pub(super) async fn handle_sync_diff(
         Err(e) => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error(format!("invalid base64: {e}")),
+                McpError::invalid_params("sv", format!("invalid base64: {e}")),
             );
         }
     };
@@ -434,7 +431,7 @@ pub(super) async fn handle_sync_diff(
                 }),
             )
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+        Err(e) => JsonRpcResponse::error(id, storage_error(e)),
     }
 }
 
@@ -465,7 +462,7 @@ pub(super) async fn handle_sync_resync(
     // cannot be used to reach a `kb:` doc by another spelling.
     if let Err(msg) = deny_kb_doc_read(doc_store, &raw_name, auth_principal, transport).await {
         warn!(session = session_id, doc = %raw_name, reason = %msg, "sync/resync denied");
-        return JsonRpcResponse::error(id, McpError::internal_error(msg));
+        return JsonRpcResponse::error(id, msg.into());
     }
     // Resolve bare filenames via suffix matching (e.g. "test.txt" finds "file:no-project/test.txt").
     let doc_name = if doc_store.has_doc(&raw_name).await {
@@ -482,7 +479,7 @@ pub(super) async fn handle_sync_resync(
     if doc_name != raw_name {
         if let Err(msg) = deny_kb_doc_read(doc_store, &doc_name, auth_principal, transport).await {
             warn!(session = session_id, doc = %doc_name, reason = %msg, "sync/resync denied (resolved)");
-            return JsonRpcResponse::error(id, McpError::internal_error(msg));
+            return JsonRpcResponse::error(id, msg.into());
         }
     }
     // Track this doc for disconnect cleanup and doc-scoped broadcast filtering.
@@ -505,7 +502,7 @@ pub(super) async fn handle_sync_resync(
                 }),
             )
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e.to_string())),
+        Err(e) => JsonRpcResponse::error(id, storage_error(e)),
     }
 }
 
@@ -531,7 +528,7 @@ pub(super) async fn handle_sync_share(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'update' field".to_string()),
+                McpError::invalid_params("update", "missing 'update' field".to_string()),
             );
         }
     };
@@ -540,7 +537,7 @@ pub(super) async fn handle_sync_share(
         Err(e) => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error(format!("invalid base64: {e}")),
+                McpError::invalid_params("update", format!("invalid base64: {e}")),
             );
         }
     };

@@ -30,10 +30,7 @@ pub(super) fn handle_kb_shared_event(
                 }
             }
         }
-        editor
-            .collab
-            .kb_collection_state
-            .insert(kb_id.clone(), collection_state);
+        editor.kb_note_collection_state(&kb_id, collection_state);
     }
     // ADR-105 D4: which KB is this? `kb_id` is a collab id, not a name, so it
     // cannot be compared against "default"/"primary" any more. Prefer the in-flight
@@ -205,7 +202,19 @@ pub(super) fn handle_kb_joined_event(
     // (re)join even if their pending-queue row was lost in a crash. Per-node
     // decode/reconcile errors are tolerated (skipped + warned) inside the helper.
     let joined_node_ids: HashSet<String> = nodes.iter().map(|n| n.id.clone()).collect();
+    // C1: seed the local collection replica from the full join snapshot so
+    // subsequent live `kbc:` membership broadcasts can be applied as deltas
+    // and the epoch relearned without a reconnect. Seeded BEFORE registering
+    // the instance: the reconcile inside it must already know whether this KB
+    // declares a body format MAE does not write (it then withholds local-ahead
+    // ops rather than re-sending them).
+    editor
+        .collab
+        .kb_collection_state
+        .insert(kb_id.clone(), collection_state.clone());
     editor.kb_register_joined_instance(&kb_id, nodes);
+    // Now that the instance store exists, record the body format durably.
+    editor.kb_record_body_format(&kb_id);
     // Keep the transient index in sync as a cache.
     editor
         .collab
@@ -229,14 +238,6 @@ pub(super) fn handle_kb_joined_event(
             debug!(kb = %kb_id, epoch, "learned KB authorization epoch (ADR-023)");
         }
     }
-
-    // C1: seed the local collection replica from the full join snapshot so
-    // subsequent live `kbc:` membership broadcasts can be applied as deltas
-    // and the epoch relearned without a reconnect.
-    editor
-        .collab
-        .kb_collection_state
-        .insert(kb_id.clone(), collection_state);
 
     info!(kb = %kb_id, node_count, "KB join complete (merged)");
     editor.set_status(format!("Joined KB '{}' ({} nodes)", kb_id, node_count));
@@ -515,7 +516,16 @@ pub(super) fn drain_kb_node_updates(editor: &mut Editor, collab_tx: &mpsc::Sende
     // Phase D1.1: drain collection-manifest ops (created/deleted nodes) →
     // kb/collection_node_*. Best-effort: only sent when connected; creates also
     // self-heal on the reconnect re-share (which rebuilds the full manifest).
+    let mut hold = OutboundHold::default();
     for (kb_id, node_id, title, add) in std::mem::take(&mut editor.collab.pending_kb_manifest) {
+        if hold.refuses(editor, &kb_id) {
+            // Kept in the queue, unsent — see `OutboundHold`.
+            editor
+                .collab
+                .pending_kb_manifest
+                .push((kb_id, node_id, title, add));
+            continue;
+        }
         tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, add, "drain: send kb/collection_node");
         // #156 F5: never write a cleartext node title into the manifest of an E2e KB —
         // the key-blind daemon/relay stores the manifest in the clear and would read it.
@@ -553,6 +563,11 @@ pub(super) fn drain_kb_node_updates(editor: &mut Editor, collab_tx: &mpsc::Sende
         .and_then(|s| s.drain_pending_updates().ok())
         .unwrap_or_default();
     for pu in pending {
+        // A KB that declares a body format MAE does not write: the row stays in
+        // the durable queue (quarantined, never acked) and is not sent.
+        if hold.refuses(editor, &pu.kb_id) {
+            continue;
+        }
         // Skip rows already on the wire awaiting the daemon's apply-confirmation.
         if !editor.collab.inflight_kb_updates.insert(pu.rowid) {
             continue;
@@ -585,6 +600,13 @@ pub(super) fn drain_kb_node_updates(editor: &mut Editor, collab_tx: &mpsc::Sende
     // no durable store). Destructive take — requeued in-memory on send failure.
     let in_mem = editor.collab.pending_kb_updates.len();
     for (kb_id, node_id, update) in std::mem::take(&mut editor.collab.pending_kb_updates) {
+        if hold.refuses(editor, &kb_id) {
+            editor
+                .collab
+                .pending_kb_updates
+                .push((kb_id, node_id, update));
+            continue;
+        }
         tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, bytes = update.len(), "drain: send kb/node_update (in-mem)");
         let epoch = editor.collab.kb_epochs.get(&kb_id).copied().unwrap_or(0);
         let e2e = editor
@@ -607,18 +629,98 @@ pub(super) fn drain_kb_node_updates(editor: &mut Editor, collab_tx: &mpsc::Sende
     if in_mem > 0 {
         tracing::debug!(target: "kb_sync", count = in_mem, "drain: flushed in-memory kb updates");
     }
+    hold.report(editor);
+}
+
+/// Send-time body-format check for one drain (`kb_ops::literal_guard`).
+///
+/// An op accepted while this editor could not tell a KB's format (fail-open)
+/// is already queued when the marker is learned; the edit-time guard cannot
+/// recall it. So every queued op is checked again here, against what the
+/// editor knows NOW, and a refused KB's ops are **kept in their queue and not
+/// sent** — quarantined in place rather than purged, so the user's edit is not
+/// thrown away, and a later change of the KB's declared format is the only
+/// thing that can release it.
+#[derive(Default)]
+struct OutboundHold {
+    /// kb_id → number of ops held this drain (`None` = sendable).
+    verdicts: std::collections::HashMap<String, Option<usize>>,
+}
+
+impl OutboundHold {
+    fn refuses(&mut self, editor: &mut Editor, kb_id: &str) -> bool {
+        let verdict = self
+            .verdicts
+            .entry(kb_id.to_string())
+            .or_insert_with(|| editor.kb_outbound_refusal(kb_id).map(|_| 0));
+        match verdict {
+            Some(held) => {
+                *held += 1;
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn report(self, editor: &mut Editor) {
+        for (kb_id, held) in self.verdicts {
+            if let Some(count) = held {
+                editor.kb_note_outbound_withheld(&kb_id, count);
+            }
+        }
+    }
 }
 
 // --- CollabIntent -> CollabCommand translation (KB-sharing intents) ---
 
 /// Translate a KB-sharing `CollabIntent` into the `CollabCommand` sent to the
 /// background task. Returns `None` when the arm bails out early (KB not
-/// found, or share-encoding failed) — the caller must skip the send in that
-/// case, matching the original arm's early `return`.
+/// found, share-encoding failed, or the body-format guard refused) — the
+/// caller must skip the send in that case, matching the original arm's early
+/// `return`.
 pub(super) fn kb_intent_to_command(
     editor: &mut Editor,
     intent: CollabIntent,
 ) -> Option<CollabCommand> {
+    if refuse_local_doc_upload(editor, &intent) {
+        return None;
+    }
+    translate_kb_intent(editor, intent)
+}
+
+/// The body-format guard (`kb_ops::literal_guard`) for the two intents that put
+/// every node's LOCAL document on the wire: a share (which the daemon merges
+/// into its own copy on a re-share) and an encryption change (which re-seals
+/// and re-sends each node). On a KB declaring a format MAE does not write,
+/// either would ship whatever MAE wrote locally, withheld local-ahead ops
+/// included. Checked before the share's lineage step, which itself writes node
+/// docs. Every producer — `:kb-share`/`:kb-set-encryption`, the agent's tools,
+/// Scheme, the reconnect re-share — passes through here (principle #3).
+///
+/// An unresolvable KB is left to the translator, which reports it.
+fn refuse_local_doc_upload(editor: &mut Editor, intent: &CollabIntent) -> bool {
+    let target = match intent {
+        CollabIntent::ShareKb { kb_name, .. } => editor.kb.registry.target_of_name(kb_name),
+        CollabIntent::KbSetEncryption { kb_id, .. } => {
+            editor.kb.registry.target_of_collab_id(kb_id)
+        }
+        _ => None,
+    };
+    let owner = match target {
+        None => return false,
+        Some(mae_kb::KbTarget::Primary) => None,
+        Some(mae_kb::KbTarget::Instance(uuid)) => Some(uuid),
+    };
+    match editor.kb_refuse_foreign_body_format(&owner) {
+        Ok(()) => false,
+        Err(refusal) => {
+            editor.set_status(refusal);
+            true
+        }
+    }
+}
+
+fn translate_kb_intent(editor: &mut Editor, intent: CollabIntent) -> Option<CollabCommand> {
     match intent {
         CollabIntent::ShareKb { kb_name, node_ids } => {
             // ADR-020 B-16: establish + persist a canonical CRDT lineage for every

@@ -82,6 +82,12 @@ fn manifest_title_blanked_on_e2e_kb_only() {
 #[test]
 fn collab_kb_drain_pending_updates_sends_commands() {
     let mut editor = Editor::new();
+    // The KB's collection is known (its replica arrived), so the drain can
+    // tell it is not a literal KB.
+    editor.collab.kb_collection_state.insert(
+        "kb-1".to_string(),
+        mae_sync::kb::KbCollectionDoc::new("kb-1", "owner").encode_state(),
+    );
     editor.collab.status = CollabStatus::Connected { peer_count: 1 };
     editor.collab.pending_kb_updates.push((
         "kb-1".to_string(),

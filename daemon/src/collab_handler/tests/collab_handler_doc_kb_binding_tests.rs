@@ -79,11 +79,12 @@ async fn a_write_naming_another_kb_cannot_reach_this_kbs_node() {
         &mut docs,
     )
     .await;
-    assert!(
-        reply.error.is_some(),
-        "the write was answered: {:?}",
-        reply.result
-    );
+    let err = reply
+        .error
+        .as_ref()
+        .unwrap_or_else(|| panic!("the write was answered: {:?}", reply.result));
+    let data = err.data.as_deref().cloned().unwrap_or_default();
+    assert_eq!(data["kind"], "doc_kb_mismatch", "{}", err.message);
     assert_eq!(
         store.encode_state("kbn:ek:concept:n").await.unwrap(),
         before
@@ -100,8 +101,40 @@ async fn the_content_op_check_refuses_a_node_of_another_kb() {
     let update = make_test_node("concept:n", "n", "x", &[]);
     let r =
         verify_relayed_content_op(&store, "theirs", "kbn:ek:concept:n", &update, None, false).await;
-    assert!(r.is_err(), "{r:?}");
+    assert_eq!(r.map_err(|e| e.kind), Err(RefusalKind::DocKbMismatch));
     let same =
         verify_relayed_content_op(&store, "ek", "kbn:ek:concept:n", &update, None, false).await;
     assert!(same.is_ok(), "{same:?}");
+}
+
+/// A refused write leaves the caller subscribed to nothing: before, a
+/// non-member's refused `sync/update` still joined the node's live feed and
+/// received every later update to it.
+#[tokio::test]
+async fn a_refused_write_does_not_subscribe_the_caller() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    seed(&store, &bc).await;
+    let forged = make_test_node("concept:n", "n", "X", &[]);
+    for kb_id in ["ek", "theirs"] {
+        let mut docs = HashSet::new();
+        let reply = dispatch_as(
+            &store,
+            &bc,
+            Some(STRANGER),
+            Some(&fp(STRANGER)),
+            serde_json::json!({"jsonrpc":"2.0","id":4,"method":"sync/update",
+                "params":{"doc":"kbn:ek:concept:n","kb_id":kb_id,"update":update_to_base64(&forged)}}),
+            &mut docs,
+        )
+        .await;
+        assert!(
+            reply.error.is_some(),
+            "kb_id {kb_id}: the write was answered"
+        );
+        assert!(
+            docs.is_empty(),
+            "kb_id {kb_id}: a refused caller was subscribed to {docs:?}"
+        );
+    }
 }

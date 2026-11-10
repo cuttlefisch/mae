@@ -1065,7 +1065,7 @@ async fn spawn_collab_server(
     };
     tokio::spawn(async move {
         loop {
-            match tcp_listener.accept().await {
+            match tcp_listener.accept().await.map(mae_mcp::tuned) {
                 Ok((stream, addr)) => {
                     let Some(guard) = limiter.try_acquire() else {
                         warn!(

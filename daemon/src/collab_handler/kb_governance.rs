@@ -20,7 +20,7 @@ pub(super) async fn handle_kb_set_policy(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             )
         }
     };
@@ -29,25 +29,22 @@ pub(super) async fn handle_kb_set_policy(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("policy must be restrictive|invite|permissive".to_string()),
+                McpError::invalid_params(
+                    "policy",
+                    "policy must be restrictive|invite|permissive".to_string(),
+                ),
             )
         }
     };
-    match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
-        Ok(AccessDecision::Allow) => {}
-        Ok(AccessDecision::Deny(m)) | Err(m) => {
-            return JsonRpcResponse::error(id, McpError::internal_error(m))
-        }
-        Ok(_) => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::internal_error(format!("not authorized to manage KB '{kb_id}'")),
-            )
-        }
+    let decision = kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await;
+    if let Err(r) = require_allow(decision, || {
+        format!("not authorized to manage KB '{kb_id}'")
+    }) {
+        return JsonRpcResponse::error(id, r.into());
     }
     let mut coll = match load_collection(doc_store, &kb_id).await {
         Ok(c) => c,
-        Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
+        Err(e) => return JsonRpcResponse::error(id, e.into()),
     };
     let update = coll.set_join_policy(policy);
     match persist_and_broadcast_collection(doc_store, broadcaster, who, &kb_id, &update).await {
@@ -58,27 +55,42 @@ pub(super) async fn handle_kb_set_policy(
                 serde_json::json!({ "kb_id": kb_id, "policy": policy.as_str() }),
             )
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
+        Err(e) => JsonRpcResponse::error(id, McpError::internal_fault(e)),
     }
 }
 
+/// Whether this session is the daemon's own operator: the session presents
+/// the daemon's own identity (the editor on the same machine shares its key
+/// file), or the session is the unauthenticated loopback of `auth.mode =
+/// none`, which `kb_access` already trusts fully. Without a daemon identity
+/// an authenticated session is never the operator (fail closed).
+fn is_daemon_operator(doc_store: &DocStore, auth_principal: Option<&str>) -> bool {
+    match auth_principal {
+        None => true,
+        Some(p) => doc_store.signer().is_some_and(|me| me.fingerprint() == p),
+    }
+}
+
+fn not_operator(id: serde_json::Value) -> JsonRpcResponse {
+    JsonRpcResponse::error(
+        id,
+        McpError::not_operator(
+            "only this daemon's operator may read or change its local blocklist".to_string(),
+        ),
+    )
+}
+
 // ADR-039 A2 (#162): manage this daemon's LOCAL self-protection blocklist for a KB.
-// Deliberately NOT owner-gated and NOT routed through `kb_access`:
-//  - blocking even the owner is the explicit capability (you reach for a local
-//    block precisely when you *cannot* get a principal globally removed — e.g. you
-//    lack quorum — but want THIS daemon to stop trusting them);
-//  - it mutates only local trust, never the synced `kbc:` collection, and is never
-//    broadcast — so there is nothing for a peer to observe and no membership to gate on.
+// NOT owner-gated and NOT routed through `kb_access`: blocking even the owner is
+// the explicit capability (you reach for a local block precisely when you cannot
+// get a principal globally removed but want THIS daemon to stop trusting them),
+// and it mutates only local trust, never the synced `kbc:` collection.
 // The block is honored at every membership-derivation site (`membership_view_for`),
 // so once set it fences the principal at the access gate AND the content paths AND
-// the removal derivation (complete mediation). Authz floor: it changes only this
-// daemon's local state, so any trusted operator of this daemon may set it (a
-// loopback `none` session — already fully trusted by `kb_access` — or an
-// authenticated client). Trade-off: an authenticated remote client of a *shared*
-// daemon could set a local block (a bounded, reversible local nuisance — never a
-// privilege-escalation or data-exposure). Tightening this to the Unix operator
-// socket only is a documented hardening follow-up (the handler isn't told the
-// socket kind today; `Transport` is Hub/P2p, not Unix/Tcp).
+// the removal derivation (complete mediation).
+// @ai-caution: [authz] Operator-only (`is_daemon_operator`). Open to any
+// authenticated client, a shared daemon let anyone list every hosted KB id with
+// its blocked keys, block another KB's owner, or unblock themselves.
 pub(super) async fn handle_kb_block_unblock_principal(
     doc_store: &DocStore,
     session_id: u64,
@@ -87,13 +99,16 @@ pub(super) async fn handle_kb_block_unblock_principal(
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
+    if !is_daemon_operator(doc_store, auth_principal) {
+        return not_operator(id);
+    }
     let block = method == "kb/block_principal";
     let kb_id = match params["kb_id"].as_str() {
         Some(s) if !s.is_empty() => s.to_string(),
         _ => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             )
         }
     };
@@ -106,7 +121,8 @@ pub(super) async fn handle_kb_block_unblock_principal(
         _ => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error(
+                McpError::invalid_params(
+                    "fingerprint",
                     "missing 'fingerprint' field (the principal to block)".to_string(),
                 ),
             )
@@ -138,7 +154,7 @@ pub(super) async fn handle_kb_block_unblock_principal(
         }
         Err(e) => JsonRpcResponse::error(
             id,
-            McpError::internal_error(format!("blocklist update failed: {e}")),
+            McpError::internal_fault(format!("blocklist update failed: {e}")),
         ),
     }
 }
@@ -149,9 +165,13 @@ pub(super) async fn handle_kb_block_unblock_principal(
 // `{ blocklist: { kb_id: [fingerprint, ...] } }`; with `kb_id` it scopes to one.
 pub(super) async fn handle_kb_blocklist(
     doc_store: &DocStore,
+    auth_principal: Option<&str>,
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
+    if !is_daemon_operator(doc_store, auth_principal) {
+        return not_operator(id);
+    }
     let all = doc_store.all_kb_blocklists().await;
     let payload = match params["kb_id"].as_str() {
         Some(kb_id) => {
@@ -183,7 +203,7 @@ pub(super) async fn handle_kb_set_governance(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             )
         }
     };
@@ -195,27 +215,22 @@ pub(super) async fn handle_kb_set_governance(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error(
+                McpError::invalid_params(
+                    "governance",
                     "governance must be single-owner|quorum:N (N>=1)".to_string(),
                 ),
             )
         }
     };
-    match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
-        Ok(AccessDecision::Allow) => {}
-        Ok(AccessDecision::Deny(m)) | Err(m) => {
-            return JsonRpcResponse::error(id, McpError::internal_error(m))
-        }
-        Ok(_) => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::internal_error(format!("not authorized to manage KB '{kb_id}'")),
-            )
-        }
+    let decision = kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await;
+    if let Err(r) = require_allow(decision, || {
+        format!("not authorized to manage KB '{kb_id}'")
+    }) {
+        return JsonRpcResponse::error(id, r.into());
     }
     let mut coll = match load_collection(doc_store, &kb_id).await {
         Ok(c) => c,
-        Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
+        Err(e) => return JsonRpcResponse::error(id, e.into()),
     };
     // Only the genesis owner's signature counts toward `derive_governance`;
     // reject up front so the caller never sees a false success.
@@ -224,7 +239,7 @@ pub(super) async fn handle_kb_set_governance(
         _ => {
             return JsonRpcResponse::error(
                 id,
-                McpError::internal_error(format!(
+                McpError::signer_unavailable(format!(
                     "only the owner of KB '{kb_id}' may set its governance"
                 )),
             )
@@ -249,7 +264,7 @@ pub(super) async fn handle_kb_set_governance(
     if let Some(e) = appended.failure() {
         return JsonRpcResponse::error(
             id,
-            McpError::internal_error(format!("governance for KB '{kb_id}' was NOT changed: {e}")),
+            McpError::internal_fault(format!("governance for KB '{kb_id}' was NOT changed: {e}")),
         );
     }
     info!(session = session_id, kb_id = %kb_id, governance = %governance.to_spec(), "kb/set_governance");
@@ -280,7 +295,7 @@ pub(super) async fn handle_kb_revoke(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'kb_id' field".to_string()),
+                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
             )
         }
     };
@@ -289,25 +304,19 @@ pub(super) async fn handle_kb_revoke(
         None => {
             return JsonRpcResponse::error(
                 id,
-                McpError::parse_error("missing 'member' field".to_string()),
+                McpError::invalid_params("member", "missing 'member' field".to_string()),
             )
         }
     };
-    match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
-        Ok(AccessDecision::Allow) => {}
-        Ok(AccessDecision::Deny(m)) | Err(m) => {
-            return JsonRpcResponse::error(id, McpError::internal_error(m))
-        }
-        Ok(_) => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::internal_error(format!("not authorized to manage KB '{kb_id}'")),
-            )
-        }
+    let decision = kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await;
+    if let Err(r) = require_allow(decision, || {
+        format!("not authorized to manage KB '{kb_id}'")
+    }) {
+        return JsonRpcResponse::error(id, r.into());
     }
     let mut coll = match load_collection(doc_store, &kb_id).await {
         Ok(c) => c,
-        Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
+        Err(e) => return JsonRpcResponse::error(id, e.into()),
     };
     match append_signed_revoke(doc_store, broadcaster, who, &kb_id, &mut coll, &member).await {
         Ok(()) => {
@@ -317,6 +326,6 @@ pub(super) async fn handle_kb_revoke(
                 serde_json::json!({ "kb_id": kb_id, "member": member, "revoked": true }),
             )
         }
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
+        Err(e) => JsonRpcResponse::error(id, e),
     }
 }

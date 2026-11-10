@@ -304,6 +304,12 @@ fn offline_kb_updates_accumulate_when_disconnected() {
 #[test]
 fn offline_kb_updates_drain_on_reconnect() {
     let mut editor = Editor::new();
+    // The KB's collection is known (its replica arrived), so the drain can
+    // tell it is not a literal KB.
+    editor.collab.kb_collection_state.insert(
+        "kb-1".to_string(),
+        mae_sync::kb::KbCollectionDoc::new("kb-1", "owner").encode_state(),
+    );
     // Start disconnected, accumulate updates.
     editor.collab.status = CollabStatus::Disconnected;
     editor
@@ -341,6 +347,12 @@ fn offline_kb_updates_drain_on_reconnect() {
 #[test]
 fn offline_kb_multiple_edits_all_sent_on_reconnect() {
     let mut editor = Editor::new();
+    // The KB's collection is known (its replica arrived), so the drain can
+    // tell it is not a literal KB.
+    editor.collab.kb_collection_state.insert(
+        "kb-1".to_string(),
+        mae_sync::kb::KbCollectionDoc::new("kb-1", "owner").encode_state(),
+    );
     editor.collab.status = CollabStatus::Disconnected;
 
     // Accumulate 3 offline edits.

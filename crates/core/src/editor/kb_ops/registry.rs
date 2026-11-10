@@ -732,6 +732,13 @@ impl Editor {
                     self.set_status(refusal);
                     return None;
                 }
+                // A reimport rewrites the instance's nodes from MAE's ingest.
+                if let Err(refusal) =
+                    self.kb_refuse_foreign_body_format(&Some(instance.uuid.clone()))
+                {
+                    self.set_status(refusal);
+                    return None;
+                }
                 let mode = mode.unwrap_or_default();
 
                 if self.kb_refuse_stale_plan(&instance) {
