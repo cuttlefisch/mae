@@ -266,11 +266,21 @@ async fn quota_and_transport_refusals_carry_their_kinds() {
     assert_eq!(data["transport"], "p2p");
 }
 
-/// The mesh requires signed content ops (ADR-036); an unsigned relay is
-/// refused before membership is even consulted.
+/// The mesh requires signed content ops (ADR-036): a member cleared to write
+/// the KB over P2P still has an unsigned relay refused. (The caller's own gate
+/// runs first, so the KB is shared over P2P here — on a hub-only KB the same
+/// request is `transport_forbidden`, as above.)
 #[tokio::test]
 async fn an_unsigned_content_op_on_the_mesh_is_signature_required() {
     let (mut f, _owner, editor) = super::collab_handler_error_kind_write_tests::anchored().await;
+    let widen = load_coll(&f.store, KB)
+        .await
+        .set_transport_policy(mae_sync::kb::TransportPolicy::Both);
+    let coll_doc = format!("kbc:{KB}");
+    f.store
+        .apply_update(&coll_doc, &widen, None, TEST_BY)
+        .await
+        .unwrap();
     let me = editor.fingerprint();
     let doc = mae_sync::kb_node_doc_name(KB, NODE);
     let update = update_as(&me, 0, "unsigned");

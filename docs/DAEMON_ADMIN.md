@@ -324,7 +324,9 @@ only. A KB document on a raw `sync/*` path is `doc_unavailable` whether or not i
 daemon's local blocklist is reported as `not_member`, not as a kind of its own.
 
 On a **signed** content op (ADR-036), `not_member`, `role_forbidden` and `epoch_fenced` describe the
-op's signed *author* — the caller, unless the op is being relayed for someone else.
+op's signed *author* — the caller, unless the op is being relayed for someone else. The author is
+examined only after the caller itself is cleared to write the KB: a caller that is not gets its own
+refusal whatever header it sends, so replaying someone's captured op tells it nothing about them.
 
 `kb/join` also returns the caller's identity and fence input in its result: `principal` (the
 authenticated principal the daemon authorizes with; `null` with `auth.mode = none`) and `epoch` (the

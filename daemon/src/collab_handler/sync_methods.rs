@@ -51,6 +51,87 @@ fn update_param(params: &serde_json::Value, max_update: usize) -> Result<Vec<u8>
     Ok(update_bytes)
 }
 
+/// Mediate a `sync/update` write to a KB node document, in this order:
+///
+/// 1. the request names its KB (`kb_id`) — #169 M1: without it the write
+///    skipped membership, signature AND fence;
+/// 2. the CALLER may edit that KB (`kb_access`);
+/// 3. a signed op verifies, and its signed AUTHOR is an Editor+ member at
+///    the op's epoch (ADR-036 §D3, `verify_relayed_content_op`) — a peer
+///    daemon relaying a member's edit is untrusted, so the op is re-checked
+///    here; require-signed on P2p, legacy unsigned accepted on the hub;
+/// 4. the ADR-023 epoch fence, on the verified author.
+///
+/// Returns the verified header, carried onward with the broadcast.
+async fn authorize_node_write(
+    doc_store: &DocStore,
+    (session_id, auth_principal, transport): (u64, Option<&str>, Transport),
+    (doc_name, node_id): (&str, &str),
+    update_bytes: &[u8],
+    params: &serde_json::Value,
+) -> Result<Option<serde_json::Value>, McpError> {
+    let Some(kb_id) = params.get("kb_id").and_then(|v| v.as_str()) else {
+        warn!(session = session_id, doc = %doc_name, "sync/update: kb node write WITHOUT kb_id — REJECTED (would bypass membership + epoch fence, #169 M1)");
+        return Err(McpError::invalid_params(
+            "kb_id",
+            "kb node writes via sync/update must carry kb_id".to_string(),
+        ));
+    };
+    // Membership FIRST, and unconditionally — before anything that reads the
+    // op's header. Two reasons, each with a regression test:
+    //
+    // - Everything after this is conditional on a signature being present, and
+    //   the hub accepts unsigned ops by design, so without this gate a
+    //   non-member wrote any KB node by omitting the header (the write reached
+    //   the WAL and was replayed on every restart).
+    //   `collab_handler_unauthorized_surface_tests::
+    //   unsigned_sync_update_from_a_non_member_cannot_write_a_kb_node`.
+    // - The author checks below refuse with the AUTHOR's status (`not_member`,
+    //   `role_forbidden`, `epoch_fenced` with its epochs). Run before this
+    //   gate, they let a non-member holding someone's captured signed op learn
+    //   that author's standing in a KB it cannot see.
+    //   `collab_handler_error_kind_no_oracle_tests::
+    //   a_non_member_replaying_a_captured_op_learns_nothing_about_its_author`.
+    //
+    // @ai-caution: [dispatch-authz] Do NOT fold this gate into, or move it
+    // after, the signature checks. Signature verification answers "who wrote
+    // this"; `kb_access` answers "may the caller write here at all", and only
+    // the second may be answered to a stranger.
+    let decision = kb_access(doc_store, kb_id, auth_principal, KbOp::Edit, transport).await;
+    if let Err(m) = require_allow(decision, || format!("cannot write to KB '{kb_id}'")) {
+        warn!(session = session_id, doc = %doc_name, kb_id = %kb_id, reason = %m,
+              "sync/update: kb node write DENIED (not a member / insufficient role)");
+        return Err(m.into());
+    }
+    let header = verify_relayed_content_op(
+        doc_store,
+        kb_id,
+        doc_name,
+        update_bytes,
+        params.get("content_header"),
+        crate::content_op_policy::require_signed(transport),
+    )
+    .await
+    .map_err(|e| {
+        warn!(session = session_id, doc = %doc_name, reason = %e, "sync/update: SIGNED CONTENT OP REJECTED (ADR-036)");
+        McpError::from(e)
+    })?;
+    // Fence on the VERIFIED header author (a relayed op's true author — never
+    // the connection principal), mirroring the dialer's #157 N1 path.
+    if let Some(author) = header
+        .as_ref()
+        .and_then(|h| h.get("author").and_then(|a| a.as_str()))
+    {
+        if let Err(reason) =
+            enforce_epoch_fence(doc_store, kb_id, node_id, doc_name, update_bytes, author).await
+        {
+            warn!(session = session_id, doc = %doc_name, %reason, "sync/update: kb node REJECTED (epoch fence — #169 M1)");
+            return Err(reason.into());
+        }
+    }
+    Ok(header)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_sync_update(
     doc_store: &DocStore,
@@ -96,106 +177,22 @@ pub(super) async fn handle_sync_update(
     let client_id = params["client_id"].as_u64();
     let by = Attribution::session(auth_principal, transport);
 
-    // ADR-036 §D3 (B→A): a content op arriving over the mesh — a peer daemon's
-    // forwarded edit — is re-verified against THIS KB's membership before
-    // apply, because the relaying peer is untrusted (even a member's *daemon*
-    // could lie). The joiner's dialer sends `kb_id`; require-signed on P2p, the
-    // hub accepts legacy unsigned during migration. Same shared check as the
-    // dialer's inbound path. On success the verified header is carried onward.
-    let mut sync_content_header: Option<serde_json::Value> = None;
-    if let Some(kb_id) = params.get("kb_id").and_then(|v| v.as_str()) {
-        match verify_relayed_content_op(
-            doc_store,
-            kb_id,
-            &doc_name,
-            &update_bytes,
-            params.get("content_header"),
-            crate::content_op_policy::require_signed(transport),
-        )
-        .await
-        {
-            Ok(verified) => sync_content_header = verified,
-            Err(e) => {
-                warn!(session = session_id, doc = %doc_name, reason = %e, "sync/update: SIGNED CONTENT OP REJECTED (ADR-036)");
-                return JsonRpcResponse::error(id, e.into());
-            }
-        }
-    }
-
-    // #169 M1: a `kb:{node}` write arriving via `sync/update` must carry its `kb_id`
-    // and clear the ADR-023 epoch fence — the SAME mediation as `kb/node_update` and
-    // the mesh dialer. Before this, a bare `kb:` `sync/update` (no `kb_id`) skipped
-    // `verify_relayed_content_op` (it's gated on `kb_id`), `kb_access`, AND the fence,
-    // writing the node CRDT with no role/signature/epoch check, then broadcasting.
-    // Text buffers (non-`kb:` docs) are unaffected.
+    // A `kb:{node}` write is mediated before it is applied; any other document
+    // is not KB content (`verify_relayed_content_op` would pass it through).
     // @ai-caution: [kb-scoping] (ADR-105 D1) Address TYPE, not string prefix. A node
     // doc that stops matching here skips signature verification, `kb_access` AND the
-    // epoch fence — precisely the bypass the comment above records having fixed.
-    if let Some(mae_sync::DocAddress::KbNode { node_id, .. }) =
-        mae_sync::DocAddress::parse(&doc_name)
-    {
-        let node_id = &node_id;
-        match params.get("kb_id").and_then(|v| v.as_str()) {
-            Some(kb_id) => {
-                // Membership FIRST, and unconditionally. Everything below this
-                // point is conditional on a signature being present, and the hub
-                // accepts unsigned ops by design (`require_signed` is
-                // `matches!(transport, Transport::P2p)`), so before this check a
-                // non-member could write any KB node by simply omitting the
-                // header: `verify_relayed_content_op` returns `Ok(None)`,
-                // `sync_content_header` stays `None`, and the `if let
-                // Some(author)` fence block never runs. The write then reached
-                // the WAL and was replayed on every restart.
-                //
-                // @ai-caution: [dispatch-authz] This gate must NOT be folded into
-                // the signature branch, however tempting the symmetry. Signature
-                // verification answers "who wrote this"; `kb_access` answers "may
-                // they write here at all". They are different questions and the
-                // second one has no default answer. Regression:
-                // `collab_handler_unauthorized_surface_tests::
-                // unsigned_sync_update_from_a_non_member_cannot_write_a_kb_node`.
-                let decision =
-                    kb_access(doc_store, kb_id, auth_principal, KbOp::Edit, transport).await;
-                if let Err(m) = require_allow(decision, || format!("cannot write to KB '{kb_id}'"))
-                {
-                    warn!(session = session_id, doc = %doc_name, kb_id = %kb_id, reason = %m,
-                          "sync/update: kb node write DENIED (not a member / insufficient role)");
-                    return JsonRpcResponse::error(id, m.into());
-                }
-
-                // Fence on the VERIFIED header author (a relayed op's true author —
-                // never the connection principal), mirroring the dialer's #157 N1 path.
-                if let Some(author) = sync_content_header
-                    .as_ref()
-                    .and_then(|h| h.get("author").and_then(|a| a.as_str()))
-                {
-                    if let Err(reason) = enforce_epoch_fence(
-                        doc_store,
-                        kb_id,
-                        node_id,
-                        &doc_name,
-                        &update_bytes,
-                        author,
-                    )
-                    .await
-                    {
-                        warn!(session = session_id, doc = %doc_name, %reason, "sync/update: kb node REJECTED (epoch fence — #169 M1)");
-                        return JsonRpcResponse::error(id, reason.into());
-                    }
-                }
-            }
-            None => {
-                warn!(session = session_id, doc = %doc_name, "sync/update: kb node write WITHOUT kb_id — REJECTED (would bypass membership + epoch fence, #169 M1)");
-                return JsonRpcResponse::error(
-                    id,
-                    McpError::invalid_params(
-                        "kb_id",
-                        "kb node writes via sync/update must carry kb_id".to_string(),
-                    ),
-                );
+    // epoch fence.
+    let sync_content_header = match mae_sync::DocAddress::parse(&doc_name) {
+        Some(mae_sync::DocAddress::KbNode { node_id, .. }) => {
+            let who = (session_id, auth_principal, transport);
+            let node = (doc_name.as_str(), node_id.as_str());
+            match authorize_node_write(doc_store, who, node, &update_bytes, params).await {
+                Ok(header) => header,
+                Err(e) => return JsonRpcResponse::error(id, e),
             }
         }
-    }
+        _ => None,
+    };
 
     // ADR-113 D3: a verified signer is the content's author; record it beside
     // the session (a relay, on the P2P transport) that delivered it.

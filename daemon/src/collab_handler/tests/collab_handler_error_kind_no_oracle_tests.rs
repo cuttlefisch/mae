@@ -8,8 +8,12 @@
 //! proves (otherwise "every answer is identical" could hold vacuously, e.g. if
 //! the stranger were refused for some unrelated reason).
 
-use super::collab_handler_error_kind_tests::{expect_kind, fixture, rpc, update_as, KB, NODE};
+use super::collab_handler_error_kind_tests::{
+    expect_kind, fixture, rpc, update_as, Fixture, KB, NODE,
+};
+use super::collab_handler_error_kind_write_tests::{anchored, signed_op};
 use super::*;
+use mae_mcp::identity::Identity;
 
 const THEIRS: &str = "theirs";
 const THEIR_NODE: &str = "concept:theirs";
@@ -136,4 +140,116 @@ async fn a_member_is_told_the_node_is_not_in_the_kb() {
         let resp = f.call(Some("viewer"), fetch(node)).await;
         expect_kind(&resp, "node_not_in_kb", node);
     }
+}
+
+/// A captured signed op of `author` at `epoch`, replayed over `sync/update`.
+fn replayed(author: &Identity, epoch: u64) -> serde_json::Value {
+    let (upd, signed) = signed_op(author, epoch);
+    rpc(
+        "sync/update",
+        serde_json::json!({
+            "doc": mae_sync::kb_node_doc_name(KB, NODE),
+            "kb_id": KB,
+            "update": update_to_base64(&upd),
+            "content_header": signed.header_params(),
+        }),
+    )
+}
+
+async fn set_member(f: &mut Fixture, owner: &str, method: &str, who: &str, role: Option<&str>) {
+    let msg = kb_member_msg(method, KB, who, role);
+    let r = f.call_as(Some(owner), msg).await;
+    assert!(r.error.is_none(), "{method} {who}: {:?}", r.error);
+}
+
+/// The fence epoch `kb/join` reports for `who`.
+async fn epoch_of(f: &mut Fixture, who: &str) -> u64 {
+    let r = f.call_as(Some(who), kb_join_msg(KB)).await;
+    let epoch = r.result.as_ref().and_then(|v| v["epoch"].as_u64());
+    epoch.unwrap_or_else(|| panic!("join {who}: {:?}", r.error))
+}
+
+/// Three captured ops the author checks refuse, each for a different fact
+/// about its AUTHOR: removed since it signed, a viewer, and an epoch that
+/// moved (a role change) since it signed. Real identities, real signed log.
+async fn captured_ops(f: &mut Fixture, owner: &str) -> [serde_json::Value; 3] {
+    let removed = Identity::generate("removed");
+    let r = removed.fingerprint();
+    set_member(f, owner, "kb/add_member", &r, Some("editor")).await;
+    let removed_op = replayed(&removed, epoch_of(f, &r).await);
+    set_member(f, owner, "kb/remove_member", &r, None).await;
+
+    let viewer = Identity::generate("viewer");
+    let v = viewer.fingerprint();
+    set_member(f, owner, "kb/add_member", &v, Some("viewer")).await;
+    let viewer_op = replayed(&viewer, epoch_of(f, &v).await);
+
+    let stale = Identity::generate("stale");
+    let s = stale.fingerprint();
+    set_member(f, owner, "kb/add_member", &s, Some("editor")).await;
+    let stale_op = replayed(&stale, epoch_of(f, &s).await);
+    set_member(f, owner, "kb/add_member", &s, Some("viewer")).await;
+    set_member(f, owner, "kb/add_member", &s, Some("editor")).await;
+    [removed_op, viewer_op, stale_op]
+}
+
+/// The error `data` a member relaying each op gets.
+async fn member_answers(
+    f: &mut Fixture,
+    member: &str,
+    ops: &[serde_json::Value],
+) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for op in ops {
+        let resp = f.call_as(Some(member), op.clone()).await;
+        out.push(serialized(&resp));
+    }
+    out
+}
+
+/// On `sync/update` the CALLER's own gate runs before the op's author is
+/// examined, so a non-member replaying someone's captured signed op gets one
+/// refusal — code, message and data — whoever signed it and whatever their
+/// standing. Before, it was told the author had been removed (`not_member`),
+/// was a viewer (`role_forbidden`), or was fenced at a named epoch
+/// (`epoch_fenced {current_epoch, caller_epoch}`).
+#[tokio::test]
+async fn a_non_member_replaying_a_captured_op_learns_nothing_about_its_author() {
+    let (mut f, owner, editor) = anchored().await;
+    let ops = captured_ops(&mut f, &owner.fingerprint()).await;
+    let doc = mae_sync::kb_node_doc_name(KB, NODE);
+    let before = f.store.encode_state(&doc).await.ok();
+
+    let stranger = Identity::generate("stranger").fingerprint();
+    let mut answers = Vec::new();
+    for op in &ops {
+        let resp = f.call_as(Some(&stranger), op.clone()).await;
+        answers.push(serialized(&resp));
+    }
+    assert!(
+        answers.windows(2).all(|w| w[0] == w[1]),
+        "a non-member's answers differ by the op's author, which is an oracle: {answers:#?}"
+    );
+    assert_eq!(answers[0]["data"]["kind"], "not_member", "{answers:#?}");
+    assert_eq!(
+        f.store.encode_state(&doc).await.ok(),
+        before,
+        "nothing written"
+    );
+
+    // Positive control: a member relaying the same ops IS told about each
+    // author, so the identical answers above come from the caller's gate and
+    // not from three ops that happen to fail alike.
+    let got = member_answers(&mut f, &editor.fingerprint(), &ops).await;
+    let data: Vec<&serde_json::Value> = got.iter().map(|e| &e["data"]).collect();
+    assert_eq!(data[0]["kind"], "not_member", "{got:#?}");
+    assert_ne!(got[0]["message"], answers[0]["message"], "names the author");
+    assert_eq!(data[1]["kind"], "role_forbidden", "{got:#?}");
+    assert_eq!(data[1]["required"], "editor", "{got:#?}");
+    assert_eq!(data[2]["kind"], "epoch_fenced", "{got:#?}");
+    let (caller, current) = (
+        data[2]["caller_epoch"].as_u64(),
+        data[2]["current_epoch"].as_u64(),
+    );
+    assert!(caller.unwrap() < current.unwrap(), "{got:#?}");
 }

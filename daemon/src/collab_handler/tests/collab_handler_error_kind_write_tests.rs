@@ -146,7 +146,7 @@ fn signed_by(author: &Identity, epoch: u64) -> serde_json::Value {
     signed_node_update_msg(KB, NODE, &upd, &signed)
 }
 
-fn signed_op(author: &Identity, epoch: u64) -> (Vec<u8>, SignedContentOp) {
+pub(super) fn signed_op(author: &Identity, epoch: u64) -> (Vec<u8>, SignedContentOp) {
     let mut ts = TextSync::with_client_id("", derive_kb_client_id(&author.fingerprint(), epoch));
     let upd = ts.insert(0, "signed");
     let op = ContentOp {
