@@ -62,23 +62,38 @@ pub(super) async fn handle_kb_set_policy(
     }
 }
 
+/// Whether this session is the daemon's own operator: the session presents
+/// the daemon's own identity (the editor on the same machine shares its key
+/// file), or the session is the unauthenticated loopback of `auth.mode =
+/// none`, which `kb_access` already trusts fully. Without a daemon identity
+/// an authenticated session is never the operator (fail closed).
+fn is_daemon_operator(doc_store: &DocStore, auth_principal: Option<&str>) -> bool {
+    match auth_principal {
+        None => true,
+        Some(p) => doc_store.signer().is_some_and(|me| me.fingerprint() == p),
+    }
+}
+
+fn not_operator(id: serde_json::Value) -> JsonRpcResponse {
+    JsonRpcResponse::error(
+        id,
+        McpError::internal_error(
+            "only this daemon's operator may read or change its local blocklist".to_string(),
+        ),
+    )
+}
+
 // ADR-039 A2 (#162): manage this daemon's LOCAL self-protection blocklist for a KB.
-// Deliberately NOT owner-gated and NOT routed through `kb_access`:
-//  - blocking even the owner is the explicit capability (you reach for a local
-//    block precisely when you *cannot* get a principal globally removed — e.g. you
-//    lack quorum — but want THIS daemon to stop trusting them);
-//  - it mutates only local trust, never the synced `kbc:` collection, and is never
-//    broadcast — so there is nothing for a peer to observe and no membership to gate on.
+// NOT owner-gated and NOT routed through `kb_access`: blocking even the owner is
+// the explicit capability (you reach for a local block precisely when you cannot
+// get a principal globally removed but want THIS daemon to stop trusting them),
+// and it mutates only local trust, never the synced `kbc:` collection.
 // The block is honored at every membership-derivation site (`membership_view_for`),
 // so once set it fences the principal at the access gate AND the content paths AND
-// the removal derivation (complete mediation). Authz floor: it changes only this
-// daemon's local state, so any trusted operator of this daemon may set it (a
-// loopback `none` session — already fully trusted by `kb_access` — or an
-// authenticated client). Trade-off: an authenticated remote client of a *shared*
-// daemon could set a local block (a bounded, reversible local nuisance — never a
-// privilege-escalation or data-exposure). Tightening this to the Unix operator
-// socket only is a documented hardening follow-up (the handler isn't told the
-// socket kind today; `Transport` is Hub/P2p, not Unix/Tcp).
+// the removal derivation (complete mediation).
+// @ai-caution: [authz] Operator-only (`is_daemon_operator`). Open to any
+// authenticated client, a shared daemon let anyone list every hosted KB id with
+// its blocked keys, block another KB's owner, or unblock themselves.
 pub(super) async fn handle_kb_block_unblock_principal(
     doc_store: &DocStore,
     session_id: u64,
@@ -87,6 +102,9 @@ pub(super) async fn handle_kb_block_unblock_principal(
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
+    if !is_daemon_operator(doc_store, auth_principal) {
+        return not_operator(id);
+    }
     let block = method == "kb/block_principal";
     let kb_id = match params["kb_id"].as_str() {
         Some(s) if !s.is_empty() => s.to_string(),
@@ -149,9 +167,13 @@ pub(super) async fn handle_kb_block_unblock_principal(
 // `{ blocklist: { kb_id: [fingerprint, ...] } }`; with `kb_id` it scopes to one.
 pub(super) async fn handle_kb_blocklist(
     doc_store: &DocStore,
+    auth_principal: Option<&str>,
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
+    if !is_daemon_operator(doc_store, auth_principal) {
+        return not_operator(id);
+    }
     let all = doc_store.all_kb_blocklists().await;
     let payload = match params["kb_id"].as_str() {
         Some(kb_id) => {
