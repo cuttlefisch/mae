@@ -516,6 +516,11 @@ async fn handle_client(
 }
 
 /// Write Content-Length framed bytes to any async writer with a timeout.
+///
+/// The header and body go out in ONE write. Two writes put the body in a
+/// second small TCP segment (a second TLS record under TLS), which Nagle
+/// holds until the peer ACKs the first; a peer that delays its ACK (Linux
+/// does, by ~40 ms) then stalls every back-to-back request by that much.
 pub async fn write_framed<W: tokio::io::AsyncWrite + Unpin>(
     writer: &mut W,
     body: &[u8],
@@ -523,12 +528,31 @@ pub async fn write_framed<W: tokio::io::AsyncWrite + Unpin>(
 ) -> Result<(), std::io::Error> {
     tokio::time::timeout(timeout, async {
         let header = format!("Content-Length: {}\r\n\r\n", body.len());
-        writer.write_all(header.as_bytes()).await?;
-        writer.write_all(body).await?;
+        let mut frame = Vec::with_capacity(header.len() + body.len());
+        frame.extend_from_slice(header.as_bytes());
+        frame.extend_from_slice(body);
+        writer.write_all(&frame).await?;
         writer.flush().await
     })
     .await
     .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "write timeout"))?
+}
+
+/// Configure a TCP stream that carries request/response traffic: disable
+/// Nagle's algorithm. Replies are small and the peer waits for each one, so
+/// Nagle meeting the peer's delayed ACK adds ~40 ms to every back-to-back
+/// request. Failure is logged and ignored: the stream still works, slower.
+pub fn tune_request_stream(stream: &tokio::net::TcpStream) {
+    if let Err(e) = stream.set_nodelay(true) {
+        tracing::warn!(error = %e, "could not set TCP_NODELAY");
+    }
+}
+
+/// [`tune_request_stream`] as a pass-through for an accept result:
+/// `listener.accept().await.map(tuned)`.
+pub fn tuned<A>(conn: (tokio::net::TcpStream, A)) -> (tokio::net::TcpStream, A) {
+    tune_request_stream(&conn.0);
+    conn
 }
 
 /// Write a JSON-RPC notification (no `id` field) with Content-Length framing.
@@ -1097,6 +1121,9 @@ pub async fn handle_request(
         }
     }
 }
+
+#[cfg(test)]
+mod framing_tests;
 
 #[cfg(test)]
 mod tests {

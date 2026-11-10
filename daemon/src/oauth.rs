@@ -700,6 +700,7 @@ pub async fn run_oauth_listener(
                 continue;
             }
         };
+        mae_mcp::tune_request_stream(&tcp_stream);
         let Some(guard) = limiter.try_acquire() else {
             tracing::warn!(
                 active = limiter.current(),

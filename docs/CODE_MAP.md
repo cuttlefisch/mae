@@ -411,6 +411,8 @@ Source: `shared/mcp/src/lib.rs`
 | `McpToolResult` | struct |
 | `McpServer` | struct |
 | `write_framed` | fn |
+| `tune_request_stream` | fn |
+| `tuned` | fn |
 | `read_message` | fn |
 | `handle_request` | fn |
 
