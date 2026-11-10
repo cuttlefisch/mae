@@ -38,6 +38,10 @@ mae-effect-sandbox = { path = "../shared/effect-sandbox" }
 mae-kb = { path = "../shared/kb", default-features = false, features = ["crdt", "storage-sqlite"] }
 mae-mcp = { path = "../shared/mcp" }
 mae-sync = { path = "../shared/sync" }
+# ADR-112: the one org parser. `kb seed` reads files with it, so which lines are the
+# file drawer and which are keywords is what Org says, not a line heuristic.
+# rowan is its only dependency.
+mae-org = { path = "../shared/org" }
 
 # Collab WAL persistence — uses `sqlite` crate (same native lib as cozo, no links conflict)
 sqlite = "0.32"
@@ -56,6 +60,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "7"
 toml = "1.1"
 sha2 = "0.11"
+# `kb seed` verifies each selected blob against its sha1 object name. Already in
+# the lock (transitively), so this adds no crate.
+sha1_smol = "1"
 # `mae-daemon backup`: the archive format. No xattr feature: entries are
 # plain regular files written and read by this binary alone.
 tar = { version = "0.4", default-features = false }
@@ -87,6 +94,9 @@ bytes = "1"
 [dev-dependencies]
 hex = "0.4"
 tempfile = "3"
+# `seed` round-trip properties (generated org files); already a dev-dependency of
+# the editor workspace (`shared/org`).
+proptest = "1"
 # ADR-062 Phase D e2e: drives a real `RemoteHubQueryLayer` (client side) against a real
 # spawned mae-daemon OAuth+kb_query listener (server side) — the daemon already links
 # mae-kb, so this reuses that same dependency rather than adding a new one; `remote-hub`

@@ -36,7 +36,7 @@ async fn load_collection_migrates_legacy_v1_via_authorized_keys_and_persists_it(
         "fixture must actually be legacy"
     );
     store
-        .apply_update("kbc:legacy-kb", &legacy.encode_state(), None)
+        .apply_update("kbc:legacy-kb", &legacy.encode_state(), None, TEST_BY)
         .await
         .expect("seed the legacy collection directly into storage");
 
@@ -71,6 +71,15 @@ async fn load_collection_migrates_legacy_v1_via_authorized_keys_and_persists_it(
     assert_eq!(persisted.owner(), alice_fp);
     assert_eq!(persisted.role_of(&bob_fp), Some(SyncRole::Editor));
 
+    // ADR-113 D3: the migration is the daemon's own write, recorded as such.
+    use crate::doc_editors::EditorKind::{Internal, Principal};
+    let want = [
+        (Internal, "collection-migration"),
+        (Principal, "test-editor"),
+    ];
+    let want: Vec<_> = want.iter().map(|(k, e)| (*k, e.to_string())).collect();
+    assert_eq!(sorted_editors(&store, "kbc:legacy-kb").await, want);
+
     // Idempotent: loading again must not error or double-migrate.
     let reloaded = load_collection(&store, "legacy-kb")
         .await
@@ -92,7 +101,7 @@ async fn load_collection_falls_back_to_legacy_principal_for_an_unresolvable_labe
 
     let legacy = KbCollectionDoc::new("Ghost KB", "ghost-creator");
     store
-        .apply_update("kbc:ghost-kb", &legacy.encode_state(), None)
+        .apply_update("kbc:ghost-kb", &legacy.encode_state(), None, TEST_BY)
         .await
         .expect("seed the legacy collection");
 
@@ -115,7 +124,7 @@ async fn load_collection_leaves_v2_collections_untouched_when_no_authorized_keys
     let store = test_doc_store();
     let coll = KbCollectionDoc::new_owned("Owned KB", &fp("alice"), "alice");
     store
-        .apply_update("kbc:owned-kb", &coll.encode_state(), None)
+        .apply_update("kbc:owned-kb", &coll.encode_state(), None, TEST_BY)
         .await
         .expect("seed an already-v2 collection");
 

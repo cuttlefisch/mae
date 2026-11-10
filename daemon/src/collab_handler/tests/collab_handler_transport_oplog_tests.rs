@@ -12,7 +12,7 @@ async fn transport_policy_gate() {
         coll.add_pending(member, "bob", "t0", None, None);
         coll.approve(member, SyncRole::Editor);
         store
-            .share_doc("kbc:kbx", &coll.encode_state())
+            .share_doc("kbc:kbx", &coll.encode_state(), TEST_BY)
             .await
             .unwrap();
     }

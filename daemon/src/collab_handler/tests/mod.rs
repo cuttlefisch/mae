@@ -5,6 +5,24 @@ pub(crate) use crate::storage::SqliteBackend;
 pub(crate) use mae_mcp::broadcast::EventBroadcaster;
 pub(crate) use mae_sync::text::TextSync;
 
+/// Every test write is attributed; the editor-record tests use their own.
+pub(crate) const TEST_BY: Attribution<'static> = Attribution::Principal("test-editor");
+
+/// `(kind, editor)` of every editor record for `doc` (ADR-113 D3), sorted by
+/// kind then editor so assertions don't depend on edit timing.
+pub(crate) async fn sorted_editors(
+    store: &Arc<DocStore>,
+    doc: &str,
+) -> Vec<(crate::doc_editors::EditorKind, String)> {
+    let rows = match store.editors_since_wal(doc, 0).await.unwrap() {
+        crate::doc_editors::EditorsSince::Known(rows) => rows,
+        other => panic!("{doc}: expected a complete record, got {other:?}"),
+    };
+    let mut v: Vec<_> = rows.into_iter().map(|r| (r.kind, r.editor)).collect();
+    v.sort_by(|a, b| (a.0.as_str(), &a.1).cmp(&(b.0.as_str(), &b.1)));
+    v
+}
+
 mod collab_handler_artifact_sharing_tests;
 mod collab_handler_block_enforcement_tests;
 mod collab_handler_connection_limits_tests;
@@ -13,6 +31,8 @@ mod collab_handler_cross_kb_role_isolation_tests;
 mod collab_handler_derive_cache_tests;
 mod collab_handler_device_revocation_fence_tests;
 mod collab_handler_doc_address_guard_tests;
+mod collab_handler_doc_kb_binding_tests;
+mod collab_handler_editor_record_tests;
 mod collab_handler_governance_quorum_tests;
 mod collab_handler_kb_lifecycle_tests;
 mod collab_handler_kb_list_isolation_tests;
@@ -248,7 +268,7 @@ pub(crate) async fn set_replication_query_only(
     let sig = op.sign(owner_secret);
     let update = coll.append_signed_op(&op, &sig, owner_pubkey);
     store
-        .apply_update(&format!("kbc:{kb_id}"), &update, None)
+        .apply_update(&format!("kbc:{kb_id}"), &update, None, TEST_BY)
         .await
         .unwrap();
 }

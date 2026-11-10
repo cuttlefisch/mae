@@ -154,7 +154,7 @@ async fn quorum_requires_two_distinct_owners_to_revoke() {
         .await
         .expect("collection exists on A");
     store_b
-        .apply_update("kbc:kbq", &state, None)
+        .apply_update("kbc:kbq", &state, None, TEST_BY)
         .await
         .expect("apply A's collection state onto B");
     store_b.set_kb_anchor("kbq", owner1_pk).await;

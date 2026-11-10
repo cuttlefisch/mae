@@ -13,6 +13,11 @@ use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 
+use crate::doc_editors::{EditStamp, EditorsSince};
+
+#[path = "storage_editor_record.rs"]
+mod editor_record;
+
 /// Errors from storage operations.
 #[derive(Debug)]
 #[allow(dead_code)] // Io variant reserved for future backends
@@ -79,13 +84,38 @@ pub struct WalEntry {
 /// Trait for pluggable persistence backends.
 #[async_trait]
 pub trait StorageBackend: Send + Sync {
-    /// Append an update to the WAL. Returns the assigned sequence ID.
+    /// Append an update to the WAL and record who applied it (ADR-113 D3), as one
+    /// atomic write: either both persist or neither does. Returns the assigned
+    /// sequence ID.
+    ///
+    /// There is no unattributed variant. An update that persists without its
+    /// editor would drop out of ADR-113's author set, letting that author approve
+    /// their own revision — so attribution is part of durability, not a log line.
     async fn wal_append(
         &self,
         doc_name: &str,
         update: &[u8],
         client_id: Option<u64>,
+        by: &EditStamp,
     ) -> Result<u64, StorageError>;
+
+    /// Who edited `doc_name` after WAL id `after_wal_id` (ADR-113 D3): every
+    /// editor whose latest update is after it, or `Incomplete` when the cutoff
+    /// precedes the document's record origin. No default: a backend that cannot
+    /// answer must not answer "nobody".
+    async fn editors_since_wal(
+        &self,
+        doc_name: &str,
+        after_wal_id: u64,
+    ) -> Result<EditorsSince, StorageError>;
+
+    /// The largest WAL id `doc_name` has been written at (in the WAL or folded
+    /// into its snapshot); 0 if storage has never seen it.
+    async fn wal_high_water(&self, doc_name: &str) -> Result<u64, StorageError>;
+
+    /// Drop `doc_name`'s editor record and origin. For a document whose content
+    /// is gone for good (an evicted ephemeral buffer), so the table stays bounded.
+    async fn forget_editors(&self, doc_name: &str) -> Result<(), StorageError>;
 
     /// Load snapshot + WAL tail for a document.
     async fn load_document(&self, doc_name: &str) -> Result<Option<DocumentState>, StorageError>;
@@ -190,6 +220,7 @@ impl SqlitePool {
                          PRIMARY KEY (kb_id, principal)
                      );",
                 )?;
+                editor_record::ensure_schema(&conn)?;
                 // ADR-032 A5: migrate snapshot tables created before the integrity
                 // hash column. Errors (duplicate column on a fresh table) are ignored.
                 let _ =
@@ -229,6 +260,7 @@ impl SqlitePool {
                  PRIMARY KEY (kb_id, principal)
              );",
         )?;
+        editor_record::ensure_schema(&conn)?;
         Ok(SqlitePool {
             shards: vec![std::sync::Mutex::new(conn)],
         })
@@ -323,25 +355,36 @@ impl StorageBackend for SqliteBackend {
         doc_name: &str,
         update: &[u8],
         client_id: Option<u64>,
+        by: &EditStamp,
     ) -> Result<u64, StorageError> {
         let conn = self.pool.lock_shard(doc_name);
-        let mut stmt = conn
-            .prepare("INSERT INTO wal (doc_name, update_bytes, client_id) VALUES (?1, ?2, ?3)")?;
-        stmt.bind((1, doc_name))?;
-        stmt.bind((2, update))?;
-        match client_id {
-            Some(id) => stmt.bind((3, id as i64))?,
-            None => stmt.bind((3, sqlite::Value::Null))?,
-        }
-        stmt.next()?;
-
-        // Get last insert rowid
-        let mut id_stmt = conn.prepare("SELECT last_insert_rowid()")?;
-        id_stmt.next()?;
-        let id = id_stmt.read::<i64, _>(0)? as u64;
-
+        // One transaction: the WAL row and the editor record commit together or
+        // not at all (see the trait doc for why a lost attribution is a failure).
+        conn.execute("BEGIN IMMEDIATE")?;
+        let written = editor_record::write_attributed(&conn, doc_name, update, client_id, by);
+        let id = editor_record::commit_or_rollback(&conn, written)
+            .map_err(|e| StorageError::Sqlite(format!("wal append: {e}")))?;
         debug!(doc = doc_name, wal_id = id, "WAL append");
         Ok(id)
+    }
+
+    async fn editors_since_wal(
+        &self,
+        doc_name: &str,
+        after_wal_id: u64,
+    ) -> Result<EditorsSince, StorageError> {
+        let conn = self.pool.lock_shard(doc_name);
+        editor_record::editors_since_wal(&conn, doc_name, after_wal_id)
+    }
+
+    async fn wal_high_water(&self, doc_name: &str) -> Result<u64, StorageError> {
+        let conn = self.pool.lock_shard(doc_name);
+        Ok(editor_record::high_water(&conn, doc_name)?)
+    }
+
+    async fn forget_editors(&self, doc_name: &str) -> Result<(), StorageError> {
+        let conn = self.pool.lock_shard(doc_name);
+        Ok(editor_record::forget(&conn, doc_name)?)
     }
 
     async fn load_document(&self, doc_name: &str) -> Result<Option<DocumentState>, StorageError> {
@@ -420,6 +463,20 @@ impl StorageBackend for SqliteBackend {
         // Atomic: snapshot write + WAL trim in a single transaction.
         conn.execute("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<(), sqlite::Error> {
+            // A STALE compaction changes nothing. A snapshot already covering a
+            // later WAL id means another compaction read a newer state and has
+            // trimmed the WAL up to it; replacing that snapshot with this older
+            // state would lose every update in between, on disk. It also keeps a
+            // snapshot's `wal_id` from moving backwards (a doc reloaded with no
+            // WAL tail compacts with `up_to_wal_id` 0), which would lower the
+            // document's WAL high-water mark that ADR-113 cutoffs compare to.
+            let mut newer =
+                conn.prepare("SELECT 1 FROM snapshots WHERE doc_name = ?1 AND wal_id > ?2")?;
+            newer.bind((1, doc_name))?;
+            newer.bind((2, up_to_wal_id as i64))?;
+            if let sqlite::State::Row = newer.next()? {
+                return Ok(());
+            }
             let mut snap_stmt = conn.prepare(
                 "INSERT OR REPLACE INTO snapshots (doc_name, state, wal_id, hash, updated_at)
                  VALUES (?1, ?2, ?3, ?4, datetime('now'))",
@@ -436,25 +493,20 @@ impl StorageBackend for SqliteBackend {
             del_stmt.next()?;
             Ok(())
         })();
-        match result {
-            Ok(()) => {
-                conn.execute("COMMIT")?;
-                // ADR-037 (#156 F5): the WAL trim above frees the superseded update rows,
-                // and `secure_delete=ON` zeroes those pages in the main DB — but the
-                // removal is journalled through the WAL sidecar, which can keep a
-                // pre-image until checkpointed. TRUNCATE-checkpoint so a freed update's
-                // plaintext (e.g. a pre-E2e-enable manifest title superseded by the F5
-                // blank) cannot linger in the sidecar at rest. Best-effort (PASSIVE if
-                // another shard holds a read mark); never block the compaction on it.
-                let _ = conn.execute("PRAGMA wal_checkpoint(TRUNCATE);");
-                info!(doc = doc_name, up_to = up_to_wal_id, "compacted");
-                Ok(())
-            }
-            Err(e) => {
-                let _ = conn.execute("ROLLBACK");
-                Err(StorageError::Sqlite(format!("compact transaction: {e}")))
-            }
-        }
+        // A failed COMMIT leaves the transaction open, wedging this shard (every
+        // later BEGIN fails): `commit_or_rollback` rolls that back too.
+        editor_record::commit_or_rollback(&conn, result)
+            .map_err(|e| StorageError::Sqlite(format!("compact transaction: {e}")))?;
+        // ADR-037 (#156 F5): the WAL trim above frees the superseded update rows,
+        // and `secure_delete=ON` zeroes those pages in the main DB — but the
+        // removal is journalled through the WAL sidecar, which can keep a
+        // pre-image until checkpointed. TRUNCATE-checkpoint so a freed update's
+        // plaintext (e.g. a pre-E2e-enable manifest title superseded by the F5
+        // blank) cannot linger in the sidecar at rest. Best-effort (PASSIVE if
+        // another shard holds a read mark); never block the compaction on it.
+        let _ = conn.execute("PRAGMA wal_checkpoint(TRUNCATE);");
+        info!(doc = doc_name, up_to = up_to_wal_id, "compacted");
+        Ok(())
     }
 
     async fn list_documents(&self) -> Result<Vec<String>, StorageError> {
@@ -546,16 +598,145 @@ impl StorageBackend for SqliteBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::doc_editors::{Attribution, InternalWriter};
     use std::sync::Arc;
+
+    /// An attribution for tests that exercise the WAL, not the editor record.
+    fn stamp() -> EditStamp {
+        EditStamp::new(Attribution::Internal(InternalWriter::Scheduler).into(), 0)
+    }
+
+    /// ADR-113 D3: the WAL row and the editor row are one write. If recording
+    /// the editor fails, the WAL append must fail too and leave NO row behind —
+    /// an update that persisted unattributed would drop its author from the
+    /// author set. Made to fail for real by removing the table under it.
+    #[tokio::test]
+    async fn a_failed_editor_write_rolls_back_the_wal_append() {
+        let backend = SqliteBackend::open_memory().unwrap();
+        backend
+            .wal_append("doc1", b"kept", None, &stamp())
+            .await
+            .unwrap();
+        backend
+            .pool
+            .lock_primary()
+            .execute("DROP TABLE doc_editors")
+            .unwrap();
+
+        let r = backend.wal_append("doc1", b"lost", None, &stamp()).await;
+        assert!(r.is_err(), "an unrecordable edit was accepted: {r:?}");
+        let state = backend.load_document("doc1").await.unwrap().unwrap();
+        let tail: Vec<&[u8]> = state.wal_tail.iter().map(|e| e.update.as_slice()).collect();
+        assert_eq!(
+            tail,
+            vec![b"kept".as_slice()],
+            "the failed append left a WAL row"
+        );
+
+        // And the connection is not left inside an open transaction.
+        backend
+            .pool
+            .lock_primary()
+            .execute(editor_record::DOC_EDITORS_SCHEMA)
+            .unwrap();
+        backend
+            .wal_append("doc1", b"after", None, &stamp())
+            .await
+            .unwrap();
+    }
+
+    /// Make every COMMIT on this (single-connection, in-memory) database fail
+    /// after an insert into `table`: a deferred foreign key the insert violates
+    /// is only checked at COMMIT, and SQLite then leaves the transaction OPEN.
+    fn fail_commits_after_insert_into(backend: &SqliteBackend, table: &str) {
+        backend
+            .pool
+            .lock_primary()
+            .execute(format!(
+                "PRAGMA foreign_keys = ON;
+                 CREATE TABLE guard_parent (id INTEGER PRIMARY KEY);
+                 CREATE TABLE guard (p INTEGER REFERENCES guard_parent(id)
+                     DEFERRABLE INITIALLY DEFERRED);
+                 CREATE TRIGGER guard_{table} AFTER INSERT ON {table}
+                     BEGIN INSERT INTO guard VALUES (42); END;"
+            ))
+            .unwrap();
+    }
+
+    fn stop_failing_commits(backend: &SqliteBackend, table: &str) {
+        backend
+            .pool
+            .lock_primary()
+            .execute(format!("DROP TRIGGER guard_{table}"))
+            .unwrap();
+    }
+
+    /// A compaction whose COMMIT fails must roll back, not leave the
+    /// transaction open: an open transaction wedges the shard, so every later
+    /// write (`BEGIN IMMEDIATE`) fails.
+    #[tokio::test]
+    async fn a_failed_compaction_commit_does_not_wedge_the_shard() {
+        let backend = SqliteBackend::open_memory().unwrap();
+        let id = backend
+            .wal_append("doc1", b"u1", None, &stamp())
+            .await
+            .unwrap();
+        fail_commits_after_insert_into(&backend, "snapshots");
+        assert!(backend.compact("doc1", b"state", id).await.is_err());
+        stop_failing_commits(&backend, "snapshots");
+
+        backend
+            .wal_append("doc1", b"u2", None, &stamp())
+            .await
+            .unwrap();
+        let state = backend.load_document("doc1").await.unwrap().unwrap();
+        assert!(
+            state.snapshot.is_none(),
+            "the failed compaction left a snapshot"
+        );
+        assert_eq!(
+            state.wal_tail.len(),
+            2,
+            "the failed compaction trimmed the WAL"
+        );
+    }
+
+    /// The same for the attributed WAL append: a failed COMMIT persists neither
+    /// the update nor its editor, and leaves the shard usable.
+    #[tokio::test]
+    async fn a_failed_wal_append_commit_does_not_wedge_the_shard() {
+        let backend = SqliteBackend::open_memory().unwrap();
+        fail_commits_after_insert_into(&backend, "wal");
+        assert!(backend
+            .wal_append("doc1", b"lost", None, &stamp())
+            .await
+            .is_err());
+        stop_failing_commits(&backend, "wal");
+
+        backend
+            .wal_append("doc1", b"kept", None, &stamp())
+            .await
+            .unwrap();
+        let state = backend.load_document("doc1").await.unwrap().unwrap();
+        let tail: Vec<&[u8]> = state.wal_tail.iter().map(|e| e.update.as_slice()).collect();
+        assert_eq!(tail, vec![b"kept".as_slice()]);
+        match backend.editors_since_wal("doc1", 0).await.unwrap() {
+            EditorsSince::Known(rows) => assert_eq!(rows[0].updates, 1, "the lost append counted"),
+            other => panic!("{other:?}"),
+        }
+    }
 
     #[tokio::test]
     async fn wal_append_and_load() {
         let backend = SqliteBackend::open_memory().unwrap();
         let id1 = backend
-            .wal_append("doc1", b"update1", Some(1))
+            .wal_append("doc1", b"update1", Some(1), &stamp())
             .await
             .unwrap();
-        let id2 = backend.wal_append("doc1", b"update2", None).await.unwrap();
+        let id2 = backend
+            .wal_append("doc1", b"update2", None, &stamp())
+            .await
+            .unwrap();
         assert!(id2 > id1);
 
         let state = backend.load_document("doc1").await.unwrap().unwrap();
@@ -576,7 +757,10 @@ mod tests {
         let backend = SqliteBackend::open_memory().unwrap();
         assert!(!backend.doc_exists("missing").await.unwrap());
 
-        backend.wal_append("d-wal", b"u", None).await.unwrap();
+        backend
+            .wal_append("d-wal", b"u", None, &stamp())
+            .await
+            .unwrap();
         backend.compact("d-snap", b"snap", 0).await.unwrap();
 
         // Present via WAL and via snapshot; absent otherwise.
@@ -617,7 +801,7 @@ mod tests {
         }
         // ...and the normal async persistence API keeps working afterward.
         backend
-            .wal_append("doc-poison", b"after-poison", None)
+            .wal_append("doc-poison", b"after-poison", None, &stamp())
             .await
             .unwrap();
         let state = backend.load_document("doc-poison").await.unwrap().unwrap();
@@ -628,9 +812,18 @@ mod tests {
     #[tokio::test]
     async fn compact_creates_snapshot_and_trims_wal() {
         let backend = SqliteBackend::open_memory().unwrap();
-        let _id1 = backend.wal_append("doc1", b"u1", None).await.unwrap();
-        let id2 = backend.wal_append("doc1", b"u2", None).await.unwrap();
-        let _id3 = backend.wal_append("doc1", b"u3", None).await.unwrap();
+        let _id1 = backend
+            .wal_append("doc1", b"u1", None, &stamp())
+            .await
+            .unwrap();
+        let id2 = backend
+            .wal_append("doc1", b"u2", None, &stamp())
+            .await
+            .unwrap();
+        let _id3 = backend
+            .wal_append("doc1", b"u3", None, &stamp())
+            .await
+            .unwrap();
 
         backend.compact("doc1", b"full-state", id2).await.unwrap();
 
@@ -672,8 +865,14 @@ mod tests {
     #[tokio::test]
     async fn list_documents_from_wal_and_snapshots() {
         let backend = SqliteBackend::open_memory().unwrap();
-        backend.wal_append("doc1", b"u1", None).await.unwrap();
-        backend.wal_append("doc2", b"u2", None).await.unwrap();
+        backend
+            .wal_append("doc1", b"u1", None, &stamp())
+            .await
+            .unwrap();
+        backend
+            .wal_append("doc2", b"u2", None, &stamp())
+            .await
+            .unwrap();
         backend.compact("doc3", b"state", 0).await.unwrap();
 
         let mut docs = backend.list_documents().await.unwrap();
@@ -684,7 +883,10 @@ mod tests {
     #[tokio::test]
     async fn compact_idempotent() {
         let backend = SqliteBackend::open_memory().unwrap();
-        let id = backend.wal_append("doc1", b"u1", None).await.unwrap();
+        let id = backend
+            .wal_append("doc1", b"u1", None, &stamp())
+            .await
+            .unwrap();
         backend.compact("doc1", b"state1", id).await.unwrap();
         backend.compact("doc1", b"state2", id).await.unwrap();
 
@@ -696,9 +898,15 @@ mod tests {
     #[tokio::test]
     async fn delete_document_removes_wal_and_snapshot() {
         let backend = SqliteBackend::open_memory().unwrap();
-        let id = backend.wal_append("doc1", b"u1", None).await.unwrap();
+        let id = backend
+            .wal_append("doc1", b"u1", None, &stamp())
+            .await
+            .unwrap();
         backend.compact("doc1", b"snapshot", id).await.unwrap();
-        backend.wal_append("doc1", b"u2", None).await.unwrap();
+        backend
+            .wal_append("doc1", b"u2", None, &stamp())
+            .await
+            .unwrap();
 
         backend.delete_document("doc1").await.unwrap();
 
@@ -744,13 +952,13 @@ mod tests {
             // Write the plaintext canary as a node's content, then compact it into the
             // snapshot (mirrors a plaintext share that has been checkpointed to disk).
             let id = backend
-                .wal_append("kbn:testkb:n1", canary, None)
+                .wal_append("kbn:testkb:n1", canary, None, &stamp())
                 .await
                 .unwrap();
             backend.compact("kbn:testkb:n1", canary, id).await.unwrap();
             // Also leave a fresh WAL-tail copy (mirrors a not-yet-compacted plaintext edit).
             backend
-                .wal_append("kbn:testkb:n1", canary, None)
+                .wal_append("kbn:testkb:n1", canary, None, &stamp())
                 .await
                 .unwrap();
             assert!(
@@ -832,7 +1040,10 @@ mod tests {
         {
             let backend = SqliteBackend::open(&db_path).unwrap();
             // The original update carrying the cleartext manifest title (the `add_node`).
-            let id = backend.wal_append("kbc:x", canary, None).await.unwrap();
+            let id = backend
+                .wal_append("kbc:x", canary, None, &stamp())
+                .await
+                .unwrap();
             assert!(
                 raw_contains_canary(&db_path),
                 "precondition: the title is on disk before compaction (else the test is vacuous)"
@@ -853,9 +1064,18 @@ mod tests {
     #[tokio::test]
     async fn wal_entries_since_filters_correctly() {
         let backend = SqliteBackend::open_memory().unwrap();
-        let id1 = backend.wal_append("doc1", b"u1", None).await.unwrap();
-        let id2 = backend.wal_append("doc1", b"u2", None).await.unwrap();
-        let _id3 = backend.wal_append("doc1", b"u3", None).await.unwrap();
+        let id1 = backend
+            .wal_append("doc1", b"u1", None, &stamp())
+            .await
+            .unwrap();
+        let id2 = backend
+            .wal_append("doc1", b"u2", None, &stamp())
+            .await
+            .unwrap();
+        let _id3 = backend
+            .wal_append("doc1", b"u3", None, &stamp())
+            .await
+            .unwrap();
 
         let entries = backend.wal_entries_since("doc1", id1).unwrap();
         assert_eq!(entries.len(), 2);
@@ -867,11 +1087,11 @@ mod tests {
     async fn wal_append_with_and_without_client_id() {
         let backend = SqliteBackend::open_memory().unwrap();
         backend
-            .wal_append("doc1", b"with-client", Some(42))
+            .wal_append("doc1", b"with-client", Some(42), &stamp())
             .await
             .unwrap();
         backend
-            .wal_append("doc1", b"no-client", None)
+            .wal_append("doc1", b"no-client", None, &stamp())
             .await
             .unwrap();
 
@@ -912,7 +1132,10 @@ mod tests {
             let doc_name = format!("doc{i}");
             handles.push(tokio::spawn(async move {
                 for j in 0u8..5 {
-                    backend.wal_append(&doc_name, &[j], Some(i)).await.unwrap();
+                    backend
+                        .wal_append(&doc_name, &[j], Some(i), &stamp())
+                        .await
+                        .unwrap();
                 }
             }));
         }

@@ -25,6 +25,10 @@ use serde_json::json;
 
 use mae_daemon::kb_query::{self, KbQueryLimits};
 
+/// Every test write is attributed; the editor-record tests use their own.
+const TEST_BY: mae_daemon::doc_editors::Attribution<'static> =
+    mae_daemon::doc_editors::Attribution::Principal("test-editor");
+
 pub(super) fn generous_limits() -> KbQueryLimits {
     KbQueryLimits {
         max_body_bytes: 65_536,
@@ -62,7 +66,7 @@ pub(super) async fn seed_unencrypted_kb(
     }
     let _ = coll.add_node(node_id, title); // manifest entry -- list_nodes()/search()/graph() read this
     doc_store
-        .share_doc(&format!("kbc:{kb_id}"), &coll.encode_state())
+        .share_doc(&format!("kbc:{kb_id}"), &coll.encode_state(), TEST_BY)
         .await
         .unwrap();
 
@@ -74,6 +78,7 @@ pub(super) async fn seed_unencrypted_kb(
         .share_doc(
             &mae_sync::kb_node_doc_name(kb_id, node_id),
             &node.encode_state(),
+            TEST_BY,
         )
         .await
         .unwrap();
@@ -136,7 +141,7 @@ pub(super) async fn seed_e2e_kb(
     let _ = coll.add_node(node_id, "");
 
     doc_store
-        .share_doc(&format!("kbc:{kb_id}"), &coll.encode_state())
+        .share_doc(&format!("kbc:{kb_id}"), &coll.encode_state(), TEST_BY)
         .await
         .unwrap();
 
@@ -152,7 +157,7 @@ pub(super) async fn seed_e2e_kb(
         state = op_set::merge(&state, &outer).unwrap();
     }
     doc_store
-        .share_doc(&mae_sync::kb_node_doc_name(kb_id, node_id), &state)
+        .share_doc(&mae_sync::kb_node_doc_name(kb_id, node_id), &state, TEST_BY)
         .await
         .unwrap();
 
@@ -379,7 +384,7 @@ async fn unencrypted_kb_search_is_capped_and_cannot_full_dump() {
     coll.set_transport_policy(TransportPolicy::Hub);
     coll.upsert_member(viewer_principal, "viewer", Role::Viewer);
     doc_store
-        .share_doc("kbc:big-kb", &coll.encode_state())
+        .share_doc("kbc:big-kb", &coll.encode_state(), TEST_BY)
         .await
         .unwrap();
     const N: usize = 40;
@@ -389,6 +394,7 @@ async fn unencrypted_kb_search_is_capped_and_cannot_full_dump() {
             .share_doc(
                 &mae_sync::kb_node_doc_name("big-kb", &format!("n{i}")),
                 &node.encode_state(),
+                TEST_BY,
             )
             .await
             .unwrap();
@@ -493,7 +499,7 @@ async fn kb_query_graph_edge_count_is_capped_even_from_a_single_densely_linked_h
     coll.upsert_member(viewer_principal, "viewer", Role::Viewer);
     let _ = coll.add_node("hub", "Hub");
     doc_store
-        .share_doc("kbc:hub-kb", &coll.encode_state())
+        .share_doc("kbc:hub-kb", &coll.encode_state(), TEST_BY)
         .await
         .unwrap();
 
@@ -504,7 +510,7 @@ async fn kb_query_graph_edge_count_is_capped_even_from_a_single_densely_linked_h
         let _ = hub.add_link(&format!("target-{i}"));
     }
     doc_store
-        .share_doc("kbn:hub-kb:hub", &hub.encode_state())
+        .share_doc("kbn:hub-kb:hub", &hub.encode_state(), TEST_BY)
         .await
         .unwrap();
 
@@ -762,7 +768,7 @@ async fn seed_e2e_kb_two_members(
     }
     let _ = coll.add_node(node_id, "");
     doc_store
-        .share_doc(&format!("kbc:{kb_id}"), &coll.encode_state())
+        .share_doc(&format!("kbc:{kb_id}"), &coll.encode_state(), TEST_BY)
         .await
         .unwrap();
 }
@@ -965,7 +971,7 @@ async fn seed_multi_node_kb(
         let _ = coll.add_node(id, title);
     }
     doc_store
-        .share_doc(&format!("kbc:{kb_id}"), &coll.encode_state())
+        .share_doc(&format!("kbc:{kb_id}"), &coll.encode_state(), TEST_BY)
         .await
         .unwrap();
     for (id, title, links) in nodes {
@@ -974,7 +980,11 @@ async fn seed_multi_node_kb(
             let _ = node.add_link(l);
         }
         doc_store
-            .share_doc(&mae_sync::kb_node_doc_name(kb_id, id), &node.encode_state())
+            .share_doc(
+                &mae_sync::kb_node_doc_name(kb_id, id),
+                &node.encode_state(),
+                TEST_BY,
+            )
             .await
             .unwrap();
     }
@@ -1431,7 +1441,10 @@ async fn set_typed_fields(doc_store: &DocStore, kb_id: &str, node_id: &str) {
         node.set_aliases(&["First alias".to_string(), "Second".to_string()]),
         node.set_properties(&props),
     ] {
-        doc_store.apply_update(&name, &update, None).await.unwrap();
+        doc_store
+            .apply_update(&name, &update, None, TEST_BY)
+            .await
+            .unwrap();
     }
 }
 
@@ -1551,7 +1564,7 @@ pub(super) async fn seed_listed_kb(
         let _ = coll.add_node(id, "listed, never written");
     }
     doc_store
-        .share_doc(&format!("kbc:{kb_id}"), &coll.encode_state())
+        .share_doc(&format!("kbc:{kb_id}"), &coll.encode_state(), TEST_BY)
         .await
         .unwrap();
     for i in 1..=count {
@@ -1561,6 +1574,7 @@ pub(super) async fn seed_listed_kb(
             .share_doc(
                 &mae_sync::kb_node_doc_name(kb_id, &id),
                 &node.encode_state(),
+                TEST_BY,
             )
             .await
             .unwrap();
@@ -1630,7 +1644,10 @@ async fn kb_query_list_versions_move_only_for_the_node_that_changed() {
     let name = mae_sync::kb_node_doc_name("poll-kb", "n3");
     let mut n3 = KbNodeDoc::from_bytes(&doc_store.encode_state(&name).await.unwrap()).unwrap();
     let update = n3.set_todo_state(Some("DONE"));
-    doc_store.apply_update(&name, &update, None).await.unwrap();
+    doc_store
+        .apply_update(&name, &update, None, TEST_BY)
+        .await
+        .unwrap();
 
     let after = list_all(&doc_store, "poll-kb", 10).await;
     for (b, a) in before.iter().zip(&after) {
