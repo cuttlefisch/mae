@@ -192,17 +192,15 @@ async fn load_gated(
 ) -> Result<(KbCollectionDoc, Encryption), McpError> {
     match collab_handler::check_kb_read_access(doc_store, kb_id, principal, Transport::Hub).await {
         Ok(AccessDecision::Allow) | Ok(AccessDecision::AllowAutoJoin) => {}
-        Ok(AccessDecision::Deny(msg)) | Err(msg) => return Err(McpError::internal_error(msg)),
-        Ok(_) => {
-            return Err(McpError::internal_error(format!(
-                "cannot read KB '{kb_id}'"
-            )))
+        Ok(AccessDecision::Deny(refusal)) | Err(refusal) => return Err(refusal.into()),
+        Ok(AccessDecision::Pending) => {
+            return Err(McpError::not_member(format!("cannot read KB '{kb_id}'")))
         }
     }
 
     let coll = collab_handler::load_collection(doc_store, kb_id)
         .await
-        .map_err(McpError::internal_error)?;
+        .map_err(McpError::from)?;
 
     // Trustworthy encryption mode: derived from the SIGNED op-log, never the
     // unsigned collection-doc flag (a key-blind relay could spoof that).
@@ -272,18 +270,18 @@ async fn get(
     // scoped by construction.
     collab_handler::require_node_in_kb(doc_store, kb_id, node_id, Some(&coll))
         .await
-        .map_err(McpError::internal_error)?;
+        .map_err(McpError::from)?;
 
     let node_doc = mae_sync::kb_node_doc_name(kb_id, node_id);
     let (state, _sv) = doc_store
         .encode_state_and_sv(&node_doc)
         .await
-        .map_err(|e| McpError::internal_error(format!("node fetch failed for '{node_id}': {e}")))?;
+        .map_err(|e| McpError::internal_fault(format!("node fetch failed for '{node_id}': {e}")))?;
 
     match encryption {
         Encryption::None => {
             let doc = KbNodeDoc::from_bytes(&state)
-                .map_err(|e| McpError::internal_error(format!("bad node doc: {e}")))?;
+                .map_err(|e| McpError::internal_fault(format!("bad node doc: {e}")))?;
             let body = doc.body();
             let truncated = body.len() > max_body_bytes;
             let body = if truncated {
@@ -348,7 +346,7 @@ async fn search(
     if !matches!(encryption, Encryption::None) {
         // Structural refusal, checked before touching a single node -- never
         // an attempt that silently returns empty results.
-        return Err(McpError::invalid_request(format!(
+        return Err(McpError::e2e_unsupported(format!(
             "server-side search is unavailable for E2E-encrypted KB '{kb_id}'; use \
              kb/query.get with member-side decryption instead"
         )));
@@ -413,7 +411,7 @@ async fn my_wrapped_key(
 ) -> Result<Value, McpError> {
     let (coll, encryption) = load_gated(doc_store, kb_id, principal).await?;
     let principal = principal.ok_or_else(|| {
-        McpError::internal_error(
+        McpError::not_authenticated(
             "kb/query.my_wrapped_key requires an authenticated principal".to_string(),
         )
     })?;
@@ -431,7 +429,7 @@ async fn my_wrapped_key(
     let anchor = collab_handler::resolve_content_anchor(doc_store, kb_id)
         .await
         .ok_or_else(|| {
-            McpError::internal_error(format!("KB '{kb_id}' has no signed content anchor"))
+            McpError::no_content_anchor(format!("KB '{kb_id}' has no signed content anchor"))
         })?;
 
     // Fingerprint-scoped by construction: only ever returns the blob wrapped
@@ -567,7 +565,7 @@ async fn links(
 ) -> Result<Value, McpError> {
     let (coll, encryption) = load_gated(doc_store, kb_id, principal).await?;
     if !coll.has_node(node_id) {
-        return Err(McpError::invalid_request(format!(
+        return Err(McpError::node_not_in_kb(format!(
             "node '{node_id}' is not in KB '{kb_id}'"
         )));
     }
@@ -842,7 +840,7 @@ async fn neighborhood(
 ) -> Result<Value, McpError> {
     let (coll, encryption) = load_gated(doc_store, kb_id, principal).await?;
     if !coll.has_node(node_id) {
-        return Err(McpError::invalid_request(format!(
+        return Err(McpError::node_not_in_kb(format!(
             "node '{node_id}' is not in KB '{kb_id}'"
         )));
     }

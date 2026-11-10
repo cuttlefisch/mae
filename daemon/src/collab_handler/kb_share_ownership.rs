@@ -72,12 +72,13 @@ pub(super) async fn refuse_if_owned_by_another(
             // the handler against a collection nobody can read.
             warn!(session = session_id, kb_id = %kb_id, error = %e,
                   "kb/share: refused — existing collection failed to decode");
+            let message = format!(
+                "KB id '{kb_id}' has an existing collection that cannot be \
+                 decoded: {e}"
+            );
             Some(JsonRpcResponse::error(
                 id.clone(),
-                McpError::internal_error(format!(
-                    "KB id '{kb_id}' has an existing collection that cannot be \
-                     decoded: {e}"
-                )),
+                e.with_message(message).into(),
             ))
         }
     }

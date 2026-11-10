@@ -20,6 +20,7 @@ mod collection_core_tests;
 mod collection_crypto_recovery_tests;
 mod collection_crypto_rotation_tests;
 mod collection_crypto_tests;
+mod collection_format_tests;
 mod collection_lease_tests;
 mod collection_oplog_tests;
 mod collection_roles_tests;

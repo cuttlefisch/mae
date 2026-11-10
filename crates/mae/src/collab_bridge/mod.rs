@@ -852,11 +852,9 @@ fn handle_kbc_membership_broadcast(editor: &mut Editor, kb_id: &str, update_byte
         warn!(kb = %kb_id, error = %e, "kbc broadcast: apply_update failed");
         return;
     }
-    // Persist the advanced replica so the next broadcast composes on top of it.
-    editor
-        .collab
-        .kb_collection_state
-        .insert(kb_id.to_string(), coll.encode_state());
+    // Persist the advanced replica so the next broadcast composes on top of it
+    // (and record a body-format change durably — see `kb_note_collection_state`).
+    editor.kb_note_collection_state(kb_id, coll.encode_state());
 
     // Any membership change repaints the *KB Sharing* buffer (remote
     // promote/demote/approve/join shows live), even when our own epoch is
@@ -1583,6 +1581,7 @@ async fn establish_connection(
         ClientTransport::KeyTls { identity, verifier } => {
             let cfg = mae_mcp::tls::client_config(identity, addr.to_string(), verifier.clone())?;
             let stream = TcpStream::connect(addr).await.map_err(|e| e.to_string())?;
+            mae_mcp::tune_request_stream(&stream);
             let connector = mae_mcp::tls::TlsConnector::from(cfg);
             let server_name =
                 mae_mcp::tls::ServerName::try_from(mae_mcp::tls::SNI).map_err(|e| e.to_string())?;
@@ -1599,6 +1598,7 @@ async fn establish_connection(
         ClientTransport::KeyJson { identity, verifier } => {
             use mae_mcp::auth::{AuthProvider, KeyAuth};
             let stream = TcpStream::connect(addr).await.map_err(|e| e.to_string())?;
+            mae_mcp::tune_request_stream(&stream);
             let (r, mut w) = stream.into_split();
             let mut br = BufReader::new(r);
             let auth = KeyAuth::client(identity.clone(), addr.to_string(), verifier.clone());
@@ -1612,6 +1612,7 @@ async fn establish_connection(
         }
         ClientTransport::Plain { psk, key_id } => {
             let stream = TcpStream::connect(addr).await.map_err(|e| e.to_string())?;
+            mae_mcp::tune_request_stream(&stream);
             let (r, mut w) = stream.into_split();
             let mut br = BufReader::new(r);
             perform_psk_auth(&mut br, &mut w, psk, key_id.as_deref()).await?;

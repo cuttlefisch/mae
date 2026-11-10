@@ -190,6 +190,10 @@ mod tests;
 mod approval_tests;
 
 #[cfg(test)]
+#[path = "literal_guard_tests.rs"]
+mod literal_guard_tests;
+
+#[cfg(test)]
 #[path = "authorization_tests.rs"]
 mod authorization_tests;
 

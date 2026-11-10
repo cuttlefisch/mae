@@ -72,6 +72,10 @@ const FTS_EXTRACTOR_VERSION: &str = "3";
 /// was built with.
 const FTS_VERSION_KEY: &str = "fts_extractor_version";
 
+/// `instance_meta` key holding the KB collection's `body_format` as last learned
+/// by the editor. See [`CozoKbStore::collection_body_format`].
+const COLLECTION_BODY_FORMAT_KEY: &str = "collection_body_format";
+
 impl CozoKbStore {
     /// Open (or create) a CozoDB at the given path using the default backend.
     ///
@@ -593,6 +597,26 @@ impl CozoKbStore {
         )
         .map_err(cozo_err)?;
         Ok(())
+    }
+
+    /// The `body_format` this store's KB collection last declared, as recorded
+    /// by the editor when it learned it (`None` = MAE's own format, or never
+    /// recorded).
+    ///
+    /// A local, durable copy of a marker whose truth is the KB's collection
+    /// CRDT: the editor holds that CRDT only in memory, from the moment it joins
+    /// (or reconnects) until it exits, so without this copy a restarted, offline
+    /// editor could not tell that the KB it is about to write is one it must not
+    /// write. See mae-core `kb_ops::literal_guard`.
+    pub fn collection_body_format(&self) -> Result<Option<String>, KbStoreError> {
+        Ok(self
+            .get_meta(COLLECTION_BODY_FORMAT_KEY)?
+            .filter(|s| !s.is_empty()))
+    }
+
+    /// Record (`Some`) or clear (`None`) [`Self::collection_body_format`].
+    pub fn set_collection_body_format(&self, format: Option<&str>) -> Result<(), KbStoreError> {
+        self.set_meta(COLLECTION_BODY_FORMAT_KEY, format.unwrap_or(""))
     }
 
     fn ensure_fts_index_current(&self) -> Result<(), KbStoreError> {
