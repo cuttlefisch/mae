@@ -313,7 +313,7 @@ async fn verify_relayed_content_op_owned_kb_branches() {
         }
         .header_params()
     };
-    let doc = "kbn:kbc:concept:n";
+    let doc = "kbn:kbo:concept:n";
 
     // A valid member's signed op verifies (owned-KB anchor resolved from the signer).
     let h = header(&bob, 0);

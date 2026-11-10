@@ -44,6 +44,15 @@ pub struct Ambiguous {
     pub kb_ids: Vec<String>,
 }
 
+/// What the migration's writes are recorded as (ADR-113 D3): the daemon itself.
+/// The copy is written with `restore_doc`, which RESETS the new document's
+/// record origin to the copy: the legacy document's editor rows are not carried
+/// over, so a cutoff before the copy reads as incomplete rather than empty.
+const MIGRATION: crate::doc_editors::Attribution<'static> =
+    crate::doc_editors::Attribution::Internal(
+        crate::doc_editors::InternalWriter::DocAddressMigration,
+    );
+
 /// Rewrite every legacy `kb:{node_id}` document to `kbn:{kb_id}:{node_id}`.
 ///
 /// All-or-nothing on ambiguity: if ANY legacy node is claimed by more than one
@@ -155,7 +164,7 @@ pub async fn migrate_legacy_node_docs(
                 continue;
             }
         };
-        if let Err(e) = doc_store.share_doc(scoped_name, &state).await {
+        if let Err(e) = doc_store.restore_doc(scoped_name, &state, MIGRATION).await {
             warn!(from = %legacy_name, to = %scoped_name, error = %e,
                   "ADR-105 migration: write failed; the legacy document is left in place");
             continue;
@@ -244,6 +253,9 @@ pub async fn prepare_doc_store(backend: &dyn StorageBackend, doc_store: &DocStor
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Every test write is attributed; the editor-record tests use their own.
+    const TEST_BY: crate::doc_editors::Attribution<'static> =
+        crate::doc_editors::Attribution::Principal("test-editor");
     use crate::storage::SqliteBackend;
     use std::sync::Arc;
 
@@ -258,7 +270,7 @@ mod tests {
         for n in node_ids {
             coll.add_node(n, n);
         }
-        ds.share_doc(&format!("kbc:{kb_id}"), &coll.encode_state())
+        ds.share_doc(&format!("kbc:{kb_id}"), &coll.encode_state(), TEST_BY)
             .await
             .unwrap();
     }
@@ -267,7 +279,7 @@ mod tests {
     /// `kb_node_doc_name` cannot produce this shape any more, which is the point.
     async fn seed_legacy_node(ds: &DocStore, node_id: &str, body: &str) {
         let node = mae_sync::kb::KbNodeDoc::new(node_id, node_id, body, &[]);
-        ds.share_doc(&format!("kb:{node_id}"), &node.encode())
+        ds.share_doc(&format!("kb:{node_id}"), &node.encode(), TEST_BY)
             .await
             .unwrap();
     }
@@ -331,6 +343,16 @@ mod tests {
         assert!(
             !ds.has_durable_doc("kb:concept:architecture").await,
             "the legacy document was left behind, so the next eviction still deletes it"
+        );
+
+        // ADR-113 D3: the copy carries content, not its authors, so it resets
+        // the new document's record origin: a cutoff before it is Incomplete.
+        let (_, hw) = ds.state_with_high_water(&scoped).await.unwrap();
+        assert_eq!(
+            ds.editors_since_wal(&scoped, 0).await.unwrap(),
+            crate::doc_editors::EditorsSince::Incomplete {
+                recorded_after_wal_id: hw
+            }
         );
     }
 
@@ -427,7 +449,9 @@ mod tests {
         seed_collection(&ds, "kb-a", &["note:n"]).await;
         let scoped = mae_sync::kb_node_doc_name("kb-a", "note:n");
         let node = mae_sync::kb::KbNodeDoc::new("note:n", "n", "CURRENT", &[]);
-        ds.share_doc(&scoped, &node.encode()).await.unwrap();
+        ds.share_doc(&scoped, &node.encode(), TEST_BY)
+            .await
+            .unwrap();
 
         assert_eq!(
             migrate_legacy_node_docs(b.as_ref(), &ds).await.unwrap(),

@@ -136,6 +136,7 @@ pub(super) async fn handle_kb_join(
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
+    let who = (session_id, Attribution::session(auth_principal, transport));
     let kb_id = match params["kb_id"].as_str() {
         Some(s) => s.to_string(),
         None => {
@@ -194,14 +195,8 @@ pub(super) async fn handle_kb_join(
                 let pk = hex32(&pm["pubkey"]);
                 let label = pm["label"].as_str().unwrap_or(fp);
                 let update = coll.add_pending(fp, label, &now_stamp(), pk.as_ref(), wrap.as_ref());
-                match persist_and_broadcast_collection(
-                    doc_store,
-                    broadcaster,
-                    session_id,
-                    &kb_id,
-                    &update,
-                )
-                .await
+                match persist_and_broadcast_collection(doc_store, broadcaster, who, &kb_id, &update)
+                    .await
                 {
                     Ok(_) => {
                         info!(session = session_id, kb_id = %kb_id, member = %fp, "kb/join: recorded a forwarded pending member (#255 mesh key delivery)");
@@ -228,14 +223,9 @@ pub(super) async fn handle_kb_join(
                     auth_label.unwrap_or(principal),
                     SyncRole::Viewer,
                 );
-                if let Err(e) = persist_and_broadcast_collection(
-                    doc_store,
-                    broadcaster,
-                    session_id,
-                    &kb_id,
-                    &update,
-                )
-                .await
+                if let Err(e) =
+                    persist_and_broadcast_collection(doc_store, broadcaster, who, &kb_id, &update)
+                        .await
                 {
                     warn!(session = session_id, kb_id = %kb_id, principal = %principal, error = %e, "kb/join: failed to persist the auto-join membership — the join response below still proceeds against the pre-upsert collection state");
                 }
@@ -257,14 +247,9 @@ pub(super) async fn handle_kb_join(
                 // fails, that belief is false — the request only lived in this
                 // in-memory `coll` and is gone the moment this session ends. Report the
                 // failure instead of a false pending success.
-                if let Err(e) = persist_and_broadcast_collection(
-                    doc_store,
-                    broadcaster,
-                    session_id,
-                    &kb_id,
-                    &update,
-                )
-                .await
+                if let Err(e) =
+                    persist_and_broadcast_collection(doc_store, broadcaster, who, &kb_id, &update)
+                        .await
                 {
                     warn!(session = session_id, kb_id = %kb_id, principal = %principal, error = %e, "kb/join: failed to persist the pending join request");
                     return JsonRpcResponse::error(
@@ -413,6 +398,7 @@ pub(super) async fn handle_kb_add_remove_member(
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
+    let who = (session_id, Attribution::session(auth_principal, transport));
     let add = method == "kb/add_member";
     let kb_id = match params["kb_id"].as_str() {
         Some(s) => s.to_string(),
@@ -465,9 +451,7 @@ pub(super) async fn handle_kb_add_remove_member(
     } else {
         coll.remove_principal(&member)
     };
-    match persist_and_broadcast_collection(doc_store, broadcaster, session_id, &kb_id, &update)
-        .await
-    {
+    match persist_and_broadcast_collection(doc_store, broadcaster, who, &kb_id, &update).await {
         Ok(_) => {
             // ADR-026: mirror the change into the signed op-log (owned KBs).
             let (action, signed_role) = if add {
@@ -478,7 +462,7 @@ pub(super) async fn handle_kb_add_remove_member(
             let appended = append_signed_membership(
                 doc_store,
                 broadcaster,
-                session_id,
+                who,
                 &kb_id,
                 &mut coll,
                 action,
@@ -566,6 +550,7 @@ pub(super) async fn handle_kb_approve_member(
     id: serde_json::Value,
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
+    let who = (session_id, Attribution::session(auth_principal, transport));
     let kb_id = match params["kb_id"].as_str() {
         Some(s) => s.to_string(),
         None => {
@@ -605,15 +590,13 @@ pub(super) async fn handle_kb_approve_member(
         Err(e) => return JsonRpcResponse::error(id, McpError::internal_error(e)),
     };
     let update = coll.approve(&principal, role);
-    match persist_and_broadcast_collection(doc_store, broadcaster, session_id, &kb_id, &update)
-        .await
-    {
+    match persist_and_broadcast_collection(doc_store, broadcaster, who, &kb_id, &update).await {
         Ok(_) => {
             // ADR-026: an approval is a signed Admit in the op-log.
             let appended = append_signed_membership(
                 doc_store,
                 broadcaster,
-                session_id,
+                who,
                 &kb_id,
                 &mut coll,
                 MembershipAction::Admit,

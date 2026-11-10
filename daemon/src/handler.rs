@@ -1017,6 +1017,13 @@ impl mae_daemon::artifact_store::ArtifactStore for DaemonArtifactStore {
     }
 }
 
+/// What the control socket's own writes are recorded as (ADR-113 D3): the local
+/// operator, authenticated only by the socket's file permissions — not a principal.
+const CONTROL_SOCKET: mae_daemon::doc_editors::Attribution<'static> =
+    mae_daemon::doc_editors::Attribution::Internal(
+        mae_daemon::doc_editors::InternalWriter::ControlSocket,
+    );
+
 /// Establish (or widen) a P2P mesh share for `kb_id` directly via the control
 /// socket — the daemon's self-sufficient `kb-share-p2p` path (ADR-025). On a FRESH
 /// share it creates the `kbc:{kb_id}` collection owned by this daemon, **seeds its
@@ -1046,7 +1053,7 @@ async fn establish_p2p_share(
         update: &[u8],
     ) -> Result<(), DaemonError> {
         let result = doc_store
-            .apply_update(collection_doc, update, None)
+            .apply_update(collection_doc, update, None, CONTROL_SOCKET)
             .await
             .map_err(|e| DaemonError::Internal(format!("persist collection: {e}")))?;
         broadcaster
@@ -1124,7 +1131,7 @@ async fn establish_p2p_share(
             coll.append_signed_op(&g, &gsig, &owner.public().to_bytes());
         }
         doc_store
-            .share_doc(&collection_doc, &coll.encode_state())
+            .share_doc(&collection_doc, &coll.encode_state(), CONTROL_SOCKET)
             .await
             .map_err(|e| DaemonError::Internal(format!("share collection: {e}")))?;
         // Seed each node doc so a joining peer pulls real content, not just the
@@ -1133,11 +1140,14 @@ async fn establish_p2p_share(
             let node_doc = mae_sync::kb_node_doc_name(kb_id, node_id);
             let res = if doc_store.has_doc(&node_doc).await {
                 doc_store
-                    .apply_update(&node_doc, state, None)
+                    .apply_update(&node_doc, state, None, CONTROL_SOCKET)
                     .await
                     .map(|_| ())
             } else {
-                doc_store.share_doc(&node_doc, state).await.map(|_| ())
+                doc_store
+                    .share_doc(&node_doc, state, CONTROL_SOCKET)
+                    .await
+                    .map(|_| ())
             };
             res.map_err(|e| DaemonError::Internal(format!("seed node '{node_id}': {e}")))?;
         }
@@ -1216,6 +1226,9 @@ impl DaemonError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Every test write is attributed; the editor-record tests use their own.
+    const TEST_BY: mae_daemon::doc_editors::Attribution<'static> =
+        mae_daemon::doc_editors::Attribution::Principal("test-editor");
 
     #[tokio::test]
     async fn status_returns_uptime() {
@@ -1311,7 +1324,7 @@ mod tests {
             500,
         ));
         let node = mae_sync::kb::KbNodeDoc::new("concept:x", "X", "body", &[]);
-        ds.share_doc("kbn:testkb:concept:x", &node.encode())
+        ds.share_doc("kbn:testkb:concept:x", &node.encode(), TEST_BY)
             .await
             .unwrap();
         let mut st = DaemonState::new();
@@ -1350,11 +1363,13 @@ mod tests {
             500,
         ));
         let c1 = mae_sync::kb::KbCollectionDoc::new("default", "owner");
-        ds.share_doc("kbc:default", &c1.encode_state())
+        ds.share_doc("kbc:default", &c1.encode_state(), TEST_BY)
             .await
             .unwrap();
         let c2 = mae_sync::kb::KbCollectionDoc::new("notes", "owner");
-        ds.share_doc("kbc:notes", &c2.encode_state()).await.unwrap();
+        ds.share_doc("kbc:notes", &c2.encode_state(), TEST_BY)
+            .await
+            .unwrap();
 
         let mut st = DaemonState::new();
         st.doc_store = Some(ds);
