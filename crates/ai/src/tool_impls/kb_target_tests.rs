@@ -334,3 +334,22 @@ fn add_link_appends_to_the_named_kbs_node() {
         .unwrap_err()
         .contains("Nope"));
 }
+
+#[test]
+fn the_html_export_seeds_from_the_named_kb() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("x.html");
+    let run = |editor: &Editor, mut a: serde_json::Value| {
+        a["path"] = serde_json::json!(out.to_string_lossy());
+        super::kb_export_html::execute_kb_export_subgraph_html(editor, &a, None)
+    };
+    assert_target_errors(&|e, a| run(e, a));
+    let editor = two_kbs();
+    run(&editor, serde_json::json!({"id": DUP, "kb": "Beta"})).unwrap();
+    let html = std::fs::read_to_string(&out).unwrap();
+    assert!(html.contains("Beta dup"), "the named KB's seed is exported");
+    assert!(
+        !html.contains("Alpha dup"),
+        "the other KB's same-id node is not"
+    );
+}
