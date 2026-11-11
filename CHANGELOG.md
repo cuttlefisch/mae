@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.146] - 2026-11-11
+
+
+
+
+### Bug Fixes
+
+- *(kb)* Rebirth keeps created_at; kb-restore names its KB ([5836cf8](https://github.com/cuttlefisch/mae/commit/5836cf85dd820760a31b2afb65d3369daae2362f))
+
+### Refactor
+
+- *(scheme)* Kb-restore registers in its own function ([3e6c179](https://github.com/cuttlefisch/mae/commit/3e6c1795f6dafe0ac0e0ad2e58ce246e4eebc5b3))
+
+### Documentation
+
+- *(adr)* ADR-093 Amendment 1, the org_header field ([d81cb14](https://github.com/cuttlefisch/mae/commit/d81cb145e0ce455a378a846fa7695ad79f5e9d4f))
+- *(adr)* ADR-099 Amendment 1, browser WebSocket authentication ([bddc8c9](https://github.com/cuttlefisch/mae/commit/bddc8c9d2f6f3c2d36a0bf492023e8eb10a45e27))
+- *(adr)* ADR-099 Amendment 1 B0, D2 re-evaluated against Hocuspocus ([18ec368](https://github.com/cuttlefisch/mae/commit/18ec36828316c0aa9e33ccfcde76ef9a897bea3c))
+- *(adr)* ADR-099 Amendment 1 names the clients it serves ([3860efb](https://github.com/cuttlefisch/mae/commit/3860efb47ed331cf5080cf213d2ed7eed789f52c))
+- *(adr)* ADR-099 and its Amendment 1 are accepted ([ef779b5](https://github.com/cuttlefisch/mae/commit/ef779b5aab69d45fbbe49a299897fab4f91a879f))
+
+### Testing
+
+- *(org)* The anchor-id oracle checks the stated property ([05fbe75](https://github.com/cuttlefisch/mae/commit/05fbe75cc2658a1644d271d1905ec80159ff2c06))
+
+### Miscellaneous
+
+- *(adr)* Regenerate the ADR KB checksum for ADR-099's status ([8b8a834](https://github.com/cuttlefisch/mae/commit/8b8a834e455b33f113a38e66091e6fb269db7859))
+
 ## [0.14.145] - 2026-11-11
 
 
@@ -21,6 +50,10 @@ All notable changes to this project will be documented in this file.
 ### Documentation
 
 - *(adr)* ADR-115 KB attachment store ([e2743b4](https://github.com/cuttlefisch/mae/commit/e2743b46133d6a78fc0a4c93ff69e897cee225a9))
+
+### Miscellaneous
+
+- Bump version to 0.14.145 ([a182ba6](https://github.com/cuttlefisch/mae/commit/a182ba61fd6167f7416e17e7c4db1ccdd422d8f8))
 
 ## [0.14.144] - 2026-11-10
 
