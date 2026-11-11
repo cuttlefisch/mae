@@ -64,6 +64,11 @@ doc-scoped envelope. Because tokens expire and connections do not, the server en
 refresh deadline** and closes a connection that misses it — the gap Hocuspocus and Liveblocks leave
 open — and sends keepalive pings under proxy idle timeouts.
 
+> **Correction (2026-11-11, ADR-099 Amendment 1 B0):** Hocuspocus now offers in-session token
+> refresh (`onTokenSync`, with `connection.requestToken()` / `provider.sendToken()`), so "the gap
+> Hocuspocus leaves open" is no longer accurate for it. The decision is unchanged: MAE's server
+> still enforces the deadline itself.
+
 ### D7. Phasing — each phase is part of the end state
 
 - **P1 — read path.** Registering a hub; including it in federated search; a token without collab

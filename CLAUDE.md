@@ -722,7 +722,15 @@ log; AD groups gate the session while CRDT membership stays owner-authored. *Pro
 blocked on #176*; evidence in `docs/research/098-*.md`), **ADR-099** (bidirectional sync transport
 for browser clients — WebSocket on the existing OAuth listener, re-framing MAE's own already
 doc-scoped envelope rather than speaking y-protocols, so one session multiplexes N documents;
-*proposed*, supersedes ADR-074 D1 for the write path only), and **ADR-100** (the browser KB edit
+*accepted, design*, supersedes ADR-074 D1 for the write path only; its *accepted* Amendment 1 corrects D3 —
+a browser cannot set `Authorization` on a WebSocket, so it presents a 30-second single-use ticket in
+the subprotocol list, never in the URL — and adds version negotiation at the upgrade, an in-socket
+renewal deadline (same issuer and subject), per-frame authorization, y-protocols awareness with
+server-stamped principals for presence, and a first cut limited to operator-minted tokens until hub
+signature verification and ADR-098 land; its B0 re-evaluates D2 against Hocuspocus, which now
+multiplexes, and keeps MAE's envelope on necessity — per-update signed ops relayed for peers to
+re-verify, and E2E op-sets, have no place in a protocol whose server merges plaintext), and
+**ADR-100** (the browser KB edit
 surface — structured chrome bound to ADR-093's schema v2 with zero round-trip, plus source-backed
 live preview over the body `Y.Text`; block WYSIWYG permitted only as a projection, never a second
 source of truth; *proposed*, D4's org-parser choice gated on a WASM spike). The holistic sharing story + security audits live in `docs/KB_SHARING.md`,
