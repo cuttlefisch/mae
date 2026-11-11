@@ -137,22 +137,7 @@ pub fn validate_bearer_token(
         .and_then(|v| v.as_str())
         .ok_or(TokenValidationError::MissingPrincipalClaim)?
         .to_string();
-
-    let audience: Vec<String> = match claims.get("aud") {
-        Some(serde_json::Value::String(s)) => vec![s.clone()],
-        Some(serde_json::Value::Array(arr)) => arr
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect(),
-        _ => vec![],
-    };
-    let expires_at = claims.get("exp").and_then(|v| v.as_u64()).unwrap_or(0);
-
-    Ok(ValidatedPrincipal {
-        principal,
-        audience,
-        expires_at,
-    })
+    Ok(oauth_self_issue::validated_from_claims(&claims, principal))
 }
 
 /// An owned, module-internal copy of the fields `validate_bearer_token`
@@ -248,7 +233,7 @@ use hyper::{Request, Response, StatusCode};
 use mae_daemon::collab_handler;
 use mae_daemon::doc_store::DocStore;
 
-use crate::conn_limit::ConnLimiter;
+use crate::conn_limit::{ConnGuard, ConnLimiter};
 
 /// Build the listener's rustls server config around a certificate that follows
 /// its files on disk (`oauth_tls::ReloadingCertResolver`, ADR-111 P1), so a
@@ -273,7 +258,7 @@ fn load_tls_config(cert_path: &Path, key_path: &Path) -> Result<rustls::ServerCo
 }
 
 /// Extract a bearer token from an `Authorization: Bearer <token>` header.
-fn extract_bearer_token(req: &Request<Incoming>) -> Option<&str> {
+pub(crate) fn extract_bearer_token(req: &Request<Incoming>) -> Option<&str> {
     req.headers()
         .get(hyper::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -305,13 +290,15 @@ fn has_query_access_token(req: &Request<Incoming>) -> bool {
 /// proxy may retain them.) `no-store` is
 /// mandated for token-bearing responses by RFC 6749 §5.1, which OAuth 2.1
 /// carries forward; `Pragma: no-cache` covers HTTP/1.0 intermediaries.
-fn with_no_store(builder: hyper::http::response::Builder) -> hyper::http::response::Builder {
+pub(crate) fn with_no_store(
+    builder: hyper::http::response::Builder,
+) -> hyper::http::response::Builder {
     builder
         .header(hyper::header::CACHE_CONTROL, "no-store")
         .header(hyper::header::PRAGMA, "no-cache")
 }
 
-fn json_response(status: StatusCode, body: serde_json::Value) -> Response<Full<Bytes>> {
+pub(crate) fn json_response(status: StatusCode, body: serde_json::Value) -> Response<Full<Bytes>> {
     with_no_store(
         Response::builder()
             .status(status)
@@ -321,7 +308,7 @@ fn json_response(status: StatusCode, body: serde_json::Value) -> Response<Full<B
     .expect("building a response from a fixed status/body never fails")
 }
 
-fn unauthorized(config: &ResourceServerConfig, reason: &str) -> Response<Full<Bytes>> {
+pub(crate) fn unauthorized(config: &ResourceServerConfig, reason: &str) -> Response<Full<Bytes>> {
     let mut resp = json_response(
         StatusCode::UNAUTHORIZED,
         serde_json::json!({"error": "invalid_token", "error_description": reason}),
@@ -391,7 +378,7 @@ fn public_response(
 /// this daemon's own self-issued tokens (ADR-067 D3), or the external issuer's
 /// JWKS -- which exists only when `jwks_url` is configured (ADR-111 P1). `Err`
 /// is the complete response to send.
-async fn authenticate(
+pub(crate) async fn authenticate(
     token: &str,
     config: &ResourceServerConfig,
     jwks: Option<&JwksCache>,
@@ -455,24 +442,28 @@ async fn authenticate(
 /// bearer-verification working unchanged for callers that never send a body.
 async fn handle_request(
     req: Request<Incoming>,
-    config: Arc<ResourceServerConfig>,
-    jwks: Option<Arc<JwksCache>>,
-    doc_store: Option<Arc<DocStore>>,
-    self_issue: Arc<Option<oauth_self_issue::SelfIssueConfig>>,
-    quota: Arc<dyn mae_daemon::quota::QuotaCharger>,
+    listener: Arc<Listener>,
+    conn: Arc<ConnGuard>,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
-    if let Some(resp) = public_response(&req, &config, doc_store.as_ref()) {
+    let config = &listener.config;
+    let doc_store = listener.doc_store.as_ref();
+    if let Some(resp) = public_response(&req, config, doc_store) {
         return Ok(resp);
+    }
+    // ADR-099: `/ws` and `/ws/ticket` exist only when `ws_enabled`; otherwise
+    // they are ordinary paths and fall through to the authenticated default.
+    if crate::ws::is_ws_path(req.uri().path()) && listener.ws.is_some() {
+        return Ok(crate::ws::handle(req, Arc::clone(&listener), conn).await);
     }
 
     let Some(token) = extract_bearer_token(&req).map(str::to_string) else {
-        return Ok(unauthorized(&config, "missing bearer token"));
+        return Ok(unauthorized(config, "missing bearer token"));
     };
     let principal = match authenticate(
         &token,
-        &config,
-        jwks.as_deref(),
-        self_issue.as_ref().as_ref(),
+        config,
+        listener.jwks.as_ref(),
+        listener.self_issue.as_ref(),
     )
     .await
     {
@@ -523,10 +514,10 @@ async fn handle_request(
 
     let body = route_authenticated_request(
         rpc_request,
-        &config,
-        doc_store.as_ref(),
+        config,
+        doc_store,
         &principal,
-        quota.as_ref(),
+        listener.quota.as_ref(),
     )
     .await;
     Ok(json_response(StatusCode::OK, body))
@@ -669,28 +660,51 @@ pub(crate) async fn route_authenticated_request(
 /// TLS handshake parks one task+socket per connection forever, the same
 /// failure class just at an earlier step than the P2P mesh's own
 /// post-handshake `accept_bi` timeout.
-#[allow(clippy::too_many_arguments)]
+/// Everything a request on this listener can need, shared by every connection.
+pub(crate) struct Listener {
+    pub config: ResourceServerConfig,
+    /// ADR-111 P1: the external-issuer path exists only when an issuer is
+    /// configured. A self-issued-only deployment builds no JWKS client at all.
+    pub jwks: Option<JwksCache>,
+    pub doc_store: Option<Arc<DocStore>>,
+    pub self_issue: Option<oauth_self_issue::SelfIssueConfig>,
+    pub quota: Arc<dyn mae_daemon::quota::QuotaCharger>,
+    /// The sync WebSocket (ADR-099): `Some` only when `ws_enabled` and its
+    /// prerequisites hold (see `main.rs`).
+    pub ws: Option<crate::ws::WsState>,
+}
+
+impl Listener {
+    pub(crate) fn new(
+        config: ResourceServerConfig,
+        doc_store: Option<Arc<DocStore>>,
+        self_issue: Option<oauth_self_issue::SelfIssueConfig>,
+        quota: Arc<dyn mae_daemon::quota::QuotaCharger>,
+        ws: Option<crate::ws::WsState>,
+    ) -> Self {
+        let jwks = (!config.jwks_url.is_empty()).then(|| JwksCache::new(config.jwks_url.clone()));
+        Listener {
+            config,
+            jwks,
+            doc_store,
+            self_issue,
+            quota,
+            ws,
+        }
+    }
+}
+
 pub async fn run_oauth_listener(
-    server_config: ResourceServerConfig,
+    state: Listener,
     bind: std::net::SocketAddr,
-    cert_path: &Path,
-    key_path: &Path,
-    doc_store: Option<Arc<DocStore>>,
+    (cert_path, key_path): (&Path, &Path),
     limiter: ConnLimiter,
-    self_issue: Option<oauth_self_issue::SelfIssueConfig>,
-    quota: Arc<dyn mae_daemon::quota::QuotaCharger>,
 ) -> std::io::Result<()> {
     let tls_config = load_tls_config(cert_path, key_path).map_err(std::io::Error::other)?;
     let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls_config));
     let listener = tokio::net::TcpListener::bind(bind).await?;
-    tracing::info!(%bind, resource = %server_config.canonical_resource_uri, "OAuth HTTPS listener started");
-
-    let config = Arc::new(server_config);
-    // ADR-111 P1: the external-issuer path exists only when an issuer is
-    // configured. A self-issued-only deployment builds no JWKS client at all.
-    let jwks =
-        (!config.jwks_url.is_empty()).then(|| Arc::new(JwksCache::new(config.jwks_url.clone())));
-    let self_issue = Arc::new(self_issue);
+    tracing::info!(%bind, resource = %state.config.canonical_resource_uri, "OAuth HTTPS listener started");
+    let state = Arc::new(state);
 
     loop {
         let (tcp_stream, peer_addr) = match listener.accept().await {
@@ -710,14 +724,13 @@ pub async fn run_oauth_listener(
             continue;
         };
         let acceptor = acceptor.clone();
-        let config = config.clone();
-        let jwks = jwks.clone();
-        let doc_store = doc_store.clone();
-        let self_issue = self_issue.clone();
-        let quota = quota.clone();
+        let state = Arc::clone(&state);
 
         tokio::spawn(async move {
-            let _guard = guard;
+            // Shared, not owned: an upgraded WebSocket outlives this task and
+            // keeps the connection's ONE slot until it closes (ADR-099 D2 —
+            // N documents over one socket are one connection).
+            let guard = Arc::new(guard);
             let tls_stream = match tokio::time::timeout(
                 Duration::from_secs(collab_handler::HANDSHAKE_TIMEOUT_SECS),
                 acceptor.accept(tcp_stream),
@@ -740,18 +753,11 @@ pub async fn run_oauth_listener(
             };
             let io = hyper_util::rt::TokioIo::new(tls_stream);
             let service = hyper::service::service_fn(move |req| {
-                handle_request(
-                    req,
-                    config.clone(),
-                    jwks.clone(),
-                    doc_store.clone(),
-                    self_issue.clone(),
-                    quota.clone(),
-                )
+                handle_request(req, Arc::clone(&state), Arc::clone(&guard))
             });
             if let Err(e) =
                 hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
-                    .serve_connection(io, service)
+                    .serve_connection_with_upgrades(io, service)
                     .await
             {
                 tracing::debug!(error = %e, %peer_addr, "connection error");

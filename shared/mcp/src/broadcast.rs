@@ -4,9 +4,14 @@
 //! `EditorEvent` to the broadcaster. Each connected client with matching
 //! subscriptions receives the event via a bounded channel.
 //!
-//! Backpressure: if a client's queue is full, the event is dropped for
-//! that client (logged as a warning). This prevents one slow client from
-//! blocking the server.
+//! Backpressure: a full queue never blocks the server. For a client that
+//! receives documents by subscription, an event for a document that does not
+//! fit CLOSES that document for the client instead of being dropped: a
+//! dropped `sync_update` would leave the client's copy silently missing an
+//! edit, while a closed document is something the client is told about
+//! (`take_overflowed`) and recovers by resyncing it (ADR-099 Amendment 1 B4).
+//! Every other event (presence, save notices, globals) is still dropped: the
+//! next one replaces it.
 
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -93,6 +98,32 @@ pub enum EditorEvent {
         selection: Option<(usize, usize, usize, usize)>,
         mode: String,
     },
+    /// Presence in the y-protocols awareness encoding (ADR-099 A1 B5), relayed
+    /// as sent, with the daemon-stamped principal of every client id in it.
+    /// Receivers label a cursor by `principals`, never by the state's own
+    /// `user` fields, which the sender chose.
+    #[serde(rename = "awareness_yjs")]
+    AwarenessYjs {
+        doc_id: String,
+        update_base64: String,
+        principals: std::collections::BTreeMap<String, String>,
+    },
+}
+
+/// Who owns a y-protocols awareness client id on a document (B5).
+#[derive(Debug, Clone)]
+struct AwarenessOwner {
+    session: u64,
+    principal: String,
+}
+
+/// Why [`EventBroadcaster::claim_awareness`] claimed nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AwarenessClaimError {
+    /// This client id is owned by another principal.
+    Taken(u64),
+    /// The session would hold more than its cap of ids on the document.
+    TooMany,
 }
 
 impl EditorEvent {
@@ -105,6 +136,7 @@ impl EditorEvent {
             EditorEvent::SharerLeft { doc, .. } => Some(doc),
             EditorEvent::SaveCommitted { doc, .. } => Some(doc),
             EditorEvent::AwarenessUpdate { doc_id, .. } => Some(doc_id),
+            EditorEvent::AwarenessYjs { doc_id, .. } => Some(doc_id),
             _ => None,
         }
     }
@@ -124,6 +156,7 @@ impl EditorEvent {
             EditorEvent::SharerLeft { .. } => "sharer_left",
             EditorEvent::SaveCommitted { .. } => "save_committed",
             EditorEvent::AwarenessUpdate { .. } => "awareness_update",
+            EditorEvent::AwarenessYjs { .. } => "awareness_yjs",
         }
     }
 }
@@ -145,6 +178,9 @@ struct ClientEntry {
     doc_scoped: bool,
     /// Bounded channel for event delivery.
     tx: mpsc::Sender<EditorEvent>,
+    /// Documents closed for this client because an event for them did not
+    /// fit its queue, not yet reported (`take_overflowed`).
+    overflowed: Vec<String>,
 }
 
 /// Manages per-client event channels with doc-scoped filtering.
@@ -164,6 +200,15 @@ pub struct EventBroadcaster {
     clients: HashMap<u64, ClientEntry>,
     /// Monotonically increasing sequence number for event ordering.
     next_seq: AtomicU64,
+    /// Which session owns each y-protocols awareness client id, per document
+    /// (B5): the first session to send an id claims it until it ends, so no
+    /// other session can speak for that cursor.
+    awareness_owners: HashMap<(String, u64), AwarenessOwner>,
+    /// Reverse index of `awareness_owners`: each session's claims, so a
+    /// release touches only that session's entries, not the whole map.
+    awareness_claims: HashMap<u64, HashSet<(String, u64)>>,
+    /// When each session last relayed presence on each document (rate floor).
+    awareness_last: HashMap<(u64, String), std::time::Instant>,
 }
 
 impl EventBroadcaster {
@@ -171,6 +216,9 @@ impl EventBroadcaster {
         EventBroadcaster {
             clients: HashMap::new(),
             next_seq: AtomicU64::new(1),
+            awareness_owners: HashMap::new(),
+            awareness_claims: HashMap::new(),
+            awareness_last: HashMap::new(),
         }
     }
 
@@ -189,6 +237,7 @@ impl EventBroadcaster {
                 doc_subs: HashSet::new(),
                 doc_scoped: false,
                 tx,
+                overflowed: Vec::new(),
             },
         );
         rx
@@ -217,6 +266,104 @@ impl EventBroadcaster {
     /// Remove a client's subscription (on disconnect).
     pub fn unsubscribe(&mut self, session_id: u64) {
         self.clients.remove(&session_id);
+        for key in self
+            .awareness_claims
+            .remove(&session_id)
+            .unwrap_or_default()
+        {
+            self.awareness_owners.remove(&key);
+            self.awareness_last.remove(&(session_id, key.0));
+        }
+    }
+
+    /// Release `session_id`'s awareness claims on `doc` (it left the document).
+    fn release_awareness_doc(&mut self, session_id: u64, doc: &str) {
+        if let Some(claims) = self.awareness_claims.get_mut(&session_id) {
+            claims.retain(|key| {
+                let keep = key.0 != doc;
+                if !keep {
+                    self.awareness_owners.remove(key);
+                }
+                keep
+            });
+        }
+        self.awareness_last.remove(&(session_id, doc.to_string()));
+    }
+
+    /// Claim y-protocols awareness client ids on `doc` for `session_id`,
+    /// authenticated as `principal` (B5). An id another PRINCIPAL owns is
+    /// refused; the same principal's new session takes its own ids over (a
+    /// reconnect while the old socket lingers). A session holds at most
+    /// `cap` ids per document. Nothing is claimed on an error.
+    pub fn claim_awareness(
+        &mut self,
+        doc: &str,
+        (session_id, principal): (u64, &str),
+        ids: &[u64],
+        cap: usize,
+    ) -> Result<(), AwarenessClaimError> {
+        let key = |id: u64| (doc.to_string(), id);
+        if let Some(&taken) = ids.iter().find(|id| {
+            self.awareness_owners
+                .get(&key(**id))
+                .is_some_and(|o| o.principal != principal)
+        }) {
+            return Err(AwarenessClaimError::Taken(taken));
+        }
+        let held = self
+            .awareness_claims
+            .get(&session_id)
+            .map_or(0, |c| c.iter().filter(|(d, _)| d == doc).count());
+        let new = ids
+            .iter()
+            .filter(|id| {
+                self.awareness_owners
+                    .get(&key(**id))
+                    .is_none_or(|o| o.session != session_id)
+            })
+            .count();
+        if held + new > cap {
+            return Err(AwarenessClaimError::TooMany);
+        }
+        for &id in ids {
+            let previous = self.awareness_owners.insert(
+                key(id),
+                AwarenessOwner {
+                    session: session_id,
+                    principal: principal.to_string(),
+                },
+            );
+            if let Some(prev) = previous.filter(|p| p.session != session_id) {
+                if let Some(c) = self.awareness_claims.get_mut(&prev.session) {
+                    c.remove(&key(id));
+                }
+            }
+            self.awareness_claims
+                .entry(session_id)
+                .or_default()
+                .insert(key(id));
+        }
+        Ok(())
+    }
+
+    /// Whether `session_id` may relay presence on `doc` now: at most once per
+    /// `min` (a presence update replaces the last, so a skipped one is lost
+    /// harmlessly). Records `now` when it may.
+    pub fn awareness_due(
+        &mut self,
+        session_id: u64,
+        doc: &str,
+        now: std::time::Instant,
+        min: std::time::Duration,
+    ) -> bool {
+        let key = (session_id, doc.to_string());
+        match self.awareness_last.get(&key) {
+            Some(last) if now.duration_since(*last) < min => false,
+            _ => {
+                self.awareness_last.insert(key, now);
+                true
+            }
+        }
     }
 
     /// Update a client's event type subscription list.
@@ -245,6 +392,7 @@ impl EventBroadcaster {
         if let Some(entry) = self.clients.get_mut(&session_id) {
             entry.doc_subs.remove(doc_id);
         }
+        self.release_awareness_doc(session_id, doc_id);
     }
 
     /// Check if a client should receive an event based on event type and doc scope.
@@ -271,14 +419,27 @@ impl EventBroadcaster {
 
     /// Try to send an event to a client, handling backpressure and dead channels.
     /// Returns true if the channel is closed (should be cleaned up).
-    fn try_deliver(session_id: u64, entry: &ClientEntry, event: &EditorEvent) -> bool {
+    fn try_deliver(session_id: u64, entry: &mut ClientEntry, event: &EditorEvent) -> bool {
         match entry.tx.try_send(event.clone()) {
             Err(mpsc::error::TrySendError::Full(_)) => {
-                warn!(
-                    session_id = session_id,
-                    event_type = event.event_type(),
-                    "client event queue full; dropping event"
-                );
+                // Only a document's DATA closes it: a lost presence or save
+                // notice is replaced by the next one, a lost update is not.
+                let by_subscription = entry.doc_scoped || !entry.doc_subs.is_empty();
+                let data = matches!(event, EditorEvent::SyncUpdate { .. });
+                match event.doc_id() {
+                    Some(doc) if data && by_subscription && entry.doc_subs.remove(doc) => {
+                        warn!(
+                            session_id,
+                            doc, "client event queue full; closing the document for it"
+                        );
+                        entry.overflowed.push(doc.to_string());
+                    }
+                    _ => warn!(
+                        session_id = session_id,
+                        event_type = event.event_type(),
+                        "client event queue full; dropping event"
+                    ),
+                }
                 false
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
@@ -304,7 +465,7 @@ impl EventBroadcaster {
             "broadcasting event"
         );
         let mut closed: Vec<u64> = Vec::new();
-        for (session_id, entry) in &self.clients {
+        for (session_id, entry) in &mut self.clients {
             if Self::should_deliver(entry, event) && Self::try_deliver(*session_id, entry, event) {
                 closed.push(*session_id);
             }
@@ -326,7 +487,7 @@ impl EventBroadcaster {
             "broadcasting event (with exclusion)"
         );
         let mut closed: Vec<u64> = Vec::new();
-        for (session_id, entry) in &self.clients {
+        for (session_id, entry) in &mut self.clients {
             if *session_id == exclude_session {
                 continue;
             }
@@ -340,6 +501,16 @@ impl EventBroadcaster {
     }
 
     /// Number of currently subscribed clients.
+    /// The documents closed for `session_id` since the last call because an
+    /// event for them did not fit its queue. The session tells its client,
+    /// which resyncs each one (`sync/resync` re-subscribes it).
+    pub fn take_overflowed(&mut self, session_id: u64) -> Vec<String> {
+        self.clients
+            .get_mut(&session_id)
+            .map(|c| std::mem::take(&mut c.overflowed))
+            .unwrap_or_default()
+    }
+
     pub fn client_count(&self) -> usize {
         self.clients.len()
     }
@@ -365,6 +536,66 @@ pub type SharedBroadcaster = std::sync::Arc<std::sync::Mutex<EventBroadcaster>>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn update(doc: &str, n: u64) -> EditorEvent {
+        EditorEvent::SyncUpdate {
+            buffer_name: doc.into(),
+            update_base64: "AAA=".into(),
+            wal_seq: n,
+            content_header: None,
+        }
+    }
+
+    fn presence(doc: &str) -> EditorEvent {
+        EditorEvent::AwarenessUpdate {
+            doc_id: doc.into(),
+            client_id: 1,
+            user_name: "u".into(),
+            cursor_row: 0,
+            cursor_col: 0,
+            selection: None,
+            mode: "normal".into(),
+        }
+    }
+
+    /// ADR-099 A1 B4: an update that does not fit a subscribed client's queue
+    /// closes that document for it, reported once, and no later update for it
+    /// is delivered (so the client can never apply one past a hole). Another
+    /// document keeps flowing. Presence never closes a document, and a client
+    /// that is not subscribed per document keeps the old drop behaviour.
+    /// Kills: dropping the update silently, closing on presence, or leaving
+    /// the document subscribed after the hole.
+    #[tokio::test]
+    async fn an_update_that_does_not_fit_closes_the_document_not_the_data() {
+        let mut b = EventBroadcaster::new();
+        let mut rx = b.subscribe_doc_scoped(1, vec!["*".into()]);
+        b.subscribe_doc(1, "kbn:k:a");
+        b.subscribe_doc(1, "kbn:k:b");
+        let mut wide = b.subscribe(2, vec!["*".into()]);
+        for n in 0..DEFAULT_QUEUE_CAPACITY as u64 {
+            b.broadcast(&update("kbn:k:a", n));
+        }
+        assert!(b.take_overflowed(1).is_empty(), "the queue is exactly full");
+        b.broadcast(&presence("kbn:k:a"));
+        assert!(
+            b.take_overflowed(1).is_empty(),
+            "presence never closes a document"
+        );
+        b.broadcast(&update("kbn:k:a", 1000));
+        assert_eq!(b.take_overflowed(1), ["kbn:k:a"]);
+        assert!(b.take_overflowed(1).is_empty(), "reported once");
+        assert!(b.take_overflowed(2).is_empty(), "a wide client only drops");
+
+        // Drain, then: a's updates no longer arrive, b's do.
+        while rx.try_recv().is_ok() {}
+        while wide.try_recv().is_ok() {}
+        b.broadcast(&update("kbn:k:a", 1001));
+        b.broadcast(&update("kbn:k:b", 1));
+        let got: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|e| e.doc_id().map(String::from))
+            .collect();
+        assert_eq!(got, ["kbn:k:b"]);
+    }
 
     #[tokio::test]
     async fn subscribe_and_broadcast() {

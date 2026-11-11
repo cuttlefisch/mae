@@ -399,6 +399,14 @@ pub enum CollabEvent {
         #[allow(dead_code)]
         wal_seq: u64,
     },
+    /// The daemon closed a document for this session (`session/doc_closed`):
+    /// it stops sending that document's updates, so the copy here is behind
+    /// until it is resynced (`slow_consumer`), or no longer ours (`not_member`).
+    DocClosed {
+        doc: String,
+        kb_id: Option<String>,
+        reason: String,
+    },
     /// Gap detected in WAL sequence — triggers resync for the doc.
     GapDetected {
         doc_id: String,
@@ -933,6 +941,9 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             expected,
             got,
         } => events_doc::handle_gap_detected_event(editor, doc_id, expected, got),
+        CollabEvent::DocClosed { doc, kb_id, reason } => {
+            events_doc::handle_doc_closed_event(editor, doc, kb_id, &reason)
+        }
         CollabEvent::StatusReport { lines } => {
             events_connection::handle_status_report_event(editor, lines)
         }
@@ -4476,6 +4487,16 @@ pub(crate) fn handle_incoming_message(
                                 );
                             }
                         }
+                    }
+                }
+            }
+            "session/doc_closed" => {
+                if let Some(params) = val.get("params") {
+                    let field = |k: &str| params.get(k).and_then(|v| v.as_str()).map(String::from);
+                    if let Some(doc) = field("doc") {
+                        let reason = field("reason").unwrap_or_default();
+                        let kb_id = field("kb_id");
+                        try_send_evt(evt_tx, CollabEvent::DocClosed { doc, kb_id, reason });
                     }
                 }
             }

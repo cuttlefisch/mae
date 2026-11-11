@@ -22,6 +22,7 @@
 
 mod access;
 mod docs_methods;
+pub mod governor;
 mod kb_artifacts;
 mod kb_content;
 mod kb_governance;
@@ -172,6 +173,7 @@ pub async fn handle_client<R, W>(
         quota,
         kb_query_limits,
         self_issue,
+        None,
     )
     .await;
 }
@@ -207,8 +209,102 @@ pub async fn handle_client_authenticated<R, W>(
         quota,
         kb_query_limits,
         self_issue,
+        None,
     )
     .await;
+}
+
+/// The shared dependencies of one collab session, as a transport that is not
+/// the collab listener hands them over (ADR-099: the HTTPS listener's
+/// WebSocket route).
+#[derive(Clone)]
+pub struct SessionDeps {
+    pub doc_store: Arc<DocStore>,
+    pub broadcaster: SharedBroadcaster,
+    pub start_time: std::time::Instant,
+    pub artifact_store: Arc<dyn crate::artifact_store::ArtifactStore>,
+    pub quota: Arc<dyn crate::quota::QuotaCharger>,
+    pub kb_query_limits: crate::kb_query::KbQueryLimits,
+}
+
+/// A session governed by its transport (ADR-099 Amendment 1): `peer` is bound
+/// exactly as on [`handle_client_authenticated`], and `governor` adds the
+/// credential deadline, the open-document cap and re-authorization on renewal.
+///
+/// Always on the hub transport, and never able to mint a self-issued token:
+/// `kb/query.self_token` here would let a bearer session renew itself forever,
+/// past the deadline that makes offboarding take effect (ADR-111 D3).
+pub async fn handle_client_governed<R, W>(
+    reader: R,
+    writer: W,
+    peer: PeerIdentity,
+    deps: SessionDeps,
+    governor: governor::SessionGovernor,
+) where
+    R: AsyncBufRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin,
+{
+    run_session(
+        ClientSession::with_identity(peer),
+        reader,
+        writer,
+        deps.doc_store,
+        deps.broadcaster,
+        deps.start_time,
+        Transport::Hub,
+        deps.artifact_store,
+        deps.quota,
+        deps.kb_query_limits,
+        None,
+        Some(governor),
+    )
+    .await;
+}
+
+/// Deliver one broadcast event to the client, then tell it about every
+/// document the broadcaster closed for it because the queue was full (B4):
+/// `session/doc_closed` with reason `slow_consumer`, which the client answers
+/// by resyncing that document. `false` means a write failed.
+async fn deliver_event<W: AsyncWrite + Unpin>(
+    event: &mae_mcp::broadcast::EditorEvent,
+    session: &mut ClientSession,
+    doc_store: &DocStore,
+    broadcaster: &SharedBroadcaster,
+    session_docs: &mut HashSet<String>,
+    (writer, timeout): (&mut W, std::time::Duration),
+) -> bool {
+    let method = format!("notifications/{}", event.event_type());
+    debug!(session = session.id, event_type = %method, "broadcasting event to client");
+    let notification = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": { "seq": session.events_delivered + 1, "event": event },
+    });
+    if governor::write_json(writer, &notification, timeout)
+        .await
+        .is_err()
+    {
+        session.events_dropped += 1;
+        return false;
+    }
+    session.events_delivered += 1;
+    let closed = broadcaster
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take_overflowed(session.id);
+    for doc in closed {
+        if session_docs.remove(&doc) {
+            let _ = doc_store.track_client_disconnect(&doc).await;
+        }
+        let notice = governor::doc_closed(&doc, "slow_consumer");
+        if governor::write_json(writer, &notice, timeout)
+            .await
+            .is_err()
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// Run the client handler loop for a single connection.
@@ -233,6 +329,7 @@ async fn run_session<R, W>(
     quota: Arc<dyn crate::quota::QuotaCharger>,
     kb_query_limits: crate::kb_query::KbQueryLimits,
     self_issue: Option<crate::oauth_self_issue::SelfIssueConfig>,
+    mut governor: Option<governor::SessionGovernor>,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
@@ -247,7 +344,12 @@ async fn run_session<R, W>(
     let auth_label: Option<String> = session.authenticated_label().map(str::to_string);
     // ADR-038: the authenticated peer's Ed25519 public key — captured here so a `kb/join`
     // can record it in the pending request for the owner to wrap the content key to.
-    let auth_pubkey: Option<[u8; 32]> = session.peer_identity.as_ref().map(|p| p.pubkey);
+    // A bearer identity (ADR-099 B6) has no key: its all-zero `pubkey` is not one.
+    let auth_pubkey: Option<[u8; 32]> = session
+        .peer_identity
+        .as_ref()
+        .filter(|p| !p.bearer)
+        .map(|p| p.pubkey);
     if let Some((principal, label)) = session.principal_and_label() {
         info!(session = session_id, principal, peer = %label, "authenticated peer");
     }
@@ -335,6 +437,18 @@ async fn run_session<R, W>(
 
                 session.touch();
                 session.messages_received += 1;
+                match governor.as_ref().map(|g| g.admit(&msg, &session_docs, now_unix())) {
+                    None | Some(governor::Admission::Dispatch) => {}
+                    Some(governor::Admission::Expired) => {
+                        warn!(session = session_id, "credential deadline passed; frame not applied, ending session");
+                        break;
+                    }
+                    Some(governor::Admission::Refuse(resp)) => {
+                        if Route::of(&msg).is_notification { continue; }
+                        if governor::write_json(&mut writer, &resp, write_timeout).await.is_err() { break; }
+                        continue;
+                    }
+                }
                 // WU6: Log message classification for dispatch diagnostics.
                 let route = Route::of(&msg);
                 let is_doc = route.is_doc;
@@ -369,65 +483,27 @@ async fn run_session<R, W>(
                     ).await
                 };
 
-                // Augment initialize response with connection count so
-                // clients can report peer count accurately.
-                if msg.contains("\"initialize\"") {
-                    if let Some(ref mut result) = response.result {
-                        if let Some(info) = result.get_mut("serverInfo") {
-                            let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
-                            let count = bc.client_count().saturating_sub(1);
-                            info["connections"] = serde_json::json!(count);
-                            // Notify existing clients about the new peer.
-                            let peer_count = bc.client_count();
-                            bc.broadcast_except(
-                                &EditorEvent::PeerJoined {
-                                    session_id,
-                                    peer_count,
-                                },
-                                session_id,
-                            );
-                        }
-                    }
-                }
-
-                let body = match serde_json::to_vec(&response) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        error!(session = session_id, error = %e, "serialize error");
-                        continue;
-                    }
-                };
-
-                if mae_mcp::write_framed(&mut writer, &body, write_timeout).await.is_err() {
+                augment_initialize(&msg, &mut response, &broadcaster, session_id);
+                if governor::write_json(&mut writer, &response, write_timeout).await.is_err() {
                     warn!(session = session_id, "write error; closing client");
                     break;
                 }
             }
 
-            Some(event) = event_rx.recv() => {
-                let method = format!("notifications/{}", event.event_type());
-                debug!(session = session_id, event_type = %method,
-                    "broadcasting event to client");
-                let notification = serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": method,
-                    "params": { "seq": session.events_delivered + 1, "event": event },
-                });
-                let body = match serde_json::to_vec(&notification) {
-                    Ok(b) => b,
-                    Err(_) => continue,
-                };
+            control = governor::SessionGovernor::next_control(&mut governor) => {
+                let who = (session_id, auth_principal.as_deref(), transport);
+                if governor::apply_control(control, &doc_store, &broadcaster, who, &mut session_docs, (&mut writer, write_timeout)).await.is_err() {
+                    break;
+                }
+            }
 
-                if mae_mcp::write_framed(&mut writer, &body, write_timeout).await.is_err() {
-                    consecutive_write_failures += 1;
-                    session.events_dropped += 1;
-                    if consecutive_write_failures >= MAX_CONSECUTIVE_WRITE_FAILURES {
-                        warn!(session = session_id, "disconnecting after 3 write failures");
-                        break;
-                    }
-                } else {
-                    consecutive_write_failures = 0;
-                    session.events_delivered += 1;
+            Some(event) = event_rx.recv() => {
+                let out = (&mut writer, write_timeout);
+                let delivered = deliver_event(&event, &mut session, &doc_store, &broadcaster, &mut session_docs, out).await;
+                consecutive_write_failures = if delivered { 0 } else { consecutive_write_failures + 1 };
+                if consecutive_write_failures >= MAX_CONSECUTIVE_WRITE_FAILURES {
+                    warn!(session = session_id, "disconnecting after 3 write failures");
+                    break;
                 }
             }
         }
@@ -476,6 +552,37 @@ async fn run_session<R, W>(
         session = session_id,
         docs_touched = session_docs.len(),
         "collab client session ended"
+    );
+}
+
+/// Augment an `initialize` response with the connection count, so clients can
+/// report peer count accurately, and tell existing clients about the new peer.
+fn augment_initialize(
+    msg: &str,
+    response: &mut JsonRpcResponse,
+    broadcaster: &SharedBroadcaster,
+    session_id: u64,
+) {
+    if !msg.contains("\"initialize\"") {
+        return;
+    }
+    let Some(info) = response
+        .result
+        .as_mut()
+        .and_then(|r| r.get_mut("serverInfo"))
+    else {
+        return;
+    };
+    let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
+    let count = bc.client_count().saturating_sub(1);
+    info["connections"] = serde_json::json!(count);
+    let peer_count = bc.client_count();
+    bc.broadcast_except(
+        &EditorEvent::PeerJoined {
+            session_id,
+            peer_count,
+        },
+        session_id,
     );
 }
 

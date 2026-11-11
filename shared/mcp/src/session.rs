@@ -143,13 +143,17 @@ impl ClientSession {
         }
     }
 
-    /// The authenticated peer label, if this session is key/TLS-authenticated
-    /// with a real (non-synthetic) identity. Display/logging only — never the
-    /// subject for access control (use `authenticated_principal`).
+    /// The authenticated peer label: present exactly when the session has a
+    /// principal (key/TLS, psk, or a bearer token), so handlers that label
+    /// presence, saves or shares never fall back to a name the client chose.
+    /// Display/logging only — never the subject for access control (use
+    /// `authenticated_principal`). It used to require a real public key, which
+    /// a bearer (sync WebSocket) session lacks, so those sessions could label
+    /// themselves as anyone.
     pub fn authenticated_label(&self) -> Option<&str> {
         self.peer_identity
             .as_ref()
-            .filter(|p| p.is_authenticated())
+            .filter(|p| p.principal().is_some())
             .map(|p| p.label.as_str())
     }
 
@@ -218,6 +222,20 @@ impl std::fmt::Debug for ClientSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every authenticated kind of session (bearer token included) has the
+    /// label the daemon bound, so no handler falls back to a client-supplied
+    /// name; an unauthenticated one has none. Kills: requiring a public key,
+    /// which let every sync-WebSocket session label itself as anyone.
+    #[test]
+    fn every_authenticated_session_has_its_bound_label() {
+        let bearer =
+            ClientSession::with_identity(crate::identity::PeerIdentity::bearer("SHA256:alice"));
+        assert_eq!(bearer.authenticated_label(), Some("SHA256:alice"));
+        let none = ClientSession::with_identity(crate::identity::PeerIdentity::synthetic("guest"));
+        assert_eq!(none.authenticated_label(), None);
+        assert_eq!(ClientSession::new().authenticated_label(), None);
+    }
 
     #[test]
     fn session_ids_are_unique() {
