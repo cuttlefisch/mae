@@ -391,3 +391,25 @@ fn json_never_carries_a_raw_line_or_paragraph_separator() {
         );
     }
 }
+
+/// Headings whose titles are, or carry, characters at the edge of the id
+/// rule: combining marks Emacs counts as `[[:alnum:]]` (so a slug keeps
+/// them) and format characters it does not (so a slug drops them). Fixed
+/// cases, so the contract is checked on them every run rather than only when
+/// a random generator happens to reach them. `* \u{1cf30}` is the input the
+/// random property found: the oracle wrongly rejected its valid slug.
+#[test]
+fn headings_at_the_edge_of_the_id_rule_keep_the_contract() {
+    for title in [
+        "\u{1cf30}",
+        "a\u{0301}",
+        "\u{0915}\u{093f}",
+        "\u{1cf30}\u{1cf31} x",
+        "a\u{202e}b",
+        "\u{200b}\u{feff}",
+        "x\u{2066}y\u{2069}",
+    ] {
+        let doc = format!("* {title}\n");
+        assert!(check_all(&doc).is_ok(), "{title:?}: {:?}", check_all(&doc));
+    }
+}
