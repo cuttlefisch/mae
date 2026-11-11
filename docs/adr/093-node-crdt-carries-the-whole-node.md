@@ -132,3 +132,58 @@ Gate A, all four green, each stated as an observation rather than a review:
    **`setting_v2_fields_to_their_current_values_produces_no_ops`** — the ADR-092 D2 oracles
    restated for `YMap` and `YArray`. Peer-equality alone is free from a CRDT and would pass on a
    clear-and-refill; the oracle is what happened to the key the other peer wrote.
+
+## Amendment 1 (2026-11-11): `org_header`, the shape of a seeded file's header
+
+**Status of this amendment:** Accepted with its implementation (the native KB seed). It adds one
+optional field and sets the rules any later writer must follow.
+
+A KB seeded under the `org-literal-v1` contract stores each file's header as typed fields: the
+drawer's properties, the title and the filetags. Three facts about the header are lost that way,
+because `properties` is a per-key `YMap` with no order (D1, D5), and a plain title or tag list
+cannot tell an absent line from an empty one. An exporter writing the file back needs all three.
+So the node gains:
+
+```text
+node.org_header: YMap {
+    property_order:    YArray<String>   the drawer's keys, in file order, as written
+    has_title_line:    bool             the file had a `#+title:` line
+    has_filetags_line: bool             the file had a `#+filetags:` line
+}
+```
+
+### A1. It follows D2 and D3
+
+The field is optional. A document without it, whether v1 or a v2 node that no seed made, reads as
+"no header shape recorded". Reading it writes nothing. `KbNodeDoc::version()` and `rebirth_hash()`
+digest it only when it is present, so every existing document keeps the version it had, and
+rebirth carries it across.
+
+### A2. Who may create it: the seed, at the node's creation
+
+The seeder writes `org_header` in the same transaction that creates the node, before any other peer
+holds the document. That is D4's rule: the container exists from construction. **No other writer
+creates the map.** In particular, an editor never gives a document that lacks one an `org_header`,
+because two peers doing so concurrently would each insert a map at the key and one would be
+dropped. A node created later by an editor simply has none.
+
+### A3. How a writer maintains it on a shared document
+
+A client that edits a seeded node's properties as typed fields keeps the order with element
+operations, never a clear-and-refill (D5's rule, applied to this array):
+- adding a property inserts its key at the intended position;
+- removing a property deletes that key's element;
+- renaming a key is a delete and an insert;
+- the two flags are plain scalar sets.
+
+Concurrent inserts of the same key by two peers can leave a key in the array twice. That is
+tolerated rather than prevented (A4).
+
+### A4. How a reader interprets it
+
+- A key that appears more than once in `property_order` counts at its first position.
+- A key in `property_order` but not in `properties` is skipped.
+- A key in `properties` but not in `property_order` goes after the ordered keys, in sorted order.
+
+The export applies these rules and reports each adjustment, so no edit produces a file that seeds
+back differently. Its re-split check refuses any node that would.
