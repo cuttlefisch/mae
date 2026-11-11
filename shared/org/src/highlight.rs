@@ -59,6 +59,62 @@ pub struct Section {
     /// Whether a headline follows the region (then its text must keep
     /// ending with a line ending).
     pub followed_by_headline: bool,
+    /// The region's own line terminators, which the FILE's convention
+    /// ([`crate::LineEnding::detect`]) is computed from together with every other
+    /// region's: an edit that changes them may change the convention.
+    pub eol: EolProfile,
+    /// The line terminator just before the region (its headline line's), or
+    /// `None` at the start of the file. It belongs to no region, so it only
+    /// changes with a full parse, and it pins part of the file's convention.
+    pub eol_anchor: Option<crate::LineEnding>,
+}
+
+/// What [`crate::LineEnding::detect`] reads of a stretch of text: whether it holds
+/// an LF, an LF without a CR before it, and a CR. A region starts just after a
+/// line ending (or at the start of the file) and is followed by a headline or
+/// the end, so an LF at its start is bare and no CRLF spans its edges: the
+/// file's convention is a function of these facts, OR-ed over every region and
+/// the headline lines between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct EolProfile {
+    pub has_lf: bool,
+    pub bare_lf: bool,
+    pub has_cr: bool,
+}
+
+impl EolProfile {
+    /// The profile of `region` (as the text of a [`Section`]).
+    pub fn of(region: &str) -> EolProfile {
+        let b = region.as_bytes();
+        let mut p = EolProfile::default();
+        for (i, &c) in b.iter().enumerate() {
+            match c {
+                b'\n' => {
+                    p.has_lf = true;
+                    if i == 0 || b[i - 1] != b'\r' {
+                        p.bare_lf = true;
+                    }
+                }
+                b'\r' => p.has_cr = true,
+                _ => {}
+            }
+        }
+        p
+    }
+
+    /// As three bits (LF 1, bare LF 2, CR 4), for a serialisation boundary.
+    pub fn bits(self) -> u8 {
+        u8::from(self.has_lf) | u8::from(self.bare_lf) << 1 | u8::from(self.has_cr) << 2
+    }
+
+    /// From [`Self::bits`]; `None` for a value no profile has.
+    pub fn from_bits(b: u8) -> Option<EolProfile> {
+        (b < 8).then_some(EolProfile {
+            has_lf: b & 1 != 0,
+            bare_lf: b & 2 != 0,
+            has_cr: b & 4 != 0,
+        })
+    }
 }
 
 impl Section {
@@ -70,6 +126,8 @@ impl Section {
         context: FragmentContext,
         declarations: u32,
         followed_by_headline: bool,
+        eol: EolProfile,
+        eol_anchor: Option<crate::LineEnding>,
     ) -> Section {
         Section {
             start,
@@ -77,6 +135,8 @@ impl Section {
             context,
             declarations,
             followed_by_headline,
+            eol,
+            eol_anchor,
         }
     }
 }
@@ -92,6 +152,10 @@ pub enum NeedsFull {
     /// It no longer ends with a line ending, so it would join the next
     /// headline's line.
     Boundary,
+    /// Its line terminators changed in a way the file's line-ending
+    /// convention is computed from (an LF, a bare LF or a CR appeared or went),
+    /// so the convention, a fact about the whole file, may have changed.
+    LineEnding,
 }
 
 /// The answer of [`section_highlights`].
@@ -265,6 +329,8 @@ fn section(
         context: FragmentContext::from_document(doc, headline),
         declarations: fingerprint(inside),
         followed_by_headline: end < len,
+        eol: EolProfile::of(&slice(doc, start, end)),
+        eol_anchor: anchor_before(&slice(doc, start.saturating_sub(2), start)),
     }
 }
 
@@ -317,17 +383,63 @@ fn declares(n: &SyntaxNode) -> bool {
     }
 }
 
+fn slice(doc: &Document, start: u32, end: u32) -> String {
+    doc.syntax()
+        .text()
+        .slice(rowan::TextRange::new(start.into(), end.into()))
+        .to_string()
+}
+
+/// The terminator ending `before` (the two bytes before a region): `None` at
+/// the start of the file.
+fn anchor_before(before: &str) -> Option<crate::LineEnding> {
+    use crate::LineEnding::*;
+    match before.as_bytes() {
+        [.., b'\r', b'\n'] => Some(CrLf),
+        [.., b'\n'] => Some(Lf),
+        [.., b'\r'] => Some(Cr),
+        _ => None,
+    }
+}
+
+/// Whether the region's new terminators can change the file's convention,
+/// given its old ones and the terminator before it (see [`Section::eol_anchor`]):
+/// - a bare LF before it: the file is unix whatever the region holds;
+/// - a CRLF: the file has an LF and a CR, so only a bare LF appearing or
+///   going in the region can change it (DOS vs unix);
+/// - a CR: the file is mac (no LF anywhere), so only an LF appearing can;
+/// - the start of the file: any change in the region's facts might.
+fn line_ending_may_change(
+    old: EolProfile,
+    new: EolProfile,
+    anchor: Option<crate::LineEnding>,
+) -> bool {
+    use crate::LineEnding::*;
+    match anchor {
+        Some(Lf) => false,
+        Some(CrLf) => old.bare_lf != new.bare_lf,
+        Some(Cr) => old.has_lf != new.has_lf,
+        None => old != new,
+    }
+}
+
 /// Whether `text`, starting at offset `start` of its file, can be followed
 /// by a headline line: it ends with a line ending, or is empty, or (at the
 /// start of the file only, where a byte-order mark is trivia) holds nothing
 /// but one.
-fn ends_line(text: &str, start: u32) -> bool {
+/// The terminator is the file's: a lone CR ends a line only in a mac file;
+/// in a unix or DOS file it is content, and the next line would join it.
+fn ends_line(text: &str, start: u32, eol: crate::LineEnding) -> bool {
     let rest = if start == 0 {
         text.trim_start_matches('\u{feff}')
     } else {
         text
     };
-    rest.is_empty() || text.ends_with('\n') || text.ends_with('\r')
+    rest.is_empty()
+        || match eol {
+            crate::LineEnding::Cr => text.ends_with('\r'),
+            _ => text.ends_with('\n'),
+        }
 }
 
 /// The spans of `section`'s region whose text is now `text`, as a whole
@@ -338,8 +450,14 @@ pub fn section_highlights(
     options: &ParseOptions,
     section: &Section,
 ) -> SectionHighlights {
-    if section.followed_by_headline && !ends_line(text, section.start) {
+    if section.followed_by_headline && !ends_line(text, section.start, section.context.line_ending)
+    {
         return SectionHighlights::NeedsFull(NeedsFull::Boundary);
+    }
+    // If no region's profile changes without a full parse, the facts the
+    // convention is computed from cannot change, so neither can it.
+    if line_ending_may_change(section.eol, EolProfile::of(text), section.eol_anchor) {
+        return SectionHighlights::NeedsFull(NeedsFull::LineEnding);
     }
     let frag = parse_fragment(text, options, &section.context);
     let root = frag.syntax();
