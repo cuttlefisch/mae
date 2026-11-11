@@ -939,6 +939,8 @@ fn mae_mcp_test_principal(principal: &str) -> crate::oauth::ValidatedPrincipal {
         principal: principal.to_string(),
         audience: vec!["https://mae.example.com/mcp".to_string()],
         expires_at: 9_999_999_999,
+        issuer: String::new(),
+        subject: String::new(),
     }
 }
 
