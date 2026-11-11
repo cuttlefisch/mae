@@ -30,6 +30,8 @@ name = "mae-daemon"
 path = "src/main.rs"
 
 [dependencies]
+# NFC for the seed's path-collision key (already in the lock, transitively).
+unicode-normalization = "0.1.25"
 mae-effect-sandbox = { path = "../shared/effect-sandbox" }
 # storage-sqlite is required explicitly here (not left to Cargo's feature
 # unification with a separate direct `cozo` dep) -- the daemon never calls

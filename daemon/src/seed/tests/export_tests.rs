@@ -202,3 +202,66 @@ async fn a_kb_without_the_literal_format_is_refused() {
         .unwrap_err();
     assert!(err.0.contains("body format"), "{err}");
 }
+
+/// The export's own guard, for a seed record that holds colliding paths
+/// (written by an older planner, or edited): every colliding node is refused,
+/// and a distinct one is not. Kills: dropping the guard, or first-wins.
+#[test]
+fn colliding_source_paths_are_all_refused_at_export() {
+    let row = |id: &str, path: &str| crate::storage::SeedNodeRow {
+        node_id: id.into(),
+        path: path.into(),
+        blob: String::new(),
+        normalised_sha256: String::new(),
+        created_at: 0,
+        created_source: "git".into(),
+        modified_at: 0,
+        modified_source: "git".into(),
+        seed_wal_id: None,
+    };
+    let rows: HashMap<String, crate::storage::SeedNodeRow> = [
+        row("a", "N/A.org"),
+        row("b", "n/a.org"),
+        row("c", "n/caf\u{e9}.org"),
+        row("d", "n/cafe\u{301}.org"),
+        row("e", "n/other.org"),
+    ]
+    .into_iter()
+    .map(|r| (r.node_id.clone(), r))
+    .collect();
+    let ids: Vec<String> = ["a", "b", "c", "d", "e"].map(String::from).to_vec();
+    let got = crate::seed::export::colliding_nodes_for_test(&ids, &rows);
+    let mut refused: Vec<&str> = got.keys().map(String::as_str).collect();
+    refused.sort();
+    assert_eq!(refused, ["a", "b", "c", "d"]);
+}
+
+/// `--force` over an existing file replaces it through a temporary name and
+/// leaves no temporary file behind.
+#[tokio::test]
+async fn force_replaces_files_without_leaving_temporaries() {
+    let files = fixture_files();
+    let r = fixture_repo(&files);
+    let (store, _, _) = seeded(&r).await;
+    let dir = out_dir();
+    export(&store, KB, dir.path(), false).await.unwrap();
+    let again = export(&store, KB, dir.path(), true).await.unwrap();
+    assert!(again.refused.is_empty(), "{:?}", again.refused);
+    let mut stack = vec![dir.path().to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            assert!(
+                !p.to_string_lossy().contains("mae-export-tmp"),
+                "left behind: {}",
+                p.display()
+            );
+            if p.is_dir() {
+                stack.push(p);
+            }
+        }
+    }
+    for (path, text) in &files {
+        assert_eq!(read(dir.path(), path), normalise(text).unwrap(), "{path}");
+    }
+}

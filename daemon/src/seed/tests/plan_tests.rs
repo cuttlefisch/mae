@@ -511,3 +511,32 @@ fn the_round_trip_guard_rejects_a_file_that_does_not_read_back() {
     f.title = Some("T\n#+title: otro".into());
     assert!(!crate::seed::plan::round_trips(&f, &regen(&f)));
 }
+
+/// Two paths that are one file on a case- or normalization-insensitive
+/// filesystem are both refused (never first-wins); a path unlike any other is
+/// planned. Kills: dropping `path_collisions`, or a fold key without case or
+/// without NFC.
+#[test]
+fn paths_that_name_one_file_on_a_folding_filesystem_are_refused() {
+    let files: Vec<(&str, Vec<u8>)> = vec![
+        ("notes/Case.org", ok_page("c1")),
+        ("notes/case.org", ok_page("c2")),
+        ("notes/caf\u{e9}.org", ok_page("n1")),
+        ("notes/cafe\u{301}.org", ok_page("n2")),
+        ("notes/alone.org", ok_page("a1")),
+    ];
+    let plan = plan_entries(input(&files), &opts()).unwrap();
+    let got = refused(&plan);
+    for p in [
+        "notes/Case.org",
+        "notes/case.org",
+        "notes/caf\u{e9}.org",
+        "notes/cafe\u{301}.org",
+    ] {
+        assert!(
+            got.contains(&(p.to_string(), ProblemKind::PathCollision)),
+            "{p} missing from {got:?}"
+        );
+    }
+    assert!(!got.iter().any(|(p, _)| p == "notes/alone.org"), "{got:?}");
+}

@@ -717,7 +717,11 @@ byte for byte. Properties keep their recorded order; one added since goes after 
 one removed is skipped, and both are printed as `note:` lines. Every file is checked first: a node
 whose text would seed back differently (a `#+title:` or a drawer typed into its body, an edited
 `ID`) is printed as `refused:` and not written, and the exit code is 1. Symlinks in the target are
-never followed. Nodes created after the seed have no source path and are refused.
+never followed. Nodes created after the seed have no source path and are refused. Two source paths
+that are one file on a case- or normalization-insensitive filesystem (`A.org` and `a.org`, or NFC
+and NFD spellings) are both refused (`path_collision`), so neither overwrites the other on APFS,
+NTFS or a folding mount; the seed planner refuses such paths too. An existing file is replaced
+through a temporary file and a rename, so a crash leaves the old file or the new one.
 
 ### Store access: stop the daemon
 

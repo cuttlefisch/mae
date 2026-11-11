@@ -260,6 +260,7 @@ pub fn plan_entries(input: PlanInput, opts: &PlanOptions) -> Result<SeedPlan, Se
     }));
     let nodes = plan_files(&selection.selected, &input, opts, &mut refusals)?;
     refusals.extend(duplicate_ids(&nodes));
+    refusals.extend(path_collisions(&nodes));
     let received_times = received_times(&nodes, opts, &mut refusals);
     if opts.require_canonical {
         refusals.extend(nodes.iter().filter(|n| !n.canonical).map(|n| Refusal {
@@ -582,6 +583,33 @@ fn duplicate_ids(nodes: &[PlannedNode]) -> Vec<Refusal> {
                 p,
                 ProblemKind::DuplicateId,
                 &format!("the id {id:?} also appears in {}", others.join(", ")),
+            ));
+        }
+    }
+    out
+}
+
+/// Every path that names the same file as another selected path on a
+/// case- or normalization-insensitive filesystem ([`super::path_fold_key`]):
+/// one refusal per path, naming the others.
+fn path_collisions(nodes: &[PlannedNode]) -> Vec<Refusal> {
+    let mut seen: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    for n in nodes {
+        seen.entry(super::path_fold_key(&n.path))
+            .or_default()
+            .push(&n.path);
+    }
+    let mut out = Vec::new();
+    for paths in seen.into_values().filter(|p| p.len() > 1) {
+        for p in &paths {
+            let others: Vec<&str> = paths.iter().copied().filter(|o| o != p).collect();
+            out.push(refusal(
+                p,
+                ProblemKind::PathCollision,
+                &format!(
+                    "names the same file as {} on a case- or normalization-insensitive filesystem",
+                    others.join(", ")
+                ),
             ));
         }
     }

@@ -86,6 +86,15 @@ pub use split::{drawer_id, normalise, regen, split, SplitFile};
 /// contract rather than a silent change of meaning.
 pub const CONTRACT: &str = "org-literal-v1";
 
+/// Two paths that name the same file on a case-insensitive or
+/// normalization-insensitive filesystem (APFS, NTFS, many mounts) share this
+/// key: NFC, then lowercase. A seed refuses such paths, and so does an export,
+/// so one node's file can never overwrite another's.
+pub fn path_fold_key(path: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    path.nfc().collect::<String>().to_lowercase()
+}
+
 /// The largest body a node may have: ADR-109 D6's client cap (`kb_max_node_bytes`,
 /// 1 MiB). A larger file is refused. It is never truncated.
 pub const DEFAULT_MAX_BODY_BYTES: usize = 1_048_576;
@@ -125,6 +134,7 @@ pub enum ProblemKind {
     NotRoundTrippable,
     BodyTooLarge,
     DuplicateId,
+    PathCollision,
     NonCanonical,
     ReceivedTime,
     Symlink,
@@ -163,6 +173,7 @@ impl ProblemKind {
             NotRoundTrippable => "not_round_trippable",
             BodyTooLarge => "body_too_large",
             DuplicateId => "duplicate_id",
+            PathCollision => "path_collision",
             NonCanonical => "non_canonical",
             ReceivedTime => "received_time",
             Symlink => "symlink",

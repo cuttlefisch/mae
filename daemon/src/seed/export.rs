@@ -42,6 +42,9 @@ pub enum ExportRefusalKind {
     Unreadable,
     /// Writing the file failed (or would have followed a symlink).
     WriteFailed,
+    /// Another node's path names the same file on a case- or
+    /// normalization-insensitive filesystem; neither is written.
+    PathCollision,
 }
 
 impl ExportRefusalKind {
@@ -52,6 +55,7 @@ impl ExportRefusalKind {
             Self::NotReproducible => "not_reproducible",
             Self::Unreadable => "unreadable",
             Self::WriteFailed => "write_failed",
+            Self::PathCollision => "path_collision",
         }
     }
 }
@@ -99,7 +103,16 @@ pub async fn export(
     let mut ids: Vec<String> = coll.list_nodes().into_iter().map(|(id, _)| id).collect();
     ids.sort();
     let mut report = ExportReport::default();
+    let colliding = colliding_nodes(&ids, &rows);
     for id in ids {
+        if let Some(detail) = colliding.get(&id) {
+            report.refused.push(ExportRefusal {
+                node_id: id.clone(),
+                kind: ExportRefusalKind::PathCollision,
+                detail: detail.clone(),
+            });
+            continue;
+        }
         export_node(store, kb_id, &id, rows.get(&id), dir, &mut report).await;
     }
     Ok(report)
@@ -123,6 +136,42 @@ async fn literal_collection(store: &DocStore, kb_id: &str) -> Result<KbCollectio
              bodies are not literal org text, so there is no file to write back"
         ))),
     }
+}
+
+/// Nodes whose source path folds ([`super::path_fold_key`]) to the same key as
+/// another node's: every one of them is refused, never first-wins.
+fn colliding_nodes(ids: &[String], rows: &HashMap<String, SeedNodeRow>) -> HashMap<String, String> {
+    let mut by_key: HashMap<String, Vec<(&str, &str)>> = HashMap::new();
+    for id in ids {
+        if let Some(row) = rows.get(id) {
+            by_key
+                .entry(super::path_fold_key(&row.path))
+                .or_default()
+                .push((id, &row.path));
+        }
+    }
+    let mut out = HashMap::new();
+    for group in by_key.into_values().filter(|g| g.len() > 1) {
+        let paths: Vec<&str> = group.iter().map(|(_, p)| *p).collect();
+        for (id, path) in &group {
+            out.insert(
+                id.to_string(),
+                format!(
+                    "{path} names the same file as another of {}",
+                    paths.join(", ")
+                ),
+            );
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+pub(crate) fn colliding_nodes_for_test(
+    ids: &[String],
+    rows: &HashMap<String, SeedNodeRow>,
+) -> HashMap<String, String> {
+    colliding_nodes(ids, rows)
 }
 
 /// The target must be a real directory (created if missing) and empty, unless
@@ -315,20 +364,33 @@ fn write_inside(dir: &Path, rel: &Path, text: &str) -> Result<(), String> {
 fn replace_file(path: &Path, text: &str) -> Result<(), String> {
     use std::io::Write;
     let err = |e: std::io::Error| format!("{}: {e}", path.display());
-    match std::fs::symlink_metadata(path) {
-        Ok(m) if m.file_type().is_symlink() || !m.is_file() => {
+    if let Ok(m) = std::fs::symlink_metadata(path) {
+        if m.file_type().is_symlink() || !m.is_file() {
             return Err(format!(
                 "{} exists and is not a regular file",
                 path.display()
-            ))
+            ));
         }
-        Ok(_) => std::fs::remove_file(path).map_err(err)?,
-        Err(_) => {}
     }
+    // Write beside the target, then rename over it: a crash leaves either the
+    // old file or the new one, never neither (`--force` used to remove first).
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{name}.mae-export-tmp"));
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(path)
-        .map_err(err)?;
-    f.write_all(text.as_bytes()).map_err(err)
+        .open(&tmp)
+        .map_err(|e| format!("{}: {e}", tmp.display()))?;
+    let written = f
+        .write_all(text.as_bytes())
+        .and_then(|()| f.sync_all())
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(err(e));
+    }
+    Ok(())
 }
