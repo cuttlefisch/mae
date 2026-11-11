@@ -257,7 +257,7 @@ fn own_end_only_ever_drops_trailing_blank() {
     }
 }
 
-/// The edit mae-web's property test found: in a CRLF file, an LF typed between
+/// The edit a browser client's property test found: in a CRLF file, an LF typed between
 /// a CR and its LF makes the file unix (a lone LF anywhere does, as Emacs
 /// decides it), a fact about the whole file the region alone cannot carry.
 /// So the section asks for a full parse. Kills: answering from the region.
