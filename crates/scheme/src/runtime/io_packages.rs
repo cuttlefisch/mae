@@ -501,25 +501,7 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         },
     );
 
-    // (kb-restore NODE-ID VERSION) — restore a node to a previous version
-    let s = shared.clone();
-    vm.register_fn(
-        "kb-restore",
-        "Restore a KB node to a previous version",
-        Arity::Fixed(2),
-        tier::WRITE,
-        move |args: &[Value]| {
-            let id = arg_string(args, 0, "kb-restore")?;
-            let version = match &args[1] {
-                Value::Int(n) => *n,
-                other => return Err(LispError::type_error("integer", format!("{}", other))),
-            };
-            s.lock()
-                .pending_ex_commands
-                .push(format!("kb-restore {} {}", id, version));
-            Ok(Value::Void)
-        },
-    );
+    register_kb_restore(vm, shared);
 
     // (kb-raw-query DATALOG) — execute raw CozoDB Datalog query
     let s = shared.clone();
@@ -558,6 +540,32 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
 ///
 /// Enforced by
 /// `permission_tests::kb_agenda_custom_is_refused_below_the_tier_kb_raw_query_requires`.
+/// `(kb-restore NODE-ID VERSION [KB])` — restore a node to a previous version.
+fn register_kb_restore(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>) {
+    let s = shared.clone();
+    vm.register_fn(
+        "kb-restore",
+        "Restore a KB node to a previous version. Optional KB names the KB whose store \
+         holds the history (`local` = the local KB); without it the primary's store is \
+         used. An unknown KB is an error, never a fallback.",
+        Arity::Variadic(2),
+        tier::WRITE,
+        move |args: &[Value]| {
+            let id = arg_string(args, 0, "kb-restore")?;
+            let version = match &args[1] {
+                Value::Int(n) => *n,
+                other => return Err(LispError::type_error("integer", format!("{}", other))),
+            };
+            let kb = super::kb_crud::opt_kb(args, 2, "kb-restore")?;
+            let flag = kb.map(|k| format!("--kb={k} ")).unwrap_or_default();
+            s.lock()
+                .pending_ex_commands
+                .push(format!("kb-restore {flag}{id} {version}"));
+            Ok(Value::Void)
+        },
+    );
+}
+
 fn reject_arbitrary_datalog_filter(filter: &str) -> Result<(), LispError> {
     if filter.eq_ignore_ascii_case("custom") {
         return Err(LispError::user(
