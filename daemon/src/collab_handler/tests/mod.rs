@@ -39,6 +39,7 @@ mod collab_handler_error_kind_fault_tests;
 mod collab_handler_error_kind_no_oracle_tests;
 mod collab_handler_error_kind_tests;
 mod collab_handler_error_kind_write_tests;
+mod collab_handler_field_types_tests;
 mod collab_handler_governance_quorum_tests;
 mod collab_handler_governor_tests;
 mod collab_handler_kb_lifecycle_tests;

@@ -1024,6 +1024,68 @@ fn admission_kind(e: &mae_sync::content_ops::AdmissionError) -> RefusalKind {
 /// external anchor for a JOINED KB, else this daemon's own signer key when it is the
 /// collection's owner (an OWNED KB — A is its own authority). `None` when neither
 /// holds (un-anchored + not ours), in which case the caller applies the legacy gate.
+/// Refuse a node update that would leave a known field of the node document
+/// mistyped (`invalid_field`), checked on the document as it would be after
+/// the update and before anything is persisted. `replace` checks the update
+/// alone (a purge-and-recreate). Only a violation the update INTRODUCES
+/// counts, so a legacy document stays writable. E2E KBs are not checked: the
+/// daemon cannot read their nodes. A document or update that does not decode
+/// is left to the write path's own validation.
+///
+/// Where it runs: on writes this daemon accepts from a client (`kb/node_update`,
+/// `sync/update`). Updates a mesh peer delivers (the dialer) are deliberately
+/// NOT re-checked: refusing one cannot reach the writer, and would only leave
+/// this replica diverged from its peer's for good. The daemon that accepted the
+/// write from its client is where it is checked. The owner's own `kb/share`
+/// merge and the control socket are owner paths, also unchecked.
+pub(crate) async fn refuse_mistyped_node_update(
+    doc_store: &DocStore,
+    (kb_id, node_doc): (&str, &str),
+    coll: Option<&KbCollectionDoc>,
+    update: &[u8],
+    replace: bool,
+) -> Result<(), McpError> {
+    let loaded;
+    let coll = match coll {
+        Some(c) => c,
+        None => match load_collection(doc_store, kb_id).await {
+            Ok(c) => {
+                loaded = c;
+                &loaded
+            }
+            Err(_) => return Ok(()),
+        },
+    };
+    let signed_e2e = match resolve_content_anchor_with_coll(doc_store, kb_id, Some(coll)).await {
+        Some(anchor) => matches!(
+            mae_sync::membership::derive_encryption(&coll.oplog_ops(), &anchor),
+            mae_sync::kb::Encryption::E2e
+        ),
+        None => false,
+    };
+    if signed_e2e || matches!(coll.encryption(), mae_sync::kb::Encryption::E2e) {
+        return Ok(());
+    }
+    // The base is the document as storage holds it: an idle-evicted node is
+    // on disk, not in memory (`has_doc` would say "new" and the check would
+    // pass a delta the real apply then lands on the reloaded document). One
+    // that exists and cannot be read is refused, never checked as empty.
+    let base = if replace || !doc_store.has_durable_doc(node_doc).await {
+        Vec::new()
+    } else {
+        doc_store.encode_state(node_doc).await.map_err(|e| {
+            McpError::internal_fault(format!("node '{node_doc}' could not be read to check: {e}"))
+        })?
+    };
+    match mae_sync::kb::KbNodeDoc::field_type_introduced(&base, update) {
+        Ok(Some(field)) => Err(McpError::invalid_field(
+            field,
+            format!("the update leaves the node's '{field}' field with the wrong type"),
+        )),
+        _ => Ok(()),
+    }
+}
+
 pub async fn resolve_content_anchor(doc_store: &DocStore, kb_id: &str) -> Option<[u8; 32]> {
     resolve_content_anchor_with_coll(doc_store, kb_id, None).await
 }
