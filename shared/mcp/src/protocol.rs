@@ -366,6 +366,18 @@ impl McpError {
         Self::kinded(-32600, message, "credential_in_url", serde_json::json!({}))
     }
 
+    /// A y-protocols awareness update names a client id another session on
+    /// the same document already owns (B5): a session speaks only for its own
+    /// cursors.
+    pub fn awareness_not_owned(message: String) -> Self {
+        Self::kinded(
+            -32600,
+            message,
+            "awareness_not_owned",
+            serde_json::json!({}),
+        )
+    }
+
     /// A principal already holds `limit` unused connect tickets (B1): use one
     /// or let it expire (30 s) before minting another.
     pub fn too_many_tickets(message: String, limit: usize) -> Self {
@@ -515,6 +527,7 @@ pub const ERROR_KINDS: &[&str] = &[
     "tenant_quota_exceeded",
     "too_many_open_docs",
     "credential_in_url",
+    "awareness_not_owned",
     "too_many_tickets",
     "ticket_invalid",
     "issuer_not_supported",
@@ -694,6 +707,7 @@ mod tests {
             McpError::tenant_quota_exceeded(m()),
             McpError::too_many_open_docs(m(), 1),
             McpError::credential_in_url(m()),
+            McpError::awareness_not_owned(m()),
             McpError::too_many_tickets(m(), 8),
             McpError::ticket_invalid(m()),
             McpError::issuer_not_supported(m()),

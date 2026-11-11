@@ -264,6 +264,71 @@ pub(super) async fn relay(
     .await
 }
 
+/// Most client ids one presence update may carry (a session is one client
+/// per open editor; this bounds a decode, not a real client).
+const MAX_AWARENESS_CLIENTS: usize = 16;
+/// The presence rate floor per session and document: 20 Hz, the rate the
+/// awareness module already asks clients to keep to.
+const AWARENESS_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// B5: presence in the y-protocols awareness encoding. Decoded and bounded;
+/// every client id in it must be this session's (the first session to send
+/// an id on a document claims it); relayed as sent, with the session's
+/// principal stamped for each id, never one the client chose. A faster
+/// update than the floor is accepted and dropped (presence supersedes).
+fn relay_awareness_yjs(
+    broadcaster: &SharedBroadcaster,
+    (session_id, principal): (u64, Option<&str>),
+    session_docs: &mut HashSet<String>,
+    doc_name: &str,
+    id: serde_json::Value,
+    update: &serde_json::Value,
+) -> JsonRpcResponse {
+    use mae_sync::yrs::updates::decoder::Decode;
+    let bad =
+        |m: &str| JsonRpcResponse::error(id.clone(), McpError::invalid_params("update", m.into()));
+    let Some(bytes) = update.as_str().and_then(|u| base64_to_update(u).ok()) else {
+        return bad("'update' is not base64");
+    };
+    let Ok(decoded) = mae_sync::yrs::sync::awareness::AwarenessUpdate::decode_v1(&bytes) else {
+        return bad("'update' is not a y-protocols awareness update");
+    };
+    if decoded.clients.len() > MAX_AWARENESS_CLIENTS {
+        return bad("'update' names too many clients");
+    }
+    let ids: Vec<u64> = decoded.clients.keys().map(|c| c.get()).collect();
+    let stamp = principal.unwrap_or("unauthenticated").to_string();
+    let principals = ids.iter().map(|c| (c.to_string(), stamp.clone())).collect();
+    session_docs.insert(doc_name.to_string());
+    let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
+    bc.subscribe_doc(session_id, doc_name);
+    bc.add_event_sub(session_id, "awareness_yjs");
+    if let Err(taken) = bc.claim_awareness(doc_name, session_id, &ids) {
+        return JsonRpcResponse::error(
+            id,
+            McpError::awareness_not_owned(format!(
+                "awareness client {taken} on '{doc_name}' belongs to another session"
+            )),
+        );
+    }
+    if bc.awareness_due(
+        session_id,
+        doc_name,
+        std::time::Instant::now(),
+        AWARENESS_MIN_INTERVAL,
+    ) {
+        bc.broadcast_except(
+            &EditorEvent::AwarenessYjs {
+                doc_id: doc_name.to_string(),
+                update_base64: update.as_str().unwrap_or_default().to_string(),
+                principals,
+            },
+            session_id,
+        );
+    }
+    JsonRpcResponse::success(id, serde_json::json!({ "relayed": true }))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_sync_awareness(
     doc_store: &DocStore,
@@ -284,6 +349,10 @@ pub(super) async fn handle_sync_awareness(
     if let Err(msg) = deny_kb_awareness(doc_store, &doc_name, auth_principal, transport).await {
         warn!(session = session_id, doc = %doc_name, reason = %msg, "sync/awareness denied");
         return JsonRpcResponse::error(id, msg.into());
+    }
+    if let Some(update) = params.get("update") {
+        let who = (session_id, auth_principal);
+        return relay_awareness_yjs(broadcaster, who, session_docs, &doc_name, id, update);
     }
     let state = &params["state"];
     debug!(

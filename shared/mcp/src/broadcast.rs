@@ -98,6 +98,16 @@ pub enum EditorEvent {
         selection: Option<(usize, usize, usize, usize)>,
         mode: String,
     },
+    /// Presence in the y-protocols awareness encoding (ADR-099 A1 B5), relayed
+    /// as sent, with the daemon-stamped principal of every client id in it.
+    /// Receivers label a cursor by `principals`, never by the state's own
+    /// `user` fields, which the sender chose.
+    #[serde(rename = "awareness_yjs")]
+    AwarenessYjs {
+        doc_id: String,
+        update_base64: String,
+        principals: std::collections::BTreeMap<String, String>,
+    },
 }
 
 impl EditorEvent {
@@ -110,6 +120,7 @@ impl EditorEvent {
             EditorEvent::SharerLeft { doc, .. } => Some(doc),
             EditorEvent::SaveCommitted { doc, .. } => Some(doc),
             EditorEvent::AwarenessUpdate { doc_id, .. } => Some(doc_id),
+            EditorEvent::AwarenessYjs { doc_id, .. } => Some(doc_id),
             _ => None,
         }
     }
@@ -129,6 +140,7 @@ impl EditorEvent {
             EditorEvent::SharerLeft { .. } => "sharer_left",
             EditorEvent::SaveCommitted { .. } => "save_committed",
             EditorEvent::AwarenessUpdate { .. } => "awareness_update",
+            EditorEvent::AwarenessYjs { .. } => "awareness_yjs",
         }
     }
 }
@@ -172,6 +184,12 @@ pub struct EventBroadcaster {
     clients: HashMap<u64, ClientEntry>,
     /// Monotonically increasing sequence number for event ordering.
     next_seq: AtomicU64,
+    /// Which session owns each y-protocols awareness client id, per document
+    /// (B5): the first session to send an id claims it until it ends, so no
+    /// other session can speak for that cursor.
+    awareness_owners: HashMap<(String, u64), u64>,
+    /// When each session last relayed presence on each document (rate floor).
+    awareness_last: HashMap<(u64, String), std::time::Instant>,
 }
 
 impl EventBroadcaster {
@@ -179,6 +197,8 @@ impl EventBroadcaster {
         EventBroadcaster {
             clients: HashMap::new(),
             next_seq: AtomicU64::new(1),
+            awareness_owners: HashMap::new(),
+            awareness_last: HashMap::new(),
         }
     }
 
@@ -226,6 +246,47 @@ impl EventBroadcaster {
     /// Remove a client's subscription (on disconnect).
     pub fn unsubscribe(&mut self, session_id: u64) {
         self.clients.remove(&session_id);
+        self.awareness_owners
+            .retain(|_, owner| *owner != session_id);
+        self.awareness_last.retain(|(s, _), _| *s != session_id);
+    }
+
+    /// Claim y-protocols awareness client ids on `doc` for `session_id` (B5).
+    /// `Err(id)` names the first id another session already owns; nothing is
+    /// claimed then.
+    pub fn claim_awareness(&mut self, doc: &str, session_id: u64, ids: &[u64]) -> Result<(), u64> {
+        if let Some(&taken) = ids.iter().find(|id| {
+            self.awareness_owners
+                .get(&(doc.to_string(), **id))
+                .is_some_and(|owner| *owner != session_id)
+        }) {
+            return Err(taken);
+        }
+        for id in ids {
+            self.awareness_owners
+                .insert((doc.to_string(), *id), session_id);
+        }
+        Ok(())
+    }
+
+    /// Whether `session_id` may relay presence on `doc` now: at most once per
+    /// `min` (a presence update replaces the last, so a skipped one is lost
+    /// harmlessly). Records `now` when it may.
+    pub fn awareness_due(
+        &mut self,
+        session_id: u64,
+        doc: &str,
+        now: std::time::Instant,
+        min: std::time::Duration,
+    ) -> bool {
+        let key = (session_id, doc.to_string());
+        match self.awareness_last.get(&key) {
+            Some(last) if now.duration_since(*last) < min => false,
+            _ => {
+                self.awareness_last.insert(key, now);
+                true
+            }
+        }
     }
 
     /// Update a client's event type subscription list.
