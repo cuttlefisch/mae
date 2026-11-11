@@ -826,8 +826,8 @@ hold references; mae-org's resolver renders a labelled placeholder for every non
 
 **ADR-116** (*proposed, design; phased P1–P6*) — **node version history is complete, attributed,
 tamper-evident, retained by policy, and rolled back through the write path.** Amends ADR-106: every
-authored change (not only ingest) cuts a checkpoint version (handoff, idle, long session, before a
-destructive act, named), recording the whole materialized node, its editors and WAL range from the
+authored change (not only ingest) is covered by a checkpoint version (editor handoff, before a
+destructive act, named; deliberately no timer), recording the whole materialized node, its editors and WAL range from the
 editor record, and a per-node hash chain whose KB head the daemon signs; tamper evidence is stated
 as only as strong as a head kept outside the daemon. Retention is an explicit per-KB policy with
 floors, overridden by holds, named versions and revision-referenced versions; pruning drops content

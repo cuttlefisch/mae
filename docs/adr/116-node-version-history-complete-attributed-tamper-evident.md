@@ -47,13 +47,17 @@ History never enters the CRDT (ADR-106 D4 stands).
 ### D2. When a version is cut
 
 A version is a checkpoint of the node's whole materialized content. It is not one entry per CRDT
-update. The daemon cuts one when any of these happens:
-1. **Handoff:** a different principal starts editing the node.
-2. **Idle:** the node's edits pause for `history_idle_secs` (default 300).
-3. **Long session:** a continuous edit has run for `history_max_interval_secs` (default 1800).
-4. **Before a destructive act:** rollback, ingest, a seed overwrite, rebirth, delete or purge. The
+update, and it is not cut on a timer. The daemon cuts one when any of these happens:
+1. **Handoff:** a different principal starts editing the node. The version records the state the
+   previous principal left, attributed to the principals who edited since the last version.
+2. **Before a destructive act:** rollback, ingest, a seed overwrite, rebirth, delete or purge. The
    state is always captured before it is replaced.
-5. **On request:** a named version (`kb/history.checkpoint {name}`), or an ADR-113 revision freeze.
+3. **On request:** a named version (`kb/history.checkpoint {name}`), or an ADR-113 revision freeze.
+
+This grouping is deliberately coarse (decided 2026-11-11). A long session by one principal is one
+version until someone else edits, the principal names a version, or a destructive act intervenes.
+Finer rollback points within such a session are therefore not kept. The WAL still holds every
+update for as long as compaction keeps it, but that is not a history surface.
 
 Each version records the content AFTER the edits it covers, and the principals who made them. A
 checkpoint whose content equals the previous version's is not written, so watcher ticks and no-op
@@ -101,7 +105,7 @@ not stored.
 ### D5. Retention: an explicit, audited policy, overridden by holds and records
 
 Each KB has a policy, set by its owner or the daemon operator, and never by an agent principal
-(principle #16). The fields:
+(principle #16; see below). The fields:
 - **`min_days`**: content younger than this is never pruned. Floor 30.
 - **`keep`**: either `all`, or a rule of `max_versions` per node (floor 100) with an optional
   `max_days`.
@@ -120,8 +124,12 @@ job, and the time.
 Every policy change and every hold is itself a recorded event. Pruning runs on the maintenance tick
 and is bounded per pass.
 
-**Default:** `keep: all`, with `min_days: 30`. Nothing is pruned until a policy is set. A deployment
-sets its policy explicitly, and `mae-daemon kb history policy` shows each KB's current policy.
+**Default** (decided 2026-11-11): `keep: all`, with `min_days: 30`. Nothing is pruned until a
+policy is set. A deployment sets its policy explicitly, and `mae-daemon kb history policy` shows each
+KB's current policy, so an unset one is visible.
+
+**Who may set it** (decided 2026-11-11): the KB's Owner role, or the daemon operator. Never an agent
+principal.
 
 ### D6. Rollback goes through the write path, and adds history
 
@@ -170,9 +178,9 @@ until client-side history is designed.
   - pruning content still verifies, and a pruned entry's metadata is intact;
   - two different contents never share an `entry_hash` (length-prefix collision cases).
 - **P2 — daemon recording.**
-  - The five checkpoint triggers, each with a test driven by real `sync/update` traffic: handoff
-    between two principals, idle via the maintenance tick, long session, before each destructive
-    act, and named.
+  - The three checkpoint triggers, each with a test driven by real `sync/update` traffic: handoff
+    between two principals, before each destructive act, and named.
+  - A long single-principal session cuts no version until one of them happens.
   - The editors and WAL range of every version match the editor record.
   - A no-op save writes nothing.
 - **P3 — reads and verification.** `list`, `get`, `diff` and `verify`; signed heads and the head log;
