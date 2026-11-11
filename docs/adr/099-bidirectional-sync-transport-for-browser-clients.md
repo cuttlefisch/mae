@@ -217,6 +217,23 @@ lose.
   provider would otherwise supply these.
 - A third-party app that speaks only Hocuspocus cannot connect to MAE unmodified.
 
+**Who connects, as targeted (2026-11-11).** The clients MAE is building for are:
+- **mae-web in the browser**, on this transport, with B1's ticket;
+- **MAE's native editor and headless instances**, on this transport, with the bearer header
+  (ADR-111 D6);
+- **AI coding tools over MCP** (Codex, VS Code and similar).
+
+MCP clients do not speak a sync protocol at all. They call MAE's tools: through a local MAE
+reached by the MCP shim, which is itself a native or headless client of the daemon, or through an
+MCP endpoint on the daemon's HTTPS listener under ADR-052. Neither path needs a Yjs provider.
+
+User identity comes from an OIDC provider backed by the organisation's directory. The first one
+supported is authentik in front of Active Directory. B3's issuer-and-subject check, B6's end
+state and ADR-098's binding are written for exactly that issuer.
+
+No off-the-shelf Yjs or Hocuspocus application is a target. That removes the one tradeoff B0 had
+left open.
+
 **When to revisit:** if such third-party apps become a target, the answer is a separate gateway
 that speaks Hocuspocus to them. It would serve non-E2E KBs only, attribute their writes to the
 gateway's own principal, and be unable to carry signed ops. It must never replace the envelope.
