@@ -564,6 +564,17 @@ pub(super) async fn handle_kb_node_update(
         return resp;
     }
 
+    if let Err(e) = refuse_mistyped_node_update(
+        doc_store,
+        (&kb_id, &node_doc),
+        pre_coll.as_ref(),
+        &update_bytes,
+        reseal || rebirth,
+    )
+    .await
+    {
+        return JsonRpcResponse::error(id, e);
+    }
     let signer = crate::doc_editors::verified_signer(content_header.as_ref());
     let by = Writer::signed(Attribution::session(auth_principal, transport), signer);
     let applied = write_node(doc_store, &node_doc, &update_bytes, reseal || rebirth, by).await;
