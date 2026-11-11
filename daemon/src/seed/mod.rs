@@ -1,9 +1,15 @@
-//! Seeding a native KB from a tagged commit of an org repository: the PLANNER.
+//! Seeding a native KB from a tagged commit of an org repository.
 //!
-//! This module turns one commit's `.org` files into a [`SeedPlan`], the exact set of
-//! nodes a seed would create, and every reason it must not. It reads git and
-//! nothing else. It never opens a `DocStore`, so a dry run cannot write. Applying a
-//! plan is a later phase.
+//! Three steps, each its own module:
+//! - the PLANNER ([`plan`]) turns one commit's `.org` files into a [`SeedPlan`],
+//!   the exact set of nodes a seed would create, and every reason it must not. It
+//!   reads git and nothing else; it never opens a `DocStore`, so a dry run cannot
+//!   write.
+//! - [`apply()`] writes a plan with no refusal, whose hash is the one the operator
+//!   reviewed, as a native, daemon-owned KB, ordered so a crash and a re-run
+//!   converge (see `apply.rs`).
+//! - [`export()`] writes each node back to its source path as N(F) (below),
+//!   checking first that the file would seed back to the same node.
 //!
 //! ## The contract (`org-literal-v1`)
 //!
@@ -52,6 +58,8 @@
 //! files, rewrote links and lowercased keys, all while reporting success). A new
 //! case either fits the contract or becomes a named refusal; never a default.
 
+mod apply;
+mod export;
 mod git;
 mod glob;
 mod history;
@@ -59,6 +67,10 @@ mod plan;
 mod report;
 mod split;
 
+pub use apply::{
+    apply, build_collection, build_node, ApplyError, ApplyOutcome, ApplyRefusalKind, ApplyTarget,
+};
+pub use export::{export, render, ExportRefusal, ExportRefusalKind, ExportReport, Rendered};
 pub use git::{GitRepo, TreeEntry};
 pub use glob::{Glob, GlobError};
 pub use history::{History, HISTORY_PREFIX_BYTES};

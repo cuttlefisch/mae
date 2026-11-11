@@ -140,7 +140,7 @@ fn listener_would_accept(config: &DaemonConfig) -> Result<&str, String> {
 /// Load the daemon identity WITHOUT ever creating one (#652: a command that
 /// only needs to read the key must not leave a fresh one behind -- that is how
 /// `--check-config` once left a root-owned key the service could not read).
-fn load_identity(config: &DaemonConfig) -> Result<Identity, String> {
+pub(crate) fn load_identity(config: &DaemonConfig) -> Result<Identity, String> {
     let dir = config
         .collab
         .auth

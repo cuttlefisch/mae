@@ -34,6 +34,7 @@ mod oauth_tls;
 mod p2p;
 mod projection_stores;
 mod scheduler;
+mod seed_apply_cli;
 mod seed_cli;
 mod tenant;
 #[cfg(test)]
@@ -153,6 +154,8 @@ async fn main() {
         // Whole-instance backup (every store, registry, collab store, identity)
         // with a manifest a restore rehearsal can check against. See backup/mod.rs.
         Some("backup") => std::process::exit(backup::run(&config, &cli.rest)),
+        // Native-KB seed (plan / apply) and export: `seed_cli`, `seed_apply_cli`.
+        Some("kb") => std::process::exit(seed_cli::run_kb(&config, &cli.rest).await),
         _ => {}
     }
 
@@ -639,6 +642,10 @@ async fn spawn_p2p_mesh(
 /// logic. Returns `None` on any construction failure (already logged) — same
 /// disable-collab-non-fatally behavior as before this split, just observable to the
 /// caller instead of an internal early `return`.
+/// The collab store lock this daemon holds (see `init_doc_store`).
+static STORE_LOCK: std::sync::OnceLock<mae_daemon::store_lock::StoreLock> =
+    std::sync::OnceLock::new();
+
 async fn init_doc_store(
     config: &DaemonConfig,
 ) -> Option<(
@@ -648,6 +655,17 @@ async fn init_doc_store(
 )> {
     let collab = &config.collab;
     let collab_data_dir = config.resolve_collab_data_dir();
+    // Held for the life of the process, so an offline operator command
+    // (`kb seed`, `kb export`, `restore`) cannot write this store under us.
+    match mae_daemon::store_lock::StoreLock::acquire(&collab_data_dir) {
+        Ok(lock) => {
+            let _ = STORE_LOCK.set(lock);
+        }
+        Err(e) => {
+            error!(error = %e, "collab store is locked by another process");
+            return None;
+        }
+    }
     let db_path = collab_data_dir.join("state.db");
     let backend =
         match storage::SqliteBackend::open_with_pool_size(&db_path, collab.storage.shard_count) {
@@ -1531,8 +1549,8 @@ fn run_authorize(config: &DaemonConfig, rest: &[String]) -> i32 {
 /// Symmetric keystore (psk mode): `keygen [name]`, `keys`. Asymmetric key mode
 /// (ADR-017/018): `identity`, `authorized`, `authorize <pubkey-line>` (labels
 /// must be unique), `revoke <label|SHA256:fp>`. `token mint --sub <principal>
-/// [--ttl <duration>]` (ADR-111 P1, `token_cli`). `kb seed --dry-run …` plans a native
-/// KB seed from a tagged commit (`seed_cli`). And `ping`, the liveness probe.
+/// [--ttl <duration>]` (ADR-111 P1, `token_cli`). And `ping`, the liveness probe.
+/// (`kb seed` / `kb export` open the store, so they run in `main`'s async match.)
 fn run_admin_subcommand(sub: &str, rest: &[String], config: &DaemonConfig) -> Option<i32> {
     let first = rest.first().map(|s| s.as_str());
     Some(match sub {
@@ -1544,7 +1562,6 @@ fn run_admin_subcommand(sub: &str, rest: &[String], config: &DaemonConfig) -> Op
         "revoke" => run_revoke(config, first),
         "ping" => run_ping(config),
         "token" => token_cli::run_token(config, rest),
-        "kb" => seed_cli::run_kb(rest),
         _ => return None,
     })
 }
