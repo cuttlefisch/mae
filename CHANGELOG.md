@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.149] - 2026-11-11
+
+
+
+
+### Features
+
+- *(daemon)* Sync WebSocket on the HTTPS listener, first cut (ADR-099 A1 B1-B4, B6) ([f2b35c7](https://github.com/cuttlefisch/mae/commit/f2b35c751397c9c52ac07e95946d8beedb66d589))
+- *(daemon)* Ws cap counts a joined KB once; CORS, keepalive, ticket kind ([af0e842](https://github.com/cuttlefisch/mae/commit/af0e842f0276c424af09423d1ac83fc77a919af5))
+- *(collab)* Presence in the y-protocols awareness encoding (ADR-099 A1 B5) ([0f6ae48](https://github.com/cuttlefisch/mae/commit/0f6ae4879d06ba934d492550c5444fba4f975767))
+
+### Bug Fixes
+
+- *(collab)* A full queue closes the document instead of losing an update ([230e0ca](https://github.com/cuttlefisch/mae/commit/230e0ca4a0b8c4377d7ca18b737d2d48a52daf45))
+- *(collab)* Review fixes for the sync WebSocket ([7a6c882](https://github.com/cuttlefisch/mae/commit/7a6c8825c1555c55d24f893934949e5ef5f94786))
+
+### Testing
+
+- *(daemon)* Three writers converge through the sync WebSocket ([7480edb](https://github.com/cuttlefisch/mae/commit/7480edb176a15fc19a97258ba98f68ea0f18ed83))
+- *(daemon)* Split the WS convergence test's write and catch-up phases ([b2f45e9](https://github.com/cuttlefisch/mae/commit/b2f45e93ccddc73128600bacfd53dd9f1d8a5310))
+
 ## [0.14.148] - 2026-11-11
 
 
@@ -20,6 +41,10 @@ All notable changes to this project will be documented in this file.
 - *(sync)* Measure the field-type check on the keystroke path ([16a0528](https://github.com/cuttlefisch/mae/commit/16a0528d07a873b64520c9c2995fc7ef036892a7))
 - *(sync)* Hoist the wrong-type cases out of the field test ([3a04def](https://github.com/cuttlefisch/mae/commit/3a04def4d6ff24285b0991c0ff9468260e85d773))
 
+### Miscellaneous
+
+- Bump version to 0.14.148 ([7870303](https://github.com/cuttlefisch/mae/commit/7870303c817e1223d7a483614b2b20ba53145cd8))
+
 ## [0.14.147] - 2026-11-11
 
 
@@ -36,11 +61,11 @@ All notable changes to this project will be documented in this file.
 
 ### Documentation
 
-- *(adr)* ADR-093 Amendment 1, the org_header field ([d81cb14](https://github.com/cuttlefisch/mae/commit/d81cb145e0ce455a378a846fa7695ad79f5e9d4f))
 - *(adr)* ADR-099 Amendment 1, browser WebSocket authentication ([bddc8c9](https://github.com/cuttlefisch/mae/commit/bddc8c9d2f6f3c2d36a0bf492023e8eb10a45e27))
 - *(adr)* ADR-099 Amendment 1 B0, D2 re-evaluated against Hocuspocus ([18ec368](https://github.com/cuttlefisch/mae/commit/18ec36828316c0aa9e33ccfcde76ef9a897bea3c))
 - *(adr)* ADR-099 Amendment 1 names the clients it serves ([3860efb](https://github.com/cuttlefisch/mae/commit/3860efb47ed331cf5080cf213d2ed7eed789f52c))
 - *(adr)* ADR-099 and its Amendment 1 are accepted ([ef779b5](https://github.com/cuttlefisch/mae/commit/ef779b5aab69d45fbbe49a299897fab4f91a879f))
+- *(adr)* ADR-093 Amendment 1, the org_header field ([d81cb14](https://github.com/cuttlefisch/mae/commit/d81cb145e0ce455a378a846fa7695ad79f5e9d4f))
 
 ### Testing
 
