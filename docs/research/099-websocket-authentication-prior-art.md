@@ -69,10 +69,82 @@ a POST parameter.
 **Decides:** the two-step shape. An authenticated HTTPS call mints a short-lived connect credential,
 and the WebSocket presents it. MAE tightens this to single-use and keeps it out of the URL.
 
+## SignalR: the query-string fallback, and refresh on a live connection
+
+<https://learn.microsoft.com/en-us/aspnet/core/signalr/authn-and-authz>: "browsers can't set custom
+headers, such as `Authorization`, on the WebSocket and Server-Sent Events APIs. Because of this
+browser limitation, SignalR sends the token as a query string parameter for those transports when
+the client runs in a browser." It also warns that "many servers log query string values".
+Non-browser clients send the header.
+
+With `EnableAuthenticationRefresh`, a client refreshes the identity of an open connection, and
+`CloseOnAuthenticationExpiration` closes connections whose tokens expire. The built-in check
+"compares the first `sub`, `ClaimTypes.NameIdentifier`, or `ClaimTypes.Upn` claim in each
+principal". A refresh is rejected when the refreshed principal has "a different value, issuer, or
+claim type".
+
+**Decides:**
+- the native-header / browser-fallback split;
+- close on expiry, with refresh;
+- a refresh must keep both issuer and subject (Amendment 1 B3).
+
+## Heroku: ticket-based WebSocket authentication
+
+<https://devcenter.heroku.com/articles/websocket-security>: "One pattern we've seen that seems to
+solve the WebSocket authentication problem well is a 'ticket'-based authentication system." The
+client obtains a ticket from the HTTP server, and the server stores it and later checks that it
+"hasn't been re-used and hasn't expired". The ticket "typically contains … the IP of the client
+requesting the ticket". The page gives no expiry duration or format.
+
+**Decides:** the ticket shape. The IP binding is deliberately not taken, because behind a
+TLS-terminating proxy every client has the proxy's address.
+
+## Ably: refresh over the open connection
+
+<https://ably.com/docs/auth/token>: the SDK "Requests a new token before the current token expires"
+and "Maintains the connection seamlessly during refresh". On `authorize()`, "The new token is sent
+to Ably using the existing realtime connection", and "The updated permissions are automatically
+applied without disconnecting."
+
+**Decides:** renewal travels in-band on the same socket (B3), rather than over a side endpoint as
+SignalR does.
+
+## Yjs: y-protocols and Hocuspocus (for B0, D2 re-evaluated)
+
+- <https://gh.ali360.cloudns.ch/yjs/y-protocols/blob/master/PROTOCOL.md>:
+  - sync messages are `varUint(0) • varBuffer(stateVector)` (SyncStep1),
+    `varUint(1) • varBuffer(documentUpdate)` (SyncStep2) and `varUint(2) • varBuffer(documentUpdate)`
+    (Update);
+  - SyncStep2 is computed from the responder's own document;
+  - the sync section says nothing about authenticating or signing updates;
+  - awareness is unauthenticated, so a peer can claim arbitrary presence, and identity must be
+    enforced at a higher layer.
+- <https://gh.ali360.cloudns.ch/ueberdosis/hocuspocus/releases/tag/v2.0.0>: "Multiplexing allows you to
+  synchronize multiple documents over the same websocket connection." The message layout changed
+  from `[HocuspocusMessageType][YjsMessageType][yjs binary]` to
+  `[documentName][HocuspocusMessageType][YjsMessageType][yjs binary]`.
+- <https://tiptap.dev/docs/hocuspocus/server/hooks>:
+  - `onAuthenticate` receives a `token` and the `documentName`;
+  - `onTokenSync` lets the server "validate user tokens during active sessions without requiring a
+    full reconnection";
+  - `connection.readOnly` makes a connection read-only;
+  - throwing in `beforeHandleMessage` closes the connection;
+  - `onStateless` carries string payloads;
+  - the hooks hand over the server's `Y.Doc`.
+- <https://docs.rs/crate/hocuspocus-rs/0.1.2>: a Rust implementation exists, at 0.1.x.
+
+**Decides:** D2 holds, but on necessity. An update carries no metadata, and the server merges and
+answers from its own plaintext document. So MAE's per-update signed authorship, relayed for peers
+to re-verify, and its E2E op-sets have no place in the standard protocol. The standard is still
+adopted where it fits: Yjs payload encodings, and y-protocols awareness with relative-position
+cursors for presence.
+
 ## Already recorded elsewhere
 
 ADR-111's research note records that Hocuspocus and Liveblocks leave the token-expiry gap on open
-connections, which is why ADR-111 D6 requires an in-band refresh deadline. Hocuspocus's
+connections, which is why ADR-111 D6 requires an in-band refresh deadline. For Hocuspocus that is
+now out of date: `onTokenSync` (above) refreshes a token in session. ADR-111 D6 carries a
+correction, and the decision is unchanged. Hocuspocus's
 authentication guide (<https://tiptap.dev/docs/hocuspocus/guides/authentication>) shows a `token`
 provider option. It does not say how the token is transported or whether it is re-checked on
 expiry.

@@ -57,6 +57,10 @@ surface rather than replacing the first.
 
 This is the load-bearing decision, and it is settled on operational grounds rather than taste.
 
+> **Amended (Amendment 1, B0):** the multiplexing argument below is out of date. Hocuspocus, the
+> de facto Yjs server, has multiplexed documents over one socket since 2.0. B0 re-evaluates D2 on
+> the remaining grounds, and the decision stands for different reasons.
+
 **Multiplexing decides it.** Browsing a KB opens many documents — each node is its own
 `kb:{node_id}` yrs doc. `y-websocket` is one connection *per document*. The OAuth listener's
 `max_connections` defaults to 256, so a handful of users browsing a KB of any size would exhaust
@@ -162,6 +166,61 @@ Per principle #14, verified by trying to falsify it.
 client, and bounds what may ship before hub signature verification (ADR-111 D4) and the identity
 binding (ADR-098). Evidence: `docs/research/099-websocket-authentication-prior-art.md`.
 
+### B0. D2 re-evaluated: does a standard Yjs protocol serve MAE better than its own envelope?
+
+D2's first reason was that `y-websocket` needs one connection per document. That is true of
+`y-websocket`, but Hocuspocus 2.0 changed its message layout to
+`[documentName][HocuspocusMessageType][YjsMessageType][yjs binary]`, so that "multiplexing allows
+you to synchronize multiple documents over the same websocket connection". There is also an early
+Rust port, `hocuspocus-rs` 0.1.x. The rejection is re-run here on what each protocol can carry.
+The bar: adopt the standard unless MAE's envelope exists out of necessity and buys concrete
+advantages without tradeoffs that matter.
+
+**What the standard protocol gives** (y-protocols sync, and Hocuspocus on top of it):
+- a maintained browser provider, with the handshake, reconnection and resync;
+- multiplexing;
+- per-document authentication (`onAuthenticate`) and read-only connections;
+- in-session token refresh (`onTokenSync`), which corrects ADR-111 D6's remark that Hocuspocus
+  leaves that gap open;
+- string "stateless" messages;
+- y-protocols awareness, which every Yjs editor binding (CodeMirror, ProseMirror, Tiptap, Monaco)
+  speaks.
+
+**What MAE must carry, and whether the standard can carry it:**
+
+| MAE requirement | Standard protocol |
+|---|---|
+| **Per-update signed authorship** (ADR-036): each node update carries author, epoch, issue time, base state vector, signature and public key. The daemon verifies it and relays the header with the update, so a downstream peer re-verifies the same op (ADR-026's peer-verifiable integrity; the mesh relay depends on it). | No. An update is bare Yjs bytes (`varUint(2) • varBuffer(update)`), and the spec says nothing about authenticating or signing updates. The server merges each update into its own document and forwards it, so the signature has nowhere to travel. A side channel of stateless messages would pair signature and update by convention, with no ordering guarantee. (MAE's own `kb/join` also answers a plaintext KB from server state, as SyncStep2 does. The difference is the live path and the mesh relay, where MAE forwards the signed op with its header.) |
+| **E2E KBs** (ADR-037): the daemon stores an opaque op-set it cannot decrypt. | No. The responder must hold the document to compute SyncStep2, so a server that cannot read the content cannot answer the handshake. |
+| **Refusals per document, with a kind**: a multiplexed session refuses one document's write (`epoch_fenced`, `not_member`, `update_too_large`) and keeps its other documents. | Partly. Authentication failure is per document, but `beforeHandleMessage` refuses by throwing, which closes the whole connection. |
+| **KB-level operations on the same channel**: join with per-node state vectors for a whole KB in one round trip, signed membership ops on the collection document, typed errors. | No equivalent. It would need a second protocol beside the socket. |
+| **One wire format and one authorization path** across Unix socket, mTLS TCP, the HTTPS listener and the mesh (principle #8). | A second wire format for remote clients, with every authorization check (`kb_access`, the epoch fence, signature verification) re-implemented against it. |
+| **A server in Rust, inside the daemon.** | Hocuspocus is a Node server. Its Rust port is at 0.1.x. Adopting it means either a Node sidecar on the security-critical path, or MAE maintaining a young port. |
+
+**Decision: D2 stands, now on necessity rather than connection counts.** The envelope exists
+because MAE's integrity model, signed ops relayed for peers to re-verify, and its E2E model, an
+opaque op-set on the server, cannot be expressed in a protocol whose server merges plaintext and
+forwards bare updates. Those are not preferences; they are ADR-026/036/037 properties MAE would
+lose.
+
+**The standard is adopted where it costs nothing and buys compatibility:**
+- **Payloads stay standard Yjs:** v1 updates and v1 state vectors, as today.
+- **Presence moves to y-protocols awareness** (B5). MAE's own awareness carries row and column
+  cursors, which drift under concurrent edits. Yjs bindings anchor cursors with relative positions,
+  the established pattern, and expect an `Awareness` object.
+- **Compatibility is defined at the binding layer, not the wire.** The browser adapter must expose
+  exactly a `Y.Doc` per node and a y-protocols `Awareness`. Then any Yjs editor binding works
+  unmodified, and the adapter is the only MAE-specific client code.
+
+**What is given up, stated plainly:**
+- MAE maintains the client adapter: handshake, reconnect, resync, the offline queue. A maintained
+  provider would otherwise supply these.
+- A third-party app that speaks only Hocuspocus cannot connect to MAE unmodified.
+
+**When to revisit:** if such third-party apps become a target, the answer is a separate gateway
+that speaks Hocuspocus to them. It would serve non-E2E KBs only, attribute their writes to the
+gateway's own principal, and be unable to carry signed ops. It must never replace the envelope.
+
 ### B1. Two credentials on the upgrade; neither is ever in the URL
 
 The browser WebSocket API takes only a URL and a list of subprotocols. It cannot set
@@ -189,7 +248,10 @@ bad credential gets the same `401` and `WWW-Authenticate` as every other route o
 - Each principal may hold only a bounded number of unused tickets.
 
 An unknown, used or expired ticket all give one refusal (`ticket_invalid`), so a probe learns
-nothing. The daemon's response selects `mae.v1` and never echoes the ticket entry.
+nothing. The ticket is deliberately **not** bound to the client's IP address, which the ticket
+pattern often suggests. Behind ADR-111's TLS-terminating proxy every client arrives from the
+proxy's address, so an IP binding would bind nothing and would only look like a control.
+The daemon's response selects `mae.v1` and never echoes the ticket entry.
 
 **Origin.** When a handshake carries `Origin`, it must exactly match an entry in
 `oauth.ws_allowed_origins`, with no wildcards and no substring matching. It must also equal the
@@ -216,8 +278,10 @@ This is the server-enforced refresh ADR-111 D6 requires.
   configurable, default 60 seconds).
 - The client answers with a `session/renew {token}` frame. The token travels inside TLS, in a frame,
   never in a URL.
-- The new token must validate and carry the **same principal**. A different principal closes the
-  socket (`principal_changed`).
+- The new token must validate and carry the **same identity: the same issuer and the same
+  subject**, compared before any claim mapping. A different subject, or the same subject from a
+  different issuer, closes the socket (`principal_changed`). This is SignalR's refresh rule. Once
+  external issuers are accepted (after B6), the subject string alone is not an identity.
 - On success the deadline moves to the new token's expiry, and every open subscription is
   re-authorized. A subscription the principal has lost is closed (`doc_closed`, reason
   `not_member`) without closing the session.
@@ -244,10 +308,16 @@ Offboarding (ADR-111 D3) therefore takes effect at the next renewal at the lates
 
 ### B5. Presence
 
-Awareness (`shared/sync/src/awareness.rs`) rides the same envelope, per document:
+Presence on this transport is **y-protocols awareness** (B0): the standard encoding, with cursors
+as Yjs relative positions. It is carried per document as the payload of the envelope's
+`sync/awareness`. MAE's native awareness (`shared/sync/src/awareness.rs`, row and column cursors)
+stays for existing native peers until they move. A native client converts relative positions with
+yrs' sticky indices.
 - It is delivered only to sessions authorized for that document.
-- The daemon stamps the sender's principal on every awareness message and discards any principal
-  the client supplies, so a client cannot appear as someone else.
+- The y-protocols spec says awareness is unauthenticated: any peer can claim any state. So the
+  daemon decodes each update and refuses entries for client ids the session does not own.
+- It attaches the sender's principal beside each entry. A client's own `user` fields (name,
+  colour) are display hints, and a UI must label a cursor by the stamped principal.
 - It is rate-limited per session and document.
 - It is never persisted, and a session's presence is cleared when it closes.
 
@@ -295,7 +365,11 @@ Each test must fail without its mechanism.
   contains nothing from that KB (D3's leak oracle).
 
 **Presence:**
-- An awareness message carrying another principal is delivered stamped with the sender's.
+- An awareness update for a client id the session does not own is refused.
+- Every relayed entry carries the sender's stamped principal, whatever `user` fields the client
+  set.
+- A remote cursor stays on the same character under a concurrent insert before it (relative
+  positions), where a row/column cursor would move.
 - Presence never reaches a session not authorized for the document.
 
 **Multiplexing:**
@@ -304,6 +378,9 @@ Each test must fail without its mechanism.
 - N documents use one connection.
 
 ### Rejected in this amendment
+
+- **Adopting Hocuspocus' protocol in place of the envelope** (B0). It cannot carry per-update
+  signed authorship to peers, or serve E2E KBs whose content the server cannot read.
 
 - **The bearer token in the subprotocol** (Kubernetes' scheme). It works, but it puts the long-lived
   credential in a header every proxy on the path can see and may log. The ticket carries 30 seconds
