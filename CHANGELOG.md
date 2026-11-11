@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.148] - 2026-11-11
+
+
+
+
+### Features
+
+- *(daemon)* Refuse a node update that leaves a field mistyped ([a0692a1](https://github.com/cuttlefisch/mae/commit/a0692a117621d2843f1a1b9ffa223a9619843b41))
+
+### Bug Fixes
+
+- *(daemon)* An evicted node is checked against its stored state ([1818a6d](https://github.com/cuttlefisch/mae/commit/1818a6dfb2b7d65c78a810889b0e050eb90c811c))
+
+### Testing
+
+- *(sync)* Measure the field-type check on the keystroke path ([16a0528](https://github.com/cuttlefisch/mae/commit/16a0528d07a873b64520c9c2995fc7ef036892a7))
+- *(sync)* Hoist the wrong-type cases out of the field test ([3a04def](https://github.com/cuttlefisch/mae/commit/3a04def4d6ff24285b0991c0ff9468260e85d773))
+
 ## [0.14.147] - 2026-11-11
 
 
@@ -9,8 +27,8 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
-- *(identity)* Authorized_keys updates fail closed under contention ([b58f3e1](https://github.com/cuttlefisch/mae/commit/b58f3e10c34964c0bc898f49fda5fbaa4fbe4e1e))
 - *(kb)* Rebirth keeps created_at; kb-restore names its KB ([5836cf8](https://github.com/cuttlefisch/mae/commit/5836cf85dd820760a31b2afb65d3369daae2362f))
+- *(identity)* Authorized_keys updates fail closed under contention ([b58f3e1](https://github.com/cuttlefisch/mae/commit/b58f3e10c34964c0bc898f49fda5fbaa4fbe4e1e))
 
 ### Refactor
 
@@ -18,11 +36,11 @@ All notable changes to this project will be documented in this file.
 
 ### Documentation
 
+- *(adr)* ADR-093 Amendment 1, the org_header field ([d81cb14](https://github.com/cuttlefisch/mae/commit/d81cb145e0ce455a378a846fa7695ad79f5e9d4f))
 - *(adr)* ADR-099 Amendment 1, browser WebSocket authentication ([bddc8c9](https://github.com/cuttlefisch/mae/commit/bddc8c9d2f6f3c2d36a0bf492023e8eb10a45e27))
 - *(adr)* ADR-099 Amendment 1 B0, D2 re-evaluated against Hocuspocus ([18ec368](https://github.com/cuttlefisch/mae/commit/18ec36828316c0aa9e33ccfcde76ef9a897bea3c))
 - *(adr)* ADR-099 Amendment 1 names the clients it serves ([3860efb](https://github.com/cuttlefisch/mae/commit/3860efb47ed331cf5080cf213d2ed7eed789f52c))
 - *(adr)* ADR-099 and its Amendment 1 are accepted ([ef779b5](https://github.com/cuttlefisch/mae/commit/ef779b5aab69d45fbbe49a299897fab4f91a879f))
-- *(adr)* ADR-093 Amendment 1, the org_header field ([d81cb14](https://github.com/cuttlefisch/mae/commit/d81cb145e0ce455a378a846fa7695ad79f5e9d4f))
 
 ### Testing
 
@@ -32,6 +50,7 @@ All notable changes to this project will be documented in this file.
 
 - *(adr)* Regenerate the ADR KB checksum for ADR-099's status ([8b8a834](https://github.com/cuttlefisch/mae/commit/8b8a834e455b33f113a38e66091e6fb269db7859))
 - Bump version to 0.14.146 ([8f11ed3](https://github.com/cuttlefisch/mae/commit/8f11ed3dd4caae1f904dd9b76d19de646efc164c))
+- Bump version to 0.14.147 ([fe44c78](https://github.com/cuttlefisch/mae/commit/fe44c78a2c5b1fc6d1dbfbc0c8e2233a49b4c32b))
 
 ## [0.14.145] - 2026-11-11
 
