@@ -11,6 +11,8 @@ pub(crate) mod kb;
 mod kb_export_html;
 #[cfg(test)]
 mod kb_scope_tests;
+#[cfg(test)]
+mod kb_target_tests;
 pub(crate) mod lsp;
 mod project;
 mod shell;

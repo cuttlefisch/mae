@@ -3,6 +3,12 @@ use crate::types::*;
 /// The `kb` argument of the KB write tools.
 const KB_TARGET: &str = "Target KB by name (`local` = the local KB). Required when the id exists in more than one KB; an unknown or unloaded KB is an error, never a fallback to another KB.";
 
+/// The `kb` argument of the KB read tools that resolve a node id.
+const KB_READ_TARGET: &str = "Read from this KB only (a registered KB's name, `local` = the local KB). Without it the id is resolved across all KBs and an id that exists in several is refused, listing them; an unknown or unloaded KB is an error, never a fallback to another KB.";
+
+/// The `kb` argument of tools that act on one KB's store.
+const KB_STORE_TARGET: &str = "Act on this KB's store (a registered KB's name, `local` = the local KB). Without it the local KB's store is used; an unknown or unloaded KB is an error, never a fallback to another KB.";
+
 use super::tool_def::ToolDefBuilder;
 
 /// Knowledge base tool definitions: get, search, list, links, graph, help, org.
@@ -51,6 +57,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "Outgoing links from a node — the targets of its body's [[link]] markers, in document order (deduplicated). Errors if the node doesn't exist.",
         )
         .prop("id", "string", "Source node id")
+        .prop("kb", "string", KB_READ_TARGET)
         .required(["id"])
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -59,6 +66,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "Incoming links — ids of all KB nodes whose body references this target. Works even if the target node doesn't exist yet (dangling backlinks).",
         )
         .prop("id", "string", "Target node id (may be dangling)")
+        .prop("kb", "string", KB_READ_TARGET)
         .required(["id"])
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -68,6 +76,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         )
         .prop("id", "string", "Seed node id")
         .prop("depth", "integer", "Hop radius (default 1, clamped to 3)")
+        .prop("kb", "string", KB_READ_TARGET)
         .required(["id"])
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -77,6 +86,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         )
         .prop("id", "string", "Seed node id")
         .prop("limit", "integer", "Max related nodes to return (default 10)")
+        .prop("kb", "string", KB_READ_TARGET)
         .required(["id"])
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -87,6 +97,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         )
         .prop("id", "string", "KB node id to center the graph on")
         .prop("depth", "integer", "Hop radius (default: kb_graph_default_depth option)")
+        .prop("kb", "string", KB_READ_TARGET)
         .permission(PermissionTier::ReadOnly)
         .build(),
         ToolDefBuilder::new("kb_graph_view_close", "Close the native KB graph view, if open.")
@@ -170,6 +181,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "Show the KB-link hover preview popup for a node id, anchored at the current cursor position — same popup shown by the human's cursor-hover/K-keybinding trigger. `id` doesn't need to be the target of a link under the cursor. Scoped to KB-view-mode buffers. Returns the popup's rendered content (title + noise-stripped, truncated body).",
         )
         .prop("id", "string", "KB node id to preview")
+        .prop("kb", "string", KB_READ_TARGET)
         .required(["id"])
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -333,6 +345,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         )
         .prop("from", "string", "Source node id")
         .prop("to", "string", "Target node id")
+        .prop("kb", "string", KB_READ_TARGET)
         .required(["from", "to"])
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -342,6 +355,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         )
         .prop("id", "string", "Seed node id")
         .prop("depth", "integer", "Hop radius (default 2, max 5)")
+        .prop("kb", "string", KB_READ_TARGET)
         .required(["id"])
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -376,6 +390,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "Execute a raw query on the KB store backend. CozoDB: Datalog syntax. SQLite: SQL. Returns {headers: [...], rows: [[...]]}. Use with caution — no schema validation.",
         )
         .prop("query", "string", "Query string (Datalog for CozoDB, SQL for SQLite)")
+        .prop("kb", "string", KB_STORE_TARGET)
         .required(["query"])
         .permission(PermissionTier::Privileged)
         .build(),
@@ -581,6 +596,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         )
         .prop("id", "string", "Node ID to get history for")
         .prop("limit", "integer", "Max versions to return (default 10)")
+        .prop("kb", "string", KB_STORE_TARGET)
         .required(["id"])
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -590,6 +606,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         )
         .prop("id", "string", "Node ID to restore")
         .prop("version", "integer", "Version number to restore to")
+        .prop("kb", "string", KB_STORE_TARGET)
         .required(["id", "version"])
         .permission(PermissionTier::Write)
         .build(),
@@ -598,6 +615,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "Promote a federated/imported KB node into the primary CozoDB-backed KB by id (#303) — severs its dependency on the origin org file/instance, so it becomes a fully graph-native node. The origin instance's now-redundant copy is deduplicated automatically when content still matches (or preserved + flagged for manual review if it has since diverged).",
         )
         .prop("id", "string", "Node ID to promote")
+        .prop("kb", "string", KB_TARGET)
         .required(["id"])
         .permission(PermissionTier::Write)
         .build(),
