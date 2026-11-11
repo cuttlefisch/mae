@@ -28,6 +28,7 @@ mod kb_governance;
 mod kb_id_guard;
 pub mod kb_lease;
 mod kb_membership;
+pub use kb_membership::{operator_change_membership, operator_list_members, OperatorMemberOp};
 mod kb_share_ownership;
 mod method_authz;
 mod refusal;

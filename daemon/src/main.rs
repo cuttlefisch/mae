@@ -28,6 +28,7 @@ pub mod hygiene;
 #[cfg(test)]
 mod lazy_fetch_client;
 pub mod maintenance;
+mod member_cli;
 mod oauth;
 mod oauth_config;
 mod oauth_tls;

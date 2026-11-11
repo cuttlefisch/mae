@@ -675,7 +675,12 @@ exists (see §4). Keep backups for the solo-daemon case.
 (contract `org-literal-v1`, see `daemon/src/seed/mod.rs`): one node per `.org` file, the file drawer,
 `#+title` and `#+filetags` as typed fields, the rest of the file kept byte for byte. The KB is owned
 by the daemon's own identity (key mode), served over the hub, and marked `org-literal-v1`, so MAE's
-own node writer refuses to write it. Members are added later (ADR-098).
+own node writer refuses to write it. Members are added by the operator with `kb member` (below)
+until ADR-098 binds directory identities to members.
+
+`kb seed` needs **git 2.40 or later** (it uses `git check-attr --source`). Debian bookworm ships 2.39
+and its backports do not carry git, so run the seed on a host with a newer git (Debian trixie has
+2.47); the daemon binary itself does not need it.
 
 ```bash
 # 1. Plan: reads git only, writes nothing. Review the refusals and note plan_hash.
@@ -703,6 +708,24 @@ daemon's `state.db` (`kb_seed`, `kb_seed_nodes`). They are not synced to mesh pe
 UTC, or null), `modified_at_basis` (`seed`: the git time; `edit`: a later edit recorded by this
 daemon; `unknown`), and `property_order` with `org_header` (`property_order`, `has_title_line`,
 `has_filetags_line`): what a reader needs to lay the header out as the file had it.
+
+### Members of a seeded KB: `mae-daemon kb member`
+
+```bash
+systemctl --user stop mae-daemon
+mae-daemon kb member add    --kb-id notes --member SHA256:… --role viewer   # or editor; --label <name>
+mae-daemon kb member remove --kb-id notes --member SHA256:…
+mae-daemon kb member list   --kb-id notes
+systemctl --user start mae-daemon
+```
+
+The operator's bridge until ADR-098: it changes membership of a KB **this daemon owns** (a seeded KB),
+offline under the store lock like `kb seed`, through the same write path as `kb/add_member`, and signs
+the change into the KB's membership op-log as the daemon. It refuses, writing nothing: a KB another
+identity owns (its owner manages it), a role other than `viewer`/`editor` (ownership is not
+transferred here), the owner as the member, and a member that is not a key fingerprint. Like
+`token mint`, it acts as the KB's owner: it is a command for the operator only, never exposed as an
+MCP tool or an RPC.
 
 ### Exporting it back: `mae-daemon kb export`
 
