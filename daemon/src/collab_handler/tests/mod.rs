@@ -24,6 +24,7 @@ pub(crate) async fn sorted_editors(
 }
 
 mod collab_handler_artifact_sharing_tests;
+mod collab_handler_awareness_yjs_tests;
 mod collab_handler_block_enforcement_tests;
 mod collab_handler_blocklist_operator_tests;
 mod collab_handler_connection_limits_tests;
@@ -40,6 +41,7 @@ mod collab_handler_error_kind_tests;
 mod collab_handler_error_kind_write_tests;
 mod collab_handler_field_types_tests;
 mod collab_handler_governance_quorum_tests;
+mod collab_handler_governor_tests;
 mod collab_handler_kb_lifecycle_tests;
 mod collab_handler_kb_list_isolation_tests;
 mod collab_handler_kb_query_mtls_tests;
