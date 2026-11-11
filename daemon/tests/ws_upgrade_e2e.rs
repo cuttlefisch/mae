@@ -225,3 +225,82 @@ async fn exactly_one_credential_is_accepted() {
     assert_eq!(both.status, 400);
     assert!(both.ws.is_none());
 }
+
+/// CORS on `/ws/ticket`: an allowlisted origin's preflight is answered and
+/// its mint response names that origin, exactly; a disallowed origin gets no
+/// CORS header on either, and a preflight asking for another method or header
+/// is refused. Kills: a missing preflight (a browser could never mint), a
+/// wildcard or reflected `Access-Control-Allow-Origin`.
+#[tokio::test]
+async fn the_ticket_route_answers_cors_for_allowed_origins_only() {
+    let d = spawn(Opts::default()).await;
+    let pre = |origin: &'static str, method: &'static str, headers: &'static str| {
+        vec![
+            ("Origin", origin),
+            ("Access-Control-Request-Method", method),
+            ("Access-Control-Request-Headers", headers),
+        ]
+    };
+    let ok = request(
+        &d,
+        "OPTIONS",
+        "/ws/ticket",
+        &pre(ORIGIN_A, "POST", "authorization"),
+        false,
+    )
+    .await;
+    assert_eq!(ok.status, 204, "{}", ok.body);
+    assert_eq!(
+        ok.header("access-control-allow-origin").as_deref(),
+        Some(ORIGIN_A)
+    );
+    assert!(ok
+        .header("access-control-allow-headers")
+        .unwrap()
+        .contains("Authorization"));
+
+    let evil = request(
+        &d,
+        "OPTIONS",
+        "/ws/ticket",
+        &pre("https://evil.example", "POST", "authorization"),
+        false,
+    )
+    .await;
+    assert_eq!(evil.status, 403);
+    assert_eq!(evil.header("access-control-allow-origin"), None);
+
+    for bad in [
+        pre(ORIGIN_A, "DELETE", "authorization"),
+        pre(ORIGIN_A, "POST", "authorization, x-evil"),
+    ] {
+        let r = request(&d, "OPTIONS", "/ws/ticket", &bad, false).await;
+        assert_eq!(r.status, 400, "{bad:?}");
+    }
+
+    let token = d.token("SHA256:alice", 3600);
+    let minted = mint_ticket(&d, &token, Some(ORIGIN_B)).await;
+    assert_eq!(minted.status, 200, "{}", minted.body);
+    assert_eq!(
+        minted.header("access-control-allow-origin").as_deref(),
+        Some(ORIGIN_B)
+    );
+    let refused = mint_ticket(&d, &token, Some("https://evil.example")).await;
+    assert_eq!(refused.header("access-control-allow-origin"), None);
+}
+
+/// The ninth unused ticket is refused with a kind and the limit.
+#[tokio::test]
+async fn too_many_unused_tickets_is_a_kinded_refusal() {
+    let d = spawn(Opts::default()).await;
+    let token = d.token("SHA256:alice", 3600);
+    for _ in 0..8 {
+        assert_eq!(mint_ticket(&d, &token, None).await.status, 200);
+    }
+    let r = mint_ticket(&d, &token, None).await;
+    assert_eq!(
+        refusal(&r),
+        (429, "too_many_requests".into(), "too_many_tickets".into())
+    );
+    assert_eq!(r.json()["limit"], 8);
+}

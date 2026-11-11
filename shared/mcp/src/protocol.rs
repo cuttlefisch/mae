@@ -366,6 +366,17 @@ impl McpError {
         Self::kinded(-32600, message, "credential_in_url", serde_json::json!({}))
     }
 
+    /// A principal already holds `limit` unused connect tickets (B1): use one
+    /// or let it expire (30 s) before minting another.
+    pub fn too_many_tickets(message: String, limit: usize) -> Self {
+        Self::kinded(
+            -32600,
+            message,
+            "too_many_tickets",
+            serde_json::json!({ "limit": limit }),
+        )
+    }
+
     /// A connect ticket that is unknown, used, expired or misbound — one
     /// refusal for all of them (B1).
     pub fn ticket_invalid(message: String) -> Self {
@@ -504,6 +515,7 @@ pub const ERROR_KINDS: &[&str] = &[
     "tenant_quota_exceeded",
     "too_many_open_docs",
     "credential_in_url",
+    "too_many_tickets",
     "ticket_invalid",
     "issuer_not_supported",
     "invalid_token",
@@ -682,6 +694,7 @@ mod tests {
             McpError::tenant_quota_exceeded(m()),
             McpError::too_many_open_docs(m(), 1),
             McpError::credential_in_url(m()),
+            McpError::too_many_tickets(m(), 8),
             McpError::ticket_invalid(m()),
             McpError::issuer_not_supported(m()),
             McpError::invalid_token(m()),

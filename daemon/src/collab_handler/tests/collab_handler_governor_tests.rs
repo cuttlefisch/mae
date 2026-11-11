@@ -56,8 +56,10 @@ fn at_the_cap_only_a_new_document_is_refused() {
         refused_kind(gov.admit(&sync_update("shared:other"), &full, 0)),
         "too_many_open_docs"
     );
+    // A node of a KB the session has NOT joined is new (a node of a joined KB
+    // rides the join: `a_joined_kb_counts_once_against_the_cap`).
     let node_fetch = serde_json::json!({"jsonrpc": "2.0", "id": 5, "method": "kb/node_fetch",
-        "params": {"kb_id": "kra", "node_id": "concept:n"}})
+        "params": {"kb_id": "krb", "node_id": "concept:n"}})
     .to_string();
     assert_eq!(
         refused_kind(gov.admit(&node_fetch, &full, 0)),
@@ -328,5 +330,52 @@ async fn a_document_closed_for_a_full_queue_is_reported_to_the_client() {
     assert!(
         !String::from_utf8(out).unwrap().contains("doc_closed"),
         "reported twice"
+    );
+}
+
+/// B4's cap counts a joined KB as one unit: a KB with more nodes than the cap
+/// stays usable (its node documents ride its join), and the cap still bounds
+/// how many KBs and other documents a session holds. Kills: counting each
+/// node, which made a large KB block every later open.
+#[test]
+fn a_joined_kb_counts_once_against_the_cap() {
+    let (gov, _h) = governor(3, u64::MAX);
+    let mut open: HashSet<String> = ["kbc:big".to_string()].into();
+    for i in 0..2000 {
+        open.insert(mae_sync::kb_node_doc_name("big", &format!("n{i}")));
+    }
+    let node = |kb: &str, n: &str| {
+        serde_json::json!({"jsonrpc": "2.0", "id": 9, "method": "kb/node_fetch",
+            "params": {"kb_id": kb, "node_id": n}})
+        .to_string()
+    };
+    // One unit used of three: a new node of the joined KB, a new KB and a
+    // buffer all run.
+    assert!(matches!(
+        gov.admit(&node("big", "fresh"), &open, 0),
+        Admission::Dispatch
+    ));
+    assert!(matches!(
+        gov.admit(&sync_update("shared:pad"), &open, 0),
+        Admission::Dispatch
+    ));
+    // At three units (two KBs and a buffer), only something new is refused.
+    open.insert("kbc:second".into());
+    open.insert("shared:pad".into());
+    assert!(matches!(
+        gov.admit(&node("big", "another"), &open, 0),
+        Admission::Dispatch
+    ));
+    assert!(matches!(
+        gov.admit(&node("second", "x"), &open, 0),
+        Admission::Dispatch
+    ));
+    assert_eq!(
+        refused_kind(gov.admit(&node("third", "x"), &open, 0)),
+        "too_many_open_docs"
+    );
+    assert_eq!(
+        refused_kind(gov.admit(&sync_update("shared:other"), &open, 0)),
+        "too_many_open_docs"
     );
 }

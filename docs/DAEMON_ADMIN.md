@@ -295,6 +295,7 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `tenant_quota_exceeded` | The caller's tenant is over its request quota or connection cap (ADR-060). Back off. | every method, both listeners | — |
 | `too_many_open_docs` | A sync-WebSocket session already holds `ws_max_open_docs` documents and the request names another (ADR-099 B4). Nothing ran. | any method naming a document, on `/ws` | `limit` |
 | `credential_in_url` | A query string on `/ws` or `/ws/ticket`; credentials never travel in a URL. HTTP `400`, `error: "invalid_request"`. | `GET /ws`, `POST /ws/ticket` | — |
+| `too_many_tickets` | A principal already holds 8 unused connect tickets. Use one or let it expire (30 s). HTTP `429`, `error: "too_many_requests"`. | `POST /ws/ticket` | `limit` |
 | `ticket_invalid` | A connect ticket that is unknown, used, expired or bound to another origin — one identical refusal for all. HTTP `401`, `error: "invalid_token"`, with `WWW-Authenticate`. | `GET /ws` | — |
 | `issuer_not_supported` | A token not issued by this daemon, while ADR-099 B6 holds. HTTP `401`, `error: "invalid_token"`, with `WWW-Authenticate`; on a socket, a JSON-RPC error to `session/renew`. | `GET /ws`, `POST /ws/ticket`, `session/renew` | — |
 | `invalid_token` | A `session/renew` token that does not validate or has already expired. The old deadline stands. | `session/renew` | — |
@@ -392,6 +393,7 @@ self_issued_tokens_enabled = true               #   only kid="self" tokens are a
                                                 #   ([collab] enabled, auth.mode = "key")
 ws_allowed_origins = ["https://mae.example.com"]  # browser Origins, EXACT match; default [] (none)
 # ws_renew_lead_secs = 60                       # session/renew_needed this long before the deadline
+# ws_ping_secs = 30                             # keepalive ping period (under proxy idle timeouts); 0 = off
 # ws_max_open_docs = 1024                       # documents one socket may hold (0 = unlimited)
 # ws_max_frame_bytes = 1048576                  # largest inbound frame; unset = max_request_body_bytes
 ```
@@ -411,7 +413,7 @@ mae-daemon token mint --config daemon.toml --sub 'SHA256:…member-fingerprint�
   `new WebSocket(url, ["mae.v1", "mae.ticket." + ticket])`. A ticket is single-use (spent on first
   presentation, whatever happens next), valid 30 s, held in memory only (a restart voids it),
   bound to the minting token's identity and expiry and to the mint request's `Origin`, and at most
-  8 may be unused per principal (`429 too_many_tickets`). Unknown, used and expired tickets all get
+  8 may be unused per principal (`429`, `kind: "too_many_tickets"`). Unknown, used and expired tickets all get
   the same `401`, `kind: "ticket_invalid"`. Any query string on `/ws` or `/ws/ticket` is refused
   (`400`, `kind: "credential_in_url"`).
 - **Every refusal happens before the upgrade**, as an ordinary response in the listener's
@@ -436,10 +438,17 @@ mae-daemon token mint --config daemon.toml --sub 'SHA256:…member-fingerprint�
   for any KB document, `node_id` for a node document) and the rest of the session continues. A missed deadline closes `4401
   token_expired`, and no frame is applied after it. So removing a member takes effect on their open
   sockets at their next renewal at the latest — keep token lifetimes short.
-- **Limits.** A frame over `ws_max_frame_bytes` closes `1009`. A session holding `ws_max_open_docs`
-  documents is refused any request naming another (`too_many_open_docs`); `kb/join` opens a KB's
-  collection and every node at once and is admitted while under the cap, so it can carry a session
-  past it by one KB. A client that stops reading for 5 s is dropped.
+- **Limits.** A frame over `ws_max_frame_bytes` closes `1009`. `ws_max_open_docs` counts units: a
+  joined KB is one unit however many nodes it has, and any other document is one. A session at the
+  cap is refused a request opening a new unit (`too_many_open_docs`). A client that stops reading for
+  5 s is dropped. If an update for a document does not fit a session's event queue, that document
+  is closed for the session (`session/doc_closed`, reason `slow_consumer`) rather than the update
+  being lost; the client resyncs it (`sync/resync`, or `kb/join` for a KB).
+- **Keepalive.** The daemon pings every `ws_ping_secs` (default 30) so a proxy's idle timeout never
+  closes a quiet session.
+- **CORS.** `POST /ws/ticket` answers a browser preflight from an origin in `ws_allowed_origins`
+  (POST, with `Authorization` and `Content-Type`), and names that origin, exactly, in
+  `Access-Control-Allow-Origin`. No other origin gets a CORS header.
 - **`max_connections` counts sockets, not documents.** One socket is one connection however many
   documents it carries; `daemon/status` reports the listener under `connections.oauth`.
 

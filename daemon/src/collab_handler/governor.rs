@@ -126,8 +126,12 @@ impl SessionGovernor {
             return Admission::Dispatch;
         }
         let params = obj.get("params").cloned().unwrap_or_default();
+        let (units, joined) = open_units(open);
+        if units < self.max_open_docs {
+            return Admission::Dispatch;
+        }
         match requested_doc(&params) {
-            Some(doc) if !open.contains(&doc) => {
+            Some(doc) if !open.contains(&doc) && !in_joined_kb(&doc, &joined) => {
                 let id = obj.get("id").cloned().unwrap_or_default();
                 Admission::Refuse(Box::new(JsonRpcResponse::error(
                     id,
@@ -159,6 +163,32 @@ impl SessionGovernor {
 /// The document a request names, from the envelope's own addressing (ADR-099
 /// D2): `params.doc` on `sync/*`/`docs/*`, a node on `kb/*` with `node_id`, the
 /// collection on any other `kb/*` with a `kb_id`. `None` names no document.
+/// What the open-document cap counts (B4): a joined KB is ONE unit, since
+/// `kb/join` delivers every node of it under that one subscription; any other
+/// open document is one unit each. Returns the count and the joined KB ids.
+/// Counting each node instead made a KB larger than the cap unjoinable, and
+/// any KB joined near it block every later open.
+fn open_units(open: &HashSet<String>) -> (usize, HashSet<String>) {
+    let joined: HashSet<String> = open
+        .iter()
+        .filter_map(|d| match mae_sync::DocAddress::parse(d) {
+            Some(mae_sync::DocAddress::KbCollection { kb_id }) => Some(kb_id),
+            _ => None,
+        })
+        .collect();
+    let units = open.iter().filter(|d| !in_joined_kb(d, &joined)).count() + joined.len();
+    (units, joined)
+}
+
+/// A node document of a KB the session has joined: covered by the join.
+fn in_joined_kb(doc: &str, joined: &HashSet<String>) -> bool {
+    matches!(
+        mae_sync::DocAddress::parse(doc),
+        Some(mae_sync::DocAddress::KbNode { kb_id, .. }) | Some(mae_sync::DocAddress::KbCollection { kb_id })
+            if joined.contains(&kb_id)
+    )
+}
+
 fn requested_doc(params: &serde_json::Value) -> Option<String> {
     if let Some(doc) = params.get("doc").and_then(|d| d.as_str()) {
         return Some(doc.to_string());

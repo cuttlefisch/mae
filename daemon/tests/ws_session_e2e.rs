@@ -258,3 +258,21 @@ async fn a_binary_frame_closes_1003() {
     ws.send_binary(vec![0u8, 1, 2]).await;
     assert_eq!(ws.closed().await.0, 1003);
 }
+
+/// ADR-111 D6: the daemon pings a quiet session on `ws_ping_secs`, so a
+/// proxy's idle timeout never closes it; `0` turns pings off. Kills: no
+/// keepalive at all.
+#[tokio::test]
+async fn a_quiet_session_is_pinged_on_the_configured_period() {
+    for (secs, expect) in [(1, true), (0, false)] {
+        let d = spawn(Opts {
+            ping_secs: Some(secs),
+            ..Opts::default()
+        })
+        .await;
+        let token = d.token("SHA256:alice", 3600);
+        let mut ws = connect_bearer(&d, &token).await;
+        let got = ws.pinged(std::time::Duration::from_millis(2500)).await;
+        assert_eq!(got, expect, "ws_ping_secs = {secs}");
+    }
+}

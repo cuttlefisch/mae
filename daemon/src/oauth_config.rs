@@ -132,12 +132,15 @@ pub struct OAuthConfig {
     /// Seconds before a session's authentication deadline at which the daemon
     /// sends `session/renew_needed` (B3).
     pub ws_renew_lead_secs: u64,
-    /// Documents one socket session may hold open at once (B4); 0 = unlimited.
-    /// A request naming a document the session does not already hold is
-    /// refused (`too_many_open_docs`) once it holds this many. `kb/join` opens
-    /// the KB's collection and every node in one request and is admitted while
-    /// the session is under the cap, so it can carry a session past it by one
-    /// KB's size.
+    /// ADR-111 D6: a WebSocket ping this often, so a proxy's idle timeout
+    /// never closes a quiet session. 30 s sits under the 60 s idle timeout
+    /// common reverse proxies ship with (nginx `proxy_read_timeout`, HAProxy
+    /// `timeout tunnel` examples). `0` disables pings.
+    pub ws_ping_secs: u64,
+    /// Units one socket session may hold open at once (B4); 0 = unlimited.
+    /// A joined KB is ONE unit however many nodes it has (its nodes ride the
+    /// join); any other document is one unit. Once a session holds this many,
+    /// a request opening a new unit is refused (`too_many_open_docs`).
     pub ws_max_open_docs: usize,
     /// Largest inbound WebSocket frame, bytes; a larger one closes the socket
     /// with `1009` (B4). Unset means `max_request_body_bytes` — the same bound
@@ -169,6 +172,7 @@ impl Default for OAuthConfig {
             ws_enabled: false,
             ws_allowed_origins: Vec::new(),
             ws_renew_lead_secs: 60,
+            ws_ping_secs: 30,
             ws_max_open_docs: 1024,
             ws_max_frame_bytes: None,
         }

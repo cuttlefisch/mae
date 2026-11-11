@@ -50,6 +50,8 @@ pub(crate) fn is_ws_path(path: &str) -> bool {
 pub(crate) struct WsSettings {
     pub allowed_origins: Vec<String>,
     pub renew_lead: Duration,
+    /// Keepalive ping period (`None` = no pings), ADR-111 D6.
+    pub ping_every: Option<Duration>,
     pub max_open_docs: usize,
     pub max_frame_bytes: usize,
 }
@@ -87,6 +89,7 @@ pub(crate) fn state_from_config(
     let settings = WsSettings {
         allowed_origins: oauth.ws_allowed_origins.clone(),
         renew_lead: Duration::from_secs(oauth.ws_renew_lead_secs),
+        ping_every: (oauth.ws_ping_secs > 0).then(|| Duration::from_secs(oauth.ws_ping_secs)),
         max_open_docs: oauth.ws_max_open_docs,
         max_frame_bytes: oauth
             .ws_max_frame_bytes

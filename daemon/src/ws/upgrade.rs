@@ -15,7 +15,7 @@ use hyper::body::Incoming;
 use hyper::header::{HeaderMap, HeaderValue};
 use hyper::{Method, Request, Response, StatusCode};
 
-use super::connect_ticket::{TicketGrant, TICKET_TTL};
+use super::connect_ticket::{TicketGrant, MAX_UNUSED_TICKETS_PER_PRINCIPAL, TICKET_TTL};
 use super::{now_unix, WsState, PROTOCOL_V1, SUPPORTED_PROTOCOLS};
 use crate::conn_limit::ConnGuard;
 use crate::oauth::{self, json_response, unauthorized, with_no_store, Listener};
@@ -52,7 +52,13 @@ pub(crate) async fn handle(
         .as_ref()
         .expect("routed here only when ws is Some");
     if req.uri().path() == "/ws/ticket" {
-        return mint_ticket(&req, &listener, ws).await;
+        let mut resp = if req.method() == Method::OPTIONS {
+            preflight(&req, ws)
+        } else {
+            mint_ticket(&req, &listener, ws).await
+        };
+        allow_origin(&mut resp, &req, ws);
+        return resp;
     }
     upgrade(req, &listener, conn).await
 }
@@ -349,6 +355,66 @@ async fn upgrade(
     switching_protocols(&key)
 }
 
+/// The request headers a cross-origin `POST /ws/ticket` may carry.
+const CORS_ALLOWED_HEADERS: &[&str] = &["authorization", "content-type"];
+
+/// CORS for `/ws/ticket`, so a browser page on an allowlisted origin can mint
+/// a ticket (its `Authorization` header makes the POST preflighted). Only an
+/// origin in `ws_allowed_origins` is ever named, exactly; no credentials mode
+/// (MAE uses no cookies, the token travels in the header). A response to any
+/// other origin carries no CORS header, so the browser withholds it.
+fn allow_origin(resp: &mut HttpResponse, req: &Request<Incoming>, ws: &WsState) {
+    let Ok(Some(origin)) = request_origin(req) else {
+        return;
+    };
+    if !ws.settings.allowed_origins.iter().any(|a| a == &origin) {
+        return;
+    }
+    let h = resp.headers_mut();
+    if let Ok(v) = HeaderValue::from_str(&origin) {
+        h.insert(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN, v);
+    }
+    h.append(hyper::header::VARY, HeaderValue::from_static("Origin"));
+}
+
+/// The CORS preflight for `POST /ws/ticket`: an allowlisted origin asking for
+/// POST with at most `Authorization` and `Content-Type` gets `204`; anything
+/// else is refused (and, from a disallowed origin, carries no CORS header).
+fn preflight(req: &Request<Incoming>, ws: &WsState) -> HttpResponse {
+    if let Some(resp) = refuse_url_or_origin(req, ws) {
+        return resp;
+    }
+    let h = req.headers();
+    let method_ok = h
+        .get(hyper::header::ACCESS_CONTROL_REQUEST_METHOD)
+        .is_some_and(|m| m.as_bytes() == b"POST");
+    let headers_ok = h
+        .get_all(hyper::header::ACCESS_CONTROL_REQUEST_HEADERS)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+        .all(|v| CORS_ALLOWED_HEADERS.contains(&v.as_str()));
+    if h.get(hyper::header::ORIGIN).is_none() || !method_ok || !headers_ok {
+        return bad_request(
+            "invalid_request",
+            "a preflight for POST /ws/ticket names an allowed Origin, POST, and at most \
+             Authorization and Content-Type",
+        );
+    }
+    Response::builder()
+        .status(StatusCode::NO_CONTENT)
+        .header(hyper::header::ACCESS_CONTROL_ALLOW_METHODS, "POST")
+        .header(
+            hyper::header::ACCESS_CONTROL_ALLOW_HEADERS,
+            "Authorization, Content-Type",
+        )
+        .header(hyper::header::ACCESS_CONTROL_MAX_AGE, "600")
+        .body(Full::new(Bytes::new()))
+        .expect("building a response from fixed parts never fails")
+}
+
 /// `POST /ws/ticket` (B1): bearer header in, `{ticket, expires_in}` out.
 async fn mint_ticket(req: &Request<Incoming>, listener: &Listener, ws: &WsState) -> HttpResponse {
     if req.method() != Method::POST {
@@ -380,14 +446,21 @@ async fn mint_ticket(req: &Request<Incoming>, listener: &Listener, ws: &WsState)
             StatusCode::OK,
             serde_json::json!({"ticket": ticket, "expires_in": TICKET_TTL.as_secs()}),
         ),
-        Err(_) => json_response(
-            StatusCode::TOO_MANY_REQUESTS,
-            serde_json::json!({
-                "error": "too_many_tickets",
-                "error_description": "this principal holds its quota of unused tickets; use or \
-                                      let one expire",
-            }),
-        ),
+        Err(_) => {
+            let mut limit = serde_json::Map::new();
+            limit.insert("limit".into(), MAX_UNUSED_TICKETS_PER_PRINCIPAL.into());
+            kinded_with(
+                StatusCode::TOO_MANY_REQUESTS,
+                "too_many_requests",
+                McpError::too_many_tickets(
+                    "this principal holds its quota of unused tickets; use one or let it \
+                     expire"
+                        .to_string(),
+                    MAX_UNUSED_TICKETS_PER_PRINCIPAL,
+                ),
+                limit,
+            )
+        }
     }
 }
 

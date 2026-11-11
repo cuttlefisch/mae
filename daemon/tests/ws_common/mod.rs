@@ -34,6 +34,8 @@ pub struct Opts {
     pub max_open_docs: usize,
     pub max_frame_bytes: Option<usize>,
     pub tenant_budget: Option<(String, u32)>,
+    /// `ws_ping_secs`; `None` leaves the daemon's default.
+    pub ping_secs: Option<u64>,
 }
 
 impl Default for Opts {
@@ -44,6 +46,7 @@ impl Default for Opts {
             max_open_docs: 1024,
             max_frame_bytes: None,
             tenant_budget: None,
+            ping_secs: None,
         }
     }
 }
@@ -56,6 +59,7 @@ pub struct Daemon {
     pub socket: PathBuf,
     cert_der: Vec<u8>,
     config_path: PathBuf,
+    opts: Opts,
 }
 
 fn free_port() -> u16 {
@@ -73,10 +77,15 @@ fn config_toml(dir: &Path, oauth_port: u16, opts: &Opts) -> String {
         .as_ref()
         .map(|(p, b)| format!("[[tenant]]\nname = \"t\"\nprincipals = [\"{p}\"]\n[tenant.quota]\nbudget_per_minute = {b}\n"))
         .unwrap_or_default();
+    let ping = opts
+        .ping_secs
+        .map(|n| format!("ws_ping_secs = {n}\n"))
+        .unwrap_or_default();
     let frame = opts
         .max_frame_bytes
         .map(|n| format!("ws_max_frame_bytes = {n}\n"))
-        .unwrap_or_default();
+        .unwrap_or_default()
+        + ping.as_str();
     format!(
         "[collab]\nenabled = true\nbind = \"127.0.0.1:{collab}\"\n\
          [collab.auth]\nmode = \"key\"\nidentity_dir = \"{id}\"\nauthorized_keys = \"{id}/authorized_keys\"\n\
@@ -116,13 +125,80 @@ pub async fn spawn(opts: Opts) -> Daemon {
         cert_der: cert.cert.der().to_vec(),
         config_path,
         tmp,
+        opts,
     };
     d.start().await;
     d
 }
 
 impl Daemon {
+    /// Start the daemon and wait until THIS daemon serves its port. A free
+    /// port is only reserved until it is released for the daemon to bind, so
+    /// a parallel test can take it in between; the readiness probe therefore
+    /// proves identity (a TLS handshake pinned to this daemon's own
+    /// certificate, and `/ws/ticket` present when ws is on), and a daemon that
+    /// never becomes ready is restarted on fresh ports. Before this, a probe
+    /// that merely connected could reach another test's daemon on a reused
+    /// port, and the test failed later with "connection refused".
     async fn start(&mut self) {
+        for _attempt in 0..3 {
+            self.spawn_child();
+            let ready = tokio::time::timeout(Duration::from_secs(10), async {
+                while !self.serves_this_daemon().await {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            })
+            .await
+            .is_ok();
+            if ready {
+                return;
+            }
+            if let Some(mut c) = self.child.take() {
+                let _ = c.kill().await;
+                let _ = c.wait().await;
+            }
+            let port = free_port();
+            self.addr = format!("127.0.0.1:{port}").parse().unwrap();
+            let config = config_toml(self.tmp.path(), port, &self.opts);
+            std::fs::write(&self.config_path, config).unwrap();
+        }
+        panic!("{}", mae_mcp::ready::timeout_message("the OAuth listener"));
+    }
+
+    /// The port answers with THIS daemon's certificate, and (when ws is on)
+    /// the ticket route exists, which needs the collab service up too.
+    async fn serves_this_daemon(&self) -> bool {
+        let Ok(Ok(tcp)) = tokio::time::timeout(
+            Duration::from_millis(500),
+            tokio::net::TcpStream::connect(self.addr),
+        )
+        .await
+        else {
+            return false;
+        };
+        let name = rustls::pki_types::ServerName::try_from("127.0.0.1").unwrap();
+        let Ok(Ok(mut tls)) = tokio::time::timeout(
+            Duration::from_millis(500),
+            self.connector().connect(name, tcp),
+        )
+        .await
+        else {
+            return false;
+        };
+        if !self.opts.ws_enabled {
+            return true;
+        }
+        let req = "POST /ws/ticket HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n";
+        if tls.write_all(req.as_bytes()).await.is_err() {
+            return false;
+        }
+        matches!(
+            tokio::time::timeout(Duration::from_millis(500), read_head(&mut tls)).await,
+            Ok(head) if head.split_whitespace().nth(1) == Some("401")
+        )
+    }
+
+    fn spawn_child(&mut self) {
         let dir = self.tmp.path();
         let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"))
             .args([
@@ -138,16 +214,6 @@ impl Daemon {
             .spawn()
             .expect("spawn mae-daemon");
         self.child = Some(child);
-        let addr = self.addr;
-        let up = mae_mcp::ready::wait_until(|| async {
-            tokio::net::TcpStream::connect(addr).await.is_ok()
-        })
-        .await;
-        assert!(
-            up,
-            "{}",
-            mae_mcp::ready::timeout_message("the OAuth listener")
-        );
     }
 
     /// Kill and start the same daemon again: same config, identity and data.
@@ -165,6 +231,16 @@ impl Daemon {
     }
 
     async fn tls(&self) -> TlsStream<tokio::net::TcpStream> {
+        let tcp = tokio::net::TcpStream::connect(self.addr).await.unwrap();
+        let name = rustls::pki_types::ServerName::try_from("127.0.0.1").unwrap();
+        self.connector()
+            .connect(name, tcp)
+            .await
+            .expect("TLS handshake")
+    }
+
+    /// A TLS client trusting ONLY this daemon's certificate.
+    fn connector(&self) -> tokio_rustls::TlsConnector {
         let mut roots = rustls::RootCertStore::empty();
         roots.add(self.cert_der.clone().into()).unwrap();
         let provider = Arc::new(rustls::crypto::ring::default_provider());
@@ -173,10 +249,7 @@ impl Daemon {
             .unwrap()
             .with_root_certificates(roots)
             .with_no_client_auth();
-        let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
-        let tcp = tokio::net::TcpStream::connect(self.addr).await.unwrap();
-        let name = rustls::pki_types::ServerName::try_from("127.0.0.1").unwrap();
-        connector.connect(name, tcp).await.expect("TLS handshake")
+        tokio_rustls::TlsConnector::from(Arc::new(config))
     }
 }
 
@@ -338,9 +411,28 @@ impl Ws {
             .expect("send frame");
     }
 
+    /// Wait for a ping from the daemon, skipping any other frame.
+    pub async fn pinged(&mut self, within: std::time::Duration) -> bool {
+        use futures_util::StreamExt;
+        let until = tokio::time::Instant::now() + within;
+        loop {
+            match tokio::time::timeout_at(until, self.inner.next()).await {
+                Err(_) | Ok(None) | Ok(Some(Err(_))) => return false,
+                Ok(Some(Ok(m))) if m.is_ping() => return true,
+                Ok(Some(Ok(_))) => continue,
+            }
+        }
+    }
+
     pub async fn next(&mut self) -> Event {
         use futures_util::StreamExt;
-        match tokio::time::timeout(WAIT, self.inner.next()).await {
+        let frame = loop {
+            match tokio::time::timeout(WAIT, self.inner.next()).await {
+                Ok(Some(Ok(m))) if m.is_ping() || m.is_pong() => continue,
+                other => break other,
+            }
+        };
+        match frame {
             Err(_) => panic!("no frame within {WAIT:?}"),
             Ok(None) | Ok(Some(Err(_))) => Event::End,
             Ok(Some(Ok(m))) if m.is_close() => {

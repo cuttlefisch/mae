@@ -65,6 +65,7 @@ struct Driver {
     listener: Arc<Listener>,
     renew_lead: Duration,
     renew_sent: bool,
+    ping_every: Option<Duration>,
 }
 
 /// Run one socket until it closes. Holds `conn` — the TCP connection's one
@@ -103,6 +104,7 @@ pub(super) async fn run(
         listener: Arc::clone(&listener),
         renew_lead: settings.renew_lead,
         renew_sent: false,
+        ping_every: settings.ping_every,
     };
     tracing::info!(principal = %principal, "ws: session opened");
     // B2: the first frame the daemon sends, before the session can write.
@@ -169,6 +171,11 @@ fn at_unix(unix: u64) -> tokio::time::Instant {
 
 impl Driver {
     async fn drive(&mut self, mut out: mpsc::Receiver<String>) {
+        // ADR-111 D6: a ping on a fixed period keeps a quiet session alive
+        // through a proxy's idle timeout. The first tick is one period out.
+        let period = self.ping_every.unwrap_or(Duration::from_secs(3600));
+        let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+        ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             let deadline = self.handle.deadline();
             let renew_at = at_unix(deadline.saturating_sub(self.renew_lead.as_secs()));
@@ -185,6 +192,7 @@ impl Driver {
                 _ = tokio::time::sleep_until(deadline_at) => {
                     Flow::Close(CLOSE_TOKEN_EXPIRED, "token_expired")
                 }
+                _ = ping.tick(), if self.ping_every.is_some() => self.send_ping().await,
             };
             match flow {
                 Flow::Continue => {}
@@ -312,6 +320,13 @@ impl Driver {
         let resp = mae_mcp::protocol::JsonRpcResponse::error(id, error);
         self.send_json(serde_json::to_value(resp).unwrap_or_default())
             .await
+    }
+
+    async fn send_ping(&mut self) -> Flow {
+        match tokio::time::timeout(WRITE_TIMEOUT, self.ws.send(Message::ping(Vec::new()))).await {
+            Ok(Ok(())) => Flow::Continue,
+            _ => Flow::Stop,
+        }
     }
 
     async fn send_json(&mut self, value: Value) -> Flow {
