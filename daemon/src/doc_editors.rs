@@ -177,6 +177,9 @@ pub enum InternalWriter {
     /// `mae-daemon kb seed`, run by the operator: installs a seeded KB's
     /// documents (`seed::apply`). Its content has no recorded authorship.
     Seed,
+    /// `mae-daemon kb member add|remove`, run by the operator on a KB this
+    /// daemon owns.
+    OperatorMembership,
 }
 
 impl InternalWriter {
@@ -188,6 +191,7 @@ impl InternalWriter {
             Self::ControlSocket => "control-socket",
             Self::Scheduler => "scheduler",
             Self::Seed => "kb-seed",
+            Self::OperatorMembership => "kb-member-cli",
         }
     }
 }
