@@ -53,13 +53,11 @@ fn a_well_typed_node_has_no_violation() {
     assert_eq!(KbNodeDoc::field_type_introduced(&base, &up).unwrap(), None);
 }
 
-/// Every known field, set to a wrong type, is named. Kills a check that misses
-/// any one of them.
-#[test]
-fn every_known_field_set_to_a_wrong_type_is_named() {
-    let base = node().encode_state();
-    type Edit = Box<dyn Fn(&yrs::MapRef, &mut yrs::TransactionMut)>;
-    let cases: Vec<(&str, Edit)> = vec![
+type Edit = Box<dyn Fn(&yrs::MapRef, &mut yrs::TransactionMut)>;
+
+/// One wrong-typed write per known field, with the field it must be named as.
+fn wrong_type_cases() -> Vec<(&'static str, Edit)> {
+    vec![
         (
             "title",
             Box::new(|m, t| {
@@ -128,8 +126,15 @@ fn every_known_field_set_to_a_wrong_type_is_named() {
                 m.insert(t, "org_header", "flat");
             }),
         ),
-    ];
-    for (field, edit) in cases {
+    ]
+}
+
+/// Every known field, set to a wrong type, is named. Kills a check that misses
+/// any one of them.
+#[test]
+fn every_known_field_set_to_a_wrong_type_is_named() {
+    let base = node().encode_state();
+    for (field, edit) in wrong_type_cases() {
         let up = foreign(&base, |m, t| edit(m, t));
         assert_eq!(
             KbNodeDoc::field_type_introduced(&base, &up).unwrap(),
