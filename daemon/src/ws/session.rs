@@ -110,7 +110,7 @@ pub(super) async fn run(
     // B2: the first frame the daemon sends, before the session can write.
     if let Flow::Continue = driver.send_json(hello(&driver.auth, &settings)).await {
         let (r, w) = tokio::io::split(session_end);
-        let session = tokio::spawn(mae_daemon::collab_handler::handle_client_governed(
+        let mut session = tokio::spawn(mae_daemon::collab_handler::handle_client_governed(
             BufReader::new(r),
             w,
             PeerIdentity::bearer(&principal),
@@ -125,7 +125,15 @@ pub(super) async fn run(
         drop(driver);
         pump.abort();
         let _ = pump.await;
-        let _ = tokio::time::timeout(WRITE_TIMEOUT * 2, session).await;
+        // A session still running after the grace period (stuck in a slow
+        // store call) is aborted, so it never outlives the slot released below.
+        if tokio::time::timeout(WRITE_TIMEOUT * 2, &mut session)
+            .await
+            .is_err()
+        {
+            session.abort();
+            let _ = session.await;
+        }
     }
     tracing::info!(principal = %principal, "ws: session closed");
     drop(conn);

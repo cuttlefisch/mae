@@ -159,3 +159,64 @@ async fn presence_faster_than_the_floor_is_dropped_not_refused() {
         "the second, inside the floor, was relayed"
     );
 }
+
+/// Review fixes: ownership is the principal's (its own reconnect takes its
+/// ids over while the old session lingers; another principal still cannot),
+/// a session holds at most 16 ids per document across messages, and leaving
+/// the document releases them. Kills: session-keyed ownership, an uncapped
+/// map, and claims that outlive the document.
+#[tokio::test]
+async fn ownership_is_the_principals_capped_and_released_with_the_document() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let ok = |r: &JsonRpcResponse| assert!(r.error.is_none(), "{:?}", r.error);
+    ok(&send(
+        &store,
+        &bc,
+        (1, "SHA256:alice"),
+        awareness(&[(11, "{}")]).into(),
+    )
+    .await);
+    // Alice reconnects (session 3) while session 1 lingers: hers to take.
+    ok(&send(
+        &store,
+        &bc,
+        (3, "SHA256:alice"),
+        awareness(&[(11, "{}")]).into(),
+    )
+    .await);
+    let r = send(
+        &store,
+        &bc,
+        (2, "SHA256:bob"),
+        awareness(&[(11, "{}")]).into(),
+    )
+    .await;
+    assert_eq!(kind(&r), "awareness_not_owned");
+
+    // Sixteen ids in two messages fit; a seventeenth does not.
+    let first: Vec<(u64, &str)> = (100..108).map(|i| (i, "{}")).collect();
+    let second: Vec<(u64, &str)> = (108..116).map(|i| (i, "{}")).collect();
+    ok(&send(&store, &bc, (4, "SHA256:carol"), awareness(&first).into()).await);
+    ok(&send(&store, &bc, (4, "SHA256:carol"), awareness(&second).into()).await);
+    let r = send(
+        &store,
+        &bc,
+        (4, "SHA256:carol"),
+        awareness(&[(200, "{}")]).into(),
+    )
+    .await;
+    assert_eq!(kind(&r), "invalid_params", "the seventeenth id");
+    // Re-sending ids it already holds is not "new".
+    ok(&send(&store, &bc, (4, "SHA256:carol"), awareness(&first).into()).await);
+
+    // Leaving the document releases carol's ids for others.
+    bc.lock().unwrap().unsubscribe_doc(4, DOC);
+    ok(&send(
+        &store,
+        &bc,
+        (2, "SHA256:bob"),
+        awareness(&[(100, "{}")]).into(),
+    )
+    .await);
+}

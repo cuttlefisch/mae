@@ -303,13 +303,21 @@ fn relay_awareness_yjs(
     let mut bc = broadcaster.lock().unwrap_or_else(|e| e.into_inner());
     bc.subscribe_doc(session_id, doc_name);
     bc.add_event_sub(session_id, "awareness_yjs");
-    if let Err(taken) = bc.claim_awareness(doc_name, session_id, &ids) {
-        return JsonRpcResponse::error(
-            id,
-            McpError::awareness_not_owned(format!(
-                "awareness client {taken} on '{doc_name}' belongs to another session"
-            )),
-        );
+    use mae_mcp::broadcast::AwarenessClaimError;
+    match bc.claim_awareness(doc_name, (session_id, &stamp), &ids, MAX_AWARENESS_CLIENTS) {
+        Ok(()) => {}
+        Err(AwarenessClaimError::Taken(taken)) => {
+            return JsonRpcResponse::error(
+                id,
+                McpError::awareness_not_owned(format!(
+                    "awareness client {taken} on '{doc_name}' belongs to another principal"
+                )),
+            );
+        }
+        Err(AwarenessClaimError::TooMany) => {
+            drop(bc);
+            return bad("this session already holds its cap of awareness client ids here");
+        }
     }
     if bc.awareness_due(
         session_id,

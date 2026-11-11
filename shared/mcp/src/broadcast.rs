@@ -110,6 +110,22 @@ pub enum EditorEvent {
     },
 }
 
+/// Who owns a y-protocols awareness client id on a document (B5).
+#[derive(Debug, Clone)]
+struct AwarenessOwner {
+    session: u64,
+    principal: String,
+}
+
+/// Why [`EventBroadcaster::claim_awareness`] claimed nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AwarenessClaimError {
+    /// This client id is owned by another principal.
+    Taken(u64),
+    /// The session would hold more than its cap of ids on the document.
+    TooMany,
+}
+
 impl EditorEvent {
     /// The document ID associated with this event, if any.
     /// Used for doc-scoped filtering — events with a doc_id should only be
@@ -187,7 +203,10 @@ pub struct EventBroadcaster {
     /// Which session owns each y-protocols awareness client id, per document
     /// (B5): the first session to send an id claims it until it ends, so no
     /// other session can speak for that cursor.
-    awareness_owners: HashMap<(String, u64), u64>,
+    awareness_owners: HashMap<(String, u64), AwarenessOwner>,
+    /// Reverse index of `awareness_owners`: each session's claims, so a
+    /// release touches only that session's entries, not the whole map.
+    awareness_claims: HashMap<u64, HashSet<(String, u64)>>,
     /// When each session last relayed presence on each document (rate floor).
     awareness_last: HashMap<(u64, String), std::time::Instant>,
 }
@@ -198,6 +217,7 @@ impl EventBroadcaster {
             clients: HashMap::new(),
             next_seq: AtomicU64::new(1),
             awareness_owners: HashMap::new(),
+            awareness_claims: HashMap::new(),
             awareness_last: HashMap::new(),
         }
     }
@@ -246,25 +266,82 @@ impl EventBroadcaster {
     /// Remove a client's subscription (on disconnect).
     pub fn unsubscribe(&mut self, session_id: u64) {
         self.clients.remove(&session_id);
-        self.awareness_owners
-            .retain(|_, owner| *owner != session_id);
-        self.awareness_last.retain(|(s, _), _| *s != session_id);
+        for key in self
+            .awareness_claims
+            .remove(&session_id)
+            .unwrap_or_default()
+        {
+            self.awareness_owners.remove(&key);
+            self.awareness_last.remove(&(session_id, key.0));
+        }
     }
 
-    /// Claim y-protocols awareness client ids on `doc` for `session_id` (B5).
-    /// `Err(id)` names the first id another session already owns; nothing is
-    /// claimed then.
-    pub fn claim_awareness(&mut self, doc: &str, session_id: u64, ids: &[u64]) -> Result<(), u64> {
+    /// Release `session_id`'s awareness claims on `doc` (it left the document).
+    fn release_awareness_doc(&mut self, session_id: u64, doc: &str) {
+        if let Some(claims) = self.awareness_claims.get_mut(&session_id) {
+            claims.retain(|key| {
+                let keep = key.0 != doc;
+                if !keep {
+                    self.awareness_owners.remove(key);
+                }
+                keep
+            });
+        }
+        self.awareness_last.remove(&(session_id, doc.to_string()));
+    }
+
+    /// Claim y-protocols awareness client ids on `doc` for `session_id`,
+    /// authenticated as `principal` (B5). An id another PRINCIPAL owns is
+    /// refused; the same principal's new session takes its own ids over (a
+    /// reconnect while the old socket lingers). A session holds at most
+    /// `cap` ids per document. Nothing is claimed on an error.
+    pub fn claim_awareness(
+        &mut self,
+        doc: &str,
+        (session_id, principal): (u64, &str),
+        ids: &[u64],
+        cap: usize,
+    ) -> Result<(), AwarenessClaimError> {
+        let key = |id: u64| (doc.to_string(), id);
         if let Some(&taken) = ids.iter().find(|id| {
             self.awareness_owners
-                .get(&(doc.to_string(), **id))
-                .is_some_and(|owner| *owner != session_id)
+                .get(&key(**id))
+                .is_some_and(|o| o.principal != principal)
         }) {
-            return Err(taken);
+            return Err(AwarenessClaimError::Taken(taken));
         }
-        for id in ids {
-            self.awareness_owners
-                .insert((doc.to_string(), *id), session_id);
+        let held = self
+            .awareness_claims
+            .get(&session_id)
+            .map_or(0, |c| c.iter().filter(|(d, _)| d == doc).count());
+        let new = ids
+            .iter()
+            .filter(|id| {
+                self.awareness_owners
+                    .get(&key(**id))
+                    .is_none_or(|o| o.session != session_id)
+            })
+            .count();
+        if held + new > cap {
+            return Err(AwarenessClaimError::TooMany);
+        }
+        for &id in ids {
+            let previous = self.awareness_owners.insert(
+                key(id),
+                AwarenessOwner {
+                    session: session_id,
+                    principal: principal.to_string(),
+                },
+            );
+            if let Some(prev) = previous.filter(|p| p.session != session_id) {
+                if let Some(c) = self.awareness_claims.get_mut(&prev.session) {
+                    c.remove(&key(id));
+                }
+            }
+            self.awareness_claims
+                .entry(session_id)
+                .or_default()
+                .insert(key(id));
         }
         Ok(())
     }
@@ -315,6 +392,7 @@ impl EventBroadcaster {
         if let Some(entry) = self.clients.get_mut(&session_id) {
             entry.doc_subs.remove(doc_id);
         }
+        self.release_awareness_doc(session_id, doc_id);
     }
 
     /// Check if a client should receive an event based on event type and doc scope.
