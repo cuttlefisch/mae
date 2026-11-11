@@ -148,17 +148,15 @@ impl Editor {
         self.show_scratch_buffer("*KB History*", &lines.join("\n"));
     }
 
-    /// Dispatch `:kb-restore <node-id> <version>`.
-    pub fn dispatch_kb_restore(&mut self, id: &str, version: i64) {
-        let store = match &self.kb.store {
-            Some(s) => s.clone(),
-            None => {
-                self.set_status("No persistent KB store (CozoDB required)");
-                return;
-            }
-        };
-
-        match store.restore_version(id, version) {
+    /// Dispatch `:kb-restore [--kb=NAME] <node-id> <version>`: the named KB's
+    /// store, else the primary's (as the `kb_restore` tool).
+    pub fn dispatch_kb_restore(&mut self, kb: Option<&str>, id: &str, version: i64) {
+        let restored = self.kb_store_named_or_primary(kb).and_then(|store| {
+            store
+                .restore_version(id, version)
+                .map_err(|e| e.to_string())
+        });
+        match restored {
             Ok(()) => {
                 self.set_status(format!("Restored '{}' to version {}", id, version));
             }

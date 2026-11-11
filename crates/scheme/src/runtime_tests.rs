@@ -2621,3 +2621,15 @@ fn kb_export_subgraph_html_from_scheme_with_chord_config_alist_override() {
         editor.status_msg
     );
 }
+
+#[test]
+fn kb_restore_passes_its_kb_to_the_restore_command() {
+    // `(kb-restore ID VERSION KB)` queues `:kb-restore --kb=KB ID VERSION`, so
+    // the KB reaches the same resolver as the `kb_restore` tool: an unknown KB
+    // is named in the refusal rather than the primary's store being restored.
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+    rt.eval(r#"(kb-restore "dup" 1 "Nope")"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+    assert!(editor.status_msg.contains("Nope"), "{}", editor.status_msg);
+}
