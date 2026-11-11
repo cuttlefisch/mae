@@ -1118,33 +1118,7 @@ impl Editor {
                 .then_some(owner)
                 .ok_or_else(|| format!("No KB node '{id}' in KB '{name}'"));
         }
-        let mut holders: Vec<String> = self
-            .kb
-            .instances
-            .iter()
-            .filter(|(_, kb)| kb.contains(id))
-            .map(|(uuid, _)| {
-                self.kb
-                    .registry
-                    .find_by_uuid(uuid)
-                    .map_or_else(|| uuid.clone(), |e| e.name.clone())
-            })
-            .collect();
-        let primary_holds = self
-            .kb
-            .primary
-            .get(id)
-            .is_some_and(|n| n.source != Some(mae_kb::NodeSource::Federation));
-        if primary_holds {
-            holders.push("local".to_string());
-        }
-        if holders.len() > 1 {
-            holders.sort();
-            return Err(format!(
-                "'{id}' exists in several KBs ({}); name the one to change",
-                holders.join(", ")
-            ));
-        }
+        self.kb_refuse_ambiguous_id(id, "change")?;
         self.kb_owner_of(id)
             .ok_or_else(|| format!("No KB node: {id}"))
     }
@@ -1380,7 +1354,9 @@ impl Editor {
     /// shipped practice (principle #16: the agent does not choose its own
     /// standing instructions).
     pub fn kb_get_in(&self, kb: &str, id: &str) -> Result<Option<ScopedNode>, String> {
-        use mae_kb::KbStore as _;
+        if kb.eq_ignore_ascii_case("local") {
+            return self.kb_get_local(id);
+        }
         // A system KB under its catalog spelling (`ai_guidance_kb` is matched
         // case-blind, so the name an agent was given may differ in case).
         let system = mae_kb::system_kb::find(kb).map(|k| k.name);
@@ -1417,21 +1393,41 @@ impl Editor {
                 }
             }
         };
-        let Some(node) = store.get_node(id).map_err(|e| e.to_string())? else {
-            return Ok(None);
-        };
-        let ids = |links: Vec<mae_kb::Link>, src: bool| -> Vec<String> {
-            links
-                .into_iter()
-                .map(|l| if src { l.src } else { l.dst })
-                .collect()
-        };
-        Ok(Some(ScopedNode {
-            node,
-            links_from: ids(store.links_from(id).map_err(|e| e.to_string())?, false),
-            links_to: ids(store.links_to(id).map_err(|e| e.to_string())?, true),
-        }))
+        scoped_node_in_store(&*store, id)
     }
+
+    /// [`Editor::kb_get_in`] for the primary (`local`) KB.
+    fn kb_get_local(&self, id: &str) -> Result<Option<ScopedNode>, String> {
+        match self.kb.store.as_deref() {
+            Some(store) => scoped_node_in_store(store, id),
+            None => Ok(self.kb.primary.get(id).map(|n| ScopedNode {
+                node: n.clone(),
+                links_from: self.kb.primary.links_from(id),
+                links_to: self.kb.primary.links_to(id),
+            })),
+        }
+    }
+}
+
+/// `id` and the ids it links to and from, read from one store.
+fn scoped_node_in_store(
+    store: &dyn mae_kb::KbStore,
+    id: &str,
+) -> Result<Option<ScopedNode>, String> {
+    let Some(node) = store.get_node(id).map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    let ids = |links: Vec<mae_kb::Link>, src: bool| -> Vec<String> {
+        links
+            .into_iter()
+            .map(|l| if src { l.src } else { l.dst })
+            .collect()
+    };
+    Ok(Some(ScopedNode {
+        node,
+        links_from: ids(store.links_from(id).map_err(|e| e.to_string())?, false),
+        links_to: ids(store.links_to(id).map_err(|e| e.to_string())?, true),
+    }))
 }
 
 /// A node read from one named KB by [`Editor::kb_get_in`], with the ids it

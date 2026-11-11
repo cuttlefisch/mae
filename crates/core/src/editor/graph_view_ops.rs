@@ -1602,6 +1602,38 @@ impl Editor {
         self.populate_graph_buffer(buf_idx, center, depth);
     }
 
+    /// [`Editor::kb_graph_view_open`] centred on the node of the KB `kb` names
+    /// (else of the KB holding it, refusing an id several KBs hold): an unknown
+    /// or unloaded KB, or a KB without the node, is an error and opens nothing.
+    ///
+    /// The view resolves its owning KB through `kb_owner_of_scoped`, which
+    /// honours `kb.search_scope`; naming a KB points that at it for the open
+    /// alone and restores it after, so the persistent scope is untouched.
+    pub fn kb_graph_view_open_in(
+        &mut self,
+        kb: Option<&str>,
+        center: Option<String>,
+        depth: Option<usize>,
+    ) -> Result<(), String> {
+        let center = self.resolve_graph_center(center);
+        let Some(owner) = self.kb_read_scope(&center, kb)? else {
+            self.kb_graph_view_open(Some(center), depth);
+            return Ok(());
+        };
+        let name = match &owner {
+            None => "local".to_string(),
+            Some(uuid) => self
+                .kb
+                .registry
+                .find_by_uuid(uuid)
+                .map_or_else(|| uuid.clone(), |e| e.name.clone()),
+        };
+        let prior = std::mem::replace(&mut self.kb.search_scope, name);
+        self.kb_graph_view_open(Some(center), depth);
+        self.kb.search_scope = prior;
+        Ok(())
+    }
+
     /// Structured, read-only introspection snapshot of the open graph view
     /// (hovered/selected node, every rendered node and edge) — `None` if no
     /// `BufferKind::Graph` buffer is open. Thin wrapper around

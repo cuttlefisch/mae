@@ -1,5 +1,7 @@
 //! Tests for the seed planner. Every fixture is synthetic text written here.
 
+mod apply_tests;
+mod export_tests;
 mod git_tests;
 mod glob_tests;
 mod hardening_tests;
@@ -9,6 +11,7 @@ mod object_tests;
 mod plan_tests;
 mod prop_tests;
 mod split_tests;
+mod vector_tests;
 
 use super::*;
 

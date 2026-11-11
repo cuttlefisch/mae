@@ -1,9 +1,15 @@
-//! Seeding a native KB from a tagged commit of an org repository: the PLANNER.
+//! Seeding a native KB from a tagged commit of an org repository.
 //!
-//! This module turns one commit's `.org` files into a [`SeedPlan`], the exact set of
-//! nodes a seed would create, and every reason it must not. It reads git and
-//! nothing else. It never opens a `DocStore`, so a dry run cannot write. Applying a
-//! plan is a later phase.
+//! Three steps, each its own module:
+//! - the PLANNER ([`plan`]) turns one commit's `.org` files into a [`SeedPlan`],
+//!   the exact set of nodes a seed would create, and every reason it must not. It
+//!   reads git and nothing else; it never opens a `DocStore`, so a dry run cannot
+//!   write.
+//! - [`apply()`] writes a plan with no refusal, whose hash is the one the operator
+//!   reviewed, as a native, daemon-owned KB, ordered so a crash and a re-run
+//!   converge (see `apply.rs`).
+//! - [`export()`] writes each node back to its source path as N(F) (below),
+//!   checking first that the file would seed back to the same node.
 //!
 //! ## The contract (`org-literal-v1`)
 //!
@@ -52,6 +58,8 @@
 //! files, rewrote links and lowercased keys, all while reporting success). A new
 //! case either fits the contract or becomes a named refusal; never a default.
 
+mod apply;
+mod export;
 mod git;
 mod glob;
 mod history;
@@ -59,6 +67,10 @@ mod plan;
 mod report;
 mod split;
 
+pub use apply::{
+    apply, build_collection, build_node, ApplyError, ApplyOutcome, ApplyRefusalKind, ApplyTarget,
+};
+pub use export::{export, render, ExportRefusal, ExportRefusalKind, ExportReport, Rendered};
 pub use git::{GitRepo, TreeEntry};
 pub use glob::{Glob, GlobError};
 pub use history::{History, HISTORY_PREFIX_BYTES};
@@ -73,6 +85,15 @@ pub use split::{drawer_id, normalise, regen, split, SplitFile};
 /// normalisation above, and enters `plan_hash`, so a change to either is a new
 /// contract rather than a silent change of meaning.
 pub const CONTRACT: &str = "org-literal-v1";
+
+/// Two paths that name the same file on a case-insensitive or
+/// normalization-insensitive filesystem (APFS, NTFS, many mounts) share this
+/// key: NFC, then lowercase. A seed refuses such paths, and so does an export,
+/// so one node's file can never overwrite another's.
+pub fn path_fold_key(path: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    path.nfc().collect::<String>().to_lowercase()
+}
 
 /// The largest body a node may have: ADR-109 D6's client cap (`kb_max_node_bytes`,
 /// 1 MiB). A larger file is refused. It is never truncated.
@@ -113,6 +134,7 @@ pub enum ProblemKind {
     NotRoundTrippable,
     BodyTooLarge,
     DuplicateId,
+    PathCollision,
     NonCanonical,
     ReceivedTime,
     Symlink,
@@ -151,6 +173,7 @@ impl ProblemKind {
             NotRoundTrippable => "not_round_trippable",
             BodyTooLarge => "body_too_large",
             DuplicateId => "duplicate_id",
+            PathCollision => "path_collision",
             NonCanonical => "non_canonical",
             ReceivedTime => "received_time",
             Symlink => "symlink",

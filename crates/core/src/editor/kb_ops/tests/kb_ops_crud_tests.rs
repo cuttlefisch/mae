@@ -499,3 +499,163 @@ fn a_targeted_update_of_an_id_the_kb_does_not_hold_fails() {
         .unwrap_err();
     assert!(err.contains("Beta"), "{err}");
 }
+
+// ---- Follow-ups to the above: the remaining writes (add-link, set-role, the
+// ex commands, promote) and the node-addressed reads name their KB too. ----
+
+/// `dup` in both Alpha and Beta, with different titles.
+fn two_instances_with_dup() -> (Editor, String, String, Vec<tempfile::TempDir>) {
+    let (mut editor, ua, ub, d) = two_instances();
+    for kb in ["Alpha", "Beta"] {
+        editor
+            .kb_create_node_target(Some(kb), "dup", kb, "body", mae_kb::NodeKind::Note)
+            .unwrap();
+    }
+    (editor, ua, ub, d)
+}
+
+fn body_in(editor: &Editor, uuid: &str) -> String {
+    editor.kb.instances[uuid].get("dup").unwrap().body.clone()
+}
+
+fn role_in(editor: &Editor, uuid: &str) -> Option<String> {
+    editor.kb.instances[uuid]
+        .get("dup")
+        .unwrap()
+        .properties
+        .get("role")
+        .cloned()
+}
+
+#[test]
+fn an_add_link_lands_in_the_named_kbs_node_or_fails() {
+    let (mut editor, ua, ub, _d) = two_instances_with_dup();
+    let err = editor
+        .kb_add_link_target(None, "dup", "somewhere", "refs", 1.0)
+        .unwrap_err();
+    assert!(err.contains("Alpha") && err.contains("Beta"), "{err}");
+    assert_eq!(
+        (body_in(&editor, &ua), body_in(&editor, &ub)),
+        ("body".into(), "body".into())
+    );
+
+    editor
+        .kb_add_link_target(Some("Beta"), "dup", "somewhere", "refs", 1.0)
+        .unwrap();
+    assert!(
+        body_in(&editor, &ub).contains("[[somewhere?rel=refs"),
+        "not in Beta"
+    );
+    assert_eq!(body_in(&editor, &ua), "body", "Alpha's copy was changed");
+
+    let err = editor
+        .kb_add_link_target(Some("Nope"), "dup", "x", "refs", 1.0)
+        .unwrap_err();
+    assert!(err.contains("Nope"), "{err}");
+}
+
+#[test]
+fn the_set_role_command_and_the_ex_writes_take_a_kb() {
+    let (mut editor, ua, ub, _d) = two_instances_with_dup();
+    // Unnamed, an id both KBs hold is refused and nothing changes.
+    editor.ex_kb_set_role("dup hub");
+    assert!(editor.status_msg.contains("Alpha"), "{}", editor.status_msg);
+    assert_eq!((role_in(&editor, &ua), role_in(&editor, &ub)), (None, None));
+    editor.ex_kb_set_role("--kb=Nope dup hub");
+    assert!(editor.status_msg.contains("Nope"), "{}", editor.status_msg);
+    assert_eq!((role_in(&editor, &ua), role_in(&editor, &ub)), (None, None));
+
+    editor.ex_kb_set_role("--kb=Beta dup hub");
+    assert_eq!(role_in(&editor, &ub).as_deref(), Some("hub"));
+    assert_eq!(role_in(&editor, &ua), None, "Alpha's copy was changed");
+
+    editor.ex_kb_update("--kb=Alpha dup new body text");
+    assert_eq!(body_in(&editor, &ua), "new body text");
+    assert_eq!(body_in(&editor, &ub), "body");
+
+    editor.ex_kb_delete("dup");
+    assert!(
+        in_instance(&editor, &ua, "dup") && in_instance(&editor, &ub, "dup"),
+        "ambiguous delete ran"
+    );
+    editor.ex_kb_delete("--kb=Alpha dup");
+    assert!(!in_instance(&editor, &ua, "dup") && in_instance(&editor, &ub, "dup"));
+
+    editor.ex_kb_create("--kb=Beta 3f9c-x A title");
+    assert!(in_instance(&editor, &ub, "3f9c-x"), "not in the named KB");
+    assert!(editor.kb.primary.get("3f9c-x").is_none());
+    editor.ex_kb_create("--kb=Nope 3f9c-y A title");
+    assert!(editor.kb.primary.get("3f9c-y").is_none() && !in_instance(&editor, &ub, "3f9c-y"));
+    editor.ex_kb_create("--kb=Beta onlyword");
+    assert!(editor.status_msg.contains("--kb"), "{}", editor.status_msg);
+}
+
+#[test]
+fn a_promote_names_the_instance_it_copies_from() {
+    let (mut editor, _ua, ub, _d) = two_instances_with_dup();
+    editor
+        .kb_set_role_target(Some("Beta"), "dup", "atom")
+        .unwrap();
+    let err = editor.kb_promote_node("dup").unwrap_err();
+    assert!(err.contains("Alpha") && err.contains("Beta"), "{err}");
+    assert!(editor.kb.primary.get("dup").is_none());
+    let err = editor
+        .kb_promote_node_from(Some("Alpha"), "nope")
+        .unwrap_err();
+    assert!(err.contains("Alpha"), "{err}");
+
+    let r = editor.kb_promote_node_from(Some("Beta"), "dup").unwrap();
+    assert_eq!(r.promoted_from_uuid, ub);
+    assert_eq!(editor.kb.primary.get("dup").unwrap().title, "Beta");
+}
+
+#[test]
+fn a_read_names_its_kb_or_is_refused_when_ambiguous() {
+    let (mut editor, ua, ub, _d) = two_instances_with_dup();
+    editor
+        .kb_create_node_target(Some("Beta"), "only-b", "T", "b", mae_kb::NodeKind::Note)
+        .unwrap();
+    let err = editor.kb_read_scope("dup", None).unwrap_err();
+    assert!(err.contains("Alpha") && err.contains("Beta"), "{err}");
+    assert_eq!(
+        editor.kb_read_scope("dup", Some("Beta")).unwrap(),
+        Some(Some(ub))
+    );
+    assert_eq!(
+        editor.kb_read_scope("dup", Some("Alpha")).unwrap(),
+        Some(Some(ua))
+    );
+    assert!(editor
+        .kb_read_scope("dup", Some("Nope"))
+        .unwrap_err()
+        .contains("Nope"));
+    assert!(editor
+        .kb_read_scope("dup", Some("local"))
+        .unwrap_err()
+        .contains("local"));
+    // An id held by one KB resolves unqualified, as before.
+    assert_eq!(editor.kb_read_scope("only-b", None).unwrap(), None);
+}
+
+#[test]
+fn a_named_local_read_answers_from_the_primary_not_an_instance() {
+    let (mut editor, _ua, _ub, _d) = two_instances_with_dup();
+    editor
+        .kb_create_node_target(
+            Some("local"),
+            "dup",
+            "Local copy",
+            "b",
+            mae_kb::NodeKind::Note,
+        )
+        .unwrap();
+    let got = editor.kb_get_in("local", "dup").unwrap().unwrap();
+    assert_eq!(got.node.title, "Local copy");
+    let got = editor.kb_get_in("Beta", "dup").unwrap().unwrap();
+    assert_eq!(got.node.title, "Beta");
+    let err = editor.kb_read_scope("dup", None).unwrap_err();
+    assert!(
+        err.contains("local") && err.contains("Alpha") && err.contains("Beta"),
+        "{err}"
+    );
+}

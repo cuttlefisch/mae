@@ -1,9 +1,12 @@
-//! `mae-daemon kb seed`: plan the seed of a native KB from a tagged commit.
+//! `mae-daemon kb seed`: plan, then apply, the seed of a native KB from a
+//! tagged commit; and `mae-daemon kb export`, which writes a seeded KB back.
 //!
-//! Only `--dry-run` exists in this version. It reads git, writes nothing, and
-//! prints what a seed would create and every reason it must not (see
-//! `mae_daemon::seed`). Without `--dry-run` the command refuses before reading
-//! anything: applying a plan is not built yet.
+//! `--dry-run` reads git, writes nothing, and prints what a seed would create
+//! and every reason it must not, with the plan's hash (see `mae_daemon::seed`).
+//! Without it the command applies: it recomputes the plan from git and writes
+//! only if the plan has no refusal and its hash is the `--plan-hash` the
+//! operator reviewed. Apply and export open the store offline, under its lock
+//! (`seed_apply_cli`).
 //!
 //! @ai-caution: [security] An operator command, like `token mint`: seeding names
 //! a KB's owner. It must not become an MCP tool or an agent-reachable RPC
@@ -13,7 +16,11 @@ use std::path::PathBuf;
 
 use mae_daemon::seed::{self, PlanOptions};
 
+use crate::config::DaemonConfig;
+
 const USAGE: &str = "usage: mae-daemon kb seed --dry-run --git <repo> --rev <tag-or-commit>\n\
+     \x20      mae-daemon kb seed --git <repo> --rev <tag-or-commit> --kb-id <id> --plan-hash <hash>\n\
+     \x20      mae-daemon kb export --kb-id <id> --out <dir> [--force]\n\
      \x20   [--include <glob>]... [--exclude <path>]... [--require-canonical]\n\
      \x20   [--max-body-bytes <n>] [--code-property <KEY>]\n\
      \x20   [--allow-received-times] [--json]\n\
@@ -22,13 +29,14 @@ const USAGE: &str = "usage: mae-daemon kb seed --dry-run --git <repo> --rev <tag
      \x20            (default: **/*.org)\n\
      \x20 --exclude: an exact selected path to leave out, repeatable; always reported";
 
-const APPLY_NOT_BUILT: &str = "error: apply not built yet: only `mae-daemon kb seed --dry-run` \
-     exists in this version. Nothing was read or written.";
-
-/// `mae-daemon kb <action> …`. Exit code: 0 plan OK, 1 refused or failed, 2 usage.
-pub(crate) fn run_kb(rest: &[String]) -> i32 {
+/// `mae-daemon kb <action> …`. Exit code: 0 OK, 1 refused or failed, 2 usage.
+pub(crate) async fn run_kb(config: &DaemonConfig, rest: &[String]) -> i32 {
     match rest.first().map(String::as_str) {
-        Some("seed") => run_seed(&rest[1..]),
+        Some("seed") => match run_seed(&rest[1..]) {
+            Step::Exit(code) => code,
+            Step::Apply(args) => crate::seed_apply_cli::run_apply(config, &args).await,
+        },
+        Some("export") => crate::seed_apply_cli::run_export(config, &rest[1..]).await,
         _ => {
             eprintln!("{USAGE}");
             2
@@ -36,8 +44,16 @@ pub(crate) fn run_kb(rest: &[String]) -> i32 {
     }
 }
 
+/// What `kb seed` does after parsing: exit (a dry run, or a usage error), or
+/// apply, which needs the store.
+#[derive(Debug)]
+pub(crate) enum Step {
+    Exit(i32),
+    Apply(Box<SeedArgs>),
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
-struct SeedArgs {
+pub(crate) struct SeedArgs {
     dry_run: bool,
     git: Option<PathBuf>,
     rev: Option<String>,
@@ -50,26 +66,33 @@ struct SeedArgs {
     name: Option<String>,
     owner: Option<String>,
     owner_label: Option<String>,
-    kb_id: Option<String>,
+    pub(crate) kb_id: Option<String>,
     code_property: Option<String>,
+    /// The `plan_hash` reviewed in the dry run; required to apply.
+    pub(crate) plan_hash: Option<String>,
 }
 
-fn run_seed(args: &[String]) -> i32 {
+fn run_seed(args: &[String]) -> Step {
     // Parsing reads nothing. `--dry-run` is a flag of the parse, not a word
     // searched for in the raw arguments: `--name --dry-run` names a KB
     // "--dry-run" (refused as a value) rather than passing the guard.
-    let parsed = match parse_seed_args(args) {
+    let parsed = match parse_seed_args(args).and_then(validate_mode) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("error: {e}\n{USAGE}");
-            return 2;
+            return Step::Exit(2);
         }
     };
     if !parsed.dry_run {
-        eprintln!("{APPLY_NOT_BUILT}");
-        return 2;
+        return Step::Apply(Box::new(parsed));
     }
-    let opts = PlanOptions {
+    Step::Exit(dry_run(&parsed))
+}
+
+/// The plan options the arguments name (the same for a dry run and an apply,
+/// so the apply recomputes exactly the plan that was reviewed).
+pub(crate) fn plan_options(parsed: &SeedArgs) -> PlanOptions {
+    PlanOptions {
         repo: parsed.git.clone().unwrap_or_default(),
         rev: parsed.rev.clone().unwrap_or_default(),
         include: parsed.include.clone(),
@@ -80,7 +103,21 @@ fn run_seed(args: &[String]) -> i32 {
         require_canonical: parsed.require_canonical,
         code_property: parsed.code_property.clone(),
         allow_received_times: parsed.allow_received_times,
-    };
+    }
+}
+
+/// The default plan options for `repo` at `rev`, as a bare `kb seed` would use.
+#[cfg(test)]
+pub(crate) fn plan_options_for_test(repo: &std::path::Path, rev: &str) -> PlanOptions {
+    plan_options(&SeedArgs {
+        git: Some(repo.to_path_buf()),
+        rev: Some(rev.to_string()),
+        ..SeedArgs::default()
+    })
+}
+
+fn dry_run(parsed: &SeedArgs) -> i32 {
+    let opts = plan_options(parsed);
     match seed::plan(&opts) {
         Ok(plan) => {
             if parsed.json {
@@ -166,9 +203,32 @@ fn set_value(a: &mut SeedArgs, flag: &str, value: String) -> Result<(), String> 
         "--owner-label" => a.owner_label = Some(value),
         "--kb-id" => a.kb_id = Some(value),
         "--code-property" => a.code_property = Some(value),
+        "--plan-hash" => a.plan_hash = Some(value),
         other => return Err(format!("unknown argument '{other}'")),
     }
     Ok(())
+}
+
+/// An apply needs the KB id and the reviewed hash, and takes none of the
+/// ownership flags: the KB is the daemon's (members come with ADR-098).
+fn validate_mode(a: SeedArgs) -> Result<SeedArgs, String> {
+    if a.dry_run {
+        return Ok(a);
+    }
+    if a.kb_id.is_none() {
+        return Err("applying needs --kb-id <id>".into());
+    }
+    if a.plan_hash.as_deref().is_none_or(str::is_empty) {
+        return Err("applying needs --plan-hash <hash> (from the dry run)".into());
+    }
+    if a.name.is_some() || a.owner.is_some() || a.owner_label.is_some() {
+        return Err(
+            "--name/--owner/--owner-label do not apply: a seeded KB is named by --kb-id and \
+             owned by the daemon's identity"
+                .into(),
+        );
+    }
+    Ok(a)
 }
 
 fn validate(a: SeedArgs) -> Result<SeedArgs, String> {
@@ -208,26 +268,56 @@ mod tests {
         v.iter().map(|s| s.to_string()).collect()
     }
 
-    /// Without `--dry-run` the command refuses before resolving anything: the
-    /// repository named here does not exist, and the refusal is still the
-    /// apply message (exit 2), not a git error (exit 1).
+    fn exit(step: Step) -> i32 {
+        match step {
+            Step::Exit(code) => code,
+            Step::Apply(a) => panic!("expected an exit, got an apply of {a:?}"),
+        }
+    }
+
+    /// Without `--dry-run`, an apply that does not name its KB and the reviewed
+    /// hash is a usage error before anything is read: the repository named here
+    /// does not exist, and the exit is 2, not a git error (1).
     #[test]
-    fn without_dry_run_it_refuses_before_reading() {
-        let code = run_seed(&args(&["--git", "/nonexistent/repo", "--rev", "v1"]));
-        assert_eq!(code, 2);
-        let code = run_seed(&args(&["--git=/nonexistent/repo", "--rev=v1", "--json"]));
-        assert_eq!(code, 2);
+    fn an_apply_without_kb_id_and_plan_hash_refuses_before_reading() {
+        for a in [
+            &["--git", "/nonexistent/repo", "--rev", "v1"][..],
+            &["--git=/nonexistent/repo", "--rev=v1", "--kb-id", "k"],
+            &["--git=/nonexistent/repo", "--rev=v1", "--plan-hash", "h"],
+            &["--git=/r", "--rev=v1", "--kb-id", "k", "--plan-hash", ""],
+            &[
+                "--git=/r",
+                "--rev=v1",
+                "--kb-id",
+                "k",
+                "--plan-hash",
+                "h",
+                "--owner",
+                "x",
+            ],
+        ] {
+            assert_eq!(exit(run_seed(&args(a))), 2, "{a:?}");
+        }
+        match run_seed(&args(&[
+            "--git=/r",
+            "--rev=v1",
+            "--kb-id=k",
+            "--plan-hash=h",
+        ])) {
+            Step::Apply(a) => assert_eq!(a.plan_hash.as_deref(), Some("h")),
+            Step::Exit(c) => panic!("a complete apply must reach apply, got exit {c}"),
+        }
     }
 
     #[test]
     fn a_missing_repo_with_dry_run_is_an_error_not_a_plan() {
-        let code = run_seed(&args(&[
+        let code = exit(run_seed(&args(&[
             "--dry-run",
             "--git",
             "/nonexistent/repo",
             "--rev",
             "v1",
-        ]));
+        ])));
         assert_eq!(code, 1);
     }
 
@@ -256,14 +346,14 @@ mod tests {
     /// arguments for the word, which `--name --dry-run` passed.
     #[test]
     fn dry_run_is_a_flag_not_a_word_in_the_arguments() {
-        let code = run_seed(&args(&[
+        let code = exit(run_seed(&args(&[
             "--git",
             "/nonexistent/repo",
             "--rev",
             "v1",
             "--name",
             "--dry-run",
-        ]));
+        ])));
         assert_eq!(code, 2);
         assert!(parse_seed_args(&args(&[
             "--git",
