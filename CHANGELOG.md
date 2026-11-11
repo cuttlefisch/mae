@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.145] - 2026-11-11
+
+
+
+
+### Features
+
+- *(daemon)* Apply and export a native KB seed ([fc812a6](https://github.com/cuttlefisch/mae/commit/fc812a67b90274718603d919d34afee7147db10c))
+
+### Bug Fixes
+
+- *(daemon)* Seed and export refuse paths that fold to one file ([bd1418a](https://github.com/cuttlefisch/mae/commit/bd1418a96bd35117572f979da9a0de736e335422))
+- *(daemon)* Exit when the collab store is held at startup ([4f1cf6b](https://github.com/cuttlefisch/mae/commit/4f1cf6b0b6d9619c984a9e34a6c44cce8ec447ca))
+- *(kb)* Remaining writes and the id-resolving reads name their KB or fail ([7b3802a](https://github.com/cuttlefisch/mae/commit/7b3802a9937a42d4b21ce04ffc59a17e243bcd0e))
+- *(kb)* Kb_export_subgraph_html seeds from the KB it names ([0d2dc7f](https://github.com/cuttlefisch/mae/commit/0d2dc7f02e8233c6f02efbb33649f336e0dfe702))
+
+### Documentation
+
+- *(adr)* ADR-115 KB attachment store ([e2743b4](https://github.com/cuttlefisch/mae/commit/e2743b46133d6a78fc0a4c93ff69e897cee225a9))
+
 ## [0.14.144] - 2026-11-10
 
 
@@ -25,6 +45,10 @@ All notable changes to this project will be documented in this file.
 ### Testing
 
 - *(collab)* Inject write failures instead of relying on a peer hang-up ([6a13273](https://github.com/cuttlefisch/mae/commit/6a132738730e84c754d2374a5fe6de1d88919c6c))
+
+### Miscellaneous
+
+- Bump version to 0.14.144 ([f75fb86](https://github.com/cuttlefisch/mae/commit/f75fb867bfa66a0bfb76973f2a2aa8ba1a3410d3))
 
 ## [0.14.143] - 2026-11-10
 
