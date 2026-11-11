@@ -28,8 +28,8 @@ serde_json = "1"
 # exactly what a browser builds (auto-closed <p>, foster-parented table text,
 # the newline a <pre> drops, CR and NUL normalisation). A hand-written
 # re-parser would share the renderer's assumptions. Dev-only.
-html5ever = "0.39"
-markup5ever_rcdom = "0.39"
+html5ever = "0.40"
+markup5ever_rcdom = "0.40"
 # The semantics differential (tests/semantics_differential.rs) compares
 # `semantics()` with mae-kb's org parser, the projection it replaces. A
 # dev-dependency only: mae-org itself stays rowan-only (ADR-112 D1). Once
