@@ -347,19 +347,7 @@ impl Editor {
                 true
             }
             "kb-restore" => {
-                match args.map(str::trim).filter(|s| !s.is_empty()) {
-                    None => self.set_status("Usage: :kb-restore <node-id> <version>"),
-                    Some(input) => {
-                        let parts: Vec<&str> = input.splitn(2, ' ').collect();
-                        if parts.len() < 2 {
-                            self.set_status("Usage: :kb-restore <node-id> <version>");
-                        } else if let Ok(ver) = parts[1].trim().parse::<i64>() {
-                            self.dispatch_kb_restore(parts[0], ver);
-                        } else {
-                            self.set_status("Version must be a number");
-                        }
-                    }
-                }
+                self.ex_kb_restore(args.unwrap_or(""));
                 true
             }
             "kb-raw-query" => {
