@@ -96,14 +96,16 @@ pub(crate) async fn run_restore(config: &DaemonConfig, rest: &[String]) -> i32 {
             return 1;
         }
     };
-    let doc_store = match open_doc_store_offline(config).await {
-        Ok(d) => d,
+    // Exclusive: the doc comment above always said restore refuses a serving
+    // daemon, but nothing checked it. Now the store lock and the socket do.
+    let store = match crate::seed_apply_cli::open_exclusive(config) {
+        Ok(s) => s,
         Err(e) => {
-            eprintln!("Error: {e} (is the daemon running? stop it first)");
+            eprintln!("Error: {e}");
             return 1;
         }
     };
-    match checkpoint::import_kb(&doc_store, &bytes).await {
+    match checkpoint::import_kb(&store.doc_store, &bytes).await {
         Ok(cp) => {
             println!(
                 "restored: kb={} nodes={} hash={}",

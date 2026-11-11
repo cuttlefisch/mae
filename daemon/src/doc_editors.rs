@@ -174,6 +174,9 @@ pub enum InternalWriter {
     ControlSocket,
     /// The maintenance scheduler (ADR-061 enrichment lease claims).
     Scheduler,
+    /// `mae-daemon kb seed`, run by the operator: installs a seeded KB's
+    /// documents (`seed::apply`). Its content has no recorded authorship.
+    Seed,
 }
 
 impl InternalWriter {
@@ -184,6 +187,7 @@ impl InternalWriter {
             Self::CheckpointRestore => "checkpoint-restore",
             Self::ControlSocket => "control-socket",
             Self::Scheduler => "scheduler",
+            Self::Seed => "kb-seed",
         }
     }
 }

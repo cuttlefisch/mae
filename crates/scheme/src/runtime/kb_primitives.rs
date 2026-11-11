@@ -13,6 +13,7 @@ use crate::lisp_error::{Arity, LispError};
 use crate::value::Value;
 use crate::vm::Vm;
 
+use super::kb_crud::{opt_kb, KbNodeOp};
 use super::SharedState;
 use crate::permission::tier;
 
@@ -21,18 +22,22 @@ use crate::permission::tier;
 pub(super) fn register_kb_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>) {
     // --- Typed link functions ---
 
-    // (kb-add-link! SOURCE-ID TARGET-ID REL-TYPE)
+    // (kb-add-link! SOURCE-ID TARGET-ID REL-TYPE [KB])
     let s = shared.clone();
     vm.register_fn(
         "kb-add-link!",
-        "Add a typed link between KB nodes",
-        Arity::Fixed(3),
+        "Add a typed link between KB nodes: appended to SOURCE-ID's body, like the kb_add_link \
+         tool. Optional KB names the KB holding SOURCE-ID (`local` = the local KB); it is \
+         required when the id exists in more than one KB, and an unknown or unloaded KB is an \
+         error, never a fallback to another KB.",
+        Arity::Variadic(3),
         tier::WRITE,
         move |args: &[Value]| {
             let src = arg_string(args, 0, "kb-add-link!")?;
             let dst = arg_string(args, 1, "kb-add-link!")?;
             let rel = arg_string(args, 2, "kb-add-link!")?;
-            s.lock().pending_kb_links.push((src, dst, rel));
+            let kb = opt_kb(args, 3, "kb-add-link!")?;
+            s.lock().pending_kb_links.push((src, dst, rel, kb));
             Ok(Value::Void)
         },
     );
@@ -479,21 +484,25 @@ saved recovery key OFFLINE — it can later authorize a rebind if the primary is
             },
         );
 
-    // (kb-set-role NODE-ID ROLE) — source | atom | molecule | hub, the molecular-note
-    // classification (Source→Atom→Molecule→Hub). Also NOT a collab/daemon action —
-    // routes through the ex parser like kb-set-ai-residency above.
+    // (kb-set-role NODE-ID ROLE [KB]) — source | atom | molecule | hub, the molecular-note
+    // classification (Source→Atom→Molecule→Hub). Not a collab/daemon action: queued like
+    // kb-create/kb-update and applied through `Editor::kb_set_role_target`, the method the
+    // `kb_set_role` MCP tool and `:kb-set-role` use.
     let s = shared.clone();
     vm.register_fn(
         "kb-set-role",
-        "Set a KB node's molecular-note role: source | atom | molecule | hub.",
-        Arity::Fixed(2),
+        "Set a KB node's molecular-note role: source | atom | molecule | hub. Optional KB names \
+         the KB holding the node (`local` = the local KB); it is required when the id exists in \
+         more than one KB, and an unknown or unloaded KB is an error, never a fallback.",
+        Arity::Variadic(2),
         tier::PRIVILEGED,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-set-role")?;
             let role = arg_string(args, 1, "kb-set-role")?;
+            let kb = opt_kb(args, 2, "kb-set-role")?;
             s.lock()
-                .pending_ex_commands
-                .push(format!("kb-set-role {id} {role}"));
+                .pending_kb_node_ops
+                .push(KbNodeOp::SetRole { id, role, kb });
             Ok(Value::Void)
         },
     );

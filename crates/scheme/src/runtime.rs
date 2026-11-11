@@ -192,7 +192,7 @@ pub struct SharedState {
     /// rather than two that can drift (CLAUDE.md principles #3 + #15).
     pending_kb_node_ops: Vec<kb_crud::KbNodeOp>,
     /// Pending KB typed links: (source, target, rel_type).
-    pending_kb_links: Vec<(String, String, String)>,
+    pending_kb_links: Vec<(String, String, String, Option<String>)>,
     /// Pending KB link removals: (source, target).
     pending_kb_link_removals: Vec<(String, String)>,
     /// Pending KB meta-member additions: (meta_id, member_id, role).
@@ -702,8 +702,8 @@ impl SchemeRuntime {
         std::mem::take(&mut state.pending_kb_nodes)
     }
 
-    /// Drain pending typed link additions: (source, target, rel_type).
-    pub fn drain_kb_links(&mut self) -> Vec<(String, String, String)> {
+    /// Drain pending typed link additions: (source, target, rel_type, kb).
+    pub fn drain_kb_links(&mut self) -> Vec<(String, String, String, Option<String>)> {
         let mut state = self.shared.lock();
         std::mem::take(&mut state.pending_kb_links)
     }

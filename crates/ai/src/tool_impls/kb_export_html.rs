@@ -92,7 +92,23 @@ fn write_export(out_path: &std::path::Path, html: &str) -> Result<(), String> {
 /// `mae_kb::KnowledgeBase::extract_subgraph`'s BFS: it only ever follows
 /// `self.nodes`), so the whole exported subgraph is guaranteed to stay
 /// within whichever KB `id` resolves to.
-fn locate_seed_kb<'a>(editor: &'a Editor, id: &str) -> Result<&'a mae_kb::KnowledgeBase, String> {
+fn locate_seed_kb<'a>(
+    editor: &'a Editor,
+    id: &str,
+    kb: Option<&str>,
+) -> Result<&'a mae_kb::KnowledgeBase, String> {
+    // A named KB answers alone; an id held by several KBs needs one named
+    // (`kb_read_scope`, shared with every other kb-addressed read).
+    if let Some(owner) = editor.kb_read_scope(id, kb)? {
+        return match owner {
+            None => Ok(&editor.kb.primary),
+            Some(uuid) => {
+                editor.kb.instances.get(&uuid).ok_or_else(|| {
+                    format!("kb_export_subgraph_html: KB '{uuid}' has no loaded nodes")
+                })
+            }
+        };
+    }
     if editor.kb.primary.get(id).is_some() {
         return Ok(&editor.kb.primary);
     }
@@ -333,7 +349,7 @@ pub fn execute_kb_export_subgraph_html(
         .unwrap_or(editor.kb_export_default_node_cap as u64)
         .min(editor.kb_export_max_node_cap as u64) as usize;
 
-    let kb = locate_seed_kb(editor, id)?;
+    let kb = locate_seed_kb(editor, id, args.get("kb").and_then(|v| v.as_str()))?;
 
     // Hard filter, independent of depth/node_cap: when set, only nodes
     // carrying this exact tag (plus the seed itself, regardless of its own

@@ -23,7 +23,7 @@ mod collection_roles;
 mod node;
 
 pub use collection_format::BODY_FORMAT_ORG_LITERAL_V1;
-pub use node::{body_bytes, KbNodeDoc, MaterializedNode};
+pub use node::{body_bytes, KbNodeDoc, MaterializedNode, OrgHeader};
 
 /// Derive a stable yrs `client_id` for KB CRDT edits from a peer's durable collab
 /// identity `fingerprint` + its per-KB authorization `epoch` (ADR-020 B-16,

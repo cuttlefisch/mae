@@ -400,15 +400,21 @@ impl SchemeRuntime {
             }
         }
 
-        // Apply typed link additions from (kb-add-link! SRC DST REL_TYPE)
-        if let Some(ref store) = editor.kb.store {
-            for (src, dst, rel_type) in state.pending_kb_links.drain(..) {
-                if let Err(e) = store.add_typed_link(&src, &dst, &rel_type, 1.0) {
+        // Typed link additions from (kb-add-link! SRC DST REL_TYPE [KB]): the same
+        // text-is-truth path as the kb_add_link MCP tool, so a named KB is honoured
+        // and the edge is derived from `SRC`'s body rather than written to the store.
+        for (src, dst, rel_type, kb) in state.pending_kb_links.drain(..) {
+            match editor.kb_add_link_target(kb.as_deref(), &src, &dst, &rel_type, 1.0) {
+                Ok(()) => {
+                    debug!(src = %src, dst = %dst, rel = %rel_type, "typed link added from scheme")
+                }
+                Err(e) => {
                     warn!(src = %src, dst = %dst, rel = %rel_type, "kb-add-link! error: {}", e);
-                } else {
-                    debug!(src = %src, dst = %dst, rel = %rel_type, "typed link added from scheme");
+                    editor.set_status(format!("kb-add-link! {src}: {e}"));
                 }
             }
+        }
+        if let Some(ref store) = editor.kb.store {
             for (src, dst) in state.pending_kb_link_removals.drain(..) {
                 if let Err(e) = store.remove_link(&src, &dst) {
                     warn!(src = %src, dst = %dst, "kb-remove-link! error: {}", e);
@@ -432,7 +438,6 @@ impl SchemeRuntime {
             }
         } else {
             // No store — just drain to avoid accumulating
-            state.pending_kb_links.clear();
             state.pending_kb_link_removals.clear();
             state.pending_kb_meta_adds.clear();
             state.pending_kb_meta_removes.clear();
@@ -857,6 +862,13 @@ fn apply_kb_node_op(
         crate::runtime::kb_crud::KbNodeOp::Delete { id, kb } => {
             let r = editor.kb_delete_node_target(kb.as_deref(), &id);
             (format!("kb-delete {id}"), r)
+        }
+        crate::runtime::kb_crud::KbNodeOp::SetRole { id, role, kb } => {
+            // `kb_set_role_target` reports its outcome on the status line itself.
+            let r = editor
+                .kb_set_role_target(kb.as_deref(), &id, &role)
+                .map(|_| ());
+            (format!("kb-set-role {id}"), r)
         }
     }
 }

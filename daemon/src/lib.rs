@@ -17,8 +17,10 @@ pub mod lease_fence;
 pub mod oauth_self_issue;
 pub mod projector;
 pub mod quota;
+pub mod rfc3339;
 pub mod seed;
 pub mod storage;
+pub mod store_lock;
 
 /// Short git SHA of this build (`-dirty` if the tree had uncommitted changes,
 /// "unknown" if built outside a git checkout). Set by `build.rs`. Reported in
