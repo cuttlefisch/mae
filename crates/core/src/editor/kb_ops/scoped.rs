@@ -26,6 +26,20 @@ pub(crate) fn take_kb_flag(input: &str) -> (Option<&str>, &str) {
 }
 
 impl Editor {
+    /// `:kb-restore [--kb=NAME] <node-id> <version>`.
+    pub(crate) fn ex_kb_restore(&mut self, input: &str) {
+        const USAGE: &str = "Usage: :kb-restore [--kb=NAME] <node-id> <version>";
+        let (kb, rest) = take_kb_flag(input);
+        let Some((id, ver)) = rest.split_once(' ') else {
+            self.set_status(USAGE);
+            return;
+        };
+        match ver.trim().parse::<i64>() {
+            Ok(v) => self.dispatch_kb_restore(kb, id, v),
+            Err(_) => self.set_status("Version must be a number"),
+        }
+    }
+
     /// `:kb-create [--kb=NAME] <id> <title>` or `:kb-create <title>`. Naming a KB
     /// needs an explicit id: the title-only form is the capture flow, which
     /// places the note by `kb_notes_dir`, not by a named KB.
@@ -184,6 +198,20 @@ impl Editor {
 
     /// The durable store of the KB named `kb` (`local` = the primary). An
     /// unknown, unloaded or store-less KB is an error; never another KB's store.
+    /// The store a store-addressed operation (history, restore, raw query) acts
+    /// on: the KB `kb` names, else the primary's. Never another KB's. One rule
+    /// for the ex command, Scheme and the MCP tools.
+    pub fn kb_store_named_or_primary(&self, kb: Option<&str>) -> Result<&dyn KbStore, String> {
+        match kb {
+            Some(name) => self.kb_store_named(name),
+            None => self
+                .kb
+                .store
+                .as_deref()
+                .ok_or_else(|| "No KB store configured".to_string()),
+        }
+    }
+
     pub fn kb_store_named(&self, kb: &str) -> Result<&dyn KbStore, String> {
         match self.kb_resolve_target(kb)? {
             None => self

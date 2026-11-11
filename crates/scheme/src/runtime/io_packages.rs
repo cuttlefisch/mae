@@ -501,12 +501,14 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         },
     );
 
-    // (kb-restore NODE-ID VERSION) — restore a node to a previous version
+    // (kb-restore NODE-ID VERSION [KB]) — restore a node to a previous version
     let s = shared.clone();
     vm.register_fn(
         "kb-restore",
-        "Restore a KB node to a previous version",
-        Arity::Fixed(2),
+        "Restore a KB node to a previous version. Optional KB names the KB whose store \
+         holds the history (`local` = the local KB); without it the primary's store is \
+         used. An unknown KB is an error, never a fallback.",
+        Arity::Variadic(2),
         tier::WRITE,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-restore")?;
@@ -514,9 +516,11 @@ pub(super) fn register_io_package_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
                 Value::Int(n) => *n,
                 other => return Err(LispError::type_error("integer", format!("{}", other))),
             };
+            let kb = super::kb_crud::opt_kb(args, 2, "kb-restore")?;
+            let flag = kb.map(|k| format!("--kb={k} ")).unwrap_or_default();
             s.lock()
                 .pending_ex_commands
-                .push(format!("kb-restore {} {}", id, version));
+                .push(format!("kb-restore {flag}{id} {version}"));
             Ok(Value::Void)
         },
     );
