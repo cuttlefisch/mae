@@ -11,6 +11,7 @@ unchanged for read-only views.
 whose `ConnLimiter` discipline binds here), ADR-091 (session handle for MCP dispatch).
 **Evidence:** `docs/research/097-browser-crdt-interop-spike.md` — the Phase 0 spike that
 established the payload bytes cross runtimes intact.
+Amendment 1: `docs/research/099-websocket-authentication-prior-art.md`.
 **Tracking:** issue TBD.
 
 ## Context
@@ -89,6 +90,10 @@ ADR-073's view route carries (`oauth.rs:297-326`) is **not** extended here — a
 script-driven and can set headers, so it has no need for the concession a plain browser navigation
 required.
 
+> **Amended (Amendment 1, B1):** the last sentence is wrong for browsers. The WebSocket API cannot
+> set `Authorization`. Native clients present the bearer header; browsers present a single-use
+> ticket in the subprotocol list.
+
 ### D4 — Backpressure and caps follow the posture MAE already has
 
 Per-session bounded queues, write timeouts, and slow clients **dropped rather than blocked** —
@@ -150,3 +155,164 @@ Per principle #14, verified by trying to falsify it.
 - **Convergence through the real transport.** The Phase 0 spike's ≥3-writer, all-apply-orders, shuffled convergence test, re-run end-to-end over the socket rather than over files — including the negative control that must fail when the binding is disabled. A transport that silently drops or reorders updates would pass a naive "both edits arrived" check and fail this one.
 - **Backpressure.** A deliberately slow client must be dropped, not allowed to stall the daemon, and a slow *document* must not stall the other documents in its own session (D4).
 - **ADR-074 is not regressed.** The read-only HTML view must continue to work over SSE/polling with this route disabled, proving the two transports are genuinely independent rather than one having quietly become load-bearing for the other.
+
+## Amendment 1 (2026-11-11): connecting from a browser, staying authenticated, and the first cut
+
+**Status of this amendment:** Proposed. It corrects D3, fills in what D2–D4 left open for a real
+client, and bounds what may ship before hub signature verification (ADR-111 D4) and the identity
+binding (ADR-098). Evidence: `docs/research/099-websocket-authentication-prior-art.md`.
+
+### B1. Two credentials on the upgrade; neither is ever in the URL
+
+The browser WebSocket API takes only a URL and a list of subprotocols. It cannot set
+`Authorization`, so D3 as written cannot serve the client this ADR exists for. The upgrade to
+`GET /ws` accepts exactly one of:
+
+- **`Authorization: Bearer <token>`**, for native and headless clients (ADR-111 D6). This is D3 as
+  written.
+- **A connect ticket**, for browsers. The client first calls `POST /ws/ticket` with its bearer
+  header. The daemon answers `{ticket, expires_in}`, and the browser opens the socket with
+  `new WebSocket(url, ["mae.v1", "mae.ticket." + ticket])`.
+
+A credential in the query string is refused (`credential_in_url`), as the listener already does for
+`?access_token=` (ADR-111 P1). Authentication is decided **before** the upgrade completes. So a
+bad credential gets the same `401` and `WWW-Authenticate` as every other route on the listener
+(D3's inheritance argument), and no unauthenticated socket ever exists.
+
+**The ticket:**
+- 256 random bits.
+- Single use: it is consumed on its first presentation, whether or not the upgrade then succeeds.
+- Valid for 30 seconds.
+- Held in memory only, so a restart voids every ticket.
+- Bound to the minting token's principal, its expiry and its tenant, and to the `Origin` of the mint
+  request when there was one.
+- Each principal may hold only a bounded number of unused tickets.
+
+An unknown, used or expired ticket all give one refusal (`ticket_invalid`), so a probe learns
+nothing. The daemon's response selects `mae.v1` and never echoes the ticket entry.
+
+**Origin.** When a handshake carries `Origin`, it must exactly match an entry in
+`oauth.ws_allowed_origins`, with no wildcards and no substring matching. It must also equal the
+ticket's bound origin. MAE uses no cookies, so cross-site hijacking has no ambient credential to
+ride on; the check is defence in depth and it pins the ticket to the page that minted it.
+
+### B2. The protocol version is negotiated at the upgrade
+
+The version is the `mae.v<N>` subprotocol. If the client offers no version the daemon speaks, the
+upgrade is refused with `400`, `protocol_unsupported`, listing the supported versions. This happens
+before the upgrade, not as a close after it.
+
+The first frame the daemon sends is
+`session/hello {protocol, principal, auth_deadline, limits: {max_frame_bytes, max_open_docs}}`.
+It doubles as `session/whoami` for a socket that has not joined anything.
+
+### B3. Staying authenticated: an in-socket renewal deadline
+
+This is the server-enforced refresh ADR-111 D6 requires.
+
+- The session's `auth_deadline` is the presenting token's expiry. A ticket carries its minting
+  token's expiry.
+- At `auth_deadline − renew_lead`, the daemon sends `session/renew_needed` (`renew_lead` is
+  configurable, default 60 seconds).
+- The client answers with a `session/renew {token}` frame. The token travels inside TLS, in a frame,
+  never in a URL.
+- The new token must validate and carry the **same principal**. A different principal closes the
+  socket (`principal_changed`).
+- On success the deadline moves to the new token's expiry, and every open subscription is
+  re-authorized. A subscription the principal has lost is closed (`doc_closed`, reason
+  `not_member`) without closing the session.
+- A missed deadline closes the socket with code `4401`, reason `token_expired`. In-flight frames are
+  not applied after the deadline.
+
+Offboarding (ADR-111 D3) therefore takes effect at the next renewal at the latest.
+
+### B4. Multiplexing, made concrete
+
+- Frames are D2's envelope: one JSON-RPC message per text frame, every one naming its document.
+- **Every frame is authorized against its own document's KB.** A connection holds no grant, and the
+  same order applies as on every collab path: access, then signature and author, then the epoch
+  fence. A session subscribes to a document only after its first authorized operation on it.
+- Each document has its own bounded send queue. A document whose queue overflows is closed for that
+  session (`doc_closed`, reason `slow_consumer`) and must be re-opened, which resyncs it. The
+  session's other documents are not affected (D4's head-of-line case).
+- Caps:
+  - `max_frame_bytes` defaults to the listener's existing request-body cap, and a larger frame closes
+    the socket (`1009`);
+  - `max_open_docs` bounds the documents per session;
+  - an open document counts against the tenant's existing quotas, exactly like the same request over
+    the HTTPS listener.
+
+### B5. Presence
+
+Awareness (`shared/sync/src/awareness.rs`) rides the same envelope, per document:
+- It is delivered only to sessions authorized for that document.
+- The daemon stamps the sender's principal on every awareness message and discards any principal
+  the client supplies, so a client cannot appear as someone else.
+- It is rate-limited per session and document.
+- It is never persisted, and a session's presence is cleared when it closes.
+
+### B6. The first cut, before hub signature verification and identity binding
+
+ADR-111 D4 makes signature verification on the hub (#727) a prerequisite for the HTTPS listener to
+carry writes from untrusted callers, and ADR-098's binding is what turns an IdP subject into a KB
+member. Neither exists yet. Until both do:
+
+- The route is **off by default** (`oauth.ws_enabled = false`).
+- With it on, **only daemon-issued tokens** (`kid = "self"`, minted by the operator, ADR-111 P1) are
+  accepted on `/ws` and `/ws/ticket`. A token from an external issuer is refused there
+  (`issuer_not_supported`), even though the listener accepts it for `kb/query`.
+- The session's principal is the token's subject, taken literally as the membership principal. The
+  operator mints a token for a member's existing principal. That is the trust an operator-minted
+  token already carries on this listener. It makes every writer in this cut a caller the operator
+  vouched for, which is the only condition under which ADR-111 permits a channel-authenticated
+  write.
+- `docs/DAEMON_ADMIN.md` states that this cut is for development and for single-operator
+  deployments, and that it ends when #727 and ADR-098 land. At that point external tokens are
+  accepted and the principal comes from the binding.
+
+### B7. Tests this amendment adds to Verification
+
+Each test must fail without its mechanism.
+
+**Tickets and the upgrade:**
+- A ticket is refused on its second use, after 30 seconds, and after a restart.
+- An unknown, used and expired ticket give identical responses.
+- A ticket in the query string is refused.
+- A ticket minted for one origin is refused from another.
+- An origin outside the allowlist is refused, including one that merely contains an allowed origin.
+- The selected subprotocol never contains the ticket.
+- No version in common gives `400` before the upgrade.
+
+**Renewal:**
+- A missed deadline closes the socket with `4401`, and a frame sent after it is not applied.
+- Renewal with a different principal closes the socket.
+- A member removed between renewals loses that KB's documents at the next renewal, and keeps the
+  others.
+
+**Authorization:**
+- An external-issuer token is refused on `/ws` while B6 holds.
+- A frame naming a document of a KB the session cannot read is refused, and its raw response
+  contains nothing from that KB (D3's leak oracle).
+
+**Presence:**
+- An awareness message carrying another principal is delivered stamped with the sender's.
+- Presence never reaches a session not authorized for the document.
+
+**Multiplexing:**
+- A slow document is closed for its session while a second document in the same session keeps
+  converging.
+- N documents use one connection.
+
+### Rejected in this amendment
+
+- **The bearer token in the subprotocol** (Kubernetes' scheme). It works, but it puts the long-lived
+  credential in a header every proxy on the path can see and may log. The ticket carries 30 seconds
+  of single-use authority instead.
+- **The token in the first frame** (OWASP's preference). It requires an unauthenticated open socket,
+  with its own timeout, cap and pre-auth message rules. It also moves rejection off the listener's
+  tested pre-upgrade path, which is the property D3 chose this listener for.
+- **A ticket in the query string** (Slack's shape). A URL is logged by proxies and servers, and
+  OWASP says plainly to keep tokens out of it. Single use narrows the damage but does not remove the
+  log entry.
+- **Cookies.** They bring cross-site request rules, a CSRF surface and a session store, to carry a
+  credential the client already holds as a bearer token.
