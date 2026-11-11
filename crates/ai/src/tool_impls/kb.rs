@@ -2303,19 +2303,12 @@ pub fn execute_kb_agenda(
 }
 
 /// The store a store-addressed tool (`kb_history`, `kb_restore`, `kb_raw_query`)
-/// acts on: the KB `kb` names, else the primary's. Never another KB's.
+/// acts on: the KB `kb` names, else the primary's (`Editor::kb_store_named_or_primary`).
 fn named_or_primary_store<'a>(
     editor: &'a Editor,
     kb: Option<&str>,
 ) -> Result<&'a dyn mae_kb::KbStore, String> {
-    match kb {
-        Some(name) => editor.kb_store_named(name),
-        None => editor
-            .kb
-            .store
-            .as_deref()
-            .ok_or_else(|| "No KB store configured".to_string()),
-    }
+    editor.kb_store_named_or_primary(kb)
 }
 
 pub fn execute_kb_history(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
