@@ -191,3 +191,28 @@ fn a_new_document_is_checked_from_nothing() {
         Some("title")
     );
 }
+
+/// The check's cost on the keystroke path (`sync/update` checks every node
+/// update): one call per keystroke on a node with a 100 KB body. Run with
+/// `cargo test -p mae-sync --release -- --ignored field_type_check_cost --nocapture`.
+/// Measured 2026-11-11: about 1.3 ms per update on a 105 KB node, release build,
+/// proportional to the node's size (about 60 µs at 5 KB).
+#[test]
+#[ignore]
+fn field_type_check_cost() {
+    let body = "lorem ipsum dolor sit amet ".repeat(4000);
+    let base = KbNodeDoc::new("n", "T", &body, &[]).encode_state();
+    let mut editor = KbNodeDoc::from_bytes(&base).unwrap();
+    let ups: Vec<Vec<u8>> = (0..200)
+        .map(|i| editor.set_kind(Some(&format!("k{i}"))))
+        .collect();
+    let t = std::time::Instant::now();
+    for up in &ups {
+        assert_eq!(KbNodeDoc::field_type_introduced(&base, up).unwrap(), None);
+    }
+    let per = t.elapsed() / ups.len() as u32;
+    println!(
+        "field_type_introduced on a {} KB node: {per:?} per update",
+        body.len() / 1024
+    );
+}
