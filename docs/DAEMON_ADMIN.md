@@ -728,13 +728,15 @@ through a temporary file and a rename, so a crash leaves the old file or the new
 `kb seed` (apply), `kb export` and `restore` open the collab store offline. Each takes the store lock
 (`state.db.lock` in the collab directory, an OS lock released when its holder exits) and refuses if
 any process holds it or a daemon answers on the control socket. The serving daemon takes the same
-lock when it opens its store: started while an operator command holds it, it logs `collab store is
-locked by another process` and runs without the collab service. Restart it once the command is done.
+lock when it opens its store. Started while an operator command holds it, it **exits** with status
+75 (`EX_TEMPFAIL`) and says why, rather than serving with collab and `kb/query` silently off. A
+supervisor that restarts on failure (`Restart=on-failure`) brings it up once the command is done.
 
 ## 8. Troubleshooting
 
 | Symptom | Check |
 |---------|-------|
+| Daemon exits with status 75, "the collab store is in use by another process" | an operator `kb seed`, `kb export` or `restore` is running; let it finish, then start the daemon |
 | Daemon won't start / "another daemon is listening" | a stale socket or a running instance — `ss -tln`, remove a stale `socket` path |
 | Client can't connect (`key` mode) | the client's key is `authorize`d (`mae-daemon authorized`); host-key TOFU pinned on the client (`known_hosts`); ports/firewall (§5) |
 | Client rejected after rotating its key | `authorize` its **new** public key (ADR-040, §3) |

@@ -23,11 +23,11 @@ async fn the_daemon_and_an_operator_command_exclude_each_other() {
     let config = isolated(tmp.path());
     let held = open_exclusive(&config).unwrap();
     assert!(
-        crate::init_doc_store(&config).await.is_none(),
+        crate::init_doc_store(&config).await.is_err(),
         "the daemon must not open a store an operator command holds"
     );
     drop(held);
-    assert!(crate::init_doc_store(&config).await.is_some());
+    assert!(matches!(crate::init_doc_store(&config).await, Ok(Some(_))));
     let err = open_exclusive(&config)
         .err()
         .expect("the daemon holds the store now");
