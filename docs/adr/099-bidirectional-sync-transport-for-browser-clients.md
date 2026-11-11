@@ -1,6 +1,6 @@
 # ADR-099: Bidirectional sync transport for browser clients
 
-**Status:** Proposed.
+**Status:** Accepted (design), with Amendment 1 (accepted 2026-11-11). Not yet built.
 **Depends on:** ADR-097 (Browser MAE is a KB surface — its D3 establishes that a one-directional
 transport cannot serve a write surface), ADR-052 (OAuth 2.1 resource server — the listener this
 extends), ADR-053 (the read-through query surface this sits beside), ADR-098 (the identity a
@@ -162,7 +162,7 @@ Per principle #14, verified by trying to falsify it.
 
 ## Amendment 1 (2026-11-11): connecting from a browser, staying authenticated, and the first cut
 
-**Status of this amendment:** Proposed. It corrects D3, fills in what D2–D4 left open for a real
+**Status of this amendment:** Accepted (2026-11-11). It corrects D3, fills in what D2–D4 left open for a real
 client, and bounds what may ship before hub signature verification (ADR-111 D4) and the identity
 binding (ADR-098). Evidence: `docs/research/099-websocket-authentication-prior-art.md`.
 
