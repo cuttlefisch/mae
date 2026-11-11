@@ -6,6 +6,7 @@ mod git_tests;
 mod glob_tests;
 mod hardening_tests;
 mod integrity_tests;
+mod member_tests;
 mod merge_tests;
 mod object_tests;
 mod plan_tests;
