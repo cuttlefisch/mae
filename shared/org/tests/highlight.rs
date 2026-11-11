@@ -256,3 +256,75 @@ fn own_end_only_ever_drops_trailing_blank() {
         }
     }
 }
+
+/// The edit a browser client's property test found: in a CRLF file, an LF typed between
+/// a CR and its LF makes the file unix (a lone LF anywhere does, as Emacs
+/// decides it), a fact about the whole file the region alone cannot carry.
+/// So the section asks for a full parse. Kills: answering from the region.
+#[test]
+fn an_edit_that_changes_the_files_line_ending_needs_a_full_parse() {
+    let text = "#+title: T\r\n\r\n* A uno\r\ntexto\r\nmás\r\n* Dos\r\nfin\r\n";
+    let doc = parse(text, &ParseOptions::default());
+    assert_eq!(doc.line_ending(), mae_org::LineEnding::CrLf);
+    let s = sections(&doc).into_iter().nth(1).unwrap();
+    let region = &text[s.start as usize..s.end as usize];
+    let cr = region.find('\r').unwrap();
+    for insert in ["x\n", "#+TODO: A\n"] {
+        let new = format!("{}{insert}{}", &region[..=cr], &region[cr + 1..]);
+        let whole = format!(
+            "{}{new}{}",
+            &text[..s.start as usize],
+            &text[s.end as usize..]
+        );
+        assert_eq!(
+            parse(&whole, &ParseOptions::default()).line_ending(),
+            mae_org::LineEnding::Lf
+        );
+        assert!(
+            matches!(
+                section_highlights(&new, &ParseOptions::default(), &s),
+                SectionHighlights::NeedsFull(_)
+            ),
+            "{insert:?} answered from the region"
+        );
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(3000))]
+
+    /// Incremental equals full: after a random edit inside a random section
+    /// of org-shaped text with every line-ending convention, either the
+    /// section asks for a full parse, or its spans equal a full parse of the
+    /// edited file and the file's line ending is unchanged. Kills an edit
+    /// answered from the region that changed a fact about the whole file.
+    #[test]
+    fn an_answered_section_edit_equals_a_full_parse(
+        parts in prop::collection::vec(prop::sample::select(&[
+            "* ", "** ", "text", "*b*", "<<<r>>>", " r ", "#+TODO: X | Y", "X ", "- ", "  ",
+            "\n", "\n", "\r\n", "\r\n", "\r",
+        ][..]), 1..40),
+        pick in any::<prop::sample::Index>(),
+        at in any::<prop::sample::Index>(),
+        cut in 0usize..4,
+        insert in prop::sample::select(&["", "\n", "\r", "\r\n", "x", "*y* ", "<<<r>>>"][..]),
+    ) {
+        let text = parts.concat();
+        let opts = ParseOptions::default();
+        let doc = parse(&text, &opts);
+        let secs = sections(&doc);
+        let s = &secs[pick.index(secs.len())];
+        let region = &text[s.start as usize..s.end as usize];
+        let bounds: Vec<usize> = (0..=region.len()).filter(|i| region.is_char_boundary(*i)).collect();
+        let a = bounds[at.index(bounds.len())];
+        let b = bounds.iter().copied().filter(|&i| i >= a).nth(cut).unwrap_or(a);
+        let new = format!("{}{insert}{}", &region[..a], &region[b..]);
+        if let SectionHighlights::Spans(got) = section_highlights(&new, &opts, s) {
+            let whole = format!("{}{new}{}", &text[..s.start as usize], &text[s.end as usize..]);
+            let full = parse(&whole, &opts);
+            prop_assert_eq!(full.line_ending(), doc.line_ending(), "the convention changed: {:?}", whole);
+            let end = s.start + new.len() as u32;
+            prop_assert_eq!(got, whole_within(&highlights(&full), s.start, end), "{:?}", whole);
+        }
+    }
+}

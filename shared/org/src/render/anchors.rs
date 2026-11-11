@@ -100,12 +100,20 @@ pub fn slug(title: &str) -> String {
     out
 }
 
+/// The anchor of a heading whose title has no letter or digit. Not the bare
+/// `h` it was: an element id becomes a property of `window` in a browser, and
+/// `h` is a plausible script name; `h--untitled` is no JavaScript identifier,
+/// and neither a slug (which never holds `--`) nor a repeat suffix (`--` and
+/// digits) can spell it.
+pub const UNTITLED_ANCHOR: &str = "h--untitled";
+
 /// The anchor every rendered headline's heading carries: `h-` + the slug of
-/// its title, or `h` when the slug is empty (before any repeat suffix).
+/// its title, or [`UNTITLED_ANCHOR`] when the slug is empty (before any repeat
+/// suffix).
 pub fn heading_anchor(title: &str) -> String {
     let s = slug(title);
     if s.is_empty() {
-        "h".to_string()
+        UNTITLED_ANCHOR.to_string()
     } else {
         format!("h-{s}")
     }
@@ -182,8 +190,8 @@ mod tests {
         assert_eq!(ids.claim(heading_anchor("a 2")), "h-a-2");
         assert_eq!(ids.claim(heading_anchor("a")), "h-a--2");
         assert_eq!(ids.claim(heading_anchor("a")), "h-a--3");
-        assert_eq!(ids.claim(heading_anchor("¿?")), "h");
-        assert_eq!(ids.claim(heading_anchor("")), "h--2");
+        assert_eq!(ids.claim(heading_anchor("¿?")), "h--untitled");
+        assert_eq!(ids.claim(heading_anchor("")), "h--untitled--2");
         assert_eq!(slug("  Hello, World! "), "hello-world");
         assert_eq!(slug("Café au lait"), "café-au-lait");
         assert_eq!(slug("Глава 2"), "глава-2");
