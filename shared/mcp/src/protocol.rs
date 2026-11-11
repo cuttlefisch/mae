@@ -348,6 +348,17 @@ impl McpError {
 
     /// One update is larger than `[collab.sync] max_update_size_bytes`.
     /// Distinct from `quota_exceeded`, which is about the document it would grow.
+    /// A node update would leave a known field of the node document with the
+    /// wrong type (`mae_sync` node field types). Nothing was applied.
+    pub fn invalid_field(field: &str, message: String) -> Self {
+        Self::kinded(
+            -32602,
+            message,
+            "invalid_field",
+            serde_json::json!({ "field": field }),
+        )
+    }
+
     pub fn update_too_large(message: String, size: usize, limit: usize) -> Self {
         Self::kinded(
             -32603,
@@ -447,6 +458,7 @@ pub const ERROR_KINDS: &[&str] = &[
     "doc_not_found",
     "tenant_quota_exceeded",
     "update_too_large",
+    "invalid_field",
     "cannot_remove_owner",
     "signer_unavailable",
     "subject_not_member",
@@ -618,6 +630,7 @@ mod tests {
             McpError::doc_not_found(m()),
             McpError::tenant_quota_exceeded(m()),
             McpError::update_too_large(m(), 2, 1),
+            McpError::invalid_field("title", m()),
             McpError::cannot_remove_owner(m()),
             McpError::signer_unavailable(m()),
             McpError::subject_not_member(m()),

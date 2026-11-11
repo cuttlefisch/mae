@@ -14,6 +14,7 @@ use crate::SyncError;
 
 use super::sv_has_ops_beyond;
 
+mod field_types;
 mod org_header;
 pub use org_header::OrgHeader;
 
