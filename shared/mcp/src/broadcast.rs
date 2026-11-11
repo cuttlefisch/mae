@@ -4,9 +4,14 @@
 //! `EditorEvent` to the broadcaster. Each connected client with matching
 //! subscriptions receives the event via a bounded channel.
 //!
-//! Backpressure: if a client's queue is full, the event is dropped for
-//! that client (logged as a warning). This prevents one slow client from
-//! blocking the server.
+//! Backpressure: a full queue never blocks the server. For a client that
+//! receives documents by subscription, an event for a document that does not
+//! fit CLOSES that document for the client instead of being dropped: a
+//! dropped `sync_update` would leave the client's copy silently missing an
+//! edit, while a closed document is something the client is told about
+//! (`take_overflowed`) and recovers by resyncing it (ADR-099 Amendment 1 B4).
+//! Every other event (presence, save notices, globals) is still dropped: the
+//! next one replaces it.
 
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -145,6 +150,9 @@ struct ClientEntry {
     doc_scoped: bool,
     /// Bounded channel for event delivery.
     tx: mpsc::Sender<EditorEvent>,
+    /// Documents closed for this client because an event for them did not
+    /// fit its queue, not yet reported (`take_overflowed`).
+    overflowed: Vec<String>,
 }
 
 /// Manages per-client event channels with doc-scoped filtering.
@@ -189,6 +197,7 @@ impl EventBroadcaster {
                 doc_subs: HashSet::new(),
                 doc_scoped: false,
                 tx,
+                overflowed: Vec::new(),
             },
         );
         rx
@@ -271,14 +280,27 @@ impl EventBroadcaster {
 
     /// Try to send an event to a client, handling backpressure and dead channels.
     /// Returns true if the channel is closed (should be cleaned up).
-    fn try_deliver(session_id: u64, entry: &ClientEntry, event: &EditorEvent) -> bool {
+    fn try_deliver(session_id: u64, entry: &mut ClientEntry, event: &EditorEvent) -> bool {
         match entry.tx.try_send(event.clone()) {
             Err(mpsc::error::TrySendError::Full(_)) => {
-                warn!(
-                    session_id = session_id,
-                    event_type = event.event_type(),
-                    "client event queue full; dropping event"
-                );
+                // Only a document's DATA closes it: a lost presence or save
+                // notice is replaced by the next one, a lost update is not.
+                let by_subscription = entry.doc_scoped || !entry.doc_subs.is_empty();
+                let data = matches!(event, EditorEvent::SyncUpdate { .. });
+                match event.doc_id() {
+                    Some(doc) if data && by_subscription && entry.doc_subs.remove(doc) => {
+                        warn!(
+                            session_id,
+                            doc, "client event queue full; closing the document for it"
+                        );
+                        entry.overflowed.push(doc.to_string());
+                    }
+                    _ => warn!(
+                        session_id = session_id,
+                        event_type = event.event_type(),
+                        "client event queue full; dropping event"
+                    ),
+                }
                 false
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
@@ -304,7 +326,7 @@ impl EventBroadcaster {
             "broadcasting event"
         );
         let mut closed: Vec<u64> = Vec::new();
-        for (session_id, entry) in &self.clients {
+        for (session_id, entry) in &mut self.clients {
             if Self::should_deliver(entry, event) && Self::try_deliver(*session_id, entry, event) {
                 closed.push(*session_id);
             }
@@ -326,7 +348,7 @@ impl EventBroadcaster {
             "broadcasting event (with exclusion)"
         );
         let mut closed: Vec<u64> = Vec::new();
-        for (session_id, entry) in &self.clients {
+        for (session_id, entry) in &mut self.clients {
             if *session_id == exclude_session {
                 continue;
             }
@@ -340,6 +362,16 @@ impl EventBroadcaster {
     }
 
     /// Number of currently subscribed clients.
+    /// The documents closed for `session_id` since the last call because an
+    /// event for them did not fit its queue. The session tells its client,
+    /// which resyncs each one (`sync/resync` re-subscribes it).
+    pub fn take_overflowed(&mut self, session_id: u64) -> Vec<String> {
+        self.clients
+            .get_mut(&session_id)
+            .map(|c| std::mem::take(&mut c.overflowed))
+            .unwrap_or_default()
+    }
+
     pub fn client_count(&self) -> usize {
         self.clients.len()
     }
@@ -365,6 +397,66 @@ pub type SharedBroadcaster = std::sync::Arc<std::sync::Mutex<EventBroadcaster>>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn update(doc: &str, n: u64) -> EditorEvent {
+        EditorEvent::SyncUpdate {
+            buffer_name: doc.into(),
+            update_base64: "AAA=".into(),
+            wal_seq: n,
+            content_header: None,
+        }
+    }
+
+    fn presence(doc: &str) -> EditorEvent {
+        EditorEvent::AwarenessUpdate {
+            doc_id: doc.into(),
+            client_id: 1,
+            user_name: "u".into(),
+            cursor_row: 0,
+            cursor_col: 0,
+            selection: None,
+            mode: "normal".into(),
+        }
+    }
+
+    /// ADR-099 A1 B4: an update that does not fit a subscribed client's queue
+    /// closes that document for it, reported once, and no later update for it
+    /// is delivered (so the client can never apply one past a hole). Another
+    /// document keeps flowing. Presence never closes a document, and a client
+    /// that is not subscribed per document keeps the old drop behaviour.
+    /// Kills: dropping the update silently, closing on presence, or leaving
+    /// the document subscribed after the hole.
+    #[tokio::test]
+    async fn an_update_that_does_not_fit_closes_the_document_not_the_data() {
+        let mut b = EventBroadcaster::new();
+        let mut rx = b.subscribe_doc_scoped(1, vec!["*".into()]);
+        b.subscribe_doc(1, "kbn:k:a");
+        b.subscribe_doc(1, "kbn:k:b");
+        let mut wide = b.subscribe(2, vec!["*".into()]);
+        for n in 0..DEFAULT_QUEUE_CAPACITY as u64 {
+            b.broadcast(&update("kbn:k:a", n));
+        }
+        assert!(b.take_overflowed(1).is_empty(), "the queue is exactly full");
+        b.broadcast(&presence("kbn:k:a"));
+        assert!(
+            b.take_overflowed(1).is_empty(),
+            "presence never closes a document"
+        );
+        b.broadcast(&update("kbn:k:a", 1000));
+        assert_eq!(b.take_overflowed(1), ["kbn:k:a"]);
+        assert!(b.take_overflowed(1).is_empty(), "reported once");
+        assert!(b.take_overflowed(2).is_empty(), "a wide client only drops");
+
+        // Drain, then: a's updates no longer arrive, b's do.
+        while rx.try_recv().is_ok() {}
+        while wide.try_recv().is_ok() {}
+        b.broadcast(&update("kbn:k:a", 1001));
+        b.broadcast(&update("kbn:k:b", 1));
+        let got: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|e| e.doc_id().map(String::from))
+            .collect();
+        assert_eq!(got, ["kbn:k:b"]);
+    }
 
     #[tokio::test]
     async fn subscribe_and_broadcast() {

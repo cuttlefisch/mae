@@ -257,3 +257,76 @@ async fn a_bearer_sessions_pending_join_records_no_key() {
         .expect("bob is pending");
     assert_eq!(bob.pubkey, None);
 }
+
+/// ADR-099 A1 B4, at the session: when the broadcaster closes a document for
+/// this session because its queue was full, the next delivery tells the
+/// client, once, with `session/doc_closed` (`slow_consumer`, with `kb_id` and
+/// `node_id` for a node document), and the session forgets the document.
+/// Kills: closing silently, which leaves the client missing edits for good.
+#[tokio::test]
+async fn a_document_closed_for_a_full_queue_is_reported_to_the_client() {
+    let store = test_doc_store();
+    let broadcaster = test_broadcaster();
+    let mut session = mae_mcp::session::ClientSession::new();
+    let sid = session.id;
+    let doc = "kbn:kra:concept:n";
+    let mut rx = {
+        let mut b = broadcaster.lock().unwrap();
+        let rx = b.subscribe_doc_scoped(sid, vec!["*".into()]);
+        b.subscribe_doc(sid, doc);
+        rx
+    };
+    let update = |n| mae_mcp::broadcast::EditorEvent::SyncUpdate {
+        buffer_name: doc.into(),
+        update_base64: "AAA=".into(),
+        wal_seq: n,
+        content_header: None,
+    };
+    for n in 0..=100 {
+        broadcaster.lock().unwrap().broadcast(&update(n));
+    }
+    let mut docs: HashSet<String> = [doc.to_string()].into();
+    let first = rx.try_recv().expect("queued");
+    let mut out: Vec<u8> = Vec::new();
+    let timeout = std::time::Duration::from_secs(1);
+    assert!(
+        deliver_event(
+            &first,
+            &mut session,
+            &store,
+            &broadcaster,
+            &mut docs,
+            (&mut out, timeout)
+        )
+        .await
+    );
+    let text = String::from_utf8(out.clone()).unwrap();
+    let closed: Vec<&str> = text.matches("session/doc_closed").collect();
+    assert_eq!(closed.len(), 1, "{text}");
+    for want in [
+        "\"reason\":\"slow_consumer\"",
+        "\"kb_id\":\"kra\"",
+        "\"node_id\":\"concept:n\"",
+    ] {
+        assert!(text.contains(want), "{want} missing: {text}");
+    }
+    assert!(
+        !docs.contains(doc),
+        "the session still counts the closed document"
+    );
+    out.clear();
+    let next = rx.try_recv().expect("queued");
+    deliver_event(
+        &next,
+        &mut session,
+        &store,
+        &broadcaster,
+        &mut docs,
+        (&mut out, timeout),
+    )
+    .await;
+    assert!(
+        !String::from_utf8(out).unwrap().contains("doc_closed"),
+        "reported twice"
+    );
+}

@@ -261,6 +261,52 @@ pub async fn handle_client_governed<R, W>(
     .await;
 }
 
+/// Deliver one broadcast event to the client, then tell it about every
+/// document the broadcaster closed for it because the queue was full (B4):
+/// `session/doc_closed` with reason `slow_consumer`, which the client answers
+/// by resyncing that document. `false` means a write failed.
+async fn deliver_event<W: AsyncWrite + Unpin>(
+    event: &mae_mcp::broadcast::EditorEvent,
+    session: &mut ClientSession,
+    doc_store: &DocStore,
+    broadcaster: &SharedBroadcaster,
+    session_docs: &mut HashSet<String>,
+    (writer, timeout): (&mut W, std::time::Duration),
+) -> bool {
+    let method = format!("notifications/{}", event.event_type());
+    debug!(session = session.id, event_type = %method, "broadcasting event to client");
+    let notification = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": { "seq": session.events_delivered + 1, "event": event },
+    });
+    if governor::write_json(writer, &notification, timeout)
+        .await
+        .is_err()
+    {
+        session.events_dropped += 1;
+        return false;
+    }
+    session.events_delivered += 1;
+    let closed = broadcaster
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take_overflowed(session.id);
+    for doc in closed {
+        if session_docs.remove(&doc) {
+            let _ = doc_store.track_client_disconnect(&doc).await;
+        }
+        let notice = governor::doc_closed(&doc, "slow_consumer");
+        if governor::write_json(writer, &notice, timeout)
+            .await
+            .is_err()
+        {
+            return false;
+        }
+    }
+    true
+}
+
 /// Run the client handler loop for a single connection.
 ///
 /// Generic over reader/writer — works with TCP, TLS, Unix, or any async stream.
@@ -452,29 +498,12 @@ async fn run_session<R, W>(
             }
 
             Some(event) = event_rx.recv() => {
-                let method = format!("notifications/{}", event.event_type());
-                debug!(session = session_id, event_type = %method,
-                    "broadcasting event to client");
-                let notification = serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "method": method,
-                    "params": { "seq": session.events_delivered + 1, "event": event },
-                });
-                let body = match serde_json::to_vec(&notification) {
-                    Ok(b) => b,
-                    Err(_) => continue,
-                };
-
-                if mae_mcp::write_framed(&mut writer, &body, write_timeout).await.is_err() {
-                    consecutive_write_failures += 1;
-                    session.events_dropped += 1;
-                    if consecutive_write_failures >= MAX_CONSECUTIVE_WRITE_FAILURES {
-                        warn!(session = session_id, "disconnecting after 3 write failures");
-                        break;
-                    }
-                } else {
-                    consecutive_write_failures = 0;
-                    session.events_delivered += 1;
+                let out = (&mut writer, write_timeout);
+                let delivered = deliver_event(&event, &mut session, &doc_store, &broadcaster, &mut session_docs, out).await;
+                consecutive_write_failures = if delivered { 0 } else { consecutive_write_failures + 1 };
+                if consecutive_write_failures >= MAX_CONSECUTIVE_WRITE_FAILURES {
+                    warn!(session = session_id, "disconnecting after 3 write failures");
+                    break;
                 }
             }
         }

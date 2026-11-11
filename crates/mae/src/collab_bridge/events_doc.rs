@@ -97,6 +97,33 @@ pub(super) fn handle_gap_detected_event(
     editor.mark_full_redraw();
 }
 
+/// `session/doc_closed`: for `slow_consumer` the daemon stopped sending the
+/// document's updates because this session fell behind, so the copy here is
+/// missing edits until it is resynced: a KB document by re-joining its KB
+/// (which reconciles every node from its state vector), a buffer by
+/// `ForceSync`. Any other reason (`not_member`) is reported, never retried.
+pub(super) fn handle_doc_closed_event(
+    editor: &mut Editor,
+    doc: String,
+    kb_id: Option<String>,
+    reason: &str,
+) {
+    warn!(doc = %doc, reason, "daemon closed a document for this session");
+    if reason != "slow_consumer" {
+        editor.set_status(format!("Collab: {doc} closed by the daemon ({reason})"));
+        return;
+    }
+    editor.set_status(format!("Collab: {doc} fell behind; resyncing"));
+    editor.collab.pending_intent = Some(match kb_id {
+        Some(kb_id) => {
+            let node_svs = editor.kb_join_node_svs(&kb_id);
+            CollabIntent::JoinKb { kb_id, node_svs }
+        }
+        None => CollabIntent::ForceSync { buffer_name: doc },
+    });
+    editor.mark_full_redraw();
+}
+
 pub(super) fn handle_buffer_shared_event(editor: &mut Editor, doc_id: String) {
     info!(doc = %doc_id, "buffer shared (server confirmed)");
     // Doc was already added optimistically in drain_collab_intents (BUG A fix).

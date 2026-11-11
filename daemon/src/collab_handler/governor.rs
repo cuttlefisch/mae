@@ -220,7 +220,7 @@ pub(crate) async fn reauthorize_open_docs(
 /// The notification closing one document for a session (B3/B4).
 /// `doc` is the envelope's document name; `kb_id` is present for a KB
 /// document and `node_id` for a node document, read from the address itself.
-fn doc_closed(doc: &str, reason: &str) -> serde_json::Value {
+pub(crate) fn doc_closed(doc: &str, reason: &str) -> serde_json::Value {
     let mut params = serde_json::json!({ "doc": doc, "reason": reason });
     match mae_sync::DocAddress::parse(doc) {
         Some(mae_sync::DocAddress::KbNode { kb_id, node_id }) => {
