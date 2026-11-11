@@ -562,6 +562,131 @@ pub fn shortest_path_over(
     Ok(Vec::new())
 }
 
+/// The graph read surfaces over exactly ONE KB: a named instance's store, or
+/// the primary's, with no fallback to any other. A read that names a KB uses
+/// this instead of the federated backends, which resolve an id in whichever KB
+/// is consulted first and so can answer with another KB's node when the id
+/// exists in several.
+///
+/// `instance` is the owning KB's name (`None` for the primary), so the
+/// AI-residency filters judge each result by the KB it really lives in.
+pub enum ScopedBackend<'a> {
+    Store(&'a dyn KbStore, Option<String>),
+    Mem(&'a KnowledgeBase, Option<String>),
+}
+
+impl ScopedBackend<'_> {
+    fn instance(&self) -> Option<String> {
+        match self {
+            ScopedBackend::Store(_, i) | ScopedBackend::Mem(_, i) => i.clone(),
+        }
+    }
+
+    /// Whether the KB holds `id`.
+    pub fn holds(&self, id: &str) -> bool {
+        match self {
+            ScopedBackend::Store(s, _) => matches!(s.get_node_light(id), Ok(Some(_))),
+            ScopedBackend::Mem(kb, _) => kb.contains(id),
+        }
+    }
+
+    /// Outgoing links of `id` as `(dst, rel_type)`; the in-memory KB has no
+    /// relation types.
+    pub fn typed_links_from(
+        &self,
+        id: &str,
+    ) -> Result<Vec<(String, Option<String>)>, crate::store::KbStoreError> {
+        Ok(match self {
+            ScopedBackend::Store(s, _) => s
+                .links_from(id)?
+                .into_iter()
+                .map(|l| (l.dst, Some(l.rel_type)))
+                .collect(),
+            ScopedBackend::Mem(kb, _) => kb.links_from(id).into_iter().map(|d| (d, None)).collect(),
+        })
+    }
+
+    /// Incoming links of `id` as `(src, rel_type)`.
+    pub fn typed_links_to(
+        &self,
+        id: &str,
+    ) -> Result<Vec<(String, Option<String>)>, crate::store::KbStoreError> {
+        Ok(match self {
+            ScopedBackend::Store(s, _) => s
+                .links_to(id)?
+                .into_iter()
+                .map(|l| (l.src, Some(l.rel_type)))
+                .collect(),
+            ScopedBackend::Mem(kb, _) => kb.links_to(id).into_iter().map(|d| (d, None)).collect(),
+        })
+    }
+
+    fn describe_in(&self, id: &str) -> Option<(String, String, Option<String>, bool)> {
+        let (title, kind, source) = match self {
+            ScopedBackend::Store(s, _) => {
+                let n = s.get_node_light(id).ok().flatten()?;
+                (n.title, n.kind, n.source)
+            }
+            ScopedBackend::Mem(kb, _) => {
+                let n = kb.get(id)?;
+                (n.title.clone(), n.kind, n.source)
+            }
+        };
+        Some((
+            title,
+            kind.as_str().to_string(),
+            self.instance(),
+            source == Some(crate::NodeSource::Seed),
+        ))
+    }
+}
+
+impl GraphNeighbors for ScopedBackend<'_> {
+    fn contains(&self, id: &str) -> bool {
+        self.holds(id)
+    }
+
+    fn neighbor_ids(&self, id: &str) -> Result<Vec<String>, crate::store::KbStoreError> {
+        let mut out: Vec<String> = self.outgoing_ids(id)?;
+        let mut seen: HashSet<String> = out.iter().cloned().collect();
+        for (src, _) in self.typed_links_to(id)? {
+            if seen.insert(src.clone()) {
+                out.push(src);
+            }
+        }
+        Ok(out)
+    }
+
+    fn outgoing_ids(&self, id: &str) -> Result<Vec<String>, crate::store::KbStoreError> {
+        Ok(self
+            .typed_links_from(id)?
+            .into_iter()
+            .map(|(d, _)| d)
+            .collect())
+    }
+
+    fn describe(&self, id: &str) -> Option<(String, String, Option<String>, bool)> {
+        self.describe_in(id)
+    }
+}
+
+impl RelatedSource for ScopedBackend<'_> {
+    fn scored(
+        &self,
+        id: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, f64)>, crate::store::KbStoreError> {
+        match self {
+            ScopedBackend::Store(s, _) => s.related(id, limit),
+            ScopedBackend::Mem(kb, _) => Ok(kb.related(id, limit)),
+        }
+    }
+
+    fn describe(&self, id: &str) -> Option<(String, String, Option<String>, bool)> {
+        self.describe_in(id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

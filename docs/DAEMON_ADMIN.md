@@ -732,6 +732,7 @@ sqlite3 ~/.local/share/mae/<store>.cozo ".backup '/backups/mae-$(date +%F).cozo'
 #                           against these without re-fetching from the daemon)
 #   content_keys/         — recovered per-KB content keys (re-derivable from the op-log, but cached)
 #   recovery/             — your registered OFFLINE recovery key, if you ran collab-register-recovery-key
+#   state.db.lock         — the store lock (§7b); empty, safe to leave out of a backup
 #   state.db (+ -wal/-shm) — the collab store, when `collab.storage.data_dir` is unset (the default is
 #                           <data_dir>/collab, the SAME directory). It is a live SQLite database:
 #                           snapshot it like the store above, never copy it with the directory.
@@ -756,10 +757,74 @@ exists (see §4). Keep backups for the solo-daemon case.
 
 ---
 
+## 7b. Seeding a native KB from an org repository
+
+`mae-daemon kb seed` turns one tagged commit of an org repository into a native KB on this daemon
+(contract `org-literal-v1`, see `daemon/src/seed/mod.rs`): one node per `.org` file, the file drawer,
+`#+title` and `#+filetags` as typed fields, the rest of the file kept byte for byte. The KB is owned
+by the daemon's own identity (key mode), served over the hub, and marked `org-literal-v1`, so MAE's
+own node writer refuses to write it. Members are added later (ADR-098).
+
+```bash
+# 1. Plan: reads git only, writes nothing. Review the refusals and note plan_hash.
+mae-daemon kb seed --dry-run --git /srv/notes --rev v1.0
+# 2. Apply exactly that plan. Stop the daemon first.
+systemctl --user stop mae-daemon
+mae-daemon kb seed --git /srv/notes --rev v1.0 --kb-id notes --plan-hash <plan_hash>
+systemctl --user start mae-daemon
+```
+
+Apply recomputes the plan from git with the same options and refuses unless it has no refusal and
+its hash is the `--plan-hash` you reviewed. It is safe to re-run:
+
+- After a crash or an error part-way, a re-run with the same plan finishes the KB. Readers see
+  nothing until every node exists (the collection is written last).
+- After success, a re-run writes nothing (`already applied`).
+- A different plan for an existing `--kb-id`, or an id that exists without having been seeded, is
+  refused. A node document that already exists with other content is never overwritten.
+
+The seed's provenance (repository, revision, commit, tree, plan hash, contract, excluded paths, start
+and finish times) and each node's source path, blob, N(F) digest and git times are kept in this
+daemon's `state.db` (`kb_seed`, `kb_seed_nodes`). They are not synced to mesh peers.
+
+`kb/query.get` and `kb/query.list` report, for every node, `created_at` and `modified_at` (RFC 3339
+UTC, or null), `modified_at_basis` (`seed`: the git time; `edit`: a later edit recorded by this
+daemon; `unknown`), and `property_order` with `org_header` (`property_order`, `has_title_line`,
+`has_filetags_line`): what a reader needs to lay the header out as the file had it.
+
+### Exporting it back: `mae-daemon kb export`
+
+```bash
+systemctl --user stop mae-daemon
+mae-daemon kb export --kb-id notes --out /srv/export     # an EMPTY (or new) directory
+mae-daemon kb export --kb-id notes --out /srv/export --force   # write into a non-empty one
+```
+
+Each node is written to its source path as N(F): unedited since the seed, a canonical file comes back
+byte for byte. Properties keep their recorded order; one added since goes after them in sorted order,
+one removed is skipped, and both are printed as `note:` lines. Every file is checked first: a node
+whose text would seed back differently (a `#+title:` or a drawer typed into its body, an edited
+`ID`) is printed as `refused:` and not written, and the exit code is 1. Symlinks in the target are
+never followed. Nodes created after the seed have no source path and are refused. Two source paths
+that are one file on a case- or normalization-insensitive filesystem (`A.org` and `a.org`, or NFC
+and NFD spellings) are both refused (`path_collision`), so neither overwrites the other on APFS,
+NTFS or a folding mount; the seed planner refuses such paths too. An existing file is replaced
+through a temporary file and a rename, so a crash leaves the old file or the new one.
+
+### Store access: stop the daemon
+
+`kb seed` (apply), `kb export` and `restore` open the collab store offline. Each takes the store lock
+(`state.db.lock` in the collab directory, an OS lock released when its holder exits) and refuses if
+any process holds it or a daemon answers on the control socket. The serving daemon takes the same
+lock when it opens its store. Started while an operator command holds it, it **exits** with status
+75 (`EX_TEMPFAIL`) and says why, rather than serving with collab and `kb/query` silently off. A
+supervisor that restarts on failure (`Restart=on-failure`) brings it up once the command is done.
+
 ## 8. Troubleshooting
 
 | Symptom | Check |
 |---------|-------|
+| Daemon exits with status 75, "the collab store is in use by another process" | an operator `kb seed`, `kb export` or `restore` is running; let it finish, then start the daemon |
 | Daemon won't start / "another daemon is listening" | a stale socket or a running instance — `ss -tln`, remove a stale `socket` path |
 | Client can't connect (`key` mode) | the client's key is `authorize`d (`mae-daemon authorized`); host-key TOFU pinned on the client (`known_hosts`); ports/firewall (§5) |
 | Client rejected after rotating its key | `authorize` its **new** public key (ADR-040, §3) |

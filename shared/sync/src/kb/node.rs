@@ -14,6 +14,9 @@ use crate::SyncError;
 
 use super::sv_has_ops_beyond;
 
+mod org_header;
+pub use org_header::OrgHeader;
+
 const ID_KEY: &str = "id";
 const TITLE_KEY: &str = "title";
 const BODY_KEY: &str = "body";
@@ -84,6 +87,9 @@ pub struct MaterializedNode {
     /// Creation timestamp (unix seconds). `None` for a document authored before
     /// the key existed.
     pub created_at: Option<i64>,
+    /// The org header shape a seeded node came from (`org_header`). `None`
+    /// for every node not made by a seed.
+    pub org_header: Option<OrgHeader>,
 }
 
 /// Seconds since the unix epoch, or 0 if the clock predates it.
@@ -124,6 +130,20 @@ pub fn body_bytes(doc: &Doc) -> usize {
 impl KbNodeDoc {
     /// Create a new KB node document with UTF-16 offset kind.
     pub fn new(id: &str, title: &str, body: &str, tags: &[String]) -> Self {
+        Self::new_created_at(id, title, body, tags, unix_now())
+    }
+
+    /// [`Self::new`] with the creation time given rather than read from the
+    /// clock: for content whose creation is a known fact older than this
+    /// document (a seed dates a page by the first commit carrying its `:ID:`).
+    /// Still stamped exactly once, here; there is no setter.
+    pub fn new_created_at(
+        id: &str,
+        title: &str,
+        body: &str,
+        tags: &[String],
+        created: i64,
+    ) -> Self {
         let doc = new_doc();
         {
             let root = doc.get_or_insert_map("node");
@@ -149,7 +169,7 @@ impl KbNodeDoc {
             root.insert(&mut txn, PROPS_KEY, MapPrelim::default());
             // Stamped once, here, and never moved — node age is a fact about the
             // node, not about the last time something wrote it.
-            Self::stamp_created_at(&root, &mut txn, unix_now());
+            Self::stamp_created_at(&root, &mut txn, created);
         }
         Self { doc }
     }
@@ -728,6 +748,7 @@ impl KbNodeDoc {
             source_version: self.source_version(),
             source: self.source(),
             created_at: self.created_at(),
+            org_header: self.org_header(),
         }
     }
 
@@ -779,6 +800,7 @@ impl KbNodeDoc {
             source_version,
             source,
             created_at,
+            org_header,
         } = self.materialize();
         let mut h = Sha256::new();
         let mut put = |b: &[u8]| {
@@ -811,6 +833,9 @@ impl KbNodeDoc {
         for (k, v) in props {
             put(k.as_bytes());
             put(v.as_bytes());
+        }
+        if let Some(bytes) = org_header::digest_bytes(org_header.as_ref()) {
+            put(&bytes);
         }
         hex::encode(&h.finalize()[..16])
     }
@@ -873,6 +898,11 @@ impl KbNodeDoc {
             field(k.as_bytes());
             field(v.as_bytes());
         }
+        // Appended only when present, so every node without one keeps the hash
+        // it had (an older peer's signed rebirth still verifies).
+        if let Some(bytes) = org_header::digest_bytes(mat.org_header.as_ref()) {
+            field(&bytes);
+        }
         hex::encode(h.finalize())
     }
 
@@ -910,6 +940,9 @@ impl KbNodeDoc {
         let _ = doc.set_properties(&mat.properties);
         for l in &mat.links {
             let _ = doc.add_link(l);
+        }
+        if let Some(header) = &mat.org_header {
+            let _ = doc.set_org_header(header);
         }
         doc
     }

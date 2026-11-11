@@ -967,3 +967,58 @@ fn kb_create_with_a_kb_lands_in_that_kb_never_the_primary() {
     );
     assert!(editor.kb.instances["uuid-beta"].get("0c1d-y").is_none());
 }
+
+/// `dup` held by both the local KB and `Beta`, with different titles.
+fn editor_with_dup_in_local_and_beta() -> Editor {
+    let mut editor = editor_with_beta();
+    for (kb, title) in [(None, "Local"), (Some("Beta"), "Beta")] {
+        editor
+            .kb_create_node_target(kb, "dup", title, "body", mae_kb::NodeKind::Note)
+            .unwrap();
+    }
+    editor
+}
+
+/// ADVERSARIAL: `(kb-set-role)` and `(kb-add-link!)` act on the KB they name,
+/// refuse an id two KBs hold when none is named, and never fall back to
+/// another KB for an unknown one.
+#[test]
+fn kb_set_role_and_add_link_name_their_kb() {
+    let mut rt = new_runtime();
+    let mut editor = editor_with_dup_in_local_and_beta();
+    let role = |e: &Editor, beta: bool| {
+        let n = if beta {
+            e.kb.instances["uuid-beta"].get("dup").unwrap().clone()
+        } else {
+            e.kb.primary.get("dup").unwrap().clone()
+        };
+        (n.properties.get("role").cloned(), n.body)
+    };
+    rt.inject_editor_state(&editor);
+    // Ambiguous and unknown: nothing changes anywhere.
+    rt.eval(r#"(kb-set-role "dup" "hub")"#).unwrap();
+    rt.eval(r#"(kb-set-role "dup" "hub" "Nope")"#).unwrap();
+    rt.eval(r#"(kb-add-link! "dup" "x" "refs")"#).unwrap();
+    rt.eval(r#"(kb-add-link! "dup" "x" "refs" "Nope")"#)
+        .unwrap();
+    rt.apply_to_editor(&mut editor);
+    assert_eq!(role(&editor, true), (None, "body".to_string()));
+    assert_eq!(role(&editor, false), (None, "body".to_string()));
+
+    rt.inject_editor_state(&editor);
+    rt.eval(r#"(kb-set-role "dup" "hub" "Beta")"#).unwrap();
+    rt.eval(r#"(kb-add-link! "dup" "x" "refs" "Beta")"#)
+        .unwrap();
+    rt.apply_to_editor(&mut editor);
+    let (beta_role, beta_body) = role(&editor, true);
+    assert_eq!(beta_role.as_deref(), Some("hub"), "not set in Beta");
+    assert!(
+        beta_body.contains("[[x?rel=refs"),
+        "link not in Beta: {beta_body}"
+    );
+    assert_eq!(
+        role(&editor, false),
+        (None, "body".to_string()),
+        "local copy changed"
+    );
+}

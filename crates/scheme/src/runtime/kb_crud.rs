@@ -71,6 +71,11 @@ pub enum KbNodeOp {
         id: String,
         kb: Option<String>,
     },
+    SetRole {
+        id: String,
+        role: String,
+        kb: Option<String>,
+    },
 }
 
 /// `kb-update`'s optional TAGS: a list of strings, or `#f` / absence for none.
@@ -99,7 +104,7 @@ fn opt_tags(arg: Option<&Value>) -> Result<Option<Vec<String>>, LispError> {
 
 /// The optional string argument at `i` (a KB name, a title, a body): a string,
 /// or `#f` / absence for none.
-fn opt_kb(args: &[Value], i: usize, who: &str) -> Result<Option<String>, LispError> {
+pub(super) fn opt_kb(args: &[Value], i: usize, who: &str) -> Result<Option<String>, LispError> {
     match args.get(i) {
         None => Ok(None),
         Some(v) => opt_string(v, who),

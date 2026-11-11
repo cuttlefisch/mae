@@ -66,6 +66,7 @@ mod kb_socket_malformed_and_disconnect_tests;
 mod kb_store_routing_tests;
 mod kb_write_concurrency_tests;
 mod multi_instance_tests;
+mod seed_store_access_tests;
 mod webview_tests;
 
 /// Build a `DaemonState` with a real primary store + one named instance

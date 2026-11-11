@@ -34,6 +34,7 @@ mod oauth_tls;
 mod p2p;
 mod projection_stores;
 mod scheduler;
+mod seed_apply_cli;
 mod seed_cli;
 mod tenant;
 #[cfg(test)]
@@ -154,6 +155,8 @@ async fn main() {
         // Whole-instance backup (every store, registry, collab store, identity)
         // with a manifest a restore rehearsal can check against. See backup/mod.rs.
         Some("backup") => std::process::exit(backup::run(&config, &cli.rest)),
+        // Native-KB seed (plan / apply) and export: `seed_cli`, `seed_apply_cli`.
+        Some("kb") => std::process::exit(seed_cli::run_kb(&config, &cli.rest).await),
         _ => {}
     }
 
@@ -354,8 +357,9 @@ async fn main() {
             }
             // Non-fatal: KB service continues, collab disabled
             warn!("collab service disabled due to config errors");
-        } else if let Some((doc_store, broadcaster, server_start_time)) =
-            init_doc_store(&config).await
+        } else if let Some((doc_store, broadcaster, server_start_time)) = init_doc_store(&config)
+            .await
+            .unwrap_or_else(|locked| exit_store_locked(&locked))
         {
             doc_store_for_query = Some(Arc::clone(&doc_store));
             // @ai-caution: [daemon-state] These two go into `DaemonState` HERE,
@@ -668,25 +672,61 @@ async fn spawn_p2p_mesh(
 /// blocklists, recover documents) — split out from `spawn_collab_server` (ADR-053/
 /// Phase G, #382) so the OAuth listener's `kb/query.*` surface can share the SAME
 /// `DocStore` instance without depending on the TCP listener's own setup/auth/accept
-/// logic. Returns `None` on any construction failure (already logged) — same
+/// logic. Returns `Ok(None)` on any construction failure (already logged) — same
 /// disable-collab-non-fatally behavior as before this split, just observable to the
-/// caller instead of an internal early `return`.
+/// caller instead of an internal early `return`. A store another process holds is
+/// `Err(StoreLocked)`, which the caller turns into an exit, never a silent degrade.
+/// The collab store is held by another process (an operator's `kb seed`,
+/// `kb export` or `restore`). Serving without it would leave this daemon up
+/// with collab AND the OAuth `kb/query` surface silently off, health checks
+/// passing; so it exits instead, with `EX_TEMPFAIL` (75): a supervisor's
+/// restart succeeds once the operator command finishes.
+#[derive(Debug)]
+struct StoreLocked(String);
+
+const EXIT_STORE_LOCKED: i32 = 75;
+
+fn exit_store_locked(locked: &StoreLocked) -> ! {
+    error!(error = %locked.0, "collab store is locked by another process; exiting");
+    eprintln!(
+        "mae-daemon: the collab store is in use by another process ({}); refusing to start \
+         without it. Finish or stop that command (kb seed, kb export, restore) and start again.",
+        locked.0
+    );
+    std::process::exit(EXIT_STORE_LOCKED)
+}
+
+/// The collab store lock this daemon holds (see `init_doc_store`).
+static STORE_LOCK: std::sync::OnceLock<mae_daemon::store_lock::StoreLock> =
+    std::sync::OnceLock::new();
+
 async fn init_doc_store(
     config: &DaemonConfig,
-) -> Option<(
-    Arc<doc_store::DocStore>,
-    SharedBroadcaster,
-    std::time::Instant,
-)> {
+) -> Result<
+    Option<(
+        Arc<doc_store::DocStore>,
+        SharedBroadcaster,
+        std::time::Instant,
+    )>,
+    StoreLocked,
+> {
     let collab = &config.collab;
     let collab_data_dir = config.resolve_collab_data_dir();
+    // Held for the life of the process, so an offline operator command
+    // (`kb seed`, `kb export`, `restore`) cannot write this store under us.
+    match mae_daemon::store_lock::StoreLock::acquire(&collab_data_dir) {
+        Ok(lock) => {
+            let _ = STORE_LOCK.set(lock);
+        }
+        Err(e) => return Err(StoreLocked(e)),
+    }
     let db_path = collab_data_dir.join("state.db");
     let backend =
         match storage::SqliteBackend::open_with_pool_size(&db_path, collab.storage.shard_count) {
             Ok(b) => Arc::new(b),
             Err(e) => {
                 error!(error = %e, path = %db_path.display(), "failed to open collab SQLite");
-                return None;
+                return Ok(None);
             }
         };
 
@@ -708,10 +748,10 @@ async fn init_doc_store(
     // addresses, then warm every document. Both live in `kb_doc_migration`, which
     // explains why the ORDER matters and why an un-migratable store must not start.
     if !kb_doc_migration::prepare_doc_store(backend.as_ref(), &doc_store).await {
-        return None;
+        return Ok(None);
     }
 
-    Some((doc_store, broadcaster, server_start_time))
+    Ok(Some((doc_store, broadcaster, server_start_time)))
 }
 
 /// Wire the CRDT→Cozo projector (ADR-029 B2/B3).
@@ -1563,8 +1603,8 @@ fn run_authorize(config: &DaemonConfig, rest: &[String]) -> i32 {
 /// Symmetric keystore (psk mode): `keygen [name]`, `keys`. Asymmetric key mode
 /// (ADR-017/018): `identity`, `authorized`, `authorize <pubkey-line>` (labels
 /// must be unique), `revoke <label|SHA256:fp>`. `token mint --sub <principal>
-/// [--ttl <duration>]` (ADR-111 P1, `token_cli`). `kb seed --dry-run …` plans a native
-/// KB seed from a tagged commit (`seed_cli`). And `ping`, the liveness probe.
+/// [--ttl <duration>]` (ADR-111 P1, `token_cli`). And `ping`, the liveness probe.
+/// (`kb seed` / `kb export` open the store, so they run in `main`'s async match.)
 fn run_admin_subcommand(sub: &str, rest: &[String], config: &DaemonConfig) -> Option<i32> {
     let first = rest.first().map(|s| s.as_str());
     Some(match sub {
@@ -1576,7 +1616,6 @@ fn run_admin_subcommand(sub: &str, rest: &[String], config: &DaemonConfig) -> Op
         "revoke" => run_revoke(config, first),
         "ping" => run_ping(config),
         "token" => token_cli::run_token(config, rest),
-        "kb" => seed_cli::run_kb(rest),
         _ => return None,
     })
 }
