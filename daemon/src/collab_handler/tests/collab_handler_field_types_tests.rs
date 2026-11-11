@@ -106,3 +106,65 @@ async fn a_mistyped_node_update_is_refused_on_both_paths_and_applies_nothing() {
         );
     }
 }
+
+/// The review's case: a node evicted from memory (idle) is still checked
+/// against its stored state, not as a new document. Kills a base taken from
+/// memory only, which let a delta overwriting a field pass on a cold node.
+#[tokio::test]
+async fn an_evicted_node_is_checked_against_its_stored_state() {
+    for method in ["kb/node_update", "sync/update"] {
+        let store = test_doc_store();
+        let bc = test_broadcaster();
+        let mut docs = HashSet::new();
+        let owner = fp("alice");
+        kb_share_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&owner),
+            KB,
+            "alice",
+            &mut docs,
+        )
+        .await;
+        let cid = derive_kb_client_id(&owner, 0);
+        let good =
+            mae_sync::kb::KbNodeDoc::new_with_client_id(NODE, "Real title", "body\n", &[], cid)
+                .encode_state();
+        let r = dispatch_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&owner),
+            update_msg(method, &good),
+            &mut docs,
+        )
+        .await;
+        assert!(r.error.is_none(), "{:?}", r.error);
+        let base = store.encode_state(&node_doc()).await.unwrap();
+        for _ in 0..4 {
+            store.track_client_disconnect(&node_doc()).await.unwrap(); // saturates at 0
+        }
+        let evicted = store.evict_idle(0).await;
+        assert!(
+            evicted.contains(&node_doc()),
+            "precondition: evicted ({evicted:?})"
+        );
+        assert!(!store.has_doc(&node_doc()).await);
+
+        let r = dispatch_as(
+            &store,
+            &bc,
+            Some("alice"),
+            Some(&owner),
+            update_msg(method, &mistyped_title(&base)),
+            &mut docs,
+        )
+        .await;
+        let err = r
+            .error
+            .unwrap_or_else(|| panic!("{method}: a cold node took a mistyped title"));
+        assert_eq!(err.data.unwrap()["field"], "title", "{method}");
+        assert_eq!(title_now(&store).await, "Real title", "{method}");
+    }
+}

@@ -924,6 +924,13 @@ fn admission_kind(e: &mae_sync::content_ops::AdmissionError) -> RefusalKind {
 /// counts, so a legacy document stays writable. E2E KBs are not checked: the
 /// daemon cannot read their nodes. A document or update that does not decode
 /// is left to the write path's own validation.
+///
+/// Where it runs: on writes this daemon accepts from a client (`kb/node_update`,
+/// `sync/update`). Updates a mesh peer delivers (the dialer) are deliberately
+/// NOT re-checked: refusing one cannot reach the writer, and would only leave
+/// this replica diverged from its peer's for good. The daemon that accepted the
+/// write from its client is where it is checked. The owner's own `kb/share`
+/// merge and the control socket are owner paths, also unchecked.
 pub(crate) async fn refuse_mistyped_node_update(
     doc_store: &DocStore,
     (kb_id, node_doc): (&str, &str),
@@ -952,10 +959,16 @@ pub(crate) async fn refuse_mistyped_node_update(
     if signed_e2e || matches!(coll.encryption(), mae_sync::kb::Encryption::E2e) {
         return Ok(());
     }
-    let base = if replace || !doc_store.has_doc(node_doc).await {
+    // The base is the document as storage holds it: an idle-evicted node is
+    // on disk, not in memory (`has_doc` would say "new" and the check would
+    // pass a delta the real apply then lands on the reloaded document). One
+    // that exists and cannot be read is refused, never checked as empty.
+    let base = if replace || !doc_store.has_durable_doc(node_doc).await {
         Vec::new()
     } else {
-        doc_store.encode_state(node_doc).await.unwrap_or_default()
+        doc_store.encode_state(node_doc).await.map_err(|e| {
+            McpError::internal_fault(format!("node '{node_doc}' could not be read to check: {e}"))
+        })?
     };
     match mae_sync::kb::KbNodeDoc::field_type_introduced(&base, update) {
         Ok(Some(field)) => Err(McpError::invalid_field(
