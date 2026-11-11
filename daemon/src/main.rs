@@ -1572,7 +1572,13 @@ fn run_authorize(config: &DaemonConfig, rest: &[String]) -> i32 {
     };
     let fp = pk.fingerprint();
     let label = pk.label.clone().unwrap_or_default();
-    let (_ak, add_result) = mae_mcp::identity::AuthorizedKeys::update(&path, |ak| ak.add(pk));
+    let add_result = match mae_mcp::identity::AuthorizedKeys::update(&path, |ak| ak.add(pk)) {
+        Ok((_ak, r)) => r,
+        Err(e) => {
+            eprintln!("error: authorized_keys not changed: {e}");
+            return 1;
+        }
+    };
     match add_result {
         Ok(()) => {
             println!("Authorized {label} ({fp}) → {}", path.display());
@@ -1670,13 +1676,20 @@ fn run_revoke(config: &DaemonConfig, target: Option<&str>) -> i32 {
     // Revoke by fingerprint (the precise, unambiguous identity — ADR-018) or by a
     // now-unique label.
     let by_fp = target.starts_with("SHA256:");
-    let (_ak, result) = mae_mcp::identity::AuthorizedKeys::update(&path, |ak| {
+    let updated = mae_mcp::identity::AuthorizedKeys::update(&path, |ak| {
         if by_fp {
             ak.revoke_by_fingerprint(target)
         } else {
             ak.revoke(target)
         }
     });
+    let result = match updated {
+        Ok((_ak, r)) => r,
+        Err(e) => {
+            eprintln!("error: authorized_keys not changed: {e}");
+            return 1;
+        }
+    };
     match result {
         Ok(0) => {
             println!("No authorized key matching '{target}'");
