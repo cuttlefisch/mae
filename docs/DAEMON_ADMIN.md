@@ -292,6 +292,7 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `invalid_params` | A parameter is missing, of the wrong type, malformed (bad base64, an undecodable update) or out of range. Code `-32602`. | all | `param` |
 | `quota_exceeded` | The update would grow a document past `max_document_size_bytes`. Nothing was applied. Code `-32006`. | `kb/node_update`, `sync/update`, `sync/share` | `size`, `limit` |
 | `update_too_large` | One update is over `max_update_size_bytes`. Send smaller increments. | `kb/node_update`, `kb/collection_op`, `sync/update` | `size`, `limit` |
+| `invalid_field` | A node update would leave a known field of the node document with the wrong type (for example `title` not text, `tags` not an array of strings, `org_header` malformed). A field already mistyped before the update, and any unknown key, are left alone. Nothing was applied. Not checked on E2E KBs, whose nodes the daemon cannot read. | `kb/node_update`, `sync/update` on a node document | `field` |
 | `tenant_quota_exceeded` | The caller's tenant is over its request quota or connection cap (ADR-060). Back off. | every method, both listeners | — |
 | `kb_id_owned_by_another` | `kb/share` of an id another principal already owns. Mint a new id. Code `-32005`. | `kb/share` | — |
 | `not_member` | The caller is not a member of the KB. A principal on this daemon's local blocklist is not a member. | every `kb/*` method that names a KB, `kb/query.*`, and the self-gated `sync/*` methods on a KB document | — |

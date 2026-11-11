@@ -917,6 +917,55 @@ fn admission_kind(e: &mae_sync::content_ops::AdmissionError) -> RefusalKind {
 /// external anchor for a JOINED KB, else this daemon's own signer key when it is the
 /// collection's owner (an OWNED KB — A is its own authority). `None` when neither
 /// holds (un-anchored + not ours), in which case the caller applies the legacy gate.
+/// Refuse a node update that would leave a known field of the node document
+/// mistyped (`invalid_field`), checked on the document as it would be after
+/// the update and before anything is persisted. `replace` checks the update
+/// alone (a purge-and-recreate). Only a violation the update INTRODUCES
+/// counts, so a legacy document stays writable. E2E KBs are not checked: the
+/// daemon cannot read their nodes. A document or update that does not decode
+/// is left to the write path's own validation.
+pub(crate) async fn refuse_mistyped_node_update(
+    doc_store: &DocStore,
+    (kb_id, node_doc): (&str, &str),
+    coll: Option<&KbCollectionDoc>,
+    update: &[u8],
+    replace: bool,
+) -> Result<(), McpError> {
+    let loaded;
+    let coll = match coll {
+        Some(c) => c,
+        None => match load_collection(doc_store, kb_id).await {
+            Ok(c) => {
+                loaded = c;
+                &loaded
+            }
+            Err(_) => return Ok(()),
+        },
+    };
+    let signed_e2e = match resolve_content_anchor_with_coll(doc_store, kb_id, Some(coll)).await {
+        Some(anchor) => matches!(
+            mae_sync::membership::derive_encryption(&coll.oplog_ops(), &anchor),
+            mae_sync::kb::Encryption::E2e
+        ),
+        None => false,
+    };
+    if signed_e2e || matches!(coll.encryption(), mae_sync::kb::Encryption::E2e) {
+        return Ok(());
+    }
+    let base = if replace || !doc_store.has_doc(node_doc).await {
+        Vec::new()
+    } else {
+        doc_store.encode_state(node_doc).await.unwrap_or_default()
+    };
+    match mae_sync::kb::KbNodeDoc::field_type_introduced(&base, update) {
+        Ok(Some(field)) => Err(McpError::invalid_field(
+            field,
+            format!("the update leaves the node's '{field}' field with the wrong type"),
+        )),
+        _ => Ok(()),
+    }
+}
+
 pub async fn resolve_content_anchor(doc_store: &DocStore, kb_id: &str) -> Option<[u8; 32]> {
     resolve_content_anchor_with_coll(doc_store, kb_id, None).await
 }
