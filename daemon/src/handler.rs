@@ -66,6 +66,10 @@ pub struct DaemonState {
     /// listener creation and do not have that hole.
     pub kb_conn: Option<crate::conn_limit::ConnLimiter>,
     pub collab_conn: Option<crate::conn_limit::ConnLimiter>,
+    /// The HTTPS listener's. A sync WebSocket is one connection here however
+    /// many documents it carries (ADR-099 D2), so this counts sessions, not
+    /// documents.
+    pub oauth_conn: Option<crate::conn_limit::ConnLimiter>,
 }
 
 /// How many clients are attached to this daemon right now, per listener.
@@ -91,6 +95,7 @@ fn connection_report(state: &DaemonState) -> serde_json::Value {
     for (name, limiter) in [
         ("kb_socket", &state.kb_conn),
         ("collab", &state.collab_conn),
+        ("oauth", &state.oauth_conn),
     ] {
         if let Some(l) = limiter {
             out.insert(
@@ -129,6 +134,7 @@ impl DaemonState {
             tenants: Arc::new(crate::tenant::TenantRegistry::empty()),
             kb_conn: None,
             collab_conn: None,
+            oauth_conn: None,
         }
     }
 

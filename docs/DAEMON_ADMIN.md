@@ -293,6 +293,13 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `quota_exceeded` | The update would grow a document past `max_document_size_bytes`. Nothing was applied. Code `-32006`. | `kb/node_update`, `sync/update`, `sync/share` | `size`, `limit` |
 | `update_too_large` | One update is over `max_update_size_bytes`. Send smaller increments. | `kb/node_update`, `kb/collection_op`, `sync/update` | `size`, `limit` |
 | `tenant_quota_exceeded` | The caller's tenant is over its request quota or connection cap (ADR-060). Back off. | every method, both listeners | — |
+| `too_many_open_docs` | A sync-WebSocket session already holds `ws_max_open_docs` documents and the request names another (ADR-099 B4). Nothing ran. | any method naming a document, on `/ws` | `limit` |
+| `credential_in_url` | A query string on `/ws` or `/ws/ticket`; credentials never travel in a URL. HTTP `400`, `error: "invalid_request"`. | `GET /ws`, `POST /ws/ticket` | — |
+| `ticket_invalid` | A connect ticket that is unknown, used, expired or bound to another origin — one identical refusal for all. HTTP `401`, `error: "invalid_token"`, with `WWW-Authenticate`. | `GET /ws` | — |
+| `issuer_not_supported` | A token not issued by this daemon, while ADR-099 B6 holds. HTTP `401`, `error: "invalid_token"`, with `WWW-Authenticate`; on a socket, a JSON-RPC error to `session/renew`. | `GET /ws`, `POST /ws/ticket`, `session/renew` | — |
+| `invalid_token` | A `session/renew` token that does not validate or has already expired. The old deadline stands. | `session/renew` | — |
+| `protocol_unsupported` | No protocol version in common at the upgrade. HTTP `400`, `error: "invalid_request"`. | `GET /ws` | `supported` (beside `kind`) |
+| `origin_not_allowed` | A browser `Origin` not exactly in `ws_allowed_origins`. HTTP `403`, `error: "access_denied"`. | `GET /ws`, `POST /ws/ticket` | — |
 | `kb_id_owned_by_another` | `kb/share` of an id another principal already owns. Mint a new id. Code `-32005`. | `kb/share` | — |
 | `not_member` | The caller is not a member of the KB. A principal on this daemon's local blocklist is not a member. | every `kb/*` method that names a KB, `kb/query.*`, and the self-gated `sync/*` methods on a KB document | — |
 | `role_forbidden` | A member whose role does not permit the operation. | writes (`editor`); membership, policy, governance, `kb/collection_op`, reseal and rebirth (`owner`) | `required` |
@@ -367,6 +374,74 @@ mae-daemon token mint --config /etc/mae/daemon.toml --sub svc:indexer --ttl 8h \
 - It reads the daemon's private key, so it is an operator command only: it is deliberately not an
   MCP tool or an RPC. Over mTLS, a member can still obtain a token for **its own** fingerprint
   (`kb/query.self_token`).
+
+#### The sync WebSocket (`/ws`, ADR-099) — development and single-operator only
+
+`GET /ws` upgrades to a WebSocket that carries the collab envelope (`sync/*`, `kb/*`), one JSON-RPC
+message per text frame, any number of documents per socket. **This cut is for development and for
+single-operator deployments.** Until hub signature verification (#727) and the identity binding
+(ADR-098) land, it accepts **only this daemon's own tokens**, and the principal is the token's
+`--sub`, taken literally as the KB membership principal: every writer on it is someone the operator
+minted a token for. A token from an external issuer is refused here (`issuer_not_supported`) even
+though `kb/query.*` accepts it. Off by default.
+
+```toml
+[oauth]
+ws_enabled = true                               # default false; also needs:
+self_issued_tokens_enabled = true               #   only kid="self" tokens are accepted on /ws
+                                                #   ([collab] enabled, auth.mode = "key")
+ws_allowed_origins = ["https://mae.example.com"]  # browser Origins, EXACT match; default [] (none)
+# ws_renew_lead_secs = 60                       # session/renew_needed this long before the deadline
+# ws_max_open_docs = 1024                       # documents one socket may hold (0 = unlimited)
+# ws_max_frame_bytes = 1048576                  # largest inbound frame; unset = max_request_body_bytes
+```
+
+A missing prerequisite (collab disabled, or self-issued tokens unavailable) leaves the route
+absent and logs why at startup. With `ws_enabled = false`, `/ws` and `/ws/ticket` are ordinary
+paths. To try it, mint a token for the principal you want to connect as — normally the fingerprint
+of an existing KB member — and open the socket with it:
+
+```bash
+mae-daemon token mint --config daemon.toml --sub 'SHA256:…member-fingerprint…' --ttl 15m
+```
+
+- **Credentials.** Exactly one, never in the URL: `Authorization: Bearer <token>` (native and
+  headless clients), or a connect ticket for browsers, which cannot set that header: `POST
+  /ws/ticket` with the bearer header returns `{"ticket", "expires_in": 30}`, and the browser opens
+  `new WebSocket(url, ["mae.v1", "mae.ticket." + ticket])`. A ticket is single-use (spent on first
+  presentation, whatever happens next), valid 30 s, held in memory only (a restart voids it),
+  bound to the minting token's identity and expiry and to the mint request's `Origin`, and at most
+  8 may be unused per principal (`429 too_many_tickets`). Unknown, used and expired tickets all get
+  the same `401`, `kind: "ticket_invalid"`. Any query string on `/ws` or `/ws/ticket` is refused
+  (`400`, `kind: "credential_in_url"`).
+- **Every refusal happens before the upgrade**, as an ordinary response in the listener's
+  `{error, error_description}` body plus a `kind` (table above): a bad token gets exactly the `401`
+  and `WWW-Authenticate` every other route gives it; a disallowed `Origin` is `403`, `kind:
+  "origin_not_allowed"`. The protocol version is the `mae.v1` subprotocol; with none in common the
+  answer is `400`, `kind: "protocol_unsupported"`, with a `supported` list. The `101` selects
+  `mae.v1` only.
+- **The session.** The first frame is the notification `session/hello {protocol, principal,
+  auth_deadline, limits: {max_frame_bytes, max_open_docs}}`; `auth_deadline`, everywhere it
+  appears, is an RFC 3339 UTC string. Every frame is then authorized against its own document's KB
+  by the same checks as on the collab listener; the socket holds no grant of its own.
+  `kb/query.self_token` is refused on a socket (`self_issue_disabled`): a bearer session must not
+  mint its own successor. Requests are charged to the principal's tenant as on the other listeners.
+- **Staying authenticated.** `auth_deadline` is the token's expiry. `ws_renew_lead_secs` before it
+  the daemon sends the notification `session/renew_needed`; the client answers `session/renew {"token": …}` with a
+  fresh token for the **same issuer and subject** (a different one closes the socket `4403
+  principal_changed`; a token that does not validate is answered with an error, `data.kind`
+  `invalid_token` or `issuer_not_supported`, and the old deadline stands). On success the deadline
+  moves and every open document is re-authorized: one the principal can no longer read is closed
+  with the notification `session/doc_closed {doc, kb_id, node_id, reason: "not_member"}` (`kb_id`
+  for any KB document, `node_id` for a node document) and the rest of the session continues. A missed deadline closes `4401
+  token_expired`, and no frame is applied after it. So removing a member takes effect on their open
+  sockets at their next renewal at the latest — keep token lifetimes short.
+- **Limits.** A frame over `ws_max_frame_bytes` closes `1009`. A session holding `ws_max_open_docs`
+  documents is refused any request naming another (`too_many_open_docs`); `kb/join` opens a KB's
+  collection and every node at once and is admitted while under the cap, so it can carry a session
+  past it by one KB. A client that stops reading for 5 s is dropped.
+- **`max_connections` counts sockets, not documents.** One socket is one connection however many
+  documents it carries; `daemon/status` reports the listener under `connections.oauth`.
 
 **Revocation, honestly:** there is no per-token revocation list. A self-issued token is valid until
 its `exp`, or until the daemon's identity key is replaced (§3, *Key rotation*) — which invalidates
@@ -543,12 +618,15 @@ listener under `connections`:
 ```json
 "connections": {
   "kb_socket": {"active": 1, "max": 256},
-  "collab":    {"active": 3, "max": 256, "sessions": 3}
+  "collab":    {"active": 3, "max": 256, "sessions": 3},
+  "oauth":     {"active": 2, "max": 256}
 }
 ```
 
 - **`active`** — accepted, still-open connections on that listener.
 - **`max`** — the configured cap (`0` = unlimited), so `3` reads as `3 of 256`.
+- **`oauth`** — the HTTPS listener. A sync WebSocket counts once however many documents it
+  carries (ADR-099).
 - **`sessions`** (collab only) — clients that got *past authentication* and
   subscribed. A persistent gap between `sessions` and `active` across successive
   polls means clients are connecting and failing to authenticate: the first

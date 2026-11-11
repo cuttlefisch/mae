@@ -117,6 +117,32 @@ pub struct OAuthConfig {
     /// `self_issued_token_ttl_secs` greater than this makes `token mint`
     /// without `--ttl` refuse too.
     pub self_issued_token_max_ttl_secs: u64,
+    /// ADR-099 Amendment 1, B6: whether `GET /ws` (the sync WebSocket) and
+    /// `POST /ws/ticket` exist on this listener at all. Default `false`
+    /// (principle #12). While B6 holds this route is a development and
+    /// single-operator surface: it accepts ONLY this daemon's own tokens
+    /// (`kid = "self"`, so `self_issued_tokens_enabled` is a prerequisite), and
+    /// it needs `collab.enabled` — the socket reaches the collab session loop.
+    pub ws_enabled: bool,
+    /// Origins a browser handshake (and a ticket mint) may carry, matched
+    /// EXACTLY: no wildcards, no prefix or substring matching (B1). A request
+    /// with no `Origin` (a native client) is not origin-checked. Empty means no
+    /// browser origin is accepted.
+    pub ws_allowed_origins: Vec<String>,
+    /// Seconds before a session's authentication deadline at which the daemon
+    /// sends `session/renew_needed` (B3).
+    pub ws_renew_lead_secs: u64,
+    /// Documents one socket session may hold open at once (B4); 0 = unlimited.
+    /// A request naming a document the session does not already hold is
+    /// refused (`too_many_open_docs`) once it holds this many. `kb/join` opens
+    /// the KB's collection and every node in one request and is admitted while
+    /// the session is under the cap, so it can carry a session past it by one
+    /// KB's size.
+    pub ws_max_open_docs: usize,
+    /// Largest inbound WebSocket frame, bytes; a larger one closes the socket
+    /// with `1009` (B4). Unset means `max_request_body_bytes` — the same bound
+    /// a request body on this listener has.
+    pub ws_max_frame_bytes: Option<usize>,
 }
 
 impl Default for OAuthConfig {
@@ -140,6 +166,11 @@ impl Default for OAuthConfig {
             self_issued_tokens_enabled: false,
             self_issued_token_ttl_secs: 3600,
             self_issued_token_max_ttl_secs: 86_400,
+            ws_enabled: false,
+            ws_allowed_origins: Vec::new(),
+            ws_renew_lead_secs: 60,
+            ws_max_open_docs: 1024,
+            ws_max_frame_bytes: None,
         }
     }
 }
