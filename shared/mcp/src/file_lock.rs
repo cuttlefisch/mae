@@ -405,7 +405,7 @@ pub fn locked_update<T, R, E>(
     locked_update_waiting(LOCKED_UPDATE_WAIT, lock_target, load, mutate, save)
 }
 
-fn locked_update_waiting<T, R, E>(
+pub(crate) fn locked_update_waiting<T, R, E>(
     wait: Duration,
     lock_target: &Path,
     load: impl FnOnce() -> Result<T, E>,
