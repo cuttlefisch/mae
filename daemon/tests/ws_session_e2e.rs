@@ -276,3 +276,116 @@ async fn a_quiet_session_is_pinged_on_the_configured_period() {
         assert_eq!(got, expect, "ws_ping_secs = {secs}");
     }
 }
+
+/// Three writers on one document over the real socket converge: each makes
+/// interleaved inserts at seeded-random offsets, sends them without waiting,
+/// and applies whatever the daemon relays; afterwards every writer's text, and
+/// the daemon's own state, are identical and hold every insert. Kills a
+/// transport that drops, truncates or fails to relay updates (a naive "my
+/// edit arrived" check passes that; this one does not).
+#[tokio::test]
+async fn three_writers_converge_through_the_socket() {
+    use mae_sync::encoding::{base64_to_update, update_to_base64};
+    use mae_sync::text::TextSync;
+    let d = spawn(Opts::default()).await;
+    let doc = "conv.txt";
+    let mut socks = Vec::new();
+    for who in ["SHA256:w1", "SHA256:w2", "SHA256:w3"] {
+        let mut ws = connect_bearer(&d, &d.token(who, 3600)).await;
+        ws.call(
+            1,
+            "notifications/subscribe",
+            json!({"types": ["sync_update"]}),
+        )
+        .await;
+        socks.push(ws);
+    }
+    let mut texts: Vec<TextSync> = (0..3)
+        .map(|i| TextSync::with_client_id("", 100 + i as u64))
+        .collect();
+    let seed = texts[0].insert(0, "base:");
+    let r = socks[0]
+        .call(
+            2,
+            "sync/update",
+            json!({"doc": doc, "update": update_to_base64(&seed)}),
+        )
+        .await;
+    assert!(r.get("error").is_none(), "{r}");
+    for i in 1..3 {
+        let r = socks[i].call(2, "sync/resync", json!({"doc": doc})).await;
+        let state = base64_to_update(r["result"]["state"].as_str().expect("state")).unwrap();
+        texts[i].apply_update(&state).unwrap();
+    }
+    // Interleaved writes, seeded offsets, no waiting for relays.
+    let mut rng: u64 = 0x5eed;
+    let mut id = 10;
+    let mut last_id = [0u64; 3];
+    for round in 0..15 {
+        for w in 0..3 {
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let len = texts[w].content().chars().count() as u64;
+            let at = (rng >> 33) % (len + 1);
+            let token = format!("[{w}.{round}]");
+            let upd = texts[w].insert(at as u32, &token);
+            id += 1;
+            last_id[w] = id;
+            socks[w]
+                .send(json!({"jsonrpc": "2.0", "id": id, "method": "sync/update",
+                "params": {"doc": doc, "update": update_to_base64(&upd)}}))
+                .await;
+        }
+    }
+    // Every writer's last update acknowledged: the daemon has applied and
+    // relayed everything. Then each writer applies what it has received until
+    // it matches the daemon's state (a relay may still be in flight), bounded.
+    for (w, ws) in socks.iter_mut().enumerate() {
+        let last = last_id[w];
+        ws.until(|v| v["id"] == last && v.get("method").is_none())
+            .await;
+    }
+    let server = socks[0]
+        .call(9001, "sync/full_state", json!({"doc": doc}))
+        .await;
+    let mut truth = TextSync::with_client_id("", 999);
+    truth
+        .apply_update(&base64_to_update(server["result"]["state"].as_str().unwrap()).unwrap())
+        .unwrap();
+    let want = truth.content();
+    for (w, ws) in socks.iter_mut().enumerate() {
+        for attempt in 0..50 {
+            for line in ws.log.clone() {
+                let v: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
+                if v["method"] == "notifications/sync_update" {
+                    let b64 = v["params"]["event"]["data"]["update_base64"]
+                        .as_str()
+                        .unwrap();
+                    texts[w]
+                        .apply_update(&base64_to_update(b64).unwrap())
+                        .unwrap();
+                }
+            }
+            if texts[w].content() == want {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            ws.call(9100 + attempt, "sync/state_vector", json!({"doc": doc}))
+                .await;
+        }
+        assert_eq!(texts[w].content(), want, "writer {w} diverged");
+    }
+    // No character lost or invented: inserts at random offsets may land
+    // inside one another's tokens, so compare the multiset of characters.
+    let mut expected: Vec<char> = "base:".chars().collect();
+    for w in 0..3 {
+        for round in 0..15 {
+            expected.extend(format!("[{w}.{round}]").chars());
+        }
+    }
+    let mut got: Vec<char> = want.chars().collect();
+    expected.sort_unstable();
+    got.sort_unstable();
+    assert_eq!(got, expected, "an insert was lost or duplicated: {want}");
+}
