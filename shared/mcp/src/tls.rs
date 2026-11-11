@@ -110,6 +110,7 @@ pub fn peer_identity_from_tls(
         },
         fingerprint,
         pubkey,
+        bearer: false,
     })
 }
 

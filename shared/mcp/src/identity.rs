@@ -77,9 +77,31 @@ pub struct PeerIdentity {
     pub fingerprint: String,
     /// Raw 32-byte Ed25519 public key.
     pub pubkey: [u8; 32],
+    /// True when no key proved this identity: a validated bearer token did
+    /// (ADR-099 Amendment 1, B6). `fingerprint` then holds the token's subject,
+    /// taken literally as the membership principal, and `pubkey` is all-zero —
+    /// it is NOT the peer's key and must never be recorded as one (a pending
+    /// join's wrap target, for instance). See [`PeerIdentity::bearer`].
+    pub bearer: bool,
 }
 
 impl PeerIdentity {
+    /// The identity of a session whose principal a validated bearer token
+    /// established (ADR-099 Amendment 1, B6): the token's subject, literally.
+    /// It has a principal but no key, which is the one combination the other
+    /// constructors cannot express — and why [`PeerIdentity::principal`] reads
+    /// `bearer` rather than inferring a principal from a non-zero key.
+    ///
+    /// The caller refuses an empty subject before building one.
+    pub fn bearer(subject: &str) -> Self {
+        Self {
+            label: subject.to_string(),
+            fingerprint: subject.to_string(),
+            pubkey: [0u8; 32],
+            bearer: true,
+        }
+    }
+
     /// A synthetic identity for the `none` auth mode, so handlers have a uniform
     /// type. No real key and no principal — `none` sessions are loopback-trusted.
     pub fn synthetic(label: &str) -> Self {
@@ -87,6 +109,7 @@ impl PeerIdentity {
             label: label.to_string(),
             fingerprint: String::new(),
             pubkey: [0u8; 32],
+            bearer: false,
         }
     }
 
@@ -98,6 +121,7 @@ impl PeerIdentity {
             label: keyid.to_string(),
             fingerprint: format!("psk:{keyid}"),
             pubkey: [0u8; 32],
+            bearer: false,
         }
     }
 
@@ -110,8 +134,14 @@ impl PeerIdentity {
     /// key/TLS-authenticated peer, the `psk:<keyid>` string for psk, or `None` for
     /// an unauthenticated (`none`/loopback) session. This — never the mutable,
     /// non-unique label — is the sole subject identity for KB ownership/membership.
+    ///
+    /// A bearer identity's principal is its token subject.
+    ///
+    /// @ai-caution: [authz] `None` here means "loopback-trusted, every KB
+    /// allowed" downstream (`kb_access`). A bearer identity must therefore
+    /// ALWAYS yield `Some`, never fall through to `None` for lack of a key.
     pub fn principal(&self) -> Option<&str> {
-        if self.is_authenticated() || self.fingerprint.starts_with("psk:") {
+        if self.is_authenticated() || self.bearer || self.fingerprint.starts_with("psk:") {
             Some(&self.fingerprint)
         } else {
             None
@@ -1257,8 +1287,13 @@ mod tests {
             label: "alice".into(),
             fingerprint: k.fingerprint(),
             pubkey: k.to_bytes(),
+            bearer: false,
         };
         assert_eq!(real.principal(), Some(k.fingerprint().as_str()));
+        // A bearer identity has no key, and still has a principal: the subject.
+        let bearer = PeerIdentity::bearer("SHA256:token-subject");
+        assert!(!bearer.is_authenticated(), "a bearer identity holds no key");
+        assert_eq!(bearer.principal(), Some("SHA256:token-subject"));
         assert_eq!(
             PeerIdentity::synthetic_psk("team").principal(),
             Some("psk:team")
