@@ -68,6 +68,15 @@ async fn a_member_reads_exactly_while_a_member() {
     assert!(!reads(&store, &editor_a).await, "removed, no longer reads");
 }
 
+/// An add with no label: the shape every refusal case uses.
+fn add(member: &str, role: Role) -> OperatorMemberOp<'_> {
+    OperatorMemberOp::Add {
+        member,
+        role,
+        label: "",
+    }
+}
+
 /// Every refusal writes nothing. Kills: acting on a KB another identity owns,
 /// transferring or touching ownership, accepting a non-fingerprint member.
 #[tokio::test]
@@ -79,65 +88,17 @@ async fn refusals_write_nothing() {
     let member = Identity::generate("m").fingerprint();
     let owner_fp = daemon.fingerprint();
     let cases: Vec<(&Identity, OperatorMemberOp<'_>, &str)> = vec![
-        (
-            &stranger,
-            OperatorMemberOp::Add {
-                member: &member,
-                role: Role::Viewer,
-                label: "",
-            },
-            "owned by",
-        ),
-        (
-            &daemon,
-            OperatorMemberOp::Add {
-                member: &member,
-                role: Role::Owner,
-                label: "",
-            },
-            "viewer or editor",
-        ),
-        (
-            &daemon,
-            OperatorMemberOp::Add {
-                member: &owner_fp,
-                role: Role::Editor,
-                label: "",
-            },
-            "owner",
-        ),
+        (&stranger, add(&member, Role::Viewer), "owned by"),
+        (&daemon, add(&member, Role::Owner), "viewer or editor"),
+        (&daemon, add(&owner_fp, Role::Editor), "owner"),
         (
             &daemon,
             OperatorMemberOp::Remove { member: &owner_fp },
             "owner",
         ),
-        (
-            &daemon,
-            OperatorMemberOp::Add {
-                member: "alice",
-                role: Role::Viewer,
-                label: "",
-            },
-            "fingerprint",
-        ),
-        (
-            &daemon,
-            OperatorMemberOp::Add {
-                member: "SHA256:",
-                role: Role::Viewer,
-                label: "",
-            },
-            "fingerprint",
-        ),
-        (
-            &daemon,
-            OperatorMemberOp::Add {
-                member: "SHA256:abc def",
-                role: Role::Viewer,
-                label: "",
-            },
-            "fingerprint",
-        ),
+        (&daemon, add("alice", Role::Viewer), "fingerprint"),
+        (&daemon, add("SHA256:", Role::Viewer), "fingerprint"),
+        (&daemon, add("SHA256:abc def", Role::Viewer), "fingerprint"),
         (
             &daemon,
             OperatorMemberOp::Remove { member: &member },
@@ -150,18 +111,9 @@ async fn refusals_write_nothing() {
             .unwrap_err();
         assert!(e.contains(want), "{want}: {e}");
     }
-    let e = operator_change_membership(
-        &store,
-        &daemon,
-        "no-such-kb",
-        OperatorMemberOp::Add {
-            member: &member,
-            role: Role::Viewer,
-            label: "",
-        },
-    )
-    .await
-    .unwrap_err();
+    let e = operator_change_membership(&store, &daemon, "no-such-kb", add(&member, Role::Viewer))
+        .await
+        .unwrap_err();
     assert!(e.contains("no-such-kb"), "{e}");
     assert_eq!(operator_list_members(&store, KB).await.unwrap(), before);
 }
