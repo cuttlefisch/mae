@@ -162,6 +162,14 @@ fn a_malformed_section_request_is_an_error() {
     assert!(err(8, bad).contains("section.start"));
     let eol = r#"{"text": "x", "file": {"line_ending": "dos"}, "section": {"start": 0, "end": 1, "level": 0, "ancestors": 0, "declarations": 0, "followed": false}}"#;
     assert!(err(8, eol).contains("line_ending"));
+    // `eol` is required (0.5.0): it is how a section edit learns it may
+    // change the file's line ending.
+    for bad_eol in ["", r#", "eol": 32"#, r#", "eol": -1"#] {
+        let req = format!(
+            r#"{{"text": "x", "file": {{"line_ending": "lf"}}, "section": {{"start": 0, "end": 1, "level": 0, "ancestors": 0, "declarations": 0, "followed": false{bad_eol}}}}}"#
+        );
+        assert!(err(8, &req).contains("section.eol"), "{bad_eol}");
+    }
 }
 
 /// `"post_blank": false` ends each span before its post-blank, in `syntax`

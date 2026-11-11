@@ -70,7 +70,8 @@ mod green;
 mod headline;
 mod highlight;
 pub use highlight::{
-    highlights, section_highlights, sections, Highlight, NeedsFull, Section, SectionHighlights,
+    highlights, section_highlights, sections, EolProfile, Highlight, NeedsFull, Section,
+    SectionHighlights,
 };
 mod index;
 mod inline;
