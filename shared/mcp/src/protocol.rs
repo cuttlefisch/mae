@@ -346,6 +346,85 @@ impl McpError {
         )
     }
 
+    /// A multiplexed session (ADR-099 B4) already holds its `max_open_docs`
+    /// documents and this request names one it does not hold. Nothing ran.
+    /// Close a document (or open a new session) before opening another.
+    pub fn too_many_open_docs(message: String, limit: usize) -> Self {
+        Self::kinded(
+            -32603,
+            message,
+            "too_many_open_docs",
+            serde_json::json!({ "limit": limit }),
+        )
+    }
+
+    /// The sync WebSocket's refusals (ADR-099 Amendment 1). Most are HTTP
+    /// refusals before the upgrade, whose body carries the same `kind`; they
+    /// are built here so the kind strings have one home and one registry.
+    /// This one: a credential presented in the URL's query string (B1).
+    pub fn credential_in_url(message: String) -> Self {
+        Self::kinded(-32600, message, "credential_in_url", serde_json::json!({}))
+    }
+
+    /// A y-protocols awareness update names a client id another session on
+    /// the same document already owns (B5): a session speaks only for its own
+    /// cursors.
+    pub fn awareness_not_owned(message: String) -> Self {
+        Self::kinded(
+            -32600,
+            message,
+            "awareness_not_owned",
+            serde_json::json!({}),
+        )
+    }
+
+    /// A principal already holds `limit` unused connect tickets (B1): use one
+    /// or let it expire (30 s) before minting another.
+    pub fn too_many_tickets(message: String, limit: usize) -> Self {
+        Self::kinded(
+            -32600,
+            message,
+            "too_many_tickets",
+            serde_json::json!({ "limit": limit }),
+        )
+    }
+
+    /// A connect ticket that is unknown, used, expired or misbound — one
+    /// refusal for all of them (B1).
+    pub fn ticket_invalid(message: String) -> Self {
+        Self::kinded(-32600, message, "ticket_invalid", serde_json::json!({}))
+    }
+
+    /// A token from an issuer this route does not accept (B6).
+    pub fn issuer_not_supported(message: String) -> Self {
+        Self::kinded(
+            -32600,
+            message,
+            "issuer_not_supported",
+            serde_json::json!({}),
+        )
+    }
+
+    /// A renewal token that does not validate (B3).
+    pub fn invalid_token(message: String) -> Self {
+        Self::kinded(-32600, message, "invalid_token", serde_json::json!({}))
+    }
+
+    /// No protocol version in common at the upgrade (B2).
+    pub fn protocol_unsupported(message: String) -> Self {
+        Self::kinded(
+            -32600,
+            message,
+            "protocol_unsupported",
+            serde_json::json!({}),
+        )
+    }
+
+    /// A handshake `Origin` outside the allowlist (B1).
+    pub fn origin_not_allowed(message: String) -> Self {
+        Self::kinded(-32600, message, "origin_not_allowed", serde_json::json!({}))
+    }
+
     /// One update is larger than `[collab.sync] max_update_size_bytes`.
     /// Distinct from `quota_exceeded`, which is about the document it would grow.
     /// A node update would leave a known field of the node document with the
@@ -457,6 +536,15 @@ pub const ERROR_KINDS: &[&str] = &[
     "doc_kb_mismatch",
     "doc_not_found",
     "tenant_quota_exceeded",
+    "too_many_open_docs",
+    "credential_in_url",
+    "awareness_not_owned",
+    "too_many_tickets",
+    "ticket_invalid",
+    "issuer_not_supported",
+    "invalid_token",
+    "protocol_unsupported",
+    "origin_not_allowed",
     "update_too_large",
     "invalid_field",
     "cannot_remove_owner",
@@ -629,6 +717,15 @@ mod tests {
             McpError::doc_kb_mismatch(m()),
             McpError::doc_not_found(m()),
             McpError::tenant_quota_exceeded(m()),
+            McpError::too_many_open_docs(m(), 1),
+            McpError::credential_in_url(m()),
+            McpError::awareness_not_owned(m()),
+            McpError::too_many_tickets(m(), 8),
+            McpError::ticket_invalid(m()),
+            McpError::issuer_not_supported(m()),
+            McpError::invalid_token(m()),
+            McpError::protocol_unsupported(m()),
+            McpError::origin_not_allowed(m()),
             McpError::update_too_large(m(), 2, 1),
             McpError::invalid_field("title", m()),
             McpError::cannot_remove_owner(m()),

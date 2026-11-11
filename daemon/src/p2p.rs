@@ -132,6 +132,7 @@ pub(crate) fn authorize_peer(
         label,
         fingerprint,
         pubkey,
+        bearer: false,
     })
 }
 
@@ -158,6 +159,7 @@ fn resolve_mesh_peer(
             label: fingerprint.clone(),
             fingerprint,
             pubkey,
+            bearer: false,
         });
     }
     None

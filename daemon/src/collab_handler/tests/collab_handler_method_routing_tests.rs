@@ -77,6 +77,7 @@ impl Session {
             label: who.to_string(),
             fingerprint: fp(who),
             pubkey: [7u8; 32],
+            bearer: false,
         };
         let (store, bc) = (Arc::clone(store), Arc::clone(bc));
         tokio::spawn(async move {

@@ -227,3 +227,48 @@ async fn handle_incoming_logs_null_id_response() {
 // -----------------------------------------------------------------------
 // Bug 2 regression: join must set language AND invalidate syntax cache
 // -----------------------------------------------------------------------
+
+/// ADR-099 A1 B4: `session/doc_closed` reaches the editor, which recovers a
+/// `slow_consumer` document (re-join for a KB document, ForceSync for a
+/// buffer) and only reports `not_member`. Kills: ignoring the notice, which
+/// leaves the document missing edits with nothing ever arriving to show it.
+#[tokio::test]
+async fn a_closed_document_is_resynced_or_reported() {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut pending = std::collections::HashMap::new();
+    let mut shared = vec![];
+    let closed = |doc: &str, kb: Option<&str>, reason: &str| {
+        let mut params = serde_json::json!({"doc": doc, "reason": reason});
+        if let Some(k) = kb {
+            params["kb_id"] = k.into();
+        }
+        serde_json::json!({"jsonrpc": "2.0", "method": "session/doc_closed", "params": params})
+    };
+    let cases = [
+        (closed("kbn:kra:n1", Some("kra"), "slow_consumer"), "join"),
+        (closed("notes.org", None, "slow_consumer"), "force"),
+        (closed("kbn:krb:n2", Some("krb"), "not_member"), "none"),
+    ];
+    for (msg, want) in cases {
+        handle_incoming_message(
+            &msg.to_string(),
+            &tx,
+            &mut pending,
+            &mut shared,
+            &mut std::collections::HashMap::new(),
+            kb_ctx!(),
+        );
+        let event = rx.try_recv().expect("the notice becomes an event");
+        let mut editor = Editor::new();
+        handle_collab_event(&mut editor, event);
+        let got = match editor.collab.pending_intent {
+            Some(CollabIntent::JoinKb { ref kb_id, .. }) if kb_id == "kra" => "join",
+            Some(CollabIntent::ForceSync { ref buffer_name }) if buffer_name == "notes.org" => {
+                "force"
+            }
+            None => "none",
+            ref other => panic!("unexpected intent {other:?}"),
+        };
+        assert_eq!(got, want);
+    }
+}

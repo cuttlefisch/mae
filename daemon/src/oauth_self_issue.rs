@@ -84,6 +84,47 @@ pub struct ValidatedPrincipal {
     pub principal: String,
     pub audience: Vec<String>,
     pub expires_at: u64,
+    /// The token's raw `iss` and `sub` claims, BEFORE any claim mapping
+    /// (`principal` may come from a different claim). Together they are the
+    /// token's identity: ADR-099 B3 refuses a renewal that changes either, and
+    /// once external issuers are accepted the subject alone is not an identity.
+    /// Absent claims read as empty strings.
+    pub issuer: String,
+    pub subject: String,
+}
+
+/// The raw `iss` and `sub` claims, empty when absent — for [`ValidatedPrincipal`].
+fn raw_identity(claims: &serde_json::Value) -> (String, String) {
+    let field = |k: &str| {
+        claims
+            .get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    (field("iss"), field("sub"))
+}
+
+/// Build a [`ValidatedPrincipal`] from already-verified claims: one place for
+/// the audience/expiry/identity extraction both validators share.
+pub fn validated_from_claims(claims: &serde_json::Value, principal: String) -> ValidatedPrincipal {
+    let audience: Vec<String> = match claims.get("aud") {
+        Some(serde_json::Value::String(s)) => vec![s.clone()],
+        Some(serde_json::Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        _ => vec![],
+    };
+    let expires_at = claims.get("exp").and_then(|v| v.as_u64()).unwrap_or(0);
+    let (issuer, subject) = raw_identity(claims);
+    ValidatedPrincipal {
+        principal,
+        audience,
+        expires_at,
+        issuer,
+        subject,
+    }
 }
 
 /// The fixed `kid` marking a self-issued token — never a real external JWKS
@@ -196,21 +237,7 @@ pub fn validate_self_issued_token(
         .and_then(|v| v.as_str())
         .ok_or(TokenValidationError::MissingPrincipalClaim)?
         .to_string();
-    let audience: Vec<String> = match claims.get("aud") {
-        Some(serde_json::Value::String(s)) => vec![s.clone()],
-        Some(serde_json::Value::Array(arr)) => arr
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect(),
-        _ => vec![],
-    };
-    let expires_at = claims.get("exp").and_then(|v| v.as_u64()).unwrap_or(0);
-
-    Ok(ValidatedPrincipal {
-        principal,
-        audience,
-        expires_at,
-    })
+    Ok(validated_from_claims(&claims, principal))
 }
 
 #[cfg(test)]
