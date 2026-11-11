@@ -659,3 +659,44 @@ fn a_named_local_read_answers_from_the_primary_not_an_instance() {
         "{err}"
     );
 }
+
+/// `:kb-restore` (and so Scheme `kb-restore`, which queues it) restores in
+/// the KB it names, through the same resolver as the `kb_restore` tool. Kills:
+/// restoring the primary's store whatever the flag says, or a silent fallback
+/// for an unknown KB.
+#[test]
+fn the_restore_command_acts_on_the_named_kbs_store() {
+    let (mut editor, _ua, ub, _d) = two_instances_with_dup();
+    // History is written by authored ingest (`insert_node_with_history`), not
+    // by an ex update; snapshot Beta's original directly.
+    let v = editor.kb.instance_stores[&ub]
+        .snapshot_version("dup", "before the edit")
+        .unwrap();
+    editor.ex_kb_update("--kb=Beta dup edited in beta");
+    editor.ex_kb_update("--kb=Alpha dup edited in alpha");
+    let body = |e: &Editor, kb: &str| {
+        e.kb_store_named(kb)
+            .unwrap()
+            .get_node("dup")
+            .unwrap()
+            .unwrap()
+            .body
+    };
+    assert_eq!(body(&editor, "Beta"), "edited in beta");
+
+    editor.ex_kb_restore(&format!("--kb=Nope dup {v}"));
+    assert!(editor.status_msg.contains("Nope"), "{}", editor.status_msg);
+    assert_eq!(
+        body(&editor, "Beta"),
+        "edited in beta",
+        "an unknown KB fell back"
+    );
+
+    editor.ex_kb_restore(&format!("--kb=Beta dup {v}"));
+    assert_eq!(body(&editor, "Beta"), "body", "{}", editor.status_msg);
+    assert_eq!(
+        body(&editor, "Alpha"),
+        "edited in alpha",
+        "Alpha's store was touched"
+    );
+}

@@ -106,3 +106,16 @@ fn a_given_creation_time_is_the_one_stamped() {
         assert_eq!(back.created_at(), Some(t));
     }
 }
+
+/// Rebirth keeps the node's creation time, so a reborn node is still dated
+/// and keeps its `version`. Kills: building the reborn document without the
+/// stamp (it read as undated, and its version moved with no content change).
+#[test]
+fn rebirth_keeps_the_creation_time_and_the_version() {
+    for created in [0_i64, 1_600_000_000, 1_794_387_026] {
+        let doc = KbNodeDoc::new_created_at("n", "T", "body\n", &["a".into()], created);
+        let reborn = doc.reborn(42);
+        assert_eq!(reborn.created_at(), Some(created));
+        assert_eq!(reborn.version(), doc.version());
+    }
+}

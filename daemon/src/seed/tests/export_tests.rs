@@ -265,3 +265,29 @@ async fn force_replaces_files_without_leaving_temporaries() {
         assert_eq!(read(dir.path(), path), normalise(text).unwrap(), "{path}");
     }
 }
+
+/// Two peers inserting the same key concurrently can leave it in
+/// `property_order` twice (ADR-093 Amendment 1 A3). A reader counts it once, at
+/// its first position, and the file still seeds back (A4). Kills: writing each
+/// listed key as it comes, which repeats the drawer line and fails the re-split.
+#[tokio::test]
+async fn a_key_listed_twice_in_the_order_is_written_once_at_its_first_place() {
+    let r = fixture_repo(&fixture_files());
+    let (store, _, _) = seeded(&r).await;
+    let alpha = "0a000000-0000-4000-8000-000000000001";
+    edit(&store, alpha, |d| {
+        let mut h = d.org_header().expect("a seeded node has a header shape");
+        // The fixture's order is ID, zeta, KIND, Alpha, mIxEd_Case, beta.
+        assert_eq!(h.property_order[2], "KIND");
+        h.property_order.push("KIND".into());
+        d.set_org_header(&h)
+    })
+    .await;
+    let dir = out_dir();
+    let report = export(&store, KB, dir.path(), false).await.unwrap();
+    assert!(report.refused.is_empty(), "{:?}", report.refused);
+    let text = read(dir.path(), "notes/alpha.org");
+    let drawer: Vec<&str> = text.lines().take_while(|l| *l != ":END:").collect();
+    assert_eq!(drawer.iter().filter(|l| l.starts_with(":KIND:")).count(), 1);
+    assert_eq!(drawer[3], ":KIND: Concept", "kept at its first position");
+}

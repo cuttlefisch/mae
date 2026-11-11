@@ -944,6 +944,14 @@ impl KbNodeDoc {
         if let Some(header) = &mat.org_header {
             let _ = doc.set_org_header(header);
         }
+        // The creation time is a fact about the node, not about this lineage:
+        // without it the reborn node reads as undated and its `version` (which
+        // digests `created_at`) changes although no content did.
+        if let Some(created) = mat.created_at {
+            let root = doc.doc.get_or_insert_map("node");
+            let mut txn = doc.doc.transact_mut();
+            Self::stamp_created_at(&root, &mut txn, created);
+        }
         doc
     }
 
