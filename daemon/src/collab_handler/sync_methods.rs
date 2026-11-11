@@ -60,7 +60,8 @@ fn update_param(params: &serde_json::Value, max_update: usize) -> Result<Vec<u8>
 ///    the op's epoch (ADR-036 §D3, `verify_relayed_content_op`) — a peer
 ///    daemon relaying a member's edit is untrusted, so the op is re-checked
 ///    here; require-signed on P2p, legacy unsigned accepted on the hub;
-/// 4. the ADR-023 epoch fence, on the verified author.
+/// 4. the ADR-023 epoch fence, on the verified author;
+/// 5. the node document's field types (`invalid_field`).
 ///
 /// Returns the verified header, carried onward with the broadcast.
 async fn authorize_node_write(
@@ -129,6 +130,9 @@ async fn authorize_node_write(
             return Err(reason.into());
         }
     }
+    // 5. Field types, last: only an authorized writer learns its update was
+    // mistyped (a stranger got its refusal above).
+    refuse_mistyped_node_update(doc_store, (kb_id, doc_name), None, update_bytes, false).await?;
     Ok(header)
 }
 
