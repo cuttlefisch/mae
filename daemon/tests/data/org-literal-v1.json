@@ -1,0 +1,221 @@
+{
+  "formato": "org-literal-v1",
+  "descripcion": "Vectores de ida y vuelta de la siembra de MAE (paquete H): f es el fichero, n es N(f) = cabecera rehecha desde los campos + body; para un f canónico, n == f. Sintéticos: nunca contenido de una KB real. rechazos: ficheros que el planificador de MAE rechaza, con el motivo.",
+  "vectores": [
+    {
+      "nombre": "canónico: título y etiquetas, salto final, 2 bytes",
+      "canonico": true,
+      "f": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000101\n:KIND: nota\n:END:\n#+title: Camión del año\n#+filetags: :a:b:\n\n* Ñandú\nTexto.\n",
+      "n": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000101\n:KIND: nota\n:END:\n#+title: Camión del año\n#+filetags: :a:b:\n\n* Ñandú\nTexto.\n",
+      "campos": {
+        "properties": {
+          "ID": "0f000000-0000-4000-8000-000000000101",
+          "KIND": "nota"
+        },
+        "property_order": ["ID", "KIND"],
+        "title": "Camión del año",
+        "has_title_line": true,
+        "tags": ["a", "b"],
+        "has_filetags_line": true
+      },
+      "body": "\n* Ñandú\nTexto.\n"
+    },
+    {
+      "nombre": "canónico: sin salto final, 3 y 4 bytes, sin etiquetas",
+      "canonico": true,
+      "f": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000102\n:END:\n#+title: Clave 𝄞 y €\nTexto con 日本 y 😀",
+      "n": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000102\n:END:\n#+title: Clave 𝄞 y €\nTexto con 日本 y 😀",
+      "campos": {
+        "properties": {
+          "ID": "0f000000-0000-4000-8000-000000000102"
+        },
+        "property_order": ["ID"],
+        "title": "Clave 𝄞 y €",
+        "has_title_line": true,
+        "tags": [],
+        "has_filetags_line": false
+      },
+      "body": "Texto con 日本 y 😀"
+    },
+    {
+      "nombre": "canónico: valor vacío y título vacío",
+      "canonico": true,
+      "f": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000103\n:ROAM_ALIASES:\n:END:\n#+title:\n* Uno\n",
+      "n": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000103\n:ROAM_ALIASES:\n:END:\n#+title:\n* Uno\n",
+      "campos": {
+        "properties": {
+          "ID": "0f000000-0000-4000-8000-000000000103",
+          "ROAM_ALIASES": ""
+        },
+        "property_order": ["ID", "ROAM_ALIASES"],
+        "title": "",
+        "has_title_line": true,
+        "tags": [],
+        "has_filetags_line": false
+      },
+      "body": "* Uno\n"
+    },
+    {
+      "nombre": "canónico: sin título ni etiquetas, cuerpo vacío",
+      "canonico": true,
+      "f": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000104\n:END:\n",
+      "n": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000104\n:END:\n",
+      "campos": {
+        "properties": {
+          "ID": "0f000000-0000-4000-8000-000000000104"
+        },
+        "property_order": ["ID"],
+        "title": "",
+        "has_title_line": false,
+        "tags": [],
+        "has_filetags_line": false
+      },
+      "body": ""
+    },
+    {
+      "nombre": "canónico: línea de etiquetas vacía",
+      "canonico": true,
+      "f": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000105\n:END:\n#+title: Ωmega\n#+filetags:\nCuerpo.\n",
+      "n": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000105\n:END:\n#+title: Ωmega\n#+filetags:\nCuerpo.\n",
+      "campos": {
+        "properties": {
+          "ID": "0f000000-0000-4000-8000-000000000105"
+        },
+        "property_order": ["ID"],
+        "title": "Ωmega",
+        "has_title_line": true,
+        "tags": [],
+        "has_filetags_line": true
+      },
+      "body": "Cuerpo.\n"
+    },
+    {
+      "nombre": "no canónico: palabras clave en mayúscula y espacios de más en el cajón",
+      "canonico": false,
+      "f": ":PROPERTIES:\n:ID:   0f000000-0000-4000-8000-000000000106\n:END:\n#+TITLE: Ωmega\n#+FILETAGS: :x:\nCuerpo.\n",
+      "n": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000106\n:END:\n#+title: Ωmega\n#+filetags: :x:\nCuerpo.\n",
+      "campos": {
+        "properties": {
+          "ID": "0f000000-0000-4000-8000-000000000106"
+        },
+        "property_order": ["ID"],
+        "title": "Ωmega",
+        "has_title_line": true,
+        "tags": ["x"],
+        "has_filetags_line": true
+      },
+      "body": "Cuerpo.\n"
+    },
+    {
+      "nombre": "no canónico: las etiquetas antes del título",
+      "canonico": false,
+      "f": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000107\n:END:\n#+filetags: :a:\n#+title: T\nCuerpo\n",
+      "n": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000107\n:END:\n#+title: T\n#+filetags: :a:\nCuerpo\n",
+      "campos": {
+        "properties": {
+          "ID": "0f000000-0000-4000-8000-000000000107"
+        },
+        "property_order": ["ID"],
+        "title": "T",
+        "has_title_line": true,
+        "tags": ["a"],
+        "has_filetags_line": true
+      },
+      "body": "Cuerpo\n"
+    },
+    {
+      "nombre": "no canónico: una línea en blanco entre :END: y el título",
+      "canonico": false,
+      "f": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000108\n:END:\n\n#+title: T\nB\n",
+      "n": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000108\n:END:\n#+title: T\n\nB\n",
+      "campos": {
+        "properties": {
+          "ID": "0f000000-0000-4000-8000-000000000108"
+        },
+        "property_order": ["ID"],
+        "title": "T",
+        "has_title_line": true,
+        "tags": [],
+        "has_filetags_line": false
+      },
+      "body": "\nB\n"
+    },
+    {
+      "nombre": "no canónico: un valor vacío con un espacio detrás",
+      "canonico": false,
+      "f": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000109\n:ROAM_ALIASES: \n:END:\n#+title: T\n",
+      "n": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000109\n:ROAM_ALIASES:\n:END:\n#+title: T\n",
+      "campos": {
+        "properties": {
+          "ID": "0f000000-0000-4000-8000-000000000109",
+          "ROAM_ALIASES": ""
+        },
+        "property_order": ["ID", "ROAM_ALIASES"],
+        "title": "T",
+        "has_title_line": true,
+        "tags": [],
+        "has_filetags_line": false
+      },
+      "body": ""
+    },
+    {
+      "nombre": "no canónico: espacios detrás de un valor y del título",
+      "canonico": false,
+      "f": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000110\n:K: v  \n:END:\n#+title: T  \nB\n",
+      "n": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000110\n:K: v\n:END:\n#+title: T\nB\n",
+      "campos": {
+        "properties": {
+          "ID": "0f000000-0000-4000-8000-000000000110",
+          "K": "v"
+        },
+        "property_order": ["ID", "K"],
+        "title": "T",
+        "has_title_line": true,
+        "tags": [],
+        "has_filetags_line": false
+      },
+      "body": "B\n"
+    },
+    {
+      "nombre": "no canónico: la línea del título al final, sin salto",
+      "canonico": false,
+      "f": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000111\n:END:\n#+title: T",
+      "n": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000111\n:END:\n#+title: T\n",
+      "campos": {
+        "properties": {
+          "ID": "0f000000-0000-4000-8000-000000000111"
+        },
+        "property_order": ["ID"],
+        "title": "T",
+        "has_title_line": true,
+        "tags": [],
+        "has_filetags_line": false
+      },
+      "body": ""
+    },
+    {
+      "nombre": "no canónico: :END: al final, sin salto",
+      "canonico": false,
+      "f": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000112\n:END:",
+      "n": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000112\n:END:\n",
+      "campos": {
+        "properties": {
+          "ID": "0f000000-0000-4000-8000-000000000112"
+        },
+        "property_order": ["ID"],
+        "title": "",
+        "has_title_line": false,
+        "tags": [],
+        "has_filetags_line": false
+      },
+      "body": ""
+    }
+  ],
+  "rechazos": [
+    {
+      "nombre": "un comentario entre :END: y el título: el título queda fuera del bloque de cabecera",
+      "f": ":PROPERTIES:\n:ID: 0f000000-0000-4000-8000-000000000113\n:END:\n\n# nota\n#+title: T\nCuerpo\n",
+      "motivo": "misplaced_header_keyword"
+    }
+  ]
+}

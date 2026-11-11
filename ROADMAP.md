@@ -463,6 +463,11 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 
 ### Architecture Debt (v0.9.1+)
 
+- [ ] **Four copies of the unix-days → civil-date conversion.** `daemon/src/rfc3339.rs` (added for
+  `kb/query`'s RFC 3339 times), `crates/core/src/editor/kb_ops/mod.rs::civil_from_days`,
+  `crates/core/src/project.rs::days_to_ymd` and `shared/kb/src/migrate/mod.rs::days_to_ymd`. None was
+  reachable from the daemon without a dependency it does not otherwise need. Fix: one helper in a
+  shared crate every caller already depends on (principle #8), not a fifth copy.
 - [ ] **Files accepted over ceiling by the pre-v0.15 security/audit branch** (2026-08). Each carries an
   `@ai-caution: [architecture-debt]` marker naming its reason; all are recorded in
   `docs/AUDIT_BASELINE.json`, so `make audit-metrics-check` fails if any grows further:

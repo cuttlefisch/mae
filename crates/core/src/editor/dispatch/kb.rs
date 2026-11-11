@@ -292,21 +292,9 @@ impl Editor {
                 }
             }
             "kb-set-role" => {
-                // :kb-set-role <node-id> <source|atom|molecule|hub>
+                // :kb-set-role [--kb=NAME] <node-id> <source|atom|molecule|hub>
                 let line = self.vi.command_line.trim().to_string();
-                let mut parts = line.split_whitespace();
-                let id = parts.next().unwrap_or("").to_string();
-                let role = parts.next().unwrap_or("").to_string();
-                if id.is_empty() || role.is_empty() {
-                    self.set_status(
-                        "usage: :kb-set-role <node-id> <source|atom|molecule|hub>".to_string(),
-                    );
-                } else {
-                    match self.kb_set_role(&id, &role) {
-                        Ok(msg) => self.set_status(msg),
-                        Err(e) => self.set_status(e),
-                    }
-                }
+                self.ex_kb_set_role(&line);
             }
             "kb-widen" => {
                 self.kb_widen_meta();

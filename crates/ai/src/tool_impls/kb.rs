@@ -275,30 +275,26 @@ pub(crate) fn links_backend(editor: &Editor) -> LinksBackend<'_> {
     }
 }
 
-/// `requester_provider` -- the caller's AI provider, when known -- lets this
-/// SingleTargetFilterable tool (#366, "Bucket B" of #358/#361's AI-residency
-/// seed-content exemption) post-filter its own materialized dst list: each
-/// dst can live in a DIFFERENT KB than the anchor `id`, so a permitted
-/// (open or seed) anchor could otherwise leak a restricted KB's non-seed
-/// content reached by traversal — same shape as `kb_related`/`kb_graph`
-/// (Bucket A), just without a full `Node` already in hand for each result,
-/// hence the new per-dst `describe()` lookup via [`links_backend`].
-pub fn execute_kb_links_from(
+/// Outgoing links of `id` as `(dst, rel_type)`, from the KB `kb` names or, with
+/// none, the tier that holds `id` (refusing an id several KBs hold).
+fn links_from_raw(
     editor: &Editor,
-    args: &serde_json::Value,
-    requester_provider: Option<&str>,
-) -> Result<String, String> {
-    let id = args
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "Missing required argument: id".to_string())?;
+    id: &str,
+    kb: Option<&str>,
+) -> Result<Vec<(String, Option<String>)>, String> {
+    if let Some(owner) = editor.kb_read_scope(id, kb)? {
+        return editor
+            .kb_scoped_backend(&owner)
+            .typed_links_from(id)
+            .map_err(|e| format!("KB query failed reading links from {id}: {e}"));
+    }
     // Outgoing links are a property of the node's OWN tier (its body is what
     // defines them), so — unlike links_to below — this is exactly the
     // `kb_resolve_anywhere`-shaped single-tier fallback.
     let (_, resolution) = editor
         .kb_resolve_anywhere(id)
         .ok_or_else(|| format!("No KB node: {}", id))?;
-    let raw: Vec<(String, Option<String>)> = match resolution {
+    Ok(match resolution {
         mae_core::KbResolution::Query => {
             let q = editor
                 .kb
@@ -330,7 +326,27 @@ pub fn execute_kb_links_from(
                 .map(|dst| (dst, None))
                 .collect()
         }
-    };
+    })
+}
+
+/// `requester_provider` -- the caller's AI provider, when known -- lets this
+/// SingleTargetFilterable tool (#366, "Bucket B" of #358/#361's AI-residency
+/// seed-content exemption) post-filter its own materialized dst list: each
+/// dst can live in a DIFFERENT KB than the anchor `id`, so a permitted
+/// (open or seed) anchor could otherwise leak a restricted KB's non-seed
+/// content reached by traversal — same shape as `kb_related`/`kb_graph`
+/// (Bucket A), just without a full `Node` already in hand for each result,
+/// hence the new per-dst `describe()` lookup via [`links_backend`].
+pub fn execute_kb_links_from(
+    editor: &Editor,
+    args: &serde_json::Value,
+    requester_provider: Option<&str>,
+) -> Result<String, String> {
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required argument: id".to_string())?;
+    let raw = links_from_raw(editor, id, kb_arg(args))?;
 
     let backend = links_backend(editor);
     let enriched: Vec<(String, Option<String>, Option<String>, bool)> = raw
@@ -358,18 +374,19 @@ pub fn execute_kb_links_from(
     serde_json::to_string_pretty(&links).map_err(|e| e.to_string())
 }
 
-/// `requester_provider` -- same seed-content post-filter as
-/// [`execute_kb_links_from`] (#366), applied to the incoming-link src ids
-/// this tool aggregates across every federated tier.
-pub fn execute_kb_links_to(
+/// Incoming links of `id` as `(src, rel_type)`: within the KB `kb` names, or,
+/// with none, from every tier (an incoming link can originate in any of them).
+fn links_to_raw(
     editor: &Editor,
-    args: &serde_json::Value,
-    requester_provider: Option<&str>,
-) -> Result<String, String> {
-    let id = args
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "Missing required argument: id".to_string())?;
+    id: &str,
+    kb: Option<&str>,
+) -> Result<Vec<(String, Option<String>)>, String> {
+    if let Some(owner) = editor.kb_read_scope(id, kb)? {
+        return editor
+            .kb_scoped_backend(&owner)
+            .typed_links_to(id)
+            .map_err(|e| format!("KB query failed reading links to {id}: {e}"));
+    }
     // Incoming links are NOT a single-tier property — any federated instance
     // (or the primary KB) could link into this node, so — unlike links_from
     // above — this deliberately aggregates across every tier rather than
@@ -381,7 +398,7 @@ pub fn execute_kb_links_to(
     if editor.kb_get_node_anywhere(id).is_none() {
         return Err(format!("No KB node: {}", id));
     }
-    let raw: Vec<(String, Option<String>)> = if let Some(q) = editor.kb.query_layer() {
+    Ok(if let Some(q) = editor.kb.query_layer() {
         q.links_to(id)
             .map_err(|e| format!("KB query failed reading links to {id}: {e}"))?
             .into_iter()
@@ -400,7 +417,22 @@ pub fn execute_kb_links_to(
         }
         links.sort();
         links.into_iter().map(|src| (src, None)).collect()
-    };
+    })
+}
+
+/// `requester_provider` -- same seed-content post-filter as
+/// [`execute_kb_links_from`] (#366), applied to the incoming-link src ids
+/// this tool aggregates across every federated tier.
+pub fn execute_kb_links_to(
+    editor: &Editor,
+    args: &serde_json::Value,
+    requester_provider: Option<&str>,
+) -> Result<String, String> {
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required argument: id".to_string())?;
+    let raw = links_to_raw(editor, id, kb_arg(args))?;
 
     let backend = links_backend(editor);
     let enriched: Vec<(String, Option<String>, Option<String>, bool)> = raw
@@ -426,6 +458,32 @@ pub fn execute_kb_links_to(
         })
         .collect();
     serde_json::to_string_pretty(&links).map_err(|e| e.to_string())
+}
+
+/// The ranked related nodes of `id`: within the KB `kb` names, else federated
+/// (refusing an id several KBs hold).
+fn related_items(
+    editor: &Editor,
+    id: &str,
+    limit: usize,
+    kb: Option<&str>,
+) -> Result<Vec<mae_kb::graph_query::RelatedItem>, String> {
+    let items = match editor.kb_read_scope(id, kb)? {
+        Some(owner) => {
+            mae_kb::graph_query::related_enriched(&editor.kb_scoped_backend(&owner), id, limit)
+        }
+        None => mae_kb::graph_query::related_enriched(
+            &mae_kb::graph_query::FederatedRelatedBackend {
+                query: editor.kb.query_layer(),
+                primary: &editor.kb.primary,
+                instances: &editor.kb.instances,
+                registry: &editor.kb.registry,
+            },
+            id,
+            limit,
+        ),
+    };
+    items.map_err(|e| format!("KB query failed computing nodes related to {id}: {e}"))
 }
 
 /// Graph-relatedness: nodes structurally related to `id` (co-citation /
@@ -459,14 +517,7 @@ pub fn execute_kb_related(
         .map(|n| n as usize)
         .unwrap_or(10);
 
-    let backend = mae_kb::graph_query::FederatedRelatedBackend {
-        query: editor.kb.query_layer(),
-        primary: &editor.kb.primary,
-        instances: &editor.kb.instances,
-        registry: &editor.kb.registry,
-    };
-    let items = mae_kb::graph_query::related_enriched(&backend, id, limit)
-        .map_err(|e| format!("KB query failed computing nodes related to {id}: {e}"))?;
+    let items = related_items(editor, id, limit, kb_arg(args))?;
     let items = mae_core::ai_residency::filter_residency_exempt_by(
         editor,
         requester_provider,
@@ -482,6 +533,32 @@ pub fn execute_kb_related(
         })
         .collect();
     serde_json::to_string_pretty(&objs).map_err(|e| e.to_string())
+}
+
+/// The BFS neighborhood of `id`: within the KB `kb` names, else federated
+/// (refusing an id several KBs hold).
+fn graph_walk(
+    editor: &Editor,
+    id: &str,
+    depth: usize,
+    kb: Option<&str>,
+) -> Result<mae_kb::graph_query::GraphBfsResult, String> {
+    use mae_kb::graph_query as gq;
+    if let Some(owner) = editor.kb_read_scope(id, kb)? {
+        return gq::bfs_neighborhood(&editor.kb_scoped_backend(&owner), id, depth);
+    }
+    match editor.kb.query_layer() {
+        Some(q) => gq::bfs_neighborhood(&gq::QueryLayerBackend(q), id, depth),
+        None => gq::bfs_neighborhood(
+            &gq::InMemoryFederatedBackend {
+                primary: &editor.kb.primary,
+                instances: &editor.kb.instances,
+                registry: &editor.kb.registry,
+            },
+            id,
+            depth,
+        ),
+    }
 }
 
 /// BFS neighborhood around a seed node, up to `depth` hops (default 1, max 3).
@@ -520,19 +597,7 @@ pub fn execute_kb_graph(
         .unwrap_or(1)
         .min(3) as usize;
 
-    let result = if let Some(q) = editor.kb.query_layer() {
-        mae_kb::graph_query::bfs_neighborhood(&mae_kb::graph_query::QueryLayerBackend(q), id, depth)
-    } else {
-        mae_kb::graph_query::bfs_neighborhood(
-            &mae_kb::graph_query::InMemoryFederatedBackend {
-                primary: &editor.kb.primary,
-                instances: &editor.kb.instances,
-                registry: &editor.kb.registry,
-            },
-            id,
-            depth,
-        )
-    }?;
+    let result = graph_walk(editor, id, depth, kb_arg(args))?;
 
     // Filter BEFORE building the edges/output so a dropped node's id also
     // disappears from the edge list below (edges are restricted to the
@@ -1157,7 +1222,7 @@ pub fn execute_kb_graph_view_open(
         .get("depth")
         .and_then(|v| v.as_u64())
         .map(|v| v as usize);
-    editor.kb_graph_view_open(id, depth);
+    editor.kb_graph_view_open_in(kb_arg(args), id, depth)?;
 
     let idx = editor
         .buffers
@@ -1441,7 +1506,7 @@ pub fn execute_kb_preview_show(
         .get("id")
         .and_then(|v| v.as_str())
         .ok_or("Missing required parameter: id")?;
-    editor.kb_preview_show(id);
+    editor.kb_preview_show_in(kb_arg(args), id)?;
     editor
         .kb_preview_popup()
         .map(|popup| popup.contents.clone())
@@ -1471,7 +1536,7 @@ pub fn execute_kb_promote(editor: &mut Editor, args: &serde_json::Value) -> Resu
         .and_then(|v| v.as_str())
         .ok_or("Missing required parameter: id")?;
 
-    let result = editor.kb_promote_node(id)?;
+    let result = editor.kb_promote_node_from(kb_arg(args), id)?;
     let dedup = match result.dedup {
         mae_core::editor::PromoteDedup::Removed => "removed",
         mae_core::editor::PromoteDedup::KeptDiverged => "kept_diverged",
@@ -1881,18 +1946,16 @@ pub fn execute_kb_shortest_path(
     // are never written to the user's `primary.cozo` — could not be endpoints,
     // and the walk returned an empty Vec that is indistinguishable from "no
     // path exists" (ADR-086's empty-vs-failure line).
-    let path = match editor.kb.query_layer() {
+    let (store, scoped) = walk_store(editor, &[from, to], kb_arg(args))?;
+    let query = editor.kb.query_layer().filter(|_| !scoped);
+    let path = match query {
         Some(q) => {
             mae_kb::graph_query::shortest_path_over(q, from, to).map_err(|e| e.to_string())?
         }
-        None => {
-            let store = editor
-                .kb
-                .store
-                .as_ref()
-                .ok_or_else(|| "No KB store configured".to_string())?;
-            store.shortest_path(from, to).map_err(|e| e.to_string())?
-        }
+        None => store
+            .ok_or_else(|| "No KB store configured".to_string())?
+            .shortest_path(from, to)
+            .map_err(|e| e.to_string())?,
     };
 
     let local_bypass = requester_provider.is_some_and(mae_core::ai_residency::is_local_provider);
@@ -1902,13 +1965,9 @@ pub fn execute_kb_shortest_path(
     // Resolve from whichever source produced the path, so a federated hop is
     // judged on its own record rather than failing the lookup and being dropped.
     let resolve = |nid: &str| -> Option<mae_kb::Node> {
-        match editor.kb.query_layer() {
+        match query {
             Some(q) => q.get(nid),
-            None => editor
-                .kb
-                .store
-                .as_ref()
-                .and_then(|s| s.get_node(nid).ok().flatten()),
+            None => store.and_then(|s| s.get_node(nid).ok().flatten()),
         }
     };
     let filtered: Vec<&String> = path
@@ -1927,6 +1986,24 @@ pub fn execute_kb_shortest_path(
         &[]
     };
     serde_json::to_string_pretty(out).map_err(|e| e.to_string())
+}
+
+/// The durable store a store-walking read (`kb_neighborhood`, `kb_shortest_path`)
+/// uses, and whether it is a NAMED KB's. With `kb`, that KB's store, and every
+/// id in `ids` must be held by it; without, the primary store (and an id several
+/// KBs hold is refused). Never another KB's store.
+fn walk_store<'a>(
+    editor: &'a Editor,
+    ids: &[&str],
+    kb: Option<&str>,
+) -> Result<(Option<&'a dyn mae_kb::KbStore>, bool), String> {
+    for id in ids {
+        editor.kb_read_scope(id, kb)?;
+    }
+    match kb {
+        Some(name) => Ok((Some(editor.kb_store_named(name)?), true)),
+        None => Ok((editor.kb.store.as_deref(), false)),
+    }
 }
 
 /// `requester_provider` -- the caller's AI provider, when known -- lets this
@@ -1957,13 +2034,11 @@ pub fn execute_kb_neighborhood(
     // practices content — never written to the user's `primary.cozo` — was
     // simply not found, and the walk returned an empty SubGraph: a successful
     // answer that reads as "this node has no neighbours" (ADR-086).
-    let query = editor.kb.query_layer();
+    let (store, scoped) = walk_store(editor, &[id], kb_arg(args))?;
+    let query = editor.kb.query_layer().filter(|_| !scoped);
     let walked = match query {
         Some(q) => mae_kb::graph_query::neighborhood_over(q, id, depth),
-        None => editor
-            .kb
-            .store
-            .as_ref()
+        None => store
             .ok_or_else(|| "No KB store configured".to_string())?
             .neighborhood(id, depth),
     };
@@ -1980,11 +2055,7 @@ pub fn execute_kb_neighborhood(
             let resolve = |nid: &str| -> Option<mae_kb::Node> {
                 match query {
                     Some(q) => q.get(nid),
-                    None => editor
-                        .kb
-                        .store
-                        .as_ref()
-                        .and_then(|s| s.get_node(nid).ok().flatten()),
+                    None => store.and_then(|s| s.get_node(nid).ok().flatten()),
                 }
             };
             let kept_ids: std::collections::HashSet<&str> = subgraph
@@ -2036,31 +2107,10 @@ pub fn execute_kb_add_link(
         .ok_or_else(|| "Missing required argument: rel_type".to_string())?;
     let weight = args.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0);
 
-    // ADR-030: text is truth. Append the typed link into `src`'s body instead of
-    // writing cozo's `links` relation directly -- the previous implementation did
-    // exactly that (a direct store.add_typed_link call), producing a graph edge
-    // with no corresponding source text: lost on any KB rebuild/reimport, and
-    // per-peer divergent in collab mode since only the cozo projection changed,
-    // never the CRDT text every peer actually converges on. Routing through
-    // kb_update_node means this now round-trips through the same
-    // parse_typed_links + replace_node_links projection every other write path
-    // uses (fixed for the single-user case in the same change that added this).
-    // A storage failure reading the current body must abort the add-link (proceeding
-    // with a wrong/empty body would corrupt the node), not be conflated with the
-    // distinct "no such node" case (ADR-086 read-side twin: `?` propagates the real
-    // error; only a genuine `Ok(None)`/missing-body falls through to "No KB node").
-    let kb = kb_arg(args);
-    let current_body = match kb {
-        // From the KB the write names, so a duplicate id elsewhere never
-        // supplies the body the link is appended to.
-        Some(kb) => editor.kb_get_in(kb, src)?.map(|s| s.node.body),
-        None => node_json(editor, src)?
-            .and_then(|v| v.get("body").and_then(|b| b.as_str()).map(str::to_string)),
-    }
-    .ok_or_else(|| format!("No KB node: {}", src))?;
-    let link_line = format!("\n[[{dst}?rel={rel_type}&w={weight}][{dst}]]");
-    let new_body = format!("{current_body}{link_line}");
-    editor.kb_update_node_target(kb, src, None, Some(&new_body), None)?;
+    // ADR-030: text is truth: the link is appended to `src`'s body (see
+    // `Editor::kb_add_link_target`, shared with the `(kb-add-link!)` primitive),
+    // into the KB the call names, or the one holding `src`.
+    editor.kb_add_link_target(kb_arg(args), src, dst, rel_type, weight)?;
 
     Ok(serde_json::json!({
         "status": "ok",
@@ -2077,11 +2127,7 @@ pub fn execute_kb_raw_query(editor: &Editor, args: &serde_json::Value) -> Result
         .get("query")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required argument: query".to_string())?;
-    let store = editor
-        .kb
-        .store
-        .as_ref()
-        .ok_or_else(|| "No KB store configured".to_string())?;
+    let store = named_or_primary_store(editor, kb_arg(args))?;
     match store.raw_query(query) {
         Ok((headers, rows)) => {
             let out = serde_json::json!({
@@ -2256,6 +2302,22 @@ pub fn execute_kb_agenda(
     .map_err(|e| e.to_string())
 }
 
+/// The store a store-addressed tool (`kb_history`, `kb_restore`, `kb_raw_query`)
+/// acts on: the KB `kb` names, else the primary's. Never another KB's.
+fn named_or_primary_store<'a>(
+    editor: &'a Editor,
+    kb: Option<&str>,
+) -> Result<&'a dyn mae_kb::KbStore, String> {
+    match kb {
+        Some(name) => editor.kb_store_named(name),
+        None => editor
+            .kb
+            .store
+            .as_deref()
+            .ok_or_else(|| "No KB store configured".to_string()),
+    }
+}
+
 pub fn execute_kb_history(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
     let id = args
         .get("id")
@@ -2263,11 +2325,7 @@ pub fn execute_kb_history(editor: &Editor, args: &serde_json::Value) -> Result<S
         .ok_or_else(|| "Missing required argument: id".to_string())?;
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
 
-    let store = editor
-        .kb
-        .store
-        .as_ref()
-        .ok_or_else(|| "No KB store configured".to_string())?;
+    let store = named_or_primary_store(editor, kb_arg(args))?;
     let versions = store.node_history(id, limit).map_err(|e| e.to_string())?;
     let out: Vec<serde_json::Value> = versions
         .iter()
@@ -2301,11 +2359,7 @@ pub fn execute_kb_restore(editor: &Editor, args: &serde_json::Value) -> Result<S
         .and_then(|v| v.as_i64())
         .ok_or_else(|| "Missing required argument: version".to_string())?;
 
-    let store = editor
-        .kb
-        .store
-        .as_ref()
-        .ok_or_else(|| "No KB store configured".to_string())?;
+    let store = named_or_primary_store(editor, kb_arg(args))?;
     store
         .restore_version(id, version)
         .map_err(|e| e.to_string())?;

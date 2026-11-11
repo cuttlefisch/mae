@@ -18,7 +18,7 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
 use crate::doc_editors::{Authors, EditClock, EditStamp, EditorsSince, PendingChange, Writer};
-use crate::storage::{StorageBackend, StorageError};
+use crate::storage::{SeedNodeRow, SeedRecord, StorageBackend, StorageError};
 
 /// Built-in default for the per-update size gate (bytes), used when the operator
 /// has not set `[collab.sync] max_update_size_bytes` in `daemon.toml`. A fixed
@@ -355,6 +355,52 @@ impl DocStore {
         after_wal_id: u64,
     ) -> Result<EditorsSince, StorageError> {
         self.storage.editors_since_wal(doc_name, after_wal_id).await
+    }
+
+    /// A seeded KB's provenance record and node rows (see `seed::apply`).
+    pub async fn seed_record(
+        &self,
+        kb_id: &str,
+    ) -> Result<Option<(SeedRecord, Vec<SeedNodeRow>)>, StorageError> {
+        self.storage.seed_record(kb_id).await
+    }
+
+    /// One seeded node's row: its source path and git times.
+    pub async fn seed_node(
+        &self,
+        kb_id: &str,
+        node_id: &str,
+    ) -> Result<Option<SeedNodeRow>, StorageError> {
+        self.storage.seed_node(kb_id, node_id).await
+    }
+
+    /// Insert a seed record and its node rows atomically (see `StorageBackend`).
+    pub async fn seed_insert(
+        &self,
+        record: &SeedRecord,
+        nodes: &[SeedNodeRow],
+    ) -> Result<(), StorageError> {
+        self.storage.seed_insert(record, nodes).await
+    }
+
+    /// Record the WAL id of the write that installed a seeded node.
+    pub async fn seed_set_node_wal(
+        &self,
+        kb_id: &str,
+        node_id: &str,
+        wal: u64,
+    ) -> Result<(), StorageError> {
+        self.storage.seed_set_node_wal(kb_id, node_id, wal).await
+    }
+
+    /// Mark a seed complete.
+    pub async fn seed_complete(&self, kb_id: &str, applied_at: i64) -> Result<(), StorageError> {
+        self.storage.seed_complete(kb_id, applied_at).await
+    }
+
+    /// The largest WAL id `doc_name` has been written at; 0 if never.
+    pub async fn wal_high_water(&self, doc_name: &str) -> Result<u64, StorageError> {
+        self.storage.wal_high_water(doc_name).await
     }
 
     /// The ADR-113 author verdict for `doc_name` since `after_wal_id` — see

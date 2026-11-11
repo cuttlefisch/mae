@@ -37,6 +37,9 @@ use mae_sync::membership;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 
+#[path = "kb_query_node_fields.rs"]
+mod node_fields;
+
 /// Default cap on one `kb/query.get` body: the node size backstop
 /// (`[collab.sync] max_document_size_bytes`, ADR-109 D6), so a stock daemon
 /// returns every node whole — a reader renders a node, and refuses a
@@ -293,28 +296,21 @@ async fn get(
             // editor shows it without replicating its CRDT. Tolerant of a v1
             // document: what it does not carry reads as null / empty, and
             // `schema_v` says which it is.
-            let properties: serde_json::Map<String, Value> = doc
-                .properties()
-                .into_iter()
-                .map(|(k, v)| (k, Value::String(v)))
-                .collect();
-            Ok(json!({
-                "kb_id": kb_id,
-                "node_id": node_id,
-                "encryption": "none",
-                "schema_v": doc.schema_version(),
-                "version": doc.version(),
-                "title": doc.title(),
-                "kind": doc.kind(),
-                "todo_state": doc.todo_state(),
-                "priority": doc.priority(),
-                "aliases": doc.aliases(),
-                "properties": properties,
-                "body": body,
-                "body_truncated": truncated,
-                "tags": doc.tags(),
-                "links": doc.links(),
-            }))
+            let mut out = node_fields::node_fields(doc_store, kb_id, node_id, &doc).await;
+            out.extend(
+                json!({
+                    "kb_id": kb_id,
+                    "node_id": node_id,
+                    "encryption": "none",
+                    "body": body,
+                    "body_truncated": truncated,
+                    "links": doc.links(),
+                })
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            );
+            Ok(Value::Object(out))
         }
         Encryption::E2e => {
             // The daemon cannot decrypt this -- `state` IS the op-set
@@ -784,23 +780,9 @@ async fn list(
             Encryption::E2e => json!({"id": id, "version": opaque_version(&state)}),
             Encryption::None => match KbNodeDoc::from_bytes(&state) {
                 Ok(doc) => {
-                    let properties: serde_json::Map<String, Value> = doc
-                        .properties()
-                        .into_iter()
-                        .map(|(k, v)| (k, Value::String(v)))
-                        .collect();
-                    json!({
-                        "id": id,
-                        "version": doc.version(),
-                        "schema_v": doc.schema_version(),
-                        "title": doc.title(),
-                        "kind": doc.kind(),
-                        "todo_state": doc.todo_state(),
-                        "priority": doc.priority(),
-                        "aliases": doc.aliases(),
-                        "properties": properties,
-                        "tags": doc.tags(),
-                    })
+                    let mut fields = node_fields::node_fields(doc_store, kb_id, &id, &doc).await;
+                    fields.insert("id".into(), json!(id));
+                    Value::Object(fields)
                 }
                 // No manifest title here: it is a stale creation-time hint
                 // (see `titles`), and a reader would show it as the node's.

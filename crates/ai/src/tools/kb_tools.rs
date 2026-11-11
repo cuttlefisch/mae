@@ -3,6 +3,12 @@ use crate::types::*;
 /// The `kb` argument of the KB write tools.
 const KB_TARGET: &str = "Target KB by name (`local` = the local KB). Required when the id exists in more than one KB; an unknown or unloaded KB is an error, never a fallback to another KB.";
 
+/// The `kb` argument of the KB read tools that resolve a node id.
+const KB_READ_TARGET: &str = "Read from this KB only (a registered KB's name, `local` = the local KB). Without it the id is resolved across all KBs and an id that exists in several is refused, listing them; an unknown or unloaded KB is an error, never a fallback to another KB.";
+
+/// The `kb` argument of tools that act on one KB's store.
+const KB_STORE_TARGET: &str = "Act on this KB's store (a registered KB's name, `local` = the local KB). Without it the local KB's store is used; an unknown or unloaded KB is an error, never a fallback to another KB.";
+
 use super::tool_def::ToolDefBuilder;
 
 /// Knowledge base tool definitions: get, search, list, links, graph, help, org.
@@ -51,6 +57,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "Outgoing links from a node — the targets of its body's [[link]] markers, in document order (deduplicated). Errors if the node doesn't exist.",
         )
         .prop("id", "string", "Source node id")
+        .prop("kb", "string", KB_READ_TARGET)
         .required(["id"])
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -59,6 +66,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "Incoming links — ids of all KB nodes whose body references this target. Works even if the target node doesn't exist yet (dangling backlinks).",
         )
         .prop("id", "string", "Target node id (may be dangling)")
+        .prop("kb", "string", KB_READ_TARGET)
         .required(["id"])
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -68,6 +76,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         )
         .prop("id", "string", "Seed node id")
         .prop("depth", "integer", "Hop radius (default 1, clamped to 3)")
+        .prop("kb", "string", KB_READ_TARGET)
         .required(["id"])
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -77,6 +86,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         )
         .prop("id", "string", "Seed node id")
         .prop("limit", "integer", "Max related nodes to return (default 10)")
+        .prop("kb", "string", KB_READ_TARGET)
         .required(["id"])
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -87,6 +97,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         )
         .prop("id", "string", "KB node id to center the graph on")
         .prop("depth", "integer", "Hop radius (default: kb_graph_default_depth option)")
+        .prop("kb", "string", KB_READ_TARGET)
         .permission(PermissionTier::ReadOnly)
         .build(),
         ToolDefBuilder::new("kb_graph_view_close", "Close the native KB graph view, if open.")
@@ -170,6 +181,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "Show the KB-link hover preview popup for a node id, anchored at the current cursor position — same popup shown by the human's cursor-hover/K-keybinding trigger. `id` doesn't need to be the target of a link under the cursor. Scoped to KB-view-mode buffers. Returns the popup's rendered content (title + noise-stripped, truncated body).",
         )
         .prop("id", "string", "KB node id to preview")
+        .prop("kb", "string", KB_READ_TARGET)
         .required(["id"])
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -333,6 +345,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         )
         .prop("from", "string", "Source node id")
         .prop("to", "string", "Target node id")
+        .prop("kb", "string", KB_READ_TARGET)
         .required(["from", "to"])
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -342,6 +355,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         )
         .prop("id", "string", "Seed node id")
         .prop("depth", "integer", "Hop radius (default 2, max 5)")
+        .prop("kb", "string", KB_READ_TARGET)
         .required(["id"])
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -376,6 +390,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "Execute a raw query on the KB store backend. CozoDB: Datalog syntax. SQLite: SQL. Returns {headers: [...], rows: [[...]]}. Use with caution — no schema validation.",
         )
         .prop("query", "string", "Query string (Datalog for CozoDB, SQL for SQLite)")
+        .prop("kb", "string", KB_STORE_TARGET)
         .required(["query"])
         .permission(PermissionTier::Privileged)
         .build(),
@@ -581,6 +596,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         )
         .prop("id", "string", "Node ID to get history for")
         .prop("limit", "integer", "Max versions to return (default 10)")
+        .prop("kb", "string", KB_STORE_TARGET)
         .required(["id"])
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -590,6 +606,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         )
         .prop("id", "string", "Node ID to restore")
         .prop("version", "integer", "Version number to restore to")
+        .prop("kb", "string", KB_STORE_TARGET)
         .required(["id", "version"])
         .permission(PermissionTier::Write)
         .build(),
@@ -598,6 +615,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "Promote a federated/imported KB node into the primary CozoDB-backed KB by id (#303) — severs its dependency on the origin org file/instance, so it becomes a fully graph-native node. The origin instance's now-redundant copy is deduplicated automatically when content still matches (or preserved + flagged for manual review if it has since diverged).",
         )
         .prop("id", "string", "Node ID to promote")
+        .prop("kb", "string", KB_TARGET)
         .required(["id"])
         .permission(PermissionTier::Write)
         .build(),
@@ -654,6 +672,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "Export a KB subgraph (a seed/anchor node plus its neighborhood) to ONE self-contained, standalone HTML file — no external network requests, works fully offline in a browser. BFS from `id` out to `depth` hops (default/ceiling configurable via kb_export_default_depth/kb_export_max_depth editor options, factory defaults 2/4) capped at `node_cap` reachable nodes (default/ceiling configurable via kb_export_default_node_cap/kb_export_max_node_cap, factory defaults 60/200 — the returned status says explicitly if any were hidden by this cap, never a silent truncation), laid out as a compact chord ring (nodes on a circle, edges as interior arcs) in a sidebar nav widget alongside a collapsible per-node outline; the main content area shows the selected node's full rendered body. Optional `required_tag` hard-filters the exported node set to only nodes carrying that exact tag (plus the seed itself, regardless of its own tags) — BFS still traverses through untagged nodes to reach tagged ones beyond them, but only tagged nodes are included in the output; the returned status reports how many reachable nodes this excluded, same never-silent-truncation convention as `node_cap` (see ADR-082). The chord diagram's layout/timing constants (hover-growth amount, wedge rounding, animation speed, etc.) are also configurable, persistently via the kb_export_* editor options or per-call via `chord_config` — see that parameter's own description; every option's factory default reproduces this tool's original hardcoded behavior exactly. The anchor node gets distinct styling, a persistent Home button, and a Previous/Next reading-order walk (follows an authored `* Reading Order` Previous/Next chain in a node's body when present, falling back to BFS-distance order otherwise). A header search box does fuzzy jump-to-node, and a tag-filter picker dims non-matching chord nodes. Click a node (in the chord ring, the outline, or an in-body link) to view it; hovering a chord node OR an in-body link shows a title+excerpt preview popover. Optional `translations` JSON overlay ({id: {title_es, body_es}}) adds an instant EN/ES toggle — omit it and the page just shows EN with the toggle hidden. Optional `guidance_ids` always includes those specific nodes (regardless of BFS reachability) in a distinct \"About this guide\" colophon section — e.g. a writing-style standard or a translation-provenance disclosure. `#+begin_src mermaid` blocks in node bodies are pre-rendered to inline SVG, themed to match the page. Fails with a clear error if `id` doesn't resolve anywhere in the KB, or if `translations` is given but unreadable/malformed.",
         )
         .prop("id", "string", "Seed/anchor node id to center the export on")
+        .prop("kb", "string", KB_READ_TARGET)
         .prop("path", "string", "Output HTML file path (absolute, or relative to the project root)")
         .prop("depth", "integer", "BFS hop radius from the seed (default/ceiling from kb_export_default_depth/kb_export_max_depth, factory defaults 2/4)")
         .prop(

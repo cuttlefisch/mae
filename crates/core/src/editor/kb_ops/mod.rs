@@ -220,6 +220,7 @@ mod nodes;
 pub(crate) mod registry;
 mod remote_hub;
 pub(crate) mod retire;
+mod scoped;
 mod search;
 pub(crate) mod stale_archive;
 mod sync;
