@@ -44,6 +44,18 @@ impl Editor {
     /// in-memory insert, matching how every other primary-node write in
     /// this codebase already behaves.
     pub fn kb_promote_node(&mut self, node_id: &str) -> Result<KbPromoteResult, String> {
+        self.kb_promote_node_from(None, node_id)
+    }
+
+    /// [`Editor::kb_promote_node`] from the KB named `kb`, which must be a
+    /// loaded instance holding the node. Without one, a node held by more than
+    /// one instance is refused rather than promoted from whichever a hash map
+    /// yields first.
+    pub fn kb_promote_node_from(
+        &mut self,
+        kb: Option<&str>,
+        node_id: &str,
+    ) -> Result<KbPromoteResult, String> {
         self.kb_write_blocked()?;
         // Promotion writes into the primary store, which is read first: the
         // same shadowing risk as a create (an agent writes an org file with a
@@ -53,13 +65,7 @@ impl Editor {
         if self.kb.primary.contains(node_id) {
             return Err(format!("'{}' is already in the primary KB", node_id));
         }
-        let owner_uuid = self
-            .kb
-            .instances
-            .iter()
-            .find(|(_, kb)| kb.contains(node_id))
-            .map(|(uuid, _)| uuid.clone())
-            .ok_or_else(|| format!("No KB node: {}", node_id))?;
+        let owner_uuid = self.kb_promote_source(kb, node_id)?;
         // Promotion deletes the instance copy (and its manifest entry) when it
         // matches, and writes a MAE-format copy into the primary: both ends write.
         self.kb_refuse_foreign_body_format(&Some(owner_uuid.clone()))?;
@@ -241,6 +247,39 @@ impl Editor {
             Some(name) => {
                 let owner = self.kb_resolve_target(name)?;
                 self.kb_create_node_in(owner, id, title, body, kind)
+            }
+        }
+    }
+
+    /// The instance a promote of `node_id` takes the node from: the one named,
+    /// which must hold it, else the only instance that does.
+    fn kb_promote_source(&self, kb: Option<&str>, node_id: &str) -> Result<String, String> {
+        if let Some(name) = kb {
+            let owner = self.kb_resolve_target(name)?.ok_or_else(|| {
+                format!("'{node_id}' is already in the primary KB; promote copies from an instance")
+            })?;
+            return match self.kb.instances.get(&owner) {
+                Some(inst) if inst.contains(node_id) => Ok(owner),
+                _ => Err(format!("No KB node '{node_id}' in KB '{name}'")),
+            };
+        }
+        let holders: Vec<&String> = self
+            .kb
+            .instances
+            .iter()
+            .filter(|(_, kb)| kb.contains(node_id))
+            .map(|(uuid, _)| uuid)
+            .collect();
+        match holders.as_slice() {
+            [] => Err(format!("No KB node: {node_id}")),
+            [one] => Ok((*one).clone()),
+            _ => {
+                self.kb_refuse_ambiguous_id(node_id, "promote")?;
+                // Unreachable in practice (>1 instance holder is >1 holder);
+                // refuse rather than guess if the two counts ever disagree.
+                Err(format!(
+                    "'{node_id}' exists in several KBs; name the one to promote"
+                ))
             }
         }
     }
@@ -609,6 +648,23 @@ impl Editor {
     /// value written through the existing update path.
     pub fn kb_set_role(&mut self, id: &str, role: &str) -> Result<String, String> {
         self.kb_set_role_target(None, id, role)
+    }
+
+    /// Add a typed link `src -> dst` by appending it to `src`'s body (ADR-030:
+    /// text is truth; the graph edge is a projection of it), in the KB named
+    /// `kb`, which must hold `src`. Without one, a `src` held by more than one
+    /// KB is refused. The one add-link path: the `kb_add_link` MCP tool and the
+    /// `(kb-add-link!)` Scheme primitive both land here.
+    pub fn kb_add_link_target(
+        &mut self,
+        kb: Option<&str>,
+        src: &str,
+        dst: &str,
+        rel_type: &str,
+        weight: f64,
+    ) -> Result<(), String> {
+        let link_line = format!("\n[[{dst}?rel={rel_type}&w={weight}][{dst}]]");
+        self.kb_update_node_with_target(kb, src, |node| node.body.push_str(&link_line))
     }
 
     /// [`Editor::kb_set_role`] in the KB named `kb`, which must hold `id`.
