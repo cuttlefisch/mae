@@ -644,14 +644,19 @@ pub async fn operator_change_membership(
         } => (member, true, role, label),
         OperatorMemberOp::Remove { member } => (member, false, SyncRole::Viewer, ""),
     };
-    if !member.starts_with("SHA256:") {
-        return Err(format!("'{member}' is not a key fingerprint (SHA256:…)"));
+    if !is_key_fingerprint(member) {
+        return Err(format!(
+            "'{member}' is not a key fingerprint (SHA256: and the unpadded base64 of 32 bytes)"
+        ));
     }
     if member == owner {
         return Err("the owner's own membership is not changed here".into());
     }
     if add && !matches!(role, SyncRole::Viewer | SyncRole::Editor) {
         return Err("the role must be viewer or editor".into());
+    }
+    if !add && coll.role_of(member).is_none() {
+        return Err(format!("'{member}' is not a member of KB '{kb_id}'"));
     }
     let broadcaster: SharedBroadcaster = Default::default();
     let who = (0, Attribution::Internal(InternalWriter::OperatorMembership));
@@ -664,13 +669,32 @@ pub async fn operator_change_membership(
     let result = apply_membership_change(doc_store, &broadcaster, who, kb_id, change)
         .await
         .map_err(|e| e.message)?;
+    // The only way here is a storage write failing just after the roles write
+    // succeeded (owner and signer were checked first). Re-running the same
+    // command is idempotent and appends the missing op
+    // (`a_rerun_completes_and_changes_nothing_else`).
     if result["signed_oplog"] != true {
         return Err(format!(
-            "membership applied to the roles, but NOT to the signed op-log: {}",
+            "the roles were changed but the signed op-log was NOT ({}); re-run the same \
+             command to complete it",
             result["warning"]
         ));
     }
     Ok(result)
+}
+
+/// `SHA256:` followed by the unpadded standard base64 of a 32-byte digest,
+/// exactly as `PublicKey::fingerprint` writes it: 43 characters of the
+/// standard alphabet, the last carrying 4 bits of the digest and 2 zero bits.
+fn is_key_fingerprint(s: &str) -> bool {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let Some(b) = s.strip_prefix("SHA256:").map(str::as_bytes) else {
+        return false;
+    };
+    let value = |c: &u8| ALPHABET.iter().position(|a| a == c);
+    b.len() == 43
+        && b.iter().all(|c| value(c).is_some())
+        && value(&b[42]).is_some_and(|v| v & 0b11 == 0)
 }
 
 /// `mae-daemon kb member list`: the KB's owner and its members with roles.

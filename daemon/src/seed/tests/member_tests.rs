@@ -120,6 +120,29 @@ async fn refusals_write_nothing() {
             },
             "fingerprint",
         ),
+        (
+            &daemon,
+            OperatorMemberOp::Add {
+                member: "SHA256:",
+                role: Role::Viewer,
+                label: "",
+            },
+            "fingerprint",
+        ),
+        (
+            &daemon,
+            OperatorMemberOp::Add {
+                member: "SHA256:abc def",
+                role: Role::Viewer,
+                label: "",
+            },
+            "fingerprint",
+        ),
+        (
+            &daemon,
+            OperatorMemberOp::Remove { member: &member },
+            "not a member",
+        ),
     ];
     for (op_id, op, want) in cases {
         let e = operator_change_membership(&store, op_id, KB, op)
@@ -141,4 +164,92 @@ async fn refusals_write_nothing() {
     .unwrap_err();
     assert!(e.contains("no-such-kb"), "{e}");
     assert_eq!(operator_list_members(&store, KB).await.unwrap(), before);
+}
+
+/// The recovery the error message promises: re-running an add or a remove
+/// completes it (signed op-log included) and changes nothing else. Kills a
+/// re-run that fails, demotes, or leaves the member's access wrong.
+#[tokio::test]
+async fn a_rerun_completes_and_changes_nothing_else() {
+    let r = fixture_repo(&fixture_files());
+    let (store, daemon, _) = seeded(&r).await;
+    let editor_a = Identity::generate("editor-a");
+    let fp = editor_a.fingerprint();
+    for _ in 0..2 {
+        let add = OperatorMemberOp::Add {
+            member: &fp,
+            role: Role::Editor,
+            label: "a",
+        };
+        let out = operator_change_membership(&store, &daemon, KB, add)
+            .await
+            .unwrap();
+        assert_eq!(out["signed_oplog"], true);
+    }
+    let (_, members) = operator_list_members(&store, KB).await.unwrap();
+    let mine: Vec<_> = members.iter().filter(|(m, _)| m == &fp).collect();
+    assert_eq!(
+        mine,
+        vec![&(fp.clone(), "editor".to_string())],
+        "once, as editor"
+    );
+    assert!(reads(&store, &editor_a).await);
+    operator_change_membership(
+        &store,
+        &daemon,
+        KB,
+        OperatorMemberOp::Remove { member: &fp },
+    )
+    .await
+    .unwrap();
+    let e = operator_change_membership(
+        &store,
+        &daemon,
+        KB,
+        OperatorMemberOp::Remove { member: &fp },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        e.contains("not a member"),
+        "a second remove is refused, not re-signed: {e}"
+    );
+    assert!(!reads(&store, &editor_a).await);
+}
+
+/// Every real fingerprint is accepted, so the shape check never refuses a
+/// genuine member (64 generated keys); near-misses are refused.
+#[tokio::test]
+async fn the_fingerprint_shape_accepts_every_real_key() {
+    let r = fixture_repo(&fixture_files());
+    let (store, daemon, _) = seeded(&r).await;
+    for i in 0..64 {
+        let fp = Identity::generate(&format!("k{i}")).fingerprint();
+        let add = OperatorMemberOp::Add {
+            member: &fp,
+            role: Role::Viewer,
+            label: "",
+        };
+        operator_change_membership(&store, &daemon, KB, add)
+            .await
+            .unwrap_or_else(|e| panic!("{fp}: {e}"));
+    }
+    let real = Identity::generate("x").fingerprint();
+    for bad in [
+        format!("{real}A"),
+        real[..real.len() - 1].to_string(),
+        real.replace('S', "s"),
+    ] {
+        let add = OperatorMemberOp::Add {
+            member: &bad,
+            role: Role::Viewer,
+            label: "",
+        };
+        assert!(
+            operator_change_membership(&store, &daemon, KB, add)
+                .await
+                .is_err(),
+            "{bad}"
+        );
+    }
 }
