@@ -200,56 +200,20 @@ impl Editor {
                 true
             }
             "kb-create" => {
-                match args.map(str::trim).filter(|s| !s.is_empty()) {
-                    None => self.set_status("Usage: :kb-create <title> or :kb-create <id> <title>"),
-                    Some(input) => {
-                        let parts: Vec<&str> = input.splitn(2, ' ').collect();
-                        if parts.len() == 2 && (parts[0].contains(':') || !parts[0].contains(' ')) {
-                            // Legacy: explicit id + title
-                            let id = parts[0];
-                            let title = parts[1].trim();
-                            match self.kb_create_node(id, title, "", mae_kb::NodeKind::Note) {
-                                Ok(()) => {}
-                                Err(e) => self.set_status(e),
-                            }
-                        } else {
-                            // New: title-only, auto-generate ID
-                            match self.kb_create_note_from_title(input) {
-                                Ok(_) => {}
-                                Err(e) => self.set_status(e),
-                            }
-                        }
-                    }
-                }
+                self.ex_kb_create(args.unwrap_or(""));
                 true
             }
             "kb-update" => {
-                // `:kb-update <id> <body…>` — replace a node's BODY (everything after
-                // the id). A scriptable content edit (parity with the AI `kb_update`
+                // `:kb-update [--kb=NAME] <id> <body…>` — replace a node's BODY (everything
+                // after the id). A scriptable content edit (parity with the AI `kb_update`
                 // tool); on a shared E2e KB the resulting kb/node_update SEALS
                 // (ADR-037). Title/tags unchanged. Used by the encrypted-lifecycle e2e
                 // to plant a canary in sealed content.
-                match args.map(str::trim).filter(|s| !s.is_empty()) {
-                    None => self.set_status("Usage: :kb-update <id> <body>"),
-                    Some(input) => {
-                        let (id, body) =
-                            input.split_once(char::is_whitespace).unwrap_or((input, ""));
-                        match self.kb_update_node(id.trim(), None, Some(body.trim()), None) {
-                            Ok(()) => {}
-                            Err(e) => self.set_status(e),
-                        }
-                    }
-                }
+                self.ex_kb_update(args.unwrap_or(""));
                 true
             }
             "kb-delete" => {
-                match args.map(str::trim).filter(|s| !s.is_empty()) {
-                    None => self.set_status("Usage: :kb-delete <id>"),
-                    Some(id) => match self.kb_delete_node(id) {
-                        Ok(()) => {}
-                        Err(e) => self.set_status(e),
-                    },
-                }
+                self.ex_kb_delete(args.unwrap_or(""));
                 true
             }
             "kb-register" => {

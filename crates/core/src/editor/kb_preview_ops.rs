@@ -32,15 +32,37 @@ impl Editor {
     /// federated KB.
     pub(crate) fn fetch_kb_preview_content(&self, id: &str) -> Option<(String, String)> {
         let node = self.kb_for_node(id).and_then(|kb| kb.get(id))?;
-        let title = node.title.clone();
+        Some(self.preview_content_of(node))
+    }
+
+    /// A node's preview `(title, body)`: noise stripped, truncated to
+    /// `kb_preview_max_lines`.
+    fn preview_content_of(&self, node: &mae_kb::Node) -> (String, String) {
         let filtered = super::help_ops::strip_kb_body_noise(&node.body);
-        let max_lines = self.kb_preview_max_lines;
         let body: String = filtered
             .lines()
-            .take(max_lines)
+            .take(self.kb_preview_max_lines)
             .collect::<Vec<_>>()
             .join("\n");
-        Some((title, body))
+        (node.title.clone(), body)
+    }
+
+    /// [`Editor::kb_preview_show`] for the node `id` of the KB `kb` names (else
+    /// of the KB holding it, refusing an id several KBs hold). Unlike the bare
+    /// form, a miss is an error rather than a status-line note.
+    pub fn kb_preview_show_in(&mut self, kb: Option<&str>, id: &str) -> Result<(), String> {
+        let Some(name) = kb else {
+            self.kb_read_scope(id, None)?;
+            self.kb_preview_show(id);
+            return Ok(());
+        };
+        self.kb_read_scope(id, Some(name))?;
+        let node = self
+            .kb_get_in(name, id)?
+            .ok_or_else(|| format!("No KB node '{id}' in KB '{name}'"))?
+            .node;
+        let content = self.preview_content_of(&node);
+        self.show_kb_preview_content(content)
     }
 
     /// The active (focused window's) buffer's KB preview popup, if any.
@@ -145,10 +167,20 @@ impl Editor {
             self.set_status("kb-preview-show: not in a KB buffer");
             return;
         }
-        let Some((title, body)) = self.fetch_kb_preview_content(id) else {
+        let Some(content) = self.fetch_kb_preview_content(id) else {
             self.set_status(format!("kb-preview-show: no such KB node: {}", id));
             return;
         };
+        let _ = self.show_kb_preview_content(content);
+    }
+
+    /// Put `(title, body)` in the active KB buffer's preview popup, anchored at
+    /// the cursor. Errors when the active buffer is not a KB buffer.
+    fn show_kb_preview_content(&mut self, (title, body): (String, String)) -> Result<(), String> {
+        let buf_idx = self.active_buffer_idx();
+        if self.buffers.get(buf_idx).map(|b| b.kind) != Some(BufferKind::Kb) {
+            return Err("kb-preview-show: not in a KB buffer".to_string());
+        }
         let (row, col) = {
             let win = self.window_mgr.focused_window();
             (win.cursor_row, win.cursor_col)
@@ -167,6 +199,7 @@ impl Editor {
             view.kb_preview_suppressed_at = None;
         }
         self.set_status("[KB] K to scroll, any key to dismiss");
+        Ok(())
     }
 
     /// Dismiss the KB preview popup on the active buffer, if any — and

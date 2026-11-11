@@ -17,6 +17,10 @@ use crate::doc_editors::{EditStamp, EditorsSince};
 
 #[path = "storage_editor_record.rs"]
 mod editor_record;
+#[path = "storage_seed_record.rs"]
+mod seed_record;
+
+pub use seed_record::{SeedNodeRow, SeedRecord};
 
 /// Errors from storage operations.
 #[derive(Debug)]
@@ -157,6 +161,56 @@ pub trait StorageBackend: Send + Sync {
     async fn remove_block(&self, _kb_id: &str, _principal: &str) -> Result<(), StorageError> {
         Ok(())
     }
+
+    /// A seeded KB's provenance and node rows (`seed::apply`), if it has any.
+    ///
+    /// The seed methods have no silent default: a backend without the tables
+    /// answers an error, never "not seeded", which would let an apply treat an
+    /// existing seed as absent.
+    async fn seed_record(
+        &self,
+        _kb_id: &str,
+    ) -> Result<Option<(SeedRecord, Vec<SeedNodeRow>)>, StorageError> {
+        Err(no_seed_tables())
+    }
+
+    /// One seeded node's row.
+    async fn seed_node(
+        &self,
+        _kb_id: &str,
+        _node_id: &str,
+    ) -> Result<Option<SeedNodeRow>, StorageError> {
+        Err(no_seed_tables())
+    }
+
+    /// Insert a seed record (not yet applied) and its node rows atomically;
+    /// an error, writing nothing, if the KB already has one.
+    async fn seed_insert(
+        &self,
+        _record: &SeedRecord,
+        _nodes: &[SeedNodeRow],
+    ) -> Result<(), StorageError> {
+        Err(no_seed_tables())
+    }
+
+    /// Record the WAL id of the write that installed a seeded node.
+    async fn seed_set_node_wal(
+        &self,
+        _kb_id: &str,
+        _node_id: &str,
+        _wal: u64,
+    ) -> Result<(), StorageError> {
+        Err(no_seed_tables())
+    }
+
+    /// Mark a seed complete.
+    async fn seed_complete(&self, _kb_id: &str, _applied_at: i64) -> Result<(), StorageError> {
+        Err(no_seed_tables())
+    }
+}
+
+fn no_seed_tables() -> StorageError {
+    StorageError::Sqlite("this storage backend has no seed record".into())
 }
 
 /// Sharded SQLite connection pool.
@@ -221,6 +275,7 @@ impl SqlitePool {
                      );",
                 )?;
                 editor_record::ensure_schema(&conn)?;
+                seed_record::ensure_schema(&conn)?;
                 // ADR-032 A5: migrate snapshot tables created before the integrity
                 // hash column. Errors (duplicate column on a fresh table) are ignored.
                 let _ =
@@ -261,6 +316,7 @@ impl SqlitePool {
              );",
         )?;
         editor_record::ensure_schema(&conn)?;
+        seed_record::ensure_schema(&conn)?;
         Ok(SqlitePool {
             shards: vec![std::sync::Mutex::new(conn)],
         })
@@ -385,6 +441,43 @@ impl StorageBackend for SqliteBackend {
     async fn forget_editors(&self, doc_name: &str) -> Result<(), StorageError> {
         let conn = self.pool.lock_shard(doc_name);
         Ok(editor_record::forget(&conn, doc_name)?)
+    }
+
+    async fn seed_record(
+        &self,
+        kb_id: &str,
+    ) -> Result<Option<(SeedRecord, Vec<SeedNodeRow>)>, StorageError> {
+        seed_record::load(&self.pool.lock_primary(), kb_id)
+    }
+
+    async fn seed_node(
+        &self,
+        kb_id: &str,
+        node_id: &str,
+    ) -> Result<Option<SeedNodeRow>, StorageError> {
+        let rows = seed_record::load_nodes(&self.pool.lock_primary(), kb_id, Some(node_id))?;
+        Ok(rows.into_iter().next())
+    }
+
+    async fn seed_insert(
+        &self,
+        record: &SeedRecord,
+        nodes: &[SeedNodeRow],
+    ) -> Result<(), StorageError> {
+        seed_record::insert(&self.pool.lock_primary(), record, nodes)
+    }
+
+    async fn seed_set_node_wal(
+        &self,
+        kb_id: &str,
+        node_id: &str,
+        wal: u64,
+    ) -> Result<(), StorageError> {
+        seed_record::set_node_wal(&self.pool.lock_primary(), kb_id, node_id, wal)
+    }
+
+    async fn seed_complete(&self, kb_id: &str, applied_at: i64) -> Result<(), StorageError> {
+        seed_record::complete(&self.pool.lock_primary(), kb_id, applied_at)
     }
 
     async fn load_document(&self, doc_name: &str) -> Result<Option<DocumentState>, StorageError> {

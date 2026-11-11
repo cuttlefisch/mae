@@ -1126,8 +1126,8 @@ pub(crate) const SCHEME_API_FUNCTIONS: &[(&str, &str, &str, &str, &str)] = &[
         // KB authoring
         (
             "kb-add-link!",
-            "(kb-add-link! SOURCE-ID TARGET-ID REL-TYPE)",
-            "Add a typed link from SOURCE-ID to TARGET-ID with relationship REL-TYPE (e.g. \"references\", \"implements\").",
+            "(kb-add-link! SOURCE-ID TARGET-ID REL-TYPE [KB])",
+            "Add a typed link from SOURCE-ID to TARGET-ID with relationship REL-TYPE (e.g. \"references\", \"implements\"). The link is appended to SOURCE-ID's body, as the kb_add_link tool does. Optional KB names the KB holding SOURCE-ID (required when the id exists in several; an unknown or unloaded KB is an error).",
             "(kb-add-link! \"concept:buffer\" \"concept:window\" \"references\")",
             "kb-authoring",
         ),
@@ -1175,8 +1175,8 @@ pub(crate) const SCHEME_API_FUNCTIONS: &[(&str, &str, &str, &str, &str)] = &[
         ),
         (
             "kb-set-role",
-            "(kb-set-role NODE-ID ROLE)",
-            "Set KB node NODE-ID's molecular-note classification ROLE: \"source\" | \"atom\" | \"molecule\" | \"hub\" (Source→Atom→Molecule→Hub).",
+            "(kb-set-role NODE-ID ROLE [KB])",
+            "Set KB node NODE-ID's molecular-note classification ROLE: \"source\" | \"atom\" | \"molecule\" | \"hub\" (Source→Atom→Molecule→Hub). Optional KB names the KB holding the node (required when the id exists in several; an unknown or unloaded KB is an error).",
             "(kb-set-role \"concept:buffer\" \"hub\")",
             "kb-authoring",
         ),

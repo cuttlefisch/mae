@@ -2115,4 +2115,4 @@ async fn handle_sync_tool(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
