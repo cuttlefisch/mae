@@ -357,8 +357,8 @@ proptest! {
         for (i, head) in heads.iter().enumerate().take(titles.len()) {
             let href = href_of(&out, &format!("lk{i}"));
             // A title with no letter or digit once rendered (only a hidden
-            // src block) has the bare `h` anchor, which no fragment names.
-            if head == "h" || head.starts_with("h--") {
+            // src block) has the `h--untitled` anchor, which no fragment names.
+            if head.starts_with("h--untitled") {
                 prop_assert_eq!(href, "#id-n");
                 continue;
             }
