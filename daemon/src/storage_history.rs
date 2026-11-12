@@ -90,6 +90,19 @@ pub(super) fn holds_content(conn: &sqlite::Connection, kb_id: &str) -> Result<bo
     Ok(matches!(stmt.next()?, sqlite::State::Row))
 }
 
+/// The nodes of `kb_id` that have history, sorted.
+pub(super) fn nodes(conn: &sqlite::Connection, kb_id: &str) -> Result<Vec<String>, StorageError> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT node_id FROM kb_node_history WHERE kb_id = ?1 ORDER BY node_id",
+    )?;
+    stmt.bind((1, kb_id))?;
+    let mut out = Vec::new();
+    while let sqlite::State::Row = stmt.next()? {
+        out.push(stmt.read::<String, _>(0)?);
+    }
+    Ok(out)
+}
+
 /// Every entry of the node, in `seq` order.
 pub(super) fn list(
     conn: &sqlite::Connection,

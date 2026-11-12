@@ -68,6 +68,9 @@ impl StorageBackend for ArmedBackend {
     async fn history_holds_content(&self, kb: &str) -> Result<bool, StorageError> {
         self.inner.history_holds_content(kb).await
     }
+    async fn history_nodes(&self, kb: &str) -> Result<Vec<String>, StorageError> {
+        self.inner.history_nodes(kb).await
+    }
     async fn forget_editors(&self, doc: &str) -> Result<(), StorageError> {
         self.inner.forget_editors(doc).await
     }

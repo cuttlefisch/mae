@@ -64,6 +64,21 @@ pub enum Broken {
     Head,
 }
 
+impl Broken {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Seq => "seq",
+            Self::Ids => "ids",
+            Self::Link => "link",
+            Self::EntryHash => "entry_hash",
+            Self::Content => "content",
+            Self::ContentHash => "content_hash",
+            Self::Shape => "shape",
+            Self::Head => "head",
+        }
+    }
+}
+
 /// The entry `draft` makes as the next version of `node_id` in `kb_id`, after
 /// `prev` (`None` for the node's first).
 pub fn seal(

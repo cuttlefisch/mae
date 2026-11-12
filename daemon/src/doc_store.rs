@@ -449,6 +449,11 @@ impl DocStore {
         self.storage.history_holds_content(kb_id).await
     }
 
+    /// The nodes of `kb_id` that have history, sorted (ADR-116).
+    pub async fn history_nodes(&self, kb_id: &str) -> Result<Vec<String>, StorageError> {
+        self.storage.history_nodes(kb_id).await
+    }
+
     /// Every version of a KB node, in `seq` order (ADR-116).
     pub async fn history_list(
         &self,

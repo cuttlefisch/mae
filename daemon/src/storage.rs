@@ -141,6 +141,9 @@ pub trait StorageBackend: Send + Sync {
     /// Whether any version in `kb_id`'s history still holds content.
     async fn history_holds_content(&self, kb_id: &str) -> Result<bool, StorageError>;
 
+    /// The nodes of `kb_id` that have history, sorted.
+    async fn history_nodes(&self, kb_id: &str) -> Result<Vec<String>, StorageError>;
+
     /// Every entry of a KB node's history, in `seq` order.
     async fn history_list(
         &self,
@@ -396,6 +399,13 @@ pub struct SqliteBackend {
 }
 
 impl SqliteBackend {
+    /// Run raw SQL against the database, for tests that play someone with
+    /// write access to `state.db` (ADR-116 P3: tampering must be detected).
+    #[cfg(test)]
+    pub(crate) fn execute_for_test(&self, sql: &str) {
+        self.pool.lock_primary().execute(sql).expect("test SQL");
+    }
+
     /// Open or create the SQLite database at the given path (default 4 shards).
     pub fn open(path: &Path) -> Result<Self, StorageError> {
         Self::open_with_pool_size(path, 4)
@@ -511,6 +521,10 @@ impl StorageBackend for SqliteBackend {
 
     async fn history_holds_content(&self, kb_id: &str) -> Result<bool, StorageError> {
         history::holds_content(&self.pool.lock_primary(), kb_id)
+    }
+
+    async fn history_nodes(&self, kb_id: &str) -> Result<Vec<String>, StorageError> {
+        history::nodes(&self.pool.lock_primary(), kb_id)
     }
 
     async fn history_list(

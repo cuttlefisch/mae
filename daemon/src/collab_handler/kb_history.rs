@@ -1,9 +1,11 @@
 //! ADR-116 D7: the version-history methods. `kb/history.checkpoint` cuts a
 //! named version (D2.3).
 
+use super::method_authz::Method;
 use super::*;
 use crate::storage::StorageError;
-use mae_sync::kb::history::{HistoryEntry, VersionKind};
+use mae_sync::kb::history::{kb_head, verify_chain, HistoryEntry, VersionKind};
+use mae_sync::kb::MaterializedNode;
 
 /// The longest name a version may carry, in characters.
 const MAX_NAME_CHARS: usize = 200;
@@ -60,40 +62,14 @@ fn checkpoint_params(params: &serde_json::Value) -> Result<(String, String, Stri
 /// content the daemon cannot read. The requester is recorded in the
 /// version's summary: naming is an act, not an edit, so it does not make them
 /// one of the version's editors.
-pub(super) async fn checkpoint(
+async fn checkpoint(
     doc_store: &DocStore,
     auth_principal: Option<&str>,
     transport: Transport,
-    id: serde_json::Value,
     params: &serde_json::Value,
-) -> JsonRpcResponse {
-    let (kb_id, node_id, name) = match checkpoint_params(params) {
-        Ok(p) => p,
-        Err(e) => return JsonRpcResponse::error(id, e),
-    };
-    let coll = load_collection(doc_store, &kb_id).await.ok();
-    let decision = kb_access_with_coll(
-        doc_store,
-        &kb_id,
-        auth_principal,
-        KbOp::Edit,
-        transport,
-        coll.as_ref(),
-    )
-    .await;
-    if let Err(msg) = require_allow(decision, || format!("cannot edit KB '{kb_id}'")) {
-        return JsonRpcResponse::error(id, msg.into());
-    }
-    if let Some(c) = &coll {
-        if kb_is_e2e(doc_store, &kb_id, c).await {
-            return JsonRpcResponse::error(
-                id,
-                McpError::e2e_unsupported(format!(
-                    "KB '{kb_id}' is end-to-end encrypted: the daemon cannot read its content to version it"
-                )),
-            );
-        }
-    }
+) -> Result<serde_json::Value, McpError> {
+    let (kb_id, node_id, name) = checkpoint_params(params)?;
+    gate(doc_store, &kb_id, auth_principal, transport, KbOp::Edit).await?;
     let summary = Some(format!(
         "named by {}",
         auth_principal.unwrap_or("unauthenticated")
@@ -102,17 +78,248 @@ pub(super) async fn checkpoint(
         .history_checkpoint(&kb_id, &node_id, VersionKind::Named, Some(name), summary)
         .await
     {
-        Ok(Some(entry)) => JsonRpcResponse::success(id, entry_json(&entry)),
-        Ok(None) => JsonRpcResponse::error(
-            id,
-            McpError::internal_fault("a named version was not written".into()),
-        ),
-        Err(StorageError::DurableDocMissing(_)) => JsonRpcResponse::error(
-            id,
-            McpError::doc_not_found(format!("KB '{kb_id}' has no node '{node_id}'")),
-        ),
-        Err(e) => JsonRpcResponse::error(id, McpError::internal_fault(format!("checkpoint: {e}"))),
+        Ok(Some(entry)) => Ok(entry_json(&entry)),
+        Ok(None) => Err(McpError::internal_fault(
+            "a named version was not written".into(),
+        )),
+        Err(StorageError::DurableDocMissing(_)) => Err(McpError::doc_not_found(format!(
+            "KB '{kb_id}' has no node '{node_id}'"
+        ))),
+        Err(e) => Err(McpError::internal_fault(format!("checkpoint: {e}"))),
     }
+}
+
+/// The history methods, routed from one dispatch arm (ADR-116 D7).
+pub(super) async fn dispatch(
+    method: Method,
+    doc_store: &DocStore,
+    auth_principal: Option<&str>,
+    transport: Transport,
+    id: serde_json::Value,
+    params: &serde_json::Value,
+) -> JsonRpcResponse {
+    let result = match method {
+        Method::KbHistoryCheckpoint => {
+            checkpoint(doc_store, auth_principal, transport, params).await
+        }
+        Method::KbHistoryList => list(doc_store, auth_principal, transport, params).await,
+        Method::KbHistoryGet => get(doc_store, auth_principal, transport, params).await,
+        Method::KbHistoryDiff => diff(doc_store, auth_principal, transport, params).await,
+        Method::KbHistoryVerify => verify(doc_store, auth_principal, transport, params).await,
+        other => Err(McpError::method_not_found(format!(
+            "{other:?} is not a history method"
+        ))),
+    };
+    match result {
+        Ok(v) => JsonRpcResponse::success(id, v),
+        Err(e) => JsonRpcResponse::error(id, e),
+    }
+}
+
+/// What every history method needs: `op` on the KB, and a KB whose content
+/// the daemon can read. An E2E KB's history is client-side (D7).
+async fn gate(
+    doc_store: &DocStore,
+    kb_id: &str,
+    auth_principal: Option<&str>,
+    transport: Transport,
+    op: KbOp,
+) -> Result<(), McpError> {
+    let coll = load_collection(doc_store, kb_id).await.ok();
+    let decision = kb_access_with_coll(
+        doc_store,
+        kb_id,
+        auth_principal,
+        op,
+        transport,
+        coll.as_ref(),
+    )
+    .await;
+    require_allow(decision, || {
+        format!("cannot use the history of KB '{kb_id}'")
+    })
+    .map_err(Into::<McpError>::into)?;
+    if let Some(c) = &coll {
+        if kb_is_e2e(doc_store, kb_id, c).await {
+            return Err(McpError::e2e_unsupported(format!(
+                "KB '{kb_id}' is end-to-end encrypted: its history is not on the daemon"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn text(params: &serde_json::Value, key: &str) -> Result<String, McpError> {
+    params[key]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| McpError::invalid_params(key, format!("{key} is required")))
+}
+
+fn seq(params: &serde_json::Value, key: &str) -> Result<u64, McpError> {
+    params[key]
+        .as_u64()
+        .filter(|s| *s > 0)
+        .ok_or_else(|| McpError::invalid_params(key, format!("{key} is a version seq (1 or more)")))
+}
+
+async fn load(
+    doc_store: &DocStore,
+    kb_id: &str,
+    node_id: &str,
+) -> Result<Vec<HistoryEntry>, McpError> {
+    doc_store
+        .history_list(kb_id, node_id)
+        .await
+        .map_err(|e| McpError::internal_fault(format!("history of '{node_id}' unreadable: {e}")))
+}
+
+fn version_at<'a>(
+    h: &'a [HistoryEntry],
+    seq: u64,
+    key: &str,
+) -> Result<&'a HistoryEntry, McpError> {
+    h.iter()
+        .find(|e| e.seq == seq)
+        .ok_or_else(|| McpError::doc_not_found(format!("there is no version {seq} ({key})")))
+}
+
+/// The chain check of a node's whole history, as the methods report it.
+fn chain_status(kb_id: &str, node_id: &str, h: &[HistoryEntry]) -> serde_json::Value {
+    match verify_chain(kb_id, node_id, h, None) {
+        Ok(()) => serde_json::json!({ "ok": true }),
+        Err(e) => serde_json::json!({ "ok": false, "seq": e.seq, "broken": e.broken.as_str() }),
+    }
+}
+
+/// `kb/history.list {kb_id, node_id}`: every version's record, without content.
+async fn list(
+    doc_store: &DocStore,
+    auth_principal: Option<&str>,
+    transport: Transport,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, McpError> {
+    let (kb_id, node_id) = (text(params, "kb_id")?, text(params, "node_id")?);
+    gate(doc_store, &kb_id, auth_principal, transport, KbOp::Read).await?;
+    let h = load(doc_store, &kb_id, &node_id).await?;
+    Ok(serde_json::json!({
+        "kb_id": kb_id,
+        "node_id": node_id,
+        "versions": h.iter().map(entry_json).collect::<Vec<_>>(),
+    }))
+}
+
+/// A version's content as a reader shows it, if it holds one that matches its
+/// hash. `None` when pruned or when it does not verify.
+fn content_json(e: &HistoryEntry) -> Option<serde_json::Value> {
+    let node = e.node()?.ok().filter(|n| n.digest() == e.content_hash)?;
+    let mut m = crate::kb_query::content_fields(&node);
+    m.insert("body".into(), serde_json::json!(node.body));
+    m.insert("links".into(), serde_json::json!(node.links));
+    m.insert(
+        "version".into(),
+        serde_json::json!(hex::encode(&e.content_hash[..16])),
+    );
+    Some(serde_json::Value::Object(m))
+}
+
+/// `kb/history.get {kb_id, node_id, seq}`: one version's record and content,
+/// with the verification of the node's chain.
+async fn get(
+    doc_store: &DocStore,
+    auth_principal: Option<&str>,
+    transport: Transport,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, McpError> {
+    let (kb_id, node_id, want) = (
+        text(params, "kb_id")?,
+        text(params, "node_id")?,
+        seq(params, "seq")?,
+    );
+    gate(doc_store, &kb_id, auth_principal, transport, KbOp::Read).await?;
+    let h = load(doc_store, &kb_id, &node_id).await?;
+    let e = version_at(&h, want, "seq")?;
+    let mut out = entry_json(e);
+    out["content"] = content_json(e).unwrap_or(serde_json::Value::Null);
+    out["verification"] = chain_status(&kb_id, &node_id, &h);
+    Ok(out)
+}
+
+/// `kb/history.diff {kb_id, node_id, from, to}`: the fields that differ
+/// between two versions, each of which must hold content that verifies.
+async fn diff(
+    doc_store: &DocStore,
+    auth_principal: Option<&str>,
+    transport: Transport,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, McpError> {
+    let (kb_id, node_id) = (text(params, "kb_id")?, text(params, "node_id")?);
+    let (from, to) = (seq(params, "from")?, seq(params, "to")?);
+    gate(doc_store, &kb_id, auth_principal, transport, KbOp::Read).await?;
+    let h = load(doc_store, &kb_id, &node_id).await?;
+    let node = |s: u64, key: &str| -> Result<MaterializedNode, McpError> {
+        let e = version_at(&h, s, key)?;
+        let refuse = |why: &str| McpError::invalid_params(key, format!("version {s} {why}"));
+        let n = e.node().ok_or_else(|| refuse("is pruned"))?;
+        n.ok()
+            .filter(|n| n.digest() == e.content_hash)
+            .ok_or_else(|| refuse("does not verify"))
+    };
+    let (a, b) = (node(from, "from")?, node(to, "to")?);
+    let changes: Vec<serde_json::Value> = mae_sync::kb::history::diff(&a, &b)
+        .into_iter()
+        .map(|c| serde_json::json!({ "field": c.field, "change": c.change }))
+        .collect();
+    Ok(
+        serde_json::json!({ "kb_id": kb_id, "node_id": node_id, "from": from, "to": to, "changes": changes }),
+    )
+}
+
+/// `kb/history.verify {kb_id, node_id?}`: verify one node's chain, or every
+/// node's in the KB, which also reports the KB's head (D4). Without a head
+/// kept elsewhere, a removed last version or a rewritten history cannot be
+/// seen: `head_checked` says so.
+async fn verify(
+    doc_store: &DocStore,
+    auth_principal: Option<&str>,
+    transport: Transport,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, McpError> {
+    let kb_id = text(params, "kb_id")?;
+    gate(doc_store, &kb_id, auth_principal, transport, KbOp::Read).await?;
+    let whole = params["node_id"].as_str().is_none();
+    let nodes = match params["node_id"].as_str() {
+        Some(n) => vec![n.to_string()],
+        None => doc_store
+            .history_nodes(&kb_id)
+            .await
+            .map_err(|e| McpError::internal_fault(format!("history unreadable: {e}")))?,
+    };
+    let (mut versions, mut failures, mut tips) = (0usize, Vec::new(), Vec::new());
+    for n in &nodes {
+        let h = load(doc_store, &kb_id, n).await?;
+        versions += h.len();
+        if let Err(e) = verify_chain(&kb_id, n, &h, None) {
+            failures.push(
+                serde_json::json!({ "node_id": n, "seq": e.seq, "broken": e.broken.as_str() }),
+            );
+        }
+        if let Some(t) = h.last() {
+            tips.push((n.clone(), t.seq, t.entry_hash));
+        }
+    }
+    let head = kb_head(&kb_id, tips.iter().map(|(n, s, h)| (n.as_str(), *s, *h)))
+        .map_err(|e| McpError::internal_fault(format!("head: {e}")))?;
+    Ok(serde_json::json!({
+        "kb_id": kb_id,
+        "ok": failures.is_empty(),
+        "nodes": nodes.len(),
+        "versions": versions,
+        "failures": failures,
+        "head": whole.then(|| hex::encode(head)),
+        "head_checked": false,
+    }))
 }
 
 /// ADR-116 Amendment 1, until history is carried over encrypted: refuse a

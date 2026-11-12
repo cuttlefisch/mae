@@ -21,10 +21,12 @@
 
 mod chain;
 mod codec;
+mod diff;
 mod retention;
 
 pub use chain::{kb_head, seal, verify_chain, Broken, Draft, SealError, VerifyError};
 pub use codec::{decode_content, encode_content, ContentError};
+pub use diff::{diff, FieldChange};
 pub use retention::{
     prune_candidates, Exemptions, Keep, Policy, PolicyError, MAX_VERSIONS_FLOOR, MIN_DAYS_FLOOR,
 };
