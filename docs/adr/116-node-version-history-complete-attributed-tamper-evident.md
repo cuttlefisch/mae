@@ -267,8 +267,11 @@ losing tamper evidence (D4), so it must be re-encrypted in place.
 The daemon cannot encrypt: it never holds the content key. The client that performs the switch
 already reseals every node; it reseals every version too.
 
-1. It flips the collection to E2E with `carries_history: true` on `kb/collection_op`. Without
-   that flag, the interim refusal stands. With it, the KB enters `history_migrating`.
+1. It fetches the KB's history key (`kb/history.key`, owner only) and distributes it to the
+   members with the content key (ADR-037 D2), so a member can check a decrypted version against
+   its `content_hash`. Then it flips the collection to E2E with `carries_history: true` on
+   `kb/collection_op`. Without that flag, the interim refusal stands. With it, the KB enters
+   `history_migrating`.
 2. For each version that holds plaintext, it reads the content (`kb/history.get`, P3), encrypts
    it under the KB's current content key exactly as node content is encrypted (ADR-037 D1), and
    uploads it with `kb/history.reseal {kb_id, node_id, seq, entry_hash, key_epoch, ciphertext}`.
@@ -276,13 +279,17 @@ already reseals every node; it reseals every version too.
    still holds plaintext. It records the key epoch, so a member holding that key can decrypt the
    version after later rotations (ADR-037 D3). The entry's other fields and hashes are unchanged,
    so the chain still verifies.
-4. When no version holds plaintext, the KB leaves `history_migrating`. The plaintext's pages are
+4. When no version holds plaintext, the KB leaves `history_migrating`, and in the same
+   transaction the daemon releases its history key: the key's bytes are cleared and a "released"
+   marker stays, so no later version re-creates a key. The plaintext's and the key's pages are
    zeroed (`secure_delete`), and the WAL sidecar is TRUNCATE-checkpointed, as for a node reseal.
+   The key is released only here, after every version is re-encrypted, so a client that crashed
+   before keeping the key can fetch it again; nothing depends on timing.
 
 The upload is idempotent per entry, so an interrupted switch resumes. Its progress (versions
 left) is reported. The ciphertext needs no associated data to stay in place: `content_hash`
-binds it. A member who decrypts a ciphertext moved to another entry gets content whose digest
-is not that entry's `content_hash`, and verification on the member's side fails. The daemon
+binds it. A member who decrypts a ciphertext moved to another entry gets content whose keyed
+hash is not that entry's `content_hash`, and verification on the member's side fails. The daemon
 cannot see that, just as it cannot see a bad node reseal. The owner's client is trusted for the
 switch either way.
 
@@ -299,20 +306,20 @@ as it drops plaintext.
 
 It can no longer cut versions, diff them, check a version's content against its hash, or roll
 back. Those become client-side, with ADR-116's "client-side history" still to be designed. Until
-then, an E2E KB's history ends at the switch. Clients that hold the key verify each decrypted
-version against its `content_hash`.
+then, an E2E KB's history ends at the switch. Clients that hold the history key verify each
+decrypted version against its `content_hash`.
 
-### A3. The leak that remains, stated
+### A3. No guess-confirming hash after the switch
 
-`content_hash` is the SHA-256 of the plaintext node's canonical encoding, and it stays on the
-daemon. Anyone holding the daemon's store can confirm a guess at a version's entire content by
-hashing it. For a real note this is impractical: a guess must reproduce every field exactly,
-including the id, `created_at` and the properties. For a tiny or boilerplate node it is not.
+`content_hash` is keyed (D3, as amended 2026-11-12): an HMAC of the content under the KB's
+history key. An unkeyed hash would have stayed on the daemon after the switch and let anyone
+holding its store confirm a guess at a version's whole content, which brute-forces a small secret
+in a templated record in moments. Removing such a hash at the switch would have meant rewriting
+every entry hash, the tamper the chain exists to expose.
 
-Removing the hash would mean rewriting every entry hash after it, which is the tamper the chain
-exists to expose. So it stays, and the switch tells the owner. History cut client-side for an E2E
-KB in future should use a digest keyed under the content key instead, so the oracle does not
-extend past the switch.
+Keyed, the hashes stay exactly as they are and confirm nothing once the daemon has released the
+key (A1 step 4). The chain is never rewritten, and every signed head stays valid. What remains is
+trust that the daemon released the key, the same trust as that it zeroed the plaintext.
 
 ### A4. A switch relayed from a mesh peer
 
@@ -339,14 +346,16 @@ read its content.
   The owner asked to keep the history, and A1 can.
 - **Delete the history.** D5 already rejects losing the record of who changed what.
 - **Encrypt on the daemon.** The daemon would need the content key, which ends key-blindness.
-- **Re-hash the chain under a keyed digest.** It rewrites every entry hash, which is exactly the
-  tamper D4 detects.
+- **Re-hash the chain under a keyed digest at the switch.** It rewrites every entry hash, which
+  is exactly the tamper D4 detects, and invalidates every head kept outside. Keying the hash from
+  the first version (D3) gets the same result with no rewrite.
 - **Start a new chain at the switch.** It loses the link between history before and after it.
 
 ### Implementation
 
-- **H-E1:** `kb/history.reseal`, the `history_migrating` state, `carries_history` on the flip,
-  and the handoff skip for an E2E-flagged KB. Tested by a switch interrupted and resumed, a
+- **H-E1:** `kb/history.key`, `kb/history.reseal`, the `history_migrating` state,
+  `carries_history` on the flip, the key's release when migration ends, and the handoff skip for
+  an E2E-flagged KB. Tested by a switch interrupted and resumed, a
   ciphertext refused for another entry's hash, and a chain that still verifies afterwards.
 - **H-E2:** the editor's switch flow, which re-encrypts every version.
 - **H-E3:** the relayed switch (A4), with a hold keeping its content and reported.
