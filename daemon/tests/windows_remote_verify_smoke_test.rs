@@ -12,8 +12,9 @@
 //!   `cargo build -p mae-daemon --example windows_remote_verify && \
 //!    cargo test -p mae-daemon --test windows_remote_verify_smoke_test`
 
+mod daemon_harness;
+
 use std::net::SocketAddr;
-use std::path::Path;
 
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use rsa::pkcs1::EncodeRsaPrivateKey;
@@ -94,32 +95,21 @@ async fn spawn_mock_jwks_server(jwks: &serde_json::Value) -> SocketAddr {
     addr
 }
 
-fn generate_self_signed_cert(cert_path: &Path, key_path: &Path) {
-    let cert_key = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()])
-        .expect("rcgen self-signed cert");
-    std::fs::write(cert_path, cert_key.cert.pem()).unwrap();
-    std::fs::write(key_path, cert_key.signing_key.serialize_pem()).unwrap();
-}
-
-fn free_tcp_port() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.local_addr().unwrap().port()
-}
-
 struct DaemonGuard {
-    child: std::process::Child,
+    _proc: daemon_harness::Process,
     _tmp: tempfile::TempDir,
     collab_addr: SocketAddr,
     oauth_url: String,
 }
 
-impl Drop for DaemonGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
+fn resource_for(oauth_port: u16) -> String {
+    format!("https://127.0.0.1:{oauth_port}/mcp")
 }
 
+/// Ready means BOTH listeners proven up -- the binary under test talks to
+/// both, and the OAuth one binds after collab. Waiting on collab alone handed
+/// the binary a daemon whose OAuth port was not listening (CI: "[collab] PASS",
+/// then "[oauth] FAIL ... Connection refused"); see `daemon_harness`.
 async fn spawn_daemon_with_collab_and_oauth(jwks_addr: SocketAddr) -> (DaemonGuard, String) {
     let tmp = tempfile::tempdir().unwrap();
     let data_dir = tmp.path().join("data");
@@ -127,14 +117,12 @@ async fn spawn_daemon_with_collab_and_oauth(jwks_addr: SocketAddr) -> (DaemonGua
 
     let cert_path = tmp.path().join("cert.pem");
     let key_path = tmp.path().join("key.pem");
-    generate_self_signed_cert(&cert_path, &key_path);
+    let cert_der = daemon_harness::write_self_signed_cert(&cert_path, &key_path);
 
-    let collab_port = free_tcp_port();
-    let oauth_port = free_tcp_port();
-    let resource = format!("https://127.0.0.1:{oauth_port}/mcp");
-
-    let config = format!(
-        r#"
+    let root = tmp.path().to_path_buf();
+    let proc = daemon_harness::spawn_ready(|ports| {
+        let config = format!(
+            r#"
 [collab]
 enabled = true
 bind = "127.0.0.1:{collab_port}"
@@ -152,51 +140,45 @@ cert_path = "{cert}"
 key_path = "{key}"
 kb_query_enabled = true
 "#,
-        cert = cert_path.display(),
-        key = key_path.display(),
-    );
-    let config_path = tmp.path().join("daemon.toml");
-    std::fs::write(&config_path, config).unwrap();
+            collab_port = ports.collab,
+            oauth_port = ports.oauth,
+            resource = resource_for(ports.oauth),
+            cert = cert_path.display(),
+            key = key_path.display(),
+        );
+        let config_path = root.join("daemon.toml");
+        std::fs::write(&config_path, config).unwrap();
 
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"))
-        .args([
+        let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"));
+        cmd.args([
             "--data-dir",
             data_dir.to_str().unwrap(),
             "--config",
             config_path.to_str().unwrap(),
         ])
-        .env("XDG_RUNTIME_DIR", tmp.path())
-        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("failed to spawn mae-daemon");
-
-    let collab_addr: SocketAddr = format!("127.0.0.1:{collab_port}").parse().unwrap();
-    // Bounded by wall-clock, not by an iteration count — see `mae_mcp::ready`.
-    let bound = mae_mcp::ready::wait_until(|| async {
-        tokio::net::TcpStream::connect(collab_addr).await.is_ok()
+        .env("XDG_RUNTIME_DIR", &root)
+        .env("XDG_CONFIG_HOME", root.join("config"));
+        daemon_harness::Launch {
+            cmd,
+            status_socket: root.join("mae-daemon.sock"),
+            log: root.join("daemon.log"),
+            collab: true,
+            oauth: Some(daemon_harness::OauthProbe {
+                cert_der: cert_der.clone(),
+                ws_ticket: false,
+            }),
+        }
     })
     .await;
-    if !bound {
-        // Don't leave a zombie/orphaned process behind on the failure path.
-        let _ = child.kill();
-        let _ = child.wait();
-        panic!(
-            "{}",
-            mae_mcp::ready::timeout_message(&format!(
-                "mae-daemon's collab listener on {collab_addr}"
-            ))
-        );
-    }
+    let ports = proc.ports;
     (
         DaemonGuard {
-            child,
+            _proc: proc,
             _tmp: tmp,
-            collab_addr,
-            oauth_url: format!("https://127.0.0.1:{oauth_port}"),
+            collab_addr: ports.collab_addr(),
+            oauth_url: format!("https://127.0.0.1:{}", ports.oauth),
         },
-        resource,
+        resource_for(ports.oauth),
     )
 }
 

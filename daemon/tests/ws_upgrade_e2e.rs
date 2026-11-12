@@ -4,6 +4,7 @@
 //! Every refusal here happens BEFORE the upgrade, as an ordinary HTTP response,
 //! so each test reads status, headers and body off the wire.
 
+mod daemon_harness;
 mod ws_common;
 
 use std::time::Duration;
