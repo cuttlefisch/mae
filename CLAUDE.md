@@ -832,7 +832,11 @@ editor record, and a per-node hash chain whose KB head the daemon signs; tamper 
 as only as strong as a head kept outside the daemon. Retention is an explicit per-KB policy with
 floors, overridden by holds, named versions and revision-referenced versions; pruning drops content
 but keeps the chained record. Rollback is a new version applied through the write path, never a
-direct store write. Evidence in `docs/research/116-version-history-prior-art.md`.
+direct store write. Evidence in `docs/research/116-version-history-prior-art.md`. Its *proposed*
+Amendment 1 carries history across a switch to E2E: the owner's client re-encrypts every version
+under the content key (the daemon stays key-blind), the chain is untouched, and `content_hash`
+remains as a stated confirmation oracle; until it is built, the switch is refused while history
+holds plaintext.
 
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
 > from it entirely until 2026-08-04, i.e. every ADR from the KB-visualization arc and the whole
