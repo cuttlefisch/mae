@@ -142,7 +142,13 @@ async fn each_handoff_cuts_the_state_the_previous_session_left() {
     );
     assert!(h.iter().all(|e| e.kind == VersionKind::Edit));
     let last = h.last().unwrap();
-    assert!(verify_chain(KB, NODE, &h, Some((last.seq, last.entry_hash))).is_ok());
+    let key = env
+        .store
+        .history_key(KB)
+        .await
+        .unwrap()
+        .expect("the KB's history key");
+    assert!(verify_chain(KB, NODE, &h, Some((last.seq, last.entry_hash)), Some(&key)).is_ok());
 }
 
 /// A long session by one principal cuts no version, however many updates.
@@ -299,7 +305,13 @@ async fn a_named_version_is_cut_on_request_and_starts_a_session() {
         "no one edited between the two names"
     );
     let last = h.last().unwrap();
-    assert!(verify_chain(KB, NODE, &h, Some((last.seq, last.entry_hash))).is_ok());
+    let key = env
+        .store
+        .history_key(KB)
+        .await
+        .unwrap()
+        .expect("the KB's history key");
+    assert!(verify_chain(KB, NODE, &h, Some((last.seq, last.entry_hash)), Some(&key)).is_ok());
 }
 
 /// Naming needs `Edit`: a non-member and a viewer are refused and write
