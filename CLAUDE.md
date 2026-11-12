@@ -824,6 +824,16 @@ under the binding lock, with a grace period, never collects what any history, re
 hold references; mae-org's resolver renders a labelled placeholder for every non-resolved state. Evidence in
 `docs/research/115-attachment-store-prior-art.md`.
 
+**ADR-116** (*proposed, design; phased P1–P6*) — **node version history is complete, attributed,
+tamper-evident, retained by policy, and rolled back through the write path.** Amends ADR-106: every
+authored change (not only ingest) is covered by a checkpoint version (editor handoff, before a
+destructive act, named; deliberately no timer), recording the whole materialized node, its editors and WAL range from the
+editor record, and a per-node hash chain whose KB head the daemon signs; tamper evidence is stated
+as only as strong as a head kept outside the daemon. Retention is an explicit per-KB policy with
+floors, overridden by holds, named versions and revision-referenced versions; pruning drops content
+but keeps the chained record. Rollback is a new version applied through the write path, never a
+direct store write. Evidence in `docs/research/116-version-history-prior-art.md`.
+
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
 > from it entirely until 2026-08-04, i.e. every ADR from the KB-visualization arc and the whole
 > pre-v0.15 audit set, so agents rediscovered decisions that already existed. `docs/adr/` is the
