@@ -5,6 +5,7 @@
 //! same `kb_access` path as on every other transport. These tests do not
 //! re-prove that path; they prove the socket cannot get around it.
 
+mod daemon_harness;
 mod ws_common;
 
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
