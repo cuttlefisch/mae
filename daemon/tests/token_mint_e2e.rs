@@ -15,17 +15,14 @@
 //! - a token from this command is accepted by the real listener, and one
 //!   signed by any other daemon's key is refused.
 
+mod daemon_harness;
+
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use mae_mcp::identity::Identity;
 
 const AUD: &str = "https://127.0.0.1/mcp";
-
-fn free_tcp_port() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.local_addr().unwrap().port()
-}
 
 /// TOML-safe path (Windows backslashes are escapes in a basic string).
 fn toml_path(p: &Path) -> String {
@@ -37,10 +34,16 @@ struct Home {
     tmp: tempfile::TempDir,
     config: PathBuf,
     identity_dir: PathBuf,
-    oauth_port: u16,
+    authorized_keys: PathBuf,
+    cert: PathBuf,
+    key: PathBuf,
+    /// The listener's certificate, which readiness pins (`daemon_harness`).
+    cert_der: Vec<u8>,
+    opts: Opts,
 }
 
 /// Knobs a test varies; everything else is a working self-issued deployment.
+#[derive(Clone)]
 struct Opts {
     seed_identity: bool,
     self_issued_tokens_enabled: bool,
@@ -73,17 +76,31 @@ fn make_home(opts: &Opts) -> (Home, Option<Identity>) {
         format!("{}\n", Identity::generate("client").public().to_line()),
     )
     .unwrap();
-    let ck = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).unwrap();
     let (cert, key) = (tmp.path().join("tls.crt"), tmp.path().join("tls.key"));
-    std::fs::write(&cert, ck.cert.pem()).unwrap();
-    std::fs::write(&key, ck.signing_key.serialize_pem()).unwrap();
+    let cert_der = daemon_harness::write_self_signed_cert(&cert, &key);
+    let home = Home {
+        config: tmp.path().join("daemon.toml"),
+        tmp,
+        identity_dir,
+        authorized_keys: ak,
+        cert,
+        key,
+        cert_der,
+        opts: opts.clone(),
+    };
+    // The administrative commands read this config but bind nothing, so these
+    // ports are never used; a serving daemon rewrites it with its own.
+    home.write_config(daemon_harness::Ports::fresh());
+    (home, identity)
+}
 
-    let oauth_port = free_tcp_port();
-    let config = tmp.path().join("daemon.toml");
-    std::fs::write(
-        &config,
-        format!(
-            r#"
+impl Home {
+    fn write_config(&self, ports: daemon_harness::Ports) {
+        let opts = &self.opts;
+        std::fs::write(
+            &self.config,
+            format!(
+                r#"
 [collab]
 enabled = true
 bind = "127.0.0.1:{collab_port}"
@@ -104,26 +121,19 @@ self_issued_tokens_enabled = {enabled}
 self_issued_token_ttl_secs = {ttl}
 self_issued_token_max_ttl_secs = {max}
 "#,
-            collab_port = free_tcp_port(),
-            identity_dir = toml_path(&identity_dir),
-            ak = toml_path(&ak),
-            cert = toml_path(&cert),
-            key = toml_path(&key),
-            enabled = opts.self_issued_tokens_enabled,
-            ttl = opts.default_ttl_secs,
-            max = opts.max_ttl_secs,
-        ),
-    )
-    .unwrap();
-    (
-        Home {
-            tmp,
-            config,
-            identity_dir,
-            oauth_port,
-        },
-        identity,
-    )
+                collab_port = ports.collab,
+                oauth_port = ports.oauth,
+                identity_dir = toml_path(&self.identity_dir),
+                ak = toml_path(&self.authorized_keys),
+                cert = toml_path(&self.cert),
+                key = toml_path(&self.key),
+                enabled = opts.self_issued_tokens_enabled,
+                ttl = opts.default_ttl_secs,
+                max = opts.max_ttl_secs,
+            ),
+        )
+        .unwrap();
+    }
 }
 
 /// Run `mae-daemon --config <home> <args…>` with every ambient location pointed
@@ -327,27 +337,32 @@ async fn the_minted_token_is_accepted_by_the_listener_and_a_foreign_one_is_not()
     let (other, _) = make_home(&Opts::default());
     let foreign = minted(&run(&other, &["token", "mint", "--sub", "svc:reader"]));
 
-    let root = home.tmp.path();
-    let _daemon = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"))
-        .arg("--config")
-        .arg(&home.config)
-        .args(["--data-dir", root.to_str().unwrap()])
-        .args(["--socket", root.join("kb.sock").to_str().unwrap()])
-        .env("HOME", root)
-        .env("USERPROFILE", root)
-        .env("XDG_CONFIG_HOME", root.join("config"))
-        .env("XDG_DATA_HOME", root.join("data"))
-        .env("XDG_RUNTIME_DIR", root)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let addr: std::net::SocketAddr = format!("127.0.0.1:{}", home.oauth_port).parse().unwrap();
-    let up =
-        mae_mcp::ready::wait_until(|| async { tokio::net::TcpStream::connect(addr).await.is_ok() })
-            .await;
-    assert!(up, "{}", mae_mcp::ready::timeout_message("OAuth listener"));
+    let root = home.tmp.path().to_path_buf();
+    let daemon = daemon_harness::spawn_ready(|ports| {
+        home.write_config(ports);
+        let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"));
+        cmd.arg("--config")
+            .arg(&home.config)
+            .args(["--data-dir", root.to_str().unwrap()])
+            .args(["--socket", root.join("kb.sock").to_str().unwrap()])
+            .env("HOME", &root)
+            .env("USERPROFILE", &root)
+            .env("XDG_CONFIG_HOME", root.join("config"))
+            .env("XDG_DATA_HOME", root.join("data"))
+            .env("XDG_RUNTIME_DIR", &root);
+        daemon_harness::Launch {
+            cmd,
+            status_socket: root.join("kb.sock"),
+            log: root.join("daemon.log"),
+            collab: true,
+            oauth: Some(daemon_harness::OauthProbe {
+                cert_der: home.cert_der.clone(),
+                ws_ticket: false,
+            }),
+        }
+    })
+    .await;
+    let addr = daemon.ports.oauth_addr();
 
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
