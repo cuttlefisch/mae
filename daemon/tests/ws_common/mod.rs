@@ -305,7 +305,40 @@ pub async fn request(
     headers: &[(&str, &str)],
     upgrade: bool,
 ) -> Reply {
-    let mut s = d.tls().await;
+    request_on(d.tls().await, method, path, headers, upgrade).await
+}
+
+/// `GET /ws` like [`upgrade`], over a client socket whose kernel send buffer
+/// is `send_buffer` bytes: a large frame then cannot all be buffered, so the
+/// client is still writing it when the daemon reacts — what a test needs to
+/// see how the daemon closes on a client mid-write.
+pub async fn upgrade_small_send_buffer(
+    d: &Daemon,
+    protocols: &str,
+    extra: &[(&str, &str)],
+    send_buffer: u32,
+) -> Reply {
+    let sock = tokio::net::TcpSocket::new_v4().unwrap();
+    sock.set_send_buffer_size(send_buffer).unwrap();
+    let tcp = sock.connect(d.addr).await.unwrap();
+    let name = rustls::pki_types::ServerName::try_from("127.0.0.1").unwrap();
+    let tls = d
+        .connector()
+        .connect(name, tcp)
+        .await
+        .expect("TLS handshake");
+    let mut h: Vec<(&str, &str)> = extra.to_vec();
+    h.push(("Sec-WebSocket-Protocol", protocols));
+    request_on(tls, "GET", "/ws", &h, true).await
+}
+
+async fn request_on(
+    mut s: TlsStream<tokio::net::TcpStream>,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    upgrade: bool,
+) -> Reply {
     let mut req = format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n");
     if upgrade {
         req.push_str("Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n");

@@ -276,11 +276,20 @@ async fn deliver_event<W: AsyncWrite + Unpin>(
 ) -> bool {
     let method = format!("notifications/{}", event.event_type());
     debug!(session = session.id, event_type = %method, "broadcasting event to client");
-    let notification = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": method,
-        "params": { "seq": session.events_delivered + 1, "event": event },
-    });
+    let notification = match event {
+        // B5: y-protocols presence reaches a receiver in the envelope's own
+        // `sync/awareness` shape, addressed like every other document notice.
+        mae_mcp::broadcast::EditorEvent::AwarenessYjs {
+            doc_id,
+            update_base64,
+            principals,
+        } => governor::awareness_relayed(doc_id, update_base64, principals),
+        _ => serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": { "seq": session.events_delivered + 1, "event": event },
+        }),
+    };
     if governor::write_json(writer, &notification, timeout)
         .await
         .is_err()

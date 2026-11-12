@@ -354,8 +354,10 @@ pub(super) async fn handle_sync_awareness(
     params: &serde_json::Value,
 ) -> JsonRpcResponse {
     // Pure relay: broadcast awareness to all other clients on same doc.
-    // No persistence — awareness is ephemeral.
-    let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+    // No persistence — awareness is ephemeral. The document is named as any
+    // other request names it (`doc`, or `kb_id` with or without `node_id`),
+    // so it gets that document's access check.
+    let doc_name = super::governor::requested_doc(params).unwrap_or_else(|| "default".to_string());
     // Relaying subscribes the session to the doc (a standing feed of its
     // updates): a KB doc needs read access to its KB first.
     if let Err(msg) = deny_kb_awareness(doc_store, &doc_name, auth_principal, transport).await {
