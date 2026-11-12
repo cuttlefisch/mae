@@ -454,6 +454,55 @@ impl DocStore {
         self.storage.history_nodes(kb_id).await
     }
 
+    /// ADR-116 D4: sign `kb_id`'s history head with this daemon's key and
+    /// append it to the head log, unless it names the same tips as the latest
+    /// head. `None` when nothing was signed: no signer (not in key-auth mode),
+    /// no history, or no change. The tips are one snapshot, and versions cut
+    /// after it simply follow the head (a head is a prefix commitment), so a
+    /// head signed while edits land is never wrong, only already behind.
+    pub async fn history_sign_head(
+        &self,
+        kb_id: &str,
+    ) -> Result<Option<mae_sync::kb::history::SignedHead>, StorageError> {
+        let Some(signer) = self.signer() else {
+            return Ok(None);
+        };
+        let tips = self.storage.history_tips(kb_id).await?;
+        if tips.is_empty() {
+            return Ok(None);
+        }
+        let now = ((self.clock)() / 1000) as i64;
+        let head =
+            mae_sync::kb::history::SignedHead::sign(kb_id, now, tips, &signer.secret_bytes())
+                .map_err(|e| StorageError::Sqlite(format!("history head: {e}")))?;
+        let latest = self.storage.history_latest_head(kb_id).await?;
+        if latest.is_some_and(|l| l.digest == head.digest && l.signer == head.signer) {
+            return Ok(None);
+        }
+        self.storage.history_append_head(&head).await?;
+        Ok(Some(head))
+    }
+
+    /// Sign the head of every KB that has history (the maintenance tick, and
+    /// before a backup). Returns how many heads were appended.
+    pub async fn history_sign_heads(&self) -> Result<usize, StorageError> {
+        let mut signed = 0;
+        for kb_id in self.storage.history_kbs().await? {
+            if self.history_sign_head(&kb_id).await?.is_some() {
+                signed += 1;
+            }
+        }
+        Ok(signed)
+    }
+
+    /// `kb_id`'s latest signed head, if any (ADR-116 D4).
+    pub async fn history_latest_head(
+        &self,
+        kb_id: &str,
+    ) -> Result<Option<mae_sync::kb::history::SignedHead>, StorageError> {
+        self.storage.history_latest_head(kb_id).await
+    }
+
     /// Every version of a KB node, in `seq` order (ADR-116).
     pub async fn history_list(
         &self,

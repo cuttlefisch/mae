@@ -4,7 +4,9 @@
 use super::method_authz::Method;
 use super::*;
 use crate::storage::StorageError;
-use mae_sync::kb::history::{kb_head, verify_chain, HistoryEntry, VersionKind};
+use mae_sync::kb::history::{
+    kb_head, public_key_of, verify_against_head, verify_chain, HeadError, HistoryEntry, VersionKind,
+};
 use mae_sync::kb::MaterializedNode;
 
 /// The longest name a version may carry, in characters.
@@ -277,9 +279,11 @@ async fn diff(
 }
 
 /// `kb/history.verify {kb_id, node_id?}`: verify one node's chain, or every
-/// node's in the KB, which also reports the KB's head (D4). Without a head
-/// kept elsewhere, a removed last version or a rewritten history cannot be
-/// seen: `head_checked` says so.
+/// node's in the KB. A whole-KB check also reports the KB's head and checks
+/// the chains against the latest signed head (D4), which is what shows a
+/// removed last version or a history re-sealed from an earlier one. A head kept
+/// outside the daemon is still the only defence against a rewrite by whoever
+/// holds the daemon's key (`mae-daemon kb history verify --against`).
 async fn verify(
     doc_store: &DocStore,
     auth_principal: Option<&str>,
@@ -296,7 +300,8 @@ async fn verify(
             .await
             .map_err(|e| McpError::internal_fault(format!("history unreadable: {e}")))?,
     };
-    let (mut versions, mut failures, mut tips) = (0usize, Vec::new(), Vec::new());
+    let (mut versions, mut failures) = (0usize, Vec::new());
+    let mut chains = std::collections::BTreeMap::new();
     for n in &nodes {
         let h = load(doc_store, &kb_id, n).await?;
         versions += h.len();
@@ -305,21 +310,64 @@ async fn verify(
                 serde_json::json!({ "node_id": n, "seq": e.seq, "broken": e.broken.as_str() }),
             );
         }
-        if let Some(t) = h.last() {
-            tips.push((n.clone(), t.seq, t.entry_hash));
-        }
+        chains.insert(n.clone(), h);
     }
-    let head = kb_head(&kb_id, tips.iter().map(|(n, s, h)| (n.as_str(), *s, *h)))
-        .map_err(|e| McpError::internal_fault(format!("head: {e}")))?;
+    let tips = chains
+        .iter()
+        .filter_map(|(n, h)| h.last().map(|t| (n.as_str(), t.seq, t.entry_hash)));
+    let head = kb_head(&kb_id, tips).map_err(|e| McpError::internal_fault(format!("head: {e}")))?;
+    let signed = match whole {
+        true => Some(signed_head_check(doc_store, &kb_id, &chains).await?),
+        false => None,
+    };
+    let signed_ok = signed.as_ref().is_none_or(|s| s["ok"] != false);
     Ok(serde_json::json!({
         "kb_id": kb_id,
-        "ok": failures.is_empty(),
+        "ok": failures.is_empty() && signed_ok,
         "nodes": nodes.len(),
         "versions": versions,
         "failures": failures,
         "head": whole.then(|| hex::encode(head)),
-        "head_checked": false,
+        "head_checked": signed.as_ref().is_some_and(|s| s["checked"] == true),
+        "signed_head": signed,
     }))
+}
+
+/// The chains checked against the KB's latest signed head. It must be signed
+/// with this daemon's own key: a head that verifies under any other key was
+/// not written by this daemon, and is reported, never trusted.
+async fn signed_head_check(
+    doc_store: &DocStore,
+    kb_id: &str,
+    chains: &std::collections::BTreeMap<String, Vec<HistoryEntry>>,
+) -> Result<serde_json::Value, McpError> {
+    let latest = doc_store
+        .history_latest_head(kb_id)
+        .await
+        .map_err(|e| McpError::internal_fault(format!("head log unreadable: {e}")))?;
+    let Some(head) = latest else {
+        return Ok(serde_json::json!({ "checked": false, "reason": "no signed head yet" }));
+    };
+    let own = doc_store.signer().map(|s| public_key_of(&s.secret_bytes()));
+    let at = serde_json::json!({ "at": head.at, "digest": hex::encode(head.digest) });
+    if own != Some(head.signer) {
+        return Ok(
+            serde_json::json!({ "checked": true, "ok": false, "head": at,
+            "broken": "head", "reason": "the head is not signed with this daemon's key" }),
+        );
+    }
+    Ok(match verify_against_head(&head, kb_id, chains) {
+        Ok(()) => serde_json::json!({ "checked": true, "ok": true, "head": at }),
+        Err(e) => {
+            let (node_id, seq) = match &e {
+                HeadError::Tip { node_id, seq } => (Some(node_id.clone()), Some(*seq)),
+                HeadError::Chain { node_id, err } => (Some(node_id.clone()), Some(err.seq)),
+                _ => (None, None),
+            };
+            serde_json::json!({ "checked": true, "ok": false, "head": at,
+                "broken": e.broken().as_str(), "node_id": node_id, "seq": seq })
+        }
+    })
 }
 
 /// ADR-116 Amendment 1, until history is carried over encrypted: refuse a

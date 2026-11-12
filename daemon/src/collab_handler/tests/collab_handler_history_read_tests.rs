@@ -203,3 +203,135 @@ async fn verify_reports_failures_and_the_head() {
         (Some(true), Some(false))
     );
 }
+
+fn daemon_identity(seed: u8) -> Arc<mae_mcp::identity::Identity> {
+    Arc::new(mae_mcp::identity::Identity::from_seed(
+        &[seed; 32],
+        "daemon",
+    ))
+}
+
+async fn whole_verify(env: &mut Env) -> serde_json::Value {
+    ok(&call(
+        env,
+        "bob",
+        "kb/history.verify",
+        serde_json::json!({"kb_id": KB}),
+    )
+    .await)
+}
+
+/// The daemon signs a head only when it has a key and something changed;
+/// verification checks the chains against it, accepts versions cut after it,
+/// and catches a removed last version, which the chains alone do not.
+#[tokio::test]
+async fn a_signed_head_catches_a_removed_last_version() {
+    let mut env = three_versions().await;
+    assert_eq!(
+        env.store.history_sign_head(KB).await.unwrap(),
+        None,
+        "no key, no head"
+    );
+    assert_eq!(whole_verify(&mut env).await["head_checked"], false);
+    env.store.set_signer(daemon_identity(9));
+    assert!(env.store.history_sign_head(KB).await.unwrap().is_some());
+    assert_eq!(
+        env.store.history_sign_head(KB).await.unwrap(),
+        None,
+        "unchanged: not signed again"
+    );
+    let v = whole_verify(&mut env).await;
+    assert_eq!(
+        (v["ok"].as_bool(), v["head_checked"].as_bool()),
+        (Some(true), Some(true))
+    );
+
+    assert!(checkpoint(&mut env, "bob", NODE, "after")
+        .await
+        .error
+        .is_none());
+    assert_eq!(
+        whole_verify(&mut env).await["ok"],
+        true,
+        "a version after the head is expected"
+    );
+    assert_eq!(env.store.history_sign_heads().await.unwrap(), 1);
+
+    env.backend.execute_for_test(&format!(
+        "DELETE FROM kb_node_history WHERE kb_id = '{KB}' AND seq = 4"
+    ));
+    let v = whole_verify(&mut env).await;
+    assert_eq!(
+        v["failures"],
+        serde_json::json!([]),
+        "each chain is consistent on its own"
+    );
+    assert_eq!(v["ok"], false);
+    let s = &v["signed_head"];
+    assert_eq!(
+        (
+            s["broken"].as_str(),
+            s["node_id"].as_str(),
+            s["seq"].as_u64()
+        ),
+        (Some("head"), Some(NODE), Some(4))
+    );
+}
+
+/// A head this daemon did not sign is reported, never trusted: one signed
+/// with another key, and one whose signature was altered in the log.
+#[tokio::test]
+async fn a_forged_head_is_reported() {
+    let mut env = three_versions().await;
+    env.store.set_signer(daemon_identity(9));
+    let tips: Vec<_> = env
+        .store
+        .history_list(KB, NODE)
+        .await
+        .unwrap()
+        .last()
+        .map(|t| mae_sync::kb::history::Tip {
+            node_id: NODE.into(),
+            seq: t.seq,
+            entry_hash: t.entry_hash,
+        })
+        .into_iter()
+        .collect();
+    let foreign = mae_sync::kb::history::SignedHead::sign(KB, 1, tips, &[3; 32]).unwrap();
+    assert!(
+        foreign.verify_signature(),
+        "precondition: valid under its own key"
+    );
+    let tips_json: Vec<(String, u64, String)> = foreign
+        .tips
+        .iter()
+        .map(|t| (t.node_id.clone(), t.seq, hex::encode(t.entry_hash)))
+        .collect();
+    env.backend.execute_for_test(&format!(
+        "INSERT INTO kb_history_heads (kb_id, at, digest, tips, signer, signature) VALUES ('{KB}', 1, X'{}', '{}', X'{}', X'{}')",
+        hex::encode(foreign.digest),
+        serde_json::to_string(&tips_json).unwrap(),
+        hex::encode(foreign.signer),
+        hex::encode(foreign.signature)
+    ));
+    let v = whole_verify(&mut env).await;
+    assert_eq!(
+        (v["ok"].as_bool(), v["signed_head"]["broken"].as_str()),
+        (Some(false), Some("head"))
+    );
+
+    assert!(
+        env.store.history_sign_head(KB).await.unwrap().is_some(),
+        "a real head after it"
+    );
+    assert_eq!(whole_verify(&mut env).await["ok"], true);
+    env.backend.execute_for_test(&format!(
+        "UPDATE kb_history_heads SET signature = X'{}' WHERE id = (SELECT MAX(id) FROM kb_history_heads)",
+        "00".repeat(64)
+    ));
+    let v = whole_verify(&mut env).await;
+    assert_eq!(
+        (v["ok"].as_bool(), v["signed_head"]["broken"].as_str()),
+        (Some(false), Some("head"))
+    );
+}

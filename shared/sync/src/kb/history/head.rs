@@ -57,6 +57,12 @@ pub enum HeadError {
     Tip { node_id: String, seq: u64 },
 }
 
+/// The Ed25519 public key of the secret seed `seed`: whose key a head must
+/// carry to be this signer's.
+pub fn public_key_of(seed: &[u8; 32]) -> [u8; 32] {
+    SigningKey::from_bytes(seed).verifying_key().to_bytes()
+}
+
 impl SignedHead {
     /// Sign the tips of `kb_id` at `at` with the Ed25519 key whose secret
     /// seed is `seed`.

@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 
 use crate::doc_editors::{EditStamp, EditorKind, EditorsSince};
-use mae_sync::kb::history::HistoryEntry;
+use mae_sync::kb::history::{HistoryEntry, SignedHead, Tip};
 
 #[path = "storage_editor_record.rs"]
 mod editor_record;
@@ -143,6 +143,18 @@ pub trait StorageBackend: Send + Sync {
 
     /// The nodes of `kb_id` that have history, sorted.
     async fn history_nodes(&self, kb_id: &str) -> Result<Vec<String>, StorageError>;
+
+    /// The KBs that have history, sorted.
+    async fn history_kbs(&self) -> Result<Vec<String>, StorageError>;
+
+    /// Every node's latest version in `kb_id`, read as one snapshot.
+    async fn history_tips(&self, kb_id: &str) -> Result<Vec<Tip>, StorageError>;
+
+    /// Append a signed head to `head.kb_id`'s head log (ADR-116 D4).
+    async fn history_append_head(&self, head: &SignedHead) -> Result<(), StorageError>;
+
+    /// `kb_id`'s latest signed head, if any.
+    async fn history_latest_head(&self, kb_id: &str) -> Result<Option<SignedHead>, StorageError>;
 
     /// Every entry of a KB node's history, in `seq` order.
     async fn history_list(
@@ -525,6 +537,22 @@ impl StorageBackend for SqliteBackend {
 
     async fn history_nodes(&self, kb_id: &str) -> Result<Vec<String>, StorageError> {
         history::nodes(&self.pool.lock_primary(), kb_id)
+    }
+
+    async fn history_kbs(&self) -> Result<Vec<String>, StorageError> {
+        history::kbs(&self.pool.lock_primary())
+    }
+
+    async fn history_tips(&self, kb_id: &str) -> Result<Vec<Tip>, StorageError> {
+        history::tips(&self.pool.lock_primary(), kb_id)
+    }
+
+    async fn history_append_head(&self, head: &SignedHead) -> Result<(), StorageError> {
+        history::append_head(&self.pool.lock_primary(), head)
+    }
+
+    async fn history_latest_head(&self, kb_id: &str) -> Result<Option<SignedHead>, StorageError> {
+        history::latest_head(&self.pool.lock_primary(), kb_id)
     }
 
     async fn history_list(

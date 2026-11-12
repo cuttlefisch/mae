@@ -83,6 +83,27 @@ impl StorageBackend for FailingBackend {
     async fn history_nodes(&self, kb: &str) -> Result<Vec<String>, StorageError> {
         self.inner.history_nodes(kb).await
     }
+    async fn history_kbs(&self) -> Result<Vec<String>, StorageError> {
+        self.inner.history_kbs().await
+    }
+    async fn history_tips(
+        &self,
+        kb: &str,
+    ) -> Result<Vec<mae_sync::kb::history::Tip>, StorageError> {
+        self.inner.history_tips(kb).await
+    }
+    async fn history_append_head(
+        &self,
+        head: &mae_sync::kb::history::SignedHead,
+    ) -> Result<(), StorageError> {
+        self.inner.history_append_head(head).await
+    }
+    async fn history_latest_head(
+        &self,
+        kb: &str,
+    ) -> Result<Option<mae_sync::kb::history::SignedHead>, StorageError> {
+        self.inner.history_latest_head(kb).await
+    }
 
     async fn forget_editors(&self, doc_name: &str) -> Result<(), StorageError> {
         self.inner.forget_editors(doc_name).await

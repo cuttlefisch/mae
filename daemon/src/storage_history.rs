@@ -11,6 +11,7 @@
 //! share or reseal recreates a node's content, and its history must survive.
 
 use mae_sync::kb::history::{seal, Draft, Editor, EditorKind, Hash, HistoryEntry, VersionKind};
+use mae_sync::kb::history::{SignedHead, Tip};
 use mae_sync::kb::MaterializedNode;
 
 use super::editor_record;
@@ -35,6 +36,16 @@ pub(super) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS kb_node_history (
      entry_hash BLOB NOT NULL,
      PRIMARY KEY (kb_id, node_id, seq)
  );
+ CREATE TABLE IF NOT EXISTS kb_history_heads (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     kb_id TEXT NOT NULL,
+     at INTEGER NOT NULL,
+     digest BLOB NOT NULL,
+     tips TEXT NOT NULL,
+     signer BLOB NOT NULL,
+     signature BLOB NOT NULL
+ );
+ CREATE INDEX IF NOT EXISTS idx_history_heads_kb ON kb_history_heads(kb_id, id);
  CREATE TABLE IF NOT EXISTS kb_node_history_session (
      kb_id TEXT NOT NULL,
      node_id TEXT NOT NULL,
@@ -101,6 +112,111 @@ pub(super) fn nodes(conn: &sqlite::Connection, kb_id: &str) -> Result<Vec<String
         out.push(stmt.read::<String, _>(0)?);
     }
     Ok(out)
+}
+
+/// Every node's latest version in `kb_id`, as a head names it. One statement,
+/// so one consistent snapshot: a version cut concurrently is either wholly in
+/// it or not, and a head names tips that all existed together.
+pub(super) fn tips(conn: &sqlite::Connection, kb_id: &str) -> Result<Vec<Tip>, StorageError> {
+    let mut stmt = conn.prepare(
+        "SELECT h.node_id, h.seq, h.entry_hash FROM kb_node_history h
+         WHERE h.kb_id = ?1 AND h.seq = (SELECT MAX(seq) FROM kb_node_history m
+                                         WHERE m.kb_id = h.kb_id AND m.node_id = h.node_id)
+         ORDER BY h.node_id",
+    )?;
+    stmt.bind((1, kb_id))?;
+    let mut out = Vec::new();
+    while let sqlite::State::Row = stmt.next()? {
+        let entry_hash = stmt
+            .read::<Vec<u8>, _>(2)?
+            .try_into()
+            .map_err(|_| StorageError::Sqlite("history row: bad entry_hash".into()))?;
+        out.push(Tip {
+            node_id: stmt.read::<String, _>(0)?,
+            seq: stmt.read::<i64, _>(1)? as u64,
+            entry_hash,
+        });
+    }
+    Ok(out)
+}
+
+/// The KBs that have history, sorted.
+pub(super) fn kbs(conn: &sqlite::Connection) -> Result<Vec<String>, StorageError> {
+    let mut stmt = conn.prepare("SELECT DISTINCT kb_id FROM kb_node_history ORDER BY kb_id")?;
+    let mut out = Vec::new();
+    while let sqlite::State::Row = stmt.next()? {
+        out.push(stmt.read::<String, _>(0)?);
+    }
+    Ok(out)
+}
+
+/// Append a signed head to the KB's head log (D4). The log is append-only:
+/// nothing here updates or deletes a row.
+pub(super) fn append_head(conn: &sqlite::Connection, h: &SignedHead) -> Result<(), StorageError> {
+    let tips: Vec<(&str, u64, String)> = h
+        .tips
+        .iter()
+        .map(|t| (t.node_id.as_str(), t.seq, hex::encode(t.entry_hash)))
+        .collect();
+    let mut stmt = conn.prepare(
+        "INSERT INTO kb_history_heads (kb_id, at, digest, tips, signer, signature)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )?;
+    stmt.bind((1, h.kb_id.as_str()))?;
+    stmt.bind((2, h.at))?;
+    stmt.bind((3, &h.digest[..]))?;
+    stmt.bind((
+        4,
+        serde_json::to_string(&tips).expect("plain data").as_str(),
+    ))?;
+    stmt.bind((5, &h.signer[..]))?;
+    stmt.bind((6, &h.signature[..]))?;
+    stmt.next()?;
+    Ok(())
+}
+
+/// The KB's latest signed head, if any. A row that does not decode is an
+/// error, never skipped: a damaged log must not read as "no head".
+pub(super) fn latest_head(
+    conn: &sqlite::Connection,
+    kb_id: &str,
+) -> Result<Option<SignedHead>, StorageError> {
+    let mut stmt = conn.prepare(
+        "SELECT at, digest, tips, signer, signature FROM kb_history_heads
+         WHERE kb_id = ?1 ORDER BY id DESC LIMIT 1",
+    )?;
+    stmt.bind((1, kb_id))?;
+    if stmt.next()? != sqlite::State::Row {
+        return Ok(None);
+    }
+    let bad = |what: &str| StorageError::Sqlite(format!("history head: bad {what}"));
+    let fixed = |col: &str| stmt.read::<Vec<u8>, _>(col).map_err(StorageError::from);
+    let tips: Vec<(String, u64, String)> =
+        serde_json::from_str(&stmt.read::<String, _>("tips")?).map_err(|_| bad("tips"))?;
+    let tips = tips
+        .into_iter()
+        .map(|(node_id, seq, h)| {
+            let entry_hash = hex::decode(h)
+                .ok()
+                .and_then(|b| b.try_into().ok())
+                .ok_or_else(|| bad("tip hash"))?;
+            Ok(Tip {
+                node_id,
+                seq,
+                entry_hash,
+            })
+        })
+        .collect::<Result<Vec<_>, StorageError>>()?;
+    Ok(Some(SignedHead {
+        kb_id: kb_id.to_string(),
+        at: stmt.read::<i64, _>("at")?,
+        tips,
+        digest: fixed("digest")?.try_into().map_err(|_| bad("digest"))?,
+        signer: fixed("signer")?.try_into().map_err(|_| bad("signer"))?,
+        signature: fixed("signature")?
+            .try_into()
+            .map_err(|_| bad("signature"))?,
+    }))
 }
 
 /// Every entry of the node, in `seq` order.
