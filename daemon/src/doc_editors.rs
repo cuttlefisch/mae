@@ -197,48 +197,8 @@ impl InternalWriter {
 }
 
 /// The class of an editor record. Stored as text; see [`EditorKind::as_str`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum EditorKind {
-    Principal,
-    Unauthenticated,
-    /// A relay whose update carried NO verified signer: the author is unknown.
-    MeshPeer,
-    /// A relay whose update was signed; the signer has its own `Principal` row.
-    SignedRelay,
-    Internal,
-}
-
-impl EditorKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Principal => "principal",
-            Self::Unauthenticated => "unauthenticated",
-            Self::MeshPeer => "mesh-peer",
-            Self::SignedRelay => "signed-relay",
-            Self::Internal => "internal",
-        }
-    }
-
-    /// The inverse of [`Self::as_str`]. `None` for a value this build does not
-    /// know, which the reader reports as an error rather than guessing a kind.
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "principal" => Some(Self::Principal),
-            "unauthenticated" => Some(Self::Unauthenticated),
-            "mesh-peer" => Some(Self::MeshPeer),
-            "signed-relay" => Some(Self::SignedRelay),
-            "internal" => Some(Self::Internal),
-            _ => None,
-        }
-    }
-
-    /// Whether a row of this kind leaves the authors of a change unknown.
-    /// Only a principal (a known author) and a signed relay (whose signer is
-    /// recorded as a principal) do not.
-    fn hides_an_author(self) -> bool {
-        !matches!(self, Self::Principal | Self::SignedRelay)
-    }
-}
+/// Shared with version history (ADR-116 D3), which records the same classes.
+pub use mae_sync::kb::history::EditorKind;
 
 /// How an apply changed the updates yrs holds pending (see the module doc).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
