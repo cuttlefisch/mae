@@ -6,9 +6,8 @@
 //! Reuses `daemon/tests/oauth_e2e.rs`'s exact daemon-spawning shape (real self-signed TLS
 //! via `rcgen`, a real mock JWKS HTTP server, real RS256-signed JWTs via `jsonwebtoken` —
 //! CLAUDE.md principle #14: real crypto/keys per run, never a shared hardcoded test
-//! token) — duplicated rather than factored into a shared `tests/common` module so this
-//! file stays a self-contained addition with zero risk to the already-passing
-//! `oauth_e2e.rs` suite.
+//! token). The spawn and readiness check itself is the shared `daemon_harness`: the
+//! copy this file used to carry had the same port race as every other copy.
 //!
 //! `RemoteHubQueryLayer` is a *blocking* client (its whole point is to be a drop-in
 //! `KbQueryLayer`, whose trait methods are synchronous by design — see the module's own
@@ -25,6 +24,8 @@
 //! get/search round-trips) is covered separately in `shared/kb/src/remote_hub.rs`'s own
 //! unit tests against a minimal protocol-accurate mock, which doesn't need a real daemon.
 
+mod daemon_harness;
+
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use mae_kb::federation::{RemoteHubAuth, RemoteHubConfig};
 use mae_kb::query::KbQueryLayer;
@@ -33,8 +34,7 @@ use rsa::pkcs1::EncodeRsaPrivateKey;
 use rsa::traits::PublicKeyParts;
 use rsa::RsaPrivateKey;
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::Path;
+use std::net::{SocketAddr, TcpListener};
 use std::time::Duration;
 
 const TEST_KID: &str = "e2e-remote-hub-key";
@@ -119,43 +119,33 @@ fn spawn_mock_jwks_server(jwks: &serde_json::Value) -> SocketAddr {
     addr
 }
 
-fn generate_self_signed_cert(cert_path: &Path, key_path: &Path) {
-    let cert_key = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()])
-        .expect("rcgen self-signed cert");
-    std::fs::write(cert_path, cert_key.cert.pem()).unwrap();
-    std::fs::write(key_path, cert_key.signing_key.serialize_pem()).unwrap();
-}
-
-fn free_tcp_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.local_addr().unwrap().port()
-}
-
+/// The daemon and the runtime its readiness check ran on. The process is
+/// declared first so it is killed before the runtime that owns it shuts down.
 struct DaemonGuard {
-    child: std::process::Child,
+    _proc: daemon_harness::Process,
+    _rt: tokio::runtime::Runtime,
     _tmp: tempfile::TempDir,
     oauth_addr: SocketAddr,
 }
 
-impl Drop for DaemonGuard {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
+/// Spawn the daemon through `daemon_harness` (see its doc for why a bare
+/// connect is not readiness). The harness is async; this file stays off the
+/// async runtime for its blocking client (module doc), so the spawn alone runs
+/// on a private current-thread runtime, which the guard keeps alive.
 fn spawn_daemon_with_oauth(jwks_addr: SocketAddr) -> DaemonGuard {
     let tmp = tempfile::tempdir().unwrap();
     let cert_path = tmp.path().join("oauth.crt");
     let key_path = tmp.path().join("oauth.key");
-    generate_self_signed_cert(&cert_path, &key_path);
+    let cert_der = daemon_harness::write_self_signed_cert(&cert_path, &key_path);
 
-    let collab_port = free_tcp_port();
-    let oauth_port = free_tcp_port();
-    let oauth_addr: SocketAddr = format!("127.0.0.1:{oauth_port}").parse().unwrap();
-
-    let config_toml = format!(
-        r#"
+    let root = tmp.path().to_path_buf();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let proc = rt.block_on(daemon_harness::spawn_ready(|ports| {
+        let config_toml = format!(
+            r#"
 [collab]
 enabled = true
 bind = "127.0.0.1:{collab_port}"
@@ -176,51 +166,40 @@ kb_query_max_scan_nodes = 500
 kb_query_max_search_results = 20
 max_connections = 0
 "#,
-        collab_port = collab_port,
-        oauth_port = oauth_port,
-        jwks_port = jwks_addr.port(),
-        cert_path = cert_path.display(),
-        key_path = key_path.display(),
-    );
-    let config_path = tmp.path().join("daemon.toml");
-    std::fs::write(&config_path, config_toml).unwrap();
+            collab_port = ports.collab,
+            oauth_port = ports.oauth,
+            jwks_port = jwks_addr.port(),
+            cert_path = cert_path.display(),
+            key_path = key_path.display(),
+        );
+        let config_path = root.join("daemon.toml");
+        std::fs::write(&config_path, config_toml).unwrap();
 
-    let child = std::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"))
-        .args([
+        let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"));
+        cmd.args([
             "--config",
             config_path.to_str().unwrap(),
             "--data-dir",
-            tmp.path().to_str().unwrap(),
+            root.to_str().unwrap(),
         ])
-        .env("XDG_RUNTIME_DIR", tmp.path())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("failed to spawn mae-daemon");
-
-    // Guard constructed the instant spawn() returns, BEFORE the polling loop
-    // and its `assert!` below -- previously the bare `child` lived through
-    // both, so a daemon that never accepted a connection (the exact case the
-    // assert exists to catch) panicked with the process still unguarded and
-    // leaked it. `DaemonGuard`'s `Drop` now covers this whole function from
-    // here on, regardless of how it returns.
-    let guard = DaemonGuard {
-        child,
+        .env("XDG_RUNTIME_DIR", &root);
+        daemon_harness::Launch {
+            cmd,
+            status_socket: root.join("mae-daemon.sock"),
+            log: root.join("daemon.log"),
+            collab: true,
+            oauth: Some(daemon_harness::OauthProbe {
+                cert_der: cert_der.clone(),
+                ws_ticket: false,
+            }),
+        }
+    }));
+    DaemonGuard {
+        oauth_addr: proc.ports.oauth_addr(),
+        _proc: proc,
+        _rt: rt,
         _tmp: tmp,
-        oauth_addr,
-    };
-
-    // Bounded by wall-clock, not by an iteration count — see `mae_mcp::ready`.
-    // The *blocking* variant: this file is deliberately `#[test]`, not
-    // `#[tokio::test]` (see the module doc), so it cannot use the async one.
-    let connected = mae_mcp::ready::wait_until_blocking(|| TcpStream::connect(oauth_addr).is_ok());
-    assert!(
-        connected,
-        "{}",
-        mae_mcp::ready::timeout_message(&format!("mae-daemon's OAuth listener on {oauth_addr}"))
-    );
-
-    guard
+    }
 }
 
 fn remote_hub_config(base_url: String, auth: RemoteHubAuth) -> RemoteHubConfig {
