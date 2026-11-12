@@ -2018,14 +2018,7 @@ async fn handle_doc_request_inner(
         }
 
         Method::KbHistoryCheckpoint => {
-            kb_history::handle_kb_history_checkpoint(
-                doc_store,
-                auth_principal,
-                transport,
-                id,
-                &params,
-            )
-            .await
+            kb_history::checkpoint(doc_store, auth_principal, transport, id, &params).await
         }
 
         Method::KbNodeUpdate => {

@@ -60,7 +60,7 @@ fn checkpoint_params(params: &serde_json::Value) -> Result<(String, String, Stri
 /// content the daemon cannot read. The requester is recorded in the
 /// version's summary: naming is an act, not an edit, so it does not make them
 /// one of the version's editors.
-pub(super) async fn handle_kb_history_checkpoint(
+pub(super) async fn checkpoint(
     doc_store: &DocStore,
     auth_principal: Option<&str>,
     transport: Transport,
