@@ -80,9 +80,14 @@ function resolverFor(sem) {
 }
 
 // 2. The differential.
+// Inputs no corpus file holds. A headline title ending in a multi-byte
+// character before its LF made 0.5.0's syntax trap (`unreachable`).
+const EDGE_TEXTS = [
+  '* ñ\n', '* €\n', '* 😀\n', '* 𝄞\n', '* a😀\n', '** 😀\n', 'texto\n* 😀\n',
+  '* ñ\r\n', '* 😀', '* 😀a\n',
+];
 const requests = [];
-for (const f of files) {
-  const text = readFileSync(join(root, f), 'utf8');
+for (const text of [...files.map((f) => readFileSync(join(root, f), 'utf8')), ...EDGE_TEXTS]) {
   const sem = org.semantics({ text }).semantics;
   const resolver = resolverFor(sem);
   requests.push([OPS.semantics, { text }]);

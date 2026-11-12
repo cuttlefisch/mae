@@ -215,7 +215,10 @@ layer on it becomes the cheaper path.
   gains a required `eol` integer that `syntaxSection` reads back. A trailing lone CR no longer
   counts as a line end in unix and DOS files. Breaking: a heading whose title has no letter or digit
   is anchored `h--untitled` (was the bare `h`, which a browser exposes as a `window` property);
-  repeats are `h--untitled--2`.
+  repeats are `h--untitled--2`. **`mae-org-v0.5.1`** fixes a 0.5.0 panic: the terminator before a
+  region was read by slicing the two bytes before it, which split a multi-byte character ending a
+  headline's title (`"* ñ\n"`); it is now read byte by byte. The `.d.ts` declares `eol` and
+  `"line_ending"`.
 - **O4** MAE switches ingest, export and read mode to it, with the repair path; the span-based write
   path lands on the same spans.
 - **O5** the remaining constructs by measured use, privacy-relevant regions first.
