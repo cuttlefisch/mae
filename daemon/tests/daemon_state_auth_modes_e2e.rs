@@ -24,6 +24,7 @@
 //! via `tests/common/mod.rs`.
 
 mod common;
+mod daemon_harness;
 
 use common::{daemon_status, spawn_server, spawn_server_without_collab};
 use std::path::Path;

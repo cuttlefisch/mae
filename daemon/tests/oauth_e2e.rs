@@ -30,8 +30,9 @@
 //! the actual, previously-unproven thing.
 
 use std::net::SocketAddr;
-use std::path::Path;
 use std::time::Duration;
+
+mod daemon_harness;
 
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use rsa::pkcs1::EncodeRsaPrivateKey;
@@ -128,31 +129,17 @@ async fn spawn_mock_jwks_server(jwks: &serde_json::Value) -> SocketAddr {
     addr
 }
 
-/// Generate a self-signed TLS cert+key (rcgen — the same crate
-/// `shared/mcp/src/tls.rs` uses for mTLS test certs) for `127.0.0.1`,
-/// PEM-encoded to `cert_path`/`key_path`.
-fn generate_self_signed_cert(cert_path: &Path, key_path: &Path) {
-    let cert_key = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()])
-        .expect("rcgen self-signed cert");
-    std::fs::write(cert_path, cert_key.cert.pem()).unwrap();
-    std::fs::write(key_path, cert_key.signing_key.serialize_pem()).unwrap();
-}
-
-fn free_tcp_port() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.local_addr().unwrap().port()
-}
-
 struct DaemonGuard {
-    _child: tokio::process::Child,
+    _proc: daemon_harness::Process,
     _tmp: tempfile::TempDir,
     oauth_addr: SocketAddr,
 }
 
 /// Spawn a real `mae-daemon` with a real OAuth listener (collab enabled so
 /// a `DocStore` exists for `kb/query.*`, TLS cert/key on disk, JWKS pointed
-/// at the mock server above) and wait for it to actually accept TLS
-/// connections before returning.
+/// at the mock server above) and wait until it is proven ready -- both
+/// listeners bound, the OAuth one presenting this test's certificate (see
+/// `daemon_harness`).
 async fn spawn_daemon_with_oauth(jwks_addr: SocketAddr) -> DaemonGuard {
     spawn_daemon_with_oauth_capped(jwks_addr, 0).await
 }
@@ -163,79 +150,7 @@ async fn spawn_daemon_with_oauth_capped(
     jwks_addr: SocketAddr,
     max_connections: usize,
 ) -> DaemonGuard {
-    let tmp = tempfile::tempdir().unwrap();
-    let cert_path = tmp.path().join("oauth.crt");
-    let key_path = tmp.path().join("oauth.key");
-    generate_self_signed_cert(&cert_path, &key_path);
-
-    let collab_port = free_tcp_port();
-    let oauth_port = free_tcp_port();
-    let oauth_addr: SocketAddr = format!("127.0.0.1:{oauth_port}").parse().unwrap();
-
-    let config_toml = format!(
-        r#"
-[collab]
-enabled = true
-bind = "127.0.0.1:{collab_port}"
-
-[oauth]
-enabled = true
-bind = "127.0.0.1:{oauth_port}"
-canonical_resource_uri = "{CANONICAL_RESOURCE}"
-jwks_url = "http://127.0.0.1:{jwks_port}/jwks"
-issuer = "{TEST_ISSUER}"
-principal_claim = "sub"
-cert_path = "{cert_path}"
-key_path = "{key_path}"
-kb_query_enabled = true
-max_request_body_bytes = 200
-kb_query_max_body_bytes = 65536
-kb_query_max_scan_nodes = 500
-kb_query_max_search_results = 20
-max_connections = {max_connections}
-"#,
-        collab_port = collab_port,
-        oauth_port = oauth_port,
-        jwks_port = jwks_addr.port(),
-        cert_path = cert_path.display(),
-        key_path = key_path.display(),
-        max_connections = max_connections,
-    );
-    let config_path = tmp.path().join("daemon.toml");
-    std::fs::write(&config_path, config_toml).unwrap();
-
-    let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"))
-        .args([
-            "--config",
-            config_path.to_str().unwrap(),
-            "--data-dir",
-            tmp.path().to_str().unwrap(),
-        ])
-        .env("XDG_RUNTIME_DIR", tmp.path())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("failed to spawn mae-daemon");
-
-    // Wait for the OAuth listener to actually accept a TCP connection
-    // (TLS handshake happens per-request below, not needed for this probe).
-    // Bounded by wall-clock, not by an iteration count — see `mae_mcp::ready`.
-    let connected = mae_mcp::ready::wait_until(|| async {
-        tokio::net::TcpStream::connect(oauth_addr).await.is_ok()
-    })
-    .await;
-    assert!(
-        connected,
-        "{}",
-        mae_mcp::ready::timeout_message(&format!("mae-daemon's OAuth listener on {oauth_addr}"))
-    );
-
-    DaemonGuard {
-        _child: child,
-        _tmp: tmp,
-        oauth_addr,
-    }
+    spawn_daemon(jwks_addr, 200, max_connections, false).await
 }
 
 /// Same as `spawn_daemon_with_oauth`, additionally setting `webview_enabled
@@ -262,17 +177,25 @@ async fn spawn_daemon_with_oauth_configured(
     jwks_addr: SocketAddr,
     webview_enabled: bool,
 ) -> DaemonGuard {
+    spawn_daemon(jwks_addr, 1048576, 0, webview_enabled).await
+}
+
+/// The one spawn behind the variants above; they differ only in these knobs.
+async fn spawn_daemon(
+    jwks_addr: SocketAddr,
+    max_request_body_bytes: usize,
+    max_connections: usize,
+    webview_enabled: bool,
+) -> DaemonGuard {
     let tmp = tempfile::tempdir().unwrap();
     let cert_path = tmp.path().join("oauth.crt");
     let key_path = tmp.path().join("oauth.key");
-    generate_self_signed_cert(&cert_path, &key_path);
+    let cert_der = daemon_harness::write_self_signed_cert(&cert_path, &key_path);
 
-    let collab_port = free_tcp_port();
-    let oauth_port = free_tcp_port();
-    let oauth_addr: SocketAddr = format!("127.0.0.1:{oauth_port}").parse().unwrap();
-
-    let config_toml = format!(
-        r#"
+    let root = tmp.path().to_path_buf();
+    let proc = daemon_harness::spawn_ready(|ports| {
+        let config_toml = format!(
+            r#"
 [collab]
 enabled = true
 bind = "127.0.0.1:{collab_port}"
@@ -287,52 +210,46 @@ principal_claim = "sub"
 cert_path = "{cert_path}"
 key_path = "{key_path}"
 kb_query_enabled = true
-max_request_body_bytes = 1048576
+max_request_body_bytes = {max_request_body_bytes}
 kb_query_max_body_bytes = 65536
 kb_query_max_scan_nodes = 500
 kb_query_max_search_results = 20
-max_connections = 0
+max_connections = {max_connections}
 webview_enabled = {webview_enabled}
 "#,
-        collab_port = collab_port,
-        oauth_port = oauth_port,
-        jwks_port = jwks_addr.port(),
-        cert_path = cert_path.display(),
-        key_path = key_path.display(),
-        webview_enabled = webview_enabled,
-    );
-    let config_path = tmp.path().join("daemon.toml");
-    std::fs::write(&config_path, config_toml).unwrap();
+            collab_port = ports.collab,
+            oauth_port = ports.oauth,
+            jwks_port = jwks_addr.port(),
+            cert_path = cert_path.display(),
+            key_path = key_path.display(),
+        );
+        let config_path = root.join("daemon.toml");
+        std::fs::write(&config_path, config_toml).unwrap();
 
-    let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"))
-        .args([
+        let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"));
+        cmd.args([
             "--config",
             config_path.to_str().unwrap(),
             "--data-dir",
-            tmp.path().to_str().unwrap(),
+            root.to_str().unwrap(),
         ])
-        .env("XDG_RUNTIME_DIR", tmp.path())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("failed to spawn mae-daemon");
-
-    // Bounded by wall-clock, not by an iteration count — see `mae_mcp::ready`.
-    let connected = mae_mcp::ready::wait_until(|| async {
-        tokio::net::TcpStream::connect(oauth_addr).await.is_ok()
+        .env("XDG_RUNTIME_DIR", &root);
+        daemon_harness::Launch {
+            cmd,
+            status_socket: root.join("mae-daemon.sock"),
+            log: root.join("daemon.log"),
+            collab: true,
+            oauth: Some(daemon_harness::OauthProbe {
+                cert_der: cert_der.clone(),
+                ws_ticket: false,
+            }),
+        }
     })
     .await;
-    assert!(
-        connected,
-        "{}",
-        mae_mcp::ready::timeout_message(&format!("mae-daemon's OAuth listener on {oauth_addr}"))
-    );
-
     DaemonGuard {
-        _child: child,
+        oauth_addr: proc.ports.oauth_addr(),
+        _proc: proc,
         _tmp: tmp,
-        oauth_addr,
     }
 }
 
