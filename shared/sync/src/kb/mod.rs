@@ -20,6 +20,7 @@ mod collection_format;
 mod collection_lease;
 mod collection_oplog;
 mod collection_roles;
+pub mod history;
 mod node;
 
 pub use collection_format::BODY_FORMAT_ORG_LITERAL_V1;
