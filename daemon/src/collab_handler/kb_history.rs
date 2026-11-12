@@ -5,7 +5,8 @@ use super::method_authz::Method;
 use super::*;
 use crate::storage::StorageError;
 use mae_sync::kb::history::{
-    kb_head, public_key_of, verify_against_head, verify_chain, HeadError, HistoryEntry, VersionKind,
+    kb_head, public_key_of, verify_against_head, verify_chain, HeadError, HistoryEntry, HistoryKey,
+    VersionKind,
 };
 use mae_sync::kb::MaterializedNode;
 
@@ -187,9 +188,22 @@ fn version_at<'a>(
         .ok_or_else(|| McpError::doc_not_found(format!("there is no version {seq} ({key})")))
 }
 
+/// The KB's history key: content is checked only with it.
+async fn kb_key(doc_store: &DocStore, kb_id: &str) -> Result<Option<HistoryKey>, McpError> {
+    doc_store
+        .history_key(kb_id)
+        .await
+        .map_err(|e| McpError::internal_fault(format!("history key unreadable: {e}")))
+}
+
 /// The chain check of a node's whole history, as the methods report it.
-fn chain_status(kb_id: &str, node_id: &str, h: &[HistoryEntry]) -> serde_json::Value {
-    match verify_chain(kb_id, node_id, h, None) {
+fn chain_status(
+    kb_id: &str,
+    node_id: &str,
+    h: &[HistoryEntry],
+    key: Option<&HistoryKey>,
+) -> serde_json::Value {
+    match verify_chain(kb_id, node_id, h, None, key) {
         Ok(()) => serde_json::json!({ "ok": true }),
         Err(e) => serde_json::json!({ "ok": false, "seq": e.seq, "broken": e.broken.as_str() }),
     }
@@ -214,14 +228,17 @@ async fn list(
 
 /// A version's content as a reader shows it, if it holds one that matches its
 /// hash. `None` when pruned or when it does not verify.
-fn content_json(e: &HistoryEntry) -> Option<serde_json::Value> {
-    let node = e.node()?.ok().filter(|n| n.digest() == e.content_hash)?;
+fn content_json(e: &HistoryEntry, key: &HistoryKey) -> Option<serde_json::Value> {
+    let node = e
+        .node()?
+        .ok()
+        .filter(|n| key.content_hash(n) == e.content_hash)?;
     let mut m = crate::kb_query::content_fields(&node);
     m.insert("body".into(), serde_json::json!(node.body));
     m.insert("links".into(), serde_json::json!(node.links));
     m.insert(
         "version".into(),
-        serde_json::json!(hex::encode(&e.content_hash[..16])),
+        serde_json::json!(hex::encode(&node.digest()[..16])),
     );
     Some(serde_json::Value::Object(m))
 }
@@ -243,8 +260,12 @@ async fn get(
     let h = load(doc_store, &kb_id, &node_id).await?;
     let e = version_at(&h, want, "seq")?;
     let mut out = entry_json(e);
-    out["content"] = content_json(e).unwrap_or(serde_json::Value::Null);
-    out["verification"] = chain_status(&kb_id, &node_id, &h);
+    let key = kb_key(doc_store, &kb_id).await?;
+    out["content"] = key
+        .as_ref()
+        .and_then(|k| content_json(e, k))
+        .unwrap_or(serde_json::Value::Null);
+    out["verification"] = chain_status(&kb_id, &node_id, &h, key.as_ref());
     Ok(out)
 }
 
@@ -260,12 +281,15 @@ async fn diff(
     let (from, to) = (seq(params, "from")?, seq(params, "to")?);
     gate(doc_store, &kb_id, auth_principal, transport, KbOp::Read).await?;
     let h = load(doc_store, &kb_id, &node_id).await?;
+    let hkey = kb_key(doc_store, &kb_id)
+        .await?
+        .ok_or_else(|| McpError::internal_fault(format!("KB '{kb_id}' has no history key")))?;
     let node = |s: u64, key: &str| -> Result<MaterializedNode, McpError> {
         let e = version_at(&h, s, key)?;
         let refuse = |why: &str| McpError::invalid_params(key, format!("version {s} {why}"));
         let n = e.node().ok_or_else(|| refuse("is pruned"))?;
         n.ok()
-            .filter(|n| n.digest() == e.content_hash)
+            .filter(|n| hkey.content_hash(n) == e.content_hash)
             .ok_or_else(|| refuse("does not verify"))
     };
     let (a, b) = (node(from, "from")?, node(to, "to")?);
@@ -300,12 +324,13 @@ async fn verify(
             .await
             .map_err(|e| McpError::internal_fault(format!("history unreadable: {e}")))?,
     };
+    let hkey = kb_key(doc_store, &kb_id).await?;
     let (mut versions, mut failures) = (0usize, Vec::new());
     let mut chains = std::collections::BTreeMap::new();
     for n in &nodes {
         let h = load(doc_store, &kb_id, n).await?;
         versions += h.len();
-        if let Err(e) = verify_chain(&kb_id, n, &h, None) {
+        if let Err(e) = verify_chain(&kb_id, n, &h, None, hkey.as_ref()) {
             failures.push(
                 serde_json::json!({ "node_id": n, "seq": e.seq, "broken": e.broken.as_str() }),
             );
@@ -317,7 +342,7 @@ async fn verify(
         .filter_map(|(n, h)| h.last().map(|t| (n.as_str(), t.seq, t.entry_hash)));
     let head = kb_head(&kb_id, tips).map_err(|e| McpError::internal_fault(format!("head: {e}")))?;
     let signed = match whole {
-        true => Some(signed_head_check(doc_store, &kb_id, &chains).await?),
+        true => Some(signed_head_check(doc_store, &kb_id, &chains, hkey.as_ref()).await?),
         false => None,
     };
     let signed_ok = signed.as_ref().is_none_or(|s| s["ok"] != false);
@@ -340,6 +365,7 @@ async fn signed_head_check(
     doc_store: &DocStore,
     kb_id: &str,
     chains: &std::collections::BTreeMap<String, Vec<HistoryEntry>>,
+    key: Option<&HistoryKey>,
 ) -> Result<serde_json::Value, McpError> {
     let latest = doc_store
         .history_latest_head(kb_id)
@@ -356,7 +382,7 @@ async fn signed_head_check(
             "broken": "head", "reason": "the head is not signed with this daemon's key" }),
         );
     }
-    Ok(match verify_against_head(&head, kb_id, chains) {
+    Ok(match verify_against_head(&head, kb_id, chains, key) {
         Ok(()) => serde_json::json!({ "checked": true, "ok": true, "head": at }),
         Err(e) => {
             let (node_id, seq) = match &e {

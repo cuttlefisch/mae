@@ -503,6 +503,14 @@ impl DocStore {
         self.storage.history_latest_head(kb_id).await
     }
 
+    /// `kb_id`'s history key, if it has one that is not released (ADR-116).
+    pub async fn history_key(
+        &self,
+        kb_id: &str,
+    ) -> Result<Option<mae_sync::kb::history::HistoryKey>, StorageError> {
+        self.storage.history_key(kb_id).await
+    }
+
     /// Every version of a KB node, in `seq` order (ADR-116).
     pub async fn history_list(
         &self,

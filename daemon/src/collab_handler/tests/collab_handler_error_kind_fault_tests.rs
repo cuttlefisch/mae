@@ -92,6 +92,13 @@ impl StorageBackend for ArmedBackend {
     ) -> Result<Option<mae_sync::kb::history::SignedHead>, StorageError> {
         self.inner.history_latest_head(kb).await
     }
+
+    async fn history_key(
+        &self,
+        kb: &str,
+    ) -> Result<Option<mae_sync::kb::history::HistoryKey>, StorageError> {
+        self.inner.history_key(kb).await
+    }
     async fn forget_editors(&self, doc: &str) -> Result<(), StorageError> {
         self.inner.forget_editors(doc).await
     }

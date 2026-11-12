@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
 use super::chain::{kb_head, verify_chain, Broken, SealError, VerifyError};
-use super::{Hash, HistoryEntry};
+use super::{Hash, HistoryEntry, HistoryKey};
 
 const SIG_DOMAIN: &[u8] = b"maehistoryhead-sig/v1";
 
@@ -122,12 +122,14 @@ impl SignedHead {
 }
 
 /// Checks `chains` (each node's whole history, in `seq` order) against
-/// `head`: the signature, every chain on its own, and every tip the head names
-/// still in its chain with the same entry hash.
+/// `head`: the signature, every chain on its own (with its content, given the
+/// KB's history `key`), and every tip the head names still in its chain with
+/// the same entry hash.
 pub fn verify_against_head(
     head: &SignedHead,
     kb_id: &str,
     chains: &BTreeMap<String, Vec<HistoryEntry>>,
+    key: Option<&HistoryKey>,
 ) -> Result<(), HeadError> {
     if head.kb_id != kb_id {
         return Err(HeadError::Kb);
@@ -136,7 +138,7 @@ pub fn verify_against_head(
         return Err(HeadError::Signature);
     }
     for (node_id, chain) in chains {
-        verify_chain(kb_id, node_id, chain, None).map_err(|err| HeadError::Chain {
+        verify_chain(kb_id, node_id, chain, None, key).map_err(|err| HeadError::Chain {
             node_id: node_id.clone(),
             err,
         })?;

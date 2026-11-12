@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 
 use crate::doc_editors::{EditStamp, EditorKind, EditorsSince};
-use mae_sync::kb::history::{HistoryEntry, SignedHead, Tip};
+use mae_sync::kb::history::{HistoryEntry, HistoryKey, SignedHead, Tip};
 
 #[path = "storage_editor_record.rs"]
 mod editor_record;
@@ -155,6 +155,8 @@ pub trait StorageBackend: Send + Sync {
 
     /// `kb_id`'s latest signed head, if any.
     async fn history_latest_head(&self, kb_id: &str) -> Result<Option<SignedHead>, StorageError>;
+    /// `kb_id`'s history key, if it has one that is not released.
+    async fn history_key(&self, kb_id: &str) -> Result<Option<HistoryKey>, StorageError>;
 
     /// Every entry of a KB node's history, in `seq` order.
     async fn history_list(
@@ -553,6 +555,10 @@ impl StorageBackend for SqliteBackend {
 
     async fn history_latest_head(&self, kb_id: &str) -> Result<Option<SignedHead>, StorageError> {
         history::latest_head(&self.pool.lock_primary(), kb_id)
+    }
+
+    async fn history_key(&self, kb_id: &str) -> Result<Option<HistoryKey>, StorageError> {
+        history::key(&self.pool.lock_primary(), kb_id)
     }
 
     async fn history_list(
@@ -1473,5 +1479,94 @@ mod tests {
         );
         let s = backend.history_session("kb", "n").await.unwrap();
         assert_eq!(s, vec![(EditorKind::Principal, "carol".to_string())]);
+    }
+
+    fn checkpoint_for(node: &str, title: &str) -> Checkpoint {
+        Checkpoint {
+            kb_id: "kb".into(),
+            node_id: node.into(),
+            kind: mae_sync::kb::history::VersionKind::Edit,
+            content: mae_sync::kb::KbNodeDoc::new_created_at(node, title, "", &[], 1).materialize(),
+            name: None,
+            summary: None,
+            restored_from: None,
+        }
+    }
+
+    fn key_rows(backend: &SqliteBackend) -> i64 {
+        let conn = backend.pool.lock_primary();
+        let mut stmt = conn
+            .prepare("SELECT COUNT(*) FROM kb_history_keys")
+            .unwrap();
+        stmt.next().unwrap();
+        stmt.read::<i64, _>(0).unwrap()
+    }
+
+    /// A KB's first versions, cut at the same moment on different nodes (so
+    /// on different shard connections of one database file), all use one
+    /// history key: the first transaction makes it and the rest read it.
+    /// Kills a key made outside the cut's transaction, or one that replaces
+    /// an existing key, under either of which earlier versions stop verifying.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_first_cuts_share_one_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteBackend::open(&dir.path().join("state.db")).unwrap());
+        for round in 0..3 {
+            let tasks: Vec<_> = (0..16)
+                .map(|i| {
+                    let b = Arc::clone(&backend);
+                    tokio::spawn(async move {
+                        let cp = checkpoint_for(&format!("n{i}"), &format!("r{round}"));
+                        b.history_cut(cp, 1).await.unwrap()
+                    })
+                })
+                .collect();
+            for t in tasks {
+                t.await.unwrap();
+            }
+        }
+        assert_eq!(key_rows(&backend), 1);
+        let key = backend.history_key("kb").await.unwrap().expect("a key");
+        for i in 0..16 {
+            let node = format!("n{i}");
+            let h = backend.history_list("kb", &node).await.unwrap();
+            assert_eq!(h.len(), 3, "{node}");
+            let verified = mae_sync::kb::history::verify_chain("kb", &node, &h, None, Some(&key));
+            assert!(verified.is_ok(), "{node}: {verified:?}");
+        }
+    }
+
+    /// Once a KB's history key is released (it switched to E2E), an update
+    /// that would cut a version still lands, cuts nothing, and makes no new
+    /// key. Kills a cut that fails its update, and one that re-creates a key.
+    #[tokio::test]
+    async fn a_released_key_skips_the_cut_and_is_not_recreated() {
+        let backend = SqliteBackend::open_memory().unwrap();
+        let doc = mae_sync::kb_node_doc_name("kb", "n");
+        backend
+            .history_cut(checkpoint_for("n", "before"), 1)
+            .await
+            .unwrap();
+        backend
+            .pool
+            .lock_primary()
+            .execute("UPDATE kb_history_keys SET key = NULL, released_at = 2 WHERE kb_id = 'kb'")
+            .unwrap();
+        backend
+            .wal_append(&doc, b"u", None, &handoff_stamp("bob", Some("after")))
+            .await
+            .unwrap();
+        let state = backend.load_document(&doc).await.unwrap().unwrap();
+        assert_eq!(state.wal_tail.len(), 1, "the update landed");
+        assert_eq!(
+            backend.history_list("kb", "n").await.unwrap().len(),
+            1,
+            "no version cut"
+        );
+        assert!(
+            backend.history_key("kb").await.unwrap().is_none(),
+            "no new key"
+        );
+        assert_eq!(key_rows(&backend), 1, "the released marker stays");
     }
 }

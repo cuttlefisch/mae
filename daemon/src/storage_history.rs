@@ -10,8 +10,9 @@
 //! Like the editor record, history is not touched by `delete_document`: a
 //! share or reseal recreates a node's content, and its history must survive.
 
-use mae_sync::kb::history::{seal, Draft, Editor, EditorKind, Hash, HistoryEntry, VersionKind};
-use mae_sync::kb::history::{SignedHead, Tip};
+use mae_sync::kb::history::{
+    seal, Draft, Editor, EditorKind, Hash, HistoryEntry, HistoryKey, SignedHead, Tip, VersionKind,
+};
 use mae_sync::kb::MaterializedNode;
 
 use super::editor_record;
@@ -46,6 +47,11 @@ pub(super) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS kb_node_history (
      signature BLOB NOT NULL
  );
  CREATE INDEX IF NOT EXISTS idx_history_heads_kb ON kb_history_heads(kb_id, id);
+ CREATE TABLE IF NOT EXISTS kb_history_keys (
+     kb_id TEXT PRIMARY KEY,
+     key BLOB,
+     released_at INTEGER
+ );
  CREATE TABLE IF NOT EXISTS kb_node_history_session (
      kb_id TEXT NOT NULL,
      node_id TEXT NOT NULL,
@@ -290,6 +296,42 @@ fn mark_session(
     Ok(())
 }
 
+/// The KB's history key for a cut, made in the cut's own transaction if the KB
+/// has none: `INSERT OR IGNORE` under the transaction's write lock, then read
+/// back, so concurrent first cuts on different nodes (different shards) all
+/// get the one key the first of them made. `None` once the key is released
+/// (the KB switched to E2E): the row stays as a marker, so no later cut
+/// makes a new key, and the caller skips the cut rather than fail the write.
+fn key_for_cut(conn: &sqlite::Connection, kb_id: &str) -> Result<Option<HistoryKey>, StorageError> {
+    let mut make =
+        conn.prepare("INSERT OR IGNORE INTO kb_history_keys (kb_id, key) VALUES (?1, ?2)")?;
+    make.bind((1, kb_id))?;
+    make.bind((2, &HistoryKey::generate().as_bytes()[..]))?;
+    make.next()?;
+    key(conn, kb_id)
+}
+
+/// The KB's history key, if it has one that is not released.
+pub(super) fn key(
+    conn: &sqlite::Connection,
+    kb_id: &str,
+) -> Result<Option<HistoryKey>, StorageError> {
+    let mut stmt = conn.prepare("SELECT key FROM kb_history_keys WHERE kb_id = ?1")?;
+    stmt.bind((1, kb_id))?;
+    if stmt.next()? != sqlite::State::Row {
+        return Ok(None);
+    }
+    match stmt.read::<Option<Vec<u8>>, _>(0)? {
+        None => Ok(None),
+        Some(bytes) => {
+            let bytes: [u8; 32] = bytes
+                .try_into()
+                .map_err(|_| StorageError::Sqlite("history key: bad length".into()))?;
+            Ok(Some(HistoryKey::from_bytes(bytes)))
+        }
+    }
+}
+
 /// The editors recorded after WAL id `after`. Where the record begins later
 /// (`Incomplete`), the editors it does know: an unattributed stretch adds no
 /// one, rather than failing the write that cuts the version.
@@ -323,13 +365,17 @@ fn editors_after(
 /// inclusive), and the editors recorded there. Either way it starts a new
 /// session.
 /// Returns `None` without writing when the content equals the previous
-/// version's and the cut is not a named one (a no-op save adds nothing, D2).
+/// version's and the cut is not a named one (a no-op save adds nothing, D2),
+/// and when the KB's history key is released: an E2E KB is not versioned.
 pub(super) fn cut_in_txn(
     conn: &sqlite::Connection,
     doc_name: &str,
     cp: Checkpoint,
     now: i64,
 ) -> Result<Option<HistoryEntry>, StorageError> {
+    let Some(key) = key_for_cut(conn, &cp.kb_id)? else {
+        return Ok(None);
+    };
     let prev = tail(conn, &cp.kb_id, &cp.node_id)?;
     let wal_from = prev.as_ref().map_or(0, |p| p.wal_to);
     let wal_to = editor_record::high_water(conn, doc_name)?.max(wal_from);
@@ -337,7 +383,7 @@ pub(super) fn cut_in_txn(
     if cp.kind != VersionKind::Named
         && prev
             .as_ref()
-            .is_some_and(|p| p.content_hash == cp.content.digest())
+            .is_some_and(|p| p.content_hash == key.content_hash(&cp.content))
     {
         return Ok(None);
     }
@@ -352,7 +398,7 @@ pub(super) fn cut_in_txn(
         restored_from: cp.restored_from,
         content: Some(cp.content),
     };
-    let entry = seal(&cp.kb_id, &cp.node_id, prev.as_ref(), draft)
+    let entry = seal(&cp.kb_id, &cp.node_id, prev.as_ref(), draft, &key)
         .map_err(|e| StorageError::Sqlite(format!("history: {e}")))?;
     insert(conn, &entry)?;
     Ok(Some(entry))

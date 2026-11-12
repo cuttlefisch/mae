@@ -10,6 +10,10 @@ use crate::kb::history::*;
 const KB: &str = "kb-1";
 const SEED: [u8; 32] = [7; 32];
 
+fn key() -> HistoryKey {
+    HistoryKey::from_bytes([5; 32])
+}
+
 fn chain(node: &str, titles: &[&str]) -> Vec<HistoryEntry> {
     let mut out: Vec<HistoryEntry> = Vec::new();
     for (i, t) in titles.iter().enumerate() {
@@ -24,7 +28,7 @@ fn chain(node: &str, titles: &[&str]) -> Vec<HistoryEntry> {
             restored_from: None,
             content: Some(KbNodeDoc::new_created_at(node, t, "", &[], 1).materialize()),
         };
-        let e = seal(KB, node, out.last(), d).unwrap();
+        let e = seal(KB, node, out.last(), d, &key()).unwrap();
         out.push(e);
     }
     out
@@ -74,7 +78,7 @@ fn a_head_verifies_only_as_signed() {
         "another key's name on this signature"
     );
     assert_eq!(
-        verify_against_head(&head, "kb-2", &chains),
+        verify_against_head(&head, "kb-2", &chains, Some(&key())),
         Err(HeadError::Kb)
     );
 }
@@ -86,13 +90,16 @@ fn a_head_verifies_only_as_signed() {
 fn a_chain_is_checked_as_a_prefix_of_the_head() {
     let chains = kb();
     let head = SignedHead::sign(KB, 100, tips(&chains), &SEED).unwrap();
-    assert_eq!(verify_against_head(&head, KB, &chains), Ok(()));
+    assert_eq!(
+        verify_against_head(&head, KB, &chains, Some(&key())),
+        Ok(())
+    );
 
     let mut grown = chains.clone();
     grown.insert("a".into(), chain("a", &["a1", "a2", "a3", "a4"]));
     grown.insert("c".into(), chain("c", &["c1"]));
     assert_eq!(
-        verify_against_head(&head, KB, &grown),
+        verify_against_head(&head, KB, &grown, Some(&key())),
         Ok(()),
         "later versions are expected"
     );
@@ -103,16 +110,19 @@ fn a_chain_is_checked_as_a_prefix_of_the_head() {
         node_id: "a".into(),
         seq: 3,
     };
-    assert_eq!(verify_against_head(&head, KB, &cut), Err(tip_a3.clone()));
+    assert_eq!(
+        verify_against_head(&head, KB, &cut, Some(&key())),
+        Err(tip_a3.clone())
+    );
     assert!(
-        verify_chain(KB, "a", &cut["a"], None).is_ok(),
+        verify_chain(KB, "a", &cut["a"], None, Some(&key())).is_ok(),
         "which the chain alone accepts"
     );
 
     let mut gone = chains.clone();
     gone.remove("b");
     assert_eq!(
-        verify_against_head(&head, KB, &gone),
+        verify_against_head(&head, KB, &gone, Some(&key())),
         Err(HeadError::Tip {
             node_id: "b".into(),
             seq: 1
@@ -122,15 +132,18 @@ fn a_chain_is_checked_as_a_prefix_of_the_head() {
     let mut resealed = chains.clone();
     resealed.insert("a".into(), chain("a", &["a1", "rewritten", "a3"]));
     assert!(
-        verify_chain(KB, "a", &resealed["a"], None).is_ok(),
+        verify_chain(KB, "a", &resealed["a"], None, Some(&key())).is_ok(),
         "consistent on its own"
     );
-    assert_eq!(verify_against_head(&head, KB, &resealed), Err(tip_a3));
+    assert_eq!(
+        verify_against_head(&head, KB, &resealed, Some(&key())),
+        Err(tip_a3)
+    );
 
     let mut broken = chains.clone();
     broken.get_mut("b").unwrap()[0].summary = Some("x".into());
     assert!(matches!(
-        verify_against_head(&head, KB, &broken),
+        verify_against_head(&head, KB, &broken, Some(&key())),
         Err(HeadError::Chain { .. })
     ));
 }
