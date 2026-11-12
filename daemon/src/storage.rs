@@ -23,7 +23,7 @@ mod history;
 #[path = "storage_seed_record.rs"]
 mod seed_record;
 
-pub use history::Checkpoint;
+pub use history::{Checkpoint, Listed};
 pub use seed_record::{SeedNodeRow, SeedRecord};
 
 /// Errors from storage operations.
@@ -164,6 +164,16 @@ pub trait StorageBackend: Send + Sync {
         kb_id: &str,
         node_id: &str,
     ) -> Result<Vec<HistoryEntry>, StorageError>;
+
+    /// Up to `limit` versions of a KB node with `seq < before` (every version,
+    /// without `before`), newest first, without their content.
+    async fn history_page(
+        &self,
+        kb_id: &str,
+        node_id: &str,
+        before: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<Listed>, StorageError>;
 
     /// Drop `doc_name`'s editor record and origin. For a document whose content
     /// is gone for good (an evicted ephemeral buffer), so the table stays bounded.
@@ -569,6 +579,18 @@ impl StorageBackend for SqliteBackend {
         let doc_name = mae_sync::kb_node_doc_name(kb_id, node_id);
         let conn = self.pool.lock_shard(&doc_name);
         history::list(&conn, kb_id, node_id)
+    }
+
+    async fn history_page(
+        &self,
+        kb_id: &str,
+        node_id: &str,
+        before: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<Listed>, StorageError> {
+        let doc_name = mae_sync::kb_node_doc_name(kb_id, node_id);
+        let conn = self.pool.lock_shard(&doc_name);
+        history::page(&conn, kb_id, node_id, before, limit)
     }
 
     async fn wal_high_water(&self, doc_name: &str) -> Result<u64, StorageError> {

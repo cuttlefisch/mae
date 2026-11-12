@@ -74,7 +74,7 @@ async fn list_reports_records_to_readers_only() {
         .iter()
         .map(|e| e["seq"].as_u64().unwrap())
         .collect();
-    assert_eq!(seqs, [1, 2, 3]);
+    assert_eq!(seqs, [3, 2, 1], "newest first");
     assert!(versions
         .iter()
         .all(|e| e.get("content").is_none() && e["pruned"] == false));

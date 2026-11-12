@@ -520,6 +520,20 @@ impl DocStore {
         self.storage.history_list(kb_id, node_id).await
     }
 
+    /// A page of a KB node's versions, newest first (ADR-116 D7): see
+    /// [`crate::storage::StorageBackend::history_page`].
+    pub async fn history_page(
+        &self,
+        kb_id: &str,
+        node_id: &str,
+        before: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<crate::storage::Listed>, StorageError> {
+        self.storage
+            .history_page(kb_id, node_id, before, limit)
+            .await
+    }
+
     pub async fn wal_high_water(&self, doc_name: &str) -> Result<u64, StorageError> {
         self.storage.wal_high_water(doc_name).await
     }

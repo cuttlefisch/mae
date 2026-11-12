@@ -10,8 +10,30 @@ use mae_sync::kb::MaterializedNode;
 /// The longest name a version may carry, in characters.
 const MAX_NAME_CHARS: usize = 200;
 
-/// A version as the history methods report it.
+/// The most versions one `kb/history.list` page returns when the request
+/// names no `limit`: a history view's first screen, in one round trip.
+pub(super) const LIST_DEFAULT_LIMIT: u32 = 100;
+
+/// The most a request may ask for. A page's size grows with it (a record is
+/// a few hundred bytes, more with a long name or many editors), so this keeps
+/// a page far under the 10 MiB frame limit of `mae_mcp` while the SQL stays
+/// one index range scan of at most this many rows.
+pub(super) const LIST_MAX_LIMIT: u32 = 500;
+
+/// A version as the history methods report it. Every record carries `kind`,
+/// one of [`VersionKind::as_str`]'s values: `edit` (cut at a handoff between
+/// editors), `named` (a checkpoint someone asked for: `kb/history.checkpoint`,
+/// with `name` set), `rollback` (`restored_from` set), `import`, `seed`,
+/// `rebirth`, `delete`, or `pruned` (an audit entry of a pruning pass, which
+/// holds no content). A reader that meets a kind it does not know shows it as
+/// a version of that kind, never as an edit.
 pub(super) fn entry_json(e: &HistoryEntry) -> serde_json::Value {
+    record_json(e, e.is_pruned())
+}
+
+/// [`entry_json`] for a record whose content was not read: `pruned` says
+/// whether the stored version holds any.
+fn record_json(e: &HistoryEntry, pruned: bool) -> serde_json::Value {
     let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(e.created_at.max(0) as u64);
     serde_json::json!({
         "kb_id": e.kb_id,
@@ -27,7 +49,7 @@ pub(super) fn entry_json(e: &HistoryEntry) -> serde_json::Value {
         "summary": e.summary,
         "name": e.name,
         "restored_from": e.restored_from,
-        "pruned": e.is_pruned(),
+        "pruned": pruned,
         "content_hash": hex::encode(e.content_hash),
         "entry_hash": hex::encode(e.entry_hash),
     })
@@ -206,7 +228,14 @@ fn chain_status(
     }
 }
 
-/// `kb/history.list {kb_id, node_id}`: every version's record, without content.
+/// `kb/history.list {kb_id, node_id, limit?, before_seq?}`: a page of the
+/// node's version records, without content, **newest first**. `limit` is
+/// 1..=[`LIST_MAX_LIMIT`] (default [`LIST_DEFAULT_LIMIT`]); `before_seq`
+/// returns only versions with `seq < before_seq`. `next` is the `before_seq`
+/// of the following page, or `null` when this page reaches the oldest
+/// version. Seqs never change once written and new versions only ever take a
+/// higher one, so paging with `next` returns every version that existed at
+/// the first call exactly once, however many are cut meanwhile.
 async fn list(
     doc_store: &DocStore,
     auth_principal: Option<&str>,
@@ -214,13 +243,41 @@ async fn list(
     params: &serde_json::Value,
 ) -> Result<serde_json::Value, McpError> {
     let (kb_id, node_id) = (text(params, "kb_id")?, text(params, "node_id")?);
+    let (limit, before) = page_params(params)?;
     gate(doc_store, &kb_id, auth_principal, transport, KbOp::Read).await?;
-    let h = load(doc_store, &kb_id, &node_id).await?;
+    let mut page = doc_store
+        .history_page(&kb_id, &node_id, before, limit + 1)
+        .await
+        .map_err(|e| McpError::internal_fault(format!("history of '{node_id}' unreadable: {e}")))?;
+    let more = page.len() > limit as usize;
+    page.truncate(limit as usize);
+    let next = page.last().filter(|_| more).map(|l| l.entry.seq);
     Ok(serde_json::json!({
         "kb_id": kb_id,
         "node_id": node_id,
-        "versions": h.iter().map(entry_json).collect::<Vec<_>>(),
+        "versions": page.iter().map(|l| record_json(&l.entry, l.pruned)).collect::<Vec<_>>(),
+        "next": next,
     }))
+}
+
+/// `list`'s `limit` and `before_seq`, each optional, and refused when out of
+/// range rather than adjusted: a client that asked for 1000 must not take 500
+/// for the whole history.
+fn page_params(params: &serde_json::Value) -> Result<(u32, Option<u64>), McpError> {
+    let limit = match &params["limit"] {
+        serde_json::Value::Null => LIST_DEFAULT_LIMIT,
+        v => v
+            .as_u64()
+            .filter(|n| (1..=u64::from(LIST_MAX_LIMIT)).contains(n))
+            .ok_or_else(|| {
+                McpError::invalid_params("limit", format!("limit is 1 to {LIST_MAX_LIMIT}"))
+            })? as u32,
+    };
+    let before = match &params["before_seq"] {
+        serde_json::Value::Null => None,
+        _ => Some(seq(params, "before_seq")?),
+    };
+    Ok((limit, before))
 }
 
 /// A version's content as a reader shows it, if it holds one that matches its

@@ -871,6 +871,33 @@ mae-daemon kb history verify --kb-id notes --against /secure/notes-head-2026-11-
   backup carries the latest head the maintenance tick signed.
 - Both commands are operator-only and offline (stop the daemon), like `kb member`.
 
+### Reading a node's history
+
+A KB reader lists a node's versions with `kb/history.list {kb_id, node_id, limit?, before_seq?}`.
+It returns `{versions, next}`, **newest first**, without content. `limit` is 1 to 500 (default
+100); a value outside that is refused, not adjusted. To read further back, call again with
+`before_seq` set to the `next` value; `next` is `null` on the page that reaches version 1. A seq
+never changes and new versions always take a higher one, so paging this way returns every version
+exactly once even while edits continue. `kb/history.get {kb_id, node_id, seq}` returns one version
+with its content and the chain's verification.
+
+Every version record carries:
+
+- `kind`: `edit` (cut when the node passes from one editor to another), `named` (a checkpoint cut
+  by `kb/history.checkpoint`; `name` is set), `rollback` (`restored_from` is set), `import`,
+  `seed`, `rebirth`, `delete`, or `pruned` (an audit entry of a pruning pass, with no content).
+  A client should show a kind it does not know as that kind, never as an edit.
+- `editors`: `[{kind, principal}]`, everyone who edited the node in the range the version covers.
+  `kind` is `principal` (an authenticated principal: a key fingerprint, `psk:<keyid>` or an OAuth
+  subject), `signed-relay` (a relay whose update was signed; the signer has its own `principal`
+  entry), `mesh-peer` (a relay with no verified signer: the author is unknown),
+  `unauthenticated`, or `internal` (the daemon itself). A named version's `editors` are the
+  editors since the previous version; who named it is in `summary` (`named by <principal>`).
+- `created_at`: when the daemon cut the version, RFC 3339, UTC, to the second.
+
+The daemon does not record whether a principal is a person or an agent: nothing in its identity
+model marks one (ADR-113 relies on a marking ADR-098 has not designed), so no field claims it.
+
 ## 8. Troubleshooting
 
 | Symptom | Check |

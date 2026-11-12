@@ -243,6 +243,49 @@ pub(super) fn list(
     Ok(out)
 }
 
+/// One version as a listing reports it: its record without the content.
+/// `entry.content` is always `None` here; `pruned` says whether the stored row
+/// holds content, so a listing never reads a version's content to say so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listed {
+    pub entry: HistoryEntry,
+    pub pruned: bool,
+}
+
+/// Up to `limit` of the node's entries with `seq < before` (every entry,
+/// without `before`), newest first, without their content. It reads only the
+/// rows it returns, through the primary key. A `before` past `i64::MAX`
+/// reads as no bound.
+pub(super) fn page(
+    conn: &sqlite::Connection,
+    kb_id: &str,
+    node_id: &str,
+    before: Option<u64>,
+    limit: u32,
+) -> Result<Vec<Listed>, StorageError> {
+    let mut stmt = conn.prepare(
+        "SELECT h.kb_id, h.node_id, h.seq, h.kind, h.created_at, h.editors, h.wal_from,
+                h.wal_to, h.summary, h.name, h.restored_from, NULL AS content,
+                h.content IS NULL AS pruned, h.content_hash, h.prev_hash, h.entry_hash
+         FROM kb_node_history h
+         WHERE h.kb_id = ?1 AND h.node_id = ?2 AND h.seq < ?3
+         ORDER BY h.seq DESC LIMIT ?4",
+    )?;
+    let before = before.map_or(i64::MAX, |b| i64::try_from(b).unwrap_or(i64::MAX));
+    stmt.bind((1, kb_id))?;
+    stmt.bind((2, node_id))?;
+    stmt.bind((3, before))?;
+    stmt.bind((4, i64::from(limit)))?;
+    let mut out = Vec::new();
+    while let sqlite::State::Row = stmt.next()? {
+        out.push(Listed {
+            entry: read_row(&stmt)?,
+            pruned: stmt.read::<i64, _>("pruned")? != 0,
+        });
+    }
+    Ok(out)
+}
+
 /// The editors of the node's current session: those recorded since its last
 /// cut (D2), the WAL point every cut moves the session marker to, whether it
 /// wrote a version or found the content unchanged. Without the marker, a cut

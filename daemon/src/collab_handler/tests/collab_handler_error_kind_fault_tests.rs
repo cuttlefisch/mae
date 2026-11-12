@@ -65,6 +65,15 @@ impl StorageBackend for ArmedBackend {
     ) -> Result<Vec<mae_sync::kb::history::HistoryEntry>, StorageError> {
         self.inner.history_list(kb, node).await
     }
+    async fn history_page(
+        &self,
+        kb: &str,
+        node: &str,
+        before: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<crate::storage::Listed>, StorageError> {
+        self.inner.history_page(kb, node, before, limit).await
+    }
     async fn history_holds_content(&self, kb: &str) -> Result<bool, StorageError> {
         self.inner.history_holds_content(kb).await
     }
