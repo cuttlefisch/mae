@@ -14,6 +14,7 @@
 //! `hub_observability_e2e.rs`.
 
 mod common;
+mod daemon_harness;
 
 use common::{read_framed, send_recv, spawn_server, spawn_server_with_config};
 use mae_sync::encoding::update_to_base64;
