@@ -146,6 +146,15 @@ is attributed to the requesting principal.
 The result is a new version of kind `rollback`, with `restored_from`. Nothing after the target is
 deleted or rewritten. A rollback is undone by rolling back again.
 
+A rollback restores the version's content as it was recorded. The field-type check on client
+writes (`kb/node_update` and `sync/update` refuse an update that introduces a mistyped field,
+error `invalid_field`) guards what a client sends, not the daemon's own writes, so it does not
+apply here: a version recorded before that check existed, holding a field of the wrong type, is
+still restorable. The node stays writable afterwards, because the check refuses only a violation
+an update introduces, never one already present. An implementation must not route rollback
+through the client handlers to reuse their authorization, or such a version becomes
+unrestorable.
+
 An editor-local KB does the same through `kb_update_node_with` (ADR-092's single mutator), not
 through the direct store write that `restore_version` makes today.
 
