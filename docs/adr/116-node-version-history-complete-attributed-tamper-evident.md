@@ -69,18 +69,23 @@ Each version carries:
 - `kb_id`, `node_id`, and `seq` (per node, gapless, starting at 1);
 - `kind`: one of `edit`, `named`, `rollback`, `import`, `seed`, `rebirth`, `delete` or `pruned`
   (D5);
-- `created_at`, from the daemon clock, as RFC 3339 UTC;
+- `created_at`, from the daemon clock: the record holds unix seconds (UTC), which have one
+  encoding; surfaces render it as RFC 3339;
 - `editors`: each principal with its attribution kind (Principal, SignedRelay, MeshPeer,
   Unauthenticated, Internal; ADR-113 A1), taken from the editor record over the WAL range;
 - `wal_from` and `wal_to`, the edits the version covers;
 - `summary` and `name`, both optional; for a rollback, `restored_from` (a `seq`);
 - `content`: the canonical encoding of the whole `MaterializedNode`, including `kind`,
   `properties`, `aliases`, `links` and `org_header`;
-- `content_hash`, which is `KbNodeDoc::version()` of that content. It is the node's own complete
-  digest: it destructures without `..`, so a new field cannot be left out of it;
+- `content_hash`: `MaterializedNode::digest()` of that content, the full SHA-256 whose first 16
+  bytes are `KbNodeDoc::version()`. It is the node's own complete digest: it destructures without
+  `..`, so a new field cannot be left out of it. History keeps all 32 bytes, so forging a content
+  needs a full second preimage, not one against a 128-bit prefix;
 - `prev_hash` and `entry_hash`, where
   `entry_hash = SHA-256("maehistory/v1" ‖ prev_hash ‖ canonical(entry without entry_hash))`.
-  Every field is length-prefixed, so no two different entries encode alike.
+  Every field is length-prefixed, so no two different entries encode alike. The content enters
+  only through `content_hash`, which is what lets pruning drop it and keep the chain verifying
+  (D5). Stored content is accepted only in its one canonical encoding.
 
 The "what" of a version is a diff between two versions, computed when asked for (`kb/history.diff`),
 not stored.
@@ -181,6 +186,7 @@ until client-side history is designed.
 ## Implementation plan, and how each property is proven
 
 - **P1 — the shared module.** Record, canonical encoding, chain, verify, retention evaluation.
+  *Built:* `mae_sync::kb::history`, with no store yet writing it.
   Property tests:
   - flipping any byte of any field of any entry fails verification;
   - reordering or removing an entry fails;

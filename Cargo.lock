@@ -3434,6 +3434,7 @@ dependencies = [
  "curve25519-dalek",
  "ed25519-dalek",
  "hex",
+ "proptest",
  "rand 0.10.3",
  "ropey",
  "serde",

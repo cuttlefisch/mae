@@ -24,6 +24,8 @@ mod collection_format_tests;
 mod collection_lease_tests;
 mod collection_oplog_tests;
 mod collection_roles_tests;
+mod history_chain_tests;
+mod history_retention_tests;
 mod node_convergence_tests;
 mod node_field_types_tests;
 mod node_org_header_tests;

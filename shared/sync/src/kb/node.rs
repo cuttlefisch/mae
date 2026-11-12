@@ -93,6 +93,68 @@ pub struct MaterializedNode {
     pub org_header: Option<OrgHeader>,
 }
 
+impl MaterializedNode {
+    /// The full SHA-256 of everything a reader of the node sees: every field,
+    /// length-prefixed, lists in order, properties sorted by key.
+    /// [`KbNodeDoc::version`] is its first 16 bytes; version history (ADR-116)
+    /// records all 32, so a forged content must find a full second preimage.
+    pub fn digest(&self) -> [u8; 32] {
+        // No `..`: a field added to MaterializedNode must be added here too.
+        let MaterializedNode {
+            id,
+            title,
+            body,
+            tags,
+            links,
+            kind,
+            todo_state,
+            priority,
+            aliases,
+            properties,
+            source_version,
+            source,
+            created_at,
+            org_header,
+        } = self;
+        let mut h = Sha256::new();
+        let mut put = |b: &[u8]| {
+            h.update((b.len() as u64).to_le_bytes());
+            h.update(b);
+        };
+        let opt = |o: Option<&str>| match o {
+            None => vec![0u8],
+            Some(s) => [&[1u8][..], s.as_bytes()].concat(),
+        };
+        put(b"maeversion/v1");
+        put(id.as_bytes());
+        put(title.as_bytes());
+        put(body.as_bytes());
+        for list in [tags, links, aliases] {
+            put(&(list.len() as u64).to_le_bytes());
+            for item in list {
+                put(item.as_bytes());
+            }
+        }
+        put(&opt(kind.as_deref()));
+        put(&opt(todo_state.as_deref()));
+        put(&opt(priority.as_deref()));
+        put(&opt(source.as_deref()));
+        put(&opt(source_version.map(|v| v.to_string()).as_deref()));
+        put(&opt(created_at.map(|v| v.to_string()).as_deref()));
+        let mut props: Vec<(&String, &String)> = properties.iter().collect();
+        props.sort();
+        put(&(props.len() as u64).to_le_bytes());
+        for (k, v) in props {
+            put(k.as_bytes());
+            put(v.as_bytes());
+        }
+        if let Some(bytes) = org_header::digest_bytes(org_header.as_ref()) {
+            put(&bytes);
+        }
+        h.finalize().into()
+    }
+}
+
 /// Seconds since the unix epoch, or 0 if the clock predates it.
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
@@ -786,59 +848,7 @@ impl KbNodeDoc {
     /// [`content_hash`]: Self::content_hash
     /// [`rebirth_hash`]: Self::rebirth_hash
     pub fn version(&self) -> String {
-        // No `..`: a field added to MaterializedNode must be added here too.
-        let MaterializedNode {
-            id,
-            title,
-            body,
-            tags,
-            links,
-            kind,
-            todo_state,
-            priority,
-            aliases,
-            properties,
-            source_version,
-            source,
-            created_at,
-            org_header,
-        } = self.materialize();
-        let mut h = Sha256::new();
-        let mut put = |b: &[u8]| {
-            h.update((b.len() as u64).to_le_bytes());
-            h.update(b);
-        };
-        let opt = |o: Option<&str>| match o {
-            None => vec![0u8],
-            Some(s) => [&[1u8][..], s.as_bytes()].concat(),
-        };
-        put(b"maeversion/v1");
-        put(id.as_bytes());
-        put(title.as_bytes());
-        put(body.as_bytes());
-        for list in [&tags, &links, &aliases] {
-            put(&(list.len() as u64).to_le_bytes());
-            for item in list {
-                put(item.as_bytes());
-            }
-        }
-        put(&opt(kind.as_deref()));
-        put(&opt(todo_state.as_deref()));
-        put(&opt(priority.as_deref()));
-        put(&opt(source.as_deref()));
-        put(&opt(source_version.map(|v| v.to_string()).as_deref()));
-        put(&opt(created_at.map(|v| v.to_string()).as_deref()));
-        let mut props: Vec<(&String, &String)> = properties.iter().collect();
-        props.sort();
-        put(&(props.len() as u64).to_le_bytes());
-        for (k, v) in props {
-            put(k.as_bytes());
-            put(v.as_bytes());
-        }
-        if let Some(bytes) = org_header::digest_bytes(org_header.as_ref()) {
-            put(&bytes);
-        }
-        hex::encode(&h.finalize()[..16])
+        hex::encode(&self.materialize().digest()[..16])
     }
 
     /// ADR-107: the hash a **rebirth** signs — covering everything the reborn
