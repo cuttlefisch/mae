@@ -62,6 +62,12 @@ export interface SyntaxSectionInfo {
   ancestors: number;
   declarations: number;
   followed: boolean;
+  /**
+   * The region's line-ending facts (bits 0-2) and the terminator before it
+   * (bits 3-4). Opaque: pass it back to `syntaxSection` unchanged. Required
+   * since 0.5.0.
+   */
+  eol: number;
 }
 
 /**
@@ -83,10 +89,13 @@ export interface SyntaxResult extends SyntaxSpans {
 
 /**
  * `needs_full`: the edit changed what the rest of the file reads (a headline
- * line, a radio target or TODO keyword line, or the line ending before the
- * next headline); send the whole text to `syntax` again.
+ * line, a radio target or TODO keyword line, the line ending before the next
+ * headline, or the file's line-ending convention); send the whole text to
+ * `syntax` again.
  */
-export type SyntaxSectionResult = SyntaxSpans | { needs_full: 'headline' | 'declarations' | 'boundary' };
+export type SyntaxSectionResult =
+  | SyntaxSpans
+  | { needs_full: 'headline' | 'declarations' | 'boundary' | 'line_ending' };
 
 export interface Span { start: number; end: number }
 
