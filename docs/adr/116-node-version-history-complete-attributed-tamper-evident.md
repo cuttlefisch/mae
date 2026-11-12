@@ -322,9 +322,10 @@ version of that KB: it zeroes the plaintext and keeps the metadata (D5). It reco
 audit entry naming the relayed switch. The record of who changed what and when survives; the
 content does not.
 
-**Open question:** a hold on that KB. A hold promises the content stays, and ADR-037 promises it
-does not. This amendment proposes that the hold wins, and that the daemon reports the conflict
-loudly to the operator, since a hold is a deliberate operator act. This needs a decision.
+**A hold wins** (decided 2026-11-12). A hold on that KB promises the content stays, and ADR-037
+promises it does not. The hold is a deliberate operator act, so its versions keep their content.
+The daemon reports the conflict to the operator, naming the KB and the held versions, until the
+hold is released, and the plaintext is then pruned as above.
 
 ### A5. Destructive acts on an E2E KB
 
@@ -348,4 +349,4 @@ read its content.
   and the handoff skip for an E2E-flagged KB. Tested by a switch interrupted and resumed, a
   ciphertext refused for another entry's hash, and a chain that still verifies afterwards.
 - **H-E2:** the editor's switch flow, which re-encrypts every version.
-- **H-E3:** the relayed switch (A4), once the hold question is decided.
+- **H-E3:** the relayed switch (A4), with a hold keeping its content and reported.
