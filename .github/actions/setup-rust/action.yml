@@ -108,7 +108,9 @@ runs:
     - uses: dtolnay/rust-toolchain@master
       with:
         toolchain: ${{ inputs.toolchain }}
-        components: ${{ inputs.components }}
+        # Always clippy and rustfmt: a pinned toolchain is installed with the
+        # minimal profile, unlike the runner image's preinstalled `stable`.
+        components: clippy, rustfmt${{ inputs.components != '' && format(', {0}', inputs.components) || '' }}
         targets: ${{ inputs.targets }}
     - uses: Swatinem/rust-cache@v2
       with:
