@@ -226,7 +226,9 @@ data: {"kb":"<kb_id>","node":"<node_id>","op":"upsert","seq":1042}
 
 **A notice never carries:**
 - title, body or tags, even for a plaintext KB;
-- the author or editor of the change;
+- the author or editor of the change. **Decided (2026-11-13):** version history (ADR-116) is the
+  single source of truth for who changed what. A view of authorship reads from there, behind
+  history's own gate, never from a notice;
 - membership details;
 - timestamps;
 - update bytes;
@@ -280,6 +282,10 @@ not a grant, and access is checked again on every open (C4).
   - `below_floor`;
   - `too_many_changes`.
 
+  The `reason` is always present, so a reader can tell a gap past the replay limit from a restore
+  or a bad cursor in its logs. `too_many_changes` also carries the limit it exceeded
+  (`{kb, reason: "too_many_changes", limit, cursor}`), and the limit is documented with the route.
+
   The reader relists that KB (`kb/query.list`, paged, with its cursor) and continues from the
   `reset`'s cursor. This is Kubernetes' 410 Gone, sent per KB, and the other KBs in the stream are
   unaffected.
@@ -327,11 +333,22 @@ sides than thousands of notices, each followed by a fetch.
   `check_kb_read_access`, `Transport::Hub`). It is one gate, not a second copy.
 - A bad token gets the listener's own `401` and `WWW-Authenticate`, the same as on every other
   route.
-- If any KB is refused, the whole open fails. The response is HTTP `403`, and its body is the
-  JSON-RPC error object `kb/query` returns for that token and KB. `kb/query` itself answers with
-  `200`, because it is JSON-RPC. The stream must not: a non-200 response makes an SSE client fail
-  rather than retry (HTML spec), and that is the behaviour wanted here.
-- A partial open would leave the client unsure what it is subscribed to.
+- **A KB the token cannot read (proposed; pending the owner's decision).** The stream opens for
+  the KBs it can read and sends `access_lost {kb}` for each refused KB as its first events, before
+  any notice. A refused KB is never silently absent, and "never had access" takes the same path
+  as "lost access mid-stream", so a reader has one code path. Only a bad token (`401`) or every
+  KB refused fails the open.
+
+  The prior art is one-sided: systems that serve several separately authorized resources over one
+  connection report per resource and keep the connection. A failed Phoenix channel `join` errors
+  that topic only. Ably and Pusher authorize each channel on its own, and a failed attach puts
+  that channel in an error state. Matrix `/sync` omits rooms the user cannot see and moves rooms
+  they lose to `leave`. Failing the whole open would let one revoked KB take down a multi-KB
+  reader.
+
+  The probing concern (one request reveals which of many KB ids a token can read) adds nothing:
+  `kb/query` already answers that per KB, and the stream only batches it. The 16-KB-per-stream cap
+  bounds the batch.
 - ADR-067 `QueryOnly` members are admitted, because this is the query surface.
 - ADR-099 B6's daemon-only-token gate does not apply. The stream is read-only, like `kb/query`, so
   it accepts the tokens `kb/query` accepts.
@@ -514,16 +531,16 @@ Each test must fail without its mechanism.
    - a 15 s keepalive.
 
    Each has a reason above. None is measured yet.
-2. **The write-path cost bar.** Is 10% at p99 on `apply_update` acceptable? If it is missed, is the
+2. **The write-path cost bar.** Is 10% at p99 on `apply_update` acceptable, and does it hold at the
+   ADR-109 hosted scale? It is being measured on the real write path at that scale before this
+   amendment is accepted (`docs/research/074a-write-cost-measurement.md`). If it is missed, is the
    fallback an in-memory coalescer with crash recovery, which C1 rejects as it stands?
 3. **HTTP/2 on the listener.** Should the listener advertise `h2` through ALPN? That lifts the
    browser's six-connection limit for direct connections. It does not remove C3's multi-KB stream,
    because the proxy's upstream leg still costs a slot per stream.
-4. **The WebSocket method.** Should `kb/changes.subscribe` (C6) ship with the SSE route, or wait
-   until ADR-099's first cut (B6) ends?
-5. **A partial open.** Should an open that names an unreadable KB fail as a whole (proposed) or
-   open with that KB marked `access_lost`? The second is friendlier to a reader that keeps a fixed
-   list. It also lets a probe learn, in one request, which of many KB ids it can read.
-6. **Authorship.** Should a reader ever learn who made a change? It is excluded here. ADR-113's
-   editor record is not exposed through `kb/query` either, and the feed should not be the first
-   place it leaks.
+4. **The WebSocket method.** *Decided (2026-11-13):* it ships in the same release as the SSE
+   route: one index, one gate, two transports.
+5. **A partial open.** C4 now proposes it, from the prior art there: the open succeeds for the
+   readable KBs and sends `access_lost` first for each refused one. Still the owner's decision.
+6. **Authorship.** *Decided (2026-11-13):* never in a notice. Version history is the single source
+   of truth for authorship (C2).
