@@ -54,6 +54,30 @@ impl StorageBackend for FailingBackend {
         self.inner.wal_high_water(doc_name).await
     }
 
+    async fn history_session(
+        &self,
+        kb: &str,
+        node: &str,
+    ) -> Result<Vec<(crate::doc_editors::EditorKind, String)>, StorageError> {
+        self.inner.history_session(kb, node).await
+    }
+
+    async fn history_cut(
+        &self,
+        cp: crate::storage::Checkpoint,
+        now: i64,
+    ) -> Result<Option<mae_sync::kb::history::HistoryEntry>, StorageError> {
+        self.inner.history_cut(cp, now).await
+    }
+
+    async fn history_list(
+        &self,
+        kb: &str,
+        node: &str,
+    ) -> Result<Vec<mae_sync::kb::history::HistoryEntry>, StorageError> {
+        self.inner.history_list(kb, node).await
+    }
+
     async fn forget_editors(&self, doc_name: &str) -> Result<(), StorageError> {
         self.inner.forget_editors(doc_name).await
     }

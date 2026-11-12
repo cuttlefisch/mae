@@ -1,0 +1,241 @@
+//! ADR-116 D2 through real traffic: members of a shared KB edit one node with
+//! `sync/update`, as their clients would, and the daemon cuts a version at
+//! each handoff. Each version's editors and WAL range are checked against the
+//! editor record, which is written independently of history.
+
+use super::*;
+use mae_sync::kb::history::{verify_chain, HistoryEntry, VersionKind};
+use mae_sync::kb::KbNodeDoc;
+
+const KB: &str = "kbhist";
+const NODE: &str = "n";
+
+struct Env {
+    store: Arc<DocStore>,
+    bc: SharedBroadcaster,
+    docs: HashSet<String>,
+}
+
+fn node_doc() -> String {
+    mae_sync::kb_node_doc_name(KB, NODE)
+}
+
+/// A KB owned by alice, with bob and carol as editors (dave is no member).
+async fn shared_kb() -> Env {
+    let mut env = Env {
+        store: test_doc_store(),
+        bc: test_broadcaster(),
+        docs: HashSet::new(),
+    };
+    let alice = fp("alice");
+    kb_share_as(
+        &env.store,
+        &env.bc,
+        Some("alice"),
+        Some(&alice),
+        KB,
+        "alice",
+        &mut env.docs,
+    )
+    .await;
+    for member in [fp("bob"), fp("carol")] {
+        let add = kb_member_msg("kb/add_member", KB, &member, Some("editor"));
+        let r = dispatch_as(
+            &env.store,
+            &env.bc,
+            Some("alice"),
+            Some(&alice),
+            add,
+            &mut env.docs,
+        )
+        .await;
+        assert!(r.error.is_none(), "admit: {:?}", r.error);
+        let join = dispatch_as(
+            &env.store,
+            &env.bc,
+            None,
+            Some(&member),
+            kb_join_msg(KB),
+            &mut env.docs,
+        )
+        .await;
+        assert!(join.error.is_none(), "join: {:?}", join.error);
+    }
+    env
+}
+
+/// `who` sends one `sync/update` made by `edit` on the node as the daemon holds
+/// it (a new node, when it has none), with their own fenced client id.
+async fn edit(
+    env: &mut Env,
+    who: &str,
+    edit: impl FnOnce(&mut KbNodeDoc) -> Vec<u8>,
+) -> JsonRpcResponse {
+    let cid = derive_kb_client_id(&fp(who), 0);
+    let update = if env.store.has_durable_doc(&node_doc()).await {
+        let state = env.store.encode_state(&node_doc()).await.unwrap();
+        let mut node = KbNodeDoc::from_bytes_with_client_id(&state, cid).unwrap();
+        edit(&mut node)
+    } else {
+        let mut node = KbNodeDoc::new_with_client_id(NODE, "", "", &[], cid);
+        let _ = edit(&mut node);
+        node.encode()
+    };
+    let msg = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"sync/update",
+        "params":{"doc":node_doc(),"kb_id":KB,"update":update_to_base64(&update)}});
+    dispatch_as(
+        &env.store,
+        &env.bc,
+        None,
+        Some(&fp(who)),
+        msg,
+        &mut env.docs,
+    )
+    .await
+}
+
+/// `who` retitles the node; returns the WAL id the update landed at.
+async fn retitle(env: &mut Env, who: &str, title: &str) -> u64 {
+    let r = edit(env, who, |n| n.set_title(title)).await;
+    assert!(r.error.is_none(), "{who} retitles {title:?}: {:?}", r.error);
+    env.store.wal_high_water(&node_doc()).await.unwrap()
+}
+
+async fn history(env: &Env) -> Vec<HistoryEntry> {
+    env.store.history_list(KB, NODE).await.unwrap()
+}
+
+fn titles(h: &[HistoryEntry]) -> Vec<String> {
+    h.iter().map(|e| e.node().unwrap().unwrap().title).collect()
+}
+
+fn editor_sets(h: &[HistoryEntry]) -> Vec<Vec<String>> {
+    h.iter()
+        .map(|e| e.editors.iter().map(|ed| ed.principal.clone()).collect())
+        .collect()
+}
+
+/// Alice creates the node; bob, carol and bob again take over. Each handoff
+/// cuts the state the previous principal left, attributed to them; bob's
+/// second edit in his own session cuts nothing. Kills a cut taken after the
+/// update (wrong content), one attributed to the incoming principal, and one
+/// cut on every update.
+#[tokio::test]
+async fn each_handoff_cuts_the_state_the_previous_session_left() {
+    let mut env = shared_kb().await;
+    let a = retitle(&mut env, "alice", "by alice").await;
+    retitle(&mut env, "bob", "bob 1").await;
+    let b = retitle(&mut env, "bob", "bob 2").await;
+    let c = retitle(&mut env, "carol", "by carol").await;
+    retitle(&mut env, "bob", "bob 3").await;
+    let h = history(&env).await;
+    assert_eq!(titles(&h), ["by alice", "bob 2", "by carol"]);
+    assert_eq!(
+        editor_sets(&h),
+        [vec![fp("alice")], vec![fp("bob")], vec![fp("carol")]]
+    );
+    let ranges: Vec<(u64, u64)> = h.iter().map(|e| (e.wal_from, e.wal_to)).collect();
+    assert_eq!(
+        ranges,
+        [(0, a), (a, b), (b, c)],
+        "each covers its session's updates"
+    );
+    assert!(h.iter().all(|e| e.kind == VersionKind::Edit));
+    let last = h.last().unwrap();
+    assert!(verify_chain(KB, NODE, &h, Some((last.seq, last.entry_hash))).is_ok());
+}
+
+/// A long session by one principal cuts no version, however many updates.
+#[tokio::test]
+async fn a_long_single_principal_session_cuts_nothing() {
+    let mut env = shared_kb().await;
+    for i in 0..25 {
+        retitle(&mut env, "alice", &format!("draft {i}")).await;
+    }
+    assert!(history(&env).await.is_empty());
+    retitle(&mut env, "bob", "bob").await;
+    assert_eq!(titles(&history(&env).await), ["draft 24"]);
+}
+
+/// A handoff that finds the content unchanged since the last version writes
+/// nothing, and still starts a new session, so the handoff after it is cut.
+/// Kills a no-op cut that writes, and a session left open after one.
+#[tokio::test]
+async fn an_unchanged_handoff_writes_nothing_but_starts_a_session() {
+    let mut env = shared_kb().await;
+    retitle(&mut env, "alice", "A").await;
+    retitle(&mut env, "bob", "B").await;
+    retitle(&mut env, "bob", "A").await;
+    retitle(&mut env, "carol", "C").await;
+    assert_eq!(
+        titles(&history(&env).await),
+        ["A"],
+        "bob left it as the last version had it"
+    );
+    retitle(&mut env, "bob", "D").await;
+    let h = history(&env).await;
+    assert_eq!(titles(&h), ["A", "C"]);
+    assert_eq!(
+        editor_sets(&h)[1],
+        vec![fp("bob"), fp("carol")],
+        "everyone since the last version"
+    );
+}
+
+/// A refused write cuts nothing: a non-member's, and a member's that would
+/// leave a field mistyped. The next accepted write by that member is the
+/// handoff.
+#[tokio::test]
+async fn a_refused_write_cuts_nothing() {
+    let mut env = shared_kb().await;
+    retitle(&mut env, "alice", "A").await;
+    let r = edit(&mut env, "dave", |n| n.set_title("dave")).await;
+    assert!(r.error.is_some(), "precondition: dave is refused");
+    let r = edit(&mut env, "bob", mistype_title).await;
+    assert!(
+        r.error.is_some(),
+        "precondition: a mistyped field is refused"
+    );
+    assert!(history(&env).await.is_empty());
+    retitle(&mut env, "bob", "B").await;
+    assert_eq!(titles(&history(&env).await), ["A"]);
+}
+
+/// An update, by `n`'s own client, setting the title to a plain string
+/// instead of text.
+fn mistype_title(n: &mut KbNodeDoc) -> Vec<u8> {
+    use mae_sync::yrs::updates::decoder::Decode;
+    use mae_sync::yrs::{Map, ReadTxn, Transact};
+    let doc = mae_sync::yrs::Doc::with_client_id(n.client_id());
+    let state = n.encode_state();
+    doc.transact_mut()
+        .apply_update(mae_sync::yrs::Update::decode_v1(&state).unwrap())
+        .unwrap();
+    let sv = doc.transact().state_vector();
+    let root = doc.get_or_insert_map("node");
+    root.insert(&mut doc.transact_mut(), "title", "plain");
+    let out = doc.transact().encode_state_as_update_v1(&sv);
+    out
+}
+
+/// A node document that does not read as a node (plain text here; E2E
+/// ciphertext likewise) is never versioned, whoever edits it.
+#[tokio::test]
+async fn a_document_that_is_not_a_readable_node_is_not_versioned() {
+    let mut env = shared_kb().await;
+    for (who, text) in [("alice", "a"), ("bob", "b"), ("carol", "c")] {
+        let msg = kb_node_update_msg_as(KB, &fp(who), 0, text);
+        let r = dispatch_as(
+            &env.store,
+            &env.bc,
+            None,
+            Some(&fp(who)),
+            msg,
+            &mut env.docs,
+        )
+        .await;
+        assert!(r.error.is_none(), "{who}: {:?}", r.error);
+    }
+    let h = env.store.history_list(KB, "concept:n").await.unwrap();
+    assert!(h.is_empty(), "{h:?}");
+}
