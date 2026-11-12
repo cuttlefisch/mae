@@ -14,7 +14,6 @@
 
 use std::net::SocketAddr;
 use std::path::Path;
-use std::time::Duration;
 
 use mae_mcp::protocol::JsonRpcResponse;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -22,7 +21,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 /// Holds a spawned `mae-daemon` (+ its temp data dir) for a test's lifetime.
 /// Dropping it kills the daemon (`kill_on_drop`) and removes the temp dir.
 pub struct ServerGuard {
-    _child: tokio::process::Child,
+    _proc: crate::daemon_harness::Process,
     _tmp: tempfile::TempDir,
     pub addr: SocketAddr,
     /// The daemon's KB Unix socket (`$XDG_RUNTIME_DIR/mae-daemon.sock`), where
@@ -67,10 +66,6 @@ async fn spawn_server_opts(
         eprintln!("skipping: MAE_TCP_E2E not set");
         return None;
     }
-    // Reserve a free port, then hand it to the daemon.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr: SocketAddr = listener.local_addr().unwrap();
-    drop(listener);
     let tmp = tempfile::tempdir().unwrap();
     // Isolate this daemon fully so tests run in parallel and alongside any other
     // daemon (incl. a developer's live one): a per-test XDG_RUNTIME_DIR gives it a
@@ -82,44 +77,33 @@ async fn spawn_server_opts(
         std::fs::create_dir_all(&config_dir).unwrap();
         std::fs::write(config_dir.join("daemon.toml"), toml).unwrap();
     }
-    let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"))
-        .args([
+    let root = tmp.path().to_path_buf();
+    let socket = root.join("mae-daemon.sock");
+    // Ports, respawn on a lost port, and the status-based readiness described
+    // above all live in `daemon_harness`, shared with every other suite.
+    let proc = crate::daemon_harness::spawn_ready(|ports| {
+        let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"));
+        cmd.args([
             "--bind",
-            &addr.to_string(),
+            &ports.collab_addr().to_string(),
             "--data-dir",
-            tmp.path().to_str().unwrap(),
+            root.to_str().unwrap(),
         ])
-        .env("XDG_RUNTIME_DIR", tmp.path())
-        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("failed to spawn mae-daemon");
-    let socket = tmp.path().join("mae-daemon.sock");
-    // Bounded by wall-clock, not by an iteration count — see `mae_mcp::ready`.
-    // This helper is shared by most of the daemon e2e suite, so the old fixed
-    // 5s budget set the flake floor for all of them at once.
-    let ready = mae_mcp::ready::wait_until(|| async {
-        match try_daemon_status(&socket).await {
-            Some(status) => status["connections"]["collab"].is_object() == wait_for_collab,
-            None => false,
+        .env("XDG_RUNTIME_DIR", &root)
+        .env("XDG_CONFIG_HOME", root.join("config"));
+        crate::daemon_harness::Launch {
+            cmd,
+            status_socket: socket.clone(),
+            log: root.join("daemon.log"),
+            collab: wait_for_collab,
+            oauth: None,
         }
     })
     .await;
-    assert!(
-        ready,
-        "{}",
-        mae_mcp::ready::timeout_message(&format!(
-            "mae-daemon (addr {addr}, socket {}, expecting collab {})",
-            socket.display(),
-            if wait_for_collab { "up" } else { "disabled" }
-        ))
-    );
     Some(ServerGuard {
-        _child: child,
+        addr: proc.ports.collab_addr(),
+        _proc: proc,
         _tmp: tmp,
-        addr,
         socket,
     })
 }
@@ -167,28 +151,8 @@ pub async fn send_recv(
 /// Ask the daemon's KB Unix socket for `daemon/status`. The hub's collab clients
 /// arrive over TCP; the count is read here, on the other listener — which is the
 /// operator's real vantage point (`mae-daemon` on the server, editors elsewhere).
-pub async fn daemon_status(socket: &Path) -> serde_json::Value {
-    use tokio::io::BufReader;
-    let mut stream = tokio::net::UnixStream::connect(socket)
-        .await
-        .unwrap_or_else(|e| panic!("connect {}: {e}", socket.display()));
-    let (r, mut w) = stream.split();
-    let mut reader = BufReader::new(r);
-    let body = serde_json::to_vec(
-        &serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "daemon/status", "params": {}}),
-    )
-    .unwrap();
-    mae_mcp::write_framed(&mut w, &body, Duration::from_secs(5))
-        .await
-        .expect("write daemon/status");
-    let msg = mae_mcp::read_message(&mut reader)
-        .await
-        .expect("read daemon/status")
-        .expect("response before EOF");
-    let v: serde_json::Value = serde_json::from_str(&msg).expect("parse daemon/status");
-    assert!(v.get("error").is_none(), "daemon/status failed: {v:?}");
-    v["result"].clone()
-}
+#[allow(unused_imports)]
+pub use crate::daemon_harness::daemon_status;
 
 /// Poll `daemon/status` until the collab connection count reaches `want`,
 /// returning the last value seen. Connection teardown is observed by the server
@@ -211,23 +175,4 @@ pub async fn await_collab_active(socket: &Path, want: u64) -> Option<u64> {
         // count actually observed, exactly as the old loop's `last` did.
         None => daemon_status(socket).await["connections"]["collab"]["active"].as_u64(),
     }
-}
-
-/// `daemon_status`, but returning `None` instead of panicking while the daemon
-/// is still coming up. Used only by the readiness loop.
-async fn try_daemon_status(socket: &Path) -> Option<serde_json::Value> {
-    use tokio::io::BufReader;
-    let mut stream = tokio::net::UnixStream::connect(socket).await.ok()?;
-    let (r, mut w) = stream.split();
-    let mut reader = BufReader::new(r);
-    let body = serde_json::to_vec(
-        &serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "daemon/status", "params": {}}),
-    )
-    .ok()?;
-    mae_mcp::write_framed(&mut w, &body, Duration::from_secs(2))
-        .await
-        .ok()?;
-    let msg = mae_mcp::read_message(&mut reader).await.ok()??;
-    let v: serde_json::Value = serde_json::from_str(&msg).ok()?;
-    v.get("result").cloned()
 }
