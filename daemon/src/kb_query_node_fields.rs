@@ -6,6 +6,10 @@
 //!   `property_order` (its array, or null): the shape of the org header a
 //!   seeded node came from, so a reader can lay out the drawer in file order.
 //!   `properties` keeps its shape (an object, which has no order).
+//! - `aliases`: what a reader should show, by the one rule in
+//!   `mae_sync::kb::aliases` — in an `org-literal-v1` KB derived from the
+//!   `ROAM_ALIASES` property, elsewhere the node's array — plus
+//!   `aliases_problems` (strings) when that value could not be read cleanly.
 //! - `created_at` and `modified_at`: RFC 3339 UTC, or null when unknown, with
 //!   `modified_at_basis` saying where `modified_at` came from and, when the edit
 //!   record could not be used, `modified_at_note` saying why.
@@ -22,13 +26,16 @@ use crate::doc_store::DocStore;
 use crate::rfc3339;
 use mae_sync::kb::KbNodeDoc;
 
-/// Every field a reader shows for `doc`, without the body.
+/// Every field a reader shows for `doc`, without the body. `body_format` is
+/// the KB collection's (`KbCollectionDoc::body_format`).
 pub(super) async fn node_fields(
     store: &DocStore,
     kb_id: &str,
     node_id: &str,
     doc: &KbNodeDoc,
+    body_format: Option<&str>,
 ) -> Map<String, Value> {
+    let aliases = doc.aliases_in(body_format);
     let properties: Map<String, Value> = doc
         .properties()
         .into_iter()
@@ -42,7 +49,7 @@ pub(super) async fn node_fields(
         "kind": doc.kind(),
         "todo_state": doc.todo_state(),
         "priority": doc.priority(),
-        "aliases": doc.aliases(),
+        "aliases": aliases.aliases,
         "properties": properties,
         "property_order": header.as_ref().map(|h| h.property_order.clone()),
         "org_header": header.as_ref().map(|h| json!({
@@ -54,6 +61,10 @@ pub(super) async fn node_fields(
         "created_at": doc.created_at().map(rfc3339::utc),
     });
     let fields = m.as_object_mut().expect("an object literal");
+    if !aliases.problems.is_empty() {
+        let problems: Vec<String> = aliases.problems.iter().map(|p| p.to_string()).collect();
+        fields.insert("aliases_problems".into(), json!(problems));
+    }
     fields.extend(modified(store, kb_id, node_id).await);
     std::mem::take(fields)
 }

@@ -15,6 +15,7 @@ pub(super) fn oplog_keypair(seed: u8) -> ([u8; 32], [u8; 32], String) {
     (secret, pubkey, fp)
 }
 
+mod aliases_tests;
 mod collection_artifacts_tests;
 mod collection_core_tests;
 mod collection_crypto_recovery_tests;
