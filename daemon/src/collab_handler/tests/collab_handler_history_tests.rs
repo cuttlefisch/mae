@@ -358,3 +358,96 @@ async fn a_named_version_is_refused_where_it_must_be() {
         "only the one valid name was written"
     );
 }
+
+/// The owner's `kb/collection_op` with a collection update made by `edit`.
+async fn collection_op(
+    env: &mut Env,
+    edit: impl FnOnce(&mut KbCollectionDoc) -> Vec<u8>,
+) -> JsonRpcResponse {
+    let state = env.store.encode_state(&format!("kbc:{KB}")).await.unwrap();
+    let mut coll = KbCollectionDoc::from_bytes(&state).unwrap();
+    let up = edit(&mut coll);
+    let msg = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"kb/collection_op",
+        "params":{"kb_id":KB,"update":update_to_base64(&up)}});
+    let alice = fp("alice");
+    dispatch_as(
+        &env.store,
+        &env.bc,
+        Some("alice"),
+        Some(&alice),
+        msg,
+        &mut env.docs,
+    )
+    .await
+}
+
+async fn is_e2e(env: &Env) -> bool {
+    let state = env.store.encode_state(&format!("kbc:{KB}")).await.unwrap();
+    matches!(
+        KbCollectionDoc::from_bytes(&state).unwrap().encryption(),
+        mae_sync::kb::Encryption::E2e
+    )
+}
+
+/// ADR-116 Amendment 1 (interim): switching a KB to E2E is refused while its
+/// history holds plaintext content, and the collection is left as it was. A
+/// collection op that does not switch is not refused, and a KB with no
+/// history switches. Kills a check that refuses every collection op, one that
+/// never refuses, and one that applies the switch before refusing it.
+#[tokio::test]
+async fn switching_to_e2e_is_refused_while_history_holds_plaintext() {
+    let mut fresh = shared_kb().await;
+    let r = collection_op(&mut fresh, |c| {
+        c.set_encryption(mae_sync::kb::Encryption::E2e)
+    })
+    .await;
+    assert!(
+        r.error.is_none(),
+        "no history: the switch is allowed: {:?}",
+        r.error
+    );
+    assert!(is_e2e(&fresh).await);
+
+    let mut env = shared_kb().await;
+    retitle(&mut env, "alice", "A").await;
+    retitle(&mut env, "bob", "B").await;
+    assert_eq!(
+        history(&env).await.len(),
+        1,
+        "precondition: history holds a version"
+    );
+    let r = collection_op(&mut env, |c| {
+        c.set_encryption(mae_sync::kb::Encryption::E2e)
+    })
+    .await;
+    assert_eq!(error_kind(&r), "history_holds_plaintext");
+    assert!(!is_e2e(&env).await, "the refused switch was not applied");
+    let r = collection_op(&mut env, |c| {
+        c.upsert_member(&fp("erin"), "erin", SyncRole::Viewer)
+    })
+    .await;
+    assert!(
+        r.error.is_none(),
+        "an op that does not switch is not refused: {:?}",
+        r.error
+    );
+    // Already E2E (as a flip relayed from a mesh peer leaves it): later
+    // collection ops are not switches, and are not refused.
+    let kbc = format!("kbc:{KB}");
+    let state = env.store.encode_state(&kbc).await.unwrap();
+    let up = KbCollectionDoc::from_bytes(&state)
+        .unwrap()
+        .set_encryption(mae_sync::kb::Encryption::E2e);
+    let by =
+        crate::doc_editors::Attribution::Internal(crate::doc_editors::InternalWriter::Scheduler);
+    env.store.apply_update(&kbc, &up, None, by).await.unwrap();
+    let r = collection_op(&mut env, |c| {
+        c.upsert_member(&fp("finn"), "finn", SyncRole::Viewer)
+    })
+    .await;
+    assert!(
+        r.error.is_none(),
+        "an already-E2E KB is not refused: {:?}",
+        r.error
+    );
+}

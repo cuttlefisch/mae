@@ -138,6 +138,9 @@ pub trait StorageBackend: Send + Sync {
         now: i64,
     ) -> Result<Option<HistoryEntry>, StorageError>;
 
+    /// Whether any version in `kb_id`'s history still holds content.
+    async fn history_holds_content(&self, kb_id: &str) -> Result<bool, StorageError>;
+
     /// Every entry of a KB node's history, in `seq` order.
     async fn history_list(
         &self,
@@ -504,6 +507,10 @@ impl StorageBackend for SqliteBackend {
                 Err(e)
             }
         }
+    }
+
+    async fn history_holds_content(&self, kb_id: &str) -> Result<bool, StorageError> {
+        history::holds_content(&self.pool.lock_primary(), kb_id)
     }
 
     async fn history_list(

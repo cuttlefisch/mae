@@ -114,3 +114,39 @@ pub(super) async fn checkpoint(
         Err(e) => JsonRpcResponse::error(id, McpError::internal_fault(format!("checkpoint: {e}"))),
     }
 }
+
+/// ADR-116 Amendment 1, until history is carried over encrypted: refuse a
+/// collection update that would switch `kb_id` to E2E while its history still
+/// holds plaintext content, which the switch would leave readable on a daemon
+/// that must hold none (ADR-037). The daemon does not interpret the update:
+/// it applies it to a copy of the collection and asks whether the KB is E2E
+/// before and after. An update that does not apply is left to the write path.
+/// A history that cannot be read refuses the switch rather than allowing it.
+pub(super) async fn refuse_e2e_switch_over_history(
+    doc_store: &DocStore,
+    kb_id: &str,
+    update: &[u8],
+) -> Result<(), McpError> {
+    let Ok(before) = load_collection(doc_store, kb_id).await else {
+        return Ok(());
+    };
+    if kb_is_e2e(doc_store, kb_id, &before).await {
+        return Ok(());
+    }
+    let Ok(mut after) = KbCollectionDoc::from_bytes(&before.encode_state()) else {
+        return Ok(());
+    };
+    if after.apply_update(update).is_err() || !kb_is_e2e(doc_store, kb_id, &after).await {
+        return Ok(());
+    }
+    match doc_store.history_holds_content(kb_id).await {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(McpError::history_holds_plaintext(format!(
+            "KB '{kb_id}' cannot switch to end-to-end encryption while its version history \
+             holds plaintext content"
+        ))),
+        Err(e) => Err(McpError::internal_fault(format!(
+            "KB '{kb_id}': its version history could not be read to check the switch: {e}"
+        ))),
+    }
+}

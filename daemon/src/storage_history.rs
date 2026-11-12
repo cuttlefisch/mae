@@ -80,6 +80,16 @@ pub(super) fn tail(
     }
 }
 
+/// Whether any version of any node of `kb_id` still holds content (has not
+/// been pruned): what a switch to E2E would leave readable.
+pub(super) fn holds_content(conn: &sqlite::Connection, kb_id: &str) -> Result<bool, StorageError> {
+    let mut stmt = conn.prepare(
+        "SELECT 1 FROM kb_node_history WHERE kb_id = ?1 AND content IS NOT NULL LIMIT 1",
+    )?;
+    stmt.bind((1, kb_id))?;
+    Ok(matches!(stmt.next()?, sqlite::State::Row))
+}
+
 /// Every entry of the node, in `seq` order.
 pub(super) fn list(
     conn: &sqlite::Connection,

@@ -444,6 +444,11 @@ impl DocStore {
         self.storage.history_cut(cp, now).await
     }
 
+    /// Whether any version in `kb_id`'s history still holds content (ADR-116).
+    pub async fn history_holds_content(&self, kb_id: &str) -> Result<bool, StorageError> {
+        self.storage.history_holds_content(kb_id).await
+    }
+
     /// Every version of a KB node, in `seq` order (ADR-116).
     pub async fn history_list(
         &self,
