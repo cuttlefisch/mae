@@ -290,6 +290,35 @@ fn an_edit_that_changes_the_files_line_ending_needs_a_full_parse() {
     }
 }
 
+/// A headline line ending in a multi-byte character: the terminator before
+/// the next region is read without slicing inside that character. Each
+/// input panicked in 0.5.0, and the anchor read is the terminator itself.
+#[test]
+fn a_multibyte_character_before_the_line_ending_is_read_whole() {
+    for (text, want) in [
+        ("* ñ\n", mae_org::LineEnding::Lf),
+        ("* €\n", mae_org::LineEnding::Lf),
+        ("* 😀\n", mae_org::LineEnding::Lf),
+        ("* 𝄞\n", mae_org::LineEnding::Lf),
+        ("* a😀\n", mae_org::LineEnding::Lf),
+        ("** 😀\n", mae_org::LineEnding::Lf),
+        ("texto\n* 😀\n", mae_org::LineEnding::Lf),
+        ("* ñ\r\n", mae_org::LineEnding::CrLf),
+        ("* 😀\rmás\r", mae_org::LineEnding::Cr),
+    ] {
+        let doc = parse(text, &ParseOptions::default());
+        let after_heading: Vec<_> = sections(&doc).into_iter().filter(|s| s.start > 0).collect();
+        assert!(!after_heading.is_empty(), "{text:?}");
+        for s in after_heading {
+            assert_eq!(s.eol_anchor, Some(want), "{text:?}");
+        }
+        assert!(
+            sections_match(text, text, &ParseOptions::default()).is_ok(),
+            "{text:?}"
+        );
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(3000))]
 
@@ -302,12 +331,12 @@ proptest! {
     fn an_answered_section_edit_equals_a_full_parse(
         parts in prop::collection::vec(prop::sample::select(&[
             "* ", "** ", "text", "*b*", "<<<r>>>", " r ", "#+TODO: X | Y", "X ", "- ", "  ",
-            "\n", "\n", "\r\n", "\r\n", "\r",
+            "\n", "\n", "\r\n", "\r\n", "\r", "ñ", "😀",
         ][..]), 1..40),
         pick in any::<prop::sample::Index>(),
         at in any::<prop::sample::Index>(),
         cut in 0usize..4,
-        insert in prop::sample::select(&["", "\n", "\r", "\r\n", "x", "*y* ", "<<<r>>>"][..]),
+        insert in prop::sample::select(&["", "\n", "\r", "\r\n", "x", "*y* ", "<<<r>>>", "é", "😀\n"][..]),
     ) {
         let text = parts.concat();
         let opts = ParseOptions::default();

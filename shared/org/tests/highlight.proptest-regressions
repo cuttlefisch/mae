@@ -7,3 +7,4 @@
 cc 18a0163ed3bde05567ebfd1dc1b3e5009bc4518fa05ccdd965accd0127543902 # shrinks to parts = ["X ", "* ", "\r\n", "* "], pick = Index(0), at = Index(15811494920322472814), cut = 0, insert = "\r"
 cc 6ce5524bb9a3ecbb0d663dec0803c8e0f4d35286e32dd20fc93a596cbc3a9096 # shrinks to parts = ["text", "* ", "* ", "* ", "* ", "* ", "#+TODO: X | Y", "* ", "* ", "X ", "* ", "<<<r>>>", "* ", "X ", "\n", "X ", "\r\n", " r ", "* ", "* ", "#+TODO: X | Y"], pick = Index(0), at = Index(11273010267266948210), cut = 2, insert = "\r"
 cc b779b29fef5094f57ababcd04ac20ec7d5d5c3eaca5f2f8821be32b3183a23cd # shrinks to parts = ["* ", "\r\n", "text", "** ", "* ", "\n", "X "], pick = Index(9223372036854775808), at = Index(9932862193535912409), cut = 3, insert = "\r"
+cc dc206d1f390696fcdd2fa6bec68228c2ddfb19981991839c394976d2c999180c # shrinks to parts = ["* ", "ñ", "\n"], pick = Index(0), at = Index(0), cut = 0, insert = ""
