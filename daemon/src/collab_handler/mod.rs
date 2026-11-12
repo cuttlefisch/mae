@@ -26,6 +26,7 @@ pub mod governor;
 mod kb_artifacts;
 mod kb_content;
 mod kb_governance;
+mod kb_history;
 mod kb_id_guard;
 pub mod kb_lease;
 mod kb_membership;
@@ -1021,10 +1022,20 @@ fn admission_kind(e: &mae_sync::content_ops::AdmissionError) -> RefusalKind {
     }
 }
 
-/// Resolve a KB's content trust anchor (the genesis owner pubkey): the registered
-/// external anchor for a JOINED KB, else this daemon's own signer key when it is the
-/// collection's owner (an OWNED KB — A is its own authority). `None` when neither
-/// holds (un-anchored + not ours), in which case the caller applies the legacy gate.
+/// Whether `kb_id`'s content is E2E encrypted, by its signed op-log or its
+/// collection: the daemon cannot read such content, so checks and history
+/// that need the plaintext stand aside for it.
+pub(crate) async fn kb_is_e2e(doc_store: &DocStore, kb_id: &str, coll: &KbCollectionDoc) -> bool {
+    let signed_e2e = match resolve_content_anchor_with_coll(doc_store, kb_id, Some(coll)).await {
+        Some(anchor) => matches!(
+            mae_sync::membership::derive_encryption(&coll.oplog_ops(), &anchor),
+            mae_sync::kb::Encryption::E2e
+        ),
+        None => false,
+    };
+    signed_e2e || matches!(coll.encryption(), mae_sync::kb::Encryption::E2e)
+}
+
 /// Refuse a node update that would leave a known field of the node document
 /// mistyped (`invalid_field`), checked on the document as it would be after
 /// the update and before anything is persisted. `replace` checks the update
@@ -1057,14 +1068,7 @@ pub(crate) async fn refuse_mistyped_node_update(
             Err(_) => return Ok(()),
         },
     };
-    let signed_e2e = match resolve_content_anchor_with_coll(doc_store, kb_id, Some(coll)).await {
-        Some(anchor) => matches!(
-            mae_sync::membership::derive_encryption(&coll.oplog_ops(), &anchor),
-            mae_sync::kb::Encryption::E2e
-        ),
-        None => false,
-    };
-    if signed_e2e || matches!(coll.encryption(), mae_sync::kb::Encryption::E2e) {
+    if kb_is_e2e(doc_store, kb_id, coll).await {
         return Ok(());
     }
     // The base is the document as storage holds it: an idle-evicted node is
@@ -1087,6 +1091,10 @@ pub(crate) async fn refuse_mistyped_node_update(
     }
 }
 
+/// Resolve a KB's content trust anchor (the genesis owner pubkey): the registered
+/// external anchor for a JOINED KB, else this daemon's own signer key when it is the
+/// collection's owner (an OWNED KB — A is its own authority). `None` when neither
+/// holds (un-anchored + not ours), in which case the caller applies the legacy gate.
 pub async fn resolve_content_anchor(doc_store: &DocStore, kb_id: &str) -> Option<[u8; 32]> {
     resolve_content_anchor_with_coll(doc_store, kb_id, None).await
 }
@@ -2002,6 +2010,17 @@ async fn handle_doc_request_inner(
                 session_id,
                 auth_principal,
                 session_docs,
+                transport,
+                id,
+                &params,
+            )
+            .await
+        }
+
+        Method::KbHistoryCheckpoint => {
+            kb_history::handle_kb_history_checkpoint(
+                doc_store,
+                auth_principal,
                 transport,
                 id,
                 &params,

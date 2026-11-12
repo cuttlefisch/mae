@@ -239,3 +239,122 @@ async fn a_document_that_is_not_a_readable_node_is_not_versioned() {
     let h = env.store.history_list(KB, "concept:n").await.unwrap();
     assert!(h.is_empty(), "{h:?}");
 }
+
+async fn checkpoint(env: &mut Env, who: &str, node: &str, name: &str) -> JsonRpcResponse {
+    let msg = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"kb/history.checkpoint",
+        "params":{"kb_id":KB,"node_id":node,"name":name}});
+    dispatch_as(
+        &env.store,
+        &env.bc,
+        None,
+        Some(&fp(who)),
+        msg,
+        &mut env.docs,
+    )
+    .await
+}
+
+fn error_kind(r: &JsonRpcResponse) -> String {
+    let e = r.error.as_ref().expect("an error");
+    e.data.as_deref().map_or(String::new(), |d| {
+        d["kind"].as_str().unwrap_or("").to_string()
+    })
+}
+
+/// A named version holds the node as it stands, is written even when the
+/// content repeats the previous version, records who named it, and starts a
+/// new session: the namer's next edit cuts nothing, the next handoff does.
+#[tokio::test]
+async fn a_named_version_is_cut_on_request_and_starts_a_session() {
+    let mut env = shared_kb().await;
+    retitle(&mut env, "alice", "A").await;
+    retitle(&mut env, "bob", "B").await;
+    let r = checkpoint(&mut env, "bob", NODE, "release 1").await;
+    let v = r.result.as_ref().unwrap_or_else(|| panic!("{:?}", r.error));
+    assert_eq!(
+        (v["kind"].as_str(), v["name"].as_str(), v["seq"].as_u64()),
+        (Some("named"), Some("release 1"), Some(2))
+    );
+    let r = checkpoint(&mut env, "bob", NODE, "again").await;
+    assert!(
+        r.error.is_none(),
+        "a second name on the same content is written: {:?}",
+        r.error
+    );
+    retitle(&mut env, "bob", "B2").await;
+    retitle(&mut env, "carol", "C").await;
+    let h = history(&env).await;
+    assert_eq!(titles(&h), ["A", "B", "B", "B2"]);
+    assert_eq!(
+        h[1].summary.as_deref(),
+        Some(format!("named by {}", fp("bob")).as_str())
+    );
+    assert_eq!(
+        editor_sets(&h)[1],
+        vec![fp("bob")],
+        "naming does not make one an editor"
+    );
+    assert!(
+        editor_sets(&h)[2].is_empty(),
+        "no one edited between the two names"
+    );
+    let last = h.last().unwrap();
+    assert!(verify_chain(KB, NODE, &h, Some((last.seq, last.entry_hash))).is_ok());
+}
+
+/// Naming needs `Edit`: a non-member and a viewer are refused and write
+/// nothing. A bad name, a missing node and an E2E KB are refused too.
+#[tokio::test]
+async fn a_named_version_is_refused_where_it_must_be() {
+    let mut env = shared_kb().await;
+    let (alice, vic) = (fp("alice"), fp("vic"));
+    let add = kb_member_msg("kb/add_member", KB, &vic, Some("viewer"));
+    let r = dispatch_as(
+        &env.store,
+        &env.bc,
+        Some("alice"),
+        Some(&alice),
+        add,
+        &mut env.docs,
+    )
+    .await;
+    assert!(r.error.is_none(), "{:?}", r.error);
+    retitle(&mut env, "alice", "A").await;
+    for who in ["dave", "vic"] {
+        assert!(
+            checkpoint(&mut env, who, NODE, "n").await.error.is_some(),
+            "{who}"
+        );
+    }
+    for bad in ["", "   ", "a\nb", &"x".repeat(201)] {
+        assert_eq!(
+            error_kind(&checkpoint(&mut env, "alice", NODE, bad).await),
+            "invalid_params",
+            "{bad:?}"
+        );
+    }
+    assert!(checkpoint(&mut env, "alice", NODE, &"x".repeat(200))
+        .await
+        .error
+        .is_none());
+    assert_eq!(
+        error_kind(&checkpoint(&mut env, "alice", "missing", "n").await),
+        "doc_not_found"
+    );
+    let kbc = format!("kbc:{KB}");
+    let state = env.store.encode_state(&kbc).await.unwrap();
+    let mut coll = KbCollectionDoc::from_bytes(&state).unwrap();
+    let up = coll.set_encryption(mae_sync::kb::Encryption::E2e);
+    let by =
+        crate::doc_editors::Attribution::Internal(crate::doc_editors::InternalWriter::Scheduler);
+    env.store.apply_update(&kbc, &up, None, by).await.unwrap();
+    assert_eq!(
+        error_kind(&checkpoint(&mut env, "alice", NODE, "n").await),
+        "e2e_unsupported"
+    );
+    assert_eq!(
+        history(&env).await.len(),
+        1,
+        "only the one valid name was written"
+    );
+}

@@ -401,6 +401,49 @@ impl DocStore {
     }
 
     /// The largest WAL id `doc_name` has been written at; 0 if never.
+    /// ADR-116 D2: cut a version of KB node `node_id` now: a named version,
+    /// or the state before a destructive act. Read and cut under the
+    /// document's lock, the one an update's WAL append holds, so the content
+    /// and the WAL range the version records agree. `None` when it would
+    /// repeat the previous version (never for a named one).
+    ///
+    /// Refused for a node storage has never seen (`DurableDocMissing`), and
+    /// for a document that does not read as its node (E2E ciphertext): a
+    /// version must hold the node's readable content.
+    pub async fn history_checkpoint(
+        &self,
+        kb_id: &str,
+        node_id: &str,
+        kind: mae_sync::kb::history::VersionKind,
+        name: Option<String>,
+        summary: Option<String>,
+    ) -> Result<Option<mae_sync::kb::history::HistoryEntry>, StorageError> {
+        let doc_name = mae_sync::kb_node_doc_name(kb_id, node_id);
+        if !self.has_durable_doc(&doc_name).await {
+            return Err(StorageError::DurableDocMissing(doc_name));
+        }
+        let entry = self.get_or_create_allowing_durable(&doc_name).await?;
+        let doc = entry.lock().await;
+        let content = mae_sync::kb::KbNodeDoc::from_bytes(&doc.sync.encode_state())
+            .map(|n| n.materialize())
+            .ok()
+            .filter(|c| c.id == node_id)
+            .ok_or_else(|| {
+                StorageError::Sqlite(format!("{doc_name} does not read as node {node_id}"))
+            })?;
+        let cp = Checkpoint {
+            kb_id: kb_id.to_string(),
+            node_id: node_id.to_string(),
+            kind,
+            content,
+            name,
+            summary,
+            restored_from: None,
+        };
+        let now = ((self.clock)() / 1000) as i64;
+        self.storage.history_cut(cp, now).await
+    }
+
     /// Every version of a KB node, in `seq` order (ADR-116).
     pub async fn history_list(
         &self,
