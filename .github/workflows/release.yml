@@ -29,7 +29,7 @@ jobs:
         with:
           fetch-depth: 0  # full history for changelog
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1 # pinned with ci (setup-rust)
         with:
           targets: x86_64-unknown-linux-musl
 
@@ -105,7 +105,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1 # pinned with ci (setup-rust)
 
       - uses: ./.github/actions/install-gui-deps
 
@@ -189,7 +189,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1 # pinned with ci (setup-rust)
 
       - uses: Swatinem/rust-cache@v2
 
@@ -367,7 +367,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1 # pinned with ci (setup-rust)
 
       - uses: Swatinem/rust-cache@v2
 
@@ -405,7 +405,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1 # pinned with ci (setup-rust)
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8
