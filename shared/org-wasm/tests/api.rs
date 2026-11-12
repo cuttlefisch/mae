@@ -155,6 +155,35 @@ fn syntax_sections_round_trip_through_json() {
     );
 }
 
+/// A headline whose title ends in a multi-byte character before its LF:
+/// `syntax` answers, and each section round-trips through `syntaxSection`.
+/// Each input made 0.5.0's `syntax` panic (`unreachable` in WASM).
+#[test]
+fn a_multibyte_character_before_a_headline_lf_is_answered() {
+    for text in [
+        "* ñ\n",
+        "* €\n",
+        "* 😀\n",
+        "* 𝄞\n",
+        "* a😀\n",
+        "** 😀\n",
+        "texto\n* 😀\n",
+    ] {
+        for post_blank in [true, false] {
+            let req = serde_json::json!({ "text": text, "post_blank": post_blank });
+            let whole = ok(7, &req.to_string());
+            for s in whole["sections"].as_array().unwrap() {
+                let (start, end) = (s["start"].as_u64().unwrap(), s["end"].as_u64().unwrap());
+                let region = &text[start as usize..end as usize];
+                let req = serde_json::json!({
+                    "text": region, "section": s, "file": whole["file"], "post_blank": post_blank,
+                });
+                assert!(ok(8, &req.to_string())["spans"].is_array(), "{text:?}");
+            }
+        }
+    }
+}
+
 #[test]
 fn a_malformed_section_request_is_an_error() {
     assert!(err(8, r#"{"text": "x"}"#).contains("section"));
