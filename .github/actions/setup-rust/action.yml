@@ -12,9 +12,12 @@ description: >
   actions/checkout as its own first step before this one.
 inputs:
   toolchain:
-    description: Rust toolchain channel/version to install (e.g. stable, nightly, 1.95)
+    description: Rust toolchain channel/version to install (e.g. 1.99.1, nightly, 1.95)
     required: false
-    default: stable
+    # Pinned, not `stable`: Rust 1.100.0 (2026-11-09) reached the runners
+    # unannounced and failed main on rustfmt and new clippy lints in code no PR
+    # had touched. A toolchain upgrade is its own PR, with its own fixes.
+    default: "1.99.1"
   components:
     description: Extra rustup components, comma-separated (e.g. "clippy, rustfmt")
     required: false
@@ -105,7 +108,9 @@ runs:
     - uses: dtolnay/rust-toolchain@master
       with:
         toolchain: ${{ inputs.toolchain }}
-        components: ${{ inputs.components }}
+        # Always clippy and rustfmt: a pinned toolchain is installed with the
+        # minimal profile, unlike the runner image's preinstalled `stable`.
+        components: clippy, rustfmt${{ inputs.components != '' && format(', {0}', inputs.components) || '' }}
         targets: ${{ inputs.targets }}
     - uses: Swatinem/rust-cache@v2
       with:
