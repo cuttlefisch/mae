@@ -689,6 +689,10 @@ impl StorageBackend for SqliteBackend {
 }
 
 #[cfg(test)]
+#[path = "storage_change_index_bench_tests.rs"]
+mod change_index_bench;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::doc_editors::{Attribution, InternalWriter};
