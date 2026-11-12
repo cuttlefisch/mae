@@ -121,6 +121,62 @@ impl SignedHead {
     }
 }
 
+impl SignedHead {
+    /// The head as a file an operator keeps outside the daemon (D4): plain
+    /// JSON, every hash and key hex.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "format": "mae-history-head/v1",
+            "kb_id": self.kb_id,
+            "at": self.at,
+            "digest": hex::encode(self.digest),
+            "tips": self.tips.iter().map(|t| serde_json::json!({
+                "node_id": t.node_id, "seq": t.seq, "entry_hash": hex::encode(t.entry_hash),
+            })).collect::<Vec<_>>(),
+            "signer": hex::encode(self.signer),
+            "signature": hex::encode(self.signature),
+        })
+    }
+
+    /// Read a head file. Refuses anything not in [`Self::to_json`]'s form;
+    /// whether the head verifies is a separate question.
+    pub fn from_json(v: &serde_json::Value) -> Result<Self, String> {
+        fn hex_n<const N: usize>(v: &serde_json::Value, key: &str) -> Result<[u8; N], String> {
+            v[key]
+                .as_str()
+                .and_then(|s| hex::decode(s).ok())
+                .and_then(|b| b.try_into().ok())
+                .ok_or_else(|| format!("'{key}' is not {N} bytes of hex"))
+        }
+        if v["format"] != "mae-history-head/v1" {
+            return Err("not a mae-history-head/v1 file".into());
+        }
+        let tips = v["tips"]
+            .as_array()
+            .ok_or("'tips' is not a list")?
+            .iter()
+            .map(|t| {
+                Ok(Tip {
+                    node_id: t["node_id"]
+                        .as_str()
+                        .ok_or("a tip has no node_id")?
+                        .to_string(),
+                    seq: t["seq"].as_u64().ok_or("a tip has no seq")?,
+                    entry_hash: hex_n(t, "entry_hash")?,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(SignedHead {
+            kb_id: v["kb_id"].as_str().ok_or("'kb_id' is missing")?.to_string(),
+            at: v["at"].as_i64().ok_or("'at' is missing")?,
+            tips,
+            digest: hex_n(v, "digest")?,
+            signer: hex_n(v, "signer")?,
+            signature: hex_n(v, "signature")?,
+        })
+    }
+}
+
 /// Checks `chains` (each node's whole history, in `seq` order) against
 /// `head`: the signature, every chain on its own (with its content, given the
 /// KB's history `key`), and every tip the head names still in its chain with

@@ -335,3 +335,72 @@ async fn a_forged_head_is_reported() {
         (Some(false), Some("head"))
     );
 }
+
+/// D4's honest limit, and its remedy: whoever holds the daemon's key and its
+/// database rewrites a version consistently (content, keyed hash, entry hash)
+/// and signs a fresh head. Against the daemon's own log that verifies; against
+/// a head the operator kept before the rewrite, it does not.
+#[tokio::test]
+async fn only_a_kept_head_catches_a_rewrite_by_the_key_holder() {
+    use mae_sync::kb::history::{seal, Draft};
+    let env = three_versions().await;
+    env.store.set_signer(daemon_identity(9));
+    let kept = env
+        .store
+        .history_sign_head(KB)
+        .await
+        .unwrap()
+        .expect("a head to keep");
+
+    let h = env.store.history_list(KB, NODE).await.unwrap();
+    let key = env.store.history_key(KB).await.unwrap().unwrap();
+    let old = &h[2];
+    let draft = Draft {
+        kind: old.kind,
+        created_at: old.created_at,
+        editors: old.editors.clone(),
+        wal_from: old.wal_from,
+        wal_to: old.wal_to,
+        summary: old.summary.clone(),
+        name: old.name.clone(),
+        restored_from: old.restored_from,
+        content: Some(
+            mae_sync::kb::KbNodeDoc::new_created_at(NODE, "rewritten", "", &[], 1).materialize(),
+        ),
+    };
+    let forged = seal(KB, NODE, Some(&h[1]), draft, &key).unwrap();
+    env.backend.execute_for_test(&format!(
+        "UPDATE kb_node_history SET content = X'{}', content_hash = X'{}', entry_hash = X'{}' \
+         WHERE kb_id = '{KB}' AND node_id = '{NODE}' AND seq = 3",
+        hex::encode(forged.content.as_ref().unwrap()),
+        hex::encode(forged.content_hash),
+        hex::encode(forged.entry_hash)
+    ));
+    assert!(
+        env.store.history_sign_head(KB).await.unwrap().is_some(),
+        "re-signed"
+    );
+
+    let own = crate::history_verify::verify_kb(&env.store, KB, None)
+        .await
+        .unwrap();
+    assert!(own.ok(), "the daemon's own log cannot see it: {own:?}");
+    let r = crate::history_verify::verify_kb(&env.store, KB, Some(&kept))
+        .await
+        .unwrap();
+    assert!(!r.ok());
+    match r.against {
+        Some(crate::history_verify::HeadCheck::Failed { node_id, seq, .. }) => {
+            assert_eq!((node_id.as_deref(), seq), (Some(NODE), Some(3)));
+        }
+        other => panic!("{other:?}"),
+    }
+    let file = mae_sync::kb::history::SignedHead::from_json(&kept.to_json()).unwrap();
+    assert!(
+        !crate::history_verify::verify_kb(&env.store, KB, Some(&file))
+            .await
+            .unwrap()
+            .ok(),
+        "from its file too"
+    );
+}

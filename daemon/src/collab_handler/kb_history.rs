@@ -4,10 +4,7 @@
 use super::method_authz::Method;
 use super::*;
 use crate::storage::StorageError;
-use mae_sync::kb::history::{
-    kb_head, public_key_of, verify_against_head, verify_chain, HeadError, HistoryEntry, HistoryKey,
-    VersionKind,
-};
+use mae_sync::kb::history::{verify_chain, HistoryEntry, HistoryKey, VersionKind};
 use mae_sync::kb::MaterializedNode;
 
 /// The longest name a version may carry, in characters.
@@ -302,10 +299,9 @@ async fn diff(
     )
 }
 
-/// `kb/history.verify {kb_id, node_id?}`: verify one node's chain, or every
-/// node's in the KB. A whole-KB check also reports the KB's head and checks
-/// the chains against the latest signed head (D4), which is what shows a
-/// removed last version or a history re-sealed from an earlier one. A head kept
+/// `kb/history.verify {kb_id, node_id?}`: verify one node's chain, or the
+/// whole KB (`crate::history_verify`, shared with the operator's command),
+/// which also checks the chains against the latest signed head. A head kept
 /// outside the daemon is still the only defence against a rewrite by whoever
 /// holds the daemon's key (`mae-daemon kb history verify --against`).
 async fn verify(
@@ -316,84 +312,34 @@ async fn verify(
 ) -> Result<serde_json::Value, McpError> {
     let kb_id = text(params, "kb_id")?;
     gate(doc_store, &kb_id, auth_principal, transport, KbOp::Read).await?;
-    let whole = params["node_id"].as_str().is_none();
-    let nodes = match params["node_id"].as_str() {
-        Some(n) => vec![n.to_string()],
-        None => doc_store
-            .history_nodes(&kb_id)
+    let unreadable = |e: StorageError| McpError::internal_fault(format!("history unreadable: {e}"));
+    let Some(node) = params["node_id"].as_str() else {
+        let r = crate::history_verify::verify_kb(doc_store, &kb_id, None)
             .await
-            .map_err(|e| McpError::internal_fault(format!("history unreadable: {e}")))?,
+            .map_err(unreadable)?;
+        let failures: Vec<serde_json::Value> = r
+            .failures
+            .iter()
+            .map(|(n, e)| serde_json::json!({ "node_id": n, "seq": e.seq, "broken": e.broken.as_str() }))
+            .collect();
+        return Ok(serde_json::json!({
+            "kb_id": kb_id, "ok": r.ok(), "nodes": r.nodes, "versions": r.versions,
+            "failures": failures, "head": hex::encode(r.head),
+            "head_checked": !matches!(r.signed, crate::history_verify::HeadCheck::Unchecked(_)),
+            "signed_head": r.signed.json(),
+        }));
     };
-    let hkey = kb_key(doc_store, &kb_id).await?;
-    let (mut versions, mut failures) = (0usize, Vec::new());
-    let mut chains = std::collections::BTreeMap::new();
-    for n in &nodes {
-        let h = load(doc_store, &kb_id, n).await?;
-        versions += h.len();
-        if let Err(e) = verify_chain(&kb_id, n, &h, None, hkey.as_ref()) {
-            failures.push(
-                serde_json::json!({ "node_id": n, "seq": e.seq, "broken": e.broken.as_str() }),
-            );
-        }
-        chains.insert(n.clone(), h);
-    }
-    let tips = chains
-        .iter()
-        .filter_map(|(n, h)| h.last().map(|t| (n.as_str(), t.seq, t.entry_hash)));
-    let head = kb_head(&kb_id, tips).map_err(|e| McpError::internal_fault(format!("head: {e}")))?;
-    let signed = match whole {
-        true => Some(signed_head_check(doc_store, &kb_id, &chains, hkey.as_ref()).await?),
-        false => None,
-    };
-    let signed_ok = signed.as_ref().is_none_or(|s| s["ok"] != false);
+    let key = kb_key(doc_store, &kb_id).await?;
+    let h = load(doc_store, &kb_id, node).await?;
+    let failures: Vec<serde_json::Value> = verify_chain(&kb_id, node, &h, None, key.as_ref())
+        .err()
+        .map(|e| serde_json::json!({ "node_id": node, "seq": e.seq, "broken": e.broken.as_str() }))
+        .into_iter()
+        .collect();
     Ok(serde_json::json!({
-        "kb_id": kb_id,
-        "ok": failures.is_empty() && signed_ok,
-        "nodes": nodes.len(),
-        "versions": versions,
-        "failures": failures,
-        "head": whole.then(|| hex::encode(head)),
-        "head_checked": signed.as_ref().is_some_and(|s| s["checked"] == true),
-        "signed_head": signed,
+        "kb_id": kb_id, "ok": failures.is_empty(), "nodes": 1, "versions": h.len(),
+        "failures": failures, "head": null, "head_checked": false, "signed_head": null,
     }))
-}
-
-/// The chains checked against the KB's latest signed head. It must be signed
-/// with this daemon's own key: a head that verifies under any other key was
-/// not written by this daemon, and is reported, never trusted.
-async fn signed_head_check(
-    doc_store: &DocStore,
-    kb_id: &str,
-    chains: &std::collections::BTreeMap<String, Vec<HistoryEntry>>,
-    key: Option<&HistoryKey>,
-) -> Result<serde_json::Value, McpError> {
-    let latest = doc_store
-        .history_latest_head(kb_id)
-        .await
-        .map_err(|e| McpError::internal_fault(format!("head log unreadable: {e}")))?;
-    let Some(head) = latest else {
-        return Ok(serde_json::json!({ "checked": false, "reason": "no signed head yet" }));
-    };
-    let own = doc_store.signer().map(|s| public_key_of(&s.secret_bytes()));
-    let at = serde_json::json!({ "at": head.at, "digest": hex::encode(head.digest) });
-    if own != Some(head.signer) {
-        return Ok(
-            serde_json::json!({ "checked": true, "ok": false, "head": at,
-            "broken": "head", "reason": "the head is not signed with this daemon's key" }),
-        );
-    }
-    Ok(match verify_against_head(&head, kb_id, chains, key) {
-        Ok(()) => serde_json::json!({ "checked": true, "ok": true, "head": at }),
-        Err(e) => {
-            let (node_id, seq) = match &e {
-                HeadError::Tip { node_id, seq } => (Some(node_id.clone()), Some(*seq)),
-                HeadError::Chain { node_id, err } => (Some(node_id.clone()), Some(err.seq)),
-                _ => (None, None),
-            };
-            serde_json::json!({ "checked": true, "ok": false, "head": at,
-                "broken": e.broken().as_str(), "node_id": node_id, "seq": seq })
-        }
-    })
 }
 
 /// ADR-116 Amendment 1, until history is carried over encrypted: refuse a

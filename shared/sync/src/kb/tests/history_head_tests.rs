@@ -147,3 +147,19 @@ fn a_chain_is_checked_as_a_prefix_of_the_head() {
         Err(HeadError::Chain { .. })
     ));
 }
+
+/// A head survives its file form exactly, and a damaged file is refused
+/// rather than read as some other head.
+#[test]
+fn a_head_round_trips_through_its_file() {
+    let head = SignedHead::sign(KB, 100, tips(&kb()), &SEED).unwrap();
+    let back = SignedHead::from_json(&head.to_json()).unwrap();
+    assert_eq!(back, head);
+    assert!(back.verify_signature());
+    let mut v = head.to_json();
+    v["digest"] = serde_json::json!("00");
+    assert!(SignedHead::from_json(&v).is_err());
+    let mut v = head.to_json();
+    v["format"] = serde_json::json!("other");
+    assert!(SignedHead::from_json(&v).is_err());
+}

@@ -845,6 +845,32 @@ lock when it opens its store. Started while an operator command holds it, it **e
 75 (`EX_TEMPFAIL`) and says why, rather than serving with collab and `kb/query` silently off. A
 supervisor that restarts on failure (`Restart=on-failure`) brings it up once the command is done.
 
+## 7c. Version history: signed heads and keeping one elsewhere
+
+Every KB node's versions form a hash chain (ADR-116). The daemon signs each KB's **history head**
+(every node's latest version) with its own key on the maintenance tick, only when it changed, into
+an append-only log in `state.db`. `kb/history.verify` checks the chains against the latest one,
+which shows a removed last version or a history re-sealed from an earlier point.
+
+What no log on the daemon can show is a rewrite by whoever holds both the daemon's key and its
+database: they can re-sign. Keep a head somewhere they cannot reach, and check against it:
+
+```bash
+mae-daemon kb history head   --kb-id notes --out /secure/notes-head-2026-11-12.json
+mae-daemon kb history verify --kb-id notes --against /secure/notes-head-2026-11-12.json
+```
+
+- `head` signs the head now (or takes the latest, if nothing changed) and writes it; it never
+  overwrites an existing file. Without `--out` it prints the JSON (`mae-history-head/v1`).
+- `verify` checks every chain, the latest signed head and, with `--against`, the kept one. It
+  prints `verified` and exits 0, or names the first failing node and version, prints
+  `NOT VERIFIED` and exits 1. A KB with no history is refused rather than reported as verified, so
+  a mistyped id cannot pass.
+- A head counts only if it is signed with this daemon's key.
+- `backup create` signs every KB's head first when the daemon is stopped. With it running, the
+  backup carries the latest head the maintenance tick signed.
+- Both commands are operator-only and offline (stop the daemon), like `kb member`.
+
 ## 8. Troubleshooting
 
 | Symptom | Check |
