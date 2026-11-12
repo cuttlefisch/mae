@@ -330,7 +330,7 @@ fn section(
         declarations: fingerprint(inside),
         followed_by_headline: end < len,
         eol: EolProfile::of(&slice(doc, start, end)),
-        eol_anchor: anchor_before(&slice(doc, start.saturating_sub(2), start)),
+        eol_anchor: anchor_before(doc, start),
     }
 }
 
@@ -390,16 +390,28 @@ fn slice(doc: &Document, start: u32, end: u32) -> String {
         .to_string()
 }
 
-/// The terminator ending `before` (the two bytes before a region): `None` at
-/// the start of the file.
-fn anchor_before(before: &str) -> Option<crate::LineEnding> {
+/// The terminator ending just before offset `start`: `None` at the start of
+/// the file. Read byte by byte from the tokens, not by slicing the text: the
+/// byte two before `start` may be inside a multi-byte character (`"* ñ\n"`),
+/// where a string slice panics. Only an ASCII CR or LF matters, and no byte
+/// of a multi-byte UTF-8 character is one.
+fn anchor_before(doc: &Document, start: u32) -> Option<crate::LineEnding> {
     use crate::LineEnding::*;
-    match before.as_bytes() {
-        [.., b'\r', b'\n'] => Some(CrLf),
-        [.., b'\n'] => Some(Lf),
-        [.., b'\r'] => Some(Cr),
+    let byte = |back: u32| start.checked_sub(back).and_then(|at| byte_at(doc, at));
+    match (byte(2), byte(1)) {
+        (Some(b'\r'), Some(b'\n')) => Some(CrLf),
+        (_, Some(b'\n')) => Some(Lf),
+        (_, Some(b'\r')) => Some(Cr),
         _ => None,
     }
+}
+
+/// The byte at offset `at` of `doc`'s text, from the token that holds it.
+fn byte_at(doc: &Document, at: u32) -> Option<u8> {
+    let off = rowan::TextSize::from(at);
+    let token = doc.syntax().token_at_offset(off).right_biased()?;
+    let i = usize::from(off.checked_sub(token.text_range().start())?);
+    token.text().as_bytes().get(i).copied()
 }
 
 /// Whether the region's new terminators can change the file's convention,
