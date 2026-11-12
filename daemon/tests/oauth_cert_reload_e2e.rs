@@ -14,14 +14,11 @@
 //! garbage, an empty file, or a new certificate beside the OLD key. The
 //! listener must keep serving the previous certificate, never fail handshakes.
 
+mod daemon_harness;
+
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
-
-fn free_tcp_port() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.local_addr().unwrap().port()
-}
 
 /// A fresh self-signed pair (distinct key per call -- principle #14).
 struct Pair {
@@ -30,6 +27,8 @@ struct Pair {
     /// Short SHA-256 fingerprint of the DER certificate -- compared instead of
     /// the raw bytes so a failure prints two readable fingerprints.
     der: String,
+    /// The DER itself, which readiness pins (`daemon_harness`).
+    der_bytes: Vec<u8>,
 }
 
 fn fingerprint(der: &[u8]) -> String {
@@ -43,6 +42,7 @@ fn new_pair() -> Pair {
         cert_pem: ck.cert.pem(),
         key_pem: ck.signing_key.serialize_pem(),
         der: fingerprint(ck.cert.der()),
+        der_bytes: ck.cert.der().to_vec(),
     }
 }
 
@@ -60,7 +60,7 @@ fn write_stamped(path: &Path, contents: &str, offset_secs: u64) {
 }
 
 struct DaemonGuard {
-    _child: tokio::process::Child,
+    _proc: daemon_harness::Process,
     _tmp: tempfile::TempDir,
     addr: SocketAddr,
     cert_path: PathBuf,
@@ -74,10 +74,10 @@ async fn spawn_daemon_with(initial: &Pair) -> DaemonGuard {
     std::fs::write(&cert_path, &initial.cert_pem).unwrap();
     std::fs::write(&key_path, &initial.key_pem).unwrap();
 
-    let port = free_tcp_port();
-    let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
-    let config = format!(
-        r#"
+    let root = tmp.path().to_path_buf();
+    let proc = daemon_harness::spawn_ready(|ports| {
+        let config = format!(
+            r#"
 [collab]
 enabled = false
 
@@ -90,40 +90,39 @@ cert_path = "{cert}"
 key_path = "{key}"
 max_connections = 0
 "#,
-        cert = cert_path.display().to_string().replace('\\', "\\\\"),
-        key = key_path.display().to_string().replace('\\', "\\\\"),
-    );
-    let config_path = tmp.path().join("daemon.toml");
-    std::fs::write(&config_path, config).unwrap();
+            port = ports.oauth,
+            cert = cert_path.display().to_string().replace('\\', "\\\\"),
+            key = key_path.display().to_string().replace('\\', "\\\\"),
+        );
+        let config_path = root.join("daemon.toml");
+        std::fs::write(&config_path, config).unwrap();
 
-    let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"))
-        .args([
+        let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"));
+        cmd.args([
             "--config",
             config_path.to_str().unwrap(),
             "--data-dir",
-            tmp.path().to_str().unwrap(),
+            root.to_str().unwrap(),
             "--socket",
-            tmp.path().join("kb.sock").to_str().unwrap(),
+            root.join("kb.sock").to_str().unwrap(),
         ])
-        .env("XDG_RUNTIME_DIR", tmp.path())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("spawn mae-daemon");
-
-    let up =
-        mae_mcp::ready::wait_until(|| async { tokio::net::TcpStream::connect(addr).await.is_ok() })
-            .await;
-    assert!(
-        up,
-        "{}",
-        mae_mcp::ready::timeout_message(&format!("OAuth listener on {addr}"))
-    );
+        .env("XDG_RUNTIME_DIR", &root);
+        daemon_harness::Launch {
+            cmd,
+            status_socket: root.join("kb.sock"),
+            log: root.join("daemon.log"),
+            collab: false,
+            oauth: Some(daemon_harness::OauthProbe {
+                cert_der: initial.der_bytes.clone(),
+                ws_ticket: false,
+            }),
+        }
+    })
+    .await;
     DaemonGuard {
-        _child: child,
+        addr: proc.ports.oauth_addr(),
+        _proc: proc,
         _tmp: tmp,
-        addr,
         cert_path,
         key_path,
     }

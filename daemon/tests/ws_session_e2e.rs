@@ -1,6 +1,7 @@
 //! A live sync-WebSocket session, over the real listener (ADR-099 Amendment 1,
 //! B2/B3/B4; B7 "Renewal" and "Multiplexing" — slow documents excepted).
 
+mod daemon_harness;
 mod ws_common;
 
 use std::time::Duration;

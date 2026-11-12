@@ -5,6 +5,7 @@
 //! `tests/common/mod.rs`.
 
 mod common;
+mod daemon_harness;
 
 use common::{await_collab_active, daemon_status, send_recv, spawn_server};
 
