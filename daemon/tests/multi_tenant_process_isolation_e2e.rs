@@ -12,6 +12,8 @@
 //!
 //! Run: `MAE_TCP_E2E=1 cargo test -p mae-daemon --test multi_tenant_process_isolation_e2e`
 
+mod daemon_harness;
+
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
@@ -19,7 +21,7 @@ use mae_mcp::protocol::JsonRpcResponse;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 struct TenantProcess {
-    child: tokio::process::Child,
+    proc: daemon_harness::Process,
     _tmp: tempfile::TempDir,
     addr: SocketAddr,
 }
@@ -34,37 +36,31 @@ async fn spawn_tenant_process() -> Option<TenantProcess> {
         eprintln!("skipping: MAE_TCP_E2E not set");
         return None;
     }
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr: SocketAddr = listener.local_addr().unwrap();
-    drop(listener);
     let tmp = tempfile::tempdir().unwrap();
-    let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"))
-        .args([
+    let root = tmp.path().to_path_buf();
+    let proc = daemon_harness::spawn_ready(|ports| {
+        let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"));
+        cmd.args([
             "--bind",
-            &addr.to_string(),
+            &ports.collab_addr().to_string(),
             "--data-dir",
-            tmp.path().to_str().unwrap(),
+            root.to_str().unwrap(),
         ])
-        .env("XDG_RUNTIME_DIR", tmp.path())
-        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("failed to spawn mae-daemon");
-    // Bounded by wall-clock, not by an iteration count — see `mae_mcp::ready`.
-    let up =
-        mae_mcp::ready::wait_until(|| async { tokio::net::TcpStream::connect(addr).await.is_ok() })
-            .await;
-    assert!(
-        up,
-        "{}",
-        mae_mcp::ready::timeout_message(&format!("mae-daemon on {addr}"))
-    );
+        .env("XDG_RUNTIME_DIR", &root)
+        .env("XDG_CONFIG_HOME", root.join("config"));
+        daemon_harness::Launch {
+            cmd,
+            status_socket: root.join("mae-daemon.sock"),
+            log: root.join("daemon.log"),
+            collab: true,
+            oauth: None,
+        }
+    })
+    .await;
     Some(TenantProcess {
-        child,
+        addr: proc.ports.collab_addr(),
+        proc,
         _tmp: tmp,
-        addr,
     })
 }
 
@@ -154,11 +150,17 @@ async fn sigkilling_one_tenant_process_has_zero_observable_impact_on_another() {
     // The real adversarial action: SIGKILL, not a graceful shutdown --
     // proves this doesn't depend on tenant A getting a chance to clean up.
     // tokio::process::Child::kill() sends SIGKILL on Unix.
-    tenant_a.child.kill().await.expect("SIGKILL must succeed");
-    let wait_result = tokio::time::timeout(Duration::from_secs(5), tenant_a.child.wait())
+    tenant_a
+        .proc
+        .child_mut()
+        .kill()
         .await
-        .expect("tenant A's process must actually exit after SIGKILL")
-        .expect("wait() must succeed");
+        .expect("SIGKILL must succeed");
+    let wait_result =
+        tokio::time::timeout(Duration::from_secs(5), tenant_a.proc.child_mut().wait())
+            .await
+            .expect("tenant A's process must actually exit after SIGKILL")
+            .expect("wait() must succeed");
     assert!(
         !wait_result.success(),
         "a SIGKILL'd process must not report a clean exit"
@@ -191,5 +193,5 @@ async fn sigkilling_one_tenant_process_has_zero_observable_impact_on_another() {
         );
     }
 
-    tenant_b.child.kill().await.ok();
+    tenant_b.proc.child_mut().kill().await.ok();
 }
