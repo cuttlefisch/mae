@@ -208,6 +208,14 @@ layer on it becomes the cheaper path.
   styles a node or asks whether the cursor is in it; `end` keeps `org-element`'s extent. WASM
   `syntax`/`syntaxSection` take `"post_blank": false` to end every span there instead, so the flat
   triples keep their shape. `Highlight` is now `#[non_exhaustive]`, as the result types already were.
+- **O3.4** (`mae-org-v0.5.0`) a section edit that may change the file's line ending needs a full
+  parse: the convention (a lone LF anywhere makes a CRLF file unix) is a whole-file fact, so each
+  `Section` carries its region's line-terminator facts and the terminator before it, and an edit
+  that could change the convention answers `needs_full` `"line_ending"`. The WASM `sections` JSON
+  gains a required `eol` integer that `syntaxSection` reads back. A trailing lone CR no longer
+  counts as a line end in unix and DOS files. Breaking: a heading whose title has no letter or digit
+  is anchored `h--untitled` (was the bare `h`, which a browser exposes as a `window` property);
+  repeats are `h--untitled--2`.
 - **O4** MAE switches ingest, export and read mode to it, with the repair path; the span-based write
   path lands on the same spans.
 - **O5** the remaining constructs by measured use, privacy-relevant regions first.

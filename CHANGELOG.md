@@ -2,6 +2,88 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.150] - 2026-11-11
+
+
+
+
+### Features
+
+- *(daemon)* `kb member add|remove|list` for KBs this daemon owns ([da34d6d](https://github.com/cuttlefisch/mae/commit/da34d6da62acb8d0dbf944691527a5cc9abf0aa9))
+- *(daemon)* Sync WebSocket on the HTTPS listener, first cut (ADR-099 A1 B1-B4, B6) ([f2b35c7](https://github.com/cuttlefisch/mae/commit/f2b35c751397c9c52ac07e95946d8beedb66d589))
+- *(daemon)* Ws cap counts a joined KB once; CORS, keepalive, ticket kind ([af0e842](https://github.com/cuttlefisch/mae/commit/af0e842f0276c424af09423d1ac83fc77a919af5))
+- *(collab)* Presence in the y-protocols awareness encoding (ADR-099 A1 B5) ([0f6ae48](https://github.com/cuttlefisch/mae/commit/0f6ae4879d06ba934d492550c5444fba4f975767))
+
+### Bug Fixes
+
+- *(daemon)* Kb member review fixes ([63bb9de](https://github.com/cuttlefisch/mae/commit/63bb9dea23535a0f3f9ef342891b24f5457673b0))
+- *(collab)* A full queue closes the document instead of losing an update ([230e0ca](https://github.com/cuttlefisch/mae/commit/230e0ca4a0b8c4377d7ca18b737d2d48a52daf45))
+- *(collab)* Review fixes for the sync WebSocket ([7a6c882](https://github.com/cuttlefisch/mae/commit/7a6c8825c1555c55d24f893934949e5ef5f94786))
+
+### Testing
+
+- *(daemon)* One line per refusal case in the member test ([5763426](https://github.com/cuttlefisch/mae/commit/5763426f0e0783dae9f8673632ebb5b285b4b1a7))
+- *(daemon)* Three writers converge through the sync WebSocket ([7480edb](https://github.com/cuttlefisch/mae/commit/7480edb176a15fc19a97258ba98f68ea0f18ed83))
+- *(daemon)* Split the WS convergence test's write and catch-up phases ([b2f45e9](https://github.com/cuttlefisch/mae/commit/b2f45e93ccddc73128600bacfd53dd9f1d8a5310))
+
+### Miscellaneous
+
+- Bump version to 0.14.149 ([23b28bc](https://github.com/cuttlefisch/mae/commit/23b28bcffe96009b1711ce67dbc6a31d007e25ad))
+
+## [0.14.148] - 2026-11-11
+
+
+
+
+### Features
+
+- *(daemon)* Refuse a node update that leaves a field mistyped ([a0692a1](https://github.com/cuttlefisch/mae/commit/a0692a117621d2843f1a1b9ffa223a9619843b41))
+
+### Bug Fixes
+
+- *(daemon)* An evicted node is checked against its stored state ([1818a6d](https://github.com/cuttlefisch/mae/commit/1818a6dfb2b7d65c78a810889b0e050eb90c811c))
+
+### Testing
+
+- *(sync)* Measure the field-type check on the keystroke path ([16a0528](https://github.com/cuttlefisch/mae/commit/16a0528d07a873b64520c9c2995fc7ef036892a7))
+- *(sync)* Hoist the wrong-type cases out of the field test ([3a04def](https://github.com/cuttlefisch/mae/commit/3a04def4d6ff24285b0991c0ff9468260e85d773))
+
+### Miscellaneous
+
+- Bump version to 0.14.148 ([7870303](https://github.com/cuttlefisch/mae/commit/7870303c817e1223d7a483614b2b20ba53145cd8))
+
+## [0.14.147] - 2026-11-11
+
+
+
+
+### Bug Fixes
+
+- *(kb)* Rebirth keeps created_at; kb-restore names its KB ([5836cf8](https://github.com/cuttlefisch/mae/commit/5836cf85dd820760a31b2afb65d3369daae2362f))
+- *(identity)* Authorized_keys updates fail closed under contention ([b58f3e1](https://github.com/cuttlefisch/mae/commit/b58f3e10c34964c0bc898f49fda5fbaa4fbe4e1e))
+
+### Refactor
+
+- *(scheme)* Kb-restore registers in its own function ([3e6c179](https://github.com/cuttlefisch/mae/commit/3e6c1795f6dafe0ac0e0ad2e58ce246e4eebc5b3))
+
+### Documentation
+
+- *(adr)* ADR-099 Amendment 1, browser WebSocket authentication ([bddc8c9](https://github.com/cuttlefisch/mae/commit/bddc8c9d2f6f3c2d36a0bf492023e8eb10a45e27))
+- *(adr)* ADR-099 Amendment 1 B0, D2 re-evaluated against Hocuspocus ([18ec368](https://github.com/cuttlefisch/mae/commit/18ec36828316c0aa9e33ccfcde76ef9a897bea3c))
+- *(adr)* ADR-099 Amendment 1 names the clients it serves ([3860efb](https://github.com/cuttlefisch/mae/commit/3860efb47ed331cf5080cf213d2ed7eed789f52c))
+- *(adr)* ADR-099 and its Amendment 1 are accepted ([ef779b5](https://github.com/cuttlefisch/mae/commit/ef779b5aab69d45fbbe49a299897fab4f91a879f))
+- *(adr)* ADR-093 Amendment 1, the org_header field ([d81cb14](https://github.com/cuttlefisch/mae/commit/d81cb145e0ce455a378a846fa7695ad79f5e9d4f))
+
+### Testing
+
+- *(org)* The anchor-id oracle checks the stated property ([05fbe75](https://github.com/cuttlefisch/mae/commit/05fbe75cc2658a1644d271d1905ec80159ff2c06))
+
+### Miscellaneous
+
+- *(adr)* Regenerate the ADR KB checksum for ADR-099's status ([8b8a834](https://github.com/cuttlefisch/mae/commit/8b8a834e455b33f113a38e66091e6fb269db7859))
+- Bump version to 0.14.146 ([8f11ed3](https://github.com/cuttlefisch/mae/commit/8f11ed3dd4caae1f904dd9b76d19de646efc164c))
+- Bump version to 0.14.147 ([fe44c78](https://github.com/cuttlefisch/mae/commit/fe44c78a2c5b1fc6d1dbfbc0c8e2233a49b4c32b))
+
 ## [0.14.145] - 2026-11-11
 
 
@@ -21,6 +103,10 @@ All notable changes to this project will be documented in this file.
 ### Documentation
 
 - *(adr)* ADR-115 KB attachment store ([e2743b4](https://github.com/cuttlefisch/mae/commit/e2743b46133d6a78fc0a4c93ff69e897cee225a9))
+
+### Miscellaneous
+
+- Bump version to 0.14.145 ([a182ba6](https://github.com/cuttlefisch/mae/commit/a182ba61fd6167f7416e17e7c4db1ccdd422d8f8))
 
 ## [0.14.144] - 2026-11-10
 

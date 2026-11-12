@@ -1,6 +1,6 @@
 [package]
 name = "mae-daemon"
-version = "0.14.145"
+version = "0.14.150"
 edition = "2021"
 license = "GPL-3.0-or-later"
 description = "MAE daemon — background KB persistence, maintenance, collaboration, and services"
@@ -92,6 +92,23 @@ hyper-util = { version = "0.1", features = ["tokio", "server-auto", "http1"] }
 http-body-util = "0.1"
 rustls-pemfile = "2"
 bytes = "1"
+# ADR-099 D5 / Amendment 1: WebSocket framing for `GET /ws` on the OAuth
+# listener. hyper performs the HTTP upgrade (and authentication runs BEFORE it,
+# on the listener's tested path); this crate only frames RFC 6455 messages over
+# the upgraded stream. Chosen over tokio-tungstenite because it is ALREADY in
+# this binary's dependency graph (iroh-relay -> tokio-websockets), so adopting it
+# adds no new crate and no new trust, and its publishers (3) and recent
+# committers (2 active) are the broader set. Evidence recorded in
+# docs/research/099-websocket-dependency-evidence.md. `server` only: the daemon
+# never dials a WebSocket.
+tokio-websockets = { version = "0.13", default-features = false, features = ["server"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+# `/ws/ticket`: 256 random bits per connect ticket. Already a dependency of
+# mae-mcp (its nonces and keys use the same `rand::rng()`), so no new crate.
+rand = "0.10"
+# `auth_deadline` on the sync WebSocket is an RFC 3339 UTC string. Already in
+# this binary (cozo -> env_logger -> humantime), so no new crate.
+humantime = "2"
 
 [dev-dependencies]
 hex = "0.4"
@@ -111,8 +128,9 @@ mae-kb = { path = "../shared/kb", default-features = false, features = ["crdt", 
 # rsa 0.9 depends on rand_core 0.6 -- rand must stay on the matching 0.8
 # line or RsaPrivateKey::new's CryptoRngCore bound fails to resolve.
 rsa = "0.9"
-rand = "0.10"
 base64 = "0.23"
+# ws e2e: the test drives a real WebSocket client over the real TLS listener.
+tokio-websockets = { version = "0.13", default-features = false, features = ["server", "client"] }
 # oauth_kb_query_e2e.rs generates a real self-signed TLS cert for the real
 # OAuth listener it spawns -- same crate `shared/mcp/src/tls.rs` already
 # uses for mTLS test cert generation.

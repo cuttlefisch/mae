@@ -22,6 +22,8 @@ fn principal(p: &str) -> crate::oauth::ValidatedPrincipal {
         principal: p.to_string(),
         audience: vec!["https://mae.example.com/mcp".to_string()],
         expires_at: 9_999_999_999,
+        issuer: String::new(),
+        subject: String::new(),
     }
 }
 

@@ -88,6 +88,7 @@ impl AuthResult {
                     .map(|k| k.fingerprint())
                     .unwrap_or_default(),
                 pubkey: *pubkey,
+                bearer: false,
             },
             AuthProof::Psk { keyid } => crate::identity::PeerIdentity::synthetic_psk(keyid),
             AuthProof::None => crate::identity::PeerIdentity::synthetic(&self.client_label),

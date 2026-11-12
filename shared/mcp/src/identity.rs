@@ -77,9 +77,31 @@ pub struct PeerIdentity {
     pub fingerprint: String,
     /// Raw 32-byte Ed25519 public key.
     pub pubkey: [u8; 32],
+    /// True when no key proved this identity: a validated bearer token did
+    /// (ADR-099 Amendment 1, B6). `fingerprint` then holds the token's subject,
+    /// taken literally as the membership principal, and `pubkey` is all-zero —
+    /// it is NOT the peer's key and must never be recorded as one (a pending
+    /// join's wrap target, for instance). See [`PeerIdentity::bearer`].
+    pub bearer: bool,
 }
 
 impl PeerIdentity {
+    /// The identity of a session whose principal a validated bearer token
+    /// established (ADR-099 Amendment 1, B6): the token's subject, literally.
+    /// It has a principal but no key, which is the one combination the other
+    /// constructors cannot express — and why [`PeerIdentity::principal`] reads
+    /// `bearer` rather than inferring a principal from a non-zero key.
+    ///
+    /// The caller refuses an empty subject before building one.
+    pub fn bearer(subject: &str) -> Self {
+        Self {
+            label: subject.to_string(),
+            fingerprint: subject.to_string(),
+            pubkey: [0u8; 32],
+            bearer: true,
+        }
+    }
+
     /// A synthetic identity for the `none` auth mode, so handlers have a uniform
     /// type. No real key and no principal — `none` sessions are loopback-trusted.
     pub fn synthetic(label: &str) -> Self {
@@ -87,6 +109,7 @@ impl PeerIdentity {
             label: label.to_string(),
             fingerprint: String::new(),
             pubkey: [0u8; 32],
+            bearer: false,
         }
     }
 
@@ -98,6 +121,7 @@ impl PeerIdentity {
             label: keyid.to_string(),
             fingerprint: format!("psk:{keyid}"),
             pubkey: [0u8; 32],
+            bearer: false,
         }
     }
 
@@ -110,8 +134,14 @@ impl PeerIdentity {
     /// key/TLS-authenticated peer, the `psk:<keyid>` string for psk, or `None` for
     /// an unauthenticated (`none`/loopback) session. This — never the mutable,
     /// non-unique label — is the sole subject identity for KB ownership/membership.
+    ///
+    /// A bearer identity's principal is its token subject.
+    ///
+    /// @ai-caution: [authz] `None` here means "loopback-trusted, every KB
+    /// allowed" downstream (`kb_access`). A bearer identity must therefore
+    /// ALWAYS yield `Some`, never fall through to `None` for lack of a key.
     pub fn principal(&self) -> Option<&str> {
-        if self.is_authenticated() || self.fingerprint.starts_with("psk:") {
+        if self.is_authenticated() || self.bearer || self.fingerprint.starts_with("psk:") {
             Some(&self.fingerprint)
         } else {
             None
@@ -446,20 +476,31 @@ pub struct AuthorizedKeys {
 }
 
 impl AuthorizedKeys {
-    /// Load (or start empty if absent).
+    /// Load (or start empty if absent, or unreadable: a reader that cannot
+    /// see the file trusts nobody). For a load that a WRITE will follow, use
+    /// [`Self::load_for_update`], which refuses an unreadable file.
     pub fn load(path: &Path) -> Self {
-        let mut entries = Vec::new();
-        if let Ok(content) = std::fs::read_to_string(path) {
-            for line in content.lines() {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with('#') {
-                    continue;
-                }
-                if let Some(pk) = PublicKey::from_line(line) {
-                    entries.push(pk);
-                }
-            }
+        Self::load_for_update(path).unwrap_or_else(|_| Self::parse(path, ""))
+    }
+
+    /// Load for a read-modify-write: absent is empty, but a file that exists
+    /// and cannot be read is an error. Saving "nobody + my change" over it
+    /// would revoke every key it holds.
+    fn load_for_update(path: &Path) -> std::io::Result<Self> {
+        match std::fs::read_to_string(path) {
+            Ok(content) => Ok(Self::parse(path, &content)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::parse(path, "")),
+            Err(e) => Err(e),
         }
+    }
+
+    fn parse(path: &Path, content: &str) -> Self {
+        let entries = content
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .filter_map(PublicKey::from_line)
+            .collect();
         Self {
             path: path.to_path_buf(),
             entries,
@@ -486,21 +527,38 @@ impl AuthorizedKeys {
     /// Returns the resulting (freshest-plus-my-change) set and whatever
     /// `mutate` returned (typically the persisted `io::Result<()>` from
     /// `add`/`revoke`).
-    pub fn update<R>(path: &Path, mutate: impl FnOnce(&mut Self) -> R) -> (Self, R) {
-        let guard = crate::file_lock::LockGuard::try_acquire_with_retry(
+    ///
+    /// **Fail-closed** (this replaced a fail-open version): the lock is
+    /// [`crate::file_lock::locked_update`]'s, and contention past its wait is
+    /// an error with nothing written, never an unlocked write. The old helper
+    /// wrote anyway after ~600 ms, so under contention one writer's stale
+    /// snapshot replaced the others' and a just-authorized key vanished; the
+    /// 8-thread test below caught it on Windows CI. An unreadable file is an
+    /// error too, never "nobody + my change" saved over it.
+    pub fn update<R>(
+        path: &Path,
+        mutate: impl FnOnce(&mut Self) -> R,
+    ) -> std::io::Result<(Self, R)> {
+        // `add`/`revoke`/`revoke_by_fingerprint` persist inside `mutate`, so
+        // there is no separate save step; the lock spans load, mutate and the
+        // write they make.
+        Self::update_waiting(path, crate::file_lock::LOCKED_UPDATE_WAIT, mutate)
+    }
+
+    /// [`Self::update`] with the lock wait given (tests use a short one).
+    pub(crate) fn update_waiting<R>(
+        path: &Path,
+        wait: std::time::Duration,
+        mutate: impl FnOnce(&mut Self) -> R,
+    ) -> std::io::Result<(Self, R)> {
+        crate::file_lock::locked_update_waiting(
+            wait,
             path,
-            30,
-            std::time::Duration::from_millis(20),
-        );
-        if !guard.acquired() {
-            tracing::warn!(
-                path = %path.display(),
-                "proceeding without advisory lock on authorized_keys (contended by another mae process)"
-            );
-        }
-        let mut value = Self::load(path);
-        let result = mutate(&mut value);
-        (value, result)
+            || Self::load_for_update(path),
+            mutate,
+            |_| Ok(()),
+        )
+        .map_err(|e| std::io::Error::other(format!("{}: {e}", path.display())))
     }
 
     /// The on-disk path this set was loaded from (for live re-reads, I-10).
@@ -994,6 +1052,78 @@ mod tests {
     /// silently clobbering everyone else's addition). N=8, not 2 — a 2-way
     /// race can accidentally pass by luck of scheduling; a real lock failure
     /// shows up reliably at higher concurrency.
+    /// Fail-closed under contention: while another holder keeps the lock past
+    /// the wait, an update is an error and the file is unchanged. Kills the
+    /// old behaviour (write anyway, unlocked, after the retries), which is
+    /// what lost a key under 8-way contention on Windows CI.
+    #[test]
+    fn a_contended_update_writes_nothing_rather_than_writing_unlocked() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("authorized_keys");
+        let first = Identity::generate("first").public();
+        AuthorizedKeys::update(&path, |ak| ak.add(first))
+            .unwrap()
+            .1
+            .unwrap();
+        let before = std::fs::read(&path).unwrap();
+
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let holder_path = path.clone();
+        let holder = std::thread::spawn(move || {
+            crate::file_lock::locked_update(
+                &holder_path,
+                || Ok::<_, std::io::Error>(()),
+                |_| {
+                    held_tx.send(()).unwrap();
+                    let _ = release_rx.recv_timeout(std::time::Duration::from_secs(10));
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+        });
+        held_rx.recv().unwrap();
+        let late = Identity::generate("late").public();
+        let got =
+            AuthorizedKeys::update_waiting(&path, std::time::Duration::from_millis(200), |ak| {
+                ak.add(late)
+            });
+        release_tx.send(()).unwrap();
+        holder.join().unwrap();
+        assert!(
+            got.is_err(),
+            "a contended update must fail, not write unlocked"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before, "nothing was written");
+    }
+
+    /// An authorized_keys that exists but cannot be read is never replaced by
+    /// "nobody + my change", which would revoke every key in it.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_file_is_an_error_not_an_empty_set() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("authorized_keys");
+        let first = Identity::generate("first").public();
+        AuthorizedKeys::update(&path, |ak| ak.add(first))
+            .unwrap()
+            .1
+            .unwrap();
+        let before = std::fs::read(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&path).is_ok() {
+            // Running as root: permissions do not stop the read, so there is
+            // nothing to test here.
+            return;
+        }
+        let other = Identity::generate("other").public();
+        let got = AuthorizedKeys::update(&path, |ak| ak.add(other));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(got.is_err(), "an unreadable file must not be overwritten");
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
     #[test]
     fn concurrent_update_calls_never_lose_a_concurrently_authorized_key() {
         let dir =
@@ -1011,7 +1141,8 @@ mod tests {
             .map(|pk| {
                 let path = path.clone();
                 std::thread::spawn(move || {
-                    let (_ak, result) = AuthorizedKeys::update(&path, |ak| ak.add(pk));
+                    let (_ak, result) = AuthorizedKeys::update(&path, |ak| ak.add(pk))
+                        .expect("the lock is taken within its wait");
                     result.expect("concurrent authorize must not fail");
                 })
             })
@@ -1156,8 +1287,13 @@ mod tests {
             label: "alice".into(),
             fingerprint: k.fingerprint(),
             pubkey: k.to_bytes(),
+            bearer: false,
         };
         assert_eq!(real.principal(), Some(k.fingerprint().as_str()));
+        // A bearer identity has no key, and still has a principal: the subject.
+        let bearer = PeerIdentity::bearer("SHA256:token-subject");
+        assert!(!bearer.is_authenticated(), "a bearer identity holds no key");
+        assert_eq!(bearer.principal(), Some("SHA256:token-subject"));
         assert_eq!(
             PeerIdentity::synthetic_psk("team").principal(),
             Some("psk:team")

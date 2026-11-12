@@ -10,7 +10,7 @@
 //!  "file": {"line_ending": "lf", "radio_targets": ["…"],
 //!           "todo": [{"todo": ["TODO"], "done": ["DONE"]}]},
 //!  "sections": [{"start": 0, "end": 12, "level": 0, "ancestors": 0,
-//!                "declarations": 2166136261, "followed": true}, …]}
+//!                "declarations": 2166136261, "followed": true, "eol": 1}, …]}
 //! ```
 //!
 //! `spans` is flat (three numbers a span, `k` an index into `kinds`) to keep
@@ -21,13 +21,13 @@
 //! cursor is in it. `syntaxSection` takes one region's NEW text as `text`
 //! with its `section` and the `file` object as `syntax` gave them, and
 //! answers `{"kinds", "spans"}` with offsets in the whole text, or
-//! `{"needs_full": "headline" | "declarations" | "boundary"}` when the whole
+//! `{"needs_full": "headline" | "declarations" | "boundary" | "line_ending"}` when the whole
 //! text must be sent to `syntax` again. Offsets are UTF-8 bytes.
 
 use crate::json::Json;
 use mae_org::{
-    json_string, FragmentContext, Highlight, LineEnding, NeedsFull, ParseOptions, Section,
-    SectionHighlights, SyntaxKind, TodoSequence,
+    json_string, EolProfile, FragmentContext, Highlight, LineEnding, NeedsFull, ParseOptions,
+    Section, SectionHighlights, SyntaxKind, TodoSequence,
 };
 
 /// `{"kinds": […], "spans": […]}` without the braces. Each span ends at its
@@ -91,10 +91,41 @@ fn file_json(ctx: &FragmentContext) -> String {
     )
 }
 
+/// A section's line-ending facts as one integer: the region's profile in
+/// bits 0-2 (`EolProfile::bits`) and the terminator before it in bits 3-4
+/// (0 none, 1 LF, 2 CRLF, 3 CR).
+fn eol_bits(s: &Section) -> u32 {
+    let anchor = match s.eol_anchor {
+        None => 0,
+        Some(LineEnding::Lf) => 1,
+        Some(LineEnding::CrLf) => 2,
+        Some(LineEnding::Cr) => 3,
+    };
+    u32::from(s.eol.bits()) | anchor << 3
+}
+
+fn eol_from_bits(b: u64) -> Option<(EolProfile, Option<LineEnding>)> {
+    let profile = EolProfile::from_bits((b & 0b111) as u8)?;
+    let anchor = match b >> 3 {
+        0 => None,
+        1 => Some(LineEnding::Lf),
+        2 => Some(LineEnding::CrLf),
+        3 => Some(LineEnding::Cr),
+        _ => return None,
+    };
+    Some((profile, anchor))
+}
+
 fn section_json(s: &Section) -> String {
     format!(
-        "{{\"start\":{},\"end\":{},\"level\":{},\"ancestors\":{},\"declarations\":{},\"followed\":{}}}",
-        s.start, s.end, s.context.level, s.context.ancestors, s.declarations, s.followed_by_headline
+        "{{\"start\":{},\"end\":{},\"level\":{},\"ancestors\":{},\"declarations\":{},\"followed\":{},\"eol\":{}}}",
+        s.start,
+        s.end,
+        s.context.level,
+        s.context.ancestors,
+        s.declarations,
+        s.followed_by_headline,
+        eol_bits(s)
     )
 }
 
@@ -169,12 +200,18 @@ fn read_section(section: &Json, file: &Json) -> Result<Section, String> {
         _ => return Err("section.followed must be a boolean".into()),
     };
     let context = file_context(file, n("level")? as usize, n("ancestors")? as usize)?;
+    let (start, end, declarations) = (n("start")?, n("end")?, n("declarations")?);
+    // Read last, so an older request's other errors keep their precedence.
+    let (eol, anchor) =
+        eol_from_bits(n("eol")?).ok_or("section.eol must be the integer `sections` gave (0-31)")?;
     Ok(Section::new(
-        n("start")? as u32,
-        n("end")? as u32,
+        start as u32,
+        end as u32,
         context,
-        n("declarations")? as u32,
+        declarations as u32,
         followed,
+        eol,
+        anchor,
     ))
 }
 
@@ -196,6 +233,7 @@ pub fn syntax_section(
                 NeedsFull::Headline => "headline",
                 NeedsFull::Declarations => "declarations",
                 NeedsFull::Boundary => "boundary",
+                NeedsFull::LineEnding => "line_ending",
                 _ => "unknown",
             };
             format!("{{\"needs_full\":\"{w}\"}}")

@@ -28,6 +28,7 @@ pub mod hygiene;
 #[cfg(test)]
 mod lazy_fetch_client;
 pub mod maintenance;
+mod member_cli;
 mod oauth;
 mod oauth_config;
 mod oauth_tls;
@@ -42,6 +43,7 @@ mod tests;
 mod ticket;
 mod token_cli;
 mod webview;
+mod ws;
 
 use config::DaemonConfig;
 use handler::DaemonState;
@@ -549,22 +551,53 @@ async fn spawn_oauth_listener(
     // principal.
     let oauth_quota: Arc<dyn mae_daemon::quota::QuotaCharger> =
         Arc::new(tenant::TenantQuota(Arc::clone(&state.lock().await.tenants)));
+    let ws = oauth_ws_state(
+        config,
+        state,
+        doc_store.as_ref(),
+        &oauth_quota,
+        self_issue.is_some(),
+    )
+    .await;
+    state.lock().await.oauth_conn = Some(oauth_limiter.clone());
+    let listener = oauth::Listener::new(server_config, doc_store, self_issue, oauth_quota, ws);
     tokio::spawn(async move {
-        if let Err(e) = oauth::run_oauth_listener(
-            server_config,
-            bind,
-            &cert_path,
-            &key_path,
-            doc_store,
-            oauth_limiter,
-            self_issue,
-            oauth_quota,
-        )
-        .await
+        if let Err(e) =
+            oauth::run_oauth_listener(listener, bind, (&cert_path, &key_path), oauth_limiter).await
         {
             error!(error = %e, "OAuth listener failed to start");
         }
     });
+}
+
+/// The sync WebSocket's state (ADR-099), when `oauth.ws_enabled`: the collab
+/// session's dependencies, shared with the collab listener — the same doc
+/// store, broadcaster, artifact bridge and tenant quota — so a socket session
+/// is the same kind of session as any other.
+async fn oauth_ws_state(
+    config: &DaemonConfig,
+    state: &Arc<Mutex<DaemonState>>,
+    doc_store: Option<&Arc<doc_store::DocStore>>,
+    quota: &Arc<dyn mae_daemon::quota::QuotaCharger>,
+    self_issue_available: bool,
+) -> Option<ws::WsState> {
+    let st = state.lock().await;
+    let deps = match (doc_store, st.broadcaster.as_ref()) {
+        (Some(ds), Some(bc)) => Some(mae_daemon::collab_handler::SessionDeps {
+            doc_store: Arc::clone(ds),
+            broadcaster: Arc::clone(bc),
+            start_time: st.started_at,
+            artifact_store: Arc::new(handler::DaemonArtifactStore(Arc::clone(state))),
+            quota: Arc::clone(quota),
+            kb_query_limits: mae_daemon::kb_query::KbQueryLimits {
+                max_body_bytes: config.oauth.kb_query_max_body_bytes,
+                max_scan_nodes: config.oauth.kb_query_max_scan_nodes,
+                max_search_results: config.oauth.kb_query_max_search_results,
+            },
+        }),
+        _ => None,
+    };
+    ws::state_from_config(&config.oauth, deps, self_issue_available)
 }
 
 /// Spawn the collab TCP server (absorbed from mae-state-server).
@@ -1540,7 +1573,13 @@ fn run_authorize(config: &DaemonConfig, rest: &[String]) -> i32 {
     };
     let fp = pk.fingerprint();
     let label = pk.label.clone().unwrap_or_default();
-    let (_ak, add_result) = mae_mcp::identity::AuthorizedKeys::update(&path, |ak| ak.add(pk));
+    let add_result = match mae_mcp::identity::AuthorizedKeys::update(&path, |ak| ak.add(pk)) {
+        Ok((_ak, r)) => r,
+        Err(e) => {
+            eprintln!("error: authorized_keys not changed: {e}");
+            return 1;
+        }
+    };
     match add_result {
         Ok(()) => {
             println!("Authorized {label} ({fp}) → {}", path.display());
@@ -1638,13 +1677,20 @@ fn run_revoke(config: &DaemonConfig, target: Option<&str>) -> i32 {
     // Revoke by fingerprint (the precise, unambiguous identity — ADR-018) or by a
     // now-unique label.
     let by_fp = target.starts_with("SHA256:");
-    let (_ak, result) = mae_mcp::identity::AuthorizedKeys::update(&path, |ak| {
+    let updated = mae_mcp::identity::AuthorizedKeys::update(&path, |ak| {
         if by_fp {
             ak.revoke_by_fingerprint(target)
         } else {
             ak.revoke(target)
         }
     });
+    let result = match updated {
+        Ok((_ak, r)) => r,
+        Err(e) => {
+            eprintln!("error: authorized_keys not changed: {e}");
+            return 1;
+        }
+    };
     match result {
         Ok(0) => {
             println!("No authorized key matching '{target}'");
