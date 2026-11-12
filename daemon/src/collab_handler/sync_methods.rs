@@ -341,6 +341,15 @@ fn relay_awareness_yjs(
     JsonRpcResponse::success(id, serde_json::json!({ "relayed": true }))
 }
 
+/// The address field a presence update names but leaves empty, if any. An
+/// empty `doc`, `kb_id` or `node_id` would name a document no KB has (`kbc:`,
+/// `kbn:x:`), which skips the KB gate; refused rather than relayed.
+fn empty_address(params: &serde_json::Value) -> Option<&'static str> {
+    ["doc", "kb_id", "node_id"]
+        .into_iter()
+        .find(|k| params.get(*k).and_then(|v| v.as_str()) == Some(""))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_sync_awareness(
     doc_store: &DocStore,
@@ -357,6 +366,12 @@ pub(super) async fn handle_sync_awareness(
     // No persistence — awareness is ephemeral. The document is named as any
     // other request names it (`doc`, or `kb_id` with or without `node_id`),
     // so it gets that document's access check.
+    if let Some(key) = empty_address(params) {
+        return JsonRpcResponse::error(
+            id,
+            McpError::invalid_params(key, format!("{key} must not be empty")),
+        );
+    }
     let doc_name = super::governor::requested_doc(params).unwrap_or_else(|| "default".to_string());
     // Relaying subscribes the session to the doc (a standing feed of its
     // updates): a KB doc needs read access to its KB first.
