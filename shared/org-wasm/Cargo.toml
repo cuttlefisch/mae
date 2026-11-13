@@ -7,7 +7,7 @@ description = "mae-org's WASM facade: JSON in, JSON out, over a hand-rolled ABI 
 # workspace version and the crates it lists, so a MAE release changes
 # neither this number nor the WASM artifact's bytes. Bump it by hand
 # when the contract changes; it moves with mae-org (tests/api.rs).
-version = "0.5.1"
+version = "0.6.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
