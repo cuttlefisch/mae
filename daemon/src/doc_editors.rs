@@ -50,8 +50,9 @@ use mae_sync::kb::Transport;
 
 /// Who is applying an update to a document.
 ///
-/// Only [`Attribution::Principal`] names a person (or an agent acting as one —
-/// ADR-098 marks those). Every other variant is recorded under its own
+/// Only [`Attribution::Principal`] names a person (or an agent acting as one:
+/// nothing marks which yet; ADR-113 expects ADR-098 to, and ADR-098 does not
+/// design it). Every other variant is recorded under its own
 /// [`EditorKind`], so a consumer can never mistake a relay, the daemon, or an
 /// unauthenticated socket for a principal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
