@@ -1417,6 +1417,38 @@ mod tests {
         }
     }
 
+    /// The SQLite every daemon build links must retry a busy lock in
+    /// milliseconds. Without `HAVE_USLEEP`, SQLite's busy handler sleeps in
+    /// whole seconds, so a write that meets another writer's lock waits at
+    /// least a second (measured: hosted write rates fell from 162/s to about
+    /// 20/s, and an 8-writer burst returned "database is locked"). A lock
+    /// held for 50 ms must therefore cost a waiter well under a second.
+    #[test]
+    fn a_busy_lock_is_retried_in_milliseconds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("busy.db");
+        let holder = sqlite::open(&path).unwrap();
+        holder
+            .execute("PRAGMA journal_mode=WAL; CREATE TABLE t (x)")
+            .unwrap();
+        holder.execute("BEGIN IMMEDIATE").unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            holder.execute("COMMIT").unwrap();
+        });
+        let waiter = sqlite::open(&path).unwrap();
+        waiter.execute("PRAGMA busy_timeout=5000").unwrap();
+        let started = std::time::Instant::now();
+        waiter.execute("BEGIN IMMEDIATE").unwrap();
+        let waited = started.elapsed();
+        waiter.execute("COMMIT").unwrap();
+        release.join().unwrap();
+        assert!(
+            waited < std::time::Duration::from_millis(800),
+            "a 50 ms lock cost {waited:?}: SQLite is sleeping in whole seconds (built without HAVE_USLEEP)"
+        );
+    }
+
     /// ADR-116 D2: a version an update carries (a handoff) as `who`, at time
     /// 5 s, recording node `n` titled `title`.
     fn handoff_stamp(who: &str, title: Option<&str>) -> EditStamp {
