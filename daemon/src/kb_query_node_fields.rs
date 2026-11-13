@@ -20,7 +20,7 @@ use serde_json::{json, Map, Value};
 use crate::doc_editors::EditorsSince;
 use crate::doc_store::DocStore;
 use crate::rfc3339;
-use mae_sync::kb::KbNodeDoc;
+use mae_sync::kb::{KbNodeDoc, MaterializedNode};
 
 /// Every field a reader shows for `doc`, without the body.
 pub(super) async fn node_fields(
@@ -29,33 +29,40 @@ pub(super) async fn node_fields(
     node_id: &str,
     doc: &KbNodeDoc,
 ) -> Map<String, Value> {
-    let properties: Map<String, Value> = doc
-        .properties()
-        .into_iter()
-        .map(|(k, v)| (k, Value::String(v)))
+    let mut m = content_fields(&doc.materialize());
+    m.insert("version".into(), json!(doc.version()));
+    m.insert("schema_v".into(), json!(doc.schema_version()));
+    m.extend(modified(store, kb_id, node_id).await);
+    m
+}
+
+/// The fields a reader shows for a node's content, without the body: shared
+/// by the live node (`kb/query.get`/`list`) and a version of it
+/// (`kb/history.get`, ADR-116), so the two cannot render a node differently.
+pub(crate) fn content_fields(n: &MaterializedNode) -> Map<String, Value> {
+    let properties: Map<String, Value> = n
+        .properties
+        .iter()
+        .map(|(k, v)| (k.clone(), Value::String(v.clone())))
         .collect();
-    let header = doc.org_header();
+    let header = n.org_header.as_ref();
     let mut m = json!({
-        "version": doc.version(),
-        "schema_v": doc.schema_version(),
-        "title": doc.title(),
-        "kind": doc.kind(),
-        "todo_state": doc.todo_state(),
-        "priority": doc.priority(),
-        "aliases": doc.aliases(),
+        "title": n.title,
+        "kind": n.kind,
+        "todo_state": n.todo_state,
+        "priority": n.priority,
+        "aliases": n.aliases,
         "properties": properties,
-        "property_order": header.as_ref().map(|h| h.property_order.clone()),
-        "org_header": header.as_ref().map(|h| json!({
+        "property_order": header.map(|h| h.property_order.clone()),
+        "org_header": header.map(|h| json!({
             "property_order": h.property_order,
             "has_title_line": h.has_title_line,
             "has_filetags_line": h.has_filetags_line,
         })),
-        "tags": doc.tags(),
-        "created_at": doc.created_at().map(rfc3339::utc),
+        "tags": n.tags,
+        "created_at": n.created_at.map(rfc3339::utc),
     });
-    let fields = m.as_object_mut().expect("an object literal");
-    fields.extend(modified(store, kb_id, node_id).await);
-    std::mem::take(fields)
+    std::mem::take(m.as_object_mut().expect("an object literal"))
 }
 
 /// `modified_at`, `modified_at_basis` and (when the edit record is not usable)

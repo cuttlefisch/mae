@@ -24,6 +24,7 @@ mod conn_limit;
 mod dialer;
 pub mod enrichment;
 mod handler;
+mod history_cli;
 pub mod hygiene;
 #[cfg(test)]
 mod lazy_fetch_client;
@@ -155,7 +156,12 @@ async fn main() {
         }
         // Whole-instance backup (every store, registry, collab store, identity)
         // with a manifest a restore rehearsal can check against. See backup/mod.rs.
-        Some("backup") => std::process::exit(backup::run(&config, &cli.rest)),
+        Some("backup") => {
+            if cli.rest.first().map(String::as_str) == Some("create") {
+                history_cli::sign_before_backup(&config).await;
+            }
+            std::process::exit(backup::run(&config, &cli.rest))
+        }
         // Native-KB seed (plan / apply) and export: `seed_cli`, `seed_apply_cli`.
         Some("kb") => std::process::exit(seed_cli::run_kb(&config, &cli.rest).await),
         _ => {}

@@ -2026,8 +2026,12 @@ async fn handle_doc_request_inner(
             .await
         }
 
-        Method::KbHistoryCheckpoint => {
-            kb_history::checkpoint(doc_store, auth_principal, transport, id, &params).await
+        m @ (Method::KbHistoryCheckpoint
+        | Method::KbHistoryList
+        | Method::KbHistoryGet
+        | Method::KbHistoryDiff
+        | Method::KbHistoryVerify) => {
+            kb_history::dispatch(m, doc_store, auth_principal, transport, id, &params).await
         }
 
         Method::KbNodeUpdate => {
