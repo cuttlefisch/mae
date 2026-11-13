@@ -507,6 +507,18 @@ impl McpError {
         Self::kinded(-32600, message, "e2e_unsupported", serde_json::json!({}))
     }
 
+    /// A KB cannot be switched to E2E while its version history holds
+    /// plaintext content: the switch would leave that plaintext readable on a
+    /// daemon that must hold none (ADR-116 Amendment 1, ADR-037).
+    pub fn history_holds_plaintext(message: String) -> Self {
+        Self::kinded(
+            -32600,
+            message,
+            "history_holds_plaintext",
+            serde_json::json!({}),
+        )
+    }
+
     /// The daemon failed (storage, decode, persistence). Not a decision about
     /// the caller; retrying may succeed.
     pub fn internal_fault(message: String) -> Self {
@@ -556,6 +568,7 @@ pub const ERROR_KINDS: &[&str] = &[
     "no_content_anchor",
     "kb_query_unavailable",
     "e2e_unsupported",
+    "history_holds_plaintext",
     "internal",
 ];
 
@@ -737,6 +750,7 @@ mod tests {
             McpError::no_content_anchor(m()),
             McpError::kb_query_unavailable(m()),
             McpError::e2e_unsupported(m()),
+            McpError::history_holds_plaintext(m()),
             McpError::internal_fault(m()),
         ]
     }
