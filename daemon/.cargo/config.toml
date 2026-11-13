@@ -1,0 +1,16 @@
+# Daemon-only Cargo configuration, merged with the repository's .cargo/config.toml.
+
+[env]
+# The daemon links the bundled SQLite (`sqlite` with `features = ["bundled"]`):
+# the copy the static musl release has always linked, since pkg-config does not
+# cross-compile. sqlite3-src compiles it with no defines at all, and without
+# HAVE_USLEEP SQLite's busy handler sleeps in WHOLE SECONDS: a write that meets
+# another writer's lock waited at least a second, hosted write throughput fell
+# from 162/s to about 20/s, and clients got "database is locked".
+#
+# The cc crate takes the first of CFLAGS_<target>, then HOST_CFLAGS (a native
+# build) or TARGET_CFLAGS (a cross build), then CFLAGS; both kinds are set so
+# the define holds natively and for the musl release alike.
+# `storage::tests::a_busy_lock_is_retried_in_milliseconds` fails without it.
+HOST_CFLAGS = "-DHAVE_USLEEP=1"
+TARGET_CFLAGS = "-DHAVE_USLEEP=1"
