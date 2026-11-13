@@ -3,7 +3,7 @@
 //! rows someone with write access has changed.
 
 use super::collab_handler_history_tests::{
-    checkpoint, error_kind, retitle, shared_kb, Env, KB, NODE,
+    checkpoint, edit, error_kind, retitle, shared_kb, Env, KB, NODE,
 };
 use super::*;
 
@@ -118,6 +118,41 @@ async fn get_returns_content_and_reports_tampering() {
     assert!(
         v["content"].is_null(),
         "a content that does not verify is not shown"
+    );
+}
+
+/// A version reports its aliases by the same rule as the live node: in an
+/// `org-literal-v1` KB derived from `ROAM_ALIASES`, never the array. Kills
+/// `content_fields` reading the array, and history not passing the KB's
+/// body format.
+#[tokio::test]
+async fn a_version_derives_its_aliases_like_the_live_node() {
+    let mut env = shared_kb().await;
+    let kbc = format!("kbc:{KB}");
+    let state = env.store.encode_state(&kbc).await.unwrap();
+    let mut coll = mae_sync::kb::KbCollectionDoc::from_bytes(&state).unwrap();
+    let update = coll.set_body_format(mae_sync::kb::BODY_FORMAT_ORG_LITERAL_V1);
+    let by = crate::doc_editors::Attribution::Principal("test-setup");
+    env.store
+        .apply_update(&kbc, &update, None, by)
+        .await
+        .unwrap();
+
+    let props = std::collections::HashMap::from([
+        ("ID".to_string(), NODE.to_string()),
+        ("ROAM_ALIASES".to_string(), "\"Big Name\" small".to_string()),
+    ]);
+    let r = edit(&mut env, "alice", |n| n.set_properties(&props)).await;
+    assert!(r.error.is_none(), "{:?}", r.error);
+    let r = edit(&mut env, "alice", |n| n.set_aliases(&["stray".to_string()])).await;
+    assert!(r.error.is_none(), "{:?}", r.error);
+    retitle(&mut env, "bob", "bob's").await;
+
+    let get = serde_json::json!({"kb_id":KB,"node_id":NODE,"seq":1});
+    let v = ok(&call(&mut env, "bob", "kb/history.get", get).await);
+    assert_eq!(
+        v["content"]["aliases"],
+        serde_json::json!(["Big Name", "small"])
     );
 }
 
