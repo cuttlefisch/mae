@@ -22,7 +22,8 @@
 //!  "node": "KB id",
 //!  "path": "id:x?rel=r",
 //!  "section": {…}, "file": {…},           // syntaxSection: see `syntax.rs`
-//!  "ranges": [[0, 10]], "uuids": ["…"],     // CUSTOM_ID ops: see `custom_id.rs`
+//!  "ranges": [[0, 10]], "uuids": ["…"],     // CUSTOM_ID ops: see `custom_id.rs`;
+//!                                          // headlineProperties takes "ranges" too
 //!  "position": 12, "uuid": "…"}
 //! ```
 //!
@@ -49,6 +50,7 @@ pub enum Op {
     CustomIdEdits = 10,
     DuplicateCustomIds = 11,
     ReplaceCustomId = 12,
+    HeadlineProperties = 13,
 }
 
 impl Op {
@@ -66,6 +68,7 @@ impl Op {
             Op::CustomIdEdits,
             Op::DuplicateCustomIds,
             Op::ReplaceCustomId,
+            Op::HeadlineProperties,
         ]
         .into_iter()
         .find(|o| *o as u32 == n)
@@ -125,6 +128,11 @@ fn run(op: Op, request: &str) -> Result<String, String> {
         Op::CustomIdEdits => crate::custom_id::edits(&req.text, &req.parse, &req.custom_id),
         Op::DuplicateCustomIds => Ok(crate::custom_id::duplicates(&req.text, &req.parse)),
         Op::ReplaceCustomId => crate::custom_id::replace(&req.text, &req.parse, &req.custom_id),
+        Op::HeadlineProperties => Ok(crate::headline_properties::headline_properties(
+            &req.text,
+            &req.parse,
+            req.custom_id.ranges.as_deref(),
+        )),
     }
 }
 

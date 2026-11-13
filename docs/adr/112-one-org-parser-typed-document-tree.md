@@ -235,6 +235,12 @@ layer on it becomes the cheaper path.
 
   The caller supplies the values, and anything but a lowercase UUID v4 is refused, so no caller can
   write structure into a drawer. Offsets are UTF-8 bytes, like every span.
+- **O3.7** (`mae-org-v0.8.0`) every headline's properties, node or not (`headline_properties`,
+  WASM op 13). `semantics` lists only `ID` headlines; a page also needs, say, a
+  `:VISIBILITY: folded` on a heading that has only a `CUSTOM_ID`. It reads the drawer Org reads
+  as the headline's (lowercase included; not one after a blank line), with every property line in
+  file order, so the caller applies Org's last-one-wins itself. Optional byte ranges scope it
+  as in the `CUSTOM_ID` ops.
 - **O4** MAE switches ingest, export and read mode to it, with the repair path; the span-based write
   path lands on the same spans.
 - **O5** the remaining constructs by measured use, privacy-relevant regions first.
