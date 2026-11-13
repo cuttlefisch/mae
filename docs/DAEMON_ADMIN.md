@@ -840,7 +840,19 @@ Each node is written to its source path as N(F): unedited since the seed, a cano
 byte for byte. Properties keep their recorded order; one added since goes after them in sorted order,
 one removed is skipped, and both are printed as `note:` lines. Every file is checked first: a node
 whose text would seed back differently (a `#+title:` or a drawer typed into its body, an edited
-`ID`) is printed as `refused:` and not written, and the exit code is 1. Symlinks in the target are
+`ID`) is printed as `refused:` and not written, and the exit code is 1.
+
+A node that holds something the file cannot carry is refused the same way (`unrepresentable`),
+naming the fields, rather than written without it. The check builds the node the exported file
+would seed back to and compares it with the node, field by field: any difference refuses. In
+practice that is an `aliases` list (an org-literal-v1 alias is the `ROAM_ALIASES` property, which is
+exported, but the seed never fills the list), a todo state, a priority, structured links, a source
+version, or a `kind` that is not the node's `KIND` property value (one changed without the other).
+Fix the node, for example by moving the aliases into `ROAM_ALIASES` and clearing the list, and export
+again. Three fields are exempt because the seed sets them itself rather than reading them from the
+file: the provenance (always `user_org`), the creation time (from git history, kept in the seed
+record), and the header shape (the property order and whether the title and filetags lines exist,
+which the export writes from the node and reports in its notes). Symlinks in the target are
 never followed. Nodes created after the seed have no source path and are refused. Two source paths
 that are one file on a case- or normalization-insensitive filesystem (`A.org` and `a.org`, or NFC
 and NFD spellings) are both refused (`path_collision`), so neither overwrites the other on APFS,
@@ -855,6 +867,59 @@ any process holds it or a daemon answers on the control socket. The serving daem
 lock when it opens its store. Started while an operator command holds it, it **exits** with status
 75 (`EX_TEMPFAIL`) and says why, rather than serving with collab and `kb/query` silently off. A
 supervisor that restarts on failure (`Restart=on-failure`) brings it up once the command is done.
+
+## 7c. Version history: signed heads and keeping one elsewhere
+
+Every KB node's versions form a hash chain (ADR-116). The daemon signs each KB's **history head**
+(every node's latest version) with its own key on the maintenance tick, only when it changed, into
+an append-only log in `state.db`. `kb/history.verify` checks the chains against the latest one,
+which shows a removed last version or a history re-sealed from an earlier point.
+
+What no log on the daemon can show is a rewrite by whoever holds both the daemon's key and its
+database: they can re-sign. Keep a head somewhere they cannot reach, and check against it:
+
+```bash
+mae-daemon kb history head   --kb-id notes --out /secure/notes-head-2026-11-12.json
+mae-daemon kb history verify --kb-id notes --against /secure/notes-head-2026-11-12.json
+```
+
+- `head` signs the head now (or takes the latest, if nothing changed) and writes it; it never
+  overwrites an existing file. Without `--out` it prints the JSON (`mae-history-head/v1`).
+- `verify` checks every chain, the latest signed head and, with `--against`, the kept one. It
+  prints `verified` and exits 0, or names the first failing node and version, prints
+  `NOT VERIFIED` and exits 1. A KB with no history is refused rather than reported as verified, so
+  a mistyped id cannot pass.
+- A head counts only if it is signed with this daemon's key.
+- `backup create` signs every KB's head first when the daemon is stopped. With it running, the
+  backup carries the latest head the maintenance tick signed.
+- Both commands are operator-only and offline (stop the daemon), like `kb member`.
+
+### Reading a node's history
+
+A KB reader lists a node's versions with `kb/history.list {kb_id, node_id, limit?, before_seq?}`.
+It returns `{versions, next}`, **newest first**, without content. `limit` is 1 to 500 (default
+100); a value outside that is refused, not adjusted. To read further back, call again with
+`before_seq` set to the `next` value; `next` is `null` on the page that reaches version 1. A seq
+never changes and new versions always take a higher one, so paging this way returns every version
+exactly once even while edits continue. `kb/history.get {kb_id, node_id, seq}` returns one version
+with its content and the chain's verification.
+
+Every version record carries:
+
+- `kind`: `edit` (cut when the node passes from one editor to another), `named` (a checkpoint cut
+  by `kb/history.checkpoint`; `name` is set), `rollback` (`restored_from` is set), `import`,
+  `seed`, `rebirth`, `delete`, or `pruned` (an audit entry of a pruning pass, with no content).
+  A client should show a kind it does not know as that kind, never as an edit.
+- `editors`: `[{kind, principal}]`, everyone who edited the node in the range the version covers.
+  `kind` is `principal` (an authenticated principal: a key fingerprint, `psk:<keyid>` or an OAuth
+  subject), `signed-relay` (a relay whose update was signed; the signer has its own `principal`
+  entry), `mesh-peer` (a relay with no verified signer: the author is unknown),
+  `unauthenticated`, or `internal` (the daemon itself). A named version's `editors` are the
+  editors since the previous version; who named it is in `summary` (`named by <principal>`).
+- `created_at`: when the daemon cut the version, RFC 3339, UTC, to the second.
+
+The daemon does not record whether a principal is a person or an agent: nothing in its identity
+model marks one (ADR-113 relies on a marking ADR-098 has not designed), so no field claims it.
 
 ## 8. Troubleshooting
 

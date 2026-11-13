@@ -695,7 +695,9 @@ redesign / KB read mode / a live network-shareable HTML KB view on the daemon + 
 transport / `kb-export-subgraph-html` as a real module rather than a Scheme reimplementation /
 untranslated-node fallback signalling / guidance-as-colophon / configurable layout constants
 (**080 superseded** by 081's real JSON injection) / `required_tag` hard filtering) — note 069–074
-are **accepted design only, not built**, **ADR-075** (language/LSP registry consolidation +
+are **accepted design only, not built** (ADR-074's *proposed* Amendment 1 turns its SSE push into a
+per-KB change feed for many readers: thin notices from one index written in the WAL transaction,
+resumable cursors, per-batch access checks, shared with ADR-099's socket), **ADR-075** (language/LSP registry consolidation +
 Terraform/Dockerfile/Ansible/Helm support), **ADR-076** (the system of bundled KBs), **ADR-083**
 (`kb_agenda` becomes federation-aware), and the **pre-v0.15 audit set ADR-084–091** (permission
 tiers enforced *at the effect* against a compiler-proven allow-list / `ToolCategory` describes
@@ -832,7 +834,11 @@ editor record, and a per-node hash chain whose KB head the daemon signs; tamper 
 as only as strong as a head kept outside the daemon. Retention is an explicit per-KB policy with
 floors, overridden by holds, named versions and revision-referenced versions; pruning drops content
 but keeps the chained record. Rollback is a new version applied through the write path, never a
-direct store write. Evidence in `docs/research/116-version-history-prior-art.md`.
+direct store write. Evidence in `docs/research/116-version-history-prior-art.md`. Its *proposed*
+Amendment 1 carries history across a switch to E2E: the owner's client re-encrypts every version
+under the content key (the daemon stays key-blind) and receives the KB's history key, which the
+daemon then releases, so the keyed `content_hash` confirms no guess and the chain is never
+rewritten; until it is built, the switch is refused while history holds plaintext.
 
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
 > from it entirely until 2026-08-04, i.e. every ADR from the KB-visualization arc and the whole

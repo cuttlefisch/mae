@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 
 use crate::doc_editors::{EditStamp, EditorKind, EditorsSince};
-use mae_sync::kb::history::{HistoryEntry, HistoryKey};
+use mae_sync::kb::history::{HistoryEntry, HistoryKey, SignedHead, Tip};
 
 #[path = "storage_editor_record.rs"]
 mod editor_record;
@@ -23,7 +23,7 @@ mod history;
 #[path = "storage_seed_record.rs"]
 mod seed_record;
 
-pub use history::Checkpoint;
+pub use history::{Checkpoint, Listed};
 pub use seed_record::{SeedNodeRow, SeedRecord};
 
 /// Errors from storage operations.
@@ -141,6 +141,20 @@ pub trait StorageBackend: Send + Sync {
     /// Whether any version in `kb_id`'s history still holds content.
     async fn history_holds_content(&self, kb_id: &str) -> Result<bool, StorageError>;
 
+    /// The nodes of `kb_id` that have history, sorted.
+    async fn history_nodes(&self, kb_id: &str) -> Result<Vec<String>, StorageError>;
+
+    /// The KBs that have history, sorted.
+    async fn history_kbs(&self) -> Result<Vec<String>, StorageError>;
+
+    /// Every node's latest version in `kb_id`, read as one snapshot.
+    async fn history_tips(&self, kb_id: &str) -> Result<Vec<Tip>, StorageError>;
+
+    /// Append a signed head to `head.kb_id`'s head log (ADR-116 D4).
+    async fn history_append_head(&self, head: &SignedHead) -> Result<(), StorageError>;
+
+    /// `kb_id`'s latest signed head, if any.
+    async fn history_latest_head(&self, kb_id: &str) -> Result<Option<SignedHead>, StorageError>;
     /// `kb_id`'s history key, if it has one that is not released.
     async fn history_key(&self, kb_id: &str) -> Result<Option<HistoryKey>, StorageError>;
 
@@ -150,6 +164,16 @@ pub trait StorageBackend: Send + Sync {
         kb_id: &str,
         node_id: &str,
     ) -> Result<Vec<HistoryEntry>, StorageError>;
+
+    /// Up to `limit` versions of a KB node with `seq < before` (every version,
+    /// without `before`), newest first, without their content.
+    async fn history_page(
+        &self,
+        kb_id: &str,
+        node_id: &str,
+        before: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<Listed>, StorageError>;
 
     /// Drop `doc_name`'s editor record and origin. For a document whose content
     /// is gone for good (an evicted ephemeral buffer), so the table stays bounded.
@@ -399,6 +423,13 @@ pub struct SqliteBackend {
 }
 
 impl SqliteBackend {
+    /// Run raw SQL against the database, for tests that play someone with
+    /// write access to `state.db` (ADR-116 P3: tampering must be detected).
+    #[cfg(test)]
+    pub(crate) fn execute_for_test(&self, sql: &str) {
+        self.pool.lock_primary().execute(sql).expect("test SQL");
+    }
+
     /// Open or create the SQLite database at the given path (default 4 shards).
     pub fn open(path: &Path) -> Result<Self, StorageError> {
         Self::open_with_pool_size(path, 4)
@@ -516,6 +547,26 @@ impl StorageBackend for SqliteBackend {
         history::holds_content(&self.pool.lock_primary(), kb_id)
     }
 
+    async fn history_nodes(&self, kb_id: &str) -> Result<Vec<String>, StorageError> {
+        history::nodes(&self.pool.lock_primary(), kb_id)
+    }
+
+    async fn history_kbs(&self) -> Result<Vec<String>, StorageError> {
+        history::kbs(&self.pool.lock_primary())
+    }
+
+    async fn history_tips(&self, kb_id: &str) -> Result<Vec<Tip>, StorageError> {
+        history::tips(&self.pool.lock_primary(), kb_id)
+    }
+
+    async fn history_append_head(&self, head: &SignedHead) -> Result<(), StorageError> {
+        history::append_head(&self.pool.lock_primary(), head)
+    }
+
+    async fn history_latest_head(&self, kb_id: &str) -> Result<Option<SignedHead>, StorageError> {
+        history::latest_head(&self.pool.lock_primary(), kb_id)
+    }
+
     async fn history_key(&self, kb_id: &str) -> Result<Option<HistoryKey>, StorageError> {
         history::key(&self.pool.lock_primary(), kb_id)
     }
@@ -528,6 +579,18 @@ impl StorageBackend for SqliteBackend {
         let doc_name = mae_sync::kb_node_doc_name(kb_id, node_id);
         let conn = self.pool.lock_shard(&doc_name);
         history::list(&conn, kb_id, node_id)
+    }
+
+    async fn history_page(
+        &self,
+        kb_id: &str,
+        node_id: &str,
+        before: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<Listed>, StorageError> {
+        let doc_name = mae_sync::kb_node_doc_name(kb_id, node_id);
+        let conn = self.pool.lock_shard(&doc_name);
+        history::page(&conn, kb_id, node_id, before, limit)
     }
 
     async fn wal_high_water(&self, doc_name: &str) -> Result<u64, StorageError> {

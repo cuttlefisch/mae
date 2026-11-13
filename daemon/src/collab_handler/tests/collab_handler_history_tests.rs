@@ -7,13 +7,14 @@ use super::*;
 use mae_sync::kb::history::{verify_chain, HistoryEntry, VersionKind};
 use mae_sync::kb::KbNodeDoc;
 
-const KB: &str = "kbhist";
-const NODE: &str = "n";
+pub(super) const KB: &str = "kbhist";
+pub(super) const NODE: &str = "n";
 
-struct Env {
-    store: Arc<DocStore>,
-    bc: SharedBroadcaster,
-    docs: HashSet<String>,
+pub(super) struct Env {
+    pub(super) store: Arc<DocStore>,
+    pub(super) bc: SharedBroadcaster,
+    pub(super) docs: HashSet<String>,
+    pub(super) backend: Arc<SqliteBackend>,
 }
 
 fn node_doc() -> String {
@@ -21,11 +22,13 @@ fn node_doc() -> String {
 }
 
 /// A KB owned by alice, with bob and carol as editors (dave is no member).
-async fn shared_kb() -> Env {
+pub(super) async fn shared_kb() -> Env {
+    let backend = Arc::new(SqliteBackend::open_memory().unwrap());
     let mut env = Env {
-        store: test_doc_store(),
+        store: Arc::new(DocStore::new(backend.clone(), 500)),
         bc: test_broadcaster(),
         docs: HashSet::new(),
+        backend,
     };
     let alice = fp("alice");
     kb_share_as(
@@ -66,7 +69,7 @@ async fn shared_kb() -> Env {
 
 /// `who` sends one `sync/update` made by `edit` on the node as the daemon holds
 /// it (a new node, when it has none), with their own fenced client id.
-async fn edit(
+pub(super) async fn edit(
     env: &mut Env,
     who: &str,
     edit: impl FnOnce(&mut KbNodeDoc) -> Vec<u8>,
@@ -95,7 +98,7 @@ async fn edit(
 }
 
 /// `who` retitles the node; returns the WAL id the update landed at.
-async fn retitle(env: &mut Env, who: &str, title: &str) -> u64 {
+pub(super) async fn retitle(env: &mut Env, who: &str, title: &str) -> u64 {
     let r = edit(env, who, |n| n.set_title(title)).await;
     assert!(r.error.is_none(), "{who} retitles {title:?}: {:?}", r.error);
     env.store.wal_high_water(&node_doc()).await.unwrap()
@@ -246,7 +249,12 @@ async fn a_document_that_is_not_a_readable_node_is_not_versioned() {
     assert!(h.is_empty(), "{h:?}");
 }
 
-async fn checkpoint(env: &mut Env, who: &str, node: &str, name: &str) -> JsonRpcResponse {
+pub(super) async fn checkpoint(
+    env: &mut Env,
+    who: &str,
+    node: &str,
+    name: &str,
+) -> JsonRpcResponse {
     let msg = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"kb/history.checkpoint",
         "params":{"kb_id":KB,"node_id":node,"name":name}});
     dispatch_as(
@@ -260,7 +268,7 @@ async fn checkpoint(env: &mut Env, who: &str, node: &str, name: &str) -> JsonRpc
     .await
 }
 
-fn error_kind(r: &JsonRpcResponse) -> String {
+pub(super) fn error_kind(r: &JsonRpcResponse) -> String {
     let e = r.error.as_ref().expect("an error");
     e.data.as_deref().map_or(String::new(), |d| {
         d["kind"].as_str().unwrap_or("").to_string()

@@ -3190,6 +3190,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mae-crypto-wasm"
+version = "0.0.0"
+dependencies = [
+ "chacha20poly1305",
+ "curve25519-dalek",
+ "ed25519-dalek",
+ "getrandom 0.4.2",
+ "mae-sync",
+ "rand 0.10.3",
+ "sha2 0.11.0",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
 name = "mae-dap"
 version = "0.14.150"
 dependencies = [
@@ -3310,7 +3325,7 @@ dependencies = [
 
 [[package]]
 name = "mae-org"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "html5ever",
  "mae-kb",
@@ -3322,7 +3337,7 @@ dependencies = [
 
 [[package]]
 name = "mae-org-wasm"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "mae-org",
  "proptest",

@@ -534,6 +534,42 @@
         }
       ]
     },
+    "mae-crypto-wasm": {
+      "path": "shared/crypto-wasm/src/lib.rs",
+      "dependencies": [
+        "mae-sync"
+      ],
+      "public_items": [
+        {
+          "name": "api",
+          "kind": "mod"
+        },
+        {
+          "name": "content_crypto",
+          "kind": "mod"
+        },
+        {
+          "name": "mae_crypto_alloc",
+          "kind": "fn"
+        },
+        {
+          "name": "mae_crypto_call",
+          "kind": "fn"
+        },
+        {
+          "name": "mae_crypto_result_ptr",
+          "kind": "fn"
+        },
+        {
+          "name": "mae_crypto_result_free",
+          "kind": "fn"
+        },
+        {
+          "name": "mae_crypto_live_bytes",
+          "kind": "fn"
+        }
+      ]
+    },
     "mae-dap": {
       "path": "crates/dap/src/lib.rs",
       "dependencies": [

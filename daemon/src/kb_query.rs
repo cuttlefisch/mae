@@ -39,6 +39,7 @@ use std::collections::{HashMap, HashSet};
 
 #[path = "kb_query_node_fields.rs"]
 mod node_fields;
+pub(crate) use node_fields::content_fields;
 
 /// Default cap on one `kb/query.get` body: the node size backstop
 /// (`[collab.sync] max_document_size_bytes`, ADR-109 D6), so a stock daemon

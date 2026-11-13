@@ -291,3 +291,152 @@ async fn a_key_listed_twice_in_the_order_is_written_once_at_its_first_place() {
     assert_eq!(drawer.iter().filter(|l| l.starts_with(":KIND:")).count(), 1);
     assert_eq!(drawer[3], ":KIND: Concept", "kept at its first position");
 }
+
+const ALPHA: &str = "0a000000-0000-4000-8000-000000000001";
+
+/// Seed the fixture, apply `change` to node alpha, export: alpha's refusal if
+/// any, whether its file was written, and the report.
+async fn export_after_editing_alpha(
+    change: impl FnOnce(&mut KbNodeDoc) -> Vec<u8>,
+) -> (Option<ExportRefusal>, bool, ExportReport) {
+    let r = fixture_repo(&fixture_files());
+    let (store, _, _) = seeded(&r).await;
+    edit(&store, ALPHA, change).await;
+    let dir = out_dir();
+    let report = export(&store, KB, dir.path(), false).await.unwrap();
+    let refusal = report.refused.iter().find(|r| r.node_id == ALPHA).cloned();
+    let written = dir.path().join("notes/alpha.org").exists();
+    (refusal, written, report)
+}
+
+fn assert_refused_naming(refusal: Option<ExportRefusal>, written: bool, field: &str) {
+    let r = refusal.unwrap_or_else(|| panic!("a node with {field} must be refused"));
+    assert_eq!(r.kind, ExportRefusalKind::Unrepresentable, "{r:?}");
+    assert!(
+        r.detail.contains(field),
+        "the detail names {field}: {}",
+        r.detail
+    );
+    assert!(!written, "a refused node's file is never written");
+}
+
+/// An alias held only in the `aliases` array has no place in the file (an
+/// org-literal-v1 alias is the ROAM_ALIASES property, and the seed never fills
+/// the array): the node is refused by name, not written without it. The other
+/// nodes still export. Kills: export without the re-seed comparison.
+#[tokio::test]
+async fn an_aliases_array_refuses_the_export_naming_it() {
+    let (refusal, written, report) =
+        export_after_editing_alpha(|d| d.set_aliases(&["Alpha Prime".to_string()])).await;
+    let detail = refusal
+        .as_ref()
+        .map(|r| r.detail.clone())
+        .unwrap_or_default();
+    assert_refused_naming(refusal, written, "aliases");
+    assert!(detail.contains("ROAM_ALIASES"), "{detail}");
+    assert_eq!(report.refused.len(), 1, "{:?}", report.refused);
+    assert_eq!(report.written.len(), 4);
+}
+
+/// Every other field the file cannot carry refuses the same way, each named.
+/// One field per seeded KB, so one field cannot hide another.
+#[tokio::test]
+async fn every_unrepresentable_field_refuses_the_export_naming_it() {
+    type Change = Box<dyn FnOnce(&mut KbNodeDoc) -> Vec<u8>>;
+    let cases: Vec<(&str, Change)> = vec![
+        ("todo_state", Box::new(|d| d.set_todo_state(Some("TODO")))),
+        ("priority", Box::new(|d| d.set_priority(Some("A")))),
+        (
+            "links",
+            Box::new(|d| d.add_link("0a000000-0000-4000-8000-000000000002")),
+        ),
+        (
+            "source_version",
+            Box::new(|d| d.set_source_version(Some(3))),
+        ),
+    ];
+    for (field, change) in cases {
+        let (refusal, written, _) = export_after_editing_alpha(change).await;
+        assert_refused_naming(refusal, written, field);
+    }
+}
+
+/// The node's `kind` is its KIND property's value. Either one changed alone
+/// leaves them disagreeing, and the file (which has only the property) would
+/// seed back with the other kind: refused naming `kind`. Kills: comparing
+/// properties but not the kind.
+#[tokio::test]
+async fn a_kind_that_disagrees_with_the_kind_property_refuses() {
+    let (refusal, written, _) = export_after_editing_alpha(|d| d.set_kind(Some("Decision"))).await;
+    assert_refused_naming(refusal, written, "kind");
+    let (refusal, written, _) = export_after_editing_alpha(|d| {
+        let mut p = d.properties();
+        p.insert("KIND".into(), "Decision".into());
+        d.set_properties(&p)
+    })
+    .await;
+    assert_refused_naming(refusal, written, "kind");
+}
+
+/// A field the seed sets by definition (here provenance) is not the file's to
+/// carry: a change to it alone still exports. Kills: dropping the exemption.
+#[tokio::test]
+async fn a_field_the_seed_sets_does_not_refuse() {
+    let (refusal, written, report) =
+        export_after_editing_alpha(|d| d.set_source(Some("manual"))).await;
+    assert!(refusal.is_none(), "{refusal:?}");
+    assert!(written);
+    assert!(report.refused.is_empty(), "{:?}", report.refused);
+}
+
+/// Edits the file can carry (title, body, tags, a property's value, a new
+/// ROAM_ALIASES property placed in the recorded order, the KIND property and
+/// the kind together) export with no refusal and no note, and the file is
+/// canonical, so seeding and exporting it again gives the same bytes. Kills: a
+/// comparison that refuses an edited node the file represents.
+#[tokio::test]
+async fn representable_edits_export_and_round_trip() {
+    let r = fixture_repo(&fixture_files());
+    let (store, _, _) = seeded(&r).await;
+    edit(&store, ALPHA, |d| d.set_title("Alpha, renamed")).await;
+    edit(&store, ALPHA, |d| {
+        d.set_body("New body with \u{e9}.\n* Heading\nText.\n")
+    })
+    .await;
+    edit(&store, ALPHA, |d| d.set_tags(&["y".into(), "z".into()])).await;
+    edit(&store, ALPHA, |d| d.set_kind(Some("Decision"))).await;
+    edit(&store, ALPHA, |d| {
+        let mut p = d.properties();
+        p.insert("Alpha".into(), "changed".into());
+        p.insert("KIND".into(), "Decision".into());
+        p.insert("ROAM_ALIASES".into(), "\"Alpha Prime\" AP".into());
+        d.set_properties(&p)
+    })
+    .await;
+    edit(&store, ALPHA, |d| {
+        let mut h = d.org_header().unwrap();
+        h.property_order.insert(1, "ROAM_ALIASES".into());
+        d.set_org_header(&h)
+    })
+    .await;
+    let dir = out_dir();
+    let report = export(&store, KB, dir.path(), false).await.unwrap();
+    assert!(report.refused.is_empty(), "{:?}", report.refused);
+    assert!(report.notes.is_empty(), "{:?}", report.notes);
+    let text = read(dir.path(), "notes/alpha.org");
+    let expected = format!(
+        ":PROPERTIES:\n:ID: {ALPHA}\n:ROAM_ALIASES: \"Alpha Prime\" AP\n:zeta: last\n\
+         :KIND: Decision\n:Alpha: changed\n:mIxEd_Case: kept\n:beta:\n:END:\n\
+         #+title: Alpha, renamed\n#+filetags: :y:z:\nNew body with \u{e9}.\n* Heading\nText.\n"
+    );
+    assert_eq!(text, expected);
+    // Seed the exported file and export it again: the same bytes.
+    let mut files = fixture_files();
+    files[0].1 = text.clone();
+    let r2 = fixture_repo(&files);
+    let (store2, _, _) = seeded(&r2).await;
+    let dir2 = out_dir();
+    let again = export(&store2, KB, dir2.path(), false).await.unwrap();
+    assert!(again.refused.is_empty(), "{:?}", again.refused);
+    assert_eq!(read(dir2.path(), "notes/alpha.org"), text);
+}

@@ -25,6 +25,7 @@ members = [
     "shared/effect-sandbox",
     "shared/org",
     "shared/org-wasm",
+    "shared/crypto-wasm",
 ]
 exclude = ["tools/code-map", "tools/audit-metrics", "daemon"]
 resolver = "2"
