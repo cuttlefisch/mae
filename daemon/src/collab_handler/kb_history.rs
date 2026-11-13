@@ -139,14 +139,15 @@ pub(super) async fn dispatch(
 }
 
 /// What every history method needs: `op` on the KB, and a KB whose content
-/// the daemon can read. An E2E KB's history is client-side (D7).
+/// the daemon can read. An E2E KB's history is client-side (D7). Returns the
+/// KB's body format, which decides where a version's aliases come from.
 async fn gate(
     doc_store: &DocStore,
     kb_id: &str,
     auth_principal: Option<&str>,
     transport: Transport,
     op: KbOp,
-) -> Result<(), McpError> {
+) -> Result<Option<String>, McpError> {
     let coll = load_collection(doc_store, kb_id).await.ok();
     let decision = kb_access_with_coll(
         doc_store,
@@ -168,7 +169,7 @@ async fn gate(
             )));
         }
     }
-    Ok(())
+    Ok(coll.and_then(|c| c.body_format()))
 }
 
 fn text(params: &serde_json::Value, key: &str) -> Result<String, McpError> {
@@ -282,12 +283,16 @@ fn page_params(params: &serde_json::Value) -> Result<(u32, Option<u64>), McpErro
 
 /// A version's content as a reader shows it, if it holds one that matches its
 /// hash. `None` when pruned or when it does not verify.
-fn content_json(e: &HistoryEntry, key: &HistoryKey) -> Option<serde_json::Value> {
+fn content_json(
+    e: &HistoryEntry,
+    key: &HistoryKey,
+    body_format: Option<&str>,
+) -> Option<serde_json::Value> {
     let node = e
         .node()?
         .ok()
         .filter(|n| key.content_hash(n) == e.content_hash)?;
-    let mut m = crate::kb_query::content_fields(&node);
+    let mut m = crate::kb_query::content_fields(&node, body_format);
     m.insert("body".into(), serde_json::json!(node.body));
     m.insert("links".into(), serde_json::json!(node.links));
     m.insert(
@@ -310,14 +315,14 @@ async fn get(
         text(params, "node_id")?,
         seq(params, "seq")?,
     );
-    gate(doc_store, &kb_id, auth_principal, transport, KbOp::Read).await?;
+    let body_format = gate(doc_store, &kb_id, auth_principal, transport, KbOp::Read).await?;
     let h = load(doc_store, &kb_id, &node_id).await?;
     let e = version_at(&h, want, "seq")?;
     let mut out = entry_json(e);
     let key = kb_key(doc_store, &kb_id).await?;
     out["content"] = key
         .as_ref()
-        .and_then(|k| content_json(e, k))
+        .and_then(|k| content_json(e, k, body_format.as_deref()))
         .unwrap_or(serde_json::Value::Null);
     out["verification"] = chain_status(&kb_id, &node_id, &h, key.as_ref());
     Ok(out)

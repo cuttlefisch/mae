@@ -6,6 +6,10 @@
 //!   `property_order` (its array, or null): the shape of the org header a
 //!   seeded node came from, so a reader can lay out the drawer in file order.
 //!   `properties` keeps its shape (an object, which has no order).
+//! - `aliases`: what a reader should show, by the one rule in
+//!   `mae_sync::kb::aliases` — in an `org-literal-v1` KB derived from the
+//!   `ROAM_ALIASES` property, elsewhere the node's array — plus
+//!   `aliases_problems` (strings) when that value could not be read cleanly.
 //! - `created_at` and `modified_at`: RFC 3339 UTC, or null when unknown, with
 //!   `modified_at_basis` saying where `modified_at` came from and, when the edit
 //!   record could not be used, `modified_at_note` saying why.
@@ -22,14 +26,16 @@ use crate::doc_store::DocStore;
 use crate::rfc3339;
 use mae_sync::kb::{KbNodeDoc, MaterializedNode};
 
-/// Every field a reader shows for `doc`, without the body.
+/// Every field a reader shows for `doc`, without the body. `body_format` is
+/// the KB collection's (`KbCollectionDoc::body_format`).
 pub(super) async fn node_fields(
     store: &DocStore,
     kb_id: &str,
     node_id: &str,
     doc: &KbNodeDoc,
+    body_format: Option<&str>,
 ) -> Map<String, Value> {
-    let mut m = content_fields(&doc.materialize());
+    let mut m = content_fields(&doc.materialize(), body_format);
     m.insert("version".into(), json!(doc.version()));
     m.insert("schema_v".into(), json!(doc.schema_version()));
     m.extend(modified(store, kb_id, node_id).await);
@@ -39,7 +45,12 @@ pub(super) async fn node_fields(
 /// The fields a reader shows for a node's content, without the body: shared
 /// by the live node (`kb/query.get`/`list`) and a version of it
 /// (`kb/history.get`, ADR-116), so the two cannot render a node differently.
-pub(crate) fn content_fields(n: &MaterializedNode) -> Map<String, Value> {
+/// `body_format` is the KB collection's: it decides where aliases come from.
+pub(crate) fn content_fields(
+    n: &MaterializedNode,
+    body_format: Option<&str>,
+) -> Map<String, Value> {
+    let aliases = mae_sync::kb::aliases::node_aliases(body_format, &n.aliases, &n.properties);
     let properties: Map<String, Value> = n
         .properties
         .iter()
@@ -51,7 +62,7 @@ pub(crate) fn content_fields(n: &MaterializedNode) -> Map<String, Value> {
         "kind": n.kind,
         "todo_state": n.todo_state,
         "priority": n.priority,
-        "aliases": n.aliases,
+        "aliases": aliases.aliases,
         "properties": properties,
         "property_order": header.map(|h| h.property_order.clone()),
         "org_header": header.map(|h| json!({
@@ -62,7 +73,12 @@ pub(crate) fn content_fields(n: &MaterializedNode) -> Map<String, Value> {
         "tags": n.tags,
         "created_at": n.created_at.map(rfc3339::utc),
     });
-    std::mem::take(m.as_object_mut().expect("an object literal"))
+    let fields = m.as_object_mut().expect("an object literal");
+    if !aliases.problems.is_empty() {
+        let problems: Vec<String> = aliases.problems.iter().map(|p| p.to_string()).collect();
+        fields.insert("aliases_problems".into(), json!(problems));
+    }
+    std::mem::take(fields)
 }
 
 /// `modified_at`, `modified_at_basis` and (when the edit record is not usable)
