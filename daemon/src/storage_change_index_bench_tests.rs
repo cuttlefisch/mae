@@ -28,9 +28,12 @@ use mae_sync::DocAddress;
 use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 
-use super::{editor_record, DocumentState, SqliteBackend, StorageBackend, StorageError};
-use crate::doc_editors::{Attribution, EditStamp, EditorsSince};
+use super::{
+    editor_record, Checkpoint, DocumentState, Listed, SqliteBackend, StorageBackend, StorageError,
+};
+use crate::doc_editors::{Attribution, EditStamp, EditorKind, EditorsSince};
 use crate::doc_store::DocStore;
+use mae_sync::kb::history::{HistoryEntry, HistoryKey, SignedHead, Tip};
 
 const KBS: usize = 4;
 const HOT_PER_WRITER: usize = 64;
@@ -262,6 +265,54 @@ impl StorageBackend for IndexedBackend {
     }
     async fn delete_document(&self, d: &str) -> Result<(), StorageError> {
         self.inner.delete_document(d).await
+    }
+    // History (ADR-116) is not what this benchmark measures: passed through.
+    async fn history_session(
+        &self,
+        kb: &str,
+        node: &str,
+    ) -> Result<Vec<(EditorKind, String)>, StorageError> {
+        self.inner.history_session(kb, node).await
+    }
+    async fn history_cut(
+        &self,
+        cp: Checkpoint,
+        now: i64,
+    ) -> Result<Option<HistoryEntry>, StorageError> {
+        self.inner.history_cut(cp, now).await
+    }
+    async fn history_holds_content(&self, kb: &str) -> Result<bool, StorageError> {
+        self.inner.history_holds_content(kb).await
+    }
+    async fn history_nodes(&self, kb: &str) -> Result<Vec<String>, StorageError> {
+        self.inner.history_nodes(kb).await
+    }
+    async fn history_kbs(&self) -> Result<Vec<String>, StorageError> {
+        self.inner.history_kbs().await
+    }
+    async fn history_tips(&self, kb: &str) -> Result<Vec<Tip>, StorageError> {
+        self.inner.history_tips(kb).await
+    }
+    async fn history_append_head(&self, head: &SignedHead) -> Result<(), StorageError> {
+        self.inner.history_append_head(head).await
+    }
+    async fn history_latest_head(&self, kb: &str) -> Result<Option<SignedHead>, StorageError> {
+        self.inner.history_latest_head(kb).await
+    }
+    async fn history_key(&self, kb: &str) -> Result<Option<HistoryKey>, StorageError> {
+        self.inner.history_key(kb).await
+    }
+    async fn history_list(&self, kb: &str, node: &str) -> Result<Vec<HistoryEntry>, StorageError> {
+        self.inner.history_list(kb, node).await
+    }
+    async fn history_page(
+        &self,
+        kb: &str,
+        node: &str,
+        before: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<Listed>, StorageError> {
+        self.inner.history_page(kb, node, before, limit).await
     }
 }
 
