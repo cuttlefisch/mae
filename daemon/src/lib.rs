@@ -11,6 +11,7 @@ pub mod collab_handler;
 pub mod content_op_policy;
 pub mod doc_editors;
 pub mod doc_store;
+pub mod history_verify;
 pub mod kb_doc_migration;
 pub mod kb_query;
 pub mod lease_fence;
