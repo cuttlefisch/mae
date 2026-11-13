@@ -13,13 +13,17 @@ use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 
-use crate::doc_editors::{EditStamp, EditorsSince};
+use crate::doc_editors::{EditStamp, EditorKind, EditorsSince};
+use mae_sync::kb::history::{HistoryEntry, HistoryKey};
 
 #[path = "storage_editor_record.rs"]
 mod editor_record;
+#[path = "storage_history.rs"]
+mod history;
 #[path = "storage_seed_record.rs"]
 mod seed_record;
 
+pub use history::Checkpoint;
 pub use seed_record::{SeedNodeRow, SeedRecord};
 
 /// Errors from storage operations.
@@ -116,6 +120,36 @@ pub trait StorageBackend: Send + Sync {
     /// The largest WAL id `doc_name` has been written at (in the WAL or folded
     /// into its snapshot); 0 if storage has never seen it.
     async fn wal_high_water(&self, doc_name: &str) -> Result<u64, StorageError>;
+
+    /// The editors since a KB node's last version (ADR-116 D2): the session a
+    /// handoff is measured against.
+    async fn history_session(
+        &self,
+        kb_id: &str,
+        node_id: &str,
+    ) -> Result<Vec<(EditorKind, String)>, StorageError>;
+
+    /// Cut a version of a KB node in its own transaction (a named version, or
+    /// the state before a destructive act). `None` when it would repeat the
+    /// previous version's content.
+    async fn history_cut(
+        &self,
+        cp: Checkpoint,
+        now: i64,
+    ) -> Result<Option<HistoryEntry>, StorageError>;
+
+    /// Whether any version in `kb_id`'s history still holds content.
+    async fn history_holds_content(&self, kb_id: &str) -> Result<bool, StorageError>;
+
+    /// `kb_id`'s history key, if it has one that is not released.
+    async fn history_key(&self, kb_id: &str) -> Result<Option<HistoryKey>, StorageError>;
+
+    /// Every entry of a KB node's history, in `seq` order.
+    async fn history_list(
+        &self,
+        kb_id: &str,
+        node_id: &str,
+    ) -> Result<Vec<HistoryEntry>, StorageError>;
 
     /// Drop `doc_name`'s editor record and origin. For a document whose content
     /// is gone for good (an evicted ephemeral buffer), so the table stays bounded.
@@ -276,6 +310,7 @@ impl SqlitePool {
                 )?;
                 editor_record::ensure_schema(&conn)?;
                 seed_record::ensure_schema(&conn)?;
+                history::ensure_schema(&conn)?;
                 // ADR-032 A5: migrate snapshot tables created before the integrity
                 // hash column. Errors (duplicate column on a fresh table) are ignored.
                 let _ =
@@ -317,6 +352,7 @@ impl SqlitePool {
         )?;
         editor_record::ensure_schema(&conn)?;
         seed_record::ensure_schema(&conn)?;
+        history::ensure_schema(&conn)?;
         Ok(SqlitePool {
             shards: vec![std::sync::Mutex::new(conn)],
         })
@@ -417,9 +453,21 @@ impl StorageBackend for SqliteBackend {
         // One transaction: the WAL row and the editor record commit together or
         // not at all (see the trait doc for why a lost attribution is a failure).
         conn.execute("BEGIN IMMEDIATE")?;
-        let written = editor_record::write_attributed(&conn, doc_name, update, client_id, by);
-        let id = editor_record::commit_or_rollback(&conn, written)
-            .map_err(|e| StorageError::Sqlite(format!("wal append: {e}")))?;
+        // ADR-116 D2: a version the update cuts (a handoff) commits with it, or
+        // neither does.
+        let written = history::cut_for(&conn, doc_name, by).and_then(|()| {
+            Ok(editor_record::write_attributed(
+                &conn, doc_name, update, client_id, by,
+            )?)
+        });
+        let id = match written {
+            Ok(id) => editor_record::commit_or_rollback(&conn, Ok(id))
+                .map_err(|e| StorageError::Sqlite(format!("wal append: {e}")))?,
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK");
+                return Err(e);
+            }
+        };
         debug!(doc = doc_name, wal_id = id, "WAL append");
         Ok(id)
     }
@@ -431,6 +479,55 @@ impl StorageBackend for SqliteBackend {
     ) -> Result<EditorsSince, StorageError> {
         let conn = self.pool.lock_shard(doc_name);
         editor_record::editors_since_wal(&conn, doc_name, after_wal_id)
+    }
+
+    async fn history_session(
+        &self,
+        kb_id: &str,
+        node_id: &str,
+    ) -> Result<Vec<(EditorKind, String)>, StorageError> {
+        let doc_name = mae_sync::kb_node_doc_name(kb_id, node_id);
+        let conn = self.pool.lock_shard(&doc_name);
+        history::session(&conn, &doc_name, kb_id, node_id)
+    }
+
+    async fn history_cut(
+        &self,
+        cp: Checkpoint,
+        now: i64,
+    ) -> Result<Option<HistoryEntry>, StorageError> {
+        let doc_name = mae_sync::kb_node_doc_name(&cp.kb_id, &cp.node_id);
+        let conn = self.pool.lock_shard(&doc_name);
+        conn.execute("BEGIN IMMEDIATE")?;
+        let cut = history::cut_in_txn(&conn, &doc_name, cp, now);
+        match cut {
+            Ok(v) => {
+                conn.execute("COMMIT")?;
+                Ok(v)
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
+
+    async fn history_holds_content(&self, kb_id: &str) -> Result<bool, StorageError> {
+        history::holds_content(&self.pool.lock_primary(), kb_id)
+    }
+
+    async fn history_key(&self, kb_id: &str) -> Result<Option<HistoryKey>, StorageError> {
+        history::key(&self.pool.lock_primary(), kb_id)
+    }
+
+    async fn history_list(
+        &self,
+        kb_id: &str,
+        node_id: &str,
+    ) -> Result<Vec<HistoryEntry>, StorageError> {
+        let doc_name = mae_sync::kb_node_doc_name(kb_id, node_id);
+        let conn = self.pool.lock_shard(&doc_name);
+        history::list(&conn, kb_id, node_id)
     }
 
     async fn wal_high_water(&self, doc_name: &str) -> Result<u64, StorageError> {
@@ -1283,5 +1380,184 @@ mod tests {
             waited < std::time::Duration::from_millis(800),
             "a 50 ms lock cost {waited:?}: SQLite is sleeping in whole seconds (built without HAVE_USLEEP)"
         );
+    }
+
+    /// ADR-116 D2: a version an update carries (a handoff) as `who`, at time
+    /// 5 s, recording node `n` titled `title`.
+    fn handoff_stamp(who: &str, title: Option<&str>) -> EditStamp {
+        use mae_sync::kb::history::VersionKind;
+        let mut s = EditStamp::new(Attribution::Principal(who).into(), 5_000);
+        s.checkpoint = title.map(|t| Checkpoint {
+            kb_id: "kb".into(),
+            node_id: "n".into(),
+            kind: VersionKind::Edit,
+            content: mae_sync::kb::KbNodeDoc::new_created_at("n", t, "", &[], 1).materialize(),
+            name: None,
+            summary: None,
+            restored_from: None,
+        });
+        s
+    }
+
+    /// A version cut by an update commits with it or not at all: when the
+    /// update's COMMIT fails, the version is gone too, and the shard is usable.
+    /// Kills a cut made in its own transaction, which would record a handoff
+    /// to an update that never landed.
+    #[tokio::test]
+    async fn a_version_cut_by_an_update_rolls_back_with_it() {
+        let backend = SqliteBackend::open_memory().unwrap();
+        let doc = mae_sync::kb_node_doc_name("kb", "n");
+        backend
+            .wal_append(&doc, b"u1", None, &handoff_stamp("alice", None))
+            .await
+            .unwrap();
+        fail_commits_after_insert_into(&backend, "wal");
+        let lost = backend
+            .wal_append(&doc, b"u2", None, &handoff_stamp("bob", Some("A")))
+            .await;
+        assert!(lost.is_err());
+        stop_failing_commits(&backend, "wal");
+        assert!(backend.history_list("kb", "n").await.unwrap().is_empty());
+        backend
+            .wal_append(&doc, b"u2", None, &handoff_stamp("bob", Some("A")))
+            .await
+            .unwrap();
+        let h = backend.history_list("kb", "n").await.unwrap();
+        assert_eq!(h.len(), 1);
+        assert_eq!((h[0].wal_from, h[0].wal_to, h[0].created_at), (0, 1, 5));
+        assert_eq!(h[0].editors.len(), 1, "{:?}", h[0].editors);
+        assert_eq!(h[0].editors[0].principal, "alice");
+    }
+
+    /// A checkpoint for another document than the one written is refused, and
+    /// the write with it: a version can only ever describe its own node.
+    #[tokio::test]
+    async fn a_checkpoint_for_another_document_is_refused() {
+        let backend = SqliteBackend::open_memory().unwrap();
+        let other = mae_sync::kb_node_doc_name("kb", "m");
+        assert!(backend
+            .wal_append(&other, b"u", None, &handoff_stamp("bob", Some("A")))
+            .await
+            .is_err());
+        assert!(backend.load_document(&other).await.unwrap().is_none());
+        assert!(backend.history_list("kb", "n").await.unwrap().is_empty());
+    }
+
+    /// A cut that finds the content unchanged writes no version but still
+    /// starts a new session: the handoff after it is seen. Kills a session
+    /// measured from the last WRITTEN version, under which this back-and-forth
+    /// loses a version.
+    #[tokio::test]
+    async fn an_unchanged_cut_still_starts_a_new_session() {
+        let backend = SqliteBackend::open_memory().unwrap();
+        let doc = mae_sync::kb_node_doc_name("kb", "n");
+        backend
+            .wal_append(&doc, b"a", None, &handoff_stamp("alice", None))
+            .await
+            .unwrap();
+        backend
+            .wal_append(&doc, b"b", None, &handoff_stamp("bob", Some("A")))
+            .await
+            .unwrap();
+        backend
+            .wal_append(&doc, b"c", None, &handoff_stamp("carol", Some("A")))
+            .await
+            .unwrap();
+        assert_eq!(
+            backend.history_list("kb", "n").await.unwrap().len(),
+            1,
+            "unchanged: no version"
+        );
+        let s = backend.history_session("kb", "n").await.unwrap();
+        assert_eq!(s, vec![(EditorKind::Principal, "carol".to_string())]);
+    }
+
+    fn checkpoint_for(node: &str, title: &str) -> Checkpoint {
+        Checkpoint {
+            kb_id: "kb".into(),
+            node_id: node.into(),
+            kind: mae_sync::kb::history::VersionKind::Edit,
+            content: mae_sync::kb::KbNodeDoc::new_created_at(node, title, "", &[], 1).materialize(),
+            name: None,
+            summary: None,
+            restored_from: None,
+        }
+    }
+
+    fn key_rows(backend: &SqliteBackend) -> i64 {
+        let conn = backend.pool.lock_primary();
+        let mut stmt = conn
+            .prepare("SELECT COUNT(*) FROM kb_history_keys")
+            .unwrap();
+        stmt.next().unwrap();
+        stmt.read::<i64, _>(0).unwrap()
+    }
+
+    /// A KB's first versions, cut at the same moment on different nodes (so
+    /// on different shard connections of one database file), all use one
+    /// history key: the first transaction makes it and the rest read it.
+    /// Kills a key made outside the cut's transaction, or one that replaces
+    /// an existing key, under either of which earlier versions stop verifying.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_first_cuts_share_one_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteBackend::open(&dir.path().join("state.db")).unwrap());
+        for round in 0..3 {
+            let tasks: Vec<_> = (0..16)
+                .map(|i| {
+                    let b = Arc::clone(&backend);
+                    tokio::spawn(async move {
+                        let cp = checkpoint_for(&format!("n{i}"), &format!("r{round}"));
+                        b.history_cut(cp, 1).await.unwrap()
+                    })
+                })
+                .collect();
+            for t in tasks {
+                t.await.unwrap();
+            }
+        }
+        assert_eq!(key_rows(&backend), 1);
+        let key = backend.history_key("kb").await.unwrap().expect("a key");
+        for i in 0..16 {
+            let node = format!("n{i}");
+            let h = backend.history_list("kb", &node).await.unwrap();
+            assert_eq!(h.len(), 3, "{node}");
+            let verified = mae_sync::kb::history::verify_chain("kb", &node, &h, None, Some(&key));
+            assert!(verified.is_ok(), "{node}: {verified:?}");
+        }
+    }
+
+    /// Once a KB's history key is released (it switched to E2E), an update
+    /// that would cut a version still lands, cuts nothing, and makes no new
+    /// key. Kills a cut that fails its update, and one that re-creates a key.
+    #[tokio::test]
+    async fn a_released_key_skips_the_cut_and_is_not_recreated() {
+        let backend = SqliteBackend::open_memory().unwrap();
+        let doc = mae_sync::kb_node_doc_name("kb", "n");
+        backend
+            .history_cut(checkpoint_for("n", "before"), 1)
+            .await
+            .unwrap();
+        backend
+            .pool
+            .lock_primary()
+            .execute("UPDATE kb_history_keys SET key = NULL, released_at = 2 WHERE kb_id = 'kb'")
+            .unwrap();
+        backend
+            .wal_append(&doc, b"u", None, &handoff_stamp("bob", Some("after")))
+            .await
+            .unwrap();
+        let state = backend.load_document(&doc).await.unwrap().unwrap();
+        assert_eq!(state.wal_tail.len(), 1, "the update landed");
+        assert_eq!(
+            backend.history_list("kb", "n").await.unwrap().len(),
+            1,
+            "no version cut"
+        );
+        assert!(
+            backend.history_key("kb").await.unwrap().is_none(),
+            "no new key"
+        );
+        assert_eq!(key_rows(&backend), 1, "the released marker stays");
     }
 }

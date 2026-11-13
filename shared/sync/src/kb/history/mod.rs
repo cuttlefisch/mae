@@ -10,9 +10,10 @@
 //! `entry_hash = SHA-256(canonical("maehistory/v1", prev_hash, every field
 //! but content and entry_hash))`
 //!
-//! The content enters only through `content_hash`, the full digest of the
-//! materialized node ([`MaterializedNode::digest`]). That is what lets
-//! pruning drop an entry's content and keep the chain verifying (D5).
+//! The content enters only through `content_hash`, an HMAC of its canonical
+//! encoding under the KB's [`HistoryKey`]. That is what lets pruning drop an
+//! entry's content and keep the chain verifying (D5), and, keyed, the hash
+//! confirms no guess at the content to someone without the key.
 //!
 //! What the chain alone cannot show: a removed LAST entry, or a whole history
 //! rewritten by someone who can recompute every hash. The first needs a head
@@ -21,10 +22,12 @@
 
 mod chain;
 mod codec;
+mod key;
 mod retention;
 
 pub use chain::{kb_head, seal, verify_chain, Broken, Draft, SealError, VerifyError};
 pub use codec::{decode_content, encode_content, ContentError};
+pub use key::{hmac_sha256, HistoryKey};
 pub use retention::{
     prune_candidates, Exemptions, Keep, Policy, PolicyError, MAX_VERSIONS_FLOOR, MIN_DAYS_FLOOR,
 };
@@ -157,7 +160,7 @@ pub struct HistoryEntry {
     /// The canonical encoding of the node ([`encode_content`]). `None` once
     /// pruned, and always on a `Pruned` audit entry.
     pub content: Option<Vec<u8>>,
-    /// [`MaterializedNode::digest`] of the content; [`GENESIS`] on a `Pruned`
+    /// [`HistoryKey::content_hash`] of the content; [`GENESIS`] on a `Pruned`
     /// audit entry.
     pub content_hash: Hash,
     pub prev_hash: Hash,
