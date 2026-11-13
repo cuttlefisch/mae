@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url';
 // reading, `#+LINK` expansion); 755,498 bytes after the final pre-tag
 // review's fixes, 761,547 after its second round, 772,721 after its
 // third; 846,219 once macros were expanded as Org's export does (review
-// round 4), 868,108 after round 5, 906,436 after round 6, 928,440 with the syntax ops (v0.2.0), 958,381 with the CUSTOM_ID ops (v0.7.0). The first budget, 700,000 (~15% over the
+// round 4), 868,108 after round 5, 906,436 after round 6, 928,440 with the syntax ops (v0.2.0), 958,381 with the CUSTOM_ID ops (v0.7.0), 962,644 with headlineProperties (v0.8.0). The first budget, 700,000 (~15% over the
 // first measurement), caught that growth as it should; it was raised to
 // 800,000 (~13% over the tagged size), then to 900,000 as the deliberate
 // cost of expanding macros, then to 1,000,000 for round 6's fixes, each recorded in ADR-112's O3 note. The
@@ -41,6 +41,7 @@ const SIZE_BUDGET = 1_000_000;
 const OPS = {
   semantics: 1, renderHast: 2, renderHtml: 3, text: 4, classifyLink: 5, version: 6, syntax: 7, syntaxSection: 8,
   headingsMissingCustomId: 9, customIdEdits: 10, duplicateCustomIds: 11, replaceCustomId: 12,
+  headlineProperties: 13,
 };
 /** The N-th test value (from 1), a lowercase UUID v4. */
 const uuid = (n) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
@@ -133,6 +134,22 @@ for (const text of [...files.map((f) => readFileSync(join(root, f), 'utf8')), ..
   const minted = new TextDecoder().decode(out);
   if (org.headingsMissingCustomId({ text: minted }).headings.length) fail('a headline still needs a CUSTOM_ID after its edits');
   if (edits.some((e) => e.start !== e.end && !/^ /.test(e.insert))) fail('an edit replaced text other than an empty value');
+  // Headline properties: the whole text and the first half by range.
+  requests.push([OPS.headlineProperties, { text }]);
+  requests.push([OPS.headlineProperties, { text, ranges: [[0, Math.floor(bytes.length / 2)]] }]);
+}
+// headlineProperties end to end: a heading with only a CUSTOM_ID is listed with
+// its VISIBILITY; offsets are UTF-8 bytes, so a multibyte title shifts them.
+{
+  const text = '* ñandú\n:PROPERTIES:\n:CUSTOM_ID: x\n:Visibility: folded \n:END:\n* none\n';
+  const got = org.headlineProperties({ text }).headlines;
+  const want = [{ heading: [0, 9], level: 1, properties: [
+    { key: 'CUSTOM_ID', keyAsWritten: 'CUSTOM_ID', value: 'x' },
+    { key: 'VISIBILITY', keyAsWritten: 'Visibility', value: 'folded' }] }];
+  if (JSON.stringify(got) !== JSON.stringify(want)) fail(`headlineProperties: ${JSON.stringify(got)}`);
+  let threw = null;
+  try { org.headlineProperties({ text, ranges: [[4, 2]] }); } catch (e) { threw = e; }
+  if (!threw || !/ends before it starts/.test(threw.message)) fail(`headlineProperties bad range: ${threw && threw.message}`);
 }
 for (const [request, want] of [
   [{ text: '* a\n', uuids: ['A0000000-0000-4000-8000-000000000001'] }, /not a lowercase UUID v4/],

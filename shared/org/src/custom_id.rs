@@ -212,7 +212,7 @@ fn missing_in(root: &SyntaxNode, ranges: Option<&[Span]>) -> Vec<Headline> {
         .collect()
 }
 
-fn in_scope(h: &Headline, ranges: Option<&[Span]>) -> bool {
+pub(crate) fn in_scope(h: &Headline, ranges: Option<&[Span]>) -> bool {
     let at = Span::of(h.syntax()).start;
     ranges.is_none_or(|rs| rs.iter().any(|r| r.start <= at && at < r.end))
 }
@@ -237,7 +237,7 @@ fn custom_id_value(h: &Headline) -> Option<SyntaxToken> {
 }
 
 /// A headline's headline line, without its line ending.
-fn heading_line(h: &Headline) -> Span {
+pub(crate) fn heading_line(h: &Headline) -> Span {
     let start = Span::of(h.syntax()).start;
     let end = token(h.syntax(), NEWLINE).map_or(Span::of(h.syntax()).end, |t| token_span(&t).start);
     Span { start, end }

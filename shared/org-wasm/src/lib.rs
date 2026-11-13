@@ -24,6 +24,7 @@
 
 pub mod api;
 mod custom_id;
+mod headline_properties;
 pub mod json;
 pub mod syntax;
 

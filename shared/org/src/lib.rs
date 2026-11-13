@@ -73,6 +73,8 @@ mod element;
 mod entities;
 mod green;
 mod headline;
+mod headline_properties;
+pub use headline_properties::{headline_properties, HeadlineProperties, HeadlineProperty};
 mod highlight;
 pub use highlight::{
     highlights, section_highlights, sections, EolProfile, Highlight, NeedsFull, Section,
