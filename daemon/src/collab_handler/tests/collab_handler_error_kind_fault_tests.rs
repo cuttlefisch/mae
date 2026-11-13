@@ -44,6 +44,36 @@ impl StorageBackend for ArmedBackend {
     async fn wal_high_water(&self, doc: &str) -> Result<u64, StorageError> {
         self.inner.wal_high_water(doc).await
     }
+    async fn history_session(
+        &self,
+        kb: &str,
+        node: &str,
+    ) -> Result<Vec<(crate::doc_editors::EditorKind, String)>, StorageError> {
+        self.inner.history_session(kb, node).await
+    }
+    async fn history_cut(
+        &self,
+        cp: crate::storage::Checkpoint,
+        now: i64,
+    ) -> Result<Option<mae_sync::kb::history::HistoryEntry>, StorageError> {
+        self.inner.history_cut(cp, now).await
+    }
+    async fn history_list(
+        &self,
+        kb: &str,
+        node: &str,
+    ) -> Result<Vec<mae_sync::kb::history::HistoryEntry>, StorageError> {
+        self.inner.history_list(kb, node).await
+    }
+    async fn history_holds_content(&self, kb: &str) -> Result<bool, StorageError> {
+        self.inner.history_holds_content(kb).await
+    }
+    async fn history_key(
+        &self,
+        kb: &str,
+    ) -> Result<Option<mae_sync::kb::history::HistoryKey>, StorageError> {
+        self.inner.history_key(kb).await
+    }
     async fn forget_editors(&self, doc: &str) -> Result<(), StorageError> {
         self.inner.forget_editors(doc).await
     }
