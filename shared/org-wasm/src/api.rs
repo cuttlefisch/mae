@@ -21,7 +21,9 @@
 //!               "placeholder": "[?]"},
 //!  "node": "KB id",
 //!  "path": "id:x?rel=r",
-//!  "section": {…}, "file": {…}}            // syntaxSection: see `syntax.rs`
+//!  "section": {…}, "file": {…},           // syntaxSection: see `syntax.rs`
+//!  "ranges": [[0, 10]], "uuids": ["…"],     // CUSTOM_ID ops: see `custom_id.rs`
+//!  "position": 12, "uuid": "…"}
 //! ```
 //!
 //! Spans in results are UTF-8 BYTE offsets into `text`.
@@ -43,6 +45,10 @@ pub enum Op {
     Version = 6,
     Syntax = 7,
     SyntaxSection = 8,
+    HeadingsMissingCustomId = 9,
+    CustomIdEdits = 10,
+    DuplicateCustomIds = 11,
+    ReplaceCustomId = 12,
 }
 
 impl Op {
@@ -56,6 +62,10 @@ impl Op {
             Op::Version,
             Op::Syntax,
             Op::SyntaxSection,
+            Op::HeadingsMissingCustomId,
+            Op::CustomIdEdits,
+            Op::DuplicateCustomIds,
+            Op::ReplaceCustomId,
         ]
         .into_iter()
         .find(|o| *o as u32 == n)
@@ -107,6 +117,14 @@ fn run(op: Op, request: &str) -> Result<String, String> {
             req.file.as_ref(),
             req.post_blank,
         ),
+        Op::HeadingsMissingCustomId => Ok(crate::custom_id::missing(
+            &req.text,
+            &req.parse,
+            &req.custom_id,
+        )),
+        Op::CustomIdEdits => crate::custom_id::edits(&req.text, &req.parse, &req.custom_id),
+        Op::DuplicateCustomIds => Ok(crate::custom_id::duplicates(&req.text, &req.parse)),
+        Op::ReplaceCustomId => crate::custom_id::replace(&req.text, &req.parse, &req.custom_id),
     }
 }
 
@@ -168,6 +186,8 @@ struct Request {
     /// For `syntax`/`syntaxSection`: whether a span's end includes its
     /// post-blank (default true, as `org-element` reports it).
     post_blank: bool,
+    /// For the `CUSTOM_ID` operations: `ranges`, `uuids`, `position`, `uuid`.
+    custom_id: crate::custom_id::CustomIdRequest,
 }
 
 const KEYS: &[&str] = &[
@@ -181,6 +201,10 @@ const KEYS: &[&str] = &[
     "section",
     "file",
     "post_blank",
+    "ranges",
+    "uuids",
+    "position",
+    "uuid",
 ];
 
 impl Request {
@@ -197,6 +221,12 @@ impl Request {
             section: j.get("section").filter(|v| **v != Json::Null).cloned(),
             file: j.get("file").filter(|v| **v != Json::Null).cloned(),
             post_blank: opt_bool(j.get("post_blank"), "post_blank")?.unwrap_or(true),
+            custom_id: crate::custom_id::CustomIdRequest {
+                ranges: crate::custom_id::ranges(j.get("ranges"))?,
+                uuids: strs(j.get("uuids"), "uuids")?,
+                position: crate::custom_id::offset(j.get("position"), "position")?,
+                uuid: opt_str(j.get("uuid"), "uuid")?,
+            },
         })
     }
 
