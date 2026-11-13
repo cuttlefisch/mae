@@ -1,0 +1,38 @@
+[package]
+name = "mae-crypto-wasm"
+description = "SPIKE: MAE's ADR-037 envelope crypto as a WASM module, over a hand-rolled ABI"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# cdylib: the .wasm module (`scripts/crypto-wasm.sh`). rlib: the same code
+# natively, for its tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# The crypto itself is `shared/sync/src/content_crypto.rs`, compiled here by
+# `#[path]` (src/lib.rs) rather than through mae-sync: mae-sync as a whole does
+# not build for wasm32-unknown-unknown (yrs gates `undo::Options: Default` off
+# wasm, and yrs -> fastrand -> getrandom 0.3 wants wasm-bindgen). These are
+# exactly the versions mae-sync pins, for the reasons its Cargo.toml gives.
+[dependencies]
+chacha20poly1305 = "0.11"
+sha2 = "0.11"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+rand = "0.10"
+zeroize = { version = "1", features = ["zeroize_derive"] }
+# Only for the custom backend's signature (src/lib.rs): on wasm32 the build
+# selects `--cfg getrandom_backend="custom"`, and entropy comes from the host.
+getrandom = "0.4"
+
+# The native side of the Node interop test is mae-sync's own module, not
+# this crate's copy of it, so the test crosses two separate builds.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+mae-sync = { path = "../sync" }
+
+# The included module's own tests (they run here too, natively).
+[dev-dependencies]
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+curve25519-dalek = "4"
