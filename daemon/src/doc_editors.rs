@@ -252,6 +252,9 @@ pub struct EditStamp {
     /// a migration copy): move the document's record origin up to this write,
     /// so any cutoff before it reads as [`EditorsSince::Incomplete`].
     pub resets_origin: bool,
+    /// A version of the node cut in the same transaction, before this write
+    /// (ADR-116 D2: a handoff).
+    pub checkpoint: Option<crate::storage::Checkpoint>,
 }
 
 impl EditStamp {
@@ -261,6 +264,7 @@ impl EditStamp {
             at_ms,
             pending: PendingChange::default(),
             resets_origin: false,
+            checkpoint: None,
         }
     }
 }
