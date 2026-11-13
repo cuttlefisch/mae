@@ -18,6 +18,7 @@
 //! replaced by the live value or by a format check; everything else is
 //! literal.
 
+mod daemon_harness;
 mod ws_common;
 
 use std::collections::HashMap;
