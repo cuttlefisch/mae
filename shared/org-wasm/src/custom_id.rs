@@ -52,7 +52,7 @@ pub fn replace(text: &str, parse: &ParseOptions, r: &CustomIdRequest) -> Result<
     Ok(format!("{{\"edit\":{}}}", edit(&e)))
 }
 
-fn span(s: Span) -> String {
+pub(crate) fn span(s: Span) -> String {
     format!("[{},{}]", s.start, s.end)
 }
 

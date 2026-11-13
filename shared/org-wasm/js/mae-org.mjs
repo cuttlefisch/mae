@@ -25,6 +25,7 @@ const OPS = new Map([
   ['customIdEdits', 10],
   ['duplicateCustomIds', 11],
   ['replaceCustomId', 12],
+  ['headlineProperties', 13],
 ]);
 
 const encoder = new TextEncoder();
@@ -153,6 +154,7 @@ export class MaeOrg {
   customIdEdits(request) { return this.call('customIdEdits', request); }
   duplicateCustomIds(request) { return this.call('duplicateCustomIds', request); }
   replaceCustomId(request) { return this.call('replaceCustomId', request); }
+  headlineProperties(request) { return this.call('headlineProperties', request); }
 
   /** Bytes the module has allocated and not freed (for leak checks). */
   liveBytes() { return this.exports.mae_org_live_bytes() >>> 0; }
