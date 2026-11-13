@@ -160,9 +160,6 @@ impl SessionGovernor {
     }
 }
 
-/// The document a request names, from the envelope's own addressing (ADR-099
-/// D2): `params.doc` on `sync/*`/`docs/*`, a node on `kb/*` with `node_id`, the
-/// collection on any other `kb/*` with a `kb_id`. `None` names no document.
 /// What the open-document cap counts (B4): a joined KB is ONE unit, since
 /// `kb/join` delivers every node of it under that one subscription; any other
 /// open document is one unit each. Returns the count and the joined KB ids.
@@ -189,7 +186,10 @@ fn in_joined_kb(doc: &str, joined: &HashSet<String>) -> bool {
     )
 }
 
-fn requested_doc(params: &serde_json::Value) -> Option<String> {
+/// The document a request names, from the envelope's own addressing (ADR-099
+/// D2): `params.doc` on `sync/*`/`docs/*`, a node on `kb/*` with `node_id`, the
+/// collection on any other `kb/*` with a `kb_id`. `None` names no document.
+pub(crate) fn requested_doc(params: &serde_json::Value) -> Option<String> {
     if let Some(doc) = params.get("doc").and_then(|d| d.as_str()) {
         return Some(doc.to_string());
     }
@@ -247,20 +247,45 @@ pub(crate) async fn reauthorize_open_docs(
     lost
 }
 
-/// The notification closing one document for a session (B3/B4).
-/// `doc` is the envelope's document name; `kb_id` is present for a KB
-/// document and `node_id` for a node document, read from the address itself.
-pub(crate) fn doc_closed(doc: &str, reason: &str) -> serde_json::Value {
-    let mut params = serde_json::json!({ "doc": doc, "reason": reason });
+/// How a notification the daemon sends names its document: `doc`, the
+/// envelope's document name, always; `kb_id` for any KB document and
+/// `node_id` for a node document, read from the address itself. One helper,
+/// so every notification naming a document addresses it the same way.
+fn doc_address(doc: &str) -> serde_json::Map<String, serde_json::Value> {
+    let mut params = serde_json::Map::new();
+    params.insert("doc".into(), doc.into());
     match mae_sync::DocAddress::parse(doc) {
         Some(mae_sync::DocAddress::KbNode { kb_id, node_id }) => {
-            params["kb_id"] = kb_id.into();
-            params["node_id"] = node_id.into();
+            params.insert("kb_id".into(), kb_id.into());
+            params.insert("node_id".into(), node_id.into());
         }
-        Some(mae_sync::DocAddress::KbCollection { kb_id }) => params["kb_id"] = kb_id.into(),
+        Some(mae_sync::DocAddress::KbCollection { kb_id }) => {
+            params.insert("kb_id".into(), kb_id.into());
+        }
         _ => {}
     }
+    params
+}
+
+/// The notification closing one document for a session (B3/B4).
+pub(crate) fn doc_closed(doc: &str, reason: &str) -> serde_json::Value {
+    let mut params = doc_address(doc);
+    params.insert("reason".into(), reason.into());
     serde_json::json!({ "jsonrpc": "2.0", "method": "session/doc_closed", "params": params })
+}
+
+/// Another session's y-protocols presence on `doc`, as the receiver gets it
+/// (B5): the same method the sender used, `sync/awareness`, with the update as
+/// sent and the daemon-stamped principal of each client id in it.
+pub(crate) fn awareness_relayed(
+    doc: &str,
+    update_base64: &str,
+    principals: &std::collections::BTreeMap<String, String>,
+) -> serde_json::Value {
+    let mut params = doc_address(doc);
+    params.insert("update".into(), update_base64.into());
+    params.insert("principals".into(), serde_json::json!(principals));
+    serde_json::json!({ "jsonrpc": "2.0", "method": "sync/awareness", "params": params })
 }
 
 /// Serialize `value` and write it as one framed message. `Err` means the
