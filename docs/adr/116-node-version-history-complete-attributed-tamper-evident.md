@@ -247,3 +247,121 @@ first run):
 - **Rollback as a direct store write.** Peers never see it, and the next projection silently
   reverses it.
 - **A per-row hash alone, as tamper evidence.** Anyone with write access recomputes it (CT).
+
+## Amendment 1 (proposed, 2026-11-12): history across a switch to E2E
+
+### Context
+
+D1 records each version's content in the clear, because the daemon reads it to cut versions,
+diff them and roll back. ADR-037 requires that a daemon serving an E2E KB hold no recoverable
+plaintext: that is why a reseal replaces node documents and `secure_delete` zeroes the freed
+pages (#171). A KB switched to E2E would therefore keep, in its history, exactly the plaintext
+the switch exists to remove.
+
+Until this amendment is built, the switch is refused while any version of the KB still holds
+content (`history_holds_plaintext`, shipped with P2 in #893). That is safe, but it makes a KB
+with history unable to go E2E at all. This amendment carries the history across instead, so it
+survives the switch encrypted.
+
+The failure it avoids has known prior art: `git-crypt` documents that files committed before
+encryption was enabled stay readable in the repository's history. Enabling encryption protects
+only what comes after, unless history is rewritten. MAE's chain cannot be rewritten without
+losing tamper evidence (D4), so it must be re-encrypted in place.
+
+### A1. The owner's client re-encrypts the history as part of the switch
+
+The daemon cannot encrypt: it never holds the content key. The client that performs the switch
+already reseals every node; it reseals every version too.
+
+1. It fetches the KB's history key (`kb/history.key`, owner only) and distributes it to the
+   members with the content key (ADR-037 D2), so a member can check a decrypted version against
+   its `content_hash`. Then it flips the collection to E2E with `carries_history: true` on
+   `kb/collection_op`. Without that flag, the interim refusal stands. With it, the KB enters
+   `history_migrating`.
+2. For each version that holds plaintext, it reads the content (`kb/history.get`, P3), encrypts
+   it under the KB's current content key exactly as node content is encrypted (ADR-037 D1), and
+   uploads it with `kb/history.reseal {kb_id, node_id, seq, entry_hash, key_epoch, ciphertext}`.
+3. The daemon replaces the content only when `entry_hash` names the stored entry and that entry
+   still holds plaintext. It records the key epoch, so a member holding that key can decrypt the
+   version after later rotations (ADR-037 D3). The entry's other fields and hashes are unchanged,
+   so the chain still verifies.
+4. When no version holds plaintext, the KB leaves `history_migrating`, and in the same
+   transaction the daemon releases its history key: the key's bytes are cleared and a "released"
+   marker stays, so no later version re-creates a key. The plaintext's and the key's pages are
+   zeroed (`secure_delete`), and the WAL sidecar is TRUNCATE-checkpointed, as for a node reseal.
+   The key is released only here, after every version is re-encrypted, so a client that crashed
+   before keeping the key can fetch it again; nothing depends on timing.
+
+The upload is idempotent per entry, so an interrupted switch resumes. Its progress (versions
+left) is reported. The ciphertext needs no associated data to stay in place: `content_hash`
+binds it. A member who decrypts a ciphertext moved to another entry gets content whose keyed
+hash is not that entry's `content_hash`, and verification on the member's side fails. The daemon
+cannot see that, just as it cannot see a bad node reseal. The owner's client is trusted for the
+switch either way.
+
+While the KB is `history_migrating`, and after:
+- the daemon cuts no new versions of its nodes. The handoff check (P2) also skips a node of a KB
+  flagged E2E, not only one that does not read as a node;
+- named versions are refused (`e2e_unsupported`), as today.
+
+### A2. What the daemon still does with an E2E KB's history
+
+It can still list versions with their metadata, verify the chain (entry hashes cover
+`content_hash`, never the content), apply retention, and honour holds. Pruning drops ciphertext
+as it drops plaintext.
+
+It can no longer cut versions, diff them, check a version's content against its hash, or roll
+back. Those become client-side, with ADR-116's "client-side history" still to be designed. Until
+then, an E2E KB's history ends at the switch. Clients that hold the history key verify each
+decrypted version against its `content_hash`.
+
+### A3. No guess-confirming hash after the switch
+
+`content_hash` is keyed (D3, as amended 2026-11-12): an HMAC of the content under the KB's
+history key. An unkeyed hash would have stayed on the daemon after the switch and let anyone
+holding its store confirm a guess at a version's whole content, which brute-forces a small secret
+in a templated record in moments. Removing such a hash at the switch would have meant rewriting
+every entry hash, the tamper the chain exists to expose.
+
+Keyed, the hashes stay exactly as they are and confirm nothing once the daemon has released the
+key (A1 step 4). The chain is never rewritten, and every signed head stays valid. What remains is
+trust that the daemon released the key, the same trust as that it zeroed the plaintext.
+
+### A4. A switch relayed from a mesh peer
+
+A daemon that receives a flip it did not author, from a peer, cannot carry the history across:
+it has no key, and the owner's client is elsewhere. On receipt it prunes the content of every
+version of that KB: it zeroes the plaintext and keeps the metadata (D5). It records a `pruned`
+audit entry naming the relayed switch. The record of who changed what and when survives; the
+content does not.
+
+**A hold wins** (decided 2026-11-12). A hold on that KB promises the content stays, and ADR-037
+promises it does not. The hold is a deliberate operator act, so its versions keep their content.
+The daemon reports the conflict to the operator, naming the KB and the held versions, until the
+hold is released, and the plaintext is then pruned as above.
+
+### A5. Destructive acts on an E2E KB
+
+D2.2's version before a destructive act applies to plaintext KBs only. A reseal is not versioned
+(A1 carries the existing history). Nor is any destructive act on an E2E KB: the daemon cannot
+read its content.
+
+### Rejected
+
+- **Prune all content at the switch.** It keeps who changed what and loses every past content.
+  The owner asked to keep the history, and A1 can.
+- **Delete the history.** D5 already rejects losing the record of who changed what.
+- **Encrypt on the daemon.** The daemon would need the content key, which ends key-blindness.
+- **Re-hash the chain under a keyed digest at the switch.** It rewrites every entry hash, which
+  is exactly the tamper D4 detects, and invalidates every head kept outside. Keying the hash from
+  the first version (D3) gets the same result with no rewrite.
+- **Start a new chain at the switch.** It loses the link between history before and after it.
+
+### Implementation
+
+- **H-E1:** `kb/history.key`, `kb/history.reseal`, the `history_migrating` state,
+  `carries_history` on the flip, the key's release when migration ends, and the handoff skip for
+  an E2E-flagged KB. Tested by a switch interrupted and resumed, a
+  ciphertext refused for another entry's hash, and a chain that still verifies afterwards.
+- **H-E2:** the editor's switch flow, which re-encrypts every version.
+- **H-E3:** the relayed switch (A4), with a hold keeping its content and reported.
