@@ -11,7 +11,7 @@
 //! share or reseal recreates a node's content, and its history must survive.
 
 use mae_sync::kb::history::{
-    seal, Draft, Editor, EditorKind, Hash, HistoryEntry, HistoryKey, VersionKind,
+    seal, Draft, Editor, EditorKind, Hash, HistoryEntry, HistoryKey, SignedHead, Tip, VersionKind,
 };
 use mae_sync::kb::MaterializedNode;
 
@@ -37,6 +37,16 @@ pub(super) const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS kb_node_history (
      entry_hash BLOB NOT NULL,
      PRIMARY KEY (kb_id, node_id, seq)
  );
+ CREATE TABLE IF NOT EXISTS kb_history_heads (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     kb_id TEXT NOT NULL,
+     at INTEGER NOT NULL,
+     digest BLOB NOT NULL,
+     tips TEXT NOT NULL,
+     signer BLOB NOT NULL,
+     signature BLOB NOT NULL
+ );
+ CREATE INDEX IF NOT EXISTS idx_history_heads_kb ON kb_history_heads(kb_id, id);
  CREATE TABLE IF NOT EXISTS kb_history_keys (
      kb_id TEXT PRIMARY KEY,
      key BLOB,
@@ -97,6 +107,124 @@ pub(super) fn holds_content(conn: &sqlite::Connection, kb_id: &str) -> Result<bo
     Ok(matches!(stmt.next()?, sqlite::State::Row))
 }
 
+/// The nodes of `kb_id` that have history, sorted.
+pub(super) fn nodes(conn: &sqlite::Connection, kb_id: &str) -> Result<Vec<String>, StorageError> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT node_id FROM kb_node_history WHERE kb_id = ?1 ORDER BY node_id",
+    )?;
+    stmt.bind((1, kb_id))?;
+    let mut out = Vec::new();
+    while let sqlite::State::Row = stmt.next()? {
+        out.push(stmt.read::<String, _>(0)?);
+    }
+    Ok(out)
+}
+
+/// Every node's latest version in `kb_id`, as a head names it. One statement,
+/// so one consistent snapshot: a version cut concurrently is either wholly in
+/// it or not, and a head names tips that all existed together.
+pub(super) fn tips(conn: &sqlite::Connection, kb_id: &str) -> Result<Vec<Tip>, StorageError> {
+    let mut stmt = conn.prepare(
+        "SELECT h.node_id, h.seq, h.entry_hash FROM kb_node_history h
+         WHERE h.kb_id = ?1 AND h.seq = (SELECT MAX(seq) FROM kb_node_history m
+                                         WHERE m.kb_id = h.kb_id AND m.node_id = h.node_id)
+         ORDER BY h.node_id",
+    )?;
+    stmt.bind((1, kb_id))?;
+    let mut out = Vec::new();
+    while let sqlite::State::Row = stmt.next()? {
+        let entry_hash = stmt
+            .read::<Vec<u8>, _>(2)?
+            .try_into()
+            .map_err(|_| StorageError::Sqlite("history row: bad entry_hash".into()))?;
+        out.push(Tip {
+            node_id: stmt.read::<String, _>(0)?,
+            seq: stmt.read::<i64, _>(1)? as u64,
+            entry_hash,
+        });
+    }
+    Ok(out)
+}
+
+/// The KBs that have history, sorted.
+pub(super) fn kbs(conn: &sqlite::Connection) -> Result<Vec<String>, StorageError> {
+    let mut stmt = conn.prepare("SELECT DISTINCT kb_id FROM kb_node_history ORDER BY kb_id")?;
+    let mut out = Vec::new();
+    while let sqlite::State::Row = stmt.next()? {
+        out.push(stmt.read::<String, _>(0)?);
+    }
+    Ok(out)
+}
+
+/// Append a signed head to the KB's head log (D4). The log is append-only:
+/// nothing here updates or deletes a row.
+pub(super) fn append_head(conn: &sqlite::Connection, h: &SignedHead) -> Result<(), StorageError> {
+    let tips: Vec<(&str, u64, String)> = h
+        .tips
+        .iter()
+        .map(|t| (t.node_id.as_str(), t.seq, hex::encode(t.entry_hash)))
+        .collect();
+    let mut stmt = conn.prepare(
+        "INSERT INTO kb_history_heads (kb_id, at, digest, tips, signer, signature)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )?;
+    stmt.bind((1, h.kb_id.as_str()))?;
+    stmt.bind((2, h.at))?;
+    stmt.bind((3, &h.digest[..]))?;
+    stmt.bind((
+        4,
+        serde_json::to_string(&tips).expect("plain data").as_str(),
+    ))?;
+    stmt.bind((5, &h.signer[..]))?;
+    stmt.bind((6, &h.signature[..]))?;
+    stmt.next()?;
+    Ok(())
+}
+
+/// The KB's latest signed head, if any. A row that does not decode is an
+/// error, never skipped: a damaged log must not read as "no head".
+pub(super) fn latest_head(
+    conn: &sqlite::Connection,
+    kb_id: &str,
+) -> Result<Option<SignedHead>, StorageError> {
+    let mut stmt = conn.prepare(
+        "SELECT at, digest, tips, signer, signature FROM kb_history_heads
+         WHERE kb_id = ?1 ORDER BY id DESC LIMIT 1",
+    )?;
+    stmt.bind((1, kb_id))?;
+    if stmt.next()? != sqlite::State::Row {
+        return Ok(None);
+    }
+    let bad = |what: &str| StorageError::Sqlite(format!("history head: bad {what}"));
+    let fixed = |col: &str| stmt.read::<Vec<u8>, _>(col).map_err(StorageError::from);
+    let tips: Vec<(String, u64, String)> =
+        serde_json::from_str(&stmt.read::<String, _>("tips")?).map_err(|_| bad("tips"))?;
+    let tips = tips
+        .into_iter()
+        .map(|(node_id, seq, h)| {
+            let entry_hash = hex::decode(h)
+                .ok()
+                .and_then(|b| b.try_into().ok())
+                .ok_or_else(|| bad("tip hash"))?;
+            Ok(Tip {
+                node_id,
+                seq,
+                entry_hash,
+            })
+        })
+        .collect::<Result<Vec<_>, StorageError>>()?;
+    Ok(Some(SignedHead {
+        kb_id: kb_id.to_string(),
+        at: stmt.read::<i64, _>("at")?,
+        tips,
+        digest: fixed("digest")?.try_into().map_err(|_| bad("digest"))?,
+        signer: fixed("signer")?.try_into().map_err(|_| bad("signer"))?,
+        signature: fixed("signature")?
+            .try_into()
+            .map_err(|_| bad("signature"))?,
+    }))
+}
+
 /// Every entry of the node, in `seq` order.
 pub(super) fn list(
     conn: &sqlite::Connection,
@@ -111,6 +239,49 @@ pub(super) fn list(
     let mut out = Vec::new();
     while let sqlite::State::Row = stmt.next()? {
         out.push(read_row(&stmt)?);
+    }
+    Ok(out)
+}
+
+/// One version as a listing reports it: its record without the content.
+/// `entry.content` is always `None` here; `pruned` says whether the stored row
+/// holds content, so a listing never reads a version's content to say so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listed {
+    pub entry: HistoryEntry,
+    pub pruned: bool,
+}
+
+/// Up to `limit` of the node's entries with `seq < before` (every entry,
+/// without `before`), newest first, without their content. It reads only the
+/// rows it returns, through the primary key. A `before` past `i64::MAX`
+/// reads as no bound.
+pub(super) fn page(
+    conn: &sqlite::Connection,
+    kb_id: &str,
+    node_id: &str,
+    before: Option<u64>,
+    limit: u32,
+) -> Result<Vec<Listed>, StorageError> {
+    let mut stmt = conn.prepare(
+        "SELECT h.kb_id, h.node_id, h.seq, h.kind, h.created_at, h.editors, h.wal_from,
+                h.wal_to, h.summary, h.name, h.restored_from, NULL AS content,
+                h.content IS NULL AS pruned, h.content_hash, h.prev_hash, h.entry_hash
+         FROM kb_node_history h
+         WHERE h.kb_id = ?1 AND h.node_id = ?2 AND h.seq < ?3
+         ORDER BY h.seq DESC LIMIT ?4",
+    )?;
+    let before = before.map_or(i64::MAX, |b| i64::try_from(b).unwrap_or(i64::MAX));
+    stmt.bind((1, kb_id))?;
+    stmt.bind((2, node_id))?;
+    stmt.bind((3, before))?;
+    stmt.bind((4, i64::from(limit)))?;
+    let mut out = Vec::new();
+    while let sqlite::State::Row = stmt.next()? {
+        out.push(Listed {
+            entry: read_row(&stmt)?,
+            pruned: stmt.read::<i64, _>("pruned")? != 0,
+        });
     }
     Ok(out)
 }
