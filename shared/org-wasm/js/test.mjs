@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url';
 // reading, `#+LINK` expansion); 755,498 bytes after the final pre-tag
 // review's fixes, 761,547 after its second round, 772,721 after its
 // third; 846,219 once macros were expanded as Org's export does (review
-// round 4), 868,108 after round 5, 906,436 after round 6, 928,440 with the syntax ops (v0.2.0). The first budget, 700,000 (~15% over the
+// round 4), 868,108 after round 5, 906,436 after round 6, 928,440 with the syntax ops (v0.2.0), 958,381 with the CUSTOM_ID ops (v0.7.0). The first budget, 700,000 (~15% over the
 // first measurement), caught that growth as it should; it was raised to
 // 800,000 (~13% over the tagged size), then to 900,000 as the deliberate
 // cost of expanding macros, then to 1,000,000 for round 6's fixes, each recorded in ADR-112's O3 note. The
@@ -38,7 +38,12 @@ import { fileURLToPath } from 'node:url';
 // size; raising it again is a decision to record there, not a number to
 // bump.
 const SIZE_BUDGET = 1_000_000;
-const OPS = { semantics: 1, renderHast: 2, renderHtml: 3, text: 4, classifyLink: 5, version: 6, syntax: 7, syntaxSection: 8 };
+const OPS = {
+  semantics: 1, renderHast: 2, renderHtml: 3, text: 4, classifyLink: 5, version: 6, syntax: 7, syntaxSection: 8,
+  headingsMissingCustomId: 9, customIdEdits: 10, duplicateCustomIds: 11, replaceCustomId: 12,
+};
+/** The N-th test value (from 1), a lowercase UUID v4. */
+const uuid = (n) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
 const encoder = new TextEncoder();
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -105,6 +110,41 @@ for (const text of [...files.map((f) => readFileSync(join(root, f), 'utf8')), ..
     const region = new TextDecoder().decode(bytes.slice(section.start, section.end));
     requests.push([OPS.syntaxSection, { text: region, section, file: syn.file }]);
   }
+  // CUSTOM_ID minting: the whole text, the first half by range, and too few
+  // values; then the duplicates, and replacing the second of the first group.
+  const missing = org.headingsMissingCustomId({ text }).headings;
+  const uuids = missing.map((_, i) => uuid(i + 1));
+  requests.push([OPS.headingsMissingCustomId, { text }]);
+  requests.push([OPS.customIdEdits, { text, uuids }]);
+  requests.push([OPS.customIdEdits, { text, uuids, ranges: [[0, Math.floor(bytes.length / 2)]] }]);
+  if (missing.length) requests.push([OPS.customIdEdits, { text, uuids: uuids.slice(1) }]);
+  requests.push([OPS.duplicateCustomIds, { text }]);
+  const dups = org.duplicateCustomIds({ text }).groups;
+  if (dups.length) {
+    requests.push([OPS.replaceCustomId, { text, position: dups[0][1].value[0], uuid: uuid(1) }]);
+    requests.push([OPS.replaceCustomId, { text, position: dups[0][1].value[0] + 1, uuid: uuid(1) }]);
+  }
+  // Applying the edits leaves no headline needing one, and changes nothing else.
+  const edits = org.customIdEdits({ text, uuids }).edits;
+  let out = bytes;
+  for (const e of edits) {
+    out = new Uint8Array([...out.slice(0, e.start), ...encoder.encode(e.insert), ...out.slice(e.end)]);
+  }
+  const minted = new TextDecoder().decode(out);
+  if (org.headingsMissingCustomId({ text: minted }).headings.length) fail('a headline still needs a CUSTOM_ID after its edits');
+  if (edits.some((e) => e.start !== e.end && !/^ /.test(e.insert))) fail('an edit replaced text other than an empty value');
+}
+for (const [request, want] of [
+  [{ text: '* a\n', uuids: ['A0000000-0000-4000-8000-000000000001'] }, /not a lowercase UUID v4/],
+  [{ text: '* a\n', uuids: ['x\n:END:'] }, /not a lowercase UUID v4/],
+  [{ text: '* a\n* b\n', uuids: [uuid(1)] }, /2 uuids needed, 1 supplied/],
+  [{ text: '* a\n', uuids: [uuid(1)], ranges: [[4, 2]] }, /ends before it starts/],
+  [{ text: '* a\n', uuids: [uuid(1)], ranges: [[0.5, 2]] }, /whole number/],
+  [{ text: '* a\n' }, /needs "uuids"/],
+]) {
+  let threw = null;
+  try { org.customIdEdits(request); } catch (e) { threw = e; }
+  if (!threw || !want.test(threw.message)) fail(`customIdEdits ${JSON.stringify(request)}: ${threw && threw.message}`);
 }
 requests.push([OPS.version, {}]);
 requests.push([OPS.renderHast, { text: 'x', bogus: 1 }]);

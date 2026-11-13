@@ -21,6 +21,10 @@ const OPS = new Map([
   ['version', 6],
   ['syntax', 7],
   ['syntaxSection', 8],
+  ['headingsMissingCustomId', 9],
+  ['customIdEdits', 10],
+  ['duplicateCustomIds', 11],
+  ['replaceCustomId', 12],
 ]);
 
 const encoder = new TextEncoder();
@@ -140,6 +144,15 @@ export class MaeOrg {
   // byte offsets) and the regions syntaxSection can re-highlight alone.
   syntax(request) { return this.call('syntax', request); }
   syntaxSection(request) { return this.call('syntaxSection', request); }
+  // Stable heading anchors (UTF-8 byte offsets, like every span): the
+  // headline lines needing a CUSTOM_ID; the edits giving them one (`uuids`,
+  // lowercase UUID v4s, at least as many as there are headlines; edits
+  // descending); the CUSTOM_IDs several headlines share; and the edit that
+  // replaces one of them.
+  headingsMissingCustomId(request) { return this.call('headingsMissingCustomId', request); }
+  customIdEdits(request) { return this.call('customIdEdits', request); }
+  duplicateCustomIds(request) { return this.call('duplicateCustomIds', request); }
+  replaceCustomId(request) { return this.call('replaceCustomId', request); }
 
   /** Bytes the module has allocated and not freed (for leak checks). */
   liveBytes() { return this.exports.mae_org_live_bytes() >>> 0; }

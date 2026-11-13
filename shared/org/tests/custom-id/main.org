@@ -1,0 +1,62 @@
+:PROPERTIES:
+:ID: file-level
+:END:
+#+title: Custom id placement
+
+* Plain
+body
+* TODO With planning
+SCHEDULED: <2026-11-01 Sun>
+text
+* Existing drawer
+:PROPERTIES:
+:OTHER: x
+:END:
+* Indented drawer
+  :PROPERTIES:
+  :OTHER: y
+  :END:
+* Has a custom id
+:PROPERTIES:
+:CUSTOM_ID: keep-me
+:END:
+* Is a KB node
+:PROPERTIES:
+:ID: 0b6c2c58-6f0e-4b8e-9d55-0a1f3c3e9a11
+:END:
+* Empty id is no node
+:PROPERTIES:
+:ID:
+:END:
+* Empty custom id
+:PROPERTIES:
+:CUSTOM_ID:
+:OTHER: after
+:END:
+** Child, planning and drawer
+DEADLINE: <2026-11-03 Tue>
+:PROPERTIES:
+:OTHER: w
+:END:
+#+begin_src org
+* a heading, even in a block
+#+end_src
+* Blank before drawer
+
+:PROPERTIES:
+:OTHER: z
+:END:
+* Planning, then a blank line, then a drawer
+SCHEDULED: <2026-11-01 Sun>
+
+:PROPERTIES:
+:OTHER: after a blank, so no property drawer
+:END:
+* lower case drawer
+:properties:
+:other: v
+:end:
+* ñandú — multibyte title
+* COMMENT commented
+* Archived :ARCHIVE:
+archived text

@@ -224,6 +224,17 @@ layer on it becomes the cheaper path.
   (`En Windows` in `#+begin_details En Windows`), trimmed, as a plain attribute value. Only on a
   block whose name is valid (`data-org-block`), and only when non-empty, at most 512 bytes and free
   of control characters; otherwise it is absent. Affiliated `#+ATTR_*` keywords are still not read.
+- **O3.6** (`mae-org-v0.7.0`) stable heading anchors. Four pure functions (and WASM ops 9–12),
+  for an editor that gives every headline a `CUSTOM_ID` without making it a KB node:
+  - which headlines need one: no non-empty `CUSTOM_ID` and no non-empty `ID`;
+  - the edits giving them one, placed as `org-entry-put` places it, which
+    `conformance/custom-id-put.el` records and `tests/custom_id.rs` requires byte for byte;
+  - the values several headlines share, reported in groups and never resolved, since only the
+    editor knows which occurrence is a copy;
+  - the edit replacing one of those values.
+
+  The caller supplies the values, and anything but a lowercase UUID v4 is refused, so no caller can
+  write structure into a drawer. Offsets are UTF-8 bytes, like every span.
 - **O4** MAE switches ingest, export and read mode to it, with the repair path; the span-based write
   path lands on the same spans.
 - **O5** the remaining constructs by measured use, privacy-relevant regions first.
