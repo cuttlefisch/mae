@@ -66,6 +66,8 @@ struct Driver {
     renew_lead: Duration,
     renew_sent: bool,
     ping_every: Option<Duration>,
+    /// Most bytes [`Driver::linger`] discards before giving up on a client.
+    linger_bytes: usize,
 }
 
 /// Run one socket until it closes. Holds `conn` — the TCP connection's one
@@ -105,6 +107,9 @@ pub(super) async fn run(
         renew_lead: settings.renew_lead,
         renew_sent: false,
         ping_every: settings.ping_every,
+        // One frame over the cap may be mid-flight when the daemon closes,
+        // with a frame queued behind it: two caps' worth.
+        linger_bytes: settings.max_frame_bytes.saturating_mul(2),
     };
     tracing::info!(principal = %principal, "ws: session opened");
     // B2: the first frame the daemon sends, before the session can write.
@@ -225,9 +230,11 @@ impl Driver {
             None => Flow::Stop,
             Some(Err(e)) => {
                 // A frame over the cap arrives here, with its `1009` close
-                // already queued by the codec: flush it out before going.
+                // already queued by the codec: flush it out, then linger so
+                // the client can read it.
                 tracing::debug!(error = %e, "ws: read error");
                 let _ = tokio::time::timeout(WRITE_TIMEOUT, self.ws.flush()).await;
+                self.linger().await;
                 Flow::Stop
             }
             Some(Ok(m)) if m.is_text() => {
@@ -356,5 +363,31 @@ impl Driver {
         let send = self.ws.send(Message::close(code, reason));
         let _ = tokio::time::timeout(WRITE_TIMEOUT, send).await;
         let _ = tokio::time::timeout(WRITE_TIMEOUT, self.ws.flush()).await;
+        self.linger().await;
+    }
+
+    /// After the daemon's own close frame: half-close, then read and discard
+    /// what the client is still sending until it closes too, bounded by
+    /// [`WRITE_TIMEOUT`] and `linger_bytes`. Closing a TCP connection with
+    /// unread input makes the kernel answer with a reset, and a reset discards
+    /// the close frame still in flight: the client would see an abnormal
+    /// closure (1006) instead of the code it was sent — exactly what happens
+    /// to a frame over the cap, whose unread remainder is the input.
+    async fn linger(&mut self) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let budget = self.linger_bytes;
+        let io = self.ws.get_mut();
+        let drain = async {
+            let _ = io.shutdown().await;
+            let mut buf = vec![0u8; 16 * 1024];
+            let mut seen = 0usize;
+            while seen <= budget {
+                match io.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => seen += n,
+                }
+            }
+        };
+        let _ = tokio::time::timeout(WRITE_TIMEOUT, drain).await;
     }
 }
