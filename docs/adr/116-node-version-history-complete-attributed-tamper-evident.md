@@ -77,10 +77,16 @@ Each version carries:
 - `summary` and `name`, both optional; for a rollback, `restored_from` (a `seq`);
 - `content`: the canonical encoding of the whole `MaterializedNode`, including `kind`,
   `properties`, `aliases`, `links` and `org_header`;
-- `content_hash`: `MaterializedNode::digest()` of that content, the full SHA-256 whose first 16
-  bytes are `KbNodeDoc::version()`. It is the node's own complete digest: it destructures without
-  `..`, so a new field cannot be left out of it. History keeps all 32 bytes, so forging a content
-  needs a full second preimage, not one against a 128-bit prefix;
+- `content_hash`: HMAC-SHA256 of that content's canonical encoding under the KB's **history key**
+  (decided 2026-11-12). The encoding destructures the node without `..`, so a new field cannot be
+  left out of it. An unkeyed hash would let anyone holding the store confirm a guess at a version's
+  whole content, which brute-forces a small secret in a templated record in moments. Keyed, it
+  confirms nothing without the key. The daemon holds the key while the KB is plaintext, which
+  exposes nothing new because it holds the plaintext. It makes the key inside a version's own
+  transaction (`INSERT OR IGNORE`, then read back), so concurrent first versions on different
+  nodes share one key. A released key leaves a marker, so it is never re-created, and a version
+  that would need it is skipped rather than failing its update (Amendment 1 hands the key over at
+  the switch to E2E);
 - `prev_hash` and `entry_hash`, where
   `entry_hash = SHA-256("maehistory/v1" ‖ prev_hash ‖ canonical(entry without entry_hash))`.
   Every field is length-prefixed, so no two different entries encode alike. The content enters
@@ -171,7 +177,7 @@ as the seed's writes.
 
 | Method | Needs | What it does |
 |---|---|---|
-| `kb/history.list` | Read | The versions' metadata, without content |
+| `kb/history.list` | Read | The versions' metadata, without content, newest first, a page at a time (`limit`, `before_seq`, `next`) |
 | `kb/history.get` | Read | One version's content and its verification status |
 | `kb/history.diff` | Read | The difference between two versions |
 | `kb/history.verify` | Read | Verifies a node or the whole KB |

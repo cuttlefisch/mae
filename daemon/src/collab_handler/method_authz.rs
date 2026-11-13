@@ -59,6 +59,11 @@ pub(super) enum Method {
     KbJoin,
     KbNodeFetch,
     KbNodeUpdate,
+    KbHistoryCheckpoint,
+    KbHistoryList,
+    KbHistoryGet,
+    KbHistoryDiff,
+    KbHistoryVerify,
     KbCollectionOp,
     KbClaimLease,
     KbFetchArtifact,
@@ -118,6 +123,11 @@ impl Method {
             "kb/join" => Self::KbJoin,
             "kb/node_fetch" => Self::KbNodeFetch,
             "kb/node_update" => Self::KbNodeUpdate,
+            "kb/history.checkpoint" => Self::KbHistoryCheckpoint,
+            "kb/history.list" => Self::KbHistoryList,
+            "kb/history.get" => Self::KbHistoryGet,
+            "kb/history.diff" => Self::KbHistoryDiff,
+            "kb/history.verify" => Self::KbHistoryVerify,
             "kb/collection_op" => Self::KbCollectionOp,
             "kb/claim_lease" => Self::KbClaimLease,
             "kb/fetch_artifact" => Self::KbFetchArtifact,
@@ -210,6 +220,11 @@ impl DocScope {
             | Method::KbJoin
             | Method::KbNodeFetch
             | Method::KbNodeUpdate
+            | Method::KbHistoryCheckpoint
+            | Method::KbHistoryList
+            | Method::KbHistoryGet
+            | Method::KbHistoryDiff
+            | Method::KbHistoryVerify
             | Method::KbCollectionOp
             | Method::KbClaimLease
             | Method::KbFetchArtifact

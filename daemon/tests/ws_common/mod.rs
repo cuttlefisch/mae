@@ -52,7 +52,7 @@ impl Default for Opts {
 }
 
 pub struct Daemon {
-    child: Option<tokio::process::Child>,
+    proc: Option<crate::daemon_harness::Process>,
     tmp: tempfile::TempDir,
     pub addr: SocketAddr,
     pub identity: Arc<Identity>,
@@ -62,15 +62,7 @@ pub struct Daemon {
     opts: Opts,
 }
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
-fn config_toml(dir: &Path, oauth_port: u16, opts: &Opts) -> String {
+fn config_toml(dir: &Path, ports: crate::daemon_harness::Ports, opts: &Opts) -> String {
     let id = dir.join("identity");
     let tenant = opts
         .tenant_budget
@@ -89,12 +81,13 @@ fn config_toml(dir: &Path, oauth_port: u16, opts: &Opts) -> String {
     format!(
         "[collab]\nenabled = true\nbind = \"127.0.0.1:{collab}\"\n\
          [collab.auth]\nmode = \"key\"\nidentity_dir = \"{id}\"\nauthorized_keys = \"{id}/authorized_keys\"\n\
-         [oauth]\nenabled = true\nbind = \"127.0.0.1:{oauth_port}\"\ncanonical_resource_uri = \"{AUDIENCE}\"\n\
+         [oauth]\nenabled = true\nbind = \"127.0.0.1:{oauth}\"\ncanonical_resource_uri = \"{AUDIENCE}\"\n\
          cert_path = \"{d}/oauth.crt\"\nkey_path = \"{d}/oauth.key\"\nkb_query_enabled = true\n\
          self_issued_tokens_enabled = true\nmax_connections = 0\n\
          ws_enabled = {ws}\nws_allowed_origins = [\"{ORIGIN_A}\", \"{ORIGIN_B}\"]\n\
          ws_renew_lead_secs = {lead}\nws_max_open_docs = {docs}\n{frame}\n{tenant}",
-        collab = free_port(),
+        collab = ports.collab,
+        oauth = ports.oauth,
         id = id.display(),
         d = dir.display(),
         ws = opts.ws_enabled,
@@ -107,22 +100,22 @@ fn config_toml(dir: &Path, oauth_port: u16, opts: &Opts) -> String {
 pub async fn spawn(opts: Opts) -> Daemon {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().to_path_buf();
-    let cert = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).unwrap();
-    std::fs::write(dir.join("oauth.crt"), cert.cert.pem()).unwrap();
-    std::fs::write(dir.join("oauth.key"), cert.signing_key.serialize_pem()).unwrap();
+    let cert_der = crate::daemon_harness::write_self_signed_cert(
+        &dir.join("oauth.crt"),
+        &dir.join("oauth.key"),
+    );
     let identity = Arc::new(Identity::generate("daemon-under-test"));
     identity.save(&dir.join("identity")).unwrap();
     let client = Identity::generate("throwaway-client").public().to_line();
     std::fs::write(dir.join("identity/authorized_keys"), format!("{client}\n")).unwrap();
-    let oauth_port = free_port();
     let config_path = dir.join("daemon.toml");
-    std::fs::write(&config_path, config_toml(&dir, oauth_port, &opts)).unwrap();
     let mut d = Daemon {
-        child: None,
-        addr: format!("127.0.0.1:{oauth_port}").parse().unwrap(),
+        proc: None,
+        // Set by `start`, from the ports the daemon actually came up on.
+        addr: SocketAddr::from(([127, 0, 0, 1], 0)),
         socket: dir.join("mae-daemon.sock"),
         identity,
-        cert_der: cert.cert.der().to_vec(),
+        cert_der,
         config_path,
         tmp,
         opts,
@@ -132,95 +125,48 @@ pub async fn spawn(opts: Opts) -> Daemon {
 }
 
 impl Daemon {
-    /// Start the daemon and wait until THIS daemon serves its port. A free
-    /// port is only reserved until it is released for the daemon to bind, so
-    /// a parallel test can take it in between; the readiness probe therefore
-    /// proves identity (a TLS handshake pinned to this daemon's own
-    /// certificate, and `/ws/ticket` present when ws is on), and a daemon that
-    /// never becomes ready is restarted on fresh ports. Before this, a probe
-    /// that merely connected could reach another test's daemon on a reused
-    /// port, and the test failed later with "connection refused".
+    /// Start the daemon and wait until THIS daemon serves its port, on fresh
+    /// ports each time. The port choice, the readiness proof (a TLS handshake
+    /// pinned to this daemon's certificate, `/ws/ticket` answering when ws is
+    /// on) and the respawn after a lost port are `daemon_harness`'s, shared with
+    /// every daemon suite; this harness was where they were first worked out
+    /// (PR #886), after a probe that merely connected reached another test's
+    /// daemon on a reused port.
     async fn start(&mut self) {
-        for _attempt in 0..3 {
-            self.spawn_child();
-            let ready = tokio::time::timeout(Duration::from_secs(10), async {
-                while !self.serves_this_daemon().await {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
-            })
-            .await
-            .is_ok();
-            if ready {
-                return;
-            }
-            if let Some(mut c) = self.child.take() {
-                let _ = c.kill().await;
-                let _ = c.wait().await;
-            }
-            let port = free_port();
-            self.addr = format!("127.0.0.1:{port}").parse().unwrap();
-            let config = config_toml(self.tmp.path(), port, &self.opts);
-            std::fs::write(&self.config_path, config).unwrap();
-        }
-        panic!("{}", mae_mcp::ready::timeout_message("the OAuth listener"));
-    }
-
-    /// The port answers with THIS daemon's certificate, and (when ws is on)
-    /// the ticket route exists, which needs the collab service up too.
-    async fn serves_this_daemon(&self) -> bool {
-        let Ok(Ok(tcp)) = tokio::time::timeout(
-            Duration::from_millis(500),
-            tokio::net::TcpStream::connect(self.addr),
-        )
-        .await
-        else {
-            return false;
+        let dir = self.tmp.path().to_path_buf();
+        let probe = crate::daemon_harness::OauthProbe {
+            cert_der: self.cert_der.clone(),
+            ws_ticket: self.opts.ws_enabled,
         };
-        let name = rustls::pki_types::ServerName::try_from("127.0.0.1").unwrap();
-        let Ok(Ok(mut tls)) = tokio::time::timeout(
-            Duration::from_millis(500),
-            self.connector().connect(name, tcp),
-        )
-        .await
-        else {
-            return false;
-        };
-        if !self.opts.ws_enabled {
-            return true;
-        }
-        let req = "POST /ws/ticket HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n";
-        if tls.write_all(req.as_bytes()).await.is_err() {
-            return false;
-        }
-        matches!(
-            tokio::time::timeout(Duration::from_millis(500), read_head(&mut tls)).await,
-            Ok(head) if head.split_whitespace().nth(1) == Some("401")
-        )
-    }
-
-    fn spawn_child(&mut self) {
-        let dir = self.tmp.path();
-        let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"))
-            .args([
+        let (config_path, socket, opts) = (&self.config_path, &self.socket, &self.opts);
+        let proc = crate::daemon_harness::spawn_ready(|ports| {
+            std::fs::write(config_path, config_toml(&dir, ports, opts)).unwrap();
+            let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"));
+            cmd.args([
                 "--config",
-                self.config_path.to_str().unwrap(),
+                config_path.to_str().unwrap(),
                 "--data-dir",
                 dir.to_str().unwrap(),
             ])
-            .env("XDG_RUNTIME_DIR", dir)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .expect("spawn mae-daemon");
-        self.child = Some(child);
+            .env("XDG_RUNTIME_DIR", &dir);
+            crate::daemon_harness::Launch {
+                cmd,
+                status_socket: socket.clone(),
+                log: dir.join("daemon.log"),
+                collab: true,
+                oauth: Some(probe.clone()),
+            }
+        })
+        .await;
+        self.addr = proc.ports.oauth_addr();
+        self.proc = Some(proc);
     }
 
-    /// Kill and start the same daemon again: same config, identity and data.
+    /// Kill and start the same daemon again: same config, identity and data
+    /// (on fresh ports: a released port is no more ours than any other).
     pub async fn restart(&mut self) {
-        if let Some(mut c) = self.child.take() {
-            c.kill().await.unwrap();
-            let _ = c.wait().await;
+        if let Some(mut p) = self.proc.take() {
+            p.stop().await;
         }
         self.start().await;
     }
@@ -241,15 +187,7 @@ impl Daemon {
 
     /// A TLS client trusting ONLY this daemon's certificate.
     fn connector(&self) -> tokio_rustls::TlsConnector {
-        let mut roots = rustls::RootCertStore::empty();
-        roots.add(self.cert_der.clone().into()).unwrap();
-        let provider = Arc::new(rustls::crypto::ring::default_provider());
-        let config = rustls::ClientConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()
-            .unwrap()
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-        tokio_rustls::TlsConnector::from(Arc::new(config))
+        crate::daemon_harness::pinned_connector(&self.cert_der)
     }
 }
 
@@ -521,17 +459,5 @@ pub fn kb_share(kb_id: &str, nodes: &[(&str, &str, &str)]) -> Value {
 }
 
 /// `daemon/status` over the KB socket.
-pub async fn daemon_status(socket: &Path) -> Value {
-    let mut stream = tokio::net::UnixStream::connect(socket)
-        .await
-        .expect("KB socket");
-    let (r, mut w) = stream.split();
-    let mut reader = tokio::io::BufReader::new(r);
-    let body =
-        json!({"jsonrpc": "2.0", "id": 1, "method": "daemon/status", "params": {}}).to_string();
-    mae_mcp::write_framed(&mut w, body.as_bytes(), Duration::from_secs(5))
-        .await
-        .unwrap();
-    let msg = mae_mcp::read_message(&mut reader).await.unwrap().unwrap();
-    serde_json::from_str::<Value>(&msg).unwrap()["result"].clone()
-}
+#[allow(unused_imports)]
+pub use crate::daemon_harness::daemon_status;
