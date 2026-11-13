@@ -17,8 +17,10 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
-use crate::doc_editors::{Authors, EditClock, EditStamp, EditorsSince, PendingChange, Writer};
-use crate::storage::{SeedNodeRow, SeedRecord, StorageBackend, StorageError};
+use crate::doc_editors::{
+    Authors, EditClock, EditStamp, EditorKind, EditorsSince, PendingChange, Writer,
+};
+use crate::storage::{Checkpoint, SeedNodeRow, SeedRecord, StorageBackend, StorageError};
 
 /// Built-in default for the per-update size gate (bytes), used when the operator
 /// has not set `[collab.sync] max_update_size_bytes` in `daemon.toml`. A fixed
@@ -399,6 +401,71 @@ impl DocStore {
     }
 
     /// The largest WAL id `doc_name` has been written at; 0 if never.
+    /// ADR-116 D2: cut a version of KB node `node_id` now: a named version,
+    /// or the state before a destructive act. Read and cut under the
+    /// document's lock, the one an update's WAL append holds, so the content
+    /// and the WAL range the version records agree. `None` when it would
+    /// repeat the previous version (never for a named one).
+    ///
+    /// Refused for a node storage has never seen (`DurableDocMissing`), and
+    /// for a document that does not read as its node (E2E ciphertext): a
+    /// version must hold the node's readable content.
+    pub async fn history_checkpoint(
+        &self,
+        kb_id: &str,
+        node_id: &str,
+        kind: mae_sync::kb::history::VersionKind,
+        name: Option<String>,
+        summary: Option<String>,
+    ) -> Result<Option<mae_sync::kb::history::HistoryEntry>, StorageError> {
+        let doc_name = mae_sync::kb_node_doc_name(kb_id, node_id);
+        if !self.has_durable_doc(&doc_name).await {
+            return Err(StorageError::DurableDocMissing(doc_name));
+        }
+        let entry = self.get_or_create_allowing_durable(&doc_name).await?;
+        let doc = entry.lock().await;
+        let content = mae_sync::kb::KbNodeDoc::from_bytes(&doc.sync.encode_state())
+            .map(|n| n.materialize())
+            .ok()
+            .filter(|c| c.id == node_id)
+            .ok_or_else(|| {
+                StorageError::Sqlite(format!("{doc_name} does not read as node {node_id}"))
+            })?;
+        let cp = Checkpoint {
+            kb_id: kb_id.to_string(),
+            node_id: node_id.to_string(),
+            kind,
+            content,
+            name,
+            summary,
+            restored_from: None,
+        };
+        let now = ((self.clock)() / 1000) as i64;
+        self.storage.history_cut(cp, now).await
+    }
+
+    /// Whether any version in `kb_id`'s history still holds content (ADR-116).
+    pub async fn history_holds_content(&self, kb_id: &str) -> Result<bool, StorageError> {
+        self.storage.history_holds_content(kb_id).await
+    }
+
+    /// `kb_id`'s history key, if it has one that is not released (ADR-116).
+    pub async fn history_key(
+        &self,
+        kb_id: &str,
+    ) -> Result<Option<mae_sync::kb::history::HistoryKey>, StorageError> {
+        self.storage.history_key(kb_id).await
+    }
+
+    /// Every version of a KB node, in `seq` order (ADR-116).
+    pub async fn history_list(
+        &self,
+        kb_id: &str,
+        node_id: &str,
+    ) -> Result<Vec<mae_sync::kb::history::HistoryEntry>, StorageError> {
+        self.storage.history_list(kb_id, node_id).await
+    }
+
     pub async fn wal_high_water(&self, doc_name: &str) -> Result<u64, StorageError> {
         self.storage.wal_high_water(doc_name).await
     }
@@ -452,6 +519,45 @@ impl DocStore {
     /// The stamp for an update applied now by `by`.
     fn stamp(&self, by: Writer<'_>) -> EditStamp {
         EditStamp::new(by, (self.clock)())
+    }
+
+    /// ADR-116 D2: the version a write by `editors` cuts before it lands (the
+    /// node as the session before it left it) when one of them is not in the
+    /// node's current session: a handoff. `None` for anything else, and for a
+    /// document that does not read as its own node: E2E ciphertext, whose
+    /// content the daemon cannot read (ADR-116 refuses history for it), or a
+    /// node with no content yet. Materializes only on a handoff.
+    async fn handoff(
+        &self,
+        doc_name: &str,
+        sync: &TextSync,
+        editors: &[(EditorKind, String)],
+    ) -> Result<Option<Checkpoint>, StorageError> {
+        let Some(mae_sync::DocAddress::KbNode { kb_id, node_id }) =
+            mae_sync::DocAddress::parse(doc_name)
+        else {
+            return Ok(None);
+        };
+        let session = self.storage.history_session(&kb_id, &node_id).await?;
+        if editors.iter().all(|e| session.contains(e)) {
+            return Ok(None);
+        }
+        let Ok(node) = mae_sync::kb::KbNodeDoc::from_bytes(&sync.encode_state()) else {
+            return Ok(None);
+        };
+        let content = node.materialize();
+        if content.id != node_id {
+            return Ok(None);
+        }
+        Ok(Some(Checkpoint {
+            kb_id,
+            node_id,
+            kind: mae_sync::kb::history::VersionKind::Edit,
+            content,
+            name: None,
+            summary: None,
+            restored_from: None,
+        }))
     }
 
     /// ADR-042 (#247): derive `kb_id`'s `(governance, valid_members)` with memoization. The
@@ -881,6 +987,10 @@ impl DocStore {
         // it, so an update's length does not bound how much the document grows.
         let (should_compact, wal_id) = {
             let mut doc = entry.lock().await;
+            // ADR-116 D2: decided before the update lands, since the version a
+            // handoff cuts is the node as the previous session left it.
+            let mut stamp = self.stamp(by.into());
+            stamp.checkpoint = self.handoff(doc_name, &doc.sync, &stamp.editors).await?;
             let (before, pending_before) = (doc.sync.payload_bytes(), doc.sync.pending_digest());
             doc.sync
                 .apply_update(update)
@@ -899,7 +1009,6 @@ impl DocStore {
             // WAL append (durability) before the update is acknowledged or relayed.
             // The editor record commits with it, or neither does — including any
             // held-back content this update integrated (`PendingChange`).
-            let mut stamp = self.stamp(by.into());
             stamp.pending = PendingChange::between(&pending_before, &doc.sync.pending_digest());
             let wal_id = match self
                 .storage
