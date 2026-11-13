@@ -393,6 +393,30 @@
             },
             "tagName": "div",
             "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "type": "text",
+                    "value": "parameters as text"
+                  }
+                ],
+                "properties": {},
+                "tagName": "p",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-special-block"
+              ],
+              "dataOrgBlock": "details",
+              "dataOrgParams": "\"><img src=x onerror=alert(1)> & <b>"
+            },
+            "tagName": "div",
+            "type": "element"
           }
         ],
         "properties": {

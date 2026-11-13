@@ -219,6 +219,11 @@ layer on it becomes the cheaper path.
   region was read by slicing the two bytes before it, which split a multi-byte character ending a
   headline's title (`"* ñ\n"`); it is now read byte by byte. The `.d.ts` declares `eol` and
   `"line_ending"`.
+- **O3.5** (`mae-org-v0.6.0`) a special block's parameters reach the output: `data-org-params` on
+  its `<div class="org-special-block">` (hast `dataOrgParams`) holds the text after the block name
+  (`En Windows` in `#+begin_details En Windows`), trimmed, as a plain attribute value. Only on a
+  block whose name is valid (`data-org-block`), and only when non-empty, at most 512 bytes and free
+  of control characters; otherwise it is absent. Affiliated `#+ATTR_*` keywords are still not read.
 - **O4** MAE switches ingest, export and read mode to it, with the repair path; the span-based write
   path lands on the same spans.
 - **O5** the remaining constructs by measured use, privacy-relevant regions first.
