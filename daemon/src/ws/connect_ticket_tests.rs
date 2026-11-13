@@ -61,8 +61,9 @@ fn tickets_are_256_random_bits_and_never_repeat() {
     let now = Instant::now();
     let a = store.mint(grant("SHA256:a"), now).unwrap();
     let b = store.mint(grant("SHA256:b"), now).unwrap();
-    assert_eq!(a.len(), 64, "32 bytes, hex: {a}");
-    assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
+    assert_eq!(a.len(), 43, "32 bytes, base64url without padding: {a}");
+    let bytes = data_encoding::BASE64URL_NOPAD.decode(a.as_bytes()).unwrap();
+    assert_eq!(bytes.len(), 32);
     assert_ne!(a, b);
 }
 

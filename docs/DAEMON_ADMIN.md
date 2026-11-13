@@ -413,7 +413,8 @@ mae-daemon token mint --config daemon.toml --sub 'SHA256:â€¦member-fingerprintâ€
 - **Credentials.** Exactly one, never in the URL: `Authorization: Bearer <token>` (native and
   headless clients), or a connect ticket for browsers, which cannot set that header: `POST
   /ws/ticket` with the bearer header returns `{"ticket", "expires_in": 30}`, and the browser opens
-  `new WebSocket(url, ["mae.v1", "mae.ticket." + ticket])`. A ticket is single-use (spent on first
+  `new WebSocket(url, ["mae.v1", "mae.ticket." + ticket])`. A ticket is 256 random bits written as
+  43 base64url characters, single-use (spent on first
   presentation, whatever happens next), valid 30 s, held in memory only (a restart voids it),
   bound to the minting token's identity and expiry and to the mint request's `Origin`, and at most
   8 may be unused per principal (`429`, `kind: "too_many_tickets"`). Unknown, used and expired tickets all get
@@ -447,6 +448,12 @@ mae-daemon token mint --config daemon.toml --sub 'SHA256:â€¦member-fingerprintâ€
   5 s is dropped. If an update for a document does not fit a session's event queue, that document
   is closed for the session (`session/doc_closed`, reason `slow_consumer`) rather than the update
   being lost; the client resyncs it (`sync/resync`, or `kb/join` for a KB).
+- **Presence.** `sync/awareness {kb_id, node_id, update}` (or `{doc, update}`) carries a
+  y-protocols awareness update for one document, after the same read check as the document itself.
+  Every other session on that document receives `sync/awareness {doc, kb_id, node_id, update,
+  principals}`, where `principals` maps each client id in the update to the sender's principal as
+  the daemon authenticated it; label a cursor by that, never by the update's own `user` fields. A
+  client id another principal already uses on that document is refused (`awareness_not_owned`).
 - **Keepalive.** The daemon pings every `ws_ping_secs` (default 30) so a proxy's idle timeout never
   closes a quiet session.
 - **CORS.** `POST /ws/ticket` answers a browser preflight from an origin in `ws_allowed_origins`
