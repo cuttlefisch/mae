@@ -2,6 +2,116 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.151] - 2026-11-13
+
+
+
+
+### Features
+
+- *(kb)* Derive org-literal-v1 aliases from ROAM_ALIASES on read ([67d138a](https://github.com/cuttlefisch/mae/commit/67d138a238c167c4a3f6e9bc25686b4c6b25bb52))
+
+### Bug Fixes
+
+- *(ws)* Conform the sync WebSocket to the web client's script ([637d5d1](https://github.com/cuttlefisch/mae/commit/637d5d1e25bbc5ada11754022048623a1e5d11f0))
+- *(daemon)* Kb export refuses a node it would write without some of its content ([c1077fb](https://github.com/cuttlefisch/mae/commit/c1077fb049a7b8f7ef7f3dbe1bb6723ac262f477))
+- *(daemon)* Retry a busy SQLite lock in milliseconds, not seconds ([fbdb88e](https://github.com/cuttlefisch/mae/commit/fbdb88ef2371565a8edb6f4bf8927e5a20f963f8))
+
+### Testing
+
+- *(ws)* Presence addressed to a KB node is gated by that KB ([c01bccf](https://github.com/cuttlefisch/mae/commit/c01bccf3039c6332cca9c85851e895b851389280))
+- *(daemon)* Pass the history methods through the benchmark backend ([e32d2ad](https://github.com/cuttlefisch/mae/commit/e32d2adc0463a834b6c4e0886189950199437503))
+- *(ws)* Declare the spawn harness the shared WebSocket helpers now use ([0409ddb](https://github.com/cuttlefisch/mae/commit/0409ddb2eb27c57700071f6d589c2e4bd3374211))
+
+### CI
+
+- *(daemon)* Build the test binaries before the timed test step ([1cea2ef](https://github.com/cuttlefisch/mae/commit/1cea2ef017bb9c77c0613a10dd3fbee64d23c3df))
+
+### Bench
+
+- *(daemon)* Measure the write cost of ADR-074 C1's change index ([8a0a9c9](https://github.com/cuttlefisch/mae/commit/8a0a9c99b099f8b09d9842db65c531703fbde0ae))
+
+### Spike
+
+- *(crypto-wasm)* MAE's envelope crypto as a WASM module ([73ad3e4](https://github.com/cuttlefisch/mae/commit/73ad3e48120ee8c7760329ad91181cd98a628b74))
+
+## [mae-org-v0.6.0] - 2026-11-13
+
+
+
+
+### Features
+
+- *(sync)* The shared node version-history module (ADR-116 P1) ([994f144](https://github.com/cuttlefisch/mae/commit/994f144823fa64e16ccc075c5479f4285f80ee7b))
+- *(daemon)* Cut a node version at each handoff (ADR-116 P2) ([251351e](https://github.com/cuttlefisch/mae/commit/251351e60b2b207d64574b4f2f2efe19887ac4ce))
+- *(daemon)* Kb/history.checkpoint cuts a named version (ADR-116 P2) ([5129d3f](https://github.com/cuttlefisch/mae/commit/5129d3f56c0723aaa9916bb2bab61a7eae29e5e1))
+- *(daemon)* Refuse switching a KB to E2E while its history holds plaintext ([6d98dd6](https://github.com/cuttlefisch/mae/commit/6d98dd617f3116458e36b39f446c7aa0414f2924))
+- *(sync,daemon)* Key each version's content hash (ADR-116 D3) ([f093c57](https://github.com/cuttlefisch/mae/commit/f093c5758d3ceb6dfe0223d6b8fb2bbd268cdf3b))
+- *(daemon)* Kb/history.list, get, diff and verify (ADR-116 P3) ([a530417](https://github.com/cuttlefisch/mae/commit/a530417d825c8a8621dfe60d12554ab0195b497c))
+- *(sync)* The signed history head (ADR-116 P3) ([35e4a67](https://github.com/cuttlefisch/mae/commit/35e4a67b447921c20b83f8d95ef51a52cc0a3d49))
+- *(daemon)* Signed history heads, checked by kb/history.verify (ADR-116 P3) ([e00fae2](https://github.com/cuttlefisch/mae/commit/e00fae2194f10173b6e95a748f9dc621266724fc))
+- *(daemon)* Mae-daemon kb history head|verify, and a head before each backup (ADR-116 P3) ([fa392c8](https://github.com/cuttlefisch/mae/commit/fa392c8f1d7851bb9e5ec54b43b51ab8787df498))
+- *(daemon)* Page kb/history.list newest first, and document version kinds (ADR-116 D7) ([96aa927](https://github.com/cuttlefisch/mae/commit/96aa927bb7fd69da8680c182e81b15699ed27c37))
+- *(org)* A special block's parameters reach the output; mae-org 0.6.0 ([7f1bc0c](https://github.com/cuttlefisch/mae/commit/7f1bc0cf000b24f4ae81beb31c5c0414883fd148))
+
+### Refactor
+
+- *(daemon)* One-line dispatch arm for kb/history.checkpoint ([1839739](https://github.com/cuttlefisch/mae/commit/1839739fb5fe4e8a26ad8173a3b1ef8bc6e0e3f0))
+
+### Documentation
+
+- *(adr)* ADR-116 Amendment 1, history across a switch to E2E ([297f1c2](https://github.com/cuttlefisch/mae/commit/297f1c25f2783140f905d6f9c43fd008edc7ef11))
+- *(adr)* ADR-116 Amendment 1 A4, a hold wins over a relayed switch ([34fd34c](https://github.com/cuttlefisch/mae/commit/34fd34c86e506c0db4a5f1b8a4e8b66f67416588))
+- *(adr)* ADR-116 Amendment 1, the keyed content hash closes A3 ([a7b3043](https://github.com/cuttlefisch/mae/commit/a7b304371adec237af91342e9e76567c181b07f3))
+- *(adr-074)* Propose Amendment 1, a per-KB change feed for many readers ([7a8e7f7](https://github.com/cuttlefisch/mae/commit/7a8e7f747277a2c2615552ff3ba53cf65635e13a))
+- *(adr-074)* Amendment 1 records the owner's decisions so far ([b329a21](https://github.com/cuttlefisch/mae/commit/b329a2101f1b24a1cf7473af9dcea8cdf26adfa9))
+- *(adr-074)* Amendment 1 open question 2 answered by measurement ([6da641e](https://github.com/cuttlefisch/mae/commit/6da641ec98257b9951ae708c1a885e7e88786e29))
+
+### Testing
+
+- *(daemon)* One spawn harness that proves its daemon is ready ([463c056](https://github.com/cuttlefisch/mae/commit/463c0563f8626e5fb96517c464cd60002b743d23))
+
+### CI
+
+- Pin the Rust toolchain to 1.99.1 ([78aa440](https://github.com/cuttlefisch/mae/commit/78aa440a53473303943403ca403bb27c2b5063d8))
+- Install clippy and rustfmt with the pinned toolchain ([f8dd8c0](https://github.com/cuttlefisch/mae/commit/f8dd8c012da28f07642402952d704ff5e9636629))
+
+## [mae-org-v0.5.1] - 2026-11-12
+
+
+
+
+### Bug Fixes
+
+- *(org)* Read the terminator before a section byte by byte; mae-org 0.5.1 ([3aa999e](https://github.com/cuttlefisch/mae/commit/3aa999e876c5f61e5d2f1b8869c6fccb2dc9e10c))
+
+### Documentation
+
+- *(adr)* ADR-116 node version history ([d4613b6](https://github.com/cuttlefisch/mae/commit/d4613b6c4d393ed8351d504688821c1c0a071512))
+- *(adr)* ADR-116 records the retention, setter and granularity decisions ([a746dd0](https://github.com/cuttlefisch/mae/commit/a746dd0dd97f76eab54fc39c0626bbb53c2ce8f1))
+- *(adr)* ADR-116 D6 states how rollback meets the field-type check ([a638b38](https://github.com/cuttlefisch/mae/commit/a638b387be9c582fadc9c4c39d0a02ba62c8eb4e))
+
+## [mae-org-v0.5.0] - 2026-11-11
+
+
+### ⚠ Breaking Changes
+- *(org)* An untitled heading's anchor is h--untitled; mae-org 0.5.0 ([db8e486](https://github.com/cuttlefisch/mae/commit/db8e4867b65f28a8d9204c09e12b028f9ac19e09))
+
+
+
+### Features
+
+- *(org)* An untitled heading's anchor is h--untitled; mae-org 0.5.0 ([db8e486](https://github.com/cuttlefisch/mae/commit/db8e4867b65f28a8d9204c09e12b028f9ac19e09))
+
+### Bug Fixes
+
+- *(org)* A section edit that may change the file's line ending needs a full parse ([853ec7e](https://github.com/cuttlefisch/mae/commit/853ec7e30047e5ebf15c419f68ad7822681b1577))
+
+### Testing
+
+- *(org)* Neutral wording in the line-ending test's comment ([1343e08](https://github.com/cuttlefisch/mae/commit/1343e08be0354b9d1ddbe03804e6bab139c27fbb))
+- *(org)* The API contract pins 0.5.0; ADR-112 records O3.4 ([5f46c7c](https://github.com/cuttlefisch/mae/commit/5f46c7ce59e14943286cff4fc6c1f9e5ea48945c))
+
 ## [0.14.150] - 2026-11-11
 
 
@@ -9,26 +119,27 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
-- *(daemon)* `kb member add|remove|list` for KBs this daemon owns ([da34d6d](https://github.com/cuttlefisch/mae/commit/da34d6da62acb8d0dbf944691527a5cc9abf0aa9))
 - *(daemon)* Sync WebSocket on the HTTPS listener, first cut (ADR-099 A1 B1-B4, B6) ([f2b35c7](https://github.com/cuttlefisch/mae/commit/f2b35c751397c9c52ac07e95946d8beedb66d589))
 - *(daemon)* Ws cap counts a joined KB once; CORS, keepalive, ticket kind ([af0e842](https://github.com/cuttlefisch/mae/commit/af0e842f0276c424af09423d1ac83fc77a919af5))
 - *(collab)* Presence in the y-protocols awareness encoding (ADR-099 A1 B5) ([0f6ae48](https://github.com/cuttlefisch/mae/commit/0f6ae4879d06ba934d492550c5444fba4f975767))
+- *(daemon)* `kb member add|remove|list` for KBs this daemon owns ([da34d6d](https://github.com/cuttlefisch/mae/commit/da34d6da62acb8d0dbf944691527a5cc9abf0aa9))
 
 ### Bug Fixes
 
-- *(daemon)* Kb member review fixes ([63bb9de](https://github.com/cuttlefisch/mae/commit/63bb9dea23535a0f3f9ef342891b24f5457673b0))
 - *(collab)* A full queue closes the document instead of losing an update ([230e0ca](https://github.com/cuttlefisch/mae/commit/230e0ca4a0b8c4377d7ca18b737d2d48a52daf45))
 - *(collab)* Review fixes for the sync WebSocket ([7a6c882](https://github.com/cuttlefisch/mae/commit/7a6c8825c1555c55d24f893934949e5ef5f94786))
+- *(daemon)* Kb member review fixes ([63bb9de](https://github.com/cuttlefisch/mae/commit/63bb9dea23535a0f3f9ef342891b24f5457673b0))
 
 ### Testing
 
-- *(daemon)* One line per refusal case in the member test ([5763426](https://github.com/cuttlefisch/mae/commit/5763426f0e0783dae9f8673632ebb5b285b4b1a7))
 - *(daemon)* Three writers converge through the sync WebSocket ([7480edb](https://github.com/cuttlefisch/mae/commit/7480edb176a15fc19a97258ba98f68ea0f18ed83))
 - *(daemon)* Split the WS convergence test's write and catch-up phases ([b2f45e9](https://github.com/cuttlefisch/mae/commit/b2f45e93ccddc73128600bacfd53dd9f1d8a5310))
+- *(daemon)* One line per refusal case in the member test ([5763426](https://github.com/cuttlefisch/mae/commit/5763426f0e0783dae9f8673632ebb5b285b4b1a7))
 
 ### Miscellaneous
 
 - Bump version to 0.14.149 ([23b28bc](https://github.com/cuttlefisch/mae/commit/23b28bcffe96009b1711ce67dbc6a31d007e25ad))
+- Bump version to 0.14.150 ([76b0b7b](https://github.com/cuttlefisch/mae/commit/76b0b7b8cc51b61da8c9909ee50844fce630cb29))
 
 ## [0.14.148] - 2026-11-11
 
