@@ -69,7 +69,7 @@ pub(super) async fn shared_kb() -> Env {
 
 /// `who` sends one `sync/update` made by `edit` on the node as the daemon holds
 /// it (a new node, when it has none), with their own fenced client id.
-async fn edit(
+pub(super) async fn edit(
     env: &mut Env,
     who: &str,
     edit: impl FnOnce(&mut KbNodeDoc) -> Vec<u8>,

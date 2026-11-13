@@ -66,6 +66,11 @@ struct ProjectionIndex {
     manifests: HashMap<String, HashSet<String>>,
     /// `node_id` → the KBs whose manifest lists it (reverse index for node routing).
     node_to_kbs: HashMap<String, HashSet<String>>,
+    /// `kb_id` → its collection's `body_format` when the manifest was last seen.
+    /// A node's projected aliases depend on it (`mae_sync::kb::aliases`), so a
+    /// node change reads it here rather than re-reading the collection doc per
+    /// node, and a format change re-projects the whole KB.
+    formats: HashMap<String, Option<String>>,
 }
 
 /// Drives the cozo projection from the doc_store change feed (ADR-029 B2/B3). A KB doc
@@ -133,6 +138,10 @@ impl Projector {
         if !known {
             return Ok(());
         }
+        let body_format = {
+            let idx = self.index.lock().unwrap_or_else(|e| e.into_inner());
+            idx.formats.get(kb_id).cloned().flatten()
+        };
         let doc = mae_sync::kb_node_doc_name(kb_id, node_id);
         let (state, _sv) = self
             .doc_store
@@ -140,7 +149,7 @@ impl Projector {
             .await
             .map_err(|e| format!("read '{doc}': {e}"))?;
         let store = self.stores.store_for(kb_id).await?;
-        project_node(&store, node_id, &state)
+        project_node(&store, node_id, &state, body_format.as_deref())
     }
 
     /// A collection changed → diff its manifest against the last-seen one: delete removed
@@ -154,13 +163,23 @@ impl Projector {
         let coll = mae_sync::kb::KbCollectionDoc::from_bytes(&coll_state)
             .map_err(|e| format!("parse 'kbc:{kb_id}': {e}"))?;
         let current: HashSet<String> = coll.list_nodes().into_iter().map(|(id, _)| id).collect();
+        let body_format = coll.body_format();
 
-        let prev = {
+        let (prev, prev_format) = {
             let idx = self.index.lock().unwrap_or_else(|e| e.into_inner());
-            idx.manifests.get(kb_id).cloned().unwrap_or_default()
+            (
+                idx.manifests.get(kb_id).cloned().unwrap_or_default(),
+                idx.formats.get(kb_id).cloned(),
+            )
         };
         let removed: Vec<String> = prev.difference(&current).cloned().collect();
-        let added: Vec<String> = current.difference(&prev).cloned().collect();
+        // A changed body format changes what every node derives (its aliases),
+        // so every node re-projects, not only the new ones.
+        let added: Vec<String> = if prev_format.is_some_and(|f| f != body_format) {
+            current.iter().cloned().collect()
+        } else {
+            current.difference(&prev).cloned().collect()
+        };
 
         let store = self.stores.store_for(kb_id).await?;
         for node_id in &removed {
@@ -176,7 +195,7 @@ impl Projector {
                 .encode_state_and_sv(&mae_sync::kb_node_doc_name(kb_id, node_id))
                 .await
             {
-                if let Err(e) = project_node(&store, node_id, &state) {
+                if let Err(e) = project_node(&store, node_id, &state, body_format.as_deref()) {
                     tracing::debug!(kb = %kb_id, node = %node_id, error = %e, "project: node failed");
                 }
             }
@@ -199,6 +218,7 @@ impl Projector {
                 .insert(kb_id.to_string());
         }
         idx.manifests.insert(kb_id.to_string(), current);
+        idx.formats.insert(kb_id.to_string(), body_format);
         Ok(())
     }
 
@@ -328,6 +348,8 @@ impl Projector {
         let coll = mae_sync::kb::KbCollectionDoc::from_bytes(&coll_state)
             .map_err(|e| format!("parse 'kbc:{kb_id}': {e}"))?;
         let truth: HashSet<String> = coll.list_nodes().into_iter().map(|(id, _)| id).collect();
+        let body_format = coll.body_format();
+        let body_format = body_format.as_deref();
 
         let store = self.stores.store_for(kb_id).await?;
         let mut report = DriftReport::default();
@@ -352,20 +374,20 @@ impl Projector {
             // `source_version` had drifted reported ZERO drift -- precisely the
             // fields ADR-093 added to the node document, invisible to the tier
             // whose whole job is to notice.
-            let expected = Node::from_crdt_doc(&doc, kind_from_id(node_id), NodeSource::Federation);
+            let expected = projected_node(&doc, node_id, body_format);
             match store.get_node(node_id) {
                 Ok(Some(actual)) => {
                     if projected_fields_differ(&actual, &expected) {
                         report.differing.push(node_id.clone());
                         if heal {
-                            project_node(&store, node_id, &state)?;
+                            project_node(&store, node_id, &state, body_format)?;
                         }
                     }
                 }
                 _ => {
                     report.missing.push(node_id.clone());
                     if heal {
-                        project_node(&store, node_id, &state)?;
+                        project_node(&store, node_id, &state, body_format)?;
                     }
                 }
             }
@@ -394,13 +416,17 @@ impl Projector {
 /// into the cozo query store: materialize the node (title/body/tags/kind) + FTS, then
 /// wire the **typed** link graph parsed from the node's source text (ADR-030: rel_type/
 /// weight/confidence live in the text). Deterministic + idempotent — re-projecting the
-/// same state yields the same node + link set.
-pub fn project_node(store: &CozoKbStore, node_id: &str, state: &[u8]) -> Result<(), String> {
+/// same state yields the same node + link set. `body_format` is the KB collection's;
+/// it decides where the node's aliases come from ([`projected_node`]).
+pub fn project_node(
+    store: &CozoKbStore,
+    node_id: &str,
+    state: &[u8],
+    body_format: Option<&str>,
+) -> Result<(), String> {
     let doc = mae_sync::kb::KbNodeDoc::from_bytes(state)
         .map_err(|e| format!("parse node doc '{node_id}': {e}"))?;
-    // Kind is a cozo-only projection field (the CRDT carries only content); derive it
-    // deterministically from the id namespace.
-    let node = Node::from_crdt_doc(&doc, kind_from_id(node_id), NodeSource::Federation);
+    let node = projected_node(&doc, node_id, body_format);
     // One transaction: the row, its typed links (ADR-030: rel/weight/confidence
     // from each link's inline `?query`, external URLs dropped) and its
     // `#+TRANSCLUDE` members — `CozoKbStore::derived_links` is the single
@@ -411,6 +437,25 @@ pub fn project_node(store: &CozoKbStore, node_id: &str, state: &[u8]) -> Result<
         .insert_node(&node)
         .map_err(|e| format!("project node '{node_id}': {e}"))?;
     Ok(())
+}
+
+/// The row CRDT truth derives for one node: what [`project_node`] writes and what
+/// [`Projector::reconcile_kb`] compares against, so the two cannot disagree.
+///
+/// Its `aliases` are the reader-facing ones (`mae_sync::kb::aliases::node_aliases`):
+/// in an `org-literal-v1` KB derived from the `ROAM_ALIASES` property, which is how
+/// they reach the FTS index and the stored `aliases_json`. That row is a projection,
+/// never written back into a node document, so this is not a second writable copy.
+fn projected_node(doc: &mae_sync::kb::KbNodeDoc, node_id: &str, body_format: Option<&str>) -> Node {
+    // Kind is a cozo-only projection field (the CRDT carries only content); derive it
+    // deterministically from the id namespace.
+    let mut node = Node::from_crdt_doc(doc, kind_from_id(node_id), NodeSource::Federation);
+    let derived = doc.aliases_in(body_format);
+    for problem in &derived.problems {
+        tracing::warn!(node = %node_id, %problem, "projection: node aliases");
+    }
+    node.aliases = derived.aliases;
+    node
 }
 
 /// Whether the projected row disagrees with what CRDT truth derives.
@@ -483,7 +528,7 @@ mod tests {
             "The rope buffer structure. See [[concept:buffer?w=0.8&c=0.9][the buffer]].",
             &["alpha".to_string()],
         );
-        project_node(&store, "concept:rope", &doc.encode()).unwrap();
+        project_node(&store, "concept:rope", &doc.encode(), None).unwrap();
 
         // The node is materialized with kind derived from the namespace.
         let n = store.get_node("concept:rope").unwrap().unwrap();
@@ -523,7 +568,7 @@ mod tests {
         let state = doc.encode();
 
         let project_all = |store: &CozoKbStore| -> (String, Vec<String>) {
-            project_node(store, "concept:x", &state).unwrap();
+            project_node(store, "concept:x", &state, None).unwrap();
             let title = store.get_node("concept:x").unwrap().unwrap().title;
             let mut dsts: Vec<String> = store
                 .links_from("concept:x")
@@ -710,3 +755,7 @@ mod tests {
 #[cfg(test)]
 #[path = "projector_gate_c_tests.rs"]
 mod gate_c_tests;
+
+#[cfg(test)]
+#[path = "projector_aliases_tests.rs"]
+mod aliases_tests;

@@ -55,6 +55,7 @@ mod backup_tests;
 mod connection_observability_tests;
 mod doctor_exit_code_tests;
 mod kb_query_agenda_health_tests;
+mod kb_query_aliases_tests;
 mod kb_query_cross_kb_isolation_tests;
 mod kb_query_error_kind_tests;
 mod kb_query_param_tests;
