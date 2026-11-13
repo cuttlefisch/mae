@@ -704,6 +704,13 @@ jobs:
           mold: "true"
       - name: clippy
         run: cd daemon && cargo clippy --all-targets -- -D warnings
+      # The test binaries are built in their own step so the 5-minute budget
+      # below times the tests alone. With the build inside it, the step ran
+      # 190-263s on main and timed out at 308s on a cold cache with every test
+      # already passed.
+      - name: build tests
+        run: cd daemon && cargo nextest run --no-run
+        timeout-minutes: 15
       - name: test
         # Issue #470: the daemon workspace's real socket tests already bind
         # ephemeral ports (127.0.0.1:0), confirmed by direct grep of
