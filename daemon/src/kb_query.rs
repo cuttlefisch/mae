@@ -297,7 +297,10 @@ async fn get(
             // editor shows it without replicating its CRDT. Tolerant of a v1
             // document: what it does not carry reads as null / empty, and
             // `schema_v` says which it is.
-            let mut out = node_fields::node_fields(doc_store, kb_id, node_id, &doc).await;
+            let body_format = coll.body_format();
+            let mut out =
+                node_fields::node_fields(doc_store, kb_id, node_id, &doc, body_format.as_deref())
+                    .await;
             out.extend(
                 json!({
                     "kb_id": kb_id,
@@ -760,6 +763,7 @@ async fn list(
     principal: Option<&str>,
 ) -> Result<Value, McpError> {
     let (coll, encryption) = load_gated(doc_store, kb_id, principal).await?;
+    let body_format = coll.body_format();
     let mut ids: Vec<(String, String)> = coll.list_nodes();
     ids.sort();
     let rest: Vec<(String, String)> = ids
@@ -781,7 +785,14 @@ async fn list(
             Encryption::E2e => json!({"id": id, "version": opaque_version(&state)}),
             Encryption::None => match KbNodeDoc::from_bytes(&state) {
                 Ok(doc) => {
-                    let mut fields = node_fields::node_fields(doc_store, kb_id, &id, &doc).await;
+                    let mut fields = node_fields::node_fields(
+                        doc_store,
+                        kb_id,
+                        &id,
+                        &doc,
+                        body_format.as_deref(),
+                    )
+                    .await;
                     fields.insert("id".into(), json!(id));
                     Value::Object(fields)
                 }

@@ -806,6 +806,17 @@ UTC, or null), `modified_at_basis` (`seed`: the git time; `edit`: a later edit r
 daemon; `unknown`), and `property_order` with `org_header` (`property_order`, `has_title_line`,
 `has_filetags_line`): what a reader needs to lay the header out as the file had it.
 
+**Aliases in an `org-literal-v1` KB come from `ROAM_ALIASES`.** A node's aliases there are derived
+on read from its `ROAM_ALIASES` property, kept verbatim as the file had it and read the way
+org-roam reads it (Emacs' `split-string-and-unquote`: space-separated, double-quoted when an alias
+holds whitespace, backslash escapes inside quotes). The property is the only place to write them;
+the node's `aliases` array must stay empty, and `kb export` refuses a node whose array is set. In a
+native KB the array is the source, as before. One rule (`mae_sync::kb::aliases`) feeds
+`kb/query.get`/`list` (`aliases`) and the Cozo projection the daemon's KB search uses. A value
+Emacs could not read (an unterminated quote, a bad escape) gives the node no aliases, as org-roam
+gets none, and `get`/`list` add `aliases_problems` saying why; so does an array found set anyway,
+whose values are not reported. Nothing copies the property into the array.
+
 ### Members of a seeded KB: `mae-daemon kb member`
 
 ```bash
