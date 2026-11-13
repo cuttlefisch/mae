@@ -829,7 +829,19 @@ Each node is written to its source path as N(F): unedited since the seed, a cano
 byte for byte. Properties keep their recorded order; one added since goes after them in sorted order,
 one removed is skipped, and both are printed as `note:` lines. Every file is checked first: a node
 whose text would seed back differently (a `#+title:` or a drawer typed into its body, an edited
-`ID`) is printed as `refused:` and not written, and the exit code is 1. Symlinks in the target are
+`ID`) is printed as `refused:` and not written, and the exit code is 1.
+
+A node that holds something the file cannot carry is refused the same way (`unrepresentable`),
+naming the fields, rather than written without it. The check builds the node the exported file
+would seed back to and compares it with the node, field by field: any difference refuses. In
+practice that is an `aliases` list (an org-literal-v1 alias is the `ROAM_ALIASES` property, which is
+exported, but the seed never fills the list), a todo state, a priority, structured links, a source
+version, or a `kind` that is not the node's `KIND` property value (one changed without the other).
+Fix the node, for example by moving the aliases into `ROAM_ALIASES` and clearing the list, and export
+again. Three fields are exempt because the seed sets them itself rather than reading them from the
+file: the provenance (always `user_org`), the creation time (from git history, kept in the seed
+record), and the header shape (the property order and whether the title and filetags lines exist,
+which the export writes from the node and reports in its notes). Symlinks in the target are
 never followed. Nodes created after the seed have no source path and are refused. Two source paths
 that are one file on a case- or normalization-insensitive filesystem (`A.org` and `a.org`, or NFC
 and NFD spellings) are both refused (`path_collision`), so neither overwrites the other on APFS,
