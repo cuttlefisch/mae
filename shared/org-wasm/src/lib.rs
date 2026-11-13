@@ -23,6 +23,7 @@
 //! block with its argument.
 
 pub mod api;
+mod custom_id;
 pub mod json;
 pub mod syntax;
 
