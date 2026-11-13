@@ -3325,7 +3325,7 @@ dependencies = [
 
 [[package]]
 name = "mae-org"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "html5ever",
  "mae-kb",
@@ -3337,7 +3337,7 @@ dependencies = [
 
 [[package]]
 name = "mae-org-wasm"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "mae-org",
  "proptest",
