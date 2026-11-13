@@ -43,6 +43,7 @@ graph TD
     mae_core --> mae_spell
     mae_core --> mae_sync
     mae_core --> mae_mcp
+    mae_crypto_wasm --> mae_sync
     mae_dap --> mae_core
     mae_effect_sandbox[mae-effect-sandbox]
     mae_export --> mae_babel
@@ -225,6 +226,20 @@ Source: `crates/core/src/lib.rs`
 | `redraw` | mod |
 | `VisualType` | enum |
 | `Mode` | enum |
+
+## mae-crypto-wasm
+
+Source: `shared/crypto-wasm/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `api` | mod |
+| `content_crypto` | mod |
+| `mae_crypto_alloc` | fn |
+| `mae_crypto_call` | fn |
+| `mae_crypto_result_ptr` | fn |
+| `mae_crypto_result_free` | fn |
+| `mae_crypto_live_bytes` | fn |
 
 ## mae-dap
 
