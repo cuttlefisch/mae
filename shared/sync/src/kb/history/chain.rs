@@ -4,8 +4,8 @@ use sha2::{Digest, Sha256};
 
 use super::codec::{entry_preimage, is_genesis, Writer};
 use super::{
-    decode_content, encode_content, Editor, Hash, HistoryEntry, MaterializedNode, VersionKind,
-    GENESIS,
+    decode_content, encode_content, Editor, Hash, HistoryEntry, HistoryKey, MaterializedNode,
+    VersionKind, GENESIS,
 };
 
 /// What a caller supplies for a new version; [`seal`] adds the sequence and
@@ -55,7 +55,7 @@ pub enum Broken {
     EntryHash,
     /// The content is not a canonical node encoding, or is another node.
     Content,
-    /// The content's digest is not `content_hash`.
+    /// The content's keyed hash is not `content_hash`.
     ContentHash,
     /// A combination [`seal`] never writes (a `Named` version with no name, a
     /// `Pruned` audit entry holding content, unsorted editors …).
@@ -65,12 +65,14 @@ pub enum Broken {
 }
 
 /// The entry `draft` makes as the next version of `node_id` in `kb_id`, after
-/// `prev` (`None` for the node's first).
+/// `prev` (`None` for the node's first), its content hashed under the KB's
+/// history `key`.
 pub fn seal(
     kb_id: &str,
     node_id: &str,
     prev: Option<&HistoryEntry>,
     draft: Draft,
+    key: &HistoryKey,
 ) -> Result<HistoryEntry, SealError> {
     if let Some(p) = prev {
         if p.kb_id != kb_id || p.node_id != node_id {
@@ -86,7 +88,7 @@ pub fn seal(
     editors.sort();
     editors.dedup();
     let (content, content_hash) = match &draft.content {
-        Some(node) => (Some(encode_content(node)), node.digest()),
+        Some(node) => (Some(encode_content(node)), key.content_hash(node)),
         None => (None, GENESIS),
     };
     let mut entry = HistoryEntry {
@@ -154,11 +156,17 @@ fn shape_fault(e: &HistoryEntry) -> Option<&'static str> {
 /// Checks a node's whole chain, in `seq` order, and that it ends at `head`
 /// (`(seq, entry_hash)` of its last entry, `(0, GENESIS)` for none) when one
 /// is given. Without a head, a removed last entry cannot be seen.
+///
+/// With the KB's history `key`, each held content is checked too: canonical,
+/// this node's, and hashing to its `content_hash`. Without it (an E2E KB after
+/// the switch, whose content the checker cannot read) the chain is checked and
+/// the content is not.
 pub fn verify_chain(
     kb_id: &str,
     node_id: &str,
     entries: &[HistoryEntry],
     head: Option<(u64, Hash)>,
+    key: Option<&HistoryKey>,
 ) -> Result<(), VerifyError> {
     let mut prev = GENESIS;
     for (i, e) in entries.iter().enumerate() {
@@ -178,12 +186,12 @@ pub fn verify_chain(
         if e.compute_hash() != e.entry_hash {
             return Err(fail(Broken::EntryHash));
         }
-        if let Some(bytes) = &e.content {
+        if let (Some(bytes), Some(key)) = (&e.content, key) {
             let node = decode_content(bytes).map_err(|_| fail(Broken::Content))?;
             if node.id != node_id {
                 return Err(fail(Broken::Content));
             }
-            if node.digest() != e.content_hash {
+            if key.content_hash(&node) != e.content_hash {
                 return Err(fail(Broken::ContentHash));
             }
         }
