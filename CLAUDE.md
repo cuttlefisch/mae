@@ -695,7 +695,9 @@ redesign / KB read mode / a live network-shareable HTML KB view on the daemon + 
 transport / `kb-export-subgraph-html` as a real module rather than a Scheme reimplementation /
 untranslated-node fallback signalling / guidance-as-colophon / configurable layout constants
 (**080 superseded** by 081's real JSON injection) / `required_tag` hard filtering) — note 069–074
-are **accepted design only, not built**, **ADR-075** (language/LSP registry consolidation +
+are **accepted design only, not built** (ADR-074's *proposed* Amendment 1 turns its SSE push into a
+per-KB change feed for many readers: thin notices from one index written in the WAL transaction,
+resumable cursors, per-batch access checks, shared with ADR-099's socket), **ADR-075** (language/LSP registry consolidation +
 Terraform/Dockerfile/Ansible/Helm support), **ADR-076** (the system of bundled KBs), **ADR-083**
 (`kb_agenda` becomes federation-aware), and the **pre-v0.15 audit set ADR-084–091** (permission
 tiers enforced *at the effect* against a compiler-proven allow-list / `ToolCategory` describes
