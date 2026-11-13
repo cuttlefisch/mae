@@ -100,6 +100,18 @@ pub(crate) fn is_valid_block_name(name: &str) -> bool {
     token(name, 64, b"_-")
 }
 
+/// Whether a special block's parameters may be emitted as `data-org-params`:
+/// trimmed, non-empty, at most 512 bytes, with no control characters. The
+/// value is plain text (escaped like any attribute), never markup.
+/// `Block::parameters` already trims and never returns an empty string; the
+/// first two conditions hold the attribute's grammar whatever the parser gives.
+pub(crate) fn is_valid_block_params(params: &str) -> bool {
+    !params.is_empty()
+        && params.len() <= 512
+        && params.trim() == params
+        && !params.chars().any(char::is_control)
+}
+
 fn token(s: &str, max: usize, extra: &[u8]) -> bool {
     let b = s.as_bytes();
     !b.is_empty()
