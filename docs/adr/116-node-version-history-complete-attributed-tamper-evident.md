@@ -177,7 +177,7 @@ as the seed's writes.
 
 | Method | Needs | What it does |
 |---|---|---|
-| `kb/history.list` | Read | The versions' metadata, without content |
+| `kb/history.list` | Read | The versions' metadata, without content, newest first, a page at a time (`limit`, `before_seq`, `next`) |
 | `kb/history.get` | Read | One version's content and its verification status |
 | `kb/history.diff` | Read | The difference between two versions |
 | `kb/history.verify` | Read | Verifies a node or the whole KB |
