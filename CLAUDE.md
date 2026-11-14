@@ -721,7 +721,9 @@ clients — the membership subject is a stable *member* key, not a device key; d
 recovery-key-sealed secret storage; the OIDC-principal↔fingerprint binding lives in daemon state
 *outside* the CRDT so an IdP migration rewrites a mutable table rather than an unrewritable signed
 log; AD groups gate the session while CRDT membership stays owner-authored. *Proposed, phased,
-blocked on #176*; evidence in `docs/research/098-*.md`), **ADR-099** (bidirectional sync transport
+blocked on #176* except Phase C's read path, which Amendment 1 brings forward and which also
+defines who counts as a person (an IdP sign-in on a binding flagged `person`; everything else is an
+agent); evidence in `docs/research/098-*.md`), **ADR-099** (bidirectional sync transport
 for browser clients — WebSocket on the existing OAuth listener, re-framing MAE's own already
 doc-scoped envelope rather than speaking y-protocols, so one session multiplexes N documents;
 *accepted, design*, supersedes ADR-074 D1 for the write path only; its *accepted* Amendment 1 corrects D3 —

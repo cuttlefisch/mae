@@ -1,6 +1,7 @@
 # ADR-098: Durable identity for network clients — devices, OIDC, and the binding table
 
-**Status:** Proposed. Phased (A–E); Phase A is a prerequisite fix, not new design.
+**Status:** Proposed. Phased (A–E); Phase A is a prerequisite fix, not new design. Amendment 1
+(2026-11-14) brings Phase C forward for the read path and defines who counts as a person.
 **Depends on:** ADR-097 (Browser MAE is a KB surface), ADR-017/018 (asymmetric peer auth +
 identity-anchored access control), ADR-026 (signed, hash-chained membership op-log), ADR-036/037
 (signed content ops + E2E content encryption), ADR-040/041 (identity rotation/rebind + key
@@ -14,7 +15,7 @@ ADR-067 (replication policy), ADR-060 (multi-tenancy).
 `098-device-secret-storage-and-revocation-spike.md`,
 `098-revocation-forward-secrecy-spike.md`,
 `098-revocation-write-fencing-spike.md`.
-**Blocked on:** issue #176 (Phase A).
+**Blocked on:** issue #176 (Phase A), for Phases B, D and E. Phase C's read path is not (Amendment 1).
 **Tracking:** issue TBD.
 
 ## Context
@@ -177,7 +178,7 @@ for everyone else.
 
 - **A — fix #176** (prerequisite). Members retain all wrapped keys; `open_new_ops` tries each per blob. No new design; the spike already demonstrated the fix's shape and safety against the shipped API.
 - **B — MAE secret storage.** The sealed-blob format, a properly specified recovery-key derivation *with a checksum so a mistyped key is caught before it produces a wrong key* (Matrix uses base58 + HKDF + a MAC check; the spike's `sha2(domain ‖ recovery)` is a placeholder, not a proposal), and the daemon's key-blind storage endpoints.
-- **C — binding table + session gate.** D3's `principal ↔ fingerprint` table, D4's group-claim session authorization, and the enrolment flow that registers a fingerprint against a principal.
+- **C — binding table + session gate** (built first, for the read path: Amendment 1). D3's `principal ↔ fingerprint` table, D4's group-claim session authorization, and the enrolment flow that registers a fingerprint against a principal.
 - **D — browser device enrolment, end to end.** OIDC login → fetch blob → recovery-key prompt → unlock → non-extractable import → act as the member. Including the browser-storage-eviction path (see Consequences).
 - **E — per-device revocation via device certificates.** Deferred; own ADR. Only start once a real operational need appears, since it reopens the op-log's verification rules.
 
@@ -235,3 +236,126 @@ One further inherited uncertainty, stated rather than buried: **whether a non-ow
 author a content-key rotation** was inferred from the wrap-authorship rule, not measured. D5 assumes
 they cannot. If that inference is wrong, D5's cost table is wrong in the user's favour, and the
 Phase E deferral should be revisited.
+
+## Amendment 1 (2026-11-14): Phase C first, for reads; who counts as a person; Phase B settled
+
+Browser MAE's reader (ADR-097) must enforce per-person, per-KB access. Today it can only do so for a
+person whose key is already a member and who presents a daemon-issued token: an IdP session names
+nobody the daemon's membership knows. This amendment brings Phase C forward for that case, defines
+the person/agent distinction ADR-113 already relies on but this ADR never stated, and records the
+three Phase B questions decided on 2026-11-13.
+
+### C0. Phase C is built before #176, for the read path
+
+Phase A (#176) is a prerequisite for **D5**: rotation is the device-loss path, and without retained
+keys every rotation strands history. Phase C (binding table + session gate) involves no rotation and
+no content key, so #176 does not block it. The binding gives an IdP session exactly the authority
+`kb/query.self_token` already gives whoever holds the same key — D3 calls that token "the same
+binding in the other direction" — so it adds no capability over what exists, only a second way to
+present it.
+
+The scope is the read path: `kb/query.*`, including `kb/query.my_kbs`. Writes over an IdP session
+wait for the hub to verify op signatures (#727, ADR-111 D4), as every HTTPS write does. On an E2E
+KB a bound session sees what that member's self-issued token sees — ciphertext and its own wrapped
+key — and cannot decrypt in a browser until Phase D.
+
+A person with no key at all (browser only) is not served by C0; they wait for Phases B and D.
+
+### C1. The principal is typed
+
+An IdP token's subject is never compared with a member fingerprint. The listener resolves every
+bearer token to one of:
+
+- **a member fingerprint** — a self-issued token's principal, or an IdP token whose `(iss, sub)` is
+  bound in the D3 table;
+- **an unbound IdP subject** — any other IdP token, carried as `(iss, sub)` in a form no fingerprint
+  can equal. It is a member of nothing, so `kb_access` denies it every KB, and `kb/query.my_kbs`
+  answers it with an empty list.
+
+This is ADR-052 D4's typed principal (ADR-111 P2), required here because C0 is the first place an
+IdP subject and a fingerprint meet.
+
+This supersedes one path ADR-067 Phase D left open: accepting an external token whose
+`principal_claim` already carries the member's fingerprint. Whether that is safe depends on who can
+influence the claim at the IdP, which the daemon cannot see. A deployment that relied on it binds
+its subjects instead (C2), and the binding is the only way an IdP token reaches a fingerprint.
+
+### C2. Binding is by proof of possession, one subject to one key
+
+1. With an IdP bearer token, the person asks the listener for a challenge. A self-issued token is
+   refused: its principal already is a fingerprint.
+2. The daemon returns a single-use challenge, valid for minutes, covering a domain-separation tag,
+   `iss`, `sub`, the listener's audience, the fingerprint being claimed and a random nonce.
+3. The person signs it with the member key. The program that holds the IdP session (the browser,
+   for Browser MAE) and the one that holds the key (native MAE, or a CLI) need not be the same; the
+   challenge and the signature are short enough to carry between them.
+4. The daemon checks the signature against the claimed public key, that the key's fingerprint is the
+   one in the challenge, that the challenge is unexpired and unused, and that the token presenting
+   the signature has the same `(iss, sub)`.
+
+Constraints, each tested: one `(iss, sub)` is bound to at most one fingerprint and one fingerprint
+to at most one `(iss, sub)` (D3's "never bind a fingerprint another principal holds"); replacing a
+binding takes an explicit unbind first; binding grants no membership — membership stays
+owner-authored (D4).
+
+The binding table, the person flag (C3) and unbinding are administered by a **local** daemon CLI,
+like the token CLI, never by a network method, an MCP tool or Scheme (principle #16). Whether that
+CLI may also bind without proof of possession, for development and tests, is decided by the owner
+of this ADR and recorded here; the case for it is that a local operator can already mint a token
+for any fingerprint.
+
+The D4 session gate is part of C: an optional set of required group claims, checked on every
+request before the binding is looked up. With none configured there is no group gate.
+
+### C3. Who counts as a person
+
+A request counts as a **person** only when both hold:
+
+1. its credential is an IdP token, from an interactive sign-in; and
+2. the bound fingerprint is flagged `person` in the binding table.
+
+Every other request counts as an **agent**: self-issued tokens, the native editor's mTLS session,
+and IdP sessions whose binding is unflagged. A binding is `agent` until an administrator sets it.
+This is the "whether a principal is an agent is daemon state" ADR-113 relies on, and it is what a
+version history record (ADR-116) and a publication approval (ADR-113) read.
+
+Both conditions are needed because an agent working in a person's editor signs with that person's
+key (D1, D2): a flag on the key alone would make it a person. Requiring an IdP sign-in is what an
+agent in the editor does not have.
+
+Stated rather than discovered later:
+
+- **A person's own edits from native MAE count as agent** until native clients sign in through the
+  IdP (ADR-111 P4). A rule that "only a person may clear an agent's change" therefore applies to
+  them too.
+- **An agent driving a browser that holds a person's live IdP session counts as that person.** The
+  daemon cannot tell them apart; that boundary belongs to the IdP and the device.
+
+### C4. Phase B decisions (2026-11-13)
+
+- **Two secrets.** D2's secret-storage recovery key and ADR-040's offline recovery key `R` are
+  different secrets with different jobs: the first unseals the member key on a new device, the
+  second signs a `Rebind` when the member key is lost or burned and must stay offline and unused.
+  The interface never presents them as one, and names them differently.
+- **Owner recoverability.** An owner registers `R` at enrolment, enforced by the interface; no
+  co-owner design now. A sole owner without `R` is not an offered state.
+- **Browser cryptography.** The envelope, wrap and sealed-blob code in the browser is MAE's own Rust
+  crypto compiled to WASM, published with the same signed provenance as the `mae-org` WASM. An
+  audited JavaScript implementation serves only as a differential check in tests. A second, AES-GCM
+  envelope for WebCrypto is rejected: it would fork the wire format that signed ops and wraps commit
+  to.
+
+### C5. Verification added
+
+On top of Phase C's existing list:
+
+- **Typed principal.** An IdP token whose `sub` is byte-identical to a member's fingerprint string
+  is denied that member's KBs, and `kb/query.my_kbs` answers it with an empty list.
+- **Proof of possession.** Refused: a signature by another key; a challenge for another fingerprint,
+  subject or audience; an expired challenge; a replayed one; a self-issued token asking for a
+  challenge; a second subject binding an already-bound fingerprint, and a second fingerprint for an
+  already-bound subject.
+- **Kind.** A self-issued token for a `person`-flagged fingerprint is an agent; an IdP session bound
+  to an unflagged fingerprint is an agent; only an IdP session on a flagged binding is a person. No
+  network method changes a flag (a raw-byte scan of every method's refusal, as Phase C requires).
+- **Unbinding.** After an unbind, the next request with the same IdP token is an unbound subject.

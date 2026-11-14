@@ -78,7 +78,8 @@ open — and sends keepalive pings under proxy idle timeouts.
 - **P2 — integrity.** D4; JWKS accepts ES256/EdDSA as well as RS256; a typed principal (ADR-052 D4).
 - **P3 — one sync transport.** D6, native and headless clients included.
 - **P4 — SSO.** D3: IdP as issuer; PKCE + loopback for desktops, device flow or service token for
-  headless; ADR-098 binding and group gate (after #176).
+  headless; ADR-098 binding and group gate (after #176, except the read path, which ADR-098
+  Amendment 1 brings forward).
 - **P5 — browser and confidentiality.** ADR-100's surface; E2E for sensitive KBs.
 
 ## What exists (2026-09)
