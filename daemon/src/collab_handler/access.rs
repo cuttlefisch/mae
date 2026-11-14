@@ -24,6 +24,42 @@ pub(crate) async fn kb_access(
     kb_access_with_coll(doc_store, kb_id, principal, op, transport, None).await
 }
 
+/// `principal`'s role in `kb_id` and its replication policy, from the same source
+/// [`kb_access`] decides on: the SIGNED op-log under its declared governance for an
+/// anchored KB, else the locally-authoritative `member_roles`. `None` = not a member.
+///
+/// Shared with `kb/query.my_kbs` so the role a caller is SHOWN can never come from
+/// a different source than the role they are GATED on (principle #8): an anchored
+/// KB's unsigned `member_roles` may disagree with its op-log.
+pub(crate) async fn member_role(
+    doc_store: &DocStore,
+    kb_id: &str,
+    coll: &KbCollectionDoc,
+    principal: &str,
+) -> (Option<SyncRole>, ReplicationPolicy) {
+    match doc_store.kb_anchor(kb_id).await {
+        Some(anchor) if coll.oplog_head().is_some() => {
+            // ADR-026 §A4: read the owner-declared governance from the op-log, then
+            // derive membership under it — so a `Quorum{m}` KB enforces m-of-n
+            // co-signed removals (and an Owner removed by quorum loses access here)
+            // exactly as every honest peer derives it. `SingleOwner` (the default)
+            // reduces to the prior single-author rule.
+            // ADR-042 (#247): membership derivation is memoized in `derived_membership` — an
+            // unchanged op-log (state-vector) + anchor + timebox horizon returns the cached set
+            // without re-decoding the whole op-log. This gate runs on every anchored/E2E access;
+            // the cache is what keeps it O(1) at membership-churn scale.
+            let dm_scope = doc_store
+                .derived_membership(kb_id, coll, &anchor, now_unix())
+                .await;
+            match dm_scope.members.get(principal) {
+                Some(m) => (Some(m.role), m.replication),
+                None => (None, ReplicationPolicy::Full),
+            }
+        }
+        _ => (coll.role_of(principal), ReplicationPolicy::Full),
+    }
+}
+
 /// As [`kb_access`], but accepts a pre-loaded collection snapshot so a handler
 /// running several gates on one request loads `kbc:{kb_id}` once. `None` loads
 /// itself — identical to [`kb_access`]. The `None`-principal (loopback) case
@@ -58,28 +94,7 @@ pub(crate) async fn kb_access_with_coll(
     // explicit, named scope boundary, not a silent gap: retrofitting tamper-evidence
     // onto the unsigned `member_roles` map would be the exact spoofing risk ADR-067
     // Phase A's signed-field design avoids).
-    let dm_scope;
-    let (role, replication) = match doc_store.kb_anchor(kb_id).await {
-        Some(anchor) if coll.oplog_head().is_some() => {
-            // ADR-026 §A4: read the owner-declared governance from the op-log, then
-            // derive membership under it — so a `Quorum{m}` KB enforces m-of-n
-            // co-signed removals (and an Owner removed by quorum loses access here)
-            // exactly as every honest peer derives it. `SingleOwner` (the default)
-            // reduces to the prior single-author rule.
-            // ADR-042 (#247): membership derivation is memoized in `derived_membership` — an
-            // unchanged op-log (state-vector) + anchor + timebox horizon returns the cached set
-            // without re-decoding the whole op-log. This gate runs on every anchored/E2E access;
-            // the cache is what keeps it O(1) at membership-churn scale.
-            dm_scope = doc_store
-                .derived_membership(kb_id, coll, &anchor, now_unix())
-                .await;
-            match dm_scope.members.get(principal) {
-                Some(m) => (Some(m.role), m.replication),
-                None => (None, ReplicationPolicy::Full),
-            }
-        }
-        _ => (coll.role_of(principal), ReplicationPolicy::Full),
-    };
+    let (role, replication) = member_role(doc_store, kb_id, coll, principal).await;
     // Per-KB transport policy (ADR-018/025): a KB is reachable over a transport
     // only if its policy exposes it there — EXCEPT the owner, who always reaches
     // their own KB (e.g. their local editor over the hub socket) and is the one who
