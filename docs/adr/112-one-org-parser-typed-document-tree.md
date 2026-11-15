@@ -241,6 +241,10 @@ layer on it becomes the cheaper path.
   as the headline's (lowercase included; not one after a blank line), with every property line in
   file order, so the caller applies Org's last-one-wins itself. Optional byte ranges scope it
   as in the `CUSTOM_ID` ops.
+- **O3.8** (`mae-org-v0.9.0`) `RenderOptions.toplevel_hlevel` (`render.toplevel_hlevel`, 1–6): the
+  HTML level a top-level headline renders at, Org's `org-html-toplevel-hlevel`. Org's ox-html uses
+  2, rendering `#+TITLE` as the page's `<h1>`; MAE's default stays 1, so no rendering changes unless
+  a host asks. Only the tag moves: `org-level-N`, sections and anchors follow the stars.
 - **O4** MAE switches ingest, export and read mode to it, with the repair path; the span-based write
   path lands on the same spans.
 - **O5** the remaining constructs by measured use, privacy-relevant regions first.

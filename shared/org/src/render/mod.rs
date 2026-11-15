@@ -153,6 +153,37 @@ pub struct RenderOptions {
     /// Render property drawers as `<dl class="org-properties">`. Default
     /// off, as in Org's export; [`Rendered::nodes`] carries them either way.
     pub property_drawers: bool,
+    /// The HTML level a top-level headline renders at. See [`ToplevelHlevel`].
+    pub toplevel_hlevel: ToplevelHlevel,
+}
+
+/// The HTML heading level a top-level headline renders at: Org's
+/// `org-html-toplevel-hlevel`. A headline with `n` stars renders as
+/// `h{min(6, n + level - 1)}`. Only the tag changes: the `org-level-N` class,
+/// the section structure and the anchors follow the stars, whatever the level.
+///
+/// The default is 1, MAE's behaviour so far. Org's ox-html defaults to 2,
+/// because it renders `#+TITLE` as the page's `<h1>`; a host that renders the
+/// title that way passes 2. Only 1 to 6 exist, so a level outside them cannot
+/// be built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ToplevelHlevel(u8);
+
+impl ToplevelHlevel {
+    /// `Some` for 1 to 6, `None` otherwise.
+    pub fn new(level: u8) -> Option<Self> {
+        (1..=6).contains(&level).then_some(Self(level))
+    }
+
+    pub fn get(self) -> u8 {
+        self.0
+    }
+}
+
+impl Default for ToplevelHlevel {
+    fn default() -> Self {
+        Self(1)
+    }
 }
 
 /// Where a KB link goes: caller-supplied data, never a callback (no
