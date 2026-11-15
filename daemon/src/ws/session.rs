@@ -334,11 +334,12 @@ impl Driver {
         {
             return self.principal_changed();
         }
-        self.handle.set_deadline(vp.expires_at);
+        let deadline = credential::session_deadline(&vp, &self.listener);
+        self.handle.set_deadline(deadline);
         self.renew_sent = false;
         let flow = self
             .send_json(
-                json!({"jsonrpc": "2.0", "id": id, "result": {"auth_deadline": rfc3339(vp.expires_at)}}),
+                json!({"jsonrpc": "2.0", "id": id, "result": {"auth_deadline": rfc3339(deadline)}}),
             )
             .await;
         self.handle.reauthorize().await;

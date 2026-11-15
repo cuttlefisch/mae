@@ -50,6 +50,8 @@ pub struct IdpOpts {
     pub issuer: String,
     pub allowed_groups: Vec<String>,
     pub accept_bound_idp: bool,
+    /// `ws_max_idp_session_secs`; `None` leaves the daemon's default.
+    pub max_session_secs: Option<u64>,
 }
 
 impl IdpOpts {
@@ -66,7 +68,11 @@ impl IdpOpts {
             iss = self.issuer,
             groups = groups.join(", "),
             accept = self.accept_bound_idp,
-        )
+        ) + self
+            .max_session_secs
+            .map(|n| format!("ws_max_idp_session_secs = {n}\n"))
+            .unwrap_or_default()
+            .as_str()
     }
 }
 

@@ -48,6 +48,9 @@ pub(crate) struct TicketGrant {
     /// The minting token's `exp` (unix seconds): the session's deadline.
     pub token_expires_at: u64,
     pub origin: Option<String>,
+    /// Minted by a bound identity-provider token: redemption re-reads the
+    /// binding (ADR-099 Amendment 2, E1).
+    pub bound_idp: bool,
 }
 
 /// The principal already holds its quota of unused tickets.

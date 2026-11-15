@@ -14,7 +14,9 @@
 //! a session: its principal is a typed unbound subject, a member of nothing,
 //! and the socket has no use for one. Refuse it here, never downstream.
 
-use mae_daemon::oauth_self_issue::{Credential, ValidatedPrincipal, SELF_ISSUED_KID};
+use mae_daemon::oauth_self_issue::{
+    unbound_principal, Credential, PrincipalKind, ValidatedPrincipal, SELF_ISSUED_KID,
+};
 use mae_mcp::protocol::McpError;
 
 use super::now_unix;
@@ -89,6 +91,51 @@ pub(super) async fn socket_principal(
         return Err(Refused::Expired);
     }
     Ok(vp)
+}
+
+/// The deadline a session or renewal on `vp` gets (Amendment 2, E2): the
+/// token's expiry, and for a bound identity-provider token no later than
+/// `ws_max_idp_session_secs` from now. A binding is re-read only at a renewal,
+/// and an IdP's own token lifetime is not this daemon's to choose, so the cap
+/// is what bounds how long an unbind or a rebind takes to reach an open
+/// socket. Self-issued sessions keep their token's expiry.
+pub(super) fn session_deadline(vp: &ValidatedPrincipal, listener: &Listener) -> u64 {
+    let cap = listener
+        .ws
+        .as_ref()
+        .map_or(0, |ws| ws.settings.max_idp_session_secs);
+    if vp.credential != Credential::IdpBound || cap == 0 {
+        return vp.expires_at;
+    }
+    vp.expires_at.min(now_unix().saturating_add(cap))
+}
+
+/// At a ticket's redemption (Amendment 2, E1): does `(issuer, subject)` still
+/// resolve to `principal`? The binding table is read off the runtime, as on
+/// every route; a table that cannot be read fails closed.
+pub(super) async fn still_bound(
+    listener: &Listener,
+    issuer: &str,
+    subject: &str,
+    principal: &str,
+) -> Result<bool, Refused> {
+    let probe = ValidatedPrincipal {
+        principal: unbound_principal(issuer, subject),
+        audience: Vec::new(),
+        expires_at: 0,
+        issuer: issuer.to_string(),
+        subject: subject.to_string(),
+        credential: Credential::IdpUnbound,
+        kind: PrincipalKind::Agent,
+    };
+    let bindings = listener.bindings.clone();
+    let now = mae_daemon::identity_binding::resolve_off_runtime(probe, bindings)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "binding table unreadable at ticket redemption");
+            Refused::Auth(AuthFailure::Unavailable)
+        })?;
+    Ok(now.credential == Credential::IdpBound && now.principal == principal)
 }
 
 /// `oauth.ws_accept_bound_idp`, as resolved into the socket's settings.

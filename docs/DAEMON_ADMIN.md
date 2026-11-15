@@ -501,6 +501,7 @@ ws_allowed_origins = ["https://mae.example.com"]  # browser Origins, EXACT match
 # ws_max_frame_bytes = 1048576                  # largest inbound frame; unset = max_request_body_bytes
 # ws_max_outbound_bytes = 15029592              # largest message sent; unset = derived from max_document_size_bytes
 # ws_accept_bound_idp = false                   # pilot: also accept BOUND identity-provider tokens (below)
+# ws_max_idp_session_secs = 900                 # a bound-IdP session renews at least this often; 0 = no cap
 ```
 
 **`ws_accept_bound_idp` (ADR-099 Amendment 2) is for a pilot with short IdP token lifetimes.** With
@@ -508,14 +509,21 @@ it on, `/ws` and `/ws/ticket` also accept an identity-provider token (`jwks_url`
 `(iss, sub)` is bound to a member key (*Identity binding* above). The session's principal is the
 **bound fingerprint**, exactly as a self-issued token for that fingerprint would carry, so
 membership, roles, the epoch fence and per-frame authorization apply unchanged; a ticket minted with
-such a token is bound to that fingerprint. The group gate (`allowed_groups`) runs first, as on every
+such a token is bound to that fingerprint, and the binding is read again when the ticket is
+presented: unbound or rebound inside its 30 s, it opens nothing (the usual `ticket_invalid`; a fresh
+mint then says `identity_not_bound`). The group gate (`allowed_groups`) runs first, as on every
 route (`403`, `group_required`). A token whose subject is **not bound** is refused (`403`, kind
 `identity_not_bound`) and no socket exists; it is never admitted as its raw subject. The binding is
 resolved again at every `session/renew`: once the subject is unbound, or bound to another key, the
 next renewal closes the socket `4403 principal_changed`, and a token that lost its group gets
-`group_required` and the session ends at its deadline (`4401`). So an unbind, a rebind or a group
-removal takes effect on open sockets within one token lifetime: **keep IdP access-token lifetimes
-short** (minutes, not hours).
+`group_required` and the session ends at its deadline (`4401`). A bound-IdP session's deadline is
+the token's `exp` or `ws_max_idp_session_secs` from now (default 900), whichever is sooner, at the
+open and at every renewal, so the client renews at least that often with the token it holds. An
+unbind, a rebind or a group removal therefore reaches an open socket within the cap (15 minutes by
+default) however long the IdP's tokens live. The cap must exceed `ws_renew_lead_secs` (else `/ws` is
+left disabled and the reason logged); `0` removes it, leaving the token's own lifetime as the
+bound. Self-issued sessions are not capped. **Still keep IdP access-token lifetimes short**
+(minutes, not hours): the cap bounds the socket, not what else the token opens.
 
 What this does not protect against until #727 is enforced: a write over such a session is trusted
 on the channel (TLS, the IdP token, the binding), not on a signature over the op. A stolen IdP

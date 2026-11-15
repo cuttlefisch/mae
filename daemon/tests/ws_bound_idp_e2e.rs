@@ -28,6 +28,11 @@ struct Pilot {
 }
 
 async fn pilot(accept: bool) -> Pilot {
+    pilot_capped(accept, None, Opts::default().renew_lead_secs).await
+}
+
+/// [`pilot`], with `ws_max_idp_session_secs = cap` and `ws_renew_lead_secs = lead`.
+async fn pilot_capped(accept: bool, cap: Option<u64>, lead: u64) -> Pilot {
     let (pem, jwks) = idp_keys();
     let jwks_port = spawn_jwks(&jwks).await.port();
     let d = spawn(Opts {
@@ -36,7 +41,9 @@ async fn pilot(accept: bool) -> Pilot {
             issuer: ISS.to_string(),
             allowed_groups: vec![GROUP.to_string()],
             accept_bound_idp: accept,
+            max_session_secs: cap,
         }),
+        renew_lead_secs: lead,
         ..Opts::default()
     })
     .await;
@@ -325,4 +332,108 @@ async fn a_token_inside_the_clock_leeway_neither_opens_nor_renews() {
     let mut ws = connect_bearer(&d, &d.token("SHA256:alice", 3600)).await;
     let renewed = ws.call(1, "session/renew", json!({"token": stale})).await;
     assert_eq!(kind(&renewed), "invalid_token", "{renewed}");
+}
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+/// The cap and the renewal lead the capped tests run with: renew_needed about
+/// 3 s after each (re)open, the deadline at 6 s, an hour short of the token.
+const CAP: u64 = 6;
+const LEAD: u64 = 3;
+
+/// Renew with `token` and return the new deadline, which must be capped.
+async fn renew_capped(ws: &mut Ws, id: u64, token: &str) -> u64 {
+    let asked = now_unix();
+    let renewed = ws.call(id, "session/renew", json!({"token": token})).await;
+    assert!(ok(&renewed), "{renewed}");
+    let deadline = deadline_unix(&renewed["result"]["auth_deadline"]);
+    assert!(
+        deadline <= now_unix() + CAP && deadline >= asked + CAP - 1,
+        "a renewal is capped too, not moved to the token's exp: {renewed}"
+    );
+    deadline
+}
+
+/// E2: an IdP token living an hour still gets `session/renew_needed` by the
+/// cap, and an unbind made meanwhile is enforced at that renewal (`4403`).
+#[tokio::test]
+async fn the_cap_brings_the_renewal_forward_and_an_unbind_is_enforced_there() {
+    let p = pilot_capped(true, Some(CAP), LEAD).await;
+    p.bind("alice@idp", &member());
+    let token = p.token("alice@idp");
+    let opened = now_unix();
+    let mut ws = connect_bearer(&p.d, &token).await;
+    let hello = ws.until(|v| v["method"] == "session/hello").await;
+    let deadline = deadline_unix(&hello["params"]["auth_deadline"]);
+    assert!(
+        deadline <= now_unix() + CAP && deadline >= opened + CAP - 1,
+        "the session deadline is the cap, not the token's hour: {hello}"
+    );
+    ws.until(|v| v["method"] == "session/renew_needed").await;
+    renew_capped(&mut ws, 1, &token).await;
+    p.unbind("alice@idp");
+    ws.until(|v| v["method"] == "session/renew_needed").await;
+    ws.send(
+        json!({"jsonrpc": "2.0", "id": 2, "method": "session/renew", "params": {"token": token}}),
+    )
+    .await;
+    assert_eq!(ws.closed().await, (4403, "principal_changed".to_string()));
+}
+
+/// E2: the cap is for bound IdP sessions only. A self-issued session on the
+/// same daemon keeps its token's expiry.
+#[tokio::test]
+async fn the_cap_leaves_a_self_issued_session_at_its_token_expiry() {
+    let p = pilot_capped(true, Some(CAP), LEAD).await;
+    let fp = member();
+    let mut ws = connect_bearer(&p.d, &p.d.token(&fp, 3600)).await;
+    let hello = ws.until(|v| v["method"] == "session/hello").await;
+    let deadline = deadline_unix(&hello["params"]["auth_deadline"]);
+    assert!(deadline >= now_unix() + 3500, "{hello}");
+}
+
+/// Mint a ticket with `token`, from `ORIGIN_A`.
+async fn ticket(d: &Daemon, token: &str) -> String {
+    let minted = mint_ticket(d, token, Some(ORIGIN_A)).await;
+    assert_eq!(minted.status, 200, "{}", minted.body);
+    minted.json()["ticket"].as_str().unwrap().to_string()
+}
+
+/// Present ticket `t` at the upgrade.
+async fn redeem(d: &Daemon, t: &str) -> Reply {
+    let protocols = format!("mae.v1, mae.ticket.{t}");
+    upgrade(d, &protocols, &[("Origin", ORIGIN_A)]).await
+}
+
+/// E1: a ticket minted by a bound token is re-resolved when it is presented.
+/// After an unbind, or a rebind to another key, inside its 30 s it opens
+/// nothing, with the ticket's own refusal (identical to an unknown ticket's);
+/// a ticket minted after the rebind opens as the new key.
+#[tokio::test]
+async fn a_ticket_presented_after_an_unbind_or_a_rebind_opens_nothing() {
+    let p = pilot(true).await;
+    let (old, new) = (member(), member());
+    p.bind("alice@idp", &old);
+    let token = p.token("alice@idp");
+    let (after_unbind, after_rebind) = (ticket(&p.d, &token).await, ticket(&p.d, &token).await);
+    let unknown = redeem(&p.d, "x".repeat(43).as_str()).await;
+    assert_eq!(unknown.status, 401);
+
+    p.unbind("alice@idp");
+    let r = redeem(&p.d, &after_unbind).await;
+    assert!(r.ws.is_none(), "unbound: no socket");
+    assert_eq!(r.fingerprint(), unknown.fingerprint(), "B1: one refusal");
+
+    p.bind("alice@idp", &new);
+    let r = redeem(&p.d, &after_rebind).await;
+    assert!(r.ws.is_none(), "rebound: no socket as the old key");
+    assert_eq!(r.fingerprint(), unknown.fingerprint(), "B1: one refusal");
+
+    let (_ws, hello) = ticket_session(&p.d, &token).await;
+    assert_eq!(hello["params"]["principal"], json!(new));
 }

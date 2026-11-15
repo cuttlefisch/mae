@@ -20,6 +20,7 @@ use super::credential::{self, Refused};
 use super::{now_unix, WsState, PROTOCOL_V1, SUPPORTED_PROTOCOLS};
 use crate::conn_limit::ConnGuard;
 use crate::oauth::{self, json_response, unauthorized, with_no_store, Listener};
+use mae_daemon::oauth_self_issue::Credential;
 use mae_mcp::protocol::McpError;
 
 type HttpResponse = Response<Full<Bytes>>;
@@ -38,8 +39,12 @@ pub(super) struct SessionAuth {
     pub issuer: String,
     pub subject: String,
     pub principal: String,
-    /// The credential's expiry, unix seconds: the session's first deadline.
+    /// The session's first deadline, unix seconds: the credential's expiry,
+    /// capped for a bound IdP token (`credential::session_deadline`).
     pub deadline: u64,
+    /// Whether the credential was a bound identity-provider token, whose
+    /// binding a ticket re-reads at redemption (Amendment 2, E1).
+    pub bound_idp: bool,
 }
 
 /// Route one request to `/ws` or `/ws/ticket`. Only called when `ws_enabled`.
@@ -191,10 +196,11 @@ async fn bearer_auth(token: &str, listener: &Listener) -> Result<SessionAuth, Re
         .await
         .map_err(|why| refused(listener, why))?;
     Ok(SessionAuth {
+        deadline: credential::session_deadline(&vp, listener),
+        bound_idp: vp.credential == Credential::IdpBound,
         issuer: vp.issuer,
         subject: vp.subject,
         principal: vp.principal,
-        deadline: vp.expires_at,
     })
 }
 
@@ -212,8 +218,24 @@ fn ticket_auth(
             subject: g.subject,
             principal: g.principal,
             deadline: g.token_expires_at,
+            bound_idp: g.bound_idp,
         }),
         _ => Err(ticket_invalid(listener)),
+    }
+}
+
+/// A ticket minted by a bound IdP token is re-resolved at redemption, so an
+/// unbind or a rebind inside its TTL opens nothing (Amendment 2, E1). The
+/// refusal is the ticket's own: B1 keeps one refusal whatever the reason, and
+/// a fresh mint with the same token then answers `identity_not_bound`.
+async fn recheck_ticket(auth: SessionAuth, listener: &Listener) -> Result<SessionAuth, Refusal> {
+    if !auth.bound_idp {
+        return Ok(auth);
+    }
+    match credential::still_bound(listener, &auth.issuer, &auth.subject, &auth.principal).await {
+        Ok(true) => Ok(auth),
+        Ok(false) => Err(ticket_invalid(listener)),
+        Err(why) => Err(refused(listener, why)),
     }
 }
 
@@ -232,7 +254,11 @@ async fn credential(
         (Some(token), 0) => bearer_auth(token, listener).await,
         (None, 1) => {
             let origin = request_origin(req).unwrap_or(None);
-            ticket_auth(tickets.into_iter().next().flatten(), &origin, listener)
+            let grant = tickets.into_iter().next().flatten();
+            match ticket_auth(grant, &origin, listener) {
+                Ok(auth) => recheck_ticket(auth, listener).await,
+                Err(refusal) => Err(refusal),
+            }
         }
         _ => Err(Box::new(bad_request(
             "invalid_request",
@@ -437,6 +463,7 @@ async fn mint_ticket(req: &Request<Incoming>, listener: &Listener, ws: &WsState)
         principal: auth.principal,
         token_expires_at: auth.deadline,
         origin: request_origin(req).unwrap_or(None),
+        bound_idp: auth.bound_idp,
     };
     match ws.tickets.mint(grant, Instant::now()) {
         Ok(ticket) => json_response(

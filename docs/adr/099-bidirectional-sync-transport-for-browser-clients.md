@@ -431,17 +431,29 @@ is enforced.
   (`identity_not_bound`), never admitted as its raw subject: the typed principal of ADR-098
   Amendment 1 C1 holds here too. The D4 group gate runs first, as on every route.
 - A ticket minted with a bound IdP token is bound to the resolved fingerprint, and to the token's
-  expiry, tenant and origin, as B1 already requires.
+  expiry, tenant and origin, as B1 already requires. The binding is read again when the ticket is
+  presented: if `(iss, sub)` no longer resolves to that fingerprint (unbound, or bound to another
+  key, inside the ticket's 30 s), no socket opens. The refusal is B1's one ticket refusal
+  (`ticket_invalid`), so a ticket's refusal still says nothing about why; a fresh mint with the
+  same token then answers `identity_not_bound`.
 - The session's kind (ADR-098 Amendment 1 C3) is computed as everywhere: a person only on a binding
   flagged `person`.
 
-### E2. Unbinding reaches open sockets at the next renewal
+### E2. Unbinding reaches open sockets at the next renewal, and the daemon bounds when that is
 
 The binding is resolved when a session opens and again at each renewal (B3). If the renewed
 token no longer resolves to the session's fingerprint (it was unbound, or bound to another key),
 the socket closes `4403 principal_changed`, the code B3 already uses for a renewal with a different
-identity. So an unbind or a rebind takes effect on open sockets within one token lifetime, and an
-IdP group removal at the next refresh (D4); keep token lifetimes short.
+identity. An IdP group removal is seen at the same point (D4).
+
+A renewal is due at the session's deadline, and an IdP token's `exp` is the IdP's to choose, not
+the daemon's. So a bound-IdP session's deadline is `min(token exp, now + ws_max_idp_session_secs)`,
+at the open and at every renewal; self-issued sessions keep their token's `exp`. The default cap is
+900 s: it bounds an unbind, a rebind or a group removal to 15 minutes on an open socket whatever
+the IdP issues, and costs one validation and one binding lookup per session per ~14 minutes. The
+client renews with the token it already holds, so a cap shorter than the token adds no sign-in. A
+cap must exceed `ws_renew_lead_secs`, or every session would be asked to renew as it opens; such a
+configuration leaves `/ws` disabled with the reason logged. `0` removes the cap.
 
 ### E3. Until #727, these writes are as trusted as an operator-minted token, and no more
 
@@ -489,5 +501,10 @@ bindings.
 - A ticket minted by a bound token opens a socket as the bound fingerprint and no other.
 - Unbinding, then renewing with the same token, closes the socket `4403`; rebinding the subject to
   another key does the same.
+- An IdP token with a long `exp` gets `session/renew_needed` by the cap, its renewal is capped
+  too, and an unbind made meanwhile closes the socket `4403` at that renewal; a self-issued
+  session on the same daemon keeps its token's expiry.
+- A ticket presented after its subject was unbound, or rebound to another key, opens nothing, with
+  the same refusal as an unknown ticket.
 
 E4's checks are #727's, and so are their tests.
