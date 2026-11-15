@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.154] - 2026-11-15
+
+
+
+
+### Features
+
+- *(kb)* Page whole-KB transfers both ways (ADR-022 Amendment 1) ([ff02487](https://github.com/cuttlefisch/mae/commit/ff024877b72e5272f91f8e4b2cc040dcd1c15a39))
+
+### Refactor
+
+- *(collab)* Share batches and join pages in their own functions ([c2003ed](https://github.com/cuttlefisch/mae/commit/c2003ed6fa82fa48d2b945058d851a9ca4d47202))
+
 ## [0.14.153] - 2026-11-15
 
 
@@ -10,6 +23,10 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 
 - *(ws)* Bound replies by their own limit, and close when one is over it ([b08f8f7](https://github.com/cuttlefisch/mae/commit/b08f8f794c889e65c60ae4cfb9097ae96e45c35d))
+
+### Miscellaneous
+
+- Bump version to 0.14.153 ([8bff37d](https://github.com/cuttlefisch/mae/commit/8bff37d9207598e5b9e92b75091533b3fd12ee67))
 
 ## [0.14.152] - 2026-11-15
 

@@ -273,6 +273,7 @@ pub(super) async fn handle_kb_join(
         }
     };
 
+    let page = JoinPage::from_params(params, doc_store, collection_state.len());
     let joined = join_node_states(
         doc_store,
         broadcaster,
@@ -281,6 +282,7 @@ pub(super) async fn handle_kb_join(
         &kb_id,
         &node_ids,
         params,
+        &page,
     )
     .await;
 
@@ -289,16 +291,63 @@ pub(super) async fn handle_kb_join(
         reconcile_mode = joined.reconcile_mode, diff_count = joined.diff_count,
         "kb/join: complete"
     );
-    JsonRpcResponse::success(
-        id,
-        serde_json::json!({
-            "kb_id": kb_id,
-            "collection_state": update_to_base64(&collection_state),
-            "nodes": joined.nodes,
-            "principal": auth_principal,
-            "epoch": epoch,
-        }),
-    )
+    let mut result = serde_json::json!({
+        "kb_id": kb_id,
+        "collection_state": update_to_base64(&collection_state),
+        "nodes": joined.nodes,
+        "principal": auth_principal,
+        "epoch": epoch,
+    });
+    if let Some(next) = joined.next_after {
+        result["next_after"] = serde_json::json!(next);
+    }
+    JsonRpcResponse::success(id, result)
+}
+
+/// ADR-022 Amendment 1 E2: which nodes one `kb/join` reply carries.
+///
+/// Without `paged` (an older client), every node, as before. With it, the
+/// nodes in sorted id order after `after`, until the reply would pass the
+/// message bound one document at the size limit fits; `next_after` then names
+/// the last node served. A page always carries at least one node, so a node
+/// stored above the limit before the limit existed still goes out alone.
+struct JoinPage {
+    paged: bool,
+    after: Option<String>,
+    /// Bytes left for node entries in this reply.
+    budget: usize,
+}
+
+/// A reply's fields other than its nodes, beyond the collection state.
+const JOIN_REPLY_OVERHEAD: usize = 4096;
+
+impl JoinPage {
+    fn from_params(
+        params: &serde_json::Value,
+        doc_store: &DocStore,
+        collection_len: usize,
+    ) -> Self {
+        let bound = doc_store.message_bound();
+        let collection_b64 = collection_len.div_ceil(3) * 4;
+        JoinPage {
+            paged: params["paged"].as_bool().unwrap_or(false),
+            after: params["after"].as_str().map(str::to_string),
+            budget: bound.saturating_sub(collection_b64 + JOIN_REPLY_OVERHEAD),
+        }
+    }
+
+    /// The ids this reply may consider, in serving order.
+    fn candidates<'a>(&self, node_ids: &'a [String]) -> Vec<&'a String> {
+        if !self.paged {
+            return node_ids.iter().collect();
+        }
+        let mut ids: Vec<&String> = node_ids
+            .iter()
+            .filter(|id| self.after.as_ref().is_none_or(|a| id.as_str() > a.as_str()))
+            .collect();
+        ids.sort();
+        ids
+    }
 }
 
 /// The caller's ADR-023 authorization epoch in this KB, as `kb/join` reports
@@ -326,6 +375,8 @@ struct JoinedNodes {
     nodes: Vec<serde_json::Value>,
     diff_count: usize,
     reconcile_mode: bool,
+    /// Paged: the last node served, when more remain.
+    next_after: Option<String>,
 }
 
 /// Fetch the nodes the collection lists (not all `kb:` docs) and subscribe the
@@ -333,6 +384,7 @@ struct JoinedNodes {
 /// (`node_svs`), reply with an incremental DIFF per node so it can reconcile
 /// (merge, no clobber) instead of adopting a full snapshot; absent (old editor,
 /// or a first-ever join) → full state, as before.
+#[allow(clippy::too_many_arguments)]
 async fn join_node_states(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
@@ -341,6 +393,7 @@ async fn join_node_states(
     kb_id: &str,
     node_ids: &[String],
     params: &serde_json::Value,
+    page: &JoinPage,
 ) -> JoinedNodes {
     let member_svs: std::collections::HashMap<String, Vec<u8>> = params["node_svs"]
         .as_array()
@@ -358,8 +411,11 @@ async fn join_node_states(
         nodes: Vec::new(),
         diff_count: 0,
         reconcile_mode: !member_svs.is_empty(),
+        next_after: None,
     };
-    for node_id in node_ids {
+    let candidates = page.candidates(node_ids);
+    let mut used = 0usize;
+    for (i, &node_id) in candidates.iter().enumerate() {
         let doc_name = mae_sync::kb_node_doc_name(kb_id, node_id);
         // Member sent an SV for this node → send only the ops it lacks.
         let encoded = match member_svs.get(node_id) {
@@ -379,6 +435,17 @@ async fn join_node_states(
                 continue;
             }
         };
+        if page.paged {
+            let payload = diff.as_ref().or(state.as_ref()).map_or(0, Vec::len);
+            let cost = node_id.len() + (payload + sv.len()).div_ceil(3) * 4 + 64;
+            if !joined.nodes.is_empty() && used + cost > page.budget {
+                // This node starts the next page; nothing of it was sent or
+                // subscribed, so the next page reads it afresh.
+                joined.next_after = Some(candidates[i - 1].to_string());
+                break;
+            }
+            used += cost;
+        }
         session_docs.insert(doc_name.clone());
         let _ = doc_store.track_client_connect(&doc_name).await;
         broadcaster
