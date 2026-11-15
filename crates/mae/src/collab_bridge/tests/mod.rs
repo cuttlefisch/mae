@@ -19,6 +19,7 @@ mod collab_bridge_kb_sharing_staleness_tests;
 mod collab_bridge_kb_sync_tests;
 mod collab_bridge_literal_guard_tests;
 mod collab_bridge_message_handling_tests;
+mod collab_bridge_paged_transfer_tests;
 mod collab_bridge_psk_tests;
 mod collab_bridge_set_encryption_validation_tests;
 mod collab_bridge_sync_recovery_backoff_tests;
@@ -39,6 +40,7 @@ macro_rules! kb_ctx {
             kb_collections: &mut std::collections::HashMap::new(),
             signing_identity: None,
             pending_collection_ops: &mut Vec::new(),
+            pending_join_pages: &mut Vec::new(),
         }
     };
 }

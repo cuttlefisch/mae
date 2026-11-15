@@ -1127,6 +1127,14 @@
           "kind": "fn"
         },
         {
+          "name": "MessageTooLarge",
+          "kind": "struct"
+        },
+        {
+          "name": "too_large",
+          "kind": "fn"
+        },
+        {
           "name": "read_message_limited",
           "kind": "fn"
         },

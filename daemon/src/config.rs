@@ -458,6 +458,14 @@ pub struct SyncConfig {
     /// that do not apply their own, smaller cap (the editor's
     /// `kb_max_node_bytes`).
     pub max_document_size_bytes: usize,
+    /// Largest message on a collab session, bytes: a request the daemon
+    /// reads, and the budget a paged `kb/join` reply is filled to (ADR-022
+    /// Amendment 1). Unset (the default) means derived from
+    /// `max_document_size_bytes` so one document at that limit fits one
+    /// message; see `mae_daemon::message_limits`. Set it only to lower the
+    /// bound (or in tests); a value under one document's encoding refuses that
+    /// document.
+    pub max_message_bytes: Option<usize>,
 }
 
 impl Default for SyncConfig {
@@ -474,6 +482,7 @@ impl Default for SyncConfig {
             // per-message allocation. Over-cap updates are rejected — see the field doc.
             max_update_size_bytes: 4_194_304,    // 4 MiB
             max_document_size_bytes: 10_485_760, // 10 MB
+            max_message_bytes: None,
         }
     }
 }

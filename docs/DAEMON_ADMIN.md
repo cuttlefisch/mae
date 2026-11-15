@@ -207,6 +207,11 @@ max_document_size_bytes = 10485760              # 10 MB — an update that would
                                                 #   past it may still shrink. The editor caps
                                                 #   nodes lower first (`kb_max_node_bytes`,
                                                 #   1 MiB). ADR-109 D6.
+# max_message_bytes = 15029592                  # largest message on a collab session: a request
+                                                #   read, and what a paged `kb/join` reply is
+                                                #   filled to. Unset = derived so one document at
+                                                #   max_document_size_bytes fits (base64 + 1 MiB,
+                                                #   never under 10 MiB). ADR-022 Amendment 1.
 ```
 
 > [!TIP]
@@ -298,6 +303,7 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `invalid_params` | A parameter is missing, of the wrong type, malformed (bad base64, an undecodable update) or out of range. Code `-32602`. | all | `param` |
 | `quota_exceeded` | The update would grow a document past `max_document_size_bytes`. Nothing was applied. Code `-32006`. | `kb/node_update`, `sync/update`, `sync/share` | `size`, `limit` |
 | `update_too_large` | One update is over `max_update_size_bytes`. Send smaller increments. | `kb/node_update`, `kb/collection_op`, `sync/update` | `size`, `limit` |
+| `request_too_large` | A request is over the session's request cap (one document at `max_document_size_bytes`, as base64, plus 1 MiB; never under 10 MiB). Answered with `id` `null`, then the session ends. Send smaller requests: `kb/share` takes node batches. | any method, on the collab listener | `size`, `limit` |
 | `invalid_field` | A node update would leave a known field of the node document with the wrong type (for example `title` not text, `tags` not an array of strings, `org_header` malformed). A field already mistyped before the update, and any unknown key, are left alone. Nothing was applied. Not checked on E2E KBs, whose nodes the daemon cannot read, nor on updates a mesh peer relays (the daemon that accepted the write from its client checked it; refusing a relayed one would only diverge this replica). | `kb/node_update`, `sync/update` on a node document | `field` |
 | `tenant_quota_exceeded` | The caller's tenant is over its request quota or connection cap (ADR-060). Back off. | every method, both listeners | — |
 | `too_many_open_docs` | A sync-WebSocket session already holds `ws_max_open_docs` documents and the request names another (ADR-099 B4). Nothing ran. | any method naming a document, on `/ws` | `limit` |
@@ -354,6 +360,17 @@ client authors under `derive_kb_client_id(principal, epoch)`; `null` without a p
 per member, not per KB; one changes when that member's role changes or it is removed and re-admitted,
 and a client then re-joins (or reads `epoch_fenced`'s `current_epoch`). A `pending` join returns
 `principal` only.
+
+A whole KB moves in pages (ADR-022 Amendment 1), because no single message can bound a KB:
+- **`kb/join` with `"paged": true`** answers nodes in id order, filling each reply up to
+  `max_message_bytes`, and adds `"next_after": "<node id>"` while nodes remain; the client repeats
+  the join with `"after"` set to it, sending the same `node_svs`, until a reply has none. A node is
+  subscribed when its page is served. Without `paged` (an older client) the reply carries every node,
+  as before.
+- **`kb/share` takes node batches**: each request carries the full `collection_state` and some of the
+  node states; the daemon keeps the collection from the first and merges each node.
+- **`initialize` reports the limits** as `result.limits.{max_frame_bytes, max_outbound_bytes}`, so a
+  client sizes its batches; a daemon that does not report them reads requests at 10 MiB.
 - **The HTML KB view takes its token in the URL fragment**:
   `https://<host>/kb/<kb_id>/view#access_token=<token>`. The fragment is never sent to the server,
   so it cannot land in a proxy access log; the page moves it into an `Authorization` header and
