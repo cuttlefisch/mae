@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.155] - 2026-11-15
+
+
+
+
+### Features
+
+- *(daemon)* ADR-098 Phase C read path — typed principal, binding table, group gate ([4913826](https://github.com/cuttlefisch/mae/commit/4913826959cf8837f40e99b76c7e2886d56378cc))
+
+### Bug Fixes
+
+- *(identity)* The signer confirms the subject it binds; store hardening ([9b8b39f](https://github.com/cuttlefisch/mae/commit/9b8b39f48e99d3e085ea51c823dd544bbdf80e86))
+
+### Testing
+
+- *(identity)* Split the binding e2e tests into helpers ([9d56b0d](https://github.com/cuttlefisch/mae/commit/9d56b0d5b93c959ab637b55c2c072baabe367f7f))
+
 ## [0.14.154] - 2026-11-15
 
 
@@ -14,6 +31,10 @@ All notable changes to this project will be documented in this file.
 ### Refactor
 
 - *(collab)* Share batches and join pages in their own functions ([c2003ed](https://github.com/cuttlefisch/mae/commit/c2003ed6fa82fa48d2b945058d851a9ca4d47202))
+
+### Miscellaneous
+
+- Bump version to 0.14.154 ([9768c6f](https://github.com/cuttlefisch/mae/commit/9768c6fb06198e4722d4ef0014945769b875abe1))
 
 ## [0.14.153] - 2026-11-15
 
