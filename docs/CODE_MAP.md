@@ -431,6 +431,8 @@ Source: `shared/mcp/src/lib.rs`
 | `tune_request_stream` | fn |
 | `tuned` | fn |
 | `read_message` | fn |
+| `MessageTooLarge` | struct |
+| `too_large` | fn |
 | `read_message_limited` | fn |
 | `handle_request` | fn |
 

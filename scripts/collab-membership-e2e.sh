@@ -75,6 +75,11 @@ data_dir = "$WORK/srv/data"
 bind = "127.0.0.1:$PORT"
 [collab.auth]
 mode = "key"
+# ADR-022 Amendment 1: a small message bound, so bob's join of the three-node
+# fixture takes several pages through the real editor's network loop (the
+# drain that asks for each next page), not one reply.
+[collab.sync]
+max_message_bytes = 6144
 EOF
 
 srv()   { HOME="$WORK/srv"   XDG_CONFIG_HOME="$WORK/srv/.config"   XDG_DATA_HOME="$WORK/srv/.local/share"   "$@"; }
@@ -212,6 +217,9 @@ fail=0
 [ "$pending" -ge 1 ] || { echo "FAIL: bob's invite join was not recorded pending (got $pending)"; fail=1; }
 [ "$approved" -ge 1 ] || { echo "FAIL: owner approval not seen (got $approved)"; fail=1; }
 [ "$joined_after_approve" -ge 1 ] || { echo "FAIL: bob's join after approval was not allowed"; fail=1; }
+# Each page of a paged join logs its own completion: at least two means the
+# editor asked for the next page itself (ADR-022 Amendment 1 E2).
+[ "$joined_after_approve" -ge 2 ] || { echo "FAIL: bob's join was not paged (got $joined_after_approve page(s))"; fail=1; }
 grep 'authenticated' "$LOG" | grep -q 'bob' || { echo "FAIL: bob never authenticated over mTLS"; fail=1; }
 if grep -qE '^not ok' "$WORK/alice.tap" "$WORK/bob.tap"; then echo "FAIL: a scenario step failed"; fail=1; fi
 [ "$fail" -eq 0 ] && echo "PASS: ADR-018 invite flow (join → pending → owner approve → join allowed)" || exit 1

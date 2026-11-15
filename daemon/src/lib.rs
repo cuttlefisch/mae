@@ -15,6 +15,7 @@ pub mod history_verify;
 pub mod kb_doc_migration;
 pub mod kb_query;
 pub mod lease_fence;
+pub mod message_limits;
 pub mod oauth_self_issue;
 pub mod projector;
 pub mod quota;
