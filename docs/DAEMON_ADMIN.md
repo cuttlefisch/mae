@@ -399,6 +399,7 @@ ws_allowed_origins = ["https://mae.example.com"]  # browser Origins, EXACT match
 # ws_ping_secs = 30                             # keepalive ping period (under proxy idle timeouts); 0 = off
 # ws_max_open_docs = 1024                       # documents one socket may hold (0 = unlimited)
 # ws_max_frame_bytes = 1048576                  # largest inbound frame; unset = max_request_body_bytes
+# ws_max_outbound_bytes = 15029592              # largest message sent; unset = derived from max_document_size_bytes
 ```
 
 A missing prerequisite (collab disabled, or self-issued tokens unavailable) leaves the route
@@ -442,7 +443,10 @@ mae-daemon token mint --config daemon.toml --sub 'SHA256:…member-fingerprint�
   for any KB document, `node_id` for a node document) and the rest of the session continues. A missed deadline closes `4401
   token_expired`, and no frame is applied after it. So removing a member takes effect on their open
   sockets at their next renewal at the latest — keep token lifetimes short.
-- **Limits.** A frame over `ws_max_frame_bytes` closes `1009`. `ws_max_open_docs` counts units: a
+- **Limits.** A frame over `ws_max_frame_bytes` closes `1009`. A reply over `ws_max_outbound_bytes`
+  closes `1011` with reason `response_too_large`; by default that bound holds one document at
+  `max_document_size_bytes` as base64 plus 1 MiB (15,029,592 at the stock 10 MB), never less than
+  10 MiB, and `session/hello` advertises it as `limits.max_outbound_bytes`. `ws_max_open_docs` counts units: a
   joined KB is one unit however many nodes it has, and any other document is one. A session at the
   cap is refused a request opening a new unit (`too_many_open_docs`). A client that stops reading for
   5 s is dropped. If an update for a document does not fit a session's event queue, that document

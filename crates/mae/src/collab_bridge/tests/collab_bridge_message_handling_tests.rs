@@ -272,3 +272,25 @@ async fn a_closed_document_is_resynced_or_reported() {
         assert_eq!(got, want);
     }
 }
+
+/// A daemon reply bigger than the 10 MiB REQUEST cap still reaches the editor.
+/// One node at the daemon's 10 MB document limit is ~13.4 MB of base64, and a
+/// `kb/join` carries every node, so reading replies with the request cap made a
+/// large KB unjoinable. The reader task takes up to `MAX_DAEMON_RESPONSE_SIZE`.
+#[tokio::test]
+async fn a_reply_over_the_request_cap_is_read() {
+    let body = format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"pad\":\"{}\"}}}}",
+        "z".repeat(mae_mcp::MAX_MESSAGE_SIZE + 1)
+    );
+    let mut framed = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
+    framed.extend_from_slice(body.as_bytes());
+    let reader = tokio::io::BufReader::new(std::io::Cursor::new(framed));
+    let mut rx = spawn_reader_task(reader);
+    let got = rx
+        .recv()
+        .await
+        .expect("a message")
+        .expect("read, not refused");
+    assert_eq!(got.len(), body.len());
+}
