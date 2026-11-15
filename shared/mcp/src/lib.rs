@@ -49,6 +49,7 @@ pub mod content_key_store;
 pub mod daemon_client;
 pub mod file_lock;
 pub mod identity;
+pub mod identity_challenge;
 pub mod keystore;
 pub mod local_ipc;
 pub mod protocol;
