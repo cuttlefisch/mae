@@ -147,6 +147,28 @@ pub struct OAuthConfig {
     /// (`kid = "self"`, so `self_issued_tokens_enabled` is a prerequisite), and
     /// it needs `collab.enabled` — the socket reaches the collab session loop.
     pub ws_enabled: bool,
+    /// ADR-099 Amendment 2, E1: whether `/ws` and `/ws/ticket` also accept an
+    /// external identity-provider token whose `(iss, sub)` is bound to a member
+    /// key (ADR-098). The session's principal is then the bound fingerprint; an
+    /// unbound token is refused `identity_not_bound`. Default `false`: only this
+    /// daemon's own tokens (B6). Until hub signature verification (#727) is
+    /// enforced, a write over such a session is trusted on the channel alone
+    /// (E3), so this is for a pilot with short IdP token lifetimes.
+    pub ws_accept_bound_idp: bool,
+    /// ADR-099 Amendment 2, E2: the longest a bound-IdP socket session runs
+    /// before it must renew, seconds, whatever the IdP token's own `exp`. Each
+    /// renewal re-reads the binding, so this bounds how long an unbind, a
+    /// rebind or a lost group takes to reach an open socket, independently of
+    /// the token lifetime the IdP is configured with. Default 900 (15 min):
+    /// short enough for the pilot's revocation window, long enough that a
+    /// renewal (one validation and one binding lookup per session) every
+    /// `900 - ws_renew_lead_secs` seconds costs nothing measurable, and the
+    /// client renews with the token it already holds, so a cap shorter than
+    /// the token adds no sign-in. Must exceed `ws_renew_lead_secs`, or every
+    /// session would be asked to renew as it opens (`/ws` is then disabled
+    /// and the reason logged). `0`: no cap, the deadline is the token's `exp`.
+    /// Self-issued sessions are not capped.
+    pub ws_max_idp_session_secs: u64,
     /// Origins a browser handshake (and a ticket mint) may carry, matched
     /// EXACTLY: no wildcards, no prefix or substring matching (B1). A request
     /// with no `Origin` (a native client) is not origin-checked. Empty means no
@@ -205,6 +227,8 @@ impl Default for OAuthConfig {
             self_issued_token_ttl_secs: 3600,
             self_issued_token_max_ttl_secs: 86_400,
             ws_enabled: false,
+            ws_accept_bound_idp: false,
+            ws_max_idp_session_secs: 900,
             ws_allowed_origins: Vec::new(),
             ws_renew_lead_secs: 60,
             ws_ping_secs: 30,

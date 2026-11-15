@@ -16,7 +16,10 @@
 //!
 //! B6, while it holds: off by default (`oauth.ws_enabled`), and only
 //! daemon-issued tokens (`kid = "self"`) are accepted on both routes — anything
-//! else is `issuer_not_supported`. The session principal is the token subject,
+//! else is `issuer_not_supported`. Amendment 2 (E1/E2) adds one exception behind
+//! `oauth.ws_accept_bound_idp`: an identity-provider token whose `(iss, sub)` is
+//! bound to a member key, whose principal is then that fingerprint. Which tokens
+//! qualify is decided in one place, `credential`. The session principal is
 //! bound as a bearer `PeerIdentity`, so `session/hello`'s principal and
 //! `kb/join`'s are the same value.
 //!
@@ -25,6 +28,7 @@
 //! listener's own response builders (`oauth::unauthorized`, `with_no_store`).
 
 mod connect_ticket;
+mod credential;
 mod session;
 mod upgrade;
 
@@ -56,6 +60,10 @@ pub(crate) struct WsSettings {
     pub max_frame_bytes: usize,
     /// Largest message the daemon sends (`ws_max_outbound_bytes`, else `DocStore::message_bound`).
     pub max_outbound_bytes: usize,
+    /// `ws_accept_bound_idp` (ADR-099 Amendment 2, E1).
+    pub accept_bound_idp: bool,
+    /// `ws_max_idp_session_secs` (Amendment 2, E2); `0` = no cap.
+    pub max_idp_session_secs: u64,
 }
 
 /// Everything the routes need beyond the listener's own state.
@@ -88,6 +96,13 @@ pub(crate) fn state_from_config(
         );
         return None;
     }
+    if !idp_cap_leaves_room_to_renew(oauth.ws_max_idp_session_secs, oauth.ws_renew_lead_secs) {
+        tracing::error!(
+            "oauth.ws_max_idp_session_secs must exceed oauth.ws_renew_lead_secs (or be 0): a \
+             shorter cap would ask every bound-IdP session to renew as it opens — /ws disabled"
+        );
+        return None;
+    }
     let settings = WsSettings {
         allowed_origins: oauth.ws_allowed_origins.clone(),
         renew_lead: Duration::from_secs(oauth.ws_renew_lead_secs),
@@ -99,7 +114,16 @@ pub(crate) fn state_from_config(
         max_outbound_bytes: oauth
             .ws_max_outbound_bytes
             .unwrap_or_else(|| deps.doc_store.message_bound()),
+        accept_bound_idp: oauth.ws_accept_bound_idp,
+        max_idp_session_secs: oauth.ws_max_idp_session_secs,
     };
+    if settings.accept_bound_idp {
+        tracing::warn!(
+            "oauth.ws_accept_bound_idp: /ws accepts bound identity-provider tokens; until hub \
+             signature verification (#727) is enforced their writes are trusted on the channel \
+             alone (ADR-099 Amendment 2, E3) — keep token lifetimes short"
+        );
+    }
     tracing::info!(
         origins = settings.allowed_origins.len(),
         "sync WebSocket enabled on the OAuth listener (/ws)"
@@ -111,10 +135,38 @@ pub(crate) fn state_from_config(
     })
 }
 
+/// A bound-IdP session cap (`ws_max_idp_session_secs`) must leave room for a
+/// renewal: at or under `ws_renew_lead_secs`, `session/renew_needed` would be
+/// due the moment each session opens, and again after every renewal.
+fn idp_cap_leaves_room_to_renew(cap_secs: u64, renew_lead_secs: u64) -> bool {
+    cap_secs == 0 || cap_secs > renew_lead_secs
+}
+
 /// Current unix time, seconds.
 pub(crate) fn now_unix() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A cap at or under the renewal lead would demand a renewal on open; the
+    /// default (900 over a 60 s lead) and "no cap" are both fine.
+    #[test]
+    fn an_idp_session_cap_must_leave_room_to_renew() {
+        assert!(idp_cap_leaves_room_to_renew(900, 60));
+        assert!(idp_cap_leaves_room_to_renew(61, 60));
+        assert!(idp_cap_leaves_room_to_renew(0, 60), "0 is no cap");
+        assert!(!idp_cap_leaves_room_to_renew(60, 60));
+        assert!(!idp_cap_leaves_room_to_renew(30, 60));
+        let d = crate::oauth_config::OAuthConfig::default();
+        assert!(idp_cap_leaves_room_to_renew(
+            d.ws_max_idp_session_secs,
+            d.ws_renew_lead_secs
+        ));
+    }
 }

@@ -12,6 +12,7 @@ fn grant(principal: &str) -> TicketGrant {
         principal: principal.into(),
         token_expires_at: 4_000_000_000,
         origin: Some("https://app.example".into()),
+        bound_idp: false,
     }
 }
 

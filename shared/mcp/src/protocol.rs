@@ -579,6 +579,13 @@ impl McpError {
         )
     }
 
+    /// An identity-provider token whose `(iss, sub)` is bound to no member key,
+    /// presented to the sync socket (ADR-099 Amendment 2, E1). It is refused,
+    /// never admitted as its raw subject (ADR-098 Amendment 1, C1).
+    pub fn identity_not_bound(message: String) -> Self {
+        Self::kinded(-32600, message, "identity_not_bound", serde_json::json!({}))
+    }
+
     /// The daemon failed (storage, decode, persistence). Not a decision about
     /// the caller; retrying may succeed.
     pub fn internal_fault(message: String) -> Self {
@@ -636,6 +643,7 @@ pub const ERROR_KINDS: &[&str] = &[
     "proof_invalid",
     "binding_conflict",
     "too_many_challenges",
+    "identity_not_bound",
     "internal",
 ];
 
@@ -825,6 +833,7 @@ mod tests {
             McpError::proof_invalid(m()),
             McpError::binding_conflict(m(), "subject"),
             McpError::too_many_challenges(m(), 4),
+            McpError::identity_not_bound(m()),
             McpError::internal_fault(m()),
         ]
     }
