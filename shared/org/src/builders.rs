@@ -143,6 +143,12 @@ impl RenderOptions {
         self.property_drawers = drawers;
         self
     }
+
+    /// [`RenderOptions::toplevel_hlevel`].
+    pub fn with_toplevel_hlevel(mut self, level: crate::ToplevelHlevel) -> Self {
+        self.toplevel_hlevel = level;
+        self
+    }
 }
 
 impl Resolved {
