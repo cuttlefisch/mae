@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.153] - 2026-11-15
+
+
+
+
+### Bug Fixes
+
+- *(ws)* Bound replies by their own limit, and close when one is over it ([b08f8f7](https://github.com/cuttlefisch/mae/commit/b08f8f794c889e65c60ae4cfb9097ae96e45c35d))
+
 ## [0.14.152] - 2026-11-15
 
 
@@ -10,6 +19,10 @@ All notable changes to this project will be documented in this file.
 ### Features
 
 - *(daemon)* Kb/query.my_kbs lists the caller's own KBs ([d090b7f](https://github.com/cuttlefisch/mae/commit/d090b7fed924394eec41a59b1915bbdcc433061e))
+
+### Miscellaneous
+
+- Bump version to 0.14.152 ([2cfc277](https://github.com/cuttlefisch/mae/commit/2cfc277ff49cf99f7ed1904e66991e35530ce9be))
 
 ## [mae-org-v0.8.0] - 2026-11-13
 
