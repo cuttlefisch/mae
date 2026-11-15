@@ -50,6 +50,9 @@ const CLOSE_TOKEN_EXPIRED: u16 = 4401;
 const CLOSE_PRINCIPAL_CHANGED: u16 = 4403;
 /// RFC 6455 "unsupported data": the envelope is JSON text.
 const CLOSE_UNSUPPORTED_DATA: u16 = 1003;
+/// A reply the session produced is over `max_outbound_bytes`: RFC 6455's
+/// "unexpected condition" (1011), with reason `response_too_large`.
+const CLOSE_RESPONSE_TOO_LARGE: u16 = 1011;
 
 enum Flow {
     Continue,
@@ -123,7 +126,7 @@ pub(super) async fn run(
             gov,
         ));
         let (out_tx, out_rx) = mpsc::channel(32);
-        let pump = tokio::spawn(pump(from_session, out_tx));
+        let pump = tokio::spawn(pump(from_session, out_tx, settings.max_outbound_bytes));
         driver.drive(out_rx).await;
         // Closing both ends of the pipe ends the session loop; wait for it, so
         // the slot is released only once the session is really gone.
@@ -145,11 +148,33 @@ pub(super) async fn run(
 }
 
 /// Every message the session writes, as one string each, until it ends.
-async fn pump(from_session: ReadHalf<DuplexStream>, out: mpsc::Sender<String>) {
+/// What the pump hands the driver: a message to send, or the news that the
+/// session produced one over `max_outbound_bytes`.
+enum Outbound {
+    Frame(String),
+    TooLarge,
+}
+
+/// Forward the session's framed messages to the driver, each at most `max`
+/// bytes. The session writes replies the request cap was never meant to bound
+/// (one document at the size limit is ~13.4 MB of base64), so the pump reads
+/// with the socket's own outbound bound. A message over it, or a pipe that can
+/// no longer be parsed, is reported as `TooLarge` so the socket closes with a
+/// code and a reason: before, the pump just stopped and the client saw `1006`.
+async fn pump(from_session: ReadHalf<DuplexStream>, out: mpsc::Sender<Outbound>, max: usize) {
     let mut reader = BufReader::new(from_session);
-    while let Ok(Some(msg)) = mae_mcp::read_message(&mut reader).await {
-        if out.send(msg).await.is_err() {
-            break;
+    loop {
+        let item = match mae_mcp::read_message_limited(&mut reader, max).await {
+            Ok(Some(msg)) => Outbound::Frame(msg),
+            Ok(None) => return,
+            Err(e) => {
+                tracing::warn!(error = %e, max, "ws: session reply over the outbound bound");
+                Outbound::TooLarge
+            }
+        };
+        let stop = matches!(item, Outbound::TooLarge);
+        if out.send(item).await.is_err() || stop {
+            return;
         }
     }
 }
@@ -169,6 +194,7 @@ fn hello(auth: &SessionAuth, settings: &WsSettings) -> Value {
             "auth_deadline": rfc3339(auth.deadline),
             "limits": {
                 "max_frame_bytes": settings.max_frame_bytes,
+                "max_outbound_bytes": settings.max_outbound_bytes,
                 "max_open_docs": settings.max_open_docs,
             },
         },
@@ -183,7 +209,7 @@ fn at_unix(unix: u64) -> tokio::time::Instant {
 }
 
 impl Driver {
-    async fn drive(&mut self, mut out: mpsc::Receiver<String>) {
+    async fn drive(&mut self, mut out: mpsc::Receiver<Outbound>) {
         // ADR-111 D6: a ping on a fixed period keeps a quiet session alive
         // through a proxy's idle timeout. The first tick is one period out.
         let period = self.ping_every.unwrap_or(Duration::from_secs(3600));
@@ -196,7 +222,10 @@ impl Driver {
             let flow = tokio::select! {
                 frame = self.ws.next() => self.on_frame(frame).await,
                 body = out.recv() => match body {
-                    Some(b) => self.send_text(b).await,
+                    Some(Outbound::Frame(b)) => self.send_text(b).await,
+                    Some(Outbound::TooLarge) => {
+                        Flow::Close(CLOSE_RESPONSE_TOO_LARGE, "response_too_large")
+                    }
                     None => self.session_ended(),
                 },
                 _ = tokio::time::sleep_until(renew_at), if !self.renew_sent => {
