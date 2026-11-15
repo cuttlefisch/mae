@@ -207,7 +207,6 @@ fn refresh_kb_content_key_re_derives_on_rotation_remaining_yes_removed_no() {
         let mut collections: HashMap<String, Vec<u8>> = HashMap::new();
         collections.insert("KB".to_string(), pre_rotation.clone());
         let (mut os, mut n2k, mut so) = (HashMap::new(), HashMap::new(), HashMap::new());
-        let mut pco: Vec<(String, Vec<u8>)> = Vec::new();
         {
             let mut ctx = KbCryptoCtx {
                 content_keys: &mut content_keys,
@@ -216,7 +215,7 @@ fn refresh_kb_content_key_re_derives_on_rotation_remaining_yes_removed_no() {
                 seen_ops: &mut so,
                 kb_collections: &mut collections,
                 signing_identity: Some(id),
-                pending_collection_ops: &mut pco,
+                pending_collection_ops: &mut Vec::new(),
                 pending_join_pages: &mut Vec::new(),
             };
             refresh_kb_content_key_on_collection_delta(&mut ctx, "kbc:KB", &delta);

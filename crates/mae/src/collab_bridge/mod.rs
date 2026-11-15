@@ -2740,33 +2740,8 @@ async fn run_collab_task(
                             if let Some(ref mut w) = writer {
                                 let nodes =
                                     select_share_node_states(&kb_id, e2e, &node_states, &op_sets);
-                                // ADR-022 Amendment 1 E1: the manifest rides every batch (the
-                                // daemon keeps the first, B-12) and the node states are split
-                                // so each request stays under the daemon's request cap.
-                                let coll_b64 = mae_sync::encoding::update_to_base64(&collection_state);
-                                let overhead = coll_b64.len() + kb_id.len() + name.len() + creator.len() + 512;
-                                let batches = mae_sync::wire::share_batches(&nodes, daemon_request_cap.saturating_sub(overhead));
-                                let (count, total) = (batches.len(), nodes.len());
-                                let mut sent_all = true;
-                                for (k, batch) in batches.iter().enumerate() {
-                                    let req_id = next_request_id;
-                                    next_request_id += 1;
-                                    let req = mae_sync::wire::kb_share_request(req_id, &kb_id, &name, &creator, &coll_b64, batch);
-                                    let body = match serde_json::to_vec(&req) {
-                                        Ok(b) => b,
-                                        Err(e) => { error!("kb share serialize error: {e}"); sent_all = false; break; }
-                                    };
-                                    if write_framed(w, &body, write_timeout).await.is_err() {
-                                        sent_all = false;
-                                        break;
-                                    }
-                                    let kind = if count == 1 {
-                                        PendingResponseKind::KbShare { kb_id: kb_id.clone() }
-                                    } else {
-                                        PendingResponseKind::KbShareBatch { kb_id: kb_id.clone(), last: (k + 1 == count).then_some(total) }
-                                    };
-                                    pending_responses.insert(req_id, kind);
-                                }
+                                let share = ShareParts { kb_id: &kb_id, name: &name, creator: &creator, collection_state: &collection_state, nodes: &nodes };
+                                let sent_all = send_share_batches(w, &share, daemon_request_cap, &mut next_request_id, &mut pending_responses, write_timeout).await;
                                 if sent_all {
                                     // ADR-020 B-13: subscribe the OWNER to its own
                                     // collection + node docs so peer edits broadcast
@@ -3711,30 +3686,7 @@ async fn run_collab_task(
                             } else {
                                 pending_collection_ops.clear();
                             }
-                            // ADR-022 Amendment 1 E2: ask for the next page of each paged
-                            // join this message advanced. Without a writer the join is lost
-                            // with the connection, and the reconnect re-joins from the start.
-                            for next in pending_join_pages.drain(..) {
-                                let Some(w) = writer.as_mut() else { break };
-                                let req_id = next_request_id;
-                                next_request_id += 1;
-                                let svs = join_svs.get(&next.kb_id).cloned().unwrap_or_default();
-                                let mut req = mae_sync::wire::kb_join_page_request(
-                                    req_id,
-                                    &next.kb_id,
-                                    &svs,
-                                    Some(&next.after),
-                                );
-                                with_wrap_pubkey(&mut req, signing_identity.as_ref());
-                                let Ok(body) = serde_json::to_vec(&req) else { continue };
-                                if write_framed(w, &body, write_timeout).await.is_ok() {
-                                    pending_responses.insert(
-                                        req_id,
-                                        PendingResponseKind::KbJoinPage { kb_id: next.kb_id, acc: next.acc },
-                                    );
-                                }
-                            }
-                            pending_join_pages.clear();
+                            send_join_pages(&mut writer, &mut pending_join_pages, &join_svs, signing_identity.as_ref(), &mut next_request_id, &mut pending_responses, write_timeout).await;
                             // Any valid message resets the ping_pending flag.
                             ping_pending = false;
                         }
@@ -4001,6 +3953,96 @@ fn with_wrap_pubkey(
             );
         }
     }
+}
+
+/// One KB share's content, as `send_share_batches` sends it.
+struct ShareParts<'a> {
+    kb_id: &'a str,
+    name: &'a str,
+    creator: &'a str,
+    collection_state: &'a [u8],
+    nodes: &'a [(String, String)],
+}
+
+/// ADR-022 Amendment 1 E1: send a share as batches under the daemon's request
+/// cap. The manifest rides every batch (the daemon keeps the first, B-12);
+/// only the last batch reports the share, with the whole count. `false` when a
+/// batch could not be sent, and the share is then not subscribed.
+async fn send_share_batches<W: tokio::io::AsyncWrite + Unpin>(
+    w: &mut W,
+    share: &ShareParts<'_>,
+    request_cap: usize,
+    next_request_id: &mut u64,
+    pending_responses: &mut std::collections::HashMap<u64, PendingResponseKind>,
+    write_timeout: std::time::Duration,
+) -> bool {
+    let coll_b64 = mae_sync::encoding::update_to_base64(share.collection_state);
+    let overhead =
+        coll_b64.len() + share.kb_id.len() + share.name.len() + share.creator.len() + 512;
+    let batches = mae_sync::wire::share_batches(share.nodes, request_cap.saturating_sub(overhead));
+    let (count, total) = (batches.len(), share.nodes.len());
+    for (k, batch) in batches.iter().enumerate() {
+        let req_id = *next_request_id;
+        *next_request_id += 1;
+        let (kb, name, creator) = (share.kb_id, share.name, share.creator);
+        let req = mae_sync::wire::kb_share_request(req_id, kb, name, creator, &coll_b64, batch);
+        let body = match serde_json::to_vec(&req) {
+            Ok(b) => b,
+            Err(e) => {
+                error!("kb share serialize error: {e}");
+                return false;
+            }
+        };
+        if mae_mcp::write_framed(w, &body, write_timeout)
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        let kb_id = kb.to_string();
+        let kind = if count == 1 {
+            PendingResponseKind::KbShare { kb_id }
+        } else {
+            let last = (k + 1 == count).then_some(total);
+            PendingResponseKind::KbShareBatch { kb_id, last }
+        };
+        pending_responses.insert(req_id, kind);
+    }
+    true
+}
+
+/// ADR-022 Amendment 1 E2: ask for the next page of each paged join the last
+/// message advanced. Without a writer the join is lost with the connection, and
+/// the reconnect re-joins from the start.
+async fn send_join_pages(
+    writer: &mut Option<BoxWriter>,
+    pages: &mut Vec<JoinFollowUp>,
+    join_svs: &std::collections::HashMap<String, Vec<(String, String)>>,
+    identity: Option<&std::sync::Arc<mae_mcp::identity::Identity>>,
+    next_request_id: &mut u64,
+    pending_responses: &mut std::collections::HashMap<u64, PendingResponseKind>,
+    write_timeout: std::time::Duration,
+) {
+    for next in pages.drain(..) {
+        let Some(w) = writer.as_mut() else { break };
+        let req_id = *next_request_id;
+        *next_request_id += 1;
+        let svs = join_svs.get(&next.kb_id).cloned().unwrap_or_default();
+        let after = Some(next.after.as_str());
+        let mut req = mae_sync::wire::kb_join_page_request(req_id, &next.kb_id, &svs, after);
+        with_wrap_pubkey(&mut req, identity);
+        let Ok(body) = serde_json::to_vec(&req) else {
+            continue;
+        };
+        if mae_mcp::write_framed(w, &body, write_timeout).await.is_ok() {
+            let kind = PendingResponseKind::KbJoinPage {
+                kb_id: next.kb_id,
+                acc: next.acc,
+            };
+            pending_responses.insert(req_id, kind);
+        }
+    }
+    pages.clear();
 }
 
 /// What a response means once paging is accounted for.
