@@ -257,14 +257,9 @@ fn json_of(raw: &str) -> Value {
     serde_json::from_str(raw).unwrap_or(Value::Null)
 }
 
-#[tokio::test]
-async fn binding_by_proof_kind_group_gate_and_unbind_over_the_real_wire() {
-    let d = spawn().await;
-    let member = Identity::generate("alice-member-key");
-    let fp = member.fingerprint();
-    let alice = idp_token(&d.pem, "alice@idp", &[GROUP]);
-
-    let (status, who) = d.whoami(&alice).await;
+/// The IdP subject behind `token` is unbound: typed, never a fingerprint, and an agent.
+async fn assert_unbound(d: &Daemon, token: &str) {
+    let (status, who) = d.whoami(token).await;
     assert_eq!(status, 200, "{who}");
     assert!(
         who["principal"]
@@ -274,7 +269,13 @@ async fn binding_by_proof_kind_group_gate_and_unbind_over_the_real_wire() {
         "{who}"
     );
     assert_eq!(who["kind"], "agent");
+}
 
+/// C2 over the wire: a self-issued token is refused a challenge, the route is
+/// POST-only, and the IdP subject binds `member`'s key by proof. Returns the
+/// bind body, for the replay check.
+async fn bind_by_proof(d: &Daemon, member: &Identity, alice: &str) -> Value {
+    let fp = member.fingerprint();
     // A self-issued token's principal already is a fingerprint.
     let (status, raw) = d
         .post(
@@ -291,14 +292,14 @@ async fn binding_by_proof_kind_group_gate_and_unbind_over_the_real_wire() {
     let get = d
         .http
         .get(format!("{}/identity/challenge", d.base))
-        .bearer_auth(&alice)
+        .bearer_auth(alice)
         .send()
         .await
         .unwrap();
     assert_eq!(get.status().as_u16(), 405);
 
     let (status, raw) = d
-        .post("/identity/challenge", &alice, json!({"fingerprint": fp}))
+        .post("/identity/challenge", alice, json!({"fingerprint": fp}))
         .await;
     assert_eq!(status, 200, "{raw}");
     // Signed by the editor's own signer (`mae --sign-identity-challenge`),
@@ -311,11 +312,11 @@ async fn binding_by_proof_kind_group_gate_and_unbind_over_the_real_wire() {
         issuer: ISS,
         subject: "alice@idp",
     };
-    let (_, bind) = mae_mcp::identity_challenge::sign_challenge(&member, me, &raw, now).unwrap();
-    let (status, raw) = d.post("/identity/bind", &alice, bind.clone()).await;
+    let (_, bind) = mae_mcp::identity_challenge::sign_challenge(member, me, &raw, now).unwrap();
+    let (status, raw) = d.post("/identity/bind", alice, bind.clone()).await;
     assert_eq!(status, 200, "{raw}");
 
-    let (_, who) = d.whoami(&alice).await;
+    let (_, who) = d.whoami(alice).await;
     assert_eq!(
         (who["principal"].as_str(), who["kind"].as_str()),
         (Some(fp.as_str()), Some("agent"))
@@ -328,14 +329,12 @@ async fn binding_by_proof_kind_group_gate_and_unbind_over_the_real_wire() {
         "{row}"
     );
 
-    // C3: person only with an IdP session on a flagged binding.
-    assert!(
-        d.cli(&["set-kind", "--fingerprint", &fp, "--kind", "person"])
-            .0
-    );
-    assert_eq!(d.whoami(&alice).await.1["kind"], "person");
-    assert_eq!(d.whoami(&d.self_token(&fp)).await.1["kind"], "agent");
+    bind
+}
 
+/// D4: a token without an allowed group is refused before anything is
+/// written; any ONE allowed group admits.
+async fn group_gate_refuses_without_writing(d: &Daemon, fp: &str) {
     // D4: the group removed at the IdP; refused before anything is written.
     let before = d.store_rows();
     let groupless = idp_token(&d.pem, "alice@idp", &["other"]);
@@ -365,15 +364,35 @@ async fn binding_by_proof_kind_group_gate_and_unbind_over_the_real_wire() {
         before,
         "a refused session must write nothing"
     );
-    assert!(d.cli(&["list"]).1.contains(&fp), "nor touch the binding");
+    assert!(d.cli(&["list"]).1.contains(fp), "nor touch the binding");
     // Any ONE allowed group admits: the other of the two, alone.
     let other_group_only = idp_token(&d.pem, "alice@idp", &[OTHER_GROUP]);
     let (status, who) = d.whoami(&other_group_only).await;
     assert_eq!(
         (status, who["principal"].as_str()),
-        (200, Some(fp.as_str())),
+        (200, Some(fp)),
         "{who}"
     );
+}
+
+#[tokio::test]
+async fn binding_by_proof_kind_group_gate_and_unbind_over_the_real_wire() {
+    let d = spawn().await;
+    let member = Identity::generate("alice-member-key");
+    let fp = member.fingerprint();
+    let alice = idp_token(&d.pem, "alice@idp", &[GROUP]);
+    assert_unbound(&d, &alice).await;
+    let bind = bind_by_proof(&d, &member, &alice).await;
+
+    // C3: person only with an IdP session on a flagged binding.
+    assert!(
+        d.cli(&["set-kind", "--fingerprint", &fp, "--kind", "person"])
+            .0
+    );
+    assert_eq!(d.whoami(&alice).await.1["kind"], "person");
+    assert_eq!(d.whoami(&d.self_token(&fp)).await.1["kind"], "agent");
+
+    group_gate_refuses_without_writing(&d, &fp).await;
 
     // Replayed bind: the challenge is spent.
     let (status, raw) = d.post("/identity/bind", &alice, bind).await;
@@ -385,24 +404,11 @@ async fn binding_by_proof_kind_group_gate_and_unbind_over_the_real_wire() {
 
     // Unbind on the running daemon holds on the next request.
     assert!(d.cli(&["unbind", "--fingerprint", &fp]).0);
-    let (_, who) = d.whoami(&alice).await;
-    assert!(
-        who["principal"]
-            .as_str()
-            .unwrap()
-            .starts_with("idp-unbound:"),
-        "{who}"
-    );
-    assert_eq!(who["kind"], "agent");
+    assert_unbound(&d, &alice).await;
 }
 
-#[tokio::test]
-async fn no_network_method_changes_a_binding_or_names_another_principals() {
-    let d = spawn().await;
-    let (alice_fp, bob_fp) = (
-        Identity::generate("a").fingerprint(),
-        Identity::generate("b").fingerprint(),
-    );
+/// Two admin bindings made with the local CLI (alice flagged a person).
+fn admin_bindings(d: &Daemon, alice_fp: &str, bob_fp: &str) {
     assert!(
         d.cli(&[
             "bind",
@@ -411,7 +417,7 @@ async fn no_network_method_changes_a_binding_or_names_another_principals() {
             "--subject",
             "alice@idp",
             "--fingerprint",
-            &alice_fp
+            alice_fp
         ])
         .0
     );
@@ -435,17 +441,14 @@ async fn no_network_method_changes_a_binding_or_names_another_principals() {
             "--subject",
             "bob@idp",
             "--fingerprint",
-            &bob_fp
+            bob_fp
         ])
         .0
     );
-    let (_, before) = d.cli(&["list"]);
-    assert!(
-        before.contains("\tadmin\t"),
-        "admin bindings are shown as such: {before}"
-    );
+}
 
-    let bob = idp_token(&d.pem, "bob@idp", &[OTHER_GROUP]);
+/// Every network request that might change a binding or a kind, as bob.
+async fn every_mutation_attempt(d: &Daemon, bob: &str, bob_fp: &str) -> Vec<(u16, String)> {
     let mut answers = Vec::new();
     for method in [
         "kb/query.my_kbs",
@@ -462,7 +465,7 @@ async fn no_network_method_changes_a_binding_or_names_another_principals() {
         answers.push(
             d.post(
                 "/",
-                &bob,
+                bob,
                 json!({"jsonrpc": "2.0", "id": 1, "method": method,
             "params": params}),
             )
@@ -488,8 +491,27 @@ async fn no_network_method_changes_a_binding_or_names_another_principals() {
             json!({"fingerprint": bob_fp, "kind": "person"}),
         ),
     ] {
-        answers.push(d.post(path, &bob, body).await);
+        answers.push(d.post(path, bob, body).await);
     }
+    answers
+}
+
+#[tokio::test]
+async fn no_network_method_changes_a_binding_or_names_another_principals() {
+    let d = spawn().await;
+    let (alice_fp, bob_fp) = (
+        Identity::generate("a").fingerprint(),
+        Identity::generate("b").fingerprint(),
+    );
+    admin_bindings(&d, &alice_fp, &bob_fp);
+    let (_, before) = d.cli(&["list"]);
+    assert!(
+        before.contains("\tadmin\t"),
+        "admin bindings are shown as such: {before}"
+    );
+
+    let bob = idp_token(&d.pem, "bob@idp", &[OTHER_GROUP]);
+    let answers = every_mutation_attempt(&d, &bob, &bob_fp).await;
     for (status, raw) in &answers {
         for other in [alice_fp.as_str(), "alice@idp"] {
             assert!(

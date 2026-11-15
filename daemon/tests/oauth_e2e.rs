@@ -264,6 +264,30 @@ fn insecure_https_client() -> reqwest::Client {
         .unwrap()
 }
 
+/// ADR-098 Amendment 1: the binding routes are off by default
+/// (`identity_binding_enabled = false`): the path is an ordinary one, so it
+/// answers the bare probe and issues no challenge. And the probe shows the IdP
+/// subject typed as unbound, never as its raw `sub`.
+async fn binding_routes_are_off_by_default(
+    client: &reqwest::Client,
+    base_url: &str,
+    valid_token: &str,
+) {
+    let off = client
+        .post(format!("{base_url}/identity/challenge"))
+        .bearer_auth(valid_token)
+        .json(&serde_json::json!({"fingerprint": "SHA256:x"}))
+        .send()
+        .await
+        .expect("binding route request");
+    assert_eq!(off.status(), 200);
+    let off: serde_json::Value = off.json().await.unwrap();
+    assert!(off.get("challenge_id").is_none(), "{off}");
+    let principal = off["principal"].as_str().unwrap_or_default();
+    assert!(principal.starts_with("idp-unbound:"), "{off}");
+    assert_ne!(principal, "alice@example.com");
+}
+
 #[tokio::test]
 async fn oauth_and_kb_query_over_a_real_tls_connection() {
     let (private_key_pem, jwks) = generate_key_material();
@@ -325,25 +349,7 @@ async fn oauth_and_kb_query_over_a_real_tls_connection() {
         valid_body.get("error").is_some(),
         "a nonexistent KB is a JSON-RPC error, but from dispatch, not an auth failure: {valid_body}"
     );
-
-    // 3b. ADR-098 Amendment 1: the binding routes are off by default
-    // (`identity_binding_enabled = false`): the path is an ordinary one, so
-    // it answers the bare probe and issues no challenge. And the probe shows
-    // the IdP subject typed as unbound, never as its raw `sub`.
-    let off = client
-        .post(format!("{base_url}/identity/challenge"))
-        .bearer_auth(&valid_token)
-        .json(&serde_json::json!({"fingerprint": "SHA256:x"}))
-        .send()
-        .await
-        .expect("binding route request");
-    assert_eq!(off.status(), 200);
-    let off: serde_json::Value = off.json().await.unwrap();
-    assert!(off.get("challenge_id").is_none(), "{off}");
-    let principal = off["principal"].as_str().unwrap_or_default();
-    assert!(principal.starts_with("idp-unbound:"), "{off}");
-    assert_ne!(principal, "alice@example.com");
-
+    binding_routes_are_off_by_default(&client, &base_url, &valid_token).await;
     // 4. Wrong-audience token -> 401, over the real wire (the confused-
     // deputy defense, RFC 8707, previously only proven in-process).
     let mut wrong_aud_claims = valid_claims();
