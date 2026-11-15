@@ -317,6 +317,13 @@ async fn deliver_event<W: AsyncWrite + Unpin>(
     }
     true
 }
+/// Why a session's reader task stopped.
+enum ReadEnd {
+    Eof,
+    /// A request over the session's cap (ADR-022 Amendment 1 E5).
+    TooLarge(mae_mcp::MessageTooLarge),
+    Failed(String),
+}
 
 /// Run the client handler loop for a single connection.
 ///
@@ -392,22 +399,30 @@ async fn run_session<R, W>(
 
     // Spawn a dedicated reader task so read_message always runs to completion
     // (never cancelled by select!).  Messages arrive via an mpsc channel.
-    let (msg_tx, mut msg_rx) = mpsc::channel::<Result<String, String>>(32);
+    // ADR-022 Amendment 1 E3: requests are read up to the bound one document at
+    // the size limit fits, not a fixed 10 MiB, so a node at the limit can be
+    // shared or written in one message.
+    let request_cap = doc_store.message_bound();
+    let (msg_tx, mut msg_rx) = mpsc::channel::<Result<String, ReadEnd>>(32);
     tokio::spawn(async move {
         let mut reader = reader;
         loop {
-            match mae_mcp::read_message(&mut reader).await {
+            match mae_mcp::read_message_limited(&mut reader, request_cap).await {
                 Ok(Some(msg)) => {
                     if msg_tx.send(Ok(msg)).await.is_err() {
                         break; // handler dropped
                     }
                 }
                 Ok(None) => {
-                    let _ = msg_tx.send(Err("EOF".to_string())).await;
+                    let _ = msg_tx.send(Err(ReadEnd::Eof)).await;
                     break;
                 }
                 Err(e) => {
-                    let _ = msg_tx.send(Err(e.to_string())).await;
+                    let end = match mae_mcp::too_large(&e) {
+                        Some(t) => ReadEnd::TooLarge(t),
+                        None => ReadEnd::Failed(e.to_string()),
+                    };
+                    let _ = msg_tx.send(Err(end)).await;
                     break;
                 }
             }
@@ -432,11 +447,20 @@ async fn run_session<R, W>(
             msg = msg_rx.recv() => {
                 let msg = match msg {
                     Some(Ok(msg)) => msg,
-                    Some(Err(e)) if e == "EOF" => {
+                    Some(Err(ReadEnd::Eof)) => {
                         debug!(session = session_id, "client disconnected (EOF)");
                         break;
                     }
-                    Some(Err(e)) => {
+                    Some(Err(ReadEnd::TooLarge(t))) => {
+                        // E5: say why before the session ends. The body was
+                        // never read, so the framing cannot resume after it.
+                        warn!(session = session_id, size = t.len, limit = t.max, "request over the cap; answering and ending the session");
+                        let err = McpError::request_too_large(t.to_string(), t.len, t.max);
+                        let resp = JsonRpcResponse::error(serde_json::Value::Null, err);
+                        let _ = governor::write_json(&mut writer, &resp, write_timeout).await;
+                        break;
+                    }
+                    Some(Err(ReadEnd::Failed(e))) => {
                         error!(session = session_id, error = %e, "read error");
                         break;
                     }
@@ -494,7 +518,7 @@ async fn run_session<R, W>(
                     ).await
                 };
 
-                augment_initialize(&msg, &mut response, &broadcaster, session_id);
+                augment_initialize(&msg, &mut response, &broadcaster, session_id, request_cap);
                 if governor::write_json(&mut writer, &response, write_timeout).await.is_err() {
                     warn!(session = session_id, "write error; closing client");
                     break;
@@ -573,9 +597,19 @@ fn augment_initialize(
     response: &mut JsonRpcResponse,
     broadcaster: &SharedBroadcaster,
     session_id: u64,
+    message_cap: usize,
 ) {
     if !msg.contains("\"initialize\"") {
         return;
+    }
+    // ADR-022 Amendment 1 E4: the same two limits the socket's hello carries,
+    // so a client packs `kb/share` batches against the daemon's real request
+    // cap. A paged `kb/join` fills each reply up to the same bound.
+    if let Some(result) = response.result.as_mut().filter(|r| r.is_object()) {
+        result["limits"] = serde_json::json!({
+            "max_frame_bytes": message_cap,
+            "max_outbound_bytes": message_cap,
+        });
     }
     let Some(info) = response
         .result

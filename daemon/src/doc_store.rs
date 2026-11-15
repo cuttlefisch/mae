@@ -86,6 +86,8 @@ pub struct DocStore {
     /// Largest payload (a KB node's body, or a text document's content) an
     /// update may grow a document to, in UTF-8 bytes (0 = unlimited). ADR-109 D6.
     max_document_size_bytes: usize,
+    /// `[collab.sync] max_message_bytes`; see [`DocStore::message_bound`].
+    max_message_bytes: Option<usize>,
     /// Maximum single sync-update payload size in bytes (0 = use the built-in
     /// default). Operator-tunable via `daemon.toml` `[collab.sync]
     /// max_update_size_bytes`; enforced by the collab handler's per-update gate.
@@ -261,6 +263,7 @@ impl DocStore {
             max_documents: 0,
             max_wal_entries: 0,
             max_document_size_bytes: 0,
+            max_message_bytes: None,
             max_update_size_bytes: 0,
             kb_metas: RwLock::new(HashMap::new()),
             signer: std::sync::OnceLock::new(),
@@ -854,6 +857,20 @@ impl DocStore {
     /// The ADR-109 D6 document size limit, bytes; 0 = unlimited.
     pub fn max_document_size(&self) -> usize {
         self.max_document_size_bytes
+    }
+
+    /// Override the message bound (`[collab.sync] max_message_bytes`); `None`
+    /// keeps it derived from the document size limit.
+    pub fn with_max_message_bytes(mut self, max: Option<usize>) -> Self {
+        self.max_message_bytes = max;
+        self
+    }
+
+    /// The largest message on a collab session: the configured override, or
+    /// the bound one document at the size limit fits (ADR-022 Amendment 1 E3).
+    pub fn message_bound(&self) -> usize {
+        self.max_message_bytes
+            .unwrap_or_else(|| crate::message_limits::message_bound(self.max_document_size_bytes))
     }
 
     /// Set the maximum single sync-update payload size (bytes). 0 = use the
