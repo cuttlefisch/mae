@@ -29,10 +29,12 @@ unsafe extern "C" {
 
 /// Fills `dest` with random bytes, or fails.
 ///
-/// A fill of 16 bytes or more that comes back all zeros is refused (odds
-/// 2^-128 for a real source): it is what a host stub that reports success
-/// without writing produces, and `dest` starts zeroed here. A source that
-/// writes constant non-zero bytes is not detectable and not detected.
+/// A fill of 16 bytes or more that comes back all zeros, or identical to the
+/// previous such fill (on this thread; the WASM module has one), is refused:
+/// odds 2^-128 for a real source. The first is what a host stub that reports
+/// success without writing produces (`dest` starts zeroed here); the second,
+/// a host that returns a constant or replays a buffer. A source that varies
+/// but is predictable is not detectable and not detected.
 pub fn fill(dest: &mut [u8]) -> Result<(), RandomUnavailable> {
     fill_from(dest, source)
 }
@@ -43,11 +45,26 @@ fn fill_from(
 ) -> Result<(), RandomUnavailable> {
     dest.fill(0);
     let filled = source(dest).is_ok();
-    if !filled || (dest.len() >= 16 && dest.iter().all(|b| *b == 0)) {
+    if !filled || (dest.len() >= 16 && (dest.iter().all(|b| *b == 0) || repeats(dest))) {
         dest.fill(0);
         return Err(RandomUnavailable);
     }
     Ok(())
+}
+
+thread_local! {
+    /// A digest of the last fill of 16 bytes or more: a digest, so a seed
+    /// drawn here is not kept in memory as itself.
+    static LAST: std::cell::Cell<[u8; 16]> = const { std::cell::Cell::new([0u8; 16]) };
+}
+
+/// Whether `fill` is identical to the previous fill of 16 bytes or more,
+/// recording it as the previous one.
+fn repeats(fill: &[u8]) -> bool {
+    use sha2::{Digest, Sha256};
+    let mut d = [0u8; 16];
+    d.copy_from_slice(&Sha256::digest(fill)[..16]);
+    LAST.with(|last| last.replace(d) == d)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -90,6 +107,47 @@ mod tests {
         let b: [u8; 32] = array();
         assert_ne!(a, [0u8; 32]);
         assert_ne!(a, b);
+    }
+
+    /// A host that returns the same bytes twice is refused the second time;
+    /// a varying one is not.
+    #[test]
+    fn a_fill_identical_to_the_previous_one_is_refused() {
+        let constant = |d: &mut [u8]| {
+            d.fill(0x5a);
+            Ok(())
+        };
+        let mut a = [0u8; 32];
+        assert_eq!(fill_from(&mut a, constant), Ok(()));
+        let mut b = [0u8; 32];
+        assert_eq!(fill_from(&mut b, constant), Err(RandomUnavailable));
+        assert_eq!(b, [0u8; 32], "the repeated bytes are not handed on");
+        for n in 1..=4u8 {
+            let mut c = [0u8; 16];
+            assert_eq!(
+                fill_from(&mut c, |d| {
+                    d.fill(n);
+                    Ok(())
+                }),
+                Ok(())
+            );
+        }
+        // Short fills are not compared (a 4-byte value may repeat).
+        let mut s = [0u8; 4];
+        assert_eq!(
+            fill_from(&mut s, |d| {
+                d.fill(7);
+                Ok(())
+            }),
+            Ok(())
+        );
+        assert_eq!(
+            fill_from(&mut s, |d| {
+                d.fill(7);
+                Ok(())
+            }),
+            Ok(())
+        );
     }
 
     /// A host that reports success without writing, or that fails, gives

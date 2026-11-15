@@ -32,6 +32,15 @@ const OPS = new Map([
   ['contentUnwrap', 17],
 ]);
 
+/**
+ * The largest request, in UTF-8 bytes, the loader passes to the module:
+ * 15,029,592, the daemon's default `max_message_bytes` (base64 of a
+ * 10 MiB document plus 1 MiB). A `contentSeal` of a node at the daemon's
+ * document limit (base64 plaintext, about 14 MB) fits; anything larger is
+ * refused here with a RangeError, before the module is touched.
+ */
+export const MAX_REQUEST_BYTES = 15_029_592;
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
 
@@ -60,9 +69,19 @@ function hostRandom() {
 
 /**
  * Instantiates the module from its bytes (or a compiled module), synchronously.
- * `randomFill` replaces the entropy source: for tests only.
+ *
+ * TEST ONLY: `randomFill` replaces the entropy source every key, salt and
+ * nonce is drawn from. It is refused unless `dangerouslyReplaceEntropyForTests`
+ * is `true` beside it, so it cannot be passed by accident; a production
+ * loader never sets either.
  */
-export function instantiate(bytes, { randomFill } = {}) {
+export function instantiate(bytes, { randomFill, dangerouslyReplaceEntropyForTests } = {}) {
+  if (randomFill !== undefined && dangerouslyReplaceEntropyForTests !== true) {
+    throw new Error(
+      'mae-crypto: randomFill replaces the entropy source and is for tests only; ' +
+        'it also needs dangerouslyReplaceEntropyForTests: true',
+    );
+  }
   const module = bytes instanceof WebAssembly.Module ? bytes : new WebAssembly.Module(bytes);
   const fill = randomFill ?? hostRandom();
   let memory = null;
@@ -86,9 +105,11 @@ export function instantiate(bytes, { randomFill } = {}) {
 /**
  * One module instance and the member keys it holds (by handle). A call
  * that throws for any reason other than an error response (a trap, the
- * host's stack running out) RETIRES the instance: every later call throws.
- * It is not restarted behind the caller's back, because a fresh instance
- * holds none of the keys and reissues their handles to new keys.
+ * host's stack running out) RETIRES the instance: its whole linear memory
+ * is zeroed (the keys it held, and whatever the failed call left) and
+ * every later call throws. It is not restarted behind the caller's back,
+ * because a fresh instance holds none of the keys and reissues their
+ * handles to new keys. `dispose()` retires it the same way on purpose.
  */
 export class MaeCrypto {
   constructor(exports) {
@@ -106,9 +127,13 @@ export class MaeCrypto {
       throw new Error(`unknown operation ${typeof op === 'string' ? op : typeof op}`);
     }
     if (this.broken) {
-      throw new Error(`mae-crypto instance retired after a failed call: ${this.broken.message}`);
+      throw new Error(`mae-crypto instance retired: ${this.broken.message}`);
     }
     const input = encoder.encode(request);
+    if (input.length > MAX_REQUEST_BYTES) {
+      input.fill(0);
+      throw new RangeError(`mae-crypto: a request is at most ${MAX_REQUEST_BYTES} bytes`);
+    }
     const e = this.exports;
     try {
       // Pointers and lengths are u32: `>>> 0` reads them unsigned past 2 GiB.
@@ -124,8 +149,22 @@ export class MaeCrypto {
         e.mae_crypto_result_free();
       }
     } catch (err) {
-      this.broken = err;
+      this.retire(err);
       throw err;
+    }
+  }
+
+  /** Zeroes the instance's memory, keys included, and refuses every later call. */
+  dispose() {
+    this.retire(new Error('disposed'));
+  }
+
+  retire(reason) {
+    this.broken = reason;
+    try {
+      new Uint8Array(this.exports.memory.buffer).fill(0);
+    } catch {
+      // Nothing more can be done for memory the engine will not let us write.
     }
   }
 
@@ -148,24 +187,25 @@ export class MaeCrypto {
   fingerprint(publicKey) { return this.call('fingerprint', { public_key: publicKey }).fingerprint; }
 
   // The identity-binding challenge: signed only if canonical, for this key,
-  // unexpired, and issued to the issuer and subject stated here. `now` is
-  // unix seconds (default: this host's clock).
-  checkChallenge({ key, issuer, subject, challenge, now = nowSeconds() }) {
-    return this.call('checkChallenge', { key, issuer, subject, challenge, now }).challenge;
+  // unexpired and not too far off, and issued to the issuer and subject and
+  // by the daemon (audience) stated here. `now` is unix seconds (default:
+  // this host's clock).
+  checkChallenge({ key, issuer, subject, audience, challenge, now = nowSeconds() }) {
+    return this.call('checkChallenge', { key, issuer, subject, audience, challenge, now }).challenge;
   }
-  signChallenge({ key, issuer, subject, challenge, now = nowSeconds() }) {
-    return this.call('signChallenge', { key, issuer, subject, challenge, now });
+  signChallenge({ key, issuer, subject, audience, challenge, now = nowSeconds() }) {
+    return this.call('signChallenge', { key, issuer, subject, audience, challenge, now });
   }
 
-  // The key backup (envelope v1). The passphrase is NFC-normalised here, as
-  // the format requires, so the same typed passphrase opens it anywhere.
+  // The key backup (envelope v1). The module NFC-normalises the passphrase
+  // itself (as a native caller does), so it is passed as typed.
   backupSeal({ key, passphrase, kdf }) {
-    const req = { key, passphrase: nfc(passphrase) };
+    const req = { key, passphrase };
     if (kdf !== undefined) req.kdf = kdf;
     return this.call('backupSeal', req).envelope;
   }
   backupOpen({ envelope, passphrase }) {
-    return this.call('backupOpen', { envelope, passphrase: nfc(passphrase) });
+    return this.call('backupOpen', { envelope, passphrase });
   }
   backupParams(envelope) { return this.call('backupParams', { envelope }); }
 
@@ -190,11 +230,4 @@ export class MaeCrypto {
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
-}
-
-function nfc(passphrase) {
-  if (typeof passphrase !== 'string') {
-    throw new TypeError('mae-crypto: a passphrase must be a string');
-  }
-  return passphrase.normalize('NFC');
 }

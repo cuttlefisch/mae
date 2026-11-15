@@ -18,20 +18,24 @@
 //  6. memory: no leak over many calls, and after a key is forgotten (or an
 //     operation returns) no copy of a seed, content key, plaintext or
 //     passphrase is left anywhere in linear memory;
-//  7. the loader NFC-normalises passphrases.
+//  7. passphrases are NFC-normalised in the module, the same natively;
+//  8. the loader: the entropy override needs its explicit test flag, and a
+//     request over MAX_REQUEST_BYTES is refused before the module sees it.
 
-import { instantiate, MaeCryptoError } from './mae-crypto.mjs';
+import { instantiate as load, MaeCryptoError, MAX_REQUEST_BYTES } from './mae-crypto.mjs';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 
 // Measured with rustc 1.98, `--profile wasm` (opt-level "s"): 346,994 bytes
-// on 2026-11-15; the budget is ~15% over that (docs/E2E_ENCRYPTION.md §10). The module guards against
-// accidental bloat (a stray dependency, a generic blow-up); raising the
-// budget is a decision to record there, not a number to bump.
-const SIZE_BUDGET = 400_000;
+// on 2026-11-15; 474,145 once NFC moved into Rust (review round 1; the
+// growth is unicode-normalization's tables). The budget is ~16% over the
+// latter (docs/E2E_ENCRYPTION.md §10). It guards against accidental bloat
+// (a stray dependency, a generic blow-up); raising it is a decision to
+// record there, not a number to bump.
+const SIZE_BUDGET = 550_000;
 const OPS = new Map([
   ['version', 1], ['generate', 2], ['importSeed', 3], ['exportSeed', 4], ['forget', 5],
   ['keyInfo', 6], ['fingerprint', 7], ['checkChallenge', 8], ['signChallenge', 9],
@@ -41,7 +45,11 @@ const OPS = new Map([
 const FAST = { m: 19456, t: 2, p: 1 };
 const ISS = 'https://idp.example.com';
 const SUB = 'alice@idp';
+const AUD = 'https://mae.example.com';
 const NOW = 1_900_000_000;
+// Tests replace the entropy source; the loader insists that be explicit.
+const instantiate = (bytes, opts = {}) =>
+  load(bytes, opts.randomFill ? { ...opts, dangerouslyReplaceEntropyForTests: true } : opts);
 
 const wasmPath = process.env.MAE_CRYPTO_WASM;
 const nativePath = process.env.MAE_CRYPTO_NATIVE;
@@ -130,10 +138,12 @@ check(wasmBytes.length <= SIZE_BUDGET, `size ${wasmBytes.length} > budget ${SIZE
       challengeText(fp, ISS, SUB, NOW + 60).replace('mae-identity-binding-v1', 'mae-other-v1'),
       challengeText(fp, ISS, SUB, NOW + 60).replace('{', '{"x":1,'),
       challengeText(fp, ISS, 'a'.repeat(5000), NOW + 60),
+      challengeText(fp, ISS, SUB, NOW + 3601),
+      challengeText(fp, ISS, SUB, NOW + 60).replace(AUD, 'https://other.example.com'),
       'sign me',
     ];
     for (const challenge of cases) {
-      const req = { key, issuer: ISS, subject: SUB, challenge, now: NOW };
+      const req = { key, issuer: ISS, subject: SUB, audience: AUD, challenge, now: NOW };
       script.push(['checkChallenge', req], ['signChallenge', req]);
     }
     script.push(['fingerprint', { public_key: info.public_key }]);
@@ -143,6 +153,7 @@ check(wasmBytes.length <= SIZE_BUDGET, `size ${wasmBytes.length} > budget ${SIZE
     ['fingerprint', { public_key: b64(new Uint8Array(31)) }], ['importSeed', { seed: 'AAAA' }],
     ['keyInfo', {}], ['keyInfo', { key: 2, x: 1 }], ['version', { x: 1 }],
     ['backupParams', { envelope: 'not json' }], ['backupOpen', { envelope: '{"v":2}', passphrase: 'p' }],
+    ['backupSeal', { key: 2, passphrase: 'elevenchars', kdf: FAST }],
     ['contentOpen', { content_key: b64(randomBytes(32)), sealed: b64(randomBytes(80)) }],
     ['contentOpen', { content_key: b64(randomBytes(32)), sealed: 'AAAA' }],
     ['contentWrap', { content_key: b64(randomBytes(32)), wrap_public: b64(new Uint8Array(32)) }],
@@ -159,7 +170,7 @@ check(wasmBytes.length <= SIZE_BUDGET, `size ${wasmBytes.length} > budget ${SIZE
   const codes = new Set(w.map(result).filter((r) => !r.ok).map((r) => r.code));
   for (const c of ['other-key', 'other-subject', 'other-issuer', 'expired', 'empty-field', 'not-a-challenge',
     'wrong-domain', 'too-long', 'no-key', 'bad-public-key', 'bad-request', 'not-an-envelope', 'unknown-version',
-    'decrypt', 'malformed']) {
+    'decrypt', 'malformed', 'other-audience', 'expiry-too-far', 'passphrase-weak']) {
     check(codes.has(c), `differential never saw '${c}'`);
   }
   // And a signature verifies over exactly the challenge bytes.
@@ -252,7 +263,7 @@ check(wasmBytes.length <= SIZE_BUDGET, `size ${wasmBytes.length} > budget ${SIZE
   }
   const k = dead.importSeed(b64(randomBytes(32)));
   let code = null;
-  try { dead.backupSeal({ key: k.key, passphrase: 'p', kdf: FAST }); } catch (e) { code = e.code; }
+  try { dead.backupSeal({ key: k.key, passphrase: 'twelve chars', kdf: FAST }); } catch (e) { code = e.code; }
   check(code === 'no-entropy', 'backupSeal without entropy');
   let trapped = false;
   try { dead.contentSeal(b64(randomBytes(32)), b64(randomBytes(8))); } catch (e) { trapped = e instanceof WebAssembly.RuntimeError; }
@@ -260,10 +271,16 @@ check(wasmBytes.length <= SIZE_BUDGET, `size ${wasmBytes.length} > budget ${SIZE
   let retired = false;
   try { dead.version(); } catch (e) { retired = !(e instanceof MaeCryptoError); }
   check(retired, 'a trapped instance is retired');
+  check(new Uint8Array(dead.exports.memory.buffer).every((b) => b === 0), 'a retired instance is wiped (the held seed with it)');
   // A host that reports success and writes nothing (all zeros) is refused.
   const zeros = instantiate(module, { randomFill: (v) => v.fill(0) });
   const r = result(zeros.callRaw('generate', '{}'));
   check(!r.ok && r.code === 'no-entropy', 'an all-zero source is refused');
+  // A host that replays the same bytes is refused the second time.
+  const replay = instantiate(module, { randomFill: (v) => v.fill(0x5a) });
+  check(result(replay.callRaw('generate', '{}')).ok, 'the first constant fill is not yet detectable');
+  const again = result(replay.callRaw('generate', '{}'));
+  check(!again.ok && again.code === 'no-entropy', 'a repeated fill is refused');
   // The host is asked: two generated keys differ, and so do two seals.
   const live = instantiate(module);
   check(live.generate().public_key !== live.generate().public_key, 'two generated keys are equal');
@@ -282,8 +299,8 @@ check(wasmBytes.length <= SIZE_BUDGET, `size ${wasmBytes.length} > budget ${SIZE
     const s = m.contentSeal(ck, b64(randomBytes(100)));
     m.contentOpen(ck, s);
     try { m.contentOpen(m.contentKeyGenerate(), s); } catch {}
-    m.signChallenge({ key: k.key, issuer: ISS, subject: SUB, challenge: challengeText(fp, ISS, SUB, NOW + 60), now: NOW });
-    try { m.signChallenge({ key: k.key, issuer: ISS, subject: 'x', challenge: 'sign me', now: NOW }); } catch {}
+    m.signChallenge({ key: k.key, issuer: ISS, subject: SUB, audience: AUD, challenge: challengeText(fp, ISS, SUB, NOW + 60), now: NOW });
+    try { m.signChallenge({ key: k.key, issuer: ISS, subject: 'x', audience: AUD, challenge: 'sign me', now: NOW }); } catch {}
     m.forget(m.generate().key);
   };
   for (let i = 0; i < 50; i++) warm();
@@ -305,7 +322,7 @@ check(wasmBytes.length <= SIZE_BUDGET, `size ${wasmBytes.length} > budget ${SIZE
   const seed = randomBytes(32);
   const pass = 'residue ' + b64(randomBytes(9));
   let h = r.importSeed(b64(seed));
-  r.signChallenge({ key: h.key, issuer: ISS, subject: SUB, challenge: challengeText(h.fingerprint, ISS, SUB, NOW + 60), now: NOW });
+  r.signChallenge({ key: h.key, issuer: ISS, subject: SUB, audience: AUD, challenge: challengeText(h.fingerprint, ISS, SUB, NOW + 60), now: NOW });
   const env = r.backupSeal({ key: h.key, passphrase: pass, kdf: FAST });
   r.exportSeed(h.key);
   check(copies(r, Buffer.from(seed)) > 0, 'control: a held seed is found');
@@ -344,22 +361,67 @@ check(wasmBytes.length <= SIZE_BUDGET, `size ${wasmBytes.length} > budget ${SIZE
   for (const i of [0, 4, 2, 1]) r.forget(hs[i]);
   [0, 4, 2, 1].forEach((i) => none(r, many[i], `forgotten key ${i} of 5`));
   check(copies(r, Buffer.from(many[3])) > 0, 'control: the key still held is found');
+  // The keys derived from a seed (the X25519 wrap secret, and the Ed25519
+  // signing scalar's hash prefix) do not outlive the call that used them;
+  // after forget, neither does the seed; after dispose, nothing at all.
+  r = instantiate(module);
+  const ds = randomBytes(32);
+  const dk = r.importSeed(b64(ds));
+  r.signChallenge({ key: dk.key, issuer: ISS, subject: SUB, audience: AUD, challenge: challengeText(dk.fingerprint, ISS, SUB, NOW + 60), now: NOW });
+  r.contentUnwrap(dk.key, r.contentWrap(b64(randomBytes(32)), dk.wrap_public));
+  const wrapSecret = createHash('sha512').update('mae-x25519-wrap/v1').update(ds).digest().subarray(0, 32);
+  const hashPrefix = createHash('sha512').update(ds).digest().subarray(32, 64);
+  check(copies(r, wrapSecret) === 0, 'the wrap secret outlived its call');
+  check(copies(r, hashPrefix) === 0, 'the signing hash prefix outlived its call');
+  r.forget(dk.key);
+  none(r, ds, 'a forgotten seed whose derived keys were used');
+  const held = randomBytes(32);
+  r.importSeed(b64(held));
+  check(copies(r, held) > 0, 'control: a held seed is found before dispose');
+  r.dispose();
+  check(copies(r, held) === 0, 'dispose left a held seed');
+  let disposed = false;
+  try { r.version(); } catch (e) { disposed = !(e instanceof MaeCryptoError); }
+  check(disposed, 'a disposed instance refuses calls');
 }
 
-// 7. The loader NFC-normalises passphrases, so the same typed passphrase
-//    opens the backup whatever form the input method produced.
+// 7. NFC in the module, natively the same: sealed with one form, opened
+//    with the other, across the two builds, through the raw ABI (the loader
+//    passes passphrases as typed).
 {
   const m = instantiate(module);
-  const k = m.generate();
-  const nfd = 'cafe\u0301 contrasen\u0303a';
+  const seed = b64(randomBytes(32));
+  const k = m.importSeed(seed);
+  const nfd = 'café contraseña';
   const nfc = nfd.normalize('NFC');
   check(nfd !== nfc, 'the test passphrase has two forms');
-  const env = m.backupSeal({ key: k.key, passphrase: nfd, kdf: FAST });
-  let opened = null;
-  try { opened = m.backupOpen({ envelope: env, passphrase: nfc }).fingerprint; } catch (e) { opened = e.code; }
-  check(opened === k.fingerprint, `NFC opens an NFD-sealed backup (${opened})`);
-  const raw = result(m.callRaw('backupOpen', JSON.stringify({ envelope: env, passphrase: nfd })));
-  check(!raw.ok && raw.code === 'open', 'the module itself takes the bytes as given');
+  const wenv = result(m.callRaw('backupSeal', JSON.stringify({ key: k.key, passphrase: nfd, kdf: FAST }))).result.envelope;
+  const [nk, nenv, nopen] = native([
+    ['importSeed', { seed }],
+    ['backupSeal', { key: 1, passphrase: nfc, kdf: FAST }],
+    ['backupOpen', { envelope: wenv, passphrase: nfc }],
+  ]).map(result);
+  check(nopen.ok && nopen.result.fingerprint === k.fingerprint, 'native opens (NFC) what WASM sealed (NFD)');
+  const wopen = result(m.callRaw('backupOpen', JSON.stringify({ envelope: nenv.result.envelope, passphrase: nfd })));
+  check(wopen.ok && wopen.result.fingerprint === nk.result.fingerprint, 'WASM opens (NFD) what native sealed (NFC)');
+}
+
+// 8. The loader's own guards.
+{
+  let refused = null;
+  try { load(module, { randomFill: (v) => v.fill(1) }); } catch (e) { refused = e.message; }
+  check(refused !== null && refused.includes('dangerouslyReplaceEntropyForTests'), 'randomFill without the test flag is refused');
+  const m = instantiate(module);
+  const ck = m.contentKeyGenerate();
+  // A node at the daemon's document limit (10 MiB) seals and opens.
+  const big = randomBytes(10 * 1024 * 1024);
+  const sealed = m.contentSeal(ck, b64(big));
+  check(m.contentOpen(ck, sealed) === b64(big), 'a 10 MiB node round-trips');
+  let tooBig = null;
+  try { m.callRaw('version', ' '.repeat(MAX_REQUEST_BYTES + 1)); } catch (e) { tooBig = e; }
+  check(tooBig instanceof RangeError, 'a request over MAX_REQUEST_BYTES is refused');
+  check(m.version().version !== undefined, 'and the instance is still usable');
+  check(MAX_REQUEST_BYTES >= 15_029_592, 'the bound admits the daemon message bound');
 }
 
 rmSync(dir, { recursive: true, force: true });

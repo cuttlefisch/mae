@@ -17,11 +17,13 @@ fn key() -> MemberKey {
 const NOW: u64 = 1_900_000_000;
 const ISS: &str = "https://idp.example.com";
 const SUB: &str = "alice@idp";
+const AUD: &str = "https://mae.example.com";
 
 /// The key holder, stating the identity the challenges below are issued to.
 const ME: Claimant<'static> = Claimant {
     issuer: ISS,
     subject: SUB,
+    audience: AUD,
 };
 
 /// Whether a refusal is the one a case expects.
@@ -32,10 +34,14 @@ fn canonical(id: &MemberKey, exp: u64) -> String {
 }
 
 fn issued_to(id: &MemberKey, iss: &str, sub: &str, exp: u64) -> String {
+    issued_at(id, iss, sub, AUD, exp)
+}
+
+fn issued_at(id: &MemberKey, iss: &str, sub: &str, aud: &str, exp: u64) -> String {
     challenge_text(
         iss,
         sub,
-        "https://mae.example.com",
+        aud,
         &id.fingerprint(),
         "bm9uY2Utbm9uY2Utbm9uY2Utbm9uY2Utbm9uY2Utbm9u",
         exp,
@@ -100,9 +106,8 @@ fn the_daemons_whole_answer_is_accepted() {
 /// Anything else is refused. Each case is one step away from a valid
 /// challenge, so the refusal is for that step and not for something else.
 #[test]
-fn it_never_signs_anything_but_a_canonical_unexpired_challenge_for_this_key() {
+fn it_never_signs_anything_but_the_canonical_challenge_format() {
     let id = key();
-    let other = key();
     let good = canonical(&id, NOW + 60);
     let reformatted =
         serde_json::to_string_pretty(&serde_json::from_str::<serde_json::Value>(&good).unwrap())
@@ -133,6 +138,22 @@ fn it_never_signs_anything_but_a_canonical_unexpired_challenge_for_this_key() {
         ("trailing bytes", format!("{good}\u{0}payload"), |r| {
             matches!(r, ChallengeRefusal::NotAChallenge(_))
         }),
+        // Canonical and for this key, but longer than any challenge issued.
+        ("too long", long_subject(&id), |r| {
+            *r == ChallengeRefusal::TooLong
+        }),
+    ];
+    assert_all_refused(&id, cases);
+}
+
+/// Canonical challenges, each one step from the one this key holder may
+/// sign: another key, person, provider or daemon, or the wrong time.
+#[test]
+fn it_never_signs_a_challenge_for_another_key_person_daemon_or_time() {
+    let id = key();
+    let other = key();
+    let good = canonical(&id, NOW + 60);
+    let cases: Vec<(&str, String, Expect)> = vec![
         ("another key", canonical(&other, NOW + 60), |r| {
             *r == ChallengeRefusal::OtherKey
         }),
@@ -165,13 +186,34 @@ fn it_never_signs_anything_but_a_canonical_unexpired_challenge_for_this_key() {
             issued_to(&id, "https://idp.example.org", SUB, NOW + 60),
             |r| *r == ChallengeRefusal::OtherIssuer,
         ),
-        // Canonical and for this key, but longer than any challenge issued.
-        ("too long", long_subject(&id), |r| {
-            *r == ChallengeRefusal::TooLong
+        // For this key and this person, but issued by another daemon: one
+        // the key holder also uses could relay it.
+        (
+            "another audience",
+            issued_at(&id, ISS, SUB, "https://evil.example.com", NOW + 60),
+            |r| *r == ChallengeRefusal::OtherAudience,
+        ),
+        (
+            "the audience with a trailing slash",
+            issued_at(&id, ISS, SUB, "https://mae.example.com/", NOW + 60),
+            |r| *r == ChallengeRefusal::OtherAudience,
+        ),
+        // Valid for longer than any daemon issues a challenge.
+        (
+            "expiry too far",
+            canonical(&id, NOW + MAX_CHALLENGE_LIFETIME_SECS + 1),
+            |r| *r == ChallengeRefusal::ExpiryTooFar,
+        ),
+        ("expiry far in the future", canonical(&id, u64::MAX), |r| {
+            *r == ChallengeRefusal::ExpiryTooFar
         }),
     ];
+    assert_all_refused(&id, cases);
+}
+
+fn assert_all_refused(id: &MemberKey, cases: Vec<(&str, String, Expect)>) {
     for (name, input, expected) in cases {
-        match sign_challenge(&id, ME, &input, NOW) {
+        match sign_challenge(id, ME, &input, NOW) {
             Ok(_) => panic!("{name}: signed"),
             Err(r) => assert!(expected(&r), "{name}: refused for the wrong reason: {r:?}"),
         }
@@ -208,8 +250,8 @@ fn check_applies_the_signing_rules_without_signing() {
     let c = check_challenge(&id.fingerprint(), ME, &answer.to_string(), NOW).unwrap();
     assert_eq!((c.iss.as_str(), c.sub.as_str()), (ISS, SUB));
     let mallory = Claimant {
-        issuer: ISS,
         subject: "mallory@idp",
+        ..ME
     };
     assert_eq!(
         check_challenge(&id.fingerprint(), mallory, &text, NOW),
@@ -231,8 +273,46 @@ fn check_applies_the_signing_rules_without_signing() {
         ChallengeRefusal::OtherKey,
         ChallengeRefusal::OtherIssuer,
         ChallengeRefusal::OtherSubject,
+        ChallengeRefusal::OtherAudience,
         ChallengeRefusal::Expired,
+        ChallengeRefusal::ExpiryTooFar,
     ];
     let codes: std::collections::BTreeSet<&str> = all.iter().map(|r| r.code()).collect();
     assert_eq!(codes.len(), all.len(), "every refusal has its own code");
+}
+
+/// The lifetime cap is inclusive: a challenge expiring exactly
+/// MAX_CHALLENGE_LIFETIME_SECS from now signs, one second more does not.
+#[test]
+fn the_lifetime_cap_is_exact() {
+    let id = key();
+    let at_cap = canonical(&id, NOW + MAX_CHALLENGE_LIFETIME_SECS);
+    assert!(sign_challenge(&id, ME, &at_cap, NOW).is_ok());
+    let over = canonical(&id, NOW + MAX_CHALLENGE_LIFETIME_SECS + 1);
+    assert_eq!(
+        sign_challenge(&id, ME, &over, NOW).unwrap_err(),
+        ChallengeRefusal::ExpiryTooFar
+    );
+}
+
+/// A refusal never quotes the input: the browser shows or logs it.
+#[test]
+fn refusals_never_echo_the_input() {
+    let id = key();
+    let marker = "QUOTEDMARKER7f3a";
+    let good = canonical(&id, NOW + 60);
+    for input in [
+        format!("{{\"{marker}\":1}}"),
+        good.replacen('{', &format!("{{\"{marker}\":1,"), 1),
+        good.replace(
+            "\"expires_at\":",
+            &format!("\"expires_at\":\"{marker}\",\"x\":"),
+        ),
+        format!("not json {marker}"),
+        format!("[\"{marker}\"]"),
+    ] {
+        let r = sign_challenge(&id, ME, &input, NOW).unwrap_err();
+        assert!(!r.to_string().contains(marker), "{r}");
+        assert!(!format!("{r:?}").contains(marker), "{r:?}");
+    }
 }

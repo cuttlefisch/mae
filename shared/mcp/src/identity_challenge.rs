@@ -11,13 +11,14 @@
 //! @ai-caution: [security] [`sign_challenge`] signs with the member key, which
 //! also signs membership and content ops. It must never become a signing
 //! oracle: the rules (canonical text byte for byte, domain tag, this key,
-//! unexpired, only for the stated issuer and subject) live in
+//! unexpired and not too far off, only for the stated issuer, subject and
+//! audience) live in
 //! `mae_crypto::identity_challenge` and must not be re-implemented or
 //! bypassed here.
 
 pub use mae_crypto::identity_challenge::{
     challenge_text, Challenge, ChallengeRefusal, ChallengeSigner, Claimant, DOMAIN_TAG,
-    MAX_CHALLENGE_BYTES,
+    MAX_CHALLENGE_BYTES, MAX_CHALLENGE_LIFETIME_SECS,
 };
 
 use crate::identity::Identity;

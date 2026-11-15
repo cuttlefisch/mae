@@ -211,16 +211,23 @@ twice and requires identical bytes; `make crypto-wasm-test` runs the Node checks
 native-vs-WASM differential over every deterministic response, interop both ways, entropy failure,
 leak and memory residue). CI's "mae-crypto WASM" job runs all three on a pinned rustc and records size and
 sha256. The contract version is `mae-crypto-wasm`'s own (`version` below), not MAE's; a consumer pins a
-`mae-crypto-vX.Y.Z` tag. Size budget: `SIZE_BUDGET` in `shared/crypto-wasm/js/test.mjs`, 400,000 bytes,
-~15% over the first measurement (346,994 bytes, rustc 1.98.0, `--profile wasm`, 2026-11-15; most of it is
-Argon2/BLAKE2b, the two curve crates and serde_json); raising it is recorded here.
+`mae-crypto-vX.Y.Z` tag. Size budget: `SIZE_BUDGET` in `shared/crypto-wasm/js/test.mjs`. First set at
+400,000 bytes, ~15% over the first measurement (346,994 bytes, rustc 1.98.0, `--profile wasm`, 2026-11-15;
+most of it Argon2/BLAKE2b, the two curve crates and serde_json). Raised to 550,000 in the first review
+round, ~16% over 474,145 bytes: moving NFC into Rust (so a native caller derives the same key) added
+unicode-normalization's tables, about 127 KB. Raising it again is recorded here.
 
 **Loader.** `js/mae-crypto.mjs` (types: `js/mae-crypto.d.ts`): `instantiate(bytes)` is synchronous and
 backs the module's one import, `mae_crypto_host.random_fill(ptr, len) -> u32` (0 = filled), with
 `crypto.getRandomValues`; without it, loading throws. Exports: `memory`, `mae_crypto_alloc`,
 `mae_crypto_call`, `mae_crypto_result_ptr`, `mae_crypto_result_free`, `mae_crypto_live_bytes`. A call that
-traps retires the instance (every later call throws); it is never restarted silently, since a fresh instance
-holds none of the keys.
+traps retires the instance: the loader zeroes its whole linear memory (every held key with it) and every
+later call throws; it is never restarted silently, since a fresh instance holds none of the keys.
+`dispose()` does the same on purpose. A request over `MAX_REQUEST_BYTES` = 15,029,592 UTF-8 bytes (the
+daemon's default `max_message_bytes`: base64 of a 10 MiB document plus 1 MiB) is refused with a
+`RangeError` before the module sees it; a `content_seal` of a node at the daemon's 10 MiB document limit
+fits. The entropy source can be replaced only by passing `randomFill` together with
+`dangerouslyReplaceEntropyForTests: true`; that is for tests, and a production loader sets neither.
 
 **Requests and responses.** A request is a JSON object with exactly the keys its operation lists (anything
 else is `bad-request`). Every response is `{"ok":true,"result":R}` or
@@ -240,11 +247,11 @@ base64 of SHA-256 over the 32 bytes), and the ADR-041 wrap key.
 | 5 | `forget` | `{"key":n}` | `{"forgotten":bool}` (the key is wiped) |
 | 6 | `key_info` | `{"key":n}` | `KeyInfo` |
 | 7 | `fingerprint` | `{"public_key":B64}` | `{"fingerprint":"SHA256:…"}` |
-| 8 | `check_challenge` | `{"key":n,"issuer":S,"subject":S,"challenge":S,"now":unix}` | `{"challenge":{"domain","iss","sub","aud","fingerprint","nonce","expires_at"}}` |
+| 8 | `check_challenge` | `{"key":n,"issuer":S,"subject":S,"audience":S,"challenge":S,"now":unix}` | `{"challenge":{"domain","iss","sub","aud","fingerprint","nonce","expires_at"}}` |
 | 9 | `sign_challenge` | as 8 | `{"challenge":{…},"body":{"challenge_id","public_key","signature"}}` |
 | 10 | `backup_seal` | `{"key":n,"passphrase":S,"kdf"?:{"m","t","p"}}` | `{"envelope":S}` |
 | 11 | `backup_open` | `{"envelope":S,"passphrase":S}` | `KeyInfo` (a new handle) |
-| 12 | `backup_params` | `{"envelope":S}` | `{"m","t","p"}` |
+| 12 | `backup_params` | `{"envelope":S}` | `{"fingerprint","m","t","p"}` (checked, not opened) |
 | 13 | `content_key_generate` | `{}` | `{"content_key":B64}` |
 | 14 | `content_seal` | `{"content_key":B64,"plaintext":B64}` | `{"sealed":B64}` (`nonce ‖ ct+tag`) |
 | 15 | `content_open` | `{"content_key":B64,"sealed":B64}` | `{"plaintext":B64}` |
@@ -253,32 +260,60 @@ base64 of SHA-256 over the 32 bytes), and the ADR-041 wrap key.
 
 The loader's method names are the camelCase forms (`signChallenge`, `backupSeal`, …). `challenge` (8, 9) is
 the challenge text or the daemon's whole `/identity/challenge` answer; it is signed only if it is
-byte-for-byte canonical, carries the domain tag, names this key, is unexpired at `now` (the host's clock:
-unix seconds), and is issued to exactly the `issuer` and `subject` given. `body` is what
-`POST /identity/bind` takes.
+byte-for-byte canonical, carries the domain tag, names this key, is issued to exactly the `issuer` and
+`subject` given and by exactly the daemon `audience` names (its canonical resource URI, the challenge's
+`aud`, so a challenge one daemon issued cannot be relayed through another), is unexpired at `now` (the
+host's clock: unix seconds), and expires at most `MAX_CHALLENGE_LIFETIME_SECS` = 3600 s after `now`. The
+daemon's `identity_challenge_ttl_secs` defaults to 300 (its tests keep the default within 120..=900 and at
+most half the cap), so an hour admits any reasonable TTL plus clock skew and refuses a challenge that would
+stay signable for days. `body` is what `POST /identity/bind` takes.
+
+**Error messages never echo input.** Every `error` text is fixed per refusal kind (a malformed request
+names the kind of problem and its line and column, never serde's message, which quotes values); no
+seed, passphrase, key, envelope or challenge field ever appears in a response but a successful one's.
 
 **Error codes.** General: `bad-request`, `unknown-op`, `no-key`, `keystore-full` (16 keys per instance),
 `no-entropy`, `bad-public-key`. Challenge: `too-long`, `not-a-challenge`, `wrong-domain`, `empty-field`,
-`other-key`, `other-issuer`, `other-subject`, `expired`. Backup: `too-long`, `not-an-envelope`,
-`unknown-version`, `unknown-kdf`, `kdf-params`, `passphrase`, `open` (a wrong passphrase and an altered
-envelope are deliberately indistinguishable). Content: `decrypt`, `malformed`, `bad-key`. Without entropy,
+`other-key`, `other-issuer`, `other-subject`, `other-audience`, `expired`, `expiry-too-far`. Backup:
+`too-long`, `not-an-envelope`, `unknown-version`, `unknown-kdf`, `kdf-params`, `passphrase`,
+`passphrase-weak` (sealing only), `open` (a wrong passphrase and an altered envelope are deliberately
+indistinguishable), `fingerprint-mismatch`. Content: `decrypt`, `malformed`, `bad-key`. Without entropy,
 `generate`, `backup_seal` and `content_key_generate` answer `no-entropy`; `content_seal` and `content_wrap`
-trap (fail closed, instance retired). A host that reports success but writes all zeros is refused.
+trap (fail closed, instance retired and wiped). A host fill of 16 bytes or more that is all zeros, or
+identical to the previous such fill, is refused as no entropy.
 
 **Backup envelope v1** (the format phase B imports; normative text in `shared/crypto/src/backup.rs`). One
 line of JSON, exactly
-`{"v":1,"kdf":"argon2id","m":M,"t":T,"p":P,"salt":SALT,"nonce":NONCE,"ct":CT}` (this key order, no
-whitespace; surrounding ASCII whitespace is ignored). SALT is 16 random bytes, NONCE 24, CT 48, each standard
-padded base64 in quotes. key = Argon2id v0x13 (passphrase's UTF-8 bytes after NFC normalisation, SALT, M KiB,
+`{"v":1,"fingerprint":FP,"kdf":"argon2id","m":M,"t":T,"p":P,"salt":SALT,"nonce":NONCE,"ct":CT}` (this key
+order, no whitespace; surrounding ASCII whitespace is ignored). FP is the sealed key's fingerprint
+(`SHA256:` + 43 unpadded base64 characters), readable without the passphrase so a person can tell which key a
+file holds. SALT is 16 random bytes, NONCE 24, CT 48, each standard padded base64 in quotes. The passphrase
+is NFC-normalised (by mae-crypto itself, on sealing and opening; any other implementation must do the same)
+and must then be 1..=1024 UTF-8 bytes. key = Argon2id v0x13 (the NFC passphrase's UTF-8 bytes, SALT, M KiB,
 T passes, P lanes, 32-byte output). HEADER = the same text without `,"ct":…`, i.e.
-`{"v":1,"kdf":"argon2id","m":M,"t":T,"p":P,"salt":SALT,"nonce":NONCE}`. CT = XChaCha20-Poly1305(key, NONCE,
-the 32-byte seed, associated data = HEADER's bytes). Written with M=65536, T=3, P=4 (RFC 9106 §4); opened
-only with M in 19456..=262144, T in 2..=10, P in 1..=4. Opening refuses an unknown `v` before anything else
-(`unknown-version`), then any other text, kdf or out-of-range costs, then a failed tag (`open`). The
-passphrase is 1..=1024 bytes; the loader NFC-normalises it, and any other implementation must too.
+`{"v":1,"fingerprint":FP,"kdf":"argon2id","m":M,"t":T,"p":P,"salt":SALT,"nonce":NONCE}`. CT =
+XChaCha20-Poly1305(key, NONCE, the 32-byte seed, associated data = HEADER's bytes, the fingerprint
+included). Written with M=65536, T=3, P=4 (RFC 9106 §4); opened only with M in 19456..=262144, T in
+2..=10, P in 1..=4. Opening refuses an unknown `v` before anything else (`unknown-version`), then any other
+text, kdf, out-of-range costs or malformed field, then a failed tag (`open`: a relabelled fingerprint fails
+here, as associated data), and last a seed whose fingerprint is not FP (`fingerprint-mismatch`). Sealing
+also needs at least 12 characters after NFC (`passphrase-weak`): OWASP ASVS 4.0.3 V2.1.1's minimum for a
+user-chosen secret. The envelope is the offline-attackable copy of the member's whole access, so length is
+the one lever the person controls, and Argon2id's cost multiplies the entropy those characters carry rather
+than replacing it (NIST SP 800-63B-4 asks 15 for a single-factor password; twelve plus a memory-hard KDF is
+the trade made here, and the floor can only rise). Opening applies no floor, so an envelope made elsewhere
+still opens.
 
 **Secrets in the module.** Freed heap blocks are zeroed by the module's allocator and the stack an operation
 used is zeroed when it returns, so after a call no copy of a seed, passphrase, content key or plaintext is
-left in linear memory except the keys still held (until `forget`). `js/test.mjs` searches the whole memory
-for each, raw and base64. JavaScript strings the caller holds (a passphrase, an exported seed) are outside
-the module's reach.
+left in linear memory except the keys still held (until `forget` or `dispose`), nor the keys derived from a
+seed (the X25519 wrap secret, the Ed25519 signing hash prefix) once the call that used them returns.
+`js/test.mjs` searches the whole memory for each, raw and base64. JavaScript strings the caller holds (a
+passphrase, an exported seed) are outside the module's reach.
+
+**Reserved: op signing (#727), planned for the next minor version; no code yet.** A future op
+`sign_op {key, kb_id, doc, update_sha256, …}` will sign a content or membership op with a held member key.
+Like `sign_challenge` it will sign only a canonical, domain-separated message the module builds itself from
+those typed fields (its own domain tag, distinct from `mae-identity-binding-v1`), never caller-supplied
+bytes: there is, and will be, no generic `sign` operation, because the member key's signatures are its
+authority over every KB it belongs to.

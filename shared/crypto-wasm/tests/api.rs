@@ -39,8 +39,10 @@ fn challenge_for(fp: &str, iss: &str, sub: &str, exp: u64) -> String {
     challenge_text(iss, sub, "https://mae.example.com", fp, "bm9uY2U", exp)
 }
 
+const AUD: &str = "https://mae.example.com";
+
 fn sign_req(key: &Value, challenge: &str, now: u64) -> Value {
-    json!({"key": key, "issuer": ISS, "subject": SUB, "challenge": challenge, "now": now})
+    json!({"key": key, "issuer": ISS, "subject": SUB, "audience": AUD, "challenge": challenge, "now": now})
 }
 
 #[test]
@@ -155,7 +157,7 @@ fn a_seed_leaves_only_when_asked_and_comes_back_as_the_same_key() {
         ),
         call(
             Op::BackupSeal as u32,
-            json!({"key": a["key"], "passphrase": "p", "kdf": fast()})
+            json!({"key": a["key"], "passphrase": "twelve chars", "kdf": fast()})
                 .to_string()
                 .as_bytes(),
         ),
@@ -218,6 +220,15 @@ fn challenges_are_signed_under_the_shared_rules_and_refused_with_their_codes() {
             sign_req(&a["key"], &good.replace("\":", "\": "), NOW),
         ),
         ("not-a-challenge", sign_req(&a["key"], "sign me", NOW)),
+        ("other-audience", {
+            let mut r = sign_req(&a["key"], &good, NOW);
+            r["audience"] = json!("https://other.example.com");
+            r
+        }),
+        (
+            "expiry-too-far",
+            sign_req(&a["key"], &challenge_for(fp, ISS, SUB, NOW + 3601), NOW),
+        ),
         (
             "wrong-domain",
             sign_req(
@@ -242,15 +253,24 @@ fn a_backup_opens_only_with_its_passphrase_and_only_unaltered() {
     let a = ok(Op::Generate, json!({}));
     let env = ok(
         Op::BackupSeal,
-        json!({"key": a["key"], "passphrase": "pässwörd", "kdf": fast()}),
+        json!({"key": a["key"], "passphrase": "pässwörd lang", "kdf": fast()}),
     )["envelope"]
         .as_str()
         .unwrap()
         .to_string();
-    assert_eq!(ok(Op::BackupParams, json!({"envelope": env})), fast());
+    let mut want = fast();
+    want["fingerprint"] = a["fingerprint"].clone();
+    assert_eq!(ok(Op::BackupParams, json!({"envelope": env})), want);
+    assert_eq!(
+        code(
+            Op::BackupSeal,
+            json!({"key": a["key"], "passphrase": "elevenchars", "kdf": fast()})
+        ),
+        "passphrase-weak"
+    );
     let b = ok(
         Op::BackupOpen,
-        json!({"envelope": env, "passphrase": "pässwörd"}),
+        json!({"envelope": env, "passphrase": "pässwörd lang"}),
     );
     assert_eq!(b["fingerprint"], a["fingerprint"]);
     assert_ne!(b["key"], a["key"], "opening gives a new handle");
@@ -265,7 +285,7 @@ fn a_backup_opens_only_with_its_passphrase_and_only_unaltered() {
     assert_eq!(
         code(
             Op::BackupOpen,
-            json!({"envelope": tampered, "passphrase": "pässwörd"})
+            json!({"envelope": tampered, "passphrase": "pässwörd lang"})
         ),
         "unknown-version"
     );
@@ -279,7 +299,7 @@ fn a_backup_opens_only_with_its_passphrase_and_only_unaltered() {
     assert_eq!(
         code(
             Op::BackupOpen,
-            json!({"envelope": altered, "passphrase": "pässwörd"})
+            json!({"envelope": altered, "passphrase": "pässwörd lang"})
         ),
         "open"
     );
@@ -355,4 +375,79 @@ fn content_crypto_round_trips_and_refuses_the_wrong_key_or_member() {
         ),
         "malformed"
     );
+}
+
+/// L7: an error response never contains the bytes of a malformed secret or
+/// challenge field, whatever is wrong with it.
+#[test]
+fn error_responses_never_echo_their_input() {
+    let marker = "ECHOMARKER5e2b";
+    let a = ok(Op::Generate, json!({}));
+    let k = &a["key"];
+    let ck = STANDARD.encode([7u8; 32]);
+    let fp = a["fingerprint"].as_str().unwrap().to_string();
+    let good = challenge_for(&fp, ISS, SUB, NOW + 60);
+    let env = ok(
+        Op::BackupSeal,
+        json!({"key": k, "passphrase": "twelve chars", "kdf": fast()}),
+    )["envelope"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut as_key = json!({});
+    as_key[marker] = json!(1);
+    let bad_values = [
+        json!(marker),
+        json!(format!("{marker}==")),
+        as_key,
+        json!([marker]),
+    ];
+    let mut cases: Vec<(Op, Value)> = vec![];
+    for v in &bad_values {
+        cases.push((Op::ImportSeed, json!({"seed": v})));
+        cases.push((Op::Fingerprint, json!({"public_key": v})));
+        if !v.is_string() {
+            // A string passphrase this long is valid; only wrong types err.
+            cases.push((Op::BackupSeal, json!({"key": k, "passphrase": v})));
+        }
+        cases.push((Op::BackupOpen, json!({"envelope": env, "passphrase": v})));
+        cases.push((
+            Op::BackupOpen,
+            json!({"envelope": v, "passphrase": "twelve chars"}),
+        ));
+        cases.push((Op::BackupParams, json!({"envelope": v})));
+        cases.push((Op::ContentSeal, json!({"content_key": v, "plaintext": ""})));
+        cases.push((Op::ContentOpen, json!({"content_key": ck, "sealed": v})));
+        cases.push((
+            Op::ContentWrap,
+            json!({"content_key": v, "wrap_public": ck}),
+        ));
+        cases.push((Op::ContentUnwrap, json!({"key": k, "wrapped": v})));
+        for f in ["issuer", "subject", "audience", "challenge"] {
+            let mut r = sign_req(k, &good, NOW);
+            r[f] = v.clone();
+            cases.push((Op::SignChallenge, r.clone()));
+            cases.push((Op::CheckChallenge, r));
+        }
+    }
+    // Well-formed JSON whose values are wrong in content, not in type.
+    for t in [
+        good.replace("https://mae.example.com", marker),
+        good.replacen('{', &format!("{{\"{marker}\":1,"), 1),
+        format!("{{\"challenge_id\":\"x\",\"challenge\":\"{marker}\",\"expires_in\":1}}"),
+    ] {
+        cases.push((Op::SignChallenge, sign_req(k, &t, NOW)));
+    }
+    cases.push((
+        Op::BackupOpen,
+        json!({"envelope": env.replace(&fp, marker), "passphrase": "twelve chars"}),
+    ));
+    let mut extra = json!({"key": k});
+    extra[marker] = json!(1);
+    cases.push((Op::KeyInfo, extra));
+    for (op, req) in cases {
+        let r = call(op as u32, req.to_string().as_bytes());
+        assert!(r.contains("\"ok\":false"), "{op:?} {req}: {r}");
+        assert!(!r.contains(marker), "{op:?} echoed its input: {r}");
+    }
 }

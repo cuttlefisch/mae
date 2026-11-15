@@ -14,9 +14,10 @@ export type ErrorCode =
   | 'bad-request' | 'unknown-op' | 'no-key' | 'keystore-full' | 'no-entropy' | 'bad-public-key'
   // identity-binding challenge refusals
   | 'too-long' | 'not-a-challenge' | 'wrong-domain' | 'empty-field' | 'other-key'
-  | 'other-issuer' | 'other-subject' | 'expired'
+  | 'other-issuer' | 'other-subject' | 'other-audience' | 'expired' | 'expiry-too-far'
   // backup refusals ('too-long' as above)
-  | 'not-an-envelope' | 'unknown-version' | 'unknown-kdf' | 'kdf-params' | 'passphrase' | 'open'
+  | 'not-an-envelope' | 'unknown-version' | 'unknown-kdf' | 'kdf-params' | 'passphrase'
+  | 'passphrase-weak' | 'open' | 'fingerprint-mismatch'
   // content crypto
   | 'decrypt' | 'malformed' | 'bad-key';
 
@@ -59,9 +60,11 @@ export interface ChallengeRequest {
   /** The OIDC issuer and subject the key holder states as their own. */
   issuer: string;
   subject: string;
+  /** The daemon the key holder means to bind at: its canonical resource URI (the challenge's `aud`). */
+  audience: string;
   /** The challenge text, or the daemon's whole `/identity/challenge` answer. */
   challenge: string;
-  /** Unix seconds; default this host's clock. */
+  /** Unix seconds; default this host's clock. Refused if expires_at is past it or more than 3600 s ahead. */
   now?: number;
 }
 
@@ -74,10 +77,24 @@ export interface SignedChallenge {
 /** Argon2id costs: memory in KiB (19456..=262144), passes (2..=10), lanes (1..=4). */
 export interface KdfParams { m: number; t: number; p: number }
 
-export interface LoadOptions {
-  /** Replaces crypto.getRandomValues as the entropy source. Tests only. */
-  randomFill?: (view: Uint8Array) => void;
+/** What backupParams reads from an envelope without opening it. */
+export interface BackupHeader extends KdfParams {
+  /** The fingerprint of the key the envelope holds. */
+  fingerprint: string;
 }
+
+/**
+ * TEST ONLY. Never set either option in production: `randomFill` replaces
+ * the entropy source every key, salt and nonce comes from, and is refused
+ * unless `dangerouslyReplaceEntropyForTests` is `true` beside it.
+ */
+export interface LoadOptions {
+  randomFill?: (view: Uint8Array) => void;
+  dangerouslyReplaceEntropyForTests?: true;
+}
+
+/** The largest request (UTF-8 bytes) the loader passes on: 15,029,592, the daemon's default max_message_bytes. */
+export const MAX_REQUEST_BYTES: number;
 
 export function instantiate(bytes: BufferSource | WebAssembly.Module, options?: LoadOptions): MaeCrypto;
 
@@ -104,12 +121,18 @@ export class MaeCrypto {
   checkChallenge(request: ChallengeRequest): Challenge;
   signChallenge(request: ChallengeRequest): SignedChallenge;
 
-  /** The key's seed, sealed under the passphrase (NFC-normalised here): envelope v1 text. */
+  /**
+   * The key's seed, sealed under the passphrase: envelope v1 text. The module NFC-normalises the
+   * passphrase; it must then have at least 12 characters ('passphrase-weak').
+   */
   backupSeal(request: { key: KeyHandle; passphrase: string; kdf?: KdfParams }): string;
-  /** Opens an envelope ('open' for a wrong passphrase or any alteration); holds the key. */
+  /**
+   * Opens an envelope ('open' for a wrong passphrase or any alteration, 'fingerprint-mismatch' if the
+   * key is not the one the header names); holds the key. No length floor on opening.
+   */
   backupOpen(request: { envelope: string; passphrase: string }): KeyInfo;
-  /** The envelope's checked KDF costs, without opening it. */
-  backupParams(envelope: string): KdfParams;
+  /** The envelope's checked header (fingerprint and KDF costs), without opening it. */
+  backupParams(envelope: string): BackupHeader;
 
   /** A fresh 32-byte content key. */
   contentKeyGenerate(): B64;
@@ -123,4 +146,6 @@ export class MaeCrypto {
 
   /** Bytes allocated in the module and not freed. */
   liveBytes(): number;
+  /** Zeroes the instance's memory (every held key) and refuses later calls. A failed call does the same. */
+  dispose(): void;
 }

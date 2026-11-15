@@ -45,14 +45,15 @@ fn a_challenge_signs_identically_through_both_signers() {
     let me = Claimant {
         issuer: "https://idp.example.com",
         subject: "alice@idp",
+        audience: "https://mae.example.com",
     };
     let text = challenge_text(
         me.issuer,
         me.subject,
-        "https://mae.example.com",
+        me.audience,
         &id.fingerprint(),
         "bm9uY2U",
-        2_000_000_000,
+        1_900_000_600,
     );
     let (_, editor) = sign_challenge(&id, me, &text, 1_900_000_000).unwrap();
     let (_, browser) =

@@ -17,12 +17,19 @@
 //! names THIS key, and is unexpired. Loosening any of those makes every
 //! signer (editor and browser alike) sign attacker-chosen bytes.
 //!
-//! @ai-caution: [security] It also signs only for the `(iss, sub)` the key
-//! holder states as their own ([`Claimant`]). The daemon issues a challenge
+//! @ai-caution: [security] It also signs only for the `(iss, sub, aud)` the
+//! key holder states ([`Claimant`]): their own identity-provider identity and
+//! the daemon they mean to bind at. The daemon issues a challenge
 //! for any fingerprint to any authenticated subject, so a challenge naming
 //! this key proves nothing about WHO asked for it: without the comparison, a
 //! key holder persuaded to sign someone else's challenge binds their key to
-//! that person's subject.
+//! that person's subject. Without the audience, a challenge one daemon issued
+//! could be relayed to the key holder by another daemon they also use and
+//! signed as if it were for that one.
+//!
+//! The signer also refuses a challenge that stays valid for longer than
+//! [`MAX_CHALLENGE_LIFETIME_SECS`] from now: the daemon issues them for
+//! minutes, so one valid for days was not issued by a daemon as configured.
 
 use serde::Deserialize;
 
@@ -33,6 +40,14 @@ pub const DOMAIN_TAG: &str = "mae-identity-binding-v1";
 /// No challenge the daemon issues comes near this; anything longer is refused
 /// before it is parsed.
 pub const MAX_CHALLENGE_BYTES: usize = 4096;
+
+/// The longest a challenge may remain valid, from the signer's `now`, and
+/// still be signed: one hour. The daemon's `identity_challenge_ttl_secs`
+/// defaults to 300 s (its tests pin the default within 120..=900), and an
+/// hour leaves room for any TTL an operator would reasonably set plus clock
+/// skew between the daemon and the signer, while refusing a challenge that
+/// would stay signable, and so relayable, for days.
+pub const MAX_CHALLENGE_LIFETIME_SECS: u64 = 3600;
 
 /// A parsed challenge.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -75,13 +90,15 @@ pub fn challenge_text(
     )
 }
 
-/// The identity-provider identity the key holder states as their own. A
-/// subject is unique only within its issuer (OIDC Core §2), so both are stated
-/// and both must match the challenge byte for byte.
+/// What the key holder states: their own identity-provider identity (a
+/// subject is unique only within its issuer, OIDC Core §2, so both) and the
+/// daemon they mean to bind at (its canonical resource URI, the challenge's
+/// `aud`). All three must match the challenge byte for byte.
 #[derive(Debug, Clone, Copy)]
 pub struct Claimant<'a> {
     pub issuer: &'a str,
     pub subject: &'a str,
+    pub audience: &'a str,
 }
 
 /// What [`sign_challenge`] refuses, and why.
@@ -102,8 +119,12 @@ pub enum ChallengeRefusal {
     OtherIssuer,
     /// It names another subject than the one the key holder stated.
     OtherSubject,
+    /// It names another daemon (`aud`) than the one the key holder stated.
+    OtherAudience,
     /// `expires_at` is not in the future.
     Expired,
+    /// `expires_at` is more than [`MAX_CHALLENGE_LIFETIME_SECS`] away.
+    ExpiryTooFar,
 }
 
 impl ChallengeRefusal {
@@ -118,7 +139,9 @@ impl ChallengeRefusal {
             Self::OtherKey => "other-key",
             Self::OtherIssuer => "other-issuer",
             Self::OtherSubject => "other-subject",
+            Self::OtherAudience => "other-audience",
             Self::Expired => "expired",
+            Self::ExpiryTooFar => "expiry-too-far",
         }
     }
 }
@@ -139,7 +162,15 @@ impl std::fmt::Display for ChallengeRefusal {
                 f,
                 "the challenge would bind this key to another subject than the one you stated"
             ),
+            Self::OtherAudience => write!(
+                f,
+                "the challenge is for another daemon than the one you stated"
+            ),
             Self::Expired => write!(f, "the challenge has expired; ask for a new one"),
+            Self::ExpiryTooFar => write!(
+                f,
+                "the challenge stays valid for longer than any daemon issues one"
+            ),
         }
     }
 }
@@ -178,8 +209,7 @@ pub fn parse_for(
     if text.len() > MAX_CHALLENGE_BYTES {
         return Err(ChallengeRefusal::TooLong);
     }
-    let c: Challenge =
-        serde_json::from_str(text).map_err(|e| ChallengeRefusal::NotAChallenge(e.to_string()))?;
+    let c: Challenge = serde_json::from_str(text).map_err(|e| not_a_challenge(&e))?;
     if c.domain != DOMAIN_TAG {
         return Err(ChallengeRefusal::WrongDomain);
     }
@@ -216,10 +246,28 @@ pub fn parse_for(
     if c.sub != claimant.subject {
         return Err(ChallengeRefusal::OtherSubject);
     }
+    if c.aud != claimant.audience {
+        return Err(ChallengeRefusal::OtherAudience);
+    }
     if c.expires_at <= now {
         return Err(ChallengeRefusal::Expired);
     }
+    if c.expires_at - now > MAX_CHALLENGE_LIFETIME_SECS {
+        return Err(ChallengeRefusal::ExpiryTooFar);
+    }
     Ok(c)
+}
+
+/// The refusal for text that does not parse as a challenge. The reason is
+/// one of a fixed few, never serde's message: that quotes the input, and the
+/// browser shows refusals to the person (or logs them).
+fn not_a_challenge(e: &serde_json::Error) -> ChallengeRefusal {
+    use serde_json::error::Category;
+    let reason = match e.classify() {
+        Category::Data => "not exactly the challenge's seven fields",
+        Category::Syntax | Category::Eof | Category::Io => "not JSON",
+    };
+    ChallengeRefusal::NotAChallenge(reason.into())
 }
 
 /// The challenge in `input` (as [`sign_challenge`] reads it), checked as

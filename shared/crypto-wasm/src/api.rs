@@ -184,8 +184,24 @@ fn run(op: Op, r: &[u8]) -> Result<String, ApiError> {
 
 // ---- requests ----
 
+/// Parses a request. The error names the kind of problem and where, never
+/// serde's message: that quotes the input (a seed, a passphrase, a key).
 fn parse<'a, T: Deserialize<'a>>(bytes: &'a [u8]) -> Result<T, ApiError> {
-    serde_json::from_slice(bytes).map_err(|e| ApiError::new("bad-request", e))
+    serde_json::from_slice(bytes).map_err(|e| {
+        use serde_json::error::Category;
+        let what = match e.classify() {
+            Category::Data => "a key is missing, unknown, or of the wrong type",
+            Category::Syntax | Category::Eof | Category::Io => "not valid JSON",
+        };
+        ApiError::new(
+            "bad-request",
+            format!(
+                "the request is not this operation's JSON object: {what} (line {}, column {})",
+                e.line(),
+                e.column()
+            ),
+        )
+    })
 }
 
 #[derive(Deserialize)]
@@ -220,6 +236,8 @@ struct ChallengeReq<'a> {
     issuer: Cow<'a, str>,
     #[serde(borrow)]
     subject: Cow<'a, str>,
+    #[serde(borrow)]
+    audience: Cow<'a, str>,
     #[serde(borrow)]
     challenge: Cow<'a, str>,
     now: u64,
@@ -286,10 +304,12 @@ struct UnwrapReq<'a> {
 }
 
 fn bytes(field: &str, b64: &str) -> Result<Zeroizing<Vec<u8>>, ApiError> {
-    STANDARD
-        .decode(b64)
-        .map(Zeroizing::new)
-        .map_err(|e| ApiError::new("bad-request", format!("{field}: {e}")))
+    STANDARD.decode(b64).map(Zeroizing::new).map_err(|_| {
+        ApiError::new(
+            "bad-request",
+            format!("{field} is not canonical padded base64"),
+        )
+    })
 }
 
 fn bytes32(field: &str, b64: &str) -> Result<Zeroizing<[u8; 32]>, ApiError> {
@@ -441,6 +461,7 @@ fn claimant<'a>(req: &'a ChallengeReq<'_>) -> Claimant<'a> {
     Claimant {
         issuer: &req.issuer,
         subject: &req.subject,
+        audience: &req.audience,
     }
 }
 
@@ -518,17 +539,19 @@ fn backup_open(r: &[u8]) -> Result<String, ApiError> {
 
 fn backup_params(r: &[u8]) -> Result<String, ApiError> {
     let req: EnvelopeReq = parse(r)?;
-    let p = backup::params_of(&req.envelope)?;
+    let h = backup::header_of(&req.envelope)?;
     #[derive(Serialize)]
-    struct P {
+    struct P<'a> {
+        fingerprint: &'a str,
         m: u32,
         t: u32,
         p: u32,
     }
     out(&P {
-        m: p.m,
-        t: p.t,
-        p: p.p,
+        fingerprint: &h.fingerprint,
+        m: h.params.m,
+        t: h.params.t,
+        p: h.params.p,
     })
 }
 
