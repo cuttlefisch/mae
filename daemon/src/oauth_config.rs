@@ -150,7 +150,7 @@ pub struct OAuthConfig {
     /// closes the socket with `1011` and reason `response_too_large`, never
     /// silently. Unset means derived from `[collab.sync]
     /// max_document_size_bytes` so one document at that limit always fits
-    /// (`ws::outbound_bound`). Advertised in `session/hello` as
+    /// (`DocStore::message_bound`). Advertised in `session/hello` as
     /// `limits.max_outbound_bytes`.
     pub ws_max_outbound_bytes: Option<usize>,
 }

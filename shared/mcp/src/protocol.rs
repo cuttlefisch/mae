@@ -447,6 +447,20 @@ impl McpError {
         )
     }
 
+    /// A request's framed length is over the session's request cap. The
+    /// framing cannot resume past an unread body, so the session ends right
+    /// after this answer; its `id` is `null` because the request was never
+    /// read. Send the same content in smaller requests (`kb/share` takes node
+    /// batches, ADR-022 Amendment 1).
+    pub fn request_too_large(message: String, size: usize, limit: usize) -> Self {
+        Self::kinded(
+            -32600,
+            message,
+            "request_too_large",
+            serde_json::json!({ "size": size, "limit": limit }),
+        )
+    }
+
     /// `kb/remove_member` named the KB's owner.
     pub fn cannot_remove_owner(message: String) -> Self {
         Self::kinded(
@@ -558,6 +572,7 @@ pub const ERROR_KINDS: &[&str] = &[
     "protocol_unsupported",
     "origin_not_allowed",
     "update_too_large",
+    "request_too_large",
     "invalid_field",
     "cannot_remove_owner",
     "signer_unavailable",
@@ -740,6 +755,7 @@ mod tests {
             McpError::protocol_unsupported(m()),
             McpError::origin_not_allowed(m()),
             McpError::update_too_large(m(), 2, 1),
+            McpError::request_too_large(m(), 2, 1),
             McpError::invalid_field("title", m()),
             McpError::cannot_remove_owner(m()),
             McpError::signer_unavailable(m()),
