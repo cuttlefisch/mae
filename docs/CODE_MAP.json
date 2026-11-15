@@ -1059,6 +1059,10 @@
           "kind": "mod"
         },
         {
+          "name": "identity_challenge",
+          "kind": "mod"
+        },
+        {
           "name": "keystore",
           "kind": "mod"
         },

@@ -108,6 +108,17 @@ fn side_files(config: &DaemonConfig, data_dir: &Path) -> Vec<Source> {
             Some(paths.collab_data_dir.join("state.db")),
             "collab/state.db".to_string(),
         ),
+        // ADR-098 D3: the identity-provider bindings, which an IdP migration
+        // rewrites and a restore must bring back.
+        (
+            Kind::Sqlite,
+            Some(
+                paths
+                    .collab_data_dir
+                    .join(mae_daemon::identity_binding::BINDINGS_FILE),
+            ),
+            format!("collab/{}", mae_daemon::identity_binding::BINDINGS_FILE),
+        ),
         (Kind::Plain, in_id("id_ed25519"), identity("id_ed25519")),
         (
             Kind::Plain,
