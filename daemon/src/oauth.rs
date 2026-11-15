@@ -155,6 +155,12 @@ pub fn validate_bearer_token(
         oauth_self_issue::Credential::IdpUnbound,
     );
     vp.subject = subject;
+    // `(iss, sub)` keys the binding table, and an absent or non-string `iss`
+    // reads as "" — one issuer every such token would share. Checked here
+    // because `config.issuer = None` skips the library's issuer validation.
+    if vp.issuer.is_empty() {
+        return Err(TokenValidationError::WrongIssuer);
+    }
     vp.principal = oauth_self_issue::unbound_principal(&vp.issuer, &vp.subject);
     Ok(vp)
 }
@@ -435,7 +441,9 @@ pub(crate) async fn authenticate(
         listener.self_issue.as_ref(),
     )
     .await?;
-    mae_daemon::identity_binding::resolve(vp, listener.bindings.as_deref()).map_err(|e| {
+    let resolved =
+        mae_daemon::identity_binding::resolve_off_runtime(vp, listener.bindings.clone()).await;
+    resolved.map_err(|e| {
         // Fail closed: a binding that cannot be read is not "unbound" (that
         // would silently demote a member), and never "bound".
         tracing::warn!(error = %e, "binding table unreadable");

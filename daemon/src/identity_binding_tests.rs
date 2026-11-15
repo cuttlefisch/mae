@@ -261,3 +261,65 @@ fn set_kind_on_no_binding_is_not_found() {
         Err(BindingError::NotFound)
     );
 }
+
+/// A COMMIT that fails must not leave the connection inside the transaction:
+/// left so, every later `BEGIN IMMEDIATE` fails and the store is dead until a
+/// restart. A deferred foreign key, violated by a trigger on one subject only,
+/// makes exactly that write fail at COMMIT (where SQLite keeps the
+/// transaction open).
+#[test]
+fn a_failed_commit_rolls_back_and_the_store_stays_writable() {
+    let conn = sqlite::Connection::open(":memory:").unwrap();
+    conn.execute("PRAGMA foreign_keys=ON").unwrap();
+    let store = BindingStore::from_conn(conn).unwrap();
+    store
+        .lock()
+        .execute(
+            "CREATE TABLE parent (id INTEGER PRIMARY KEY);
+             CREATE TABLE child (p INTEGER REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED);
+             CREATE TRIGGER poison AFTER INSERT ON identity_bindings
+                 WHEN NEW.subject = 'poison'
+             BEGIN INSERT INTO child (p) VALUES (1); END;",
+        )
+        .unwrap();
+    let e = store
+        .bind(ISS, "poison", &fp(), BoundBy::Admin, 1)
+        .unwrap_err();
+    assert!(matches!(e, BindingError::Storage(_)), "{e:?}");
+    assert_eq!(store.lookup(ISS, "poison"), Ok(None), "not rolled back");
+    let a = fp();
+    store.bind(ISS, "alice", &a, BoundBy::Admin, 1).unwrap();
+    assert_eq!(store.lookup(ISS, "alice").unwrap().unwrap().fingerprint, a);
+}
+
+/// The listener's lookup runs off the runtime: with the store held (as a write
+/// waiting on a CLI writer holds it, for up to `busy_timeout`), a timer on the
+/// same single-threaded runtime still fires on time, and the lookup completes
+/// once the store is free.
+#[tokio::test(flavor = "current_thread")]
+async fn a_held_store_does_not_stall_the_runtime() {
+    const HOLD: std::time::Duration = std::time::Duration::from_secs(2);
+    let store = std::sync::Arc::new(BindingStore::open_memory().unwrap());
+    let a = fp();
+    store.bind(ISS, "alice", &a, BoundBy::Admin, 1).unwrap();
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let holder = {
+        let s = std::sync::Arc::clone(&store);
+        std::thread::spawn(move || {
+            let _g = s.lock();
+            held_tx.send(()).unwrap();
+            std::thread::sleep(HOLD);
+        })
+    };
+    held_rx.recv().unwrap();
+    let t = std::time::Instant::now();
+    let lookup = tokio::spawn(resolve_off_runtime(
+        idp(ISS, "alice"),
+        Some(std::sync::Arc::clone(&store)),
+    ));
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let ticked = t.elapsed();
+    assert!(ticked < HOLD / 2, "the runtime stalled for {ticked:?}");
+    assert_eq!(lookup.await.unwrap().unwrap().principal, a);
+    holder.join().unwrap();
+}

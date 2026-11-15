@@ -14,6 +14,13 @@
 //! message, and no extra field, whitespace or duplicate key can ride along),
 //! names THIS key, and is unexpired. Loosening any of those makes the editor
 //! sign attacker-chosen bytes.
+//!
+//! @ai-caution: [security] It also signs only for the `(iss, sub)` the key
+//! holder states as their own ([`Claimant`]). The daemon issues a challenge
+//! for any fingerprint to any authenticated subject, so a challenge naming
+//! this key proves nothing about WHO asked for it: without the comparison, a
+//! key holder persuaded to sign someone else's challenge binds their key to
+//! that person's subject.
 
 use serde::Deserialize;
 
@@ -68,6 +75,15 @@ pub fn challenge_text(
     )
 }
 
+/// The identity-provider identity the key holder states as their own. A
+/// subject is unique only within its issuer (OIDC Core §2), so both are stated
+/// and both must match the challenge byte for byte.
+#[derive(Debug, Clone, Copy)]
+pub struct Claimant<'a> {
+    pub issuer: &'a str,
+    pub subject: &'a str,
+}
+
 /// What [`sign_challenge`] refuses, and why.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChallengeRefusal {
@@ -82,6 +98,10 @@ pub enum ChallengeRefusal {
     EmptyField(&'static str),
     /// It names another key than the one signing.
     OtherKey,
+    /// It names another issuer than the one the key holder stated.
+    OtherIssuer,
+    /// It names another subject than the one the key holder stated.
+    OtherSubject,
     /// `expires_at` is not in the future.
     Expired,
 }
@@ -94,13 +114,27 @@ impl std::fmt::Display for ChallengeRefusal {
             Self::WrongDomain => write!(f, "not an identity-binding challenge (domain tag)"),
             Self::EmptyField(k) => write!(f, "the challenge's {k} is empty"),
             Self::OtherKey => write!(f, "the challenge names another key than this identity"),
+            Self::OtherIssuer => write!(
+                f,
+                "the challenge is for another identity provider than the one you stated"
+            ),
+            Self::OtherSubject => write!(
+                f,
+                "the challenge would bind this key to another subject than the one you stated"
+            ),
             Self::Expired => write!(f, "the challenge has expired; ask for a new one"),
         }
     }
 }
 
-/// Parse and check `text` for signing by `identity` at `now` (unix seconds).
-pub fn parse_for(identity: &Identity, text: &str, now: u64) -> Result<Challenge, ChallengeRefusal> {
+/// Parse and check `text` for signing by `identity`, held by `claimant`, at
+/// `now` (unix seconds).
+pub fn parse_for(
+    identity: &Identity,
+    claimant: Claimant<'_>,
+    text: &str,
+    now: u64,
+) -> Result<Challenge, ChallengeRefusal> {
     if text.len() > MAX_CHALLENGE_BYTES {
         return Err(ChallengeRefusal::TooLong);
     }
@@ -123,6 +157,7 @@ pub fn parse_for(identity: &Identity, text: &str, now: u64) -> Result<Challenge,
         ));
     }
     for (name, v) in [
+        ("iss", &c.iss),
         ("sub", &c.sub),
         ("aud", &c.aud),
         ("fingerprint", &c.fingerprint),
@@ -135,23 +170,42 @@ pub fn parse_for(identity: &Identity, text: &str, now: u64) -> Result<Challenge,
     if c.fingerprint != identity.fingerprint() {
         return Err(ChallengeRefusal::OtherKey);
     }
+    if c.iss != claimant.issuer {
+        return Err(ChallengeRefusal::OtherIssuer);
+    }
+    if c.sub != claimant.subject {
+        return Err(ChallengeRefusal::OtherSubject);
+    }
     if c.expires_at <= now {
         return Err(ChallengeRefusal::Expired);
     }
     Ok(c)
 }
 
-/// Sign a challenge with `identity` and return it with the body
+/// The challenge in `input` (as [`sign_challenge`] reads it), checked as
+/// [`parse_for`] checks it, without signing: for a signer to show the person
+/// what they are about to bind before it signs.
+pub fn check_challenge(
+    identity: &Identity,
+    claimant: Claimant<'_>,
+    input: &str,
+    now: u64,
+) -> Result<Challenge, ChallengeRefusal> {
+    parse_for(identity, claimant, &challenge_of(input)?, now)
+}
+
+/// Sign a challenge with `identity`, held by `claimant`, and return it with the body
 /// `POST /identity/bind` expects: `{"challenge_id", "public_key",
 /// "signature"}` (base64 key and signature). `input` may be the challenge text
 /// or the daemon's whole challenge answer. Nothing secret is in the result.
 pub fn sign_challenge(
     identity: &Identity,
+    claimant: Claimant<'_>,
     input: &str,
     now: u64,
 ) -> Result<(Challenge, serde_json::Value), ChallengeRefusal> {
     let text = challenge_of(input)?;
-    let c = parse_for(identity, &text, now)?;
+    let c = parse_for(identity, claimant, &text, now)?;
     use base64::Engine;
     let signature =
         base64::engine::general_purpose::STANDARD.encode(identity.sign(text.as_bytes()));

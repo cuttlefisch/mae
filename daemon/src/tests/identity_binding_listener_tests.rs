@@ -69,18 +69,26 @@ fn idp_key() -> (String, JwkOwned) {
 }
 
 fn idp_token(pem: &str, sub: &str, groups: Value) -> String {
+    let mut claims = idp_claims(sub);
+    if !groups.is_null() {
+        claims["groups"] = groups;
+    }
+    sign_claims(pem, &claims)
+}
+
+fn idp_claims(sub: &str) -> Value {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    let mut claims = json!({"sub": sub, "aud": AUD, "iss": ISS, "iat": now, "exp": now + 3600});
-    if !groups.is_null() {
-        claims["groups"] = groups;
-    }
+    json!({"sub": sub, "aud": AUD, "iss": ISS, "iat": now, "exp": now + 3600})
+}
+
+fn sign_claims(pem: &str, claims: &Value) -> String {
     let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
     header.kid = Some(KID.into());
     let key = jsonwebtoken::EncodingKey::from_rsa_pem(pem.as_bytes()).unwrap();
-    jsonwebtoken::encode(&header, &claims, &key).unwrap()
+    jsonwebtoken::encode(&header, claims, &key).unwrap()
 }
 
 /// An owned KB with `members` as viewers, permissive so that only membership
@@ -258,6 +266,44 @@ fn an_empty_subject_is_refused() {
         r.map(|_| ()),
         Err(TokenValidationError::MissingPrincipalClaim)
     );
+}
+
+/// An external token with no issuer is no identity either: `(iss, sub)` keys
+/// the binding table, and a missing, empty or non-string `iss` would read as
+/// the one issuer `""` every such token shares. Checked with issuer
+/// validation off (`issuer = None`), where nothing else refuses it.
+#[test]
+fn an_external_token_without_an_issuer_is_refused() {
+    let (pem, jwk) = idp_key();
+    let mut unchecked = config(&[]);
+    unchecked.issuer = None;
+    let ok = validate_bearer_token(
+        &sign_claims(&pem, &idp_claims("alice")),
+        std::slice::from_ref(&jwk),
+        &unchecked,
+    );
+    assert_eq!(ok.map(|vp| vp.issuer), Ok(ISS.to_string()), "control");
+    for (case, iss) in [
+        ("missing", None),
+        ("empty", Some(json!(""))),
+        ("not a string", Some(json!(7))),
+    ] {
+        let mut claims = idp_claims("alice");
+        match iss {
+            None => drop(claims.as_object_mut().unwrap().remove("iss")),
+            Some(v) => claims["iss"] = v,
+        }
+        let r = validate_bearer_token(
+            &sign_claims(&pem, &claims),
+            std::slice::from_ref(&jwk),
+            &unchecked,
+        );
+        assert_eq!(
+            r.map(|_| ()),
+            Err(TokenValidationError::WrongIssuer),
+            "{case} iss"
+        );
+    }
 }
 
 /// D4: ANY ONE configured group admits the token, matched exactly; a token

@@ -13,7 +13,7 @@ use super::*;
 use mae_daemon::identity_binding::{BindingStore, Selector};
 use mae_daemon::oauth_self_issue::{unbound_principal, PrincipalKind};
 use mae_mcp::identity::Identity;
-use mae_mcp::identity_challenge::{sign_challenge, DOMAIN_TAG};
+use mae_mcp::identity_challenge::{sign_challenge, Claimant, DOMAIN_TAG};
 
 const ISS: &str = "https://idp.example.com";
 const AUD: &str = "https://mae.example.com";
@@ -147,8 +147,12 @@ fn the_editors_signer_binds_through_the_route() {
     ));
     assert_eq!(status, StatusCode::OK);
     let other = Identity::generate("other");
-    assert!(sign_challenge(&other, &answer, unix_now()).is_err());
-    let (_, body) = sign_challenge(&key, &answer, unix_now()).unwrap();
+    let me = Claimant {
+        issuer: ISS,
+        subject: "alice",
+    };
+    assert!(sign_challenge(&other, me, &answer, unix_now()).is_err());
+    let (_, body) = sign_challenge(&key, me, &answer, unix_now()).unwrap();
     let (status, v, _) = bind_now(&r, &store, &vp, &body);
     assert_eq!(status, StatusCode::OK, "{v}");
     let b = store.lookup(ISS, "alice").unwrap().unwrap();
@@ -406,4 +410,48 @@ fn default_challenge_bounds_are_minutes_and_a_few() {
         d.allowed_groups.is_empty(),
         "no group gate unless configured"
     );
+}
+
+/// The route's store write runs off the runtime: with another writer holding
+/// the file (as `mae-daemon binding` does), a timer on the same
+/// single-threaded runtime still fires on time, and the bind lands once the
+/// file is free (inside `busy_timeout`).
+#[tokio::test(flavor = "current_thread")]
+async fn a_writer_holding_the_file_does_not_stall_the_runtime() {
+    use http_body_util::BodyExt;
+    const HOLD: Duration = Duration::from_secs(2);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(mae_daemon::identity_binding::BINDINGS_FILE);
+    let store = Arc::new(BindingStore::open(&path).unwrap());
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let holder = {
+        let path = path.clone();
+        std::thread::spawn(move || {
+            let c = sqlite::Connection::open(&path).unwrap();
+            c.execute("BEGIN IMMEDIATE").unwrap();
+            held_tx.send(()).unwrap();
+            std::thread::sleep(HOLD);
+            c.execute("ROLLBACK").unwrap();
+        })
+    };
+    held_rx.recv().unwrap();
+    let key = Identity::generate("alice");
+    let t = Instant::now();
+    let write = tokio::spawn(record_binding_off_runtime(
+        Arc::clone(&store),
+        idp("alice"),
+        key.fingerprint(),
+    ));
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let ticked = t.elapsed();
+    assert!(ticked < HOLD / 2, "the runtime stalled for {ticked:?}");
+    let resp = write.await.unwrap();
+    let status = resp.status();
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(
+        store.lookup(ISS, "alice").unwrap().unwrap().fingerprint,
+        key.fingerprint()
+    );
+    holder.join().unwrap();
 }

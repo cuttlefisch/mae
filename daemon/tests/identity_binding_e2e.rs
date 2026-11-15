@@ -307,7 +307,11 @@ async fn binding_by_proof_kind_group_gate_and_unbind_over_the_real_wire() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    let (_, bind) = mae_mcp::identity_challenge::sign_challenge(&member, &raw, now).unwrap();
+    let me = mae_mcp::identity_challenge::Claimant {
+        issuer: ISS,
+        subject: "alice@idp",
+    };
+    let (_, bind) = mae_mcp::identity_challenge::sign_challenge(&member, me, &raw, now).unwrap();
     let (status, raw) = d.post("/identity/bind", &alice, bind.clone()).await;
     assert_eq!(status, 200, "{raw}");
 

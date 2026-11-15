@@ -55,7 +55,7 @@ pub(crate) fn handle_help(args: &[String]) -> Option<io::Result<()>> {
         println!("  --print-config-path     Print the config file path and exit");
         println!("  --print-config-template Print the default commented template to stdout");
         println!("  --collab-identity       Print this editor's collab peer identity (for `mae-daemon authorize`)");
-        println!("  --sign-identity-challenge <CHALLENGE|->");
+        println!("  --sign-identity-challenge <CHALLENGE|-> --issuer <ISS> --subject <SUB>");
         println!("                          Sign a daemon identity-binding challenge with this editor's key (ADR-098)");
         println!("  setup-collab [--server ADDR] [--ssh-key PATH] [--p2p]");
         println!("                          One-command key-mode setup: identity + init.scm (--p2p also enables the daemon mesh)");

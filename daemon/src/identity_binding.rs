@@ -249,7 +249,13 @@ fn finish_tx<T>(
 ) -> Result<T, BindingError> {
     match result {
         Ok(v) => {
-            conn.execute("COMMIT")?;
+            if let Err(e) = conn.execute("COMMIT") {
+                // A failed COMMIT can leave the transaction open (SQLite keeps
+                // it on SQLITE_BUSY and on a deferred constraint). Left so,
+                // every later `BEGIN IMMEDIATE` on this connection fails.
+                let _ = conn.execute("ROLLBACK");
+                return Err(e.into());
+            }
             Ok(v)
         }
         Err(e) => {
@@ -352,6 +358,25 @@ pub fn resolve(
         },
         None => vp,
     })
+}
+
+/// [`resolve`] for the async listener: the lookup is blocking SQLite behind a
+/// mutex, and a CLI writer may hold the file for up to `busy_timeout`, so it
+/// runs on the blocking pool rather than stalling a runtime worker. A lookup
+/// task that dies is a storage error — the caller fails closed on it.
+pub async fn resolve_off_runtime(
+    vp: ValidatedPrincipal,
+    store: Option<std::sync::Arc<BindingStore>>,
+) -> Result<ValidatedPrincipal, BindingError> {
+    match store {
+        // Only an unbound IdP principal is looked up; the rest need no hop.
+        Some(store) if vp.credential == Credential::IdpUnbound => {
+            tokio::task::spawn_blocking(move || resolve(vp, Some(&store)))
+                .await
+                .map_err(|e| BindingError::Storage(format!("binding lookup task: {e}")))?
+        }
+        store => resolve(vp, store.as_deref()),
+    }
 }
 
 #[cfg(test)]

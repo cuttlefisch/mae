@@ -26,7 +26,7 @@
 //! network form of any of them.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
@@ -214,8 +214,10 @@ fn parse_bind(body: &Value) -> Result<BindRequest, Box<HttpResponse>> {
     })
 }
 
-/// `POST /identity/bind`, the token already validated and resolved. Every
-/// check in C2 step 4, then the one-to-one rule.
+/// `POST /identity/bind`, the token already validated and resolved: every
+/// check in C2 step 4, then the one-to-one rule. The route runs the same two
+/// steps, the store write on the blocking pool ([`record_binding_off_runtime`]).
+#[cfg(test)]
 pub(crate) fn complete_binding(
     routes: &BindingRoutes,
     store: &BindingStore,
@@ -224,36 +226,71 @@ pub(crate) fn complete_binding(
     body: &Value,
     now: Instant,
 ) -> HttpResponse {
-    let req = match parse_bind(body) {
-        Ok(r) => r,
-        Err(resp) => return *resp,
-    };
+    match check_proof(routes, vp, audience, body, now) {
+        Ok(fp) => record_binding(store, vp, &fp),
+        Err(resp) => *resp,
+    }
+}
+
+/// Every check in C2 step 4: the fingerprint to bind, or the refusal.
+fn check_proof(
+    routes: &BindingRoutes,
+    vp: &ValidatedPrincipal,
+    audience: &str,
+    body: &Value,
+    now: Instant,
+) -> Result<String, Box<HttpResponse>> {
+    let refuse = |e| Err(Box::new(refused(e)));
+    let req = parse_bind(body)?;
     let Some(pending) = routes.take(&req.challenge_id, now) else {
-        return refused(McpError::challenge_invalid(
+        return refuse(McpError::challenge_invalid(
             "unknown, already used or expired challenge".to_string(),
         ));
     };
     if pending.issuer != vp.issuer || pending.subject != vp.subject {
-        return refused(McpError::challenge_mismatch(
+        return refuse(McpError::challenge_mismatch(
             "this challenge was issued to another subject".to_string(),
         ));
     }
     if pending.audience != audience {
-        return refused(McpError::challenge_mismatch(
+        return refuse(McpError::challenge_mismatch(
             "this challenge was issued for another audience".to_string(),
         ));
     }
     if req.key.fingerprint() != pending.fingerprint {
-        return refused(McpError::proof_invalid(
+        return refuse(McpError::proof_invalid(
             "the key is not the one this challenge names".to_string(),
         ));
     }
     if !req.key.verify(pending.text.as_bytes(), &req.signature) {
-        return refused(McpError::proof_invalid(
+        return refuse(McpError::proof_invalid(
             "the signature does not verify against the challenge".to_string(),
         ));
     }
-    record_binding(store, vp, &pending.fingerprint)
+    Ok(pending.fingerprint)
+}
+
+/// [`record_binding`] on the blocking pool: the write is blocking SQLite behind
+/// a mutex, and a CLI writer may hold the file for up to `busy_timeout`. A task
+/// that dies answers 503, as a failed write does.
+pub(crate) async fn record_binding_off_runtime(
+    store: Arc<BindingStore>,
+    vp: ValidatedPrincipal,
+    fp: String,
+) -> HttpResponse {
+    tokio::task::spawn_blocking(move || record_binding(&store, &vp, &fp))
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "binding store write task failed");
+            unavailable()
+        })
+}
+
+fn unavailable() -> HttpResponse {
+    oauth::json_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        json!({"error": "temporarily_unavailable"}),
+    )
 }
 
 fn record_binding(store: &BindingStore, vp: &ValidatedPrincipal, fp: &str) -> HttpResponse {
@@ -277,10 +314,7 @@ fn record_binding(store: &BindingStore, vp: &ValidatedPrincipal, fp: &str) -> Ht
         Err(BindingError::FingerprintBound) => conflict("fingerprint"),
         Err(e) => {
             tracing::warn!(error = %e, "binding store write failed");
-            oauth::json_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                json!({"error": "temporarily_unavailable"}),
-            )
+            unavailable()
         }
     }
 }
@@ -319,13 +353,13 @@ pub(crate) async fn handle(
     let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     let audience = &listener.config.canonical_resource_uri;
     let now = Instant::now();
-    match (path.as_str(), listener.bindings.as_deref()) {
+    match (path.as_str(), listener.bindings.as_ref()) {
         (CHALLENGE_PATH, _) => issue_challenge(routes, &vp, audience, &body, now),
-        (_, Some(store)) => complete_binding(routes, store, &vp, audience, &body, now),
-        (_, None) => oauth::json_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            json!({"error": "temporarily_unavailable"}),
-        ),
+        (_, Some(store)) => match check_proof(routes, &vp, audience, &body, now) {
+            Ok(fp) => record_binding_off_runtime(Arc::clone(store), vp, fp).await,
+            Err(resp) => *resp,
+        },
+        (_, None) => unavailable(),
     }
 }
 
