@@ -20,7 +20,13 @@ export interface Request {
     link_exclude_keywords?: string[];
     link_exclude_properties?: string[];
   };
-  render?: { headline_ids?: 'explicit' | 'slug'; images?: boolean; property_drawers?: boolean };
+  render?: {
+    headline_ids?: 'explicit' | 'slug';
+    images?: boolean;
+    property_drawers?: boolean;
+    /** HTML level of a top-level headline, 1–6 (default 1; Org's ox-html uses 2). */
+    toplevel_hlevel?: 1 | 2 | 3 | 4 | 5 | 6;
+  };
   /**
    * KB node id -> where it renders. An unresolved link shows its description or `placeholder`.
    * An `href` must be an http(s)/mailto URL or a scheme-less reference, already URL-encoded;

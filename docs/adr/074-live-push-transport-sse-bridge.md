@@ -333,7 +333,7 @@ sides than thousands of notices, each followed by a fetch.
   `check_kb_read_access`, `Transport::Hub`). It is one gate, not a second copy.
 - A bad token gets the listener's own `401` and `WWW-Authenticate`, the same as on every other
   route.
-- **A KB the token cannot read (proposed; pending the owner's decision).** The stream opens for
+- **A KB the token cannot read (decided 2026-11-14: partial open).** The stream opens for
   the KBs it can read and sends `access_lost {kb}` for each refused KB as its first events, before
   any notice. A refused KB is never silently absent, and "never had access" takes the same path
   as "lost access mid-stream", so a reader has one code path. Only a bad token (`401`) or every
@@ -522,29 +522,26 @@ Each test must fail without its mechanism.
 
 ### Open questions for the owner
 
-1. **Defaults.**
+1. **Defaults.** *Decided (2026-11-15):* ship as proposed, all configurable, and revisit with
+   pilot measurements:
    - streams: a quarter of `max_connections`, and 4 per principal;
    - 16 KBs per stream;
    - a replay cap of 1000;
    - 30-day tombstone retention;
    - a 250 ms coalescing interval;
    - a 15 s keepalive.
-
-   Each has a reason above. None is measured yet.
-2. **The write-path cost bar: measured** (`docs/research/074a-write-cost-measurement.md`, #905). At
-   the ADR-109 hosted scale the index is affordable: 76 bytes per node, and p50 goes from 0.62 to
-   0.75 ms at 162 writes/s. "+10% at p99" is the wrong bar, because any in-transaction index adds
-   1–2 pages per commit and pulls SQLite's automatic checkpoint (an fsync) onto p99. The proposed
-   bar is added p50 plus throughput, on an idle machine. Two prerequisites come with it: a single
-   in-process writer lock, so shard connections queue instead of sleeping (with it, 32 writers run
-   at 1,280/s with p99 58 ms), and checkpoints off the commit path. The in-memory coalescer is not
-   needed. Accepting the bar is the owner's decision.
-3. **HTTP/2 on the listener.** Should the listener advertise `h2` through ALPN? That lifts the
-   browser's six-connection limit for direct connections. It does not remove C3's multi-KB stream,
-   because the proxy's upstream leg still costs a slot per stream.
+2. **The write-path cost bar.** *Decided (2026-11-15):* the bar is added p50 plus throughput on an
+   idle machine, as measured (`docs/research/074a-write-cost-measurement.md`, #905: 76 bytes per
+   node; p50 0.62 → 0.75 ms at 162 writes/s). Both prerequisites are built first: a single
+   in-process writer lock, so shard connections queue instead of sleeping, and checkpoints off the
+   commit path.
+3. **HTTP/2 on the listener.** *Decided (2026-11-15):* yes, the listener advertises `h2` through
+   ALPN. It lifts the browser's six-connection limit for direct connections; C3's multi-KB stream
+   stays, because a proxy's upstream leg still costs a slot per stream.
 4. **The WebSocket method.** *Decided (2026-11-13):* it ships in the same release as the SSE
    route: one index, one gate, two transports.
-5. **A partial open.** C4 now proposes it, from the prior art there: the open succeeds for the
-   readable KBs and sends `access_lost` first for each refused one. Still the owner's decision.
+5. **A partial open.** *Decided (2026-11-14):* yes, as C4 describes: the open succeeds for the
+   readable KBs and sends `access_lost` first for each refused one. Browser MAE's reader holds one
+   stream over every KB it serves, and a refused open would take it down for all of them.
 6. **Authorship.** *Decided (2026-11-13):* never in a notice. Version history is the single source
    of truth for authorship (C2).
