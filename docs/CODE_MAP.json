@@ -1083,6 +1083,14 @@
           "kind": "mod"
         },
         {
+          "name": "MAX_MESSAGE_SIZE",
+          "kind": "const"
+        },
+        {
+          "name": "MAX_DAEMON_RESPONSE_SIZE",
+          "kind": "const"
+        },
+        {
           "name": "build_shim_initialize_params",
           "kind": "fn"
         },
@@ -1116,6 +1124,10 @@
         },
         {
           "name": "read_message",
+          "kind": "fn"
+        },
+        {
+          "name": "read_message_limited",
           "kind": "fn"
         },
         {

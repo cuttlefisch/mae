@@ -54,6 +54,31 @@ pub(crate) struct WsSettings {
     pub ping_every: Option<Duration>,
     pub max_open_docs: usize,
     pub max_frame_bytes: usize,
+    /// Largest message the daemon sends; see [`outbound_bound`].
+    pub max_outbound_bytes: usize,
+}
+
+/// Room for a response's JSON around its largest field: ids, keys, state
+/// vectors, the collection state riding a `kb/join`.
+const OUTBOUND_ENVELOPE_BYTES: usize = 1 << 20;
+
+/// The default largest message the daemon sends on a socket, for a document
+/// size limit of `max_document_bytes` (0 = unlimited).
+///
+/// A reply carries document state base64-encoded, so one document at the limit
+/// is `4 * ceil(limit / 3)` bytes on the wire plus its envelope; the bound must
+/// hold that, or the largest document a member may legitimately write cannot be
+/// fetched. Never below the 10 MiB every reply was held to before (a join that
+/// worked must keep working), and an unlimited daemon gets the bound a native
+/// client reads with.
+pub(crate) fn outbound_bound(max_document_bytes: usize) -> usize {
+    if max_document_bytes == 0 {
+        return mae_mcp::MAX_DAEMON_RESPONSE_SIZE;
+    }
+    let base64 = max_document_bytes.div_ceil(3).saturating_mul(4);
+    base64
+        .saturating_add(OUTBOUND_ENVELOPE_BYTES)
+        .max(mae_mcp::MAX_MESSAGE_SIZE)
 }
 
 /// Everything the routes need beyond the listener's own state.
@@ -94,6 +119,9 @@ pub(crate) fn state_from_config(
         max_frame_bytes: oauth
             .ws_max_frame_bytes
             .unwrap_or(oauth.max_request_body_bytes),
+        max_outbound_bytes: oauth
+            .ws_max_outbound_bytes
+            .unwrap_or_else(|| outbound_bound(deps.doc_store.max_document_size())),
     };
     tracing::info!(
         origins = settings.allowed_origins.len(),
@@ -112,4 +140,34 @@ pub(crate) fn now_unix() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+#[cfg(test)]
+mod outbound_bound_tests {
+    use super::*;
+
+    /// The bound must hold what the daemon really puts on the wire for one
+    /// document at the limit: its state through the same base64 encoder every
+    /// reply uses, plus the envelope. Checked at the stock limit and around it.
+    #[test]
+    fn one_document_at_the_limit_always_fits() {
+        for limit in [10_485_760, 12_000_000, 30_000_001] {
+            let state = vec![0xA5u8; limit];
+            let on_wire = mae_sync::encoding::update_to_base64(&state).len();
+            assert!(
+                on_wire + OUTBOUND_ENVELOPE_BYTES <= outbound_bound(limit),
+                "limit {limit}: {on_wire} B of base64 does not fit {}",
+                outbound_bound(limit)
+            );
+        }
+    }
+
+    /// Never below the 10 MiB every reply was held to before, so a join that
+    /// worked keeps working under a small document limit; unlimited documents
+    /// get the bound a native client reads with.
+    #[test]
+    fn the_floor_and_the_unlimited_case() {
+        assert_eq!(outbound_bound(1_000_000), mae_mcp::MAX_MESSAGE_SIZE);
+        assert_eq!(outbound_bound(0), mae_mcp::MAX_DAEMON_RESPONSE_SIZE);
+    }
 }
