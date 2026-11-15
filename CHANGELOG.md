@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.153] - 2026-11-15
+
+
+
+
+### Bug Fixes
+
+- *(ws)* Bound replies by their own limit, and close when one is over it ([b08f8f7](https://github.com/cuttlefisch/mae/commit/b08f8f794c889e65c60ae4cfb9097ae96e45c35d))
+
+## [0.14.152] - 2026-11-15
+
+
+
+
+### Features
+
+- *(daemon)* Kb/query.my_kbs lists the caller's own KBs ([d090b7f](https://github.com/cuttlefisch/mae/commit/d090b7fed924394eec41a59b1915bbdcc433061e))
+
+### Miscellaneous
+
+- Bump version to 0.14.152 ([2cfc277](https://github.com/cuttlefisch/mae/commit/2cfc277ff49cf99f7ed1904e66991e35530ce9be))
+
+## [mae-org-v0.8.0] - 2026-11-13
+
+
+
+
+### Features
+
+- *(org)* Every headline's property drawer, node or not ([05c753b](https://github.com/cuttlefisch/mae/commit/05c753b774f5f0e341daf2f514f874e13bd39983))
+- *(org-wasm)* HeadlineProperties as op 13; mae-org 0.8.0 ([c8d190b](https://github.com/cuttlefisch/mae/commit/c8d190bf8918a21d258b8d0bf27c3be21543fe0c))
+
+## [mae-org-v0.7.0] - 2026-11-13
+
+
+
+
+### Features
+
+- *(org)* Mint stable heading anchors (CUSTOM_ID); mae-org 0.7.0 ([3dd9650](https://github.com/cuttlefisch/mae/commit/3dd9650c1c51faa669d2bad963ab341cdab5bef6))
+
 ## [0.14.151] - 2026-11-13
 
 
@@ -13,19 +54,23 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
-- *(ws)* Conform the sync WebSocket to the web client's script ([637d5d1](https://github.com/cuttlefisch/mae/commit/637d5d1e25bbc5ada11754022048623a1e5d11f0))
 - *(daemon)* Kb export refuses a node it would write without some of its content ([c1077fb](https://github.com/cuttlefisch/mae/commit/c1077fb049a7b8f7ef7f3dbe1bb6723ac262f477))
 - *(daemon)* Retry a busy SQLite lock in milliseconds, not seconds ([fbdb88e](https://github.com/cuttlefisch/mae/commit/fbdb88ef2371565a8edb6f4bf8927e5a20f963f8))
+- *(ws)* Conform the sync WebSocket to the web client's script ([637d5d1](https://github.com/cuttlefisch/mae/commit/637d5d1e25bbc5ada11754022048623a1e5d11f0))
 
 ### Testing
 
-- *(ws)* Presence addressed to a KB node is gated by that KB ([c01bccf](https://github.com/cuttlefisch/mae/commit/c01bccf3039c6332cca9c85851e895b851389280))
 - *(daemon)* Pass the history methods through the benchmark backend ([e32d2ad](https://github.com/cuttlefisch/mae/commit/e32d2adc0463a834b6c4e0886189950199437503))
+- *(ws)* Presence addressed to a KB node is gated by that KB ([c01bccf](https://github.com/cuttlefisch/mae/commit/c01bccf3039c6332cca9c85851e895b851389280))
 - *(ws)* Declare the spawn harness the shared WebSocket helpers now use ([0409ddb](https://github.com/cuttlefisch/mae/commit/0409ddb2eb27c57700071f6d589c2e4bd3374211))
 
 ### CI
 
 - *(daemon)* Build the test binaries before the timed test step ([1cea2ef](https://github.com/cuttlefisch/mae/commit/1cea2ef017bb9c77c0613a10dd3fbee64d23c3df))
+
+### Miscellaneous
+
+- Bump version to 0.14.151 ([7dd4572](https://github.com/cuttlefisch/mae/commit/7dd45720c43a357e7fb846dcb7d26aeba5d74167))
 
 ### Bench
 
@@ -46,10 +91,10 @@ All notable changes to this project will be documented in this file.
 - *(daemon)* Cut a node version at each handoff (ADR-116 P2) ([251351e](https://github.com/cuttlefisch/mae/commit/251351e60b2b207d64574b4f2f2efe19887ac4ce))
 - *(daemon)* Kb/history.checkpoint cuts a named version (ADR-116 P2) ([5129d3f](https://github.com/cuttlefisch/mae/commit/5129d3f56c0723aaa9916bb2bab61a7eae29e5e1))
 - *(daemon)* Refuse switching a KB to E2E while its history holds plaintext ([6d98dd6](https://github.com/cuttlefisch/mae/commit/6d98dd617f3116458e36b39f446c7aa0414f2924))
-- *(sync,daemon)* Key each version's content hash (ADR-116 D3) ([f093c57](https://github.com/cuttlefisch/mae/commit/f093c5758d3ceb6dfe0223d6b8fb2bbd268cdf3b))
 - *(daemon)* Kb/history.list, get, diff and verify (ADR-116 P3) ([a530417](https://github.com/cuttlefisch/mae/commit/a530417d825c8a8621dfe60d12554ab0195b497c))
 - *(sync)* The signed history head (ADR-116 P3) ([35e4a67](https://github.com/cuttlefisch/mae/commit/35e4a67b447921c20b83f8d95ef51a52cc0a3d49))
 - *(daemon)* Signed history heads, checked by kb/history.verify (ADR-116 P3) ([e00fae2](https://github.com/cuttlefisch/mae/commit/e00fae2194f10173b6e95a748f9dc621266724fc))
+- *(sync,daemon)* Key each version's content hash (ADR-116 D3) ([f093c57](https://github.com/cuttlefisch/mae/commit/f093c5758d3ceb6dfe0223d6b8fb2bbd268cdf3b))
 - *(daemon)* Mae-daemon kb history head|verify, and a head before each backup (ADR-116 P3) ([fa392c8](https://github.com/cuttlefisch/mae/commit/fa392c8f1d7851bb9e5ec54b43b51ab8787df498))
 - *(daemon)* Page kb/history.list newest first, and document version kinds (ADR-116 D7) ([96aa927](https://github.com/cuttlefisch/mae/commit/96aa927bb7fd69da8680c182e81b15699ed27c37))
 - *(org)* A special block's parameters reach the output; mae-org 0.6.0 ([7f1bc0c](https://github.com/cuttlefisch/mae/commit/7f1bc0cf000b24f4ae81beb31c5c0414883fd148))

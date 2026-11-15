@@ -79,6 +79,8 @@ pub fn collab_method_cost(method: &str) -> RequestCost {
         // `kb/list` authorizes every co-hosted KB one at a time (#653), so it scales
         // with the number of KBs on the daemon rather than being a bounded lookup.
         "kb/list" => RequestCost::Scan,
+        // Same shape over the durable collection set, on the HTTPS listener.
+        "kb/query.my_kbs" => RequestCost::Scan,
         // Server-side scans over node content (ADR-053's live query surface).
         "kb/query.search" | "kb/query.graph" => RequestCost::Scan,
         // Artifact bodies are unbounded blobs.
