@@ -288,7 +288,10 @@ its subjects instead (C2), and the binding is the only way an IdP token reaches 
    `iss`, `sub`, the listener's audience, the fingerprint being claimed and a random nonce.
 3. The person signs it with the member key. The program that holds the IdP session (the browser,
    for Browser MAE) and the one that holds the key (native MAE, or a CLI) need not be the same; the
-   challenge and the signature are short enough to carry between them.
+   challenge and the signature are short enough to carry between them. Native MAE signs with
+   `mae --sign-identity-challenge` (decided 2026-11-15). It signs only the daemon's canonical
+   challenge for its own key, and only when the person states the issuer and subject the challenge
+   names, so nobody can be talked into binding another person's login to their key.
 4. The daemon checks the signature against the claimed public key, that the key's fingerprint is the
    one in the challenge, that the challenge is unexpired and unused, and that the token presenting
    the signature has the same `(iss, sub)`.
@@ -305,8 +308,9 @@ already mint a token for any fingerprint, so this adds no power. Such a binding 
 by the administrator rather than by proof, and the binding list shows which is which (decided
 2026-11-14).
 
-The D4 session gate is part of C: an optional set of required group claims, checked on every
-request before the binding is looked up. With none configured there is no group gate.
+The D4 session gate is part of C: an optional set of allowed groups, checked on every request
+before the binding is looked up. A token carrying **any one** of them is admitted, one carrying
+none is refused (decided 2026-11-15); with none configured there is no group gate.
 
 ### C3. Who counts as a person
 
