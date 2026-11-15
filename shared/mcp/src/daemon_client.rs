@@ -336,8 +336,8 @@ fn read_cl_message<R: BufRead>(reader: &mut R) -> Result<String, DaemonClientErr
         DaemonClientError::ConnectionError("Missing Content-Length header".to_string())
     })?;
 
-    // Guard against unreasonable message sizes (100 MB limit)
-    const MAX_MESSAGE_SIZE: usize = 100 * 1024 * 1024;
+    // Guard against unreasonable message sizes.
+    const MAX_MESSAGE_SIZE: usize = crate::MAX_DAEMON_RESPONSE_SIZE;
     if len > MAX_MESSAGE_SIZE {
         return Err(DaemonClientError::ConnectionError(format!(
             "Content-Length {len} exceeds maximum {MAX_MESSAGE_SIZE}"

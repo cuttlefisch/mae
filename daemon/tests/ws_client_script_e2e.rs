@@ -399,7 +399,14 @@ async fn ticket_and_connect(sc: Value) {
     let subs = Subs::default()
         .deadlines()
         .with(EXAMPLE_PRINCIPAL, Check::Eq(json!(EXAMPLE_PRINCIPAL)));
-    assert_conforms(&step(&sc, 4, "demonio")["trama"], &first, &subs, &[]);
+    // `limits.max_outbound_bytes` is additive and agreed with the client, which
+    // sizes its inbound cap from it; the script predates it.
+    assert_conforms(
+        &step(&sc, 4, "demonio")["trama"],
+        &first,
+        &subs,
+        &["max_outbound_bytes"],
+    );
 }
 
 /// "ticket usado, caducado o desconocido": the three refusals conform and are

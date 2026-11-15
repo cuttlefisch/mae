@@ -146,6 +146,13 @@ pub struct OAuthConfig {
     /// with `1009` (B4). Unset means `max_request_body_bytes` — the same bound
     /// a request body on this listener has.
     pub ws_max_frame_bytes: Option<usize>,
+    /// Largest message the daemon sends on a socket, bytes; a reply over it
+    /// closes the socket with `1011` and reason `response_too_large`, never
+    /// silently. Unset means derived from `[collab.sync]
+    /// max_document_size_bytes` so one document at that limit always fits
+    /// (`ws::outbound_bound`). Advertised in `session/hello` as
+    /// `limits.max_outbound_bytes`.
+    pub ws_max_outbound_bytes: Option<usize>,
 }
 
 impl Default for OAuthConfig {
@@ -175,6 +182,7 @@ impl Default for OAuthConfig {
             ws_ping_secs: 30,
             ws_max_open_docs: 1024,
             ws_max_frame_bytes: None,
+            ws_max_outbound_bytes: None,
         }
     }
 }

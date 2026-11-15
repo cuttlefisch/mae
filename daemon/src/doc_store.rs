@@ -851,6 +851,11 @@ impl DocStore {
         self
     }
 
+    /// The ADR-109 D6 document size limit, bytes; 0 = unlimited.
+    pub fn max_document_size(&self) -> usize {
+        self.max_document_size_bytes
+    }
+
     /// Set the maximum single sync-update payload size (bytes). 0 = use the
     /// built-in default ([`DEFAULT_MAX_UPDATE_SIZE`]).
     pub fn with_max_update_size(mut self, max: usize) -> Self {
