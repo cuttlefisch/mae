@@ -38,6 +38,42 @@ pub struct Opts {
     pub tenant_budget: Option<(String, u32)>,
     /// `ws_ping_secs`; `None` leaves the daemon's default.
     pub ping_secs: Option<u64>,
+    /// An external token issuer, and the `/ws` pilot switch (ADR-099 Amendment 2).
+    pub idp: Option<IdpOpts>,
+}
+
+/// `[oauth]` settings for an external issuer (ADR-098) and `ws_accept_bound_idp`.
+#[derive(Clone)]
+pub struct IdpOpts {
+    /// The local port serving the issuer's JWKS at `/jwks`.
+    pub jwks_port: u16,
+    pub issuer: String,
+    pub allowed_groups: Vec<String>,
+    pub accept_bound_idp: bool,
+    /// `ws_max_idp_session_secs`; `None` leaves the daemon's default.
+    pub max_session_secs: Option<u64>,
+}
+
+impl IdpOpts {
+    fn toml(&self) -> String {
+        let groups: Vec<String> = self
+            .allowed_groups
+            .iter()
+            .map(|g| format!("\"{g}\""))
+            .collect();
+        format!(
+            "jwks_url = \"http://127.0.0.1:{port}/jwks\"\nissuer = \"{iss}\"\n\
+             allowed_groups = [{groups}]\nws_accept_bound_idp = {accept}\n",
+            port = self.jwks_port,
+            iss = self.issuer,
+            groups = groups.join(", "),
+            accept = self.accept_bound_idp,
+        ) + self
+            .max_session_secs
+            .map(|n| format!("ws_max_idp_session_secs = {n}\n"))
+            .unwrap_or_default()
+            .as_str()
+    }
 }
 
 impl Default for Opts {
@@ -50,6 +86,7 @@ impl Default for Opts {
             max_outbound_bytes: None,
             tenant_budget: None,
             ping_secs: None,
+            idp: None,
         }
     }
 }
@@ -84,6 +121,12 @@ fn config_toml(dir: &Path, ports: crate::daemon_harness::Ports, opts: &Opts) -> 
         + opts
             .max_outbound_bytes
             .map(|n| format!("ws_max_outbound_bytes = {n}\n"))
+            .unwrap_or_default()
+            .as_str()
+        + opts
+            .idp
+            .as_ref()
+            .map(IdpOpts::toml)
             .unwrap_or_default()
             .as_str();
     format!(
@@ -177,6 +220,16 @@ impl Daemon {
             p.stop().await;
         }
         self.start().await;
+    }
+
+    /// The daemon's data directory.
+    pub fn root(&self) -> &Path {
+        self.tmp.path()
+    }
+
+    /// The daemon's config file.
+    pub fn config(&self) -> &Path {
+        &self.config_path
     }
 
     /// A self-issued token for `sub`, valid `ttl` seconds.
@@ -497,6 +550,32 @@ pub fn kb_share(kb_id: &str, nodes: &[(&str, &str, &str)]) -> Value {
         node_states.push(json!({"id": id, "state": update_to_base64(&doc.encode())}));
     }
     json!({"kb_id": kb_id, "name": kb_id, "collection_state": update_to_base64(&coll.encode_state()), "nodes": node_states})
+}
+
+/// A writer on `node`, authoring under `principal`'s current-epoch client id,
+/// from the node's state as `kb/join` returned it.
+pub fn node_writer(
+    joined: &Value,
+    node: &str,
+    principal: &str,
+    epoch: u64,
+) -> mae_sync::kb::KbNodeDoc {
+    let entry = joined["result"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == node)
+        .unwrap_or_else(|| panic!("kb/join returned no node '{node}': {joined}"));
+    let state = mae_sync::encoding::base64_to_update(entry["state"].as_str().unwrap()).unwrap();
+    let client = mae_sync::kb::derive_kb_client_id(principal, epoch);
+    mae_sync::kb::KbNodeDoc::from_bytes_with_client_id(&state, client).unwrap()
+}
+
+/// The authorization epoch `kb/join` reports.
+pub fn epoch_of(joined: &Value) -> u64 {
+    joined["result"]["epoch"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("kb/join reports no epoch: {joined}"))
 }
 
 /// `daemon/status` over the KB socket.
