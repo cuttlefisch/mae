@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url';
 // reading, `#+LINK` expansion); 755,498 bytes after the final pre-tag
 // review's fixes, 761,547 after its second round, 772,721 after its
 // third; 846,219 once macros were expanded as Org's export does (review
-// round 4), 868,108 after round 5, 906,436 after round 6, 928,440 with the syntax ops (v0.2.0), 958,381 with the CUSTOM_ID ops (v0.7.0), 962,644 with headlineProperties (v0.8.0). The first budget, 700,000 (~15% over the
+// round 4), 868,108 after round 5, 906,436 after round 6, 928,440 with the syntax ops (v0.2.0), 958,381 with the CUSTOM_ID ops (v0.7.0), 964,076 with headlineProperties (v0.8.0; CI's build, the figure the tag carries). The first budget, 700,000 (~15% over the
 // first measurement), caught that growth as it should; it was raised to
 // 800,000 (~13% over the tagged size), then to 900,000 as the deliberate
 // cost of expanding macros, then to 1,000,000 for round 6's fixes, each recorded in ADR-112's O3 note. The
@@ -100,6 +100,7 @@ for (const text of [...files.map((f) => readFileSync(join(root, f), 'utf8')), ..
   requests.push([OPS.semantics, { text, semantics: { select_tags: ['export'], archived_trees: 'none' } }]);
   requests.push([OPS.renderHast, { text, resolver }]);
   requests.push([OPS.renderHtml, { text, resolver, render: { headline_ids: 'slug', images: true, property_drawers: true } }]);
+  requests.push([OPS.renderHtml, { text, resolver, render: { toplevel_hlevel: 2 } }]);
   requests.push([OPS.text, { text }]);
   if (sem.nodes.length) requests.push([OPS.text, { text, node: sem.nodes[sem.nodes.length - 1].id }]);
   for (const l of sem.links.slice(0, 5)) requests.push([OPS.classifyLink, { path: l.path }]);
@@ -196,6 +197,18 @@ if (broken.ok !== false) fail('broken JSON did not give an error response');
 const rendered = wasmOut.filter((_, i) => requests[i][0] === OPS.renderHast || requests[i][0] === OPS.renderHtml);
 if (rendered.some((r) => /href[^,}]*javascript:/i.test(r))) fail('a hostile href reached a rendering');
 // The shape mae-org.d.ts declares for a node's metadata.
+// render.toplevel_hlevel end to end: the tag moves, the class does not; a value
+// outside 1..6 (or not an integer) is refused, never clamped.
+{
+  const out = org.renderHtml({ text: '* A\n** B\n', render: { toplevel_hlevel: 2 } }).body;
+  if (!/<h2[ >]/.test(out) || !/<h3[ >]/.test(out) || /<h1[ >]/.test(out)) fail(`toplevel_hlevel 2: ${out}`);
+  if (!/org-level-1/.test(out) || !/org-level-2/.test(out)) fail(`toplevel_hlevel moved the level class: ${out}`);
+  for (const v of [0, 7, 2.5, '2', -1]) {
+    let threw = null;
+    try { org.renderHtml({ text: '* A\n', render: { toplevel_hlevel: v } }); } catch (e) { threw = e; }
+    if (!threw || !/toplevel_hlevel/.test(threw.message)) fail(`toplevel_hlevel ${JSON.stringify(v)} accepted: ${threw && threw.message}`);
+  }
+}
 const meta = org.renderHtml({ text: '* T [[https://x.example][l]]\n:PROPERTIES:\n:ID: t\n:END:\n' }).nodes[0];
 for (const k of ['id', 'anchor', 'title', 'title_unlinked', 'aliases', 'properties']) {
   if (!(k in meta)) fail(`node metadata has no ${k}`);

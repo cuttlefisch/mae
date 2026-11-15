@@ -98,7 +98,8 @@ impl Builder<'_> {
             _ => (String::new(), String::new()),
         };
         let (heading, section_id) = self.headline_anchors(n, &h, (&plain, &shown, &slugged));
-        let mut head = Element::new(Tag::heading(h.level()));
+        let shift = usize::from(self.opts.toplevel_hlevel.get()) - 1;
+        let mut head = Element::new(Tag::heading(h.level() + shift));
         if let Some(id) = heading {
             head = head.attr(Attr::Id, id);
         }
