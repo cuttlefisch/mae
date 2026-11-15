@@ -16,7 +16,7 @@
 //!                "link_types": {"web": [], "mail": [], "other": []},
 //!                "link_exclude_keywords": [], "link_exclude_properties": []},
 //!  "render": {"headline_ids": "explicit" | "slug", "images": false,
-//!             "property_drawers": false},
+//!             "property_drawers": false, "toplevel_hlevel": 1},
 //!  "resolver": {"targets": {"KB id": {"href": "/x.html", "title": "X"}},
 //!               "placeholder": "[?]"},
 //!  "node": "KB id",
@@ -376,7 +376,16 @@ fn render_options(j: Option<&Json>) -> Result<RenderOptions, String> {
     let Some(j) = j.filter(|j| **j != Json::Null) else {
         return Ok(RenderOptions::default());
     };
-    known_keys(j, &["headline_ids", "images", "property_drawers"], "render")?;
+    known_keys(
+        j,
+        &[
+            "headline_ids",
+            "images",
+            "property_drawers",
+            "toplevel_hlevel",
+        ],
+        "render",
+    )?;
     let ids = match opt_str(j.get("headline_ids"), "headline_ids")?.as_deref() {
         None | Some("explicit") => HeadlineIds::Explicit,
         Some("slug") => HeadlineIds::Slug,
@@ -384,10 +393,18 @@ fn render_options(j: Option<&Json>) -> Result<RenderOptions, String> {
     };
     let images = opt_bool(j.get("images"), "images")?.unwrap_or(false);
     let drawers = opt_bool(j.get("property_drawers"), "property_drawers")?.unwrap_or(false);
+    let hlevel = match j.get("toplevel_hlevel") {
+        None | Some(Json::Null) => mae_org::ToplevelHlevel::default(),
+        Some(Json::Num(n)) if n.fract() == 0.0 && (1.0..=6.0).contains(n) => {
+            mae_org::ToplevelHlevel::new(*n as u8).expect("1..=6 checked")
+        }
+        Some(_) => return Err("render.toplevel_hlevel must be an integer from 1 to 6".into()),
+    };
     Ok(RenderOptions::default()
         .with_headline_ids(ids)
         .with_images(images)
-        .with_property_drawers(drawers))
+        .with_property_drawers(drawers)
+        .with_toplevel_hlevel(hlevel))
 }
 
 fn resolver(j: Option<&Json>) -> Result<Resolver, String> {
