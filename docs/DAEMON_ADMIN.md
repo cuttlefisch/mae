@@ -271,6 +271,12 @@ self_issued_token_max_ttl_secs = 86400          # ceiling `token mint --ttl` ref
   `health`) examines at most `kb_query_max_scan_nodes` nodes and answers `"truncated": true` (plus
   the KB's `"total"`) when that cap, rather than the caller's result limit, ended the scan. A
   `RemoteHub` client reports such a result as partial. Raise the cap for KBs larger than it.
+- **`kb/query.my_kbs` lists the caller's own KBs.** It takes no `kb_id` and answers
+  `{"kbs": [{"kb_id", "title", "role", "encryption"}]}`, sorted by `kb_id`: every KB on this daemon
+  the token's principal may read as a member. `role` is `owner`, `editor` or `viewer`, the same
+  strings as membership; `title` is the KB's name, or `null`. A permissive KB the caller has not
+  joined is not listed, and nothing about other members is returned. Unlike the mTLS `kb/list`,
+  it reads the stored KB set, so it answers the same after a restart.
 - **A malformed parameter is refused, not ignored.** A `kb/query.*` parameter that is missing,
   of the wrong type or out of range gets JSON-RPC `-32602` with
   `data: {"kind": "invalid_params", "param": "<name>"}`; `null` counts as absent. Two ranges are
