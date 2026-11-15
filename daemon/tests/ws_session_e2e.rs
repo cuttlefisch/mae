@@ -210,6 +210,46 @@ async fn a_frame_over_the_cap_closes_1009() {
     assert_eq!(ws.closed().await.0, 1009);
 }
 
+/// A reply over `max_outbound_bytes` closes the socket `1011`
+/// `response_too_large`. It used to stop the session's pump without a close
+/// frame, so the client saw an abnormal closure (1006) and could not tell a
+/// too-large reply from a crash.
+#[tokio::test]
+async fn a_reply_over_the_outbound_bound_closes_1011_not_silently() {
+    let d = spawn(Opts {
+        max_outbound_bytes: Some(16_384),
+        ..Opts::default()
+    })
+    .await;
+    let mut alice = connect_bearer(&d, &d.token("SHA256:alice", 3600)).await;
+    let hello = alice.until(|v| v["method"] == "session/hello").await;
+    assert_eq!(hello["params"]["limits"]["max_outbound_bytes"], 16_384);
+    let big = "y".repeat(40_000);
+    assert!(ok(&alice
+        .call(1, "kb/share", kb_share("kbig", &[("n:1", "Big", &big)]))
+        .await));
+    let bob_in = json!({"kb_id": "kbig", "member": "SHA256:bob", "role": "viewer", "label": "bob"});
+    assert!(ok(&alice.call(2, "kb/add_member", bob_in).await));
+
+    let mut bob = connect_bearer(&d, &d.token("SHA256:bob", 3600)).await;
+    // A reply under the bound goes through on the same socket.
+    assert!(ok(&bob.call(1, "$/ping", json!({})).await));
+    bob.send(json!({"jsonrpc": "2.0", "id": 2, "method": "kb/join", "params": {"kb_id": "kbig"}}))
+        .await;
+    assert_eq!(bob.closed().await, (1011, "response_too_large".to_string()));
+}
+
+/// The default outbound bound is derived from the document size limit, and
+/// advertised: at the stock 10 MB limit, `4 * ceil(10485760 / 3)` bytes of
+/// base64 plus a 1 MiB envelope.
+#[tokio::test]
+async fn hello_advertises_the_derived_outbound_bound() {
+    let d = spawn(Opts::default()).await;
+    let mut ws = connect_bearer(&d, &d.token("SHA256:alice", 3600)).await;
+    let hello = ws.until(|v| v["method"] == "session/hello").await;
+    assert_eq!(hello["params"]["limits"]["max_outbound_bytes"], 15_029_592);
+}
+
 /// B4: `max_open_docs` refuses a request naming a new document once the
 /// session holds that many; one it already holds still works.
 #[tokio::test]
