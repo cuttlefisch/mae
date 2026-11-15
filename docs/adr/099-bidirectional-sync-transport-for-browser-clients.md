@@ -1,6 +1,7 @@
 # ADR-099: Bidirectional sync transport for browser clients
 
-**Status:** Accepted (design), with Amendment 1 (accepted 2026-11-11). Not yet built.
+**Status:** Accepted (design), with Amendment 1 (accepted 2026-11-11). Amendment 2 (2026-11-15,
+proposed): a linked IdP login may use the socket before #727.
 **Depends on:** ADR-097 (Browser MAE is a KB surface — its D3 establishes that a one-directional
 transport cannot serve a write surface), ADR-052 (OAuth 2.1 resource server — the listener this
 extends), ADR-053 (the read-through query surface this sits beside), ADR-098 (the identity a
@@ -410,3 +411,83 @@ Each test must fail without its mechanism.
   log entry.
 - **Cookies.** They bring cross-site request rules, a CSRF surface and a session store, to carry a
   credential the client already holds as a bearer token.
+
+## Amendment 2 (2026-11-15): a linked IdP login may use the socket, before #727
+
+B6 kept `/ws` to daemon-issued tokens until both hub signature verification (#727) and ADR-098's
+binding existed. The binding now exists (ADR-098 Amendment 1, Phase C): an IdP subject that proved
+possession of a member key, or that an operator bound, maps to that member's fingerprint. The
+owner has decided that a team pilot of the browser editor may write with such a login before #727
+is enforced (decided 2026-11-15). This amendment says how, and how those writes meet #727 once it
+is enforced.
+
+### E1. A bound IdP token is accepted on `/ws` and `/ws/ticket`, behind an operator switch
+
+- With `oauth.ws_accept_bound_idp = true` (default `false`), `POST /ws/ticket` and the bearer form
+  of the upgrade accept an external IdP token whose `(iss, sub)` is bound. The session's principal
+  is the **bound fingerprint**, exactly as a daemon-issued token for that fingerprint would carry,
+  so membership, roles, the epoch fence and per-frame authorization (B4) apply unchanged.
+- An external token that is **not bound** is refused at the upgrade or the mint
+  (`identity_not_bound`), never admitted as its raw subject: the typed principal of ADR-098
+  Amendment 1 C1 holds here too. The D4 group gate runs first, as on every route.
+- A ticket minted with a bound IdP token is bound to the resolved fingerprint, and to the token's
+  expiry, tenant and origin, as B1 already requires.
+- The session's kind (ADR-098 Amendment 1 C3) is computed as everywhere: a person only on a binding
+  flagged `person`.
+
+### E2. Unbinding reaches open sockets at the next renewal
+
+The binding is resolved when a session opens and again at each renewal (B3). If the renewed
+token no longer resolves to the session's fingerprint (it was unbound, or bound to another key),
+the socket closes `4403 principal_changed`, the code B3 already uses for a renewal with a different
+identity. So an unbind or a rebind takes effect on open sockets within one token lifetime, and an
+IdP group removal at the next refresh (D4); keep token lifetimes short.
+
+### E3. Until #727, these writes are as trusted as an operator-minted token, and no more
+
+A write over a bound-IdP session is authenticated by the channel (TLS, the IdP token, the binding),
+not by a signature over the op. That is the same standing B6 already gave operator-minted tokens:
+every writer is one the operator vouched for. Here the operator vouches by enabling the switch and
+by the binding (made by proof of possession, or by the admin CLI). What it does not protect against
+is spelled out:
+
+- a stolen IdP session can write as its member until the token expires or is refused at renewal;
+- the hub cannot later prove which ops the member's key authored, because none are signed;
+- the hub accepts an op whose signed header names any current editor of the KB as its author, from
+  any member session. This holds for every session today, not only bound-IdP ones: no hub path
+  compares a content op's author with the session that sent it.
+
+All three end when #727 is enforced (E4). `docs/DAEMON_ADMIN.md` states the switch is for a pilot with
+short token lifetimes.
+
+### E4. What #727 must add, and how bound-IdP writes meet it
+
+Today `require_signed_content_ops` (ADR-036) is consulted by `sync/update` alone, and no hub path
+compares a content op's author with the session that sent it. #727 must add both:
+
+1. **The flag applies to `kb/node_update` as well as `sync/update`.** With it on, an unsigned
+   content op is refused (`signature_required`) on either method, from any session.
+2. **An op a session originates is authored by that session's principal.** The hub checks that the
+   signed header's author is the principal the session authenticated as. Ops the hub relays from a
+   peer are a separate case, on which #727 rules: their legitimate author may differ from the
+   connection that carries them.
+
+A bound-IdP session's principal is the bound fingerprint, so once #727 holds, the browser signs each
+op with the member key it holds: the key it generated with MAE's crypto compiled to WebAssembly and
+bound by proof (ADR-098 Amendment 1 C2). This is why pilot keys are generated extractable, kept by
+the browser, and backed up: a key that was discarded after binding could not sign, and its member
+could no longer write once #727 is enforced. Turning the flag on needs no change to sessions or
+bindings.
+
+### E5. Tests this amendment adds
+
+- With the switch off, a bound IdP token is refused on `/ws` and `/ws/ticket` exactly as today
+  (`issuer_not_supported`).
+- With it on: a bound token opens a session whose `hello` principal is the bound fingerprint and
+  edits a KB that fingerprint is a member of; an unbound token is refused `identity_not_bound` and
+  no socket exists; a token without an allowed group is refused before the binding is read.
+- A ticket minted by a bound token opens a socket as the bound fingerprint and no other.
+- Unbinding, then renewing with the same token, closes the socket `4403`; rebinding the subject to
+  another key does the same.
+
+E4's checks are #727's, and so are their tests.

@@ -16,7 +16,10 @@
 //!
 //! B6, while it holds: off by default (`oauth.ws_enabled`), and only
 //! daemon-issued tokens (`kid = "self"`) are accepted on both routes — anything
-//! else is `issuer_not_supported`. The session principal is the token subject,
+//! else is `issuer_not_supported`. Amendment 2 (E1/E2) adds one exception behind
+//! `oauth.ws_accept_bound_idp`: an identity-provider token whose `(iss, sub)` is
+//! bound to a member key, whose principal is then that fingerprint. Which tokens
+//! qualify is decided in one place, `credential`. The session principal is
 //! bound as a bearer `PeerIdentity`, so `session/hello`'s principal and
 //! `kb/join`'s are the same value.
 //!
@@ -25,6 +28,7 @@
 //! listener's own response builders (`oauth::unauthorized`, `with_no_store`).
 
 mod connect_ticket;
+mod credential;
 mod session;
 mod upgrade;
 
@@ -56,6 +60,8 @@ pub(crate) struct WsSettings {
     pub max_frame_bytes: usize,
     /// Largest message the daemon sends (`ws_max_outbound_bytes`, else `DocStore::message_bound`).
     pub max_outbound_bytes: usize,
+    /// `ws_accept_bound_idp` (ADR-099 Amendment 2, E1).
+    pub accept_bound_idp: bool,
 }
 
 /// Everything the routes need beyond the listener's own state.
@@ -99,7 +105,15 @@ pub(crate) fn state_from_config(
         max_outbound_bytes: oauth
             .ws_max_outbound_bytes
             .unwrap_or_else(|| deps.doc_store.message_bound()),
+        accept_bound_idp: oauth.ws_accept_bound_idp,
     };
+    if settings.accept_bound_idp {
+        tracing::warn!(
+            "oauth.ws_accept_bound_idp: /ws accepts bound identity-provider tokens; until hub \
+             signature verification (#727) is enforced their writes are trusted on the channel \
+             alone (ADR-099 Amendment 2, E3) — keep token lifetimes short"
+        );
+    }
     tracing::info!(
         origins = settings.allowed_origins.len(),
         "sync WebSocket enabled on the OAuth listener (/ws)"

@@ -433,10 +433,21 @@ pub(crate) async fn authenticate(
     token: &str,
     listener: &Listener,
 ) -> Result<ValidatedPrincipal, Box<Response<Full<Bytes>>>> {
-    let config = &listener.config;
+    resolve_token(token, listener)
+        .await
+        .map_err(|f| f.into_response(&listener.config))
+}
+
+/// [`authenticate`], with the failure still typed, for a caller that answers
+/// it other than as an HTTP response: the sync socket's `session/renew`
+/// (ADR-099 Amendment 2, E2) re-resolves the binding here.
+pub(crate) async fn resolve_token(
+    token: &str,
+    listener: &Listener,
+) -> Result<ValidatedPrincipal, AuthFailure> {
     let vp = validate_token(
         token,
-        config,
+        &listener.config,
         listener.jwks.as_ref(),
         listener.self_issue.as_ref(),
     )
@@ -447,11 +458,35 @@ pub(crate) async fn authenticate(
         // Fail closed: a binding that cannot be read is not "unbound" (that
         // would silently demote a member), and never "bound".
         tracing::warn!(error = %e, "binding table unreadable");
-        Box::new(json_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            serde_json::json!({"error": "temporarily_unavailable"}),
-        ))
+        AuthFailure::Unavailable
     })
+}
+
+/// Why a bearer token did not authenticate, before a transport renders it:
+/// the HTTP routes as a response ([`AuthFailure::into_response`]), the sync
+/// socket's renewal as a JSON-RPC error.
+#[derive(Debug)]
+pub(crate) enum AuthFailure {
+    /// `401`: the token does not validate; the reason goes into `WWW-Authenticate`.
+    Invalid(String),
+    /// `403 group_required`: the token carries none of `allowed_groups` (D4).
+    NotInGroup,
+    /// `503`: the JWKS or the binding table could not be read.
+    Unavailable,
+}
+
+impl AuthFailure {
+    /// The listener's response for this failure.
+    pub(crate) fn into_response(self, config: &ResourceServerConfig) -> Box<Response<Full<Bytes>>> {
+        Box::new(match self {
+            AuthFailure::Invalid(reason) => unauthorized(config, &reason),
+            AuthFailure::NotInGroup => group_refusal(),
+            AuthFailure::Unavailable => json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                serde_json::json!({"error": "temporarily_unavailable"}),
+            ),
+        })
+    }
 }
 
 /// The refusal for a token that validated but lacks a required group (D4):
@@ -488,7 +523,7 @@ async fn validate_token(
     config: &ResourceServerConfig,
     jwks: Option<&JwksCache>,
     self_issue: Option<&oauth_self_issue::SelfIssueConfig>,
-) -> Result<ValidatedPrincipal, Box<Response<Full<Bytes>>>> {
+) -> Result<ValidatedPrincipal, AuthFailure> {
     // ADR-067 Phase D3: a cheap, unauthenticated header PEEK (never the
     // signature -- that's still verified below, by the real validator for
     // whichever population this token claims membership in) decides which
@@ -511,7 +546,7 @@ async fn validate_token(
         return oauth_self_issue::validate_self_issued_token(token, &daemon_pubkey, &si.audience)
             .map_err(|e| {
                 tracing::debug!(?e, "self-issued bearer token rejected");
-                Box::new(unauthorized(config, &format!("{e:?}")))
+                AuthFailure::Invalid(format!("{e:?}"))
             });
     }
 
@@ -519,24 +554,21 @@ async fn validate_token(
     // an AUTH failure (401), never as the 503 a failed JWKS fetch produces --
     // nothing is temporarily unavailable, and a client would retry a 503.
     let Some(jwks) = jwks else {
-        return Err(Box::new(unauthorized(
-            config,
+        return Err(AuthFailure::Invalid(
             "no external token issuer is configured on this daemon (oauth.jwks_url is \
-             unset); only its own self-issued tokens are accepted",
-        )));
+             unset); only its own self-issued tokens are accepted"
+                .to_string(),
+        ));
     };
     let keys = jwks.get().await.map_err(|e| {
         tracing::warn!(error = %e, "failed to fetch JWKS");
-        Box::new(json_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            serde_json::json!({"error": "temporarily_unavailable"}),
-        ))
+        AuthFailure::Unavailable
     })?;
     validate_bearer_token(token, &keys, config).map_err(|e| {
         tracing::debug!(?e, "bearer token rejected");
         match e {
-            TokenValidationError::NotInAllowedGroup => Box::new(group_refusal()),
-            e => Box::new(unauthorized(config, &format!("{e:?}"))),
+            TokenValidationError::NotInAllowedGroup => AuthFailure::NotInGroup,
+            e => AuthFailure::Invalid(format!("{e:?}")),
         }
     })
 }

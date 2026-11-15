@@ -147,6 +147,14 @@ pub struct OAuthConfig {
     /// (`kid = "self"`, so `self_issued_tokens_enabled` is a prerequisite), and
     /// it needs `collab.enabled` — the socket reaches the collab session loop.
     pub ws_enabled: bool,
+    /// ADR-099 Amendment 2, E1: whether `/ws` and `/ws/ticket` also accept an
+    /// external identity-provider token whose `(iss, sub)` is bound to a member
+    /// key (ADR-098). The session's principal is then the bound fingerprint; an
+    /// unbound token is refused `identity_not_bound`. Default `false`: only this
+    /// daemon's own tokens (B6). Until hub signature verification (#727) is
+    /// enforced, a write over such a session is trusted on the channel alone
+    /// (E3), so this is for a pilot with short IdP token lifetimes.
+    pub ws_accept_bound_idp: bool,
     /// Origins a browser handshake (and a ticket mint) may carry, matched
     /// EXACTLY: no wildcards, no prefix or substring matching (B1). A request
     /// with no `Origin` (a native client) is not origin-checked. Empty means no
@@ -205,6 +213,7 @@ impl Default for OAuthConfig {
             self_issued_token_ttl_secs: 3600,
             self_issued_token_max_ttl_secs: 86_400,
             ws_enabled: false,
+            ws_accept_bound_idp: false,
             ws_allowed_origins: Vec::new(),
             ws_renew_lead_secs: 60,
             ws_ping_secs: 30,

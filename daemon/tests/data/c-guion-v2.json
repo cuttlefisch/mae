@@ -1,6 +1,6 @@
 {
-  "formato": "c-guion-v1",
-  "descripcion": "Guion de tramas del cliente de mae-web contra el WebSocket de MAE (ADR-099, enmienda 1, B1-B6). Lo que el cliente manda y lo que espera, escenario por escenario. Confirmado y corregido por MAE el 2026-11-11 (los 'supuesto' de la primera versión, resueltos); MAE lo copia a sus pruebas cuando llegue C1. Las negativas HTTP llevan el cuerpo de siempre del escucha {error, error_description} y kind: el cliente decide por kind.",
+  "formato": "c-guion-v2",
+  "descripcion": "Guion de tramas del cliente de mae-web contra el WebSocket de MAE (ADR-099, enmienda 1, B1-B6). Lo que el cliente manda y lo que espera, escenario por escenario. Confirmado y corregido por MAE el 2026-11-11 (los 'supuesto' de la primera versión, resueltos); MAE lo copia a sus pruebas cuando llegue C1. Las negativas HTTP llevan el cuerpo de siempre del escucha {error, error_description} y kind: el cliente decide por kind. v2 (2026-11-15, MAE 0.14.153): session/hello lleva también limits.max_outbound_bytes, lo más que manda el demonio en un mensaje (el ejemplo, el de omisión: un nodo en los 10 MB de MAE, en base64, y 1 MiB de sobre); una respuesta que pasa de ahí cierra con 1011 y response_too_large.",
   "escenarios": [
     {
       "nombre": "ticket y conexión",
@@ -50,7 +50,8 @@
                 "auth_deadline": "2026-11-11T12:00:00Z",
                 "limits": {
                   "max_frame_bytes": 1048576,
-                  "max_open_docs": 64
+                  "max_open_docs": 64,
+                  "max_outbound_bytes": 15029592
                 }
               }
             }

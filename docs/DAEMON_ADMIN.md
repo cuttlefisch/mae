@@ -381,7 +381,7 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `too_many_tickets` | A principal already holds 8 unused connect tickets. Use one or let it expire (30 s). HTTP `429`, `error: "too_many_requests"`. | `POST /ws/ticket` | `limit` |
 | `awareness_not_owned` | A `sync/awareness` update in the y-protocols encoding names a client id another session on the same document already owns (ADR-099 B5). Nothing was relayed. | `sync/awareness` | — |
 | `ticket_invalid` | A connect ticket that is unknown, used, expired or bound to another origin — one identical refusal for all. HTTP `401`, `error: "invalid_token"`, with `WWW-Authenticate`. | `GET /ws` | — |
-| `issuer_not_supported` | A token not issued by this daemon, while ADR-099 B6 holds. HTTP `401`, `error: "invalid_token"`, with `WWW-Authenticate`; on a socket, a JSON-RPC error to `session/renew`. On the binding routes the reverse: a self-issued token, whose principal already is a fingerprint, with HTTP `403`, `error: "access_denied"`. | `GET /ws`, `POST /ws/ticket`, `session/renew`, `POST /identity/challenge`, `POST /identity/bind` | — |
+| `issuer_not_supported` | A token not issued by this daemon, while ADR-099 B6 holds (on `/ws`: whenever `ws_accept_bound_idp` is off). HTTP `401`, `error: "invalid_token"`, with `WWW-Authenticate`; on a socket, a JSON-RPC error to `session/renew`. On the binding routes the reverse: a self-issued token, whose principal already is a fingerprint, with HTTP `403`, `error: "access_denied"`. | `GET /ws`, `POST /ws/ticket`, `session/renew`, `POST /identity/challenge`, `POST /identity/bind` | — |
 | `invalid_token` | A `session/renew` token that does not validate or has already expired. The old deadline stands. | `session/renew` | — |
 | `protocol_unsupported` | No protocol version in common at the upgrade. HTTP `400`, `error: "invalid_request"`. | `GET /ws` | `supported` (beside `kind`) |
 | `origin_not_allowed` | A browser `Origin` not exactly in `ws_allowed_origins`. HTTP `403`, `error: "access_denied"`. | `GET /ws`, `POST /ws/ticket` | — |
@@ -410,12 +410,13 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `kb_query_unavailable` | The HTTPS listener does not serve `kb/query.*` here (`kb_query_enabled` off, or collab disabled). | `kb/query.*` (HTTPS) | — |
 | `e2e_unsupported` | A server-side operation the daemon cannot perform on an E2E KB. Code `-32600`. | `kb/query.search` | — |
 | `history_holds_plaintext` | Switching the KB to E2E is refused while its version history (ADR-116) holds plaintext content, which the switch would leave readable. Code `-32600`. | `kb/collection_op` | — |
-| `group_required` | An identity-provider token carrying none of the groups `oauth.allowed_groups` names (ADR-098 D4). Checked before the binding is looked up; nothing is read or written. HTTP `403`, `error: "insufficient_scope"`. | every authenticated route on the HTTPS listener | — |
+| `group_required` | An identity-provider token carrying none of the groups `oauth.allowed_groups` names (ADR-098 D4). Checked before the binding is looked up; nothing is read or written. HTTP `403`, `error: "insufficient_scope"`; on a socket, a JSON-RPC error to `session/renew`, and the old deadline stands. | every authenticated route on the HTTPS listener, `session/renew` | — |
 | `challenge_invalid` | A binding challenge that is unknown, already presented or expired — one refusal for all three. Ask for a new one. HTTP `403`, `error: "access_denied"`. | `POST /identity/bind` | — |
 | `challenge_mismatch` | The challenge was issued to another subject or issuer than the token presenting it, or for another audience. HTTP `403`, `error: "access_denied"`. | `POST /identity/bind` | — |
 | `proof_invalid` | The key's fingerprint is not the one the challenge names, or the signature over the challenge does not verify. HTTP `403`, `error: "access_denied"`. | `POST /identity/bind` | — |
 | `binding_conflict` | The subject already has a key, or the key already has a subject. An administrator must `binding unbind` first. HTTP `409`, `error: "conflict"`. | `POST /identity/bind` | `field` (`subject`/`fingerprint`) |
 | `too_many_challenges` | The subject already holds `identity_max_pending_challenges` unused challenges. Use one or let it expire. HTTP `429`, `error: "too_many_requests"`. | `POST /identity/challenge` | `limit` |
+| `identity_not_bound` | An identity-provider token whose `(iss, sub)` is bound to no member key, on the sync WebSocket with `ws_accept_bound_idp` on (ADR-099 Amendment 2). It is never admitted as its raw subject; bind it first (proof of possession, or `mae-daemon binding bind`). HTTP `403`, `error: "access_denied"`. At a renewal, the subject was unbound since the socket opened: the socket closes `4403 principal_changed` instead. | `GET /ws`, `POST /ws/ticket` | — |
 | `internal` | The daemon failed (storage, persistence, decoding its own state). Not a decision about the caller; a retry may succeed. | any | — |
 
 What a kind does **not** reveal is deliberate. A caller that is not a member gets `not_member` for any
@@ -478,15 +479,15 @@ mae-daemon token mint --config /etc/mae/daemon.toml --sub svc:indexer --ttl 8h \
   MCP tool or an RPC. Over mTLS, a member can still obtain a token for **its own** fingerprint
   (`kb/query.self_token`).
 
-#### The sync WebSocket (`/ws`, ADR-099) — development and single-operator only
+#### The sync WebSocket (`/ws`, ADR-099) — development, single-operator, and a pilot switch
 
 `GET /ws` upgrades to a WebSocket that carries the collab envelope (`sync/*`, `kb/*`), one JSON-RPC
 message per text frame, any number of documents per socket. **This cut is for development and for
-single-operator deployments.** Until hub signature verification (#727) and the identity binding
-(ADR-098) land, it accepts **only this daemon's own tokens**, and the principal is the token's
-`--sub`, taken literally as the KB membership principal: every writer on it is someone the operator
-minted a token for. A token from an external issuer is refused here (`issuer_not_supported`) even
-though `kb/query.*` accepts it. Off by default.
+single-operator deployments.** Until hub signature verification (#727) lands, it accepts by default
+**only this daemon's own tokens**, and the principal is the token's `--sub`, taken literally as the
+KB membership principal: every writer on it is someone the operator minted a token for. A token from
+an external issuer is refused here (`issuer_not_supported`) even though `kb/query.*` accepts it,
+unless the pilot switch below is on. Off by default.
 
 ```toml
 [oauth]
@@ -499,7 +500,29 @@ ws_allowed_origins = ["https://mae.example.com"]  # browser Origins, EXACT match
 # ws_max_open_docs = 1024                       # documents one socket may hold (0 = unlimited)
 # ws_max_frame_bytes = 1048576                  # largest inbound frame; unset = max_request_body_bytes
 # ws_max_outbound_bytes = 15029592              # largest message sent; unset = derived from max_document_size_bytes
+# ws_accept_bound_idp = false                   # pilot: also accept BOUND identity-provider tokens (below)
 ```
+
+**`ws_accept_bound_idp` (ADR-099 Amendment 2) is for a pilot with short IdP token lifetimes.** With
+it on, `/ws` and `/ws/ticket` also accept an identity-provider token (`jwks_url`, `issuer`) whose
+`(iss, sub)` is bound to a member key (*Identity binding* above). The session's principal is the
+**bound fingerprint**, exactly as a self-issued token for that fingerprint would carry, so
+membership, roles, the epoch fence and per-frame authorization apply unchanged; a ticket minted with
+such a token is bound to that fingerprint. The group gate (`allowed_groups`) runs first, as on every
+route (`403`, `group_required`). A token whose subject is **not bound** is refused (`403`, kind
+`identity_not_bound`) and no socket exists; it is never admitted as its raw subject. The binding is
+resolved again at every `session/renew`: once the subject is unbound, or bound to another key, the
+next renewal closes the socket `4403 principal_changed`, and a token that lost its group gets
+`group_required` and the session ends at its deadline (`4401`). So an unbind, a rebind or a group
+removal takes effect on open sockets within one token lifetime: **keep IdP access-token lifetimes
+short** (minutes, not hours).
+
+What this does not protect against until #727 is enforced: a write over such a session is trusted
+on the channel (TLS, the IdP token, the binding), not on a signature over the op. A stolen IdP
+session can write as its member until its token expires or a renewal is refused; the hub cannot
+later prove which ops the member's key authored; and the hub accepts an op whose signed header names
+any current editor of the KB as its author, from any member session (true of every session today).
+The daemon logs a warning at startup while the switch is on.
 
 A missing prerequisite (collab disabled, or self-issued tokens unavailable) leaves the route
 absent and logs why at startup. With `ws_enabled = false`, `/ws` and `/ws/ticket` are ordinary

@@ -24,7 +24,6 @@ use futures_util::{SinkExt, StreamExt};
 use hyper::upgrade::{OnUpgrade, Upgraded};
 use hyper_util::rt::TokioIo;
 use mae_daemon::collab_handler::governor::{governor, GovernorHandle};
-use mae_daemon::oauth_self_issue::{self, ValidatedPrincipal};
 use mae_mcp::identity::PeerIdentity;
 use mae_mcp::protocol::McpError;
 use serde_json::{json, Value};
@@ -32,6 +31,7 @@ use tokio::io::{BufReader, DuplexStream, ReadHalf, WriteHalf};
 use tokio::sync::mpsc;
 use tokio_websockets::{CloseCode, Limits, Message, ServerBuilder, WebSocketStream};
 
+use super::credential::{self, Refused};
 use super::upgrade::SessionAuth;
 use super::{now_unix, WsSettings, PROTOCOL_V1};
 use crate::conn_limit::ConnGuard;
@@ -315,17 +315,24 @@ impl Driver {
     }
 
     /// B3: validate the new token, refuse a changed identity, move the
-    /// deadline, and re-authorize every open document.
+    /// deadline, and re-authorize every open document. The binding is resolved
+    /// again here (Amendment 2, E2), so an unbind or a rebind since the socket
+    /// opened closes it.
     async fn renew(&mut self, id: Value, params: &Value) -> Flow {
         let token = params.get("token").and_then(Value::as_str).unwrap_or("");
-        let vp = match self.validate_renewal(token) {
+        let vp = match credential::socket_principal(token, &self.listener).await {
             Ok(vp) => vp,
-            Err(e) => return self.send_error(id, e).await,
+            // E2: the subject was unbound since the socket opened.
+            Err(Refused::NotBound) => return self.principal_changed(),
+            Err(why) => return self.send_error(id, why.into_rpc_error()).await,
         };
-        // Issuer AND subject, as the token carries them — before any mapping.
-        if vp.issuer != self.auth.issuer || vp.subject != self.auth.subject {
-            tracing::warn!(principal = %self.auth.principal, "ws: renewal changed the principal; closing");
-            return Flow::Close(CLOSE_PRINCIPAL_CHANGED, "principal_changed");
+        // Issuer AND subject, as the token carries them, and the principal
+        // they resolve to NOW: a rebind to another key changes only the last.
+        if vp.issuer != self.auth.issuer
+            || vp.subject != self.auth.subject
+            || vp.principal != self.auth.principal
+        {
+            return self.principal_changed();
         }
         self.handle.set_deadline(vp.expires_at);
         self.renew_sent = false;
@@ -338,26 +345,10 @@ impl Driver {
         flow
     }
 
-    /// The renewal token, validated by the same self-issued validator the
-    /// upgrade reaches through `oauth::authenticate` (B6: nothing else).
-    fn validate_renewal(&self, token: &str) -> Result<ValidatedPrincipal, McpError> {
-        let kid = jsonwebtoken::decode_header(token).ok().and_then(|h| h.kid);
-        let self_issue = self.listener.self_issue.as_ref();
-        let si = match (kid.as_deref(), self_issue) {
-            (Some(oauth_self_issue::SELF_ISSUED_KID), Some(si)) => si,
-            _ => {
-                return Err(McpError::issuer_not_supported(
-                    "only this daemon's own tokens are accepted on this route (ADR-099 B6)".into(),
-                ))
-            }
-        };
-        let pubkey = si.identity.public().to_bytes();
-        let vp = oauth_self_issue::validate_self_issued_token(token, &pubkey, &si.audience)
-            .map_err(|e| McpError::invalid_token(format!("{e:?}")))?;
-        if vp.expires_at <= now_unix() {
-            return Err(McpError::invalid_token("Expired".into()));
-        }
-        Ok(vp)
+    /// B3: a renewal naming another identity closes the socket.
+    fn principal_changed(&self) -> Flow {
+        tracing::warn!(principal = %self.auth.principal, "ws: renewal changed the principal; closing");
+        Flow::Close(CLOSE_PRINCIPAL_CHANGED, "principal_changed")
     }
 
     async fn send_error(&mut self, id: Value, error: McpError) -> Flow {

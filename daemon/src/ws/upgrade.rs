@@ -16,6 +16,7 @@ use hyper::header::{HeaderMap, HeaderValue};
 use hyper::{Method, Request, Response, StatusCode};
 
 use super::connect_ticket::{TicketGrant, MAX_UNUSED_TICKETS_PER_PRINCIPAL, TICKET_TTL};
+use super::credential::{self, Refused};
 use super::{now_unix, WsState, PROTOCOL_V1, SUPPORTED_PROTOCOLS};
 use crate::conn_limit::ConnGuard;
 use crate::oauth::{self, json_response, unauthorized, with_no_store, Listener};
@@ -128,13 +129,20 @@ fn ticket_invalid(listener: &Listener) -> Refusal {
     )
 }
 
-fn issuer_not_supported(listener: &Listener) -> Refusal {
-    invalid_token(
-        listener,
-        McpError::issuer_not_supported(
-            "only this daemon's own tokens are accepted on this route (ADR-099 B6)".to_string(),
-        ),
-    )
+/// A token [`credential::socket_principal`] refused, as the listener answers it.
+fn refused(listener: &Listener, why: Refused) -> Refusal {
+    match why {
+        Refused::IssuerNotSupported => invalid_token(listener, why.into_rpc_error()),
+        // The credential is good and names nobody: `403`, as for a missing
+        // group. A new token from the same login would not help.
+        Refused::NotBound => Box::new(kinded(
+            StatusCode::FORBIDDEN,
+            "access_denied",
+            why.into_rpc_error(),
+        )),
+        Refused::Auth(failure) => failure.into_response(&listener.config),
+        Refused::Expired => Box::new(unauthorized(&listener.config, "Expired")),
+    }
 }
 
 /// Refusals that need no credential: a query string, a disallowed `Origin`.
@@ -175,18 +183,13 @@ fn request_origin(req: &Request<Incoming>) -> Result<Option<String>, ()> {
     }
 }
 
-/// Validate a bearer token under B6: only this daemon's own tokens.
+/// Validate a bearer token: this daemon's own, or, with `ws_accept_bound_idp`,
+/// a bound identity-provider token whose principal is the bound fingerprint
+/// (B6; Amendment 2, E1).
 async fn bearer_auth(token: &str, listener: &Listener) -> Result<SessionAuth, Refusal> {
-    let kid = jsonwebtoken::decode_header(token).ok().and_then(|h| h.kid);
-    if kid.as_deref() != Some(mae_daemon::oauth_self_issue::SELF_ISSUED_KID) {
-        return Err(issuer_not_supported(listener));
-    }
-    let vp = oauth::authenticate(token, listener).await?;
-    // The validator allows the JWT library's clock leeway; a session must not
-    // open with its deadline already behind it.
-    if vp.expires_at <= now_unix() {
-        return Err(Box::new(unauthorized(&listener.config, "Expired")));
-    }
+    let vp = credential::socket_principal(token, listener)
+        .await
+        .map_err(|why| refused(listener, why))?;
     Ok(SessionAuth {
         issuer: vp.issuer,
         subject: vp.subject,
