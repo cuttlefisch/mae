@@ -23,6 +23,7 @@ shown: the last :exports wins
 Special and dynamic
 A special block.
 Hyphenated name.
+Parameters after the name.
 dynamic	table
 LaTeX
 \begin{align}

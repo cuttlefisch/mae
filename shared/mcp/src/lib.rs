@@ -49,6 +49,7 @@ pub mod content_key_store;
 pub mod daemon_client;
 pub mod file_lock;
 pub mod identity;
+pub mod identity_challenge;
 pub mod keystore;
 pub mod local_ipc;
 pub mod protocol;
@@ -69,8 +70,16 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
-/// Maximum allowed Content-Length for a single MCP message (10 MB).
-const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+/// Maximum allowed Content-Length for a single MCP message (10 MB): what a
+/// server accepts from a client, and the default for [`read_message`].
+pub const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+
+/// The largest message a client accepts FROM the daemon (100 MiB). Larger than
+/// [`MAX_MESSAGE_SIZE`] because a response carries base64 document state: one
+/// node at the daemon's 10 MB document limit is already ~13.4 MB on the wire,
+/// so reading responses with the request cap breaks on legitimate content.
+/// Still bounded, so a hostile hub cannot make a client allocate without limit.
+pub const MAX_DAEMON_RESPONSE_SIZE: usize = 100 * 1024 * 1024;
 
 /// Build the `params` object for an `initialize` request declaring
 /// `clientInfo: {name: "mae-mcp-shim", ...}`, optionally including a
@@ -594,9 +603,45 @@ fn hex_preview(bytes: &[u8]) -> String {
 ///   exactly that many bytes of body (LSP-compatible framing).
 /// - Otherwise, reads a single line (legacy line-based framing).
 ///
-/// Returns `Ok(None)` on clean EOF.
+/// Returns `Ok(None)` on clean EOF. A Content-Length over [`MAX_MESSAGE_SIZE`]
+/// is an error; [`read_message_limited`] takes another bound.
 pub async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(
     reader: &mut R,
+) -> Result<Option<String>, std::io::Error> {
+    read_message_limited(reader, MAX_MESSAGE_SIZE).await
+}
+
+/// A framed message whose Content-Length is over the reader's bound. Carried
+/// inside the `io::Error` [`read_message_limited`] returns; see [`too_large`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MessageTooLarge {
+    pub len: usize,
+    pub max: usize,
+}
+
+impl std::fmt::Display for MessageTooLarge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Content-Length {} exceeds maximum {}",
+            self.len, self.max
+        )
+    }
+}
+
+impl std::error::Error for MessageTooLarge {}
+
+/// The [`MessageTooLarge`] inside a read error, if that is what it was.
+pub fn too_large(e: &std::io::Error) -> Option<MessageTooLarge> {
+    e.get_ref()?.downcast_ref::<MessageTooLarge>().copied()
+}
+
+/// [`read_message`] with `max` as the largest Content-Length accepted. The
+/// request cap is the right bound for what a server reads from a client, not
+/// for what a client reads from the daemon ([`MAX_DAEMON_RESPONSE_SIZE`]).
+pub async fn read_message_limited<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+    max: usize,
 ) -> Result<Option<String>, std::io::Error> {
     // Peek at the buffer to determine framing mode.
     let buf = reader.fill_buf().await?;
@@ -661,11 +706,8 @@ pub async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(
         if len == 0 {
             return Err(std::io::Error::other("Content-Length must be > 0"));
         }
-        if len > MAX_MESSAGE_SIZE {
-            return Err(std::io::Error::other(format!(
-                "Content-Length {} exceeds maximum {}",
-                len, MAX_MESSAGE_SIZE
-            )));
+        if len > max {
+            return Err(std::io::Error::other(MessageTooLarge { len, max }));
         }
 
         let mut body = vec![0u8; len];
@@ -1574,6 +1616,29 @@ mod tests {
         let mut reader = BufReader::new(&data[..]);
         let result = read_message(&mut reader).await;
         assert!(result.is_err() || result.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn read_message_limited_takes_exactly_its_bound() {
+        let max = 64;
+        for (len, ok) in [(max, true), (max + 1, false)] {
+            let mut framed = format!("Content-Length: {len}\r\n\r\n").into_bytes();
+            framed.extend(std::iter::repeat_n(b'x', len));
+            let mut reader = BufReader::new(&framed[..]);
+            let got = read_message_limited(&mut reader, max).await;
+            assert_eq!(got.is_ok(), ok, "len {len}: {got:?}");
+        }
+        // The request cap is still what `read_message` applies; a response cap
+        // above it reads what the request cap refuses.
+        let len = MAX_MESSAGE_SIZE + 1;
+        let mut framed = format!("Content-Length: {len}\r\n\r\n").into_bytes();
+        framed.extend(std::iter::repeat_n(b'x', len));
+        assert!(read_message(&mut BufReader::new(&framed[..]))
+            .await
+            .is_err());
+        let big =
+            read_message_limited(&mut BufReader::new(&framed[..]), MAX_DAEMON_RESPONSE_SIZE).await;
+        assert_eq!(big.unwrap().unwrap().len(), len);
     }
 
     #[tokio::test]

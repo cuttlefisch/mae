@@ -41,7 +41,27 @@ export interface Request {
   post_blank?: boolean;
   /** For `syntaxSection`: the `file` object of the same `syntax` result, unchanged. */
   file?: SyntaxFile;
+  /** For the CUSTOM_ID ops and `headlineProperties`: a headline is in scope when its headline line starts in one (`start <= at < end`). Absent: all. */
+  ranges?: [number, number][];
+  /** For `customIdEdits`: lowercase UUID v4s, used in document order; too few throws, extras are unused. */
+  uuids?: string[];
+  /** For `replaceCustomId`: the start of a CUSTOM_ID value, as `duplicateCustomIds` gives it. */
+  position?: number;
+  /** For `replaceCustomId`: the lowercase UUID v4 to write. */
+  uuid?: string;
 }
+
+/** `text[start..end]` (UTF-8 bytes) becomes `insert`. */
+export interface TextEdit { start: number; end: number; insert: string }
+
+/** One headline's CUSTOM_ID: its value, and its headline line (no line ending). */
+export interface CustomIdOccurrence { value: [number, number]; heading: [number, number] }
+
+/** One property line: `key` canonical (ASCII upper case; an appending key keeps its `+`), `keyAsWritten` as in the file, `value` trimmed as Org reads it. */
+export interface HeadlineProperty { key: string; keyAsWritten: string; value: string }
+
+/** A headline with a property drawer Org reads: its headline line (no line ending), level (stars) and every property line in file order, repeated keys included (Org reads the last). */
+export interface HeadlineProperties { heading: [number, number]; level: number; properties: HeadlineProperty[] }
 
 /** File facts a section's re-highlight depends on, as `syntax` returns them. */
 export interface SyntaxFile {
@@ -211,7 +231,9 @@ export interface LinkClass {
 
 export type Op =
   | 'semantics' | 'renderHast' | 'renderHtml' | 'text' | 'classifyLink' | 'version'
-  | 'syntax' | 'syntaxSection';
+  | 'syntax' | 'syntaxSection'
+  | 'headingsMissingCustomId' | 'customIdEdits' | 'duplicateCustomIds' | 'replaceCustomId'
+  | 'headlineProperties';
 
 /**
  * The module, one instance at a time. Not re-entrant; calls are
@@ -242,6 +264,16 @@ export declare class MaeOrg {
   syntax(request: Request): SyntaxResult;
   /** Spans for one region: `text` is the region's NEW text, `section`/`file` as `syntax` gave them. */
   syntaxSection(request: Request): SyntaxSectionResult;
+  /** The headline lines needing a CUSTOM_ID: no non-empty CUSTOM_ID, and no non-empty ID (a KB node). */
+  headingsMissingCustomId(request: Request): { headings: [number, number][] };
+  /** Edits giving each headline in scope a CUSTOM_ID, placed as `org-entry-put` places it; sorted descending. */
+  customIdEdits(request: Request): { edits: TextEdit[] };
+  /** CUSTOM_IDs several headlines share, grouped in document order. Never chooses which to keep. */
+  duplicateCustomIds(request: Request): { groups: CustomIdOccurrence[][] };
+  /** The edit replacing the CUSTOM_ID value that starts at `position` with `uuid`. */
+  replaceCustomId(request: Request): { edit: TextEdit };
+  /** Every headline with a property drawer Org reads, node or not, in document order. */
+  headlineProperties(request: Request): { headlines: HeadlineProperties[] };
   liveBytes(): number;
 }
 

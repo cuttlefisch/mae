@@ -43,6 +43,7 @@ graph TD
     mae_core --> mae_spell
     mae_core --> mae_sync
     mae_core --> mae_mcp
+    mae_crypto_wasm --> mae_sync
     mae_dap --> mae_core
     mae_effect_sandbox[mae-effect-sandbox]
     mae_export --> mae_babel
@@ -226,6 +227,20 @@ Source: `crates/core/src/lib.rs`
 | `VisualType` | enum |
 | `Mode` | enum |
 
+## mae-crypto-wasm
+
+Source: `shared/crypto-wasm/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `api` | mod |
+| `content_crypto` | mod |
+| `mae_crypto_alloc` | fn |
+| `mae_crypto_call` | fn |
+| `mae_crypto_result_ptr` | fn |
+| `mae_crypto_result_free` | fn |
+| `mae_crypto_live_bytes` | fn |
+
 ## mae-dap
 
 Source: `crates/dap/src/lib.rs`
@@ -399,12 +414,15 @@ Source: `shared/mcp/src/lib.rs`
 | `daemon_client` | mod |
 | `file_lock` | mod |
 | `identity` | mod |
+| `identity_challenge` | mod |
 | `keystore` | mod |
 | `local_ipc` | mod |
 | `protocol` | mod |
 | `ready` | mod |
 | `session` | mod |
 | `tls` | mod |
+| `MAX_MESSAGE_SIZE` | const |
+| `MAX_DAEMON_RESPONSE_SIZE` | const |
 | `build_shim_initialize_params` | fn |
 | `RequesterContext` | struct |
 | `McpToolRequest` | struct |
@@ -414,6 +432,9 @@ Source: `shared/mcp/src/lib.rs`
 | `tune_request_stream` | fn |
 | `tuned` | fn |
 | `read_message` | fn |
+| `MessageTooLarge` | struct |
+| `too_large` | fn |
+| `read_message_limited` | fn |
 | `handle_request` | fn |
 
 ## mae-org

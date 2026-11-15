@@ -89,6 +89,7 @@ pub const ATTRS: &[(&str, &str)] = &[
     ("li", "value"),
     ("th", "scope"),
     ("div", "data-org-block"),
+    ("div", "data-org-params"),
 ];
 
 const VOID: &[&str] = &["br", "hr", "img"];
@@ -356,6 +357,9 @@ fn value(tag: &str, a: &str, v: &str, c: &Contract, ids: &HashSet<String>) -> Re
         "data-org-rel" => token(v, 64, "_.:-"),
         "data-org-w" | "data-org-c" => is_unit(v),
         "data-org-block" => token(v, 64, "_-"),
+        "data-org-params" => {
+            !v.is_empty() && v.len() <= 512 && v.trim() == v && !v.chars().any(char::is_control)
+        }
         _ => false,
     };
     if ok {

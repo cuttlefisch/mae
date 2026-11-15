@@ -299,6 +299,11 @@ impl KbNodeDoc {
     }
 
     /// Encode full state for persistence.
+    /// The yrs client id this document's own edits are made under.
+    pub fn client_id(&self) -> u64 {
+        self.doc.client_id().get()
+    }
+
     pub fn encode(&self) -> Vec<u8> {
         let txn = self.doc.transact();
         txn.encode_state_as_update_v1(&yrs::StateVector::default())

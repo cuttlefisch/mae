@@ -461,6 +461,30 @@
               {
                 "children": [
                   {
+                    "type": "text",
+                    "value": "Parameters after the name."
+                  }
+                ],
+                "properties": {},
+                "tagName": "p",
+                "type": "element"
+              }
+            ],
+            "properties": {
+              "className": [
+                "org-special-block"
+              ],
+              "dataOrgBlock": "details",
+              "dataOrgParams": "En Windows"
+            },
+            "tagName": "div",
+            "type": "element"
+          },
+          {
+            "children": [
+              {
+                "children": [
+                  {
                     "children": [
                       {
                         "children": [

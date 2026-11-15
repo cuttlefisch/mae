@@ -543,11 +543,15 @@ impl<'a> Builder<'a> {
 
     fn special_block(&mut self, n: &SyntaxNode, out: &mut Vec<Node>) {
         let mut div = Element::new(Tag::Div).class("org-special-block");
-        let name = crate::Block::cast(n.clone())
-            .map(|b| b.name())
-            .unwrap_or_default();
+        let block = crate::Block::cast(n.clone());
+        let name = block.as_ref().map(|b| b.name()).unwrap_or_default();
         if super::links::is_valid_block_name(&name) {
             div = div.attr(super::Attr::DataOrgBlock, name);
+            // `parameters` is already trimmed, and `None` when empty.
+            let params = block.and_then(|b| b.parameters());
+            if let Some(p) = params.filter(|p| super::links::is_valid_block_params(p)) {
+                div = div.attr(super::Attr::DataOrgParams, p);
+            }
         }
         self.container(n, div, out)
     }

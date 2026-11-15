@@ -290,6 +290,21 @@ impl DaemonScheduler {
     /// check — see `crate::maintenance::run_maintenance_scan`) against the
     /// primary store and every registered instance store. Read-only; safe to
     /// interrupt and re-run at any point (no partial-write state).
+    /// ADR-116 D4: sign each KB's history head with the daemon's key, where
+    /// it changed since the last one. A failure is logged and retried on the
+    /// next tick; it never blocks the rest of maintenance.
+    async fn sign_history_heads(&self) {
+        let doc_store = { self.daemon_state.lock().await.doc_store.clone() };
+        let Some(doc_store) = doc_store else {
+            return;
+        };
+        match doc_store.history_sign_heads().await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(heads = n, "maintenance_tick: signed history heads"),
+            Err(e) => tracing::warn!(error = %e, "maintenance_tick: history heads not signed"),
+        }
+    }
+
     async fn run_maintenance_tick(&self, state: &Arc<Mutex<SchedulerState>>) {
         {
             let mut s = state.lock().await;
@@ -307,6 +322,8 @@ impl DaemonScheduler {
                 tracing::info!(tenants = ?evicted, "maintenance_tick: idle-evicted tenant quota state");
             }
         }
+
+        self.sign_history_heads().await;
 
         let stores: Vec<(String, Arc<CozoKbStore>)> = {
             let ds = self.daemon_state.lock().await;

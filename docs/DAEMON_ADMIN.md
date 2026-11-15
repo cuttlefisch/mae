@@ -207,6 +207,11 @@ max_document_size_bytes = 10485760              # 10 MB — an update that would
                                                 #   past it may still shrink. The editor caps
                                                 #   nodes lower first (`kb_max_node_bytes`,
                                                 #   1 MiB). ADR-109 D6.
+# max_message_bytes = 15029592                  # largest message on a collab session: a request
+                                                #   read, and what a paged `kb/join` reply is
+                                                #   filled to. Unset = derived so one document at
+                                                #   max_document_size_bytes fits (base64 + 1 MiB,
+                                                #   never under 10 MiB). ADR-022 Amendment 1.
 ```
 
 > [!TIP]
@@ -271,12 +276,88 @@ self_issued_token_max_ttl_secs = 86400          # ceiling `token mint --ttl` ref
   `health`) examines at most `kb_query_max_scan_nodes` nodes and answers `"truncated": true` (plus
   the KB's `"total"`) when that cap, rather than the caller's result limit, ended the scan. A
   `RemoteHub` client reports such a result as partial. Raise the cap for KBs larger than it.
+- **`kb/query.my_kbs` lists the caller's own KBs.** It takes no `kb_id` and answers
+  `{"kbs": [{"kb_id", "title", "role", "encryption"}]}`, sorted by `kb_id`: every KB on this daemon
+  the token's principal may read as a member. `role` is `owner`, `editor` or `viewer`, the same
+  strings as membership; `title` is the KB's name, or `null`. A permissive KB the caller has not
+  joined is not listed, and nothing about other members is returned. Unlike the mTLS `kb/list`,
+  it reads the stored KB set, so it answers the same after a restart.
 - **A malformed parameter is refused, not ignored.** A `kb/query.*` parameter that is missing,
   of the wrong type or out of range gets JSON-RPC `-32602` with
   `data: {"kind": "invalid_params", "param": "<name>"}`; `null` counts as absent. Two ranges are
   clamped rather than refused, as before: `search`'s `limit` and `neighborhood`'s `depth` (1–3).
   `list`'s `limit` must be at least 1, and above `kb_query_max_scan_nodes` it is clamped to it.
 - **Every refusal names its reason in `error.data.kind`** — see [Error kinds](#error-kinds) below.
+
+#### Identity-provider tokens and the binding table (ADR-098 Phase C)
+
+An external identity provider's token never names a member by itself. Its `(iss, sub)` — the
+subject is the `principal_claim`, default `sub` — reaches a member key only through the **binding
+table**, daemon state outside the CRDT in `<collab data_dir>/identity-bindings.db`. Until it is
+bound, the token is an *unbound subject*, reported by the bare probe as `idp-unbound:["<iss>","<sub>"]`:
+a member of no KB, so every `kb/query.*` method refuses it with `not_member` and `kb/query.my_kbs`
+answers `{"kbs": []}` — even if its `sub` spells a member's `SHA256:` fingerprint exactly. Bound, it
+reads what that key's own self-issued token reads, no more (binding grants no membership; owners still
+add members). Writes over these sessions are not served. A deployment that used to put fingerprints
+in `principal_claim` must bind its subjects instead.
+
+```toml
+[oauth]
+# groups_claim = "groups"                  # where the token lists its groups
+# allowed_groups = ["mae-readers", "staff"] # D4 session gate: ANY ONE of them admits the token (exact match);
+#                                          # empty (default) = no gate. Not applied to self-issued tokens.
+identity_binding_enabled = true            # POST /identity/challenge + /identity/bind (default false)
+# identity_challenge_ttl_secs = 300        # a challenge is valid for minutes
+# identity_max_pending_challenges = 4      # unused challenges one subject may hold
+```
+
+- **The group gate** is checked on every request, before the binding is looked up. Removing a person
+  from every allowed group at the identity provider ends their session at their next token, with no CRDT write
+  and no owner involved; `403`, kind `group_required`.
+- **Who counts as a person.** A request is a `person` only when it carries an identity-provider token
+  AND its binding is flagged `person`; everything else — self-issued tokens, mTLS sessions, unbound
+  or unflagged IdP sessions — is an `agent`. A new binding is an `agent`. The bare probe reports
+  `kind`. A person's own edits from native MAE count as agent until native clients sign in through
+  the identity provider (ADR-111 P4).
+- **Binding by proof of possession** (`identity_binding_enabled`), both routes POST with an IdP
+  bearer token (a self-issued one is refused, `issuer_not_supported`):
+  1. `POST /identity/challenge` `{"fingerprint": "SHA256:…"}` → `{"challenge_id", "challenge",
+     "expires_in"}`. `challenge` is a JSON text naming the domain tag `mae-identity-binding-v1`,
+     `iss`, `sub`, this listener's `aud`, the fingerprint, a random `nonce` (= `challenge_id`) and
+     `expires_at`. Show the person the `iss`/`sub` before they sign.
+  2. On the machine holding the member key (the editor's collab identity, `mae --collab-identity`),
+     run `mae --sign-identity-challenge '<answer>' --issuer <your iss> --subject <your sub>` (or
+     `-` to read the answer from stdin), with either the `challenge` text or the whole answer from
+     step 1. `--issuer` and `--subject` are the key holder's OWN identity-provider identity: the
+     daemon issues a challenge for any key to any signed-in subject, so a challenge naming your key
+     says nothing about who asked for it, and one issued to anyone else is refused (both must match
+     the challenge byte for byte). It prints the issuer, subject, audience and key on stderr before
+     signing, and the bind body on stdout. It signs nothing but a canonical, unexpired challenge
+     naming its own key and the stated subject, and never prints the secret key. (The signed bytes
+     are the UTF-8 of `challenge`, Ed25519.)
+  3. `POST /identity/bind` `{"challenge_id", "public_key": "<base64 of the 32 key bytes>",
+     "signature": "<base64>"}` with a token of the same `(iss, sub)` → `{"principal", "kind",
+     "bound_by": "proof"}`. A challenge is single use, whatever the outcome. One subject has at most
+     one key and one key at most one subject: `binding_conflict` until an administrator unbinds.
+- **An external token must carry `iss`.** One with a missing or empty `iss` is refused (`401`),
+  as one with an empty subject is: `(iss, sub)` keys the binding table, even when `oauth.issuer` is
+  unset and the issuer is otherwise not checked.
+- **Before configuring a second-factor requirement** (planned, not yet enforced): some identity
+  providers emit a constant `acr` that does not reflect a second factor, so configure `amr` values
+  rather than `acr`. A session started from a recovery link may carry no `amr` at all.
+- **Administration is local only** — no network method, MCP tool or Scheme primitive unbinds,
+  rebinds or sets `kind`. `mae-daemon binding` works while the daemon serves; a change holds on the
+  listener's next request:
+
+  ```bash
+  mae-daemon binding list                       # issuer subject fingerprint kind bound_by bound_at
+  mae-daemon binding bind --issuer <iss> --subject <sub> --fingerprint SHA256:…   # no proof: bound_by=admin
+  mae-daemon binding unbind --fingerprint SHA256:…        # or --issuer <iss> --subject <sub>
+  mae-daemon binding set-kind --fingerprint SHA256:… --kind person|agent
+  ```
+
+  An administrator's `bind` needs no proof (development, tests, recovery): whoever runs it can
+  already `token mint` for any fingerprint. `list` shows `admin` or `proof` for each binding.
 
 #### Error kinds
 
@@ -292,6 +373,7 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `invalid_params` | A parameter is missing, of the wrong type, malformed (bad base64, an undecodable update) or out of range. Code `-32602`. | all | `param` |
 | `quota_exceeded` | The update would grow a document past `max_document_size_bytes`. Nothing was applied. Code `-32006`. | `kb/node_update`, `sync/update`, `sync/share` | `size`, `limit` |
 | `update_too_large` | One update is over `max_update_size_bytes`. Send smaller increments. | `kb/node_update`, `kb/collection_op`, `sync/update` | `size`, `limit` |
+| `request_too_large` | A request is over the session's request cap (one document at `max_document_size_bytes`, as base64, plus 1 MiB; never under 10 MiB). Answered with `id` `null`, then the session ends. Send smaller requests: `kb/share` takes node batches. | any method, on the collab listener | `size`, `limit` |
 | `invalid_field` | A node update would leave a known field of the node document with the wrong type (for example `title` not text, `tags` not an array of strings, `org_header` malformed). A field already mistyped before the update, and any unknown key, are left alone. Nothing was applied. Not checked on E2E KBs, whose nodes the daemon cannot read, nor on updates a mesh peer relays (the daemon that accepted the write from its client checked it; refusing a relayed one would only diverge this replica). | `kb/node_update`, `sync/update` on a node document | `field` |
 | `tenant_quota_exceeded` | The caller's tenant is over its request quota or connection cap (ADR-060). Back off. | every method, both listeners | — |
 | `too_many_open_docs` | A sync-WebSocket session already holds `ws_max_open_docs` documents and the request names another (ADR-099 B4). Nothing ran. | any method naming a document, on `/ws` | `limit` |
@@ -299,7 +381,7 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `too_many_tickets` | A principal already holds 8 unused connect tickets. Use one or let it expire (30 s). HTTP `429`, `error: "too_many_requests"`. | `POST /ws/ticket` | `limit` |
 | `awareness_not_owned` | A `sync/awareness` update in the y-protocols encoding names a client id another session on the same document already owns (ADR-099 B5). Nothing was relayed. | `sync/awareness` | — |
 | `ticket_invalid` | A connect ticket that is unknown, used, expired or bound to another origin — one identical refusal for all. HTTP `401`, `error: "invalid_token"`, with `WWW-Authenticate`. | `GET /ws` | — |
-| `issuer_not_supported` | A token not issued by this daemon, while ADR-099 B6 holds. HTTP `401`, `error: "invalid_token"`, with `WWW-Authenticate`; on a socket, a JSON-RPC error to `session/renew`. | `GET /ws`, `POST /ws/ticket`, `session/renew` | — |
+| `issuer_not_supported` | A token not issued by this daemon, while ADR-099 B6 holds. HTTP `401`, `error: "invalid_token"`, with `WWW-Authenticate`; on a socket, a JSON-RPC error to `session/renew`. On the binding routes the reverse: a self-issued token, whose principal already is a fingerprint, with HTTP `403`, `error: "access_denied"`. | `GET /ws`, `POST /ws/ticket`, `session/renew`, `POST /identity/challenge`, `POST /identity/bind` | — |
 | `invalid_token` | A `session/renew` token that does not validate or has already expired. The old deadline stands. | `session/renew` | — |
 | `protocol_unsupported` | No protocol version in common at the upgrade. HTTP `400`, `error: "invalid_request"`. | `GET /ws` | `supported` (beside `kind`) |
 | `origin_not_allowed` | A browser `Origin` not exactly in `ws_allowed_origins`. HTTP `403`, `error: "access_denied"`. | `GET /ws`, `POST /ws/ticket` | — |
@@ -327,6 +409,13 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `no_content_anchor` | An E2E KB with no signed content anchor. | `kb/query.my_wrapped_key` | — |
 | `kb_query_unavailable` | The HTTPS listener does not serve `kb/query.*` here (`kb_query_enabled` off, or collab disabled). | `kb/query.*` (HTTPS) | — |
 | `e2e_unsupported` | A server-side operation the daemon cannot perform on an E2E KB. Code `-32600`. | `kb/query.search` | — |
+| `history_holds_plaintext` | Switching the KB to E2E is refused while its version history (ADR-116) holds plaintext content, which the switch would leave readable. Code `-32600`. | `kb/collection_op` | — |
+| `group_required` | An identity-provider token carrying none of the groups `oauth.allowed_groups` names (ADR-098 D4). Checked before the binding is looked up; nothing is read or written. HTTP `403`, `error: "insufficient_scope"`. | every authenticated route on the HTTPS listener | — |
+| `challenge_invalid` | A binding challenge that is unknown, already presented or expired — one refusal for all three. Ask for a new one. HTTP `403`, `error: "access_denied"`. | `POST /identity/bind` | — |
+| `challenge_mismatch` | The challenge was issued to another subject or issuer than the token presenting it, or for another audience. HTTP `403`, `error: "access_denied"`. | `POST /identity/bind` | — |
+| `proof_invalid` | The key's fingerprint is not the one the challenge names, or the signature over the challenge does not verify. HTTP `403`, `error: "access_denied"`. | `POST /identity/bind` | — |
+| `binding_conflict` | The subject already has a key, or the key already has a subject. An administrator must `binding unbind` first. HTTP `409`, `error: "conflict"`. | `POST /identity/bind` | `field` (`subject`/`fingerprint`) |
+| `too_many_challenges` | The subject already holds `identity_max_pending_challenges` unused challenges. Use one or let it expire. HTTP `429`, `error: "too_many_requests"`. | `POST /identity/challenge` | `limit` |
 | `internal` | The daemon failed (storage, persistence, decoding its own state). Not a decision about the caller; a retry may succeed. | any | — |
 
 What a kind does **not** reveal is deliberate. A caller that is not a member gets `not_member` for any
@@ -347,6 +436,17 @@ client authors under `derive_kb_client_id(principal, epoch)`; `null` without a p
 per member, not per KB; one changes when that member's role changes or it is removed and re-admitted,
 and a client then re-joins (or reads `epoch_fenced`'s `current_epoch`). A `pending` join returns
 `principal` only.
+
+A whole KB moves in pages (ADR-022 Amendment 1), because no single message can bound a KB:
+- **`kb/join` with `"paged": true`** answers nodes in id order, filling each reply up to
+  `max_message_bytes`, and adds `"next_after": "<node id>"` while nodes remain; the client repeats
+  the join with `"after"` set to it, sending the same `node_svs`, until a reply has none. A node is
+  subscribed when its page is served. Without `paged` (an older client) the reply carries every node,
+  as before.
+- **`kb/share` takes node batches**: each request carries the full `collection_state` and some of the
+  node states; the daemon keeps the collection from the first and merges each node.
+- **`initialize` reports the limits** as `result.limits.{max_frame_bytes, max_outbound_bytes}`, so a
+  client sizes its batches; a daemon that does not report them reads requests at 10 MiB.
 - **The HTML KB view takes its token in the URL fragment**:
   `https://<host>/kb/<kb_id>/view#access_token=<token>`. The fragment is never sent to the server,
   so it cannot land in a proxy access log; the page moves it into an `Authorization` header and
@@ -398,6 +498,7 @@ ws_allowed_origins = ["https://mae.example.com"]  # browser Origins, EXACT match
 # ws_ping_secs = 30                             # keepalive ping period (under proxy idle timeouts); 0 = off
 # ws_max_open_docs = 1024                       # documents one socket may hold (0 = unlimited)
 # ws_max_frame_bytes = 1048576                  # largest inbound frame; unset = max_request_body_bytes
+# ws_max_outbound_bytes = 15029592              # largest message sent; unset = derived from max_document_size_bytes
 ```
 
 A missing prerequisite (collab disabled, or self-issued tokens unavailable) leaves the route
@@ -412,7 +513,8 @@ mae-daemon token mint --config daemon.toml --sub 'SHA256:…member-fingerprint�
 - **Credentials.** Exactly one, never in the URL: `Authorization: Bearer <token>` (native and
   headless clients), or a connect ticket for browsers, which cannot set that header: `POST
   /ws/ticket` with the bearer header returns `{"ticket", "expires_in": 30}`, and the browser opens
-  `new WebSocket(url, ["mae.v1", "mae.ticket." + ticket])`. A ticket is single-use (spent on first
+  `new WebSocket(url, ["mae.v1", "mae.ticket." + ticket])`. A ticket is 256 random bits written as
+  43 base64url characters, single-use (spent on first
   presentation, whatever happens next), valid 30 s, held in memory only (a restart voids it),
   bound to the minting token's identity and expiry and to the mint request's `Origin`, and at most
   8 may be unused per principal (`429`, `kind: "too_many_tickets"`). Unknown, used and expired tickets all get
@@ -440,12 +542,21 @@ mae-daemon token mint --config daemon.toml --sub 'SHA256:…member-fingerprint�
   for any KB document, `node_id` for a node document) and the rest of the session continues. A missed deadline closes `4401
   token_expired`, and no frame is applied after it. So removing a member takes effect on their open
   sockets at their next renewal at the latest — keep token lifetimes short.
-- **Limits.** A frame over `ws_max_frame_bytes` closes `1009`. `ws_max_open_docs` counts units: a
+- **Limits.** A frame over `ws_max_frame_bytes` closes `1009`. A reply over `ws_max_outbound_bytes`
+  closes `1011` with reason `response_too_large`; by default that bound holds one document at
+  `max_document_size_bytes` as base64 plus 1 MiB (15,029,592 at the stock 10 MB), never less than
+  10 MiB, and `session/hello` advertises it as `limits.max_outbound_bytes`. `ws_max_open_docs` counts units: a
   joined KB is one unit however many nodes it has, and any other document is one. A session at the
   cap is refused a request opening a new unit (`too_many_open_docs`). A client that stops reading for
   5 s is dropped. If an update for a document does not fit a session's event queue, that document
   is closed for the session (`session/doc_closed`, reason `slow_consumer`) rather than the update
   being lost; the client resyncs it (`sync/resync`, or `kb/join` for a KB).
+- **Presence.** `sync/awareness {kb_id, node_id, update}` (or `{doc, update}`) carries a
+  y-protocols awareness update for one document, after the same read check as the document itself.
+  Every other session on that document receives `sync/awareness {doc, kb_id, node_id, update,
+  principals}`, where `principals` maps each client id in the update to the sender's principal as
+  the daemon authenticated it; label a cursor by that, never by the update's own `user` fields. A
+  client id another principal already uses on that document is refused (`awareness_not_owned`).
 - **Keepalive.** The daemon pings every `ws_ping_secs` (default 30) so a proxy's idle timeout never
   closes a quiet session.
 - **CORS.** `POST /ws/ticket` answers a browser preflight from an origin in `ws_allowed_origins`
@@ -705,6 +816,7 @@ silently re-applying writes the backup did not contain):
 | `stores/<uuid>.sqlite` | the `db_path` of that uuid's row in the archived `kb-registry.toml` |
 | `kb-registry.toml` | `<data_dir>/kb-registry.toml` |
 | `collab/state.db` | `<collab data_dir>/state.db` |
+| `collab/identity-bindings.db` | `<collab data_dir>/identity-bindings.db` (ADR-098 bindings) |
 | `identity/*` | the identity dir / `authorized_keys` / `keystore` paths from `daemon.toml` |
 
 What it does **not** contain: the editor-side recovery material (`collections/`, `content_keys/`,
@@ -798,6 +910,17 @@ UTC, or null), `modified_at_basis` (`seed`: the git time; `edit`: a later edit r
 daemon; `unknown`), and `property_order` with `org_header` (`property_order`, `has_title_line`,
 `has_filetags_line`): what a reader needs to lay the header out as the file had it.
 
+**Aliases in an `org-literal-v1` KB come from `ROAM_ALIASES`.** A node's aliases there are derived
+on read from its `ROAM_ALIASES` property, kept verbatim as the file had it and read the way
+org-roam reads it (Emacs' `split-string-and-unquote`: space-separated, double-quoted when an alias
+holds whitespace, backslash escapes inside quotes). The property is the only place to write them;
+the node's `aliases` array must stay empty, and `kb export` refuses a node whose array is set. In a
+native KB the array is the source, as before. One rule (`mae_sync::kb::aliases`) feeds
+`kb/query.get`/`list` (`aliases`) and the Cozo projection the daemon's KB search uses. A value
+Emacs could not read (an unterminated quote, a bad escape) gives the node no aliases, as org-roam
+gets none, and `get`/`list` add `aliases_problems` saying why; so does an array found set anyway,
+whose values are not reported. Nothing copies the property into the array.
+
 ### Members of a seeded KB: `mae-daemon kb member`
 
 ```bash
@@ -828,7 +951,19 @@ Each node is written to its source path as N(F): unedited since the seed, a cano
 byte for byte. Properties keep their recorded order; one added since goes after them in sorted order,
 one removed is skipped, and both are printed as `note:` lines. Every file is checked first: a node
 whose text would seed back differently (a `#+title:` or a drawer typed into its body, an edited
-`ID`) is printed as `refused:` and not written, and the exit code is 1. Symlinks in the target are
+`ID`) is printed as `refused:` and not written, and the exit code is 1.
+
+A node that holds something the file cannot carry is refused the same way (`unrepresentable`),
+naming the fields, rather than written without it. The check builds the node the exported file
+would seed back to and compares it with the node, field by field: any difference refuses. In
+practice that is an `aliases` list (an org-literal-v1 alias is the `ROAM_ALIASES` property, which is
+exported, but the seed never fills the list), a todo state, a priority, structured links, a source
+version, or a `kind` that is not the node's `KIND` property value (one changed without the other).
+Fix the node, for example by moving the aliases into `ROAM_ALIASES` and clearing the list, and export
+again. Three fields are exempt because the seed sets them itself rather than reading them from the
+file: the provenance (always `user_org`), the creation time (from git history, kept in the seed
+record), and the header shape (the property order and whether the title and filetags lines exist,
+which the export writes from the node and reports in its notes). Symlinks in the target are
 never followed. Nodes created after the seed have no source path and are refused. Two source paths
 that are one file on a case- or normalization-insensitive filesystem (`A.org` and `a.org`, or NFC
 and NFD spellings) are both refused (`path_collision`), so neither overwrites the other on APFS,
@@ -843,6 +978,59 @@ any process holds it or a daemon answers on the control socket. The serving daem
 lock when it opens its store. Started while an operator command holds it, it **exits** with status
 75 (`EX_TEMPFAIL`) and says why, rather than serving with collab and `kb/query` silently off. A
 supervisor that restarts on failure (`Restart=on-failure`) brings it up once the command is done.
+
+## 7c. Version history: signed heads and keeping one elsewhere
+
+Every KB node's versions form a hash chain (ADR-116). The daemon signs each KB's **history head**
+(every node's latest version) with its own key on the maintenance tick, only when it changed, into
+an append-only log in `state.db`. `kb/history.verify` checks the chains against the latest one,
+which shows a removed last version or a history re-sealed from an earlier point.
+
+What no log on the daemon can show is a rewrite by whoever holds both the daemon's key and its
+database: they can re-sign. Keep a head somewhere they cannot reach, and check against it:
+
+```bash
+mae-daemon kb history head   --kb-id notes --out /secure/notes-head-2026-11-12.json
+mae-daemon kb history verify --kb-id notes --against /secure/notes-head-2026-11-12.json
+```
+
+- `head` signs the head now (or takes the latest, if nothing changed) and writes it; it never
+  overwrites an existing file. Without `--out` it prints the JSON (`mae-history-head/v1`).
+- `verify` checks every chain, the latest signed head and, with `--against`, the kept one. It
+  prints `verified` and exits 0, or names the first failing node and version, prints
+  `NOT VERIFIED` and exits 1. A KB with no history is refused rather than reported as verified, so
+  a mistyped id cannot pass.
+- A head counts only if it is signed with this daemon's key.
+- `backup create` signs every KB's head first when the daemon is stopped. With it running, the
+  backup carries the latest head the maintenance tick signed.
+- Both commands are operator-only and offline (stop the daemon), like `kb member`.
+
+### Reading a node's history
+
+A KB reader lists a node's versions with `kb/history.list {kb_id, node_id, limit?, before_seq?}`.
+It returns `{versions, next}`, **newest first**, without content. `limit` is 1 to 500 (default
+100); a value outside that is refused, not adjusted. To read further back, call again with
+`before_seq` set to the `next` value; `next` is `null` on the page that reaches version 1. A seq
+never changes and new versions always take a higher one, so paging this way returns every version
+exactly once even while edits continue. `kb/history.get {kb_id, node_id, seq}` returns one version
+with its content and the chain's verification.
+
+Every version record carries:
+
+- `kind`: `edit` (cut when the node passes from one editor to another), `named` (a checkpoint cut
+  by `kb/history.checkpoint`; `name` is set), `rollback` (`restored_from` is set), `import`,
+  `seed`, `rebirth`, `delete`, or `pruned` (an audit entry of a pruning pass, with no content).
+  A client should show a kind it does not know as that kind, never as an edit.
+- `editors`: `[{kind, principal}]`, everyone who edited the node in the range the version covers.
+  `kind` is `principal` (an authenticated principal: a key fingerprint, `psk:<keyid>` or an OAuth
+  subject), `signed-relay` (a relay whose update was signed; the signer has its own `principal`
+  entry), `mesh-peer` (a relay with no verified signer: the author is unknown),
+  `unauthenticated`, or `internal` (the daemon itself). A named version's `editors` are the
+  editors since the previous version; who named it is in `summary` (`named by <principal>`).
+- `created_at`: when the daemon cut the version, RFC 3339, UTC, to the second.
+
+The daemon does not record whether a principal is a person or an agent: nothing in its identity
+model marks one (ADR-113 relies on a marking ADR-098 has not designed), so no field claims it.
 
 ## 8. Troubleshooting
 

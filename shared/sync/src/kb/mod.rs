@@ -13,6 +13,7 @@ use yrs::Doc;
 
 use crate::SyncError;
 
+pub mod aliases;
 mod collection_artifacts;
 mod collection_core;
 mod collection_crypto;

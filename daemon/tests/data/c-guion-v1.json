@@ -1,0 +1,394 @@
+{
+  "formato": "c-guion-v1",
+  "descripcion": "Guion de tramas del cliente de mae-web contra el WebSocket de MAE (ADR-099, enmienda 1, B1-B6). Lo que el cliente manda y lo que espera, escenario por escenario. Confirmado y corregido por MAE el 2026-11-11 (los 'supuesto' de la primera versión, resueltos); MAE lo copia a sus pruebas cuando llegue C1. Las negativas HTTP llevan el cuerpo de siempre del escucha {error, error_description} y kind: el cliente decide por kind.",
+  "escenarios": [
+    {
+      "nombre": "ticket y conexión",
+      "pasos": [
+        {
+          "cliente": {
+            "http": "POST",
+            "ruta": "/ws/ticket",
+            "cabeceras": {
+              "Authorization": "Bearer <token>",
+              "Origin": "<origen de la página>"
+            }
+          }
+        },
+        {
+          "demonio": {
+            "estado": 200,
+            "json": {
+              "ticket": "TICKET-43-caracteres-base64url-de-256-bits-x",
+              "expires_in": 30
+            }
+          }
+        },
+        {
+          "cliente": {
+            "websocket": "/ws",
+            "subprotocolos": ["mae.v1", "mae.ticket.TICKET-43-caracteres-base64url-de-256-bits-x"],
+            "cabeceras": {
+              "Origin": "<el mismo origen>"
+            }
+          }
+        },
+        {
+          "demonio": {
+            "subprotocolo_elegido": "mae.v1"
+          },
+          "comprueba_cliente": "el elegido es mae.v1 y nunca lleva el ticket"
+        },
+        {
+          "demonio": {
+            "trama": {
+              "jsonrpc": "2.0",
+              "method": "session/hello",
+              "params": {
+                "protocol": "mae.v1",
+                "principal": "principal-de-prueba",
+                "auth_deadline": "2026-11-11T12:00:00Z",
+                "limits": {
+                  "max_frame_bytes": 1048576,
+                  "max_open_docs": 64
+                }
+              }
+            }
+          },
+          "nota": "notificación sin id; auth_deadline en RFC 3339 UTC"
+        }
+      ]
+    },
+    {
+      "nombre": "ticket usado, caducado o desconocido",
+      "pasos": [
+        {
+          "cliente": {
+            "websocket": "/ws",
+            "subprotocolos": ["mae.v1", "mae.ticket.<usado|caducado|inventado>"]
+          }
+        },
+        {
+          "demonio": {
+            "estado": 401,
+            "json": {
+              "error": "invalid_token",
+              "error_description": "<texto>",
+              "kind": "ticket_invalid"
+            },
+            "www_authenticate": true
+          },
+          "comprueba_cliente": "las tres respuestas, byte a byte iguales"
+        }
+      ]
+    },
+    {
+      "nombre": "credencial en la URL",
+      "pasos": [
+        {
+          "cliente": {
+            "websocket": "/ws?ticket=TICKET-43-caracteres-base64url-de-256-bits-x",
+            "subprotocolos": ["mae.v1"]
+          }
+        },
+        {
+          "demonio": {
+            "estado": 400,
+            "json": {
+              "error": "invalid_request",
+              "error_description": "<texto>",
+              "kind": "credential_in_url"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "nombre": "sin versión en común",
+      "pasos": [
+        {
+          "cliente": {
+            "websocket": "/ws",
+            "subprotocolos": ["mae.v2", "mae.ticket.TICKET-43-caracteres-base64url-de-256-bits-x"]
+          }
+        },
+        {
+          "demonio": {
+            "estado": 400,
+            "json": {
+              "error": "invalid_request",
+              "error_description": "<texto>",
+              "kind": "protocol_unsupported",
+              "supported": ["mae.v1"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "nombre": "origen fuera de la lista",
+      "pasos": [
+        {
+          "cliente": {
+            "http": "POST",
+            "ruta": "/ws/ticket",
+            "cabeceras": {
+              "Origin": "https://permitido.ejemplo.otro"
+            }
+          }
+        },
+        {
+          "demonio": {
+            "estado": 403,
+            "json": {
+              "error": "access_denied",
+              "error_description": "<texto>",
+              "kind": "origin_not_allowed"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "nombre": "renovar antes del plazo",
+      "pasos": [
+        {
+          "demonio": {
+            "trama": {
+              "jsonrpc": "2.0",
+              "method": "session/renew_needed",
+              "params": {
+                "auth_deadline": "2026-11-11T12:00:00Z"
+              }
+            }
+          }
+        },
+        {
+          "cliente": {
+            "trama": {
+              "jsonrpc": "2.0",
+              "id": "r-1",
+              "method": "session/renew",
+              "params": {
+                "token": "<token nuevo>"
+              }
+            }
+          }
+        },
+        {
+          "demonio": {
+            "trama": {
+              "jsonrpc": "2.0",
+              "id": "r-1",
+              "result": {
+                "auth_deadline": "2026-11-11T13:00:00Z"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "nombre": "renovar con otra identidad",
+      "pasos": [
+        {
+          "cliente": {
+            "trama": {
+              "jsonrpc": "2.0",
+              "id": "r-2",
+              "method": "session/renew",
+              "params": {
+                "token": "<token de otro sujeto>"
+              }
+            }
+          }
+        },
+        {
+          "demonio": {
+            "cierre": {
+              "codigo": 4403,
+              "motivo": "principal_changed"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "nombre": "plazo vencido",
+      "pasos": [
+        {
+          "demonio": {
+            "cierre": {
+              "codigo": 4401,
+              "motivo": "token_expired"
+            }
+          }
+        },
+        {
+          "comprueba_cliente": "lo mandado después no cuenta como aplicado: se reenvía tras reconectar"
+        }
+      ]
+    },
+    {
+      "nombre": "dos documentos en un socket; uno lento",
+      "pasos": [
+        {
+          "cliente": {
+            "trama": {
+              "jsonrpc": "2.0",
+              "id": "j-1",
+              "method": "kb/join",
+              "params": {
+                "kb_id": "kb-a"
+              }
+            }
+          }
+        },
+        {
+          "cliente": {
+            "trama": {
+              "jsonrpc": "2.0",
+              "id": "u-1",
+              "method": "kb/node_update",
+              "params": {
+                "kb_id": "kb-a",
+                "node_id": "n1",
+                "update": "<base64>"
+              }
+            }
+          }
+        },
+        {
+          "cliente": {
+            "trama": {
+              "jsonrpc": "2.0",
+              "id": "u-2",
+              "method": "kb/node_update",
+              "params": {
+                "kb_id": "kb-a",
+                "node_id": "n2",
+                "update": "<base64>"
+              }
+            }
+          }
+        },
+        {
+          "demonio": {
+            "trama": {
+              "jsonrpc": "2.0",
+              "method": "session/doc_closed",
+              "params": {
+                "doc": "<nombre del documento en el sobre>",
+                "kb_id": "kb-a",
+                "node_id": "n1",
+                "reason": "slow_consumer"
+              }
+            }
+          },
+          "comprueba_cliente": "vuelve a abrir n1 (se resincroniza); n2 sigue",
+          "nota": "doc y kb_id siempre (también en los documentos de colección); node_id, en los de nodo; reason not_member o slow_consumer"
+        }
+      ]
+    },
+    {
+      "nombre": "miembro quitado entre renovaciones",
+      "pasos": [
+        {
+          "demonio": {
+            "trama": {
+              "jsonrpc": "2.0",
+              "method": "session/doc_closed",
+              "params": {
+                "doc": "<nombre del documento en el sobre>",
+                "kb_id": "kb-a",
+                "node_id": "n1",
+                "reason": "not_member"
+              }
+            }
+          },
+          "nota": "doc y kb_id siempre (también en los documentos de colección); node_id, en los de nodo; reason not_member o slow_consumer"
+        },
+        {
+          "comprueba_cliente": "para los nodos de esa KB, sin cerrar la sesión ni las otras KB"
+        }
+      ]
+    },
+    {
+      "nombre": "trama demasiado grande",
+      "pasos": [
+        {
+          "comprueba_cliente": "no manda una trama de más de limits.max_frame_bytes: falla esa petición, no el socket"
+        },
+        {
+          "demonio": {
+            "cierre": {
+              "codigo": 1009
+            }
+          },
+          "nota": "si llega una, el demonio cierra el socket"
+        }
+      ]
+    },
+    {
+      "nombre": "presencia",
+      "pasos": [
+        {
+          "cliente": {
+            "trama": {
+              "jsonrpc": "2.0",
+              "method": "sync/awareness",
+              "params": {
+                "kb_id": "kb-a",
+                "node_id": "n1",
+                "update": "<base64 de un update de awareness de y-protocols>"
+              }
+            }
+          }
+        },
+        {
+          "demonio": {
+            "trama": {
+              "jsonrpc": "2.0",
+              "method": "sync/awareness",
+              "params": {
+                "kb_id": "kb-a",
+                "node_id": "n1",
+                "update": "<base64>",
+                "principals": {
+                  "<clientID>": "<principal sellado>"
+                }
+              }
+            }
+          },
+          "comprueba_cliente": "etiqueta el cursor con el principal sellado, nunca con user"
+        }
+      ]
+    },
+    {
+      "nombre": "emisor externo en el primer corte",
+      "pasos": [
+        {
+          "cliente": {
+            "http": "POST",
+            "ruta": "/ws/ticket",
+            "cabeceras": {
+              "Authorization": "Bearer <token de un emisor externo>"
+            }
+          }
+        },
+        {
+          "demonio": {
+            "estado": 401,
+            "json": {
+              "error": "invalid_token",
+              "error_description": "<texto>",
+              "kind": "issuer_not_supported"
+            },
+            "www_authenticate": true
+          }
+        }
+      ]
+    }
+  ],
+  "identidad": "El clientID de Yjs sale de principal (el de session/hello, igual al de kb/join) y de la época de kb/join, con los 24 vectores de pruebas/datos/id-cliente-kb.json (S-11)."
+}

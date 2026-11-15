@@ -220,6 +220,10 @@ pub enum Attr {
     DataOrgC,
     /// A special block's name: `[A-Za-z0-9][A-Za-z0-9_-]*`, at most 64 bytes.
     DataOrgBlock,
+    /// A special block's parameters, the text after its name (`En Windows` in
+    /// `#+begin_details En Windows`): trimmed, non-empty, at most 512 bytes,
+    /// no control characters. Only alongside `data-org-block`.
+    DataOrgParams,
 }
 
 impl Attr {
@@ -237,6 +241,7 @@ impl Attr {
             Attr::DataOrgW => "data-org-w",
             Attr::DataOrgC => "data-org-c",
             Attr::DataOrgBlock => "data-org-block",
+            Attr::DataOrgParams => "data-org-params",
         }
     }
 
@@ -248,6 +253,7 @@ impl Attr {
             Attr::DataOrgW => "dataOrgW",
             Attr::DataOrgC => "dataOrgC",
             Attr::DataOrgBlock => "dataOrgBlock",
+            Attr::DataOrgParams => "dataOrgParams",
             other => other.as_str(),
         }
     }
@@ -266,6 +272,7 @@ pub const ATTRIBUTES: &[(Option<Tag>, Attr)] = &[
     (Some(Tag::Li), Attr::Value),
     (Some(Tag::Th), Attr::Scope),
     (Some(Tag::Div), Attr::DataOrgBlock),
+    (Some(Tag::Div), Attr::DataOrgParams),
 ];
 
 /// The fixed classes (besides `org-level-N` and `language-L`).

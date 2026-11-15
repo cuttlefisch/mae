@@ -54,6 +54,8 @@ pub(crate) struct WsSettings {
     pub ping_every: Option<Duration>,
     pub max_open_docs: usize,
     pub max_frame_bytes: usize,
+    /// Largest message the daemon sends (`ws_max_outbound_bytes`, else `DocStore::message_bound`).
+    pub max_outbound_bytes: usize,
 }
 
 /// Everything the routes need beyond the listener's own state.
@@ -94,6 +96,9 @@ pub(crate) fn state_from_config(
         max_frame_bytes: oauth
             .ws_max_frame_bytes
             .unwrap_or(oauth.max_request_body_bytes),
+        max_outbound_bytes: oauth
+            .ws_max_outbound_bytes
+            .unwrap_or_else(|| deps.doc_store.message_bound()),
     };
     tracing::info!(
         origins = settings.allowed_origins.len(),

@@ -7,7 +7,7 @@
 //! log (the rejected Kubernetes scheme) or in a URL (the rejected Slack shape).
 //!
 //! Properties, each pinned by a test in `connect_ticket_tests.rs`:
-//! - 256 random bits; valid [`TICKET_TTL`]; single use — removed on its first
+//! - 256 random bits, as 43 base64url characters; valid [`TICKET_TTL`]; single use — removed on its first
 //!   presentation whatever happens next;
 //! - in memory only, so a restart voids every ticket;
 //! - bound to the minting token's issuer, subject, principal and expiry, and to
@@ -84,7 +84,10 @@ impl TicketStore {
         }
         let mut bytes = [0u8; 32];
         rand::Rng::fill_bytes(&mut rand::rng(), &mut bytes);
-        let ticket = hex::encode(bytes);
+        // base64url without padding: 43 characters, every one a valid
+        // subprotocol token character (RFC 7230 `tchar`), as the client's
+        // script (`tests/data/c-guion-v1.json`) expects.
+        let ticket = data_encoding::BASE64URL_NOPAD.encode(&bytes);
         entries.insert(
             key(&ticket),
             Entry {

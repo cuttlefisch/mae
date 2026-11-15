@@ -39,6 +39,7 @@ use std::collections::{HashMap, HashSet};
 
 #[path = "kb_query_node_fields.rs"]
 mod node_fields;
+pub(crate) use node_fields::content_fields;
 
 /// Default cap on one `kb/query.get` body: the node size backstop
 /// (`[collab.sync] max_document_size_bytes`, ADR-109 D6), so a stock daemon
@@ -88,6 +89,10 @@ pub async fn dispatch(
     principal: Option<&str>,
     limits: KbQueryLimits,
 ) -> Result<Value, McpError> {
+    // The one method not about a single KB: answered before `kb_id` is required.
+    if method == "kb/query.my_kbs" {
+        return my_kbs(doc_store, principal).await;
+    }
     let kb_id = required_str(params, "kb_id")?.to_string();
 
     match method {
@@ -205,18 +210,85 @@ async fn load_gated(
         .await
         .map_err(McpError::from)?;
 
-    // Trustworthy encryption mode: derived from the SIGNED op-log, never the
-    // unsigned collection-doc flag (a key-blind relay could spoof that).
-    // `resolve_content_anchor` mirrors `kb_access`'s own owned-vs-joined
-    // anchor resolution exactly (principle #8).
-    let encryption = match collab_handler::resolve_content_anchor(doc_store, kb_id).await {
+    let encryption = trusted_encryption(doc_store, kb_id, &coll).await;
+    Ok((coll, encryption))
+}
+
+/// Trustworthy encryption mode: derived from the SIGNED op-log, never the
+/// unsigned collection-doc flag (a key-blind relay could spoof that).
+/// `resolve_content_anchor` mirrors `kb_access`'s own owned-vs-joined
+/// anchor resolution exactly (principle #8).
+async fn trusted_encryption(
+    doc_store: &DocStore,
+    kb_id: &str,
+    coll: &KbCollectionDoc,
+) -> Encryption {
+    match collab_handler::resolve_content_anchor_with_coll(doc_store, kb_id, Some(coll)).await {
         Some(anchor) => membership::derive_encryption(&coll.oplog_ops(), &anchor),
         // No anchor at all (never anchored, not owned by this daemon either)
         // means no signed genesis exists to latch E2e from.
         None => Encryption::None,
-    };
+    }
+}
 
-    Ok((coll, encryption))
+/// `kb/query.my_kbs`: the KBs the CALLER may read, each with the caller's own
+/// role -- `{"kbs": [{kb_id, title, role, encryption}]}`, sorted by `kb_id`.
+///
+/// Listed exactly when `kb_access(.., Read, Hub)` allows, so the list and
+/// `kb/query.capabilities` agree on every KB. A permissive KB the caller has not
+/// joined is NOT listed: `Read` denies a non-member whatever the join policy
+/// (`AllowAutoJoin` answers only `Join`), and listing only `Allow` keeps that
+/// so should it change -- every permissive KB on a shared host enumerable
+/// would leak the `kb_id`s the cross-KB paths key on (#571, #718). Nothing
+/// about any OTHER principal is returned.
+///
+/// Enumerates the DURABLE collection set (`list_collection_ids`: memory plus
+/// disk), not the in-memory `kb_metas` `kb/list` reads, which a restart empties.
+/// A KB whose collection cannot be loaded or authorized is omitted, never shown:
+/// denied-by-error is still denied.
+///
+/// `title` is the collection's name (often the `kb_id` itself), `null` when
+/// empty. `role` is `null` only for an unauthenticated (loopback) caller, which
+/// `kb_access` blanket-allows; the HTTPS listener always has a principal.
+async fn my_kbs(doc_store: &DocStore, principal: Option<&str>) -> Result<Value, McpError> {
+    let mut kbs = Vec::new();
+    for kb_id in doc_store.list_collection_ids().await {
+        let coll = match collab_handler::load_collection(doc_store, &kb_id).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(kb_id, error = %e, "kb/query.my_kbs: collection unreadable, omitting KB");
+                continue;
+            }
+        };
+        let decision = collab_handler::kb_access_with_coll(
+            doc_store,
+            &kb_id,
+            principal,
+            collab_handler::KbOp::Read,
+            Transport::Hub,
+            Some(&coll),
+        )
+        .await;
+        if !matches!(decision, Ok(AccessDecision::Allow)) {
+            continue;
+        }
+        let role = match principal {
+            Some(p) => {
+                collab_handler::member_role(doc_store, &kb_id, &coll, p)
+                    .await
+                    .0
+            }
+            None => None,
+        };
+        let name = coll.name();
+        kbs.push(json!({
+            "kb_id": kb_id,
+            "title": (!name.is_empty()).then_some(name),
+            "role": role.map(|r| r.as_str()),
+            "encryption": trusted_encryption(doc_store, &kb_id, &coll).await.as_str(),
+        }));
+    }
+    Ok(json!({ "kbs": kbs }))
 }
 
 async fn capabilities(
@@ -296,7 +368,10 @@ async fn get(
             // editor shows it without replicating its CRDT. Tolerant of a v1
             // document: what it does not carry reads as null / empty, and
             // `schema_v` says which it is.
-            let mut out = node_fields::node_fields(doc_store, kb_id, node_id, &doc).await;
+            let body_format = coll.body_format();
+            let mut out =
+                node_fields::node_fields(doc_store, kb_id, node_id, &doc, body_format.as_deref())
+                    .await;
             out.extend(
                 json!({
                     "kb_id": kb_id,
@@ -759,6 +834,7 @@ async fn list(
     principal: Option<&str>,
 ) -> Result<Value, McpError> {
     let (coll, encryption) = load_gated(doc_store, kb_id, principal).await?;
+    let body_format = coll.body_format();
     let mut ids: Vec<(String, String)> = coll.list_nodes();
     ids.sort();
     let rest: Vec<(String, String)> = ids
@@ -780,7 +856,14 @@ async fn list(
             Encryption::E2e => json!({"id": id, "version": opaque_version(&state)}),
             Encryption::None => match KbNodeDoc::from_bytes(&state) {
                 Ok(doc) => {
-                    let mut fields = node_fields::node_fields(doc_store, kb_id, &id, &doc).await;
+                    let mut fields = node_fields::node_fields(
+                        doc_store,
+                        kb_id,
+                        &id,
+                        &doc,
+                        body_format.as_deref(),
+                    )
+                    .await;
                     fields.insert("id".into(), json!(id));
                     Value::Object(fields)
                 }

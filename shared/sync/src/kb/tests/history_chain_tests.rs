@@ -10,6 +10,29 @@ use proptest::prelude::*;
 use super::*;
 use crate::kb::history::*;
 
+/// The test KB's history key.
+fn key() -> HistoryKey {
+    HistoryKey::from_bytes([5; 32])
+}
+
+fn seal_k(
+    kb: &str,
+    node: &str,
+    prev: Option<&HistoryEntry>,
+    d: Draft,
+) -> Result<HistoryEntry, SealError> {
+    seal(kb, node, prev, d, &key())
+}
+
+fn verify_chain_k(
+    kb: &str,
+    node: &str,
+    entries: &[HistoryEntry],
+    head: Option<(u64, Hash)>,
+) -> Result<(), VerifyError> {
+    verify_chain(kb, node, entries, head, Some(&key()))
+}
+
 const KB: &str = "kb-1";
 const NODE: &str = "n-1";
 
@@ -43,7 +66,7 @@ fn draft(kind: VersionKind, seq: u64, node: MaterializedNode) -> Draft {
 fn chain_of(versions: Vec<(VersionKind, MaterializedNode)>) -> Vec<HistoryEntry> {
     let mut out: Vec<HistoryEntry> = Vec::new();
     for (i, (kind, node)) in versions.into_iter().enumerate() {
-        let e = seal(KB, NODE, out.last(), draft(kind, i as u64 + 1, node)).unwrap();
+        let e = seal_k(KB, NODE, out.last(), draft(kind, i as u64 + 1, node)).unwrap();
         out.push(e);
     }
     out
@@ -207,12 +230,12 @@ proptest! {
     #[test]
     fn any_change_to_any_entry_fails(chain in arb_chain(), pick in any::<prop::sample::Index>(),
                                       field in 0usize..16, salt in any::<usize>()) {
-        prop_assert!(verify_chain(KB, NODE, &chain, None).is_ok());
+        prop_assert!(verify_chain_k(KB, NODE, &chain, None).is_ok());
         let i = pick.index(chain.len());
         let mut bad = chain.clone();
         mutate(&mut bad[i], field, salt);
         prop_assert_ne!(&bad[i], &chain[i]);
-        let err = verify_chain(KB, NODE, &bad, None).unwrap_err();
+        let err = verify_chain_k(KB, NODE, &bad, None).unwrap_err();
         prop_assert!(err.seq == i as u64 + 1 || err.broken == Broken::Seq, "{:?} at {}", err, i);
     }
 
@@ -224,20 +247,20 @@ proptest! {
                                           b in any::<prop::sample::Index>()) {
         let last = chain.last().unwrap();
         let head = Some((last.seq, last.entry_hash));
-        prop_assert!(verify_chain(KB, NODE, &chain, head).is_ok());
+        prop_assert!(verify_chain_k(KB, NODE, &chain, head).is_ok());
         let (i, j) = (a.index(chain.len()), b.index(chain.len()));
         if i != j {
             let mut swapped = chain.clone();
             swapped.swap(i, j);
-            prop_assert!(verify_chain(KB, NODE, &swapped, None).is_err());
+            prop_assert!(verify_chain_k(KB, NODE, &swapped, None).is_err());
         }
         let mut removed = chain.clone();
         removed.remove(i);
         if i + 1 == chain.len() {
-            prop_assert!(verify_chain(KB, NODE, &removed, None).is_ok());
-            prop_assert_eq!(verify_chain(KB, NODE, &removed, head).unwrap_err().broken, Broken::Head);
+            prop_assert!(verify_chain_k(KB, NODE, &removed, None).is_ok());
+            prop_assert_eq!(verify_chain_k(KB, NODE, &removed, head).unwrap_err().broken, Broken::Head);
         } else {
-            prop_assert!(verify_chain(KB, NODE, &removed, head).is_err());
+            prop_assert!(verify_chain_k(KB, NODE, &removed, head).is_err());
         }
     }
 
@@ -252,7 +275,7 @@ proptest! {
             }
         }
         let last = chain.last().unwrap();
-        prop_assert!(verify_chain(KB, NODE, &pruned, Some((last.seq, last.entry_hash))).is_ok());
+        prop_assert!(verify_chain_k(KB, NODE, &pruned, Some((last.seq, last.entry_hash))).is_ok());
         for (p, e) in pruned.iter().zip(&chain) {
             prop_assert_eq!(HistoryEntry { content: e.content.clone(), ..p.clone() }, e.clone());
         }
@@ -271,7 +294,7 @@ proptest! {
             d.summary = Some(PARTS[summary].into());
             d.editors = vec![Editor { kind: EditorKind::Principal, principal: PARTS[p1].into() },
                              Editor { kind: EditorKind::Internal, principal: PARTS[p2].into() }];
-            seal(&format!("kb{}", PARTS[kb]), NODE, None, d).unwrap()
+            seal_k(&format!("kb{}", PARTS[kb]), NODE, None, d).unwrap()
         };
         let (ea, eb) = (make(a), make(b));
         prop_assert_eq!(a == b, ea.entry_hash == eb.entry_hash);
@@ -297,7 +320,7 @@ fn shifted_boundaries_do_not_collide() {
     let with = |summary: Option<&str>| {
         let mut d = draft(VersionKind::Edit, 1, node_with("x"));
         d.summary = summary.map(String::from);
-        seal(KB, NODE, None, d).unwrap().entry_hash
+        seal_k(KB, NODE, None, d).unwrap().entry_hash
     };
     assert_ne!(with(None), with(Some("")));
     let id_split = |kb: &str, node: &str| {
@@ -309,7 +332,7 @@ fn shifted_boundaries_do_not_collide() {
                 ..node_with("x")
             },
         );
-        seal(kb, node, None, d).unwrap().entry_hash
+        seal_k(kb, node, None, d).unwrap().entry_hash
     };
     assert_ne!(id_split("ab", "c"), id_split("a", "bc"));
 }
@@ -368,7 +391,7 @@ fn a_non_canonical_content_is_refused() {
         (VersionKind::Edit, node),
     ]);
     chain[1].content = Some(swapped);
-    let err = verify_chain(KB, NODE, &chain, None).unwrap_err();
+    let err = verify_chain_k(KB, NODE, &chain, None).unwrap_err();
     assert_eq!((err.seq, err.broken), (2, Broken::Content));
 }
 
@@ -377,7 +400,7 @@ fn a_non_canonical_content_is_refused() {
 #[test]
 fn seal_refuses_what_verification_would_reject() {
     let base = || draft(VersionKind::Edit, 2, node_with("x"));
-    let first = seal(KB, NODE, None, base()).unwrap();
+    let first = seal_k(KB, NODE, None, base()).unwrap();
     let cases: Vec<(&str, Draft)> = vec![
         (
             "other node's content",
@@ -439,10 +462,10 @@ fn seal_refuses_what_verification_would_reject() {
         ),
     ];
     for (what, d) in cases {
-        assert!(seal(KB, NODE, Some(&first), d).is_err(), "{what}");
+        assert!(seal_k(KB, NODE, Some(&first), d).is_err(), "{what}");
     }
     assert!(
-        seal("kb-2", NODE, Some(&first), base()).is_err(),
+        seal_k("kb-2", NODE, Some(&first), base()).is_err(),
         "previous from another KB"
     );
     let audit = Draft {
@@ -451,8 +474,8 @@ fn seal_refuses_what_verification_would_reject() {
         summary: Some("policy".into()),
         ..base()
     };
-    let a = seal(KB, NODE, Some(&first), audit).unwrap();
-    assert!(verify_chain(KB, NODE, &[first, a], None).is_ok());
+    let a = seal_k(KB, NODE, Some(&first), audit).unwrap();
+    assert!(verify_chain_k(KB, NODE, &[first, a], None).is_ok());
 }
 
 /// Editors arrive in whatever order the editor record yields; `seal` stores
@@ -468,7 +491,7 @@ fn seal_sorts_and_dedups_editors() {
             editors,
             ..draft(VersionKind::Edit, 1, node_with("x"))
         };
-        seal(KB, NODE, None, d).unwrap()
+        seal_k(KB, NODE, None, d).unwrap()
     };
     let a = with(vec![
         ed(EditorKind::Internal, "job"),
@@ -484,7 +507,7 @@ fn seal_sorts_and_dedups_editors() {
     assert_eq!(a.editors, b.editors);
     assert_eq!(a.entry_hash, b.entry_hash);
     assert_eq!(a.editors.len(), 3);
-    assert!(verify_chain(KB, NODE, &[a], None).is_ok());
+    assert!(verify_chain_k(KB, NODE, &[a], None).is_ok());
 }
 
 /// The head is one digest over every node's tip, independent of the order the
@@ -519,10 +542,13 @@ fn at(err: VerifyError) -> (u64, Broken) {
     (err.seq, err.broken)
 }
 
-/// The forger D4 names, who can recompute any hash: each forgery of entry 2
-/// is caught at entry 2 by the check made for it, or, where entry 2 is
-/// consistent by itself, at the link to entry 3. Kills a verifier missing the
-/// id, content-id or link check, or a hash leaving out `content_hash`.
+/// The forger D4 names, who holds the store and the KB's history key and can
+/// recompute any hash: each forgery of entry 2 is caught at entry 2 by the
+/// check made for it, or, where entry 2 is consistent by itself, at the link
+/// to entry 3. A forger WITHOUT the key cannot make a content verify at all:
+/// the keyed hash catches it at entry 2. Kills a verifier missing the id,
+/// content-id or link check, a hash leaving out `content_hash`, and an
+/// unkeyed content hash.
 #[test]
 fn a_forger_who_recomputes_hashes_is_caught_where_they_forged() {
     let chain = four("t");
@@ -532,26 +558,83 @@ fn a_forger_who_recomputes_hashes_is_caught_where_they_forged() {
         if rehash {
             c[1].entry_hash = c[1].compute_hash();
         }
-        at(verify_chain(KB, NODE, &c, None).unwrap_err())
+        at(verify_chain_k(KB, NODE, &c, None).unwrap_err())
     };
     let other = KbNodeDoc::new("other", "t", "", &[]).materialize();
     let alt = node_with("forged");
-    let to = |n: &MaterializedNode| {
-        let (bytes, digest) = (encode_content(n), n.digest());
+    // With the key: the right hash. Without: the best a forger can do.
+    let to = |n: &MaterializedNode, keyed: bool| {
+        let hash = if keyed {
+            key().content_hash(n)
+        } else {
+            n.digest()
+        };
+        let bytes = encode_content(n);
         move |e: &mut HistoryEntry| {
             e.content = Some(bytes.clone());
-            e.content_hash = digest;
+            e.content_hash = hash;
         }
     };
     assert_eq!(forge(&|e| e.kb_id = "kb-2".into(), true), (2, Broken::Ids));
-    assert_eq!(forge(&to(&other), true), (2, Broken::Content));
-    assert_eq!(forge(&to(&alt), false), (2, Broken::EntryHash));
-    assert_eq!(forge(&to(&alt), true), (3, Broken::Link));
+    assert_eq!(forge(&to(&other, true), true), (2, Broken::Content));
+    assert_eq!(forge(&to(&alt, true), false), (2, Broken::EntryHash));
+    assert_eq!(forge(&to(&alt, true), true), (3, Broken::Link));
+    assert_eq!(
+        forge(&to(&alt, false), true),
+        (2, Broken::ContentHash),
+        "no key, no valid hash"
+    );
     let pruned_swap = |e: &mut HistoryEntry| {
         e.prune();
-        e.content_hash = alt.digest();
+        e.content_hash = key().content_hash(&alt);
     };
     assert_eq!(forge(&pruned_swap, true), (3, Broken::Link));
+}
+
+/// HMAC-SHA256 matches RFC 4231 (test cases 1, 2 and 6: a short key, a key
+/// shorter than the hash, and a key longer than the block).
+#[test]
+fn hmac_matches_rfc_4231() {
+    let h = |k: &[u8], m: &[u8]| hex::encode(hmac_sha256(k, m));
+    assert_eq!(
+        h(&[0x0b; 20], b"Hi There"),
+        "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+    );
+    assert_eq!(
+        h(b"Jefe", b"what do ya want for nothing?"),
+        "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+    );
+    assert_eq!(
+        h(
+            &[0xaa; 131],
+            b"Test Using Larger Than Block-Size Key - Hash Key First"
+        ),
+        "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
+    );
+}
+
+/// The keyed hash confirms no guess without the key: the right content under
+/// another key, or unkeyed, does not reproduce it; the same key always does.
+/// Without the key a verifier checks the chain and leaves the content alone.
+#[test]
+fn the_content_hash_is_keyed() {
+    let n = node_with("secret 4711");
+    let stored = key().content_hash(&n);
+    assert_eq!(stored, key().content_hash(&n));
+    assert_ne!(stored, HistoryKey::from_bytes([6; 32]).content_hash(&n));
+    assert_ne!(stored, n.digest());
+    let mut c = four("t");
+    c[1].content = Some(encode_content(&node_with("swapped")));
+    assert!(
+        verify_chain_k(KB, NODE, &c, None).is_err(),
+        "with the key: caught"
+    );
+    assert!(
+        verify_chain(KB, NODE, &c, None, None).is_ok(),
+        "without the key, content is not checked (the chain still is)"
+    );
+    c[2].summary = Some("x".into());
+    assert!(verify_chain(KB, NODE, &c, None, None).is_err());
 }
 
 /// An entry valid by itself, taken from another chain of the same node and
@@ -566,13 +649,13 @@ fn an_entry_spliced_from_another_chain_fails() {
     let mut spliced = a.clone();
     spliced[1] = b[1].clone();
     assert_eq!(
-        at(verify_chain(KB, NODE, &spliced, None).unwrap_err()),
+        at(verify_chain_k(KB, NODE, &spliced, None).unwrap_err()),
         (2, Broken::Link)
     );
     spliced[1].prev_hash = a[0].entry_hash;
     spliced[2].prev_hash = spliced[1].entry_hash;
     assert_eq!(
-        at(verify_chain(KB, NODE, &spliced, head).unwrap_err()),
+        at(verify_chain_k(KB, NODE, &spliced, head).unwrap_err()),
         (2, Broken::EntryHash)
     );
 }

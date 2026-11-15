@@ -26,6 +26,7 @@ pub mod governor;
 mod kb_artifacts;
 mod kb_content;
 mod kb_governance;
+mod kb_history;
 mod kb_id_guard;
 pub mod kb_lease;
 mod kb_membership;
@@ -276,11 +277,20 @@ async fn deliver_event<W: AsyncWrite + Unpin>(
 ) -> bool {
     let method = format!("notifications/{}", event.event_type());
     debug!(session = session.id, event_type = %method, "broadcasting event to client");
-    let notification = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": method,
-        "params": { "seq": session.events_delivered + 1, "event": event },
-    });
+    let notification = match event {
+        // B5: y-protocols presence reaches a receiver in the envelope's own
+        // `sync/awareness` shape, addressed like every other document notice.
+        mae_mcp::broadcast::EditorEvent::AwarenessYjs {
+            doc_id,
+            update_base64,
+            principals,
+        } => governor::awareness_relayed(doc_id, update_base64, principals),
+        _ => serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": { "seq": session.events_delivered + 1, "event": event },
+        }),
+    };
     if governor::write_json(writer, &notification, timeout)
         .await
         .is_err()
@@ -306,6 +316,13 @@ async fn deliver_event<W: AsyncWrite + Unpin>(
         }
     }
     true
+}
+/// Why a session's reader task stopped.
+enum ReadEnd {
+    Eof,
+    /// A request over the session's cap (ADR-022 Amendment 1 E5).
+    TooLarge(mae_mcp::MessageTooLarge),
+    Failed(String),
 }
 
 /// Run the client handler loop for a single connection.
@@ -382,22 +399,30 @@ async fn run_session<R, W>(
 
     // Spawn a dedicated reader task so read_message always runs to completion
     // (never cancelled by select!).  Messages arrive via an mpsc channel.
-    let (msg_tx, mut msg_rx) = mpsc::channel::<Result<String, String>>(32);
+    // ADR-022 Amendment 1 E3: requests are read up to the bound one document at
+    // the size limit fits, not a fixed 10 MiB, so a node at the limit can be
+    // shared or written in one message.
+    let request_cap = doc_store.message_bound();
+    let (msg_tx, mut msg_rx) = mpsc::channel::<Result<String, ReadEnd>>(32);
     tokio::spawn(async move {
         let mut reader = reader;
         loop {
-            match mae_mcp::read_message(&mut reader).await {
+            match mae_mcp::read_message_limited(&mut reader, request_cap).await {
                 Ok(Some(msg)) => {
                     if msg_tx.send(Ok(msg)).await.is_err() {
                         break; // handler dropped
                     }
                 }
                 Ok(None) => {
-                    let _ = msg_tx.send(Err("EOF".to_string())).await;
+                    let _ = msg_tx.send(Err(ReadEnd::Eof)).await;
                     break;
                 }
                 Err(e) => {
-                    let _ = msg_tx.send(Err(e.to_string())).await;
+                    let end = match mae_mcp::too_large(&e) {
+                        Some(t) => ReadEnd::TooLarge(t),
+                        None => ReadEnd::Failed(e.to_string()),
+                    };
+                    let _ = msg_tx.send(Err(end)).await;
                     break;
                 }
             }
@@ -422,11 +447,20 @@ async fn run_session<R, W>(
             msg = msg_rx.recv() => {
                 let msg = match msg {
                     Some(Ok(msg)) => msg,
-                    Some(Err(e)) if e == "EOF" => {
+                    Some(Err(ReadEnd::Eof)) => {
                         debug!(session = session_id, "client disconnected (EOF)");
                         break;
                     }
-                    Some(Err(e)) => {
+                    Some(Err(ReadEnd::TooLarge(t))) => {
+                        // E5: say why before the session ends. The body was
+                        // never read, so the framing cannot resume after it.
+                        warn!(session = session_id, size = t.len, limit = t.max, "request over the cap; answering and ending the session");
+                        let err = McpError::request_too_large(t.to_string(), t.len, t.max);
+                        let resp = JsonRpcResponse::error(serde_json::Value::Null, err);
+                        let _ = governor::write_json(&mut writer, &resp, write_timeout).await;
+                        break;
+                    }
+                    Some(Err(ReadEnd::Failed(e))) => {
                         error!(session = session_id, error = %e, "read error");
                         break;
                     }
@@ -484,7 +518,7 @@ async fn run_session<R, W>(
                     ).await
                 };
 
-                augment_initialize(&msg, &mut response, &broadcaster, session_id);
+                augment_initialize(&msg, &mut response, &broadcaster, session_id, request_cap);
                 if governor::write_json(&mut writer, &response, write_timeout).await.is_err() {
                     warn!(session = session_id, "write error; closing client");
                     break;
@@ -563,9 +597,19 @@ fn augment_initialize(
     response: &mut JsonRpcResponse,
     broadcaster: &SharedBroadcaster,
     session_id: u64,
+    message_cap: usize,
 ) {
     if !msg.contains("\"initialize\"") {
         return;
+    }
+    // ADR-022 Amendment 1 E4: the same two limits the socket's hello carries,
+    // so a client packs `kb/share` batches against the daemon's real request
+    // cap. A paged `kb/join` fills each reply up to the same bound.
+    if let Some(result) = response.result.as_mut().filter(|r| r.is_object()) {
+        result["limits"] = serde_json::json!({
+            "max_frame_bytes": message_cap,
+            "max_outbound_bytes": message_cap,
+        });
     }
     let Some(info) = response
         .result
@@ -1021,10 +1065,20 @@ fn admission_kind(e: &mae_sync::content_ops::AdmissionError) -> RefusalKind {
     }
 }
 
-/// Resolve a KB's content trust anchor (the genesis owner pubkey): the registered
-/// external anchor for a JOINED KB, else this daemon's own signer key when it is the
-/// collection's owner (an OWNED KB — A is its own authority). `None` when neither
-/// holds (un-anchored + not ours), in which case the caller applies the legacy gate.
+/// Whether `kb_id`'s content is E2E encrypted, by its signed op-log or its
+/// collection: the daemon cannot read such content, so checks and history
+/// that need the plaintext stand aside for it.
+pub(crate) async fn kb_is_e2e(doc_store: &DocStore, kb_id: &str, coll: &KbCollectionDoc) -> bool {
+    let signed_e2e = match resolve_content_anchor_with_coll(doc_store, kb_id, Some(coll)).await {
+        Some(anchor) => matches!(
+            mae_sync::membership::derive_encryption(&coll.oplog_ops(), &anchor),
+            mae_sync::kb::Encryption::E2e
+        ),
+        None => false,
+    };
+    signed_e2e || matches!(coll.encryption(), mae_sync::kb::Encryption::E2e)
+}
+
 /// Refuse a node update that would leave a known field of the node document
 /// mistyped (`invalid_field`), checked on the document as it would be after
 /// the update and before anything is persisted. `replace` checks the update
@@ -1057,14 +1111,7 @@ pub(crate) async fn refuse_mistyped_node_update(
             Err(_) => return Ok(()),
         },
     };
-    let signed_e2e = match resolve_content_anchor_with_coll(doc_store, kb_id, Some(coll)).await {
-        Some(anchor) => matches!(
-            mae_sync::membership::derive_encryption(&coll.oplog_ops(), &anchor),
-            mae_sync::kb::Encryption::E2e
-        ),
-        None => false,
-    };
-    if signed_e2e || matches!(coll.encryption(), mae_sync::kb::Encryption::E2e) {
+    if kb_is_e2e(doc_store, kb_id, coll).await {
         return Ok(());
     }
     // The base is the document as storage holds it: an idle-evicted node is
@@ -1087,6 +1134,10 @@ pub(crate) async fn refuse_mistyped_node_update(
     }
 }
 
+/// Resolve a KB's content trust anchor (the genesis owner pubkey): the registered
+/// external anchor for a JOINED KB, else this daemon's own signer key when it is the
+/// collection's owner (an OWNED KB — A is its own authority). `None` when neither
+/// holds (un-anchored + not ours), in which case the caller applies the legacy gate.
 pub async fn resolve_content_anchor(doc_store: &DocStore, kb_id: &str) -> Option<[u8; 32]> {
     resolve_content_anchor_with_coll(doc_store, kb_id, None).await
 }
@@ -2007,6 +2058,14 @@ async fn handle_doc_request_inner(
                 &params,
             )
             .await
+        }
+
+        m @ (Method::KbHistoryCheckpoint
+        | Method::KbHistoryList
+        | Method::KbHistoryGet
+        | Method::KbHistoryDiff
+        | Method::KbHistoryVerify) => {
+            kb_history::dispatch(m, doc_store, auth_principal, transport, id, &params).await
         }
 
         Method::KbNodeUpdate => {

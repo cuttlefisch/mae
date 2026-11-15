@@ -51,6 +51,9 @@ A /special/ block.
 #+begin_warning-2
 Hyphenated name.
 #+end_warning-2
+#+begin_details   En Windows  
+Parameters after the name.
+#+end_details
 #+BEGIN: clocktable :scope file
 | dynamic | table |
 #+END:

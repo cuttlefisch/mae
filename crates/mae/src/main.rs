@@ -26,6 +26,7 @@ mod gui_app;
 mod gui_event;
 mod guidance_kb_engine;
 mod headless_loop;
+mod identity_challenge_cli;
 mod kb_provisioning_cost;
 mod key_handling;
 mod lsp_bridge;
@@ -492,6 +493,9 @@ fn main() -> io::Result<()> {
         return result;
     }
     if let Some(result) = cli::handle_collab_identity(&args) {
+        return result;
+    }
+    if let Some(result) = identity_challenge_cli::handle(&args) {
         return result;
     }
     cli::handle_kb_share_p2p(&args);

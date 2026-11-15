@@ -42,7 +42,7 @@ use mae_sync::membership::MembershipAction;
 use mae_sync::DocAddress;
 
 use super::plan::sha256_hex;
-use super::{regen, PlannedNode, SeedPlan, CONTRACT};
+use super::{regen, PlannedNode, SeedPlan, SplitFile, CONTRACT};
 use crate::doc_editors::{Attribution, InternalWriter};
 use crate::doc_store::DocStore;
 use crate::storage::{SeedNodeRow, SeedRecord, StorageError};
@@ -243,10 +243,16 @@ fn row_from_plan(n: &PlannedNode) -> SeedNodeRow {
 /// The node document a planned file becomes. Times come from the seed row, so a
 /// resumed apply rebuilds exactly what the first run wrote.
 pub fn build_node(n: &PlannedNode, row: &SeedNodeRow) -> KbNodeDoc {
-    let f = &n.file;
+    node_from_file(&n.file, row.created_at)
+}
+
+/// The seed's one file-to-node mapping. The apply writes it, and the export
+/// checks a node against it (`export::unrepresented`), so the two directions
+/// cannot drift apart.
+pub(super) fn node_from_file(f: &SplitFile, created_at: i64) -> KbNodeDoc {
     let tags = f.filetags.clone().unwrap_or_default();
     let title = f.title.as_deref().unwrap_or("");
-    let mut doc = KbNodeDoc::new_created_at(&f.id, title, &f.body, &tags, row.created_at);
+    let mut doc = KbNodeDoc::new_created_at(&f.id, title, &f.body, &tags, created_at);
     let _ = doc.set_kind(f.kind().filter(|k| !k.is_empty()));
     let _ = doc.set_properties(&f.properties.iter().cloned().collect());
     let _ = doc.set_org_header(&OrgHeader {

@@ -62,12 +62,19 @@ mod blocks;
 mod builder;
 mod builders;
 mod chars;
+mod custom_id;
+pub use custom_id::{
+    custom_id_edits, custom_id_edits_with, duplicate_custom_ids, headings_missing_custom_id,
+    is_custom_id_uuid, replace_custom_id, CustomIdError, CustomIdOccurrence, TextEdit,
+};
 mod chartables;
 mod diagnostic;
 mod element;
 mod entities;
 mod green;
 mod headline;
+mod headline_properties;
+pub use headline_properties::{headline_properties, HeadlineProperties, HeadlineProperty};
 mod highlight;
 pub use highlight::{
     highlights, section_highlights, sections, EolProfile, Highlight, NeedsFull, Section,

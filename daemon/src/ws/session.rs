@@ -50,6 +50,9 @@ const CLOSE_TOKEN_EXPIRED: u16 = 4401;
 const CLOSE_PRINCIPAL_CHANGED: u16 = 4403;
 /// RFC 6455 "unsupported data": the envelope is JSON text.
 const CLOSE_UNSUPPORTED_DATA: u16 = 1003;
+/// A reply the session produced is over `max_outbound_bytes`: RFC 6455's
+/// "unexpected condition" (1011), with reason `response_too_large`.
+const CLOSE_RESPONSE_TOO_LARGE: u16 = 1011;
 
 enum Flow {
     Continue,
@@ -66,6 +69,8 @@ struct Driver {
     renew_lead: Duration,
     renew_sent: bool,
     ping_every: Option<Duration>,
+    /// Most bytes [`Driver::linger`] discards before giving up on a client.
+    linger_bytes: usize,
 }
 
 /// Run one socket until it closes. Holds `conn` — the TCP connection's one
@@ -105,6 +110,9 @@ pub(super) async fn run(
         renew_lead: settings.renew_lead,
         renew_sent: false,
         ping_every: settings.ping_every,
+        // One frame over the cap may be mid-flight when the daemon closes,
+        // with a frame queued behind it: two caps' worth.
+        linger_bytes: settings.max_frame_bytes.saturating_mul(2),
     };
     tracing::info!(principal = %principal, "ws: session opened");
     // B2: the first frame the daemon sends, before the session can write.
@@ -118,7 +126,7 @@ pub(super) async fn run(
             gov,
         ));
         let (out_tx, out_rx) = mpsc::channel(32);
-        let pump = tokio::spawn(pump(from_session, out_tx));
+        let pump = tokio::spawn(pump(from_session, out_tx, settings.max_outbound_bytes));
         driver.drive(out_rx).await;
         // Closing both ends of the pipe ends the session loop; wait for it, so
         // the slot is released only once the session is really gone.
@@ -140,11 +148,33 @@ pub(super) async fn run(
 }
 
 /// Every message the session writes, as one string each, until it ends.
-async fn pump(from_session: ReadHalf<DuplexStream>, out: mpsc::Sender<String>) {
+/// What the pump hands the driver: a message to send, or the news that the
+/// session produced one over `max_outbound_bytes`.
+enum Outbound {
+    Frame(String),
+    TooLarge,
+}
+
+/// Forward the session's framed messages to the driver, each at most `max`
+/// bytes. The session writes replies the request cap was never meant to bound
+/// (one document at the size limit is ~13.4 MB of base64), so the pump reads
+/// with the socket's own outbound bound. A message over it, or a pipe that can
+/// no longer be parsed, is reported as `TooLarge` so the socket closes with a
+/// code and a reason: before, the pump just stopped and the client saw `1006`.
+async fn pump(from_session: ReadHalf<DuplexStream>, out: mpsc::Sender<Outbound>, max: usize) {
     let mut reader = BufReader::new(from_session);
-    while let Ok(Some(msg)) = mae_mcp::read_message(&mut reader).await {
-        if out.send(msg).await.is_err() {
-            break;
+    loop {
+        let item = match mae_mcp::read_message_limited(&mut reader, max).await {
+            Ok(Some(msg)) => Outbound::Frame(msg),
+            Ok(None) => return,
+            Err(e) => {
+                tracing::warn!(error = %e, max, "ws: session reply over the outbound bound");
+                Outbound::TooLarge
+            }
+        };
+        let stop = matches!(item, Outbound::TooLarge);
+        if out.send(item).await.is_err() || stop {
+            return;
         }
     }
 }
@@ -164,6 +194,7 @@ fn hello(auth: &SessionAuth, settings: &WsSettings) -> Value {
             "auth_deadline": rfc3339(auth.deadline),
             "limits": {
                 "max_frame_bytes": settings.max_frame_bytes,
+                "max_outbound_bytes": settings.max_outbound_bytes,
                 "max_open_docs": settings.max_open_docs,
             },
         },
@@ -178,7 +209,7 @@ fn at_unix(unix: u64) -> tokio::time::Instant {
 }
 
 impl Driver {
-    async fn drive(&mut self, mut out: mpsc::Receiver<String>) {
+    async fn drive(&mut self, mut out: mpsc::Receiver<Outbound>) {
         // ADR-111 D6: a ping on a fixed period keeps a quiet session alive
         // through a proxy's idle timeout. The first tick is one period out.
         let period = self.ping_every.unwrap_or(Duration::from_secs(3600));
@@ -191,7 +222,10 @@ impl Driver {
             let flow = tokio::select! {
                 frame = self.ws.next() => self.on_frame(frame).await,
                 body = out.recv() => match body {
-                    Some(b) => self.send_text(b).await,
+                    Some(Outbound::Frame(b)) => self.send_text(b).await,
+                    Some(Outbound::TooLarge) => {
+                        Flow::Close(CLOSE_RESPONSE_TOO_LARGE, "response_too_large")
+                    }
                     None => self.session_ended(),
                 },
                 _ = tokio::time::sleep_until(renew_at), if !self.renew_sent => {
@@ -225,9 +259,11 @@ impl Driver {
             None => Flow::Stop,
             Some(Err(e)) => {
                 // A frame over the cap arrives here, with its `1009` close
-                // already queued by the codec: flush it out before going.
+                // already queued by the codec: flush it out, then linger so
+                // the client can read it.
                 tracing::debug!(error = %e, "ws: read error");
                 let _ = tokio::time::timeout(WRITE_TIMEOUT, self.ws.flush()).await;
+                self.linger().await;
                 Flow::Stop
             }
             Some(Ok(m)) if m.is_text() => {
@@ -356,5 +392,31 @@ impl Driver {
         let send = self.ws.send(Message::close(code, reason));
         let _ = tokio::time::timeout(WRITE_TIMEOUT, send).await;
         let _ = tokio::time::timeout(WRITE_TIMEOUT, self.ws.flush()).await;
+        self.linger().await;
+    }
+
+    /// After the daemon's own close frame: half-close, then read and discard
+    /// what the client is still sending until it closes too, bounded by
+    /// [`WRITE_TIMEOUT`] and `linger_bytes`. Closing a TCP connection with
+    /// unread input makes the kernel answer with a reset, and a reset discards
+    /// the close frame still in flight: the client would see an abnormal
+    /// closure (1006) instead of the code it was sent — exactly what happens
+    /// to a frame over the cap, whose unread remainder is the input.
+    async fn linger(&mut self) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let budget = self.linger_bytes;
+        let io = self.ws.get_mut();
+        let drain = async {
+            let _ = io.shutdown().await;
+            let mut buf = vec![0u8; 16 * 1024];
+            let mut seen = 0usize;
+            while seen <= budget {
+                match io.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => seen += n,
+                }
+            }
+        };
+        let _ = tokio::time::timeout(WRITE_TIMEOUT, drain).await;
     }
 }

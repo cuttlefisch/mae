@@ -764,6 +764,31 @@ async fn verify_rebirth_binding(
     Ok(())
 }
 
+/// `kb/collection_op`'s `kb_id` and decoded `update`, within the update size
+/// cap.
+fn collection_op_params(
+    params: &serde_json::Value,
+    max_update: usize,
+) -> Result<(String, Vec<u8>), McpError> {
+    let kb_id = params["kb_id"]
+        .as_str()
+        .ok_or_else(|| McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()))?
+        .to_string();
+    let encoded = params["update"]
+        .as_str()
+        .ok_or_else(|| McpError::invalid_params("update", "missing 'update' field".to_string()))?;
+    let update = base64_to_update(encoded)
+        .map_err(|e| McpError::invalid_params("update", format!("invalid 'update' base64: {e}")))?;
+    if update.len() > max_update {
+        return Err(McpError::update_too_large(
+            format!("collection update exceeds {max_update} bytes"),
+            update.len(),
+            max_update,
+        ));
+    }
+    Ok((kb_id, update))
+}
+
 pub(super) async fn handle_kb_collection_op(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
@@ -783,43 +808,10 @@ pub(super) async fn handle_kb_collection_op(
     // validate; every peer DERIVES validity from the signed log. This is the
     // only way to author signed membership for an EDITOR-owned KB while keeping
     // the daemon unable to read content (the owner, not the daemon, holds the key).
-    let kb_id = match params["kb_id"].as_str() {
-        Some(s) => s.to_string(),
-        None => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::invalid_params("kb_id", "missing 'kb_id' field".to_string()),
-            );
-        }
+    let (kb_id, update) = match collection_op_params(params, doc_store.max_update_size()) {
+        Ok(p) => p,
+        Err(e) => return JsonRpcResponse::error(id, e),
     };
-    let update = match params["update"].as_str() {
-        Some(s) => match base64_to_update(s) {
-            Ok(b) => b,
-            Err(e) => {
-                return JsonRpcResponse::error(
-                    id,
-                    McpError::invalid_params("update", format!("invalid 'update' base64: {e}")),
-                );
-            }
-        },
-        None => {
-            return JsonRpcResponse::error(
-                id,
-                McpError::invalid_params("update", "missing 'update' field".to_string()),
-            );
-        }
-    };
-    let max_update = doc_store.max_update_size();
-    if update.len() > max_update {
-        return JsonRpcResponse::error(
-            id,
-            McpError::update_too_large(
-                format!("collection update exceeds {max_update} bytes"),
-                update.len(),
-                max_update,
-            ),
-        );
-    }
     // ADR-018: collection ops are owner-only (Manage) — with ONE narrow
     // exception (ADR-040 PR2c/PR3): a non-owner member managing their OWN identity
     // (self-rotation, recovery-key registration, or recovery rotation). Probe Manage
@@ -876,6 +868,11 @@ pub(super) async fn handle_kb_collection_op(
     // `kbc:` WAL at rest. (The manifest doc is mutated in place, not replaced like a
     // node doc under #171.) Additive flag — an old daemon ignores it.
     let scrub = params["scrub"].as_bool().unwrap_or(false);
+    if let Err(e) =
+        super::kb_history::refuse_e2e_switch_over_history(doc_store, &kb_id, &update).await
+    {
+        return JsonRpcResponse::error(id, e);
+    }
     match persist_and_broadcast_collection(doc_store, broadcaster, who, &kb_id, &update).await {
         Ok(wal_seq) => {
             if scrub {

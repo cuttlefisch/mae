@@ -33,6 +33,8 @@ pub struct Opts {
     pub renew_lead_secs: u64,
     pub max_open_docs: usize,
     pub max_frame_bytes: Option<usize>,
+    /// `ws_max_outbound_bytes`; `None` leaves the derived default.
+    pub max_outbound_bytes: Option<usize>,
     pub tenant_budget: Option<(String, u32)>,
     /// `ws_ping_secs`; `None` leaves the daemon's default.
     pub ping_secs: Option<u64>,
@@ -45,6 +47,7 @@ impl Default for Opts {
             renew_lead_secs: 60,
             max_open_docs: 1024,
             max_frame_bytes: None,
+            max_outbound_bytes: None,
             tenant_budget: None,
             ping_secs: None,
         }
@@ -77,7 +80,12 @@ fn config_toml(dir: &Path, ports: crate::daemon_harness::Ports, opts: &Opts) -> 
         .max_frame_bytes
         .map(|n| format!("ws_max_frame_bytes = {n}\n"))
         .unwrap_or_default()
-        + ping.as_str();
+        + ping.as_str()
+        + opts
+            .max_outbound_bytes
+            .map(|n| format!("ws_max_outbound_bytes = {n}\n"))
+            .unwrap_or_default()
+            .as_str();
     format!(
         "[collab]\nenabled = true\nbind = \"127.0.0.1:{collab}\"\n\
          [collab.auth]\nmode = \"key\"\nidentity_dir = \"{id}\"\nauthorized_keys = \"{id}/authorized_keys\"\n\
@@ -243,7 +251,40 @@ pub async fn request(
     headers: &[(&str, &str)],
     upgrade: bool,
 ) -> Reply {
-    let mut s = d.tls().await;
+    request_on(d.tls().await, method, path, headers, upgrade).await
+}
+
+/// `GET /ws` like [`upgrade`], over a client socket whose kernel send buffer
+/// is `send_buffer` bytes: a large frame then cannot all be buffered, so the
+/// client is still writing it when the daemon reacts — what a test needs to
+/// see how the daemon closes on a client mid-write.
+pub async fn upgrade_small_send_buffer(
+    d: &Daemon,
+    protocols: &str,
+    extra: &[(&str, &str)],
+    send_buffer: u32,
+) -> Reply {
+    let sock = tokio::net::TcpSocket::new_v4().unwrap();
+    sock.set_send_buffer_size(send_buffer).unwrap();
+    let tcp = sock.connect(d.addr).await.unwrap();
+    let name = rustls::pki_types::ServerName::try_from("127.0.0.1").unwrap();
+    let tls = d
+        .connector()
+        .connect(name, tcp)
+        .await
+        .expect("TLS handshake");
+    let mut h: Vec<(&str, &str)> = extra.to_vec();
+    h.push(("Sec-WebSocket-Protocol", protocols));
+    request_on(tls, "GET", "/ws", &h, true).await
+}
+
+async fn request_on(
+    mut s: TlsStream<tokio::net::TcpStream>,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    upgrade: bool,
+) -> Reply {
     let mut req = format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n");
     if upgrade {
         req.push_str("Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n");

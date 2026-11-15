@@ -13,6 +13,17 @@
 //! a `#+title:` or a drawer into its body, or changed its `ID` property) is
 //! refused by name and not written, because its file would seed differently.
 //!
+//! Then the node the text would seed back to ([`super::apply`]'s
+//! `node_from_file` of the re-split file) must equal the node itself, every
+//! field of [`MaterializedNode`]: a node carrying something the file cannot
+//! (an `aliases` array, a todo state, a priority, links, a source version, a
+//! `kind` that is not its `KIND` property) is refused naming those fields
+//! (`unrepresentable`), never written without them. Three fields are exempt,
+//! because the seed sets them by definition rather than reading them from the
+//! file: `source` (always `user_org`), `created_at` (from git history, kept in
+//! the seed record) and `org_header` (the file's own shape, which the export
+//! writes from the node and reports in its notes).
+//!
 //! @ai-caution: [security] The target directory is the operator's, and a seed
 //! path is input. Paths are relative and normal; every directory on the way
 //! must be a real directory inside the target (a symlink is refused, never
@@ -22,9 +33,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
-use mae_sync::kb::{KbCollectionDoc, KbNodeDoc, BODY_FORMAT_ORG_LITERAL_V1};
+use mae_sync::kb::{KbCollectionDoc, KbNodeDoc, MaterializedNode, BODY_FORMAT_ORG_LITERAL_V1};
 use mae_sync::DocAddress;
 
+use super::apply::node_from_file;
 use super::{regen, split, SeedError, SplitFile};
 use crate::doc_store::DocStore;
 use crate::storage::SeedNodeRow;
@@ -38,6 +50,10 @@ pub enum ExportRefusalKind {
     BadPath,
     /// The written text would not split back to the node's fields and body.
     NotReproducible,
+    /// The node has content an org-literal-v1 file cannot carry (aliases, a
+    /// todo state, a kind that is not its `KIND` property, …): the node the
+    /// file would seed back to differs from it in the named fields.
+    Unrepresentable,
     /// The node document could not be read.
     Unreadable,
     /// Writing the file failed (or would have followed a symlink).
@@ -53,6 +69,7 @@ impl ExportRefusalKind {
             Self::NoSourcePath => "no_source_path",
             Self::BadPath => "bad_path",
             Self::NotReproducible => "not_reproducible",
+            Self::Unrepresentable => "unrepresentable",
             Self::Unreadable => "unreadable",
             Self::WriteFailed => "write_failed",
             Self::PathCollision => "path_collision",
@@ -78,7 +95,7 @@ pub struct ExportReport {
     pub notes: Vec<String>,
 }
 
-/// The file text of one node, with its notes; or why it has none.
+/// The file text of one node, with its notes.
 pub struct Rendered {
     pub text: String,
     pub notes: Vec<String>,
@@ -228,7 +245,7 @@ async fn export_node(
             Ok(Err(e)) => return Err(refuse(ExportRefusalKind::Unreadable, e.to_string())),
             Err(e) => return Err(refuse(ExportRefusalKind::Unreadable, e.to_string())),
         };
-        let r = render(id, &doc).map_err(|d| refuse(ExportRefusalKind::NotReproducible, d))?;
+        let r = render(id, &doc).map_err(|(kind, d)| refuse(kind, d))?;
         write_inside(dir, &rel, &r.text).map_err(|d| refuse(ExportRefusalKind::WriteFailed, d))?;
         Ok((row.path.clone(), r.notes))
     }
@@ -244,8 +261,9 @@ async fn export_node(
     }
 }
 
-/// The file a node exports to, checked to read back as the node.
-pub fn render(id: &str, doc: &KbNodeDoc) -> Result<Rendered, String> {
+/// The file a node exports to, checked to read back as the node; or why it
+/// must not be written.
+pub fn render(id: &str, doc: &KbNodeDoc) -> Result<Rendered, (ExportRefusalKind, String)> {
     let (properties, notes) = ordered_properties(doc);
     let header = doc.org_header();
     let title = doc.title();
@@ -261,7 +279,14 @@ pub fn render(id: &str, doc: &KbNodeDoc) -> Result<Rendered, String> {
         anchors: Vec::new(),
     };
     let text = regen(&file);
-    reads_back(&file, &text)?;
+    let back = reads_back(&file, &text).map_err(|d| (ExportRefusalKind::NotReproducible, d))?;
+    let lost = unrepresented(doc.materialize(), &back);
+    if !lost.is_empty() {
+        return Err((
+            ExportRefusalKind::Unrepresentable,
+            unrepresented_detail(&lost),
+        ));
+    }
     Ok(Rendered { text, notes })
 }
 
@@ -298,7 +323,8 @@ fn ordered_properties(doc: &KbNodeDoc) -> (Vec<(String, String)>, Vec<String>) {
 }
 
 /// `split(text)` must give back the node's id, fields and body exactly.
-fn reads_back(file: &SplitFile, text: &str) -> Result<(), String> {
+/// Returns the re-split file.
+fn reads_back(file: &SplitFile, text: &str) -> Result<SplitFile, String> {
     let back = split(text).map_err(|ps| {
         let kinds: Vec<&str> = ps.iter().map(|p| p.kind.as_str()).collect();
         format!(
@@ -319,7 +345,7 @@ fn reads_back(file: &SplitFile, text: &str) -> Result<(), String> {
         .map(|(n, _)| *n)
         .collect();
     if bad.is_empty() {
-        Ok(())
+        Ok(back)
     } else {
         Err(format!(
             "the exported text would seed back with a different {} (a header line or \
@@ -327,6 +353,80 @@ fn reads_back(file: &SplitFile, text: &str) -> Result<(), String> {
             bad.join(", ")
         ))
     }
+}
+
+/// The fields of `node` that the file `back` would not seed back: the seed's
+/// own node for the file, compared with `node` field by field. The fields the
+/// seed sets by definition, not from the file, are taken from `node`.
+fn unrepresented(node: MaterializedNode, back: &SplitFile) -> Vec<&'static str> {
+    // The creation time is overwritten below; any value would do.
+    let mut reseeded = node_from_file(back, 0).materialize();
+    // Provenance: a seed always writes `user_org`.
+    reseeded.source = node.source.clone();
+    // From git history, kept in the seed record; no file line carries it.
+    reseeded.created_at = node.created_at;
+    // The file's shape, which this export writes from the node itself (and
+    // reports in its notes where it departs from the recorded order).
+    reseeded.org_header = node.org_header.clone();
+    differing_fields(&node, &reseeded)
+}
+
+/// The names of the fields in which `a` and `b` differ.
+fn differing_fields(a: &MaterializedNode, b: &MaterializedNode) -> Vec<&'static str> {
+    // No `..`: a field added to MaterializedNode must be compared here too, or
+    // an export could drop it silently.
+    let MaterializedNode {
+        id,
+        title,
+        body,
+        tags,
+        links,
+        kind,
+        todo_state,
+        priority,
+        aliases,
+        properties,
+        source_version,
+        source,
+        created_at,
+        org_header,
+    } = a;
+    [
+        ("id", *id != b.id),
+        ("title", *title != b.title),
+        ("body", *body != b.body),
+        ("tags", *tags != b.tags),
+        ("links", *links != b.links),
+        ("kind", *kind != b.kind),
+        ("todo_state", *todo_state != b.todo_state),
+        ("priority", *priority != b.priority),
+        ("aliases", *aliases != b.aliases),
+        ("properties", *properties != b.properties),
+        ("source_version", *source_version != b.source_version),
+        ("source", *source != b.source),
+        ("created_at", *created_at != b.created_at),
+        ("org_header", *org_header != b.org_header),
+    ]
+    .into_iter()
+    .filter(|(_, differs)| *differs)
+    .map(|(name, _)| name)
+    .collect()
+}
+
+fn unrepresented_detail(fields: &[&str]) -> String {
+    let mut out = format!(
+        "the node's {} cannot be written to an org-literal-v1 file, which would seed back \
+         without {}; put the content in the file's own terms or clear the field, then export",
+        fields.join(", "),
+        if fields.len() == 1 { "it" } else { "them" },
+    );
+    if fields.contains(&"aliases") {
+        out.push_str(" (aliases belong in the ROAM_ALIASES property)");
+    }
+    if fields.contains(&"kind") {
+        out.push_str(" (the kind is the KIND property's value)");
+    }
+    out
 }
 
 /// A repo path as a relative path of normal components only.

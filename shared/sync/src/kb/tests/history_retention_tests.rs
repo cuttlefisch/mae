@@ -9,6 +9,20 @@ use proptest::prelude::*;
 use super::*;
 use crate::kb::history::*;
 
+/// The test KB's history key.
+fn key() -> HistoryKey {
+    HistoryKey::from_bytes([5; 32])
+}
+
+fn seal_k(
+    kb: &str,
+    node: &str,
+    prev: Option<&HistoryEntry>,
+    d: Draft,
+) -> Result<HistoryEntry, SealError> {
+    seal(kb, node, prev, d, &key())
+}
+
 const DAY: i64 = 86_400;
 const NOW: i64 = 1_800_000_000;
 
@@ -33,7 +47,7 @@ fn history(n: u64, kind_of: impl Fn(u64) -> VersionKind) -> Vec<HistoryEntry> {
             content: (kind != VersionKind::Pruned)
                 .then(|| KbNodeDoc::new("n", &format!("t{seq}"), "", &[]).materialize()),
         };
-        let e = seal("kb", "n", out.last(), d).unwrap();
+        let e = seal_k("kb", "n", out.last(), d).unwrap();
         out.push(e);
     }
     out

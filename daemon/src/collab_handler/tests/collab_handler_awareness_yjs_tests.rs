@@ -220,3 +220,105 @@ async fn ownership_is_the_principals_capped_and_released_with_the_document() {
     )
     .await);
 }
+
+/// `sync/awareness` with explicit params, as `principal` on `session`.
+async fn send_to(
+    store: &Arc<DocStore>,
+    bc: &SharedBroadcaster,
+    (session, principal): (u64, &str),
+    params: serde_json::Value,
+) -> JsonRpcResponse {
+    let msg = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "sync/awareness", "params": params});
+    let mut docs = HashSet::new();
+    handle_doc_request_inner(
+        &msg.to_string(),
+        store,
+        &crate::quota::NoQuota,
+        bc,
+        std::time::Instant::now(),
+        session,
+        Some(principal),
+        Some(principal),
+        None,
+        &mut docs,
+        Transport::Hub,
+        &crate::artifact_store::NoArtifactStore,
+        crate::kb_query::KbQueryLimits::default(),
+        None,
+    )
+    .await
+}
+
+/// Presence addressed by `{kb_id, node_id}` is that node's presence, behind
+/// its KB's read check: a non-member is refused and nothing reaches the
+/// node's watchers or the shared "default" document; a member's identical
+/// update reaches the node's watchers only. Empty address fields are refused.
+/// Kills presence resolved from `doc` alone, and an empty address field
+/// resolving to a name outside every KB.
+#[tokio::test]
+async fn presence_addressed_to_a_kb_node_is_gated_by_that_kb() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let (kb, alice, dave) = ("kbpres", fp("alice"), fp("dave"));
+    let mut docs = HashSet::new();
+    kb_share_as(
+        &store,
+        &bc,
+        Some("alice"),
+        Some(&alice),
+        kb,
+        "alice",
+        &mut docs,
+    )
+    .await;
+    let node_doc = mae_sync::kb_node_doc_name(kb, "n");
+    let watch = |session: u64, doc: &str| {
+        let mut b = bc.lock().unwrap();
+        let rx = b.subscribe_doc_scoped(session, vec!["awareness_yjs".into()]);
+        b.subscribe_doc(session, doc);
+        rx
+    };
+    let (mut on_node, mut on_default) = (watch(8, &node_doc), watch(9, "default"));
+    let params = |who_id: u64| serde_json::json!({"kb_id": kb, "node_id": "n", "update": awareness(&[(who_id, "{}")])});
+
+    let r = send_to(&store, &bc, (3, &dave), params(33)).await;
+    assert!(r.error.is_some(), "a non-member's presence is refused");
+    assert!(
+        on_node.try_recv().is_err(),
+        "nothing reaches the node's watchers"
+    );
+    assert!(
+        on_default.try_recv().is_err(),
+        "nothing lands on \"default\""
+    );
+
+    let r = send_to(&store, &bc, (1, &alice), params(11)).await;
+    assert!(r.error.is_none(), "{:?}", r.error);
+    match on_node
+        .try_recv()
+        .expect("the member's presence reaches the node")
+    {
+        EditorEvent::AwarenessYjs { doc_id, .. } => assert_eq!(doc_id, node_doc),
+        other => panic!("expected AwarenessYjs, got {other:?}"),
+    }
+    assert!(on_default.try_recv().is_err(), "and not \"default\"");
+
+    for (key, p) in [
+        (
+            "kb_id",
+            serde_json::json!({"kb_id": "", "update": awareness(&[(12, "{}")])}),
+        ),
+        (
+            "node_id",
+            serde_json::json!({"kb_id": kb, "node_id": "", "update": awareness(&[(12, "{}")])}),
+        ),
+        (
+            "doc",
+            serde_json::json!({"doc": "", "update": awareness(&[(12, "{}")])}),
+        ),
+    ] {
+        let r = send_to(&store, &bc, (1, &alice), p).await;
+        assert_eq!(kind(&r), "invalid_params", "empty {key}");
+    }
+    assert!(on_default.try_recv().is_err() && on_node.try_recv().is_err());
+}

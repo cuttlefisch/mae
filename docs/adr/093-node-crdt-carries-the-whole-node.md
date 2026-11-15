@@ -187,3 +187,13 @@ tolerated rather than prevented (A4).
 
 The export applies these rules and reports each adjustment, so no edit produces a file that seeds
 back differently. Its re-split check refuses any node that would.
+
+### A5. Aliases in an `org-literal-v1` KB are derived, not stored twice
+
+*Note (2026-11-12), prose only.* In a KB whose collection `body_format` is `org-literal-v1`, a
+node's aliases are derived on read from its `ROAM_ALIASES` property (org-roam's format, read as
+Emacs' `split-string-and-unquote` reads it), and the `aliases` array of D1 must stay empty there:
+the property is the only writable place, so a reader never sees two copies disagree. In MAE's own
+format the array remains the source. Every reader goes through one function,
+`mae_sync::kb::aliases::node_aliases`; a value Emacs cannot read yields no aliases plus a reported
+problem, never a guess.
