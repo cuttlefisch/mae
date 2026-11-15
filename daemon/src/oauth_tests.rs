@@ -124,6 +124,7 @@ mod tests {
             groups_claim: "groups".to_string(),
             allowed_groups: Vec::new(),
             jwks_url: "https://unused-in-these-tests.example.com/jwks".to_string(),
+            jwks_ca_file: None,
             issuer: Some("https://idp.example.com".to_string()),
             kb_query_enabled: false,
             max_request_body_bytes: 1_048_576,
