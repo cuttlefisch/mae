@@ -12,6 +12,7 @@ pub mod content_op_policy;
 pub mod doc_editors;
 pub mod doc_store;
 pub mod history_verify;
+pub mod identity_binding;
 pub mod kb_doc_migration;
 pub mod kb_query;
 pub mod lease_fence;

@@ -181,13 +181,7 @@ async fn bearer_auth(token: &str, listener: &Listener) -> Result<SessionAuth, Re
     if kid.as_deref() != Some(mae_daemon::oauth_self_issue::SELF_ISSUED_KID) {
         return Err(issuer_not_supported(listener));
     }
-    let vp = oauth::authenticate(
-        token,
-        &listener.config,
-        listener.jwks.as_ref(),
-        listener.self_issue.as_ref(),
-    )
-    .await?;
+    let vp = oauth::authenticate(token, listener).await?;
     // The validator allows the JWT library's clock leeway; a session must not
     // open with its deadline already behind it.
     if vp.expires_at <= now_unix() {

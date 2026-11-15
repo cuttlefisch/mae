@@ -414,6 +414,7 @@ Source: `shared/mcp/src/lib.rs`
 | `daemon_client` | mod |
 | `file_lock` | mod |
 | `identity` | mod |
+| `identity_challenge` | mod |
 | `keystore` | mod |
 | `local_ipc` | mod |
 | `protocol` | mod |

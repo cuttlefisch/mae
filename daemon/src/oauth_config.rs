@@ -33,8 +33,31 @@ pub struct OAuthConfig {
     /// `iss` claim. Strongly recommended to set; `None` skips issuer
     /// validation.
     pub issuer: Option<String>,
-    /// Which JWT claim becomes the mapped `kb_access` principal.
+    /// Which claim of an external token identifies its subject within its
+    /// issuer: with `iss`, the binding table's key (ADR-098 D3). Since ADR-098
+    /// Amendment 1 (C1) it never becomes the `kb_access` principal itself; an
+    /// external token reaches a member only through a binding.
     pub principal_claim: String,
+    /// ADR-098 D4: the claim an external token lists its groups in (a string
+    /// array, or one string).
+    pub groups_claim: String,
+    /// ADR-098 D4: an external token carrying ANY ONE of these groups is
+    /// admitted (exact match), checked on every
+    /// request before the binding is looked up. Empty (the default): no group
+    /// gate. Self-issued tokens carry no groups and are not gated.
+    pub allowed_groups: Vec<String>,
+    /// ADR-098 Amendment 1, C2: whether `POST /identity/challenge` and `POST
+    /// /identity/bind` exist, letting an IdP-authenticated person bind their
+    /// subject to a member key by proof of possession. Default `false`
+    /// (principle #12). The binding table itself is consulted either way; the
+    /// local `mae-daemon binding` CLI administers it regardless.
+    pub identity_binding_enabled: bool,
+    /// How long a binding challenge stays valid, seconds. Long enough to carry
+    /// it from a browser to the program holding the key and back.
+    pub identity_challenge_ttl_secs: u64,
+    /// Unused binding challenges one subject may hold at once; bounds the
+    /// in-memory store against an authenticated caller.
+    pub identity_max_pending_challenges: usize,
     /// PEM-encoded TLS certificate chain path for the HTTPS listener.
     pub cert_path: PathBuf,
     /// PEM-encoded TLS private key path for the HTTPS listener.
@@ -164,6 +187,11 @@ impl Default for OAuthConfig {
             jwks_url: String::new(),
             issuer: None,
             principal_claim: "sub".to_string(),
+            groups_claim: "groups".to_string(),
+            allowed_groups: Vec::new(),
+            identity_binding_enabled: false,
+            identity_challenge_ttl_secs: 300,
+            identity_max_pending_challenges: 4,
             cert_path: PathBuf::new(),
             key_path: PathBuf::new(),
             kb_query_enabled: false,

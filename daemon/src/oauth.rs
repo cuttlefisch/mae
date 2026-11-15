@@ -36,10 +36,18 @@ pub struct ResourceServerConfig {
     /// never inferred from the request, so a token can't be revalidated
     /// against whatever host header a client happened to send.
     pub canonical_resource_uri: String,
-    /// Which JWT claim becomes the mapped principal fed into `kb_access`
-    /// (ADR-018). Config-driven, not hardcoded to `sub` — different
-    /// authorization servers use different claim conventions.
+    /// Which claim of an EXTERNAL token identifies its subject within its
+    /// issuer: with `iss`, the key of the binding table (ADR-098 D3). Since
+    /// ADR-098 Amendment 1 (C1) its value never becomes the principal fed to
+    /// `kb_access`: an external token reaches a member fingerprint only
+    /// through a binding. Default `sub`, the ADR's `(iss, sub)`.
     pub principal_claim: String,
+    /// ADR-098 D4: the claim an external token lists its groups in.
+    pub groups_claim: String,
+    /// ADR-098 D4: an external token carrying ANY ONE of these groups in
+    /// `groups_claim` is admitted; checked on every request before the binding
+    /// is looked up. Empty: no group gate.
+    pub allowed_groups: Vec<String>,
     /// URL to fetch the external issuer's JWKS from. Empty means there is no
     /// external issuer (ADR-111 P1): only self-issued tokens can validate, and
     /// no JWKS client is built at all.
@@ -132,12 +140,48 @@ pub fn validate_bearer_token(
         })?;
 
     let claims = token_data.claims;
-    let principal = claims
+    let subject = claims
         .get(&config.principal_claim)
         .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
         .ok_or(TokenValidationError::MissingPrincipalClaim)?
         .to_string();
-    Ok(oauth_self_issue::validated_from_claims(&claims, principal))
+    check_allowed_groups(&claims, config)?;
+    // C1: the claim is the SUBJECT, never the principal. Until a binding
+    // resolves it (`identity_binding::resolve`), it is a member of nothing.
+    let mut vp = oauth_self_issue::validated_from_claims(
+        &claims,
+        String::new(),
+        oauth_self_issue::Credential::IdpUnbound,
+    );
+    vp.subject = subject;
+    vp.principal = oauth_self_issue::unbound_principal(&vp.issuer, &vp.subject);
+    Ok(vp)
+}
+
+/// ADR-098 D4's session gate: the token's `groups_claim` (a string array, or a
+/// single string) must hold at least one configured group, matched exactly.
+/// Nothing configured, no gate.
+fn check_allowed_groups(
+    claims: &serde_json::Value,
+    config: &ResourceServerConfig,
+) -> Result<(), TokenValidationError> {
+    if config.allowed_groups.is_empty() {
+        return Ok(());
+    }
+    let held: Vec<&str> = match claims.get(&config.groups_claim) {
+        Some(serde_json::Value::Array(a)) => a.iter().filter_map(|v| v.as_str()).collect(),
+        Some(serde_json::Value::String(s)) => vec![s.as_str()],
+        _ => Vec::new(),
+    };
+    let admitted = config
+        .allowed_groups
+        .iter()
+        .any(|g| held.contains(&g.as_str()));
+    if !admitted {
+        return Err(TokenValidationError::NotInAllowedGroup);
+    }
+    Ok(())
 }
 
 /// An owned, module-internal copy of the fields `validate_bearer_token`
@@ -376,9 +420,62 @@ fn public_response(
 
 /// Validate `token` against whichever population it claims membership in:
 /// this daemon's own self-issued tokens (ADR-067 D3), or the external issuer's
-/// JWKS -- which exists only when `jwks_url` is configured (ADR-111 P1). `Err`
-/// is the complete response to send.
+/// JWKS -- which exists only when `jwks_url` is configured (ADR-111 P1). An
+/// external token's principal is then resolved through the binding table
+/// (ADR-098 Amendment 1, C1). `Err` is the complete response to send.
 pub(crate) async fn authenticate(
+    token: &str,
+    listener: &Listener,
+) -> Result<ValidatedPrincipal, Box<Response<Full<Bytes>>>> {
+    let config = &listener.config;
+    let vp = validate_token(
+        token,
+        config,
+        listener.jwks.as_ref(),
+        listener.self_issue.as_ref(),
+    )
+    .await?;
+    mae_daemon::identity_binding::resolve(vp, listener.bindings.as_deref()).map_err(|e| {
+        // Fail closed: a binding that cannot be read is not "unbound" (that
+        // would silently demote a member), and never "bound".
+        tracing::warn!(error = %e, "binding table unreadable");
+        Box::new(json_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            serde_json::json!({"error": "temporarily_unavailable"}),
+        ))
+    })
+}
+
+/// The refusal for a token that validated but lacks a required group (D4):
+/// `403`, since the credential is good and the session is not authorised.
+fn group_refusal() -> Response<Full<Bytes>> {
+    kinded_response(
+        StatusCode::FORBIDDEN,
+        "insufficient_scope",
+        mae_mcp::protocol::McpError::group_required(
+            "this token carries none of the groups oauth.allowed_groups names".to_string(),
+        ),
+    )
+}
+
+/// An HTTP refusal `{error, error_description, kind, …extra}` built from a
+/// kinded [`McpError`](mae_mcp::protocol::McpError): the kind and its extra
+/// fields come from the one constructor `ERROR_KINDS` is checked against.
+pub(crate) fn kinded_response(
+    status: StatusCode,
+    error: &str,
+    refusal: mae_mcp::protocol::McpError,
+) -> Response<Full<Bytes>> {
+    let mut body = match refusal.data.as_deref() {
+        Some(serde_json::Value::Object(m)) => m.clone(),
+        _ => serde_json::Map::new(),
+    };
+    body.insert("error".into(), error.into());
+    body.insert("error_description".into(), refusal.message.into());
+    json_response(status, serde_json::Value::Object(body))
+}
+
+async fn validate_token(
     token: &str,
     config: &ResourceServerConfig,
     jwks: Option<&JwksCache>,
@@ -429,7 +526,10 @@ pub(crate) async fn authenticate(
     })?;
     validate_bearer_token(token, &keys, config).map_err(|e| {
         tracing::debug!(?e, "bearer token rejected");
-        Box::new(unauthorized(config, &format!("{e:?}")))
+        match e {
+            TokenValidationError::NotInAllowedGroup => Box::new(group_refusal()),
+            e => Box::new(unauthorized(config, &format!("{e:?}"))),
+        }
     })
 }
 
@@ -455,18 +555,18 @@ async fn handle_request(
     if crate::ws::is_ws_path(req.uri().path()) && listener.ws.is_some() {
         return Ok(crate::ws::handle(req, Arc::clone(&listener), conn).await);
     }
+    // ADR-098 Amendment 1, C2: the proof-of-possession routes exist only when
+    // `identity_binding_enabled`; otherwise they fall through like any path.
+    if let Some(routes) = listener.binding_routes.as_ref() {
+        if crate::oauth_binding::is_binding_path(req.uri().path()) {
+            return Ok(crate::oauth_binding::handle(req, &listener, routes).await);
+        }
+    }
 
     let Some(token) = extract_bearer_token(&req).map(str::to_string) else {
         return Ok(unauthorized(config, "missing bearer token"));
     };
-    let principal = match authenticate(
-        &token,
-        config,
-        listener.jwks.as_ref(),
-        listener.self_issue.as_ref(),
-    )
-    .await
-    {
+    let principal = match authenticate(&token, &listener).await {
         Ok(p) => p,
         Err(resp) => return Ok(*resp),
     };
@@ -478,32 +578,9 @@ async fn handle_request(
     // the budget is exceeded), not after collecting into memory — an
     // authenticated caller cannot force unbounded server-side buffering by
     // sending an oversized body, regardless of `kb_query_enabled`.
-    let limited_body = http_body_util::Limited::new(req.into_body(), config.max_request_body_bytes);
-    let body_bytes = match http_body_util::BodyExt::collect(limited_body).await {
-        Ok(collected) => collected.to_bytes(),
-        Err(e)
-            if e.downcast_ref::<http_body_util::LengthLimitError>()
-                .is_some() =>
-        {
-            tracing::debug!(
-                limit = config.max_request_body_bytes,
-                "request body exceeded size limit"
-            );
-            return Ok(json_response(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                serde_json::json!({
-                    "error": "payload_too_large",
-                    "error_description": format!(
-                        "request body exceeds the {}-byte limit",
-                        config.max_request_body_bytes
-                    ),
-                }),
-            ));
-        }
-        Err(e) => {
-            tracing::debug!(error = %e, "failed to read request body");
-            Bytes::new()
-        }
+    let body_bytes = match read_limited_body(req, config).await {
+        Ok(b) => b,
+        Err(resp) => return Ok(*resp),
     };
 
     let rpc_request: Option<mae_mcp::protocol::JsonRpcRequest> = if body_bytes.is_empty() {
@@ -521,6 +598,42 @@ async fn handle_request(
     )
     .await;
     Ok(json_response(StatusCode::OK, body))
+}
+
+/// Read an authenticated request's body under `max_request_body_bytes`,
+/// enforced DURING the read. An unreadable body reads as empty (what a bare
+/// probe sends); one over the limit is the `413` to send.
+pub(crate) async fn read_limited_body(
+    req: Request<Incoming>,
+    config: &ResourceServerConfig,
+) -> Result<Bytes, Box<Response<Full<Bytes>>>> {
+    let limited_body = http_body_util::Limited::new(req.into_body(), config.max_request_body_bytes);
+    match http_body_util::BodyExt::collect(limited_body).await {
+        Ok(collected) => Ok(collected.to_bytes()),
+        Err(e)
+            if e.downcast_ref::<http_body_util::LengthLimitError>()
+                .is_some() =>
+        {
+            tracing::debug!(
+                limit = config.max_request_body_bytes,
+                "request body exceeded size limit"
+            );
+            Err(Box::new(json_response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                serde_json::json!({
+                    "error": "payload_too_large",
+                    "error_description": format!(
+                        "request body exceeds the {}-byte limit",
+                        config.max_request_body_bytes
+                    ),
+                }),
+            )))
+        }
+        Err(e) => {
+            tracing::debug!(error = %e, "failed to read request body");
+            Ok(Bytes::new())
+        }
+    }
 }
 
 /// Build the response for `GET /kb/{kb_id}/view` (ADR-073/Phase E, #547):
@@ -594,6 +707,11 @@ pub(crate) async fn route_authenticated_request(
                 Ok(lease) => lease,
                 Err(resp) => return serde_json::to_value(&resp).unwrap_or(serde_json::Value::Null),
             };
+            // C1: an unbound subject is a member of nothing, decided here and
+            // never by comparing its string with a member list.
+            if principal.credential == oauth_self_issue::Credential::IdpUnbound {
+                return unbound_answer(rpc.id, &rpc.method);
+            }
             let rpc_response = match mae_daemon::kb_query::dispatch(
                 &rpc.method,
                 &params,
@@ -634,10 +752,29 @@ pub(crate) async fn route_authenticated_request(
         // case (ADR-052), never touched by the kb_query_enabled/doc_store
         // distinctions above since there's no request `id` to shape a
         // JSON-RPC error response around.
-        (None, _, _) => {
-            serde_json::json!({"principal": principal.principal, "resource": config.canonical_resource_uri})
-        }
+        (None, _, _) => serde_json::json!({
+            "principal": principal.principal,
+            "kind": principal.kind.as_str(),
+            "resource": config.canonical_resource_uri,
+        }),
     }
+}
+
+/// What an unbound IdP subject gets from `kb/query.*` (ADR-098 Amendment 1,
+/// C1): `my_kbs` answers an empty list, and every other method the refusal a
+/// non-member gets.
+fn unbound_answer(id: serde_json::Value, method: &str) -> serde_json::Value {
+    let resp = if method == "kb/query.my_kbs" {
+        mae_mcp::protocol::JsonRpcResponse::success(id, serde_json::json!({"kbs": []}))
+    } else {
+        mae_mcp::protocol::JsonRpcResponse::error(
+            id,
+            mae_mcp::protocol::McpError::not_member(
+                "this identity-provider subject is not bound to a member key".to_string(),
+            ),
+        )
+    };
+    serde_json::to_value(&resp).unwrap_or(serde_json::Value::Null)
 }
 
 /// Runs the OAuth-protected HTTPS listener until the process shuts down.
@@ -672,9 +809,27 @@ pub(crate) struct Listener {
     /// The sync WebSocket (ADR-099): `Some` only when `ws_enabled` and its
     /// prerequisites hold (see `main.rs`).
     pub ws: Option<crate::ws::WsState>,
+    /// ADR-098 D3: the binding table an external token resolves through.
+    /// `None` (it could not be opened): every external token stays unbound.
+    pub bindings: Option<Arc<mae_daemon::identity_binding::BindingStore>>,
+    /// ADR-098 Amendment 1, C2: the proof-of-possession routes, `Some` only
+    /// when `identity_binding_enabled` and the table is open.
+    pub binding_routes: Option<crate::oauth_binding::BindingRoutes>,
 }
 
 impl Listener {
+    /// Attach the binding table, and (when `routes` is `Some`) the routes that
+    /// add to it by proof of possession.
+    pub(crate) fn with_identity_binding(
+        mut self,
+        bindings: Option<Arc<mae_daemon::identity_binding::BindingStore>>,
+        routes: Option<crate::oauth_binding::BindingRoutes>,
+    ) -> Self {
+        self.binding_routes = routes.filter(|_| bindings.is_some());
+        self.bindings = bindings;
+        self
+    }
+
     pub(crate) fn new(
         config: ResourceServerConfig,
         doc_store: Option<Arc<DocStore>>,
@@ -690,6 +845,8 @@ impl Listener {
             self_issue,
             quota,
             ws,
+            bindings: None,
+            binding_routes: None,
         }
     }
 }
