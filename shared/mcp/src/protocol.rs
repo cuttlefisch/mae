@@ -533,6 +533,52 @@ impl McpError {
         )
     }
 
+    /// An external token carrying none of the groups `oauth.allowed_groups` names
+    /// (ADR-098 D4). Checked before the binding is looked up.
+    pub fn group_required(message: String) -> Self {
+        Self::kinded(-32600, message, "group_required", serde_json::json!({}))
+    }
+
+    /// A binding challenge that is unknown, already presented or expired — one
+    /// refusal for all three (ADR-098 Amendment 1, C2).
+    pub fn challenge_invalid(message: String) -> Self {
+        Self::kinded(-32600, message, "challenge_invalid", serde_json::json!({}))
+    }
+
+    /// A binding challenge presented by a token of another subject or issuer,
+    /// or issued for another audience (C2).
+    pub fn challenge_mismatch(message: String) -> Self {
+        Self::kinded(-32600, message, "challenge_mismatch", serde_json::json!({}))
+    }
+
+    /// The key's fingerprint is not the one challenged, or the signature over
+    /// the challenge does not verify (C2).
+    pub fn proof_invalid(message: String) -> Self {
+        Self::kinded(-32600, message, "proof_invalid", serde_json::json!({}))
+    }
+
+    /// The subject, or the fingerprint, is already bound; replacing a binding
+    /// takes an explicit unbind by the administrator first (C2). `field` is
+    /// `"subject"` or `"fingerprint"`.
+    pub fn binding_conflict(message: String, field: &str) -> Self {
+        Self::kinded(
+            -32600,
+            message,
+            "binding_conflict",
+            serde_json::json!({ "field": field }),
+        )
+    }
+
+    /// A subject already holds `limit` unused binding challenges (C2).
+    pub fn too_many_challenges(message: String, limit: usize) -> Self {
+        Self::kinded(
+            -32600,
+            message,
+            "too_many_challenges",
+            serde_json::json!({ "limit": limit }),
+        )
+    }
+
     /// The daemon failed (storage, decode, persistence). Not a decision about
     /// the caller; retrying may succeed.
     pub fn internal_fault(message: String) -> Self {
@@ -584,6 +630,12 @@ pub const ERROR_KINDS: &[&str] = &[
     "kb_query_unavailable",
     "e2e_unsupported",
     "history_holds_plaintext",
+    "group_required",
+    "challenge_invalid",
+    "challenge_mismatch",
+    "proof_invalid",
+    "binding_conflict",
+    "too_many_challenges",
     "internal",
 ];
 
@@ -767,6 +819,12 @@ mod tests {
             McpError::kb_query_unavailable(m()),
             McpError::e2e_unsupported(m()),
             McpError::history_holds_plaintext(m()),
+            McpError::group_required(m()),
+            McpError::challenge_invalid(m()),
+            McpError::challenge_mismatch(m()),
+            McpError::proof_invalid(m()),
+            McpError::binding_conflict(m(), "subject"),
+            McpError::too_many_challenges(m(), 4),
             McpError::internal_fault(m()),
         ]
     }
