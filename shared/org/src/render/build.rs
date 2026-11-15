@@ -741,6 +741,7 @@ pub(crate) fn rendering_outside(
             headline_ids: ids,
             images: true,
             property_drawers: true,
+            toplevel_hlevel: super::ToplevelHlevel::default(),
         };
         let mut first = Builder::with_cx(cx.clone(), &opts, resolver, Mode::Page, Table::default());
         first.blank = Some(body);
