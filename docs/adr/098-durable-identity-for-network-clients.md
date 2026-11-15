@@ -299,10 +299,11 @@ binding takes an explicit unbind first; binding grants no membership — members
 owner-authored (D4).
 
 The binding table, the person flag (C3) and unbinding are administered by a **local** daemon CLI,
-like the token CLI, never by a network method, an MCP tool or Scheme (principle #16). Whether that
-CLI may also bind without proof of possession, for development and tests, is decided by the owner
-of this ADR and recorded here; the case for it is that a local operator can already mint a token
-for any fingerprint.
+like the token CLI, never by a network method, an MCP tool or Scheme (principle #16). That CLI may
+also bind **without** proof of possession, for development, tests and recovery: a local operator can
+already mint a token for any fingerprint, so this adds no power. Such a binding is recorded as made
+by the administrator rather than by proof, and the binding list shows which is which (decided
+2026-11-14).
 
 The D4 session gate is part of C: an optional set of required group claims, checked on every
 request before the binding is looked up. With none configured there is no group gate.
@@ -327,7 +328,8 @@ Stated rather than discovered later:
 
 - **A person's own edits from native MAE count as agent** until native clients sign in through the
   IdP (ADR-111 P4). A rule that "only a person may clear an agent's change" therefore applies to
-  them too.
+  them too. Accepted as the interim state (2026-11-14), rather than adding a third kind; ADR-111 P4
+  removes it.
 - **An agent driving a browser that holds a person's live IdP session counts as that person.** The
   daemon cannot tell them apart; that boundary belongs to the IdP and the device.
 
