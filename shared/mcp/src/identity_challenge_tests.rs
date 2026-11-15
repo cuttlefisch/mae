@@ -183,3 +183,29 @@ fn the_output_holds_no_secret() {
         assert!(!out.contains(&form), "the secret key is in the output");
     }
 }
+
+/// `check_challenge` through this wrapper checks against THIS identity's
+/// key and the stated claimant, as signing does.
+#[test]
+fn check_uses_this_identity_and_the_stated_claimant() {
+    let id = Identity::generate("member");
+    let other = Identity::generate("other");
+    let text = canonical(&id, NOW + 60);
+    assert_eq!(check_challenge(&id, ME, &text, NOW).unwrap().sub, SUB);
+    assert_eq!(
+        check_challenge(&other, ME, &text, NOW),
+        Err(ChallengeRefusal::OtherKey)
+    );
+    let mallory = Claimant {
+        issuer: ISS,
+        subject: "mallory@idp",
+    };
+    assert_eq!(
+        check_challenge(&id, mallory, &text, NOW),
+        Err(ChallengeRefusal::OtherSubject)
+    );
+    assert_eq!(
+        parse_for(&other, ME, &text, NOW),
+        Err(ChallengeRefusal::OtherKey)
+    );
+}

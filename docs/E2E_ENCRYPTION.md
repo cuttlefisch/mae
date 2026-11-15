@@ -28,7 +28,9 @@ is *not* anonymity, not metadata privacy, and not protection from a member you a
 
 ## 3. Cryptographic primitives
 
-All in `shared/sync/src/content_crypto.rs` (reviewed: sound, no must-fix break inside the primitives).
+All in `shared/crypto/src/content_crypto.rs`, re-exported as `mae_sync::content_crypto` (reviewed: sound, no
+must-fix break inside the primitives). It lives in the no-I/O `mae-crypto` crate so the browser runs the same
+code (§10).
 
 - **Content AEAD:** XChaCha20-Poly1305, 256-bit key, 128-bit tag, **fresh random 24-byte nonce per op**
   (the X-variant exists precisely for random nonces; collision risk is negligible far beyond op volumes).
@@ -194,3 +196,89 @@ meaningful.
   #176 rotation key-history design; F8 (compaction) + mesh anchor node-id pinning still open.
 - **FS/PCS evolution (deferred, ADR-037 §D4):** BeeKEM CGKA ratchet (O(log N) + forward/post-compromise
   secrecy), kept flagged research-maturity.
+
+## 10. Browser key material: the mae-crypto WASM module
+
+A browser client generates and uses MAE member keys with MAE's own Rust code, never a reimplementation:
+`mae-crypto` (`shared/crypto`, pure, no I/O) compiled to `wasm32-unknown-unknown` behind the facade
+`mae-crypto-wasm` (`shared/crypto-wasm`). The daemon, the editor and the browser run one implementation of:
+the member key's public forms (`member.rs`, cross-checked against `mae_mcp::identity` by
+`shared/mcp/tests/member_key_parity.rs`), the identity-binding challenge rules (`identity_challenge.rs`;
+`mae_mcp::identity_challenge` wraps it), the key backup (`backup.rs`) and §3's content crypto.
+
+**Build and pin.** `make crypto-wasm` prints the artifact's size and sha256; `make crypto-wasm-repro` builds
+twice and requires identical bytes; `make crypto-wasm-test` runs the Node checks (size budget, ABI, a
+native-vs-WASM differential over every deterministic response, interop both ways, entropy failure,
+leak and memory residue). CI's "mae-crypto WASM" job runs all three on a pinned rustc and records size and
+sha256. The contract version is `mae-crypto-wasm`'s own (`version` below), not MAE's; a consumer pins a
+`mae-crypto-vX.Y.Z` tag. Size budget: `SIZE_BUDGET` in `shared/crypto-wasm/js/test.mjs`, 400,000 bytes,
+~15% over the first measurement (346,994 bytes, rustc 1.98.0, `--profile wasm`, 2026-11-15; most of it is
+Argon2/BLAKE2b, the two curve crates and serde_json); raising it is recorded here.
+
+**Loader.** `js/mae-crypto.mjs` (types: `js/mae-crypto.d.ts`): `instantiate(bytes)` is synchronous and
+backs the module's one import, `mae_crypto_host.random_fill(ptr, len) -> u32` (0 = filled), with
+`crypto.getRandomValues`; without it, loading throws. Exports: `memory`, `mae_crypto_alloc`,
+`mae_crypto_call`, `mae_crypto_result_ptr`, `mae_crypto_result_free`, `mae_crypto_live_bytes`. A call that
+traps retires the instance (every later call throws); it is never restarted silently, since a fresh instance
+holds none of the keys.
+
+**Requests and responses.** A request is a JSON object with exactly the keys its operation lists (anything
+else is `bad-request`). Every response is `{"ok":true,"result":R}` or
+`{"ok":false,"code":C,"error":"message"}`. Bytes are standard base64 with padding. A member key lives in the
+instance and is named by a handle `key` (a number, per instance, never reused); its 32-byte seed leaves only
+through `export_seed` or inside a backup envelope. `KeyInfo` is
+`{"key":n,"public_key":B64,"fingerprint":"SHA256:…","wrap_public":B64}`: the Ed25519 public key as
+`PublicKey::encoded` writes it, the fingerprint as `PublicKey::fingerprint` does (`SHA256:` + unpadded
+base64 of SHA-256 over the 32 bytes), and the ADR-041 wrap key.
+
+| op | name | request | result |
+|----|------|---------|--------|
+| 1 | `version` | `{}` | `{"version":"0.1.0","backup_version":1,"challenge_domain":"mae-identity-binding-v1"}` |
+| 2 | `generate` | `{}` | `KeyInfo` (seed: 32 bytes from the host) |
+| 3 | `import_seed` | `{"seed":B64}` | `KeyInfo` |
+| 4 | `export_seed` | `{"key":n}` | `{"seed":B64}` |
+| 5 | `forget` | `{"key":n}` | `{"forgotten":bool}` (the key is wiped) |
+| 6 | `key_info` | `{"key":n}` | `KeyInfo` |
+| 7 | `fingerprint` | `{"public_key":B64}` | `{"fingerprint":"SHA256:…"}` |
+| 8 | `check_challenge` | `{"key":n,"issuer":S,"subject":S,"challenge":S,"now":unix}` | `{"challenge":{"domain","iss","sub","aud","fingerprint","nonce","expires_at"}}` |
+| 9 | `sign_challenge` | as 8 | `{"challenge":{…},"body":{"challenge_id","public_key","signature"}}` |
+| 10 | `backup_seal` | `{"key":n,"passphrase":S,"kdf"?:{"m","t","p"}}` | `{"envelope":S}` |
+| 11 | `backup_open` | `{"envelope":S,"passphrase":S}` | `KeyInfo` (a new handle) |
+| 12 | `backup_params` | `{"envelope":S}` | `{"m","t","p"}` |
+| 13 | `content_key_generate` | `{}` | `{"content_key":B64}` |
+| 14 | `content_seal` | `{"content_key":B64,"plaintext":B64}` | `{"sealed":B64}` (`nonce ‖ ct+tag`) |
+| 15 | `content_open` | `{"content_key":B64,"sealed":B64}` | `{"plaintext":B64}` |
+| 16 | `content_wrap` | `{"content_key":B64,"wrap_public":B64}` | `{"wrapped":B64}` |
+| 17 | `content_unwrap` | `{"key":n,"wrapped":B64}` | `{"content_key":B64}` |
+
+The loader's method names are the camelCase forms (`signChallenge`, `backupSeal`, …). `challenge` (8, 9) is
+the challenge text or the daemon's whole `/identity/challenge` answer; it is signed only if it is
+byte-for-byte canonical, carries the domain tag, names this key, is unexpired at `now` (the host's clock:
+unix seconds), and is issued to exactly the `issuer` and `subject` given. `body` is what
+`POST /identity/bind` takes.
+
+**Error codes.** General: `bad-request`, `unknown-op`, `no-key`, `keystore-full` (16 keys per instance),
+`no-entropy`, `bad-public-key`. Challenge: `too-long`, `not-a-challenge`, `wrong-domain`, `empty-field`,
+`other-key`, `other-issuer`, `other-subject`, `expired`. Backup: `too-long`, `not-an-envelope`,
+`unknown-version`, `unknown-kdf`, `kdf-params`, `passphrase`, `open` (a wrong passphrase and an altered
+envelope are deliberately indistinguishable). Content: `decrypt`, `malformed`, `bad-key`. Without entropy,
+`generate`, `backup_seal` and `content_key_generate` answer `no-entropy`; `content_seal` and `content_wrap`
+trap (fail closed, instance retired). A host that reports success but writes all zeros is refused.
+
+**Backup envelope v1** (the format phase B imports; normative text in `shared/crypto/src/backup.rs`). One
+line of JSON, exactly
+`{"v":1,"kdf":"argon2id","m":M,"t":T,"p":P,"salt":SALT,"nonce":NONCE,"ct":CT}` (this key order, no
+whitespace; surrounding ASCII whitespace is ignored). SALT is 16 random bytes, NONCE 24, CT 48, each standard
+padded base64 in quotes. key = Argon2id v0x13 (passphrase's UTF-8 bytes after NFC normalisation, SALT, M KiB,
+T passes, P lanes, 32-byte output). HEADER = the same text without `,"ct":…`, i.e.
+`{"v":1,"kdf":"argon2id","m":M,"t":T,"p":P,"salt":SALT,"nonce":NONCE}`. CT = XChaCha20-Poly1305(key, NONCE,
+the 32-byte seed, associated data = HEADER's bytes). Written with M=65536, T=3, P=4 (RFC 9106 §4); opened
+only with M in 19456..=262144, T in 2..=10, P in 1..=4. Opening refuses an unknown `v` before anything else
+(`unknown-version`), then any other text, kdf or out-of-range costs, then a failed tag (`open`). The
+passphrase is 1..=1024 bytes; the loader NFC-normalises it, and any other implementation must too.
+
+**Secrets in the module.** Freed heap blocks are zeroed by the module's allocator and the stack an operation
+used is zeroed when it returns, so after a call no copy of a seed, passphrase, content key or plaintext is
+left in linear memory except the keys still held (until `forget`). `js/test.mjs` searches the whole memory
+for each, raw and base64. JavaScript strings the caller holds (a passphrase, an exported seed) are outside
+the module's reach.
