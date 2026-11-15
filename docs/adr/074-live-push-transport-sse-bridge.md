@@ -333,7 +333,7 @@ sides than thousands of notices, each followed by a fetch.
   `check_kb_read_access`, `Transport::Hub`). It is one gate, not a second copy.
 - A bad token gets the listener's own `401` and `WWW-Authenticate`, the same as on every other
   route.
-- **A KB the token cannot read (proposed; pending the owner's decision).** The stream opens for
+- **A KB the token cannot read (decided 2026-11-14: partial open).** The stream opens for
   the KBs it can read and sends `access_lost {kb}` for each refused KB as its first events, before
   any notice. A refused KB is never silently absent, and "never had access" takes the same path
   as "lost access mid-stream", so a reader has one code path. Only a bad token (`401`) or every
@@ -544,7 +544,8 @@ Each test must fail without its mechanism.
    because the proxy's upstream leg still costs a slot per stream.
 4. **The WebSocket method.** *Decided (2026-11-13):* it ships in the same release as the SSE
    route: one index, one gate, two transports.
-5. **A partial open.** C4 now proposes it, from the prior art there: the open succeeds for the
-   readable KBs and sends `access_lost` first for each refused one. Still the owner's decision.
+5. **A partial open.** *Decided (2026-11-14):* yes, as C4 describes: the open succeeds for the
+   readable KBs and sends `access_lost` first for each refused one. Browser MAE's reader holds one
+   stream over every KB it serves, and a refused open would take it down for all of them.
 6. **Authorship.** *Decided (2026-11-13):* never in a notice. Version history is the single source
    of truth for authorship (C2).
