@@ -610,6 +610,31 @@ pub async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(
     read_message_limited(reader, MAX_MESSAGE_SIZE).await
 }
 
+/// A framed message whose Content-Length is over the reader's bound. Carried
+/// inside the `io::Error` [`read_message_limited`] returns; see [`too_large`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MessageTooLarge {
+    pub len: usize,
+    pub max: usize,
+}
+
+impl std::fmt::Display for MessageTooLarge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Content-Length {} exceeds maximum {}",
+            self.len, self.max
+        )
+    }
+}
+
+impl std::error::Error for MessageTooLarge {}
+
+/// The [`MessageTooLarge`] inside a read error, if that is what it was.
+pub fn too_large(e: &std::io::Error) -> Option<MessageTooLarge> {
+    e.get_ref()?.downcast_ref::<MessageTooLarge>().copied()
+}
+
 /// [`read_message`] with `max` as the largest Content-Length accepted. The
 /// request cap is the right bound for what a server reads from a client, not
 /// for what a client reads from the daemon ([`MAX_DAEMON_RESPONSE_SIZE`]).
@@ -681,10 +706,7 @@ pub async fn read_message_limited<R: tokio::io::AsyncBufRead + Unpin>(
             return Err(std::io::Error::other("Content-Length must be > 0"));
         }
         if len > max {
-            return Err(std::io::Error::other(format!(
-                "Content-Length {} exceeds maximum {}",
-                len, max
-            )));
+            return Err(std::io::Error::other(MessageTooLarge { len, max }));
         }
 
         let mut body = vec![0u8; len];

@@ -1279,6 +1279,20 @@ pub(crate) enum PendingResponseKind {
     KbJoin {
         kb_id: String,
     },
+    /// ADR-022 Amendment 1 E2: a later page of a paged join. `acc` holds the node
+    /// entries of the pages before it; the last page hands them all to the
+    /// `KbJoin` handling, so a paged join ends exactly like a one-reply join.
+    KbJoinPage {
+        kb_id: String,
+        acc: Vec<serde_json::Value>,
+    },
+    /// E1: one batch of a share sent as several `kb/share` requests. Only the
+    /// last carries the share's node count (`last`); it reports the share as
+    /// `KbShare` would. An earlier batch reports only a failure.
+    KbShareBatch {
+        kb_id: String,
+        last: Option<usize>,
+    },
     /// ADR-024 R1: response to `kb/node_fetch` — carries `{state, sv}` to adopt.
     KbAdoptNode {
         kb_id: String,
@@ -2052,6 +2066,14 @@ async fn run_collab_task(
     // member rotation lands on an E2e KB this peer owns, drained right after each inbound
     // message is handled (ships `kb/collection_op` + advances the replica).
     let mut pending_collection_ops: Vec<(String, Vec<u8>)> = Vec::new();
+    // ADR-022 Amendment 1: the next page of each paged join (see `JoinFollowUp`),
+    // the state vectors each join started with (every page re-sends them), and
+    // the daemon's request cap from `initialize` (10 MiB for a daemon that does
+    // not report one), which a share is batched against.
+    let mut pending_join_pages: Vec<JoinFollowUp> = Vec::new();
+    let mut join_svs: std::collections::HashMap<String, Vec<(String, String)>> =
+        std::collections::HashMap::new();
+    let mut daemon_request_cap: usize = mae_mcp::MAX_MESSAGE_SIZE;
     // WU6: Transport health counter for periodic diagnostics.
     let mut messages_received: u64 = 0;
     // WU2: Heartbeat interval (from collab_heartbeat_interval option, disabled if 0).
@@ -2716,23 +2738,36 @@ async fn run_collab_task(
                             let e2e = kb_collection_is_e2e(&collection_state);
                             info!(kb = %kb_id, nodes = node_states.len(), e2e, "sharing KB");
                             if let Some(ref mut w) = writer {
-                                let req_id = next_request_id;
-                                next_request_id += 1;
                                 let nodes =
                                     select_share_node_states(&kb_id, e2e, &node_states, &op_sets);
-                                let req = mae_sync::wire::kb_share_request(
-                                    req_id,
-                                    &kb_id,
-                                    &name,
-                                    &creator,
-                                    &mae_sync::encoding::update_to_base64(&collection_state),
-                                    &nodes,
-                                );
-                                let body = match serde_json::to_vec(&req) {
-                                    Ok(b) => b,
-                                    Err(e) => { error!("kb share serialize error: {e}"); continue; }
-                                };
-                                if write_framed(w, &body, write_timeout).await.is_ok() {
+                                // ADR-022 Amendment 1 E1: the manifest rides every batch (the
+                                // daemon keeps the first, B-12) and the node states are split
+                                // so each request stays under the daemon's request cap.
+                                let coll_b64 = mae_sync::encoding::update_to_base64(&collection_state);
+                                let overhead = coll_b64.len() + kb_id.len() + name.len() + creator.len() + 512;
+                                let batches = mae_sync::wire::share_batches(&nodes, daemon_request_cap.saturating_sub(overhead));
+                                let (count, total) = (batches.len(), nodes.len());
+                                let mut sent_all = true;
+                                for (k, batch) in batches.iter().enumerate() {
+                                    let req_id = next_request_id;
+                                    next_request_id += 1;
+                                    let req = mae_sync::wire::kb_share_request(req_id, &kb_id, &name, &creator, &coll_b64, batch);
+                                    let body = match serde_json::to_vec(&req) {
+                                        Ok(b) => b,
+                                        Err(e) => { error!("kb share serialize error: {e}"); sent_all = false; break; }
+                                    };
+                                    if write_framed(w, &body, write_timeout).await.is_err() {
+                                        sent_all = false;
+                                        break;
+                                    }
+                                    let kind = if count == 1 {
+                                        PendingResponseKind::KbShare { kb_id: kb_id.clone() }
+                                    } else {
+                                        PendingResponseKind::KbShareBatch { kb_id: kb_id.clone(), last: (k + 1 == count).then_some(total) }
+                                    };
+                                    pending_responses.insert(req_id, kind);
+                                }
+                                if sent_all {
                                     // ADR-020 B-13: subscribe the OWNER to its own
                                     // collection + node docs so peer edits broadcast
                                     // back are applied, not dropped at the
@@ -2748,7 +2783,6 @@ async fn run_collab_task(
                                             shared_docs.push(node_doc);
                                         }
                                     }
-                                    pending_responses.insert(req_id, PendingResponseKind::KbShare { kb_id });
                                 }
                             }
                         }
@@ -2763,16 +2797,11 @@ async fn run_collab_task(
                                         (id.clone(), mae_sync::encoding::update_to_base64(sv))
                                     })
                                     .collect();
-                                let mut req = mae_sync::wire::kb_join_request(req_id, &kb_id, &svs_b64);
-                                // ADR-041 (#158 I1): publish our X25519 wrap key so the owner can
-                                // wrap the content key to it on approval (the daemon can't derive
-                                // it). Only in key mode (no identity ⇒ no E2e anyway).
-                                if let Some(idy) = signing_identity.as_ref() {
-                                    let wrap_pub = mae_sync::content_crypto::wrap_public_for(&idy.secret_bytes());
-                                    if let Some(p) = req.get_mut("params").and_then(|p| p.as_object_mut()) {
-                                        p.insert("wrap_pubkey".to_string(), serde_json::Value::String(hex::encode(wrap_pub)));
-                                    }
-                                }
+                                // ADR-022 Amendment 1 E2: paged; the daemon answers in pages
+                                // and each page's `next_after` queues the next (`JoinFollowUp`).
+                                let mut req = mae_sync::wire::kb_join_page_request(req_id, &kb_id, &svs_b64, None);
+                                with_wrap_pubkey(&mut req, signing_identity.as_ref());
+                                join_svs.insert(kb_id.clone(), svs_b64);
                                 let body = match serde_json::to_vec(&req) {
                                     Ok(b) => b,
                                     Err(e) => { error!("kb join serialize error: {e}"); continue; }
@@ -3647,6 +3676,7 @@ async fn run_collab_task(
                                     kb_collections: &mut kb_collections,
                                     signing_identity: signing_identity.as_ref(),
                                     pending_collection_ops: &mut pending_collection_ops,
+                                    pending_join_pages: &mut pending_join_pages,
                                 },
                             );
                             // ADR-040 PR2c: ship any owner-side reactive re-wraps the receive
@@ -3681,6 +3711,30 @@ async fn run_collab_task(
                             } else {
                                 pending_collection_ops.clear();
                             }
+                            // ADR-022 Amendment 1 E2: ask for the next page of each paged
+                            // join this message advanced. Without a writer the join is lost
+                            // with the connection, and the reconnect re-joins from the start.
+                            for next in pending_join_pages.drain(..) {
+                                let Some(w) = writer.as_mut() else { break };
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let svs = join_svs.get(&next.kb_id).cloned().unwrap_or_default();
+                                let mut req = mae_sync::wire::kb_join_page_request(
+                                    req_id,
+                                    &next.kb_id,
+                                    &svs,
+                                    Some(&next.after),
+                                );
+                                with_wrap_pubkey(&mut req, signing_identity.as_ref());
+                                let Ok(body) = serde_json::to_vec(&req) else { continue };
+                                if write_framed(w, &body, write_timeout).await.is_ok() {
+                                    pending_responses.insert(
+                                        req_id,
+                                        PendingResponseKind::KbJoinPage { kb_id: next.kb_id, acc: next.acc },
+                                    );
+                                }
+                            }
+                            pending_join_pages.clear();
                             // Any valid message resets the ping_pending flag.
                             ping_pending = false;
                         }
@@ -3781,6 +3835,7 @@ async fn run_collab_task(
                                 &mut shared_docs, &mut next_request_id,
                                 &mut pending_responses, write_timeout,
                                 daemon_start_grace_ms, &transport,
+                                &mut daemon_request_cap,
                             ).await;
                         }
                         _ = tokio::time::sleep(std::time::Duration::from_secs(
@@ -3801,7 +3856,8 @@ async fn run_collab_task(
                             reconnect_attempt += 1;
                             match establish_connection(&addr_clone, &transport).await {
                                 Ok((mut reader, mut w)) => {
-                                    if let Some(peer_count) = send_initialize(&mut w, &mut reader, write_timeout).await {
+                                    if let Some((peer_count, cap)) = send_initialize(&mut w, &mut reader, write_timeout).await {
+                                        daemon_request_cap = cap;
                                         // Spawn dedicated reader task (cancel-safety fix).
                                         // ADR-020: set writer before msg_rx so a
                                         // command never observes connected(msg_rx)=Some
@@ -3848,6 +3904,7 @@ async fn run_collab_task(
                     write_timeout,
                     daemon_start_grace_ms,
                     &transport,
+                    &mut daemon_request_cap,
                 )
                 .await;
             }
@@ -3913,6 +3970,106 @@ pub(crate) struct KbCryptoCtx<'a> {
     /// `(kb_id, signed_delta)` here; the network loop ships each via the owner-gated
     /// `kb/collection_op` and advances the replica. Empty on non-owners / non-E2e KBs.
     pub pending_collection_ops: &'a mut Vec<(String, Vec<u8>)>,
+    /// ADR-022 Amendment 1 E2: the next page each paged join needs, queued by the
+    /// receive path and sent by the network loop right after the message.
+    pub pending_join_pages: &'a mut Vec<JoinFollowUp>,
+}
+
+/// The request a paged join needs next: `kb/join` from `after`, with the node
+/// entries already received.
+#[derive(Debug)]
+pub(crate) struct JoinFollowUp {
+    pub kb_id: String,
+    pub after: String,
+    pub acc: Vec<serde_json::Value>,
+}
+
+/// ADR-041 (#158 I1): publish our X25519 wrap key on a `kb/join` so the owner can
+/// wrap the content key to it on approval (the daemon can't derive it). Only in
+/// key mode (no identity ⇒ no E2e anyway). Every page of a paged join carries it,
+/// so each is the same request a one-reply join was.
+fn with_wrap_pubkey(
+    req: &mut serde_json::Value,
+    identity: Option<&std::sync::Arc<mae_mcp::identity::Identity>>,
+) {
+    if let Some(idy) = identity {
+        let wrap_pub = mae_sync::content_crypto::wrap_public_for(&idy.secret_bytes());
+        if let Some(p) = req.get_mut("params").and_then(|p| p.as_object_mut()) {
+            p.insert(
+                "wrap_pubkey".to_string(),
+                serde_json::Value::String(hex::encode(wrap_pub)),
+            );
+        }
+    }
+}
+
+/// What a response means once paging is accounted for.
+enum Paged {
+    /// A join page with more to come: queue its follow-up.
+    More(JoinFollowUp),
+    /// An earlier share batch that landed: nothing to report yet.
+    Quiet,
+    /// Handle as `kind`, against `val` replaced by the merged value if `Some`.
+    As(PendingResponseKind, Option<serde_json::Value>),
+}
+
+/// Fold paged joins and batched shares into the one-reply shapes the rest of
+/// `handle_response` already handles, so neither path gains a second copy of
+/// that logic.
+fn fold_paged(val: &serde_json::Value, kind: PendingResponseKind) -> Paged {
+    match kind {
+        PendingResponseKind::KbJoin { kb_id } => fold_join_page(val, kb_id, Vec::new()),
+        PendingResponseKind::KbJoinPage { kb_id, acc } => fold_join_page(val, kb_id, acc),
+        PendingResponseKind::KbShareBatch { kb_id, last } => {
+            let failed = val.get("error").is_some();
+            match last {
+                _ if failed => Paged::As(PendingResponseKind::KbShare { kb_id }, None),
+                None => Paged::Quiet,
+                Some(total) => {
+                    let mut merged = val.clone();
+                    merged["result"]["node_count"] = serde_json::json!(total);
+                    Paged::As(PendingResponseKind::KbShare { kb_id }, Some(merged))
+                }
+            }
+        }
+        other => Paged::As(other, None),
+    }
+}
+
+fn fold_join_page(
+    val: &serde_json::Value,
+    kb_id: String,
+    mut acc: Vec<serde_json::Value>,
+) -> Paged {
+    let result = val.get("result");
+    let joined = val.get("error").is_none() && result.and_then(|r| r.get("status")).is_none();
+    if !joined {
+        // Denied or pending, on any page: report it as a one-reply join would.
+        return Paged::As(PendingResponseKind::KbJoin { kb_id }, None);
+    }
+    let first_and_only = acc.is_empty();
+    let page = result
+        .and_then(|r| r.get("nodes"))
+        .and_then(|n| n.as_array())
+        .cloned()
+        .unwrap_or_default();
+    acc.extend(page);
+    if let Some(next) = result
+        .and_then(|r| r.get("next_after"))
+        .and_then(|n| n.as_str())
+    {
+        return Paged::More(JoinFollowUp {
+            kb_id,
+            after: next.to_string(),
+            acc,
+        });
+    }
+    if first_and_only {
+        return Paged::As(PendingResponseKind::KbJoin { kb_id }, None);
+    }
+    let mut merged = val.clone();
+    merged["result"]["nodes"] = serde_json::Value::Array(acc);
+    Paged::As(PendingResponseKind::KbJoin { kb_id }, Some(merged))
 }
 
 /// ADR-040 PR2b: the planned content-op deltas to ship for ONE KB during an owner
@@ -4616,6 +4773,19 @@ fn handle_response(
     seq_tracker: &mut std::collections::HashMap<String, u64>,
     kb: &mut KbCryptoCtx,
 ) {
+    let merged;
+    let (kind, val) = match fold_paged(val, kind) {
+        Paged::More(next) => {
+            kb.pending_join_pages.push(next);
+            return;
+        }
+        Paged::Quiet => return,
+        Paged::As(kind, Some(m)) => {
+            merged = m;
+            (kind, &merged)
+        }
+        Paged::As(kind, None) => (kind, val),
+    };
     let result = val.get("result");
 
     match kind {
@@ -4942,6 +5112,8 @@ fn handle_response(
                 );
             }
         }
+        // `fold_paged` turned these into `KbJoin` / `KbShare` above.
+        PendingResponseKind::KbJoinPage { .. } | PendingResponseKind::KbShareBatch { .. } => {}
         PendingResponseKind::KbAdoptNode { kb_id, node_id } => {
             // ADR-024 R1: response to kb/node_fetch → adopt the authoritative state.
             if let Some(err) = val.get("error") {
@@ -5334,15 +5506,17 @@ async fn handle_disconnected_cmd(
     write_timeout: std::time::Duration,
     daemon_start_grace_ms: u64,
     transport: &ClientTransport,
+    daemon_request_cap: &mut usize,
 ) {
     match cmd {
         CollabCommand::Connect { address } => {
             *target_address = Some(address.clone());
             match establish_connection(&address, transport).await {
                 Ok((mut reader, mut w)) => {
-                    if let Some(peer_count) =
+                    if let Some((peer_count, cap)) =
                         send_initialize(&mut w, &mut reader, write_timeout).await
                     {
+                        *daemon_request_cap = cap;
                         // Spawn dedicated reader task (cancel-safety fix).
                         // ADR-020: writer before msg_rx (see reconnect note).
                         *writer = Some(w);
@@ -5410,9 +5584,10 @@ async fn handle_disconnected_cmd(
                     *target_address = Some(addr.clone());
                     match establish_connection(&addr, transport).await {
                         Ok((mut reader, mut w)) => {
-                            if let Some(peer_count) =
+                            if let Some((peer_count, cap)) =
                                 send_initialize(&mut w, &mut reader, write_timeout).await
                             {
+                                *daemon_request_cap = cap;
                                 // Spawn dedicated reader task (cancel-safety fix).
                                 *msg_rx = Some(spawn_reader_task(reader));
                                 *writer = Some(w);
@@ -5693,7 +5868,7 @@ async fn send_initialize<W, R>(
     writer: &mut W,
     reader: &mut R,
     timeout: std::time::Duration,
-) -> Option<usize>
+) -> Option<(usize, usize)>
 where
     W: tokio::io::AsyncWrite + Unpin,
     R: tokio::io::AsyncBufRead + Unpin,
@@ -5716,8 +5891,9 @@ where
 
     match mae_mcp::read_message_limited(reader, mae_mcp::MAX_DAEMON_RESPONSE_SIZE).await {
         Ok(Some(text)) => {
-            let peer_count = serde_json::from_str::<serde_json::Value>(&text)
-                .ok()
+            let v = serde_json::from_str::<serde_json::Value>(&text).ok();
+            let peer_count = v
+                .as_ref()
                 .and_then(|v| {
                     v.get("result")?
                         .get("serverInfo")?
@@ -5726,10 +5902,24 @@ where
                 })
                 .map(|c| c as usize)
                 .unwrap_or(0);
-            Some(peer_count)
+            Some((peer_count, daemon_request_cap_of(v.as_ref())))
         }
         _ => None,
     }
+}
+
+/// ADR-022 Amendment 1 E4: the request cap a daemon reports in its `initialize`
+/// answer (`limits.max_frame_bytes`), or the 10 MiB every daemon read requests
+/// with before it reported one.
+fn daemon_request_cap_of(init: Option<&serde_json::Value>) -> usize {
+    init.and_then(|v| {
+        v.get("result")?
+            .get("limits")?
+            .get("max_frame_bytes")?
+            .as_u64()
+    })
+    .and_then(|n| usize::try_from(n).ok())
+    .unwrap_or(mae_mcp::MAX_MESSAGE_SIZE)
 }
 
 fn build_status_lines(address: &str, connected: bool, shared_docs: &[String]) -> Vec<String> {

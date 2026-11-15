@@ -125,6 +125,52 @@ pub fn kb_share_request(
 /// the `node_svs` key is omitted entirely, producing the exact pre-ADR-022 shape
 /// so an older daemon (or a first-ever join with no local nodes) still gets full
 /// state. The pairs use the canonical `{ "id", "sv" }` keys.
+/// A paged `kb/join` (ADR-022 Amendment 1 E2): [`kb_join_request`] plus
+/// `paged: true`, and `after` (the previous page's `next_after`) for every page
+/// but the first. A daemon that predates paging ignores both and answers the
+/// whole KB in one reply, with no `next_after`.
+pub fn kb_join_page_request(
+    id: u64,
+    kb_id: &str,
+    node_svs: &[(String, String)],
+    after: Option<&str>,
+) -> Value {
+    let mut req = kb_join_request(id, kb_id, node_svs);
+    if let Some(p) = req.get_mut("params").and_then(|p| p.as_object_mut()) {
+        p.insert("paged".to_string(), Value::Bool(true));
+        if let Some(a) = after {
+            p.insert("after".to_string(), Value::String(a.to_string()));
+        }
+    }
+    req
+}
+
+/// Split a share's `(node_id, state_b64)` pairs into batches whose
+/// `kb/share` requests each stay within `budget` bytes of node entries
+/// (ADR-022 Amendment 1 E1). Greedy, in the given order; a batch always holds
+/// at least one node, so a node larger than the budget goes alone (the daemon
+/// answers it `request_too_large` rather than the client dropping it). An empty
+/// share is one empty batch.
+pub fn share_batches(nodes: &[(String, String)], budget: usize) -> Vec<Vec<(String, String)>> {
+    let mut batches: Vec<Vec<(String, String)>> = vec![Vec::new()];
+    let mut used = 0usize;
+    for (id, state) in nodes {
+        // `{"id":"…","state":"…"},` around the two strings.
+        let cost = id.len() + state.len() + 24;
+        let current = batches.last_mut().expect("never empty");
+        if !current.is_empty() && used + cost > budget {
+            batches.push(Vec::new());
+            used = 0;
+        }
+        batches
+            .last_mut()
+            .expect("never empty")
+            .push((id.clone(), state.clone()));
+        used += cost;
+    }
+    batches
+}
+
 /// Build a `kb/node_fetch` JSON-RPC **request** — fetch a single node's
 /// authoritative state so a fenced member can ADOPT it (drop its stale-epoch
 /// divergence, ADR-023) and re-author. Reply carries `{ state, sv }` (base64).
@@ -264,5 +310,63 @@ mod tests {
         assert_eq!(svs.len(), 1);
         assert_eq!(svs[0]["id"], "k:n1");
         assert_eq!(svs[0]["sv"], "AAEC");
+    }
+}
+
+#[cfg(test)]
+mod paging_tests {
+    use super::*;
+
+    #[test]
+    fn a_page_request_is_a_join_with_paged_and_after_only_when_given() {
+        let first = kb_join_page_request(1, "k", &[], None);
+        assert_eq!(first["params"]["paged"], true);
+        assert!(first["params"].get("after").is_none());
+        let later = kb_join_page_request(2, "k", &[("n".into(), "sv".into())], Some("n07"));
+        assert_eq!(later["params"]["after"], "n07");
+        assert_eq!(later["params"]["node_svs"][0]["id"], "n");
+        assert_eq!(later["method"], "kb/join");
+    }
+
+    #[test]
+    fn share_batches_keep_every_node_in_order_and_each_batch_under_the_budget() {
+        let nodes: Vec<(String, String)> = (0..20)
+            .map(|i| (format!("n{i:02}"), "s".repeat(100 + 37 * i)))
+            .collect();
+        let budget = 1500;
+        let batches = share_batches(&nodes, budget);
+        assert!(batches.len() > 3);
+        let flat: Vec<_> = batches.iter().flatten().cloned().collect();
+        assert_eq!(flat, nodes, "every node, once, in order");
+        for b in &batches {
+            let cost: usize = b.iter().map(|(i, s)| i.len() + s.len() + 24).sum();
+            assert!(
+                cost <= budget || b.len() == 1,
+                "{cost} over {budget} in a batch of {}",
+                b.len()
+            );
+        }
+        // Greedy: a batch closes only when the next node would not fit.
+        for w in batches.windows(2) {
+            let cost: usize = w[0].iter().map(|(i, s)| i.len() + s.len() + 24).sum();
+            let (i, s) = &w[1][0];
+            assert!(cost + i.len() + s.len() + 24 > budget);
+        }
+    }
+
+    #[test]
+    fn a_node_over_the_budget_goes_alone_and_an_empty_share_is_one_batch() {
+        let nodes = vec![
+            ("a".to_string(), "x".repeat(10)),
+            ("big".to_string(), "y".repeat(5000)),
+            ("c".to_string(), "z".repeat(10)),
+        ];
+        let batches = share_batches(&nodes, 1000);
+        assert_eq!(batches.len(), 3);
+        assert_eq!(batches[1], vec![nodes[1].clone()]);
+        assert_eq!(
+            share_batches(&[], 1000),
+            vec![Vec::<(String, String)>::new()]
+        );
     }
 }

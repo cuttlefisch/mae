@@ -217,6 +217,7 @@ fn refresh_kb_content_key_re_derives_on_rotation_remaining_yes_removed_no() {
                 kb_collections: &mut collections,
                 signing_identity: Some(id),
                 pending_collection_ops: &mut pco,
+                pending_join_pages: &mut Vec::new(),
             };
             refresh_kb_content_key_on_collection_delta(&mut ctx, "kbc:KB", &delta);
         }
