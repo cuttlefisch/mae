@@ -71,7 +71,14 @@ fn check_sqlite_integrity(m: &Manifest, dir: &Path, problems: &mut Vec<String>) 
         .stores
         .iter()
         .map(|s| s.file.as_str())
-        .chain(m.file("collab/state.db").map(|f| f.path.as_str()));
+        .chain(m.file("collab/state.db").map(|f| f.path.as_str()))
+        .chain(
+            m.file(&format!(
+                "collab/{}",
+                mae_daemon::identity_binding::BINDINGS_FILE
+            ))
+            .map(|f| f.path.as_str()),
+        );
     for path in sqlite_files {
         if let Err(e) = integrity_ok(&dir.join(path)) {
             problems.push(format!("{path}: {e}"));

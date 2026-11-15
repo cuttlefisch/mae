@@ -289,6 +289,76 @@ self_issued_token_max_ttl_secs = 86400          # ceiling `token mint --ttl` ref
   `list`'s `limit` must be at least 1, and above `kb_query_max_scan_nodes` it is clamped to it.
 - **Every refusal names its reason in `error.data.kind`** — see [Error kinds](#error-kinds) below.
 
+#### Identity-provider tokens and the binding table (ADR-098 Phase C)
+
+An external identity provider's token never names a member by itself. Its `(iss, sub)` — the
+subject is the `principal_claim`, default `sub` — reaches a member key only through the **binding
+table**, daemon state outside the CRDT in `<collab data_dir>/identity-bindings.db`. Until it is
+bound, the token is an *unbound subject*, reported by the bare probe as `idp-unbound:["<iss>","<sub>"]`:
+a member of no KB, so every `kb/query.*` method refuses it with `not_member` and `kb/query.my_kbs`
+answers `{"kbs": []}` — even if its `sub` spells a member's `SHA256:` fingerprint exactly. Bound, it
+reads what that key's own self-issued token reads, no more (binding grants no membership; owners still
+add members). Writes over these sessions are not served. A deployment that used to put fingerprints
+in `principal_claim` must bind its subjects instead.
+
+```toml
+[oauth]
+# groups_claim = "groups"                  # where the token lists its groups
+# allowed_groups = ["mae-readers", "staff"] # D4 session gate: ANY ONE of them admits the token (exact match);
+#                                          # empty (default) = no gate. Not applied to self-issued tokens.
+identity_binding_enabled = true            # POST /identity/challenge + /identity/bind (default false)
+# identity_challenge_ttl_secs = 300        # a challenge is valid for minutes
+# identity_max_pending_challenges = 4      # unused challenges one subject may hold
+```
+
+- **The group gate** is checked on every request, before the binding is looked up. Removing a person
+  from every allowed group at the identity provider ends their session at their next token, with no CRDT write
+  and no owner involved; `403`, kind `group_required`.
+- **Who counts as a person.** A request is a `person` only when it carries an identity-provider token
+  AND its binding is flagged `person`; everything else — self-issued tokens, mTLS sessions, unbound
+  or unflagged IdP sessions — is an `agent`. A new binding is an `agent`. The bare probe reports
+  `kind`. A person's own edits from native MAE count as agent until native clients sign in through
+  the identity provider (ADR-111 P4).
+- **Binding by proof of possession** (`identity_binding_enabled`), both routes POST with an IdP
+  bearer token (a self-issued one is refused, `issuer_not_supported`):
+  1. `POST /identity/challenge` `{"fingerprint": "SHA256:…"}` → `{"challenge_id", "challenge",
+     "expires_in"}`. `challenge` is a JSON text naming the domain tag `mae-identity-binding-v1`,
+     `iss`, `sub`, this listener's `aud`, the fingerprint, a random `nonce` (= `challenge_id`) and
+     `expires_at`. Show the person the `iss`/`sub` before they sign.
+  2. On the machine holding the member key (the editor's collab identity, `mae --collab-identity`),
+     run `mae --sign-identity-challenge '<answer>' --issuer <your iss> --subject <your sub>` (or
+     `-` to read the answer from stdin), with either the `challenge` text or the whole answer from
+     step 1. `--issuer` and `--subject` are the key holder's OWN identity-provider identity: the
+     daemon issues a challenge for any key to any signed-in subject, so a challenge naming your key
+     says nothing about who asked for it, and one issued to anyone else is refused (both must match
+     the challenge byte for byte). It prints the issuer, subject, audience and key on stderr before
+     signing, and the bind body on stdout. It signs nothing but a canonical, unexpired challenge
+     naming its own key and the stated subject, and never prints the secret key. (The signed bytes
+     are the UTF-8 of `challenge`, Ed25519.)
+  3. `POST /identity/bind` `{"challenge_id", "public_key": "<base64 of the 32 key bytes>",
+     "signature": "<base64>"}` with a token of the same `(iss, sub)` → `{"principal", "kind",
+     "bound_by": "proof"}`. A challenge is single use, whatever the outcome. One subject has at most
+     one key and one key at most one subject: `binding_conflict` until an administrator unbinds.
+- **An external token must carry `iss`.** One with a missing or empty `iss` is refused (`401`),
+  as one with an empty subject is: `(iss, sub)` keys the binding table, even when `oauth.issuer` is
+  unset and the issuer is otherwise not checked.
+- **Before configuring a second-factor requirement** (planned, not yet enforced): some identity
+  providers emit a constant `acr` that does not reflect a second factor, so configure `amr` values
+  rather than `acr`. A session started from a recovery link may carry no `amr` at all.
+- **Administration is local only** — no network method, MCP tool or Scheme primitive unbinds,
+  rebinds or sets `kind`. `mae-daemon binding` works while the daemon serves; a change holds on the
+  listener's next request:
+
+  ```bash
+  mae-daemon binding list                       # issuer subject fingerprint kind bound_by bound_at
+  mae-daemon binding bind --issuer <iss> --subject <sub> --fingerprint SHA256:…   # no proof: bound_by=admin
+  mae-daemon binding unbind --fingerprint SHA256:…        # or --issuer <iss> --subject <sub>
+  mae-daemon binding set-kind --fingerprint SHA256:… --kind person|agent
+  ```
+
+  An administrator's `bind` needs no proof (development, tests, recovery): whoever runs it can
+  already `token mint` for any fingerprint. `list` shows `admin` or `proof` for each binding.
+
 #### Error kinds
 
 Every error the daemon returns on the collab listener's `kb/*`, `sync/*` and `docs/*` methods, and
@@ -311,7 +381,7 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `too_many_tickets` | A principal already holds 8 unused connect tickets. Use one or let it expire (30 s). HTTP `429`, `error: "too_many_requests"`. | `POST /ws/ticket` | `limit` |
 | `awareness_not_owned` | A `sync/awareness` update in the y-protocols encoding names a client id another session on the same document already owns (ADR-099 B5). Nothing was relayed. | `sync/awareness` | — |
 | `ticket_invalid` | A connect ticket that is unknown, used, expired or bound to another origin — one identical refusal for all. HTTP `401`, `error: "invalid_token"`, with `WWW-Authenticate`. | `GET /ws` | — |
-| `issuer_not_supported` | A token not issued by this daemon, while ADR-099 B6 holds. HTTP `401`, `error: "invalid_token"`, with `WWW-Authenticate`; on a socket, a JSON-RPC error to `session/renew`. | `GET /ws`, `POST /ws/ticket`, `session/renew` | — |
+| `issuer_not_supported` | A token not issued by this daemon, while ADR-099 B6 holds. HTTP `401`, `error: "invalid_token"`, with `WWW-Authenticate`; on a socket, a JSON-RPC error to `session/renew`. On the binding routes the reverse: a self-issued token, whose principal already is a fingerprint, with HTTP `403`, `error: "access_denied"`. | `GET /ws`, `POST /ws/ticket`, `session/renew`, `POST /identity/challenge`, `POST /identity/bind` | — |
 | `invalid_token` | A `session/renew` token that does not validate or has already expired. The old deadline stands. | `session/renew` | — |
 | `protocol_unsupported` | No protocol version in common at the upgrade. HTTP `400`, `error: "invalid_request"`. | `GET /ws` | `supported` (beside `kind`) |
 | `origin_not_allowed` | A browser `Origin` not exactly in `ws_allowed_origins`. HTTP `403`, `error: "access_denied"`. | `GET /ws`, `POST /ws/ticket` | — |
@@ -340,6 +410,12 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `kb_query_unavailable` | The HTTPS listener does not serve `kb/query.*` here (`kb_query_enabled` off, or collab disabled). | `kb/query.*` (HTTPS) | — |
 | `e2e_unsupported` | A server-side operation the daemon cannot perform on an E2E KB. Code `-32600`. | `kb/query.search` | — |
 | `history_holds_plaintext` | Switching the KB to E2E is refused while its version history (ADR-116) holds plaintext content, which the switch would leave readable. Code `-32600`. | `kb/collection_op` | — |
+| `group_required` | An identity-provider token carrying none of the groups `oauth.allowed_groups` names (ADR-098 D4). Checked before the binding is looked up; nothing is read or written. HTTP `403`, `error: "insufficient_scope"`. | every authenticated route on the HTTPS listener | — |
+| `challenge_invalid` | A binding challenge that is unknown, already presented or expired — one refusal for all three. Ask for a new one. HTTP `403`, `error: "access_denied"`. | `POST /identity/bind` | — |
+| `challenge_mismatch` | The challenge was issued to another subject or issuer than the token presenting it, or for another audience. HTTP `403`, `error: "access_denied"`. | `POST /identity/bind` | — |
+| `proof_invalid` | The key's fingerprint is not the one the challenge names, or the signature over the challenge does not verify. HTTP `403`, `error: "access_denied"`. | `POST /identity/bind` | — |
+| `binding_conflict` | The subject already has a key, or the key already has a subject. An administrator must `binding unbind` first. HTTP `409`, `error: "conflict"`. | `POST /identity/bind` | `field` (`subject`/`fingerprint`) |
+| `too_many_challenges` | The subject already holds `identity_max_pending_challenges` unused challenges. Use one or let it expire. HTTP `429`, `error: "too_many_requests"`. | `POST /identity/challenge` | `limit` |
 | `internal` | The daemon failed (storage, persistence, decoding its own state). Not a decision about the caller; a retry may succeed. | any | — |
 
 What a kind does **not** reveal is deliberate. A caller that is not a member gets `not_member` for any
@@ -740,6 +816,7 @@ silently re-applying writes the backup did not contain):
 | `stores/<uuid>.sqlite` | the `db_path` of that uuid's row in the archived `kb-registry.toml` |
 | `kb-registry.toml` | `<data_dir>/kb-registry.toml` |
 | `collab/state.db` | `<collab data_dir>/state.db` |
+| `collab/identity-bindings.db` | `<collab data_dir>/identity-bindings.db` (ADR-098 bindings) |
 | `identity/*` | the identity dir / `authorized_keys` / `keystore` paths from `daemon.toml` |
 
 What it does **not** contain: the editor-side recovery material (`collections/`, `content_keys/`,

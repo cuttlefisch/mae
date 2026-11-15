@@ -73,6 +73,70 @@ pub enum TokenValidationError {
     /// The mapped principal claim (`principal_claim`) was absent from the
     /// token, or not a string.
     MissingPrincipalClaim,
+    /// ADR-098 D4: an external token that carries none of the groups in
+    /// `oauth.allowed_groups` in its `oauth.groups_claim`. Checked before the
+    /// binding is looked up, so it never reaches membership.
+    NotInAllowedGroup,
+}
+
+/// What presented the credential, and what it resolved to (ADR-098
+/// Amendment 1, C1: the principal is typed). An identity provider's subject is
+/// never compared with a member fingerprint: it reaches one only through a
+/// binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Credential {
+    /// This daemon's own token: the principal is the fingerprint it was
+    /// minted for.
+    SelfIssued,
+    /// An external token whose `(iss, sub)` is bound: the principal is the
+    /// bound fingerprint.
+    IdpBound,
+    /// An external token with no binding: the principal is
+    /// [`unbound_principal`], a member of nothing.
+    IdpUnbound,
+}
+
+/// Who a request counts as (ADR-098 Amendment 1, C3). A person only when the
+/// credential is an IdP token AND its binding is flagged `person`; everything
+/// else, including every self-issued token, is an agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrincipalKind {
+    Person,
+    Agent,
+}
+
+impl PrincipalKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PrincipalKind::Person => "person",
+            PrincipalKind::Agent => "agent",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "person" => Some(PrincipalKind::Person),
+            "agent" => Some(PrincipalKind::Agent),
+            _ => None,
+        }
+    }
+}
+
+/// The prefix of an unbound subject's principal string.
+///
+/// A member fingerprint always begins `SHA256:` (`PublicKey::fingerprint`), so
+/// no fingerprint can equal a string with this prefix. The `(iss, sub)` pair
+/// after it is a JSON array, which is injective: two different pairs never
+/// produce one string (`"a:b","c"` and `"a","b:c"` stay distinct). Membership is
+/// still never consulted for such a principal (`oauth::route_authenticated_
+/// request` answers it before `kb_query`), because `kb/add_member` accepts any
+/// string and so a member list could hold this very text.
+pub const UNBOUND_PREFIX: &str = "idp-unbound:";
+
+/// The principal string of an unbound external subject.
+pub fn unbound_principal(issuer: &str, subject: &str) -> String {
+    let pair = serde_json::Value::from(vec![issuer, subject]);
+    format!("{UNBOUND_PREFIX}{pair}")
 }
 
 /// A validated bearer token's outcome: the mapped principal plus enough of
@@ -84,13 +148,18 @@ pub struct ValidatedPrincipal {
     pub principal: String,
     pub audience: Vec<String>,
     pub expires_at: u64,
-    /// The token's raw `iss` and `sub` claims, BEFORE any claim mapping
-    /// (`principal` may come from a different claim). Together they are the
-    /// token's identity: ADR-099 B3 refuses a renewal that changes either, and
-    /// once external issuers are accepted the subject alone is not an identity.
+    /// The token's `iss`, and its subject: `sub` for a self-issued token, the
+    /// configured `principal_claim` (default `sub`) for an external one.
+    /// Together they are the token's identity: ADR-099 B3 refuses a renewal
+    /// that changes either, and they key the binding table (ADR-098 D3) — the
+    /// subject alone is not an identity once external issuers are accepted.
     /// Absent claims read as empty strings.
     pub issuer: String,
     pub subject: String,
+    /// What the credential was and whether it resolved to a fingerprint.
+    pub credential: Credential,
+    /// The effective kind (C3). Only a bound IdP token can be a person.
+    pub kind: PrincipalKind,
 }
 
 /// The raw `iss` and `sub` claims, empty when absent — for [`ValidatedPrincipal`].
@@ -106,8 +175,14 @@ fn raw_identity(claims: &serde_json::Value) -> (String, String) {
 }
 
 /// Build a [`ValidatedPrincipal`] from already-verified claims: one place for
-/// the audience/expiry/identity extraction both validators share.
-pub fn validated_from_claims(claims: &serde_json::Value, principal: String) -> ValidatedPrincipal {
+/// the audience/expiry/identity extraction both validators share. Every
+/// principal starts as an agent; only a binding flagged `person` changes that
+/// (`identity_binding::resolve`).
+pub fn validated_from_claims(
+    claims: &serde_json::Value,
+    principal: String,
+    credential: Credential,
+) -> ValidatedPrincipal {
     let audience: Vec<String> = match claims.get("aud") {
         Some(serde_json::Value::String(s)) => vec![s.clone()],
         Some(serde_json::Value::Array(arr)) => arr
@@ -124,6 +199,8 @@ pub fn validated_from_claims(claims: &serde_json::Value, principal: String) -> V
         expires_at,
         issuer,
         subject,
+        credential,
+        kind: PrincipalKind::Agent,
     }
 }
 
@@ -237,7 +314,11 @@ pub fn validate_self_issued_token(
         .and_then(|v| v.as_str())
         .ok_or(TokenValidationError::MissingPrincipalClaim)?
         .to_string();
-    Ok(validated_from_claims(&claims, principal))
+    Ok(validated_from_claims(
+        &claims,
+        principal,
+        Credential::SelfIssued,
+    ))
 }
 
 #[cfg(test)]
