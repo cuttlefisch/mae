@@ -1642,7 +1642,9 @@ fn spawn_reader_task<R: tokio::io::AsyncBufRead + Unpin + Send + 'static>(
     tokio::spawn(async move {
         let mut reader = reader;
         loop {
-            match mae_mcp::read_message(&mut reader).await {
+            match mae_mcp::read_message_limited(&mut reader, mae_mcp::MAX_DAEMON_RESPONSE_SIZE)
+                .await
+            {
                 Ok(Some(msg)) => {
                     if msg_tx.send(Ok(msg)).await.is_err() {
                         break; // main task dropped the receiver
@@ -5712,7 +5714,7 @@ where
         return None;
     }
 
-    match mae_mcp::read_message(reader).await {
+    match mae_mcp::read_message_limited(reader, mae_mcp::MAX_DAEMON_RESPONSE_SIZE).await {
         Ok(Some(text)) => {
             let peer_count = serde_json::from_str::<serde_json::Value>(&text)
                 .ok()

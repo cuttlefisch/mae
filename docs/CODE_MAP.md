@@ -420,6 +420,8 @@ Source: `shared/mcp/src/lib.rs`
 | `ready` | mod |
 | `session` | mod |
 | `tls` | mod |
+| `MAX_MESSAGE_SIZE` | const |
+| `MAX_DAEMON_RESPONSE_SIZE` | const |
 | `build_shim_initialize_params` | fn |
 | `RequesterContext` | struct |
 | `McpToolRequest` | struct |
@@ -429,6 +431,7 @@ Source: `shared/mcp/src/lib.rs`
 | `tune_request_stream` | fn |
 | `tuned` | fn |
 | `read_message` | fn |
+| `read_message_limited` | fn |
 | `handle_request` | fn |
 
 ## mae-org
