@@ -20,6 +20,9 @@ use mae_sync::kb::history::{HistoryEntry, HistoryKey, SignedHead, Tip};
 mod editor_record;
 #[path = "storage_history.rs"]
 mod history;
+#[path = "storage_kb_anchor.rs"]
+mod kb_anchor;
+pub use kb_anchor::AnchorSource;
 #[path = "storage_seed_record.rs"]
 mod seed_record;
 
@@ -220,6 +223,25 @@ pub trait StorageBackend: Send + Sync {
         Ok(())
     }
 
+    /// Every KB content anchor as `(kb_id, owner pubkey, source)` (ADR-036
+    /// Amendment 1 F1/F2). Default: none (an in-memory-only backend has nothing).
+    async fn load_kb_anchors(&self) -> Result<Vec<(String, [u8; 32], AnchorSource)>, StorageError> {
+        Ok(Vec::new())
+    }
+
+    /// Record `kb_id`'s content anchor and its source, replacing any previous
+    /// one. A backend without the table says so rather than pretending it did.
+    async fn put_kb_anchor(
+        &self,
+        _kb_id: &str,
+        _pubkey: &[u8; 32],
+        _source: AnchorSource,
+    ) -> Result<(), StorageError> {
+        Err(StorageError::Sqlite(
+            "this storage backend does not persist KB content anchors".into(),
+        ))
+    }
+
     /// A seeded KB's provenance and node rows (`seed::apply`), if it has any.
     ///
     /// The seed methods have no silent default: a backend without the tables
@@ -335,6 +357,7 @@ impl SqlitePool {
                 editor_record::ensure_schema(&conn)?;
                 seed_record::ensure_schema(&conn)?;
                 history::ensure_schema(&conn)?;
+                kb_anchor::ensure_schema(&conn)?;
                 // ADR-032 A5: migrate snapshot tables created before the integrity
                 // hash column. Errors (duplicate column on a fresh table) are ignored.
                 let _ =
@@ -377,6 +400,7 @@ impl SqlitePool {
         editor_record::ensure_schema(&conn)?;
         seed_record::ensure_schema(&conn)?;
         history::ensure_schema(&conn)?;
+        kb_anchor::ensure_schema(&conn)?;
         Ok(SqlitePool {
             shards: vec![std::sync::Mutex::new(conn)],
         })
@@ -845,6 +869,19 @@ impl StorageBackend for SqliteBackend {
         stmt.bind((2, principal))?;
         stmt.next()?;
         Ok(())
+    }
+
+    async fn load_kb_anchors(&self) -> Result<Vec<(String, [u8; 32], AnchorSource)>, StorageError> {
+        kb_anchor::load(&self.pool.lock_primary())
+    }
+
+    async fn put_kb_anchor(
+        &self,
+        kb_id: &str,
+        pubkey: &[u8; 32],
+        source: AnchorSource,
+    ) -> Result<(), StorageError> {
+        kb_anchor::put(&self.pool.lock_primary(), kb_id, pubkey, source)
     }
 }
 

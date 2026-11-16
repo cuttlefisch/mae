@@ -100,10 +100,10 @@ async fn the_content_op_check_refuses_a_node_of_another_kb() {
     seed(&store, &bc).await;
     let update = make_test_node("concept:n", "n", "x", &[]);
     let r =
-        verify_relayed_content_op(&store, "theirs", "kbn:ek:concept:n", &update, None, false).await;
+        verify_relayed_content_op(&store, "theirs", "kbn:ek:concept:n", &update, None, hub()).await;
     assert_eq!(r.map_err(|e| e.kind), Err(RefusalKind::DocKbMismatch));
     let same =
-        verify_relayed_content_op(&store, "ek", "kbn:ek:concept:n", &update, None, false).await;
+        verify_relayed_content_op(&store, "ek", "kbn:ek:concept:n", &update, None, hub()).await;
     assert!(same.is_ok(), "{same:?}");
 }
 

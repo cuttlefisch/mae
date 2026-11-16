@@ -157,6 +157,24 @@ the **same** source `kb_access` reads (`member_role`): the signed op-log on a KB
 locally authoritative member list on one that does not. An anchored KB without a signed op-log
 yet therefore keeps working; it does not lose every member to an empty derivation.
 
+The anchor is stored with its **provenance**, and the rule depends on it:
+
+- **An anchor this hub recorded itself** (the owner's session at first share, the owner's next
+  share or write, or the operator's `kb anchor`): the hub is the authority for the KB's member
+  list. Its log is the source only when rooted at a genesis that anchor signed — a
+  cryptographically valid owner self-admit, with no predecessor, authored by the anchor key. Any
+  other log (one that starts with a member's self-`Rebind` or the owner's key rotation, one whose
+  genesis another key signed) derives no members, so membership comes from the member list, as on
+  an un-anchored KB (verified genesis or fallback). No member op can therefore make such a KB lose
+  its members.
+- **An anchor registered from a mesh join** fails closed (ADR-026): the member list came from a
+  relay, so the log is always the source, and without a genesis the anchor signed it yields no
+  members. A relay can never substitute its own member list.
+
+One decision makes this choice for access, the epoch fence, op admission and the member set alike.
+The owner authoring a genesis later, to move a hub-recorded KB onto signed membership, is a separate
+step, not part of this amendment.
+
 ### F3. Every write path verifies
 
 - `sync/update` and `kb/node_update` (the browser's path), over mTLS, `/ws`, and every other
@@ -171,6 +189,18 @@ yet therefore keeps working; it does not lose every member to an empty derivatio
   in a snapshot need an owner signature, or are re-requested as signed ops, is decided in its own
   amendment before the switch is turned on for the mesh's join path. It is tracked here so the
   switch does not go on with it open.
+
+Open, not covered by the switch yet (as built; each needs its own decision):
+
+- **Collection manifest signing.** No signed-manifest op format exists, and
+  `kb/collection_node_add`/`kb/collection_node_remove` build their collection update on the
+  daemon, so there are no client bytes to sign. A raw `kbc:` write stays owner-only
+  (`deny_collection_smuggling`); the dialer applies the owner's pushed collection unverified.
+- **The mesh join snapshot**, as above.
+- **`kb/share`'s node states.** A share carries merged node state, not individual ops, like the
+  join snapshot; it is the owner's own session (re-share of another owner's id is refused), and is
+  not verified as content ops.
+- `__mcp_sync_update` needed nothing: the daemon already refuses it on that path.
 
 ### F4. An op a session originates is its own
 

@@ -193,15 +193,26 @@ async fn captured_ops(f: &mut Fixture, owner: &str) -> [serde_json::Value; 3] {
     [removed_op, viewer_op, stale_op]
 }
 
-/// The error `data` a member relaying each op gets.
+/// The error `data` a member's daemon gets relaying each op over the mesh — the
+/// one path on which a sender may carry someone else's op (ADR-036 Amendment 1
+/// F4; on a hub session the same op is `not_author`). Widens the KB to the mesh.
 async fn member_answers(
     f: &mut Fixture,
     member: &str,
     ops: &[serde_json::Value],
 ) -> Vec<serde_json::Value> {
+    let widen = load_coll(&f.store, KB)
+        .await
+        .set_transport_policy(mae_sync::kb::TransportPolicy::Both);
+    let coll_doc = format!("kbc:{KB}");
+    f.store
+        .apply_update(&coll_doc, &widen, None, TEST_BY)
+        .await
+        .unwrap();
     let mut out = Vec::new();
     for op in ops {
-        let resp = f.call_as(Some(member), op.clone()).await;
+        let relay = (Some(member), None, Transport::P2p);
+        let resp = dispatch_session(&f.store, &f.bc, relay, op.clone(), &mut f.docs).await;
         out.push(serialized(&resp));
     }
     out
@@ -237,8 +248,8 @@ async fn a_non_member_replaying_a_captured_op_learns_nothing_about_its_author() 
         "nothing written"
     );
 
-    // Positive control: a member relaying the same ops IS told about each
-    // author, so the identical answers above come from the caller's gate and
+    // Positive control: a member's daemon relaying the same ops over the mesh
+    // IS told about each author, so the identical answers above come from the caller's gate and
     // not from three ops that happen to fail alike.
     let got = member_answers(&mut f, &editor.fingerprint(), &ops).await;
     let data: Vec<&serde_json::Value> = got.iter().map(|e| &e["data"]).collect();

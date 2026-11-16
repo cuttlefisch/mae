@@ -128,7 +128,7 @@ async fn local_block_fences_principal_at_every_derive_site() {
     //     mediation — the block holds even if a future path reaches content verification
     //     without the gate). The signature itself is valid; only the blocklist rejects it.
     let (_upd_b, signed_b) = signed_op(&bob, "bob-post");
-    let verdict = verify_content_op(&store, "kbb", &owner_pk, &signed_b).await;
+    let verdict = verify_content_op(&store, "kbb", &signed_b).await;
     assert!(
         verdict.is_err(),
         "verify_content_op rejects a blocked author's (validly-signed) op, got {verdict:?}"

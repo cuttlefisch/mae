@@ -56,17 +56,19 @@ fn update_param(params: &serde_json::Value, max_update: usize) -> Result<Vec<u8>
 /// 1. the request names its KB (`kb_id`) — #169 M1: without it the write
 ///    skipped membership, signature AND fence;
 /// 2. the CALLER may edit that KB (`kb_access`);
-/// 3. a signed op verifies, and its signed AUTHOR is an Editor+ member at
-///    the op's epoch (ADR-036 §D3, `verify_relayed_content_op`) — a peer
-///    daemon relaying a member's edit is untrusted, so the op is re-checked
-///    here; require-signed on P2p, legacy unsigned accepted on the hub;
+/// 3. the content op verifies (ADR-036 §D3 + Amendment 1,
+///    `verify_relayed_content_op`): unsigned refused when the policy requires
+///    signatures (always on P2p), else counted; signature; on a session, the
+///    author is the caller (`not_author`); the author an Editor+ member at the
+///    op's epoch — a peer daemon relaying a member's edit is untrusted;
 /// 4. the ADR-023 epoch fence, on the verified author;
 /// 5. the node document's field types (`invalid_field`).
 ///
-/// Returns the verified header, carried onward with the broadcast.
+/// Returns the verified header, carried onward with the broadcast. A session
+/// with a key that owns a KB shared before Amendment 1 anchors it first (F1).
 async fn authorize_node_write(
     doc_store: &DocStore,
-    (session_id, auth_principal, transport): (u64, Option<&str>, Transport),
+    (session_id, auth_principal, auth_pubkey, transport): NodeWriter<'_>,
     (doc_name, node_id): (&str, &str),
     update_bytes: &[u8],
     params: &serde_json::Value,
@@ -78,6 +80,8 @@ async fn authorize_node_write(
             "kb node writes via sync/update must carry kb_id".to_string(),
         ));
     };
+    // ADR-036 Amendment 1 F1: an owner's key anchors a KB shared before it.
+    adopt_owner_anchor(doc_store, kb_id, None, auth_pubkey).await;
     // Membership FIRST, and unconditionally — before anything that reads the
     // op's header. Two reasons, each with a regression test:
     //
@@ -110,7 +114,7 @@ async fn authorize_node_write(
         doc_name,
         update_bytes,
         params.get("content_header"),
-        crate::content_op_policy::require_signed(transport),
+        OpSender::session(auth_principal, transport),
     )
     .await
     .map_err(|e| {
@@ -136,12 +140,16 @@ async fn authorize_node_write(
     Ok(header)
 }
 
+/// Who is writing a node over `sync/update`: session, principal, the session's
+/// key (absent for a bearer or `none` session), transport.
+type NodeWriter<'a> = (u64, Option<&'a str>, Option<&'a [u8; 32]>, Transport);
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_sync_update(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
     session_id: u64,
-    auth_principal: Option<&str>,
+    (auth_principal, auth_pubkey): (Option<&str>, Option<&[u8; 32]>),
     session_docs: &mut HashSet<String>,
     transport: Transport,
     id: serde_json::Value,
@@ -178,7 +186,7 @@ pub(super) async fn handle_sync_update(
     // epoch fence.
     let sync_content_header = match mae_sync::DocAddress::parse(&doc_name) {
         Some(mae_sync::DocAddress::KbNode { node_id, .. }) => {
-            let who = (session_id, auth_principal, transport);
+            let who = (session_id, auth_principal, auth_pubkey, transport);
             let node = (doc_name.as_str(), node_id.as_str());
             match authorize_node_write(doc_store, who, node, &update_bytes, params).await {
                 Ok(header) => header,

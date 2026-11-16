@@ -1034,6 +1034,25 @@ pub fn owner_anchor_pubkey(ops: &[SignedMembershipOp], owner_fp: &str) -> Option
         .map(|o| o.author_pubkey)
 }
 
+/// Whether the log is rooted at a genesis `anchor_owner_pubkey` signed: a
+/// crypto-valid owner self-admit with no predecessor, authored by that key —
+/// the same root [`derive_valid_members_governed`] searches for, with the key
+/// bound inside the search (#573), and without the local blocklist (blocking
+/// the owner must not change where membership is read from).
+///
+/// ADR-036 Amendment 1 F2: a KB's membership is derived from its op-log only
+/// when this holds. A log without such a root — one that starts with a member's
+/// self-`Rebind`, or whose genesis another key signed — derives no members, so
+/// reading membership from it would lock every member out.
+pub fn has_anchored_genesis(ops: &[SignedMembershipOp], anchor_owner_pubkey: &[u8; 32]) -> bool {
+    crypto_valid(ops).iter().any(|o| {
+        o.op.prev_hash.is_empty()
+            && o.op.action == MembershipAction::Admit
+            && o.op.subject == o.op.author
+            && &o.author_pubkey == anchor_owner_pubkey
+    })
+}
+
 /// Derive the KB's active [`Governance`] from the signed op-log (ADR-026 §A4).
 /// Owner-rooted + deterministic: the **latest** crypto-valid `SetGovernance` op
 /// authored by the anchored owner, in causal order, wins; absent/unparseable ⇒

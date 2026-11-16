@@ -100,9 +100,9 @@ async fn signed_content_op_verified_or_rejected_on_anchored_kb() {
         bad.error
     );
 
-    // (3) MIS-ATTRIBUTION: a member (bob) relays an op attributed to a NON-member
+    // (3) MIS-ATTRIBUTION: a member (bob) sends an op attributed to a NON-member
     // (mallory), validly signed by mallory's own key. The signature + fingerprint
-    // bind, but mallory ∉ members ⇒ NotAMember, rejected.
+    // bind, but bob's session is not its author ⇒ `not_author` (Amendment 1 F4).
     let mallory = Identity::generate("mallory");
     let m_op = ContentOp {
         kb_id: "kbc".to_string(),
@@ -128,15 +128,11 @@ async fn signed_content_op_verified_or_rejected_on_anchored_kb() {
         &mut docs,
     )
     .await;
-    assert!(
-        injected
-            .error
-            .as_ref()
-            .map(|e| e.message.contains("signed content op rejected"))
-            .unwrap_or(false),
-        "non-member-attributed op rejected, got {:?}",
-        injected.error
-    );
+    let err = injected
+        .error
+        .expect("an op another principal signed is refused");
+    let data = err.data.as_deref().cloned().unwrap_or_default();
+    assert_eq!(data["kind"], "not_author", "{}", err.message);
 }
 
 #[tokio::test]
@@ -313,27 +309,27 @@ async fn verify_relayed_content_op_owned_kb_branches() {
         }
         .header_params()
     };
-    let doc = "kbn:kbo:concept:n";
+    let (doc, relay) = ("kbn:kbo:concept:n", OpSender::mesh_relay());
 
     // A valid member's signed op verifies (owned-KB anchor resolved from the signer).
     let h = header(&bob, 0);
     assert!(
         matches!(
-            verify_relayed_content_op(&store, "kbo", doc, &upd, Some(&h), true).await,
+            verify_relayed_content_op(&store, "kbo", doc, &upd, Some(&h), relay).await,
             Ok(Some(_))
         ),
         "valid member op on an owned KB verifies"
     );
     // Unsigned: rejected under require-signed (mesh), accepted without it (hub).
     assert!(
-        verify_relayed_content_op(&store, "kbo", doc, &upd, None, true)
+        verify_relayed_content_op(&store, "kbo", doc, &upd, None, relay)
             .await
             .is_err(),
         "unsigned rejected when require_signed (mesh)"
     );
     assert!(
         matches!(
-            verify_relayed_content_op(&store, "kbo", doc, &upd, None, false).await,
+            verify_relayed_content_op(&store, "kbo", doc, &upd, None, hub()).await,
             Ok(None)
         ),
         "unsigned accepted on the hub (migration)"
@@ -341,7 +337,7 @@ async fn verify_relayed_content_op_owned_kb_branches() {
     // A non-member's validly-signed op is rejected (NotAMember).
     let stranger = header(&Identity::generate("stranger"), 0);
     assert!(
-        verify_relayed_content_op(&store, "kbo", doc, &upd, Some(&stranger), true)
+        verify_relayed_content_op(&store, "kbo", doc, &upd, Some(&stranger), relay)
             .await
             .is_err(),
         "non-member op rejected even with a valid signature"
@@ -349,7 +345,7 @@ async fn verify_relayed_content_op_owned_kb_branches() {
     // A non-KB doc is not a content op → passes through.
     assert!(
         matches!(
-            verify_relayed_content_op(&store, "kbo", "buffer:foo.txt", &upd, None, true).await,
+            verify_relayed_content_op(&store, "kbo", "buffer:foo.txt", &upd, None, relay).await,
             Ok(None)
         ),
         "non-KB doc passes through"

@@ -15,11 +15,44 @@ fn collection_state_param(params: &serde_json::Value) -> Result<Vec<u8>, McpErro
     base64_to_update(b64).map_err(|e| invalid(format!("invalid collection_state base64: {e}")))
 }
 
+/// `kb/share`'s caller: session, principal, the session's key (absent for a
+/// bearer or `none` session) and transport.
+pub(super) type ShareCaller<'a> = (u64, Option<&'a str>, Option<&'a [u8; 32]>, Transport);
+
+/// ADR-018 strict binding: the OWNER is the AUTHENTICATED principal (key
+/// fingerprint), overriding whatever the client baked in. A self-claimed
+/// creator is simply ignored — never rejected. `none` mode (no principal)
+/// keeps the client collection as-is (loopback trust).
+fn bind_owner(
+    collection_bytes: Vec<u8>,
+    auth_principal: Option<&str>,
+    owner_label: &str,
+    kb_id: &str,
+) -> Vec<u8> {
+    let Some(principal) = auth_principal else {
+        return collection_bytes;
+    };
+    match KbCollectionDoc::from_bytes(&collection_bytes) {
+        Ok(mut coll) => {
+            coll.set_owner(principal, owner_label);
+            coll.encode_state()
+        }
+        Err(e) => {
+            warn!(
+                kb_id = %kb_id,
+                error = %e,
+                "kb/share: owner-binding decode failed; using client collection unbound"
+            );
+            collection_bytes
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_kb_share(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
-    (session_id, auth_principal, transport): (u64, Option<&str>, Transport),
+    (session_id, auth_principal, auth_pubkey, transport): ShareCaller<'_>,
     auth_label: Option<&str>,
     session_docs: &mut HashSet<String>,
     id: serde_json::Value,
@@ -52,27 +85,7 @@ pub(super) async fn handle_kb_share(
         Ok(b) => b,
         Err(e) => return JsonRpcResponse::error(id, e),
     };
-    // ADR-018 strict binding: bind the OWNER = the AUTHENTICATED principal
-    // (key fingerprint), overriding whatever the client baked in. A
-    // self-claimed creator is simply ignored — never rejected. `none` mode
-    // (no principal) keeps the client collection as-is (loopback trust).
-    let collection_bytes = match auth_principal {
-        Some(principal) => match KbCollectionDoc::from_bytes(&collection_bytes) {
-            Ok(mut coll) => {
-                coll.set_owner(principal, &owner_label);
-                coll.encode_state()
-            }
-            Err(e) => {
-                warn!(
-                    kb_id = %kb_id,
-                    error = %e,
-                    "kb/share: owner-binding decode failed; using client collection unbound"
-                );
-                collection_bytes
-            }
-        },
-        None => collection_bytes,
-    };
+    let collection_bytes = bind_owner(collection_bytes, auth_principal, &owner_label, &kb_id);
     let collection_doc = format!("kbc:{kb_id}");
     // ADR-020 B-12: an owner reconnect/re-share must NOT clobber the daemon's
     // authoritative collection. It holds the durable membership — approved
@@ -114,6 +127,9 @@ pub(super) async fn handle_kb_share(
             "kb/share: collection exists — preserving daemon-side membership (B-12)"
         );
     }
+    // ADR-036 Amendment 1 F1: the sharer's key anchors the KB, at its first
+    // share; an owner re-sharing a KB shared before the amendment anchors it.
+    adopt_owner_anchor(doc_store, &kb_id, None, auth_pubkey).await;
     session_docs.insert(collection_doc.clone());
     // ADR-020 liveness: count the sharer as a connected client so the
     // collection doc isn't idle-evicted while the owner stays connected.
@@ -379,7 +395,7 @@ pub(super) async fn handle_kb_node_update(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
     session_id: u64,
-    auth_principal: Option<&str>,
+    (auth_principal, auth_pubkey): (Option<&str>, Option<&[u8; 32]>),
     session_docs: &mut HashSet<String>,
     transport: Transport,
     id: serde_json::Value,
@@ -411,6 +427,7 @@ pub(super) async fn handle_kb_node_update(
     // enforce_epoch_fence). `None` (a failed load) makes each gate load
     // itself, reproducing its exact original semantics.
     let pre_coll = load_collection(doc_store, &kb_id).await.ok();
+    adopt_owner_anchor(doc_store, &kb_id, pre_coll.as_ref(), auth_pubkey).await;
     let decision = kb_access_with_coll(
         doc_store,
         &kb_id,
@@ -427,83 +444,29 @@ pub(super) async fn handle_kb_node_update(
 
     let node_doc = mae_sync::kb_node_doc_name(&kb_id, &node_id);
 
-    // ADR-036 §D3 SIGNED CONTENT OP VERIFICATION. If the op carries a signed
-    // authorship header, the content AUTHOR (from the *signed header*, not the
-    // connection principal) must be a current Editor+ member at the op's
-    // epoch, and the signature must bind that author to this exact
-    // (kb_id, node_id, payload). This is what makes a *relayed* edit
-    // peer-verifiable: a hostile relay can neither forge an edit nor
-    // mis-attribute one (the node_id is signed, so a header claiming a
-    // different node than it carries fails `verify_signed`). Resolved via
-    // `resolve_content_anchor`, which anchors on the registered op-log key
-    // for a JOINED KB AND on this daemon's own signer key for an OWNED KB —
-    // #255: an owned KB that is ALSO mesh-shared must attach the header to
-    // its OWNER's signed ops, or the owner's edit reaches a mesh-joined
-    // member stripped of its signature and is rejected by the member's
-    // require-signed relay gate (`verify_relayed_content_op`, which already
-    // uses the SAME resolver — the send side was the lone asymmetry). An
-    // unsigned op (no header) falls through to the legacy epoch fence. When
-    // verified, the authorship header is carried into the broadcast (and thus
-    // the dialer's relay to peers) so a downstream peer re-verifies the same
-    // op — `verify_content_op` is the single check shared with the mesh relay
-    // path (principle #8).
-    // A JOINED KB (an external `kb_anchor` is registered) has NO authority
-    // beyond its signed op-log, so a signed op is verified STRICTLY and a bad
-    // one is hard-rejected. An OWNED KB is additionally authenticated by the
-    // trusted local connection (the sender already passed `kb_access` as the
-    // owner), so `resolve_content_anchor` falls back to the owner's own key and
-    // we attach the header for mesh relay WHEN the op verifies — but on a verify
-    // miss (e.g. the genesis owner-self-admit isn't seeded yet, so the owner
-    // isn't yet a *derived* member) we fall through to the legacy epoch fence
-    // rather than reject a trusted local edit. #255: without this attach, an
-    // owned-AND-mesh-shared KB relays the owner's signed edit STRIPPED of its
-    // header, and the mesh-joined member rejects it as unsigned.
-    let mut content_header: Option<serde_json::Value> = None;
-    let joined_anchor = doc_store.kb_anchor(&kb_id).await; // Some ⇒ joined ⇒ strict
-    let content_anchor = match joined_anchor {
-        Some(a) => Some(a),
-        None => resolve_content_anchor_with_coll(doc_store, &kb_id, pre_coll.as_ref()).await, // owned fallback (lenient)
-    };
-    if let Some(anchor) = content_anchor {
-        if let Some(signed) = SignedContentOp::from_params(params, update_bytes.clone()) {
-            match verify_content_op_with_coll(
-                doc_store,
-                &kb_id,
-                &anchor,
-                &signed,
-                pre_coll.as_ref(),
-            )
-            .await
-            {
-                Ok(()) => {
-                    info!(
-                        session = session_id, kb_id = %kb_id, node_id = %node_id,
-                        author = %signed.op.author,
-                        "kb/node_update: signed content op verified (ADR-036)"
-                    );
-                    content_header = Some(signed.header_params());
-                }
-                Err(e) if joined_anchor.is_some() => {
-                    warn!(
-                        session = session_id, kb_id = %kb_id, node_id = %node_id,
-                        author = %signed.op.author, reason = %e,
-                        "kb/node_update: SIGNED CONTENT OP REJECTED (ADR-036)"
-                    );
-                    return JsonRpcResponse::error(id, e.into());
-                }
-                Err(e) => {
-                    // Owned KB, trusted local connection: don't hard-reject a
-                    // not-yet-verifiable signed op — fall through to the legacy
-                    // epoch fence with no header (pre-#255 behavior preserved).
-                    debug!(
-                        session = session_id, kb_id = %kb_id, node_id = %node_id,
-                        reason = %e,
-                        "kb/node_update: owned-KB signed op not yet verifiable; legacy gate"
-                    );
-                }
-            }
+    // ADR-036 §D3 + Amendment 1: one verification for every write path —
+    // unsigned policy (F6), signature (F1), authorship (F4), and membership at
+    // the op's epoch from the source `kb_access` just read (F2). The verified
+    // header rides the broadcast, so a mesh peer re-verifies the same op (#255).
+    // The header fields are this request's own top-level params.
+    let sender = OpSender::session(auth_principal, transport);
+    let node = (kb_id.as_str(), node_id.as_str());
+    let verified = verify_node_op(
+        doc_store,
+        node,
+        &update_bytes,
+        Some(params),
+        sender,
+        pre_coll.as_ref(),
+    );
+    let content_header = match verified.await {
+        Ok(signed) => signed.map(|s| s.header_params()),
+        Err(e) => {
+            warn!(session = session_id, kb_id = %kb_id, node_id = %node_id, reason = %e,
+                  "kb/node_update: CONTENT OP REJECTED (ADR-036)");
+            return JsonRpcResponse::error(id, e.into());
         }
-    }
+    };
 
     // ADR-023 (B-19) EPOCH FENCE — the security core. `kb_access` above
     // confirmed the sender's *current* role permits editing, but a granted

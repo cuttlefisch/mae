@@ -8,6 +8,7 @@
 //! MAE's cross-tenant bugs came from assuming one of them covered both.
 
 use super::*;
+use crate::storage::AnchorSource;
 
 /// here. Resolves the caller's role from its cryptographic **principal** (key
 /// fingerprint — never a label), then decides by hierarchical RBAC role × the
@@ -37,8 +38,8 @@ pub(crate) async fn member_role(
     coll: &KbCollectionDoc,
     principal: &str,
 ) -> (Option<SyncRole>, ReplicationPolicy) {
-    match doc_store.kb_anchor(kb_id).await {
-        Some(anchor) if coll.oplog_head().is_some() => {
+    match signed_membership_anchor(doc_store, kb_id, coll).await {
+        Some(anchor) => {
             // ADR-026 §A4: read the owner-declared governance from the op-log, then
             // derive membership under it — so a `Quorum{m}` KB enforces m-of-n
             // co-signed removals (and an Owner removed by quorum loses access here)
@@ -56,8 +57,43 @@ pub(crate) async fn member_role(
                 None => (None, ReplicationPolicy::Full),
             }
         }
-        _ => (coll.role_of(principal), ReplicationPolicy::Full),
+        None => (coll.role_of(principal), ReplicationPolicy::Full),
     }
+}
+
+/// Where a KB's membership is read from — the ONE decision every membership
+/// reader shares (`kb_access`, the epoch fence, content-op admission, the
+/// member set), so access and verification can never read different sources
+/// (ADR-036 Amendment 1 F2). `Some(anchor)`: the signed op-log, derived under
+/// that anchor — always for a JOINED KB (empty without a genesis: fail closed),
+/// and for a hub-recorded anchor only when the log is rooted at a genesis that
+/// anchor signed. `None`: the locally authoritative roster (`member_roles`), on
+/// a KB without an anchor, or a hub-recorded one whose log has no such root.
+///
+/// @ai-caution: [security] "Verified genesis or fallback", for HUB-RECORDED
+/// anchors only (the owner's ruling on the F1+F2 lockout; this hub is the
+/// authority for those member lists): a log with no anchor-signed root derives NO members,
+/// so selecting it would lock every member out — and a member can create such
+/// a log on its own (a self-`Rebind` appended to a KB with no genesis). No
+/// member op may move a KB off its roster; only the owner's genesis does, and
+/// authoring one later is a separate step.
+pub(crate) async fn signed_membership_anchor(
+    doc_store: &DocStore,
+    kb_id: &str,
+    coll: &KbCollectionDoc,
+) -> Option<[u8; 32]> {
+    let (anchor, source) = doc_store.kb_anchor_record(kb_id).await?;
+    if source == AnchorSource::Joined {
+        // ADR-026: fail closed. The member list came from a relay; without
+        // a genesis the anchor signed the log derives no members, and that is
+        // the answer — a relay never substitutes its own list.
+        return Some(anchor);
+    }
+    coll.oplog_head()?;
+    let derived = doc_store
+        .derived_membership(kb_id, coll, &anchor, now_unix())
+        .await;
+    derived.genesis_verified.then_some(anchor)
 }
 
 /// As [`kb_access`], but accepts a pre-loaded collection snapshot so a handler
@@ -189,15 +225,15 @@ pub(crate) async fn current_member_set(
     kb_id: &str,
     coll: &KbCollectionDoc,
 ) -> std::collections::BTreeSet<String> {
-    match doc_store.kb_anchor(kb_id).await {
-        Some(anchor) if coll.oplog_head().is_some() => doc_store
+    match signed_membership_anchor(doc_store, kb_id, coll).await {
+        Some(anchor) => doc_store
             .derived_membership(kb_id, coll, &anchor, now_unix())
             .await
             .members
             .keys()
             .cloned()
             .collect(),
-        _ => coll
+        None => coll
             .member_roles()
             .into_iter()
             .map(|m| m.fingerprint)

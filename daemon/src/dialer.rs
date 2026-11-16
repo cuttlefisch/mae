@@ -26,6 +26,7 @@ use tracing::{info, warn};
 use crate::handler::DaemonState;
 use crate::p2p::MAE_ALPN;
 use crate::ticket::JoinTicket;
+use mae_daemon::collab_handler::OpSender;
 use mae_daemon::doc_editors::Attribution;
 use mae_daemon::doc_store::DocStore;
 use mae_mcp::broadcast::{EditorEvent, SharedBroadcaster};
@@ -253,7 +254,7 @@ async fn peer_session(
                         // Mesh require-signed: the owner is an untrusted relay, so an
                         // unsigned/forged/mis-attributed op is rejected (shared check).
                         match mae_daemon::collab_handler::verify_relayed_content_op(
-                            doc_store, &ticket.kb_id, &doc, &update, header.as_ref(), true,
+                            doc_store, &ticket.kb_id, &doc, &update, header.as_ref(), OpSender::mesh_relay(),
                         ).await {
                             Ok(verified) => {
                                 // #157 N1: the ADR-023 epoch fence runs on the mesh relay
