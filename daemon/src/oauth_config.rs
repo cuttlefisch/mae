@@ -29,6 +29,10 @@ pub struct OAuthConfig {
     pub canonical_resource_uri: String,
     /// URL to fetch the authorization server's JWKS from.
     pub jwks_url: String,
+    /// A PEM file of CA certificates the JWKS fetch trusts INSTEAD of the
+    /// system's roots. For an image without CA certificates, or an issuer
+    /// behind a private CA. Unset: the system's roots.
+    pub jwks_ca_file: Option<std::path::PathBuf>,
     /// The authorization server's issuer, checked against each token's
     /// `iss` claim. Strongly recommended to set; `None` skips issuer
     /// validation.
@@ -207,6 +211,7 @@ impl Default for OAuthConfig {
             bind: "127.0.0.1:9474".parse().unwrap(),
             canonical_resource_uri: String::new(),
             jwks_url: String::new(),
+            jwks_ca_file: None,
             issuer: None,
             principal_claim: "sub".to_string(),
             groups_claim: "groups".to_string(),

@@ -544,6 +544,7 @@ async fn spawn_oauth_listener(
         groups_claim: config.oauth.groups_claim.clone(),
         allowed_groups: config.oauth.allowed_groups.clone(),
         jwks_url: config.oauth.jwks_url.clone(),
+        jwks_ca_file: config.oauth.jwks_ca_file.clone(),
         issuer: config.oauth.issuer.clone(),
         kb_query_enabled: config.oauth.kb_query_enabled,
         max_request_body_bytes: config.oauth.max_request_body_bytes,
@@ -571,8 +572,14 @@ async fn spawn_oauth_listener(
     .await;
     state.lock().await.oauth_conn = Some(oauth_limiter.clone());
     let (bindings, binding_routes) = oauth_identity_binding(config);
-    let listener = oauth::Listener::new(server_config, doc_store, self_issue, oauth_quota, ws)
-        .with_identity_binding(bindings, binding_routes);
+    let listener = match oauth::Listener::new(server_config, doc_store, self_issue, oauth_quota, ws)
+    {
+        Ok(l) => l.with_identity_binding(bindings, binding_routes),
+        Err(e) => {
+            error!(error = %e, "OAuth listener disabled");
+            return;
+        }
+    };
     tokio::spawn(async move {
         if let Err(e) =
             oauth::run_oauth_listener(listener, bind, (&cert_path, &key_path), oauth_limiter).await
