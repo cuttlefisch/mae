@@ -1017,7 +1017,10 @@ is skipped while the daemon runs, since it reads the store under its lock). The 
 one with a signed membership op. On such a KB, `kb member add|remove`, `kb/add_member`,
 `kb/remove_member`, `kb/approve_member` and a permissive join's auto-admit are refused
 (`signer_unavailable`) unless this daemon signs the change into the log as the KB's owner, with the
-key the KB is anchored to.
+key the KB is anchored to. One consequence: a log-governed KB with a `permissive` policy admits no
+one by itself any more. A permissive join never signs, so it is refused, and the owner admits
+joiners with signed membership ops. This fails closed; it trades the automatic admission for not
+granting access the log never recorded.
 
 **A squatted KB id.** The first session to share an id owns it, and its key becomes that KB's
 anchor, durably. No command clears an anchor. To recover: the legitimate owner shares under a fresh

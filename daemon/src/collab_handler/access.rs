@@ -190,6 +190,10 @@ pub(crate) fn warn_roster_only(kb_id: &str, roster_only: &[String]) {
 /// `kb/add_member`, `kb/remove_member`, `kb/approve_member`, a permissive
 /// `kb/join`'s auto-admit, and the operator's `kb member`. A writer that skips
 /// it reports success for a member the log never admits (or keeps admitting).
+/// One writer is exempt by design: the ADR-040 rebind mirror in `kb_content`
+/// copies a successor key into the roster AFTER the signed `Rebind` op is in
+/// the log. On a log-governed KB the log already aliases the successor, so the
+/// roster write only keeps the roster view in step and admits no one new.
 pub(crate) async fn refuse_roster_only_change(
     doc_store: &DocStore,
     kb_id: &str,
