@@ -102,6 +102,7 @@ ICON_FILE    := assets/mae.svg
 	code-map code-map-check heavy-e2e-check tool-args-check \
 	audit-metrics audit-metrics-check audit-metrics-bless \
 	org-wasm org-wasm-repro org-wasm-test \
+	crypto-wasm crypto-wasm-repro crypto-wasm-test \
 	manual-kb install-manual practices-kb install-practices kb-provisioning-cost backup-kbs \
 	devpractices-kb install-devpractices adr-kb fetch-adr-kb install-adr \
 	docker-ci docker-new-user docker-smoke docker-dev docker-clean \
@@ -636,6 +637,18 @@ org-wasm-repro:
 ## org-wasm-test: size budget, native-vs-WASM differential and memory over 10,000 calls (needs node)
 org-wasm-test:
 	CARGO=$(CARGO) scripts/org-wasm.sh test
+
+## crypto-wasm: build mae-crypto's WASM module (shared/crypto-wasm); prints size and sha256
+crypto-wasm:
+	CARGO=$(CARGO) scripts/crypto-wasm.sh build
+
+## crypto-wasm-repro: build the crypto WASM module twice in separate target dirs and require identical bytes
+crypto-wasm-repro:
+	CARGO=$(CARGO) scripts/crypto-wasm.sh repro
+
+## crypto-wasm-test: size budget, ABI, native-vs-WASM differential, interop, entropy, leak and residue (needs node)
+crypto-wasm-test:
+	CARGO=$(CARGO) scripts/crypto-wasm.sh test
 
 ## audit-metrics: regenerate docs/AUDIT_METRICS.json (structural metrics + marker cross-refs)
 audit-metrics:

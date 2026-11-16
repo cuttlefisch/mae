@@ -534,18 +534,44 @@
         }
       ]
     },
-    "mae-crypto-wasm": {
-      "path": "shared/crypto-wasm/src/lib.rs",
-      "dependencies": [
-        "mae-sync"
-      ],
+    "mae-crypto": {
+      "path": "shared/crypto/src/lib.rs",
+      "dependencies": [],
       "public_items": [
         {
-          "name": "api",
+          "name": "backup",
           "kind": "mod"
         },
         {
           "name": "content_crypto",
+          "kind": "mod"
+        },
+        {
+          "name": "identity_challenge",
+          "kind": "mod"
+        },
+        {
+          "name": "member",
+          "kind": "mod"
+        },
+        {
+          "name": "rng",
+          "kind": "mod"
+        },
+        {
+          "name": "VERSION",
+          "kind": "const"
+        }
+      ]
+    },
+    "mae-crypto-wasm": {
+      "path": "shared/crypto-wasm/src/lib.rs",
+      "dependencies": [
+        "mae-crypto"
+      ],
+      "public_items": [
+        {
+          "name": "api",
           "kind": "mod"
         },
         {
@@ -1019,6 +1045,7 @@
     "mae-mcp": {
       "path": "shared/mcp/src/lib.rs",
       "dependencies": [
+        "mae-crypto",
         "mae-effect-sandbox"
       ],
       "public_items": [
@@ -1376,14 +1403,12 @@
     },
     "mae-sync": {
       "path": "shared/sync/src/lib.rs",
-      "dependencies": [],
+      "dependencies": [
+        "mae-crypto"
+      ],
       "public_items": [
         {
           "name": "awareness",
-          "kind": "mod"
-        },
-        {
-          "name": "content_crypto",
           "kind": "mod"
         },
         {

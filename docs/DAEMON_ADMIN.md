@@ -333,14 +333,18 @@ identity_binding_enabled = true            # POST /identity/challenge + /identit
      `iss`, `sub`, this listener's `aud`, the fingerprint, a random `nonce` (= `challenge_id`) and
      `expires_at`. Show the person the `iss`/`sub` before they sign.
   2. On the machine holding the member key (the editor's collab identity, `mae --collab-identity`),
-     run `mae --sign-identity-challenge '<answer>' --issuer <your iss> --subject <your sub>` (or
+     run `mae --sign-identity-challenge '<answer>' --issuer <your iss> --subject <your sub>
+     --audience <this daemon's canonical_resource_uri>` (or
      `-` to read the answer from stdin), with either the `challenge` text or the whole answer from
      step 1. `--issuer` and `--subject` are the key holder's OWN identity-provider identity: the
      daemon issues a challenge for any key to any signed-in subject, so a challenge naming your key
      says nothing about who asked for it, and one issued to anyone else is refused (both must match
-     the challenge byte for byte). It prints the issuer, subject, audience and key on stderr before
+     the challenge byte for byte). `--audience` is the daemon you mean to bind at, compared byte for
+     byte with the challenge's `aud`, so a challenge another daemon issued and relayed to you is
+     refused; so is one valid for more than an hour from now (signers cap a challenge's remaining
+     lifetime at 3600 s; keep `identity_challenge_ttl_secs` well under it). It prints the issuer, subject, audience and key on stderr before
      signing, and the bind body on stdout. It signs nothing but a canonical, unexpired challenge
-     naming its own key and the stated subject, and never prints the secret key. (The signed bytes
+     naming its own key and the stated issuer, subject and audience, and never prints the secret key. (The signed bytes
      are the UTF-8 of `challenge`, Ed25519.)
   3. `POST /identity/bind` `{"challenge_id", "public_key": "<base64 of the 32 key bytes>",
      "signature": "<base64>"}` with a token of the same `(iss, sub)` → `{"principal", "kind",

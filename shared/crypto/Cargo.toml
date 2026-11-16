@@ -1,0 +1,49 @@
+[package]
+name = "mae-crypto"
+description = "MAE's member-key, identity-challenge, key-backup and content-envelope crypto: pure, no I/O, builds for wasm32"
+# Its own version, not the workspace's: mae-crypto-wasm's artifact is a
+# contract a browser client pins (`mae-crypto-vX.Y.Z` tags), and MAE's
+# release bump (.github/workflows/version-bump.yml) edits only the root
+# workspace version and the crates it lists, so a MAE release changes
+# neither this number nor the WASM artifact's bytes. Bump it by hand when
+# the contract changes.
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# No I/O, no clock, no OS: everything here builds for wasm32-unknown-unknown,
+# where the one source of randomness is the host (src/rng.rs). The daemon,
+# the editor (through mae-sync and mae-mcp) and the browser (through
+# mae-crypto-wasm) run these same functions.
+[dependencies]
+# Default features off: chacha20poly1305's default `getrandom` would pull
+# getrandom into the WASM build, which has no OS source (src/rng.rs).
+chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc", "zeroize"] }
+sha2 = "0.11"
+# Pinned at 2/4 like mae-sync and mae-mcp (iroh's chain, see their Cargo.toml).
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+ed25519-dalek = "2"
+zeroize = { version = "1", features = ["zeroize_derive"] }
+base64 = "0.23"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The key backup (src/backup.rs). Optional so the daemon and the editor, which
+# do not seal backups yet, do not carry it. Default features off: no
+# password-hash string format and no getrandom.
+argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize"], optional = true }
+# The backup passphrase is NFC-normalised here, on both sides, so a native
+# caller and the browser derive the same key from the same typed passphrase.
+unicode-normalization = { version = "0.1", optional = true }
+
+# Natively, randomness comes from rand's thread RNG, exactly as it did when
+# this code lived in mae-sync. On wasm32 it comes from the host (src/rng.rs),
+# and neither rand nor getrandom is built.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rand = "0.10"
+
+[features]
+backup = ["dep:argon2", "dep:unicode-normalization"]
+
+[dev-dependencies]
+curve25519-dalek = "4"
