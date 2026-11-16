@@ -447,6 +447,20 @@ impl McpError {
         )
     }
 
+    /// A request's framed length is over the session's request cap. The
+    /// framing cannot resume past an unread body, so the session ends right
+    /// after this answer; its `id` is `null` because the request was never
+    /// read. Send the same content in smaller requests (`kb/share` takes node
+    /// batches, ADR-022 Amendment 1).
+    pub fn request_too_large(message: String, size: usize, limit: usize) -> Self {
+        Self::kinded(
+            -32600,
+            message,
+            "request_too_large",
+            serde_json::json!({ "size": size, "limit": limit }),
+        )
+    }
+
     /// `kb/remove_member` named the KB's owner.
     pub fn cannot_remove_owner(message: String) -> Self {
         Self::kinded(
@@ -519,6 +533,59 @@ impl McpError {
         )
     }
 
+    /// An external token carrying none of the groups `oauth.allowed_groups` names
+    /// (ADR-098 D4). Checked before the binding is looked up.
+    pub fn group_required(message: String) -> Self {
+        Self::kinded(-32600, message, "group_required", serde_json::json!({}))
+    }
+
+    /// A binding challenge that is unknown, already presented or expired — one
+    /// refusal for all three (ADR-098 Amendment 1, C2).
+    pub fn challenge_invalid(message: String) -> Self {
+        Self::kinded(-32600, message, "challenge_invalid", serde_json::json!({}))
+    }
+
+    /// A binding challenge presented by a token of another subject or issuer,
+    /// or issued for another audience (C2).
+    pub fn challenge_mismatch(message: String) -> Self {
+        Self::kinded(-32600, message, "challenge_mismatch", serde_json::json!({}))
+    }
+
+    /// The key's fingerprint is not the one challenged, or the signature over
+    /// the challenge does not verify (C2).
+    pub fn proof_invalid(message: String) -> Self {
+        Self::kinded(-32600, message, "proof_invalid", serde_json::json!({}))
+    }
+
+    /// The subject, or the fingerprint, is already bound; replacing a binding
+    /// takes an explicit unbind by the administrator first (C2). `field` is
+    /// `"subject"` or `"fingerprint"`.
+    pub fn binding_conflict(message: String, field: &str) -> Self {
+        Self::kinded(
+            -32600,
+            message,
+            "binding_conflict",
+            serde_json::json!({ "field": field }),
+        )
+    }
+
+    /// A subject already holds `limit` unused binding challenges (C2).
+    pub fn too_many_challenges(message: String, limit: usize) -> Self {
+        Self::kinded(
+            -32600,
+            message,
+            "too_many_challenges",
+            serde_json::json!({ "limit": limit }),
+        )
+    }
+
+    /// An identity-provider token whose `(iss, sub)` is bound to no member key,
+    /// presented to the sync socket (ADR-099 Amendment 2, E1). It is refused,
+    /// never admitted as its raw subject (ADR-098 Amendment 1, C1).
+    pub fn identity_not_bound(message: String) -> Self {
+        Self::kinded(-32600, message, "identity_not_bound", serde_json::json!({}))
+    }
+
     /// The daemon failed (storage, decode, persistence). Not a decision about
     /// the caller; retrying may succeed.
     pub fn internal_fault(message: String) -> Self {
@@ -558,6 +625,7 @@ pub const ERROR_KINDS: &[&str] = &[
     "protocol_unsupported",
     "origin_not_allowed",
     "update_too_large",
+    "request_too_large",
     "invalid_field",
     "cannot_remove_owner",
     "signer_unavailable",
@@ -569,6 +637,13 @@ pub const ERROR_KINDS: &[&str] = &[
     "kb_query_unavailable",
     "e2e_unsupported",
     "history_holds_plaintext",
+    "group_required",
+    "challenge_invalid",
+    "challenge_mismatch",
+    "proof_invalid",
+    "binding_conflict",
+    "too_many_challenges",
+    "identity_not_bound",
     "internal",
 ];
 
@@ -740,6 +815,7 @@ mod tests {
             McpError::protocol_unsupported(m()),
             McpError::origin_not_allowed(m()),
             McpError::update_too_large(m(), 2, 1),
+            McpError::request_too_large(m(), 2, 1),
             McpError::invalid_field("title", m()),
             McpError::cannot_remove_owner(m()),
             McpError::signer_unavailable(m()),
@@ -751,6 +827,13 @@ mod tests {
             McpError::kb_query_unavailable(m()),
             McpError::e2e_unsupported(m()),
             McpError::history_holds_plaintext(m()),
+            McpError::group_required(m()),
+            McpError::challenge_invalid(m()),
+            McpError::challenge_mismatch(m()),
+            McpError::proof_invalid(m()),
+            McpError::binding_conflict(m(), "subject"),
+            McpError::too_many_challenges(m(), 4),
+            McpError::identity_not_bound(m()),
             McpError::internal_fault(m()),
         ]
     }

@@ -29,12 +29,39 @@ pub struct OAuthConfig {
     pub canonical_resource_uri: String,
     /// URL to fetch the authorization server's JWKS from.
     pub jwks_url: String,
+    /// A PEM file of CA certificates the JWKS fetch trusts INSTEAD of the
+    /// system's roots. For an image without CA certificates, or an issuer
+    /// behind a private CA. Unset: the system's roots.
+    pub jwks_ca_file: Option<std::path::PathBuf>,
     /// The authorization server's issuer, checked against each token's
     /// `iss` claim. Strongly recommended to set; `None` skips issuer
     /// validation.
     pub issuer: Option<String>,
-    /// Which JWT claim becomes the mapped `kb_access` principal.
+    /// Which claim of an external token identifies its subject within its
+    /// issuer: with `iss`, the binding table's key (ADR-098 D3). Since ADR-098
+    /// Amendment 1 (C1) it never becomes the `kb_access` principal itself; an
+    /// external token reaches a member only through a binding.
     pub principal_claim: String,
+    /// ADR-098 D4: the claim an external token lists its groups in (a string
+    /// array, or one string).
+    pub groups_claim: String,
+    /// ADR-098 D4: an external token carrying ANY ONE of these groups is
+    /// admitted (exact match), checked on every
+    /// request before the binding is looked up. Empty (the default): no group
+    /// gate. Self-issued tokens carry no groups and are not gated.
+    pub allowed_groups: Vec<String>,
+    /// ADR-098 Amendment 1, C2: whether `POST /identity/challenge` and `POST
+    /// /identity/bind` exist, letting an IdP-authenticated person bind their
+    /// subject to a member key by proof of possession. Default `false`
+    /// (principle #12). The binding table itself is consulted either way; the
+    /// local `mae-daemon binding` CLI administers it regardless.
+    pub identity_binding_enabled: bool,
+    /// How long a binding challenge stays valid, seconds. Long enough to carry
+    /// it from a browser to the program holding the key and back.
+    pub identity_challenge_ttl_secs: u64,
+    /// Unused binding challenges one subject may hold at once; bounds the
+    /// in-memory store against an authenticated caller.
+    pub identity_max_pending_challenges: usize,
     /// PEM-encoded TLS certificate chain path for the HTTPS listener.
     pub cert_path: PathBuf,
     /// PEM-encoded TLS private key path for the HTTPS listener.
@@ -124,6 +151,28 @@ pub struct OAuthConfig {
     /// (`kid = "self"`, so `self_issued_tokens_enabled` is a prerequisite), and
     /// it needs `collab.enabled` — the socket reaches the collab session loop.
     pub ws_enabled: bool,
+    /// ADR-099 Amendment 2, E1: whether `/ws` and `/ws/ticket` also accept an
+    /// external identity-provider token whose `(iss, sub)` is bound to a member
+    /// key (ADR-098). The session's principal is then the bound fingerprint; an
+    /// unbound token is refused `identity_not_bound`. Default `false`: only this
+    /// daemon's own tokens (B6). Until hub signature verification (#727) is
+    /// enforced, a write over such a session is trusted on the channel alone
+    /// (E3), so this is for a pilot with short IdP token lifetimes.
+    pub ws_accept_bound_idp: bool,
+    /// ADR-099 Amendment 2, E2: the longest a bound-IdP socket session runs
+    /// before it must renew, seconds, whatever the IdP token's own `exp`. Each
+    /// renewal re-reads the binding, so this bounds how long an unbind, a
+    /// rebind or a lost group takes to reach an open socket, independently of
+    /// the token lifetime the IdP is configured with. Default 900 (15 min):
+    /// short enough for the pilot's revocation window, long enough that a
+    /// renewal (one validation and one binding lookup per session) every
+    /// `900 - ws_renew_lead_secs` seconds costs nothing measurable, and the
+    /// client renews with the token it already holds, so a cap shorter than
+    /// the token adds no sign-in. Must exceed `ws_renew_lead_secs`, or every
+    /// session would be asked to renew as it opens (`/ws` is then disabled
+    /// and the reason logged). `0`: no cap, the deadline is the token's `exp`.
+    /// Self-issued sessions are not capped.
+    pub ws_max_idp_session_secs: u64,
     /// Origins a browser handshake (and a ticket mint) may carry, matched
     /// EXACTLY: no wildcards, no prefix or substring matching (B1). A request
     /// with no `Origin` (a native client) is not origin-checked. Empty means no
@@ -150,7 +199,7 @@ pub struct OAuthConfig {
     /// closes the socket with `1011` and reason `response_too_large`, never
     /// silently. Unset means derived from `[collab.sync]
     /// max_document_size_bytes` so one document at that limit always fits
-    /// (`ws::outbound_bound`). Advertised in `session/hello` as
+    /// (`DocStore::message_bound`). Advertised in `session/hello` as
     /// `limits.max_outbound_bytes`.
     pub ws_max_outbound_bytes: Option<usize>,
 }
@@ -162,8 +211,14 @@ impl Default for OAuthConfig {
             bind: "127.0.0.1:9474".parse().unwrap(),
             canonical_resource_uri: String::new(),
             jwks_url: String::new(),
+            jwks_ca_file: None,
             issuer: None,
             principal_claim: "sub".to_string(),
+            groups_claim: "groups".to_string(),
+            allowed_groups: Vec::new(),
+            identity_binding_enabled: false,
+            identity_challenge_ttl_secs: 300,
+            identity_max_pending_challenges: 4,
             cert_path: PathBuf::new(),
             key_path: PathBuf::new(),
             kb_query_enabled: false,
@@ -177,6 +232,8 @@ impl Default for OAuthConfig {
             self_issued_token_ttl_secs: 3600,
             self_issued_token_max_ttl_secs: 86_400,
             ws_enabled: false,
+            ws_accept_bound_idp: false,
+            ws_max_idp_session_secs: 900,
             ws_allowed_origins: Vec::new(),
             ws_renew_lead_secs: 60,
             ws_ping_secs: 30,

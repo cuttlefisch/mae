@@ -121,7 +121,10 @@ mod tests {
         ResourceServerConfig {
             canonical_resource_uri: TEST_RESOURCE.to_string(),
             principal_claim: "sub".to_string(),
+            groups_claim: "groups".to_string(),
+            allowed_groups: Vec::new(),
             jwks_url: "https://unused-in-these-tests.example.com/jwks".to_string(),
+            jwks_ca_file: None,
             issuer: Some("https://idp.example.com".to_string()),
             kb_query_enabled: false,
             max_request_body_bytes: 1_048_576,
@@ -155,7 +158,20 @@ mod tests {
         let token = sign_token(&pem, &valid_claims(now_unix()));
         let result = validate_bearer_token(&token, &[jwk], &base_config());
         let principal = result.expect("valid token must be accepted");
-        assert_eq!(principal.principal, "alice@example.com");
+        // ADR-098 Amendment 1, C1: the claim is the subject, never the
+        // principal; until a binding resolves it, it is an unbound subject.
+        assert_eq!(principal.subject, "alice@example.com");
+        assert_eq!(
+            principal.principal,
+            mae_daemon::oauth_self_issue::unbound_principal(
+                "https://idp.example.com",
+                "alice@example.com"
+            )
+        );
+        assert_eq!(
+            principal.credential,
+            mae_daemon::oauth_self_issue::Credential::IdpUnbound
+        );
         assert_eq!(principal.audience, vec![TEST_RESOURCE.to_string()]);
     }
 

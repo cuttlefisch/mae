@@ -2,6 +2,105 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.158] - 2026-11-16
+
+
+
+
+### Bug Fixes
+
+- *(oauth)* No CA roots is a startup error, not a panic; oauth.jwks_ca_file ([64463a6](https://github.com/cuttlefisch/mae/commit/64463a6f084c5f4015ed1f73b15fddd356494f8e))
+
+### Testing
+
+- *(oauth)* Run the no-CA-roots cases in a child process ([b463755](https://github.com/cuttlefisch/mae/commit/b4637551ea52441cd856d20c3d02d64c7707899c))
+
+## [0.14.157] - 2026-11-16
+
+
+
+
+### Features
+
+- *(crypto)* Mae-crypto, one no-I/O crypto crate, and its WASM facade ([09c8206](https://github.com/cuttlefisch/mae/commit/09c82066cf7ab99e4a3cc253ca4d5ab8389b5cf7))
+
+### Bug Fixes
+
+- *(crypto)* Review round 1 for mae-crypto and its WASM facade ([9b923c3](https://github.com/cuttlefisch/mae/commit/9b923c3023de0eb20afc4c90f11a8ebc7a67781f))
+
+### Miscellaneous
+
+- Bump version to 0.14.157 ([a880cd3](https://github.com/cuttlefisch/mae/commit/a880cd389def3f05c413ca7886118f849837b71d))
+
+## [0.14.156] - 2026-11-15
+
+
+
+
+### Features
+
+- *(daemon)* Accept a bound IdP login on /ws behind a pilot switch (ADR-099 Am. 2) ([24f49b6](https://github.com/cuttlefisch/mae/commit/24f49b639512bc2beda4a97749fa1f628a6eb885))
+
+### Bug Fixes
+
+- *(daemon)* Cap a bound-IdP socket session; re-resolve a ticket's binding ([4d57aa2](https://github.com/cuttlefisch/mae/commit/4d57aa2313dfad9f5fdd842cf1329696a9933e13))
+
+### Miscellaneous
+
+- Bump version to 0.14.156 ([11b310f](https://github.com/cuttlefisch/mae/commit/11b310fcffe9c0b61748fc76f8781876dd8d280d))
+
+## [mae-org-v0.9.0] - 2026-11-15
+
+
+
+
+### Features
+
+- *(org)* Toplevel_hlevel — the HTML level of a top-level headline (mae-org 0.9.0) ([d5fc3b6](https://github.com/cuttlefisch/mae/commit/d5fc3b6c52daaa35e581d6de435448f4d1e0a881))
+
+### Documentation
+
+- *(adr-074)* Amendment 1 — partial open decided ([bae3842](https://github.com/cuttlefisch/mae/commit/bae38423504ed518e5a7da5eea99d637c641db95))
+- *(adr-074)* Amendment 1 — defaults, write-cost bar and HTTP/2 decided ([2246a0c](https://github.com/cuttlefisch/mae/commit/2246a0c659f4a5442e27a8fbd640053b36c367ab))
+
+## [0.14.155] - 2026-11-15
+
+
+
+
+### Features
+
+- *(daemon)* ADR-098 Phase C read path — typed principal, binding table, group gate ([4913826](https://github.com/cuttlefisch/mae/commit/4913826959cf8837f40e99b76c7e2886d56378cc))
+
+### Bug Fixes
+
+- *(identity)* The signer confirms the subject it binds; store hardening ([9b8b39f](https://github.com/cuttlefisch/mae/commit/9b8b39f48e99d3e085ea51c823dd544bbdf80e86))
+
+### Testing
+
+- *(identity)* Split the binding e2e tests into helpers ([9d56b0d](https://github.com/cuttlefisch/mae/commit/9d56b0d5b93c959ab637b55c2c072baabe367f7f))
+
+### Miscellaneous
+
+- Bump version to 0.14.155 ([22f6238](https://github.com/cuttlefisch/mae/commit/22f62386eda5159467ac03cbde6767f96484286c))
+
+## [0.14.154] - 2026-11-15
+
+
+
+
+### Features
+
+- *(kb)* Page whole-KB transfers both ways (ADR-022 Amendment 1) ([ff02487](https://github.com/cuttlefisch/mae/commit/ff024877b72e5272f91f8e4b2cc040dcd1c15a39))
+
+### Refactor
+
+- *(collab)* Share batches and join pages in their own functions ([c2003ed](https://github.com/cuttlefisch/mae/commit/c2003ed6fa82fa48d2b945058d851a9ca4d47202))
+
+### Miscellaneous
+
+- Bump version to 0.14.154 ([9768c6f](https://github.com/cuttlefisch/mae/commit/9768c6fb06198e4722d4ef0014945769b875abe1))
+
 ## [0.14.153] - 2026-11-15
 
 
@@ -10,6 +109,10 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 
 - *(ws)* Bound replies by their own limit, and close when one is over it ([b08f8f7](https://github.com/cuttlefisch/mae/commit/b08f8f794c889e65c60ae4cfb9097ae96e45c35d))
+
+### Miscellaneous
+
+- Bump version to 0.14.153 ([8bff37d](https://github.com/cuttlefisch/mae/commit/8bff37d9207598e5b9e92b75091533b3fd12ee67))
 
 ## [0.14.152] - 2026-11-15
 

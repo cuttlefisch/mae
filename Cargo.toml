@@ -25,13 +25,14 @@ members = [
     "shared/effect-sandbox",
     "shared/org",
     "shared/org-wasm",
+    "shared/crypto",
     "shared/crypto-wasm",
 ]
 exclude = ["tools/code-map", "tools/audit-metrics", "daemon"]
 resolver = "2"
 
 [workspace.package]
-version = "0.14.153"
+version = "0.14.158"
 edition = "2021"
 license = "GPL-3.0-or-later"
 rust-version = "1.95"
@@ -63,10 +64,19 @@ tracing = "0.1"
 [patch.crates-io]
 yrs = { git = "https://github.com/cuttlefisch/y-crdt", rev = "40a08982b4e95fe8d06c84e4df5a5713eca11c25" }
 
-# The WASM facade's build (`make org-wasm`, shared/org-wasm): one codegen
-# unit, LTO, no unwinding and no symbols, so the artifact is small and the
-# same bytes on every build. Selected only by `--profile wasm`; nothing else
-# uses it.
+# mae-crypto's key-backup tests derive Argon2id keys (19 MiB, two passes) on
+# every case, and unoptimised that is seconds each. Only these two crates,
+# which nothing else in the workspace uses, are optimised in dev/test builds.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
+
+# The WASM facades' build (`make org-wasm`, `make crypto-wasm`; shared/org-wasm,
+# shared/crypto-wasm): one codegen unit, LTO, no unwinding and no symbols, so
+# the artifact is small and the same bytes on every build. Selected only by
+# `--profile wasm`; nothing else uses it.
 [profile.wasm]
 inherits = "release"
 opt-level = "s"

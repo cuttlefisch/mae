@@ -237,6 +237,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "argon2"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "134c52ddac6d63c576bef8168db10c83c49c26444ecbc68060fef078925a901c"
+dependencies = [
+ "base64ct",
+ "blake2",
+ "cpufeatures 0.3.0",
+ "password-hash",
+ "zeroize",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -497,6 +510,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "blake2"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b5d4d889834ee8ecfc0f8426ad30faf7cdcb10f741a8e6d7224d95325479f6f"
+dependencies = [
+ "digest 0.11.3",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -691,6 +713,7 @@ dependencies = [
  "cipher 0.5.2",
  "cpufeatures 0.3.0",
  "rand_core 0.10.1",
+ "zeroize",
 ]
 
 [[package]]
@@ -703,6 +726,7 @@ dependencies = [
  "chacha20",
  "cipher 0.5.2",
  "poly1305",
+ "zeroize",
 ]
 
 [[package]]
@@ -1217,9 +1241,7 @@ version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
 dependencies = [
- "getrandom 0.4.2",
  "hybrid-array",
- "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -3038,7 +3060,7 @@ dependencies = [
 
 [[package]]
 name = "mae"
-version = "0.14.153"
+version = "0.14.158"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3080,7 +3102,7 @@ dependencies = [
 
 [[package]]
 name = "mae-agent-cli"
-version = "0.14.153"
+version = "0.14.158"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3099,7 +3121,7 @@ dependencies = [
 
 [[package]]
 name = "mae-ai"
-version = "0.14.153"
+version = "0.14.158"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3123,11 +3145,11 @@ dependencies = [
 
 [[package]]
 name = "mae-babel"
-version = "0.14.153"
+version = "0.14.158"
 
 [[package]]
 name = "mae-canvas"
-version = "0.14.153"
+version = "0.14.158"
 dependencies = [
  "serde",
  "serde_json",
@@ -3135,7 +3157,7 @@ dependencies = [
 
 [[package]]
 name = "mae-core"
-version = "0.14.153"
+version = "0.14.158"
 dependencies = [
  "criterion",
  "hex",
@@ -3190,23 +3212,37 @@ dependencies = [
 ]
 
 [[package]]
-name = "mae-crypto-wasm"
-version = "0.0.0"
+name = "mae-crypto"
+version = "0.1.0"
 dependencies = [
+ "argon2",
+ "base64 0.23.1",
  "chacha20poly1305",
  "curve25519-dalek",
  "ed25519-dalek",
- "getrandom 0.4.2",
- "mae-sync",
  "rand 0.10.3",
+ "serde",
+ "serde_json",
  "sha2 0.11.0",
+ "unicode-normalization",
  "x25519-dalek",
  "zeroize",
 ]
 
 [[package]]
+name = "mae-crypto-wasm"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "mae-crypto",
+ "serde",
+ "serde_json",
+ "zeroize",
+]
+
+[[package]]
 name = "mae-dap"
-version = "0.14.153"
+version = "0.14.158"
 dependencies = [
  "mae-core",
  "serde",
@@ -3217,11 +3253,11 @@ dependencies = [
 
 [[package]]
 name = "mae-effect-sandbox"
-version = "0.14.153"
+version = "0.14.158"
 
 [[package]]
 name = "mae-export"
-version = "0.14.153"
+version = "0.14.158"
 dependencies = [
  "mae-babel",
  "serde",
@@ -3231,11 +3267,11 @@ dependencies = [
 
 [[package]]
 name = "mae-format"
-version = "0.14.153"
+version = "0.14.158"
 
 [[package]]
 name = "mae-gui"
-version = "0.14.153"
+version = "0.14.158"
 dependencies = [
  "mae-core",
  "mae-renderer",
@@ -3249,7 +3285,7 @@ dependencies = [
 
 [[package]]
 name = "mae-kb"
-version = "0.14.153"
+version = "0.14.158"
 dependencies = [
  "cozo",
  "hex",
@@ -3273,14 +3309,14 @@ dependencies = [
 
 [[package]]
 name = "mae-lookup"
-version = "0.14.153"
+version = "0.14.158"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-lsp"
-version = "0.14.153"
+version = "0.14.158"
 dependencies = [
  "serde",
  "serde_json",
@@ -3290,14 +3326,14 @@ dependencies = [
 
 [[package]]
 name = "mae-make"
-version = "0.14.153"
+version = "0.14.158"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-mcp"
-version = "0.14.153"
+version = "0.14.158"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3306,6 +3342,7 @@ dependencies = [
  "hmac 0.13.0",
  "hostname",
  "libc",
+ "mae-crypto",
  "mae-effect-sandbox",
  "rand 0.10.3",
  "rcgen",
@@ -3325,7 +3362,7 @@ dependencies = [
 
 [[package]]
 name = "mae-org"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "html5ever",
  "mae-kb",
@@ -3337,7 +3374,7 @@ dependencies = [
 
 [[package]]
 name = "mae-org-wasm"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "mae-org",
  "proptest",
@@ -3346,7 +3383,7 @@ dependencies = [
 
 [[package]]
 name = "mae-renderer"
-version = "0.14.153"
+version = "0.14.158"
 dependencies = [
  "crossterm",
  "mae-core",
@@ -3357,7 +3394,7 @@ dependencies = [
 
 [[package]]
 name = "mae-scheme"
-version = "0.14.153"
+version = "0.14.158"
 dependencies = [
  "base64 0.23.1",
  "libc",
@@ -3372,7 +3409,7 @@ dependencies = [
 
 [[package]]
 name = "mae-scheme-extra"
-version = "0.14.153"
+version = "0.14.158"
 dependencies = [
  "mae-scheme",
  "parking_lot 0.12.5",
@@ -3380,7 +3417,7 @@ dependencies = [
 
 [[package]]
 name = "mae-shell"
-version = "0.14.153"
+version = "0.14.158"
 dependencies = [
  "alacritty_terminal",
  "portable-pty",
@@ -3390,22 +3427,21 @@ dependencies = [
 
 [[package]]
 name = "mae-snippets"
-version = "0.14.153"
+version = "0.14.158"
 
 [[package]]
 name = "mae-spell"
-version = "0.14.153"
+version = "0.14.158"
 
 [[package]]
 name = "mae-sync"
-version = "0.14.153"
+version = "0.14.158"
 dependencies = [
  "base64 0.23.1",
- "chacha20poly1305",
  "criterion",
- "curve25519-dalek",
  "ed25519-dalek",
  "hex",
+ "mae-crypto",
  "proptest",
  "rand 0.10.3",
  "ropey",
@@ -3415,7 +3451,6 @@ dependencies = [
  "similar",
  "tempfile",
  "tracing",
- "x25519-dalek",
  "yrs",
  "zeroize",
 ]
@@ -4349,6 +4384,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "password-hash"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aab41826031698d6ffcd9cff78ef56ef998e39dc7e5067cdfebe373842d4723b"
+dependencies = [
+ "phc",
+]
+
+[[package]]
 name = "pem"
 version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4414,6 +4458,16 @@ checksum = "89815c69d36021a140146f26659a81d6c2afa33d216d736dd4be5381a7362220"
 dependencies = [
  "pest",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "phc"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44dc769b75f93afdddd8c7fa12d685292ddeff1e66f7f0f3a234cf1818afe892"
+dependencies = [
+ "base64ct",
+ "ctutils",
 ]
 
 [[package]]

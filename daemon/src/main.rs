@@ -14,6 +14,7 @@
 //! collaboration, and services that outlive the editor session.
 
 mod backup;
+mod binding_cli;
 mod checkpoint_cli;
 mod cli;
 mod config;
@@ -31,6 +32,7 @@ mod lazy_fetch_client;
 pub mod maintenance;
 mod member_cli;
 mod oauth;
+mod oauth_binding;
 mod oauth_config;
 mod oauth_tls;
 mod p2p;
@@ -539,7 +541,10 @@ async fn spawn_oauth_listener(
     let server_config = oauth::ResourceServerConfig {
         canonical_resource_uri: config.oauth.canonical_resource_uri.clone(),
         principal_claim: config.oauth.principal_claim.clone(),
+        groups_claim: config.oauth.groups_claim.clone(),
+        allowed_groups: config.oauth.allowed_groups.clone(),
         jwks_url: config.oauth.jwks_url.clone(),
+        jwks_ca_file: config.oauth.jwks_ca_file.clone(),
         issuer: config.oauth.issuer.clone(),
         kb_query_enabled: config.oauth.kb_query_enabled,
         max_request_body_bytes: config.oauth.max_request_body_bytes,
@@ -566,7 +571,15 @@ async fn spawn_oauth_listener(
     )
     .await;
     state.lock().await.oauth_conn = Some(oauth_limiter.clone());
-    let listener = oauth::Listener::new(server_config, doc_store, self_issue, oauth_quota, ws);
+    let (bindings, binding_routes) = oauth_identity_binding(config);
+    let listener = match oauth::Listener::new(server_config, doc_store, self_issue, oauth_quota, ws)
+    {
+        Ok(l) => l.with_identity_binding(bindings, binding_routes),
+        Err(e) => {
+            error!(error = %e, "OAuth listener disabled");
+            return;
+        }
+    };
     tokio::spawn(async move {
         if let Err(e) =
             oauth::run_oauth_listener(listener, bind, (&cert_path, &key_path), oauth_limiter).await
@@ -574,6 +587,36 @@ async fn spawn_oauth_listener(
             error!(error = %e, "OAuth listener failed to start");
         }
     });
+}
+
+/// The binding table (ADR-098 D3) and, when `identity_binding_enabled`, the
+/// proof-of-possession routes (Amendment 1, C2). A table that cannot be opened
+/// is logged and left `None`: every external token then stays an unbound
+/// subject (fail closed), and the routes do not exist.
+fn oauth_identity_binding(
+    config: &DaemonConfig,
+) -> (
+    Option<Arc<mae_daemon::identity_binding::BindingStore>>,
+    Option<oauth_binding::BindingRoutes>,
+) {
+    let path = config
+        .resolve_collab_data_dir()
+        .join(mae_daemon::identity_binding::BINDINGS_FILE);
+    let bindings = match mae_daemon::identity_binding::BindingStore::open(&path) {
+        Ok(s) => Some(Arc::new(s)),
+        Err(e) => {
+            error!(error = %e, path = %path.display(), "cannot open the identity binding table; \
+                   every identity-provider token will be an unbound subject");
+            None
+        }
+    };
+    let routes = config.oauth.identity_binding_enabled.then(|| {
+        oauth_binding::BindingRoutes::new(
+            config.oauth.identity_challenge_ttl_secs,
+            config.oauth.identity_max_pending_challenges,
+        )
+    });
+    (bindings, routes)
 }
 
 /// The sync WebSocket's state (ADR-099), when `oauth.ws_enabled`: the collab
@@ -742,6 +785,7 @@ async fn init_doc_store(
             .with_max_documents(collab.sync.max_documents)
             .with_max_wal_entries(collab.storage.max_wal_entries)
             .with_max_document_size(collab.sync.max_document_size_bytes)
+            .with_max_message_bytes(collab.sync.max_message_bytes)
             .with_max_update_size(collab.sync.max_update_size_bytes),
     );
     // ADR-039 A2 (#162): hydrate the local self-protection blocklist from durable storage
@@ -1616,7 +1660,8 @@ fn run_authorize(config: &DaemonConfig, rest: &[String]) -> i32 {
 /// Symmetric keystore (psk mode): `keygen [name]`, `keys`. Asymmetric key mode
 /// (ADR-017/018): `identity`, `authorized`, `authorize <pubkey-line>` (labels
 /// must be unique), `revoke <label|SHA256:fp>`. `token mint --sub <principal>
-/// [--ttl <duration>]` (ADR-111 P1, `token_cli`). And `ping`, the liveness probe.
+/// [--ttl <duration>]` (ADR-111 P1, `token_cli`). `binding list|bind|unbind|
+/// set-kind` (ADR-098 D3, `binding_cli`). And `ping`, the liveness probe.
 /// (`kb seed` / `kb export` open the store, so they run in `main`'s async match.)
 fn run_admin_subcommand(sub: &str, rest: &[String], config: &DaemonConfig) -> Option<i32> {
     let first = rest.first().map(|s| s.as_str());
@@ -1629,6 +1674,7 @@ fn run_admin_subcommand(sub: &str, rest: &[String], config: &DaemonConfig) -> Op
         "revoke" => run_revoke(config, first),
         "ping" => run_ping(config),
         "token" => token_cli::run_token(config, rest),
+        "binding" => binding_cli::run(config, rest),
         _ => return None,
     })
 }

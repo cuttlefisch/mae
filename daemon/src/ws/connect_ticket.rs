@@ -48,6 +48,9 @@ pub(crate) struct TicketGrant {
     /// The minting token's `exp` (unix seconds): the session's deadline.
     pub token_expires_at: u64,
     pub origin: Option<String>,
+    /// Minted by a bound identity-provider token: redemption re-reads the
+    /// binding (ADR-099 Amendment 2, E1).
+    pub bound_idp: bool,
 }
 
 /// The principal already holds its quota of unused tickets.
@@ -86,7 +89,7 @@ impl TicketStore {
         rand::Rng::fill_bytes(&mut rand::rng(), &mut bytes);
         // base64url without padding: 43 characters, every one a valid
         // subprotocol token character (RFC 7230 `tchar`), as the client's
-        // script (`tests/data/c-guion-v1.json`) expects.
+        // script (`tests/data/c-guion-v2.json`) expects.
         let ticket = data_encoding::BASE64URL_NOPAD.encode(&bytes);
         entries.insert(
             key(&ticket),
