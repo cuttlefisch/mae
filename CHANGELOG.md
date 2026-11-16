@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.158] - 2026-11-16
+
+
+
+
+### Bug Fixes
+
+- *(oauth)* No CA roots is a startup error, not a panic; oauth.jwks_ca_file ([64463a6](https://github.com/cuttlefisch/mae/commit/64463a6f084c5f4015ed1f73b15fddd356494f8e))
+
+### Testing
+
+- *(oauth)* Run the no-CA-roots cases in a child process ([b463755](https://github.com/cuttlefisch/mae/commit/b4637551ea52441cd856d20c3d02d64c7707899c))
+
 ## [0.14.157] - 2026-11-16
 
 
@@ -14,6 +27,10 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 
 - *(crypto)* Review round 1 for mae-crypto and its WASM facade ([9b923c3](https://github.com/cuttlefisch/mae/commit/9b923c3023de0eb20afc4c90f11a8ebc7a67781f))
+
+### Miscellaneous
+
+- Bump version to 0.14.157 ([a880cd3](https://github.com/cuttlefisch/mae/commit/a880cd389def3f05c413ca7886118f849837b71d))
 
 ## [0.14.156] - 2026-11-15
 
