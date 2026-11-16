@@ -52,6 +52,8 @@ pub struct ResourceServerConfig {
     /// external issuer (ADR-111 P1): only self-issued tokens can validate, and
     /// no JWKS client is built at all.
     pub jwks_url: String,
+    /// A PEM bundle the JWKS fetch trusts instead of the system's roots.
+    pub jwks_ca_file: Option<std::path::PathBuf>,
     /// The authorization server's issuer, checked against the token's `iss`
     /// claim. `None` skips issuer validation (not recommended, but some
     /// deployments' AS metadata omits a stable issuer during evaluation).
@@ -229,12 +231,51 @@ pub struct JwksCache {
 }
 
 impl JwksCache {
-    pub fn new(url: String) -> Self {
-        JwksCache {
-            url,
-            client: reqwest::Client::new(),
-            state: RwLock::new(None),
+    /// The JWKS client for `url`. With `ca_file`, the fetch trusts ONLY the
+    /// PEM roots in that file, so it works where the system has none (a
+    /// minimal container image). Without it, it uses the platform's roots.
+    ///
+    /// `Err` instead of a panic: `reqwest::Client::new()` panics when the TLS
+    /// backend cannot load any root, which took the whole daemon down at
+    /// startup in an image without CA certificates. The caller reports the
+    /// error and leaves the listener off, like every other misconfiguration.
+    pub fn new(url: String, ca_file: Option<&std::path::Path>) -> Result<Self, String> {
+        let mut builder = reqwest::Client::builder();
+        if let Some(path) = ca_file {
+            let pem = std::fs::read(path).map_err(|e| {
+                format!("oauth.jwks_ca_file {}: cannot read it: {e}", path.display())
+            })?;
+            let roots = reqwest::Certificate::from_pem_bundle(&pem).map_err(|e| {
+                format!(
+                    "oauth.jwks_ca_file {}: not a PEM certificate bundle: {e}",
+                    path.display()
+                )
+            })?;
+            if roots.is_empty() {
+                return Err(format!(
+                    "oauth.jwks_ca_file {}: holds no certificate",
+                    path.display()
+                ));
+            }
+            builder = builder.tls_certs_only(roots);
         }
+        let client = builder.build().map_err(|e| match ca_file {
+            Some(path) => format!(
+                "oauth.jwks_ca_file {}: not usable as CA certificates for oauth.jwks_url {url} \
+                 ({e})",
+                path.display()
+            ),
+            None => format!(
+                "oauth.jwks_url {url}: cannot build the HTTPS client that fetches it ({e}); \
+                 the system has no usable CA certificates: install them, or name a PEM file \
+                 in oauth.jwks_ca_file"
+            ),
+        })?;
+        Ok(JwksCache {
+            url,
+            client,
+            state: RwLock::new(None),
+        })
     }
 
     /// Returns the cached JWKS if still fresh, otherwise fetches a new one.
@@ -876,9 +917,15 @@ impl Listener {
         self_issue: Option<oauth_self_issue::SelfIssueConfig>,
         quota: Arc<dyn mae_daemon::quota::QuotaCharger>,
         ws: Option<crate::ws::WsState>,
-    ) -> Self {
-        let jwks = (!config.jwks_url.is_empty()).then(|| JwksCache::new(config.jwks_url.clone()));
-        Listener {
+    ) -> Result<Self, String> {
+        let jwks = match config.jwks_url.is_empty() {
+            true => None,
+            false => Some(JwksCache::new(
+                config.jwks_url.clone(),
+                config.jwks_ca_file.as_deref(),
+            )?),
+        };
+        Ok(Listener {
             config,
             jwks,
             doc_store,
@@ -887,7 +934,7 @@ impl Listener {
             ws,
             bindings: None,
             binding_routes: None,
-        }
+        })
     }
 }
 
@@ -966,3 +1013,7 @@ pub async fn run_oauth_listener(
 #[cfg(test)]
 #[path = "oauth_tests.rs"]
 mod oauth_tests;
+
+#[cfg(test)]
+#[path = "oauth_jwks_ca_tests.rs"]
+mod oauth_jwks_ca_tests;

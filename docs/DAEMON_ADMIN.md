@@ -252,6 +252,7 @@ cert_path = "/etc/mae/tls/tls.crt"              # PEM chain; re-read when it cha
 key_path  = "/etc/mae/tls/tls.key"
 kb_query_enabled = true                         # the kb/query.* surface (needs [collab] enabled)
 # jwks_url = "https://idp.example.com/jwks.json" # external issuer — OPTIONAL (below)
+# jwks_ca_file = "/etc/mae/idp-ca.pem"           # trust ONLY these roots for the JWKS fetch
 # issuer = "https://idp.example.com"
 self_issued_tokens_enabled = true               # accept this daemon's own tokens (key mode only)
 self_issued_token_ttl_secs = 3600               # default lifetime of `token mint`
@@ -260,6 +261,12 @@ self_issued_token_max_ttl_secs = 86400          # ceiling `token mint --ttl` ref
 # webview_enabled = false                       # GET /kb/<id>/view
 ```
 
+- **The JWKS fetch needs CA certificates.** By default it trusts the system's roots. An image with
+  none (a minimal container) gets a startup error naming `jwks_url` and this fix, and the OAuth
+  listener stays off: the daemon no longer panics. Install CA certificates, or set `jwks_ca_file` to
+  a PEM bundle, which the fetch then trusts **instead of** the system's roots (also the way to
+  reach an issuer behind a private CA). A file that is missing, holds no certificate, or cannot be
+  used as roots is a startup error naming it.
 - **`jwks_url` is optional** when the daemon's own self-issued tokens are the only ones in use.
   With it unset no JWKS client exists: a token from an external issuer is refused with `401` and a
   reason naming `jwks_url` (not a `503` — nothing is temporarily unavailable). With **neither**
@@ -326,14 +333,18 @@ identity_binding_enabled = true            # POST /identity/challenge + /identit
      `iss`, `sub`, this listener's `aud`, the fingerprint, a random `nonce` (= `challenge_id`) and
      `expires_at`. Show the person the `iss`/`sub` before they sign.
   2. On the machine holding the member key (the editor's collab identity, `mae --collab-identity`),
-     run `mae --sign-identity-challenge '<answer>' --issuer <your iss> --subject <your sub>` (or
+     run `mae --sign-identity-challenge '<answer>' --issuer <your iss> --subject <your sub>
+     --audience <this daemon's canonical_resource_uri>` (or
      `-` to read the answer from stdin), with either the `challenge` text or the whole answer from
      step 1. `--issuer` and `--subject` are the key holder's OWN identity-provider identity: the
      daemon issues a challenge for any key to any signed-in subject, so a challenge naming your key
      says nothing about who asked for it, and one issued to anyone else is refused (both must match
-     the challenge byte for byte). It prints the issuer, subject, audience and key on stderr before
+     the challenge byte for byte). `--audience` is the daemon you mean to bind at, compared byte for
+     byte with the challenge's `aud`, so a challenge another daemon issued and relayed to you is
+     refused; so is one valid for more than an hour from now (signers cap a challenge's remaining
+     lifetime at 3600 s; keep `identity_challenge_ttl_secs` well under it). It prints the issuer, subject, audience and key on stderr before
      signing, and the bind body on stdout. It signs nothing but a canonical, unexpired challenge
-     naming its own key and the stated subject, and never prints the secret key. (The signed bytes
+     naming its own key and the stated issuer, subject and audience, and never prints the secret key. (The signed bytes
      are the UTF-8 of `challenge`, Ed25519.)
   3. `POST /identity/bind` `{"challenge_id", "public_key": "<base64 of the 32 key bytes>",
      "signature": "<base64>"}` with a token of the same `(iss, sub)` → `{"principal", "kind",

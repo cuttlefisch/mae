@@ -43,7 +43,8 @@ graph TD
     mae_core --> mae_spell
     mae_core --> mae_sync
     mae_core --> mae_mcp
-    mae_crypto_wasm --> mae_sync
+    mae_crypto[mae-crypto]
+    mae_crypto_wasm --> mae_crypto
     mae_dap --> mae_core
     mae_effect_sandbox[mae-effect-sandbox]
     mae_export --> mae_babel
@@ -57,6 +58,7 @@ graph TD
     mae_lookup[mae-lookup]
     mae_lsp[mae-lsp]
     mae_make[mae-make]
+    mae_mcp --> mae_crypto
     mae_mcp --> mae_effect_sandbox
     mae_org --> mae_kb
     mae_org_wasm --> mae_org
@@ -70,7 +72,7 @@ graph TD
     mae_shell[mae-shell]
     mae_snippets[mae-snippets]
     mae_spell[mae-spell]
-    mae_sync[mae-sync]
+    mae_sync --> mae_crypto
 ```
 
 ## mae
@@ -227,6 +229,19 @@ Source: `crates/core/src/lib.rs`
 | `VisualType` | enum |
 | `Mode` | enum |
 
+## mae-crypto
+
+Source: `shared/crypto/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `backup` | mod |
+| `content_crypto` | mod |
+| `identity_challenge` | mod |
+| `member` | mod |
+| `rng` | mod |
+| `VERSION` | const |
+
 ## mae-crypto-wasm
 
 Source: `shared/crypto-wasm/src/lib.rs`
@@ -234,7 +249,6 @@ Source: `shared/crypto-wasm/src/lib.rs`
 | Item | Kind |
 |------|------|
 | `api` | mod |
-| `content_crypto` | mod |
 | `mae_crypto_alloc` | fn |
 | `mae_crypto_call` | fn |
 | `mae_crypto_result_ptr` | fn |
@@ -541,7 +555,6 @@ Source: `shared/sync/src/lib.rs`
 | Item | Kind |
 |------|------|
 | `awareness` | mod |
-| `content_crypto` | mod |
 | `content_ops` | mod |
 | `encoding` | mod |
 | `kb` | mod |
