@@ -22,6 +22,7 @@ pub mod projector;
 pub mod quota;
 pub mod rfc3339;
 pub mod seed;
+pub mod sign_in;
 pub mod storage;
 pub mod store_lock;
 

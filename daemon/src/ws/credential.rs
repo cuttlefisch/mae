@@ -127,6 +127,7 @@ pub(super) async fn still_bound(
         subject: subject.to_string(),
         credential: Credential::IdpUnbound,
         kind: PrincipalKind::Agent,
+        sign_in: None,
     };
     let bindings = listener.bindings.clone();
     let now = mae_daemon::identity_binding::resolve_off_runtime(probe, bindings)
