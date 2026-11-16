@@ -33,6 +33,7 @@ fn idp_at(issuer: &str, subject: &str) -> ValidatedPrincipal {
         subject: subject.into(),
         credential: Credential::IdpUnbound,
         kind: PrincipalKind::Agent,
+        sign_in: None,
     }
 }
 

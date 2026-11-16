@@ -160,6 +160,9 @@ pub struct ValidatedPrincipal {
     pub credential: Credential,
     /// The effective kind (C3). Only a bound IdP token can be a person.
     pub kind: PrincipalKind,
+    /// How the person signed in (`amr`, `acr`, `auth_time`, groups): set for
+    /// an external token, `None` for a self-issued one, which is no sign-in.
+    pub sign_in: Option<crate::sign_in::SignIn>,
 }
 
 /// The raw `iss` and `sub` claims, empty when absent — for [`ValidatedPrincipal`].
@@ -201,6 +204,7 @@ pub fn validated_from_claims(
         subject,
         credential,
         kind: PrincipalKind::Agent,
+        sign_in: None,
     }
 }
 
