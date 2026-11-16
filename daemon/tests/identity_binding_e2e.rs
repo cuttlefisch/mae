@@ -236,6 +236,7 @@ async fn bind_by_proof(d: &Daemon, member: &Identity, alice: &str) -> Value {
     let me = mae_mcp::identity_challenge::Claimant {
         issuer: ISS,
         subject: "alice@idp",
+        audience: AUD,
     };
     let (_, bind) = mae_mcp::identity_challenge::sign_challenge(member, me, &raw, now).unwrap();
     let (status, raw) = d.post("/identity/bind", alice, bind.clone()).await;
