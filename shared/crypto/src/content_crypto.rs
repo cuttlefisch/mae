@@ -1,6 +1,9 @@
 //! ADR-037 content-encryption primitives — the pure crypto FOUNDATION (#131).
 //!
-//! This is the confidentiality counterpart to [`crate::content_ops`] (integrity).
+//! This is the confidentiality counterpart to `mae_sync::content_ops` (integrity).
+//! It lives in mae-crypto (no I/O, builds for wasm32) so the browser client runs this
+//! same code; mae-sync re-exports it as `mae_sync::content_crypto`.
+//!
 //! ADR-037 encrypts content-op payloads with a **per-KB symmetric content key**,
 //! distributed to members through the ADR-026 membership op-log, so a relaying /
 //! hosting daemon — or the hub server — can carry a KB it **cannot read**
@@ -19,7 +22,7 @@
 //!   the Ed25519 public key alone).
 //!
 //! Encrypt-then-sign (§D1): the caller encrypts the payload *before* signing it with
-//! [`crate::content_ops`], so a peer verifies authorship + authorization *before*
+//! `mae_sync::content_ops`, so a peer verifies authorship + authorization *before*
 //! decrypting, and a relay verifies integrity without the key. `SignedContentOp`'s
 //! `payload` is opaque bytes — it transparently holds ciphertext, no struct change.
 //!
@@ -46,10 +49,10 @@ const X25519_LEN: usize = 32;
 pub struct ContentKey([u8; 32]);
 
 impl ContentKey {
-    /// A fresh random content key (`rand::random` — the version-stable top-level API,
-    /// matching the epoch-token RNG in `kb.rs`).
+    /// A fresh random content key ([`crate::rng`]: rand's thread RNG natively, the
+    /// host's CSPRNG in the WASM module).
     pub fn generate() -> Self {
-        ContentKey(rand::random::<[u8; 32]>())
+        ContentKey(crate::rng::array::<32>())
     }
 
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
@@ -87,7 +90,7 @@ pub enum CryptoError {
 pub fn encrypt(key: &ContentKey, plaintext: &[u8]) -> Vec<u8> {
     let cipher =
         XChaCha20Poly1305::new_from_slice(&key.0).expect("ContentKey is exactly KEY_LEN bytes");
-    let nonce = rand::random::<[u8; NONCE_LEN]>();
+    let nonce = crate::rng::array::<NONCE_LEN>();
     let ciphertext = cipher
         .encrypt(&XNonce::from(nonce), plaintext)
         .expect("XChaCha20-Poly1305 encryption is infallible for valid keys");
@@ -130,7 +133,7 @@ pub fn wrap_to_member(
     // key-exchange now use SEPARATE keys. The recipient must publish this key (a sender
     // cannot derive it from the Ed25519 public key alone).
     let recipient_x = XPublicKey::from(*recipient_wrap_pub);
-    let ephemeral = StaticSecret::from(rand::random::<[u8; 32]>());
+    let ephemeral = StaticSecret::from(crate::rng::array::<32>());
     let ephemeral_pub = XPublicKey::from(&ephemeral);
     let shared = ephemeral.diffie_hellman(&recipient_x);
     // F6 (security review): reject a non-contributory (all-zero / low-order) DH result so

@@ -12,6 +12,7 @@ const SUB: &str = "alice@idp";
 const ME: Claimant<'static> = Claimant {
     issuer: ISS,
     subject: SUB,
+    audience: "https://mae.example.com",
 };
 
 /// Whether a refusal is the one a case expects.
@@ -182,4 +183,49 @@ fn the_output_holds_no_secret() {
     ] {
         assert!(!out.contains(&form), "the secret key is in the output");
     }
+}
+
+/// `check_challenge` through this wrapper checks against THIS identity's
+/// key and the stated claimant, as signing does.
+#[test]
+fn check_uses_this_identity_and_the_stated_claimant() {
+    let id = Identity::generate("member");
+    let other = Identity::generate("other");
+    let text = canonical(&id, NOW + 60);
+    assert_eq!(check_challenge(&id, ME, &text, NOW).unwrap().sub, SUB);
+    assert_eq!(
+        check_challenge(&other, ME, &text, NOW),
+        Err(ChallengeRefusal::OtherKey)
+    );
+    let mallory = Claimant {
+        subject: "mallory@idp",
+        ..ME
+    };
+    assert_eq!(
+        check_challenge(&id, mallory, &text, NOW),
+        Err(ChallengeRefusal::OtherSubject)
+    );
+    assert_eq!(
+        parse_for(&other, ME, &text, NOW),
+        Err(ChallengeRefusal::OtherKey)
+    );
+}
+
+/// Through this wrapper too, a challenge for another daemon is refused.
+#[test]
+fn the_wrapper_binds_the_audience() {
+    let id = Identity::generate("member");
+    let text = canonical(&id, NOW + 60);
+    let elsewhere = Claimant {
+        audience: "https://other.example.com",
+        ..ME
+    };
+    assert_eq!(
+        sign_challenge(&id, elsewhere, &text, NOW).unwrap_err(),
+        ChallengeRefusal::OtherAudience
+    );
+    assert_eq!(
+        check_challenge(&id, elsewhere, &text, NOW),
+        Err(ChallengeRefusal::OtherAudience)
+    );
 }
