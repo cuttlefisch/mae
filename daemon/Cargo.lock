@@ -2695,7 +2695,7 @@ dependencies = [
 
 [[package]]
 name = "mae-daemon"
-version = "0.14.156"
+version = "0.14.157"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2742,11 +2742,11 @@ dependencies = [
 
 [[package]]
 name = "mae-effect-sandbox"
-version = "0.14.156"
+version = "0.14.157"
 
 [[package]]
 name = "mae-kb"
-version = "0.14.156"
+version = "0.14.157"
 dependencies = [
  "cozo",
  "hex",
@@ -2768,7 +2768,7 @@ dependencies = [
 
 [[package]]
 name = "mae-mcp"
-version = "0.14.156"
+version = "0.14.157"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2803,7 +2803,7 @@ dependencies = [
 
 [[package]]
 name = "mae-sync"
-version = "0.14.156"
+version = "0.14.157"
 dependencies = [
  "base64 0.23.1",
  "ed25519-dalek 2.2.0",
