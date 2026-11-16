@@ -1,5 +1,5 @@
 //! `mae --sign-identity-challenge <challenge | -> --issuer <iss> --subject
-//! <sub>`: the key holder's half of binding an identity-provider subject to
+//! <sub> --audience <daemon>`: the key holder's half of binding an identity-provider subject to
 //! this editor's collab key (ADR-098 Amendment 1, C2).
 //!
 //! The person asks the daemon for a challenge in the program holding their
@@ -11,6 +11,9 @@
 //! identity, stated by them: the daemon issues a challenge for any key to
 //! any authenticated subject, so a challenge naming this key says nothing
 //! about who asked for it. One issued to anyone else is refused.
+//! `--audience` is the daemon they mean to bind at (its canonical resource
+//! URI, the challenge's `aud`): a challenge another daemon issued, relayed to
+//! them, is refused.
 //!
 //! stderr says what is being bound (issuer, subject, audience, key) before
 //! anything is signed; stdout carries the bind body only (`challenge_id`,
@@ -19,7 +22,7 @@
 //! @ai-caution: [security] The member key also signs membership and content
 //! ops. This command signs ONLY what `mae_mcp::identity_challenge::
 //! sign_challenge` accepts — a canonical, unexpired challenge naming this key
-//! AND the issuer and subject the person stated — never arbitrary text, and
+//! AND the issuer, subject and audience the person stated — never arbitrary text, and
 //! it never prints or logs the secret key. It loads the identity without
 //! creating one.
 
@@ -30,8 +33,8 @@ use mae_mcp::identity::Identity;
 use mae_mcp::identity_challenge::{check_challenge, sign_challenge, Claimant, MAX_CHALLENGE_BYTES};
 
 const FLAG: &str = "--sign-identity-challenge";
-const USAGE: &str =
-    "usage: mae --sign-identity-challenge <challenge | -> --issuer <iss> --subject <sub>";
+const USAGE: &str = "usage: mae --sign-identity-challenge <challenge | -> --issuer <iss> \
+                     --subject <sub> --audience <daemon URI>";
 
 /// The label an identity loaded only to sign carries; it is never written.
 const LABEL: &str = "mae-editor";
@@ -64,6 +67,7 @@ pub(crate) fn handle(args: &[String]) -> Option<io::Result<()>> {
     let claimant = Claimant {
         issuer: &parsed.issuer,
         subject: &parsed.subject,
+        audience: &parsed.audience,
     };
     match sign_in(&dir, claimant, &input, now, &mut |s| eprintln!("{s}")) {
         Ok(body) => {
@@ -80,20 +84,22 @@ pub(crate) struct Args {
     pub challenge: String,
     pub issuer: String,
     pub subject: String,
+    pub audience: String,
 }
 
-/// Parse the arguments after the flag: one challenge (or `-`) and both
-/// `--issuer` and `--subject`, each given once and non-empty.
+/// Parse the arguments after the flag: one challenge (or `-`) and each of
+/// `--issuer`, `--subject` and `--audience`, given once and non-empty.
 pub(crate) fn parse_args(rest: &[String]) -> Result<Args, String> {
-    let (mut challenge, mut issuer, mut subject) = (None, None, None);
+    let (mut challenge, mut issuer, mut subject, mut audience) = (None, None, None, None);
     let mut it = rest.iter();
     while let Some(a) = it.next() {
         let slot = match a.as_str() {
             "--issuer" => &mut issuer,
             "--subject" => &mut subject,
+            "--audience" => &mut audience,
             _ => &mut challenge,
         };
-        let value = if a == "--issuer" || a == "--subject" {
+        let value = if matches!(a.as_str(), "--issuer" | "--subject" | "--audience") {
             it.next()
                 .ok_or_else(|| format!("{a} needs a value; {USAGE}"))?
         } else {
@@ -111,6 +117,7 @@ pub(crate) fn parse_args(rest: &[String]) -> Result<Args, String> {
         challenge: need(challenge, "the challenge")?,
         issuer: need(issuer, "--issuer (your identity provider)")?,
         subject: need(subject, "--subject (your subject at it)")?,
+        audience: need(audience, "--audience (the daemon you are binding at)")?,
     })
 }
 
@@ -154,9 +161,11 @@ mod tests {
 
     const NOW: u64 = 1_900_000_000;
     const ISS: &str = "https://idp.example.com";
+    const AUD: &str = "https://mae.example.com";
     const ME: Claimant<'static> = Claimant {
         issuer: ISS,
         subject: "alice@idp",
+        audience: AUD,
     };
 
     fn challenge_for(id: &Identity) -> String {
@@ -245,7 +254,7 @@ mod tests {
         assert!(said.is_empty(), "announced a binding it refused: {said:?}");
         let elsewhere = Claimant {
             issuer: "https://idp.example.org",
-            subject: "alice@idp",
+            ..ME
         };
         let e = sign(dir.path(), elsewhere, &challenge_for(&id))
             .0
@@ -253,34 +262,93 @@ mod tests {
         assert!(e.contains("another identity provider"), "{e}");
         // The same challenge, stated by the subject it was issued to, signs.
         let mallory = Claimant {
-            issuer: ISS,
             subject: "mallory@idp",
+            ..ME
         };
         assert!(sign(dir.path(), mallory, &theirs).0.is_ok());
     }
 
+    /// A challenge for this key and this person, but another daemon's, is
+    /// refused with nothing announced; so is one valid for longer than any
+    /// daemon issues.
     #[test]
-    fn issuer_and_subject_are_required_and_non_empty() {
-        let ok = parse_args(&strings(&["-", "--issuer", ISS, "--subject", "alice@idp"])).unwrap();
+    fn a_challenge_for_another_daemon_or_too_long_lived_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = Identity::generate("editor");
+        id.save(dir.path()).unwrap();
+        let other_daemon = Claimant {
+            audience: "https://other.example.com",
+            ..ME
+        };
+        let (r, said) = sign(dir.path(), other_daemon, &challenge_for(&id));
+        assert!(r.unwrap_err().contains("another daemon"));
+        assert!(said.is_empty());
+        let long = challenge_text(
+            ISS,
+            "alice@idp",
+            AUD,
+            &id.fingerprint(),
+            "bm9uY2U",
+            NOW + mae_mcp::identity_challenge::MAX_CHALLENGE_LIFETIME_SECS + 1,
+        );
+        let (r, said) = sign(dir.path(), ME, &long);
+        assert!(r.unwrap_err().contains("longer than any daemon"));
+        assert!(said.is_empty());
+    }
+
+    /// Each missing, empty, repeated or stray argument, one at a time
+    /// (`|`-separated, so an empty argument can be written; ISS and AUD
+    /// stand for the constants).
+    fn bad_args() -> Vec<Vec<&'static str>> {
+        [
+            "-",
+            "-|--issuer|ISS|--subject|alice@idp",
+            "-|--issuer|ISS|--audience|AUD",
+            "-|--subject|alice@idp|--audience|AUD",
+            "-|--issuer|ISS|--subject||--audience|AUD",
+            "-|--issuer||--subject|alice@idp|--audience|AUD",
+            "-|--issuer|ISS|--subject|alice@idp|--audience|",
+            "-|--issuer|ISS|--subject|alice@idp|--audience",
+            "--issuer|ISS|--subject|alice@idp|--audience|AUD",
+            "-|x|--issuer|ISS|--subject|alice@idp|--audience|AUD",
+            "-|--issuer|ISS|--subject|a|--subject|b|--audience|AUD",
+            "-|--issuer|ISS|--subject|a|--audience|AUD|--audience|AUD",
+        ]
+        .iter()
+        .map(|line| {
+            line.split('|')
+                .map(|t| match t {
+                    "ISS" => ISS,
+                    "AUD" => AUD,
+                    t => t,
+                })
+                .collect()
+        })
+        .collect()
+    }
+
+    #[test]
+    fn issuer_subject_and_audience_are_required_and_non_empty() {
+        let all = [
+            "-",
+            "--issuer",
+            ISS,
+            "--subject",
+            "alice@idp",
+            "--audience",
+            AUD,
+        ];
+        let ok = parse_args(&strings(&all)).unwrap();
         assert_eq!(
             ok,
             Args {
                 challenge: "-".into(),
                 issuer: ISS.into(),
                 subject: "alice@idp".into(),
+                audience: AUD.into(),
             }
         );
-        for bad in [
-            vec!["-"],
-            vec!["-", "--issuer", ISS],
-            vec!["-", "--subject", "alice@idp"],
-            vec!["-", "--issuer", ISS, "--subject", ""],
-            vec!["-", "--issuer", "", "--subject", "alice@idp"],
-            vec!["-", "--issuer", ISS, "--subject"],
-            vec!["--issuer", ISS, "--subject", "alice@idp"],
-            vec!["-", "x", "--issuer", ISS, "--subject", "alice@idp"],
-            vec!["-", "--issuer", ISS, "--subject", "a", "--subject", "b"],
-        ] {
+        for bad in bad_args() {
             assert!(parse_args(&strings(&bad)).is_err(), "accepted {bad:?}");
         }
     }
