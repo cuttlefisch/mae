@@ -252,6 +252,7 @@ cert_path = "/etc/mae/tls/tls.crt"              # PEM chain; re-read when it cha
 key_path  = "/etc/mae/tls/tls.key"
 kb_query_enabled = true                         # the kb/query.* surface (needs [collab] enabled)
 # jwks_url = "https://idp.example.com/jwks.json" # external issuer — OPTIONAL (below)
+# jwks_ca_file = "/etc/mae/idp-ca.pem"           # trust ONLY these roots for the JWKS fetch
 # issuer = "https://idp.example.com"
 self_issued_tokens_enabled = true               # accept this daemon's own tokens (key mode only)
 self_issued_token_ttl_secs = 3600               # default lifetime of `token mint`
@@ -260,6 +261,12 @@ self_issued_token_max_ttl_secs = 86400          # ceiling `token mint --ttl` ref
 # webview_enabled = false                       # GET /kb/<id>/view
 ```
 
+- **The JWKS fetch needs CA certificates.** By default it trusts the system's roots. An image with
+  none (a minimal container) gets a startup error naming `jwks_url` and this fix, and the OAuth
+  listener stays off: the daemon no longer panics. Install CA certificates, or set `jwks_ca_file` to
+  a PEM bundle, which the fetch then trusts **instead of** the system's roots (also the way to
+  reach an issuer behind a private CA). A file that is missing, holds no certificate, or cannot be
+  used as roots is a startup error naming it.
 - **`jwks_url` is optional** when the daemon's own self-issued tokens are the only ones in use.
   With it unset no JWKS client exists: a token from an external issuer is refused with `401` and a
   reason naming `jwks_url` (not a `503` — nothing is temporarily unavailable). With **neither**
