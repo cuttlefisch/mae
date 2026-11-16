@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.157] - 2026-11-16
+
+
+
+
+### Features
+
+- *(crypto)* Mae-crypto, one no-I/O crypto crate, and its WASM facade ([09c8206](https://github.com/cuttlefisch/mae/commit/09c82066cf7ab99e4a3cc253ca4d5ab8389b5cf7))
+
+### Bug Fixes
+
+- *(crypto)* Review round 1 for mae-crypto and its WASM facade ([9b923c3](https://github.com/cuttlefisch/mae/commit/9b923c3023de0eb20afc4c90f11a8ebc7a67781f))
+
 ## [0.14.156] - 2026-11-15
 
 
@@ -14,6 +27,10 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 
 - *(daemon)* Cap a bound-IdP socket session; re-resolve a ticket's binding ([4d57aa2](https://github.com/cuttlefisch/mae/commit/4d57aa2313dfad9f5fdd842cf1329696a9933e13))
+
+### Miscellaneous
+
+- Bump version to 0.14.156 ([11b310f](https://github.com/cuttlefisch/mae/commit/11b310fcffe9c0b61748fc76f8781876dd8d280d))
 
 ## [mae-org-v0.9.0] - 2026-11-15
 
