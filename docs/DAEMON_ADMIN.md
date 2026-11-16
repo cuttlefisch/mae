@@ -313,6 +313,8 @@ in `principal_claim` must bind its subjects instead.
 # groups_claim = "groups"                  # where the token lists its groups
 # allowed_groups = ["mae-readers", "staff"] # D4 session gate: ANY ONE of them admits the token (exact match);
 #                                          # empty (default) = no gate. Not applied to self-issued tokens.
+# second_factor_amr = []                   # amr values that count as a second factor — NO default (below)
+# second_factor_acr = []                   # acr values that count as one (exact match) — NO default
 identity_binding_enabled = true            # POST /identity/challenge + /identity/bind (default false)
 # identity_challenge_ttl_secs = 300        # a challenge is valid for minutes
 # identity_max_pending_challenges = 4      # unused challenges one subject may hold
@@ -353,9 +355,25 @@ identity_binding_enabled = true            # POST /identity/challenge + /identit
 - **An external token must carry `iss`.** One with a missing or empty `iss` is refused (`401`),
   as one with an empty subject is: `(iss, sub)` keys the binding table, even when `oauth.issuer` is
   unset and the issuer is otherwise not checked.
-- **Before configuring a second-factor requirement** (planned, not yet enforced): some identity
-  providers emit a constant `acr` that does not reflect a second factor, so configure `amr` values
-  rather than `acr`. A session started from a recovery link may carry no `amr` at all.
+- **How a person signed in** (ADR-098, for ADR-113's approval checks). For an identity-provider
+  token the daemon reads `amr` (an array of strings), `acr` (a string), `auth_time` (unix seconds)
+  and the groups in `groups_claim`; the bare probe reports them as `sign_in`, with
+  `second_factor: {"claim": "amr"|"acr", "value": …}` naming the configured value the sign-in
+  meets, or `null`. A self-issued token reports `sign_in: null`: it is no sign-in. A claim of the
+  wrong type (`amr` as one string or holding a non-string, `acr` not a string, `auth_time` not a
+  non-negative integer) is treated as absent, never as a pass. Nothing is enforced yet; ADR-113
+  will refuse its controlled acts on this answer.
+- **The second-factor rule has no default.** `second_factor_amr` and `second_factor_acr` are empty
+  unless you set them, because the values differ by identity provider: measure what yours emits
+  (sign in with and without the second factor and read the probe's `sign_in`) and list the values
+  that only a second factor produces. A sign-in meets the rule when any listed `amr` value is in its
+  `amr`, or its `acr` equals a listed `acr` value. With both lists empty no sign-in meets it, so a
+  requirement switched on with nothing configured refuses every act (fail closed). Some identity
+  providers emit a constant `acr` that does not reflect a second factor: configure `amr` values for
+  those, never that `acr`. A session started from a recovery link may carry no `amr` at all, and so
+  never meets an `amr` rule. A sign-in is *fresh* when its `auth_time` is within the act's window;
+  no `auth_time` is never fresh, and one ahead of the daemon's clock by more than the token
+  validator's 60 s leeway is refused.
 - **Administration is local only** — no network method, MCP tool or Scheme primitive unbinds,
   rebinds or sets `kind`. `mae-daemon binding` works while the daemon serves; a change holds on the
   listener's next request:

@@ -553,6 +553,7 @@ async fn spawn_oauth_listener(
         kb_query_max_scan_nodes: config.oauth.kb_query_max_scan_nodes,
         kb_query_max_search_results: config.oauth.kb_query_max_search_results,
         webview_enabled: config.oauth.webview_enabled,
+        second_factor: config.oauth.second_factor_rule(),
     };
     let bind = config.oauth.bind;
     let cert_path = config.oauth.cert_path.clone();

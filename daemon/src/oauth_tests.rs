@@ -132,6 +132,7 @@ mod tests {
             kb_query_max_scan_nodes: 500,
             kb_query_max_search_results: 20,
             webview_enabled: false,
+            second_factor: Default::default(),
         }
     }
 
@@ -314,5 +315,244 @@ mod tests {
             "{}/.well-known/oauth-protected-resource",
             TEST_RESOURCE
         )));
+    }
+
+    /// ADR-098 for ADR-113 B7/C4: how a person signed in, read from real RS256
+    /// tokens through the listener's own validator. The fixtures are the shapes
+    /// an identity provider was measured to emit: a second factor (`pwd` and
+    /// `mfa`), a password alone, and a session started from a recovery link,
+    /// which carries no `amr`. Every one carries the same constant `acr`, which
+    /// is why `acr` alone cannot tell them apart.
+    mod sign_in_claims {
+        use super::*;
+        use mae_daemon::sign_in::{SecondFactor, SecondFactorRule, SignIn, ACR, AMR};
+
+        const CONSTANT_ACR: &str = "constant-acr";
+
+        fn claims_with(now: u64, extra: serde_json::Value) -> serde_json::Value {
+            let mut c = valid_claims(now);
+            for (k, v) in extra.as_object().unwrap() {
+                c[k] = v.clone();
+            }
+            c
+        }
+
+        fn second_factor_login(now: u64) -> serde_json::Value {
+            claims_with(
+                now,
+                serde_json::json!({"amr": ["pwd", "mfa"], "acr": CONSTANT_ACR,
+                                   "auth_time": now - 30, "groups": ["readers"]}),
+            )
+        }
+
+        fn password_login(now: u64) -> serde_json::Value {
+            claims_with(
+                now,
+                serde_json::json!({"amr": ["pwd"], "acr": CONSTANT_ACR, "auth_time": now - 30}),
+            )
+        }
+
+        fn recovery_link_login(now: u64) -> serde_json::Value {
+            claims_with(
+                now,
+                serde_json::json!({"acr": CONSTANT_ACR, "auth_time": now - 30}),
+            )
+        }
+
+        fn sign_in_of(claims: &serde_json::Value, config: &ResourceServerConfig) -> SignIn {
+            let (pem, jwk) = generate_test_key();
+            let token = sign_token(&pem, claims);
+            validate_bearer_token(&token, &[jwk], config)
+                .expect("a valid token")
+                .sign_in
+                .expect("an external token always carries a SignIn")
+        }
+
+        fn rule(amr: &[&str], acr: &[&str]) -> SecondFactorRule {
+            SecondFactorRule {
+                amr: amr.iter().map(|s| s.to_string()).collect(),
+                acr: acr.iter().map(|s| s.to_string()).collect(),
+            }
+        }
+
+        /// No built-in second-factor values: the values differ by identity
+        /// provider. Configured, the two keys reach the rule unchanged.
+        #[test]
+        fn the_rule_has_no_default_and_reads_both_keys() {
+            let default = crate::config::OAuthConfig::default();
+            assert_eq!(default.second_factor_rule(), SecondFactorRule::default());
+            let set: crate::config::OAuthConfig =
+                toml::from_str("second_factor_amr = [\"mfa\"]\nsecond_factor_acr = [\"strong\"]")
+                    .unwrap();
+            assert_eq!(set.second_factor_rule(), rule(&["mfa"], &["strong"]));
+        }
+
+        #[test]
+        fn the_measured_sign_ins_are_read_as_emitted() {
+            let now = now_unix();
+            let c = base_config();
+            let s = sign_in_of(&second_factor_login(now), &c);
+            assert_eq!(s.amr, vec!["pwd", "mfa"]);
+            assert_eq!(s.acr.as_deref(), Some(CONSTANT_ACR));
+            assert_eq!(s.auth_time, Some(now - 30));
+            assert_eq!(s.groups, vec!["readers"]);
+            let s = sign_in_of(&password_login(now), &c);
+            assert_eq!(s.amr, vec!["pwd"]);
+            assert_eq!(s.auth_time, Some(now - 30));
+            let s = sign_in_of(&recovery_link_login(now), &c);
+            assert!(s.amr.is_empty(), "a recovery-link session has no amr");
+            assert_eq!(s.acr.as_deref(), Some(CONSTANT_ACR));
+        }
+
+        #[test]
+        fn the_configured_groups_claim_is_the_one_read() {
+            let now = now_unix();
+            let mut c = base_config();
+            c.groups_claim = "roles".into();
+            let claims = claims_with(
+                now,
+                serde_json::json!({"roles": "editors", "groups": ["x"]}),
+            );
+            assert_eq!(sign_in_of(&claims, &c).groups, vec!["editors"]);
+        }
+
+        #[test]
+        fn malformed_claim_types_are_absent_and_never_pass() {
+            let now = now_unix();
+            let c = base_config();
+            let lenient = rule(&["mfa", "pwd"], &["2", CONSTANT_ACR]);
+            for extra in [
+                serde_json::json!({"amr": "mfa", "acr": 2, "auth_time": "now"}),
+                serde_json::json!({"amr": ["mfa", 7], "acr": [CONSTANT_ACR], "auth_time": -1}),
+                serde_json::json!({"amr": {"mfa": true}, "acr": {}, "auth_time": 1.5}),
+            ] {
+                let s = sign_in_of(&claims_with(now, extra.clone()), &c);
+                assert!(s.amr.is_empty(), "{extra}");
+                assert_eq!(s.acr, None, "{extra}");
+                assert_eq!(s.auth_time, None, "{extra}");
+                assert_eq!(s.second_factor(&lenient), None, "{extra}");
+                assert!(!s.fresh_within(now, u64::MAX), "{extra}");
+            }
+        }
+
+        #[test]
+        fn with_nothing_configured_no_sign_in_has_a_second_factor() {
+            let now = now_unix();
+            let c = base_config();
+            for claims in [
+                second_factor_login(now),
+                password_login(now),
+                recovery_link_login(now),
+            ] {
+                let s = sign_in_of(&claims, &c);
+                assert_eq!(s.second_factor(&c.second_factor), None, "{claims}");
+            }
+        }
+
+        #[test]
+        fn an_amr_rule_passes_the_second_factor_and_nothing_else() {
+            let now = now_unix();
+            let c = base_config();
+            let r = rule(&["mfa", "hwk", "sc"], &[]);
+            assert_eq!(
+                sign_in_of(&second_factor_login(now), &c).second_factor(&r),
+                Some(SecondFactor {
+                    claim: AMR,
+                    value: "mfa".into()
+                })
+            );
+            assert_eq!(sign_in_of(&password_login(now), &c).second_factor(&r), None);
+            assert_eq!(
+                sign_in_of(&recovery_link_login(now), &c).second_factor(&r),
+                None
+            );
+        }
+
+        #[test]
+        fn an_acr_rule_matches_the_exact_acr_only() {
+            let now = now_unix();
+            let c = base_config();
+            let strong = claims_with(now, serde_json::json!({"acr": "strong", "amr": ["pwd"]}));
+            let r = rule(&[], &["strong"]);
+            assert_eq!(
+                sign_in_of(&strong, &c).second_factor(&r),
+                Some(SecondFactor {
+                    claim: ACR,
+                    value: "strong".into()
+                })
+            );
+            assert_eq!(sign_in_of(&password_login(now), &c).second_factor(&r), None);
+            // The hazard the docs name: a constant `acr`, configured, passes a
+            // password-only sign-in. Configure `amr` for such a provider.
+            let r = rule(&[], &[CONSTANT_ACR]);
+            assert!(sign_in_of(&password_login(now), &c)
+                .second_factor(&r)
+                .is_some());
+        }
+
+        #[test]
+        fn freshness_reads_auth_time_from_the_token() {
+            let now = now_unix();
+            let c = base_config();
+            let s = sign_in_of(&second_factor_login(now), &c);
+            assert!(s.fresh_within(now, 30));
+            assert!(!s.fresh_within(now, 29));
+            let leeway = mae_daemon::sign_in::JWT_CLOCK_LEEWAY_SECS;
+            let ahead = |by: u64| {
+                sign_in_of(
+                    &claims_with(now, serde_json::json!({"auth_time": now + by})),
+                    &c,
+                )
+            };
+            assert!(ahead(leeway).fresh_within(now, 300));
+            assert!(!ahead(leeway + 1).fresh_within(now, 300));
+        }
+
+        /// The leeway freshness allows a future `auth_time` is the one the
+        /// validator allows `exp`: a token just inside it validates, one just
+        /// outside is expired.
+        #[test]
+        fn the_validator_grants_exp_the_same_leeway() {
+            let leeway = mae_daemon::sign_in::JWT_CLOCK_LEEWAY_SECS;
+            // Why 60: it is the library's own default, which this validator
+            // used before stating it, so stating it changed no token's fate.
+            assert_eq!(leeway, Validation::new(Algorithm::RS256).leeway);
+            let (pem, jwk) = generate_test_key();
+            let now = now_unix();
+            let inside = claims_with(now, serde_json::json!({"exp": now + 10 - leeway}));
+            let outside = claims_with(now, serde_json::json!({"exp": now - 10 - leeway}));
+            let config = base_config();
+            let validate = |c: &serde_json::Value| {
+                validate_bearer_token(&sign_token(&pem, c), std::slice::from_ref(&jwk), &config)
+            };
+            assert!(validate(&inside).is_ok());
+            assert_eq!(validate(&outside), Err(TokenValidationError::Expired));
+        }
+
+        #[tokio::test]
+        async fn the_bare_probe_reports_the_sign_in_and_the_rule_it_meets() {
+            let now = now_unix();
+            let mut c = base_config();
+            c.second_factor = rule(&["mfa"], &[]);
+            let (pem, jwk) = generate_test_key();
+            let token = sign_token(&pem, &second_factor_login(now));
+            let vp = validate_bearer_token(&token, &[jwk], &c).unwrap();
+            let q = mae_daemon::quota::NoQuota;
+            let body = route_authenticated_request(None, &c, None, &vp, &q).await;
+            let s = &body["sign_in"];
+            assert_eq!(s["amr"], serde_json::json!(["pwd", "mfa"]));
+            assert_eq!(s["auth_time"], serde_json::json!(now - 30));
+            assert_eq!(
+                s["second_factor"],
+                serde_json::json!({"claim": "amr", "value": "mfa"})
+            );
+            c.second_factor = SecondFactorRule::default();
+            let body = route_authenticated_request(None, &c, None, &vp, &q).await;
+            assert!(body["sign_in"]["second_factor"].is_null());
+            let mut self_issued = vp;
+            self_issued.sign_in = None;
+            let body = route_authenticated_request(None, &c, None, &self_issued, &q).await;
+            assert!(body["sign_in"].is_null(), "{body}");
+        }
     }
 }

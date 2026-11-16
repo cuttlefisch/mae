@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.159] - 2026-11-16
+
+
+
+
+### Features
+
+- *(daemon)* Expose how a person signed in (ADR-098, for ADR-113 B7/C4) ([dbe2125](https://github.com/cuttlefisch/mae/commit/dbe2125f40adaaa3113748536e194d0c7bcfbf71))
+
+### Documentation
+
+- *(adr-036)* Amendment 1 — the hub verifies every content op it accepts ([496d3d4](https://github.com/cuttlefisch/mae/commit/496d3d47474411bef3066f079895b94ff7e3cde7))
+- *(adr-113)* Amendments 2 and 3 — the revision record, and approval per document type ([a532356](https://github.com/cuttlefisch/mae/commit/a5323563f2ef25273302205922a17b11f6293ebc))
+
 ## [0.14.158] - 2026-11-16
 
 
@@ -15,7 +29,20 @@ All notable changes to this project will be documented in this file.
 
 - *(oauth)* Run the no-CA-roots cases in a child process ([b463755](https://github.com/cuttlefisch/mae/commit/b4637551ea52441cd856d20c3d02d64c7707899c))
 
+### Miscellaneous
+
+- Bump version to 0.14.158 ([23083f1](https://github.com/cuttlefisch/mae/commit/23083f129a3ec56d7d50c1bf24745b153e817d6b))
+
 ## [0.14.157] - 2026-11-16
+
+
+
+
+### Miscellaneous
+
+- Bump version to 0.14.157 ([a880cd3](https://github.com/cuttlefisch/mae/commit/a880cd389def3f05c413ca7886118f849837b71d))
+
+## [mae-crypto-v0.1.0] - 2026-11-16
 
 
 
@@ -27,10 +54,6 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 
 - *(crypto)* Review round 1 for mae-crypto and its WASM facade ([9b923c3](https://github.com/cuttlefisch/mae/commit/9b923c3023de0eb20afc4c90f11a8ebc7a67781f))
-
-### Miscellaneous
-
-- Bump version to 0.14.157 ([a880cd3](https://github.com/cuttlefisch/mae/commit/a880cd389def3f05c413ca7886118f849837b71d))
 
 ## [0.14.156] - 2026-11-15
 
