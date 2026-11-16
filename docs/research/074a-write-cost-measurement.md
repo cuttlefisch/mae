@@ -1,6 +1,8 @@
 # What a per-KB change index costs on the write path: ADR-074 Amendment 1, C1
 
-**Status:** Measured 2026-11-12, against `main` at `8cb10688`.
+**Status:** Measured 2026-11-12, against `main` at `8cb10688`. The two prerequisites the owner
+decided on (one writer lock, checkpoints off the commit path) were built and measured 2026-11-16:
+see [After the prerequisites](#after-the-prerequisites-2026-11-16).
 **Question:** C1 writes a change index (bump a per-KB `kb_feed.head` row, upsert one `kb_changes`
 row per node) inside every update's `wal_append` transaction. Is "+10% at p99 on `apply_update`"
 (Open question 2) a realistic budget at the hosted scale, or is this a scaling problem to design
@@ -248,6 +250,70 @@ If it is built this way, the fix is independent of C1:
 - serialize writers in-process.
 
 Either removes the 1-second sleeps; the serialization also removes collisions altogether.
+
+## After the prerequisites (2026-11-16)
+
+ADR-074 Amendment 1's open question 2 was decided on 2026-11-15: the bar is the added p50 plus
+throughput, and both prerequisites are built before C1. They are now in `daemon/src/storage_writer.rs`:
+
+- **One writer slot.** Every write to `state.db` takes one FIFO tokio mutex before its shard
+  connection. Reads take only their shard.
+- **Checkpoints off the commit path.** Shard connections run with `wal_autocheckpoint=16384` as a
+  backstop only. A background thread with its own connection runs a PASSIVE checkpoint once a
+  second if anything was written, and a TRUNCATE after 1 s idle.
+
+**Method.** The #905 harness, unchanged except for one fix (below). `main` at `cb209d37` ran first,
+then the branch, back to back, as separate jobs in the same 4-core, 8 GB queue class. Each side ran
+5 runs of every scenario. Both sides used the daemon's bundled SQLite 3.42.0, built with
+`HAVE_USLEEP`. Load averages were 0.8–3.6 throughout, lower than the November 12 runs. The
+"before" `base` mode is unmodified `main`. The "after" `base` mode is the new store: it already
+queues, so `base_serial` adds only a second, redundant lock.
+
+**A harness fix: open-loop latency is now measured from when the write was due.** Before the fix, a
+paced writer started its clock when its task ran. On `main` a writer blocked in a shard's
+`std::sync::Mutex` keeps its runtime worker thread. Other writers due at that moment are not polled,
+so their wait went unmeasured (coordinated omission). Measured from the due time, `main`'s p50 at
+the hosted rate is 2.2–7.9 ms, where the old clock reported 0.6–0.9 ms. The November 12 paced
+figures (0.62 → 0.75 ms) are therefore lower bounds. Closed-loop scenarios have no due time and are
+unaffected.
+
+| scenario | | p50 | p99 | writes/s |
+|---|---|---|---|---|
+| `wal_append`, 1 writer | before | 67 µs [57–90] | 281 µs [270–343] | 3,244 [2,115–3,811] |
+| | after | **47 µs** [41–66] | **159 µs** [113–191] | **7,071** [3,941–13,049] |
+| `apply_update`, 1 writer | before | 229 µs [161–370] | 738 µs [603–1,110] | 1,542 [1,065–2,549] |
+| | after | 235 µs [93–422] | **498 µs** [275–925] | 2,568 [1,490–7,066] |
+| `apply_update`, 32 writers, closed loop | before | 0.83 ms [0.72–0.92] | 642 ms [596–717] | 1,512 [1,305–1,653] |
+| | after | 12.6 ms [11.5–13.7] | **24 ms** [18–47] | **2,364** [2,200–2,693] |
+| 32 × 5/s (162/s, hosted rate) | before | 2.8 ms [2.2–7.9] | 43 ms [34–61] | 162 |
+| | after | **2.0 ms** [1.7–3.4] | 60 ms [48–104] | 162 |
+
+Medians over 5 runs, [min–max].
+
+**Reading.**
+- **Throughput at saturation rises 56%** with 32 writers (1,512 → 2,364/s), and p99 falls from
+  642 ms to 24 ms.
+- **Closed-loop p50 rises from 0.8 to 12.6 ms.** This is queueing, not cost: 32 writers that
+  never pause now wait in line. On `main` the same wait was spent asleep in SQLite's busy handler,
+  and it showed up in the tail instead.
+- **The single-writer storage path got cheaper.** p99 fell from 281 to 159 µs because a commit no
+  longer runs SQLite's 1000-page checkpoint, which the causal test above identified as that tail.
+  p50 fell from 67 to 47 µs, but those ranges overlap.
+- **At the hosted rate, p50 fell from 2.8 to 2.0 ms and p99 rose from 43 to 60 ms.** The p99
+  ranges overlap, and these tails come from the scenario's shape: all 32 paced writers fire on the
+  same tick, so every 200 ms a burst of 32 commits queues at once.
+- **`apply_update` with 1 writer drifts within a process on both sides.** Its p50 rises from run
+  to run: 93 → 412 µs after, 161 → 370 µs before. Its medians are equal within that drift.
+- **The cadence of the background checkpoint was measured, not assumed.** The first version
+  checkpointed every 100 ms. At the hosted rate, with the corrected clock, that gave a p50 of
+  11.6 ms [7.0–13.1]. The writer lock alone, with SQLite's own 1000-page checkpoint, gave 3.6 ms,
+  and a 1 s cadence gave 3.1 ms (3 runs each). A checkpoint's fsyncs slow the commits that overlap
+  it, so a cadence ten times as frequent cost more than it saved. At the hosted rate of about
+  1,000 WAL pages a second, 1 s is also how often SQLite's own checkpoint ran before.
+
+**Against the bar.** Throughput improves at every load measured. The added p50 is negative except
+for closed-loop queueing, which is the intended exchange of busy-handler sleep for FIFO wait. C1
+behind the lock can now be measured against these "after" figures.
 
 ## What was not measured
 

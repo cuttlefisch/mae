@@ -57,12 +57,14 @@
 //! 1. `DocStore`'s replace gate, then its per-document lock (the backend's
 //!    callers);
 //! 2. [`WriterLock`], by every write, and by the checkpointer's TRUNCATE only;
-//! 3. a shard connection's mutex (`SqlitePool::lock_shard`/`lock_primary`);
-//! 4. SQLite's own file locks, contended only by other processes.
+//! 3. the checkpoint mutex (`Shared::checkpointing`), by every checkpoint
+//!    this process starts;
+//! 4. a shard connection's mutex (`SqlitePool::lock_shard`/`lock_primary`);
+//! 5. SQLite's own file locks, contended only by other processes.
 //!
 //! The checkpointer never holds a shard mutex: it has its own connection. A
 //! write that skips [`WriterLock`] is not caught by any type: it collides with
-//! the queued writers at step 4 and sleeps in the busy handler again.
+//! the queued writers at step 5 and sleeps in the busy handler again.
 
 use std::ops::Deref;
 use std::path::Path;
@@ -79,24 +81,27 @@ use super::StorageError;
 #[derive(Clone, Copy, Debug)]
 pub struct CheckpointPolicy {
     /// How often the checkpointer wakes. A wake with no new commit costs one
-    /// atomic load. 100 ms: at the measured saturation (about 1,300–1,900
-    /// commits/s at 6.2 WAL frames each) a tick backfills about 1,000 pages,
-    /// the size of SQLite's own default checkpoint, now off the commit path.
+    /// atomic load. 1 s, measured (`docs/research/074a-write-cost-measurement.md`):
+    /// at the hosted rate a checkpoint's fsyncs slow the commits that overlap
+    /// them, and a 100 ms cadence took p50 from 3.1 ms to 11.6 ms against 1 s.
+    /// At that rate (about 1,000 WAL pages a second) 1 s is also how often
+    /// SQLite's own 1000-page checkpoint ran before.
     pub interval: Duration,
     /// With no commit for this long, TRUNCATE the WAL to zero bytes.
     pub idle_truncate_after: Duration,
     /// `wal_autocheckpoint` on the shard connections: the commit path
-    /// checkpoints only when the WAL holds this many pages. 8192 pages (32 MiB
-    /// at 4 KiB pages) is about eight ticks at saturation, so a commit pays a
-    /// checkpoint only after the background checkpointer has missed several.
+    /// checkpoints only when the WAL holds this many pages. 16384 pages (64 MiB
+    /// at 4 KiB pages) is more than a second of writing at the measured
+    /// saturation (about 2,000 commits/s at 6–8 pages each), so the background
+    /// pass normally comes first.
     pub backstop_pages: u32,
 }
 
 impl CheckpointPolicy {
     pub const PRODUCTION: CheckpointPolicy = CheckpointPolicy {
-        interval: Duration::from_millis(100),
+        interval: Duration::from_secs(1),
         idle_truncate_after: Duration::from_secs(1),
-        backstop_pages: 8192,
+        backstop_pages: 16384,
     };
 }
 
