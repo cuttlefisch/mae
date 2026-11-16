@@ -50,6 +50,16 @@ pub struct OAuthConfig {
     /// request before the binding is looked up. Empty (the default): no group
     /// gate. Self-issued tokens carry no groups and are not gated.
     pub allowed_groups: Vec<String>,
+    /// ADR-098, for ADR-113 B7: the `amr` values (RFC 8176) that count as a
+    /// second factor; any one of them in the token's `amr` meets the rule.
+    /// No default, because the values differ by identity provider: empty (the
+    /// default) with `second_factor_acr` empty means no sign-in has one, so a
+    /// requirement fails closed.
+    pub second_factor_amr: Vec<String>,
+    /// The `acr` values that count as a second factor (exact match). Some
+    /// identity providers emit a constant `acr` that says nothing about the
+    /// factors used; prefer `second_factor_amr`. Empty by default.
+    pub second_factor_acr: Vec<String>,
     /// ADR-098 Amendment 1, C2: whether `POST /identity/challenge` and `POST
     /// /identity/bind` exist, letting an IdP-authenticated person bind their
     /// subject to a member key by proof of possession. Default `false`
@@ -216,6 +226,8 @@ impl Default for OAuthConfig {
             principal_claim: "sub".to_string(),
             groups_claim: "groups".to_string(),
             allowed_groups: Vec::new(),
+            second_factor_amr: Vec::new(),
+            second_factor_acr: Vec::new(),
             identity_binding_enabled: false,
             identity_challenge_ttl_secs: 300,
             identity_max_pending_challenges: 4,
@@ -240,6 +252,16 @@ impl Default for OAuthConfig {
             ws_max_open_docs: 1024,
             ws_max_frame_bytes: None,
             ws_max_outbound_bytes: None,
+        }
+    }
+}
+
+impl OAuthConfig {
+    /// The second-factor rule `second_factor_amr`/`second_factor_acr` state.
+    pub fn second_factor_rule(&self) -> mae_daemon::sign_in::SecondFactorRule {
+        mae_daemon::sign_in::SecondFactorRule {
+            amr: self.second_factor_amr.clone(),
+            acr: self.second_factor_acr.clone(),
         }
     }
 }

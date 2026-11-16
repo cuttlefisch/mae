@@ -231,6 +231,8 @@ async fn a_self_issued_token_is_accepted_over_the_real_wire_and_maps_the_princip
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["principal"], "SHA256:real-member-fp");
     assert_eq!(body["resource"], CANONICAL_RESOURCE);
+    // ADR-098: a self-issued token is no sign-in at an identity provider.
+    assert!(body["sign_in"].is_null(), "{body}");
 }
 
 #[tokio::test]

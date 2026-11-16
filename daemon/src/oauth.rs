@@ -82,6 +82,10 @@ pub struct ResourceServerConfig {
     /// `kb_query_enabled` alone. Also requires a `DocStore` to exist (same
     /// `collab.enabled` prerequisite `kb_query_enabled` has).
     pub webview_enabled: bool,
+    /// ADR-098, for ADR-113 B7: the `amr`/`acr` values the operator counts as
+    /// a second factor. Empty (the default): none does. The bare probe reports
+    /// whether the caller's sign-in meets it.
+    pub second_factor: mae_daemon::sign_in::SecondFactorRule,
 }
 
 /// A single JSON Web Key, the subset of RFC 7517 fields this module uses
@@ -125,6 +129,8 @@ pub fn validate_bearer_token(
         validation.set_issuer(std::slice::from_ref(issuer));
     }
     validation.validate_exp = true;
+    // Stated, not inherited: `SignIn::fresh_within` tolerates the same skew.
+    validation.leeway = mae_daemon::sign_in::JWT_CLOCK_LEEWAY_SECS;
 
     let token_data =
         decode::<serde_json::Value>(token, &decoding_key, &validation).map_err(|e| {
@@ -157,6 +163,10 @@ pub fn validate_bearer_token(
         oauth_self_issue::Credential::IdpUnbound,
     );
     vp.subject = subject;
+    vp.sign_in = Some(mae_daemon::sign_in::SignIn::from_claims(
+        &claims,
+        &config.groups_claim,
+    ));
     // `(iss, sub)` keys the binding table, and an absent or non-string `iss`
     // reads as "" — one issuer every such token would share. Checked here
     // because `config.issuer = None` skips the library's issuer validation.
@@ -177,15 +187,8 @@ fn check_allowed_groups(
     if config.allowed_groups.is_empty() {
         return Ok(());
     }
-    let held: Vec<&str> = match claims.get(&config.groups_claim) {
-        Some(serde_json::Value::Array(a)) => a.iter().filter_map(|v| v.as_str()).collect(),
-        Some(serde_json::Value::String(s)) => vec![s.as_str()],
-        _ => Vec::new(),
-    };
-    let admitted = config
-        .allowed_groups
-        .iter()
-        .any(|g| held.contains(&g.as_str()));
+    let held = mae_daemon::sign_in::groups_from_claims(claims, &config.groups_claim);
+    let admitted = config.allowed_groups.iter().any(|g| held.contains(g));
     if !admitted {
         return Err(TokenValidationError::NotInAllowedGroup);
     }
@@ -833,12 +836,40 @@ pub(crate) async fn route_authenticated_request(
         // case (ADR-052), never touched by the kb_query_enabled/doc_store
         // distinctions above since there's no request `id` to shape a
         // JSON-RPC error response around.
-        (None, _, _) => serde_json::json!({
-            "principal": principal.principal,
-            "kind": principal.kind.as_str(),
-            "resource": config.canonical_resource_uri,
-        }),
+        (None, _, _) => probe_answer(principal, config),
     }
+}
+
+/// The bare probe's answer: who the token resolved to, and how they signed in.
+fn probe_answer(
+    principal: &ValidatedPrincipal,
+    config: &ResourceServerConfig,
+) -> serde_json::Value {
+    serde_json::json!({
+        "principal": principal.principal,
+        "kind": principal.kind.as_str(),
+        "resource": config.canonical_resource_uri,
+        "sign_in": sign_in_report(principal, config),
+    })
+}
+
+/// The bare probe's view of how the caller signed in (ADR-098): the claims as
+/// read, and which configured value, if any, meets the second-factor rule.
+/// `null` for a self-issued token, which is no sign-in.
+fn sign_in_report(
+    principal: &ValidatedPrincipal,
+    config: &ResourceServerConfig,
+) -> serde_json::Value {
+    let Some(s) = principal.sign_in.as_ref() else {
+        return serde_json::Value::Null;
+    };
+    serde_json::json!({
+        "amr": s.amr,
+        "acr": s.acr,
+        "auth_time": s.auth_time,
+        "groups": s.groups,
+        "second_factor": s.second_factor(&config.second_factor),
+    })
 }
 
 /// What an unbound IdP subject gets from `kb/query.*` (ADR-098 Amendment 1,
