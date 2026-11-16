@@ -1,76 +1,619 @@
-//! The operations, as bytes in and bytes out. Every key and public key is
-//! 32 bytes at the head of the request; the rest is the operand.
+//! The facade's operations: a JSON request in, a JSON response out. Safe
+//! Rust only; `lib.rs` moves the bytes across the ABI. The contract (every
+//! operation's request and result, the error codes, the backup format) is
+//! written out in docs/E2E_ENCRYPTION.md, "Browser key material"; this file
+//! and `js/mae-crypto.d.ts` must say the same.
 //!
-//! | op | request                    | response            |
-//! |----|----------------------------|---------------------|
-//! | 1  | key ‖ plaintext            | nonce ‖ ct ‖ tag    |
-//! | 2  | key ‖ sealed               | plaintext           |
-//! | 3  | content key ‖ wrap pub     | eph pub ‖ sealed    |
-//! | 4  | ed25519 seed ‖ wrapped     | content key         |
-//! | 5  | ed25519 seed               | wrap pub            |
+//! Every response is `{"ok":true,"result":R}` or
+//! `{"ok":false,"code":"<code>","error":"<message>"}`. A request is a JSON
+//! object with exactly the keys its operation names (an unknown or missing
+//! key is `bad-request`, never a default). Bytes travel as standard base64
+//! with padding. A member key is named by the handle (`key`, a number) the
+//! module gave it; its seed stays inside the module unless `export_seed` or
+//! `backup_seal` is called for it.
 //!
-//! Errors are negative codes, the same on both sides of the interop test.
+//! Results are serialised from structs, so their key order is fixed by this
+//! file, not by serde_json's map type (which a cargo feature elsewhere in
+//! the workspace can change).
 
-pub const SEAL: u32 = 1;
-pub const OPEN: u32 = 2;
-pub const WRAP: u32 = 3;
-pub const UNWRAP: u32 = 4;
-pub const WRAP_PUBLIC: u32 = 5;
+use std::borrow::Cow;
 
-pub const E_DECRYPT: i32 = -1;
-pub const E_MALFORMED: i32 = -2;
-pub const E_BAD_KEY: i32 = -3;
-pub const E_SHORT: i32 = -4;
-pub const E_OP: i32 = -5;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
+use mae_crypto::backup::{self, BackupError, KdfParams};
+use mae_crypto::content_crypto::{self as cc, ContentKey, CryptoError};
+use mae_crypto::identity_challenge::{self as ic, Challenge, ChallengeRefusal, Claimant};
+use mae_crypto::member::{self, MemberKey};
+use mae_crypto::rng;
+use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
-/// Defines `call(op, request) -> Result<Vec<u8>, i32>` over a module with
-/// `content_crypto`'s API. Used twice: over this crate's `#[path]` copy (the
-/// WASM module) and over `mae_sync::content_crypto` (the native interop
-/// binary), so the two sides cannot drift in framing.
-#[macro_export]
-macro_rules! define_call {
-    ($($m:ident)::+) => {
-        pub fn call(op: u32, req: &[u8]) -> Result<Vec<u8>, i32> {
-            use $crate::api::*;
-            use $($m)::+ as cc;
-            use zeroize::Zeroize;
-            fn err(e: cc::CryptoError) -> i32 {
-                match e {
-                    cc::CryptoError::Decrypt => E_DECRYPT,
-                    cc::CryptoError::Malformed => E_MALFORMED,
-                    cc::CryptoError::BadKey => E_BAD_KEY,
-                }
-            }
-            if !(SEAL..=WRAP_PUBLIC).contains(&op) {
-                return Err(E_OP);
-            }
-            if req.len() < 32 {
-                return Err(E_SHORT);
-            }
-            let (head, rest) = req.split_at(32);
-            let mut k: [u8; 32] = head.try_into().map_err(|_| E_SHORT)?;
-            let out = match op {
-                SEAL => Ok(cc::encrypt(&cc::ContentKey::from_bytes(k), rest)),
-                OPEN => cc::decrypt(&cc::ContentKey::from_bytes(k), rest).map_err(err),
-                WRAP => match <[u8; 32]>::try_from(rest) {
-                    Ok(public) => {
-                        cc::wrap_to_member(&cc::ContentKey::from_bytes(k), &public).map_err(err)
-                    }
-                    Err(_) => Err(E_SHORT),
-                },
-                UNWRAP => cc::unwrap_as_member(rest, &k)
-                    .map(|ck| ck.as_bytes().to_vec())
-                    .map_err(err),
-                _ => {
-                    if rest.is_empty() {
-                        Ok(cc::wrap_public_for(&k).to_vec())
-                    } else {
-                        Err(E_SHORT)
-                    }
-                }
-            };
-            k.zeroize();
-            out
+use crate::keystore::{self, StoreError};
+
+/// The contract version (`mae-crypto-vX.Y.Z` tags), reported by `version`.
+pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// An operation, by its ABI number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Op {
+    Version = 1,
+    Generate = 2,
+    ImportSeed = 3,
+    ExportSeed = 4,
+    Forget = 5,
+    KeyInfo = 6,
+    Fingerprint = 7,
+    CheckChallenge = 8,
+    SignChallenge = 9,
+    BackupSeal = 10,
+    BackupOpen = 11,
+    BackupParams = 12,
+    ContentKeyGenerate = 13,
+    ContentSeal = 14,
+    ContentOpen = 15,
+    ContentWrap = 16,
+    ContentUnwrap = 17,
+}
+
+impl Op {
+    /// Every operation, in ABI order.
+    pub const ALL: [Op; 17] = [
+        Op::Version,
+        Op::Generate,
+        Op::ImportSeed,
+        Op::ExportSeed,
+        Op::Forget,
+        Op::KeyInfo,
+        Op::Fingerprint,
+        Op::CheckChallenge,
+        Op::SignChallenge,
+        Op::BackupSeal,
+        Op::BackupOpen,
+        Op::BackupParams,
+        Op::ContentKeyGenerate,
+        Op::ContentSeal,
+        Op::ContentOpen,
+        Op::ContentWrap,
+        Op::ContentUnwrap,
+    ];
+
+    pub fn from_u32(n: u32) -> Option<Op> {
+        Op::ALL.into_iter().find(|o| *o as u32 == n)
+    }
+}
+
+/// An error response.
+#[derive(Debug)]
+pub struct ApiError {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl ApiError {
+    fn new(code: &'static str, message: impl std::fmt::Display) -> Self {
+        Self {
+            code,
+            message: message.to_string(),
+        }
+    }
+}
+
+impl From<ChallengeRefusal> for ApiError {
+    fn from(r: ChallengeRefusal) -> Self {
+        Self::new(r.code(), &r)
+    }
+}
+
+impl From<BackupError> for ApiError {
+    fn from(e: BackupError) -> Self {
+        Self::new(e.code(), &e)
+    }
+}
+
+impl From<CryptoError> for ApiError {
+    fn from(e: CryptoError) -> Self {
+        match e {
+            CryptoError::Decrypt => Self::new("decrypt", "wrong key, or the data was altered"),
+            CryptoError::Malformed => Self::new("malformed", "malformed or hostile input"),
+            CryptoError::BadKey => Self::new("bad-key", "not a valid public key"),
+        }
+    }
+}
+
+impl From<StoreError> for ApiError {
+    fn from(e: StoreError) -> Self {
+        match e {
+            StoreError::Full => Self::new(
+                "keystore-full",
+                format!("{} keys are held; forget one first", keystore::MAX_KEYS),
+            ),
+            StoreError::Exhausted => Self::new("keystore-full", "no handles left in this instance"),
+        }
+    }
+}
+
+fn no_entropy() -> ApiError {
+    ApiError::new("no-entropy", rng::RandomUnavailable)
+}
+
+/// Runs operation `op` on `request` (JSON bytes). Total: any input gives a
+/// JSON response.
+pub fn call(op: u32, request: &[u8]) -> String {
+    let result = match Op::from_u32(op) {
+        Some(op) => run(op, request),
+        None => Err(ApiError::new(
+            "unknown-op",
+            format!("unknown operation {op}"),
+        )),
+    };
+    match result {
+        Ok(r) => format!("{{\"ok\":true,\"result\":{r}}}"),
+        Err(e) => format!(
+            "{{\"ok\":false,\"code\":{},\"error\":{}}}",
+            json_str(e.code),
+            json_str(&e.message)
+        ),
+    }
+}
+
+fn json_str(s: &str) -> String {
+    serde_json::to_string(s).expect("a string serialises")
+}
+
+fn run(op: Op, r: &[u8]) -> Result<String, ApiError> {
+    match op {
+        Op::Version => version(r),
+        Op::Generate => generate(r),
+        Op::ImportSeed => import_seed(r),
+        Op::ExportSeed => export_seed(r),
+        Op::Forget => forget(r),
+        Op::KeyInfo => key_info(r),
+        Op::Fingerprint => fingerprint(r),
+        Op::CheckChallenge => check_challenge(r),
+        Op::SignChallenge => sign_challenge(r),
+        Op::BackupSeal => backup_seal(r),
+        Op::BackupOpen => backup_open(r),
+        Op::BackupParams => backup_params(r),
+        Op::ContentKeyGenerate => content_key_generate(r),
+        Op::ContentSeal => content_seal(r),
+        Op::ContentOpen => content_open(r),
+        Op::ContentWrap => content_wrap(r),
+        Op::ContentUnwrap => content_unwrap(r),
+    }
+}
+
+// ---- requests ----
+
+/// Parses a request. The error names the kind of problem and where, never
+/// serde's message: that quotes the input (a seed, a passphrase, a key).
+fn parse<'a, T: Deserialize<'a>>(bytes: &'a [u8]) -> Result<T, ApiError> {
+    serde_json::from_slice(bytes).map_err(|e| {
+        use serde_json::error::Category;
+        let what = match e.classify() {
+            Category::Data => "a key is missing, unknown, or of the wrong type",
+            Category::Syntax | Category::Eof | Category::Io => "not valid JSON",
+        };
+        ApiError::new(
+            "bad-request",
+            format!(
+                "the request is not this operation's JSON object: {what} (line {}, column {})",
+                e.line(),
+                e.column()
+            ),
+        )
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Empty {}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KeyReq {
+    key: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeedReq<'a> {
+    #[serde(borrow)]
+    seed: Cow<'a, str>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PublicReq<'a> {
+    #[serde(borrow)]
+    public_key: Cow<'a, str>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChallengeReq<'a> {
+    key: u32,
+    #[serde(borrow)]
+    issuer: Cow<'a, str>,
+    #[serde(borrow)]
+    subject: Cow<'a, str>,
+    #[serde(borrow)]
+    audience: Cow<'a, str>,
+    #[serde(borrow)]
+    challenge: Cow<'a, str>,
+    now: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KdfReq {
+    m: u32,
+    t: u32,
+    p: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SealReq<'a> {
+    key: u32,
+    #[serde(borrow)]
+    passphrase: Cow<'a, str>,
+    #[serde(default)]
+    kdf: Option<KdfReq>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenReq<'a> {
+    #[serde(borrow)]
+    envelope: Cow<'a, str>,
+    #[serde(borrow)]
+    passphrase: Cow<'a, str>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnvelopeReq<'a> {
+    #[serde(borrow)]
+    envelope: Cow<'a, str>,
+}
+
+/// A content operation's request: the content key and the one operand the
+/// operation names (`plaintext`, `sealed` or `wrap_public`).
+macro_rules! content_req {
+    ($name:ident, $field:ident) => {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct $name<'a> {
+            #[serde(borrow)]
+            content_key: Cow<'a, str>,
+            #[serde(borrow)]
+            $field: Cow<'a, str>,
         }
     };
+}
+content_req!(SealContentReq, plaintext);
+content_req!(OpenContentReq, sealed);
+content_req!(WrapContentReq, wrap_public);
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UnwrapReq<'a> {
+    key: u32,
+    #[serde(borrow)]
+    wrapped: Cow<'a, str>,
+}
+
+fn bytes(field: &str, b64: &str) -> Result<Zeroizing<Vec<u8>>, ApiError> {
+    STANDARD.decode(b64).map(Zeroizing::new).map_err(|_| {
+        ApiError::new(
+            "bad-request",
+            format!("{field} is not canonical padded base64"),
+        )
+    })
+}
+
+fn bytes32(field: &str, b64: &str) -> Result<Zeroizing<[u8; 32]>, ApiError> {
+    let v = bytes(field, b64)?;
+    let mut out = Zeroizing::new([0u8; 32]);
+    if v.len() != out.len() {
+        let n = v.len();
+        return Err(ApiError::new(
+            "bad-request",
+            format!("{field} is {n} bytes, not 32"),
+        ));
+    }
+    out.copy_from_slice(&v);
+    Ok(out)
+}
+
+/// Runs `f` on the held key `handle`, or `no-key`.
+fn held<R>(handle: u32, f: impl FnOnce(&MemberKey) -> R) -> Result<R, ApiError> {
+    keystore::with(handle, f).ok_or_else(|| {
+        ApiError::new(
+            "no-key",
+            format!("no key {handle} in this instance (forgotten, or never given)"),
+        )
+    })
+}
+
+// ---- results ----
+
+fn out<T: Serialize>(v: &T) -> Result<String, ApiError> {
+    Ok(serde_json::to_string(v).expect("a result serialises"))
+}
+
+#[derive(Serialize)]
+struct KeyInfo {
+    key: u32,
+    public_key: String,
+    fingerprint: String,
+    wrap_public: String,
+}
+
+fn info(handle: u32) -> Result<String, ApiError> {
+    let i = held(handle, |k| KeyInfo {
+        key: handle,
+        public_key: k.public_key_b64(),
+        fingerprint: k.fingerprint(),
+        wrap_public: STANDARD.encode(k.wrap_public()),
+    })?;
+    out(&i)
+}
+
+#[derive(Serialize)]
+struct ChallengeOut<'a> {
+    domain: &'a str,
+    iss: &'a str,
+    sub: &'a str,
+    aud: &'a str,
+    fingerprint: &'a str,
+    nonce: &'a str,
+    expires_at: u64,
+}
+
+impl<'a> From<&'a Challenge> for ChallengeOut<'a> {
+    fn from(c: &'a Challenge) -> Self {
+        Self {
+            domain: &c.domain,
+            iss: &c.iss,
+            sub: &c.sub,
+            aud: &c.aud,
+            fingerprint: &c.fingerprint,
+            nonce: &c.nonce,
+            expires_at: c.expires_at,
+        }
+    }
+}
+
+// ---- operations ----
+
+fn version(r: &[u8]) -> Result<String, ApiError> {
+    parse::<Empty>(r)?;
+    #[derive(Serialize)]
+    struct V {
+        version: &'static str,
+        backup_version: u64,
+        challenge_domain: &'static str,
+    }
+    out(&V {
+        version: API_VERSION,
+        backup_version: backup::VERSION,
+        challenge_domain: ic::DOMAIN_TAG,
+    })
+}
+
+fn generate(r: &[u8]) -> Result<String, ApiError> {
+    parse::<Empty>(r)?;
+    let key = MemberKey::generate().map_err(|_| no_entropy())?;
+    info(keystore::insert(key)?)
+}
+
+fn import_seed(r: &[u8]) -> Result<String, ApiError> {
+    let req: SeedReq = parse(r)?;
+    let seed = bytes32("seed", &req.seed)?;
+    info(keystore::insert(MemberKey::from_seed(&seed))?)
+}
+
+fn export_seed(r: &[u8]) -> Result<String, ApiError> {
+    let req: KeyReq = parse(r)?;
+    let seed = Zeroizing::new(held(req.key, |k| STANDARD.encode(*k.seed()))?);
+    #[derive(Serialize)]
+    struct S<'a> {
+        seed: &'a str,
+    }
+    out(&S { seed: &seed })
+}
+
+fn forget(r: &[u8]) -> Result<String, ApiError> {
+    let req: KeyReq = parse(r)?;
+    #[derive(Serialize)]
+    struct F {
+        forgotten: bool,
+    }
+    out(&F {
+        forgotten: keystore::forget(req.key),
+    })
+}
+
+fn key_info(r: &[u8]) -> Result<String, ApiError> {
+    let req: KeyReq = parse(r)?;
+    info(req.key)
+}
+
+fn fingerprint(r: &[u8]) -> Result<String, ApiError> {
+    let req: PublicReq = parse(r)?;
+    let public = member::decode_public_key(&req.public_key).ok_or_else(|| {
+        ApiError::new(
+            "bad-public-key",
+            "public_key is not 32 bytes of padded base64 naming an Ed25519 point",
+        )
+    })?;
+    #[derive(Serialize)]
+    struct F {
+        fingerprint: String,
+    }
+    out(&F {
+        fingerprint: member::fingerprint(&public),
+    })
+}
+
+fn claimant<'a>(req: &'a ChallengeReq<'_>) -> Claimant<'a> {
+    Claimant {
+        issuer: &req.issuer,
+        subject: &req.subject,
+        audience: &req.audience,
+    }
+}
+
+fn check_challenge(r: &[u8]) -> Result<String, ApiError> {
+    let req: ChallengeReq = parse(r)?;
+    let c = held(req.key, |k| {
+        ic::check_challenge(&k.fingerprint(), claimant(&req), &req.challenge, req.now)
+    })??;
+    #[derive(Serialize)]
+    struct C<'a> {
+        challenge: ChallengeOut<'a>,
+    }
+    out(&C {
+        challenge: (&c).into(),
+    })
+}
+
+fn sign_challenge(r: &[u8]) -> Result<String, ApiError> {
+    let req: ChallengeReq = parse(r)?;
+    let (c, body) = held(req.key, |k| {
+        ic::sign_challenge(k, claimant(&req), &req.challenge, req.now)
+    })??;
+    #[derive(Serialize)]
+    struct Body<'a> {
+        challenge_id: &'a str,
+        public_key: &'a str,
+        signature: &'a str,
+    }
+    #[derive(Serialize)]
+    struct S<'a> {
+        challenge: ChallengeOut<'a>,
+        body: Body<'a>,
+    }
+    let field = |k: &str| body[k].as_str().unwrap_or_default().to_string();
+    let (id, public, sig) = (
+        field("challenge_id"),
+        field("public_key"),
+        field("signature"),
+    );
+    out(&S {
+        challenge: (&c).into(),
+        body: Body {
+            challenge_id: &id,
+            public_key: &public,
+            signature: &sig,
+        },
+    })
+}
+
+fn backup_seal(r: &[u8]) -> Result<String, ApiError> {
+    let req: SealReq = parse(r)?;
+    let params = match &req.kdf {
+        Some(k) => KdfParams {
+            m: k.m,
+            t: k.t,
+            p: k.p,
+        },
+        None => KdfParams::DEFAULT,
+    };
+    let envelope = held(req.key, |k| {
+        backup::seal(&k.seed(), &req.passphrase, params)
+    })??;
+    #[derive(Serialize)]
+    struct E {
+        envelope: String,
+    }
+    out(&E { envelope })
+}
+
+fn backup_open(r: &[u8]) -> Result<String, ApiError> {
+    let req: OpenReq = parse(r)?;
+    let seed = backup::open(&req.envelope, &req.passphrase)?;
+    info(keystore::insert(MemberKey::from_seed(&seed))?)
+}
+
+fn backup_params(r: &[u8]) -> Result<String, ApiError> {
+    let req: EnvelopeReq = parse(r)?;
+    let h = backup::header_of(&req.envelope)?;
+    #[derive(Serialize)]
+    struct P<'a> {
+        fingerprint: &'a str,
+        m: u32,
+        t: u32,
+        p: u32,
+    }
+    out(&P {
+        fingerprint: &h.fingerprint,
+        m: h.params.m,
+        t: h.params.t,
+        p: h.params.p,
+    })
+}
+
+#[derive(Serialize)]
+struct ContentKeyOut<'a> {
+    content_key: &'a str,
+}
+
+fn content_key_generate(r: &[u8]) -> Result<String, ApiError> {
+    parse::<Empty>(r)?;
+    let mut k = Zeroizing::new([0u8; 32]);
+    rng::fill(&mut k[..]).map_err(|_| no_entropy())?;
+    let b64 = Zeroizing::new(STANDARD.encode(*k));
+    out(&ContentKeyOut { content_key: &b64 })
+}
+
+fn content_key(b64: &str) -> Result<ContentKey, ApiError> {
+    Ok(ContentKey::from_bytes(*bytes32("content_key", b64)?))
+}
+
+fn content_seal(r: &[u8]) -> Result<String, ApiError> {
+    let req: SealContentReq = parse(r)?;
+    let plain = bytes("plaintext", &req.plaintext)?;
+    let sealed = cc::encrypt(&content_key(&req.content_key)?, &plain);
+    #[derive(Serialize)]
+    struct S {
+        sealed: String,
+    }
+    out(&S {
+        sealed: STANDARD.encode(sealed),
+    })
+}
+
+fn content_open(r: &[u8]) -> Result<String, ApiError> {
+    let req: OpenContentReq = parse(r)?;
+    let sealed = bytes("sealed", &req.sealed)?;
+    let plain = Zeroizing::new(cc::decrypt(&content_key(&req.content_key)?, &sealed)?);
+    let b64 = Zeroizing::new(STANDARD.encode(&*plain));
+    #[derive(Serialize)]
+    struct P<'a> {
+        plaintext: &'a str,
+    }
+    out(&P { plaintext: &b64 })
+}
+
+fn content_wrap(r: &[u8]) -> Result<String, ApiError> {
+    let req: WrapContentReq = parse(r)?;
+    let wrap_public = bytes32("wrap_public", &req.wrap_public)?;
+    let wrapped = cc::wrap_to_member(&content_key(&req.content_key)?, &wrap_public)?;
+    #[derive(Serialize)]
+    struct W {
+        wrapped: String,
+    }
+    out(&W {
+        wrapped: STANDARD.encode(wrapped),
+    })
+}
+
+fn content_unwrap(r: &[u8]) -> Result<String, ApiError> {
+    let req: UnwrapReq = parse(r)?;
+    let wrapped = bytes("wrapped", &req.wrapped)?;
+    let ck = held(req.key, |k| k.unwrap_content_key(&wrapped))??;
+    let b64 = Zeroizing::new(STANDARD.encode(ck.as_bytes()));
+    out(&ContentKeyOut { content_key: &b64 })
 }
