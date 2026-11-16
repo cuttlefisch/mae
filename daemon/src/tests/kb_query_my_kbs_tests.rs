@@ -251,7 +251,10 @@ async fn an_anchored_kb_reports_the_role_the_signed_log_grants_not_the_unsigned_
         .share_doc("kbc:kb-signed", &coll.encode_state(), TEST_BY)
         .await
         .unwrap();
-    doc_store.set_kb_anchor("kb-signed", owner_pub).await;
+    doc_store
+        .set_kb_anchor("kb-signed", owner_pub)
+        .await
+        .unwrap();
 
     let got = my_kbs(&doc_store, Some(&member_fp)).await;
     assert_eq!(

@@ -136,7 +136,7 @@ pub(super) async fn anchored() -> (Fixture, Arc<Identity>, Identity) {
     assert!(shared.error.is_none(), "{:?}", shared.error);
     let add = kb_member_msg("kb/add_member", KB, &editor.fingerprint(), Some("editor"));
     assert!(f.call_as(Some(&owner_fp), add).await.error.is_none());
-    f.store.set_kb_anchor(KB, owner_pk).await;
+    f.store.set_kb_anchor(KB, owner_pk).await.unwrap();
     (f, owner, editor)
 }
 

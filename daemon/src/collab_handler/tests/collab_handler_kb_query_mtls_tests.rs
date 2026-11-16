@@ -71,7 +71,7 @@ async fn setup_owner_and_query_only_member(
     // Anchor so `kb_access` derives roles (and ReplicationPolicy) from the
     // signed op-log -- ReplicationPolicy has no meaning on the legacy
     // `member_roles` path.
-    store.set_kb_anchor(kb_id, owner_pubkey).await;
+    store.set_kb_anchor(kb_id, owner_pubkey).await.unwrap();
 
     (owner_fp, owner_pubkey, owner_secret, query_only)
 }

@@ -43,7 +43,7 @@ async fn local_block_fences_principal_at_every_derive_site() {
         .await;
     }
     // Anchor ⇒ membership derives from the signed op-log (the path the blocklist guards).
-    store.set_kb_anchor("kbb", owner_pk).await;
+    store.set_kb_anchor("kbb", owner_pk).await.unwrap();
 
     let access = |p: String, op: KbOp| {
         let store = Arc::clone(&store);

@@ -27,7 +27,7 @@ async fn a_kb_shared_now_is_anchored_to_its_sharer_durably() {
         assert!(r.error.is_none(), "share: {:?}", r.error);
         assert_eq!(store.kb_anchor(KB).await, Some(owner.pk));
         // A mesh join's anchor, for the provenance half of the round trip.
-        store.set_kb_anchor("kb-joined", owner.pk).await;
+        store.set_kb_anchor("kb-joined", owner.pk).await.unwrap();
     }
     let reopened = DocStore::new(Arc::new(SqliteBackend::open(&path).unwrap()), 500);
     assert_eq!(reopened.kb_anchor(KB).await, None, "not yet hydrated");
@@ -114,7 +114,7 @@ async fn an_owners_reshare_or_sync_update_anchors_a_kb_shared_before() {
 async fn an_anchor_is_never_replaced_by_the_owners_connection() {
     let (mut h, k) = hv(false, false, false).await;
     let other = key("joined-from");
-    h.store.set_kb_anchor(KB, other.pk).await;
+    h.store.set_kb_anchor(KB, other.pk).await.unwrap();
     let (upd, _) = op(&k.owner, 0, "owner writes");
     let _ = h
         .call(k.owner.mtls(), write(Method::NodeUpdate, &upd, None))
@@ -135,13 +135,18 @@ async fn the_operator_anchors_only_with_the_owners_key_and_only_once() {
     let missing = operator_anchor_kb(&h.store, "no-such-kb", k.owner.pk).await;
     assert!(missing.is_err(), "an unknown KB: {missing:?}");
     let done = operator_anchor_kb(&h.store, KB, k.owner.pk).await;
-    assert_eq!(done, Ok(OperatorAnchor::Recorded));
+    assert_eq!(
+        done,
+        Ok(OperatorAnchor::Recorded {
+            roster_only: vec![]
+        })
+    );
     assert_eq!(h.store.kb_anchor(KB).await, Some(k.owner.pk));
     let again = operator_anchor_kb(&h.store, KB, k.owner.pk).await;
     assert_eq!(again, Ok(OperatorAnchor::AlreadyAnchored));
 
     let (h, k) = hv(false, false, false).await;
-    h.store.set_kb_anchor(KB, k.carol.pk).await;
+    h.store.set_kb_anchor(KB, k.carol.pk).await.unwrap();
     let replaced = operator_anchor_kb(&h.store, KB, k.owner.pk).await;
     assert!(replaced.is_err(), "anchored to another key: {replaced:?}");
     assert_eq!(h.store.kb_anchor(KB).await, Some(k.carol.pk));

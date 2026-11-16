@@ -1005,6 +1005,25 @@ for a KB shared before this, the key of its owner's next share or write. `kb anc
 `--public-key` prints the key and its source (`hub_recorded` or `joined`). Use the command only for a
 KB whose owner will not reconnect. It records the key whose fingerprint the KB names as owner and
 no other, once: a different key than the recorded one is refused. Operator-only, like `kb member`.
+Nothing replaces an anchor: a mesh join ticket naming a KB this daemon anchored is refused, and the
+dial stops.
+
+**Members the signed log leaves out.** Where the log governs, a KB's member list no longer grants
+access: an entry the log does not admit has none. Such entries are reported, never dropped silently:
+the daemon logs a warning with their number when it records the anchor, `kb anchor` prints them when
+it records one, `kb anchor --kb-id X` (show) prints which source governs and lists them, and
+`mae-daemon doctor` lists them for every anchored KB (advisory: it does not fail the verdict, and it
+is skipped while the daemon runs, since it reads the store under its lock). The owner admits each
+one with a signed membership op. On such a KB, `kb member add|remove`, `kb/add_member`,
+`kb/remove_member`, `kb/approve_member` and a permissive join's auto-admit are refused
+(`signer_unavailable`) unless this daemon signs the change into the log as the KB's owner, with the
+key the KB is anchored to.
+
+**A squatted KB id.** The first session to share an id owns it, and its key becomes that KB's
+anchor, durably. No command clears an anchor. To recover: the legitimate owner shares under a fresh
+id (MAE does this by itself when it is told `kb_id_owned_by_another`), and you revoke the squatter's
+access (`mae-daemon revoke <fingerprint>` for a key; its tokens or binding for a bearer identity).
+The squatted id stays taken.
 
 ### Exporting it back: `mae-daemon kb export`
 

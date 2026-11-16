@@ -140,8 +140,12 @@ impl PeerIdentity {
     /// @ai-caution: [authz] `None` here means "loopback-trusted, every KB
     /// allowed" downstream (`kb_access`). A bearer identity must therefore
     /// ALWAYS yield `Some`, never fall through to `None` for lack of a key.
+    /// So must any identity that names one: a key peer whose public key is the
+    /// all-zero encoding (a valid, small-order point an operator could
+    /// authorize) fails `is_authenticated`, and read as `None` it was every KB.
+    /// Only [`PeerIdentity::synthetic`] (`none` mode) has an empty fingerprint.
     pub fn principal(&self) -> Option<&str> {
-        if self.is_authenticated() || self.bearer || self.fingerprint.starts_with("psk:") {
+        if self.is_authenticated() || self.bearer || !self.fingerprint.is_empty() {
             Some(&self.fingerprint)
         } else {
             None
@@ -1299,6 +1303,16 @@ mod tests {
             Some("psk:team")
         );
         assert_eq!(PeerIdentity::synthetic("anon").principal(), None);
+        // The all-zero key decodes (a small-order point), so an operator can
+        // authorize it; its session is identified and must have a principal.
+        let zero = PublicKey::from_bytes(&[0u8; 32], None).expect("decodes");
+        let zero_peer = PeerIdentity {
+            label: "zero".into(),
+            fingerprint: zero.fingerprint(),
+            pubkey: [0u8; 32],
+            bearer: false,
+        };
+        assert_eq!(zero_peer.principal(), Some(zero.fingerprint().as_str()));
     }
 
     #[test]

@@ -26,7 +26,7 @@ async fn everyone_still_writes(h: &mut Hv, k: &Keys, ctx: &str) {
 
 /// Apply `update` to the KB's collection as raw state (no handler gate), as a
 /// relay or an old daemon could have left it.
-async fn raw_collection(h: &Hv, update: &[u8]) {
+pub(super) async fn raw_collection(h: &Hv, update: &[u8]) {
     let doc = format!("kbc:{KB}");
     h.store
         .apply_update(&doc, update, None, TEST_BY)
@@ -101,7 +101,7 @@ async fn a_log_with_the_anchors_genesis_is_the_source() {
 
 /// Append a membership op `action` on `subject`, authored and signed by
 /// `signer`, after whatever the log's head is now.
-async fn append(h: &Hv, signer: &Key, action: MembershipAction, subject: &str) {
+pub(super) async fn append(h: &Hv, signer: &Key, action: MembershipAction, subject: &str) {
     let mut coll = load_coll(&h.store, KB).await;
     let role = Some(SyncRole::Owner);
     let o = coll.build_membership_op(KB, action, subject, role, true, &signer.fp, 0, None, 0);
@@ -220,7 +220,7 @@ async fn a_joined_kb_without_the_anchors_genesis_has_no_members() {
     ] {
         let (mut h, k) = hv(false, false, false).await;
         if joined {
-            h.store.set_kb_anchor(KB, k.owner.pk).await;
+            h.store.set_kb_anchor(KB, k.owner.pk).await.unwrap();
         } else {
             let recorded = h.store.record_kb_anchor_if_absent(KB, k.owner.pk).await;
             assert_eq!(recorded.ok(), Some(true));

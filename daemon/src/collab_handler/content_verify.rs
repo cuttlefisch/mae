@@ -53,6 +53,17 @@ impl<'a> OpSender<'a> {
 
     /// F4: the principal every op this sender ORIGINATES must be authored by.
     /// A mesh peer's ops are legitimately someone else's, so it has none.
+    ///
+    /// @ai-caution: [security] A hub session with no principal skips F4. Only a
+    /// session with no identity at all has none: `auth.mode = none`
+    /// (`handle_client`, and `PeerIdentity::synthetic`). Every identified
+    /// session has one — a key or mTLS peer its fingerprint, a `/ws` bearer
+    /// its token subject, psk the shared `psk:<keyid>` (so a psk session's
+    /// signed ops are always `not_author`: psk clients do not sign). Such a
+    /// session is already loopback-trusted for every KB, so F4 would bound
+    /// nothing; signature and membership still apply. Should an identified
+    /// session ever reach `principal() == None`, it would pass here AND every
+    /// `kb_access` gate — fix that at `PeerIdentity::principal`, not here.
     fn originator(&self) -> Option<&'a str> {
         match self.transport {
             Transport::P2p => None,
@@ -177,15 +188,21 @@ pub(crate) async fn author_membership(
 /// fingerprint is the one the collection names as owner — so no other key can
 /// anchor a KB. Best-effort: a KB that cannot be loaded or persisted here is
 /// anchored at the owner's next try.
+///
+/// Returns, when this call recorded the anchor and the KB's signed log now
+/// governs, the member-list entries that log does not admit — warned about
+/// here, so no member is lost silently (the owner's "log wins, made visible").
 pub(crate) async fn adopt_owner_anchor(
     doc_store: &DocStore,
     kb_id: &str,
     coll: Option<&KbCollectionDoc>,
     pubkey: Option<&[u8; 32]>,
-) {
-    let Some(pubkey) = pubkey else { return };
+) -> Vec<String> {
+    let Some(pubkey) = pubkey else {
+        return Vec::new();
+    };
     if doc_store.kb_anchor(kb_id).await.is_some() {
-        return;
+        return Vec::new();
     }
     let loaded;
     let coll = match coll {
@@ -195,20 +212,24 @@ pub(crate) async fn adopt_owner_anchor(
                 loaded = c;
                 &loaded
             }
-            Err(_) => return,
+            Err(_) => return Vec::new(),
         },
     };
     let owner = coll.owner();
     if owner.is_empty() || fingerprint_of(pubkey) != owner {
-        return;
+        return Vec::new();
     }
     match doc_store.record_kb_anchor_if_absent(kb_id, *pubkey).await {
         Ok(true) => {
-            info!(kb_id, owner = %owner, "KB content anchor recorded (ADR-036 Amendment 1 F1)")
+            info!(kb_id, owner = %owner, "KB content anchor recorded (ADR-036 Amendment 1 F1)");
+            let roster_only = membership_source(doc_store, kb_id, coll).await.roster_only;
+            warn_roster_only(kb_id, &roster_only);
+            roster_only
         }
-        Ok(false) => {}
+        Ok(false) => Vec::new(),
         Err(e) => {
-            warn!(kb_id, error = %e, "KB content anchor not recorded; retried at the owner's next write")
+            warn!(kb_id, error = %e, "KB content anchor not recorded; retried at the owner's next write");
+            Vec::new()
         }
     }
 }
@@ -216,7 +237,11 @@ pub(crate) async fn adopt_owner_anchor(
 /// What `mae-daemon kb anchor` did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OperatorAnchor {
-    Recorded,
+    /// Recorded. `roster_only`: member-list entries the KB's signed log, which
+    /// now governs, does not admit (empty when the member list still governs).
+    Recorded {
+        roster_only: Vec<String>,
+    },
     AlreadyAnchored,
 }
 
@@ -249,7 +274,11 @@ pub async fn operator_anchor_kb(
             "KB '{kb_id}' is already anchored to another key; an anchor is recorded once"
         )),
         None => match doc_store.record_kb_anchor_if_absent(kb_id, pubkey).await {
-            Ok(true) => Ok(OperatorAnchor::Recorded),
+            Ok(true) => {
+                let roster_only = membership_source(doc_store, kb_id, &coll).await.roster_only;
+                warn_roster_only(kb_id, &roster_only);
+                Ok(OperatorAnchor::Recorded { roster_only })
+            }
             Ok(false) => Err(format!(
                 "KB '{kb_id}' was anchored concurrently; re-run to check"
             )),

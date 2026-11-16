@@ -174,6 +174,11 @@ pub(super) async fn handle_kb_join(
             if let (Some(principal), Ok(mut coll)) =
                 (auth_principal, load_collection(doc_store, &kb_id).await)
             {
+                // An auto-admit never signs: on a log-governed KB it would
+                // admit nobody while the join reported success.
+                if let Err(e) = refuse_roster_only_change(doc_store, &kb_id, &coll, false).await {
+                    return JsonRpcResponse::error(id, e);
+                }
                 let update = coll.upsert_member(
                     principal,
                     auth_label.unwrap_or(principal),
@@ -611,6 +616,7 @@ async fn apply_membership_change(
     let mut coll = load_collection(doc_store, kb_id)
         .await
         .map_err(McpError::from)?;
+    refuse_roster_only_change(doc_store, kb_id, &coll, true).await?;
     if !ch.add && coll.owner() == ch.member {
         return Err(McpError::cannot_remove_owner(format!(
             "cannot remove the owner of KB '{kb_id}'"
@@ -866,6 +872,9 @@ pub(super) async fn handle_kb_approve_member(
         Ok(c) => c,
         Err(e) => return JsonRpcResponse::error(id, e.into()),
     };
+    if let Err(e) = refuse_roster_only_change(doc_store, &kb_id, &coll, true).await {
+        return JsonRpcResponse::error(id, e);
+    }
     let update = coll.approve(&principal, role);
     match persist_and_broadcast_collection(doc_store, broadcaster, who, &kb_id, &update).await {
         Ok(_) => {

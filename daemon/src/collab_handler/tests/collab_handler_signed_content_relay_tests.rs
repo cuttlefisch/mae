@@ -40,7 +40,7 @@ async fn signed_content_op_verified_or_rejected_on_anchored_kb() {
     )
     .await;
     // Anchor ⇒ the daemon derives membership from the signed op-log (the mesh path).
-    store.set_kb_anchor("kbc", owner_pk).await;
+    store.set_kb_anchor("kbc", owner_pk).await.unwrap();
 
     // A yrs edit authored under bob's epoch-0 KB client_id (so the ADR-023 fence
     // also passes for the valid case — signing is an ADDITIONAL gate, not a bypass).
@@ -402,7 +402,7 @@ async fn kb_member_epoch_reads_oplog_not_legacy_for_anchored_kb() {
     );
 
     // Anchored ⇒ kb_member_epoch derives the NON-ZERO epoch from the signed op-log (the fix).
-    store.set_kb_anchor("kbe", opk).await;
+    store.set_kb_anchor("kbe", opk).await.unwrap();
     assert_eq!(
         kb_member_epoch(&store, "kbe", &coll, &mfp).await,
         7,

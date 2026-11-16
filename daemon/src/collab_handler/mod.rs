@@ -38,6 +38,7 @@ mod refusal;
 mod sync_methods;
 
 pub(crate) use access::*;
+pub use access::{kb_membership_source, roster_only_members_report, MembershipSource};
 pub(crate) use content_verify::{adopt_owner_anchor, author_membership};
 pub use content_verify::{operator_anchor_kb, verify_node_op, OpSender, OperatorAnchor};
 pub(crate) use refusal::{require_allow, storage_error};

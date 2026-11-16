@@ -47,6 +47,7 @@ mod collab_handler_history_read_tests;
 mod collab_handler_history_tests;
 mod collab_handler_hub_verify_anchor_tests;
 mod collab_handler_hub_verify_genesis_tests;
+mod collab_handler_hub_verify_roster_tests;
 mod collab_handler_hub_verify_tests;
 mod collab_handler_kb_lifecycle_tests;
 mod collab_handler_kb_list_isolation_tests;

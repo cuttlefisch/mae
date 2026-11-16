@@ -205,6 +205,29 @@ pub struct DerivedMembership {
     pub genesis_verified: bool,
 }
 
+/// Why [`DocStore::set_kb_anchor`] refused a join's anchor: a KB's anchor is
+/// stored once (ADR-036 Amendment 1 F1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorRefused {
+    /// This hub records the KB's anchor itself: it hosts the KB, so no join
+    /// ticket may anchor it, with any key.
+    HubRecorded,
+    /// The KB is already joined under another owner key.
+    OtherKey,
+}
+
+impl std::fmt::Display for AnchorRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::HubRecorded => {
+                "this daemon hosts the KB and recorded its anchor itself; a join ticket cannot \
+                 anchor it"
+            }
+            Self::OtherKey => "the KB is already anchored to another owner key",
+        })
+    }
+}
+
 /// One [`DocStore::derive_cache`] entry. A hit requires the collection SV **and** anchor to still
 /// match AND `now < valid_until` (the earliest future member timebox that would flip the set).
 struct CachedDerive {
@@ -761,8 +784,26 @@ impl DocStore {
     /// Always installed in memory (a joined KB without its anchor would fall back
     /// to the relay-supplied roster); persisted best-effort, since the dialer
     /// registers it again on every dial.
-    pub async fn set_kb_anchor(&self, kb_id: &str, owner_pubkey: [u8; 32]) {
+    ///
+    /// @ai-caution: [security] Never replaces an anchor (ADR-036 Amendment 1
+    /// F1: a KB's anchor is stored once). A join ticket is not the owner: one
+    /// whose `kb_id` names a KB this hub hosts, or names a joined KB with a
+    /// different key, would otherwise swap the key its membership is verified
+    /// against, and flip a hosted KB to fail-closed `Joined`. The same key from
+    /// the same source is a no-op; anything else is refused and the dial ends.
+    pub async fn set_kb_anchor(
+        &self,
+        kb_id: &str,
+        owner_pubkey: [u8; 32],
+    ) -> Result<(), AnchorRefused> {
         let source = AnchorSource::Joined;
+        let mut anchors = self.kb_anchors.write().await;
+        match anchors.get(kb_id) {
+            Some(&(key, AnchorSource::Joined)) if key == owner_pubkey => return Ok(()),
+            Some(&(_, AnchorSource::HubRecorded)) => return Err(AnchorRefused::HubRecorded),
+            Some(_) => return Err(AnchorRefused::OtherKey),
+            None => {}
+        }
         if let Err(e) = self
             .storage
             .put_kb_anchor(kb_id, &owner_pubkey, source)
@@ -770,10 +811,15 @@ impl DocStore {
         {
             warn!(kb_id, error = %e, "KB content anchor not persisted");
         }
-        self.kb_anchors
-            .write()
-            .await
-            .insert(kb_id.to_string(), (owner_pubkey, source));
+        anchors.insert(kb_id.to_string(), (owner_pubkey, source));
+        Ok(())
+    }
+
+    /// Every KB with a content anchor, sorted (`mae-daemon doctor`).
+    pub async fn anchored_kb_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.kb_anchors.read().await.keys().cloned().collect();
+        ids.sort();
+        ids
     }
 
     /// Record `owner_pubkey` as `kb_id`'s anchor, [`AnchorSource::HubRecorded`],

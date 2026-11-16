@@ -1840,6 +1840,12 @@ fn run_doctor(config: &DaemonConfig, compare_with: Option<&DaemonConfig>) -> i32
             }
         }
 
+        // ADR-036 Amendment 1 F2, "log wins, made visible": a listed member the
+        // governing signed op-log does not admit has no access. Advisory only.
+        for line in anchor_cli::doctor_lines(config) {
+            println!("{line}");
+        }
+
         if config.collab.auth.mode == "none" {
             println!("  collab auth: none — the port is UNAUTHENTICATED");
             println!("    ! set [collab.auth] mode = \"key\" before exposing it off-host");
