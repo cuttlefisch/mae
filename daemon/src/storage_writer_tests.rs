@@ -294,6 +294,10 @@ async fn an_idle_truncate_never_meets_a_writer() {
         // milliseconds; the rest land a write anywhere inside one.
         tokio::time::sleep(Duration::from_millis(i * 7 % 41)).await;
     }
+    // The collision above needs a write to land inside a TRUNCATE lasting
+    // microseconds, so it is not certain to happen; this check is: no
+    // TRUNCATE ran with the slot free.
+    assert_eq!(backend.pool.writer.unslotted_truncates(), 0);
     let emptied = backend.pool.writer.emptied();
     assert!(
         emptied >= 10,

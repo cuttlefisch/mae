@@ -122,6 +122,10 @@ struct Shared {
     /// handler, so the scrub would otherwise be skipped whenever it met a
     /// background PASSIVE. Taken after the writer slot, never before it.
     checkpointing: std::sync::Mutex<()>,
+    /// TRUNCATEs the checkpointer ran while the writer slot was free: always 0,
+    /// since it holds the slot itself. Tests read it.
+    #[cfg(test)]
+    unslotted_truncates: AtomicU64,
 }
 
 /// The store's one writer slot. Cheap to clone: clones share the slot.
@@ -130,7 +134,7 @@ pub struct WriterLock(Arc<Shared>);
 
 impl WriterLock {
     /// Wait in line for the writer slot, THEN lock the shard connection (lock
-    /// order steps 2 and 3). The slot is held until the returned guard drops.
+    /// order steps 2 and 4). The slot is held until the returned guard drops.
     pub async fn write<'a>(
         &'a self,
         shard: impl FnOnce() -> MutexGuard<'a, sqlite::Connection>,
@@ -154,6 +158,12 @@ impl WriterLock {
     /// Writes finished so far, committed or not.
     pub fn writes(&self) -> u64 {
         self.0.writes.load(Ordering::Acquire)
+    }
+
+    /// See `Shared::unslotted_truncates`.
+    #[cfg(test)]
+    pub fn unslotted_truncates(&self) -> u64 {
+        self.0.unslotted_truncates.load(Ordering::Acquire)
     }
 
     /// The write count the last complete PASSIVE covered; tests wait on it.
@@ -261,7 +271,7 @@ fn run(
         let writes = writer.writes();
         if seen != Some(writes) {
             (seen, quiet_since, emptied) = (Some(writes), Instant::now(), false);
-            if checkpoint(conn, "PASSIVE", &writer.checkpointing()) {
+            if checkpoint(conn, "PASSIVE", writer) {
                 writer.0.covered.store(writes, Ordering::Release);
             }
         } else if !emptied && quiet_since.elapsed() >= policy.idle_truncate_after {
@@ -278,16 +288,20 @@ fn run(
 /// TRUNCATE the WAL holding the writer slot, if it is free; whether it emptied.
 fn truncate(conn: &sqlite::Connection, writer: &WriterLock) -> bool {
     match writer.0.queue.try_lock() {
-        Ok(_slot) => checkpoint(conn, "TRUNCATE", &writer.checkpointing()),
+        Ok(_slot) => checkpoint(conn, "TRUNCATE", writer),
         Err(_) => false,
     }
 }
 
 /// Run `PRAGMA wal_checkpoint(mode)`; whether it completed: not blocked
 /// (`busy` 0) and every frame of the WAL backfilled (`log` = `checkpointed`;
-/// both 0 after a TRUNCATE emptied the file). The caller holds the checkpoint
-/// mutex, which `_held` stands for.
-fn checkpoint(conn: &sqlite::Connection, mode: &str, _held: &MutexGuard<'_, ()>) -> bool {
+/// both 0 after a TRUNCATE emptied the file). Holds the checkpoint mutex.
+fn checkpoint(conn: &sqlite::Connection, mode: &str, writer: &WriterLock) -> bool {
+    let _checkpointing = writer.checkpointing();
+    #[cfg(test)]
+    if mode == "TRUNCATE" && writer.0.queue.try_lock().is_ok() {
+        writer.0.unslotted_truncates.fetch_add(1, Ordering::Release);
+    }
     let result = conn
         .prepare(format!("PRAGMA wal_checkpoint({mode})"))
         .and_then(|mut stmt| {
