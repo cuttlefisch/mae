@@ -1,6 +1,8 @@
 # ADR-036: Signed content operations (peer-verifiable node-edit authorship)
 
 **Status:** Accepted (design). The explicit follow-on named in **ADR-026 §A5** ("Scope = membership;
+**Amended:** Amendment 1 (2026-11-15, proposed): the hub verifies every content op it accepts, on
+every KB and every path (#727).
 signed *content* ops are a deferred follow-on") and the remaining half of P2P **Phase 4** (#91).
 Tracks #91.
 **Extends:** ADR-023 (epoch-fenced rebase — content write-access), ADR-026 (signed membership op-log
@@ -125,3 +127,84 @@ peer-side; valid op applies + converges (SV advances). **Security-negative oracl
 mesh** (the harness in `daemon/src/dialer.rs` tests): a relay that forges/mis-attributes a content op is
 rejected by the receiving peer; a removed member's content op doesn't cascade; a valid member's edit
 applies + both peers converge. Cross-OS (principle #13). v0.14 single-hub content tests stay green.
+
+## Amendment 1 (2026-11-15): the hub verifies every content op it accepts
+
+D3 made verification peer-side, and the mesh requires it. The hub does not: it verifies only on a
+KB that has a content anchor, consults `require_signed_content_ops` only on `sync/update`, never
+checks that a session's own op is authored by that session, and applies the mesh join snapshot and
+one internal sync path unverified (#727). Browser clients now write over the hub (ADR-099 Amendment
+2), so the hub's authorship guarantee can no longer be opt-in. This amendment closes it.
+
+### F1. What is stored, and what travels
+
+- **A member's public key travels with every op.** A signed op carries `author_pubkey`, and
+  `author` is its fingerprint (D1); the verifier checks that the two match before anything else.
+  The fingerprint is self-certifying, so no per-member key registry is needed to verify. A binding
+  (ADR-098) or a member list may show a key; nothing depends on it.
+- **A KB's anchor is stored once.** Membership is derived from the owner-signed op-log, which needs
+  the owner's public key: the KB's content anchor. A joined KB registers one today; a KB an editor
+  shares to the hub usually has none, which is why the hub falls back to accepting unsigned ops
+  there. From now on, the hub records the sharing session's public key as the KB's anchor when the
+  KB is first shared, durably, in the same record a joined KB's anchor uses. A KB shared before this
+  is anchored when its owner next connects with the key whose fingerprint the collection names as
+  owner, or by the operator's local CLI.
+
+### F2. One membership source for access and for verification
+
+Verification admits an op when its author is a member at the op's epoch. It reads membership from
+the **same** source `kb_access` reads (`member_role`): the signed op-log on a KB that has one, the
+locally authoritative member list on one that does not. An anchored KB without a signed op-log
+yet therefore keeps working; it does not lose every member to an empty derivation.
+
+### F3. Every write path verifies
+
+- `sync/update` and `kb/node_update` (the browser's path), over mTLS, `/ws`, and every other
+  transport that reaches them, run the same verification, and both consult the switch.
+- The internal sync path #727 names (`__mcp_sync_update`) gets the same cap and verification, or is
+  removed if nothing needs it.
+- **Collection documents** (`kbc:`) are written the same way: a manifest change (a node added,
+  renamed or removed) is a signed op on the collection document, admitted only from an author with
+  the role that change needs. Membership and policy stay in the signed op-log (ADR-026).
+- **The mesh join snapshot** (#727 §2) is the one path that carries merged state rather than
+  individual ops. Its collection op-log is verified against the anchor as now; whether node states
+  in a snapshot need an owner signature, or are re-requested as signed ops, is decided in its own
+  amendment before the switch is turned on for the mesh's join path. It is tracked here so the
+  switch does not go on with it open.
+
+### F4. An op a session originates is its own
+
+On an editor session (mTLS, a self-issued token, a bound IdP login on `/ws`), the op's `author`
+must equal the session's principal (`not_author`). A session cannot author for another member.
+Ops a mesh peer relays (`Transport::P2p`) are checked for signature and membership only: their
+author is legitimately not the connection.
+
+### F5. Every writer signs
+
+Native MAE signs with its identity key (D2). Browser MAE signs with the member key it holds, through
+mae-crypto's `sign_op`: domain-separated, over exactly D1's canonical bytes, sharing the Rust code
+that produces them so the browser, the editor and the verifier cannot diverge. A daemon never signs
+on a member's behalf (ADR-098 rejected it): an agent writes with a key of its own, or through a
+client that holds its person's key.
+
+### F6. Turning it on
+
+`require_signed_content_ops` stays the switch, daemon-wide. With it off, unsigned ops are accepted
+and counted (the existing metric). It is turned on once every client signs and the count stays at
+zero over the pilot. Then an unsigned op, an op from an author who is not a member at its epoch, a
+mis-attributed op, or an originated op not authored by its session is refused, on every KB and
+every path.
+
+### F7. Tests
+
+- An unsigned op is refused on `sync/update` and on `kb/node_update`, over mTLS and `/ws`, on an
+  anchored KB and on a KB anchored at first share; accepted and counted with the switch off.
+- A KB shared after this change has its sharer's key as anchor; a KB shared before is anchored at
+  the owner's next connection, and not by a key whose fingerprint is not the owner's.
+- An anchored KB without a signed op-log admits its members' signed ops (F2).
+- An op whose `author_pubkey` does not hash to `author`, or whose signature does not verify, is
+  refused; an op authored by another member on a session is refused `not_author`; the same op
+  relayed by a mesh peer is admitted.
+- An unsigned manifest change to a collection document is refused with the switch on.
+- A browser-signed op (mae-crypto) and an editor-signed op for the same bytes are both accepted,
+  and their canonical bytes are identical.
