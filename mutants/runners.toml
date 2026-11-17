@@ -1,0 +1,32 @@
+# How each kind of suite is built, run and judged, defined once and named by
+# every mutant that uses it. Format and commands: tools/mutate/README.md.
+#
+# `{targets}` expands to the mutant's targets (or this runner's default);
+# `{filter}` is the nextest filterset naming the tests that must fail.
+# nextest stops at the first failing test by default, which is all a verdict
+# needs.
+
+[runner.daemon]
+# From inside daemon/: its .cargo/config.toml applies only there.
+workspace = "daemon"
+build = ["cargo", "nextest", "run", "--no-run", "{targets}", "-E", "{filter}"]
+test = ["cargo", "nextest", "run", "{targets}", "-E", "{filter}"]
+caught = ["FAIL [", "TIMEOUT ["]
+count = ["{n} tests run", "{n} test run"]
+queue_class = "rust-enlace"
+
+[runner.editor]
+workspace = "."
+build = ["cargo", "nextest", "run", "--no-run", "{targets}", "-E", "{filter}"]
+test = ["cargo", "nextest", "run", "{targets}", "-E", "{filter}"]
+caught = ["FAIL [", "TIMEOUT ["]
+count = ["{n} tests run", "{n} test run"]
+queue_class = "rust-enlace"
+
+[runner.tools-mutate]
+workspace = "tools/mutate"
+build = ["cargo", "nextest", "run", "--no-run", "{targets}", "-E", "{filter}"]
+test = ["cargo", "nextest", "run", "{targets}", "-E", "{filter}"]
+caught = ["FAIL [", "TIMEOUT ["]
+count = ["{n} tests run", "{n} test run"]
+queue_class = "rust"
