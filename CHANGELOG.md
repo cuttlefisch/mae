@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.166] - 2026-11-17
+
+
+
+
+### Miscellaneous
+
+- *(daemon)* Bump jsonwebtoken to 12 and five patch dependencies ([dfa0a3d](https://github.com/cuttlefisch/mae/commit/dfa0a3dfd54a4598f1f8667698a15fc4ec123739))
+
 ## [0.14.165] - 2026-11-17
 
 
@@ -34,6 +43,10 @@ All notable changes to this project will be documented in this file.
 ### CI
 
 - Give the daemon collab test step a 15-minute cap ([3c0beb9](https://github.com/cuttlefisch/mae/commit/3c0beb90b182b7436727951cb348260a4a71e698))
+
+### Miscellaneous
+
+- Bump version to 0.14.165 ([08bdbf0](https://github.com/cuttlefisch/mae/commit/08bdbf0cea79ad6b84d998fd7cf9bf3ca0615c03))
 
 ## [0.14.164] - 2026-11-17
 
@@ -76,9 +89,9 @@ All notable changes to this project will be documented in this file.
 
 ### Documentation
 
+- *(adr-022)* Amendment 1 — a whole-KB transfer is paged, both ways ([536876c](https://github.com/cuttlefisch/mae/commit/536876c48dd14a9c95c52cb89ed6259071d5c3ae))
 - *(adr)* The ADR-113/115 build sequence, ADR-117, ADR-111 Am. 1, ADR-118 ([0ab9100](https://github.com/cuttlefisch/mae/commit/0ab910069b9c5848db8b85075f6a2b16d0c08cfe))
 - *(adr)* Agent renew happens in place; an agent grant is not a self-grant ([0f2b2a3](https://github.com/cuttlefisch/mae/commit/0f2b2a3ca9988640d28274bcabcbb73bf3c3c1b4))
-- *(adr-022)* Amendment 1 — a whole-KB transfer is paged, both ways ([536876c](https://github.com/cuttlefisch/mae/commit/536876c48dd14a9c95c52cb89ed6259071d5c3ae))
 
 ### Testing
 
