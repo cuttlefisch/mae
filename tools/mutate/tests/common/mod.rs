@@ -94,6 +94,10 @@ impl Fx {
             .env("MUTATE_QUEUE", "off")
             .env_remove("MUTATE_PREFIX")
             .env("CARGO_TARGET_DIR", self.dir.join("target"))
+            // Pinned, not inherited: CI sets CARGO_TERM_COLOR=always, and a
+            // test's outcome must not depend on who runs it. The coloured
+            // case has its own test.
+            .env("CARGO_TERM_COLOR", "never")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1");
         c
