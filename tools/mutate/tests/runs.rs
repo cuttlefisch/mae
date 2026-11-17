@@ -32,6 +32,29 @@ fn same_length_mutants_back_to_back_are_each_rebuilt_and_judged() {
 }
 
 #[test]
+fn coloured_build_output_is_read_as_a_rebuild_and_judged() {
+    // CI sets CARGO_TERM_COLOR=always: cargo then styles "Compiling", and a
+    // marker matched against the raw bytes saw no rebuild, bumped, rebuilt,
+    // and reported every mutant as no result.
+    let fx = Fx::committed("coloured", &(caught_a() + &survives_b()));
+    let out = Out(fx
+        .command(&["run"])
+        .env("CARGO_TERM_COLOR", "always")
+        .output()
+        .unwrap());
+    assert!(
+        fx.read(".git/mae-mutate/logs/a.build.log")
+            .contains("\x1b[1m\x1b[92m   Compiling\x1b[0m fixture"),
+        "the build output must really be coloured, or this proves nothing"
+    );
+    assert!(out.stdout().contains("caught\ta\t"), "{}", out.all());
+    assert!(out.stdout().contains("SURVIVED\tb\t"), "{}", out.all());
+    let calls = fx.calls();
+    assert_eq!(count(&calls, "a build"), 1, "built once: {calls:?}");
+    assert_eq!(count(&calls, "b build"), 1, "built once: {calls:?}");
+}
+
+#[test]
 fn a_build_that_recompiled_nothing_is_rebuilt_not_judged() {
     // The hook makes `b`'s first build see a source file older than the last
     // build, as a coarse or skewed clock would: cargo keeps `a`'s binary.
