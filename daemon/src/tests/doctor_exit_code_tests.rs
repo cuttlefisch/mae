@@ -67,3 +67,45 @@ fn a_port_already_bound_is_not_a_problem() {
          service is actually healthy"
     );
 }
+
+/// `doctor` runs beside a live daemon, so it must not write the store: where
+/// there is none it creates none, and beside a live one (its WAL unchecked)
+/// it leaves both files byte for byte. It used to open the store as the daemon
+/// does, creating it, starting a second checkpointer and running schema DDL
+/// outside the daemon's writer slot. Kills that open.
+#[test]
+fn doctor_creates_no_store_and_writes_nothing_beside_a_live_one() {
+    use mae_daemon::storage::{CheckpointPolicy, SqliteBackend, StorageBackend};
+    let tmp = tempfile::TempDir::new().unwrap();
+    let config = isolated(tmp.path());
+    let db = config.collab_data_dir().join("state.db");
+    assert_eq!(run_doctor(&config, None), 0);
+    assert!(!db.exists(), "doctor created the store");
+    std::fs::create_dir_all(config.collab_data_dir()).unwrap();
+
+    // A live store whose checkpointer never wakes, so only doctor could
+    // change its files.
+    let paused = CheckpointPolicy {
+        interval: std::time::Duration::from_secs(3600),
+        idle_truncate_after: std::time::Duration::from_secs(3600),
+        ..CheckpointPolicy::PRODUCTION
+    };
+    let live = SqliteBackend::open_with_policy(&db, 4, paused).unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    for i in 0..20 {
+        rt.block_on(live.add_block(&format!("kb{i}"), "SHA256:p"))
+            .unwrap();
+    }
+    let wal = config.collab_data_dir().join("state.db-wal");
+    let files = || (std::fs::read(&db).unwrap(), std::fs::read(&wal).unwrap());
+    let before = files();
+    assert!(
+        !before.1.is_empty(),
+        "precondition: the live store has a WAL"
+    );
+    assert_eq!(run_doctor(&config, None), 0);
+    assert!(files() == before, "doctor wrote to the live store");
+    drop(live);
+}

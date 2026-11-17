@@ -1,12 +1,15 @@
 //! The store's one writer and its background checkpointer
 //! (`storage_writer.rs`): writers queue rather than meet a locked database,
-//! a commit never checkpoints below the backstop, the WAL stays bounded, the
-//! checkpointer empties it when idle, and an acknowledged write survives a
-//! kill.
+//! a commit never checkpoints below the backstop, the WAL stays bounded while
+//! no reader pins it and is reported when one does, the checkpointer empties
+//! it when idle, every ADR-037 scrub completes once readers let go, even under
+//! sustained writes, a panicking tick does not stop the checkpointer, and an
+//! acknowledged write survives a kill.
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -23,16 +26,14 @@ fn stamp() -> EditStamp {
 const PAUSED: CheckpointPolicy = CheckpointPolicy {
     interval: Duration::from_secs(3600),
     idle_truncate_after: Duration::from_secs(3600),
-    backstop_pages: CheckpointPolicy::PRODUCTION.backstop_pages,
+    ..CheckpointPolicy::PRODUCTION
 };
 
 /// An update big enough to take a few pages, so the WAL grows quickly.
 const UPDATE: [u8; 3000] = [7; 3000];
 
 fn wal_path(db: &Path) -> PathBuf {
-    let mut p = db.as_os_str().to_owned();
-    p.push("-wal");
-    PathBuf::from(p)
+    writer::wal_path(db)
 }
 
 /// WAL frames the file holds room for (its high-water mark since the last
@@ -283,7 +284,20 @@ async fn an_idle_truncate_never_meets_a_writer() {
     };
     let backend = SqliteBackend::open_with_policy(&dir.path().join("state.db"), 4, policy).unwrap();
     fail_fast_on_a_locked_database(&backend);
-    for i in 0..200u64 {
+    backend.wait_for_scrub().await; // the open's own TRUNCATE is not counted
+    let base = backend.pool.writer.emptied();
+    // At least 200 writes, and on until 10 idle truncates have run among them:
+    // under I/O load a PASSIVE and a TRUNCATE (an fsync each) may not fit the
+    // gaps, so a fixed count of writes once saw only 7.
+    for i in 0u64.. {
+        if i >= 200 && backend.pool.writer.emptied() >= base + 10 {
+            break;
+        }
+        assert!(
+            i < 3000,
+            "only {} truncates ran among {i} writes: the test raced nothing",
+            backend.pool.writer.emptied() - base
+        );
         let doc = format!("doc{}", i % 8);
         backend
             .wal_append(&doc, &UPDATE, None, &stamp())
@@ -298,11 +312,6 @@ async fn an_idle_truncate_never_meets_a_writer() {
     // microseconds, so it is not certain to happen; this check is: no
     // TRUNCATE ran with the slot free.
     assert_eq!(backend.pool.writer.unslotted_truncates(), 0);
-    let emptied = backend.pool.writer.emptied();
-    assert!(
-        emptied >= 10,
-        "only {emptied} truncates ran among the writes: the test raced nothing"
-    );
 }
 
 /// A commit never runs a checkpoint below the backstop: the database file is
@@ -378,6 +387,7 @@ async fn the_checkpointer_keeps_the_wal_small_and_empties_it_when_idle() {
         interval: Duration::from_millis(2),
         idle_truncate_after: Duration::from_secs(1),
         backstop_pages: 1_000_000,
+        ..CheckpointPolicy::PRODUCTION
     };
     let backend = SqliteBackend::open_with_policy(&db, 4, policy).unwrap();
     let writer = backend.pool.writer.clone();
@@ -410,13 +420,11 @@ fn dir_contains(dir: &Path, needle: &[u8]) -> bool {
     })
 }
 
-/// A compaction's scrub (ADR-037: TRUNCATE so no pre-image lingers at rest)
-/// waits for a background PASSIVE rather than being refused by it: SQLite
-/// refuses a second concurrent checkpoint without calling the busy handler.
-/// The checkpointer runs every millisecond, so over many rounds a scrub meets
-/// one. Kills a scrub that does not take the checkpoint mutex.
+/// Every compaction's scrub (ADR-037: TRUNCATE so no pre-image lingers at
+/// rest) completes, among background checkpoints running every millisecond.
+/// Kills a compaction that marks no scrub.
 #[tokio::test]
-async fn a_scrub_waits_for_a_background_checkpoint_instead_of_being_refused() {
+async fn every_compactions_scrub_completes() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("state.db");
     let policy = CheckpointPolicy {
@@ -424,18 +432,364 @@ async fn a_scrub_waits_for_a_background_checkpoint_instead_of_being_refused() {
         ..PAUSED
     };
     let backend = SqliteBackend::open_with_policy(&db, 4, policy).unwrap();
-    for i in 0..300 {
+    for i in 0..100 {
         let canary = format!("SCRUB-CANARY-{i:04}-must-not-survive-compaction");
         let id = backend
             .wal_append("kbc:x", canary.as_bytes(), None, &stamp())
             .await
             .unwrap();
         backend.compact("kbc:x", b"clean", id).await.unwrap();
+        backend.wait_for_scrub().await;
         assert!(
             !dir_contains(dir.path(), canary.as_bytes()),
             "round {i}: the compacted update survived on disk"
         );
     }
+}
+
+/// The shard a test pins a reader on. Not 0, the primary.
+const READER: usize = 3;
+
+fn shard_index(backend: &SqliteBackend, doc: &str) -> usize {
+    let shard = backend.pool.shard_for(doc);
+    let shards = &backend.pool.shards;
+    shards.iter().position(|s| std::ptr::eq(s, shard)).unwrap()
+}
+
+/// A document name of the form `{tag}-n` that lives on any shard but
+/// [`READER`], so writing it never meets the pinned reader's transaction.
+fn doc_off_reader(backend: &SqliteBackend, tag: &str, n: usize) -> String {
+    (0..)
+        .map(|i| format!("{tag}-{n}-{i}"))
+        .find(|d| shard_index(backend, d) != READER)
+        .unwrap()
+}
+
+/// Leave a read transaction open on shard [`READER`]'s connection, as a long
+/// read (a backup's `VACUUM INTO`) holds one: no checkpoint can backfill past
+/// its snapshot, and the WAL cannot be restarted or truncated under it.
+fn pin_reader(backend: &SqliteBackend) {
+    let conn = backend.pool.shards[READER].lock().unwrap();
+    conn.execute("BEGIN; SELECT COUNT(*) FROM wal;").unwrap();
+}
+
+fn release_reader(backend: &SqliteBackend) {
+    let conn = backend.pool.shards[READER].lock().unwrap();
+    conn.execute("COMMIT").unwrap();
+}
+
+/// Write `canary`, compact it away, and wait until the checkpointer has tried
+/// the scrub three times against the pinned reader; the canary is still on
+/// disk then, or the test proves nothing.
+async fn compact_canary_under_reader(backend: &SqliteBackend, dir: &Path, canary: &[u8]) {
+    let doc = doc_off_reader(backend, "kbc", 0);
+    let id = backend
+        .wal_append(&doc, canary, None, &stamp())
+        .await
+        .unwrap();
+    backend.compact(&doc, b"clean", id).await.unwrap();
+    let writer = backend.pool.writer.clone();
+    let tried = writer.scrub_attempts();
+    wait_until("three scrub attempts", || {
+        writer.scrub_attempts() >= tried + 3
+    })
+    .await;
+    assert!(
+        writer.scrub_pending(),
+        "a scrub completed past a pinned reader"
+    );
+    assert!(
+        dir_contains(dir, canary),
+        "precondition: the reader keeps the canary in the WAL (else this proves nothing)"
+    );
+}
+
+/// A scrub that a reader on another shard blocks is retried, every tick, and
+/// completes once the reader lets go. The idle TRUNCATE is out of reach, so
+/// only the scrub can empty the WAL. Kills a scrub that is not retried (the
+/// compaction's own best-effort TRUNCATE, which this replaced, gave up for
+/// good on a reader) and a compaction that marks none.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_scrub_blocked_by_a_reader_completes_once_it_lets_go() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("state.db");
+    let policy = CheckpointPolicy {
+        interval: Duration::from_millis(5),
+        idle_truncate_after: Duration::from_secs(3600),
+        ..CheckpointPolicy::PRODUCTION
+    };
+    let backend = SqliteBackend::open_with_policy(&db, 4, policy).unwrap();
+    backend.wait_for_scrub().await; // the one every open owes
+    pin_reader(&backend);
+    let canary = b"READER-SCRUB-CANARY-must-not-survive-the-reader";
+    compact_canary_under_reader(&backend, dir.path(), canary).await;
+    release_reader(&backend);
+    backend.wait_for_scrub().await;
+    assert!(
+        !dir_contains(dir.path(), canary),
+        "the scrub completed and the compacted update is still on disk"
+    );
+}
+
+/// A scrub completes while writers keep the slot busy back to back, so it is
+/// never free and the WAL is never idle: the scrub has to queue for the slot.
+/// The WAL is filled ahead of the canary, so the frames that later writes
+/// put at the start of a restarted WAL never reach the canary's. Kills a
+/// scrub that only tries the slot (`try_lock`) and one that is not retried.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn a_scrub_completes_under_sustained_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("state.db");
+    let policy = CheckpointPolicy {
+        interval: Duration::from_millis(5),
+        ..CheckpointPolicy::PRODUCTION
+    };
+    let backend = Arc::new(SqliteBackend::open_with_policy(&db, 4, policy).unwrap());
+    backend.wait_for_scrub().await;
+    pin_reader(&backend);
+    for i in 0..1000 {
+        let doc = doc_off_reader(&backend, "fill", i % 8);
+        backend
+            .wal_append(&doc, &UPDATE, None, &stamp())
+            .await
+            .unwrap();
+    }
+    let canary = b"BUSY-SCRUB-CANARY-must-not-survive-sustained-writes";
+    compact_canary_under_reader(&backend, dir.path(), canary).await;
+    let stop = Arc::new(AtomicBool::new(false));
+    let writers: Vec<_> = (0..4)
+        .map(|t| {
+            let (b, stop) = (Arc::clone(&backend), Arc::clone(&stop));
+            let doc = doc_off_reader(&backend, "busy", t);
+            tokio::spawn(async move {
+                while !stop.load(Ordering::Acquire) {
+                    b.wal_append(&doc, b"tick", None, &stamp()).await.unwrap();
+                }
+            })
+        })
+        .collect();
+    let writer = backend.pool.writer.clone();
+    let before = writer.writes();
+    wait_until("the writers to start", || writer.writes() > before + 100).await;
+    release_reader(&backend);
+    backend.wait_for_scrub().await;
+    // The writers ran before the scrub and still run after it: it completed
+    // among them, not in a pause. (Whether a write lands between the release
+    // and the scrub is a race, so it is not asserted; the `try_lock` mutant
+    // is what shows the scrub could not have waited for a free slot.)
+    let done = writer.writes();
+    wait_until("writes after the scrub", || writer.writes() > done + 100).await;
+    stop.store(true, Ordering::Release);
+    for w in writers {
+        w.await.unwrap();
+    }
+    assert!(
+        !dir_contains(dir.path(), canary),
+        "the scrub completed and the compacted update is still on disk"
+    );
+}
+
+/// A compaction and a delete hold the writer slot for their own transaction
+/// only, so a write queued behind them waits for that and no checkpoint: they
+/// owe a scrub instead of running one. Deterministic, with the checkpointer
+/// paused: the database file can only change, and the WAL only shrink, if one
+/// of them checkpoints. Kills a compaction or delete that TRUNCATEs inline.
+#[tokio::test]
+async fn a_compaction_or_delete_runs_no_checkpoint_under_the_slot() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("state.db");
+    let backend = SqliteBackend::open_with_policy(&db, 4, PAUSED).unwrap();
+    let mut last = 0;
+    for i in 0..20 {
+        last = backend
+            .wal_append(&format!("doc{}", i % 2), &UPDATE, None, &stamp())
+            .await
+            .unwrap();
+    }
+    let file = std::fs::read(&db).unwrap();
+    let frames = wal_frames(&backend, &db);
+    backend.compact("doc0", b"state", last).await.unwrap();
+    backend.delete_document("doc1").await.unwrap();
+    assert!(
+        std::fs::read(&db).unwrap() == file,
+        "a compaction or delete checkpointed into the database file"
+    );
+    assert!(
+        wal_frames(&backend, &db) >= frames,
+        "a compaction or delete truncated the WAL"
+    );
+    let owed = backend.storage_health().unwrap().scrub_pending;
+    assert!(
+        owed.is_some_and(|(docs, _)| docs >= 2),
+        "the compaction and delete owe no scrub: {owed:?}"
+    );
+}
+
+/// A reader held open lets the WAL grow past the backstop, which no
+/// checkpoint can prevent; the checkpointer warns, and the store reports it:
+/// `storage_health` (`daemon/status`) and `inspect_store` (`doctor`). A scrub
+/// the reader blocks past `scrub_warn_after` warns and is reported too.
+/// Kills a missing warning, and a report that does not see the WAL or the
+/// scrub.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_wal_a_reader_pins_past_the_backstop_is_warned_and_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("state.db");
+    let policy = CheckpointPolicy {
+        interval: Duration::from_millis(5),
+        idle_truncate_after: Duration::from_secs(3600),
+        backstop_pages: 64,
+        scrub_warn_after: Duration::from_millis(50),
+        warn_every: Duration::from_secs(3600),
+    };
+    let backend = SqliteBackend::open_with_policy(&db, 4, policy).unwrap();
+    let writer = backend.pool.writer.clone();
+    backend.wait_for_scrub().await;
+    assert!(!inspect_store(&db, &policy).unwrap().wal_over_backstop());
+    pin_reader(&backend);
+    let mut i = 0;
+    while !inspect_store(&db, &policy).unwrap().wal_over_backstop() {
+        let doc = doc_off_reader(&backend, "grow", i % 8);
+        backend
+            .wal_append(&doc, &UPDATE, None, &stamp())
+            .await
+            .unwrap();
+        i += 1;
+        assert!(
+            i < 5_000,
+            "the WAL stayed under the backstop with a reader pinned"
+        );
+    }
+    wait_until("the WAL warning", || writer.wal_warnings() >= 1).await;
+    let health = backend.storage_health().unwrap();
+    assert!(
+        health.wal_frames > health.wal_warn_frames,
+        "status does not see the WAL past the backstop: {health:?}"
+    );
+    assert!(health.wal_bytes > 0);
+    assert_eq!(health.scrub_pending, None);
+
+    compact_canary_under_reader(&backend, dir.path(), b"REPORTED-SCRUB-CANARY").await;
+    wait_until("the scrub warning", || writer.scrub_warnings() >= 1).await;
+    let owed = backend.storage_health().unwrap().scrub_pending;
+    assert!(owed.is_some_and(|(docs, _)| docs == 1), "{owed:?}");
+    assert_eq!(
+        writer.wal_warnings(),
+        1,
+        "the WAL warning is not rate-limited"
+    );
+    release_reader(&backend);
+    backend.wait_for_scrub().await;
+    assert_eq!(backend.storage_health().unwrap().scrub_pending, None);
+}
+
+/// The scrub mark lives in memory, so a crash loses it; every open owes a
+/// scrub to make up for that. The crash is the files copied from a live store
+/// whose compaction's scrub never ran (its checkpointer is paused). Kills an
+/// open that owes none: a PASSIVE backfills the WAL but leaves the pre-image
+/// in it.
+#[tokio::test]
+async fn a_store_reopened_after_a_crash_scrubs_the_wal_it_finds() {
+    let live = tempfile::tempdir().unwrap();
+    let db = live.path().join("state.db");
+    let canary = b"CRASH-SCRUB-CANARY-must-not-survive-a-restart";
+    let backend = SqliteBackend::open_with_policy(&db, 4, PAUSED).unwrap();
+    let id = backend
+        .wal_append("kbc:x", canary, None, &stamp())
+        .await
+        .unwrap();
+    backend.compact("kbc:x", b"clean", id).await.unwrap();
+    let crashed = tempfile::tempdir().unwrap();
+    for name in ["state.db", "state.db-wal"] {
+        std::fs::copy(live.path().join(name), crashed.path().join(name)).unwrap();
+    }
+    drop(backend);
+    assert!(
+        dir_contains(crashed.path(), canary),
+        "precondition: the crashed store's WAL holds the canary"
+    );
+    let policy = CheckpointPolicy {
+        interval: Duration::from_millis(2),
+        idle_truncate_after: Duration::from_secs(3600),
+        ..CheckpointPolicy::PRODUCTION
+    };
+    let reopened =
+        SqliteBackend::open_with_policy(&crashed.path().join("state.db"), 4, policy).unwrap();
+    reopened.wait_for_scrub().await;
+    assert!(
+        !dir_contains(crashed.path(), canary),
+        "the reopened store kept the compacted update in its WAL"
+    );
+}
+
+/// A tick that panics is caught and logged, and the checkpointer goes on: the
+/// write after it is still checkpointed. Kills a tick run without
+/// `catch_unwind`, whose panic ends the thread (and `Drop` used to discard it).
+#[tokio::test]
+async fn a_panicking_tick_does_not_stop_the_checkpointer() {
+    let dir = tempfile::tempdir().unwrap();
+    let policy = CheckpointPolicy {
+        interval: Duration::from_millis(2),
+        idle_truncate_after: Duration::from_secs(3600),
+        ..CheckpointPolicy::PRODUCTION
+    };
+    let backend = SqliteBackend::open_with_policy(&dir.path().join("state.db"), 4, policy).unwrap();
+    let writer = backend.pool.writer.clone();
+    backend.wait_for_scrub().await;
+    writer.panic_next_ticks(3);
+    backend
+        .wal_append("doc", &UPDATE, None, &stamp())
+        .await
+        .unwrap();
+    let written = writer.writes();
+    wait_until("a PASSIVE after the panics", || writer.covered() >= written).await;
+    assert_eq!(writer.tick_panics(), 3);
+}
+
+/// `doctor`'s inspection beside a live store starts no checkpointer and writes
+/// nothing, byte for byte; and where there is no store it creates none.
+/// Kills an inspection that opens the store as the daemon does (a second
+/// checkpointer, and schema DDL outside the writer slot).
+#[tokio::test]
+async fn inspecting_a_live_store_starts_no_checkpointer_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("state.db");
+    let policy = CheckpointPolicy::PRODUCTION;
+    assert_eq!(
+        inspect_store(&db, &policy).unwrap(),
+        StoreInspection::Absent
+    );
+    assert!(!db.exists(), "inspecting created the store");
+
+    let live = SqliteBackend::open_with_policy(&db, 4, PAUSED).unwrap();
+    for i in 0..20 {
+        live.wal_append("doc", &UPDATE, Some(i), &stamp())
+            .await
+            .unwrap();
+    }
+    let files = || {
+        (
+            std::fs::read(&db).unwrap(),
+            std::fs::read(wal_path(&db)).unwrap(),
+        )
+    };
+    let before = files();
+    let spawned = WriterLock::spawned_on_this_thread();
+    assert!(
+        spawned >= 1,
+        "the live store's own checkpointer is not counted"
+    );
+    let found = inspect_store(&db, &policy).unwrap();
+    assert_eq!(
+        WriterLock::spawned_on_this_thread(),
+        spawned,
+        "inspecting started a checkpointer"
+    );
+    assert!(
+        matches!(found, StoreInspection::Present { wal_bytes, .. } if wal_bytes > 0),
+        "{found:?}"
+    );
+    assert!(files() == before, "inspecting wrote to the store");
 }
 
 const CRASH_CHILD_DIR: &str = "MAE_STORAGE_CRASH_CHILD_DIR";
@@ -455,6 +809,7 @@ async fn crash_child_writes_until_killed() {
         interval: Duration::from_millis(1),
         idle_truncate_after: Duration::from_millis(1),
         backstop_pages: 64,
+        ..CheckpointPolicy::PRODUCTION
     };
     let path = Path::new(&dir).join("state.db");
     let backend = Arc::new(SqliteBackend::open_with_policy(&path, 4, policy).unwrap());

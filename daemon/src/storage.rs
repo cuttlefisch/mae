@@ -27,7 +27,7 @@ mod writer;
 
 pub use history::{Checkpoint, Listed};
 pub use seed_record::{SeedNodeRow, SeedRecord};
-pub use writer::CheckpointPolicy;
+pub use writer::{inspect_store, CheckpointPolicy, StorageHealth, StoreInspection};
 use writer::{Checkpointer, WriteConn, WriterLock};
 
 /// Errors from storage operations.
@@ -207,6 +207,12 @@ pub trait StorageBackend: Send + Sync {
     /// Delete all data for a document (snapshot + WAL entries).
     async fn delete_document(&self, doc_name: &str) -> Result<(), StorageError>;
 
+    /// How the store's WAL stands (its size, and any ADR-037 scrub still
+    /// owed), for `daemon/status`. `None` for a backend with no WAL.
+    fn storage_health(&self) -> Option<StorageHealth> {
+        None
+    }
+
     /// Load the entire LOCAL per-KB blocklist as `(kb_id, principal)` pairs
     /// (ADR-039 A2, #162). Local self-protection only — never synced to peers.
     /// Default: no durable blocklist (an in-memory-only backend has nothing to load).
@@ -285,6 +291,9 @@ fn no_seed_tables() -> StorageError {
 pub struct SqlitePool {
     shards: Vec<std::sync::Mutex<sqlite::Connection>>,
     writer: WriterLock,
+    policy: CheckpointPolicy,
+    /// The WAL file; `None` for an in-memory pool, which has none.
+    wal: Option<std::path::PathBuf>,
     /// `None` for an in-memory pool, which has no WAL.
     _checkpointer: Option<Checkpointer>,
 }
@@ -322,8 +331,9 @@ impl SqlitePool {
             // enabled on a previously-plaintext KB and the node docs are reseal-replaced
             // (delete + recreate as ciphertext, see `delete_document` + `share_doc`), the
             // pre-enable plaintext bytes are overwritten in the main DB file rather than
-            // lingering in free pages. The WAL sidecar is TRUNCATE-checkpointed after the
-            // delete so an uncheckpointed pre-image can't linger there either.
+            // lingering in free pages. The delete marks a WAL scrub pending, and the
+            // checkpointer TRUNCATEs the WAL so a pre-image can't linger there either
+            // (`storage_writer.rs`).
             // Only the first connection creates tables (idempotent via IF NOT EXISTS).
             if i == 0 {
                 conn.execute(
@@ -372,6 +382,8 @@ impl SqlitePool {
         Ok(SqlitePool {
             shards,
             writer,
+            policy,
+            wal: Some(writer::wal_path(path)),
             _checkpointer: Some(checkpointer),
         })
     }
@@ -411,6 +423,8 @@ impl SqlitePool {
         Ok(SqlitePool {
             shards: vec![std::sync::Mutex::new(conn)],
             writer: WriterLock::default(),
+            policy: CheckpointPolicy::PRODUCTION,
+            wal: None,
             _checkpointer: None,
         })
     }
@@ -473,6 +487,20 @@ impl SqliteBackend {
     #[cfg(test)]
     pub(crate) fn execute_for_test(&self, sql: &str) {
         self.pool.lock_primary().execute(sql).expect("test SQL");
+    }
+
+    /// Wait until no ADR-037 scrub is owed: what a test that reads the files at
+    /// rest after a delete or compaction must do first.
+    #[cfg(test)]
+    pub(crate) async fn wait_for_scrub(&self) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while self.pool.writer.scrub_pending() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the WAL scrub never completed"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
     }
 
     /// Open or create the SQLite database at the given path (default 4 shards).
@@ -806,12 +834,14 @@ impl StorageBackend for SqliteBackend {
             .map_err(|e| StorageError::Sqlite(format!("compact transaction: {e}")))?;
         // ADR-037 (#156 F5): the WAL trim above frees the superseded update rows,
         // and `secure_delete=ON` zeroes those pages in the main DB — but the
-        // removal is journalled through the WAL sidecar, which can keep a
-        // pre-image until checkpointed. TRUNCATE-checkpoint so a freed update's
-        // plaintext (e.g. a pre-E2e-enable manifest title superseded by the F5
-        // blank) cannot linger in the sidecar at rest. Best-effort (PASSIVE if
-        // another shard holds a read mark); never block the compaction on it.
-        conn.truncate_wal();
+        // pre-images stay in the WAL file until it is truncated. Owe a scrub: the
+        // checkpointer TRUNCATEs on its next ticks until no reader blocks it, so a
+        // freed update's plaintext (e.g. a pre-E2e-enable manifest title superseded
+        // by the F5 blank) cannot linger at rest. Not run here: a TRUNCATE holds the
+        // writer slot through its fsyncs, and up to `busy_timeout` behind a reader,
+        // stalling every writer queued behind this compaction.
+        conn.mark_scrub();
+        drop(conn);
         info!(doc = doc_name, up_to = up_to_wal_id, "compacted");
         Ok(())
     }
@@ -858,14 +888,17 @@ impl StorageBackend for SqliteBackend {
         stmt2.next()?;
 
         // ADR-037 (#171): with `secure_delete=ON` the rows above are zeroed in the main
-        // DB, but the zeroing is journalled through the WAL sidecar. TRUNCATE-checkpoint
-        // so the sidecar can't retain a pre-image of the just-purged plaintext at rest.
-        // Best-effort: downgrades to PASSIVE if another shard holds a read mark — the
-        // zeroed pages still land on the next checkpoint; we never block the delete on it.
-        conn.truncate_wal();
+        // DB, but the WAL file keeps their pre-images until it is truncated. Owe a
+        // scrub, which the checkpointer retries until it succeeds (see `compact`).
+        conn.mark_scrub();
 
         info!(doc = doc_name, "deleted document from storage");
         Ok(())
+    }
+
+    fn storage_health(&self) -> Option<StorageHealth> {
+        let wal = self.pool.wal.as_ref()?;
+        Some(self.pool.writer.health(&self.pool.policy, wal))
     }
 
     async fn load_blocklist(&self) -> Result<Vec<(String, String)>, StorageError> {
@@ -1281,8 +1314,10 @@ mod tests {
                 "precondition: the plaintext canary is on disk before purge (else the test is vacuous)"
             );
 
-            // The purge (what reseal-as-replace's share_doc triggers).
+            // The purge (what reseal-as-replace's share_doc triggers), then the scrub
+            // it owes, which the background checkpointer runs.
             backend.delete_document("kbn:testkb:n1").await.unwrap();
+            backend.wait_for_scrub().await;
 
             assert!(
                 !raw_contains_canary(&db_path),
@@ -1368,6 +1403,7 @@ mod tests {
                 .compact("kbc:x", b"BLANKED-STATE-no-title", id)
                 .await
                 .unwrap();
+            backend.wait_for_scrub().await;
             assert!(
                 !raw_contains_canary(&db_path),
                 "the superseded cleartext title MUST be scrubbed from the DB file after compaction \

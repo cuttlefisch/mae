@@ -260,7 +260,9 @@ throughput, and both prerequisites are built before C1. They are now in `daemon/
   connection. Reads take only their shard.
 - **Checkpoints off the commit path.** Shard connections run with `wal_autocheckpoint=16384` as a
   backstop only. A background thread with its own connection runs a PASSIVE checkpoint once a
-  second if anything was written, and a TRUNCATE after 1 s idle.
+  second if anything was written, and a TRUNCATE after 1 s idle. Since 2026-11-17 it also runs
+  the ADR-037 scrub that compaction and delete used to run themselves; see
+  [The slot's head-of-line behaviour](#the-slots-head-of-line-behaviour-and-the-scrub-2026-11-17).
 
 **Method.** The #905 harness, unchanged except for one fix (below). `main` at `cb209d37` ran first,
 then the branch, back to back, as separate jobs in the same 4-core, 8 GB queue class. Each side ran
@@ -315,12 +317,64 @@ Medians over 5 runs, [min–max].
 for closed-loop queueing, which is the intended exchange of busy-handler sleep for FIFO wait. C1
 behind the lock can now be measured against these "after" figures.
 
+## The slot's head-of-line behaviour, and the scrub (2026-11-17)
+
+An independent review of the two prerequisites found that the slot's queueing behaviour was not
+written down and that compaction held the slot far longer than it needed to. What follows is the
+behaviour as built after that review.
+
+**One slot, FIFO, for the whole store.** Every write to `state.db` (`wal_append`, compaction,
+delete, history and seed records, the blocklist) queues for the same slot, whatever KB or document
+it touches. A write's wait is the sum of the transactions queued ahead of it. The measured figures
+above show what that costs:
+- a `wal_append` holds the slot for 47 µs at p50 and 159 µs at p99 (1 writer);
+- 32 writers in a closed loop wait 12.6 ms at p50 and 24 ms at p99, and that wait is the queue,
+  not work: it was busy-handler sleep before, with a p99 of 642 ms.
+
+**The longest holders**, in the order they are expected to matter. None of these hold times has
+been measured; they are what to measure if the tail moves:
+- a compaction (snapshot plus WAL trim), every `compact_threshold` (500) updates of one document,
+  with a cost that grows with the document up to the 10 MB `max_document_size_bytes`;
+- a seed insert, one transaction for a whole KB's node list;
+- the checkpointer's TRUNCATE (idle, or a scrub), a backfill of whatever the WAL still holds with
+  its fsyncs. The cadence measurement above is the only evidence of what an fsync-bearing
+  checkpoint costs neighbouring commits: at a 100 ms cadence it took the hosted-rate p50 from 3.1
+  to 11.6 ms.
+
+**Compaction no longer holds the slot through the scrub.** ADR-037 requires that deleted or
+superseded plaintext not linger at rest. `secure_delete=ON` zeroes freed pages in the database
+file, but the pre-images stay in the WAL file until it is truncated: a PASSIVE checkpoint backfills
+frames and never zeroes or truncates them. Compaction and delete used to TRUNCATE before releasing
+the slot. That had two defects:
+- **It held the slot through the checkpoint's fsyncs, and with a reader in the WAL for the shard
+  connection's whole 5 s `busy_timeout`**, so every writer queued behind the compaction stalled.
+- **The result was discarded.** A reader on another shard, or a backup's `VACUUM INTO`, made the
+  TRUNCATE fail BUSY silently. The only retry was the 1 s idle TRUNCATE, which never runs under
+  steady writes, so the scrub could be skipped indefinitely.
+
+Now compaction and delete only mark a scrub pending. On every tick while the mark is set, the
+checkpointer queues for the slot (waiting in line, never `try_lock`, which steady writes would
+starve) and TRUNCATEs with `busy_timeout=0`, so a reader costs one immediate BUSY per tick rather
+than a held slot. Success clears the mark. A scrub pending for 30 s logs a warning with the number
+of documents it covers. The mark lives in memory: a clean close checkpoints and deletes the WAL,
+and every open marks a scrub pending, so a crash's leftover WAL is scrubbed on the next start.
+The tests are in `daemon/src/storage_writer_tests.rs` (`a_scrub_*`,
+`a_store_reopened_after_a_crash_scrubs_the_wal_it_finds`,
+`a_compaction_or_delete_runs_no_checkpoint_under_the_slot`).
+
+**The WAL bound holds only without long readers.** No checkpoint can backfill past the oldest
+snapshot a reader holds, and the WAL cannot restart while a reader uses it, so a long read, or
+reads overlapping on several shards, let the WAL grow past the backstop without limit. That is
+reported rather than prevented: past twice the backstop the checkpointer warns (at most every five
+minutes), and `daemon/status` and `mae-daemon doctor` report the WAL size and any pending scrub.
+
 ## What was not measured
 
 - **Collection-document writes.** C1 diffs the manifest under the document lock. That is CPU in
   `apply_update`, not storage, and is proportional to the manifest size.
 - **The replace path, mesh relay and seed apply.** They take the same `wal_append`.
 - **Compaction.** It runs every 500 updates per document, in its own transaction; under 0.2% of
-  writes, so outside p99.
+  writes, so outside p99. How long it holds the writer slot, and so delays the writes queued
+  behind it, was not measured either.
 - **macOS, and an idle machine.** Per principle #13 these figures are one platform's. The paired
   ratios are the robust output; the absolutes are not.

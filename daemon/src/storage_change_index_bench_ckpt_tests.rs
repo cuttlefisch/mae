@@ -22,13 +22,19 @@ fn wal_bytes(dir: &std::path::Path) -> u64 {
 /// Checkpoint and truncate the WAL file; asserts it emptied, since every
 /// frame count below is read from its size.
 fn truncate_wal(sqlite: &SqliteBackend, dir: &std::path::Path) {
-    // Not refused by a background PASSIVE that happens to be running.
-    let _checkpointing = sqlite.pool.writer.checkpointing();
-    sqlite
-        .pool
-        .lock_primary()
-        .execute("PRAGMA wal_checkpoint(TRUNCATE);")
-        .unwrap();
+    // A background PASSIVE running at that moment makes SQLite refuse this
+    // one outright, so retry a few times.
+    for _ in 0..100 {
+        sqlite
+            .pool
+            .lock_primary()
+            .execute("PRAGMA wal_checkpoint(TRUNCATE);")
+            .unwrap();
+        if wal_bytes(dir) == 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     assert_eq!(
         wal_bytes(dir),
         0,
