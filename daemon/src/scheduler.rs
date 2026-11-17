@@ -569,14 +569,17 @@ mod tests {
             scheduler.run(shutdown_rx).await;
         });
 
-        // Let it run a few ticks
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        {
-            let s = state.lock().await;
-            assert!(s.running);
-            assert!(s.drain_cycles > 0);
-        }
+        // Wait for it to tick at least once.
+        assert!(
+            mae_mcp::ready::wait_until(|| {
+                let st = Arc::clone(&state);
+                async move { st.lock().await.drain_cycles > 0 }
+            })
+            .await,
+            "{}",
+            mae_mcp::ready::timeout_message("the scheduler's first drain cycle")
+        );
+        assert!(state.lock().await.running);
 
         // Shutdown
         shutdown_tx.send(()).unwrap();
@@ -606,24 +609,37 @@ mod tests {
         let state = Arc::clone(&scheduler.state);
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+        let started = std::time::Instant::now();
         let handle = tokio::spawn(async move {
             scheduler.run(shutdown_rx).await;
         });
 
-        // Comfortably below the 500ms DEFAULT interval's first tick, but
-        // several multiples of the 20ms CUSTOM interval this test configured.
-        tokio::time::sleep(Duration::from_millis(150)).await;
-
-        {
-            let s = state.lock().await;
-            assert!(
-                s.drain_cycles >= 4,
-                "expected several drain cycles from the configured 20ms interval \
-                 within 150ms (got {}) -- if this is 0, the scheduler is running \
-                 with a DIFFERENT config than the one it was constructed with",
-                s.drain_cycles
-            );
-        }
+        // Wait for four drain cycles, then check how long they took. The
+        // default interval ticks at 0, 500, 1000 and 1500 ms (`interval`'s
+        // first tick is immediate), so it cannot reach four before 1500 ms;
+        // the configured 20 ms one reaches them in about 60 ms. Waiting for
+        // the count rather than sleeping a fixed 150 ms window keeps the
+        // positive half from failing on a loaded machine, and the bound
+        // keeps the negative half: four cycles that took 1500 ms or more
+        // could have come from the default interval.
+        const DEFAULT_FOURTH_TICK: Duration = Duration::from_millis(1500);
+        assert_eq!(DaemonConfig::default().watcher_interval_ms, 500);
+        assert!(
+            mae_mcp::ready::wait_until(|| {
+                let st = Arc::clone(&state);
+                async move { st.lock().await.drain_cycles >= 4 }
+            })
+            .await,
+            "{}",
+            mae_mcp::ready::timeout_message("four drain cycles")
+        );
+        let took = started.elapsed();
+        assert!(
+            took < DEFAULT_FOURTH_TICK,
+            "four drain cycles took {took:?}: no faster than the 500ms DEFAULT \
+             interval could manage, so the scheduler may be running with a \
+             DIFFERENT config than the one it was constructed with"
+        );
 
         shutdown_tx.send(()).unwrap();
         handle.await.unwrap();
@@ -969,6 +985,9 @@ mod watcher_reimport_tests {
                 .1
         };
         let b_before = stamp("n:b");
+        // Kept: `created_at` has whole-second granularity, so only a pass
+        // that runs in a later second can show a rewrite; crossing that
+        // boundary is what the test needs, and nothing else signals it.
         tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
         std::fs::write(org.path().join("a.org"), note("n:a", "v3")).unwrap();
         tick_until(&s, &state, "the second edit to reach the store", || {

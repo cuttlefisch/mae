@@ -2058,6 +2058,20 @@ impl Buffer {
 mod tests {
     use super::*;
 
+    /// Set `path`'s mtime to a fixed time long past, so the next write to it
+    /// is strictly newer. This states the ordering a test needs outright; a
+    /// sleep between two writes only hopes the filesystem's timestamp
+    /// granularity resolves it.
+    fn backdate_mtime(path: &std::path::Path) {
+        let past = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(past)
+            .unwrap();
+    }
+
     /// Helper: create a buffer + window pair for testing.
     fn new_buf_win() -> (Buffer, Window) {
         (Buffer::new(), Window::new(0, 0))
@@ -2730,16 +2744,15 @@ mod tests {
         let _ = fs::create_dir_all(&dir);
         let path = dir.join("mtime_save.txt");
         fs::write(&path, "hello").unwrap();
+        backdate_mtime(&path);
 
         let mut buf = Buffer::from_file(&path).unwrap();
         let mtime1 = buf.file_mtime;
 
-        // Small delay to ensure mtime changes
-        std::thread::sleep(std::time::Duration::from_millis(50));
         buf.insert_text_at(0, "new ");
         buf.save().unwrap();
         let mtime2 = buf.file_mtime;
-        assert!(mtime2 >= mtime1);
+        assert!(mtime2 > mtime1, "save must record the new mtime");
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -2750,12 +2763,12 @@ mod tests {
         let _ = fs::create_dir_all(&dir);
         let path = dir.join("detect.txt");
         fs::write(&path, "original").unwrap();
+        backdate_mtime(&path);
 
         let buf = Buffer::from_file(&path).unwrap();
         assert!(!buf.check_disk_changed());
 
         // Simulate external edit
-        std::thread::sleep(std::time::Duration::from_millis(50));
         fs::write(&path, "modified externally").unwrap();
         assert!(buf.check_disk_changed());
 
@@ -2768,12 +2781,12 @@ mod tests {
         let _ = fs::create_dir_all(&dir);
         let path = dir.join("reload.txt");
         fs::write(&path, "original").unwrap();
+        backdate_mtime(&path);
 
         let mut buf = Buffer::from_file(&path).unwrap();
         assert!(!buf.modified);
 
         // External edit
-        std::thread::sleep(std::time::Duration::from_millis(50));
         fs::write(&path, "updated content").unwrap();
 
         // Reload should succeed on clean buffer
@@ -2791,13 +2804,13 @@ mod tests {
         let _ = fs::create_dir_all(&dir);
         let path = dir.join("dirty.txt");
         fs::write(&path, "original").unwrap();
+        backdate_mtime(&path);
 
         let mut buf = Buffer::from_file(&path).unwrap();
         buf.insert_text_at(0, "local edit ");
         assert!(buf.modified);
 
         // External edit
-        std::thread::sleep(std::time::Duration::from_millis(50));
         fs::write(&path, "external edit").unwrap();
 
         // check_disk_changed should detect the change

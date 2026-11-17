@@ -7,7 +7,8 @@
 //! log (the rejected Kubernetes scheme) or in a URL (the rejected Slack shape).
 //!
 //! Properties, each pinned by a test in `connect_ticket_tests.rs`:
-//! - 256 random bits, as 43 base64url characters; valid [`TICKET_TTL`]; single use — removed on its first
+//! - 256 random bits, as 43 base64url characters; valid for the store's TTL (at most
+//!   [`MAX_TICKET_TTL`], `oauth.ws_ticket_ttl_secs`); single use — removed on its first
 //!   presentation whatever happens next;
 //! - in memory only, so a restart voids every ticket;
 //! - bound to the minting token's issuer, subject, principal and expiry, and to
@@ -29,8 +30,9 @@ use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 
-/// How long a ticket is valid after minting (B1: 30 seconds).
-pub(crate) const TICKET_TTL: Duration = Duration::from_secs(30);
+/// How long a ticket is valid after minting, at most and by default (B1: 30
+/// seconds). `oauth.ws_ticket_ttl_secs` may shorten it, never lengthen it.
+pub(crate) const MAX_TICKET_TTL: Duration = Duration::from_secs(30);
 
 /// Unused tickets one principal may hold at once. A browser needs one ticket
 /// per connection attempt and a reconnect burst inside 30 seconds needs a few;
@@ -63,9 +65,16 @@ struct Entry {
 }
 
 /// The in-memory ticket store. One per listener.
-#[derive(Default)]
 pub(crate) struct TicketStore {
     entries: Mutex<HashMap<[u8; 32], Entry>>,
+    ttl: Duration,
+}
+
+impl Default for TicketStore {
+    /// A store whose tickets live [`MAX_TICKET_TTL`].
+    fn default() -> Self {
+        TicketStore::with_ttl(MAX_TICKET_TTL)
+    }
 }
 
 fn key(ticket: &str) -> [u8; 32] {
@@ -73,6 +82,20 @@ fn key(ticket: &str) -> [u8; 32] {
 }
 
 impl TicketStore {
+    /// A store whose tickets live `ttl`. The caller has checked it against
+    /// [`MAX_TICKET_TTL`] (`ws::ticket_ttl_from_config`).
+    pub(crate) fn with_ttl(ttl: Duration) -> Self {
+        TicketStore {
+            entries: Mutex::default(),
+            ttl,
+        }
+    }
+
+    /// How long a ticket lives: the mint response's `expires_in`.
+    pub(crate) fn ttl(&self) -> Duration {
+        self.ttl
+    }
+
     /// Mint a ticket for `grant`. Expired entries are purged first, so a
     /// principal's quota counts only tickets that could still be used.
     pub(crate) fn mint(&self, grant: TicketGrant, now: Instant) -> Result<String, TooManyTickets> {
@@ -95,7 +118,7 @@ impl TicketStore {
             key(&ticket),
             Entry {
                 grant,
-                valid_until: now + TICKET_TTL,
+                valid_until: now + self.ttl,
             },
         );
         Ok(ticket)

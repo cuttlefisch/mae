@@ -36,7 +36,7 @@ use std::time::Duration;
 
 use mae_daemon::collab_handler::SessionDeps;
 
-pub(crate) use connect_ticket::TicketStore;
+pub(crate) use connect_ticket::{TicketStore, MAX_TICKET_TTL};
 pub(crate) use upgrade::handle;
 
 /// The one protocol version this daemon speaks (B2).
@@ -96,6 +96,16 @@ pub(crate) fn state_from_config(
         );
         return None;
     }
+    let Some(ticket_ttl) = ticket_ttl_from_config(oauth.ws_ticket_ttl_secs) else {
+        tracing::error!(
+            secs = oauth.ws_ticket_ttl_secs,
+            "oauth.ws_ticket_ttl_secs must be 1 to {} (ADR-099 B1 caps a connect ticket at {} \
+             seconds) — /ws disabled",
+            MAX_TICKET_TTL.as_secs(),
+            MAX_TICKET_TTL.as_secs()
+        );
+        return None;
+    };
     if !idp_cap_leaves_room_to_renew(oauth.ws_max_idp_session_secs, oauth.ws_renew_lead_secs) {
         tracing::error!(
             "oauth.ws_max_idp_session_secs must exceed oauth.ws_renew_lead_secs (or be 0): a \
@@ -130,9 +140,18 @@ pub(crate) fn state_from_config(
     );
     Some(WsState {
         settings,
-        tickets: TicketStore::default(),
+        tickets: TicketStore::with_ttl(ticket_ttl),
         deps,
     })
+}
+
+/// `ws_ticket_ttl_secs` as a ticket lifetime: at least a second, and no more
+/// than B1's [`MAX_TICKET_TTL`] — the setting can shorten a ticket's authority,
+/// never extend it. `None` refuses the configuration.
+fn ticket_ttl_from_config(secs: u64) -> Option<Duration> {
+    (1..=MAX_TICKET_TTL.as_secs())
+        .contains(&secs)
+        .then(|| Duration::from_secs(secs))
 }
 
 /// A bound-IdP session cap (`ws_max_idp_session_secs`) must leave room for a
@@ -153,6 +172,59 @@ pub(crate) fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The ticket lifetime may shorten B1's 30 s, never lengthen it or reach
+    /// zero; the default is the cap itself.
+    #[test]
+    fn a_ticket_ttl_is_one_to_thirty_seconds_and_defaults_to_thirty() {
+        let d = crate::oauth_config::OAuthConfig::default();
+        assert_eq!(d.ws_ticket_ttl_secs, 30, "B1's 30 s is the default");
+        assert_eq!(
+            ticket_ttl_from_config(d.ws_ticket_ttl_secs),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(ticket_ttl_from_config(1), Some(Duration::from_secs(1)));
+        assert_eq!(ticket_ttl_from_config(0), None, "0 would open nothing");
+        assert_eq!(ticket_ttl_from_config(31), None, "longer than B1 allows");
+        assert_eq!(ticket_ttl_from_config(u64::MAX), None);
+    }
+
+    /// The bound is applied where the routes are built, not only in the
+    /// helper: `state_from_config` refuses (no `/ws`) a lifetime of 0 or past
+    /// B1's 30 s, and accepts 1 and 30. Kills a call site that builds the
+    /// ticket store from the raw configured seconds.
+    #[test]
+    fn the_routes_are_not_built_with_a_ticket_ttl_outside_one_to_thirty() {
+        let deps = || {
+            use std::sync::{Arc, Mutex};
+            let backend = Arc::new(mae_daemon::storage::SqliteBackend::open_memory().unwrap());
+            mae_daemon::collab_handler::SessionDeps {
+                doc_store: Arc::new(mae_daemon::doc_store::DocStore::new(backend, 500)),
+                broadcaster: Arc::new(Mutex::new(mae_mcp::broadcast::EventBroadcaster::new())),
+                start_time: std::time::Instant::now(),
+                artifact_store: Arc::new(mae_daemon::artifact_store::NoArtifactStore),
+                quota: Arc::new(mae_daemon::quota::NoQuota),
+                kb_query_limits: mae_daemon::kb_query::KbQueryLimits::default(),
+            }
+        };
+        let with_ttl = |secs| crate::oauth_config::OAuthConfig {
+            ws_enabled: true,
+            ws_ticket_ttl_secs: secs,
+            ..Default::default()
+        };
+        for ok in [1, 30] {
+            assert!(
+                state_from_config(&with_ttl(ok), Some(deps()), true).is_some(),
+                "{ok} s is a valid ticket lifetime"
+            );
+        }
+        for bad in [0, 31, u64::MAX] {
+            assert!(
+                state_from_config(&with_ttl(bad), Some(deps()), true).is_none(),
+                "/ws was built with a {bad} s ticket lifetime"
+            );
+        }
+    }
 
     /// A cap at or under the renewal lead would demand a renewal on open; the
     /// default (900 over a 60 s lead) and "no cap" are both fine.

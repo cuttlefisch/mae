@@ -81,13 +81,26 @@ async fn a_ticket_is_single_use_and_used_reads_as_unknown() {
     assert_eq!(used.fingerprint(), unknown.fingerprint());
 }
 
-/// After 30 seconds a ticket is refused, identically to an unknown one.
+/// Once its lifetime is up a ticket is refused, identically to an unknown one.
+///
+/// The daemon runs with a 1-second ticket (`ws_ticket_ttl_secs`) rather than
+/// B1's 30, which `a_ticket_opens_a_socket_and_is_never_echoed` pins as the
+/// default, so the test waits out one second instead of thirty-one. The wait
+/// is the expiry itself, not a guess: the daemon mints before it answers, so
+/// the ticket's deadline is at most `expires_in` after the answer arrives.
 #[tokio::test]
 async fn an_expired_ticket_reads_as_unknown() {
-    let d = spawn(Opts::default()).await;
+    let d = spawn(Opts {
+        ticket_ttl_secs: Some(1),
+        ..Opts::default()
+    })
+    .await;
     let token = d.token("SHA256:alice", 3600);
-    let t = ticket_of(&mint_ticket(&d, &token, Some(ORIGIN_A)).await);
-    tokio::time::sleep(Duration::from_secs(31)).await;
+    let minted = mint_ticket(&d, &token, Some(ORIGIN_A)).await;
+    let answered = tokio::time::Instant::now();
+    assert_eq!(minted.json()["expires_in"], 1, "the configured lifetime");
+    let t = ticket_of(&minted);
+    tokio::time::sleep_until(answered + Duration::from_secs(1)).await;
     let expired = upgrade(&d, &protocols(&t), &[("Origin", ORIGIN_A)]).await;
     let unknown = upgrade(&d, &protocols(&"cd".repeat(32)), &[("Origin", ORIGIN_A)]).await;
     assert_eq!(expired.status, 401);
