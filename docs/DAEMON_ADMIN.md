@@ -252,6 +252,7 @@ cert_path = "/etc/mae/tls/tls.crt"              # PEM chain; re-read when it cha
 key_path  = "/etc/mae/tls/tls.key"
 kb_query_enabled = true                         # the kb/query.* surface (needs [collab] enabled)
 # jwks_url = "https://idp.example.com/jwks.json" # external issuer — OPTIONAL (below)
+# jwks_ca_file = "/etc/mae/idp-ca.pem"           # trust ONLY these roots for the JWKS fetch
 # issuer = "https://idp.example.com"
 self_issued_tokens_enabled = true               # accept this daemon's own tokens (key mode only)
 self_issued_token_ttl_secs = 3600               # default lifetime of `token mint`
@@ -260,6 +261,12 @@ self_issued_token_max_ttl_secs = 86400          # ceiling `token mint --ttl` ref
 # webview_enabled = false                       # GET /kb/<id>/view
 ```
 
+- **The JWKS fetch needs CA certificates.** By default it trusts the system's roots. An image with
+  none (a minimal container) gets a startup error naming `jwks_url` and this fix, and the OAuth
+  listener stays off: the daemon no longer panics. Install CA certificates, or set `jwks_ca_file` to
+  a PEM bundle, which the fetch then trusts **instead of** the system's roots (also the way to
+  reach an issuer behind a private CA). A file that is missing, holds no certificate, or cannot be
+  used as roots is a startup error naming it.
 - **`jwks_url` is optional** when the daemon's own self-issued tokens are the only ones in use.
   With it unset no JWKS client exists: a token from an external issuer is refused with `401` and a
   reason naming `jwks_url` (not a `503` — nothing is temporarily unavailable). With **neither**
@@ -306,6 +313,8 @@ in `principal_claim` must bind its subjects instead.
 # groups_claim = "groups"                  # where the token lists its groups
 # allowed_groups = ["mae-readers", "staff"] # D4 session gate: ANY ONE of them admits the token (exact match);
 #                                          # empty (default) = no gate. Not applied to self-issued tokens.
+# second_factor_amr = []                   # amr values that count as a second factor — NO default (below)
+# second_factor_acr = []                   # acr values that count as one (exact match) — NO default
 identity_binding_enabled = true            # POST /identity/challenge + /identity/bind (default false)
 # identity_challenge_ttl_secs = 300        # a challenge is valid for minutes
 # identity_max_pending_challenges = 4      # unused challenges one subject may hold
@@ -326,14 +335,18 @@ identity_binding_enabled = true            # POST /identity/challenge + /identit
      `iss`, `sub`, this listener's `aud`, the fingerprint, a random `nonce` (= `challenge_id`) and
      `expires_at`. Show the person the `iss`/`sub` before they sign.
   2. On the machine holding the member key (the editor's collab identity, `mae --collab-identity`),
-     run `mae --sign-identity-challenge '<answer>' --issuer <your iss> --subject <your sub>` (or
+     run `mae --sign-identity-challenge '<answer>' --issuer <your iss> --subject <your sub>
+     --audience <this daemon's canonical_resource_uri>` (or
      `-` to read the answer from stdin), with either the `challenge` text or the whole answer from
      step 1. `--issuer` and `--subject` are the key holder's OWN identity-provider identity: the
      daemon issues a challenge for any key to any signed-in subject, so a challenge naming your key
      says nothing about who asked for it, and one issued to anyone else is refused (both must match
-     the challenge byte for byte). It prints the issuer, subject, audience and key on stderr before
+     the challenge byte for byte). `--audience` is the daemon you mean to bind at, compared byte for
+     byte with the challenge's `aud`, so a challenge another daemon issued and relayed to you is
+     refused; so is one valid for more than an hour from now (signers cap a challenge's remaining
+     lifetime at 3600 s; keep `identity_challenge_ttl_secs` well under it). It prints the issuer, subject, audience and key on stderr before
      signing, and the bind body on stdout. It signs nothing but a canonical, unexpired challenge
-     naming its own key and the stated subject, and never prints the secret key. (The signed bytes
+     naming its own key and the stated issuer, subject and audience, and never prints the secret key. (The signed bytes
      are the UTF-8 of `challenge`, Ed25519.)
   3. `POST /identity/bind` `{"challenge_id", "public_key": "<base64 of the 32 key bytes>",
      "signature": "<base64>"}` with a token of the same `(iss, sub)` → `{"principal", "kind",
@@ -342,9 +355,25 @@ identity_binding_enabled = true            # POST /identity/challenge + /identit
 - **An external token must carry `iss`.** One with a missing or empty `iss` is refused (`401`),
   as one with an empty subject is: `(iss, sub)` keys the binding table, even when `oauth.issuer` is
   unset and the issuer is otherwise not checked.
-- **Before configuring a second-factor requirement** (planned, not yet enforced): some identity
-  providers emit a constant `acr` that does not reflect a second factor, so configure `amr` values
-  rather than `acr`. A session started from a recovery link may carry no `amr` at all.
+- **How a person signed in** (ADR-098, for ADR-113's approval checks). For an identity-provider
+  token the daemon reads `amr` (an array of strings), `acr` (a string), `auth_time` (unix seconds)
+  and the groups in `groups_claim`; the bare probe reports them as `sign_in`, with
+  `second_factor: {"claim": "amr"|"acr", "value": …}` naming the configured value the sign-in
+  meets, or `null`. A self-issued token reports `sign_in: null`: it is no sign-in. A claim of the
+  wrong type (`amr` as one string or holding a non-string, `acr` not a string, `auth_time` not a
+  non-negative integer) is treated as absent, never as a pass. Nothing is enforced yet; ADR-113
+  will refuse its controlled acts on this answer.
+- **The second-factor rule has no default.** `second_factor_amr` and `second_factor_acr` are empty
+  unless you set them, because the values differ by identity provider: measure what yours emits
+  (sign in with and without the second factor and read the probe's `sign_in`) and list the values
+  that only a second factor produces. A sign-in meets the rule when any listed `amr` value is in its
+  `amr`, or its `acr` equals a listed `acr` value. With both lists empty no sign-in meets it, so a
+  requirement switched on with nothing configured refuses every act (fail closed). Some identity
+  providers emit a constant `acr` that does not reflect a second factor: configure `amr` values for
+  those, never that `acr`. A session started from a recovery link may carry no `amr` at all, and so
+  never meets an `amr` rule. A sign-in is *fresh* when its `auth_time` is within the act's window;
+  no `auth_time` is never fresh, and one ahead of the daemon's clock by more than the token
+  validator's 60 s leeway is refused.
 - **Administration is local only** — no network method, MCP tool or Scheme primitive unbinds,
   rebinds or sets `kind`. `mae-daemon binding` works while the daemon serves; a change holds on the
   listener's next request:
@@ -381,7 +410,7 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `too_many_tickets` | A principal already holds 8 unused connect tickets. Use one or let it expire (30 s). HTTP `429`, `error: "too_many_requests"`. | `POST /ws/ticket` | `limit` |
 | `awareness_not_owned` | A `sync/awareness` update in the y-protocols encoding names a client id another session on the same document already owns (ADR-099 B5). Nothing was relayed. | `sync/awareness` | — |
 | `ticket_invalid` | A connect ticket that is unknown, used, expired or bound to another origin — one identical refusal for all. HTTP `401`, `error: "invalid_token"`, with `WWW-Authenticate`. | `GET /ws` | — |
-| `issuer_not_supported` | A token not issued by this daemon, while ADR-099 B6 holds. HTTP `401`, `error: "invalid_token"`, with `WWW-Authenticate`; on a socket, a JSON-RPC error to `session/renew`. On the binding routes the reverse: a self-issued token, whose principal already is a fingerprint, with HTTP `403`, `error: "access_denied"`. | `GET /ws`, `POST /ws/ticket`, `session/renew`, `POST /identity/challenge`, `POST /identity/bind` | — |
+| `issuer_not_supported` | A token not issued by this daemon, while ADR-099 B6 holds (on `/ws`: whenever `ws_accept_bound_idp` is off). HTTP `401`, `error: "invalid_token"`, with `WWW-Authenticate`; on a socket, a JSON-RPC error to `session/renew`. On the binding routes the reverse: a self-issued token, whose principal already is a fingerprint, with HTTP `403`, `error: "access_denied"`. | `GET /ws`, `POST /ws/ticket`, `session/renew`, `POST /identity/challenge`, `POST /identity/bind` | — |
 | `invalid_token` | A `session/renew` token that does not validate or has already expired. The old deadline stands. | `session/renew` | — |
 | `protocol_unsupported` | No protocol version in common at the upgrade. HTTP `400`, `error: "invalid_request"`. | `GET /ws` | `supported` (beside `kind`) |
 | `origin_not_allowed` | A browser `Origin` not exactly in `ws_allowed_origins`. HTTP `403`, `error: "access_denied"`. | `GET /ws`, `POST /ws/ticket` | — |
@@ -410,12 +439,13 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `kb_query_unavailable` | The HTTPS listener does not serve `kb/query.*` here (`kb_query_enabled` off, or collab disabled). | `kb/query.*` (HTTPS) | — |
 | `e2e_unsupported` | A server-side operation the daemon cannot perform on an E2E KB. Code `-32600`. | `kb/query.search` | — |
 | `history_holds_plaintext` | Switching the KB to E2E is refused while its version history (ADR-116) holds plaintext content, which the switch would leave readable. Code `-32600`. | `kb/collection_op` | — |
-| `group_required` | An identity-provider token carrying none of the groups `oauth.allowed_groups` names (ADR-098 D4). Checked before the binding is looked up; nothing is read or written. HTTP `403`, `error: "insufficient_scope"`. | every authenticated route on the HTTPS listener | — |
+| `group_required` | An identity-provider token carrying none of the groups `oauth.allowed_groups` names (ADR-098 D4). Checked before the binding is looked up; nothing is read or written. HTTP `403`, `error: "insufficient_scope"`; on a socket, a JSON-RPC error to `session/renew`, and the old deadline stands. | every authenticated route on the HTTPS listener, `session/renew` | — |
 | `challenge_invalid` | A binding challenge that is unknown, already presented or expired — one refusal for all three. Ask for a new one. HTTP `403`, `error: "access_denied"`. | `POST /identity/bind` | — |
 | `challenge_mismatch` | The challenge was issued to another subject or issuer than the token presenting it, or for another audience. HTTP `403`, `error: "access_denied"`. | `POST /identity/bind` | — |
 | `proof_invalid` | The key's fingerprint is not the one the challenge names, or the signature over the challenge does not verify. HTTP `403`, `error: "access_denied"`. | `POST /identity/bind` | — |
 | `binding_conflict` | The subject already has a key, or the key already has a subject. An administrator must `binding unbind` first. HTTP `409`, `error: "conflict"`. | `POST /identity/bind` | `field` (`subject`/`fingerprint`) |
 | `too_many_challenges` | The subject already holds `identity_max_pending_challenges` unused challenges. Use one or let it expire. HTTP `429`, `error: "too_many_requests"`. | `POST /identity/challenge` | `limit` |
+| `identity_not_bound` | An identity-provider token whose `(iss, sub)` is bound to no member key, on the sync WebSocket with `ws_accept_bound_idp` on (ADR-099 Amendment 2). It is never admitted as its raw subject; bind it first (proof of possession, or `mae-daemon binding bind`). HTTP `403`, `error: "access_denied"`. At a renewal, the subject was unbound since the socket opened: the socket closes `4403 principal_changed` instead. | `GET /ws`, `POST /ws/ticket` | — |
 | `internal` | The daemon failed (storage, persistence, decoding its own state). Not a decision about the caller; a retry may succeed. | any | — |
 
 What a kind does **not** reveal is deliberate. A caller that is not a member gets `not_member` for any
@@ -478,15 +508,15 @@ mae-daemon token mint --config /etc/mae/daemon.toml --sub svc:indexer --ttl 8h \
   MCP tool or an RPC. Over mTLS, a member can still obtain a token for **its own** fingerprint
   (`kb/query.self_token`).
 
-#### The sync WebSocket (`/ws`, ADR-099) — development and single-operator only
+#### The sync WebSocket (`/ws`, ADR-099) — development, single-operator, and a pilot switch
 
 `GET /ws` upgrades to a WebSocket that carries the collab envelope (`sync/*`, `kb/*`), one JSON-RPC
 message per text frame, any number of documents per socket. **This cut is for development and for
-single-operator deployments.** Until hub signature verification (#727) and the identity binding
-(ADR-098) land, it accepts **only this daemon's own tokens**, and the principal is the token's
-`--sub`, taken literally as the KB membership principal: every writer on it is someone the operator
-minted a token for. A token from an external issuer is refused here (`issuer_not_supported`) even
-though `kb/query.*` accepts it. Off by default.
+single-operator deployments.** Until hub signature verification (#727) lands, it accepts by default
+**only this daemon's own tokens**, and the principal is the token's `--sub`, taken literally as the
+KB membership principal: every writer on it is someone the operator minted a token for. A token from
+an external issuer is refused here (`issuer_not_supported`) even though `kb/query.*` accepts it,
+unless the pilot switch below is on. Off by default.
 
 ```toml
 [oauth]
@@ -499,7 +529,37 @@ ws_allowed_origins = ["https://mae.example.com"]  # browser Origins, EXACT match
 # ws_max_open_docs = 1024                       # documents one socket may hold (0 = unlimited)
 # ws_max_frame_bytes = 1048576                  # largest inbound frame; unset = max_request_body_bytes
 # ws_max_outbound_bytes = 15029592              # largest message sent; unset = derived from max_document_size_bytes
+# ws_accept_bound_idp = false                   # pilot: also accept BOUND identity-provider tokens (below)
+# ws_max_idp_session_secs = 900                 # a bound-IdP session renews at least this often; 0 = no cap
 ```
+
+**`ws_accept_bound_idp` (ADR-099 Amendment 2) is for a pilot with short IdP token lifetimes.** With
+it on, `/ws` and `/ws/ticket` also accept an identity-provider token (`jwks_url`, `issuer`) whose
+`(iss, sub)` is bound to a member key (*Identity binding* above). The session's principal is the
+**bound fingerprint**, exactly as a self-issued token for that fingerprint would carry, so
+membership, roles, the epoch fence and per-frame authorization apply unchanged; a ticket minted with
+such a token is bound to that fingerprint, and the binding is read again when the ticket is
+presented: unbound or rebound inside its 30 s, it opens nothing (the usual `ticket_invalid`; a fresh
+mint then says `identity_not_bound`). The group gate (`allowed_groups`) runs first, as on every
+route (`403`, `group_required`). A token whose subject is **not bound** is refused (`403`, kind
+`identity_not_bound`) and no socket exists; it is never admitted as its raw subject. The binding is
+resolved again at every `session/renew`: once the subject is unbound, or bound to another key, the
+next renewal closes the socket `4403 principal_changed`, and a token that lost its group gets
+`group_required` and the session ends at its deadline (`4401`). A bound-IdP session's deadline is
+the token's `exp` or `ws_max_idp_session_secs` from now (default 900), whichever is sooner, at the
+open and at every renewal, so the client renews at least that often with the token it holds. An
+unbind, a rebind or a group removal therefore reaches an open socket within the cap (15 minutes by
+default) however long the IdP's tokens live. The cap must exceed `ws_renew_lead_secs` (else `/ws` is
+left disabled and the reason logged); `0` removes it, leaving the token's own lifetime as the
+bound. Self-issued sessions are not capped. **Still keep IdP access-token lifetimes short**
+(minutes, not hours): the cap bounds the socket, not what else the token opens.
+
+What this does not protect against until #727 is enforced: a write over such a session is trusted
+on the channel (TLS, the IdP token, the binding), not on a signature over the op. A stolen IdP
+session can write as its member until its token expires or a renewal is refused; the hub cannot
+later prove which ops the member's key authored; and the hub accepts an op whose signed header names
+any current editor of the KB as its author, from any member session (true of every session today).
+The daemon logs a warning at startup while the switch is on.
 
 A missing prerequisite (collab disabled, or self-issued tokens unavailable) leaves the route
 absent and logs why at startup. With `ws_enabled = false`, `/ws` and `/ws/ticket` are ordinary

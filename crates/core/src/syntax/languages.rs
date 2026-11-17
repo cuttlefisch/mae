@@ -159,6 +159,43 @@ impl Language {
     }
 }
 
+/// How many levels below a `#;` comment are still painted as comment. A query
+/// has no descendant operator, so each level is its own pattern; past this
+/// depth a commented-out datum's innermost forms highlight as code again.
+/// 0.24's query stopped at four; Scheme config forms nest deeper than that
+/// (a `define` holding a `let` holding a `cond` clause holding a call).
+pub(crate) const SCHEME_SEXP_COMMENT_DEPTH: usize = 8;
+
+/// `(sexp_comment _ @comment)`, `(sexp_comment (_ _* @comment))`, and so on
+/// down to `depth` levels: the same shape tree-sitter-scheme's own query uses
+/// for `#'` syntax quotes.
+fn scheme_sexp_comment_query(depth: usize) -> String {
+    let mut query = String::from("(sexp_comment _ @comment)\n");
+    for level in 1..depth {
+        let open = "(_ ".repeat(level);
+        let close = ")".repeat(level);
+        query.push_str(&format!("(sexp_comment {open}_* @comment{close})\n"));
+    }
+    query
+}
+
+/// tree-sitter-scheme 0.25's query paints `#;` itself as a comment but lets
+/// every datum under it highlight as live code, because the inner symbol/list
+/// captures nest inside the outer @comment. 0.24 re-captured the datum's
+/// descendants as @comment four levels deep; 0.25 dropped that and kept the
+/// same shape only for `#'`. Append it back for `sexp_comment` (last pattern
+/// wins), deeper than 0.24 went.
+fn scheme_highlights_query() -> &'static str {
+    static SCHEME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SCHEME.get_or_init(|| {
+        format!(
+            "{}\n{}",
+            tree_sitter_scheme::HIGHLIGHTS_QUERY,
+            scheme_sexp_comment_query(SCHEME_SEXP_COMMENT_DEPTH)
+        )
+    })
+}
+
 pub(crate) fn build_configuration(lang: Language) -> Option<HighlightConfiguration> {
     let (highlights, injections, locals) = match lang {
         Language::Rust => (
@@ -217,7 +254,7 @@ pub(crate) fn build_configuration(lang: Language) -> Option<HighlightConfigurati
         Language::Ruby => (tree_sitter_ruby::HIGHLIGHTS_QUERY, "", ""),
         Language::Json => (tree_sitter_json::HIGHLIGHTS_QUERY, "", ""),
         Language::Bash => (tree_sitter_bash::HIGHLIGHT_QUERY, "", ""),
-        Language::Scheme => (tree_sitter_scheme::HIGHLIGHTS_QUERY, "", ""),
+        Language::Scheme => (scheme_highlights_query(), "", ""),
         Language::Yaml => (tree_sitter_yaml::HIGHLIGHTS_QUERY, "", ""),
         // tree-sitter-hcl ships no highlights query at all (crate or
         // upstream repo) -- see queries/hcl_highlights.scm's own doc

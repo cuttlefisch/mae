@@ -52,6 +52,8 @@ pub struct ResourceServerConfig {
     /// external issuer (ADR-111 P1): only self-issued tokens can validate, and
     /// no JWKS client is built at all.
     pub jwks_url: String,
+    /// A PEM bundle the JWKS fetch trusts instead of the system's roots.
+    pub jwks_ca_file: Option<std::path::PathBuf>,
     /// The authorization server's issuer, checked against the token's `iss`
     /// claim. `None` skips issuer validation (not recommended, but some
     /// deployments' AS metadata omits a stable issuer during evaluation).
@@ -80,6 +82,10 @@ pub struct ResourceServerConfig {
     /// `kb_query_enabled` alone. Also requires a `DocStore` to exist (same
     /// `collab.enabled` prerequisite `kb_query_enabled` has).
     pub webview_enabled: bool,
+    /// ADR-098, for ADR-113 B7: the `amr`/`acr` values the operator counts as
+    /// a second factor. Empty (the default): none does. The bare probe reports
+    /// whether the caller's sign-in meets it.
+    pub second_factor: mae_daemon::sign_in::SecondFactorRule,
 }
 
 /// A single JSON Web Key, the subset of RFC 7517 fields this module uses
@@ -123,6 +129,8 @@ pub fn validate_bearer_token(
         validation.set_issuer(std::slice::from_ref(issuer));
     }
     validation.validate_exp = true;
+    // Stated, not inherited: `SignIn::fresh_within` tolerates the same skew.
+    validation.leeway = mae_daemon::sign_in::JWT_CLOCK_LEEWAY_SECS;
 
     let token_data =
         decode::<serde_json::Value>(token, &decoding_key, &validation).map_err(|e| {
@@ -155,6 +163,10 @@ pub fn validate_bearer_token(
         oauth_self_issue::Credential::IdpUnbound,
     );
     vp.subject = subject;
+    vp.sign_in = Some(mae_daemon::sign_in::SignIn::from_claims(
+        &claims,
+        &config.groups_claim,
+    ));
     // `(iss, sub)` keys the binding table, and an absent or non-string `iss`
     // reads as "" — one issuer every such token would share. Checked here
     // because `config.issuer = None` skips the library's issuer validation.
@@ -175,15 +187,8 @@ fn check_allowed_groups(
     if config.allowed_groups.is_empty() {
         return Ok(());
     }
-    let held: Vec<&str> = match claims.get(&config.groups_claim) {
-        Some(serde_json::Value::Array(a)) => a.iter().filter_map(|v| v.as_str()).collect(),
-        Some(serde_json::Value::String(s)) => vec![s.as_str()],
-        _ => Vec::new(),
-    };
-    let admitted = config
-        .allowed_groups
-        .iter()
-        .any(|g| held.contains(&g.as_str()));
+    let held = mae_daemon::sign_in::groups_from_claims(claims, &config.groups_claim);
+    let admitted = config.allowed_groups.iter().any(|g| held.contains(g));
     if !admitted {
         return Err(TokenValidationError::NotInAllowedGroup);
     }
@@ -229,12 +234,51 @@ pub struct JwksCache {
 }
 
 impl JwksCache {
-    pub fn new(url: String) -> Self {
-        JwksCache {
-            url,
-            client: reqwest::Client::new(),
-            state: RwLock::new(None),
+    /// The JWKS client for `url`. With `ca_file`, the fetch trusts ONLY the
+    /// PEM roots in that file, so it works where the system has none (a
+    /// minimal container image). Without it, it uses the platform's roots.
+    ///
+    /// `Err` instead of a panic: `reqwest::Client::new()` panics when the TLS
+    /// backend cannot load any root, which took the whole daemon down at
+    /// startup in an image without CA certificates. The caller reports the
+    /// error and leaves the listener off, like every other misconfiguration.
+    pub fn new(url: String, ca_file: Option<&std::path::Path>) -> Result<Self, String> {
+        let mut builder = reqwest::Client::builder();
+        if let Some(path) = ca_file {
+            let pem = std::fs::read(path).map_err(|e| {
+                format!("oauth.jwks_ca_file {}: cannot read it: {e}", path.display())
+            })?;
+            let roots = reqwest::Certificate::from_pem_bundle(&pem).map_err(|e| {
+                format!(
+                    "oauth.jwks_ca_file {}: not a PEM certificate bundle: {e}",
+                    path.display()
+                )
+            })?;
+            if roots.is_empty() {
+                return Err(format!(
+                    "oauth.jwks_ca_file {}: holds no certificate",
+                    path.display()
+                ));
+            }
+            builder = builder.tls_certs_only(roots);
         }
+        let client = builder.build().map_err(|e| match ca_file {
+            Some(path) => format!(
+                "oauth.jwks_ca_file {}: not usable as CA certificates for oauth.jwks_url {url} \
+                 ({e})",
+                path.display()
+            ),
+            None => format!(
+                "oauth.jwks_url {url}: cannot build the HTTPS client that fetches it ({e}); \
+                 the system has no usable CA certificates: install them, or name a PEM file \
+                 in oauth.jwks_ca_file"
+            ),
+        })?;
+        Ok(JwksCache {
+            url,
+            client,
+            state: RwLock::new(None),
+        })
     }
 
     /// Returns the cached JWKS if still fresh, otherwise fetches a new one.
@@ -433,10 +477,21 @@ pub(crate) async fn authenticate(
     token: &str,
     listener: &Listener,
 ) -> Result<ValidatedPrincipal, Box<Response<Full<Bytes>>>> {
-    let config = &listener.config;
+    resolve_token(token, listener)
+        .await
+        .map_err(|f| f.into_response(&listener.config))
+}
+
+/// [`authenticate`], with the failure still typed, for a caller that answers
+/// it other than as an HTTP response: the sync socket's `session/renew`
+/// (ADR-099 Amendment 2, E2) re-resolves the binding here.
+pub(crate) async fn resolve_token(
+    token: &str,
+    listener: &Listener,
+) -> Result<ValidatedPrincipal, AuthFailure> {
     let vp = validate_token(
         token,
-        config,
+        &listener.config,
         listener.jwks.as_ref(),
         listener.self_issue.as_ref(),
     )
@@ -447,11 +502,35 @@ pub(crate) async fn authenticate(
         // Fail closed: a binding that cannot be read is not "unbound" (that
         // would silently demote a member), and never "bound".
         tracing::warn!(error = %e, "binding table unreadable");
-        Box::new(json_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            serde_json::json!({"error": "temporarily_unavailable"}),
-        ))
+        AuthFailure::Unavailable
     })
+}
+
+/// Why a bearer token did not authenticate, before a transport renders it:
+/// the HTTP routes as a response ([`AuthFailure::into_response`]), the sync
+/// socket's renewal as a JSON-RPC error.
+#[derive(Debug)]
+pub(crate) enum AuthFailure {
+    /// `401`: the token does not validate; the reason goes into `WWW-Authenticate`.
+    Invalid(String),
+    /// `403 group_required`: the token carries none of `allowed_groups` (D4).
+    NotInGroup,
+    /// `503`: the JWKS or the binding table could not be read.
+    Unavailable,
+}
+
+impl AuthFailure {
+    /// The listener's response for this failure.
+    pub(crate) fn into_response(self, config: &ResourceServerConfig) -> Box<Response<Full<Bytes>>> {
+        Box::new(match self {
+            AuthFailure::Invalid(reason) => unauthorized(config, &reason),
+            AuthFailure::NotInGroup => group_refusal(),
+            AuthFailure::Unavailable => json_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                serde_json::json!({"error": "temporarily_unavailable"}),
+            ),
+        })
+    }
 }
 
 /// The refusal for a token that validated but lacks a required group (D4):
@@ -488,7 +567,7 @@ async fn validate_token(
     config: &ResourceServerConfig,
     jwks: Option<&JwksCache>,
     self_issue: Option<&oauth_self_issue::SelfIssueConfig>,
-) -> Result<ValidatedPrincipal, Box<Response<Full<Bytes>>>> {
+) -> Result<ValidatedPrincipal, AuthFailure> {
     // ADR-067 Phase D3: a cheap, unauthenticated header PEEK (never the
     // signature -- that's still verified below, by the real validator for
     // whichever population this token claims membership in) decides which
@@ -511,7 +590,7 @@ async fn validate_token(
         return oauth_self_issue::validate_self_issued_token(token, &daemon_pubkey, &si.audience)
             .map_err(|e| {
                 tracing::debug!(?e, "self-issued bearer token rejected");
-                Box::new(unauthorized(config, &format!("{e:?}")))
+                AuthFailure::Invalid(format!("{e:?}"))
             });
     }
 
@@ -519,24 +598,21 @@ async fn validate_token(
     // an AUTH failure (401), never as the 503 a failed JWKS fetch produces --
     // nothing is temporarily unavailable, and a client would retry a 503.
     let Some(jwks) = jwks else {
-        return Err(Box::new(unauthorized(
-            config,
+        return Err(AuthFailure::Invalid(
             "no external token issuer is configured on this daemon (oauth.jwks_url is \
-             unset); only its own self-issued tokens are accepted",
-        )));
+             unset); only its own self-issued tokens are accepted"
+                .to_string(),
+        ));
     };
     let keys = jwks.get().await.map_err(|e| {
         tracing::warn!(error = %e, "failed to fetch JWKS");
-        Box::new(json_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            serde_json::json!({"error": "temporarily_unavailable"}),
-        ))
+        AuthFailure::Unavailable
     })?;
     validate_bearer_token(token, &keys, config).map_err(|e| {
         tracing::debug!(?e, "bearer token rejected");
         match e {
-            TokenValidationError::NotInAllowedGroup => Box::new(group_refusal()),
-            e => Box::new(unauthorized(config, &format!("{e:?}"))),
+            TokenValidationError::NotInAllowedGroup => AuthFailure::NotInGroup,
+            e => AuthFailure::Invalid(format!("{e:?}")),
         }
     })
 }
@@ -760,12 +836,40 @@ pub(crate) async fn route_authenticated_request(
         // case (ADR-052), never touched by the kb_query_enabled/doc_store
         // distinctions above since there's no request `id` to shape a
         // JSON-RPC error response around.
-        (None, _, _) => serde_json::json!({
-            "principal": principal.principal,
-            "kind": principal.kind.as_str(),
-            "resource": config.canonical_resource_uri,
-        }),
+        (None, _, _) => probe_answer(principal, config),
     }
+}
+
+/// The bare probe's answer: who the token resolved to, and how they signed in.
+fn probe_answer(
+    principal: &ValidatedPrincipal,
+    config: &ResourceServerConfig,
+) -> serde_json::Value {
+    serde_json::json!({
+        "principal": principal.principal,
+        "kind": principal.kind.as_str(),
+        "resource": config.canonical_resource_uri,
+        "sign_in": sign_in_report(principal, config),
+    })
+}
+
+/// The bare probe's view of how the caller signed in (ADR-098): the claims as
+/// read, and which configured value, if any, meets the second-factor rule.
+/// `null` for a self-issued token, which is no sign-in.
+fn sign_in_report(
+    principal: &ValidatedPrincipal,
+    config: &ResourceServerConfig,
+) -> serde_json::Value {
+    let Some(s) = principal.sign_in.as_ref() else {
+        return serde_json::Value::Null;
+    };
+    serde_json::json!({
+        "amr": s.amr,
+        "acr": s.acr,
+        "auth_time": s.auth_time,
+        "groups": s.groups,
+        "second_factor": s.second_factor(&config.second_factor),
+    })
 }
 
 /// What an unbound IdP subject gets from `kb/query.*` (ADR-098 Amendment 1,
@@ -844,9 +948,15 @@ impl Listener {
         self_issue: Option<oauth_self_issue::SelfIssueConfig>,
         quota: Arc<dyn mae_daemon::quota::QuotaCharger>,
         ws: Option<crate::ws::WsState>,
-    ) -> Self {
-        let jwks = (!config.jwks_url.is_empty()).then(|| JwksCache::new(config.jwks_url.clone()));
-        Listener {
+    ) -> Result<Self, String> {
+        let jwks = match config.jwks_url.is_empty() {
+            true => None,
+            false => Some(JwksCache::new(
+                config.jwks_url.clone(),
+                config.jwks_ca_file.as_deref(),
+            )?),
+        };
+        Ok(Listener {
             config,
             jwks,
             doc_store,
@@ -855,7 +965,7 @@ impl Listener {
             ws,
             bindings: None,
             binding_routes: None,
-        }
+        })
     }
 }
 
@@ -934,3 +1044,7 @@ pub async fn run_oauth_listener(
 #[cfg(test)]
 #[path = "oauth_tests.rs"]
 mod oauth_tests;
+
+#[cfg(test)]
+#[path = "oauth_jwks_ca_tests.rs"]
+mod oauth_jwks_ca_tests;

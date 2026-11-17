@@ -26,6 +26,7 @@ fn principal(p: &str) -> crate::oauth::ValidatedPrincipal {
         subject: String::new(),
         credential: mae_daemon::oauth_self_issue::Credential::SelfIssued,
         kind: mae_daemon::oauth_self_issue::PrincipalKind::Agent,
+        sign_in: None,
     }
 }
 
@@ -36,6 +37,7 @@ fn config(kb_query_enabled: bool) -> crate::oauth::ResourceServerConfig {
         groups_claim: "groups".to_string(),
         allowed_groups: Vec::new(),
         jwks_url: "https://unused.example.com/jwks".to_string(),
+        jwks_ca_file: None,
         issuer: None,
         kb_query_enabled,
         max_request_body_bytes: 1_048_576,
@@ -43,6 +45,7 @@ fn config(kb_query_enabled: bool) -> crate::oauth::ResourceServerConfig {
         kb_query_max_scan_nodes: 500,
         kb_query_max_search_results: 20,
         webview_enabled: false,
+        second_factor: Default::default(),
     }
 }
 

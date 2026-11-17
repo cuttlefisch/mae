@@ -25,6 +25,7 @@ fn idp(issuer: &str, subject: &str) -> ValidatedPrincipal {
         subject: subject.into(),
         credential: Credential::IdpUnbound,
         kind: PrincipalKind::Agent,
+        sign_in: None,
     }
 }
 
@@ -37,6 +38,7 @@ fn self_issued(fingerprint: &str) -> ValidatedPrincipal {
         subject: fingerprint.into(),
         credential: Credential::SelfIssued,
         kind: PrincipalKind::Agent,
+        sign_in: None,
     }
 }
 

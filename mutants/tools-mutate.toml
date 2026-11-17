@@ -1,0 +1,263 @@
+# The mutation tool's own guards, each caught by the tool's own tests.
+
+[[mutant]]
+id = "tools-mutate/anchor-found-twice-accepted"
+runner = "tools-mutate"
+filter = "test(an_anchor_found_twice_is_refused)"
+[[mutant.edit]]
+file = "tools/mutate/src/config.rs"
+find = "        if n != 1 {"
+replace = "        if n == 0 {"
+
+[[mutant]]
+id = "tools-mutate/later-edit-checked-against-the-original"
+runner = "tools-mutate"
+filter = "test(a_second_edit_is_checked_against_the_first_ones_result)"
+[[mutant.edit]]
+file = "tools/mutate/src/config.rs"
+find = "        let current = &files[idx].2;"
+replace = "        let current = &files[idx].1;"
+
+[[mutant]]
+id = "tools-mutate/duplicate-id-accepted"
+runner = "tools-mutate"
+filter = "test(duplicate_ids_and_unknown_runners_are_refused)"
+[[mutant.edit]]
+file = "tools/mutate/src/config.rs"
+find = "        if !seen.insert(m.id.as_str()) {"
+replace = "        if !seen.insert(m.id.as_str()) && false {"
+
+[[mutant]]
+id = "tools-mutate/dirty-file-not-refused"
+runner = "tools-mutate"
+filter = "test(a_dirty_file_a_mutant_touches_is_refused_before_anything_runs)"
+[[mutant.edit]]
+file = "tools/mutate/src/run.rs"
+find = "    if !dirty.is_empty() {"
+replace = "    if false && !dirty.is_empty() {"
+
+[[mutant]]
+id = "tools-mutate/journal-not-restored-at-start"
+runner = "tools-mutate"
+filter = "test(a_run_killed_mid_mutant_is_restored_on_the_next_start)"
+[[mutant.edit]]
+file = "tools/mutate/src/main.rs"
+find = "    for f in journal::restore(&state)? {"
+replace = "    for f in Vec::<String>::new() {"
+
+[[mutant]]
+id = "tools-mutate/no-journal-before-mutating"
+runner = "tools-mutate"
+filter = "test(a_run_killed_mid_mutant_is_restored_on_the_next_start)"
+[[mutant.edit]]
+file = "tools/mutate/src/run.rs"
+find = "        journal::record(&self.state, self.root, &files)?;\n"
+replace = "\n"
+
+[[mutant]]
+id = "tools-mutate/restore-writes-nothing"
+runner = "tools-mutate"
+filter = "test(same_length_mutants_back_to_back_are_each_rebuilt_and_judged)"
+[[mutant.edit]]
+file = "tools/mutate/src/journal.rs"
+find = "        write_file(Path::new(&f.path), &f.original)?;"
+replace = "        let _ = &f.original;"
+
+[[mutant]]
+id = "tools-mutate/normal-path-restore-left-to-drop"
+runner = "tools-mutate"
+filter = "test(same_length_mutants_back_to_back_are_each_rebuilt_and_judged)"
+equivalent = "the guard is still armed, so its Drop, one line later, restores the same journal"
+[[mutant.edit]]
+file = "tools/mutate/src/run.rs"
+find = "        guard.finish()?;\n"
+replace = "\n"
+
+[[mutant]]
+id = "tools-mutate/signal-handlers-not-installed"
+runner = "tools-mutate"
+filter = "test(sigterm_mid_mutant_restores_and_exits)"
+[[mutant.edit]]
+file = "tools/mutate/src/main.rs"
+find = "    journal::signals::install();\n"
+replace = "\n"
+
+[[mutant]]
+id = "tools-mutate/child-not-stopped-on-signal"
+runner = "tools-mutate"
+filter = "test(sigterm_mid_mutant_restores_and_exits)"
+[[mutant.edit]]
+file = "tools/mutate/src/exec.rs"
+find = "        if signals::interrupted() {\n            let _ = child.kill();"
+replace = "        if false {\n            let _ = child.kill();"
+
+[[mutant]]
+id = "tools-mutate/control-accepts-zero-tests"
+runner = "tools-mutate"
+filter = "test(a_control_that_runs_no_test_aborts)"
+[[mutant.edit]]
+file = "tools/mutate/src/run.rs"
+find = "            if !last.success || ran == 0 {"
+replace = "            if !last.success {"
+
+[[mutant]]
+id = "tools-mutate/control-accepts-failing-tests"
+runner = "tools-mutate"
+filter = "test(a_failing_control_aborts_before_any_mutant)"
+[[mutant.edit]]
+file = "tools/mutate/src/run.rs"
+find = "            if !last.success || ran == 0 {"
+replace = "            if ran == 0 {"
+
+[[mutant]]
+id = "tools-mutate/compile-failure-counted-caught"
+runner = "tools-mutate"
+filter = "test(a_compile_failure_is_unviable_not_caught)"
+[[mutant.edit]]
+file = "tools/mutate/src/run.rs"
+find = "                return Ok((Err((results::UNVIABLE, Some(d))), secs));"
+replace = "                return Ok((Err((results::CAUGHT, Some(d))), secs));"
+
+[[mutant]]
+id = "tools-mutate/passing-tests-counted-caught"
+runner = "tools-mutate"
+filter = "test(same_length_mutants_back_to_back_are_each_rebuilt_and_judged)"
+[[mutant.edit]]
+file = "tools/mutate/src/run.rs"
+find = "                return Ok((results::SURVIVED, secs, None));"
+replace = "                return Ok((results::CAUGHT, secs, None));"
+
+[[mutant]]
+id = "tools-mutate/stale-build-judged-as-is"
+runner = "tools-mutate"
+filter = "test(a_build_that_recompiled_nothing_is_rebuilt_not_judged)"
+[[mutant.edit]]
+file = "tools/mutate/src/run.rs"
+find = "                if runner.rebuilt.is_empty() || d.output.contains(&runner.rebuilt) {"
+replace = "                if true {"
+
+[[mutant]]
+id = "tools-mutate/stale-build-rebuilt-without-bump"
+runner = "tools-mutate"
+filter = "test(a_build_that_recompiled_nothing_is_rebuilt_not_judged)"
+[[mutant.edit]]
+file = "tools/mutate/src/run.rs"
+find = "                    journal::bump_mtime(&self.root.join(path))?;"
+replace = "                    let _ = path;"
+
+[[mutant]]
+id = "tools-mutate/killed-build-not-retried"
+runner = "tools-mutate"
+filter = "test(a_killed_build_is_retried_once)"
+[[mutant.edit]]
+file = "tools/mutate/src/run.rs"
+find = "            if kills >= runner.retry_on_kill {\n                return Ok((Err((results::NO_RESULT, Some(d))), secs));"
+replace = "            if kills >= 0 {\n                return Ok((Err((results::NO_RESULT, Some(d))), secs));"
+
+[[mutant]]
+id = "tools-mutate/killed-build-counted-survived"
+runner = "tools-mutate"
+filter = "test(a_build_killed_every_time_is_no_result_not_a_verdict)"
+[[mutant.edit]]
+file = "tools/mutate/src/run.rs"
+find = "            if kills >= runner.retry_on_kill {\n                return Ok((Err((results::NO_RESULT, Some(d))), secs));"
+replace = "            if kills >= runner.retry_on_kill {\n                return Ok((Err((results::SURVIVED, Some(d))), secs));"
+
+[[mutant]]
+id = "tools-mutate/recorded-ids-rerun"
+runner = "tools-mutate"
+filter = "test(resume_skips_recorded_ids_and_only_reruns_the_named_one)"
+[[mutant.edit]]
+file = "tools/mutate/src/run.rs"
+find = "|| r.results.current(&m.id, &r.fingerprint(m)).is_none())"
+replace = "|| true)"
+
+[[mutant]]
+id = "tools-mutate/only-does-not-force-a-rerun"
+runner = "tools-mutate"
+filter = "test(resume_skips_recorded_ids_and_only_reruns_the_named_one)"
+[[mutant.edit]]
+file = "tools/mutate/src/run.rs"
+find = ".filter(|m| only.contains(&m.id) || r.results"
+replace = ".filter(|m| false || r.results"
+
+[[mutant]]
+id = "tools-mutate/verdict-not-tied-to-head"
+runner = "tools-mutate"
+filter = "test(a_verdict_recorded_on_other_code_is_not_reused)"
+[[mutant.edit]]
+file = "tools/mutate/src/git.rs"
+find = "    h.add(head.trim().as_bytes());"
+replace = "    let _ = head;"
+
+[[mutant]]
+id = "tools-mutate/equivalent-mutants-run"
+runner = "tools-mutate"
+filter = "test(an_equivalent_mutant_is_listed_and_never_run)"
+[[mutant.edit]]
+file = "tools/mutate/src/run.rs"
+find = "selected.iter().partition(|m| m.is_equivalent());"
+replace = "selected.iter().partition(|_| false);"
+
+[[mutant]]
+id = "tools-mutate/since-ignores-the-working-tree"
+runner = "tools-mutate"
+filter = "test(since_selects_by_the_files_a_mutant_edits)"
+[[mutant.edit]]
+file = "tools/mutate/src/git.rs"
+find = "        vec![\"diff\", \"--no-ext-diff\", \"--name-only\", \"HEAD\"],\n"
+replace = "\n"
+
+[[mutant]]
+id = "tools-mutate/since-ignores-a-changed-list"
+runner = "tools-mutate"
+filter = "test(since_selects_by_the_files_a_mutant_edits)"
+[[mutant.edit]]
+file = "tools/mutate/src/select.rs"
+find = "|| c.contains(&format!(\"{LIST_DIR}/{}.toml\", m.area))"
+replace = "|| false"
+
+[[mutant]]
+id = "tools-mutate/shard-off-by-one"
+runner = "tools-mutate"
+filter = "test(shards_partition_by_id_and_are_stable)"
+[[mutant.edit]]
+file = "tools/mutate/src/select.rs"
+find = "    git::fnv(&[id]) % count + 1"
+replace = "    git::fnv(&[id]) % count"
+
+[[mutant]]
+id = "tools-mutate/live-lock-ignored"
+runner = "tools-mutate"
+filter = "test(a_live_lock_is_refused_and_a_dead_ones_is_taken_over)"
+[[mutant.edit]]
+file = "tools/mutate/src/journal.rs"
+find = "                    if alive(pid.trim()) {"
+replace = "                    if false {"
+
+[[mutant]]
+id = "tools-mutate/survivors-exit-zero"
+runner = "tools-mutate"
+filter = "test(same_length_mutants_back_to_back_are_each_rebuilt_and_judged)"
+[[mutant.edit]]
+file = "tools/mutate/src/run.rs"
+find = "        u8::from(!(clean && not_run.is_empty()))"
+replace = "        0"
+
+[[mutant]]
+id = "tools-mutate/output-matched-with-styling"
+runner = "tools-mutate"
+filter = "test(coloured_build_output_is_read_as_a_rebuild_and_judged)"
+[[mutant.edit]]
+file = "tools/mutate/src/exec.rs"
+find = "    let output = strip_ansi(&String::from_utf8_lossy(&fs::read(log).unwrap_or_default()));"
+replace = "    let output = String::from_utf8_lossy(&fs::read(log).unwrap_or_default()).into_owned();"
+
+[[mutant]]
+id = "tools-mutate/osc-sequence-kept"
+runner = "tools-mutate"
+filter = "test(styling_is_stripped_so_markers_match_coloured_output)"
+[[mutant.edit]]
+file = "tools/mutate/src/exec.rs"
+find = "            Some(']') => {"
+replace = "            Some('\\u{0}') => {"

@@ -5,7 +5,9 @@
 //! between yrs YText and ropey Rope for rendering.
 
 pub mod awareness;
-pub mod content_crypto;
+/// ADR-037 content crypto. It lives in mae-crypto (no I/O, builds for wasm32)
+/// so the browser runs the same code; this path is kept for every caller.
+pub use mae_crypto::content_crypto;
 pub mod content_ops;
 pub mod encoding;
 pub mod kb;

@@ -596,6 +596,60 @@ mod tests {
         assert!(!spans.is_empty());
     }
 
+    /// A `#;`-commented datum is dead code and must read as comment all the
+    /// way down. tree-sitter-scheme 0.24 painted only four levels (its query
+    /// hard-coded them), and 0.25's own query paints none: only the `#;`
+    /// itself. Seven nested forms is an ordinary config shape (define, let,
+    /// cond, clause, call, ...), and both upstream queries fail it.
+    #[test]
+    fn scheme_sexp_comment_paints_a_deeply_nested_datum_as_comment() {
+        let datum = "(a1 (a2 (a3 (a4 (a5 (a6 (a7 z)))))))";
+        let src = format!("(define x #;{datum} 1)\n");
+        let start = src.find(datum).unwrap();
+        let end = start + datum.len();
+        let spans = languages::compute_spans(Language::Scheme, &src);
+        for (i, b) in src.bytes().enumerate().take(end).skip(start) {
+            if b == b' ' {
+                continue;
+            }
+            let keys: Vec<_> = spans
+                .iter()
+                .filter(|s| s.byte_start <= i && i < s.byte_end)
+                .map(|s| s.theme_key)
+                .collect();
+            assert_eq!(
+                keys.last().copied(),
+                Some("comment"),
+                "byte {i} ({:?}) of the commented datum is not comment: {keys:?}",
+                b as char
+            );
+        }
+        // The live code around it keeps its own highlighting.
+        let key_at = |needle: &str| {
+            let i = src.rfind(needle).unwrap();
+            spans
+                .iter()
+                .rfind(|s| s.byte_start <= i && i < s.byte_end)
+                .map(|s| s.theme_key)
+        };
+        assert_eq!(key_at("define"), Some("keyword"));
+        assert_eq!(key_at("1)"), Some("number"));
+    }
+
+    /// 0.25 gives `#:keyword` a capture (0.24 left it unhighlighted).
+    #[test]
+    fn scheme_keyword_objects_are_highlighted_as_constants() {
+        let src = "(f #:key 1)\n";
+        let i = src.find("#:key").unwrap();
+        let spans = languages::compute_spans(Language::Scheme, src);
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.byte_start <= i && i < s.byte_end && s.theme_key == "constant"),
+            "{spans:?}"
+        );
+    }
+
     #[test]
     fn yaml_highlights_produce_spans() {
         let spans = languages::compute_spans(Language::Yaml, "name: mae\nversion: 0.1.0\n");
