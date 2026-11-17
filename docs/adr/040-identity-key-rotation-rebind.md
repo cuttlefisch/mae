@@ -248,3 +248,29 @@ the two cases need different paths:
   `refresh_kb_content_key_on_collection_delta`). This is the **first non-owner write to the collection op-log**
   — a new authorization surface — so it carries heavy adversarial tests (non-member rejected; a member's
   *non*-Rebind op rejected; stale-epoch; forged) and this addendum is its design of record.
+
+### Implementation addendum (2026-11-17): removal reaches the whole rebind chain
+
+§2 implemented as a *post-pass* had a hole: the post-pass moved each seat onto its successor **after**
+removal dominance had already been decided per `Admit` subject, and a successor has no `Admit` of its own.
+So an owner's `Remove` naming a rotated member's successor key was valid and had no effect; one naming the
+predecessor key was refused as "not a current member"; and a `SetRole` demoting a rotated member was
+likewise inert. Removing a member who had rotated did not remove them.
+
+The derivation now follows §1 literally — a `Rebind` says the successor **is** the same principal — so a
+member is one **seat** across its chain, and ADR-026 strong removal acts on the seat:
+
+- a `Remove`/`Revoke`/`SetRole` naming **any** key the seat has held reaches it;
+- a removal hits a seat iff it is not in the causal past of the op that bound the named key into the seat
+  (after it or concurrent with it). So a `Remove` concurrent with a `Rebind` voids the rotation (it is the
+  removed member's concurrent action), while an older removal of a fingerprint someone later rotates *into*
+  does not touch the new seat;
+- nothing re-inserts a removed seat — not a later rotation, not the owner's re-key `Admit` of the successor
+  (which continues the seat rather than opening a second one) — and only a causally-later `Admit` of a key
+  that holds no live seat at that point opens a fresh one;
+- under quorum, co-signatures naming different keys of one seat count toward the same tally;
+- under single-owner governance the owner's seat stays irrevocable under whichever key it now holds.
+
+Each op's seat is resolved from its own causal past (a linear chain — ADR-042's order makes that replay
+deterministic), and only collisions, forked rotations and concurrent `SetRole`s fall back to ADR-042's
+causal order. Tests: `shared/sync/src/membership_seat_tests.rs`.
