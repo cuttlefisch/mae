@@ -706,42 +706,59 @@ impl ShellTerminal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
-    use std::time::Duration;
+
+    /// Poll `term` until its viewport satisfies `pred`, and return the
+    /// viewport text. One bounded wait (`mae_mcp::ready`: short poll, a hard
+    /// deadline, a message naming `what`) in place of fixed startup sleeps
+    /// and fixed iteration counts.
+    fn wait_for_viewport(
+        term: &mut ShellTerminal,
+        what: &str,
+        pred: impl Fn(&str) -> bool,
+    ) -> String {
+        let mut seen = String::new();
+        let ok = mae_mcp::ready::wait_until_blocking(|| {
+            term.poll_events();
+            seen = term.read_viewport(24).join("\n");
+            pred(&seen)
+        });
+        assert!(
+            ok,
+            "{} (viewport: {seen:?})",
+            mae_mcp::ready::timeout_message(what)
+        );
+        seen
+    }
+
+    /// The shell has started: it has drawn something (its prompt).
+    fn wait_for_prompt(term: &mut ShellTerminal) {
+        wait_for_viewport(term, "the shell's first output (its prompt)", |v| {
+            !v.trim().is_empty()
+        });
+    }
 
     #[test]
     fn spawn_and_read_grid() {
         // Spawn a terminal with a simple echo command.
         let mut term = ShellTerminal::spawn(80, 24, None).expect("failed to spawn terminal");
-
-        // Give the shell time to start and produce output.
-        thread::sleep(Duration::from_millis(1000));
-        term.poll_events();
+        wait_for_prompt(&mut term);
 
         // Send a command.
         term.write_str("echo MAE_SHELL_TEST_OK\n");
 
         // Wait for output to appear in the grid.
-        let mut found = false;
-        for _ in 0..20 {
-            thread::sleep(Duration::from_millis(100));
-            term.poll_events();
-            let viewport = term.read_viewport(24);
-            let joined = viewport.join("\n");
-            if joined.contains("MAE_SHELL_TEST_OK") {
-                found = true;
-                break;
-            }
-        }
-        assert!(found, "viewport should contain echo output");
+        wait_for_viewport(&mut term, "the echo output", |v| {
+            v.contains("MAE_SHELL_TEST_OK")
+        });
 
         term.shutdown();
     }
 
     #[test]
     fn resize_terminal() {
+        // No startup wait: resizing is a grid operation and needs no shell
+        // output, so there is nothing to wait for.
         let term = ShellTerminal::spawn(80, 24, None).expect("failed to spawn terminal");
-        thread::sleep(Duration::from_millis(200));
 
         // Resize should not panic.
         term.resize(120, 40);
@@ -819,20 +836,10 @@ mod tests {
         }
         let mut term = spawn_result.expect("failed to spawn agent terminal");
 
-        let mut found = false;
-        for _ in 0..40 {
-            thread::sleep(Duration::from_millis(100));
-            term.poll_events();
-            let viewport = term.read_viewport(24);
-            if viewport.join("\n").contains("MARKER=from_bashrc") {
-                found = true;
-                break;
-            }
-        }
-        assert!(
-            found,
-            "shell-rc-set env var must reach the agent-shell target process"
-        );
+        // The shell-rc-set env var must reach the agent-shell target process.
+        wait_for_viewport(&mut term, "MARKER=from_bashrc from the target", |v| {
+            v.contains("MARKER=from_bashrc")
+        });
 
         term.shutdown();
     }
@@ -862,22 +869,14 @@ mod tests {
         )
         .expect("failed to spawn agent terminal");
 
-        let mut found_unset = false;
-        for _ in 0..40 {
-            thread::sleep(Duration::from_millis(100));
-            term.poll_events();
-            let viewport = term.read_viewport(24);
-            let joined = viewport.join("\n");
-            if joined.contains("MARKER=unset") {
-                found_unset = true;
-                break;
-            }
+        let seen = wait_for_viewport(&mut term, "the unset marker", |v| {
             assert!(
-                !joined.contains("MARKER=from_bashrc"),
+                !v.contains("MARKER=from_bashrc"),
                 "without login_wrap, .bashrc must not be sourced"
             );
-        }
-        assert!(found_unset, "expected to observe the unset marker");
+            v.contains("MARKER=unset")
+        });
+        assert!(!seen.contains("MARKER=from_bashrc"));
 
         term.shutdown();
     }
@@ -885,23 +884,20 @@ mod tests {
     #[test]
     fn child_exit_detected() {
         let mut term = ShellTerminal::spawn(80, 24, None).expect("failed to spawn terminal");
-        // Wait for shell startup — generous timeout for CI under load.
-        thread::sleep(Duration::from_millis(1000));
-        term.poll_events();
+        wait_for_prompt(&mut term);
 
         // Tell the shell to exit.
         term.write_str("exit\n");
 
-        // Wait for exit event (up to 4s under load).
-        let mut exited = false;
-        for _ in 0..40 {
-            thread::sleep(Duration::from_millis(100));
+        // Wait for the exit event.
+        let exited = mae_mcp::ready::wait_until_blocking(|| {
             term.poll_events();
-            if term.has_exited() {
-                exited = true;
-                break;
-            }
-        }
-        assert!(exited, "terminal should detect child exit");
+            term.has_exited()
+        });
+        assert!(
+            exited,
+            "{}",
+            mae_mcp::ready::timeout_message("the terminal detecting its child's exit")
+        );
     }
 }

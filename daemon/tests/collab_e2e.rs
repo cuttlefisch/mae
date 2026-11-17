@@ -575,9 +575,8 @@ async fn concurrent_edits_converge() {
     // Send both without waiting for responses.
     client_a.send_update("concurrent.txt", &update_a).await;
     client_b.send_update("concurrent.txt", &update_b).await;
-
-    // Allow time for processing.
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // No wait: `send_update` returns the server's answer, which it sends only
+    // after applying the update.
 
     // Both should see same final content on the server.
     let content_a = client_a.content("concurrent.txt").await;
@@ -609,8 +608,8 @@ async fn rejoin_after_disconnect() {
         // B disconnects (dropped at end of scope).
     }
 
-    // Allow disconnect to propagate.
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // B's disconnect processed: only A still holds the doc.
+    wait_for_connected(&store, "rejoin.txt", 1).await;
 
     // B2 reconnects and gets latest state.
     let mut client_b2 = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -698,9 +697,8 @@ async fn share_then_immediate_edit_syncs() {
     let mut ts_a = TextSync::from_state(&state).unwrap();
     let update = ts_a.insert(5, " world");
     client_a.send_update("immediate.txt", &update).await;
-
-    // Allow processing.
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // No wait: `send_update` returns the server's answer, which it sends only
+    // after applying the update.
 
     // B joins and should see both the initial content AND the edit.
     let mut client_b = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
@@ -718,9 +716,10 @@ async fn eviction_removes_from_list() {
     let mut client_a = Client::connect(Arc::clone(&store), Arc::clone(&bc)).await;
     client_a.share("evict-test.txt", "ephemeral").await;
 
-    // Disconnect A (drop).
+    // Disconnect A (drop), and wait until the server has processed it: only
+    // a doc nobody holds is evictable.
     drop(client_a);
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    wait_for_connected(&store, "evict-test.txt", 0).await;
 
     // Evict with 0 threshold.
     let evicted = store.evict_idle(0).await;
@@ -791,9 +790,8 @@ async fn three_client_convergence() {
     client_a.send_update("three.txt", &ua).await;
     client_b.send_update("three.txt", &ub).await;
     client_c.send_update("three.txt", &uc).await;
-
-    // Allow processing.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    // No wait: `send_update` returns the server's answer, which it sends only
+    // after applying the update.
 
     // All should converge to same server content.
     let ca = client_a.content("three.txt").await;
@@ -1256,9 +1254,9 @@ async fn client_connect_disconnect_updates_stats() {
         .unwrap_or(0);
     assert_eq!(clients2, 2, "should have 2 connected clients");
 
-    // Drop B.
+    // Drop B, and wait until the server has processed the disconnect.
     drop(client_b);
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    wait_for_connected(&store, "stats-test.txt", 1).await;
 
     // Stats should show 1 again (handler disconnect cleans up).
     let stats_msg3 = serde_json::json!({
@@ -1443,39 +1441,58 @@ async fn assert_convergence(
     );
 }
 
-/// Drain notifications and apply any sync_update to the local TextSync.
-/// Returns the number of updates applied.
-async fn apply_remote_updates(
-    client: &mut Client,
-    ts: &mut TextSync,
-    doc: &str,
-    timeout_ms: u64,
-) -> u32 {
+/// Apply `sync_update` notifications for `doc` until `expected` of them have
+/// brought the mirror something new. A peer's update is broadcast once and
+/// never echoed to its sender, so the count of new updates is exact; one that
+/// changes nothing (already integrated, e.g. via `full_state`) is applied but
+/// not counted. Bounded by the shared readiness budget (`mae_mcp::ready`).
+///
+/// This replaced a drain that read until 200 ms passed with nothing new. That
+/// cost 200 ms of silence on every call, and on a loaded machine a
+/// notification slower than 200 ms ended the drain early, so a convergence
+/// check then failed for want of an update still in flight.
+async fn apply_remote_updates(client: &mut Client, ts: &mut TextSync, doc: &str, expected: u32) {
+    let deadline = std::time::Instant::now() + mae_mcp::ready::ready_timeout();
     let mut applied = 0;
-    loop {
-        let notif = match client.recv_timeout(timeout_ms).await {
-            Some(n) => n,
-            None => break,
+    while applied < expected {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        let Some(notif) = client.recv_timeout(left.as_millis() as u64).await else {
+            panic!(
+                "{} (got {applied})",
+                mae_mcp::ready::timeout_message(&format!(
+                    "{expected} sync_update notification(s) for {doc}"
+                ))
+            );
         };
-        if notif.get("method").and_then(|m| m.as_str()) == Some("notifications/sync_update") {
-            if let Some(update_b64) = notif
-                .pointer("/params/event/data/update_base64")
-                .and_then(|v| v.as_str())
-            {
-                if let Some(buf_name) = notif
-                    .pointer("/params/event/data/buffer_name")
-                    .and_then(|v| v.as_str())
-                {
-                    if buf_name == doc {
-                        let bytes = base64_to_update(update_b64).unwrap();
-                        ts.apply_update(&bytes).unwrap();
-                        applied += 1;
-                    }
-                }
-            }
+        if notif.get("method").and_then(|m| m.as_str()) != Some("notifications/sync_update") {
+            continue;
+        }
+        let data = &notif["params"]["event"]["data"];
+        if data["buffer_name"].as_str() != Some(doc) {
+            continue;
+        }
+        let bytes = base64_to_update(data["update_base64"].as_str().unwrap()).unwrap();
+        // The full encoded state, not the state vector: a delete moves only
+        // the delete set, which a state vector does not carry.
+        let before = ts.encode_state();
+        ts.apply_update(&bytes).unwrap();
+        if ts.encode_state() != before {
+            applied += 1;
         }
     }
-    applied
+}
+
+/// Wait until the server counts `n` clients holding `doc` — the condition a
+/// test that drops a client depends on, in place of a fixed sleep.
+async fn wait_for_connected(store: &DocStore, doc: &str, n: u32) {
+    assert!(
+        mae_mcp::ready::wait_until(|| async {
+            store.doc_stats(doc).await.map(|s| s.connected_clients).ok() == Some(n)
+        })
+        .await,
+        "{}",
+        mae_mcp::ready::timeout_message(&format!("{doc} to have {n} connected client(s)"))
+    );
 }
 
 // --- Test 1: Sustained bidirectional editing ---
@@ -1511,7 +1528,7 @@ async fn sustained_bidirectional_editing() {
         client_a.send_update("session.txt", &update_a).await;
 
         // B receives and applies A's update.
-        apply_remote_updates(&mut client_b, &mut ts_b, "session.txt", 200).await;
+        apply_remote_updates(&mut client_b, &mut ts_b, "session.txt", 1).await;
 
         // B inserts at end.
         let b_text = format!("B{round}");
@@ -1520,7 +1537,7 @@ async fn sustained_bidirectional_editing() {
         client_b.send_update("session.txt", &update_b).await;
 
         // A receives and applies B's update.
-        apply_remote_updates(&mut client_a, &mut ts_a, "session.txt", 200).await;
+        apply_remote_updates(&mut client_a, &mut ts_a, "session.txt", 1).await;
 
         // Validate convergence every 5 rounds.
         if round % 5 == 4 {
@@ -1548,14 +1565,9 @@ async fn sustained_bidirectional_editing() {
         client_a.send_update("session.txt", &update_a).await;
         client_b.send_update("session.txt", &update_b).await;
 
-        // Allow server to process both updates before draining.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-        // Both drain and apply remote updates. Drain twice — each client
-        // needs to receive the OTHER client's update (which goes through
-        // server broadcast). First drain may only get one update.
-        apply_remote_updates(&mut client_a, &mut ts_a, "session.txt", 200).await;
-        apply_remote_updates(&mut client_b, &mut ts_b, "session.txt", 200).await;
+        // Each client receives the OTHER client's update (server broadcast).
+        apply_remote_updates(&mut client_a, &mut ts_a, "session.txt", 1).await;
+        apply_remote_updates(&mut client_b, &mut ts_b, "session.txt", 1).await;
 
         // Validate every round — concurrent edits are the risky case.
         assert_convergence(
@@ -1572,7 +1584,8 @@ async fn sustained_bidirectional_editing() {
     // PHASE 3: Delete operations (10 rounds).
     for round in 0..10 {
         let content_len = ts_a.content().len() as u32;
-        if content_len > 10 {
+        let a_sent = content_len > 10;
+        if a_sent {
             // A deletes 2 chars from the start.
             let update_a = ts_a.delete(0, 2.min(content_len));
             client_a.send_update("session.txt", &update_a).await;
@@ -1583,9 +1596,9 @@ async fn sustained_bidirectional_editing() {
         let update_b = ts_b.insert(b_offset, &format!("d{round}"));
         client_b.send_update("session.txt", &update_b).await;
 
-        // Both drain.
-        apply_remote_updates(&mut client_a, &mut ts_a, "session.txt", 200).await;
-        apply_remote_updates(&mut client_b, &mut ts_b, "session.txt", 200).await;
+        // Both drain: A gets B's insert, B gets A's delete if A sent one.
+        apply_remote_updates(&mut client_a, &mut ts_a, "session.txt", 1).await;
+        apply_remote_updates(&mut client_b, &mut ts_b, "session.txt", u32::from(a_sent)).await;
 
         if round % 3 == 2 {
             assert_convergence(
@@ -1615,7 +1628,7 @@ async fn sustained_bidirectional_editing() {
     // Continue editing after save — save must not disrupt sync.
     let update_post_save = ts_a.insert(0, "POST_SAVE:");
     client_a.send_update("session.txt", &update_post_save).await;
-    apply_remote_updates(&mut client_b, &mut ts_b, "session.txt", 200).await;
+    apply_remote_updates(&mut client_b, &mut ts_b, "session.txt", 1).await;
 
     // Final convergence check.
     assert_convergence(
@@ -1667,7 +1680,7 @@ async fn non_sharer_extended_editing() {
         joiner.send_update("joiner.txt", &update).await;
 
         // Sharer receives and applies.
-        apply_remote_updates(&mut sharer, &mut ts_s, "joiner.txt", 200).await;
+        apply_remote_updates(&mut sharer, &mut ts_s, "joiner.txt", 1).await;
 
         if round % 3 == 2 {
             assert_convergence(
@@ -1689,7 +1702,7 @@ async fn non_sharer_extended_editing() {
         sharer.send_update("joiner.txt", &update).await;
 
         // Joiner receives and applies.
-        apply_remote_updates(&mut joiner, &mut ts_j, "joiner.txt", 200).await;
+        apply_remote_updates(&mut joiner, &mut ts_j, "joiner.txt", 1).await;
 
         if round % 3 == 2 {
             assert_convergence(
@@ -1714,11 +1727,8 @@ async fn non_sharer_extended_editing() {
         sharer.send_update("joiner.txt", &update_s).await;
         joiner.send_update("joiner.txt", &update_j).await;
 
-        // Allow server to process both updates before draining.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-        apply_remote_updates(&mut sharer, &mut ts_s, "joiner.txt", 200).await;
-        apply_remote_updates(&mut joiner, &mut ts_j, "joiner.txt", 200).await;
+        apply_remote_updates(&mut sharer, &mut ts_s, "joiner.txt", 1).await;
+        apply_remote_updates(&mut joiner, &mut ts_j, "joiner.txt", 1).await;
 
         assert_convergence(
             &format!("phase3-concurrent-round{round}"),
@@ -1800,8 +1810,9 @@ async fn session_lifecycle_equivalence() {
         // Client disconnects at end of loop iteration (dropped).
     }
 
-    // Allow final disconnects to propagate.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    // Every session's disconnect processed, on both stores.
+    wait_for_connected(&store_long, "equiv.txt", 0).await;
+    wait_for_connected(&store_short, "equiv.txt", 0).await;
 
     // --- VALIDATE equivalence. ---
     let mut long_client = Client::connect(Arc::clone(&store_long), Arc::clone(&bc_long)).await;
@@ -1993,9 +2004,8 @@ async fn multi_buffer_concurrent_sync() {
     let upd_b = ts_b.insert(4, "-B");
     bob.send_update("buf-a.txt", &upd_a).await;
     bob.send_update("buf-b.txt", &upd_b).await;
-
-    // Alice should see updates for both — drain notifications
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // No wait: `send_update` returns the server's answer, which it sends only
+    // after applying the update.
 
     // Verify server-side content converged
     let content_a = alice.content("buf-a.txt").await;

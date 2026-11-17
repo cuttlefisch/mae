@@ -188,6 +188,12 @@ pub struct OAuthConfig {
     /// with no `Origin` (a native client) is not origin-checked. Empty means no
     /// browser origin is accepted.
     pub ws_allowed_origins: Vec<String>,
+    /// How long a connect ticket from `POST /ws/ticket` stays valid, seconds
+    /// (ADR-099 Amendment 1, B1). Default 30, which is also the most allowed:
+    /// B1 fixes a ticket at no more than 30 seconds of single-use authority, so
+    /// this may only SHORTEN that. A value outside `1..=30` leaves `/ws`
+    /// disabled and logs why, like any other misconfiguration of these routes.
+    pub ws_ticket_ttl_secs: u64,
     /// Seconds before a session's authentication deadline at which the daemon
     /// sends `session/renew_needed` (B3).
     pub ws_renew_lead_secs: u64,
@@ -247,6 +253,7 @@ impl Default for OAuthConfig {
             ws_accept_bound_idp: false,
             ws_max_idp_session_secs: 900,
             ws_allowed_origins: Vec::new(),
+            ws_ticket_ttl_secs: crate::ws::MAX_TICKET_TTL.as_secs(),
             ws_renew_lead_secs: 60,
             ws_ping_secs: 30,
             ws_max_open_docs: 1024,
