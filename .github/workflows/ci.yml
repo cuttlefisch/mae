@@ -980,6 +980,13 @@ jobs:
         timeout-minutes: 3
       - name: Build daemon binary
         run: cd daemon && cargo build
+      # Compile the test binaries in their own step, so the 10-minute budget
+      # below times the tests alone. With compilation inside it, the run used
+      # 8-9 minutes of the 10 on main, and a dependency bump that missed the
+      # compile cache pushed it over with no test slower at all.
+      - name: Build daemon tests
+        run: cd daemon && cargo test --no-run
+        timeout-minutes: 20
       - name: Daemon collab tests
         run: cd daemon && cargo test -- --test-threads=1 --nocapture
         timeout-minutes: 10
