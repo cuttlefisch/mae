@@ -43,7 +43,7 @@ pub enum MembershipAction {
     Revoke,
     /// Set the KB's [`Governance`] (ADR-026 §A4). Owner-authored; `subject` carries
     /// the governance spec (see [`Governance::to_spec`]), not a principal. Inert to
-    /// membership derivation (it admits/removes no one — `build_members` skips
+    /// membership derivation (it admits/removes no one — the seat replay skips
     /// non-`Admit` ops); read separately by [`derive_governance`].
     SetGovernance,
     /// Set the KB's content-encryption mode (ADR-039 F2). Owner-authored; `subject`
@@ -402,7 +402,7 @@ pub struct ValidMember {
     /// ADR-023 authorization epoch assigned by the latest authorizing op.
     pub epoch: u64,
     /// ADR-067: current replication restriction, overlaid by causally-later
-    /// `SetRole` ops exactly like `role`/`epoch` are (see `build_members`) --
+    /// `SetRole` ops exactly like `role`/`epoch` are (see `Roster::set_role`) --
     /// a `SetRole` for an unrelated reason (e.g. a plain role promotion)
     /// must still carry the subject's intended replication value explicitly,
     /// the same way it must already carry the intended role: this field has
@@ -537,6 +537,10 @@ impl Governance {
 /// - **re-add** ⇒ valid again, but pre-removal concurrent ops stay invalid (a
 ///   later re-admit causally dominates the removal);
 /// - **removal dominates** a concurrent role-change of the same subject;
+/// - a principal is **one seat across its ADR-040 rebind chain**: a removal (or role
+///   change) naming ANY key the seat has held reaches it, a removal concurrent with a
+///   rotation voids the rotation, and nothing re-inserts a removed seat — only a
+///   causally-later `Admit` opens a fresh one;
 /// - the tiebreak for a genuine same-target conflict is the **higher `chain_hash`**
 ///   (deterministic + Sybil-resistant) — explicitly *not* seniority or wall-clock.
 ///
@@ -688,9 +692,11 @@ pub fn derive_valid_members_governed(
     // 4. Validity fixpoint. `valid` shrinks monotonically (removing an op only ever
     //    removes more), so the loop converges. An op survives iff:
     //    (b) its author held the capability in the op's *own valid causal past*; and
-    //    (c) it is not a non-removal action by a member who is concurrently removed
-    //        by a *valid* removal — the strong-removal rule. Removals are exempt
-    //        from (c), so mutual removals both stand.
+    //    (c) it is not a non-removal action by a member whose SEAT (the principal across
+    //        its ADR-040 rebind chain) is concurrently removed by a *valid* removal — the
+    //        strong-removal rule. Removals are exempt from (c), so mutual removals both
+    //        stand.
+    let needed = removal_threshold(governance);
     let mut valid: BTreeSet<String> = order.iter().cloned().collect();
     // Safety bound: the fixpoint converges in a few passes for well-formed logs.
     // Quorum tallies create a theoretical re-validation path, so cap iterations to
@@ -698,6 +704,8 @@ pub fn derive_valid_members_governed(
     // every peer regardless of convergence).
     let max_iter = order.len() + 2;
     for _ in 0..max_iter {
+        let (before, place) = replay_chains(&by_hash, &order, &valid, &anc, &genesis_hash, needed);
+        let removed = effective_removals(&by_hash, &order, &valid, &anc, &place, needed);
         let mut next: BTreeSet<String> = BTreeSet::new();
         for h in &order {
             let op = &by_hash[h].op;
@@ -708,33 +716,17 @@ pub fn derive_valid_members_governed(
                 next.insert(h.clone());
                 continue;
             }
-            // (b) capability judged on the op's valid causal past (M_P).
-            let mp = membership_at(
-                &by_hash,
-                &order,
-                &valid,
-                &anc,
-                &anc[h],
-                &genesis_hash,
-                governance,
-                now,
-            );
-            if !authorized(&mp, op, &owner_principal, governance) {
+            // (b) capability judged on the op's valid causal past.
+            let past = &before[h];
+            if !authorized(past, op, &genesis_hash, governance) {
                 continue;
             }
-            // (c) strong concurrent removal: a non-removal op by S dies if S is
-            //     *effectively* removed (≥threshold distinct admin co-signatures
-            //     under quorum; one owner removal under single-owner) and that
-            //     effective removal is concurrent with the op. Ops in the removal's
-            //     causal past survive; removals themselves are exempt (mutual
-            //     removal ⇒ both apply).
+            // (c) strong concurrent removal of the author's seat. Ops in the removal's
+            //     causal past survive; removals themselves are exempt.
             if !is_removal(op.action) {
-                if let Some(rh) =
-                    effective_removal(&op.author, governance, &by_hash, &order, &valid)
-                {
-                    if !anc[&rh].contains(h) && !anc[h].contains(&rh) {
-                        continue; // concurrent with the effective removal ⇒ killed
-                    }
+                let rh = past.current(&op.author).and_then(|sid| removed.get(sid));
+                if rh.is_some_and(|rh| !anc[rh].contains(h) && !anc[h].contains(rh)) {
+                    continue; // concurrent with the effective removal ⇒ killed
                 }
             }
             next.insert(h.clone());
@@ -746,17 +738,22 @@ pub fn derive_valid_members_governed(
         }
     }
 
-    // 5. Build the final member map from the surviving ops (removal-dominant; a
-    //    causally-later re-admit wins; higher-hash SetRole wins concurrent ties).
-    let mut members = build_members(
+    // 5. The final member map: every valid binding lands on the seat its own causal past
+    //    placed it in; a seat with an effective removal is gone with every key it ever
+    //    held (a causally-later re-admit opens a fresh one); higher-hash SetRole wins
+    //    concurrent ties via `order`.
+    let (_, place) = replay_chains(&by_hash, &order, &valid, &anc, &genesis_hash, needed);
+    let removed = effective_removals(&by_hash, &order, &valid, &anc, &place, needed);
+    let mut members = merged_roster(
         &by_hash,
         &order,
         &valid,
         &anc,
         &genesis_hash,
-        governance,
-        now,
-    );
+        &place,
+        &removed,
+    )
+    .members();
 
     // 6. Inviter-removal cascade (ADR-026 §A3). `CascadeAll` transitively drops any
     //    member whose inviter is no longer present — delegated-trust revocation
@@ -814,54 +811,25 @@ fn is_removal(action: MembershipAction) -> bool {
     matches!(action, MembershipAction::Remove | MembershipAction::Revoke)
 }
 
-/// The `chain_hash` of the removal op that makes `target` *effectively* removed
-/// under `governance` — the op at which the count of **distinct** admin authors who
-/// validly removed `target` reaches the threshold, in causal order — or `None` if
-/// not (yet) removed. `SingleOwner` ⇒ threshold 1 (the sole owner's removal; this
-/// reduces to the per-op rule). `Quorum{m}` ⇒ the m-th distinct admin's
-/// co-signature. Valid removal ops are admin-authored (gated by [`authorized`]), so
-/// counting distinct authors counts distinct admins, and a lone admin's removal of
-/// another never reaches threshold.
-fn effective_removal(
-    target: &str,
-    governance: Governance,
-    by_hash: &BTreeMap<String, &SignedMembershipOp>,
-    order: &[String],
-    valid: &BTreeSet<String>,
-) -> Option<String> {
-    let needed = match governance {
+/// How many **distinct** admin authors must remove a seat for the removal to take effect:
+/// 1 under `SingleOwner` (the sole owner's removal), `m` under `Quorum{m}`. Valid removal
+/// ops are admin-authored (gated by [`authorized`]), so counting distinct authors counts
+/// distinct admins, and a lone admin's removal of another never reaches threshold.
+fn removal_threshold(governance: Governance) -> usize {
+    match governance {
         Governance::SingleOwner => 1,
         Governance::Quorum { threshold } => threshold.max(1),
-    };
-    let mut authors: BTreeSet<String> = BTreeSet::new();
-    for h in order {
-        if !valid.contains(h) {
-            continue;
-        }
-        let op = &by_hash[h].op;
-        if is_removal(op.action) && op.subject == target {
-            authors.insert(op.author.clone());
-            if authors.len() >= needed {
-                return Some(h.clone());
-            }
-        }
     }
-    None
 }
 
-/// Whether `op`'s author held the capability to perform it, given the membership
+/// Whether `op`'s author held the capability to perform it, given the [`Roster`]
 /// `mp` derived from the op's valid causal past. Owner or a delegated inviter may
 /// `Admit` (attenuated: cannot grant above the author's own role); an admin
 /// (`Role::Owner`) may `SetRole`/`Remove`/`Revoke`. Under `SingleOwner` the owner
 /// is irrevocable via the chain; under `Quorum` every member is uniform (the owner
-/// is removable, gated by the co-signature threshold in [`effective_removal`]).
-fn authorized(
-    mp: &BTreeMap<String, ValidMember>,
-    op: &MembershipOp,
-    owner: &str,
-    governance: Governance,
-) -> bool {
-    let author = match mp.get(&op.author) {
+/// is removable, gated by the co-signature threshold in [`effective_removals`]).
+fn authorized(mp: &Roster, op: &MembershipOp, genesis_hash: &str, governance: Governance) -> bool {
+    let author = match mp.member(&op.author) {
         Some(a) => a,
         None => return false,
     };
@@ -872,13 +840,21 @@ fn authorized(
             }
             author.role.includes(op.role.unwrap_or(Role::Viewer))
         }
-        MembershipAction::SetRole => author.role == Role::Owner && mp.contains_key(&op.subject),
+        // A principal is one seat across its rebind chain (ADR-040 §1), so these name it
+        // through ANY key it has held — the current one or a retired predecessor.
+        MembershipAction::SetRole => {
+            author.role == Role::Owner && !mp.naming(&op.subject).is_empty()
+        }
         MembershipAction::Remove | MembershipAction::Revoke => {
-            let owner_protected = governance == Governance::SingleOwner && op.subject == owner;
-            author.role == Role::Owner && !owner_protected && mp.contains_key(&op.subject)
+            let named = mp.naming(&op.subject);
+            // The owner's seat is the genesis's, under whichever key it now holds: a removal
+            // naming the rotated owner must not reach it any more than one naming the genesis.
+            let owner_protected = governance == Governance::SingleOwner
+                && named.iter().any(|sid| sid == genesis_hash);
+            author.role == Role::Owner && !owner_protected && !named.is_empty()
         }
         // Governance is owner-managed (ADR-026 §A4). The op is inert to the member
-        // map (`build_members` skips non-Admit ops); this only keeps it in the
+        // map (the seat replay skips non-Admit ops); this only keeps it in the
         // valid set when owner-authored so `derive_governance` can read it.
         MembershipAction::SetGovernance => author.role == Role::Owner,
         // Encryption mode is owner-managed (ADR-039 F2). Inert to the member map; kept in
@@ -906,24 +882,27 @@ fn authorized(
         //  - `subject` is BOUND to `new_pubkey` (its fingerprint) — the endorsed successor
         //    IS the named principal, so a member can't alias their seat onto an unrelated
         //    key's fingerprint;
-        //  - `subject` is a FRESH identity, not already a member — you rotate INTO a new key,
-        //    never ONTO an existing member (which the post-pass would clobber/downgrade);
+        //  - `subject` is a FRESH identity: no live seat has EVER held it. You rotate INTO a
+        //    new key, never onto another seat's current key (two seats would collide on it)
+        //    nor onto a RETIRED one (a `Remove`/`SetRole` naming that key would then reach
+        //    both seats, and one naming the owner's retired key would be refused as
+        //    owner-protected while hitting the rebinder);
         //  - not a self-rebind (`subject == author` is a no-op).
-        // The successor inherits the author's EXACT role/epoch in the derive post-pass, so a
+        // The successor inherits the author's EXACT role/epoch in the seat replay, so a
         // Rebind grants NO new authority (no self-elevation) — `author.role` is irrelevant.
         MembershipAction::Rebind => match op.new_pubkey {
             Some(npk) => {
                 op.new_wrap_pubkey.is_some()
                     && fingerprint_of(&npk) == op.subject
                     && op.subject != op.author
-                    && !mp.contains_key(&op.subject)
+                    && mp.naming(&op.subject).is_empty()
             }
             None => false,
         },
         // Recovery-key registration (ADR-040 §Recovery-key): the author registers THEIR OWN
         // offline recovery key. `mp.get` above already confirmed the author is a current
         // member; require it be self-targeted (`subject == author`) and carry a key. Inert to
-        // the member map (`build_members` skips it); the derive's recovery registry reads the
+        // the member map (the seat replay skips it); the derive's recovery registry reads the
         // key. Grants NO authority change — `author.role` is irrelevant.
         MembershipAction::RegisterRecoveryKey => {
             op.subject == op.author && op.recovery_pubkey.is_some()
@@ -1384,137 +1363,339 @@ pub fn current_replication_self_anchored(
     replication_history(ops, &anchor, principal).last().copied()
 }
 
-/// Membership as of one op's causal position — the final member map over just the
-/// **valid ancestors** of that op (its causal past, a linear chain). Used to judge
-/// capability (b). Passes the full `anc` map through so removal-dominance and
-/// SetRole overlays resolve correctly within the restricted ancestor set.
-#[allow(clippy::too_many_arguments)]
-fn membership_at(
-    by_hash: &BTreeMap<String, &SignedMembershipOp>,
-    order: &[String],
-    valid: &BTreeSet<String>,
-    anc: &BTreeMap<String, BTreeSet<String>>,
-    target_anc: &BTreeSet<String>,
-    genesis_hash: &str,
-    governance: Governance,
-    now: u64,
-) -> BTreeMap<String, ValidMember> {
-    let sub: BTreeSet<String> = valid.intersection(target_anc).cloned().collect();
-    build_members(by_hash, order, &sub, anc, genesis_hash, governance, now)
+/// One principal's **seat**: the grant an `Admit` establishes, carried across every ADR-040
+/// `Rebind` of that principal. ADR-040 §1 makes a Rebind mean "`new_fp` is the same principal",
+/// so everything that names a principal — `Remove`, `Revoke`, `SetRole` — names the seat
+/// through ANY key it has held, not only the key it currently derives under.
+///
+/// A seat's id is the hash of the `Admit` (or genesis) that opened it. An `Admit` of a key that
+/// is already a seat's current key at the Admit's causal point continues that seat (the owner's
+/// re-key re-assertion, ADR-037 §D3); one of a key that holds no live seat there opens a new
+/// one, which is what makes a re-admit after a removal a fresh grant.
+#[derive(Clone, Debug)]
+struct Seat {
+    /// The key the seat currently derives under.
+    key: String,
+    /// Every key ever bound to the seat — its current key and each retired predecessor.
+    keys: BTreeSet<String>,
+    entry: ValidMember,
+    /// The latest `Admit` (or genesis) that set the grant; a `SetRole` overlays it only from
+    /// that Admit's causal future.
+    last_admit: String,
+    /// `order` position of the seat's latest binding (Admit or Rebind) — the tiebreak when two
+    /// seats derive under one key.
+    last_bind: usize,
+    /// Distinct authors of the removals that have hit the seat (the quorum tally).
+    votes: BTreeSet<String>,
 }
 
-/// Construct the member map from a set of already-validated ops, in causal order.
-/// Removal-dominant per p2panda-auth: a principal is present iff some valid `Admit`
-/// of them is **not** overridden by an *effective* removal (under `governance`)
-/// outside that admit's causal past (so a concurrent/later removal wins, but a
-/// causally-later *re-admit* supersedes it). Roles overlay causally-later valid
-/// `SetRole`s (higher `chain_hash` wins concurrent ties via `order`).
-#[allow(clippy::too_many_arguments)]
-fn build_members(
-    by_hash: &BTreeMap<String, &SignedMembershipOp>,
-    order: &[String],
-    valid: &BTreeSet<String>,
-    anc: &BTreeMap<String, BTreeSet<String>>,
-    genesis_hash: &str,
-    governance: Governance,
-    now: u64,
-) -> BTreeMap<String, ValidMember> {
-    let in_admit_past =
-        |admit: &str, other: &str| anc.get(admit).map(|s| s.contains(other)).unwrap_or(false);
-    let mut out: BTreeMap<String, ValidMember> = BTreeMap::new();
-    for h in order {
-        if !valid.contains(h) {
-            continue;
+impl Seat {
+    fn new(key: &str, entry: ValidMember, admit: &str, pos: usize) -> Seat {
+        Seat {
+            key: key.to_string(),
+            keys: BTreeSet::from([key.to_string()]),
+            entry,
+            last_admit: admit.to_string(),
+            last_bind: pos,
+            votes: BTreeSet::new(),
         }
-        let op = &by_hash[h].op;
-        let is_genesis = h == genesis_hash;
-        if !(is_genesis || op.action == MembershipAction::Admit) {
-            continue;
+    }
+}
+
+/// The live seats as of one causal point, by seat id.
+#[derive(Clone, Debug, Default)]
+struct Roster {
+    seats: BTreeMap<String, Seat>,
+}
+
+impl Roster {
+    /// The seat that currently derives under `key` (the latest-bound one if two collide).
+    fn current(&self, key: &str) -> Option<&str> {
+        self.seats
+            .iter()
+            .filter(|(_, s)| s.key == key)
+            .max_by_key(|(_, s)| s.last_bind)
+            .map(|(id, _)| id.as_str())
+    }
+
+    /// Every live seat that has held `key` — what a `Remove`/`Revoke`/`SetRole` naming `key`
+    /// reaches.
+    fn naming(&self, key: &str) -> Vec<String> {
+        self.seats
+            .iter()
+            .filter(|(_, s)| s.keys.contains(key))
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// The grant held under `key` right now, if any.
+    fn member(&self, key: &str) -> Option<&ValidMember> {
+        self.current(key).map(|id| &self.seats[id].entry)
+    }
+
+    /// The derived member map: one entry per key a live seat derives under. Provenance follows
+    /// rotation — a member invited by a key its holder has since rotated away from traces to
+    /// the successor, so an inviter-removal cascade does not orphan a rotated inviter's
+    /// invitees.
+    fn members(&self) -> BTreeMap<String, ValidMember> {
+        let mut winners: BTreeMap<&str, &Seat> = BTreeMap::new();
+        for s in self.seats.values() {
+            if winners
+                .get(s.key.as_str())
+                .is_none_or(|w| w.last_bind < s.last_bind)
+            {
+                winners.insert(&s.key, s);
+            }
         }
-        let principal = op.subject.clone();
-        // Is this admit overridden by an *effective* removal of the principal that
-        // is not in the admit's causal past? (Removal dominates concurrent/later;
-        // under quorum the removal is effective only at the co-signature threshold.)
-        let dominated = effective_removal(&principal, governance, by_hash, order, valid)
-            .map(|rh| !in_admit_past(h, &rh))
-            .unwrap_or(false);
-        if dominated {
-            continue;
+        let mut successor: BTreeMap<&str, &str> = BTreeMap::new();
+        for s in winners.values() {
+            for k in s.keys.iter().filter(|k| !winners.contains_key(k.as_str())) {
+                successor.entry(k).or_insert(&s.key);
+            }
         }
-        let role = op.role.unwrap_or(if is_genesis {
-            Role::Owner
-        } else {
-            Role::Viewer
-        });
-        let mut entry = ValidMember {
-            principal: principal.clone(),
-            role,
-            can_invite: is_genesis || op.can_invite,
+        winners
+            .into_iter()
+            .map(|(key, s)| {
+                let mut e = s.entry.clone();
+                e.principal = key.to_string();
+                if let Some(next) = successor.get(e.invited_by.as_str()) {
+                    e.invited_by = next.to_string();
+                }
+                (key.to_string(), e)
+            })
+            .collect()
+    }
+
+    /// Bind `op` (an Admit, or genesis) into seat `sid`, opening it if it is new.
+    fn admit(&mut self, sid: &str, h: &str, op: &MembershipOp, pos: usize, genesis: bool) {
+        let entry = ValidMember {
+            principal: op.subject.clone(),
+            role: op
+                .role
+                .unwrap_or(if genesis { Role::Owner } else { Role::Viewer }),
+            can_invite: genesis || op.can_invite,
             invited_by: op.author.clone(),
             epoch: op.epoch,
             replication: op.replication,
         };
-        // Overlay causally-later valid SetRoles (causal order ⇒ higher hash last).
-        for sh in order {
-            if !valid.contains(sh) {
+        let seat = self
+            .seats
+            .entry(sid.to_string())
+            .or_insert_with(|| Seat::new(&op.subject, entry.clone(), h, pos));
+        seat.key = op.subject.clone();
+        seat.keys.insert(op.subject.clone());
+        seat.entry = entry;
+        seat.last_admit = h.to_string();
+        seat.last_bind = pos;
+    }
+
+    /// Move seat `sid` from `op.author` to the successor `op.subject` (ADR-040 §2): same grant,
+    /// predecessor retired. A no-op unless the seat still derives under the author — of two
+    /// concurrent rotations from one key, the first in causal order wins.
+    fn rotate(&mut self, sid: &str, op: &MembershipOp, pos: usize) {
+        if let Some(seat) = self.seats.get_mut(sid).filter(|s| s.key == op.author) {
+            seat.key = op.subject.clone();
+            seat.keys.insert(op.subject.clone());
+            seat.last_bind = pos;
+        }
+    }
+
+    /// Overlay a `SetRole` on each target seat whose current grant is in the op's causal past.
+    fn set_role(&mut self, targets: &[String], op: &MembershipOp, past: &BTreeSet<String>) {
+        let Some(role) = op.role else { return };
+        for sid in targets {
+            let Some(seat) = self.seats.get_mut(sid) else {
                 continue;
+            };
+            if past.contains(&seat.last_admit) {
+                seat.entry.role = role;
+                seat.entry.epoch = op.epoch;
+                // ADR-067: replication is overlaid unconditionally alongside role on every
+                // valid, causally-later SetRole -- same "latest op wins" semantics as
+                // role/epoch, not an independent "preserve unless mentioned" field.
+                seat.entry.replication = op.replication;
             }
-            let s = &by_hash[sh].op;
-            if s.action == MembershipAction::SetRole
-                && s.subject == principal
-                && anc.get(sh).map(|a| a.contains(h)).unwrap_or(false)
-            {
-                if let Some(nr) = s.role {
-                    entry.role = nr;
-                    entry.epoch = s.epoch;
-                    // ADR-067: replication is overlaid unconditionally alongside role on
-                    // every valid, causally-later SetRole -- same "latest op wins"
-                    // semantics as role/epoch, not an independent "preserve unless
-                    // mentioned" field. A caller constructing a SetRole for an unrelated
-                    // reason must carry the subject's intended replication value
-                    // explicitly, exactly as it must already carry the intended role.
-                    entry.replication = s.replication;
+        }
+    }
+}
+
+/// What each op's own causal past says it refers to — which the merged, cross-branch view
+/// cannot recover, because a key may name different seats in different branches.
+#[derive(Debug, Default)]
+struct Placement {
+    /// Admit / genesis / Rebind → the seat it binds into.
+    seat_of: BTreeMap<String, String>,
+    /// SetRole → the seats its subject named at the op's causal point.
+    targets: BTreeMap<String, Vec<String>>,
+}
+
+/// Replay every branch of the op tree: the [`Roster`] just BEFORE each op (its valid causal
+/// past, a linear chain), and where each op lands. Along one chain the strong-removal rule
+/// degenerates to replay order — every binding before a removal is in its past — so a
+/// removal reaching the threshold simply closes every seat that held the named key.
+#[allow(clippy::too_many_arguments)]
+fn replay_chains(
+    by_hash: &BTreeMap<String, &SignedMembershipOp>,
+    order: &[String],
+    valid: &BTreeSet<String>,
+    anc: &BTreeMap<String, BTreeSet<String>>,
+    genesis_hash: &str,
+    needed: usize,
+) -> (BTreeMap<String, Roster>, Placement) {
+    let mut before: BTreeMap<String, Roster> = BTreeMap::new();
+    let mut after: BTreeMap<String, Roster> = BTreeMap::new();
+    let mut place = Placement::default();
+    for (pos, h) in order.iter().enumerate() {
+        let op = &by_hash[h].op;
+        let r0 = after.get(&op.prev_hash).cloned().unwrap_or_default();
+        let mut r = r0.clone();
+        before.insert(h.clone(), r0);
+        if valid.contains(h) {
+            chain_step(
+                &mut r,
+                &mut place,
+                h,
+                op,
+                pos,
+                h == genesis_hash,
+                needed,
+                &anc[h],
+            );
+        }
+        after.insert(h.clone(), r);
+    }
+    (before, place)
+}
+
+/// Apply one valid op to the roster of its own chain, recording where it lands.
+#[allow(clippy::too_many_arguments)]
+fn chain_step(
+    r: &mut Roster,
+    place: &mut Placement,
+    h: &str,
+    op: &MembershipOp,
+    pos: usize,
+    genesis: bool,
+    needed: usize,
+    past: &BTreeSet<String>,
+) {
+    match op.action {
+        _ if genesis || op.action == MembershipAction::Admit => {
+            let sid = r.current(&op.subject).unwrap_or(h).to_string();
+            r.admit(&sid, h, op, pos, genesis);
+            place.seat_of.insert(h.to_string(), sid);
+        }
+        MembershipAction::Rebind => {
+            if let Some(sid) = r.current(&op.author).map(str::to_string) {
+                r.rotate(&sid, op, pos);
+                place.seat_of.insert(h.to_string(), sid);
+            }
+        }
+        MembershipAction::Remove | MembershipAction::Revoke => {
+            for sid in r.naming(&op.subject) {
+                let closed = r.seats.get_mut(&sid).is_some_and(|seat| {
+                    seat.votes.insert(op.author.clone());
+                    seat.votes.len() >= needed
+                });
+                if closed {
+                    r.seats.remove(&sid);
                 }
             }
         }
-        // Timebox on the establishing admit.
-        if op.expires_at.is_some_and(|exp| now >= exp) {
+        MembershipAction::SetRole => {
+            let targets = r.naming(&op.subject);
+            r.set_role(&targets, op, past);
+            place.targets.insert(h.to_string(), targets);
+        }
+        _ => {}
+    }
+}
+
+/// The removal that makes each seat *effectively* removed across all branches — ADR-026
+/// strong removal, applied to the seat rather than to one key. A valid removal naming key
+/// `k` hits a seat iff the seat bound `k` at some op the removal is NOT in the causal past
+/// of: a removal after a binding, or concurrent with it, reaches it; one that predates the
+/// binding (the key belonged to someone else then, or the seat is a later re-admit) does
+/// not. The seat's effective removal is the hit at which its tally of distinct removing
+/// authors reaches the governance threshold, in causal order (threshold 1 under
+/// single-owner).
+fn effective_removals(
+    by_hash: &BTreeMap<String, &SignedMembershipOp>,
+    order: &[String],
+    valid: &BTreeSet<String>,
+    anc: &BTreeMap<String, BTreeSet<String>>,
+    place: &Placement,
+    needed: usize,
+) -> BTreeMap<String, String> {
+    let mut bindings: BTreeMap<&str, Vec<(&str, &str)>> = BTreeMap::new();
+    for (b, sid) in place.seat_of.iter().filter(|(b, _)| valid.contains(*b)) {
+        let key = by_hash[b].op.subject.as_str();
+        bindings.entry(key).or_default().push((b, sid));
+    }
+    let mut votes: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    let mut effective: BTreeMap<String, String> = BTreeMap::new();
+    for h in order.iter().filter(|h| valid.contains(*h)) {
+        let op = &by_hash[h].op;
+        if !is_removal(op.action) {
             continue;
         }
-        out.insert(principal, entry); // causal order ⇒ a later re-admit wins
+        for (b, sid) in bindings.get(op.subject.as_str()).into_iter().flatten() {
+            if effective.contains_key(*sid) || anc[*b].contains(h) {
+                continue;
+            }
+            let tally = votes.entry(sid).or_default();
+            tally.insert(&op.author);
+            if tally.len() >= needed {
+                effective.insert(sid.to_string(), h.clone());
+            }
+        }
     }
-    // ADR-040 identity-rotation post-pass. Apply honored `Rebind`s in causal order: each
-    // TRANSFERS the predecessor's derived entry to the successor (same role / epoch /
-    // invited_by / can_invite) and RETIRES the predecessor. Because this runs inside every
-    // `build_members` call — including `membership_at`, which builds over an op's causal
-    // past — a Rebind in an op's past retires the old key for THAT op's capability check, so
-    // a rotated-away key's later ops are not honored (retirement is causal, not global).
-    // Chained rebinds (a→b→c) compose by walking causal order. A Rebind whose predecessor is
-    // not a current member here (already retired/removed/never admitted) contributes nothing
-    // (fail-closed) — `authorized` already required a fresh, fingerprint-bound successor.
-    for h in order {
+    effective
+}
+
+/// The final roster over every branch: each valid binding lands on the seat its own past
+/// placed it in, and a seat with an effective removal is gone with every binding it ever had
+/// — so no rotation, re-key admit or later step re-inserts it.
+#[allow(clippy::too_many_arguments)]
+fn merged_roster(
+    by_hash: &BTreeMap<String, &SignedMembershipOp>,
+    order: &[String],
+    valid: &BTreeSet<String>,
+    anc: &BTreeMap<String, BTreeSet<String>>,
+    genesis_hash: &str,
+    place: &Placement,
+    removed: &BTreeMap<String, String>,
+) -> Roster {
+    let mut r = Roster::default();
+    for (pos, h) in order.iter().enumerate() {
         if !valid.contains(h) {
             continue;
         }
         let op = &by_hash[h].op;
-        if op.action != MembershipAction::Rebind {
-            continue;
-        }
-        if let Some(mut entry) = out.remove(&op.author) {
-            entry.principal = op.subject.clone();
-            out.insert(op.subject.clone(), entry);
-            // Re-point provenance: members the predecessor invited now trace to the
-            // successor, so an inviter-removal cascade (CascadeAll) does NOT orphan a
-            // rotated inviter's invitees. The just-inserted successor entry keeps the
-            // predecessor's own `invited_by`, so it can't self-match here.
-            for m in out.values_mut() {
-                if m.invited_by == op.author {
-                    m.invited_by = op.subject.clone();
+        let live = place
+            .seat_of
+            .get(h)
+            .filter(|sid| !removed.contains_key(*sid));
+        match op.action {
+            _ if h == genesis_hash || op.action == MembershipAction::Admit => {
+                if let Some(sid) = live {
+                    r.admit(sid, h, op, pos, h == genesis_hash);
                 }
             }
+            MembershipAction::Rebind => {
+                if let Some(sid) = live {
+                    r.rotate(sid, op, pos);
+                }
+            }
+            MembershipAction::SetRole => {
+                if let Some(t) = place.targets.get(h) {
+                    r.set_role(t, op, &anc[h]);
+                }
+            }
+            _ => {}
         }
     }
-    out
+    r
 }
 
 /// Deterministic causal (topological) order of the op tree rooted at `genesis`.
@@ -1585,6 +1766,10 @@ pub fn fingerprint_of(pubkey: &[u8; 32]) -> String {
         base64::engine::general_purpose::STANDARD_NO_PAD.encode(digest)
     )
 }
+
+#[cfg(test)]
+#[path = "membership_seat_tests.rs"]
+mod seat_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1736,12 +1921,12 @@ mod tests {
     // --- derive_valid_members (slice 2b-3) ---
 
     /// A test identity: signing seed, public key, and principal fingerprint.
-    struct Id {
-        secret: [u8; 32],
-        pubkey: [u8; 32],
-        fp: String,
+    pub(super) struct Id {
+        pub(super) secret: [u8; 32],
+        pub(super) pubkey: [u8; 32],
+        pub(super) fp: String,
     }
-    fn id(seed: u8) -> Id {
+    pub(super) fn id(seed: u8) -> Id {
         let secret = [seed; 32];
         let pubkey = SigningKey::from_bytes(&secret).verifying_key().to_bytes();
         let fp = fingerprint_of(&pubkey);
@@ -1757,7 +1942,7 @@ mod tests {
 
     /// Build + sign a membership op authored by `author`, linked to `prev`.
     #[allow(clippy::too_many_arguments)]
-    fn make(
+    pub(super) fn make(
         author: &Id,
         action: MembershipAction,
         subject: &str,
@@ -2253,7 +2438,7 @@ mod tests {
     }
 
     /// Genesis = the owner self-admit (the anchored root of every valid log).
-    fn genesis(owner: &Id) -> SignedMembershipOp {
+    pub(super) fn genesis(owner: &Id) -> SignedMembershipOp {
         make(
             owner,
             MembershipAction::Admit,
@@ -3422,7 +3607,7 @@ mod tests {
     // --- quorum governance (slice 2b-5b) ---
 
     /// Derive under the given governance with no local view overrides.
-    fn governed(
+    pub(super) fn governed(
         ops: &[SignedMembershipOp],
         owner: &Id,
         gov: Governance,
@@ -3431,7 +3616,7 @@ mod tests {
     }
 
     /// Owner admits `who` at Role::Owner (an admin), with the invite capability.
-    fn admit_admin(owner: &Id, who: &Id, prev: &str) -> SignedMembershipOp {
+    pub(super) fn admit_admin(owner: &Id, who: &Id, prev: &str) -> SignedMembershipOp {
         make(
             owner,
             MembershipAction::Admit,
@@ -3595,7 +3780,7 @@ mod tests {
 
     /// Build + sign a `Rebind`: predecessor `old` cross-signs successor `new`, publishing
     /// `new`'s Ed25519 + X25519 wrap keys. `old`'s key signs (that is the whole point).
-    fn make_rebind(old: &Id, new: &Id, prev: &str) -> SignedMembershipOp {
+    pub(super) fn make_rebind(old: &Id, new: &Id, prev: &str) -> SignedMembershipOp {
         let op = MembershipOp {
             kb_id: "KB".into(),
             action: MembershipAction::Rebind,
