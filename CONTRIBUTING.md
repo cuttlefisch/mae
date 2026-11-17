@@ -323,6 +323,16 @@ make test-scheme-all                # All local Scheme tests
 | `make audit` | `cargo-deny` security scan |
 | `make docker-ci` | Full CI in container |
 | `make build && mae --self-test` | AI-driven E2E self-test (requires API key) |
+| `make mutate ARGS="--since origin/main"` | The declared mutants your branch touches |
+
+### Mutation Checks
+
+A test that guards a mechanism must fail without it. Show that with a mutant:
+an exact find/replace that breaks the guard, and the filter naming the tests
+that must then fail. Add it to `mutants/<area>.toml` in the same change as the
+guard. `make mutate-check` (run in CI on every PR) checks that every mutant
+still applies; `make mutate` runs them. Format, commands and cadence:
+[`tools/mutate/README.md`](tools/mutate/README.md).
 
 ---
 

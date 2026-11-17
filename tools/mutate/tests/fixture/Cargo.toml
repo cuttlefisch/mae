@@ -1,0 +1,9 @@
+# A tiny crate the tool's own tests mutate, copied into a fresh git repository
+# per test. Its own empty workspace keeps cargo from looking further up.
+[workspace]
+
+[package]
+name = "fixture"
+version = "0.1.0"
+edition = "2021"
+publish = false

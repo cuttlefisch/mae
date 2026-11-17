@@ -28,11 +28,11 @@ members = [
     "shared/crypto",
     "shared/crypto-wasm",
 ]
-exclude = ["tools/code-map", "tools/audit-metrics", "daemon"]
+exclude = ["tools/code-map", "tools/audit-metrics", "tools/mutate", "daemon"]
 resolver = "2"
 
 [workspace.package]
-version = "0.14.159"
+version = "0.14.161"
 edition = "2021"
 license = "GPL-3.0-or-later"
 rust-version = "1.95"

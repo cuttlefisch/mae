@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.161] - 2026-11-17
+
+
+
+
+### Features
+
+- *(tools)* Mae-mutate, declared and re-runnable mutation checks ([cce9979](https://github.com/cuttlefisch/mae/commit/cce997966cb2c1340ecc90d3ea29c5d549946483))
+
+### Bug Fixes
+
+- *(test-safety)* Detect cargo test binaries on Rust 1.100's build-dir layout; take over #882/#883 ([ef0157a](https://github.com/cuttlefisch/mae/commit/ef0157a15a6d15b97e40180fc4b1aaccabe674e3))
+- *(ci)* Time the daemon tests apart from their build; shorten build_configuration ([0b15197](https://github.com/cuttlefisch/mae/commit/0b151974458e13a56f170e8b7fe8be4b7319dcc8))
+
+### Documentation
+
+- *(adr)* The ADR-113/115 build sequence, ADR-117, ADR-111 Am. 1, ADR-118 ([0ab9100](https://github.com/cuttlefisch/mae/commit/0ab910069b9c5848db8b85075f6a2b16d0c08cfe))
+
+### Miscellaneous
+
+- Bump version to 0.14.160 ([4e3c1c2](https://github.com/cuttlefisch/mae/commit/4e3c1c21a731095356f7bc795bcda744f525a566))
+
 ## [0.14.159] - 2026-11-16
 
 
@@ -15,6 +37,10 @@ All notable changes to this project will be documented in this file.
 
 - *(adr-036)* Amendment 1 — the hub verifies every content op it accepts ([496d3d4](https://github.com/cuttlefisch/mae/commit/496d3d47474411bef3066f079895b94ff7e3cde7))
 - *(adr-113)* Amendments 2 and 3 — the revision record, and approval per document type ([a532356](https://github.com/cuttlefisch/mae/commit/a5323563f2ef25273302205922a17b11f6293ebc))
+
+### Miscellaneous
+
+- Bump version to 0.14.159 ([cb209d3](https://github.com/cuttlefisch/mae/commit/cb209d37298d4a6684756d82ad8108376d548aeb))
 
 ## [0.14.158] - 2026-11-16
 
