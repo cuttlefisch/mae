@@ -652,6 +652,549 @@ Field values on a controlled document are chosen from the KB's vocabularies, nev
   unapproved vocabulary change does not.
 - A KB's settings accept one type source; naming both is refused.
 
+## Build sequence (2026-11-16)
+
+This section orders the work of this ADR and of ADR-115 into pull requests that implementation can
+start one at a time. It decides nothing new: where the ADRs leave a question open or disagree, the
+question is listed under **Open before building** below, and the PR that depends on it says so.
+
+### What exists to build on
+
+Measured on `main` at the date above:
+
+- **Built:** the per-document editor record (`daemon/src/doc_editors.rs`,
+  `storage_editor_record.rs`), with the `Authors::Known | Unknown` verdict A1 and A3 require;
+  `DocStore::state_with_high_water`, the A2 cutoff; ADR-116 P1 to P3 (`mae_sync::kb::history`,
+  `storage_history.rs`, `kb/history.list | get | diff | verify | checkpoint` on the collab handler,
+  signed heads with the daemon's Ed25519 key); the seed record that A4 reads (`kb_seed`,
+  `kb_seed_nodes`); the identity binding table with the `person | agent` flag and the typed
+  principal (`identity_binding.rs`, `oauth_self_issue.rs`: `ValidatedPrincipal.kind`); the
+  maintenance tick; `mae-daemon backup` (a tar archive of `VACUUM INTO` snapshots).
+- **Not built:** anything in this ADR's D1 to D8 or its amendments; anything in ADR-115; ADR-116 P4
+  (rollback) and P5 (retention, holds); ADR-114's kind vocabulary and match key; a node bin or
+  purge in the daemon (deletion is `KbCollectionDoc::remove_node`); a per-KB lock; streaming
+  request or response bodies on the OAuth listener (every response is `Full<Bytes>`, every request
+  body is read whole under `max_request_body_bytes`); dispatch of any namespace other than
+  `kb/query.*` on that listener.
+- **Assumed from the sign-in claims follow-up to ADR-098** (in progress): the validated principal
+  carries `SignIn { amr, acr, auth_time, groups }`, with `second_factor()` and `fresh_within()`.
+  PR-8 and PR-9 need it; nothing before them does.
+
+### Rules every PR in this sequence follows
+
+- **Mergeable and green alone.** Each PR leaves `main` releasable. New behaviour is off by default
+  or unreachable until its switch is set: review stays off per KB (D3), `view` defaults to
+  `"working"` (D5), and a route that is not configured falls through as an unknown path, as the
+  binding routes do today.
+- **Data is additive.** New tables are created with `CREATE TABLE IF NOT EXISTS` in the daemon's
+  `state.db`, beside the editor record and history, so the existing backup covers them. No PR
+  rewrites an existing row. A PR that needs a backfill says so and makes it a single-writer pass,
+  never a read-triggered side effect (ADR-093).
+- **Every test fails without its code.** Adversarial cases first: the refusal, the race, the forged
+  or replayed input. Each PR commits mutant entries for the mechanisms it adds (file, exact text,
+  replacement, the test that must fail), and runs only its own mutants between review rounds; the
+  full list runs once before the PR merges. Where the list lives is open (see O14).
+- **One independent review per PR at the end**, for each PR marked so below. Every PR in this
+  sequence touches authorization, identity, retention or deletion, so every one is marked.
+- **Benchmarks** are `#[ignore]`d tests that report numbers, as ADR-109's are. A PR that introduces
+  a limit sets its default from its benchmark's first run and pins it there.
+
+### PR-1. Blob store core
+
+**Builds:** ADR-115 P1 without image processing: D1 (files and `kb_blob`), D2 (access), D3 (the
+three routes, the cap, the transfer digest, response headers, `ETag`), D3a's typing by sniffing
+only, the per-tenant storage quota, the blob directory in `mae-daemon backup`, and D8's E2E
+refusal.
+
+**Does not build:** image processing (PR-2). Until PR-2, an upload sniffed as an image is refused
+`attachment_unsupported`, so no unprocessed image is ever given an address that processing would
+later change. Also not: the `attachments` map, `blob_ref`, the sweep (PR-3; until then nothing
+deletes a blob, and the quota bounds growth), revision attachments (PR-6).
+
+**Prerequisites:** none beyond `main`. Settles O3 and O4 first, because the upload contract and the
+stored media types are fixed here.
+
+**Data:** `kb_blob(kb_id, sha256, size, media_type, width, height, stored_at)`, primary key
+`(kb_id, sha256)`. Files at `blobs/<kb_id>/<first two hex>/<sha256>`, written to a temporary file in
+the same filesystem, `fsync`ed, then renamed; leftover temporary files are removed at startup. Usage
+per tenant is the sum of `kb_blob.size` over its KBs. New configuration: `max_attachment_bytes`,
+the tenant storage quota, the blob directory. No migration: all tables are new.
+
+**Routes and errors:** `POST /kb/<kb_id>/blobs`, `GET` and `HEAD /kb/<kb_id>/blobs/<sha256>`,
+routed before the JSON-RPC body read. The listener gains a streaming request path and a streaming
+response body for these routes only; the JSON-RPC path keeps its whole-body read and its limit. Each
+route gets a `RequestCost` in `tenant.rs`. Refusals: `403 not_member` (identical for every
+non-member case, including an unknown KB), `404 blob_missing` (members only), `413
+quota_exceeded`, `507 tenant_quota_exceeded`, `400` with the transfer-digest refusal kind (O3),
+`attachment_unsupported`, `e2e_unsupported`.
+
+**Tests:**
+- A non-member's `GET` and `HEAD` receive byte-identical status, headers and body for a blob this
+  KB holds, one another KB holds, one nobody holds, and an unknown KB.
+- A member of KB A cannot read KB B's blob by its hash. A viewer cannot upload.
+- A transfer-digest mismatch leaves no file and no row. The answer's sha256 is that of the stored
+  bytes, whatever the client sent.
+- An upload over the cap stops reading at the cap (bytes read are counted); peak memory for a body
+  ten times the cap is constant (benchmark).
+- An upload interrupted mid-stream, or by a restart, leaves no file and no row; concurrent identical
+  uploads both succeed and leave one file.
+- The quota refuses the upload that would exceed it and accepts the one before it.
+- The same bytes uploaded to two KBs give two files; deleting one KB leaves the other's file.
+- Responses carry `nosniff`, the sandbox policy, and `Content-Disposition: attachment` off the
+  allowlist; `If-None-Match` answers `304` without opening the file (instrumented).
+- An E2E KB refuses; an image upload refuses until PR-2; a JSON-RPC request still hits its body
+  limit.
+- A backup contains the blob tree and a restore serves the same bytes.
+
+**Mutants:** upload checked at `Read` instead of `Edit`; the non-member branch split by existence;
+the cap compared with `>` for `>=`; the digest comparison skipped; rename before `fsync`; the KB
+dropped from the file path (cross-KB sharing); the quota off by one; each security header removed;
+the `304` path reading the file.
+
+**Size:** L. **Independent review:** yes (new unauthenticated-reachable routes, a no-oracle rule,
+streaming on the listener).
+
+### PR-2. Image processing
+
+**Builds:** ADR-115 D3a for images: dimensions read from the header and refused over
+`max_attachment_pixels`; decoding in a bounded worker with memory, time and frame limits, never on
+the request task; metadata stripped; orientation applied to the pixels; colour profile kept; SVG
+sanitised by an element and attribute allowlist; processing idempotent. Enables the image
+allowlist that PR-1 refused.
+
+**Does not build:** thumbnails, client-side processing, anything for E2E KBs.
+
+**Prerequisites:** PR-1. New decoder and sanitiser dependencies pass `deny.toml`.
+
+**Data:** fills `kb_blob.width` and `height`. No migration: PR-1 stored no image.
+
+**Errors:** `413 attachment_too_many_pixels`, `422 attachment_undecodable`,
+`attachment_unsupported`.
+
+**Tests:**
+- A header declaring more than the pixel limit is refused without the decoder being called
+  (instrumented).
+- A malformed image, a decompression bomb and an animation over the frame limit each fail within
+  the limits and are refused.
+- The stored image has no EXIF, XMP or location data; a rotated photograph is stored upright
+  (pixel comparison); a colour profile survives.
+- An SVG with a script, an external reference or an event handler is stored without it.
+- For every allowed format, processing a processed file returns identical bytes.
+- Decoding saturating its worker pool queues or refuses further uploads; it never runs on the
+  request task.
+- Benchmark: decode, strip and rotate time and peak memory per format at 1, 12 and 40 megapixels;
+  the limits' defaults come from it.
+
+**Mutants:** the pixel check moved after decoding; stripping skipped; orientation ignored; one
+dangerous element added to the SVG allowlist; a re-encoding parameter changed so processing is no
+longer idempotent.
+
+**Size:** L. **Independent review:** yes (untrusted input to parsers, new dependencies).
+
+### PR-3. Attachments in the node, and collection
+
+**Builds:** ADR-115 D4 on the node side and D5 (its P2): the `attachments` map in the node CRDT
+(`NAME` to `{sha256, size, media_type}`), `MaterializedNode::attachments`, its entry in
+`MaterializedNode::digest` and in the history content encoding (both per O1), its field-type check
+(`invalid_field`); `blob_ref` derived from every holder that exists at this point (working nodes,
+history versions, holds); a per-KB lock taken by every node-write path whose update changes
+`attachments`, and by the sweep; the sweep on the maintenance tick, bounded per pass, with the grace
+period; operator holds (O6).
+
+**Does not build:** revision holders (PR-4 and PR-6 add theirs, each in the same PR that creates
+the holder); the mae-org resolver, seeding and export, display in MAE's editor (the parallel track
+below); fetching blobs from a hub for mesh peers.
+
+**Prerequisites:** PR-1. O1, O5 and O6 settled.
+
+**Data:** CRDT key `attachments`, additive, tolerant reader, never written on read. Tables
+`blob_ref(kb_id, sha256, holder)` and the hold table of O6. `blob_ref` is an index derived from the
+documents and the history, rebuildable at any time; the sweep computes its live set from the
+holders under the lock, never from a stale index. New configuration: the grace period (default 24
+hours) and the per-pass bound. Migration: none for documents. The first sweep after upgrade builds
+`blob_ref` from scratch.
+
+**Errors:** `invalid_field` for a mistyped entry (the existing kind). Whether binding a hash this KB
+does not hold is refused is O15.
+
+**Tests:**
+- A node written before this PR keeps its `version`, and every existing history entry still
+  verifies (fixtures captured before the change).
+- Replacing an image under the same name changes the node's `version`.
+- A blob referenced only by an old history version survives a sweep; so does one under a hold, and
+  one in the bin as defined by O5.
+- A blob uploaded but unreferenced survives within the grace period and is collected after it
+  (injected clock).
+- A bind racing a sweep never loses a blob, over deterministic interleavings at each pause point of
+  both, as in the existing race suite.
+- Every node-write path (`sync/update`, `/ws`, `kb/node_update`, the dialer relay) takes the lock
+  when it changes `attachments`: one test per path, run with the sweep paused inside its critical
+  section.
+- Opening a document without the map writes nothing to it.
+- Benchmark: sweep time per pass for 1,000 and 10,000 nodes with three attachments each.
+
+**Mutants:** one holder kind removed from the live set; the lock skipped on one write path; the
+grace comparison reversed; `attachments` dropped from the digest or the encoding.
+
+**Size:** L. **Independent review:** yes (deletion, and a lock on the write path).
+
+**Parallel track, after PR-3 and outside this sequence:** ADR-115 P3 (the mae-org resolver and
+placeholder states, released as a mae-org tag), P4 (seeding and export carrying attachments; needs
+PR-2, because the dry run runs the same processing), and P5 (display in MAE's editor). None of
+PR-4 to PR-10 depends on them.
+
+### PR-4. The revision record, the request, and the event chain
+
+**Builds:** D1 (tables, hub-local, plaintext only); D2 (the freeze at the requester's `version`,
+with A2's cutoff from `state_with_high_water`; document codes with per-KB prefixes); D3's per-KB
+switch (owner-only, an event) and its tighten-only rule for `in_force_on_approval`; D7's chain
+(append-only, `prev_hash`, signed with the daemon's Ed25519 key, reserved `member_sig`, export and
+offline verify through the CLI); the request side of D8; ADR-116 D2.3's version cut on freeze and
+its D5 exemption for versions a revision references. Columns for the frozen document type (C1) and
+template (C7) exist from here, nullable, so later PRs do not change the revision's identity. The
+sweep's live set gains every revision's frozen `attachments` map, in every state.
+
+**Does not build:** any act (approve, act, reject, enter into force, derogate), the reviewer and
+approver lists, `view: "published"`, revision attachments. With the switch on, readers are served
+exactly what they are today.
+
+**Prerequisites:** PR-3 (a frozen map must hold its blobs). O7, O8 and O11 settled.
+
+**Data:** per-KB review settings (switch, `in_force_on_approval`, `required_acts`, code prefixes);
+review requests (name, mode, reason, requester, state); revisions (`rev_id`, KB, node, request,
+`doc_code`, `rev_no` null until approved, `source_sha256`, `version`, cutoff WAL id, state,
+document type, template id and sha256, creator, time, `replaces`); frozen sources, where O8 decides;
+document codes, unique per `(kb, prefix, number)`; the event log (per KB: sequence, kind, actor and
+kind of actor, time, payload, `prev_hash`, `entry_hash`, daemon signature, `member_sig`). No
+migration.
+
+**Methods and errors:** `kb/review.request`, `kb/review.withdraw` (by the requester, before
+approval), `kb/review.status`, `kb/review.pending`, `kb/review.set_policy` (switch, mode,
+`required_acts`), `kb/review.set_code`; `kb/query.revisions`; `kb/query.get` with `revision`.
+Dispatched on the OAuth listener and wherever O9 decides. Refusals: `invalid_params`,
+`role_forbidden`, `review_not_enabled`, `stale_version` (+`current`), `unknown_request`,
+`node_not_in_kb`, `doc_code_taken`, `invalid_transition`, `e2e_unsupported`.
+
+**Tests:**
+- A request naming a superseded `version` is refused with the current one.
+- A revision's body and `version` are unchanged after the working copy is edited.
+- A share, a restore or an edit racing the freeze never yields content and cutoff that disagree
+  (A2), over deterministic interleavings.
+- A requester setting `in_force_on_approval: true` against a KB default of false is refused
+  `role_forbidden`.
+- A non-owner turning review on or off is refused; the owner's change is an event.
+- With review off, `kb/review.request` is refused `review_not_enabled` and `kb/query.get` is
+  unchanged.
+- The chain verifies end to end and fails after any single column of any row is altered, a row is
+  removed, or two rows are swapped; a forged signature fails.
+- Two concurrent `set_code` calls for the same number: one wins, one is refused `doc_code_taken`;
+  an unlisted prefix is refused.
+- A blob held only by a withdrawn revision's frozen map survives a sweep.
+- The history version cut at the freeze is not pruned by any retention evaluation.
+- Every method refuses an E2E KB.
+
+**Mutants:** the stale-version check removed; `prev_hash` left out of `entry_hash`; the signature
+skipped; the owner check removed; the tighten-only check reversed; the revision holder left out of
+the sweep.
+
+**Size:** L. **Independent review:** yes (authorization, the daemon's signing key, an append-only
+record).
+
+### PR-5. Acts and publication
+
+**Builds:** D3's reviewer and approver lists (owner-set, fail-closed), the author rule as A1 and A3
+define it (`author_cannot_approve`, `authors_unknown`), and the agent rule from the principal's kind
+(ADR-098 Amendment 1, C3); `required_acts`; D4's atomic publication of a set in one SQLite
+transaction, entry into force with `effective_at`, derogation, withdrawal of an approval; D5's
+`view: "published"` for `get` and `list` (summary fields from the revision), and its delete and
+purge guards (as O5 defines delete and purge); `rev_no` assigned at approval; A4's imported,
+in-force revision from the seed record, through the operator CLI only.
+
+**Does not build:** revision attachments, sign-in requirements, per-type policy.
+
+**Prerequisites:** PR-4. O5 settled.
+
+**Data:** reviewer and approver lists per KB; the published pointer `(kb, node) -> rev_id`; acts
+(revision, act, principal, kind of principal, time, `effective_at`). No migration.
+
+**Methods and errors:** `kb/review.approve`, `kb/review.act` (`reviewed`), `kb/review.reject`,
+`kb/review.withdraw` (extended to approvals), `kb/review.enter_into_force`, `kb/review.derogate`;
+`kb/review.set_policy` gains the lists. Refusals add `not_reviewer`, `not_approver`,
+`author_cannot_approve`, `authors_unknown`, `agent_forbidden`, `set_incomplete`,
+`invalid_transition` (+`from`, `act`).
+
+**Tests:** every case in "Tests that must exist" above, and in particular:
+- X edits; Y requests; it is rejected; Y requests again; X approves: `author_cannot_approve`.
+- A listed approver whose request counts as an agent (a self-issued token for a `person`-flagged
+  fingerprint, or an IdP session on an unflagged binding) is refused `agent_forbidden`; an unlisted
+  person `not_approver`.
+- A set of three with one unapproved moves no pointer; a fault injected between the pointer writes
+  leaves all three unmoved.
+- Withdrawal after entry into force is refused; before it, a different listed approver returns the
+  revision to `in_review`.
+- Deleting a node with a published revision is refused (`act: "delete"`) and succeeds after
+  derogation; purging a node with historical revisions leaves every revision and the chain
+  verifiable.
+- A1's credit cases and A3's three unknown cases, driven through real `sync/update` traffic.
+- The imported act is unreachable from every `kb/review.*` method and from an agent principal: a
+  scan of the method table and of every refusal.
+
+**Mutants:** the author check removed; `Unknown` treated as an empty author set; the kind check
+removed; an empty list treated as "anyone"; the pointer moved per member outside the transaction;
+the delete guard removed.
+
+**Size:** L. **Independent review:** yes (the authorization core of this ADR).
+
+### PR-6. Revision attachments
+
+**Builds:** D6, B1 to B4 and B8: `rendered_pdf` and `signed_pdf` stored in the blob store as
+revision holders; write-once with the same-bytes retry; annulment with a reason by the owner or the
+uploader, and exactly one new upload after it; the PDF check; `signed_pdf` only from a listed
+approver who counts as a person, only in the states B3 lists; the declared `source_sha256` check
+for `rendered_pdf`; the uploader, its kind, its bound `iss` and `sub` and the time, in the revision
+record and as `attach` and `annul_attachment` events; D5's `attachments` list on a revision. B7's
+`approval_requires_rendered_pdf` switch, with annulment of the approved rendered PDF refused.
+
+**Does not build:** deletion and retention (PR-7), `controlled_copy` (PR-9), the second factor
+(PR-8), signature verification.
+
+**Prerequisites:** PR-1 and PR-5. O2, O3, O4 and O13 settled.
+
+**Data:** revision attachments (revision, kind, sequence within the kind, sha256, size, content
+type, declared source, uploader, uploader kind, `iss`, `sub`, time, state `current | annulled |
+deleted`, reason). The sweep's live set gains them. No migration.
+
+**Routes and errors:** the revision attachment routes as O3 decides. Refusals:
+`attachment_exists`, the transfer-digest kind (O3), `attachment_type`, `not_approver`,
+`agent_forbidden`, `invalid_transition`, `quota_exceeded`, `rendered_pdf_required`,
+`rendered_pdf_mismatch`.
+
+**Tests:** B9's attachment, annulment and `signed_pdf` cases, and:
+- A rendered PDF declaring another revision's source is refused, and the declaration of an accepted
+  one is recorded.
+- A sweep and a node purge leave every revision's attachments readable.
+- A concurrent second `PUT` of different bytes for the same kind: exactly one is stored.
+
+**Mutants:** the write-once check removed; the `%PDF-` check removed; the person check removed from
+`signed_pdf`; a pending state added to `signed_pdf`'s allowed states; the annulled-after-approval
+check removed.
+
+**Size:** M. **Independent review:** yes (who counts as a person, a write-once record).
+
+### PR-7. Retention, deletion, and imported history
+
+**Builds:** B5: the operator's floor in local configuration only; a KB period no shorter than the
+floor; nothing deletable with no policy; non-retroactive shortening (each revision keeps the period
+in force when it was superseded or derogated); owner deletion of one attachment after the period,
+leaving the record marked and appending `delete_attachment`; no path that prunes the event chain.
+B6: import of past revisions in `superseded` or `derogated` state with their attachments, refused
+when it would land before revisions the node already has.
+
+**Does not build:** any other deletion path. ADR-116 P5 (history retention) is separate.
+
+**Prerequisites:** PR-6. O2, O10 and O12 settled.
+
+**Data:** the KB's attachment retention period and its history of changes (also in the chain); the
+period stamped on a revision at supersession or derogation. No migration.
+
+**Methods and errors:** the period on `kb/review.set_policy`; deletion and import as O10 names them.
+Refusal kinds as O12 names them.
+
+**Tests:** B9's retention and import cases, and:
+- No network method, MCP tool or Scheme call can set the operator's floor (a scan).
+- Deleting an attachment whose bytes another holder references removes the revision's holder only;
+  the file stays.
+
+**Mutants:** the floor comparison reversed; the shortened period applied retroactively; the
+in-force check removed; the owner check removed; the overlap check on import removed.
+
+**Size:** M. **Independent review:** yes (retention and deletion).
+
+### PR-8. Sign-in strength at the moment of acting
+
+**Builds:** B7's `approval_requires_mfa` (accepted `amr` and `acr` values from operator
+configuration, no built-in default, fail-closed when the switch is on and nothing is configured)
+and C4's freshness window over every controlled act this sequence has built: approve, enter into
+force, attaching `signed_pdf`, and the owner's administrative acts on a review-enabled KB (as O9
+scopes them). Each act records the claim and value that satisfied it and the `auth_time`.
+
+**Does not build:** group performers (PR-9). `accept` and `controlled_copy` take the check in PR-9,
+where they are built.
+
+**Prerequisites:** PR-6 and the sign-in claims follow-up to ADR-098. O9 settled.
+
+**Data:** the switch and the operator's accepted values and window; the recorded claims on acts.
+No migration.
+
+**Errors:** `mfa_required`, `reauthentication_required`.
+
+**Tests:** B9's second-factor cases and C12's stale `auth_time` cases for each act above; a
+self-issued token never satisfies either rule; turning the switch off restores the plain approval.
+
+**Mutants:** the empty-configuration case allowed; the freshness comparison reversed; each covered
+act's check removed, one mutant per act.
+
+**Size:** M. **Independent review:** yes (authentication strength).
+
+### PR-9. Policy per document type, and the controlled record
+
+**Builds:** C1 (one type source per KB; the type frozen at request; the stricter of the old and new
+type's policies; acts with capacity, performer and order; a document may add acts, never remove
+them); C2 (separate publish act, optional distinct publisher, `in_force_on_approval` per type with
+both events recorded at once); C3 (distinct people by default); C5 (an external document revision
+and its `accept` acts, the uploader never counting); C6 (`controlled_copy`, with the prefix check,
+only once in force); C8 (the record assembled from events, `replaces` and `superseded_by`); C10
+(`kb/review.in_force`). C4's freshness extends to `accept` and `controlled_copy`.
+
+**Does not build:** vocabularies and the agent policy (PR-10).
+
+**Prerequisites:** PR-8, groups in the sign-in claims, and ADR-114's match key if a KB takes its
+types from kinds (a KB taking them from a property does not need it). O11 and O12 settled.
+
+**Data:** per-KB type source and per-type policies; per-document added acts; the revision's source
+kind (`frozen | external`). The type and template columns from PR-4 are filled. No migration.
+
+**Methods and errors:** `kb/review.set_policy` gains type policies; `kb/review.accept`;
+`kb/review.in_force`. Refusals add `controlled_copy_mismatch` and the kinds O12 names for an unmet
+performer or order.
+
+**Tests:** C12's type, distinct-people, performer, `in_force_on_approval`, external document,
+controlled copy, record and `in_force` cases, and: an edit by an agent session on P's key puts P in
+the author set, so P's approval is refused even when P is listed.
+
+**Mutants:** the stricter-of-two rule replaced by the new type alone; a per-document act removable;
+the group performer satisfied by a named member; the uploader counted towards `accept`; the
+controlled copy accepted before entry into force.
+
+**Size:** L. **Independent review:** yes (the approval policy).
+
+### PR-10. Vocabularies and the agent policy
+
+**Builds:** C11 (the vocabulary node named in settings, read with mae-org; its approved revision as
+the source of allowed values; the check at request and at approve; the vocabulary node's type with
+the owner as approver) and C9 (the deployment's assessment act, recorded through the local operator
+CLI by the person local configuration designates, and chained; `agents_not_assessed` on every agent
+write path to a review-enabled KB; the KB owner's ceiling `none | read_only | read_write`, starting
+at `none`; P's grants with a fresh second factor, 7 days by default, capped by the operator at most
+30; every agent request checked against P's current rights).
+
+**Does not build:** anything for E2E KBs.
+
+**Prerequisites:** PR-9 (the vocabulary node is a reviewed type) and PR-8 (grants need freshness).
+O9 and O16 settled.
+
+**Data:** the vocabulary node id; the assessment act; ceilings and grants with their expiry. No
+migration.
+
+**Errors:** `vocabulary_violation` (+node, field, value), `agents_not_assessed`, and the kinds O12
+names for a ceiling or grant refusal.
+
+**Tests:** C12's vocabulary and agent cases, and: the assessment act is unreachable from every
+network method, MCP tool and Scheme call (a scan); every agent write path (`sync/update`, `/ws`,
+`kb/node_update`, the dialer relay) is refused before the act, one test per path.
+
+**Mutants:** the vocabulary check skipped at approve; an unapproved vocabulary revision used; one
+agent write path left ungated; the ceiling or the grant expiry not checked; P's current rights not
+re-read.
+
+**Size:** M. **Independent review:** yes (the agent's own authority, principle #16).
+
+### Open before building
+
+Each item is a gap or a disagreement between ADRs. It is not resolved here; the PR it blocks is
+named.
+
+- **O1. The `attachments` map and existing digests (PR-3).** ADR-115 D4 adds the map to
+  `MaterializedNode::digest`, to the history content and to the seed `plan_hash`. The history
+  content encoding (`maenode/v1`) writes a presence flag for every optional field, so it cannot take
+  a new field without changing every encoding, and stored content is accepted only in its one
+  encoding (ADR-116 D3). Decide whether an empty map leaves the digest unchanged (as `org_header`
+  does) and how the history encoding is versioned so existing entries still verify.
+- **Decided 2026-11-16 (O2):** ADR-113 B5 governs. A revision's attachments are held until B5's
+  owner-only, audited deletion after the retention floor, and that deletion releases the revision's
+  hold on the bytes; nothing else releases it. ADR-115 D5 is amended to say so in PR-6.
+- **O2. Revision attachments: kept for ever, or deletable (PR-6, PR-7).** ADR-115 D5 says a
+  revision's references are never released because a revision record is never deleted. ADR-113 B5
+  lets an owner delete a revision's attachment after a retention period. Decide which governs, and
+  that B5 deletion releases the revision's hold on the bytes rather than the file itself.
+- **Decided 2026-11-16 (O3):** one upload path. Every file streams through ADR-115's blob route
+  (`POST /kb/<kb>/blobs`, its digest check, quota and sniffing); attaching it to a revision is a
+  separate call naming the hash and the kind, where ADR-113's rules apply (write-once, approver,
+  person, state). One digest carrier and one refusal kind: ADR-115's. A node can hold any number of
+  attachments by name and a revision up to its kinds; both attach by hash.
+- **O3. Two upload contracts (PR-1, PR-6).** ADR-115: `POST /kb/<kb>/blobs`, a `Content-Digest`
+  header, refusal `blob_hash_mismatch`. ADR-113: `PUT /kb/<kb>/revisions/<rev>/attachments/<kind>`,
+  an `expected_sha256` field, refusal `upload_digest_mismatch`. Decide one digest carrier and one
+  refusal kind, and whether a revision attachment is uploaded as a blob and then bound, or streamed
+  to the revision route.
+- **O4. The PDF media type (PR-1, PR-6).** ADR-115 stores and serves anything off its image
+  allowlist as `application/octet-stream`; B2 requires `application/pdf`. Decide whether
+  `application/pdf` becomes a stored type, served only as a download.
+- **O5. The bin, and purge (PR-3, PR-5).** D5 (delete to the trash, purge) and ADR-115 D5 (nodes in
+  the bin) refer to a node bin and a purge the daemon does not have; deletion today is
+  `remove_node` on the collection. A design, or a mapping onto what exists, is needed.
+- **O6. Holds (PR-3).** ADR-115 D5 and ADR-116 D5 each name operator holds; neither is built.
+  Decide that they are one table and one CLI, and which PR builds it (this sequence assumes PR-3).
+- **O7. The ADR-115 test on cross-KB bytes (PR-1).** "An upload of bytes another KB holds is read
+  and verified in full before binding" describes a cross-KB deduplication path that ADR-115 D1
+  rejects. Restate or drop it.
+- **O8. Where the frozen source lives, and its hash (PR-4).** ADR-116 D2.3 cuts a history version at
+  a freeze but defines no version kind for it, and its content hash is keyed while D2's
+  `source_sha256` is not. Decide whether a revision references the history entry `(node, seq)` or
+  holds its own copy, and the kind of that version.
+- **Decided 2026-11-16 (O9):** native MAE sessions stay agents; native IdP sign-in (ADR-111 P4)
+  is built **before** PR-4, so a person reaches their review-enabled KBs from native MAE as a person.
+- **O9. Native sessions are agents (PR-4, PR-8, PR-10).** Under ADR-098 Amendment 1 C3, a person
+  using native MAE counts as an agent. With C9, a review-enabled KB at the default ceiling `none`
+  then refuses that person's reads and writes from native MAE. C4 requires a fresh `auth_time` for
+  an owner's membership and list changes, which today go over the mutual-TLS collab path, which
+  has no `auth_time`. D8 places `kb/review.*` on the OAuth listener, while `kb/history.*` is on the
+  collab handler only. Confirm these consequences, and name the path for owner administration of
+  a review-enabled KB.
+- **O10. Unnamed methods (PR-7).** B5's attachment deletion and retention period, and B6's import,
+  have no method in D8. B6 is "an owner act", while A4's import is operator-only, through the CLI.
+  Name them, and say whether B6 is a network method (then C4 applies) or a CLI one.
+- **O11. Writes over IdP sessions (PR-1, PR-4).** ADR-098 Amendment 1 C0 says HTTPS writes wait for
+  hub signature verification (#727). This ADR needs IdP sessions to act (B3, B7, C4), and ADR-115
+  uploads need `Edit` on the same listener. State that review acts and blob uploads, which are not
+  CRDT content writes, are allowed before #727, or that they wait.
+- **O12. Unnamed refusal kinds (PR-7, PR-9, PR-10).** None is defined for: a KB retention period
+  below the floor, deletion before the period, an import overlapping existing revisions, an unmet
+  performer or order on `publish` or `accept`, a ceiling or a grant refusal.
+- **O13. Who uploads `rendered_pdf` (PR-6).** D6 says the requester's client renders and uploads
+  it; B3 says "as D6". Decide whether only the requester may upload it, or any principal with
+  `Edit`.
+- **Decided 2026-11-16 (O14):** mutant lists move into the repository only after a confidentiality
+  review of each list, and after a review of whether the harness should become proper tooling (a
+  Rust runner over declared lists, or an existing tool) rather than the provisional scripts. That
+  review is its own item before PR-1. The review is done: no list leaks anything, after small edits.
+  The harness becomes `tools/mutate`, a standalone Rust crate in the style of `tools/audit-metrics`,
+  reading declared lists from `mutants/<area>.toml`. Each entry carries an id, a runner, the test
+  filter that must fail, and one or more exact find/replace edits. `--since <ref>` selects by
+  files touched. The tool restores files left mutated by a killed run, and counts a killed build as
+  no result. CI runs `--check` (anchors still match) on every PR, and the full run nightly or
+  on a label. Each PR commits its own entries. Cost is a design requirement, not a tuning detail:
+  the provisional runners spent about 3.5 minutes per mutant on work no verdict needed. So the tool
+  prints and records each result the moment it is known, and resumes from that record. Each mutant
+  names only the test targets and the filter that hold its guarding tests. The first failing test
+  ends that mutant's run. Compile errors and killed builds are reported apart from survivors. Each
+  run reports its time per mutant, so a slow list is visible.
+- **O14. Where mutants are listed.** The repository has no committed mutant list or runner. One is
+  needed before PR-1, so each PR can add its entries.
+- **O15. Binding an unknown hash (PR-3).** ADR-115 D5 says binding takes the per-KB lock, and
+  binding happens inside ordinary CRDT updates on several paths. Decide whether an update that binds
+  a hash this KB does not hold is refused or accepted and rendered `Missing`, and whether a
+  hub-local check on a CRDT update is acceptable for a map mesh peers also replicate (ADR-115 D8).
+- **O16. One agent or all of P's agents (PR-10).** An agent signs with P's key, so the daemon cannot
+  tell one of P's agents from another: a C9 grant can only be per `(KB, P)`. Confirm.
+- **O17. A review-enabled KB switched to E2E.** Revisions and their frozen sources are plaintext,
+  and ADR-116 Amendment 1 carries only history across the switch. Decide whether the switch is
+  refused while revisions exist, as it is while history holds plaintext. No PR here builds the
+  switch, but the first revision makes the question live, so it blocks PR-4.
+- **O18. Incremental backup.** ADR-115 D1 says an incremental copy of the immutable blob files is
+  exact; `mae-daemon backup` writes one archive each run. Either extend the format or narrow the
+  claim (PR-1).
+
 ## Consequences
 
 - A reader's view of a controlled KB stops being the live working copy. A KB with no review policy
