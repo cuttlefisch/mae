@@ -373,3 +373,75 @@ fn plan_reactive_member_rewraps_works_after_the_owner_has_itself_rotated() {
         "a non-owner (not in the owner principal chain) never authors a reactive re-wrap"
     );
 }
+
+/// ADVERSARIAL — a REMOVED member's post-removal `Rebind` must not be turned into an
+/// owner-signed re-admission. The reactive planner used to re-wrap for any well-formed
+/// `Rebind` in an inbound delta, whether or not the derivation honors it, and
+/// `author_rebind_rewrap` falls back to `Role::Editor` when the successor is not a member —
+/// so a member the owner had removed could sign a rotation with the key it still holds,
+/// have it relayed to the owner, and get back in at Editor with the current content key.
+/// The derivation fences that rotation; the owner's editor must not undo the fence.
+#[test]
+fn plan_reactive_member_rewraps_ignores_a_removed_members_rotation() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::content_crypto::{wrap_public_for, wrap_to_member, ContentKey};
+    use mae_sync::kb::{KbCollectionDoc, Role};
+
+    let owner = Identity::from_seed(&[1u8; 32], "owner");
+    let member = Identity::from_seed(&[2u8; 32], "member");
+    let succ = Identity::from_seed(&[3u8; 32], "succ");
+    let (ofp, opk, osec) = (
+        owner.fingerprint(),
+        owner.public().to_bytes(),
+        owner.secret_bytes(),
+    );
+    let mfp = member.fingerprint();
+    let mut kb = KbCollectionDoc::new_owned("M", &ofp, "owner");
+    let k = ContentKey::generate();
+    let self_wrap = wrap_to_member(&k, &wrap_public_for(&osec)).unwrap();
+    kb.author_e2e_genesis("kb", &ofp, &osec, &opk, self_wrap, 1000);
+    let member_wrap = wrap_to_member(&k, &wrap_public_for(&member.secret_bytes())).unwrap();
+    kb.author_member_admit(
+        "kb",
+        &mfp,
+        &member.public().to_bytes(),
+        &wrap_public_for(&member.secret_bytes()),
+        Role::Viewer,
+        "member",
+        member_wrap,
+        &ofp,
+        &osec,
+        &opk,
+        1001,
+    );
+    // The owner removes the member (and re-keys itself).
+    let k2 = ContentKey::generate();
+    let owner_rekey = wrap_to_member(&k2, &wrap_public_for(&osec)).unwrap();
+    kb.author_rotate_on_remove(
+        "kb",
+        &mfp,
+        &[(ofp.clone(), owner_rekey)],
+        &ofp,
+        &osec,
+        &opk,
+        1002,
+    );
+    let base = kb.encode_state();
+
+    // The removed member signs a rotation with the key it still holds, after the removal.
+    let mut member_view = KbCollectionDoc::from_bytes(&base).unwrap();
+    let rebind = member_view.author_rebind(
+        "kb",
+        &mfp,
+        &succ.fingerprint(),
+        &succ.public().to_bytes(),
+        &wrap_public_for(&succ.secret_bytes()),
+        &member.secret_bytes(),
+        &member.public().to_bytes(),
+        2000,
+    );
+    assert!(
+        plan_reactive_member_rewraps("kb", &base, &rebind, &k2, &owner, 2001).is_empty(),
+        "the owner must not re-admit a removed member's successor"
+    );
+}
