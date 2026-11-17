@@ -187,25 +187,36 @@ kb_query_enabled = true
 /// `[[bin]]` target can't see; a production `mae-daemon` binary has no
 /// business linking test-cert-generation crates). Cargo does NOT set a
 /// `CARGO_BIN_EXE_*` env var for examples (only real `[[bin]]` targets), so
-/// the path is derived at runtime instead: examples land in a `examples/`
-/// directory that's a sibling of the CURRENTLY-RUNNING test binary's own
-/// `deps/` directory, both under the same `target/<profile>/`.
+/// the path is derived at runtime instead: cargo uplifts examples to
+/// `target/<profile>/examples/`, an ancestor of the running test binary.
+///
+/// Which ancestor depends on cargo's build-dir layout: the test binary sat in
+/// `target/<profile>/deps/` until Rust 1.100 and in
+/// `target/<profile>/build/<pkg>/<hash>/out/` from it, so "two levels up"
+/// stopped reaching `target/<profile>/`. Walking every ancestor holds on both.
 fn example_binary_path(name: &str) -> std::path::PathBuf {
-    let mut path = std::env::current_exe().expect("current_exe");
-    path.pop(); // this test binary's own filename
-    path.pop(); // deps/
-    path.push("examples");
-    path.push(if cfg!(windows) {
+    let file = if cfg!(windows) {
         format!("{name}.exe")
     } else {
         name.to_string()
-    });
-    assert!(
-        path.exists(),
-        "expected example binary at {path:?} -- run `cargo build --example {name}` first \
-         if running this test directly rather than via `cargo test`"
-    );
-    path
+    };
+    let exe = std::env::current_exe().expect("current_exe");
+    let tried: Vec<_> = exe
+        .ancestors()
+        .skip(1)
+        .map(|dir| dir.join("examples").join(&file))
+        .collect();
+    tried
+        .iter()
+        .find(|p| p.exists())
+        .cloned()
+        .unwrap_or_else(|| {
+            panic!(
+                "no example binary `{file}` in an `examples/` beside any ancestor of {exe:?} \
+             (tried {tried:?}) -- run `cargo build --example {name}` first if running this \
+             test directly rather than via `cargo test`"
+            )
+        })
 }
 
 #[tokio::test]
