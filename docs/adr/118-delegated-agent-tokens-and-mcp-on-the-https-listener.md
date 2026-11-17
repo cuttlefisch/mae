@@ -200,6 +200,9 @@ Methods on the OAuth listener, alongside `kb/query.*`:
   carry neither value after a grant.
 - **`kb/agent.renew {grant_id, ttl_secs?}`.** Sets a new expiry on the same grant, so the agent id and
   its history stay continuous. Renewing is granting again *(owner, 2026-11-15)*: the same checks.
+  It issues no new refresh credential and needs no re-enrolment of the shim, which keeps refreshing
+  in place (D2). For a write grant it also takes a fresh delegation P signs over the existing agent
+  key (D7).
 - **`kb/agent.revoke {grant_id, reason?}`.** Immediate (below).
 - **`kb/agent.list`.** Caller-scoped (ADR-117 D1): P sees their own grants; a KB owner sees, for their
   KBs, each grant's label, P, rights and expiry; never a token or credential.
@@ -250,8 +253,11 @@ check on every request means revocation does not depend on either.
 - An access token lives 15 minutes by default (`agent_access_token_ttl_secs`), never past the grant's
   expiry. Fifteen minutes is the window a leaked access token stays useful; refreshing costs one
   SQLite read and write per agent per quarter hour.
-- The refresh credential is 256 random bits, returned only by `kb/agent.grant`, `kb/agent.renew` and
-  the refresh itself. It is redeemed at `POST /agent/token` with RFC 6749 §6's shape
+- The refresh credential is 256 random bits, returned only by `kb/agent.grant` and the refresh
+  itself. `kb/agent.renew` returns none: it extends the grant the client already holds a credential
+  for, and the client keeps refreshing in place (D5). A renew that issued a new credential would
+  spend the client's live one, and its next routine refresh would then read as reuse and revoke the
+  grant. It is redeemed at `POST /agent/token` with RFC 6749 §6's shape
   (`grant_type=refresh_token`, `refresh_token`, `resource`), which returns a new access token **and a
   new refresh credential**; the old one is spent.
 - **Presenting a spent credential revokes the grant** (RFC 9700 §4.14.2): it means two parties hold
