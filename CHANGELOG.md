@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.14.161] - 2026-11-17
+## [0.14.162] - 2026-11-17
 
 
 
@@ -15,14 +15,27 @@ All notable changes to this project will be documented in this file.
 
 - *(test-safety)* Detect cargo test binaries on Rust 1.100's build-dir layout; take over #882/#883 ([ef0157a](https://github.com/cuttlefisch/mae/commit/ef0157a15a6d15b97e40180fc4b1aaccabe674e3))
 - *(ci)* Time the daemon tests apart from their build; shorten build_configuration ([0b15197](https://github.com/cuttlefisch/mae/commit/0b151974458e13a56f170e8b7fe8be4b7319dcc8))
+- *(tests)* Gate the Unix-socket test helper; keep the DAP mock within its ceiling ([278183f](https://github.com/cuttlefisch/mae/commit/278183ff7bbf027079d4d0367d3fb27589c84a38))
 
 ### Documentation
 
 - *(adr)* The ADR-113/115 build sequence, ADR-117, ADR-111 Am. 1, ADR-118 ([0ab9100](https://github.com/cuttlefisch/mae/commit/0ab910069b9c5848db8b85075f6a2b16d0c08cfe))
+- *(adr)* Agent renew happens in place; an agent grant is not a self-grant ([0f2b2a3](https://github.com/cuttlefisch/mae/commit/0f2b2a3ca9988640d28274bcabcbb73bf3c3c1b4))
+- *(adr-022)* Amendment 1 — a whole-KB transfer is paged, both ways ([536876c](https://github.com/cuttlefisch/mae/commit/536876c48dd14a9c95c52cb89ed6259071d5c3ae))
+
+### Testing
+
+- Wait on the real condition instead of fixed sleeps (Rust) ([aaf3288](https://github.com/cuttlefisch/mae/commit/aaf3288edd9ce54c03a2759694ba09860cc4071f))
+- *(daemon)* Pin that /ws is never built with a ticket TTL outside 1..=30 ([3be3f09](https://github.com/cuttlefisch/mae/commit/3be3f095b275c3c54eaffd3d0ca405c85e677dae))
+
+### CI
+
+- Unblock cargo-deny (chrono family) and mae-mutate's tests under colour ([1ac5c67](https://github.com/cuttlefisch/mae/commit/1ac5c6710090bdba642bd69e6049fcf773462cfe))
 
 ### Miscellaneous
 
 - Bump version to 0.14.160 ([4e3c1c2](https://github.com/cuttlefisch/mae/commit/4e3c1c21a731095356f7bc795bcda744f525a566))
+- Bump version to 0.14.161 ([202a5c5](https://github.com/cuttlefisch/mae/commit/202a5c570dfd653c430986d46103866f9d43c8bf))
 
 ## [0.14.159] - 2026-11-16
 
