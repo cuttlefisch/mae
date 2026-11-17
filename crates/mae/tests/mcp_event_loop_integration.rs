@@ -30,16 +30,14 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 
-/// Helper: find the mae binary (debug build).
+/// Helper: the `mae` binary cargo built for this test run.
+///
+/// `CARGO_BIN_EXE_mae`, not a path derived from `current_exe()`: the test
+/// executable's own directory is cargo's build-dir layout, which moved in Rust
+/// 1.100 (`deps/` became `build/<pkg>/<hash>/out/`), so "two levels up" no
+/// longer reaches `target/<profile>/`.
 fn mae_binary() -> PathBuf {
-    let mut path = std::env::current_exe()
-        .expect("current_exe")
-        .parent()
-        .expect("parent")
-        .parent()
-        .expect("parent")
-        .to_path_buf();
-    path.push("mae");
+    let path = PathBuf::from(env!("CARGO_BIN_EXE_mae"));
     if !path.exists() {
         panic!(
             "mae binary not found at {}. Run `cargo build -p mae` first.",
