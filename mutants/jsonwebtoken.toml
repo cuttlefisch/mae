@@ -49,3 +49,14 @@ find = '''    validation.validate_exp = true;
 replace = '''    validation.validate_exp = true;
     validation.validate_aud = false;
     // Stated, not inherited'''
+
+[[mutant]]
+id = "jsonwebtoken/external-validator-aud-not-required"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_token_without_an_audience_is_refused)"
+ref = "ADR-052: audience validated per RFC 8707; a token with no aud is not for this resource"
+[[mutant.edit]]
+file = "daemon/src/oauth.rs"
+find = '''    validation.set_required_spec_claims(&["exp", "aud"]);'''
+replace = '''    validation.set_required_spec_claims(&["exp"]);'''
