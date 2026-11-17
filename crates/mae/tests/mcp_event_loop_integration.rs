@@ -25,7 +25,7 @@ use std::os::fd::FromRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
@@ -105,18 +105,6 @@ fn spawn_mae_with_pty() -> (std::process::Child, String, std::fs::File) {
     let socket_path = format!("/tmp/mae-{}.sock", pid);
 
     (child, socket_path, master_file)
-}
-
-/// Wait for the MCP socket to appear.
-fn wait_for_socket(path: &str, timeout: Duration) -> bool {
-    let start = Instant::now();
-    while start.elapsed() < timeout {
-        if std::path::Path::new(path).exists() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    false
 }
 
 /// Send a JSON-RPC message and read the response via Content-Length framing.
@@ -271,23 +259,18 @@ impl Drop for MaeProcess {
 /// Boot mae and connect via MCP. Returns (process_guard, connected_stream).
 async fn boot_mae() -> (MaeProcess, UnixStream) {
     let (child, socket_path, master_fd) = spawn_mae_with_pty();
-    let mut proc = MaeProcess {
+    let proc = MaeProcess {
         child,
         socket_path: socket_path.clone(),
         _master_fd: master_fd,
     };
 
-    if !wait_for_socket(&socket_path, Duration::from_secs(30)) {
-        let _ = proc.child.kill();
-        panic!("MCP socket {} did not appear within 30s", socket_path);
-    }
-
-    // Brief delay for server to accept connections after socket creation.
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    let mut stream = UnixStream::connect(&socket_path)
-        .await
-        .expect("connect to MCP socket");
+    // The socket file appearing is not the condition (the listener may not
+    // accept yet); a successful connect is. `proc`'s Drop kills mae on timeout.
+    let mut stream = mae_mcp::ready::connect_when_ready("mae's MCP socket", || {
+        UnixStream::connect(&socket_path)
+    })
+    .await;
 
     mcp_initialize(&mut stream).await;
 

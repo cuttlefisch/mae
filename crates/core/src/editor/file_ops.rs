@@ -2173,14 +2173,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("note.txt");
         std::fs::write(&path, "original\n").unwrap();
+        // A real external change below, with a real mtime delta: the original
+        // is dated long past, so no sleep has to make one.
+        let past = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(past)
+            .unwrap();
 
         let mut editor = Editor::new();
         let idx = editor.open_file_hidden(&path).unwrap();
         editor.buffers[idx].insert_text_at(0, "unsaved edit\n");
         assert!(editor.buffers[idx].modified);
 
-        // A real external change, with a real mtime delta.
-        std::thread::sleep(std::time::Duration::from_millis(10));
         std::fs::write(&path, "changed externally\n").unwrap();
 
         editor.check_and_reload_buffer(idx);
