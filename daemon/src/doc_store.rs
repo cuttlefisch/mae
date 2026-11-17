@@ -293,6 +293,12 @@ pub(crate) fn is_durable_doc(name: &str) -> bool {
 }
 
 impl DocStore {
+    /// How the backing store's WAL stands (`daemon/status`): its size, and any
+    /// ADR-037 scrub still owed. `None` for a backend with no WAL.
+    pub fn storage_health(&self) -> Option<crate::storage::StorageHealth> {
+        self.storage.storage_health()
+    }
+
     pub fn new(storage: Arc<dyn StorageBackend>, compact_threshold: u64) -> Self {
         DocStore {
             docs: RwLock::new(HashMap::new()),

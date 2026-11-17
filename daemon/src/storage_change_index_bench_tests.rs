@@ -54,7 +54,9 @@ enum Mode {
     WalSeq,
     /// `Base` with every `wal_append` taken through one in-process FIFO lock,
     /// so writers queue instead of colliding on SQLite's file lock (whose busy
-    /// handler resolves a collision by sleeping 1, 2, 5, ... ms).
+    /// handler resolves a collision by sleeping 1, 2, 5, ... ms). Since the
+    /// backend took its own writer lock (`storage_writer.rs`), `Base` and `C1`
+    /// already queue, and the `*Serial` modes only add a second, redundant one.
     BaseSerial,
     /// `C1` behind the same in-process writer lock.
     C1Serial,
@@ -195,8 +197,9 @@ impl IndexedBackend {
         }
     }
 
-    /// The real `SqliteBackend::wal_append` body plus `record_change`.
-    fn append_indexed(
+    /// The real `SqliteBackend::wal_append` body plus `record_change`, holding
+    /// the backend's writer slot as every production write does.
+    async fn append_indexed(
         &self,
         doc: &str,
         update: &[u8],
@@ -207,7 +210,7 @@ impl IndexedBackend {
             panic!("bench writes node docs only: {doc}");
         };
         let (id, seq) = {
-            let conn = self.inner.pool.lock_shard(doc);
+            let conn = self.inner.pool.write_shard(doc).await;
             conn.execute("BEGIN IMMEDIATE")?;
             let written = editor_record::write_attributed(&conn, doc, update, client_id, by)
                 .and_then(|id| {
@@ -240,7 +243,7 @@ impl StorageBackend for IndexedBackend {
         if !self.mode.indexes() {
             return self.inner.wal_append(doc, update, client_id, by).await;
         }
-        self.append_indexed(doc, update, client_id, by)
+        self.append_indexed(doc, update, client_id, by).await
     }
     async fn editors_since_wal(&self, d: &str, w: u64) -> Result<EditorsSince, StorageError> {
         self.inner.editors_since_wal(d, w).await

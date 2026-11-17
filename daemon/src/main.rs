@@ -1823,23 +1823,36 @@ fn run_doctor(config: &DaemonConfig, compare_with: Option<&DaemonConfig>) -> i32
             }
         }
 
-        // Check collab storage
-        let collab_data_dir = config.resolve_collab_data_dir();
-        let db_path = collab_data_dir.join("state.db");
-        match storage::SqliteBackend::open_with_pool_size(
-            &db_path,
-            config.collab.storage.shard_count,
-        ) {
-            Ok(_) => println!(
-                "  collab sqlite: OK ({}, {} shard(s))",
-                db_path.display(),
-                config.collab.storage.shard_count
+        // Check collab storage. Read-only: doctor runs beside a live daemon, so
+        // it must not open the store as a writer (that started a second
+        // checkpointer and ran schema DDL outside the daemon's writer slot).
+        let db_path = config.collab_data_dir().join("state.db");
+        let policy = storage::CheckpointPolicy::PRODUCTION;
+        match storage::inspect_store(&db_path, &policy) {
+            Ok(storage::StoreInspection::Absent) => println!(
+                "  collab sqlite: not created yet ({}); the daemon creates it on first start",
+                db_path.display()
             ),
+            Ok(found @ storage::StoreInspection::Present { wal_bytes, .. }) => {
+                println!(
+                    "  collab sqlite: OK ({}, {} shard(s))",
+                    db_path.display(),
+                    config.collab.storage.shard_count
+                );
+                println!("    WAL file: {wal_bytes} bytes");
+                if found.wal_over_backstop() {
+                    println!(
+                        "    ! the WAL is past twice its checkpoint backstop: a read held open \
+                         (a backup?) is keeping checkpoints from backfilling it"
+                    );
+                }
+            }
             Err(e) => {
                 println!("  collab sqlite: FAILED ({e})");
                 problems += 1;
             }
         }
+        print_live_storage(config);
 
         // ADR-036 Amendment 1 F2, "log wins, made visible": a listed member the
         // governing signed op-log does not admit has no access. Advisory only.
@@ -1901,6 +1914,39 @@ fn run_doctor(config: &DaemonConfig, compare_with: Option<&DaemonConfig>) -> i32
          explicitly per instance (see docs/DAEMON_ADMIN.md §1)."
     );
     doctor_exit(problems + conflicts.len())
+}
+
+/// What the running daemon says about its WAL: a pending ADR-037 scrub lives
+/// only in that process's memory, so it is asked over the control socket.
+/// Advisory: a scrub pending is not a broken instance, and no daemon running
+/// is not a problem either (a store's open and close each empty the WAL).
+fn print_live_storage(config: &DaemonConfig) {
+    let mut client = mae_mcp::daemon_client::DaemonClient::new(&config.socket);
+    client.set_timeout(std::time::Duration::from_secs(2));
+    let status = client
+        .connect()
+        .ok()
+        .and_then(|()| client.call("daemon/status", serde_json::json!({})).ok());
+    let Some(storage) = status
+        .as_ref()
+        .map(|s| &s["storage"])
+        .filter(|s| s.is_object())
+    else {
+        println!("    WAL scrub: unknown (no daemon answering with its store)");
+        return;
+    };
+    let frames = storage["wal_frames"].as_u64().unwrap_or(0);
+    let warn_at = storage["wal_warn_frames"].as_u64().unwrap_or(u64::MAX);
+    println!("    live WAL: {frames} frame(s); warns past {warn_at}");
+    match storage["scrub_pending"].as_object() {
+        None => println!("    WAL scrub: none pending"),
+        Some(p) => println!(
+            "    ! WAL scrub (ADR-037) pending for {}s, covering {} removed document(s): \
+             a reader is holding the WAL",
+            p.get("pending_secs").and_then(|v| v.as_u64()).unwrap_or(0),
+            p.get("docs").and_then(|v| v.as_u64()).unwrap_or(0),
+        ),
+    }
 }
 
 /// Print the verdict and map it to an exit code.
