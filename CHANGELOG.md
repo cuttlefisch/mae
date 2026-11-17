@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.165] - 2026-11-17
+
+
+
+
+### Features
+
+- *(daemon)* One in-process SQLite writer, checkpoints off the commit path (ADR-074 Am. 1) ([bc0f43a](https://github.com/cuttlefisch/mae/commit/bc0f43a442968cc2f43d10be7bc6b35e041fee24))
+
+### Bug Fixes
+
+- *(daemon)* Retry the ADR-037 WAL scrub off the writer slot, and report the WAL ([978cd7a](https://github.com/cuttlefisch/mae/commit/978cd7a891c24f24ad57e6037e67b18453a4bb66))
+- *(daemon)* Owe the scrub before a delete, rate-limit the checkpoint warning ([636376a](https://github.com/cuttlefisch/mae/commit/636376a97ed024242837312adb4b4fffa41e7d39))
+- *(daemon)* Build clean on Rust 1.99; fail fast where a store close could hang ([c5ddd35](https://github.com/cuttlefisch/mae/commit/c5ddd3576b87919da18e13e91c62df9a3885ad00))
+
+### Performance
+
+- *(daemon)* Checkpoint once a second, and measure open-loop latency from the due time ([7802b10](https://github.com/cuttlefisch/mae/commit/7802b108d2353c88ef29abfb170dd60832cc729c))
+
+### Documentation
+
+- *(adr-098)* Amendment 1 — Phase C first for reads; who counts as a person ([f33a0b2](https://github.com/cuttlefisch/mae/commit/f33a0b2efc58627b5eeb999423610b63ce796177))
+- *(adr-098)* Amendment 1 — record the admin-bind and native-edit decisions ([5f99464](https://github.com/cuttlefisch/mae/commit/5f994642de39edf673622c3e34b52b16e5b1db80))
+- *(adr-098)* Amendment 1 — any one allowed group admits; the signing command ([0b8772f](https://github.com/cuttlefisch/mae/commit/0b8772f126f8f506be6eebce885ed3d5e94f506e))
+
+### Testing
+
+- *(daemon)* Prove the checkpointer's TRUNCATE holds the writer slot ([96e1e0b](https://github.com/cuttlefisch/mae/commit/96e1e0bc19f23e5acef2d7feb5f981dbaf9e1abc))
+
+### CI
+
+- Give the daemon collab test step a 15-minute cap ([3c0beb9](https://github.com/cuttlefisch/mae/commit/3c0beb90b182b7436727951cb348260a4a71e698))
+
 ## [0.14.164] - 2026-11-17
 
 
@@ -11,6 +44,10 @@ All notable changes to this project will be documented in this file.
 
 - *(membership)* Removing a member who rotated their key removes them ([6541317](https://github.com/cuttlefisch/mae/commit/6541317b2098a3313cee339dcd4d84f3dc4bb563))
 - *(membership)* A Rebind may not bind a key another seat has retired ([48643ed](https://github.com/cuttlefisch/mae/commit/48643ed56054b1fd1f58118d44f6ee53c70a75e5))
+
+### Miscellaneous
+
+- Bump version to 0.14.164 ([c363232](https://github.com/cuttlefisch/mae/commit/c3632326703ca8a865a315f8ab52ea6d17805613))
 
 ## [0.14.163] - 2026-11-17
 
