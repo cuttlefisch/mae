@@ -337,6 +337,18 @@ mod tests {
         assert!(with(Some(serde_json::json!(TEST_RESOURCE))).is_ok());
         assert!(with(Some(serde_json::json!(["some-client-id", TEST_RESOURCE]))).is_ok());
         assert_eq!(with(None), Err(TokenValidationError::WrongAudience));
+        // The empty forms an IdP or an attacker might send are no audience either.
+        for empty in [
+            serde_json::json!(null),
+            serde_json::json!([]),
+            serde_json::json!(""),
+        ] {
+            assert_eq!(
+                with(Some(empty.clone())),
+                Err(TokenValidationError::WrongAudience),
+                "aud = {empty}"
+            );
+        }
     }
 
     #[test]
