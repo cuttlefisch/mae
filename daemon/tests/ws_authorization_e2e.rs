@@ -21,7 +21,7 @@ async fn an_external_issuer_token_is_refused_on_both_routes() {
     header.kid = Some("idp-signing-key".to_string());
     let claims = json!({"sub": "alice@example.com", "aud": AUDIENCE, "iss": "https://idp.example.com",
         "exp": 4_000_000_000u64});
-    let external = encode(&header, &claims, &EncodingKey::from_secret(b"k")).unwrap();
+    let external = encode(&header, &claims, &EncodingKey::from_secret(b"k").unwrap()).unwrap();
     let auth = format!("Bearer {external}");
     let r = upgrade(&d, "mae.v1", &[("Authorization", &auth)]).await;
     let want = (

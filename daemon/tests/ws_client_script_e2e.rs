@@ -907,7 +907,7 @@ async fn external_issuer(sc: Value) {
     header.kid = Some("idp-signing-key".to_string());
     let claims = json!({"sub": "alice@example.com", "aud": AUDIENCE,
         "iss": "https://idp.example.com", "exp": 4_000_000_000u64});
-    let external = encode(&header, &claims, &EncodingKey::from_secret(b"k")).unwrap();
+    let external = encode(&header, &claims, &EncodingKey::from_secret(b"k").unwrap()).unwrap();
     let bearer = format!("Bearer {external}");
     let ask = step(&sc, 0, "cliente");
     let h = headers(
