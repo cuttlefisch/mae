@@ -136,9 +136,12 @@ impl Slot {
                     .and_then(|m| m.as_str())
                     .unwrap_or("refused")
                     .to_string();
-                // A refusal of the original, on the connection that carried it, is final.
-                // A refusal of a re-send is not: the original may be what made it.
-                if !resend && e.outcome == Outcome::Unknown {
+                // A refusal of the original, on the connection that carried it, is final
+                // only when it is one the daemon makes before applying anything. A refusal
+                // of a re-send is not: the original may be what made it. Any other error —
+                // an internal or storage fault, a quota, an unkinded one — may come after
+                // the daemon applied the `Rebind`, so it is settled by asking the new key.
+                if !resend && e.outcome == Outcome::Unknown && refused_before_applying(err) {
                     e.outcome = Outcome::Refused;
                     e.reason = Some(why);
                 } else {
@@ -152,6 +155,33 @@ impl Slot {
         }
         true
     }
+}
+
+/// The `data.kind`s of the daemon's `kb/collection_op` refusals that it returns BEFORE it
+/// applies anything (`handle_kb_collection_op`): the access gate (not a member, wrong role,
+/// not shared over this transport, no such KB), a malformed or oversized request, and an op
+/// whose signature or author does not verify. Only these settle a `Rebind` as refused.
+/// Everything else — `internal` (persisting failed, possibly after the update was applied),
+/// `collection_unavailable`, `tenant_quota_exceeded`, a kind this build does not know, or
+/// none — leaves it `Ambiguous`, so the new key's membership decides.
+const REFUSED_BEFORE_APPLYING: &[&str] = &[
+    "not_member",
+    "role_forbidden",
+    "transport_forbidden",
+    "kb_not_found",
+    "invalid_params",
+    "update_too_large",
+    "request_too_large",
+    "signature_invalid",
+    "signature_required",
+    "not_author",
+    "history_holds_plaintext",
+];
+
+fn refused_before_applying(err: &serde_json::Value) -> bool {
+    err.pointer("/data/kind")
+        .and_then(|k| k.as_str())
+        .is_some_and(|k| REFUSED_BEFORE_APPLYING.contains(&k))
 }
 
 impl PendingRotation {
@@ -238,6 +268,15 @@ pub(super) fn begin(
         .dir
         .clone()
         .ok_or_else(|| "there is no data directory to keep the new key in".to_string())?;
+    // A record this run is not driving — one start-up could not use, or another editor's on
+    // the same directory — may be the only copy of a key a daemon accepted. Never write over
+    // it, and never show what is in it.
+    if record::present(&dir) {
+        return Err(format!(
+            "a pending-rotation record is already on disk at {}; it may hold the only copy of a key a daemon accepted, so resolve it (restart MAE with the identity it names, or move it aside once you know no daemon accepted its key) before rotating again",
+            record::path(&dir).display()
+        ));
+    }
     let b64 = |d: &Vec<u8>| mae_sync::encoding::update_to_base64(d);
     let kbs = plans
         .into_iter()
@@ -250,7 +289,7 @@ pub(super) fn begin(
         })
         .collect();
     let record = Record::new(old_fp, &new_id, kbs);
-    record::save(&dir, &record).map_err(|e| format!("the new key could not be saved ({e})"))?;
+    record::create(&dir, &record).map_err(|e| format!("the new key could not be saved ({e})"))?;
     slot.pending = Some(PendingRotation {
         record,
         new_id,

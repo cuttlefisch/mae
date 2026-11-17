@@ -5,8 +5,11 @@
 //! accepts.
 //!
 //! One file, `<collab dir>/rotation_pending`, beside the identity key and held to the same
-//! rules: created 0600 (never created wider and narrowed), replaced atomically
-//! (`write_secure_atomic`), the directory 0700. It holds a secret, so the record has no
+//! rules: created 0600 (never created wider and narrowed), the directory 0700. It is
+//! CREATED with no-replace semantics ([`create`]): a record already on disk — even one this
+//! run could not use — may be the only copy of a key a daemon accepted, and of two editors
+//! sharing the directory only one may start a rotation. The owner's later updates replace it
+//! atomically ([`save`]). It holds a secret, so the record has no
 //! `Debug`, and nothing here logs or formats `new_key`.
 //!
 //! @ai-caution: [collab-identity] Delete this file only once no KB can still hold a `Rebind`
@@ -31,11 +34,13 @@ pub(crate) enum Outcome {
     Unknown,
     /// Re-sent after a lost answer, and the re-send refused. Either the daemon applied the
     /// first copy (so the old key, now retired, gets nothing) or it never will; only the new
-    /// key's membership tells which.
+    /// key's membership tells which. Also: the original answered with an error the daemon
+    /// may return after applying it (an internal or storage fault), not a refusal it makes
+    /// before applying anything.
     Ambiguous,
     /// The daemon holds it: it answered yes, or the new key is a member.
     Applied,
-    /// The daemon answered the original with a refusal, or a refused re-send was followed by
+    /// The daemon answered the original with a refusal it makes before applying anything, or a refused re-send was followed by
     /// the daemon saying the new key is not a member.
     Refused,
 }
@@ -100,16 +105,34 @@ pub(crate) fn path(dir: &Path) -> PathBuf {
     dir.join(FILE)
 }
 
-/// Write `rec`, replacing any previous record atomically, 0600 from creation.
+/// Start a record: write `rec`, 0600 from creation, failing (`AlreadyExists`) if anything is
+/// already at the record's path. Never replaces.
+pub(crate) fn create(dir: &Path, rec: &Record) -> std::io::Result<()> {
+    let body = prepare(dir, rec)?;
+    mae_mcp::keystore::create_secure_atomic(&path(dir), &body)
+}
+
+/// Update the record this rotation created: replace it atomically, 0600 from creation.
 pub(crate) fn save(dir: &Path, rec: &Record) -> std::io::Result<()> {
+    let body = prepare(dir, rec)?;
+    mae_mcp::keystore::write_secure_atomic(&path(dir), &body)
+}
+
+/// Whether anything is at the record's path — a file of any content, or a symlink. An
+/// error other than "not there" counts as there: a record that cannot even be looked at
+/// cannot be ruled out.
+pub(crate) fn present(dir: &Path) -> bool {
+    !matches!(std::fs::symlink_metadata(path(dir)), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+}
+
+fn prepare(dir: &Path, rec: &Record) -> std::io::Result<String> {
     std::fs::create_dir_all(dir)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
     }
-    let body = serde_json::to_string(rec).map_err(std::io::Error::other)?;
-    mae_mcp::keystore::write_secure_atomic(&path(dir), &body)
+    serde_json::to_string(rec).map_err(std::io::Error::other)
 }
 
 /// The record in `dir`; `Ok(None)` when there is none.
@@ -173,7 +196,15 @@ mod tests {
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&path(&dir)), 0o600);
         assert_eq!(mode(&dir), 0o700);
-        assert!(!dir.join(format!("{FILE}.tmp")).exists());
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            names,
+            vec![std::ffi::OsString::from(FILE)],
+            "no temporary left behind"
+        );
         let back = load(&dir).unwrap().expect("the record");
         let id = back.new_identity().expect("the key");
         assert_eq!(id.fingerprint(), new.fingerprint());
@@ -233,5 +264,75 @@ mod tests {
         let slot = Slot::load(t.path().to_path_buf(), &new);
         assert!(slot.is_pending(), "a re-wrap is still to be sent");
         assert!(slot.wake_at().is_none(), "nothing left to ask the daemon");
+    }
+
+    /// Finding 1: a record start-up could not use (corrupt here) may be the only copy of a
+    /// key the daemon accepted. A new rotation is refused while ANY record is on disk, the
+    /// refusal names the file without showing it, and the file is left byte for byte.
+    #[test]
+    fn a_new_rotation_is_refused_over_an_unusable_record() {
+        let (old, new) = keys();
+        let unusable: [(&str, Vec<u8>); 3] = [
+            ("corrupt", b"{\"v\":1,\"new_key\":\"deadbeefcafe".to_vec()),
+            ("empty", Vec::new()),
+            ("another identity's", {
+                let other = Identity::from_seed(&[15u8; 32], "me");
+                let rec = Record::new(
+                    &other.fingerprint(),
+                    &new,
+                    vec![entry(Outcome::Unknown, vec![])],
+                );
+                serde_json::to_vec(&rec).unwrap()
+            }),
+        ];
+        for (what, bytes) in unusable {
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::write(path(tmp.path()), &bytes).unwrap();
+            let mut slot = Slot::load(tmp.path().to_path_buf(), &old);
+            assert!(!slot.is_pending(), "{what}: not used at start-up");
+            let fresh = std::sync::Arc::new(Identity::from_seed(&[16u8; 32], "me"));
+            let err = super::super::begin(&mut slot, &old.fingerprint(), fresh, Vec::new(), 0)
+                .expect_err(what);
+            assert!(
+                err.contains(&path(tmp.path()).display().to_string()),
+                "{what}: {err}"
+            );
+            assert!(
+                !err.contains("new_key") && !err.contains("deadbeefcafe"),
+                "{what}: {err}"
+            );
+            assert_eq!(
+                std::fs::read(path(tmp.path())).unwrap(),
+                bytes,
+                "{what}: overwritten"
+            );
+            assert!(!slot.is_pending(), "{what}");
+        }
+    }
+
+    /// Two editors on one collab directory: the second create finds the first's record and
+    /// fails, and the first record — and its key — is left intact.
+    #[test]
+    fn a_second_create_leaves_the_first_record_intact() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (old, new) = keys();
+        let first = Record::new(
+            &old.fingerprint(),
+            &new,
+            vec![entry(Outcome::Unknown, vec![])],
+        );
+        create(tmp.path(), &first).unwrap();
+        let before = std::fs::read(path(tmp.path())).unwrap();
+        let other = Identity::from_seed(&[17u8; 32], "me");
+        let second = Record::new(
+            &old.fingerprint(),
+            &other,
+            vec![entry(Outcome::Unknown, vec![])],
+        );
+        let e = create(tmp.path(), &second).expect_err("a second create");
+        assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(path(tmp.path())).unwrap(), before);
+        let kept = load(tmp.path()).unwrap().unwrap().new_identity().unwrap();
+        assert_eq!(kept.fingerprint(), new.fingerprint());
     }
 }

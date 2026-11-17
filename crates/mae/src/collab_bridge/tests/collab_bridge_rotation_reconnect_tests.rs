@@ -119,10 +119,13 @@ async fn spawn_rotating_hub(
                             };
                             let _ = seen_tx.send(seen).await;
                         }
+                        // The daemon's refusal of a `Rebind` it will not apply, as the
+                        // daemon sends it: a kind the client treats as final.
                         if refused {
                             serde_json::to_vec(
                                 &serde_json::json!({"jsonrpc": "2.0", "id": req["id"],
-                                "error": {"code": -32001, "message": "refused (test)"}}),
+                                "error": {"code": -32603, "message": "refused (test)",
+                                          "data": {"kind": "role_forbidden"}}}),
                             )
                             .unwrap()
                         } else {

@@ -35,6 +35,10 @@ enum Act {
     DropUnapplied,
     /// Answer with a refusal; apply nothing.
     Refuse,
+    /// Apply it, then answer with an `internal` error (a persistence fault after the apply).
+    ApplyThenFail,
+    /// Answer with an `internal` error; apply nothing.
+    FailUnapplied,
 }
 
 /// What the hub saw.
@@ -190,7 +194,7 @@ impl Hub {
                 self.authorized.push(pk);
             }
         }
-        let apply = matches!(act, Act::Answer | Act::ApplyThenDrop);
+        let apply = matches!(act, Act::Answer | Act::ApplyThenDrop | Act::ApplyThenFail);
         if apply {
             self.replicas.insert(kb.clone(), probe);
             if let Some(o) = &rebind {
@@ -216,6 +220,7 @@ impl Hub {
         let reply = match act {
             Act::Answer => Some(ok(id, serde_json::json!({"applied": true}))),
             Act::Refuse => Some(refusal(id, "role_forbidden")),
+            Act::ApplyThenFail | Act::FailUnapplied => Some(refusal(id, "internal")),
             Act::ApplyThenDrop | Act::DropUnapplied => None,
         };
         let drop_after =
@@ -868,4 +873,126 @@ async fn a_partially_applied_rotation_adopts_only_the_kbs_that_accepted_it() {
         hub.lock().unwrap().member("kb-b", &old.fingerprint()),
         "kb-b still has the old key"
     );
+}
+
+/// The daemon applied the `Rebind` and then answered with an `internal` error (persisting
+/// failed after the apply). That error is not a refusal: before the fix it settled the KB as
+/// refused and, with no KB left, deleted the record — the new key the daemon now holds was
+/// lost. The editor must ask as the new key, find it is a member, and commit.
+#[tokio::test]
+async fn an_internal_error_after_the_rebind_was_applied_is_settled_by_the_new_key() {
+    let old = old_key();
+    let server = Identity::from_seed(&[87u8; 32], "daemon");
+    let server_pub = server.public();
+    let (hub, seeds) = hub_for(&old, &["kb-a"]);
+    {
+        let mut h = hub.lock().unwrap();
+        h.script
+            .insert("kb-a".into(), VecDeque::from([Act::ApplyThenFail]));
+        h.authorize_successor = true;
+    }
+    let (addr, mut seen) = spawn_hub(server, hub.clone()).await;
+    let key_dir = tempfile::tempdir().unwrap();
+    let slot = rotation::Slot::new(Some(key_dir.path().to_path_buf()));
+    let (cmd_tx, mut evt_rx, _task) = start(addr, server_pub, slot, &seeds).await;
+    cmd_tx.send(CollabCommand::RotateIdentity).await.unwrap();
+
+    let ev = event_until(&mut evt_rx, |e| {
+        rotated(e)
+            || matches!(e, CollabEvent::Error { message } if message.contains("accepted no Rebind"))
+    })
+    .await;
+    assert!(
+        rotated(&ev),
+        "the daemon holds the Rebind, so the key is kept: {ev:?}"
+    );
+    let new_fp = hub.lock().unwrap().successors[0].fingerprint();
+    let all = assert_committed_to(
+        &mut seen,
+        &cmd_tx,
+        &mut evt_rx,
+        key_dir.path(),
+        &new_fp,
+        "kb-a",
+    )
+    .await;
+    assert!(
+        all.iter().any(
+            |s| matches!(s, Seen::Probe { fp, kb, member: true } if *fp == new_fp && kb == "kb-a")
+        ),
+        "settled by asking the new key: {all:?}"
+    );
+}
+
+/// The verdict of a rotation whose only KB answered the original `Rebind` with `answer`:
+/// the event, and everything the hub saw until then. The new key is authorized at the
+/// transport on sight, so a membership question, if asked, is answered.
+async fn verdict_after(
+    answer: Act,
+    server_seed: u8,
+) -> (CollabEvent, Vec<Seen>, tempfile::TempDir) {
+    let old = old_key();
+    let server = Identity::from_seed(&[server_seed; 32], "daemon");
+    let server_pub = server.public();
+    let (hub, seeds) = hub_for(&old, &["kb-a"]);
+    {
+        let mut h = hub.lock().unwrap();
+        h.script.insert("kb-a".into(), VecDeque::from([answer]));
+        h.authorize_on_sight = true;
+    }
+    let (addr, mut seen) = spawn_hub(server, hub.clone()).await;
+    let key_dir = tempfile::tempdir().unwrap();
+    let slot = rotation::Slot::new(Some(key_dir.path().to_path_buf()));
+    let (cmd_tx, mut evt_rx, _task) = start(addr, server_pub, slot, &seeds).await;
+    cmd_tx.send(CollabCommand::RotateIdentity).await.unwrap();
+    let ev = event_until(&mut evt_rx, |e| {
+        rotated(e)
+            || matches!(e, CollabEvent::Error { message } if message.contains("accepted no Rebind"))
+    })
+    .await;
+    // Everything the hub saw before the client's verdict is already queued.
+    let mut all = Vec::new();
+    while let Ok(s) = seen.try_recv() {
+        all.push(s);
+    }
+    assert!(
+        hub.lock().unwrap().member("kb-a", &old.fingerprint()),
+        "the KB still has the old key"
+    );
+    (ev, all, key_dir)
+}
+
+/// A refusal the daemon makes before applying anything (`role_forbidden`) is still final:
+/// the rotation ends at once, without asking the new key, and leaves nothing behind.
+#[tokio::test]
+async fn a_refusal_before_applying_is_final_without_asking_the_new_key() {
+    let (ev, all, key_dir) = verdict_after(Act::Refuse, 88).await;
+    assert!(
+        matches!(&ev, CollabEvent::Error { message } if message.contains("NOT changed")),
+        "{ev:?}"
+    );
+    assert!(
+        !all.iter().any(|s| matches!(s, Seen::Probe { .. })),
+        "a final refusal asks nothing: {all:?}"
+    );
+    assert!(!key_dir.path().join("rotation_pending").exists());
+    assert!(Identity::load_secret(key_dir.path(), "owner").is_none());
+}
+
+/// An `internal` error where the daemon applied nothing: asking the new key settles it as
+/// refused, and the rotation ends without adopting the key.
+#[tokio::test]
+async fn an_internal_error_with_nothing_applied_is_settled_as_refused() {
+    let (ev, all, key_dir) = verdict_after(Act::FailUnapplied, 89).await;
+    assert!(
+        matches!(&ev, CollabEvent::Error { message } if message.contains("NOT changed")),
+        "{ev:?}"
+    );
+    assert!(
+        all.iter()
+            .any(|s| matches!(s, Seen::Probe { member: false, .. })),
+        "settled by asking the new key: {all:?}"
+    );
+    assert!(!key_dir.path().join("rotation_pending").exists());
+    assert!(Identity::load_secret(key_dir.path(), "owner").is_none());
 }
