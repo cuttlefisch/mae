@@ -3463,6 +3463,7 @@ name = "mae-shell"
 version = "0.14.161"
 dependencies = [
  "alacritty_terminal",
+ "mae-mcp",
  "portable-pty",
  "tempfile",
  "tracing",
