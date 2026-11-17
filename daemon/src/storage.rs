@@ -22,9 +22,13 @@ mod editor_record;
 mod history;
 #[path = "storage_seed_record.rs"]
 mod seed_record;
+#[path = "storage_writer.rs"]
+mod writer;
 
 pub use history::{Checkpoint, Listed};
 pub use seed_record::{SeedNodeRow, SeedRecord};
+pub use writer::{inspect_store, CheckpointPolicy, StorageHealth, StoreInspection};
+use writer::{Checkpointer, WriteConn, WriterLock};
 
 /// Errors from storage operations.
 #[derive(Debug)]
@@ -203,6 +207,12 @@ pub trait StorageBackend: Send + Sync {
     /// Delete all data for a document (snapshot + WAL entries).
     async fn delete_document(&self, doc_name: &str) -> Result<(), StorageError>;
 
+    /// How the store's WAL stands (its size, and any ADR-037 scrub still
+    /// owed), for `daemon/status`. `None` for a backend with no WAL.
+    fn storage_health(&self) -> Option<StorageHealth> {
+        None
+    }
+
     /// Load the entire LOCAL per-KB blocklist as `(kb_id, principal)` pairs
     /// (ADR-039 A2, #162). Local self-protection only — never synced to peers.
     /// Default: no durable blocklist (an in-memory-only backend has nothing to load).
@@ -275,13 +285,31 @@ fn no_seed_tables() -> StorageError {
 ///
 /// Multiple connections in WAL mode to the same file allow concurrent reads
 /// across different documents. Documents are assigned to shards via FNV-1a hash.
+/// Writes are serialised in-process by one [`WriterLock`] and checkpointed by a
+/// background [`Checkpointer`] (see `storage_writer.rs` for both, and for the
+/// lock order).
 pub struct SqlitePool {
     shards: Vec<std::sync::Mutex<sqlite::Connection>>,
+    writer: WriterLock,
+    policy: CheckpointPolicy,
+    /// The WAL file; `None` for an in-memory pool, which has none.
+    wal: Option<std::path::PathBuf>,
+    /// `None` for an in-memory pool, which has no WAL.
+    _checkpointer: Option<Checkpointer>,
 }
 
 impl SqlitePool {
     /// Open `shard_count` connections in WAL mode to the same file.
     pub fn open(path: &Path, shard_count: usize) -> Result<Self, StorageError> {
+        Self::open_with_policy(path, shard_count, CheckpointPolicy::PRODUCTION)
+    }
+
+    /// [`Self::open`] with a checkpoint policy other than production's.
+    pub fn open_with_policy(
+        path: &Path,
+        shard_count: usize,
+        policy: CheckpointPolicy,
+    ) -> Result<Self, StorageError> {
         let count = shard_count.max(1);
         let mut shards = Vec::with_capacity(count);
         for i in 0..count {
@@ -292,13 +320,20 @@ impl SqlitePool {
                  PRAGMA busy_timeout=5000;
                  PRAGMA secure_delete=ON;",
             )?;
+            // Checkpoints are the background checkpointer's; a commit runs one
+            // only past the backstop (`storage_writer.rs`).
+            conn.execute(format!(
+                "PRAGMA wal_autocheckpoint={};",
+                policy.backstop_pages
+            ))?;
             // ADR-037 (#171): a key-blind daemon must not retain RECOVERABLE plaintext
             // at rest. `secure_delete=ON` zeroes freed pages on DELETE, so when E2E is
             // enabled on a previously-plaintext KB and the node docs are reseal-replaced
             // (delete + recreate as ciphertext, see `delete_document` + `share_doc`), the
             // pre-enable plaintext bytes are overwritten in the main DB file rather than
-            // lingering in free pages. The WAL sidecar is TRUNCATE-checkpointed after the
-            // delete so an uncheckpointed pre-image can't linger there either.
+            // lingering in free pages. The delete marks a WAL scrub pending, and the
+            // checkpointer TRUNCATEs the WAL so a pre-image can't linger there either
+            // (`storage_writer.rs`).
             // Only the first connection creates tables (idempotent via IF NOT EXISTS).
             if i == 0 {
                 conn.execute(
@@ -342,7 +377,15 @@ impl SqlitePool {
             }
             shards.push(std::sync::Mutex::new(conn));
         }
-        Ok(SqlitePool { shards })
+        let writer = WriterLock::default();
+        let checkpointer = Checkpointer::spawn(path, policy, writer.clone())?;
+        Ok(SqlitePool {
+            shards,
+            writer,
+            policy,
+            wal: Some(writer::wal_path(path)),
+            _checkpointer: Some(checkpointer),
+        })
     }
 
     /// Open an in-memory pool (for tests). shard_count is forced to 1
@@ -379,6 +422,10 @@ impl SqlitePool {
         history::ensure_schema(&conn)?;
         Ok(SqlitePool {
             shards: vec![std::sync::Mutex::new(conn)],
+            writer: WriterLock::default(),
+            policy: CheckpointPolicy::PRODUCTION,
+            wal: None,
+            _checkpointer: None,
         })
     }
 
@@ -415,6 +462,18 @@ impl SqlitePool {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
+
+    /// A document's shard, held as the store's one writer: queue for the
+    /// writer slot, then lock the shard. Every write goes through this or
+    /// [`Self::write_primary`]; reads use [`Self::lock_shard`].
+    async fn write_shard(&self, doc_name: &str) -> WriteConn<'_> {
+        self.writer.write(|| self.lock_shard(doc_name)).await
+    }
+
+    /// The primary shard, held as the store's one writer.
+    async fn write_primary(&self) -> WriteConn<'_> {
+        self.writer.write(|| self.lock_primary()).await
+    }
 }
 
 /// SQLite-backed storage using WAL journal mode with connection pooling.
@@ -430,6 +489,20 @@ impl SqliteBackend {
         self.pool.lock_primary().execute(sql).expect("test SQL");
     }
 
+    /// Wait until no ADR-037 scrub is owed: what a test that reads the files at
+    /// rest after a delete or compaction must do first.
+    #[cfg(test)]
+    pub(crate) async fn wait_for_scrub(&self) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while self.pool.writer.scrub_pending() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the WAL scrub never completed"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+    }
+
     /// Open or create the SQLite database at the given path (default 4 shards).
     pub fn open(path: &Path) -> Result<Self, StorageError> {
         Self::open_with_pool_size(path, 4)
@@ -437,7 +510,16 @@ impl SqliteBackend {
 
     /// Open with a specific pool size.
     pub fn open_with_pool_size(path: &Path, pool_size: usize) -> Result<Self, StorageError> {
-        let pool = SqlitePool::open(path, pool_size)?;
+        Self::open_with_policy(path, pool_size, CheckpointPolicy::PRODUCTION)
+    }
+
+    /// Open with a specific pool size and checkpoint policy.
+    pub fn open_with_policy(
+        path: &Path,
+        pool_size: usize,
+        policy: CheckpointPolicy,
+    ) -> Result<Self, StorageError> {
+        let pool = SqlitePool::open_with_policy(path, pool_size, policy)?;
         info!(path = %path.display(), shards = pool.shards.len(), "SQLite storage opened");
         Ok(SqliteBackend { pool })
     }
@@ -480,7 +562,7 @@ impl StorageBackend for SqliteBackend {
         client_id: Option<u64>,
         by: &EditStamp,
     ) -> Result<u64, StorageError> {
-        let conn = self.pool.lock_shard(doc_name);
+        let conn = self.pool.write_shard(doc_name).await;
         // One transaction: the WAL row and the editor record commit together or
         // not at all (see the trait doc for why a lost attribution is a failure).
         conn.execute("BEGIN IMMEDIATE")?;
@@ -528,7 +610,7 @@ impl StorageBackend for SqliteBackend {
         now: i64,
     ) -> Result<Option<HistoryEntry>, StorageError> {
         let doc_name = mae_sync::kb_node_doc_name(&cp.kb_id, &cp.node_id);
-        let conn = self.pool.lock_shard(&doc_name);
+        let conn = self.pool.write_shard(&doc_name).await;
         conn.execute("BEGIN IMMEDIATE")?;
         let cut = history::cut_in_txn(&conn, &doc_name, cp, now);
         match cut {
@@ -560,7 +642,7 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn history_append_head(&self, head: &SignedHead) -> Result<(), StorageError> {
-        history::append_head(&self.pool.lock_primary(), head)
+        history::append_head(&*self.pool.write_primary().await, head)
     }
 
     async fn history_latest_head(&self, kb_id: &str) -> Result<Option<SignedHead>, StorageError> {
@@ -599,7 +681,7 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn forget_editors(&self, doc_name: &str) -> Result<(), StorageError> {
-        let conn = self.pool.lock_shard(doc_name);
+        let conn = self.pool.write_shard(doc_name).await;
         Ok(editor_record::forget(&conn, doc_name)?)
     }
 
@@ -624,7 +706,7 @@ impl StorageBackend for SqliteBackend {
         record: &SeedRecord,
         nodes: &[SeedNodeRow],
     ) -> Result<(), StorageError> {
-        seed_record::insert(&self.pool.lock_primary(), record, nodes)
+        seed_record::insert(&*self.pool.write_primary().await, record, nodes)
     }
 
     async fn seed_set_node_wal(
@@ -633,11 +715,11 @@ impl StorageBackend for SqliteBackend {
         node_id: &str,
         wal: u64,
     ) -> Result<(), StorageError> {
-        seed_record::set_node_wal(&self.pool.lock_primary(), kb_id, node_id, wal)
+        seed_record::set_node_wal(&*self.pool.write_primary().await, kb_id, node_id, wal)
     }
 
     async fn seed_complete(&self, kb_id: &str, applied_at: i64) -> Result<(), StorageError> {
-        seed_record::complete(&self.pool.lock_primary(), kb_id, applied_at)
+        seed_record::complete(&*self.pool.write_primary().await, kb_id, applied_at)
     }
 
     async fn load_document(&self, doc_name: &str) -> Result<Option<DocumentState>, StorageError> {
@@ -712,7 +794,7 @@ impl StorageBackend for SqliteBackend {
     ) -> Result<(), StorageError> {
         // ADR-032 A5: a content hash committed with the snapshot, verified on load.
         let hash = hex::encode(Sha256::digest(state));
-        let conn = self.pool.lock_shard(doc_name);
+        let conn = self.pool.write_shard(doc_name).await;
         // Atomic: snapshot write + WAL trim in a single transaction.
         conn.execute("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<(), sqlite::Error> {
@@ -752,12 +834,14 @@ impl StorageBackend for SqliteBackend {
             .map_err(|e| StorageError::Sqlite(format!("compact transaction: {e}")))?;
         // ADR-037 (#156 F5): the WAL trim above frees the superseded update rows,
         // and `secure_delete=ON` zeroes those pages in the main DB — but the
-        // removal is journalled through the WAL sidecar, which can keep a
-        // pre-image until checkpointed. TRUNCATE-checkpoint so a freed update's
-        // plaintext (e.g. a pre-E2e-enable manifest title superseded by the F5
-        // blank) cannot linger in the sidecar at rest. Best-effort (PASSIVE if
-        // another shard holds a read mark); never block the compaction on it.
-        let _ = conn.execute("PRAGMA wal_checkpoint(TRUNCATE);");
+        // pre-images stay in the WAL file until it is truncated. Owe a scrub: the
+        // checkpointer TRUNCATEs on its next ticks until no reader blocks it, so a
+        // freed update's plaintext (e.g. a pre-E2e-enable manifest title superseded
+        // by the F5 blank) cannot linger at rest. Not run here: a TRUNCATE holds the
+        // writer slot through its fsyncs, and up to `busy_timeout` behind a reader,
+        // stalling every writer queued behind this compaction.
+        conn.mark_scrub();
+        drop(conn);
         info!(doc = doc_name, up_to = up_to_wal_id, "compacted");
         Ok(())
     }
@@ -793,7 +877,15 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn delete_document(&self, doc_name: &str) -> Result<(), StorageError> {
-        let conn = self.pool.lock_shard(doc_name);
+        let conn = self.pool.write_shard(doc_name).await;
+
+        // ADR-037 (#171): with `secure_delete=ON` the rows below are zeroed in the
+        // main DB, but the WAL file keeps their pre-images until it is truncated.
+        // Owe a scrub, which the checkpointer retries until it succeeds (see
+        // `compact`). Marked BEFORE the deletes: they are two autocommit
+        // statements, so if the second fails the first has already put deleted
+        // content in the WAL. A mark with nothing to scrub costs one TRUNCATE.
+        conn.mark_scrub();
 
         let mut stmt1 = conn.prepare("DELETE FROM snapshots WHERE doc_name = ?1")?;
         stmt1.bind((1, doc_name))?;
@@ -803,15 +895,13 @@ impl StorageBackend for SqliteBackend {
         stmt2.bind((1, doc_name))?;
         stmt2.next()?;
 
-        // ADR-037 (#171): with `secure_delete=ON` the rows above are zeroed in the main
-        // DB, but the zeroing is journalled through the WAL sidecar. TRUNCATE-checkpoint
-        // so the sidecar can't retain a pre-image of the just-purged plaintext at rest.
-        // Best-effort: downgrades to PASSIVE if another shard holds a read mark — the
-        // zeroed pages still land on the next checkpoint; we never block the delete on it.
-        let _ = conn.execute("PRAGMA wal_checkpoint(TRUNCATE);");
-
         info!(doc = doc_name, "deleted document from storage");
         Ok(())
+    }
+
+    fn storage_health(&self) -> Option<StorageHealth> {
+        let wal = self.pool.wal.as_ref()?;
+        Some(self.pool.writer.health(&self.pool.policy, wal))
     }
 
     async fn load_blocklist(&self) -> Result<Vec<(String, String)>, StorageError> {
@@ -827,7 +917,7 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn add_block(&self, kb_id: &str, principal: &str) -> Result<(), StorageError> {
-        let conn = self.pool.lock_primary();
+        let conn = self.pool.write_primary().await;
         // Idempotent: re-blocking an already-blocked principal is a no-op.
         let mut stmt =
             conn.prepare("INSERT OR IGNORE INTO kb_blocklist (kb_id, principal) VALUES (?1, ?2)")?;
@@ -838,7 +928,7 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn remove_block(&self, kb_id: &str, principal: &str) -> Result<(), StorageError> {
-        let conn = self.pool.lock_primary();
+        let conn = self.pool.write_primary().await;
         let mut stmt =
             conn.prepare("DELETE FROM kb_blocklist WHERE kb_id = ?1 AND principal = ?2")?;
         stmt.bind((1, kb_id))?;
@@ -853,10 +943,20 @@ impl StorageBackend for SqliteBackend {
 mod change_index_bench;
 
 #[cfg(test)]
+#[path = "storage_writer_tests.rs"]
+mod writer_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::doc_editors::{Attribution, InternalWriter};
     use std::sync::Arc;
+
+    /// A checkpointer that ticks every 5 ms, for a test that waits on a scrub.
+    const FAST_SCRUB: CheckpointPolicy = CheckpointPolicy {
+        interval: std::time::Duration::from_millis(5),
+        ..CheckpointPolicy::PRODUCTION
+    };
 
     /// An attribution for tests that exercise the WAL, not the editor record.
     fn stamp() -> EditStamp {
@@ -1205,7 +1305,8 @@ mod tests {
         };
 
         {
-            let backend = SqliteBackend::open(&db_path).unwrap();
+            // A 5 ms tick: the scrub awaited below need not wait a production second.
+            let backend = SqliteBackend::open_with_policy(&db_path, 4, FAST_SCRUB).unwrap();
             // Write the plaintext canary as a node's content, then compact it into the
             // snapshot (mirrors a plaintext share that has been checkpointed to disk).
             let id = backend
@@ -1223,8 +1324,10 @@ mod tests {
                 "precondition: the plaintext canary is on disk before purge (else the test is vacuous)"
             );
 
-            // The purge (what reseal-as-replace's share_doc triggers).
+            // The purge (what reseal-as-replace's share_doc triggers), then the scrub
+            // it owes, which the background checkpointer runs.
             backend.delete_document("kbn:testkb:n1").await.unwrap();
+            backend.wait_for_scrub().await;
 
             assert!(
                 !raw_contains_canary(&db_path),
@@ -1295,7 +1398,8 @@ mod tests {
         };
 
         {
-            let backend = SqliteBackend::open(&db_path).unwrap();
+            // A 5 ms tick: the scrub awaited below need not wait a production second.
+            let backend = SqliteBackend::open_with_policy(&db_path, 4, FAST_SCRUB).unwrap();
             // The original update carrying the cleartext manifest title (the `add_node`).
             let id = backend
                 .wal_append("kbc:x", canary, None, &stamp())
@@ -1310,6 +1414,7 @@ mod tests {
                 .compact("kbc:x", b"BLANKED-STATE-no-title", id)
                 .await
                 .unwrap();
+            backend.wait_for_scrub().await;
             assert!(
                 !raw_contains_canary(&db_path),
                 "the superseded cleartext title MUST be scrubbed from the DB file after compaction \

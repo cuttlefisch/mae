@@ -118,6 +118,29 @@ fn connection_report(state: &DaemonState) -> serde_json::Value {
     serde_json::Value::Object(out)
 }
 
+/// `daemon/status`'s view of the collab store: the KB collections it hosts,
+/// and its WAL with any ADR-037 scrub still owed (only this process knows the
+/// latter, so `doctor` asks for it here).
+async fn doc_store_status(
+    doc_store: Option<&mae_daemon::doc_store::DocStore>,
+) -> (Vec<String>, Value) {
+    let Some(ds) = doc_store else {
+        return (Vec::new(), Value::Null);
+    };
+    let storage = ds.storage_health().map_or(Value::Null, |h| {
+        json!({
+            "wal_bytes": h.wal_bytes,
+            "wal_frames": h.wal_frames,
+            "wal_warn_frames": h.wal_warn_frames,
+            "scrub_pending": h.scrub_pending.map(|(docs, secs)| json!({
+                "docs": docs,
+                "pending_secs": secs,
+            })),
+        })
+    });
+    (ds.list_collection_ids().await, storage)
+}
+
 impl DaemonState {
     pub fn new() -> Self {
         Self {
@@ -578,10 +601,7 @@ pub async fn dispatch(
             // Phase D introspection: which KB collections does the daemon host, and
             // does it host the primary (kbc:default)? Lets a connecting editor skip
             // warming its own store and host/route the primary through the daemon.
-            let kb_collections = match doc_store {
-                Some(ds) => ds.list_collection_ids().await,
-                None => Vec::new(),
-            };
+            let (kb_collections, storage) = doc_store_status(doc_store.as_deref()).await;
             // "default" = KB_DEFAULT_NAME (the primary's canonical collab id).
             let primary_exists = kb_collections
                 .iter()
@@ -600,6 +620,7 @@ pub async fn dispatch(
                 "primary_exists": primary_exists,
                 "live_tenants": live_tenants,
                 "connections": connections,
+                "storage": storage,
             }))
         }
 
@@ -1311,6 +1332,48 @@ mod tests {
                 "crdt_doc must be cleared in the RPC payload: {n}"
             );
         }
+    }
+
+    /// `daemon/status` carries the collab store's WAL report, the only way
+    /// `doctor` (another process) can learn of a pending ADR-037 scrub. A
+    /// fresh file-backed store owes one (every open does) until its first
+    /// tick; the WAL fields are there either way. Kills a status that drops
+    /// the report, or reads it from nowhere.
+    #[tokio::test]
+    async fn status_reports_the_collab_stores_wal_and_scrub() {
+        use mae_daemon::doc_store::DocStore;
+        use mae_daemon::storage::{CheckpointPolicy, SqliteBackend};
+        let dir = tempfile::tempdir().unwrap();
+        let paused = CheckpointPolicy {
+            interval: std::time::Duration::from_secs(3600),
+            ..CheckpointPolicy::PRODUCTION
+        };
+        let backend = SqliteBackend::open_with_policy(&dir.path().join("state.db"), 2, paused);
+        let ds = Arc::new(DocStore::new(Arc::new(backend.unwrap()), 500));
+        let state = Arc::new(Mutex::new(DaemonState::new()));
+        state.lock().await.doc_store = Some(ds);
+        let r = dispatch("daemon/status", json!({}), &state).await.unwrap();
+        let storage = &r["storage"];
+        assert!(storage["wal_bytes"].as_u64().is_some(), "{storage}");
+        assert_eq!(
+            storage["wal_warn_frames"].as_u64(),
+            Some(2 * u64::from(paused.backstop_pages))
+        );
+        assert_eq!(
+            storage["scrub_pending"]["docs"].as_u64(),
+            Some(0),
+            "{storage}"
+        );
+        let ds = state.lock().await.doc_store.take();
+        drop(state);
+        crate::tests::close_within_seconds(ds);
+        assert!(state_without_store_reports_no_storage().await);
+    }
+
+    async fn state_without_store_reports_no_storage() -> bool {
+        let state = Arc::new(Mutex::new(DaemonState::new()));
+        let r = dispatch("daemon/status", json!({}), &state).await.unwrap();
+        r["storage"].is_null()
     }
 
     #[tokio::test]
