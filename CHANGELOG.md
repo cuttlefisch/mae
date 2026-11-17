@@ -2,10 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.14.160] - 2026-11-17
+## [0.14.161] - 2026-11-17
 
 
 
+
+### Features
+
+- *(tools)* Mae-mutate, declared and re-runnable mutation checks ([cce9979](https://github.com/cuttlefisch/mae/commit/cce997966cb2c1340ecc90d3ea29c5d549946483))
 
 ### Bug Fixes
 
@@ -15,6 +19,10 @@ All notable changes to this project will be documented in this file.
 ### Documentation
 
 - *(adr)* The ADR-113/115 build sequence, ADR-117, ADR-111 Am. 1, ADR-118 ([0ab9100](https://github.com/cuttlefisch/mae/commit/0ab910069b9c5848db8b85075f6a2b16d0c08cfe))
+
+### Miscellaneous
+
+- Bump version to 0.14.160 ([4e3c1c2](https://github.com/cuttlefisch/mae/commit/4e3c1c21a731095356f7bc795bcda744f525a566))
 
 ## [0.14.159] - 2026-11-16
 
