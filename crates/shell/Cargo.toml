@@ -11,4 +11,7 @@ portable-pty = "0.9"
 tracing = { workspace = true }
 
 [dev-dependencies]
+# `ready::wait_until_blocking`: the shared bounded wait the tests poll the
+# terminal with, instead of fixed sleeps.
+mae-mcp = { path = "../../shared/mcp" }
 tempfile = "3"

@@ -38,6 +38,8 @@ pub struct Opts {
     pub tenant_budget: Option<(String, u32)>,
     /// `ws_ping_secs`; `None` leaves the daemon's default.
     pub ping_secs: Option<u64>,
+    /// `ws_ticket_ttl_secs`; `None` leaves the daemon's default (B1's 30 s).
+    pub ticket_ttl_secs: Option<u64>,
     /// An external token issuer, and the `/ws` pilot switch (ADR-099 Amendment 2).
     pub idp: Option<IdpOpts>,
 }
@@ -86,6 +88,7 @@ impl Default for Opts {
             max_outbound_bytes: None,
             tenant_budget: None,
             ping_secs: None,
+            ticket_ttl_secs: None,
             idp: None,
         }
     }
@@ -112,7 +115,12 @@ fn config_toml(dir: &Path, ports: crate::daemon_harness::Ports, opts: &Opts) -> 
     let ping = opts
         .ping_secs
         .map(|n| format!("ws_ping_secs = {n}\n"))
-        .unwrap_or_default();
+        .unwrap_or_default()
+        + opts
+            .ticket_ttl_secs
+            .map(|n| format!("ws_ticket_ttl_secs = {n}\n"))
+            .unwrap_or_default()
+            .as_str();
     let frame = opts
         .max_frame_bytes
         .map(|n| format!("ws_max_frame_bytes = {n}\n"))
@@ -457,15 +465,21 @@ impl Ws {
     }
 
     pub async fn next(&mut self) -> Event {
+        self.next_within(WAIT).await
+    }
+
+    /// [`Ws::next`], waiting at most `wait` for the frame.
+    pub async fn next_within(&mut self, wait: Duration) -> Event {
         use futures_util::StreamExt;
+        let until = tokio::time::Instant::now() + wait;
         let frame = loop {
-            match tokio::time::timeout(WAIT, self.inner.next()).await {
+            match tokio::time::timeout_at(until, self.inner.next()).await {
                 Ok(Some(Ok(m))) if m.is_ping() || m.is_pong() => continue,
                 other => break other,
             }
         };
         match frame {
-            Err(_) => panic!("no frame within {WAIT:?}"),
+            Err(_) => panic!("no frame within {wait:?}"),
             Ok(None) | Ok(Some(Err(_))) => Event::End,
             Ok(Some(Ok(m))) if m.is_close() => {
                 let (code, reason) = m
@@ -501,10 +515,35 @@ impl Ws {
             .await
     }
 
+    /// The first text frame matching `pred` this socket has received, waiting
+    /// for one if none has. Unlike [`Ws::until`], a frame an earlier `until`
+    /// or `call` skipped still counts. For a notification sent once that may
+    /// arrive while the test is busy with a request: `session/renew_needed`
+    /// skipped by a `call` and then awaited would never come again, and the
+    /// session would run out to `4401 token_expired`.
+    pub async fn seen_or_until(&mut self, pred: impl Fn(&Value) -> bool) -> Value {
+        let seen = self
+            .log
+            .iter()
+            .filter_map(|t| serde_json::from_str::<Value>(t).ok())
+            .find(|v| pred(v));
+        match seen {
+            Some(v) => v,
+            None => self.until(pred).await,
+        }
+    }
+
     /// The close the socket ends with, skipping text frames.
     pub async fn closed(&mut self) -> (u16, String) {
+        self.closed_within(WAIT).await
+    }
+
+    /// [`Ws::closed`], within `wait` overall.
+    pub async fn closed_within(&mut self, wait: Duration) -> (u16, String) {
+        let until = std::time::Instant::now() + wait;
         loop {
-            match self.next().await {
+            let left = until.saturating_duration_since(std::time::Instant::now());
+            match self.next_within(left).await {
                 Event::Close(c, r) => return (c, r),
                 Event::End => return (0, String::new()),
                 Event::Text(_) => {}
@@ -519,6 +558,30 @@ pub fn refusal(r: &Reply) -> (u16, String, String) {
     let j = r.json();
     let field = |k: &str| j[k].as_str().unwrap_or("").to_string();
     (r.status, field("error"), field("kind"))
+}
+
+/// Slack past a session's `auth_deadline` for the daemon's close to arrive:
+/// the deadline timer fires at the deadline and the close frame follows.
+pub const CLOSE_GRACE: Duration = Duration::from_secs(5);
+
+/// How long from now until `deadline` (unix seconds) has passed, plus
+/// [`CLOSE_GRACE`]: a wait derived from the session's own deadline rather than
+/// a fixed guess at how long the token was given.
+pub fn until_past(deadline: u64) -> Duration {
+    let at = std::time::UNIX_EPOCH + Duration::from_secs(deadline);
+    at.duration_since(std::time::SystemTime::now())
+        .unwrap_or_default()
+        + CLOSE_GRACE
+}
+
+/// Sleep until wall-clock time is past `deadline` (unix seconds) by `margin`.
+/// For a test whose subject is outliving a deadline: the instant is computed
+/// from the deadline the daemon reported, not guessed.
+pub async fn sleep_past(deadline: u64, margin: Duration) {
+    let at = std::time::UNIX_EPOCH + Duration::from_secs(deadline) + margin;
+    if let Ok(left) = at.duration_since(std::time::SystemTime::now()) {
+        tokio::time::sleep(left).await;
+    }
 }
 
 /// An `auth_deadline` (RFC 3339, UTC) as unix seconds.
