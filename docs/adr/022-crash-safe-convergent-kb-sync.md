@@ -3,6 +3,7 @@
 **Status:** Accepted (design). Supersedes the "kb/join SV-diff = deferred bandwidth optimization"
 framing in ADR-020 §Future Work D2 — it is not a bandwidth nicety, it is the **correctness +
 crash-safety** mechanism.
+**Amended:** Amendment 1 (2026-11-15) pages whole-KB transfers (`kb/share`, `kb/join`).
 **Extends:** ADR-020 (replicated KB CRDT artifact; B-14 adopt-on-join, B-16 lineage/client_id, the
 durable pending queue).
 
@@ -119,3 +120,93 @@ Tests: `crates/core/tests/kb_sync_n_peer_e2e.rs` (N∈{2,3,5}: share/join/bidire
 offline/restart, and the crash crux as `lost_row_adopt_clobbers_documents_the_bug` vs
 `lost_row_reconcile_converges`); `reconcile_remote_node_*` units; the real-daemon
 `kb_join_with_svs_returns_reconcile_diff_else_full_state` e2e; `client_id_clamped_to_yrs_53_bits`.
+
+## Amendment 1 (2026-11-15): a whole-KB transfer is paged, both ways
+
+### Why
+
+`kb/share` sends every node's state in one request, and `kb/join` returns every node's state in one
+reply. Each side reads a message against a cap: the daemon reads requests at 10 MiB, and a socket's
+replies are bounded by `max_outbound_bytes` (15,029,592 at the stock document limit). A message
+carries document state as base64, so the size of a share or a join grows with the whole KB, while the
+per-document limit (ADR-109 D6) bounds only one node. Two consequences:
+
+- **A KB whose node states sum past 10 MiB cannot be shared** from native MAE: about 7.5 MB of node
+  content, in nodes of any size. The daemon's session reader refuses the request and the session
+  ends with no reply (read from the code).
+- **A KB whose node states sum past the reply bound cannot be joined.** Measured over the socket:
+  before the reply bound existed, one 8 MB node made a KB unjoinable with no close code; now the
+  join closes `1011 response_too_large`. The bound holds one node at the document limit, not two.
+
+No cap fixes this, because no cap bounds a whole KB. The transfer is paged instead, and every page
+is bounded by the same rule as every other message.
+
+### E1. A share is the manifest, then node batches
+
+The first `kb/share` carries the collection state (the manifest of every node) and as many node
+states as fit under the request cap. Each later `kb/share` for the same KB carries the next batch.
+This needs no new method: since B-12, a repeat share of a KB the caller owns preserves the daemon's
+collection and merges each node state onto the stored one. The client packs batches against the cap
+it is given (E4), never against a constant of its own.
+
+### E2. A join is paged by the daemon
+
+`kb/join` gains `paged: true` and an optional `after` (a node id). With `paged`, the daemon answers
+the collection state, the caller's epoch and principal, and node entries in manifest order after
+`after`, stopping before the reply would pass the session's reply bound, and adds
+`"next_after": <last node id>` when nodes remain. The client repeats `kb/join` with `after` until a
+reply has no `next_after`.
+
+- **ADR-022 reconcile is unchanged.** Each page takes `node_svs` as today and answers each node with
+  `diff` or `state`, plus the daemon's `sv`. The client sends the SVs it has; the daemon uses the
+  ones for the nodes it serves.
+- **Subscription follows the page.** A node's live feed starts when its page is served, which is
+  when its state is read, so no edit between the two is lost. The collection is subscribed on the
+  first page, so nodes added later reach the client as collection updates, as now.
+- **Pages are not a snapshot.** A node deleted between pages is skipped; one added after the first
+  page arrives through the collection. This is the same convergence a live session already relies on.
+- **Cost.** Each page is one `kb/join` against the tenant budget. Fetching nodes one at a time with
+  `kb/node_fetch` was considered and rejected: a 2,000-node KB would spend twice the default
+  per-minute budget (1,000) to join once.
+- **Old clients** send no `paged` and get today's single reply, which still works for a KB under the
+  bound and fails with a code above it.
+
+### E3. One node always fits
+
+Paging bounds a KB; it does not split a node. A node at the document limit must therefore fit one
+message in each direction:
+
+- **Replies** already hold it: the reply bound is derived from the document limit
+  (`4 * ceil(limit / 3) + 1 MiB`).
+- **Requests** on a collab session are read with the same derived bound instead of the fixed 10 MiB,
+  so a node at the limit can be shared or written in one message. The WebSocket's inbound frame cap
+  (`ws_max_frame_bytes`) is unchanged: a browser client already splits a large write into parts.
+- A node stored above the limit before the limit existed goes alone in its page; if it is over the
+  bound it fails with the same `1011`, never silently.
+
+### E4. Each side learns the other's bound
+
+The socket's `session/hello` already carries `max_outbound_bytes` (the reply bound) and
+`max_frame_bytes` (the inbound frame cap). A collab session answers `initialize` with the same two
+limits, so a native client packs share batches against the daemon's real request cap and an old
+daemon (no limits in its answer) is treated as 10 MiB.
+
+### E5. A message over a cap is answered, never dropped
+
+A request over the session's cap gets a JSON-RPC error, `request_too_large` with the cap in `data`,
+before the session ends, instead of the reader stopping without a word. The framing cannot resume
+past an unread body, so the session still ends; the error is what lets the client say why.
+
+### Verification
+
+- Share: a KB whose node states sum past three times the request cap is shared in batches, and a
+  fresh member joins it and reads every node.
+- Join: the same KB joins in pages over the socket and over mTLS; each reply stays under the bound;
+  `next_after` is absent exactly on the last page; with `node_svs`, a node with local-ahead ops
+  reconciles (ADR-022's crash case) on a page other than the first.
+- Concurrency: a node edited between its page being served and the next page, and a node added and
+  one deleted between pages, all converge.
+- One node: a node at the document limit is shared and joined in one message each way; a request one
+  byte over the derived bound is answered `request_too_large`.
+- Compatibility: a join without `paged` answers exactly today's shape.
+- Cost: a 2,000-node join stays within the default tenant budget.
