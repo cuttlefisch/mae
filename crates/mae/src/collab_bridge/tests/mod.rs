@@ -21,6 +21,7 @@ mod collab_bridge_literal_guard_tests;
 mod collab_bridge_message_handling_tests;
 mod collab_bridge_paged_transfer_tests;
 mod collab_bridge_psk_tests;
+mod collab_bridge_rotation_pending_tests;
 mod collab_bridge_rotation_reconnect_tests;
 mod collab_bridge_set_encryption_validation_tests;
 mod collab_bridge_sync_recovery_backoff_tests;

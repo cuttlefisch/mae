@@ -245,6 +245,30 @@ pub fn write_secure(path: &Path, content: &str) -> std::io::Result<()> {
     set_secure_file_perms(path)
 }
 
+/// [`write_secure`], but all-or-nothing: the content goes to `<path>.tmp` (created 0600),
+/// is flushed to disk, and is renamed over `path`. A crash at any point leaves either the
+/// old file or the new one, never a truncated one. For a key file that is the only copy of
+/// a key — a half-written one is a lost key.
+pub fn write_secure_atomic(path: &Path, content: &str) -> std::io::Result<()> {
+    let name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no file name")
+    })?;
+    let mut tmp_name = name.to_os_string();
+    tmp_name.push(".tmp");
+    let tmp = path.with_file_name(tmp_name);
+    write_secure(&tmp, content)?;
+    std::fs::File::open(&tmp)?.sync_all()?;
+    std::fs::rename(&tmp, path)?;
+    // The rename itself is durable only once the directory is flushed (unix).
+    #[cfg(unix)]
+    if let Some(dir) = path.parent() {
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+    }
+    Ok(())
+}
+
 /// Restrict a freshly-written secret file to the owner. On unix: `chmod 0600` (a failure
 /// propagates — we never leave a secret world-readable silently). On non-unix (#158 I4,
 /// principle #13): MAE cannot portably set an owner-only ACL without a platform crate, so
@@ -387,6 +411,25 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "new-secret");
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// The atomic write replaces a pre-existing, permissive file with an owner-only one
+    /// holding the new content, and leaves no temporary behind.
+    #[cfg(unix)]
+    #[test]
+    fn an_atomic_write_replaces_whole_and_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("id_ed25519");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_secure_atomic(&path, "new-secret").expect("write_secure_atomic");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new-secret");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(!tmp.path().join("id_ed25519.tmp").exists());
     }
 
     #[test]

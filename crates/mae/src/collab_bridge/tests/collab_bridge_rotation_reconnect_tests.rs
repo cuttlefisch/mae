@@ -165,6 +165,7 @@ async fn start_client(
     seen: &mut mpsc::Receiver<Seen>,
     old_fp: &str,
     seed: Vec<u8>,
+    key_dir: &std::path::Path,
 ) -> (mpsc::Sender<CollabCommand>, mpsc::Receiver<CollabEvent>) {
     let (cmd_tx, cmd_rx) = mpsc::channel(16);
     let (evt_tx, evt_rx) = mpsc::channel(64);
@@ -172,6 +173,7 @@ async fn start_client(
     let transport = ClientTransport::KeyJson {
         identity: Arc::new(Identity::from_seed(&[71u8; 32], "owner")),
         verifier,
+        rotation: rotation::Slot::new(Some(key_dir.to_path_buf())),
     };
     // reconnect_secs = 1: the reconnect fires within the test's patience.
     tokio::spawn(run_collab_task(
@@ -223,7 +225,9 @@ async fn after_rotation_the_session_reconnects_as_the_new_key_and_sends_the_rewr
     let old_fp = old.fingerprint();
     let seed = owned_e2e_collection_state("kb-rot", &old);
     let (addr, mut seen) = spawn_rotating_hub(server, old.public(), seed.clone(), false).await;
-    let (cmd_tx, mut evt_rx) = start_client(addr, server_pub, &mut seen, &old_fp, seed).await;
+    let key_dir = tempfile::tempdir().unwrap();
+    let (cmd_tx, mut evt_rx) =
+        start_client(addr, server_pub, &mut seen, &old_fp, seed, key_dir.path()).await;
     cmd_tx.send(CollabCommand::RotateIdentity).await.unwrap();
 
     // 1. The Rebind, signed by the old key, on the old key's session.
@@ -298,7 +302,9 @@ async fn a_refused_rebind_changes_nothing() {
     let old_fp = old.fingerprint();
     let seed = owned_e2e_collection_state("kb-rot", &old);
     let (addr, mut seen) = spawn_rotating_hub(server, old.public(), seed.clone(), true).await;
-    let (cmd_tx, mut evt_rx) = start_client(addr, server_pub, &mut seen, &old_fp, seed).await;
+    let key_dir = tempfile::tempdir().unwrap();
+    let (cmd_tx, mut evt_rx) =
+        start_client(addr, server_pub, &mut seen, &old_fp, seed, key_dir.path()).await;
     cmd_tx.send(CollabCommand::RotateIdentity).await.unwrap();
 
     let ev = recv_until(&mut evt_rx, |e| {

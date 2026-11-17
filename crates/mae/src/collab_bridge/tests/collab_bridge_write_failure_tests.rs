@@ -172,6 +172,16 @@ pub(crate) async fn connect_client(
     client_identity: Identity,
     server_pubkey: mae_mcp::identity::PublicKey,
 ) -> (mpsc::Sender<CollabCommand>, mpsc::Receiver<CollabEvent>) {
+    connect_client_in(addr, client_identity, server_pubkey, None).await
+}
+
+/// [`connect_client`], keeping the identity key (and a pending rotation) in `key_dir`.
+pub(crate) async fn connect_client_in(
+    addr: std::net::SocketAddr,
+    client_identity: Identity,
+    server_pubkey: mae_mcp::identity::PublicKey,
+    key_dir: Option<std::path::PathBuf>,
+) -> (mpsc::Sender<CollabCommand>, mpsc::Receiver<CollabEvent>) {
     let (cmd_tx, cmd_rx) = mpsc::channel(16);
     let (evt_tx, mut evt_rx) = mpsc::channel(16);
 
@@ -190,6 +200,7 @@ pub(crate) async fn connect_client(
     let transport = ClientTransport::KeyJson {
         identity: Arc::new(client_identity),
         verifier,
+        rotation: rotation::Slot::new(key_dir),
     };
     tokio::spawn(run_collab_task(
         cmd_rx,
@@ -324,7 +335,9 @@ async fn rotate_identity_write_failure_reports_error_not_success() {
 
     let (addr, _hangup_tx, _daemon_handle) = spawn_fake_daemon(server_id, client_pub).await;
     let connect_id = Identity::from_seed(&[51u8; 32], "client");
-    let (cmd_tx, mut evt_rx) = connect_client(addr, connect_id, server_pub).await;
+    let key_dir = tempfile::tempdir().unwrap();
+    let (cmd_tx, mut evt_rx) =
+        connect_client_in(addr, connect_id, server_pub, Some(key_dir.path().into())).await;
 
     let collection_state = owned_e2e_collection_state("kb-rotate", &client_id);
     cmd_tx
@@ -368,9 +381,16 @@ async fn rotate_identity_write_failure_reports_error_not_success() {
     match ev {
         CollabEvent::Error { message } => {
             assert!(
-                message.contains("Identity rotation failed"),
+                message.contains("Identity rotation not confirmed")
+                    && message.contains("NOT changed"),
                 "expected the mid-loop write-failure branch (the one the fix added), \
                  got: {message}"
+            );
+            // A failed write is not a refusal: the bytes may have reached the daemon, so
+            // the new key is kept as a pending rotation, never dropped.
+            assert!(
+                key_dir.path().join("rotation_pending").exists(),
+                "the new key must be kept pending after an unconfirmed write"
             );
         }
         CollabEvent::StatusReport { lines } => {

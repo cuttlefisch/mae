@@ -349,7 +349,8 @@ impl Identity {
     }
 
     /// Persist this identity to `dir`: private key `id_ed25519` (0600, hex) +
-    /// public-key line `id_ed25519.pub`. Overwrites any existing identity.
+    /// public-key line `id_ed25519.pub`. Overwrites any existing identity, atomically: an
+    /// ADR-040 rotation commits by this write, and a torn one would lose both keys.
     pub fn save(&self, dir: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
         secure_dir(dir);
@@ -359,7 +360,7 @@ impl Identity {
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
-        crate::keystore::write_secure(&dir.join("id_ed25519"), &format!("{hex}\n"))?;
+        crate::keystore::write_secure_atomic(&dir.join("id_ed25519"), &format!("{hex}\n"))?;
         std::fs::write(
             dir.join("id_ed25519.pub"),
             format!("{}\n", self.public().to_line()),
