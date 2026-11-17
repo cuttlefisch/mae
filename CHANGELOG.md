@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.163] - 2026-11-17
+
+
+
+
+### Miscellaneous
+
+- *(deps)* Bump the rust-dependencies group with 5 updates ([cd1e5e8](https://github.com/cuttlefisch/mae/commit/cd1e5e89f0262c423f3fbcc9bc6d15e7ed2c53be))
+
 ## [0.14.162] - 2026-11-17
 
 
@@ -36,6 +45,7 @@ All notable changes to this project will be documented in this file.
 
 - Bump version to 0.14.160 ([4e3c1c2](https://github.com/cuttlefisch/mae/commit/4e3c1c21a731095356f7bc795bcda744f525a566))
 - Bump version to 0.14.161 ([202a5c5](https://github.com/cuttlefisch/mae/commit/202a5c570dfd653c430986d46103866f9d43c8bf))
+- Bump version to 0.14.162 ([d8560df](https://github.com/cuttlefisch/mae/commit/d8560df05d76155e06c4495c8e346b3734d59edd))
 
 ## [0.14.159] - 2026-11-16
 
