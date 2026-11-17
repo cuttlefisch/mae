@@ -619,6 +619,7 @@ async fn kb_query_unreachable_when_disabled() {
         groups_claim: "groups".to_string(),
         allowed_groups: Vec::new(),
         jwks_url: "https://unused.example.com/jwks".to_string(),
+        jwks_ca_file: None,
         issuer: None,
         kb_query_enabled: false,
         max_request_body_bytes: 1_048_576,
@@ -626,6 +627,7 @@ async fn kb_query_unreachable_when_disabled() {
         kb_query_max_scan_nodes: 500,
         kb_query_max_search_results: 20,
         webview_enabled: false,
+        second_factor: Default::default(),
     };
     let principal = mae_mcp_test_principal("oauth:someone@example.com");
     let rpc = mae_mcp::protocol::JsonRpcRequest {
@@ -670,6 +672,7 @@ async fn kb_query_enabled_but_no_doc_store_gets_a_distinct_jsonrpc_error() {
         groups_claim: "groups".to_string(),
         allowed_groups: Vec::new(),
         jwks_url: "https://unused.example.com/jwks".to_string(),
+        jwks_ca_file: None,
         issuer: None,
         kb_query_enabled: true,
         max_request_body_bytes: 1_048_576,
@@ -677,6 +680,7 @@ async fn kb_query_enabled_but_no_doc_store_gets_a_distinct_jsonrpc_error() {
         kb_query_max_scan_nodes: 500,
         kb_query_max_search_results: 20,
         webview_enabled: false,
+        second_factor: Default::default(),
     };
     let principal = mae_mcp_test_principal("oauth:someone@example.com");
     let rpc = mae_mcp::protocol::JsonRpcRequest {
@@ -947,6 +951,7 @@ fn mae_mcp_test_principal(principal: &str) -> crate::oauth::ValidatedPrincipal {
         subject: String::new(),
         credential: mae_daemon::oauth_self_issue::Credential::SelfIssued,
         kind: mae_daemon::oauth_self_issue::PrincipalKind::Agent,
+        sign_in: None,
     }
 }
 

@@ -32,6 +32,12 @@ updates:
         versions: ["3.x"]
       - dependency-name: "curve25519-dalek"
         versions: ["5.x"]
+      # unicode-width is EXACT-pinned in mae-core (ADR-087 Rule 7): a release
+      # can change any character's width (0.2.3 moved the tables from Unicode 17
+      # to 18), and every width computation in the editor goes through it, so a
+      # bump is a deliberate change with its own width-diff, not a grouped
+      # catch-up. Dependabot would otherwise re-propose it every week.
+      - dependency-name: "unicode-width"
   # The daemon is a SEPARATE workspace with its own Cargo.lock, and until this
   # entry existed it was scanned by neither dependabot nor cargo-deny -- which is
   # how the network-facing component came to sit on yrs 0.27.0 while the editor

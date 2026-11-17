@@ -1,0 +1,14 @@
+# Standalone, for the same reason as `tools/code-map` (see the note there): an
+# empty workspace stops cargo walking up into the root workspace, which
+# `exclude`s this crate.
+[workspace]
+
+[package]
+name = "mae-mutate"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"

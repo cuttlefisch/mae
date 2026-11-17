@@ -1,14 +1,18 @@
 #!/bin/sh
-# SPIKE: MAE's envelope crypto as a WASM module (shared/crypto-wasm).
-# Not wired into make, CI or a release.
+# mae-crypto's WASM module (shared/crypto-wasm): build, prove the build
+# reproducible, and test it against the native build.
 #
 #   scripts/crypto-wasm.sh build   # the artifact, its size and sha256
-#   scripts/crypto-wasm.sh repro   # two builds in separate target dirs; same bytes?
-#   scripts/crypto-wasm.sh test    # WASM <-> native interop, tamper, entropy (needs node)
+#   scripts/crypto-wasm.sh repro   # build twice in separate target dirs; same bytes?
+#   scripts/crypto-wasm.sh test    # size budget, ABI, native-vs-WASM differential,
+#                                  # interop, entropy, leak and residue (needs node)
 #
-# Same reproducibility recipe as scripts/org-wasm.sh, plus one cfg: on
-# wasm32-unknown-unknown getrandom has no default source, and the `custom`
-# backend routes it to the module's one host import (src/lib.rs).
+# The same reproducibility recipe as scripts/org-wasm.sh: one codegen unit,
+# LTO, no debug info or symbols (Cargo.toml's `wasm` profile), Cargo.lock
+# honoured (--locked), and the two machine-specific paths compiled into panic
+# locations (this checkout and CARGO_HOME) remapped to fixed names. No
+# getrandom backend flag: the WASM build has no getrandom at all, randomness
+# is the module's one import (shared/crypto/src/rng.rs).
 set -eu
 
 cmd=${1:-build}
@@ -26,15 +30,17 @@ artifact() {
 sha256() {
     if command -v sha256sum >/dev/null 2>&1; then
         sha256sum "$1" | cut -d' ' -f1
-    else
+    elif command -v shasum >/dev/null 2>&1; then
         shasum -a 256 "$1" | cut -d' ' -f1
+    else
+        echo "neither sha256sum nor shasum found" >&2
+        exit 1
     fi
 }
 
 build() {
     # Unit separator between flags, so a path with a space stays one flag.
-    flags=$(printf '%s\037%s\037%s' "--remap-path-prefix=$root=/mae" \
-        "--remap-path-prefix=$cargo_home=/cargo" '--cfg=getrandom_backend="custom"')
+    flags=$(printf '%s\037%s' "--remap-path-prefix=$root=/mae" "--remap-path-prefix=$cargo_home=/cargo")
     CARGO_ENCODED_RUSTFLAGS="$flags" CARGO_TARGET_DIR="$1" \
         "$CARGO" build --locked -p mae-crypto-wasm --lib \
         --target wasm32-unknown-unknown --profile wasm
@@ -55,7 +61,11 @@ case "$cmd" in
         b=$(sha256 "$(artifact "$second")")
         echo "first build:  $a"
         echo "second build: $b"
-        [ "$a" = "$b" ] || { echo "not reproducible" >&2; exit 1; }
+        if [ "$a" != "$b" ]; then
+            echo "the WASM build is not reproducible" >&2
+            exit 1
+        fi
+        echo "reproducible: $(wc -c <"$(artifact "$target_dir")" | tr -d ' ') bytes, sha256 $a"
         ;;
     test)
         build "$target_dir"

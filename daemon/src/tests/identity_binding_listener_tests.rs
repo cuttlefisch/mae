@@ -38,6 +38,7 @@ fn config(allowed_groups: &[&str]) -> ResourceServerConfig {
         groups_claim: "groups".into(),
         allowed_groups: allowed_groups.iter().map(|g| g.to_string()).collect(),
         jwks_url: "https://unused.example.com/jwks".into(),
+        jwks_ca_file: None,
         issuer: Some(ISS.into()),
         kb_query_enabled: true,
         max_request_body_bytes: 1_048_576,
@@ -45,6 +46,7 @@ fn config(allowed_groups: &[&str]) -> ResourceServerConfig {
         kb_query_max_scan_nodes: 500,
         kb_query_max_search_results: 20,
         webview_enabled: false,
+        second_factor: Default::default(),
     }
 }
 

@@ -98,6 +98,7 @@ jobs:
       adr: ${{ steps.filter.outputs.adr }}
       export-js: ${{ steps.filter.outputs.export-js }}
       org-wasm: ${{ steps.filter.outputs.org-wasm }}
+      crypto-wasm: ${{ steps.filter.outputs.crypto-wasm }}
       version-bump-only: ${{ steps.version-bump-only.outputs.result }}
     steps:
       - uses: actions/checkout@v7
@@ -142,6 +143,14 @@ jobs:
               - 'scripts/org-wasm.sh'
               - 'tests/**/*.org'
               - 'assets/**/*.org'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/ci.yml'
+              - '.github/actions/**'
+            crypto-wasm:
+              - 'shared/crypto/**'
+              - 'shared/crypto-wasm/**'
+              - 'scripts/crypto-wasm.sh'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.github/workflows/ci.yml'
@@ -815,6 +824,43 @@ jobs:
       - name: Size budget, native-vs-WASM differential, memory over 10,000 calls
         run: make org-wasm-test
 
+  # mae-crypto's WASM module: the member-key, identity-challenge, key-backup
+  # and content crypto a browser client runs as MAE's own Rust code. Same
+  # discipline as the org-wasm job above, for the same reason (the artifact
+  # is a contract the browser pins, `mae-crypto-vX` tags), with the toolchain
+  # pinned to the rustc the size budget in shared/crypto-wasm/js/test.mjs was
+  # measured with.
+  crypto-wasm:
+    name: mae-crypto WASM (reproducible build, size budget, Node differential)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: changes
+    if: needs.changes.outputs.crypto-wasm == 'true'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.98.0"
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Build twice, require identical bytes
+        run: make crypto-wasm-repro
+      # The bytes a mae-crypto-vX tag pins, as the pinned toolchain produced
+      # them: in the log and the run summary, so a tag can be checked against
+      # the run that built it.
+      - name: Record the artifact's size and sha256
+        run: |
+          a=target/wasm32-unknown-unknown/wasm/mae_crypto_wasm.wasm
+          size=$(wc -c <"$a" | tr -d ' ')
+          sum=$(sha256sum "$a" | cut -d' ' -f1)
+          line="mae_crypto_wasm.wasm: $size bytes, sha256 $sum, $(rustc --version)"
+          echo "$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+      - name: Size budget, ABI, native-vs-WASM differential, interop, entropy, residue
+        run: make crypto-wasm-test
+
   lint-nonrust:
     name: shell + yaml + ansible lint
     runs-on: ubuntu-latest
@@ -934,6 +980,13 @@ jobs:
         timeout-minutes: 3
       - name: Build daemon binary
         run: cd daemon && cargo build
+      # Compile the test binaries in their own step, so the 10-minute budget
+      # below times the tests alone. With compilation inside it, the run used
+      # 8-9 minutes of the 10 on main, and a dependency bump that missed the
+      # compile cache pushed it over with no test slower at all.
+      - name: Build daemon tests
+        run: cd daemon && cargo test --no-run
+        timeout-minutes: 20
       - name: Daemon collab tests
         run: cd daemon && cargo test -- --test-threads=1 --nocapture
         timeout-minutes: 10
@@ -1486,6 +1539,27 @@ jobs:
       # name its schema omits is unreachable. Pure python3 over source, no build.
       - name: Check AI tool arguments are declared
         run: make tool-args-check
+
+  mutate-check:
+    name: mutation lists (anchors) + the tool's tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      MUTATE_QUEUE: "off"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-rust
+        with:
+          workspaces: tools/mutate -> target
+      # Text only: a refactor that moves a guard fails here, on the PR that
+      # moved it, not at the next mutation run. Running the mutants themselves
+      # is mutation.yml's job (nightly, or the `mutation` label).
+      - name: Check every declared mutant still applies
+        run: make mutate-check
+      - name: The mutation tool's own tests
+        run: make mutate-test
 
   adr-kb-sync:
     name: ADR KB staleness gate (ADR-059 Phase E)

@@ -216,6 +216,7 @@ kb_query_max_scan_nodes = 500
 kb_query_max_search_results = 20
 max_connections = {max_connections}
 webview_enabled = {webview_enabled}
+second_factor_amr = ["mfa"]
 "#,
             collab_port = ports.collab,
             oauth_port = ports.oauth,
@@ -442,6 +443,40 @@ async fn forged_signature_token_is_rejected_over_the_real_wire() {
             .is_some(),
         "a rejected forged token must still get a spec-compliant WWW-Authenticate challenge"
     );
+}
+
+/// ADR-098 for ADR-113 B7: the bare probe reports how the caller signed in
+/// and whether `oauth.second_factor_amr` (set to `["mfa"]` in this harness's
+/// `daemon.toml`) is met — read from the real config file, over the real wire.
+#[tokio::test]
+async fn the_probe_reports_the_sign_in_against_the_configured_second_factor() {
+    let (private_key_pem, jwks) = generate_key_material();
+    let jwks_addr = spawn_mock_jwks_server(&jwks).await;
+    let daemon = spawn_daemon_with_oauth(jwks_addr).await;
+    let base_url = format!("https://{}", daemon.oauth_addr);
+    let client = insecure_https_client();
+    let probe = |amr: serde_json::Value| {
+        let mut claims = valid_claims();
+        claims["amr"] = amr;
+        claims["auth_time"] = serde_json::json!(now_unix() - 5);
+        let token = sign_token(&private_key_pem, &claims);
+        let req = client.get(&base_url).bearer_auth(token);
+        async move {
+            let resp = req.send().await.expect("probe request");
+            assert_eq!(resp.status(), 200);
+            resp.json::<serde_json::Value>().await.unwrap()
+        }
+    };
+    let body = probe(serde_json::json!(["pwd", "mfa"])).await;
+    assert_eq!(
+        body["sign_in"]["second_factor"],
+        serde_json::json!({"claim": "amr", "value": "mfa"}),
+        "{body}"
+    );
+    assert!(body["sign_in"]["auth_time"].is_u64(), "{body}");
+    let body = probe(serde_json::json!(["pwd"])).await;
+    assert!(body["sign_in"]["second_factor"].is_null(), "{body}");
+    assert_eq!(body["sign_in"]["amr"], serde_json::json!(["pwd"]), "{body}");
 }
 
 /// Adversarial regression test (found via an independent security review of

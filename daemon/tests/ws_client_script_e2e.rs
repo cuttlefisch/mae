@@ -1,13 +1,13 @@
 //! Conformance with the browser client's scripted conversation (ADR-099
 //! Amendment 1, B1–B6).
 //!
-//! The web client is built against a mock that plays `c-guion-v1`: per
+//! The web client is built against a mock that plays `c-guion-v2`: per
 //! scenario, the frames and HTTP requests the client sends and exactly what it
 //! expects back. This test replays every scenario against a real daemon over
 //! the real TLS listener and checks each answer against the script's own
 //! template, so the daemon and the mock cannot drift apart unnoticed.
 //!
-//! The script is vendored byte for byte (`tests/data/c-guion-v1.json`) and its
+//! The script is vendored byte for byte (`tests/data/c-guion-v2.json`) and its
 //! hash is pinned: a changed script fails here first, and the new version is
 //! adopted deliberately. Its text is data: field names, values and placeholders
 //! are read from it, nothing else.
@@ -25,16 +25,16 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use mae_sync::encoding::{base64_to_update, update_to_base64};
-use mae_sync::kb::{derive_kb_client_id, KbNodeDoc};
+use mae_sync::kb::KbNodeDoc;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use ws_common::*;
 
 const SCRIPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/tests/data/c-guion-v1.json"
+    "/tests/data/c-guion-v2.json"
 ));
-const SCRIPT_SHA256: &str = "1ec66e53ad049a651aa63f80c7442f66a76d3f9a1a86cf73788e7d1e93973df5";
+const SCRIPT_SHA256: &str = "9fa82e4ad50869d02eeab2fd9599a76ee4c7432162d276fa29555e3ac49e491e";
 
 /// The script's example ticket, replaced by a live one wherever it appears.
 const EXAMPLE_TICKET: &str = "TICKET-43-caracteres-base64url-de-256-bits-x";
@@ -48,10 +48,10 @@ fn script() -> Value {
     assert_eq!(
         hex::encode(digest),
         SCRIPT_SHA256,
-        "tests/data/c-guion-v1.json is not the pinned copy of the client's script"
+        "tests/data/c-guion-v2.json is not the pinned copy of the client's script"
     );
     let v: Value = serde_json::from_str(SCRIPT).unwrap();
-    assert_eq!(v["formato"], "c-guion-v1");
+    assert_eq!(v["formato"], "c-guion-v2");
     v
 }
 
@@ -399,14 +399,7 @@ async fn ticket_and_connect(sc: Value) {
     let subs = Subs::default()
         .deadlines()
         .with(EXAMPLE_PRINCIPAL, Check::Eq(json!(EXAMPLE_PRINCIPAL)));
-    // `limits.max_outbound_bytes` is additive and agreed with the client, which
-    // sizes its inbound cap from it; the script predates it.
-    assert_conforms(
-        &step(&sc, 4, "demonio")["trama"],
-        &first,
-        &subs,
-        &["max_outbound_bytes"],
-    );
+    assert_conforms(&step(&sc, 4, "demonio")["trama"], &first, &subs, &[]);
 }
 
 /// "ticket usado, caducado o desconocido": the three refusals conform and are
@@ -547,25 +540,6 @@ async fn deadline_missed(sc: Value) {
         "closed no earlier than the deadline"
     );
     assert_close(&step(&sc, 0, "demonio")["cierre"], &close);
-}
-
-/// A writer on `node` of `KB`, authoring under the principal's current-epoch
-/// client id, from the node's state as `kb/join` returned it.
-fn node_writer(joined: &Value, node: &str, principal: &str, epoch: u64) -> KbNodeDoc {
-    let entry = joined["result"]["nodes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|n| n["id"] == node)
-        .unwrap_or_else(|| panic!("kb/join returned no node '{node}': {joined}"));
-    let state = base64_to_update(entry["state"].as_str().unwrap()).unwrap();
-    KbNodeDoc::from_bytes_with_client_id(&state, derive_kb_client_id(principal, epoch)).unwrap()
-}
-
-fn epoch_of(joined: &Value) -> u64 {
-    joined["result"]["epoch"]
-        .as_u64()
-        .unwrap_or_else(|| panic!("kb/join reports no epoch: {joined}"))
 }
 
 /// Seeded filler, so each flood update replaces its value outright.

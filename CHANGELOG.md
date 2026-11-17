@@ -2,6 +2,116 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.161] - 2026-11-17
+
+
+
+
+### Features
+
+- *(tools)* Mae-mutate, declared and re-runnable mutation checks ([cce9979](https://github.com/cuttlefisch/mae/commit/cce997966cb2c1340ecc90d3ea29c5d549946483))
+
+### Bug Fixes
+
+- *(test-safety)* Detect cargo test binaries on Rust 1.100's build-dir layout; take over #882/#883 ([ef0157a](https://github.com/cuttlefisch/mae/commit/ef0157a15a6d15b97e40180fc4b1aaccabe674e3))
+- *(ci)* Time the daemon tests apart from their build; shorten build_configuration ([0b15197](https://github.com/cuttlefisch/mae/commit/0b151974458e13a56f170e8b7fe8be4b7319dcc8))
+
+### Documentation
+
+- *(adr)* The ADR-113/115 build sequence, ADR-117, ADR-111 Am. 1, ADR-118 ([0ab9100](https://github.com/cuttlefisch/mae/commit/0ab910069b9c5848db8b85075f6a2b16d0c08cfe))
+
+### Miscellaneous
+
+- Bump version to 0.14.160 ([4e3c1c2](https://github.com/cuttlefisch/mae/commit/4e3c1c21a731095356f7bc795bcda744f525a566))
+
+## [0.14.159] - 2026-11-16
+
+
+
+
+### Features
+
+- *(daemon)* Expose how a person signed in (ADR-098, for ADR-113 B7/C4) ([dbe2125](https://github.com/cuttlefisch/mae/commit/dbe2125f40adaaa3113748536e194d0c7bcfbf71))
+
+### Documentation
+
+- *(adr-036)* Amendment 1 — the hub verifies every content op it accepts ([496d3d4](https://github.com/cuttlefisch/mae/commit/496d3d47474411bef3066f079895b94ff7e3cde7))
+- *(adr-113)* Amendments 2 and 3 — the revision record, and approval per document type ([a532356](https://github.com/cuttlefisch/mae/commit/a5323563f2ef25273302205922a17b11f6293ebc))
+
+### Miscellaneous
+
+- Bump version to 0.14.159 ([cb209d3](https://github.com/cuttlefisch/mae/commit/cb209d37298d4a6684756d82ad8108376d548aeb))
+
+## [0.14.158] - 2026-11-16
+
+
+
+
+### Bug Fixes
+
+- *(oauth)* No CA roots is a startup error, not a panic; oauth.jwks_ca_file ([64463a6](https://github.com/cuttlefisch/mae/commit/64463a6f084c5f4015ed1f73b15fddd356494f8e))
+
+### Testing
+
+- *(oauth)* Run the no-CA-roots cases in a child process ([b463755](https://github.com/cuttlefisch/mae/commit/b4637551ea52441cd856d20c3d02d64c7707899c))
+
+### Miscellaneous
+
+- Bump version to 0.14.158 ([23083f1](https://github.com/cuttlefisch/mae/commit/23083f129a3ec56d7d50c1bf24745b153e817d6b))
+
+## [0.14.157] - 2026-11-16
+
+
+
+
+### Miscellaneous
+
+- Bump version to 0.14.157 ([a880cd3](https://github.com/cuttlefisch/mae/commit/a880cd389def3f05c413ca7886118f849837b71d))
+
+## [mae-crypto-v0.1.0] - 2026-11-16
+
+
+
+
+### Features
+
+- *(crypto)* Mae-crypto, one no-I/O crypto crate, and its WASM facade ([09c8206](https://github.com/cuttlefisch/mae/commit/09c82066cf7ab99e4a3cc253ca4d5ab8389b5cf7))
+
+### Bug Fixes
+
+- *(crypto)* Review round 1 for mae-crypto and its WASM facade ([9b923c3](https://github.com/cuttlefisch/mae/commit/9b923c3023de0eb20afc4c90f11a8ebc7a67781f))
+
+## [0.14.156] - 2026-11-15
+
+
+
+
+### Features
+
+- *(daemon)* Accept a bound IdP login on /ws behind a pilot switch (ADR-099 Am. 2) ([24f49b6](https://github.com/cuttlefisch/mae/commit/24f49b639512bc2beda4a97749fa1f628a6eb885))
+
+### Bug Fixes
+
+- *(daemon)* Cap a bound-IdP socket session; re-resolve a ticket's binding ([4d57aa2](https://github.com/cuttlefisch/mae/commit/4d57aa2313dfad9f5fdd842cf1329696a9933e13))
+
+### Miscellaneous
+
+- Bump version to 0.14.156 ([11b310f](https://github.com/cuttlefisch/mae/commit/11b310fcffe9c0b61748fc76f8781876dd8d280d))
+
+## [mae-org-v0.9.0] - 2026-11-15
+
+
+
+
+### Features
+
+- *(org)* Toplevel_hlevel — the HTML level of a top-level headline (mae-org 0.9.0) ([d5fc3b6](https://github.com/cuttlefisch/mae/commit/d5fc3b6c52daaa35e581d6de435448f4d1e0a881))
+
+### Documentation
+
+- *(adr-074)* Amendment 1 — partial open decided ([bae3842](https://github.com/cuttlefisch/mae/commit/bae38423504ed518e5a7da5eea99d637c641db95))
+- *(adr-074)* Amendment 1 — defaults, write-cost bar and HTTP/2 decided ([2246a0c](https://github.com/cuttlefisch/mae/commit/2246a0c659f4a5442e27a8fbd640053b36c367ab))
+
 ## [0.14.155] - 2026-11-15
 
 
@@ -18,6 +128,10 @@ All notable changes to this project will be documented in this file.
 ### Testing
 
 - *(identity)* Split the binding e2e tests into helpers ([9d56b0d](https://github.com/cuttlefisch/mae/commit/9d56b0d5b93c959ab637b55c2c072baabe367f7f))
+
+### Miscellaneous
+
+- Bump version to 0.14.155 ([22f6238](https://github.com/cuttlefisch/mae/commit/22f62386eda5159467ac03cbde6767f96484286c))
 
 ## [0.14.154] - 2026-11-15
 

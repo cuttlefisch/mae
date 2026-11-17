@@ -13,7 +13,9 @@ use super::*;
 use mae_daemon::identity_binding::{BindingStore, Selector};
 use mae_daemon::oauth_self_issue::{unbound_principal, PrincipalKind};
 use mae_mcp::identity::Identity;
-use mae_mcp::identity_challenge::{sign_challenge, Claimant, DOMAIN_TAG};
+use mae_mcp::identity_challenge::{
+    sign_challenge, Claimant, DOMAIN_TAG, MAX_CHALLENGE_LIFETIME_SECS,
+};
 
 const ISS: &str = "https://idp.example.com";
 const AUD: &str = "https://mae.example.com";
@@ -31,6 +33,7 @@ fn idp_at(issuer: &str, subject: &str) -> ValidatedPrincipal {
         subject: subject.into(),
         credential: Credential::IdpUnbound,
         kind: PrincipalKind::Agent,
+        sign_in: None,
     }
 }
 
@@ -150,7 +153,13 @@ fn the_editors_signer_binds_through_the_route() {
     let me = Claimant {
         issuer: ISS,
         subject: "alice",
+        audience: AUD,
     };
+    let elsewhere = Claimant {
+        audience: "https://other.example.com",
+        ..me
+    };
+    assert!(sign_challenge(&key, elsewhere, &answer, unix_now()).is_err());
     assert!(sign_challenge(&other, me, &answer, unix_now()).is_err());
     let (_, body) = sign_challenge(&key, me, &answer, unix_now()).unwrap();
     let (status, v, _) = bind_now(&r, &store, &vp, &body);
@@ -401,6 +410,9 @@ fn a_challenge_needs_a_key_fingerprint() {
 fn default_challenge_bounds_are_minutes_and_a_few() {
     let d = crate::oauth_config::OAuthConfig::default();
     assert!((120..=900).contains(&d.identity_challenge_ttl_secs));
+    // Signers refuse a challenge valid for longer than this; the default must
+    // sit well inside it, or every bind would fail at the signer.
+    assert!(d.identity_challenge_ttl_secs <= MAX_CHALLENGE_LIFETIME_SECS / 2);
     assert!((2..=8).contains(&d.identity_max_pending_challenges));
     assert!(
         !d.identity_binding_enabled,

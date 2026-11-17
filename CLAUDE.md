@@ -842,6 +842,34 @@ under the content key (the daemon stays key-blind) and receives the KB's history
 daemon then releases, so the keyed `content_hash` confirms no guess and the chain is never
 rewritten; until it is built, the switch is refused while history holds plaintext.
 
+**ADR-117** (*proposed, design; phased P0–P9*) — **access administration: caller-scoped reads,
+signed origins, and a local directory sync.** The daemon side of a browser client's user-and-access
+administration. Three reads answer only about the caller or a KB the caller owns
+(`kb/review.my_pending`, `kb/query.my_access`, the owner-and-person-only `kb/members.list`); every
+grant carries a signed origin (`directory` with its group, or `manual` with a reason and optional
+expiry) as `maememb/v7`, and an expired grant counts on neither gate source; nobody grants anything to
+themselves; a browser owner changes membership by signing a typed op (mae-crypto 0.2.0) that the
+daemon verifies against the one derivation and appends, never signing for them; administrative acts
+need a person session with a fresh second factor (ADR-113's checker); membership follows the
+directory through a **local** operator sync that applies in daemon-owned KBs, only proposes in
+personal ones, and applies nothing when a group is missing; the binding table gains an append-only
+log and follows a verified `Rebind`; review lists accept people only and a request freezes its
+policy; a config-granted read-only auditor and a read-only notification outbox complete it.
+
+**ADR-118** (*proposed, design; phased G1–G5*) — **an AI agent reaches the daemon as "agent A of
+person P", never as P, and MCP is served on the HTTPS listener.** The daemon issues its own agent
+token (RFC 8693 `act`, its own `typ`, `kid`, issuer and signing key, refused by the self-token and
+IdP validators); the agent's principal is `agent:<id>`, a member of nothing, so a path that forgets
+the agent case fails closed. Grants live in daemon SQLite outside the CRDT, name KBs one by one, and
+every request intersects the grant, P's current role and the KB owner's ceiling, so removing P
+removes the agent. P grants and renews with a fresh second factor; revocation is immediate and
+closes live sessions. Access tokens are short and re-minted with a rotating, single-use refresh
+credential. Agent writes are signed by the agent's own key under a delegation P signs, which settles
+ADR-113 O16. Person tokens need a client in `oauth.person_client_ids` (ADR-111 Amendment 1). `/mcp`
+is Streamable HTTP with its own audience and RFC 9728 metadata, accepts agent tokens only, never
+passes a token through, and offers the read surface first; grant and policy methods are never on it
+(principle #16). The third-party MCP OAuth flow is deferred.
+
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
 > from it entirely until 2026-08-04, i.e. every ADR from the KB-visualization arc and the whole
 > pre-v0.15 audit set, so agents rediscovered decisions that already existed. `docs/adr/` is the
