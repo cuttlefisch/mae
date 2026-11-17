@@ -697,6 +697,11 @@ mod tests {
 
     /// Run a mock adapter in a background task. Returns streams the client
     /// should wrap: (adapter_stdout_for_client, adapter_stdin_from_client).
+    ///
+    /// After the script it holds the stream open until the client closes its
+    /// end, reading and ignoring whatever it sends: a silent adapter, not a dead
+    /// one. A test that wants the adapter to die scripts `Exit`; the old fixed
+    /// 50 ms hold raced every request timeout near 50 ms.
     fn spawn_mock_adapter(
         script: Vec<Action>,
     ) -> (
@@ -781,10 +786,6 @@ mod tests {
                     Action::Exit => return,
                 }
             }
-            // Hold the stream open until the client closes its end, reading
-            // and ignoring whatever it sends: a silent adapter, not a dead
-            // one. A test that wants the adapter to die scripts `Exit` — the
-            // old fixed 50 ms hold raced every request timeout near 50 ms.
             while transport.read_message().await.is_ok() {}
         });
 

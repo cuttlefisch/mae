@@ -1173,6 +1173,8 @@ mod tests {
 
     /// Connect to a test server's socket once it is bound — the condition, not
     /// a fixed "give the server time to bind" sleep (see `ready::connect_when_ready`).
+    /// Unix-only, like every test that calls it: Windows has no `UnixStream`.
+    #[cfg(unix)]
     async fn connect_server(path: impl AsRef<std::path::Path>) -> tokio::net::UnixStream {
         let path = path.as_ref();
         crate::ready::connect_when_ready("the MCP server socket", || {
