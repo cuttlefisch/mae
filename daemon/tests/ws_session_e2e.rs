@@ -48,23 +48,21 @@ async fn many_documents_over_one_socket_are_one_connection() {
     ];
     assert!(ok(&ws.call(1, "kb/share", kb_share("km1", &nodes)).await));
     assert!(ok(&ws.call(2, "kb/share", kb_share("km2", &nodes)).await));
-    // Wait for the upgrade's HTTP exchange to settle, then count.
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(
-        active(daemon_status(&d.socket).await),
-        Some(1),
-        "8 documents, 1 connection"
+    // Wait for the count to settle at one: the upgrade's HTTP exchange is
+    // over, and eight documents did not open more connections.
+    assert!(
+        mae_mcp::ready::wait_until(|| async { active(daemon_status(&d.socket).await) == Some(1) })
+            .await,
+        "{} (8 documents, 1 connection)",
+        mae_mcp::ready::timeout_message("the listener counting exactly 1 connection")
     );
     drop(ws);
-    let mut n = None;
-    for _ in 0..50 {
-        n = active(daemon_status(&d.socket).await);
-        if n == Some(0) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert_eq!(n, Some(0), "closing the socket releases its slot");
+    assert!(
+        mae_mcp::ready::wait_until(|| async { active(daemon_status(&d.socket).await) == Some(0) })
+            .await,
+        "{}",
+        mae_mcp::ready::timeout_message("closing the socket releasing its slot")
+    );
 }
 
 /// B3: `session/renew_needed` arrives `renew_lead` before the deadline; a
@@ -87,7 +85,10 @@ async fn a_missed_deadline_closes_4401() {
         now_unix() < deadline,
         "renew_needed must come before the deadline"
     );
-    assert_eq!(ws.closed().await, (4401, "token_expired".to_string()));
+    assert_eq!(
+        ws.closed_within(until_past(deadline)).await,
+        (4401, "token_expired".to_string())
+    );
 }
 
 fn now_unix() -> u64 {
@@ -99,14 +100,22 @@ fn now_unix() -> u64 {
 
 /// B3: a renewal with the same identity moves the deadline, and the socket
 /// outlives the first token.
+///
+/// The first token lives 5 s with a 4 s lead, so `renew_needed` comes about a
+/// second in and the renewal has about four (it had one or two: a 3 s token
+/// and a 2 s lead, `exp` being whole seconds). The test then waits until the
+/// first token's reported deadline has passed, not a fixed 4 s.
 #[tokio::test]
 async fn a_renewal_moves_the_deadline() {
+    const FIRST_TOKEN_SECS: u64 = 5;
     let d = spawn(Opts {
-        renew_lead_secs: 2,
+        renew_lead_secs: FIRST_TOKEN_SECS - 1,
         ..Opts::default()
     })
     .await;
-    let mut ws = connect_bearer(&d, &d.token("SHA256:alice", 3)).await;
+    let mut ws = connect_bearer(&d, &d.token("SHA256:alice", FIRST_TOKEN_SECS)).await;
+    let hello = ws.until(|v| v["method"] == "session/hello").await;
+    let first_deadline = deadline_unix(&hello["params"]["auth_deadline"]);
     ws.until(|v| v["method"] == "session/renew_needed").await;
     let renewed = ws
         .call(
@@ -117,7 +126,11 @@ async fn a_renewal_moves_the_deadline() {
         .await;
     let new_deadline = deadline_unix(&renewed["result"]["auth_deadline"]);
     assert!(new_deadline > now_unix() + 30);
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    sleep_past(first_deadline, Duration::from_millis(250)).await;
+    assert!(
+        now_unix() >= first_deadline,
+        "past the first token's deadline"
+    );
     assert!(
         ok(&ws.call(2, "kb/share", kb_share("kr", &[])).await),
         "alive past the first token"
@@ -142,8 +155,13 @@ async fn a_renewal_with_a_different_principal_closes() {
 /// per document, `not_member` — and keeps his own on the same socket.
 #[tokio::test]
 async fn a_member_removed_between_renewals_loses_that_kb_only() {
+    // Bob's token lives 30 s with a 29 s lead: `renew_needed` about a second
+    // in, then most of the lifetime to renew. With a 4 s token and a 2 s lead
+    // a slow setup let `renew_needed` arrive during one of Bob's calls, which
+    // skipped it, and the later wait ran into `4401 token_expired`.
+    const BOB_TOKEN_SECS: u64 = 30;
     let d = spawn(Opts {
-        renew_lead_secs: 2,
+        renew_lead_secs: BOB_TOKEN_SECS - 1,
         ..Opts::default()
     })
     .await;
@@ -155,13 +173,14 @@ async fn a_member_removed_between_renewals_loses_that_kb_only() {
     let bob_in = json!({"kb_id": "kra", "member": "SHA256:bob", "role": "viewer", "label": "bob"});
     assert!(ok(&alice.call(2, "kb/add_member", bob_in).await));
 
-    let mut bob = connect_bearer(&d, &d.token("SHA256:bob", 4)).await;
+    let mut bob = connect_bearer(&d, &d.token("SHA256:bob", BOB_TOKEN_SECS)).await;
     assert!(ok(&bob.call(1, "kb/share", kb_share("krb", &[])).await));
     assert!(ok(&bob.call(2, "kb/join", json!({"kb_id": "kra"})).await));
     let bob_out = json!({"kb_id": "kra", "member": "SHA256:bob"});
     assert!(ok(&alice.call(3, "kb/remove_member", bob_out).await));
 
-    bob.until(|v| v["method"] == "session/renew_needed").await;
+    bob.seen_or_until(|v| v["method"] == "session/renew_needed")
+        .await;
     let renew = json!({"token": d.token("SHA256:bob", 3600)});
     assert!(ok(&bob.call(3, "session/renew", renew).await));
     let mut closed = std::collections::BTreeSet::new();

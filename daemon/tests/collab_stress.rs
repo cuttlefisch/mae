@@ -267,8 +267,8 @@ async fn stress_sustained_session_3_peers() {
         c3.send_update("stress-3peer.txt", &update3).await;
     }
 
-    // Give the server a moment to process all updates.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // No wait: `send_update` returns the server's answer, which it sends only
+    // after applying the update, so every update above is already applied.
 
     // Drain notifications from all clients.
     c1.drain_notifications().await;
@@ -345,8 +345,8 @@ async fn stress_large_document_concurrent_edits() {
         c2.send_update("stress-large.txt", &update).await;
     }
 
-    // Wait for processing.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // No wait: `send_update` returns the server's answer, which it sends only
+    // after applying the update, so every update above is already applied.
     c1.drain_notifications().await;
     c2.drain_notifications().await;
 
@@ -416,16 +416,15 @@ async fn stress_rapid_connect_disconnect() {
                 transient.send_update("stress-churn.txt", &update).await;
             }
 
-            // Small delay to let the server process before disconnect.
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
+            // No delay before disconnecting: each `send_update` above returned
+            // the server's answer, sent only after it applied the update.
             // Disconnect by dropping.
             transient.disconnect().await;
         }
     }
 
-    // Wait for all server processing to complete.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // No wait: `send_update` returns the server's answer, which it sends only
+    // after applying the update, so every update above is already applied.
     stable.drain_notifications().await;
 
     let final_content = stable.content("stress-churn.txt").await;
@@ -497,8 +496,8 @@ async fn stress_undo_under_concurrent_load() {
         cb.send_update("stress-undo.txt", &update).await;
     }
 
-    // Wait for server to process all updates.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // No wait: `send_update` returns the server's answer, which it sends only
+    // after applying the update, so every update above is already applied.
 
     // Sync client A with server state before undoing.
     let server_state = ca.full_state("stress-undo.txt").await;
@@ -524,8 +523,8 @@ async fn stress_undo_under_concurrent_load() {
         }
     }
 
-    // Wait for undo updates to propagate.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // No wait: `send_update` returns the server's answer, which it sends only
+    // after applying the update, so every update above is already applied.
     ca.drain_notifications().await;
     cb.drain_notifications().await;
 

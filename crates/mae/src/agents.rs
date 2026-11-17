@@ -387,6 +387,21 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Date `path` long past and return that time. An idempotent write leaves
+    /// it there; any rewrite moves it to now. This states the comparison
+    /// outright, where a sleep between two writes only hoped the filesystem's
+    /// timestamp granularity would show a rewrite.
+    fn backdate_mtime(path: &std::path::Path) -> std::time::SystemTime {
+        let past = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(past)
+            .unwrap();
+        past
+    }
+
     #[test]
     fn test_builtin_agents_has_claude_and_gemini() {
         let agents = builtin_agents();
@@ -462,9 +477,7 @@ mod tests {
 
         write_gemini_settings(dir.path(), &shim).unwrap();
         let path = dir.path().join(".gemini/settings.json");
-        let mtime1 = std::fs::metadata(&path).unwrap().modified().unwrap();
-
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        let mtime1 = backdate_mtime(&path);
 
         write_gemini_settings(dir.path(), &shim).unwrap();
         let mtime2 = std::fs::metadata(&path).unwrap().modified().unwrap();
@@ -555,13 +568,8 @@ mod tests {
         let shim = PathBuf::from("/usr/local/bin/mae-mcp-shim");
 
         write_mcp_json(dir.path(), &shim).unwrap();
-        let mtime1 = std::fs::metadata(dir.path().join(".mcp.json"))
-            .unwrap()
-            .modified()
-            .unwrap();
-
-        // Brief pause to ensure mtime would differ if file were rewritten.
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        // Dated long past, so a rewrite would visibly move it.
+        let mtime1 = backdate_mtime(&dir.path().join(".mcp.json"));
 
         write_mcp_json(dir.path(), &shim).unwrap();
         let mtime2 = std::fs::metadata(dir.path().join(".mcp.json"))
@@ -676,9 +684,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         write_claude_settings(dir.path()).unwrap();
         let path = dir.path().join(".claude/settings.local.json");
-        let mtime1 = std::fs::metadata(&path).unwrap().modified().unwrap();
-
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        let mtime1 = backdate_mtime(&path);
 
         write_claude_settings(dir.path()).unwrap();
         let mtime2 = std::fs::metadata(&path).unwrap().modified().unwrap();

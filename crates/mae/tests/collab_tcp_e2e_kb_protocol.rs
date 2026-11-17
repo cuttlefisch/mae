@@ -7,8 +7,6 @@
 //! Gated with `#[ignore]` — run via:
 //!   MAE_TCP_E2E=1 cargo test -p mae --test collab_tcp_e2e_kb_protocol -- --ignored --nocapture
 
-use std::time::Duration;
-
 use mae_sync::encoding::base64_to_update;
 use mae_sync::kb::{KbCollectionDoc, KbNodeDoc};
 
@@ -244,8 +242,13 @@ async fn tcp_kb_leave_and_rejoin() {
     // Client A edits while B is away
     let mut node = KbNodeDoc::from_bytes(&node_states[0].1).unwrap();
     let update = node.set_body("Edited while B was away");
-    client_a.kb_node_update("leave-kb", "n1", &update).await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The daemon answers `kb/node_update` only after writing it, so the answer
+    // is the condition to wait for, not a fixed delay.
+    let applied = client_a.kb_node_update("leave-kb", "n1", &update).await;
+    assert_eq!(
+        applied["result"]["applied"], true,
+        "update not applied: {applied}"
+    );
 
     // Client B re-joins and should see the update
     let rejoin_resp = client_b.kb_join("leave-kb").await;
@@ -296,10 +299,12 @@ async fn tcp_kb_join_after_update_sees_latest() {
     // Client A updates the node
     let mut node = KbNodeDoc::from_bytes(&node_states[0].1).unwrap();
     let update = node.set_body("V2 Body — updated content");
-    client_a.kb_node_update("latest-kb", "n1", &update).await;
-
-    // Small delay for server to apply
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The daemon answers `kb/node_update` only after writing it.
+    let applied = client_a.kb_node_update("latest-kb", "n1", &update).await;
+    assert_eq!(
+        applied["result"]["applied"], true,
+        "update not applied: {applied}"
+    );
 
     // Client B joins AFTER the update
     let join_resp = client_b.kb_join("latest-kb").await;

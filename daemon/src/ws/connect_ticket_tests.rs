@@ -31,18 +31,39 @@ fn a_ticket_redeems_once_and_carries_its_grant() {
 
 #[test]
 fn a_ticket_is_valid_for_exactly_thirty_seconds() {
-    assert_eq!(TICKET_TTL, Duration::from_secs(30), "B1 fixes the lifetime");
+    assert_eq!(
+        MAX_TICKET_TTL,
+        Duration::from_secs(30),
+        "B1 fixes the lifetime"
+    );
     let store = TicketStore::default();
+    assert_eq!(store.ttl(), MAX_TICKET_TTL, "the default store is B1's");
     let now = Instant::now();
     let early = store.mint(grant("SHA256:alice"), now).unwrap();
     let late = store.mint(grant("SHA256:alice"), now).unwrap();
-    let just_inside = now + TICKET_TTL - Duration::from_millis(1);
+    let just_inside = now + MAX_TICKET_TTL - Duration::from_millis(1);
     assert!(store.redeem(&early, just_inside).is_some());
     assert_eq!(
-        store.redeem(&late, now + TICKET_TTL),
+        store.redeem(&late, now + MAX_TICKET_TTL),
         None,
         "expired at 30 s"
     );
+}
+
+/// A store configured with a shorter lifetime (`ws_ticket_ttl_secs`) expires
+/// its tickets at that lifetime, not at B1's 30 s.
+#[test]
+fn a_shorter_configured_ttl_expires_tickets_at_that_ttl() {
+    let ttl = Duration::from_secs(2);
+    let store = TicketStore::with_ttl(ttl);
+    assert_eq!(store.ttl(), ttl);
+    let now = Instant::now();
+    let early = store.mint(grant("SHA256:alice"), now).unwrap();
+    let late = store.mint(grant("SHA256:alice"), now).unwrap();
+    assert!(store
+        .redeem(&early, now + ttl - Duration::from_millis(1))
+        .is_some());
+    assert_eq!(store.redeem(&late, now + ttl), None, "expired at 2 s");
 }
 
 /// An expired ticket is consumed too: a later presentation, even with a clock
@@ -52,7 +73,7 @@ fn an_expired_presentation_still_consumes_the_ticket() {
     let store = TicketStore::default();
     let now = Instant::now();
     let t = store.mint(grant("SHA256:alice"), now).unwrap();
-    assert_eq!(store.redeem(&t, now + TICKET_TTL), None);
+    assert_eq!(store.redeem(&t, now + MAX_TICKET_TTL), None);
     assert_eq!(store.redeem(&t, now), None);
 }
 
@@ -78,7 +99,7 @@ fn unknown_used_and_expired_are_indistinguishable() {
     store.redeem(&used, now);
     let expired = store.mint(grant("SHA256:a"), now).unwrap();
     let unknown = "00".repeat(32);
-    let later = now + TICKET_TTL;
+    let later = now + MAX_TICKET_TTL;
     assert_eq!(store.redeem(&used, now), None);
     assert_eq!(store.redeem(&expired, later), None);
     assert_eq!(store.redeem(&unknown, now), None);
@@ -106,7 +127,9 @@ fn unused_tickets_are_bounded_per_principal_and_freed_by_use_or_expiry() {
         "use frees a slot"
     );
     assert!(
-        store.mint(grant("SHA256:alice"), now + TICKET_TTL).is_ok(),
+        store
+            .mint(grant("SHA256:alice"), now + MAX_TICKET_TTL)
+            .is_ok(),
         "expiry frees every slot"
     );
 }
