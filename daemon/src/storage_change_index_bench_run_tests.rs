@@ -91,14 +91,19 @@ async fn writer(
     start.wait().await;
     let (mut lat, mut busy) = (Vec::with_capacity(load.writes_each), 0);
     for _ in 0..load.writes_each {
-        if let Some(t) = tick.as_mut() {
-            t.tick().await;
-        }
+        // Open loop: time from when the write was due, not from when this task
+        // got a thread. A writer blocked in a shard's std mutex holds its worker
+        // thread, so later writers start their clock late and their wait goes
+        // unmeasured (coordinated omission).
+        let due = match tick.as_mut() {
+            Some(t) => Some(t.tick().await.into_std()),
+            None => None,
+        };
         let j = rng.below(docs.len());
         let at = rng.below(replicas[j].rope().len_chars()) as u32;
         let update = replicas[j].insert(at, &"x".repeat(1 + rng.below(8)));
         let by = Attribution::Principal(&principal);
-        let t0 = Instant::now();
+        let t0 = due.unwrap_or_else(Instant::now);
         let written = if load.via_doc_store {
             let done = store.apply_update(&docs[j], &update, Some(w as u64), by);
             done.await.map(drop)

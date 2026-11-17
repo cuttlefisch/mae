@@ -4,6 +4,11 @@
 //! commits. If that is the mechanism, turning auto-checkpoint off must remove
 //! the step while leaving the p50 cost in place.
 //!
+//! Written against the pre-checkpointer store. Since the background
+//! checkpointer (`storage_writer.rs`) a PASSIVE pass can land inside the
+//! 50-commit `frames_per_commit` window and let the next commit restart the
+//! WAL, so a frame count read from the file size is a lower bound there.
+//!
 //! ```text
 //! cd daemon && cargo test --release --lib change_index_checkpoint_cause -- --ignored --nocapture
 //! ```
@@ -17,11 +22,19 @@ fn wal_bytes(dir: &std::path::Path) -> u64 {
 /// Checkpoint and truncate the WAL file; asserts it emptied, since every
 /// frame count below is read from its size.
 fn truncate_wal(sqlite: &SqliteBackend, dir: &std::path::Path) {
-    sqlite
-        .pool
-        .lock_primary()
-        .execute("PRAGMA wal_checkpoint(TRUNCATE);")
-        .unwrap();
+    // A background PASSIVE running at that moment makes SQLite refuse this
+    // one outright, so retry a few times.
+    for _ in 0..100 {
+        sqlite
+            .pool
+            .lock_primary()
+            .execute("PRAGMA wal_checkpoint(TRUNCATE);")
+            .unwrap();
+        if wal_bytes(dir) == 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     assert_eq!(
         wal_bytes(dir),
         0,
