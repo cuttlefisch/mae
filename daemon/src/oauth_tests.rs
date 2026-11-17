@@ -249,6 +249,64 @@ mod tests {
         assert_eq!(result, Err(TokenValidationError::Malformed));
     }
 
+    /// Adversarial (jsonwebtoken 12, "fix remaining type confusion with sub,
+    /// iss, aud"): a correctly signed token whose `aud` is not a string or a
+    /// string array is refused. Through jsonwebtoken 11 such a claim parsed
+    /// as "malformed", fell through every arm of the audience match, and the
+    /// token was ACCEPTED for whatever resource it was presented to -- the
+    /// mixed array even reached the principal carrying this resource's URI.
+    /// The same key and claims with a string `aud` are accepted first, so a
+    /// refusal can only come from the claim's type.
+    #[test]
+    fn a_non_string_audience_is_refused() {
+        let (pem, jwk) = generate_test_key();
+        let config = base_config();
+        let control = sign_token(&pem, &valid_claims(now_unix()));
+        assert!(validate_bearer_token(&control, std::slice::from_ref(&jwk), &config).is_ok());
+        for aud in [
+            serde_json::json!(1234),
+            serde_json::json!({ "uri": TEST_RESOURCE }),
+            serde_json::json!([TEST_RESOURCE, 1]),
+            serde_json::json!(true),
+        ] {
+            let mut claims = valid_claims(now_unix());
+            claims["aud"] = aud.clone();
+            let token = sign_token(&pem, &claims);
+            assert_eq!(
+                validate_bearer_token(&token, std::slice::from_ref(&jwk), &config),
+                Err(TokenValidationError::Malformed),
+                "aud = {aud}"
+            );
+        }
+    }
+
+    /// Adversarial (jsonwebtoken 12, "reject unknown critical extensions"):
+    /// RFC 7515 §4.1.11 says a recipient that does not understand a `crit`
+    /// header parameter MUST reject the token. Through jsonwebtoken 11 a
+    /// correctly signed token naming an extension nobody here implements was
+    /// accepted. The control is the same key and claims without `crit`.
+    #[test]
+    fn an_unknown_critical_header_is_refused() {
+        let (pem, jwk) = generate_test_key();
+        let config = base_config();
+        let key = EncodingKey::from_rsa_pem(pem.as_bytes()).expect("valid PEM");
+        let sign = |crit: Option<Vec<String>>| {
+            let mut header = Header::new(Algorithm::RS256);
+            header.kid = Some(TEST_KID.to_string());
+            header.crit = crit;
+            encode(&header, &valid_claims(now_unix()), &key).expect("sign")
+        };
+        assert!(validate_bearer_token(&sign(None), std::slice::from_ref(&jwk), &config).is_ok());
+        for crit in [vec!["https://example.com/must-understand"], vec![]] {
+            let token = sign(Some(crit.iter().map(|s| s.to_string()).collect()));
+            assert_eq!(
+                validate_bearer_token(&token, std::slice::from_ref(&jwk), &config),
+                Err(TokenValidationError::Malformed),
+                "crit = {crit:?}"
+            );
+        }
+    }
+
     #[test]
     fn missing_principal_claim_is_rejected() {
         let (pem, jwk) = generate_test_key();
