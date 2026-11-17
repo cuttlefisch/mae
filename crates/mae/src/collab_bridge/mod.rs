@@ -4436,7 +4436,8 @@ pub(crate) fn plan_recovery_rotation(
 /// `kb/collection_op`. The successor inherits the content key with NO new authority (a
 /// re-wrap, not an admit). Empty unless this peer currently speaks for the owner (the genesis
 /// owner OR any cross-signed rotation successor), the KB is E2e, and the delta introduces a
-/// fresh, fingerprint-bound member Rebind by someone else.
+/// fresh, fingerprint-bound member Rebind by someone else that the derivation honors (a
+/// removed member's post-removal rotation is not — re-wrapping it would re-admit them).
 ///
 /// A rotated owner IS handled (#239/#237): authority is resolved through the owner principal
 /// chain (`is_owner_principal`, ADR-040), NOT the collection's meta `owner()` field — which
@@ -4498,12 +4499,26 @@ pub(crate) fn plan_reactive_member_rewraps(
         .iter()
         .map(|o| o.chain_hash())
         .collect();
+    // Only a rotation the derivation HONORS earns a re-wrap. `author_rebind_rewrap` signs an
+    // owner `Admit` of the successor, so re-wrapping for a Rebind the derive fences — one
+    // signed by a removed member's old key, a retired key, or a non-member — would turn it
+    // into a fresh owner-signed admission and undo the removal. Honored ⇔ the successor is a
+    // derived member of the merged log.
+    let merged_ops = merged.oplog_ops();
+    let honored = mae_sync::membership::derive_valid_members_governed(
+        &merged_ops,
+        &anchor,
+        now,
+        mae_sync::membership::derive_governance(&merged_ops, &anchor),
+        &mae_sync::membership::MembershipView::default(),
+    );
     let mut targets: Vec<(String, [u8; 32], [u8; 32])> = Vec::new();
-    for o in merged.oplog_ops() {
+    for o in merged_ops {
         if base_hashes.contains(&o.chain_hash())
             || o.op.action != MembershipAction::Rebind
             || o.op.subject == owner_fp
             || o.op.author == owner_fp
+            || !honored.contains_key(&o.op.subject)
         {
             continue;
         }

@@ -276,6 +276,15 @@ impl McpClient {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// Create an empty file whose mtime is `secs` after the epoch. Setting the
+    /// mtime states the ordering a test needs outright, where a sleep between
+    /// two writes only hopes the filesystem's timestamp granularity resolves it.
+    fn touch_at(path: &Path, secs: u64) {
+        let f = std::fs::File::create(path).unwrap();
+        f.set_modified(std::time::UNIX_EPOCH + Duration::from_secs(secs))
+            .unwrap();
+    }
     #[cfg(unix)]
     use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
@@ -399,9 +408,14 @@ mod tests {
         // Scenario A: own pid's socket is written second (newer) -> wins.
         {
             let dir = tempdir().unwrap();
-            std::fs::write(dir.path().join(format!("mae-{other_pid}-agent.sock")), b"").unwrap();
-            std::thread::sleep(Duration::from_millis(50));
-            std::fs::write(dir.path().join(format!("mae-{own_pid}-agent.sock")), b"").unwrap();
+            touch_at(
+                &dir.path().join(format!("mae-{other_pid}-agent.sock")),
+                1_000_000,
+            );
+            touch_at(
+                &dir.path().join(format!("mae-{own_pid}-agent.sock")),
+                2_000_000,
+            );
 
             let (sock, _psk) =
                 discover_connection_in_with(dir.path(), is_alive).expect("should find a candidate");
@@ -417,9 +431,14 @@ mod tests {
         // exercised with "our pid happens to always be newer".
         {
             let dir = tempdir().unwrap();
-            std::fs::write(dir.path().join(format!("mae-{own_pid}-agent.sock")), b"").unwrap();
-            std::thread::sleep(Duration::from_millis(50));
-            std::fs::write(dir.path().join(format!("mae-{other_pid}-agent.sock")), b"").unwrap();
+            touch_at(
+                &dir.path().join(format!("mae-{own_pid}-agent.sock")),
+                1_000_000,
+            );
+            touch_at(
+                &dir.path().join(format!("mae-{other_pid}-agent.sock")),
+                2_000_000,
+            );
 
             let (sock, _psk) =
                 discover_connection_in_with(dir.path(), is_alive).expect("should find a candidate");

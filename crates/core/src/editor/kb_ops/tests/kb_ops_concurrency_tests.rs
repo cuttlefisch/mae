@@ -328,6 +328,8 @@ fn registry_watch_reload_suppressed_within_local_write_cooldown() {
     })
     .unwrap();
 
+    // Kept: a negative window. The cooldown must hold for its whole span, so
+    // the test drains across ~300 ms of real time; nothing signals "never".
     for _ in 0..20 {
         editor.drain_kb_registry_watch();
         assert!(

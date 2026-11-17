@@ -1,0 +1,6 @@
+[runner.fx]
+workspace = "."
+build = ["sh", "run.sh", "build"]
+test = ["sh", "run.sh", "test", "{filter}"]
+caught = ["test result: FAILED"]
+count = ["running {n} test"]

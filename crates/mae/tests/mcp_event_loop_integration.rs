@@ -25,21 +25,19 @@ use std::os::fd::FromRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 
-/// Helper: find the mae binary (debug build).
+/// Helper: the `mae` binary cargo built for this test run.
+///
+/// `CARGO_BIN_EXE_mae`, not a path derived from `current_exe()`: the test
+/// executable's own directory is cargo's build-dir layout, which moved in Rust
+/// 1.100 (`deps/` became `build/<pkg>/<hash>/out/`), so "two levels up" no
+/// longer reaches `target/<profile>/`.
 fn mae_binary() -> PathBuf {
-    let mut path = std::env::current_exe()
-        .expect("current_exe")
-        .parent()
-        .expect("parent")
-        .parent()
-        .expect("parent")
-        .to_path_buf();
-    path.push("mae");
+    let path = PathBuf::from(env!("CARGO_BIN_EXE_mae"));
     if !path.exists() {
         panic!(
             "mae binary not found at {}. Run `cargo build -p mae` first.",
@@ -107,18 +105,6 @@ fn spawn_mae_with_pty() -> (std::process::Child, String, std::fs::File) {
     let socket_path = format!("/tmp/mae-{}.sock", pid);
 
     (child, socket_path, master_file)
-}
-
-/// Wait for the MCP socket to appear.
-fn wait_for_socket(path: &str, timeout: Duration) -> bool {
-    let start = Instant::now();
-    while start.elapsed() < timeout {
-        if std::path::Path::new(path).exists() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    false
 }
 
 /// Send a JSON-RPC message and read the response via Content-Length framing.
@@ -273,23 +259,18 @@ impl Drop for MaeProcess {
 /// Boot mae and connect via MCP. Returns (process_guard, connected_stream).
 async fn boot_mae() -> (MaeProcess, UnixStream) {
     let (child, socket_path, master_fd) = spawn_mae_with_pty();
-    let mut proc = MaeProcess {
+    let proc = MaeProcess {
         child,
         socket_path: socket_path.clone(),
         _master_fd: master_fd,
     };
 
-    if !wait_for_socket(&socket_path, Duration::from_secs(30)) {
-        let _ = proc.child.kill();
-        panic!("MCP socket {} did not appear within 30s", socket_path);
-    }
-
-    // Brief delay for server to accept connections after socket creation.
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    let mut stream = UnixStream::connect(&socket_path)
-        .await
-        .expect("connect to MCP socket");
+    // The socket file appearing is not the condition (the listener may not
+    // accept yet); a successful connect is. `proc`'s Drop kills mae on timeout.
+    let mut stream = mae_mcp::ready::connect_when_ready("mae's MCP socket", || {
+        UnixStream::connect(&socket_path)
+    })
+    .await;
 
     mcp_initialize(&mut stream).await;
 

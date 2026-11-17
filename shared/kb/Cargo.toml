@@ -1,7 +1,7 @@
 [package]
 name = "mae-kb"
 description = "Knowledge base layer (graph store, links)"
-version = "0.14.159"
+version = "0.14.164"
 edition = "2021"
 license = "GPL-3.0-or-later"
 
@@ -32,7 +32,7 @@ toml = "1.1"
 tracing = "0.1"
 walkdir = "2"
 notify = "8"
-lru = "0.18"
+lru = "0.19"
 mae-sync = { path = "../sync", optional = true }
 mae-mcp = { path = "../mcp" }
 cozo = { version = "0.7", default-features = false, features = ["rayon"] }

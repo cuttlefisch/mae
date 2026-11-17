@@ -69,7 +69,7 @@ graph TD
     mae_scheme --> mae_kb
     mae_scheme --> mae_sync
     mae_scheme_extra --> mae_scheme
-    mae_shell[mae-shell]
+    mae_shell --> mae_mcp
     mae_snippets[mae-snippets]
     mae_spell[mae-spell]
     mae_sync --> mae_crypto

@@ -7,8 +7,6 @@
 //! Gated with `#[ignore]` — run via:
 //!   MAE_TCP_E2E=1 cargo test -p mae --test collab_tcp_e2e_kb_stress -- --ignored --nocapture
 
-use std::time::Duration;
-
 use mae_sync::encoding::base64_to_update;
 use mae_sync::kb::{KbCollectionDoc, KbNodeDoc};
 
@@ -232,9 +230,8 @@ async fn tcp_peer_join_leave_notifications() {
         "client A should receive peer_joined notification"
     );
 
-    // Drop client B.
+    // Drop client B. No delay: the bounded wait below is the condition.
     drop(client_b);
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Client A should receive peer_left notification.
     let left = client_a

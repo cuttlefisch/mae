@@ -1131,7 +1131,10 @@ mod tests {
             b_bc.clone(),
         ));
 
-        // Wait for B to pull, then for its subscribe + local subscription to settle.
+        // Wait for B to pull, then for the dialer's subscription to B's local
+        // broadcaster (its only subscriber): an edit broadcast before it exists
+        // is never forwarded. The dialer subscribes to the KB's docs under one
+        // lock, so the subscriber appearing means every doc is covered.
         assert!(
             wait_until(5, || {
                 let s = Arc::clone(&b_store);
@@ -1140,7 +1143,11 @@ mod tests {
             .await,
             "B should pull on join"
         );
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            mae_mcp::ready::wait_until(|| async { b_bc.lock().unwrap().client_count() == 1 }).await,
+            "{}",
+            mae_mcp::ready::timeout_message("B's dialer subscribing to B's local broadcaster")
+        );
         let a_before = a_store.state_vector("kbn:kbo:concept:n").await.unwrap();
 
         // B's "editor" edits the node locally and broadcasts it on B's broadcaster

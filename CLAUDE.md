@@ -688,7 +688,7 @@ Events carry version numbers for ordering. Slow clients are dropped, not blocked
 
 ### Architecture Decision Records
 ADRs live in `docs/adr/` and as KB concept nodes (`concept:adr-*`).
-See ADR-001 (protocol), ADR-002 (text sync — accepted: yrs), ADR-003 (file safety), ADR-004 (KB scaling), ADR-005 (KB CRDT), ADR-006 (collaborative state engine), ADR-007 (save coordination), ADR-008 (CRDT target metrics), ADR-014 (binary architecture — editor + daemon workspaces), ADR-017/018 (asymmetric peer auth + identity-anchored access control), ADR-019/020/022/023 (durable / replicated / crash-safe sync + epoch-fenced write access), ADR-024 (notification attention bus), the **P2P daemon-mesh trio ADR-025/026/027** (iroh transport / peer-verifiable signed-hash-chained integrity / collaboration observability), the **KB-architecture set ADR-028–034** (data lifecycle / CRDT-as-truth + cozo-as-projection / in-text link grammar / derived intelligence / durable CRDT store / operation coordination / cross-peer artifact sharing), **ADR-035** (editor↔daemon boundary + `daemon_mode`), the **content-integrity + confidentiality pair ADR-036/037** (signed content ops / E2E content encryption), the **E2E KB-sharing pair ADR-038/039** (editor-authored key-blind membership / identity + authorization hardening), the **identity-arc pair ADR-040/041** (key rotation/rebind — cross-signed, history-preserving / key separation — a published X25519 wrap key), **ADR-042** (membership-derivation cache + O(n) deterministic causal order), **ADR-043** (P2P share integrity — a fresh mesh share seeds the signed owner-genesis so it anchors membership + E2E identically to the hub), **ADR-044** (e2e daemon-lifecycle safety), **ADR-048** (AI residency policy for sensitive KBs), **ADR-049** (`mae-agent` as the default AI-interaction surface, `ai_chat_enabled` gates the legacy embedded chat — supersedes ADR-046's rejected-deprecation call in part), the **external-editor MCP pairing set ADR-050–056** (VS Code/Copilot + cross-editor MCP compatibility / per-session permission+DrivenWindow isolation / OAuth 2.1 resource server / live scoped read-through KB query surface / daemon concurrency hardening / headless service mode / session-scoped tool-category dispatch enforcement for a KB+guidance-only engine instance), and the **MAE long-term architecture set ADR-057–066** (5-layer architecture vision ratification + confirmed gap analysis / per-project KB provisioning + scoped search / ADR-as-KB-node generalization for molecularly-structured decision records / `mae-daemon` as a trusted-org-scale multi-tenant server / KB enrichment as a background daemon capability / federation registry scaling + unified local/remote-hub search / guidance-delivery uniformity across MAE-embedded and external-MCP sessions / a second native MAE frontend for visual-design workflows sharing the same KB/CRDT core / KB+daemon drift corrections / native Windows support for MAE clients), and **ADR-067** (admin-enforced live-query-only KB access — a signed-op-log replication-policy axis, orthogonal to ADR-018's role table, letting a KB owner restrict an authorized member to ADR-053's live query surface instead of full `kb_join` replication; extends ADR-018/026, closes a gap ADR-053 left explicitly out of scope for non-members-only), the
+See ADR-001 (protocol), ADR-002 (text sync — accepted: yrs), ADR-003 (file safety), ADR-004 (KB scaling), ADR-005 (KB CRDT), ADR-006 (collaborative state engine), ADR-007 (save coordination), ADR-008 (CRDT target metrics), ADR-014 (binary architecture — editor + daemon workspaces), ADR-017/018 (asymmetric peer auth + identity-anchored access control), ADR-019/020/022/023 (durable / replicated / crash-safe sync + epoch-fenced write access; 022's Amendment 1 pages whole-KB `kb/share`/`kb/join` transfers), ADR-024 (notification attention bus), the **P2P daemon-mesh trio ADR-025/026/027** (iroh transport / peer-verifiable signed-hash-chained integrity / collaboration observability), the **KB-architecture set ADR-028–034** (data lifecycle / CRDT-as-truth + cozo-as-projection / in-text link grammar / derived intelligence / durable CRDT store / operation coordination / cross-peer artifact sharing), **ADR-035** (editor↔daemon boundary + `daemon_mode`), the **content-integrity + confidentiality pair ADR-036/037** (signed content ops / E2E content encryption), the **E2E KB-sharing pair ADR-038/039** (editor-authored key-blind membership / identity + authorization hardening), the **identity-arc pair ADR-040/041** (key rotation/rebind — cross-signed, history-preserving / key separation — a published X25519 wrap key), **ADR-042** (membership-derivation cache + O(n) deterministic causal order), **ADR-043** (P2P share integrity — a fresh mesh share seeds the signed owner-genesis so it anchors membership + E2E identically to the hub), **ADR-044** (e2e daemon-lifecycle safety), **ADR-048** (AI residency policy for sensitive KBs), **ADR-049** (`mae-agent` as the default AI-interaction surface, `ai_chat_enabled` gates the legacy embedded chat — supersedes ADR-046's rejected-deprecation call in part), the **external-editor MCP pairing set ADR-050–056** (VS Code/Copilot + cross-editor MCP compatibility / per-session permission+DrivenWindow isolation / OAuth 2.1 resource server / live scoped read-through KB query surface / daemon concurrency hardening / headless service mode / session-scoped tool-category dispatch enforcement for a KB+guidance-only engine instance), and the **MAE long-term architecture set ADR-057–066** (5-layer architecture vision ratification + confirmed gap analysis / per-project KB provisioning + scoped search / ADR-as-KB-node generalization for molecularly-structured decision records / `mae-daemon` as a trusted-org-scale multi-tenant server / KB enrichment as a background daemon capability / federation registry scaling + unified local/remote-hub search / guidance-delivery uniformity across MAE-embedded and external-MCP sessions / a second native MAE frontend for visual-design workflows sharing the same KB/CRDT core / KB+daemon drift corrections / native Windows support for MAE clients), and **ADR-067** (admin-enforced live-query-only KB access — a signed-op-log replication-policy axis, orthogonal to ADR-018's role table, letting a KB owner restrict an authorized member to ADR-053's live query surface instead of full `kb_join` replication; extends ADR-018/026, closes a gap ADR-053 left explicitly out of scope for non-members-only), the
 **KB-visualization / export arc ADR-068–074 + 077–082** (full-corpus multi-KB retrieval with
 degree-of-interest LOD / edge bundling / `mae-canvas` substrate hardening / chord-diagram wedge
 redesign / KB read mode / a live network-shareable HTML KB view on the daemon + its SSE push
@@ -721,7 +721,9 @@ clients — the membership subject is a stable *member* key, not a device key; d
 recovery-key-sealed secret storage; the OIDC-principal↔fingerprint binding lives in daemon state
 *outside* the CRDT so an IdP migration rewrites a mutable table rather than an unrewritable signed
 log; AD groups gate the session while CRDT membership stays owner-authored. *Proposed, phased,
-blocked on #176*; evidence in `docs/research/098-*.md`), **ADR-099** (bidirectional sync transport
+blocked on #176* except Phase C's read path, which Amendment 1 brings forward and which also
+defines who counts as a person (an IdP sign-in on a binding flagged `person`; everything else is an
+agent); evidence in `docs/research/098-*.md`), **ADR-099** (bidirectional sync transport
 for browser clients — WebSocket on the existing OAuth listener, re-framing MAE's own already
 doc-scoped envelope rather than speaking y-protocols, so one session multiplexes N documents;
 *accepted, design*, supersedes ADR-074 D1 for the write path only; its *accepted* Amendment 1 corrects D3 —
@@ -839,6 +841,34 @@ Amendment 1 carries history across a switch to E2E: the owner's client re-encryp
 under the content key (the daemon stays key-blind) and receives the KB's history key, which the
 daemon then releases, so the keyed `content_hash` confirms no guess and the chain is never
 rewritten; until it is built, the switch is refused while history holds plaintext.
+
+**ADR-117** (*proposed, design; phased P0–P9*) — **access administration: caller-scoped reads,
+signed origins, and a local directory sync.** The daemon side of a browser client's user-and-access
+administration. Three reads answer only about the caller or a KB the caller owns
+(`kb/review.my_pending`, `kb/query.my_access`, the owner-and-person-only `kb/members.list`); every
+grant carries a signed origin (`directory` with its group, or `manual` with a reason and optional
+expiry) as `maememb/v7`, and an expired grant counts on neither gate source; nobody grants anything to
+themselves; a browser owner changes membership by signing a typed op (mae-crypto 0.2.0) that the
+daemon verifies against the one derivation and appends, never signing for them; administrative acts
+need a person session with a fresh second factor (ADR-113's checker); membership follows the
+directory through a **local** operator sync that applies in daemon-owned KBs, only proposes in
+personal ones, and applies nothing when a group is missing; the binding table gains an append-only
+log and follows a verified `Rebind`; review lists accept people only and a request freezes its
+policy; a config-granted read-only auditor and a read-only notification outbox complete it.
+
+**ADR-118** (*proposed, design; phased G1–G5*) — **an AI agent reaches the daemon as "agent A of
+person P", never as P, and MCP is served on the HTTPS listener.** The daemon issues its own agent
+token (RFC 8693 `act`, its own `typ`, `kid`, issuer and signing key, refused by the self-token and
+IdP validators); the agent's principal is `agent:<id>`, a member of nothing, so a path that forgets
+the agent case fails closed. Grants live in daemon SQLite outside the CRDT, name KBs one by one, and
+every request intersects the grant, P's current role and the KB owner's ceiling, so removing P
+removes the agent. P grants and renews with a fresh second factor; revocation is immediate and
+closes live sessions. Access tokens are short and re-minted with a rotating, single-use refresh
+credential. Agent writes are signed by the agent's own key under a delegation P signs, which settles
+ADR-113 O16. Person tokens need a client in `oauth.person_client_ids` (ADR-111 Amendment 1). `/mcp`
+is Streamable HTTP with its own audience and RFC 9728 metadata, accepts agent tokens only, never
+passes a token through, and offers the read surface first; grant and policy methods are never on it
+(principle #16). The third-party MCP OAuth flow is deferred.
 
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
 > from it entirely until 2026-08-04, i.e. every ADR from the KB-visualization arc and the whole
