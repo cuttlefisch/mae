@@ -882,8 +882,11 @@ fn authorized(mp: &Roster, op: &MembershipOp, genesis_hash: &str, governance: Go
         //  - `subject` is BOUND to `new_pubkey` (its fingerprint) — the endorsed successor
         //    IS the named principal, so a member can't alias their seat onto an unrelated
         //    key's fingerprint;
-        //  - `subject` is a FRESH identity, not already a member — you rotate INTO a new key,
-        //    never ONTO an existing member's current key (two seats would collide on it);
+        //  - `subject` is a FRESH identity: no live seat has EVER held it. You rotate INTO a
+        //    new key, never onto another seat's current key (two seats would collide on it)
+        //    nor onto a RETIRED one (a `Remove`/`SetRole` naming that key would then reach
+        //    both seats, and one naming the owner's retired key would be refused as
+        //    owner-protected while hitting the rebinder);
         //  - not a self-rebind (`subject == author` is a no-op).
         // The successor inherits the author's EXACT role/epoch in the seat replay, so a
         // Rebind grants NO new authority (no self-elevation) — `author.role` is irrelevant.
@@ -892,7 +895,7 @@ fn authorized(mp: &Roster, op: &MembershipOp, genesis_hash: &str, governance: Go
                 op.new_wrap_pubkey.is_some()
                     && fingerprint_of(&npk) == op.subject
                     && op.subject != op.author
-                    && mp.current(&op.subject).is_none()
+                    && mp.naming(&op.subject).is_empty()
             }
             None => false,
         },

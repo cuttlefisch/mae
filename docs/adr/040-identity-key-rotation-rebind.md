@@ -270,6 +270,9 @@ member is one **seat** across its chain, and ADR-026 strong removal acts on the 
   that holds no live seat at that point opens a fresh one;
 - under quorum, co-signatures naming different keys of one seat count toward the same tally;
 - under single-owner governance the owner's seat stays irrevocable under whichever key it now holds.
+- a `Rebind` may only bind a key **no live seat has ever held**. Binding onto another seat's *retired* key
+  would let one `Remove`/`SetRole` reach two seats, and binding onto the owner's pre-rotation key would make
+  the rebinder unremovable by the key the member map shows (refused as owner-protected).
 
 Each op's seat is resolved from its own causal past (a linear chain — ADR-042's order makes that replay
 deterministic), and only collisions, forked rotations and concurrent `SetRole`s fall back to ADR-042's

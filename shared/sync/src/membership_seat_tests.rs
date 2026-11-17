@@ -504,3 +504,59 @@ fn a_concurrent_removal_and_rotation_converge_to_removal_on_every_peer() {
         assert!(m.contains_key(&r.owner.fp));
     }
 }
+
+/// A rebind INTO a key another seat has retired is refused (review finding). Otherwise an
+/// admin rebinding onto the owner's pre-rotation key derives under it, `naming` that key
+/// finds the genesis seat, and a `Remove` of the admin by the key the member map shows is
+/// refused as owner-protected; onto a member's retired key, a `Remove` of that member
+/// would also evict the rebinder.
+#[test]
+fn a_rebind_into_another_seats_retired_key_is_refused() {
+    // Shape 1: onto the owner's retired key.
+    let owner = id(1);
+    let owner2 = id(2);
+    let mallory = id(3);
+    let g = genesis(&owner);
+    let adm = admit_admin(&owner, &mallory, &g.chain_hash());
+    let rot = make_rebind(&owner, &owner2, &adm.chain_hash());
+    let grab = make_rebind(&mallory, &owner, &rot.chain_hash());
+    let ops = vec![g.clone(), adm, rot.clone(), grab.clone()];
+    let m = derive(&ops, &owner);
+    assert!(
+        m.contains_key(&mallory.fp),
+        "the rebind is refused: mallory keeps her key"
+    );
+    assert!(
+        !m.contains_key(&owner.fp),
+        "nobody derives under the owner's retired key"
+    );
+    // ...so the owner removes her by the key the member map shows.
+    let rm = remove(&owner2, &mallory, &grab.chain_hash());
+    let mut ops2 = ops.clone();
+    ops2.push(rm);
+    let m2 = derive(&ops2, &owner);
+    assert_no_access(
+        &m2,
+        &[&mallory, &owner],
+        "Remove(mallory) after a refused grab",
+    );
+    assert!(
+        m2.contains_key(&owner2.fp),
+        "the rotated owner is untouched"
+    );
+
+    // Shape 2: onto a member's retired key; removing that member must not hit the rebinder.
+    let r = rotated();
+    let dave = id(5);
+    let adm_d = admit(&r.owner, &dave, Role::Editor, false, &r.rebind.chain_hash());
+    let grab_d = make_rebind(&dave, &r.bob, &adm_d.chain_hash());
+    let rm_bob = remove(&r.owner, &r.bob, &grab_d.chain_hash());
+    let mut ops3 = r.base();
+    ops3.extend([adm_d, grab_d, rm_bob]);
+    let m3 = derive(&ops3, &r.owner);
+    assert_no_access(&m3, &[&r.bob, &r.bob2], "Remove(bob's retired key)");
+    assert!(
+        m3.contains_key(&dave.fp),
+        "dave's refused rebind leaves him seated as himself"
+    );
+}
