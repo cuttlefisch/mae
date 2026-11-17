@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.164] - 2026-11-17
+
+
+
+
+### Bug Fixes
+
+- *(membership)* Removing a member who rotated their key removes them ([6541317](https://github.com/cuttlefisch/mae/commit/6541317b2098a3313cee339dcd4d84f3dc4bb563))
+- *(membership)* A Rebind may not bind a key another seat has retired ([48643ed](https://github.com/cuttlefisch/mae/commit/48643ed56054b1fd1f58118d44f6ee53c70a75e5))
+
 ## [0.14.163] - 2026-11-17
 
 
@@ -10,6 +20,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - *(deps)* Bump the rust-dependencies group with 5 updates ([cd1e5e8](https://github.com/cuttlefisch/mae/commit/cd1e5e89f0262c423f3fbcc9bc6d15e7ed2c53be))
+- Bump version to 0.14.163 ([a62036e](https://github.com/cuttlefisch/mae/commit/a62036ee5bef95c812b3d636c9278f3f6922f195))
 
 ## [0.14.162] - 2026-11-17
 
