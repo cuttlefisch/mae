@@ -29,6 +29,28 @@ const PAUSED: CheckpointPolicy = CheckpointPolicy {
     ..CheckpointPolicy::PRODUCTION
 };
 
+/// Close a store, failing rather than hanging if the close waits for its
+/// checkpointer's next tick, an hour away under [`PAUSED`]: every test whose
+/// store ticks that rarely closes it here, so a stop that stopped waking the
+/// checkpointer at once fails each of them in seconds (the regression
+/// `closing_a_store_does_not_wait_for_the_checkpointers_tick` pins).
+fn close(backend: SqliteBackend) {
+    let (closed, done) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        drop(backend);
+        let _ = closed.send(());
+    });
+    match done.recv_timeout(Duration::from_secs(30)) {
+        Ok(()) => {}
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("closing the store hung: its checkpointer did not stop at once")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("closing the store panicked")
+        }
+    }
+}
+
 /// An update big enough to take a few pages, so the WAL grows quickly.
 const UPDATE: [u8; 3000] = [7; 3000];
 
@@ -261,13 +283,43 @@ async fn closing_the_store_leaves_everything_in_the_database_file() {
             .await
             .unwrap();
     }
-    drop(backend);
+    close(backend);
     assert!(!wal_path(&db).exists(), "the WAL outlived the store");
     let copy = tempfile::tempdir().unwrap();
     std::fs::copy(&db, copy.path().join("state.db")).unwrap();
     let reopened = SqliteBackend::open(&copy.path().join("state.db")).unwrap();
     let state = reopened.load_document("doc").await.unwrap().unwrap();
     assert_eq!(state.wal_tail.len(), 50);
+}
+
+/// Closing a store stops its checkpointer at once, not at its next tick: the
+/// stop disconnects the channel the thread waits on. Every store a test opens,
+/// and every daemon shutdown, closes one, so a stop that waited out the tick
+/// would cost up to a production interval (1 s) each. Production-policy
+/// stores, each closed just after its open: a stop that waited for the tick
+/// would take about `CLOSES` intervals in all, four times the bound, while a
+/// close takes milliseconds (its own checkpoint of one write). Kills a
+/// checkpointer that sleeps through its interval before looking for the stop.
+#[tokio::test]
+async fn closing_a_store_does_not_wait_for_the_checkpointers_tick() {
+    const CLOSES: u32 = 20;
+    let dir = tempfile::tempdir().unwrap();
+    let mut closing = Duration::ZERO;
+    for i in 0..CLOSES {
+        let backend = SqliteBackend::open(&dir.path().join(format!("{i}.db"))).unwrap();
+        backend
+            .wal_append("doc", &UPDATE, None, &stamp())
+            .await
+            .unwrap();
+        let started = Instant::now();
+        drop(backend);
+        closing += started.elapsed();
+    }
+    let bound = CheckpointPolicy::PRODUCTION.interval * CLOSES / 4;
+    assert!(
+        closing < bound,
+        "{CLOSES} closes took {closing:?} (bound {bound:?}): a close waits for the tick"
+    );
 }
 
 /// The checkpointer's TRUNCATE takes the writer slot: a write that arrives
@@ -341,6 +393,7 @@ async fn a_commit_never_checkpoints_below_the_backstop() {
         std::fs::read(&db).unwrap() == before,
         "a commit checkpointed: the database file changed under {i} writes"
     );
+    close(backend);
 }
 
 /// Sustained writes keep the WAL under the stated bound, the backstop plus one
@@ -371,6 +424,7 @@ async fn sustained_writes_keep_the_wal_under_the_backstop() {
     // One of these transactions writes well under 32 pages.
     let bound = u64::from(BACKSTOP) + 32;
     assert!(max <= bound, "the WAL reached {max} frames, over {bound}");
+    close(backend);
 }
 
 /// The background checkpointer, not the commit, keeps the WAL small: after
@@ -623,6 +677,7 @@ async fn a_compaction_or_delete_runs_no_checkpoint_under_the_slot() {
         owed.is_some_and(|(docs, _)| docs >= 2),
         "the compaction and delete owe no scrub: {owed:?}"
     );
+    close(backend);
 }
 
 /// `delete_document` is two autocommit DELETEs. If the second fails, the first
@@ -674,6 +729,7 @@ async fn a_delete_that_fails_midway_still_owes_its_scrub() {
         after.unwrap_or(0) > before.unwrap_or(0),
         "a delete that failed after removing the snapshot owes no scrub: {before:?} -> {after:?}"
     );
+    close(backend);
 }
 
 /// A reader held open lets the WAL grow past the backstop, which no
@@ -754,7 +810,7 @@ async fn a_store_reopened_after_a_crash_scrubs_the_wal_it_finds() {
     for name in ["state.db", "state.db-wal"] {
         std::fs::copy(live.path().join(name), crashed.path().join(name)).unwrap();
     }
-    drop(backend);
+    close(backend);
     assert!(
         dir_contains(crashed.path(), canary),
         "precondition: the crashed store's WAL holds the canary"
@@ -841,6 +897,7 @@ async fn inspecting_a_live_store_starts_no_checkpointer_and_writes_nothing() {
         "{found:?}"
     );
     assert!(files() == before, "inspecting wrote to the store");
+    close(live);
 }
 
 const CRASH_CHILD_DIR: &str = "MAE_STORAGE_CRASH_CHILD_DIR";

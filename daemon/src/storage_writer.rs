@@ -493,7 +493,7 @@ fn tick(conn: &sqlite::Connection, policy: &CheckpointPolicy, writer: &WriterLoc
         let hooks = &writer.0.test;
         if hooks
             .panic_next
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1))
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1))
             .is_ok()
         {
             panic!("injected checkpointer panic");

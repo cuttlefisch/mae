@@ -952,6 +952,12 @@ mod tests {
     use crate::doc_editors::{Attribution, InternalWriter};
     use std::sync::Arc;
 
+    /// A checkpointer that ticks every 5 ms, for a test that waits on a scrub.
+    const FAST_SCRUB: CheckpointPolicy = CheckpointPolicy {
+        interval: std::time::Duration::from_millis(5),
+        ..CheckpointPolicy::PRODUCTION
+    };
+
     /// An attribution for tests that exercise the WAL, not the editor record.
     fn stamp() -> EditStamp {
         EditStamp::new(Attribution::Internal(InternalWriter::Scheduler).into(), 0)
@@ -1299,7 +1305,8 @@ mod tests {
         };
 
         {
-            let backend = SqliteBackend::open(&db_path).unwrap();
+            // A 5 ms tick: the scrub awaited below need not wait a production second.
+            let backend = SqliteBackend::open_with_policy(&db_path, 4, FAST_SCRUB).unwrap();
             // Write the plaintext canary as a node's content, then compact it into the
             // snapshot (mirrors a plaintext share that has been checkpointed to disk).
             let id = backend
@@ -1391,7 +1398,8 @@ mod tests {
         };
 
         {
-            let backend = SqliteBackend::open(&db_path).unwrap();
+            // A 5 ms tick: the scrub awaited below need not wait a production second.
+            let backend = SqliteBackend::open_with_policy(&db_path, 4, FAST_SCRUB).unwrap();
             // The original update carrying the cleartext manifest title (the `add_node`).
             let id = backend
                 .wal_append("kbc:x", canary, None, &stamp())

@@ -107,5 +107,5 @@ fn doctor_creates_no_store_and_writes_nothing_beside_a_live_one() {
     );
     assert_eq!(run_doctor(&config, None), 0);
     assert!(files() == before, "doctor wrote to the live store");
-    drop(live);
+    super::close_within_seconds(live);
 }

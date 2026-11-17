@@ -19,6 +19,27 @@ use std::time::Duration;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Mutex;
 
+/// Drop `value` (a store, or what holds the last reference to one), failing
+/// rather than hanging if that waits for its checkpointer's next tick: a test
+/// that pauses the checkpointer for an hour closes its store through this, so
+/// a close that stopped waking the checkpointer at once fails in seconds.
+pub(crate) fn close_within_seconds<T: Send + 'static>(value: T) {
+    let (closed, done) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        drop(value);
+        let _ = closed.send(());
+    });
+    match done.recv_timeout(Duration::from_secs(30)) {
+        Ok(()) => {}
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("closing the store hung: its checkpointer did not stop at once")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("closing the store panicked")
+        }
+    }
+}
+
 /// A config whose every path is inside `tmp`.
 ///
 /// `crate::config::DaemonConfig::default()` resolves socket, data dirs, identity, keystore and

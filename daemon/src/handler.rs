@@ -1364,6 +1364,9 @@ mod tests {
             Some(0),
             "{storage}"
         );
+        let ds = state.lock().await.doc_store.take();
+        drop(state);
+        crate::tests::close_within_seconds(ds);
         assert!(state_without_store_reports_no_storage().await);
     }
 
