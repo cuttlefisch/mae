@@ -1357,7 +1357,9 @@
     },
     "mae-shell": {
       "path": "crates/shell/src/lib.rs",
-      "dependencies": [],
+      "dependencies": [
+        "mae-mcp"
+      ],
       "public_items": [
         {
           "name": "path",

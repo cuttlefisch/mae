@@ -524,6 +524,8 @@ ws_enabled = true                               # default false; also needs:
 self_issued_tokens_enabled = true               #   only kid="self" tokens are accepted on /ws
                                                 #   ([collab] enabled, auth.mode = "key")
 ws_allowed_origins = ["https://mae.example.com"]  # browser Origins, EXACT match; default [] (none)
+# ws_ticket_ttl_secs = 30                       # connect-ticket lifetime, 1..=30: may shorten B1's 30 s, never extend it;
+                                                #   outside 1..=30 /ws is disabled (logged at error), not clamped
 # ws_renew_lead_secs = 60                       # session/renew_needed this long before the deadline
 # ws_ping_secs = 30                             # keepalive ping period (under proxy idle timeouts); 0 = off
 # ws_max_open_docs = 1024                       # documents one socket may hold (0 = unlimited)

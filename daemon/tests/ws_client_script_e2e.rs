@@ -318,6 +318,11 @@ fn ok(resp: &Value) -> bool {
     resp["error"].is_null()
 }
 
+/// The token lifetime of the renewal scenarios, whose lead is one second
+/// less: `renew_needed` about a second after the mint, then the rest of this
+/// to renew in, however slow the setup before it was.
+const RENEW_TOKEN_SECS: u64 = 30;
+
 fn now_unix() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -404,8 +409,20 @@ async fn ticket_and_connect(sc: Value) {
 
 /// "ticket usado, caducado o desconocido": the three refusals conform and are
 /// byte for byte the same.
+///
+/// The daemon's tickets live `TICKET_TTL_SECS` (`ws_ticket_ttl_secs`) rather
+/// than B1's 30, so "caducado" costs that long instead of 31 s. The expired
+/// ticket is minted first and its lifetime waited out from the mint's answer
+/// (the daemon mints before answering), while the used one is minted and
+/// spent in between: the spend has the whole lifetime to finish, which is the
+/// margin a loaded machine needs for one TLS upgrade.
 async fn ticket_refusals(sc: Value) {
-    let d = spawn(Opts::default()).await;
+    const TICKET_TTL_SECS: u64 = 5;
+    let d = spawn(Opts {
+        ticket_ttl_secs: Some(TICKET_TTL_SECS),
+        ..Opts::default()
+    })
+    .await;
     let token = d.token("SHA256:alice", 3600);
     let origin = [("Origin", ORIGIN_A)];
     let ask = step(&sc, 0, "cliente");
@@ -418,12 +435,15 @@ async fn ticket_refusals(sc: Value) {
             .collect::<Vec<_>>()
             .join(", ")
     };
+    let minted = mint_ticket(&d, &token, Some(ORIGIN_A)).await;
+    let expires_after = tokio::time::Instant::now() + Duration::from_secs(TICKET_TTL_SECS);
+    assert_eq!(minted.json()["expires_in"], TICKET_TTL_SECS);
+    let expired = ticket_of(&minted);
     let used = ticket_of(&mint_ticket(&d, &token, Some(ORIGIN_A)).await);
     let first = upgrade(&d, &format!("mae.v1, mae.ticket.{used}"), &origin).await;
     assert_eq!(first.status, 101, "{}", first.body);
     drop(first);
-    let expired = ticket_of(&mint_ticket(&d, &token, Some(ORIGIN_A)).await);
-    tokio::time::sleep(Duration::from_secs(31)).await;
+    tokio::time::sleep_until(expires_after).await;
 
     let want = step(&sc, 1, "demonio");
     let mut seen: Vec<Reply> = Vec::new();
@@ -486,15 +506,29 @@ async fn origin_not_allowed(sc: Value) {
 
 /// "renovar antes del plazo": `session/renew_needed`, then the script's
 /// `session/renew` with its string id, answered with the new deadline.
+///
+/// Timing: the token lives `RENEW_TOKEN_SECS` and the lead is one second
+/// less, so `renew_needed` comes about a second after the mint and the test
+/// then has the rest of the lifetime to renew. It used to be a 4 s token with
+/// a 2 s lead: the mint, the ticket's HTTPS round trip and the upgrade had to
+/// fit before the lead, and the renewal inside the last 1-2 s (the token's
+/// `exp` is whole seconds). Under memory pressure that window was missed once
+/// and the socket closed `4401 token_expired`. The wait for `renew_needed` is
+/// bounded by the token's own deadline, which it must precede.
 async fn renew_in_time(sc: Value) {
     let d = spawn(Opts {
-        renew_lead_secs: 2,
+        renew_lead_secs: RENEW_TOKEN_SECS - 1,
         ..Opts::default()
     })
     .await;
-    let (mut ws, hello) = connect_ticket(&d, &d.token("SHA256:alice", 4)).await;
+    let (mut ws, hello) = connect_ticket(&d, &d.token("SHA256:alice", RENEW_TOKEN_SECS)).await;
     let first_deadline = deadline_unix(&hello["params"]["auth_deadline"]);
-    let needed = ws.until(|v| v["method"] == "session/renew_needed").await;
+    let needed = tokio::time::timeout(
+        until_past(first_deadline),
+        ws.seen_or_until(|v| v["method"] == "session/renew_needed"),
+    )
+    .await
+    .expect("session/renew_needed by the token's deadline");
     let subs = Subs::default().deadlines();
     assert_conforms(&step(&sc, 0, "demonio")["trama"], &needed, &subs, &[]);
     assert!(
@@ -525,7 +559,9 @@ async fn renew_other_identity(sc: Value) {
     assert_close(&step(&sc, 1, "demonio")["cierre"], &ws.closed().await);
 }
 
-/// "plazo vencido": no renewal, closed `4401 token_expired`.
+/// "plazo vencido": no renewal, closed `4401 token_expired`. The token's
+/// lifetime is the wait under test; the close is awaited until the session's
+/// own deadline plus a grace, not a fixed guess.
 async fn deadline_missed(sc: Value) {
     let d = spawn(Opts {
         renew_lead_secs: 1,
@@ -534,7 +570,7 @@ async fn deadline_missed(sc: Value) {
     .await;
     let (mut ws, hello) = connect_ticket(&d, &d.token("SHA256:alice", 3)).await;
     let deadline = deadline_unix(&hello["params"]["auth_deadline"]);
-    let close = ws.closed().await;
+    let close = ws.closed_within(until_past(deadline)).await;
     assert!(
         now_unix() >= deadline,
         "closed no earlier than the deadline"
@@ -699,9 +735,17 @@ async fn slow_document(sc: Value) {
 
 /// "miembro quitado entre renovaciones": at the next renewal Bob loses that
 /// KB's documents, one notice each, and keeps the session and his own KB.
+///
+/// Bob's token and the lead are timed like [`renew_in_time`]'s. With a 4 s
+/// token and a 2 s lead, a slow setup (connect, share, join, remove) let
+/// `renew_needed` arrive during one of Bob's calls, which skipped it; the
+/// later wait for it then ran into `4401 token_expired`. `seen_or_until`
+/// finds it wherever it arrived, and the long lead leaves the renewal room.
+/// The renewal still comes after the removal, which is what the scenario
+/// needs: the daemon re-reads membership when the renewal arrives.
 async fn member_removed(sc: Value) {
     let d = spawn(Opts {
-        renew_lead_secs: 2,
+        renew_lead_secs: RENEW_TOKEN_SECS - 1,
         ..Opts::default()
     })
     .await;
@@ -712,13 +756,19 @@ async fn member_removed(sc: Value) {
     let bob_in = json!({"kb_id": KB, "member": "SHA256:bob", "role": "viewer", "label": "bob"});
     assert!(ok(&alice.call(2, "kb/add_member", bob_in).await));
 
-    let (mut bob, _) = connect_ticket(&d, &d.token("SHA256:bob", 4)).await;
+    let (mut bob, hello) = connect_ticket(&d, &d.token("SHA256:bob", RENEW_TOKEN_SECS)).await;
+    let deadline = deadline_unix(&hello["params"]["auth_deadline"]);
     assert!(ok(&bob.call(1, "kb/share", kb_share("kb-b", &[])).await));
     assert!(ok(&bob.call(2, "kb/join", json!({"kb_id": KB})).await));
     let bob_out = json!({"kb_id": KB, "member": "SHA256:bob"});
     assert!(ok(&alice.call(3, "kb/remove_member", bob_out).await));
 
-    bob.until(|v| v["method"] == "session/renew_needed").await;
+    tokio::time::timeout(
+        until_past(deadline),
+        bob.seen_or_until(|v| v["method"] == "session/renew_needed"),
+    )
+    .await
+    .expect("session/renew_needed by Bob's token deadline");
     let renew = json!({"token": d.token("SHA256:bob", 3600)});
     assert!(ok(&bob.call(3, "session/renew", renew).await));
 
@@ -877,8 +927,8 @@ macro_rules! runner {
 }
 
 /// Every scenario of the script, replayed against its own daemon. Scenarios
-/// run concurrently (the slowest waits out a 30-second ticket), and every
-/// failure is reported, not only the first.
+/// run concurrently (the slowest waits out a short-lived ticket or token), and
+/// every failure is reported, not only the first.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_daemon_plays_the_client_script() {
     let script = script();

@@ -15,7 +15,7 @@ use hyper::body::Incoming;
 use hyper::header::{HeaderMap, HeaderValue};
 use hyper::{Method, Request, Response, StatusCode};
 
-use super::connect_ticket::{TicketGrant, MAX_UNUSED_TICKETS_PER_PRINCIPAL, TICKET_TTL};
+use super::connect_ticket::{TicketGrant, MAX_UNUSED_TICKETS_PER_PRINCIPAL};
 use super::credential::{self, Refused};
 use super::{now_unix, WsState, PROTOCOL_V1, SUPPORTED_PROTOCOLS};
 use crate::conn_limit::ConnGuard;
@@ -468,7 +468,7 @@ async fn mint_ticket(req: &Request<Incoming>, listener: &Listener, ws: &WsState)
     match ws.tickets.mint(grant, Instant::now()) {
         Ok(ticket) => json_response(
             StatusCode::OK,
-            serde_json::json!({"ticket": ticket, "expires_in": TICKET_TTL.as_secs()}),
+            serde_json::json!({"ticket": ticket, "expires_in": ws.tickets.ttl().as_secs()}),
         ),
         Err(_) => {
             let mut limit = serde_json::Map::new();

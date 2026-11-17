@@ -108,6 +108,9 @@ async fn sustained_connect_disconnect_churn_shows_bounded_rss_and_fd_growth() {
         spawn_isolated_headless(&project_root, &xdg_config, &xdg_data, tmp.path(), None);
     let pid = guard.pid();
 
+    // Kept: boot-time allocation (KB federation, background init) settles
+    // before the first RSS/fd sample, which the growth bounds are measured
+    // from; nothing signals "boot allocation done" to wait on instead.
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     const TOTAL_DURATION: Duration = Duration::from_secs(70);
