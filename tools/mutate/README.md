@@ -29,6 +29,10 @@ queue_class = "rust-enlace"              # optional, default "rust"
 `{targets}` is replaced by zero or more arguments; `{filter}` is substituted
 wherever it appears, and `test` must use it.
 
+Every marker (`caught`, `count`, `unviable`, `rebuilt`) is matched against the
+command's output with ANSI escape sequences removed, so `CARGO_TERM_COLOR=always`
+(set in CI) does not hide them. The log keeps the output as written.
+
 Each area file holds its mutants:
 
 ```toml
