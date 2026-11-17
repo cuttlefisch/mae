@@ -1533,6 +1533,27 @@ jobs:
       - name: Check AI tool arguments are declared
         run: make tool-args-check
 
+  mutate-check:
+    name: mutation lists (anchors) + the tool's tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      MUTATE_QUEUE: "off"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-rust
+        with:
+          workspaces: tools/mutate -> target
+      # Text only: a refactor that moves a guard fails here, on the PR that
+      # moved it, not at the next mutation run. Running the mutants themselves
+      # is mutation.yml's job (nightly, or the `mutation` label).
+      - name: Check every declared mutant still applies
+        run: make mutate-check
+      - name: The mutation tool's own tests
+        run: make mutate-test
+
   adr-kb-sync:
     name: ADR KB staleness gate (ADR-059 Phase E)
     runs-on: ubuntu-latest
