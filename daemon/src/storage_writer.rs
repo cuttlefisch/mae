@@ -452,6 +452,7 @@ struct Ticks {
     quiet_since: Instant,
     emptied: bool,
     wal_warned_at: Option<Instant>,
+    failed_warned_at: Option<Instant>,
 }
 
 /// The checkpointer's loop: one tick per interval, until stopped. A panic in
@@ -467,6 +468,7 @@ fn run(
         quiet_since: Instant::now(),
         emptied: false,
         wal_warned_at: None,
+        failed_warned_at: None,
     };
     while let Err(RecvTimeoutError::Timeout) = stopped.recv_timeout(policy.interval) {
         let ticked =
@@ -642,7 +644,16 @@ fn checkpoint(
             Some(c)
         }
         Err(e) => {
-            warn!(error = %e, mode, "state.db checkpoint failed; retried on the next tick");
+            // Retried every tick, so a persistent error is warned at most once per
+            // `warn_every` and debug-logged otherwise.
+            if t.failed_warned_at
+                .is_none_or(|at| at.elapsed() >= policy.warn_every)
+            {
+                warn!(error = %e, mode, "state.db checkpoint failed; retried on the next tick");
+                t.failed_warned_at = Some(Instant::now());
+            } else {
+                debug!(error = %e, mode, "state.db checkpoint failed again");
+            }
             None
         }
     }
@@ -694,9 +705,12 @@ impl StoreInspection {
 
 /// Inspect the store at `path` for `doctor`, beside a daemon that may be
 /// running on it: a read-only connection, no checkpointer, no schema change,
-/// and nothing created when the file is absent. A read-only connection never
-/// checkpoints, on close or otherwise, so the database and WAL files are left
-/// byte for byte as they were.
+/// and no database created when the file is absent. A read-only connection
+/// never checkpoints, on close or otherwise, so the database and WAL contents
+/// are left as they were. One exception: with the daemon stopped and no
+/// `-wal`/`-shm` present, SQLite may create those (empty) sidecar files to read
+/// a WAL-mode database, and a read-only connection can't remove them on close.
+/// They hold no data, and the daemon's next open adopts them.
 pub fn inspect_store(
     path: &Path,
     policy: &CheckpointPolicy,

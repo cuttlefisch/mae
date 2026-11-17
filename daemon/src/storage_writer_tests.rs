@@ -625,6 +625,57 @@ async fn a_compaction_or_delete_runs_no_checkpoint_under_the_slot() {
     );
 }
 
+/// `delete_document` is two autocommit DELETEs. If the second fails, the first
+/// has already put the deleted snapshot's pre-image in the WAL, so the scrub
+/// must be owed even though the delete returns an error. A trigger makes the
+/// second statement fail after the first committed. Kills a mark set only
+/// after both statements succeed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_delete_that_fails_midway_still_owes_its_scrub() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("state.db");
+    let backend = SqliteBackend::open_with_policy(&db, 4, PAUSED).unwrap();
+    let mut last = 0;
+    for _ in 0..3 {
+        last = backend
+            .wal_append("doc", &UPDATE, None, &stamp())
+            .await
+            .unwrap();
+    }
+    backend.compact("doc", b"state", last).await.unwrap();
+    backend
+        .wal_append("doc", &UPDATE, None, &stamp())
+        .await
+        .unwrap();
+    let before = backend
+        .storage_health()
+        .unwrap()
+        .scrub_pending
+        .map(|(d, _)| d);
+    {
+        let other = sqlite::open(&db).unwrap();
+        other
+            .execute(
+                "CREATE TRIGGER refuse_wal_delete BEFORE DELETE ON wal \
+                 BEGIN SELECT RAISE(ABORT, 'refused for the test'); END;",
+            )
+            .unwrap();
+    }
+    assert!(
+        backend.delete_document("doc").await.is_err(),
+        "precondition: the second DELETE fails"
+    );
+    let after = backend
+        .storage_health()
+        .unwrap()
+        .scrub_pending
+        .map(|(d, _)| d);
+    assert!(
+        after.unwrap_or(0) > before.unwrap_or(0),
+        "a delete that failed after removing the snapshot owes no scrub: {before:?} -> {after:?}"
+    );
+}
+
 /// A reader held open lets the WAL grow past the backstop, which no
 /// checkpoint can prevent; the checkpointer warns, and the store reports it:
 /// `storage_health` (`daemon/status`) and `inspect_store` (`doctor`). A scrub

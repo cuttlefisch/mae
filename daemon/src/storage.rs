@@ -879,6 +879,14 @@ impl StorageBackend for SqliteBackend {
     async fn delete_document(&self, doc_name: &str) -> Result<(), StorageError> {
         let conn = self.pool.write_shard(doc_name).await;
 
+        // ADR-037 (#171): with `secure_delete=ON` the rows below are zeroed in the
+        // main DB, but the WAL file keeps their pre-images until it is truncated.
+        // Owe a scrub, which the checkpointer retries until it succeeds (see
+        // `compact`). Marked BEFORE the deletes: they are two autocommit
+        // statements, so if the second fails the first has already put deleted
+        // content in the WAL. A mark with nothing to scrub costs one TRUNCATE.
+        conn.mark_scrub();
+
         let mut stmt1 = conn.prepare("DELETE FROM snapshots WHERE doc_name = ?1")?;
         stmt1.bind((1, doc_name))?;
         stmt1.next()?;
@@ -886,11 +894,6 @@ impl StorageBackend for SqliteBackend {
         let mut stmt2 = conn.prepare("DELETE FROM wal WHERE doc_name = ?1")?;
         stmt2.bind((1, doc_name))?;
         stmt2.next()?;
-
-        // ADR-037 (#171): with `secure_delete=ON` the rows above are zeroed in the main
-        // DB, but the WAL file keeps their pre-images until it is truncated. Owe a
-        // scrub, which the checkpointer retries until it succeeds (see `compact`).
-        conn.mark_scrub();
 
         info!(doc = doc_name, "deleted document from storage");
         Ok(())
