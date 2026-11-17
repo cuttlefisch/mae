@@ -1,0 +1,67 @@
+name: Mutation
+
+# Runs every declared mutant (mutants/*.toml, applied by tools/mutate): each
+# must make the tests its entry names fail. Not per-PR: a full run rebuilds the
+# test binaries once per mutant. ci.yml checks on every PR that each mutant
+# still applies (`make mutate-check`); this runs them, nightly and on a pull
+# request labelled `mutation` (re-run on each push while the label is on).
+#
+# Sharded by id (`--shard i/N`, a hash of the id), so adding a mutant moves no
+# other between shards. A shard fails on any survivor, unviable or no-result
+# mutant, or a failed control run; its results and logs are uploaded either way.
+on:
+  schedule:
+    - cron: "30 3 * * *" # Daily at 03:30 UTC
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    types: [labeled, synchronize, reopened]
+
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # See ci.yml for the rationale.
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  # Commands run directly; the local job-queue prefix does not exist here.
+  MUTATE_QUEUE: "off"
+
+jobs:
+  mutants:
+    name: mutants / shard ${{ matrix.shard }} of 4
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'mutation')
+    runs-on: ubuntu-latest
+    # Provisional ceiling, not a measurement: set it from the first nightly
+    # runs' slowest shard, as ci.yml's tiers were.
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-rust
+        with:
+          nextest: "true"
+          workspaces: |
+            .
+            daemon -> daemon/target
+            tools/mutate -> target
+      - uses: ./.github/actions/install-gui-deps
+      - name: Run shard
+        run: make mutate ARGS="--shard ${{ matrix.shard }}/4"
+      - name: Upload results and logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutants-shard-${{ matrix.shard }}
+          path: .git/mae-mutate/
+          include-hidden-files: true
+          if-no-files-found: ignore
