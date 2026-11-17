@@ -189,6 +189,43 @@ mod tests {
         assert_eq!(ticket_ttl_from_config(u64::MAX), None);
     }
 
+    /// The bound is applied where the routes are built, not only in the
+    /// helper: `state_from_config` refuses (no `/ws`) a lifetime of 0 or past
+    /// B1's 30 s, and accepts 1 and 30. Kills a call site that builds the
+    /// ticket store from the raw configured seconds.
+    #[test]
+    fn the_routes_are_not_built_with_a_ticket_ttl_outside_one_to_thirty() {
+        let deps = || {
+            use std::sync::{Arc, Mutex};
+            let backend = Arc::new(mae_daemon::storage::SqliteBackend::open_memory().unwrap());
+            mae_daemon::collab_handler::SessionDeps {
+                doc_store: Arc::new(mae_daemon::doc_store::DocStore::new(backend, 500)),
+                broadcaster: Arc::new(Mutex::new(mae_mcp::broadcast::EventBroadcaster::new())),
+                start_time: std::time::Instant::now(),
+                artifact_store: Arc::new(mae_daemon::artifact_store::NoArtifactStore),
+                quota: Arc::new(mae_daemon::quota::NoQuota),
+                kb_query_limits: mae_daemon::kb_query::KbQueryLimits::default(),
+            }
+        };
+        let with_ttl = |secs| crate::oauth_config::OAuthConfig {
+            ws_enabled: true,
+            ws_ticket_ttl_secs: secs,
+            ..Default::default()
+        };
+        for ok in [1, 30] {
+            assert!(
+                state_from_config(&with_ttl(ok), Some(deps()), true).is_some(),
+                "{ok} s is a valid ticket lifetime"
+            );
+        }
+        for bad in [0, 31, u64::MAX] {
+            assert!(
+                state_from_config(&with_ttl(bad), Some(deps()), true).is_none(),
+                "/ws was built with a {bad} s ticket lifetime"
+            );
+        }
+    }
+
     /// A cap at or under the renewal lead would demand a renewal on open; the
     /// default (900 over a 60 s lead) and "no cap" are both fine.
     #[test]
