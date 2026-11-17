@@ -239,7 +239,14 @@ impl PerfStats {
         self.sample_countdown = 120;
 
         let pid = Pid::from_u32(std::process::id());
-        let sys = self.sys.get_or_insert_with(System::new);
+        // sysinfo 0.40's `System::new` is fallible. On failure the stats keep
+        // their last values and the next sample (120 calls on) tries again.
+        if self.sys.is_none() {
+            self.sys = System::new().ok();
+        }
+        let Some(sys) = self.sys.as_mut() else {
+            return;
+        };
         sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
         if let Some(proc_info) = sys.process(pid) {
             self.rss_bytes = proc_info.memory();

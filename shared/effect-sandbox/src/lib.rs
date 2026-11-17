@@ -84,26 +84,91 @@ fn env_blocks_effects() -> bool {
 /// `Editor::mae_data_dir` is exactly how the contributor's real
 /// `kb-registry.toml` got overwritten.
 ///
-/// Cargo places test, integration-test and bench executables in
-/// `target/<profile>/deps/`, while `cargo run` and installed binaries never
-/// live there (`target/debug/mae`, `~/.local/bin/mae`). Testing for a parent
-/// directory named `deps` therefore separates the two without an env var and
-/// without cooperation from the caller.
-///
-/// Deliberately conservative in the safe direction: if `current_exe()` fails we
-/// answer `false`, because wrongly reporting "this is a test" would disable
-/// real git and real config writes for a user running the actual editor.
+/// Decided from where the executable sits; see [`is_cargo_test_executable`].
+/// If `current_exe()` fails (no `/proc` in some sandboxes), argv\[0\] stands
+/// in: cargo and nextest pass the test executable's absolute path there, and
+/// a user's shell passes `mae`, which no rule matches.
 fn running_as_cargo_test_binary() -> bool {
     static CACHED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *CACHED.get_or_init(|| {
-        std::env::current_exe()
-            .ok()
-            .and_then(|exe| {
-                let parent = exe.parent()?.file_name()?.to_owned();
-                Some(parent == *"deps")
-            })
-            .unwrap_or(false)
+        executable_path(std::env::current_exe().ok(), std::env::args_os().next())
+            .is_some_and(|exe| is_cargo_test_executable(&exe))
     })
+}
+
+/// `current_exe()`, else argv\[0\]. Separate so the fallback is testable
+/// without touching the process.
+fn executable_path(
+    current_exe: Option<std::path::PathBuf>,
+    argv0: Option<std::ffi::OsString>,
+) -> Option<std::path::PathBuf> {
+    current_exe.or_else(|| argv0.map(std::path::PathBuf::from))
+}
+
+/// Is `exe` where cargo puts a test, integration-test or bench executable?
+///
+/// Two independent rules, either of which suffices:
+///
+/// - **The name** ([`has_cargo_unit_hash`]): cargo always gives a test unit
+///   its metadata hash as a filename suffix (`<target>-<16 hex>`), in the
+///   legacy layout and in the build-dir layout that became the default in
+///   Rust 1.100, and never uplifts a test. `cargo run`, `cargo install` and
+///   release artifacts are uplifted binaries, which never carry the suffix.
+/// - **The directory**: the legacy `target/<profile>/deps/`
+///   ([`in_legacy_deps_dir`]), or the 1.100 layout's
+///   `<profile>/build/<pkg>/<16 hex>/out/` ([`in_build_unit_out_dir`]).
+///
+/// Two rules rather than one because the single `deps` rule is what broke:
+/// cargo 1.100 moved test executables out of `deps/`, and every guard reached
+/// from non-test crate code silently disarmed. Now a future cargo change has to
+/// break both the name and the directory before the guard disarms, and
+/// `the_running_test_binary_satisfies_each_rule_on_its_own` fails as soon as
+/// either one stops matching, naming which.
+///
+/// @ai-caution: [test-safety] A miss here disarms guards silently; a false hit
+/// refuses git and config writes to a real user. Keep every rule requiring a
+/// shape cargo produces and a user's install does not, and add both a positive
+/// and a negative case to the tests for any rule you add.
+fn is_cargo_test_executable(exe: &std::path::Path) -> bool {
+    has_cargo_unit_hash(exe) || in_legacy_deps_dir(exe) || in_build_unit_out_dir(exe)
+}
+
+/// Is `s` a cargo unit hash: exactly 16 lowercase hex digits (`{:016x}`)?
+fn is_unit_hash(s: &str) -> bool {
+    s.len() == 16 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Does the file name end in `-<unit hash>`, ignoring a Windows `.exe`?
+fn has_cargo_unit_hash(exe: &std::path::Path) -> bool {
+    let Some(name) = exe.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let stem = match name.len().checked_sub(4) {
+        Some(i) if name.is_char_boundary(i) && name[i..].eq_ignore_ascii_case(".exe") => &name[..i],
+        _ => name,
+    };
+    match stem.rsplit_once('-') {
+        Some((target, hash)) => !target.is_empty() && is_unit_hash(hash),
+        None => false,
+    }
+}
+
+/// Legacy layout (cargo before 1.100): `target/<profile>/deps/<exe>`.
+fn in_legacy_deps_dir(exe: &std::path::Path) -> bool {
+    exe.parent()
+        .and_then(|p| p.file_name())
+        .is_some_and(|n| n == "deps")
+}
+
+/// Build-dir layout (cargo 1.100+): `<profile>/build/<pkg>/<unit hash>/out/<exe>`.
+fn in_build_unit_out_dir(exe: &std::path::Path) -> bool {
+    let mut up = exe.ancestors().skip(1).map(|a| a.file_name());
+    let (Some(Some(out)), Some(Some(hash)), Some(Some(_pkg)), Some(Some(build))) =
+        (up.next(), up.next(), up.next(), up.next())
+    else {
+        return false;
+    };
+    out == "out" && hash.to_str().is_some_and(is_unit_hash) && build == "build"
 }
 
 /// Are real external effects blocked on this thread right now?
@@ -214,13 +279,182 @@ mod tests {
     fn a_test_binary_is_detected_even_when_the_call_site_is_not_a_test_build() {
         assert!(
             running_as_cargo_test_binary(),
-            "this IS a cargo test binary; detection is broken, so every guard \
-             called from non-test crate code is disarmed"
+            "this IS a cargo test binary ({:?}); detection is broken, so every guard \
+             called from non-test crate code is disarmed",
+            std::env::current_exe()
         );
         assert!(
             external_effects_blocked_for(false),
             "a guard whose call site is not itself a test build was left unguarded"
         );
+    }
+
+    /// Each rule must match the binary actually running, separately. The
+    /// combined detection above stays green while one rule still holds, so
+    /// without this a cargo change that breaks one rule would leave the guard
+    /// hanging on the other with nobody told.
+    #[test]
+    fn the_running_test_binary_satisfies_each_rule_on_its_own() {
+        let exe = std::env::current_exe().expect("current_exe");
+        assert!(
+            has_cargo_unit_hash(&exe),
+            "cargo no longer names test executables `<target>-<16 hex>` ({}); only \
+             the directory rule is guarding now, so fix has_cargo_unit_hash",
+            exe.display()
+        );
+        assert!(
+            in_legacy_deps_dir(&exe) || in_build_unit_out_dir(&exe),
+            "cargo moved test executables to a layout neither directory rule knows \
+             ({}); only the name rule is guarding now, so teach the new layout",
+            exe.display()
+        );
+    }
+
+    fn path(parts: &[&str]) -> std::path::PathBuf {
+        parts.iter().collect()
+    }
+
+    const H: &str = "0123456789abcdef";
+
+    /// The layout cargo 1.100 made the default, as observed with
+    /// `-Zbuild-dir-new-layout`. The rule the guard used before 1.100 misses
+    /// it; that miss is what disarmed every cross-crate guard.
+    #[test]
+    fn the_build_dir_layout_is_a_test_binary_and_the_old_rule_missed_it() {
+        let exe = path(&[
+            "/",
+            "w",
+            "target",
+            "debug",
+            "build",
+            "mae-effect-sandbox",
+            "26c86112c87c500d",
+            "out",
+            "mae_effect_sandbox-26c86112c87c500d",
+        ]);
+        assert!(!in_legacy_deps_dir(&exe), "the pre-1.100 rule");
+        assert!(is_cargo_test_executable(&exe));
+        assert!(in_build_unit_out_dir(&exe));
+        assert!(has_cargo_unit_hash(&exe));
+    }
+
+    #[test]
+    fn the_legacy_layout_is_a_test_binary() {
+        for exe in [
+            path(&[
+                "/",
+                "w",
+                "target",
+                "debug",
+                "deps",
+                &format!("mae_core-{H}"),
+            ]),
+            path(&[
+                "/",
+                "w",
+                "target",
+                "release",
+                "deps",
+                &format!("headless_e2e-{H}"),
+            ]),
+            path(&[
+                "/",
+                "w",
+                "target",
+                "x86_64-unknown-linux-gnu",
+                "release",
+                "deps",
+                &format!("mae_ai-{H}"),
+            ]),
+        ] {
+            assert!(is_cargo_test_executable(&exe), "{}", exe.display());
+        }
+    }
+
+    #[test]
+    fn a_windows_test_executable_is_recognised_through_its_extension() {
+        let exe = path(&[
+            "C:",
+            "w",
+            "target",
+            "debug",
+            "elsewhere",
+            &format!("mae_core-{H}.EXE"),
+        ]);
+        assert!(has_cargo_unit_hash(&exe));
+        assert!(!in_legacy_deps_dir(&exe) && !in_build_unit_out_dir(&exe));
+    }
+
+    /// Each rule must hold up the detection alone, so that a future layout
+    /// breaking one of them leaves the guard armed.
+    #[test]
+    fn each_rule_alone_keeps_the_guard_armed() {
+        // A hashed name in a directory no rule knows.
+        let name_only = path(&["/", "w", "target", "v3", "units", &format!("mae_core-{H}")]);
+        assert!(!in_legacy_deps_dir(&name_only) && !in_build_unit_out_dir(&name_only));
+        assert!(is_cargo_test_executable(&name_only));
+
+        // Known directories, unhashed names.
+        let deps_only = path(&["/", "w", "target", "debug", "deps", "mae_core"]);
+        assert!(!has_cargo_unit_hash(&deps_only));
+        assert!(is_cargo_test_executable(&deps_only));
+
+        let out_only = path(&[
+            "/", "w", "target", "debug", "build", "mae-core", H, "out", "mae_core",
+        ]);
+        assert!(!has_cargo_unit_hash(&out_only));
+        assert!(is_cargo_test_executable(&out_only));
+    }
+
+    /// The other direction: a real user's `mae` must never be refused git and
+    /// config writes.
+    #[test]
+    fn installed_and_cargo_run_binaries_are_not_test_binaries() {
+        for exe in [
+            path(&["/", "home", "u", ".local", "bin", "mae"]),
+            path(&["/", "home", "u", ".cargo", "bin", "mae"]),
+            path(&["/", "usr", "bin", "mae"]),
+            path(&["/", "opt", "homebrew", "bin", "mae"]),
+            path(&["/", "w", "target", "release", "mae"]),
+            path(&["/", "w", "target", "debug", "mae"]),
+            path(&["/", "w", "target", "debug", "mae-daemon"]),
+            path(&["/", "w", "target", "release", "mae-mcp-shim"]),
+            path(&[
+                "/",
+                "w",
+                "target",
+                "release",
+                "examples",
+                "windows_remote_verify",
+            ]),
+            path(&["C:", "Program Files", "MAE", "mae.exe"]),
+            path(&["mae"]),
+            // Hash lookalikes: wrong length, not hex, not lowercase.
+            path(&["/", "usr", "bin", "mae-0123456789abcde"]),
+            path(&["/", "usr", "bin", "mae-0123456789abcdef0"]),
+            path(&["/", "usr", "bin", "mae-ghijklmnopqrstuv"]),
+            path(&["/", "usr", "bin", "mae-0123456789ABCDEF"]),
+            path(&["/", "usr", "bin", &format!("-{H}")]),
+            // An `out` dir under a `build` dir that is not a cargo unit.
+            path(&["/", "home", "u", "build", "tools", "release", "out", "mae"]),
+            // A hash-named dir with an `out` below it, but no `build` above.
+            path(&["/", "srv", "x", "cache", H, "out", "mae"]),
+        ] {
+            assert!(!is_cargo_test_executable(&exe), "{}", exe.display());
+        }
+    }
+
+    /// `current_exe()` can fail (no `/proc` in some sandboxes). Falling back to
+    /// argv[0] keeps a test run guarded: cargo and nextest pass the absolute
+    /// path there.
+    #[test]
+    fn argv0_stands_in_when_current_exe_is_unavailable() {
+        let argv0 = format!("/w/target/debug/deps/mae_core-{H}");
+        let exe = executable_path(None, Some(argv0.clone().into())).expect("fallback");
+        assert!(is_cargo_test_executable(&exe));
+        let preferred = executable_path(Some("/usr/bin/mae".into()), Some(argv0.into()));
+        assert_eq!(preferred, Some("/usr/bin/mae".into()));
+        assert_eq!(executable_path(None, None), None);
     }
 
     /// The opt-in must still win over runtime detection, or a test that has

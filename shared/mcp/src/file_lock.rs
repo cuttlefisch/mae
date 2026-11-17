@@ -195,7 +195,13 @@ pub fn is_process_alive(pid: u32) -> bool {
         // dependency elsewhere in this workspace) whether the PID is a live process.
         // A stale-lock left by a dead process must be detected here too, not treated
         // as permanently alive -- see this fn's Cargo.toml dependency comment.
-        let mut sys = sysinfo::System::new();
+        //
+        // sysinfo 0.40 made `System::new` fallible. If it cannot even start,
+        // answer "alive": the cost is a stale lock left in place, where the
+        // alternative would let a caller break a lock a live process still holds.
+        let Ok(mut sys) = sysinfo::System::new() else {
+            return true;
+        };
         sys.refresh_processes(
             sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]),
             true,

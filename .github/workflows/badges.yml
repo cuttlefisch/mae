@@ -18,8 +18,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # The pinned toolchain CI uses (setup-rust's default), not `stable`: this
+      # job publishes the test count from main, so it must count what CI
+      # validated. On `stable` it went red on every main push from 2026-11-12,
+      # when Rust 1.100 moved test executables out of `deps/` and
+      # mae-effect-sandbox's test-binary detection missed them -- a failure CI,
+      # pinned to 1.99.1, could not see. A toolchain upgrade is its own PR.
+      - uses: ./.github/actions/setup-rust
         with:
           # Both workspaces -- mirrors ci.yml's `stable / test` leg (same
           # rationale: the "Build mae-daemon" step below needs the daemon
@@ -29,7 +34,7 @@ jobs:
           workspaces: |
             .
             daemon -> daemon/target
-      - uses: taiki-e/install-action@nextest
+          nextest: "true"
 
       - uses: ./.github/actions/install-gui-deps
 
