@@ -83,7 +83,7 @@ data-encoding = "2"
 # 0.5.x fix. The daemon only signs/verifies EdDSA and verifies RS256, but
 # removing the code beats arguing it is unreachable. aws-lc-rs is already in this
 # binary through rustls/iroh/reqwest, so this adds no new native build dependency.
-jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "aws_lc_rs"] }
+jsonwebtoken = { version = "12", default-features = false, features = ["use_pem", "aws_lc_rs"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "logging"] }
 tokio-rustls = "0.26"
