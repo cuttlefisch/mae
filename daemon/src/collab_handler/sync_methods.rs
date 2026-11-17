@@ -102,7 +102,19 @@ async fn authorize_node_write(
     // after, the signature checks. Signature verification answers "who wrote
     // this"; `kb_access` answers "may the caller write here at all", and only
     // the second may be answered to a stranger.
-    let decision = kb_access(doc_store, kb_id, auth_principal, KbOp::Edit, transport).await;
+    //
+    // The writer is the session's principal, or the successor its rotation
+    // signed in (ADR-040 §4) for an op that successor signed — `node_writer`.
+    let header = params.get("content_header");
+    let (decision, writer) = node_writer(
+        doc_store,
+        kb_id,
+        None,
+        (auth_principal, transport),
+        header,
+        KbOp::Edit,
+    )
+    .await;
     if let Err(m) = require_allow(decision, || format!("cannot write to KB '{kb_id}'")) {
         warn!(session = session_id, doc = %doc_name, kb_id = %kb_id, reason = %m,
               "sync/update: kb node write DENIED (not a member / insufficient role)");
@@ -113,8 +125,8 @@ async fn authorize_node_write(
         kb_id,
         doc_name,
         update_bytes,
-        params.get("content_header"),
-        OpSender::session(auth_principal, transport),
+        header,
+        OpSender::session(writer.as_deref(), transport),
     )
     .await
     .map_err(|e| {

@@ -650,6 +650,33 @@ pub fn derive_valid_members_governed(
     governance: Governance,
     view: &MembershipView,
 ) -> BTreeMap<String, ValidMember> {
+    derive_membership_governed(ops, anchor_owner_pubkey, now, governance, view).members
+}
+
+/// The derived member set, and the keys it retired by identity rotation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DerivedMembers {
+    /// The current members, keyed by principal (see [`derive_valid_members_governed`]).
+    pub members: BTreeMap<String, ValidMember>,
+    /// ADR-040: every key an honored `Rebind` retired, mapped to the principal that
+    /// holds its seat NOW — the end of its rotation chain (`a→b→c` maps `a` and `b`
+    /// to `c`), and always a key of [`Self::members`]: a successor that is no
+    /// longer a member takes its predecessors with it. A retired key's own signed ops are never
+    /// honored (it is not in `members`). The transport is re-authorized out of
+    /// band (§4), so a session can outlive the key it authenticated with; the
+    /// daemon reads this map to let such a session carry ops its successor signed.
+    pub retired: BTreeMap<String, String>,
+}
+
+/// As [`derive_valid_members_governed`], also returning the keys rotation retired
+/// ([`DerivedMembers::retired`]).
+pub fn derive_membership_governed(
+    ops: &[SignedMembershipOp],
+    anchor_owner_pubkey: &[u8; 32],
+    now: u64,
+    governance: Governance,
+    view: &MembershipView,
+) -> DerivedMembers {
     // 1. Keep only cryptographically-valid records (sig + author↔key binding) — PLUS
     //    recovery-key-signed Rebinds (ADR-040 §Recovery-key) — and drop ops authored by a
     //    locally-blocked principal (this peer ignores their authority entirely — even the
@@ -673,7 +700,7 @@ pub fn derive_valid_members_governed(
             && &o.author_pubkey == anchor_owner_pubkey
     }) {
         Some(g) => g.chain_hash(),
-        None => return BTreeMap::new(), // no trusted root ⇒ no members
+        None => return DerivedMembers::default(), // no trusted root ⇒ no members
     };
     let owner_principal = by_hash[&genesis_hash].op.subject.clone();
 
@@ -748,14 +775,12 @@ pub fn derive_valid_members_governed(
 
     // 5. Build the final member map from the surviving ops (removal-dominant; a
     //    causally-later re-admit wins; higher-hash SetRole wins concurrent ties).
-    let mut members = build_members(
-        &by_hash,
-        &order,
-        &valid,
-        &anc,
-        &genesis_hash,
+    let mut retired = BTreeMap::new();
+    let mut members = build_members_tracing(
+        (&by_hash, &order, &valid, &anc, &genesis_hash),
         governance,
         now,
+        Some(&mut retired),
     );
 
     // 6. Inviter-removal cascade (ADR-026 §A3). `CascadeAll` transitively drops any
@@ -787,7 +812,9 @@ pub fn derive_valid_members_governed(
     if !view.blocklist.is_empty() {
         members.retain(|p, _| !view.blocklist.contains(p));
     }
-    members
+    // A retired key resolves only to a seat that still exists.
+    retired.retain(|_, successor| members.contains_key(successor));
+    DerivedMembers { members, retired }
 }
 
 /// Strict ancestors of `h` (its causal past, excluding `h`): walk the `prev_hash`
@@ -1438,6 +1465,28 @@ fn build_members(
     governance: Governance,
     now: u64,
 ) -> BTreeMap<String, ValidMember> {
+    let tree = (by_hash, order, valid, anc, genesis_hash);
+    build_members_tracing(tree, governance, now, None)
+}
+
+/// The op tree [`build_members`] reads: ops by hash, causal order, the valid
+/// set, each op's ancestors, and the genesis hash.
+type OpTree<'a> = (
+    &'a BTreeMap<String, &'a SignedMembershipOp>,
+    &'a [String],
+    &'a BTreeSet<String>,
+    &'a BTreeMap<String, BTreeSet<String>>,
+    &'a str,
+);
+
+/// [`build_members`], recording into `retired` each key the rotation post-pass
+/// retires, mapped to the end of its chain ([`DerivedMembers::retired`]).
+fn build_members_tracing(
+    (by_hash, order, valid, anc, genesis_hash): OpTree<'_>,
+    governance: Governance,
+    now: u64,
+    mut retired: Option<&mut BTreeMap<String, String>>,
+) -> BTreeMap<String, ValidMember> {
     let in_admit_past =
         |admit: &str, other: &str| anc.get(admit).map(|s| s.contains(other)).unwrap_or(false);
     let mut out: BTreeMap<String, ValidMember> = BTreeMap::new();
@@ -1522,6 +1571,14 @@ fn build_members(
         if let Some(mut entry) = out.remove(&op.author) {
             entry.principal = op.subject.clone();
             out.insert(op.subject.clone(), entry);
+            if let Some(r) = retired.as_deref_mut() {
+                // Chains compose: whatever resolved to the predecessor now
+                // resolves to its successor.
+                for s in r.values_mut().filter(|s| **s == op.author) {
+                    *s = op.subject.clone();
+                }
+                r.insert(op.author.clone(), op.subject.clone());
+            }
             // Re-point provenance: members the predecessor invited now trace to the
             // successor, so an inviter-removal cascade (CascadeAll) does NOT orphan a
             // rotated inviter's invitees. The just-inserted successor entry keeps the
@@ -3832,6 +3889,58 @@ mod tests {
             Some(Role::Editor),
             "final successor c inherits the role"
         );
+    }
+
+    /// `DerivedMembers::retired` maps every key a chain retired to the seat's
+    /// CURRENT holder (`a→b→c`: both `a` and `b` resolve to `c`), and a key whose
+    /// successor is no longer a member resolves to nothing. A forged or never-honored
+    /// rebind retires no one.
+    #[test]
+    fn retired_keys_resolve_to_the_current_holder_of_their_seat() {
+        let (owner, a, b, c) = (id(1), id(2), id(3), id(4));
+        let g = genesis(&owner);
+        let admit = make(
+            &owner,
+            MembershipAction::Admit,
+            &a.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            &g.chain_hash(),
+        );
+        let r1 = make_rebind(&a, &b, &admit.chain_hash());
+        let r2 = make_rebind(&b, &c, &r1.chain_hash());
+        let ops = [g.clone(), admit.clone(), r1.clone(), r2.clone()];
+        let view = MembershipView::default();
+        let gov = Governance::SingleOwner;
+        let d = derive_membership_governed(&ops, &owner.pubkey, 100, gov, &view);
+        assert_eq!(d.retired.get(&a.fp), Some(&c.fp), "a resolves to c");
+        assert_eq!(d.retired.get(&b.fp), Some(&c.fp), "b resolves to c");
+        assert!(!d.retired.contains_key(&c.fp), "c holds its own seat");
+        assert!(
+            !d.retired.contains_key(&owner.fp),
+            "the owner never rotated"
+        );
+
+        // A seat that no longer exists resolves no one: here the holder is
+        // blocked locally, which drops it from the derived set.
+        let blocked = MembershipView {
+            blocklist: [c.fp.clone()].into(),
+            ..MembershipView::default()
+        };
+        let d = derive_membership_governed(&ops, &owner.pubkey, 100, gov, &blocked);
+        assert!(!d.members.contains_key(&c.fp), "c is blocked");
+        assert!(
+            d.retired.is_empty(),
+            "a gone seat resolves no one: {:?}",
+            d.retired
+        );
+
+        // A rebind the old key did not sign is never honored, so retires no one.
+        let mut forged = make_rebind(&a, &b, &admit.chain_hash());
+        forged.sig = make_rebind(&c, &b, &admit.chain_hash()).sig;
+        let d = derive_membership_governed(&[g, admit, forged], &owner.pubkey, 100, gov, &view);
+        assert!(d.retired.is_empty(), "a forged rebind retires no one");
     }
 
     /// Clobber guard: a member cannot rebind ONTO an existing member's fingerprint (which

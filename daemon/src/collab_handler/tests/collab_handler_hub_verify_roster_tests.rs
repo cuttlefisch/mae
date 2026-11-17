@@ -430,3 +430,100 @@ async fn an_owner_key_rotation_keeps_the_anchor() {
         .await;
     expect_kind(&r, "not_member", "the retired key");
 }
+
+/// The owner rotates on an anchored, log-governed KB and keeps writing on the
+/// SAME connection — the editor's `collab-rotate-identity` (ADR-040 PR2b): the
+/// transport stays authenticated as the old key until the operator authorizes
+/// the new one and the editor reconnects (§4), while every op is now signed by
+/// the new key. Both write methods admit the successor's op there and apply it
+/// (`MAE_E2E_ROTATE=1`, whose member never saw the post-rotation edit). The
+/// retired key gains nothing of its own: an op it signs, or one another
+/// member signed, is still refused on that session.
+#[tokio::test]
+async fn the_rotated_owner_writes_on_its_open_session() {
+    for m in METHODS {
+        let (mut h, k, new) = rotated_owner().await;
+        // The node exists first, so the epoch fence (which a node's first
+        // write skips) judges the successor's op.
+        let bob_epoch = h.epoch(&k.bob).await;
+        let (upd, signed) = op(&k.bob, bob_epoch, "bob was here");
+        let r = h
+            .call(k.bob.mtls(), write(m, &upd, Some(signed.header_params())))
+            .await;
+        assert!(
+            r.error.is_none(),
+            "bob seeds the node, {m:?}: {:?}",
+            r.error
+        );
+        let epoch = h.epoch(&new).await;
+        let text = format!("rotated owner, old session, {m:?}");
+        let (upd, signed) = op(&new, epoch, &text);
+        let r = h
+            .call(k.owner.mtls(), write(m, &upd, Some(signed.header_params())))
+            .await;
+        assert!(
+            r.error.is_none(),
+            "the successor's op, {m:?}: {:?}",
+            r.error
+        );
+        let node_doc = mae_sync::kb_node_doc_name(KB, "concept:n");
+        let (state, _) = h.store.encode_state_and_sv(&node_doc).await.expect("node");
+        let applied = state.windows(text.len()).any(|w| w == text.as_bytes());
+        assert!(applied, "the successor's op is applied, {m:?}");
+
+        for (signer, ctx) in [(&k.owner, "the retired key's own op"), (&k.bob, "bob's op")] {
+            let ep = if signer.fp == k.bob.fp {
+                h.epoch(&k.bob).await
+            } else {
+                0
+            };
+            let (upd, signed) = op(signer, ep, ctx);
+            let r = h
+                .call(k.owner.mtls(), write(m, &upd, Some(signed.header_params())))
+                .await;
+            let ctx = format!("{ctx} on the retired key's session, {m:?}");
+            expect_kind(&r, "not_member", &ctx);
+        }
+        // Naming the successor without its signature carries nothing.
+        let (upd, signed) = op(&new, epoch, "unsigned, naming the successor");
+        let mut header = signed.header_params();
+        header.as_object_mut().unwrap().remove("sig");
+        let r = h.call(k.owner.mtls(), write(m, &upd, Some(header))).await;
+        expect_kind(
+            &r,
+            "not_member",
+            &format!("unsigned, naming the successor, {m:?}"),
+        );
+    }
+}
+
+/// [`hv`]'s KB, its signed log governing, after the owner rotated its key with
+/// a `Rebind` sent on its own (old-key) session — the editor's rotation.
+async fn rotated_owner() -> (Hv, Keys, Key) {
+    let (mut h, k) = hv(false, true, true).await;
+    let id = Arc::new(Identity::generate("owner-rotated"));
+    let new = Key {
+        fp: id.fingerprint(),
+        pk: id.public().to_bytes(),
+        id,
+    };
+    let wrap = mae_sync::content_crypto::wrap_public_for(&new.id.secret_bytes());
+    let mut coll = load_coll(&h.store, KB).await;
+    let secret = k.owner.id.secret_bytes();
+    let rebind = coll.author_rebind(
+        KB,
+        &k.owner.fp,
+        &new.fp,
+        &new.pk,
+        &wrap,
+        &secret,
+        &k.owner.pk,
+        1000,
+    );
+    let r = h
+        .call(k.owner.mtls(), kb_collection_op_msg(KB, &rebind))
+        .await;
+    assert!(r.error.is_none(), "the owner's rebind: {:?}", r.error);
+    assert!(source(&h).await.log_governed, "the log governs");
+    (h, k, new)
+}
