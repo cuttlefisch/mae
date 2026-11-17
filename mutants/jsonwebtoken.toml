@@ -1,0 +1,51 @@
+# What the daemon's bearer-token validation gets from jsonwebtoken 12, and the
+# tests that pin it (daemon/src/oauth_tests.rs). A major version of the JWT
+# library can change validation behaviour without a compile error, so the
+# library version itself is a mutant: going back to 11.1.0 must fail the tests.
+#
+# The downgrade mutants edit Cargo.lock only so the run restores it: cargo
+# re-resolves the lock for the `=11.1.0` requirement, and the journal puts the
+# committed lock back afterwards.
+
+[[mutant]]
+id = "jsonwebtoken/v11-accepts-a-non-string-aud"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_non_string_audience_is_refused)"
+ref = "jsonwebtoken 12.0.0: fix remaining type confusion with sub, iss, aud"
+[[mutant.edit]]
+file = "daemon/Cargo.toml"
+find = '''jsonwebtoken = { version = "12", '''
+replace = '''jsonwebtoken = { version = "=11.1.0", '''
+[[mutant.edit]]
+file = "daemon/Cargo.lock"
+find = '''# It is not intended for manual editing.'''
+replace = '''# It is not intended for manual editing (mutant).'''
+
+[[mutant]]
+id = "jsonwebtoken/v11-accepts-an-unknown-crit-header"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(an_unknown_critical_header_is_refused)"
+ref = "jsonwebtoken 12.0.0: reject unknown critical extensions"
+[[mutant.edit]]
+file = "daemon/Cargo.toml"
+find = '''jsonwebtoken = { version = "12", '''
+replace = '''jsonwebtoken = { version = "=11.1.0", '''
+[[mutant.edit]]
+file = "daemon/Cargo.lock"
+find = '''# It is not intended for manual editing.'''
+replace = '''# It is not intended for manual editing (mutant).'''
+
+[[mutant]]
+id = "jsonwebtoken/external-validator-skips-aud"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(a_non_string_audience_is_refused)"
+[[mutant.edit]]
+file = "daemon/src/oauth.rs"
+find = '''    validation.validate_exp = true;
+    // Stated, not inherited'''
+replace = '''    validation.validate_exp = true;
+    validation.validate_aud = false;
+    // Stated, not inherited'''
