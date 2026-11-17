@@ -111,6 +111,56 @@ where
     }
 }
 
+/// Connect to a listener that may not be bound yet, retrying until `connect`
+/// succeeds or the budget elapses, and return the connection.
+///
+/// This replaces the "give the server time to bind" sleep: a test that spawns
+/// a server and then sleeps a fixed 50 ms is guessing how long a bind takes on
+/// whatever machine runs it. Here the condition is the connect itself, so a
+/// fast machine pays nothing and a loaded one waits as long as it needs.
+///
+/// The connection that succeeds is the one returned — there is no separate
+/// probe connection, so a server that counts sessions or accepts exactly one
+/// client sees only the caller's.
+///
+/// `connect` is any connect function — `|| tokio::net::UnixStream::connect(&p)`,
+/// `|| TcpStream::connect(addr)`, `|| local_ipc::connect(&p)` — so one helper
+/// serves every transport.
+///
+/// # Panics
+///
+/// On timeout, with [`timeout_message`] naming `what` and the last connect error.
+/// It is a test helper: a server that never binds is the test's failure.
+pub async fn connect_when_ready<T, F, Fut>(what: &str, mut connect: F) -> T
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = std::io::Result<T>>,
+{
+    let last_err = std::cell::RefCell::new(None);
+    let got = wait_for_some(|| {
+        let attempt = connect();
+        let last_err = &last_err;
+        async move {
+            match attempt.await {
+                Ok(conn) => Some(conn),
+                Err(e) => {
+                    *last_err.borrow_mut() = Some(e);
+                    None
+                }
+            }
+        }
+    })
+    .await;
+    match got {
+        Some(conn) => conn,
+        None => panic!(
+            "{} (last connect error: {:?})",
+            timeout_message(&format!("a connection to {what}")),
+            last_err.into_inner()
+        ),
+    }
+}
+
 /// The message a timed-out wait should panic with — names the thing, the budget,
 /// and the override, so the next person does not have to read this module.
 pub fn timeout_message(what: &str) -> String {
@@ -159,6 +209,28 @@ mod tests {
         );
     }
 
+    /// The connection returned is the attempt that succeeded, after the failed
+    /// ones were retried — not a probe followed by a second connect, and not the
+    /// first error.
+    #[tokio::test]
+    async fn connect_when_ready_retries_until_a_connect_succeeds_and_returns_it() {
+        let mut attempts = 0u32;
+        let got = connect_when_ready("a fake listener", || {
+            attempts += 1;
+            let n = attempts;
+            async move {
+                if n < 3 {
+                    Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused))
+                } else {
+                    Ok(n)
+                }
+            }
+        })
+        .await;
+        assert_eq!(got, 3, "the third attempt's connection is returned");
+        assert_eq!(attempts, 3, "no attempt after the one that succeeded");
+    }
+
     /// Everything that depends on [`READY_TIMEOUT_ENV`] lives in ONE test.
     ///
     /// `set_var` is process-wide, and `cargo test` runs a binary's tests in
@@ -203,6 +275,27 @@ mod tests {
         assert!(
             started.elapsed() < Duration::from_secs(15),
             "blocking wait ignored its budget, took {:?}",
+            started.elapsed()
+        );
+
+        // A listener that never comes up fails the wait on the budget, and the
+        // failure names the thing waited for and why the last connect failed.
+        let started = Instant::now();
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            rt.block_on(connect_when_ready("the never-bound socket", || async {
+                Err::<(), _>(std::io::Error::from(std::io::ErrorKind::NotFound))
+            }))
+        }))
+        .expect_err("a connect that never succeeds must fail, not hang");
+        let msg = panicked
+            .downcast_ref::<String>()
+            .cloned()
+            .unwrap_or_default();
+        assert!(msg.contains("the never-bound socket"), "{msg}");
+        assert!(msg.contains("NotFound"), "{msg}");
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "connect_when_ready ignored its budget, took {:?}",
             started.elapsed()
         );
 

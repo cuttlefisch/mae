@@ -152,6 +152,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let w = OrgDirWatcher::new(tmp.path()).unwrap();
         std::fs::write(tmp.path().join("notes.txt"), "ignore me").unwrap();
+        // Kept: a negative window. The test asserts an event does NOT arrive,
+        // so it gives the watcher time to (wrongly) deliver one.
         std::thread::sleep(std::time::Duration::from_millis(200));
         let changes = w.drain();
         assert!(

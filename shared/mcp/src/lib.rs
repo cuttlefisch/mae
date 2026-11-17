@@ -1171,6 +1171,16 @@ mod framing_tests;
 mod tests {
     use super::*;
 
+    /// Connect to a test server's socket once it is bound — the condition, not
+    /// a fixed "give the server time to bind" sleep (see `ready::connect_when_ready`).
+    async fn connect_server(path: impl AsRef<std::path::Path>) -> tokio::net::UnixStream {
+        let path = path.as_ref();
+        crate::ready::connect_when_ready("the MCP server socket", || {
+            tokio::net::UnixStream::connect(path)
+        })
+        .await
+    }
+
     /// Create a dummy `SharedBroadcaster` for unit tests.
     fn dummy_broadcaster() -> broadcast::SharedBroadcaster {
         std::sync::Arc::new(std::sync::Mutex::new(broadcast::EventBroadcaster::new()))
@@ -1785,13 +1795,8 @@ mod tests {
             }
         });
 
-        // Give server time to bind.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
         // --- Client 1 connects ---
-        let mut client1 = tokio::net::UnixStream::connect(&socket_path)
-            .await
-            .expect("client1 connect");
+        let mut client1 = connect_server(&socket_path).await;
 
         // Client 1: initialize
         let resp = send_and_recv(
@@ -1862,7 +1867,6 @@ mod tests {
 
         // --- Disconnect client 1, client 2 should still work ---
         drop(client1);
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         // Client 2: still alive — ping works
         let resp = send_and_recv(
@@ -1992,14 +1996,11 @@ mod tests {
                 });
             }
         });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // --- Client A: declares a ceiling via the exact same helper the
         // shim's connect_and_verify() calls, exactly as it would after
         // reading MAE_MCP_PERMISSION_CEILING=ReadOnly from its environment.
-        let mut client_a = tokio::net::UnixStream::connect(&socket_path)
-            .await
-            .expect("client A connect");
+        let mut client_a = connect_server(&socket_path).await;
         let init_params_a = build_shim_initialize_params(Some("ReadOnly"), None);
         let resp = send_and_recv(
             &mut client_a,
@@ -2088,11 +2089,7 @@ mod tests {
             server.run(vec![]).await;
         });
 
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-        let mut client = tokio::net::UnixStream::connect(&socket_path)
-            .await
-            .expect("connect");
+        let mut client = connect_server(&socket_path).await;
 
         // Initialize.
         send_and_recv(
@@ -2146,12 +2143,9 @@ mod tests {
         tokio::spawn(async move {
             server.run(vec![]).await;
         });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         for client_name in ["client-a", "client-b"] {
-            let mut client = tokio::net::UnixStream::connect(&socket_path)
-                .await
-                .expect("connect");
+            let mut client = connect_server(&socket_path).await;
             let resp = send_and_recv(
                 &mut client,
                 &serde_json::json!({
@@ -2186,11 +2180,8 @@ mod tests {
         tokio::spawn(async move {
             server.run(vec![]).await;
         });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let mut client = tokio::net::UnixStream::connect(&socket_path)
-            .await
-            .expect("connect");
+        let mut client = connect_server(&socket_path).await;
         let resp = send_and_recv(
             &mut client,
             &serde_json::json!({
@@ -2236,9 +2227,8 @@ mod tests {
                 });
             }
         });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let mut client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        let mut client = connect_server(&socket_path).await;
 
         // 1. Initialize
         let resp = send_and_recv(
@@ -2253,8 +2243,8 @@ mod tests {
 
         // 2. notifications/initialized — proper notification (no id, no response)
         send_notification(&mut client, "notifications/initialized", None).await;
-        // Brief pause for server to process the notification.
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        // No wait: one connection's messages are handled in order
+        // (`handle_client`), so the next request on it is the barrier.
 
         // 3. Tool call
         let resp = send_and_recv(
@@ -2300,8 +2290,8 @@ mod tests {
 
         drop(client);
 
-        // 7. Server still accepts new connections
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        // 7. Server still accepts new connections (the listener never closed,
+        // so no wait: the connect queues in its backlog).
         let mut client2 = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
         let resp = send_and_recv(
             &mut client2,
@@ -2341,23 +2331,21 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
 
         let (tool_tx, _tool_rx) = mpsc::channel::<McpToolRequest>(16);
-        let server = McpServer::new(&socket_path, tool_tx, dummy_broadcaster());
+        let bc = dummy_broadcaster();
+        let server = McpServer::new(&socket_path, tool_tx, bc.clone());
 
         tokio::spawn(async move {
             server.run(vec![]).await;
         });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Rapidly connect and disconnect 10 clients
         for _ in 0..10 {
-            let client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+            let client = connect_server(&socket_path).await;
             drop(client);
         }
 
-        // Small delay for server to process disconnects
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        // Server should still be alive
+        // Server should still be alive. No wait first: accepts are FIFO, so
+        // this client is accepted after all ten.
         let mut alive_client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
         let resp = send_and_recv(
             &mut alive_client,
@@ -2367,6 +2355,14 @@ mod tests {
         )
         .await;
         assert_eq!(resp.result.unwrap(), "pong");
+
+        // Every one of the ten disconnects was processed: each session
+        // unsubscribes on exit, leaving only the live client's.
+        assert!(
+            crate::ready::wait_until(|| async { bc.lock().unwrap().client_count() == 1 }).await,
+            "{}",
+            crate::ready::timeout_message("the server dropping all 10 disconnected sessions")
+        );
 
         drop(alive_client);
         let _ = std::fs::remove_file(&socket_path);
@@ -2422,9 +2418,8 @@ mod tests {
         tokio::spawn(async move {
             server.run(vec![]).await;
         });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let mut client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        let mut client = connect_server(&socket_path).await;
 
         // Initialize.
         send_and_recv(
@@ -2514,9 +2509,8 @@ mod tests {
         tokio::spawn(async move {
             server.run(vec![]).await;
         });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let mut client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        let mut client = connect_server(&socket_path).await;
 
         // Initialize -- capability response should already advertise
         // listChanged: true (the other half of #533's fix).
@@ -2613,9 +2607,8 @@ mod tests {
         tokio::spawn(async move {
             server.run(vec![]).await;
         });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let mut client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        let mut client = connect_server(&socket_path).await;
 
         send_and_recv(
             &mut client,
@@ -2660,9 +2653,8 @@ mod tests {
         tokio::spawn(async move {
             server.run(vec![]).await;
         });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let mut client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        let mut client = connect_server(&socket_path).await;
 
         // Initialize but do NOT subscribe.
         send_and_recv(
@@ -2717,10 +2709,9 @@ mod tests {
         tokio::spawn(async move {
             server.run(vec![]).await;
         });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Client A: subscribes to sync_update.
-        let mut client_a = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        let mut client_a = connect_server(&socket_path).await;
         send_and_recv(
             &mut client_a,
             &serde_json::json!({
@@ -2798,10 +2789,9 @@ mod tests {
         tokio::spawn(async move {
             server.run(vec![]).await;
         });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Client A subscribes.
-        let mut client_a = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        let mut client_a = connect_server(&socket_path).await;
         send_and_recv(
             &mut client_a,
             &serde_json::json!({
@@ -2838,9 +2828,14 @@ mod tests {
         )
         .await;
 
-        // Drop client A.
+        // Drop client A, and wait until the server has removed its session,
+        // so the broadcast below really happens after the disconnect.
         drop(client_a);
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            crate::ready::wait_until(|| async { bc.lock().unwrap().client_count() == 1 }).await,
+            "{}",
+            crate::ready::timeout_message("the server dropping client A's session")
+        );
 
         // Broadcast after A disconnected.
         {
@@ -2881,9 +2876,8 @@ mod tests {
         tokio::spawn(async move {
             server.run(vec![]).await;
         });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let mut client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        let mut client = connect_server(&socket_path).await;
         send_and_recv(
             &mut client,
             &serde_json::json!({
@@ -3125,10 +3119,8 @@ mod tests {
             }
         });
 
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
         // Both transports should work concurrently.
-        let mut unix_client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        let mut unix_client = connect_server(&socket_path).await;
         let mut tcp_client = tokio::net::TcpStream::connect(tcp_addr).await.unwrap();
 
         let unix_resp = send_and_recv(
@@ -3166,9 +3158,8 @@ mod tests {
         tokio::spawn(async move {
             server.run(vec![]).await;
         });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let mut client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        let mut client = connect_server(&socket_path).await;
 
         // Initialize (request).
         let resp = send_and_recv(
@@ -3183,7 +3174,8 @@ mod tests {
 
         // Send proper notification (no id).
         send_notification(&mut client, "notifications/initialized", None).await;
-        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        // No wait: one connection's messages are handled in order
+        // (`handle_client`), so the next request on it is the barrier.
 
         // Verify via health that session is initialized.
         let health = send_and_recv(
@@ -3213,9 +3205,8 @@ mod tests {
         tokio::spawn(async move {
             server.run(vec![]).await;
         });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let mut client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        let mut client = connect_server(&socket_path).await;
 
         // Initialize.
         send_and_recv(
@@ -3229,7 +3220,8 @@ mod tests {
 
         // Send an unknown notification — should not crash or close connection.
         send_notification(&mut client, "notifications/something_unknown", None).await;
-        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        // No wait: one connection's messages are handled in order
+        // (`handle_client`), so the next request on it is the barrier.
 
         // Connection should still be alive — verify with ping.
         let resp = send_and_recv(
@@ -3346,9 +3338,8 @@ mod tests {
         tokio::spawn(async move {
             server.run(tools).await;
         });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let mut client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+        let mut client = connect_server(&socket_path).await;
 
         // Step 1: initialize with 2025-11-25 (what Claude Code sends)
         let resp = send_and_recv(
@@ -3372,7 +3363,8 @@ mod tests {
 
         // Step 2: notifications/initialized (no response expected)
         send_notification(&mut client, "notifications/initialized", None).await;
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // No wait: one connection's messages are handled in order
+        // (`handle_client`), so the next request on it is the barrier.
 
         // Step 3: tools/list — must return the registered tools
         let tools_resp = send_and_recv(

@@ -690,6 +690,9 @@ mod tests {
         RespondErr(&'static str),
         /// Emit an event (independent of any request).
         EmitEvent(&'static str, serde_json::Value),
+        /// Exit now, closing the stream (the adapter process dying). Without
+        /// it the mock holds the stream open until the client closes its end.
+        Exit,
     }
 
     /// Run a mock adapter in a background task. Returns streams the client
@@ -775,10 +778,14 @@ mod tests {
                         }
                         _ => break,
                     },
+                    Action::Exit => return,
                 }
             }
-            // Keep the stream open briefly so late reads don't fail spuriously.
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            // Hold the stream open until the client closes its end, reading
+            // and ignoring whatever it sends: a silent adapter, not a dead
+            // one. A test that wants the adapter to die scripts `Exit` — the
+            // old fixed 50 ms hold raced every request timeout near 50 ms.
+            while transport.read_message().await.is_ok() {}
         });
 
         (client_read, client_write)
@@ -964,10 +971,10 @@ mod tests {
 
     #[tokio::test]
     async fn adapter_exit_produces_adapter_exited_event() {
-        // No script actions after initialize — mock task exits, stream closes.
-        let (r, w) = spawn_mock_adapter(vec![Action::Respond(init_caps())]);
+        // The adapter exits after initialize: its stream closes.
+        let (r, w) = spawn_mock_adapter(vec![Action::Respond(init_caps()), Action::Exit]);
         let mut client = DapClient::from_streams(r, w, "mock").await.unwrap();
-        // Wait for AdapterExited (comes after the mock task's sleep + drop).
+        // Wait for AdapterExited (comes after the mock task's drop).
         let evt = tokio::time::timeout(
             std::time::Duration::from_millis(500),
             client.event_rx.recv(),
@@ -1097,7 +1104,7 @@ mod tests {
         // reader drops the oneshot sender (ConnectionClosed path) or times
         // out — either way the caller gets an Err and/or the event_rx
         // delivers AdapterExited.
-        let (r, w) = spawn_mock_adapter(vec![Action::Respond(init_caps())]);
+        let (r, w) = spawn_mock_adapter(vec![Action::Respond(init_caps()), Action::Exit]);
         let mut client = DapClient::from_streams(r, w, "mock").await.unwrap();
 
         // Issue a threads request with a generous timeout. The adapter won't

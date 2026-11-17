@@ -259,9 +259,9 @@ mod tests {
         let path = tmp.path().join("test.sock");
         let mut listener = LocalListener::bind(&path).expect("bind");
 
+        // No wait before connecting: the listener is already bound, so the
+        // connect queues in its backlog whether or not accept is polling yet.
         let accept_task = tokio::spawn(async move { listener.accept().await });
-        // Give the accept loop a moment to actually be polling.
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
         let client = connect(&path).await.expect("connect");
         let server_stream = accept_task.await.unwrap().expect("accept");
