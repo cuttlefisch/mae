@@ -10,7 +10,7 @@ use std::sync::Arc;
 use mae_sync::encoding::validate_update;
 use mae_sync::kb::KbCollectionDoc;
 use mae_sync::membership::{
-    derive_governance, derive_membership_governed, Governance, MembershipView, ValidMember,
+    derive_governance, derive_valid_members_governed, Governance, MembershipView, ValidMember,
 };
 use mae_sync::text::TextSync;
 use sha2::{Digest, Sha256};
@@ -198,9 +198,6 @@ pub(crate) struct Pause {
 pub struct DerivedMembership {
     pub governance: Governance,
     pub members: BTreeMap<String, ValidMember>,
-    /// ADR-040: keys an honored `Rebind` retired, each mapped to the member now
-    /// holding its seat (`membership::DerivedMembers::retired`).
-    pub retired: BTreeMap<String, String>,
     /// Whether the log is rooted at a genesis the anchor signed
     /// (`membership::has_anchored_genesis`). Without one, `members` is empty
     /// by construction and the KB's membership is read from its member list
@@ -708,8 +705,7 @@ impl DocStore {
         let ops = coll.oplog_ops();
         let governance = derive_governance(&ops, anchor);
         let view = self.membership_view_for(kb_id).await;
-        let mae_sync::membership::DerivedMembers { members, retired } =
-            derive_membership_governed(&ops, anchor, now, governance, &view);
+        let members = derive_valid_members_governed(&ops, anchor, now, governance, &view);
         // The result holds until the earliest FUTURE member timebox flips a member out. No such
         // timebox ⇒ valid until the op-log (SV) or blocklist changes.
         let valid_until = ops
@@ -721,7 +717,6 @@ impl DocStore {
         let result = Arc::new(DerivedMembership {
             governance,
             members,
-            retired,
             genesis_verified: mae_sync::membership::has_anchored_genesis(&ops, anchor),
         });
         self.derive_cache.write().await.insert(

@@ -39,7 +39,8 @@ fn plan_owner_rotation_rotates_owned_e2e_kb_and_skips_unowned() {
 
     let plans = plan_owner_rotation(&kb_collections, &content_keys, &old, &new, 2000);
 
-    // Only the owned KB is planned, with two deltas (Rebind + e2e re-wrap).
+    // Only the owned KB is planned: the Rebind for the old key's session, the e2e re-wrap
+    // for the new key's (ADR-040 §4 — the retired key's session is refused it).
     assert_eq!(
         plans.len(),
         1,
@@ -47,11 +48,21 @@ fn plan_owner_rotation_rotates_owned_e2e_kb_and_skips_unowned() {
     );
     let plan = &plans[0];
     assert_eq!(plan.kb_id, "kb-a");
-    assert_eq!(plan.deltas.len(), 2, "Rebind + E2e content-key re-wrap");
+    assert_eq!(
+        plan.deltas.len(),
+        1,
+        "only the Rebind rides the old session"
+    );
+    assert_eq!(
+        plan.on_successor.len(),
+        1,
+        "the E2e content-key re-wrap waits for the new key's session"
+    );
 
-    // Apply the shipped deltas to a FRESH peer replica seeded from the pre-rotation state.
+    // Apply the shipped deltas, in order, to a FRESH peer replica seeded from the
+    // pre-rotation state.
     let mut peer = KbCollectionDoc::from_bytes(&kb_collections["kb-a"]).unwrap();
-    for d in &plan.deltas {
+    for d in plan.deltas.iter().chain(&plan.on_successor) {
         peer.apply_update(d).unwrap();
     }
     let nfp = new.fingerprint();
@@ -145,6 +156,10 @@ fn plan_member_rotation_rebinds_member_kbs_only() {
         plan.deltas.len(),
         1,
         "member rotation ships ONLY the Rebind (the owner re-wraps the key reactively)"
+    );
+    assert!(
+        plan.on_successor.is_empty(),
+        "and nothing on the new session: the owner re-wraps for a member"
     );
 
     // A fresh peer applying the Rebind aliases the successor to my Editor seat; I retire.

@@ -229,6 +229,15 @@ pub(crate) struct FixedTrustVerifier {
     expect_addr: String,
     expect_pubkey: mae_mcp::identity::PublicKey,
 }
+impl FixedTrustVerifier {
+    /// Trust exactly `pubkey` at `addr`.
+    pub(crate) fn new(addr: std::net::SocketAddr, pubkey: mae_mcp::identity::PublicKey) -> Self {
+        Self {
+            expect_addr: addr.to_string(),
+            expect_pubkey: pubkey,
+        }
+    }
+}
 impl HostKeyVerifier for FixedTrustVerifier {
     fn verify(&self, addr: &str, server_pub: &mae_mcp::identity::PublicKey) -> bool {
         addr == self.expect_addr && server_pub.to_bytes() == self.expect_pubkey.to_bytes()

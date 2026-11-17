@@ -155,15 +155,21 @@ if [ "$REMOVAL" = "1" ]; then
 fi
 
 # ADR-040 owner identity-rotation segments — empty unless MAE_E2E_ROTATE=1. After bob reads
-# CANARY1 as a member, the owner ROTATES its identity key (collab-rotate-identity → Rebind +
-# E2e content-key re-wrap to the NEW key, shipped owner-gated), then authors CANARY3 under the
-# NEW key. bob (still a member) must converge on CANARY3 — proving the new key is a valid owner
-# whose content the daemon accepts and a member decrypts, while the relay stays key-blind.
+# CANARY1 as a member, the owner ROTATES its identity key (collab-rotate-identity → Rebind on
+# the OLD key's session; once accepted, the editor reconnects under the NEW key and sends the
+# E2e content-key re-wrap there — the hub refuses the retired key's session everything). The
+# operator authorizes the new key out-of-band (§4, the background step below), then the owner
+# authors CANARY3 under the NEW key. bob (still a member) must converge on CANARY3 — proving
+# the new key is a valid owner whose content the daemon accepts and a member decrypts, while
+# the relay stays key-blind.
 ALICE_ROTATE=''
 BOB_ROTATE=''
 if [ "$ROTATE" = "1" ]; then
   ALICE_ROTATE="    (it-test \"waits for bob to read CANARY1\" (lambda () (wait-for-file \"$WORK/sync/bob-got1\" 60000)))
-    (it-test \"rotates the owner identity key (ADR-040)\" (lambda () (execute-ex \"collab-rotate-identity\") (sleep-ms 3500)))
+    (it-test \"rotates the owner identity key (ADR-040)\" (lambda () (execute-ex \"collab-rotate-identity\") (sleep-ms 2000)))
+    (it-test \"signals rotated\" (lambda () (write-file \"$WORK/sync/alice-rotated\" \"1\")))
+    (it-test \"waits for the operator to authorize the new key\" (lambda () (wait-for-file \"$WORK/sync/alice-authorized\" 60000)))
+    (it-test \"reconnects under the NEW key\" (lambda () (wait-connected 30000) (sleep-ms 2500)))
     (it-test \"edits the node UNDER THE ROTATED key\" (lambda () (execute-ex \"kb-update collabtest:alpha $CANARY3\") (sleep-ms 3000)))
     (it-test \"signals rotated-id\" (lambda () (write-file \"$WORK/sync/rotid\" \"1\")))"
   BOB_ROTATE="    (it-test \"signals read CANARY1\" (lambda () (write-file \"$WORK/sync/bob-got1\" \"1\")))
@@ -303,6 +309,20 @@ if [ "$RECOVER" = "1" ]; then
   RESTORE_PID=$!
   HARNESS_PIDS+=("$RESTORE_PID")
 fi
+# ADR-040 §4: the operator authorizes alice's NEW key once she has rotated — out-of-band, as
+# the transport trust root must be. Until then her reconnect under that key is refused.
+if [ "$ROTATE" = "1" ]; then
+  (
+    for _ in $(seq 1 160); do [ -f "$WORK/sync/alice-rotated" ] && break; sleep 0.5; done
+    AK2="$(alice "$MAE_BIN" --collab-identity 2>/dev/null | sed -n 's/.*public key:  mae-ed25519 //p' | awk '{print $1}')"
+    if [ -n "$AK2" ] && [ "$AK2" != "$AK" ]; then
+      srv "$MAE_DAEMON_BIN" authorize mae-ed25519 "$AK2" alice-rotated >/dev/null
+      printf '1\n' > "$WORK/sync/alice-new-key"
+    fi
+    printf '1\n' > "$WORK/sync/alice-authorized"
+  ) &
+  HARNESS_PIDS+=("$!")
+fi
 wait "$APID" 2>/dev/null || true
 wait "$BPID" 2>/dev/null || true
 [ -n "$CPID" ] && wait "$CPID" 2>/dev/null || true
@@ -393,6 +413,14 @@ if [ "$ROTATE" = "1" ]; then
   grep -qaF "rotate-identity: rotation shipped" "$WORK/alice.tap" \
     && echo "PASS(rotid): owner shipped an identity rotation" \
     || { echo "FAIL(rotid): owner never shipped a rotation (the handler didn't run)"; fail=1; }
+  # A NEW key was persisted (and authorized by the operator step) — else the run is vacuous.
+  [ -f "$WORK/sync/alice-new-key" ] \
+    && echo "PASS(rotid): the rotation persisted a NEW key, authorized out-of-band" \
+    || { echo "FAIL(rotid): no new key on disk after the rotation"; fail=1; }
+  # §4: the owner's self re-wrap rides the NEW key's session (the retired key's is refused it).
+  grep -qaF "rotate-identity: the new key's re-wrap accepted on its own session" "$WORK/alice.tap" \
+    && echo "PASS(rotid): the owner's re-wrap was accepted on the new key's session" \
+    || { echo "FAIL(rotid): the owner's re-wrap never landed on the new key's session"; fail=1; }
   # NON-VACUITY + NEW KEY IS A VALID AUTHOR: the post-rotation edit, signed by the NEW key,
   # landed on the daemon (>=2 alpha applies: CANARY1 under the old key + CANARY3 under the new).
   applied3=$(grep -c "node_update: applied.*collabtest:alpha" "$WORK/daemon.log" || true)

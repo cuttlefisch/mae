@@ -431,20 +431,20 @@ async fn an_owner_key_rotation_keeps_the_anchor() {
     expect_kind(&r, "not_member", "the retired key");
 }
 
-/// The owner rotates on an anchored, log-governed KB and keeps writing on the
-/// SAME connection — the editor's `collab-rotate-identity` (ADR-040 PR2b): the
-/// transport stays authenticated as the old key until the operator authorizes
-/// the new one and the editor reconnects (§4), while every op is now signed by
-/// the new key. Both write methods admit the successor's op there and apply it
-/// (`MAE_E2E_ROTATE=1`, whose member never saw the post-rotation edit). The
-/// retired key gains nothing of its own: an op it signs, or one another
-/// member signed, is still refused on that session.
+/// The attacker's test for ADR-040 §4 on the anchored, log-governed path: a
+/// rotation retires the old key, and a session still authenticated by it gets
+/// NOTHING — whoever signed what it carries. Its own op, the successor's op,
+/// another member's op, an op naming the successor without a signature, and
+/// the successor's self re-wrap are all refused there. That is why the editor
+/// reconnects under the new key once its `Rebind` is accepted, and sends the
+/// re-wrap on that session (`collab_bridge::finish_rotation`). The control: the
+/// SAME successor op and re-wrap are accepted on the new key's own session, so
+/// every refusal above is the retired session's and nothing else's.
 #[tokio::test]
-async fn the_rotated_owner_writes_on_its_open_session() {
+async fn a_retired_keys_session_gets_nothing_after_rotation() {
     for m in METHODS {
         let (mut h, k, new) = rotated_owner().await;
-        // The node exists first, so the epoch fence (which a node's first
-        // write skips) judges the successor's op.
+        // The node exists first, so a refusal is not a node's first write.
         let bob_epoch = h.epoch(&k.bob).await;
         let (upd, signed) = op(&k.bob, bob_epoch, "bob was here");
         let r = h
@@ -455,46 +455,101 @@ async fn the_rotated_owner_writes_on_its_open_session() {
             "bob seeds the node, {m:?}: {:?}",
             r.error
         );
+
         let epoch = h.epoch(&new).await;
-        let text = format!("rotated owner, old session, {m:?}");
-        let (upd, signed) = op(&new, epoch, &text);
+        let text = format!("rotated owner, {m:?}");
+        let (succ_upd, succ_signed) = op(&new, epoch, &text);
+        let (own_upd, own_signed) = op(&k.owner, 0, "the retired key's own op");
+        let (bob_upd, bob_signed) = op(&k.bob, h.epoch(&k.bob).await, "bob's op");
+        let mut unsigned = succ_signed.header_params();
+        unsigned.as_object_mut().unwrap().remove("sig");
+        let attempts = [
+            (
+                &succ_upd,
+                Some(succ_signed.header_params()),
+                "the successor's op",
+            ),
+            (
+                &own_upd,
+                Some(own_signed.header_params()),
+                "the retired key's own op",
+            ),
+            (&bob_upd, Some(bob_signed.header_params()), "bob's op"),
+            (&succ_upd, Some(unsigned), "unsigned, naming the successor"),
+            (&own_upd, None, "unsigned"),
+        ];
+        for (upd, header, ctx) in attempts {
+            let r = h.call(k.owner.mtls(), write(m, upd, header)).await;
+            expect_kind(
+                &r,
+                "not_member",
+                &format!("{ctx} on the retired session, {m:?}"),
+            );
+        }
+        let node_doc = mae_sync::kb_node_doc_name(KB, "concept:n");
+        let applied = |state: &[u8]| state.windows(text.len()).any(|w| w == text.as_bytes());
+        let (state, _) = h.store.encode_state_and_sv(&node_doc).await.expect("node");
+        assert!(
+            !applied(&state),
+            "nothing the retired session sent landed, {m:?}"
+        );
+
+        // The successor's own self re-wrap: refused on the retired session,
+        // accepted on the new key's session.
+        let rewrap = successor_rewrap(&h, &k, &new).await;
         let r = h
-            .call(k.owner.mtls(), write(m, &upd, Some(signed.header_params())))
+            .call(k.owner.mtls(), kb_collection_op_msg(KB, &rewrap))
+            .await;
+        assert!(
+            r.error.is_some(),
+            "the re-wrap on the retired session, {m:?}"
+        );
+        let before = load_coll(&h.store, KB).await.oplog_ops().len();
+        let r = h.call(new.mtls(), kb_collection_op_msg(KB, &rewrap)).await;
+        assert!(
+            r.error.is_none(),
+            "the re-wrap on the new session, {m:?}: {:?}",
+            r.error
+        );
+        let after = load_coll(&h.store, KB).await.oplog_ops().len();
+        assert_eq!(after, before + 1, "the re-wrap reached the log, {m:?}");
+
+        // Control: the successor's op itself is fine on its own session.
+        let r = h
+            .call(
+                new.mtls(),
+                write(m, &succ_upd, Some(succ_signed.header_params())),
+            )
             .await;
         assert!(
             r.error.is_none(),
-            "the successor's op, {m:?}: {:?}",
+            "the successor's op on its session, {m:?}: {:?}",
             r.error
         );
-        let node_doc = mae_sync::kb_node_doc_name(KB, "concept:n");
         let (state, _) = h.store.encode_state_and_sv(&node_doc).await.expect("node");
-        let applied = state.windows(text.len()).any(|w| w == text.as_bytes());
-        assert!(applied, "the successor's op is applied, {m:?}");
-
-        for (signer, ctx) in [(&k.owner, "the retired key's own op"), (&k.bob, "bob's op")] {
-            let ep = if signer.fp == k.bob.fp {
-                h.epoch(&k.bob).await
-            } else {
-                0
-            };
-            let (upd, signed) = op(signer, ep, ctx);
-            let r = h
-                .call(k.owner.mtls(), write(m, &upd, Some(signed.header_params())))
-                .await;
-            let ctx = format!("{ctx} on the retired key's session, {m:?}");
-            expect_kind(&r, "not_member", &ctx);
-        }
-        // Naming the successor without its signature carries nothing.
-        let (upd, signed) = op(&new, epoch, "unsigned, naming the successor");
-        let mut header = signed.header_params();
-        header.as_object_mut().unwrap().remove("sig");
-        let r = h.call(k.owner.mtls(), write(m, &upd, Some(header))).await;
-        expect_kind(
-            &r,
-            "not_member",
-            &format!("unsigned, naming the successor, {m:?}"),
-        );
+        assert!(applied(&state), "and it is applied, {m:?}");
     }
+}
+
+/// The rotated owner's self re-wrap of the KB's content key to its new wrap
+/// key — what `collab-rotate-identity` sends after its `Rebind` (ADR-040 §3).
+async fn successor_rewrap(h: &Hv, k: &Keys, new: &Key) -> Vec<u8> {
+    let key = mae_sync::content_crypto::ContentKey::generate();
+    let wrap_pk = mae_sync::content_crypto::wrap_public_for(&new.id.secret_bytes());
+    let wrapped = mae_sync::content_crypto::wrap_to_member(&key, &wrap_pk).expect("wrap");
+    let mut coll = load_coll(&h.store, KB).await;
+    let secret = new.id.secret_bytes();
+    coll.author_rebind_rewrap(
+        KB,
+        &new.fp,
+        &new.pk,
+        wrapped,
+        &k.owner.pk,
+        &new.fp,
+        &secret,
+        &new.pk,
+        1001,
+    )
 }
 
 /// [`hv`]'s KB, its signed log governing, after the owner rotated its key with

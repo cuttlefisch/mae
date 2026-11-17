@@ -428,15 +428,13 @@ pub(super) async fn handle_kb_node_update(
     // itself, reproducing its exact original semantics.
     let pre_coll = load_collection(doc_store, &kb_id).await.ok();
     adopt_owner_anchor(doc_store, &kb_id, pre_coll.as_ref(), auth_pubkey).await;
-    // The writer: the session's principal, or the successor its rotation
-    // signed in (ADR-040 §4) for an op that successor signed — `node_writer`.
-    let (decision, writer) = node_writer(
+    let decision = kb_access_with_coll(
         doc_store,
         &kb_id,
-        pre_coll.as_ref(),
-        (auth_principal, transport),
-        Some(params),
+        auth_principal,
         required_op,
+        transport,
+        pre_coll.as_ref(),
     )
     .await;
     if let Err(msg) = require_allow(decision, || format!("cannot edit KB '{kb_id}'")) {
@@ -451,7 +449,7 @@ pub(super) async fn handle_kb_node_update(
     // the op's epoch from the source `kb_access` just read (F2). The verified
     // header rides the broadcast, so a mesh peer re-verifies the same op (#255).
     // The header fields are this request's own top-level params.
-    let sender = OpSender::session(writer.as_deref(), transport);
+    let sender = OpSender::session(auth_principal, transport);
     let node = (kb_id.as_str(), node_id.as_str());
     let verified = verify_node_op(
         doc_store,
@@ -483,7 +481,7 @@ pub(super) async fn handle_kb_node_update(
     // merge to fence, and the owner's op is authored under its current epoch
     // anyway, so the fence is skipped for it (owner-gated above).
     if !reseal {
-        if let Some(principal) = writer.as_deref() {
+        if let Some(principal) = auth_principal {
             if let Err(reason) = enforce_epoch_fence_with_coll(
                 doc_store,
                 &kb_id,
