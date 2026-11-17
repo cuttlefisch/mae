@@ -73,6 +73,25 @@ ignore = [
     # rather than a reason to act on its own. Tracked in #700 — revisit on any
     # cozo bump (`cargo tree -i smartstring`).
     { id = "RUSTSEC-2026-0249", reason = "cozo transitive dep, no upstream release available; tracked in #700" },
+    # chrono declared unmaintained (chronotope/chrono#1768), and with it every
+    # crate that wraps it. All versions affected, no safe upgrade, and cozo
+    # 0.7.6 (the latest release) pulls each of them in both workspaces:
+    #   chrono          cozo -> chrono; cozo -> chrono-tz -> chrono
+    #   chrono-tz       cozo -> chrono-tz
+    #   chrono-tz-build cozo -> chrono-tz (build) -> chrono-tz-build
+    #   humantime       cozo -> env_logger 0.10 (default features) -> humantime
+    # Our own direct uses (chrono in mae and mae-ai; humantime in mae-daemon,
+    # RFC 3339 formatting only) are ours to move to jiff or time, but doing so
+    # would not clear any of these: cozo keeps them in the tree. Exit: a cozo
+    # release without them, or ADR-102's engine evaluation replacing cozo;
+    # then drop these four and `cargo tree -i chrono` / `-i humantime` should
+    # show only our own uses left to migrate. These are maintenance advisories:
+    # none names a vulnerability, but a future chrono bug will get no fix, and
+    # cozo's Datalog date functions parse query strings with it.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; cozo 0.7.6 (latest) depends on it, no upstream release without it; tracked in #700" },
+    { id = "RUSTSEC-2026-0555", reason = "chrono-tz unmaintained; cozo 0.7.6 (latest) depends on it, no upstream release without it; tracked in #700" },
+    { id = "RUSTSEC-2026-0559", reason = "chrono-tz-build unmaintained; build dep of chrono-tz via cozo 0.7.6, no upstream release without it; tracked in #700" },
+    { id = "RUSTSEC-2026-0542", reason = "humantime unmaintained; cozo 0.7.6 -> env_logger 0.10 (default features) -> humantime, no upstream release without it; tracked in #700" },
 ]
 
 [licenses]

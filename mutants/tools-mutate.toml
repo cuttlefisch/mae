@@ -243,3 +243,21 @@ filter = "test(same_length_mutants_back_to_back_are_each_rebuilt_and_judged)"
 file = "tools/mutate/src/run.rs"
 find = "        u8::from(!(clean && not_run.is_empty()))"
 replace = "        0"
+
+[[mutant]]
+id = "tools-mutate/output-matched-with-styling"
+runner = "tools-mutate"
+filter = "test(coloured_build_output_is_read_as_a_rebuild_and_judged)"
+[[mutant.edit]]
+file = "tools/mutate/src/exec.rs"
+find = "    let output = strip_ansi(&String::from_utf8_lossy(&fs::read(log).unwrap_or_default()));"
+replace = "    let output = String::from_utf8_lossy(&fs::read(log).unwrap_or_default()).into_owned();"
+
+[[mutant]]
+id = "tools-mutate/osc-sequence-kept"
+runner = "tools-mutate"
+filter = "test(styling_is_stripped_so_markers_match_coloured_output)"
+[[mutant.edit]]
+file = "tools/mutate/src/exec.rs"
+find = "            Some(']') => {"
+replace = "            Some('\\u{0}') => {"
