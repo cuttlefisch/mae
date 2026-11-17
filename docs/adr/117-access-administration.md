@@ -158,7 +158,9 @@ with `self_grant`, a change whose beneficiary is the caller:
   `kb/collection_op` update (the daemon already scans them for `Rebind`s);
 - review: adding oneself to a reviewer or approver list, naming oneself as a performer, reassigning
   an act to oneself (D8), and an agent ceiling or grant (ADR-113 C9) whose beneficiary is the
-  caller's own principal;
+  caller's own principal. A grant to the caller's own agent is not one: ADR-118 D1 makes its
+  beneficiary `agent:<id>`, a different principal whose reach is a subset of the caller's, and a
+  KB's agent ceiling is policy for every agent on the KB rather than a grant to anyone;
 - the beneficiary is compared as a principal, and a principal's `Rebind` predecessors and successors
   count as the same principal. A `Rebind` or a recovery-key registration is not a grant: it moves
   what the principal already holds and stays allowed.
