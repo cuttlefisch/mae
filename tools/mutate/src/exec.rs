@@ -95,13 +95,55 @@ pub fn run(cwd: &Path, argv: &[String], id: &str, log: &Path) -> Result<Done, St
     if signals::interrupted() {
         return Err(Stop::Interrupted);
     }
-    let output = String::from_utf8_lossy(&fs::read(log).unwrap_or_default()).into_owned();
+    // Markers are matched against the text, not the terminal styling: under
+    // `CARGO_TERM_COLOR=always` (which CI sets) cargo writes
+    // "\x1b[1m\x1b[92m   Compiling\x1b[0m fixture", which holds no
+    // "Compiling ", so every mutant read as "recompiled nothing". The log
+    // keeps the bytes as written.
+    let output = strip_ansi(&String::from_utf8_lossy(&fs::read(log).unwrap_or_default()));
     Ok(Done {
         success: status.success(),
         secs: start.elapsed().as_secs_f64(),
         output,
         log: log.to_path_buf(),
     })
+}
+
+/// The text of a command's output with ANSI escape sequences removed: CSI
+/// (`ESC [ ... final byte`: colours and styles), OSC (`ESC ] ... BEL` or
+/// `ESC ] ... ESC \`: hyperlinks, titles), and any other two-character
+/// `ESC x`.
+pub fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                for c in chars.by_ref() {
+                    if ('\x40'..='\x7e').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                while let Some(c) = chars.next() {
+                    if c == '\x07' {
+                        break;
+                    }
+                    if c == '\x1b' && chars.peek() == Some(&'\\') {
+                        chars.next();
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Sum of every `{n}` matched by the patterns, e.g. `"{n} tests run"` or
@@ -166,6 +208,26 @@ mod tests {
         let cargo = s(&["running {n} test"]);
         let out = "running 3 tests\n...\nrunning 0 tests\nrunning 1 test\n";
         assert_eq!(count_tests(&cargo, out), 4);
+    }
+
+    #[test]
+    fn styling_is_stripped_so_markers_match_coloured_output() {
+        // As cargo and nextest write them under CARGO_TERM_COLOR=always.
+        let cargo = "\x1b[1m\x1b[92m   Compiling\x1b[0m fixture v0.1.0 (/x)\n";
+        assert!(!cargo.contains("Compiling "), "no plain marker as written");
+        assert_eq!(strip_ansi(cargo), "   Compiling fixture v0.1.0 (/x)\n");
+        let nextest = "\x1b[32;1m     Summary\x1b[0m [ 0.01s] \x1b[1m12\x1b[0m tests run";
+        let n = s(&["{n} tests run"]);
+        assert_eq!(count_tests(&n, nextest), 0, "a styled count is not read");
+        assert_eq!(count_tests(&n, &strip_ansi(nextest)), 12);
+        let links = "\x1b]8;;file:///x\x1b\\lib.rs\x1b]8;;\x1b\\ and \x1b]8;;f\x07a\x1b]8;;\x07";
+        assert_eq!(strip_ansi(links), "lib.rs and a");
+        let plain = "é running 3 tests [ok] ~\n";
+        assert_eq!(
+            strip_ansi(plain),
+            plain,
+            "text without escapes is unchanged"
+        );
     }
 
     #[test]
