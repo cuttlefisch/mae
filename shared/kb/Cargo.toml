@@ -1,7 +1,7 @@
 [package]
 name = "mae-kb"
 description = "Knowledge base layer (graph store, links)"
-version = "0.14.161"
+version = "0.14.163"
 edition = "2021"
 license = "GPL-3.0-or-later"
 

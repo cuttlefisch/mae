@@ -579,8 +579,9 @@ mod tests {
     /// `initialize` and `$/ping` with a bare JSON-RPC result (ignores
     /// `notifications/initialized`, which has no response).
     #[cfg(unix)]
-    async fn serve_one_handshake(path: String) {
-        let listener = UnixListener::bind(&path).unwrap();
+    /// Takes a listener the caller already bound, so a dial right after the
+    /// spawn queues in its backlog: no "time to bind" wait exists to get wrong.
+    async fn serve_one_handshake(listener: UnixListener) {
         let (stream, _) = listener.accept().await.unwrap();
         let mut stream = BufReader::new(stream);
         loop {
@@ -607,9 +608,7 @@ mod tests {
     async fn connect_and_verify_succeeds_against_a_healthy_handshake() {
         let dir = tempfile::tempdir().unwrap();
         let path = test_socket_path(&dir, "healthy.sock");
-        tokio::spawn(serve_one_handshake(path.clone()));
-        // Give the listener a moment to bind before dialing.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::spawn(serve_one_handshake(UnixListener::bind(&path).unwrap()));
 
         let result = connect_and_verify(&path).await;
         assert!(
@@ -633,7 +632,7 @@ mod tests {
             let (_stream, _) = listener.accept().await.unwrap();
             std::future::pending::<()>().await;
         });
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // No wait: the listener was bound above, so the dial queues in its backlog.
 
         let result = connect_and_verify(&path).await;
         assert!(
