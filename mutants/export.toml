@@ -56,7 +56,11 @@ replace = '''.filter(|k| !in_comment_subtree(k) || true)'''
 id = "export/org-comment-subtree-rendered"
 runner = "editor"
 targets = ["-p", "mae-export", "--test", "export_leaks"]
-filter = "test(noexport_and_comment_content_is_absent_in_both_formats)"
+# The whole-document render cannot catch this: mae-org deletes COMMENT
+# subtrees from the text before it reads regions (org-export--delete-comment-trees),
+# so this branch is reached only through the source semantics
+# `export_subtree` reads to tell a hidden heading from a shown one.
+filter = "test(subtree_export_refuses_a_hidden_heading)"
 ref = "ADR-112 D3"
 [[mutant.edit]]
 file = "shared/org/src/semantics/regions.rs"

@@ -253,6 +253,10 @@ fn src_block_exports_none_code_results_both() {
         ("code", true, false),
         ("results", false, true),
         ("both", true, true),
+        // The last of the four words in a value wins, so this hides the
+        // block: a writer who reads only the first word publishes its code.
+        ("code none", false, false),
+        ("none results", false, true),
     ];
     for (exports, code, results) in cases {
         let src = block(exports, exports);
