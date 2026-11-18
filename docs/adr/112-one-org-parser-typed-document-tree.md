@@ -278,4 +278,17 @@ layer on it becomes the cheaper path.
 
 The Emacs oracle (byte spans for 23 element types plus links) runs over a 339-file public corpus with no
 failures; the evaluation harness, adversarial set and scaling probes from the research exist outside
-the repo and are the seed for O1's harness. No `mae-org` code exists yet.
+the repo and are the seed for O1's harness.
+
+*Updated 2026-11-18: the sentence that stood here, "No `mae-org` code exists yet", had been false for
+weeks.*
+- **`mae-org` exists** in `shared/org`, at version 0.9.0, on its own version line. It has:
+  - the lossless tree and typed views;
+  - semantics;
+  - the O3 renderers and highlights;
+  - a conformance harness (`shared/org/conformance`, including the divergence register).
+- **`shared/org-wasm`** is its WASM facade.
+- **Its consumers today** are the daemon (`daemon/Cargo.toml`, used in `daemon/src/seed/split.rs`) and
+  the WASM facade.
+- **O4 is not done.** No editor crate depends on `mae-org`. KB ingest, node-buffer saves, agenda,
+  export, the highlighter and read mode still use their own parsers.
