@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.168] - 2026-11-18
+
+
+
+
+### Bug Fixes
+
+- *(daemon)* A bearer token with no audience is refused (ADR-052) ([6a648fb](https://github.com/cuttlefisch/mae/commit/6a648fba45b833492ba14abf51af297745f6897f))
+
+### Testing
+
+- *(daemon)* Null, [] and "" audiences are refused as no audience ([6a85454](https://github.com/cuttlefisch/mae/commit/6a85454657910a07dcd815fd6e436fd9b8ef25cd))
+
 ## [0.14.167] - 2026-11-18
 
 
@@ -27,6 +40,10 @@ All notable changes to this project will be documented in this file.
 ### Documentation
 
 - *(daemon)* Name the rebind-mirror exemption and the permissive-join cost ([05fc5c7](https://github.com/cuttlefisch/mae/commit/05fc5c70e4fc32728a56614e1239d0f7db706e88))
+
+### Miscellaneous
+
+- Bump version to 0.14.167 ([1fe5aa0](https://github.com/cuttlefisch/mae/commit/1fe5aa0b16065b032413ad98c44e371cb78bb474))
 
 ## [0.14.166] - 2026-11-17
 
