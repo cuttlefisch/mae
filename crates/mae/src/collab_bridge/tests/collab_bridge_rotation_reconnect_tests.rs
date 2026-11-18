@@ -38,6 +38,117 @@ enum Seen {
     },
 }
 
+/// The fake hub's state across connections: the KB replica, the one key it authorizes,
+/// and where it reports what it saw.
+struct RotatingHub {
+    replica: KbCollectionDoc,
+    allowed: PublicKey,
+    refuse_rebind: bool,
+    seen_tx: mpsc::Sender<Seen>,
+}
+
+fn ok_reply(id: &serde_json::Value, result: serde_json::Value) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({"jsonrpc": "2.0", "id": id, "result": result})).unwrap()
+}
+
+/// The daemon's refusal of a `Rebind` it will not apply, as the daemon sends it: a kind the
+/// client treats as final.
+fn rebind_refusal(id: &serde_json::Value) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({"jsonrpc": "2.0", "id": id,
+        "error": {"code": -32603, "message": "refused (test)",
+                  "data": {"kind": "role_forbidden"}}}))
+    .unwrap()
+}
+
+impl RotatingHub {
+    /// Apply one `kb/collection_op` (unless it is a `Rebind` this hub refuses), report each
+    /// new op, and follow an accepted `Rebind` to its successor key.
+    async fn collection_op(&mut self, conn: usize, req: &serde_json::Value) -> Vec<u8> {
+        let b64 = req["params"]["update"].as_str().unwrap();
+        let delta = mae_sync::encoding::base64_to_update(b64).unwrap();
+        // The op log is not kept in arrival order: what is new is what the replica did not
+        // hold before.
+        let before: std::collections::HashSet<String> = self
+            .replica
+            .oplog_ops()
+            .iter()
+            .map(|o| o.chain_hash())
+            .collect();
+        let mut probe = KbCollectionDoc::from_bytes(&self.replica.encode_state()).unwrap();
+        probe.apply_update(&delta).unwrap();
+        let new_ops: Vec<_> = probe
+            .oplog_ops()
+            .into_iter()
+            .filter(|o| !before.contains(&o.chain_hash()))
+            .collect();
+        let rebind = new_ops
+            .iter()
+            .any(|o| o.op.action == MembershipAction::Rebind);
+        let refused = rebind && self.refuse_rebind;
+        if !refused {
+            self.replica = probe;
+        }
+        for op in new_ops {
+            let successor = op.op.new_pubkey.filter(|_| !refused);
+            if let (MembershipAction::Rebind, Some(pk)) = (op.op.action, successor) {
+                self.allowed = PublicKey::from_bytes(&pk, None).unwrap();
+            }
+            let seen = Seen::Op {
+                conn,
+                action: op.op.action,
+                author: op.op.author.clone(),
+                wraps: op.op.wrapped_key.is_some(),
+            };
+            let _ = self.seen_tx.send(seen).await;
+        }
+        if refused {
+            rebind_refusal(&req["id"])
+        } else {
+            ok_reply(&req["id"], serde_json::json!({"ok": true}))
+        }
+    }
+
+    /// Serve one connection: authenticate it against the one authorized key, then answer
+    /// `initialize` and every `kb/collection_op` until it closes. `false`: the handshake was
+    /// refused, and the connection is not numbered.
+    async fn serve(
+        &mut self,
+        server: &Arc<Identity>,
+        stream: tokio::net::TcpStream,
+        conn: usize,
+    ) -> bool {
+        let (r, mut w) = stream.into_split();
+        let mut sr = BufReader::new(r);
+        let tmp = tempfile::tempdir().unwrap();
+        let mut authorized = AuthorizedKeys::load(&tmp.path().join("authorized_keys"));
+        authorized.add(self.allowed.clone()).unwrap();
+        let auth = KeyAuth::server(server.clone(), Arc::new(authorized));
+        let Ok(result) = auth.server_handshake(&mut sr, &mut w).await else {
+            return false; // a key this hub does not authorize: refused, as a daemon would
+        };
+        let fp = result.peer_identity().fingerprint;
+        let _ = self.seen_tx.send(Seen::Authenticated { conn, fp }).await;
+        while let Ok(Some(text)) = mae_mcp::read_message(&mut sr).await {
+            let req: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let body = match req["method"].as_str() {
+                Some("initialize") => ok_reply(
+                    &req["id"],
+                    serde_json::json!({"serverInfo": {"connections": 1}}),
+                ),
+                Some("kb/collection_op") => self.collection_op(conn, &req).await,
+                _ => continue,
+            };
+            if mae_mcp::write_framed(&mut w, &body, Duration::from_secs(2))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+        true
+    }
+}
+
 /// A hub that authorizes `first` until it accepts a `Rebind` naming a successor, then only
 /// the successor. Answers `initialize` and every `kb/collection_op` — ok, or, for a `Rebind`
 /// when `refuse_rebind`, an error — and ignores the rest.
@@ -51,97 +162,18 @@ async fn spawn_rotating_hub(
     let addr = listener.local_addr().unwrap();
     let (seen_tx, seen_rx) = mpsc::channel(64);
     let server = Arc::new(server);
+    let mut hub = RotatingHub {
+        replica: KbCollectionDoc::from_bytes(&seed).unwrap(),
+        allowed: first,
+        refuse_rebind,
+        seen_tx,
+    };
     tokio::spawn(async move {
-        let mut replica = KbCollectionDoc::from_bytes(&seed).unwrap();
-        let mut allowed = first;
         let mut conn = 0usize;
-        loop {
-            let Ok((stream, _)) = listener.accept().await else {
-                return;
-            };
-            let (r, mut w) = stream.into_split();
-            let mut sr = BufReader::new(r);
-            let tmp = tempfile::tempdir().unwrap();
-            let mut authorized = AuthorizedKeys::load(&tmp.path().join("authorized_keys"));
-            authorized.add(allowed.clone()).unwrap();
-            let auth = KeyAuth::server(server.clone(), Arc::new(authorized));
-            let Ok(result) = auth.server_handshake(&mut sr, &mut w).await else {
-                continue; // a key this hub does not authorize: refused, as a daemon would
-            };
-            let fp = result.peer_identity().fingerprint;
-            let _ = seen_tx.send(Seen::Authenticated { conn, fp }).await;
-            let reply = |id: &serde_json::Value, result: serde_json::Value| {
-                serde_json::to_vec(
-                    &serde_json::json!({"jsonrpc": "2.0", "id": id, "result": result}),
-                )
-                .unwrap()
-            };
-            while let Ok(Some(text)) = mae_mcp::read_message(&mut sr).await {
-                let req: serde_json::Value = serde_json::from_str(&text).unwrap();
-                let body = match req["method"].as_str() {
-                    Some("initialize") => reply(
-                        &req["id"],
-                        serde_json::json!({"serverInfo": {"connections": 1}}),
-                    ),
-                    Some("kb/collection_op") => {
-                        let b64 = req["params"]["update"].as_str().unwrap();
-                        let delta = mae_sync::encoding::base64_to_update(b64).unwrap();
-                        // The op log is not kept in arrival order: what is new is what the
-                        // replica did not hold before.
-                        let before: std::collections::HashSet<String> =
-                            replica.oplog_ops().iter().map(|o| o.chain_hash()).collect();
-                        let mut probe =
-                            KbCollectionDoc::from_bytes(&replica.encode_state()).unwrap();
-                        probe.apply_update(&delta).unwrap();
-                        let new_ops: Vec<_> = probe
-                            .oplog_ops()
-                            .into_iter()
-                            .filter(|o| !before.contains(&o.chain_hash()))
-                            .collect();
-                        let rebind = new_ops
-                            .iter()
-                            .any(|o| o.op.action == MembershipAction::Rebind);
-                        let refused = rebind && refuse_rebind;
-                        if !refused {
-                            replica = probe;
-                        }
-                        for op in new_ops {
-                            if op.op.action == MembershipAction::Rebind && !refused {
-                                if let Some(pk) = op.op.new_pubkey {
-                                    allowed = PublicKey::from_bytes(&pk, None).unwrap();
-                                }
-                            }
-                            let seen = Seen::Op {
-                                conn,
-                                action: op.op.action,
-                                author: op.op.author.clone(),
-                                wraps: op.op.wrapped_key.is_some(),
-                            };
-                            let _ = seen_tx.send(seen).await;
-                        }
-                        // The daemon's refusal of a `Rebind` it will not apply, as the
-                        // daemon sends it: a kind the client treats as final.
-                        if refused {
-                            serde_json::to_vec(
-                                &serde_json::json!({"jsonrpc": "2.0", "id": req["id"],
-                                "error": {"code": -32603, "message": "refused (test)",
-                                          "data": {"kind": "role_forbidden"}}}),
-                            )
-                            .unwrap()
-                        } else {
-                            reply(&req["id"], serde_json::json!({"ok": true}))
-                        }
-                    }
-                    _ => continue,
-                };
-                if mae_mcp::write_framed(&mut w, &body, Duration::from_secs(2))
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
+        while let Ok((stream, _)) = listener.accept().await {
+            if hub.serve(&server, stream, conn).await {
+                conn += 1;
             }
-            conn += 1;
         }
     });
     (addr, seen_rx)

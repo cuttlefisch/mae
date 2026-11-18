@@ -494,25 +494,7 @@ async fn a_retired_keys_session_gets_nothing_after_rotation() {
             "nothing the retired session sent landed, {m:?}"
         );
 
-        // The successor's own self re-wrap: refused on the retired session,
-        // accepted on the new key's session.
-        let rewrap = successor_rewrap(&h, &k, &new).await;
-        let r = h
-            .call(k.owner.mtls(), kb_collection_op_msg(KB, &rewrap))
-            .await;
-        assert!(
-            r.error.is_some(),
-            "the re-wrap on the retired session, {m:?}"
-        );
-        let before = load_coll(&h.store, KB).await.oplog_ops().len();
-        let r = h.call(new.mtls(), kb_collection_op_msg(KB, &rewrap)).await;
-        assert!(
-            r.error.is_none(),
-            "the re-wrap on the new session, {m:?}: {:?}",
-            r.error
-        );
-        let after = load_coll(&h.store, KB).await.oplog_ops().len();
-        assert_eq!(after, before + 1, "the re-wrap reached the log, {m:?}");
+        rewrap_lands_only_on_the_new_session(&mut h, &k, &new, m).await;
 
         // Control: the successor's op itself is fine on its own session.
         let r = h
@@ -529,6 +511,28 @@ async fn a_retired_keys_session_gets_nothing_after_rotation() {
         let (state, _) = h.store.encode_state_and_sv(&node_doc).await.expect("node");
         assert!(applied(&state), "and it is applied, {m:?}");
     }
+}
+
+/// The successor's own self re-wrap: refused on the retired session, accepted
+/// on the new key's session, where it reaches the log.
+async fn rewrap_lands_only_on_the_new_session(h: &mut Hv, k: &Keys, new: &Key, m: Method) {
+    let rewrap = successor_rewrap(h, k, new).await;
+    let r = h
+        .call(k.owner.mtls(), kb_collection_op_msg(KB, &rewrap))
+        .await;
+    assert!(
+        r.error.is_some(),
+        "the re-wrap on the retired session, {m:?}"
+    );
+    let before = load_coll(&h.store, KB).await.oplog_ops().len();
+    let r = h.call(new.mtls(), kb_collection_op_msg(KB, &rewrap)).await;
+    assert!(
+        r.error.is_none(),
+        "the re-wrap on the new session, {m:?}: {:?}",
+        r.error
+    );
+    let after = load_coll(&h.store, KB).await.oplog_ops().len();
+    assert_eq!(after, before + 1, "the re-wrap reached the log, {m:?}");
 }
 
 /// The rotated owner's self re-wrap of the KB's content key to its new wrap

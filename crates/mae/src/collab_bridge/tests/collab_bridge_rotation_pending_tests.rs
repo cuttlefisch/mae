@@ -146,6 +146,33 @@ impl Hub {
         }
     }
 
+    /// Add `pk` to the transport allow-list, once.
+    fn authorize(&mut self, pk: PublicKey) {
+        if !self
+            .authorized
+            .iter()
+            .any(|k| k.to_bytes() == pk.to_bytes())
+        {
+            self.authorized.push(pk);
+        }
+    }
+
+    /// An applied `Rebind`: the seat moves to the successor, the retired key is revoked at
+    /// the transport if this hub does that, and the successor authorized if it does that.
+    fn adopt_rebind(&mut self, kb: &str, op: &mae_sync::membership::MembershipOp) {
+        let m = self.members.entry(kb.to_string()).or_default();
+        m.remove(&op.author);
+        m.insert(op.subject.clone());
+        let pk = PublicKey::from_bytes(&op.new_pubkey.unwrap(), None).unwrap();
+        if self.revoke_retired {
+            self.authorized.retain(|k| k.fingerprint() != op.author);
+        }
+        if self.authorize_successor {
+            self.authorize(pk.clone());
+        }
+        self.successors.push(pk);
+    }
+
     fn collection_op(
         &mut self,
         req: &serde_json::Value,
@@ -185,36 +212,13 @@ impl Hub {
             Act::Answer
         };
         if let (true, Some(o)) = (self.authorize_on_sight, &rebind) {
-            let pk = PublicKey::from_bytes(&o.op.new_pubkey.unwrap(), None).unwrap();
-            if !self
-                .authorized
-                .iter()
-                .any(|k| k.to_bytes() == pk.to_bytes())
-            {
-                self.authorized.push(pk);
-            }
+            self.authorize(PublicKey::from_bytes(&o.op.new_pubkey.unwrap(), None).unwrap());
         }
         let apply = matches!(act, Act::Answer | Act::ApplyThenDrop | Act::ApplyThenFail);
         if apply {
             self.replicas.insert(kb.clone(), probe);
             if let Some(o) = &rebind {
-                let m = self.members.entry(kb.clone()).or_default();
-                m.remove(&o.op.author);
-                m.insert(o.op.subject.clone());
-                let pk = PublicKey::from_bytes(&o.op.new_pubkey.unwrap(), None).unwrap();
-                if self.revoke_retired {
-                    let gone = o.op.author.clone();
-                    self.authorized.retain(|k| k.fingerprint() != gone);
-                }
-                if self.authorize_successor
-                    && !self
-                        .authorized
-                        .iter()
-                        .any(|k| k.to_bytes() == pk.to_bytes())
-                {
-                    self.authorized.push(pk.clone());
-                }
-                self.successors.push(pk);
+                self.adopt_rebind(&kb, &o.op);
             }
         }
         let reply = match act {
@@ -467,6 +471,33 @@ fn rebind_requests<'a>(all: &'a [Seen], kb: &str) -> Vec<&'a Seen> {
         .collect()
 }
 
+/// Everything already queued from the hub, without waiting.
+fn drain(seen: &mut mpsc::Receiver<Seen>) -> Vec<Seen> {
+    let mut all = Vec::new();
+    while let Ok(s) = seen.try_recv() {
+        all.push(s);
+    }
+    all
+}
+
+/// The new key the `Rebind` in the last of `first` binds, read off that request applied to
+/// the KB's `seed` replica.
+fn rebind_subject(seed: &[u8], first: &[Seen]) -> String {
+    let Some(Seen::Request { update, .. }) = first.last() else {
+        unreachable!()
+    };
+    let delta = mae_sync::encoding::base64_to_update(update).unwrap();
+    let mut probe = KbCollectionDoc::from_bytes(seed).unwrap();
+    probe.apply_update(&delta).unwrap();
+    probe
+        .oplog_ops()
+        .into_iter()
+        .find(|o| o.op.action == MembershipAction::Rebind)
+        .unwrap()
+        .op
+        .subject
+}
+
 fn interrupted(e: &CollabEvent) -> bool {
     matches!(e, CollabEvent::Error { message } if message.contains("Identity rotation interrupted"))
 }
@@ -687,19 +718,7 @@ async fn a_lost_rebind_refused_on_resend_and_never_applied_changes_nothing() {
     }
     cmd_tx.send(CollabCommand::RotateIdentity).await.unwrap();
     let first = seen_until(&mut seen, carries_rebind).await;
-    let Some(Seen::Request { update, .. }) = first.last() else {
-        unreachable!()
-    };
-    let delta = mae_sync::encoding::base64_to_update(update).unwrap();
-    let mut probe = KbCollectionDoc::from_bytes(&seeds[0].1).unwrap();
-    probe.apply_update(&delta).unwrap();
-    let new_fp = probe
-        .oplog_ops()
-        .into_iter()
-        .find(|o| o.op.action == MembershipAction::Rebind)
-        .unwrap()
-        .op
-        .subject;
+    let new_fp = rebind_subject(&seeds[0].1, &first);
 
     let ev = event_until(&mut evt_rx, |e| {
         rotated(e)
@@ -711,10 +730,7 @@ async fn a_lost_rebind_refused_on_resend_and_never_applied_changes_nothing() {
         other => panic!("a never-applied Rebind rotated the identity: {other:?}"),
     }
     // Everything the hub saw before the client's verdict is already queued.
-    let mut all = Vec::new();
-    while let Ok(s) = seen.try_recv() {
-        all.push(s);
-    }
+    let all = drain(&mut seen);
     // The deciding question was asked after the refused re-send.
     let resend = all
         .iter()
@@ -951,10 +967,7 @@ async fn verdict_after(
     })
     .await;
     // Everything the hub saw before the client's verdict is already queued.
-    let mut all = Vec::new();
-    while let Ok(s) = seen.try_recv() {
-        all.push(s);
-    }
+    let all = drain(&mut seen);
     assert!(
         hub.lock().unwrap().member("kb-a", &old.fingerprint()),
         "the KB still has the old key"

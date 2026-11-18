@@ -565,42 +565,10 @@ fn finish(
         .cloned()
         .collect();
     if applied.is_empty() && !rot.record.kbs.is_empty() {
-        if let Err(e) = record::remove(dir) {
-            warn!(error = %e, "rotate-identity: could not remove a refused rotation's record");
-        }
-        warn!(refused = ?refused, "rotate-identity: the daemon accepted no Rebind — identity NOT rotated");
-        try_send_evt(
-            evt_tx,
-            CollabEvent::Error {
-                message: format!(
-                    "Identity rotation failed — the daemon accepted no Rebind (refused: {}). Your identity was NOT changed.",
-                    refused.join(", ")
-                ),
-            },
-        );
+        report_none_accepted(dir, &refused, evt_tx);
         return false;
     }
-    // Adopt: later ops chain on the rotated state, and the new key derives its content key.
-    for k in &applied {
-        let deltas = k.rebind.iter().chain(&k.on_successor);
-        let decoded: Vec<Vec<u8>> = deltas
-            .filter_map(|b| mae_sync::encoding::base64_to_update(b).ok())
-            .collect();
-        let Some(mut coll) = kb_collections
-            .get(&k.kb_id)
-            .and_then(|b| mae_sync::kb::KbCollectionDoc::from_bytes(b).ok())
-        else {
-            warn!(kb = %k.kb_id, "rotate-identity: no local replica to adopt the rotation into");
-            continue;
-        };
-        for d in &decoded {
-            let _ = coll.apply_update(d);
-        }
-        let state = coll.encode_state();
-        // B2: persist so the rotated op-log survives a restart.
-        persist_collection(&k.kb_id, &state);
-        kb_collections.insert(k.kb_id.clone(), state);
-    }
+    adopt_applied(&applied, kb_collections);
     // Commit: from here the identity file holds the new key.
     if let Err(e) = rot.new_id.save(dir) {
         warn!(error = %e, "rotate-identity: could not save the new key; still pending");
@@ -635,9 +603,61 @@ fn finish(
     if !rot.outbox.is_empty() {
         put_back(transport, rot);
     }
-    info!(rotated = applied.len(), refused = refused.len(), new_fp = %new_fp, "rotate-identity: rotation shipped, and committed to the new key");
+    report_rotated(applied.len(), &refused, &new_fp, evt_tx);
+    true
+}
+
+/// No KB accepted the Rebind: nothing changed, so the record goes.
+fn report_none_accepted(dir: &Path, refused: &[String], evt_tx: &mpsc::Sender<CollabEvent>) {
+    if let Err(e) = record::remove(dir) {
+        warn!(error = %e, "rotate-identity: could not remove a refused rotation's record");
+    }
+    warn!(refused = ?refused, "rotate-identity: the daemon accepted no Rebind — identity NOT rotated");
+    try_send_evt(
+        evt_tx,
+        CollabEvent::Error {
+            message: format!(
+                "Identity rotation failed — the daemon accepted no Rebind (refused: {}). Your identity was NOT changed.",
+                refused.join(", ")
+            ),
+        },
+    );
+}
+
+/// Adopt: later ops chain on the rotated state, and the new key derives its content key.
+fn adopt_applied(applied: &[KbEntry], kb_collections: &mut HashMap<String, Vec<u8>>) {
+    for k in applied {
+        let deltas = k.rebind.iter().chain(&k.on_successor);
+        let decoded: Vec<Vec<u8>> = deltas
+            .filter_map(|b| mae_sync::encoding::base64_to_update(b).ok())
+            .collect();
+        let Some(mut coll) = kb_collections
+            .get(&k.kb_id)
+            .and_then(|b| mae_sync::kb::KbCollectionDoc::from_bytes(b).ok())
+        else {
+            warn!(kb = %k.kb_id, "rotate-identity: no local replica to adopt the rotation into");
+            continue;
+        };
+        for d in &decoded {
+            let _ = coll.apply_update(d);
+        }
+        let state = coll.encode_state();
+        // B2: persist so the rotated op-log survives a restart.
+        persist_collection(&k.kb_id, &state);
+        kb_collections.insert(k.kb_id.clone(), state);
+    }
+}
+
+/// The rotation is committed: tell the user what changed and what did not.
+fn report_rotated(
+    applied: usize,
+    refused: &[String],
+    new_fp: &str,
+    evt_tx: &mpsc::Sender<CollabEvent>,
+) {
+    info!(rotated = applied, refused = refused.len(), new_fp = %new_fp, "rotate-identity: rotation shipped, and committed to the new key");
     let mut lines = vec![
-        format!("Identity rotated across {} KB(s).", applied.len()),
+        format!("Identity rotated across {applied} KB(s)."),
         format!("New fingerprint: {new_fp}"),
         "Reconnecting under the new key. The daemon refuses it until its operator authorizes it (`mae-daemon authorize`); the reconnect retries until then.".to_string(),
         // The new key has a new ADR-023 client-id, so the FIRST edit to an existing node
@@ -652,7 +672,6 @@ fn finish(
         ));
     }
     try_send_evt(evt_tx, CollabEvent::StatusReport { lines });
-    true
 }
 
 /// Send what only the new key's session may send, once it is the session. A write that
