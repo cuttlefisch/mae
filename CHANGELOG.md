@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.167] - 2026-11-18
+
+
+
+
+### Features
+
+- *(daemon)* The hub verifies every signed content op (ADR-036 Am. 1, #727) ([1fc38da](https://github.com/cuttlefisch/mae/commit/1fc38daa643defa74caf83252b7ca9f4203915e4))
+
+### Bug Fixes
+
+- *(daemon)* Close the hub-verify review findings (ADR-036 Am. 1, #727) ([f947d19](https://github.com/cuttlefisch/mae/commit/f947d190d6088d1d5d0fd30bd2eee83f9de7b0cd))
+- *(daemon)* A rotated owner's open session writes as its successor (ADR-040 §4, #727) ([d41c414](https://github.com/cuttlefisch/mae/commit/d41c4145bae0bec167672fca19b6d4c36c9f9c52))
+- *(collab)* Reconnect under the new key after a rotation, not a hub exception (ADR-040 §4, #727) ([eac76a4](https://github.com/cuttlefisch/mae/commit/eac76a4a5075e2cc0c92374209a36376186f204c))
+- *(collab)* Keep a rotation's new key until the daemon's verdict is known (ADR-040 §4, #727) ([6de3f8b](https://github.com/cuttlefisch/mae/commit/6de3f8bcc907d0b94bf79320bb1f26bda49527e6))
+- *(collab)* Never write over a pending rotation, and settle ambiguous Rebind errors by asking (ADR-040 §4, #727) ([5712468](https://github.com/cuttlefisch/mae/commit/571246875dc3ac331b1baed51302c8f472190852))
+- *(daemon)* Doctor never opens the store as a writer; kb anchor lists ([8068597](https://github.com/cuttlefisch/mae/commit/8068597729dc6069bdc9c19a03230d66d1eb07fc))
+
+### Refactor
+
+- *(collab)* Split the rotation's long functions under the ratchet ([34284d2](https://github.com/cuttlefisch/mae/commit/34284d21a41704dbbe58b897b5a8d43ed3d0956e))
+
+### Documentation
+
+- *(daemon)* Name the rebind-mirror exemption and the permissive-join cost ([05fc5c7](https://github.com/cuttlefisch/mae/commit/05fc5c70e4fc32728a56614e1239d0f7db706e88))
+
 ## [0.14.166] - 2026-11-17
 
 
@@ -10,6 +36,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - *(daemon)* Bump jsonwebtoken to 12 and five patch dependencies ([dfa0a3d](https://github.com/cuttlefisch/mae/commit/dfa0a3dfd54a4598f1f8667698a15fc4ec123739))
+- Bump version to 0.14.166 ([7cbe307](https://github.com/cuttlefisch/mae/commit/7cbe3077d2082bf0aeceb6839ec863cd1bd33277))
 
 ## [0.14.165] - 2026-11-17
 
@@ -89,9 +116,9 @@ All notable changes to this project will be documented in this file.
 
 ### Documentation
 
-- *(adr-022)* Amendment 1 — a whole-KB transfer is paged, both ways ([536876c](https://github.com/cuttlefisch/mae/commit/536876c48dd14a9c95c52cb89ed6259071d5c3ae))
 - *(adr)* The ADR-113/115 build sequence, ADR-117, ADR-111 Am. 1, ADR-118 ([0ab9100](https://github.com/cuttlefisch/mae/commit/0ab910069b9c5848db8b85075f6a2b16d0c08cfe))
 - *(adr)* Agent renew happens in place; an agent grant is not a self-grant ([0f2b2a3](https://github.com/cuttlefisch/mae/commit/0f2b2a3ca9988640d28274bcabcbb73bf3c3c1b4))
+- *(adr-022)* Amendment 1 — a whole-KB transfer is paged, both ways ([536876c](https://github.com/cuttlefisch/mae/commit/536876c48dd14a9c95c52cb89ed6259071d5c3ae))
 
 ### Testing
 
