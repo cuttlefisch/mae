@@ -152,6 +152,28 @@ fn a_header_transclusion_is_the_files_but_not_in_its_body() {
     );
 }
 
+/// Text outside every node (no file `:ID:`, before the first headline
+/// node) has links and transclusions but no source: `parse_file` drops
+/// them rather than invent an empty one, while a body read alone keeps
+/// them all.
+#[test]
+fn links_and_transclusions_outside_every_node_have_no_source() {
+    let text = "#+TRANSCLUDE: lone\nsee [[id:lost]]\n* H\n:PROPERTIES:\n:ID: h\n:END:\n[[id:kept]]\n#+TRANSCLUDE: member\n";
+    let r = parse_file(text);
+    let edges: Vec<(&str, &str)> = r
+        .typed_links
+        .iter()
+        .map(|(s, l)| (s.as_str(), l.target.as_str()))
+        .collect();
+    assert_eq!(edges, [("h", "kept")]);
+    assert_eq!(
+        r.transclusions,
+        [("h".into(), "member".into(), "content".into())]
+    );
+    assert_eq!(edges_of_body(text).len(), 2);
+    assert_eq!(transclusions_of_body(text).len(), 2);
+}
+
 // --------------------------------------------------------- the store form
 
 /// Each rewrite, exactly: the query and fragment kept, `id:` and an id

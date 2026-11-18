@@ -56,8 +56,8 @@ replace = '''    let _ = &l.fragment;'''
 id = "kb-org-ingest/store-form-query-dropped"
 runner = "editor"
 targets = ["-p", "mae-kb", "--test", "org_ingest"]
-filter = "test(raw_and_stored_bodies_make_the_same_edges)"
-ref = "the old rewrite dropped ?rel=&w=&c=, so ingested typed edges became `references`"
+filter = "test(store_form_cases)"
+ref = "the old rewrite dropped ?rel=&w=&c=, so ingested typed edges became `references`; here the checks refuse the rewrite and the link stays raw, which store_form_cases sees"
 [[mutant.edit]]
 file = "shared/kb/src/org_ingest.rs"
 find = '''    if let Some(q) = query {
@@ -81,8 +81,8 @@ replace = '''    l.kind != LinkKind::Kb && !(l.target.is_empty() && l.fragment.i
 id = "kb-org-ingest/store-body-not-idempotent"
 runner = "editor"
 targets = ["-p", "mae-kb", "--test", "org_ingest"]
-filter = "test(store_body_is_idempotent)"
-ref = "a body stored twice must not grow: the CRDT body would churn on every save"
+filter = "test(store_form_cases)"
+ref = "a body stored twice must not grow (the CRDT body would churn on every save); checked_edits refuses a rewrite that would rewrite again, so the property holds and store_form_cases sees the refusal"
 [[mutant.edit]]
 file = "shared/kb/src/org_ingest.rs"
 find = '''        out.push('?');
@@ -171,9 +171,9 @@ replace = '''    let body = apply_edits(text, n.body_span.range(), &edits[..0]);
 [[mutant]]
 id = "kb-org-ingest/adapter-transclusion-source"
 runner = "editor"
-targets = ["-p", "mae-kb", "--test", "org_semantics_differential"]
-filter = "test(org_ingest_differs_only_as_registered)"
-ref = "the register must cover the consumer's adapter, not only semantics()"
+targets = ["-p", "mae-kb", "--test", "org_ingest"]
+filter = "test(links_and_transclusions_outside_every_node_have_no_source)"
+ref = "a transclusion outside every node has no source; an empty one names no node"
 [[mutant.edit]]
 file = "shared/kb/src/org_ingest.rs"
 find = '''        .filter_map(|t| Some((t.from.clone()?, t.member.clone(), t.role.clone())))'''
