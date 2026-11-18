@@ -711,7 +711,7 @@ Author a literate programming document, execute embedded code blocks to verify r
    ```
    SPC m e h     → org-export-html
    ```
-   The HTML file is written to the same directory. Code blocks are syntax-highlighted; results are rendered inline.
+   The HTML file is written to the same directory. Code blocks carry a `language-` class (no highlighting); existing `#+RESULTS:` are rendered as `:exports` says, and nothing is evaluated.
 
 9. Export a single subtree (not the full document):
    ```
