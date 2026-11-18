@@ -577,3 +577,17 @@ other body
 ";
     assert_absent(selected, &["SECRET-OUTSIDE-SELECT", "other body"]);
 }
+
+/// The tag settings that decide what is withheld are not read from a COMMENT
+/// subtree either: an `#+EXCLUDE_TAGS:` there must not change the selection
+/// (the exporter's first pass, `settings_keywords`).
+#[test]
+fn tag_settings_inside_a_comment_subtree_are_not_read() {
+    let src = "\
+* COMMENT Setup
+#+EXCLUDE_TAGS: public
+* Visible :public:
+PUBLIC-BODY
+";
+    assert_present(src, &["PUBLIC-BODY"]);
+}

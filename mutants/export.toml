@@ -43,8 +43,8 @@ replace = '''options.select_tags = ORG_EXPORT_SELECT_TAGS[..0]'''
 id = "export/settings-read-from-comment-subtrees"
 runner = "editor"
 targets = ["-p", "mae-export", "--test", "export_leaks"]
-filter = "test(noexport_and_comment_content_is_absent_in_both_formats)"
-ref = "#942: Org reads no export setting from a COMMENT subtree"
+filter = "test(tag_settings_inside_a_comment_subtree_are_not_read)"
+ref = "#942: no export setting is read from a COMMENT subtree (first pass: the tag settings)"
 [[mutant.edit]]
 file = "crates/export/src/document.rs"
 find = '''.filter(|k| !in_comment_subtree(k))'''
