@@ -468,6 +468,14 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   `crates/core/src/project.rs::days_to_ymd` and `shared/kb/src/migrate/mod.rs::days_to_ymd`. None was
   reachable from the daemon without a dependency it does not otherwise need. Fix: one helper in a
   shared crate every caller already depends on (principle #8), not a fifth copy.
+- [ ] **`html_graph` still renders KB node bodies with `mae-export`'s legacy org parser** **→ #941**.
+  The editor's HTML/Markdown export renders through `mae-org` (#942); the KB-subgraph page cannot
+  yet, because KB node bodies arrive in `mae_kb`'s stored link form `[[UUID|label]]`, which is not
+  Org. Until it moves with the KB ingest switch (ADR-112 O4), `crates/export/src/legacy_html.rs` and
+  `crates/export/src/lib.rs::parse_org_document` (both marked `@ai-caution: [architecture-debt]`)
+  keep the old parser's blind spots (ADR-112 Fact 3): a `:noexport:` section or a verse/special block
+  in a node body is drawn as prose, and the duplicated TODO-keyword list stays. Do not add callers;
+  delete both when `html_graph` reads `mae-org`.
 - [ ] **Files accepted over ceiling by the pre-v0.15 security/audit branch** (2026-08). Each carries an
   `@ai-caution: [architecture-debt]` marker naming its reason; all are recorded in
   `docs/AUDIT_BASELINE.json`, so `make audit-metrics-check` fails if any grows further:

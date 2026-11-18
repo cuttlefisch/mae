@@ -1,12 +1,15 @@
 [package]
 name = "mae-export"
-description = "Org export infrastructure — parse org documents and export to HTML/Markdown"
+description = "Org export — HTML and Markdown rendered through mae-org, plus the KB-subgraph page"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# `OrgElement::SrcBlock`'s `:exports` type (the legacy parser and Markdown→Org).
 mae-babel = { path = "../babel" }
+# ADR-112: what an export shows is mae-org's decision (document.rs).
+mae-org = { path = "../../shared/org" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

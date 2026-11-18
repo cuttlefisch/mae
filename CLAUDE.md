@@ -75,7 +75,7 @@ direction **backwards** for five leaf crates.
 | `mae-agent-cli` | Terminal AI-agent harness (ADR-046) — the default `SPC a a`/`SPC a p` surface, binary `mae-agent` | `mae-ai`, `mae-mcp`, `ratatui` |
 | `mae-shell` | Embedded terminal emulator (alacritty_terminal) | `alacritty_terminal` |
 | `mae-babel` | Org-mode code block execution (12 languages) | *(none)* |
-| `mae-export` | Org/Markdown → HTML/Markdown export | `mae-babel` |
+| `mae-export` | Org/Markdown → HTML/Markdown export (Org is rendered through `mae-org`) | `mae-org`, `mae-babel` |
 | `mae-canvas` | Visual buffer (diagrams, drawings) | *(none — `mae-core` depends on it)* |
 | `mae-snippets` | Snippet expansion engine | *(none — `mae-core` depends on it)* |
 | `mae-format` | Buffer formatting (external formatters) | *(none — `mae-core` depends on it)* |
