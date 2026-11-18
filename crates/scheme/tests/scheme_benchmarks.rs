@@ -1,15 +1,15 @@
-//! Scheme benchmark programs for performance validation.
+//! Scheme benchmark programs, adapted from the classic Gabriel/Larceny/Gambit
+//! suites.
 //!
-//! These programs are adapted from the classic Gabriel/Larceny/Gambit
-//! benchmark suites. Each test verifies correctness AND measures timing.
-//!
-//! Performance targets (rough orders of magnitude, debug mode):
-//!   - fib(20): < 5s (tree recursion)
-//!   - fib(30): < 30s (tree recursion, CI generous)
-//!   - tak(18,12,6): < 3s (deep recursion)
-//!   - sieve(10000): < 1s (vector mutation)
-//!   - nqueens(8): < 1s (backtracking search)
-//!   - deriv(large): < 1s (symbolic computation)
+//! This whole file is benchmarks. Each test asserts the program's RESULT (the
+//! correctness claim) and REPORTS its timing on stderr; none asserts a
+//! wall-clock budget. An absolute budget fails on a slow or busy runner for
+//! reasons unrelated to the code (issue #947: targets, not gates).
+//! To read the numbers: `cargo test --release -p mae-scheme --test
+//! scheme_benchmarks -- --nocapture --test-threads=1`.
+//! A growth-shape regression in the VM
+//! belongs in a ratio test (see `agenda_build_grows_linearly_not_quadratically`),
+//! not here.
 
 use std::time::Instant;
 
@@ -33,7 +33,7 @@ fn timed_eval(name: &str, code: &str) -> (Value, std::time::Duration) {
 
 #[test]
 fn bench_fib_20() {
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "fib(20)",
         "
         (define (fib n)
@@ -42,12 +42,11 @@ fn bench_fib_20() {
     ",
     );
     assert_eq!(result, Value::Int(6765));
-    assert!(elapsed.as_millis() < 5000, "fib(20) too slow: {elapsed:?}");
 }
 
 #[test]
 fn bench_fib_30() {
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "fib(30)",
         "
         (define (fib n)
@@ -56,13 +55,11 @@ fn bench_fib_30() {
     ",
     );
     assert_eq!(result, Value::Int(832040));
-    // Generous timeout for CI (debug mode, slow runners, parallel tests)
-    assert!(elapsed.as_secs() < 60, "fib(30) too slow: {elapsed:?}");
 }
 
 #[test]
 fn bench_tak() {
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "tak(18,12,6)",
         "
         (define (tak x y z)
@@ -75,12 +72,11 @@ fn bench_tak() {
     ",
     );
     assert_eq!(result, Value::Int(7));
-    assert!(elapsed.as_secs() < 10, "tak too slow: {elapsed:?}");
 }
 
 #[test]
 fn bench_sieve() {
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "sieve(10000)",
         "
         (define (sieve limit)
@@ -102,12 +98,11 @@ fn bench_sieve() {
     ",
     );
     assert_eq!(result, Value::Int(1229)); // 1229 primes below 10000
-    assert!(elapsed.as_secs() < 5, "sieve too slow: {elapsed:?}");
 }
 
 #[test]
 fn bench_nqueens() {
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "nqueens(8)",
         "
         (define (nqueens n)
@@ -131,13 +126,12 @@ fn bench_nqueens() {
     ",
     );
     assert_eq!(result, Value::Int(92)); // 92 solutions to 8-queens
-    assert!(elapsed.as_secs() < 5, "nqueens too slow: {elapsed:?}");
 }
 
 #[test]
 fn bench_deriv() {
     // Symbolic differentiation — classic Lisp benchmark
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "deriv",
         r#"
         (define (deriv exp var)
@@ -166,13 +160,12 @@ fn bench_deriv() {
         matches!(result, Value::Pair(_)),
         "deriv should return a list, got: {result}"
     );
-    assert!(elapsed.as_secs() < 5, "deriv too slow: {elapsed:?}");
 }
 
 #[test]
 fn bench_tco_count() {
     // Pure tail-call counting — tests that TCO doesn't blow the stack
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "tco-count(1M)",
         "
         (define (count-down n)
@@ -181,13 +174,12 @@ fn bench_tco_count() {
     ",
     );
     assert_eq!(result, Value::Int(0));
-    assert!(elapsed.as_secs() < 15, "tco-count too slow: {elapsed:?}");
 }
 
 #[test]
 fn bench_list_operations() {
     // List building and traversal
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "list-ops(10000)",
         "
         ;; Build a list of 10000 elements
@@ -213,12 +205,11 @@ fn bench_list_operations() {
     );
     // sum(0..9999) = 49995000 + 1 = 49995001
     assert_eq!(result, Value::Int(49995001));
-    assert!(elapsed.as_secs() < 5, "list-ops too slow: {elapsed:?}");
 }
 
 #[test]
 fn bench_map_filter() {
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "map+filter(5000)",
         "
         (define (iota n)
@@ -233,12 +224,11 @@ fn bench_map_filter() {
     ",
     );
     assert_eq!(result, Value::Int(2500)); // half of 5000 are even after *3
-    assert!(elapsed.as_secs() < 5, "map+filter too slow: {elapsed:?}");
 }
 
 #[test]
 fn bench_string_ops() {
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "string-ops",
         r#"
         ;; Build a string by repeated append
@@ -251,12 +241,11 @@ fn bench_string_ops() {
     "#,
     );
     assert_eq!(result, Value::Int(2000));
-    assert!(elapsed.as_secs() < 5, "string-ops too slow: {elapsed:?}");
 }
 
 #[test]
 fn bench_vector_ops() {
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "vector-ops(10000)",
         "
         (define v (make-vector 10000 0))
@@ -273,13 +262,12 @@ fn bench_vector_ops() {
     ",
     );
     assert_eq!(result, Value::Int(49995000));
-    assert!(elapsed.as_secs() < 5, "vector-ops too slow: {elapsed:?}");
 }
 
 #[test]
 fn bench_closure_creation() {
     // Creating and calling many closures
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "closures(10000)",
         "
         (define (make-adder n) (lambda (x) (+ x n)))
@@ -290,14 +278,13 @@ fn bench_closure_creation() {
     );
     // sum of (i+1) for i=0..9999 = sum(1..10000) = 50005000
     assert_eq!(result, Value::Int(50005000));
-    assert!(elapsed.as_secs() < 5, "closures too slow: {elapsed:?}");
 }
 
 #[test]
 fn bench_recursion_depth() {
     // Test deeply recursive function (not tail-recursive)
     // This tests stack behavior for non-TCO recursion
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "deep-recursion(5000)",
         "
         (define (depth n)
@@ -307,15 +294,11 @@ fn bench_recursion_depth() {
     ",
     );
     assert_eq!(result, Value::Int(5000));
-    assert!(
-        elapsed.as_secs() < 5,
-        "deep-recursion too slow: {elapsed:?}"
-    );
 }
 
 #[test]
 fn bench_higher_order_composition() {
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "compose-chain",
         "
         (define (compose f g) (lambda (x) (f (g x))))
@@ -331,7 +314,6 @@ fn bench_higher_order_composition() {
     ",
     );
     assert_eq!(result, Value::Int(100));
-    assert!(elapsed.as_secs() < 5, "compose too slow: {elapsed:?}");
 }
 
 // ============================================================
@@ -341,7 +323,7 @@ fn bench_higher_order_composition() {
 #[test]
 fn bench_puzzle() {
     // N-puzzle move counting (simplified)
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "puzzle",
         "
         (define (puzzle-count n)
@@ -369,13 +351,12 @@ fn bench_puzzle() {
     );
     // With n=3, should be 120 unique sequences (but many duplicates)
     assert!(matches!(result, Value::Int(_)));
-    assert!(elapsed.as_secs() < 5, "puzzle too slow: {elapsed:?}");
 }
 
 #[test]
 fn bench_ack_small() {
     // Ackermann function — super-exponential growth
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "ack(3,7)",
         "
         (define (ack m n)
@@ -387,7 +368,6 @@ fn bench_ack_small() {
     ",
     );
     assert_eq!(result, Value::Int(1021));
-    assert!(elapsed.as_secs() < 20, "ack(3,7) too slow: {elapsed:?}");
 }
 
 // ============================================================
@@ -397,7 +377,7 @@ fn bench_ack_small() {
 #[test]
 fn bench_gabriel_tak() {
     // Classic Takeuchi function — deep mutual recursion
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "tak(18,12,6)",
         "
         (define (tak x y z)
@@ -410,13 +390,12 @@ fn bench_gabriel_tak() {
     ",
     );
     assert_eq!(result, Value::Int(7));
-    assert!(elapsed.as_secs() < 10, "tak(18,12,6) too slow: {elapsed:?}");
 }
 
 #[test]
 fn bench_gabriel_cpstak() {
     // CPS (continuation-passing style) TAK — tests closure allocation
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "cpstak(18,12,6)",
         "
         (define (cpstak x y z)
@@ -441,10 +420,6 @@ fn bench_gabriel_cpstak() {
     ",
     );
     assert_eq!(result, Value::Int(7));
-    assert!(
-        elapsed.as_secs() < 30,
-        "cpstak(18,12,6) too slow: {elapsed:?}"
-    );
 }
 
 #[test]
@@ -480,7 +455,7 @@ fn bench_gabriel_deriv() {
 #[test]
 fn bench_gabriel_nqueens() {
     // N-queens solver — backtracking search
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "nqueens(8)",
         "
         (define (nqueens n)
@@ -505,13 +480,12 @@ fn bench_gabriel_nqueens() {
     ",
     );
     assert_eq!(result, Value::Int(92)); // 92 solutions for 8-queens
-    assert!(elapsed.as_secs() < 10, "nqueens(8) too slow: {elapsed:?}");
 }
 
 #[test]
 fn bench_gabriel_primes() {
     // Prime counting by trial division — arithmetic + looping
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "primes(1000)",
         "
         (define (prime? n)
@@ -528,13 +502,12 @@ fn bench_gabriel_primes() {
     ",
     );
     assert_eq!(result, Value::Int(168)); // 168 primes below 1000
-    assert!(elapsed.as_secs() < 5, "primes(1000) too slow: {elapsed:?}");
 }
 
 #[test]
 fn bench_gabriel_quicksort() {
     // Quicksort — list manipulation + recursion
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "quicksort",
         "
         (define (quicksort lst)
@@ -561,13 +534,12 @@ fn bench_gabriel_quicksort() {
         result,
         Value::list(vec![Value::Int(1), Value::Int(500), Value::Int(500)])
     );
-    assert!(elapsed.as_secs() < 10, "quicksort too slow: {elapsed:?}");
 }
 
 #[test]
 fn bench_gabriel_mbrot() {
     // Mandelbrot set — floating-point arithmetic + iteration
-    let (result, elapsed) = timed_eval(
+    let (result, _elapsed) = timed_eval(
         "mandelbrot",
         "
         (define (mandelbrot-count cr ci max-iter)
@@ -599,7 +571,6 @@ fn bench_gabriel_mbrot() {
         matches!(result, Value::Int(n) if n > 0),
         "mandelbrot should find points in set"
     );
-    assert!(elapsed.as_secs() < 10, "mandelbrot too slow: {elapsed:?}");
 }
 
 // ============================================================
@@ -617,10 +588,6 @@ fn bench_vm_startup() {
     let elapsed = start.elapsed();
     let per_iter = elapsed / 100;
     eprintln!("  VM startup (100 iterations): {elapsed:?} ({per_iter:?}/iter)");
-    assert!(
-        per_iter.as_millis() < 50,
-        "VM startup too slow: {per_iter:?}"
-    );
 }
 
 #[test]
@@ -636,8 +603,4 @@ fn bench_eval_overhead() {
     let elapsed = start.elapsed();
     let per_iter = elapsed / 10000;
     eprintln!("  eval(42) x 10000: {elapsed:?} ({per_iter:?}/iter)");
-    assert!(
-        per_iter.as_micros() < 1000,
-        "eval overhead too high: {per_iter:?}"
-    );
 }

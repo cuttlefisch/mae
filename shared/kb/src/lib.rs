@@ -3369,14 +3369,10 @@ mod tests {
         assert!(kb.search("banana").is_empty());
     }
 
-    #[test]
-    fn search_scales_to_two_thousand_nodes() {
-        // Smoke-test that search returns under 50ms at 2000 nodes with
-        // 500-char bodies. Primary value: catches accidental O(n²) regressions
-        // when the cache is bypassed.
+    fn kb_with_nodes(n: usize) -> KnowledgeBase {
         let mut kb = KnowledgeBase::new();
         let body = "lorem ipsum dolor sit amet consectetur adipiscing elit ".repeat(10);
-        for i in 0..2000 {
+        for i in 0..n {
             let title = if i % 97 == 0 {
                 format!("needle-{i}")
             } else {
@@ -3389,13 +3385,41 @@ mod tests {
                 body.clone(),
             ));
         }
-        let start = std::time::Instant::now();
-        let hits = kb.search("needle");
-        let elapsed = start.elapsed();
-        assert!(!hits.is_empty(), "should find needle entries");
+        kb
+    }
+
+    /// Search is a single pass over the corpus. A ratio, not a budget (issue
+    /// #947): "under 200 ms for 2,000 nodes" fails on a busy runner and cannot see
+    /// a quadratic search until it is enormous. 500 -> 8,000 nodes (16x) costs ~16x
+    /// if linear, ~256x if quadratic. (A search that bypasses the lowercase cache
+    /// is only a constant factor slower and is not what this guards.)
+    ///
+    /// Calibrated 2026-11-18: real code grew 14.9x-18.7x in release and
+    /// 16.1x-17.9x in debug; a quadratic mutant (every entry compared with every
+    /// entry, release) grew 217x-234x. 64x sits between them.
+    #[test]
+    fn search_grows_linearly_not_quadratically() {
+        const SEARCH_MAX_RATIO: f64 = 64.0;
+        let small = kb_with_nodes(500);
+        let large = kb_with_nodes(8000);
+        assert_eq!(small.search("needle").len(), 6, "needle-0,97,..,485");
+        assert_eq!(large.search("needle").len(), 83);
+
+        let (mut bs, mut bl) = (f64::MAX, f64::MAX);
+        for _ in 0..7 {
+            let t = std::time::Instant::now();
+            std::hint::black_box(small.search("needle"));
+            bs = bs.min(t.elapsed().as_secs_f64());
+            let t = std::time::Instant::now();
+            std::hint::black_box(large.search("needle"));
+            bl = bl.min(t.elapsed().as_secs_f64());
+        }
+        let ratio = bl / bs.max(1e-6);
+        eprintln!("kb search growth 500->8000: {ratio:.1}x ({bs:.6}s -> {bl:.6}s)");
         assert!(
-            elapsed.as_millis() < 200,
-            "search took {elapsed:?} over 2000 nodes; cache may be bypassed"
+            ratio < SEARCH_MAX_RATIO,
+            "search time grew {ratio:.0}x for 16x nodes ({bs:.6}s -> {bl:.6}s); \
+             linear ~16x, quadratic ~256x"
         );
     }
 

@@ -39,3 +39,28 @@ pub mod vm;
 pub use runtime::{
     DeclaredPackage, SchemeError, SchemeErrorSnapshot, SchemeEvalResult, SchemeRuntime,
 };
+
+/// Growth-ratio timing helper for the scaling tests (issue #947).
+#[cfg(test)]
+pub(crate) mod timing {
+    use std::time::Instant;
+
+    /// Best-of-`rounds` time of `small` and of `large`, interleaved so a load
+    /// burst slows both sides rather than one. Returns (ratio, small_s, large_s).
+    pub fn growth_ratio(
+        rounds: usize,
+        mut small: impl FnMut(),
+        mut large: impl FnMut(),
+    ) -> (f64, f64, f64) {
+        let (mut bs, mut bl) = (f64::MAX, f64::MAX);
+        for _ in 0..rounds {
+            let t = Instant::now();
+            small();
+            bs = bs.min(t.elapsed().as_secs_f64());
+            let t = Instant::now();
+            large();
+            bl = bl.min(t.elapsed().as_secs_f64());
+        }
+        (bl / bs.max(1e-6), bs, bl)
+    }
+}

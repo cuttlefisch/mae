@@ -23,6 +23,17 @@ caught = ["FAIL [", "TIMEOUT ["]
 count = ["{n} tests run", "{n} test run"]
 queue_class = "rust-enlace"
 
+[runner.editor-kb-lifecycle]
+# The kb_lifecycle_e2e tests return early (pass vacuously) unless
+# MAE_KB_LIFECYCLE is set, which would make every mutant that targets them a
+# "survivor". The runner sets the gate itself so no one has to remember it.
+workspace = "."
+build = ["cargo", "nextest", "run", "--no-run", "{targets}", "-E", "{filter}"]
+test = ["env", "MAE_KB_LIFECYCLE=1", "cargo", "nextest", "run", "--profile", "mutate", "{targets}", "-E", "{filter}"]
+caught = ["FAIL [", "TIMEOUT ["]
+count = ["{n} tests run", "{n} test run"]
+queue_class = "rust-enlace"
+
 [runner.tools-mutate]
 workspace = "tools/mutate"
 build = ["cargo", "nextest", "run", "--no-run", "{targets}", "-E", "{filter}"]
