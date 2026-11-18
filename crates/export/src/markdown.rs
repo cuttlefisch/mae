@@ -358,13 +358,12 @@ fn table(e: &Element) -> Vec<String> {
                 push_paragraph(&mut out, inline_text(&x.children, Mode::Paragraph));
             }
             Tag::Thead => {
-                for r in rows_of(x) {
-                    if header.is_none() {
-                        header = Some(r);
-                    } else {
-                        rows.push(r);
-                    }
+                // The first head row is the header; any further ones are rows.
+                let mut head = rows_of(x).into_iter();
+                if header.is_none() {
+                    header = head.next();
                 }
+                rows.extend(head);
             }
             Tag::Tbody => rows.extend(rows_of(x)),
             Tag::Tr => rows.push(cells_of(x)),
@@ -680,18 +679,9 @@ fn escape_text(text: &str, mode: Mode, out: &mut String) {
                 out.push(c);
                 continue;
             }
-            if c.is_ascii_digit() {
-                let digits: String = text[i..].chars().take_while(char::is_ascii_digit).collect();
-                let after = text[i + digits.len()..].chars().next();
-                if matches!(after, Some('.' | ')')) {
-                    out.push_str(&digits);
-                    out.push('\\');
-                    out.push(after.unwrap_or('.'));
-                    for _ in 0..digits.len() {
-                        chars.next();
-                    }
-                    continue;
-                }
+            if let Some(consumed) = escape_ordered_marker(&text[i..], out) {
+                chars.by_ref().take(consumed).for_each(drop);
+                continue;
             }
         }
         if ALWAYS.contains(&c) {
@@ -699,6 +689,25 @@ fn escape_text(text: &str, mode: Mode, out: &mut String) {
         }
         out.push(c);
     }
+}
+
+/// At a line start, `1.` or `1)` would open an ordered list: writes the
+/// digits and the escaped delimiter, and returns how many characters after
+/// the first digit that consumed (the other digits and the delimiter).
+fn escape_ordered_marker(rest: &str, out: &mut String) -> Option<usize> {
+    // ASCII digits: the count is also the byte length.
+    let digits = rest.chars().take_while(char::is_ascii_digit).count();
+    if digits == 0 {
+        return None;
+    }
+    let after = rest[digits..]
+        .chars()
+        .next()
+        .filter(|c| matches!(c, '.' | ')'))?;
+    out.push_str(&rest[..digits]);
+    out.push('\\');
+    out.push(after);
+    Some(digits)
 }
 
 #[cfg(test)]

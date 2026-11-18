@@ -602,20 +602,20 @@
       "max_fn_lines": 252,
       "max_nesting": 3
     },
-    "crates/export/src/html.rs": {
-      "max_fn_lines": 122,
-      "max_nesting": 4
-    },
     "crates/export/src/html_graph.rs": {
       "max_fn_lines": 146,
       "max_nesting": 5
     },
+    "crates/export/src/legacy_html.rs": {
+      "max_fn_lines": 116,
+      "max_nesting": 4
+    },
     "crates/export/src/lib.rs": {
-      "max_fn_lines": 332,
+      "max_fn_lines": 313,
       "max_nesting": 4
     },
     "crates/export/src/markdown.rs": {
-      "max_fn_lines": 97,
+      "max_fn_lines": 88,
       "max_nesting": 4
     },
     "crates/export/src/markdown_parser.rs": {
@@ -1185,10 +1185,6 @@
     "daemon/tests/oauth_e2e.rs": {
       "max_fn_lines": 106,
       "max_nesting": 3
-    },
-    "daemon/tests/self_issued_token_e2e.rs": {
-      "max_fn_lines": 106,
-      "max_nesting": 1
     },
     "shared/kb/examples/org_parse_latency.rs": {
       "max_fn_lines": 102,
