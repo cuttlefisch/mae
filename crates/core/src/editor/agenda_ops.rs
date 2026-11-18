@@ -592,16 +592,57 @@ Deploy the latest build.
                 .with_priority(pri),
             );
         }
-        let start = std::time::Instant::now();
         editor.open_agenda(AgendaFilter::default());
-        let elapsed = start.elapsed();
         let idx = editor.find_buffer_by_name("*Agenda*").unwrap();
         let text = editor.buffers[idx].rope().to_string();
         assert!(text.contains("1000 items"), "expected 1000 items");
+        // No wall-clock budget here: a fixed millisecond bound in a unit test that
+        // runs beside thousands of others on a shared runner fails whenever the
+        // machine is busy (53 ms against 50 on macOS CI, 2026-11-18), and at 1,000
+        // items it never caught the regression it was for: a quadratic agenda
+        // took 2.8 ms. `agenda_build_grows_linearly_not_quadratically` guards that.
+    }
+
+    /// Best of five `open_agenda` timings over `n` TODO nodes.
+    fn time_agenda(n: usize) -> std::time::Duration {
+        let mut editor = Editor::new();
+        for i in 0..n {
+            editor.kb.primary.insert(
+                mae_kb::Node::new(
+                    format!("perf:{i}"),
+                    format!("Task {i}"),
+                    mae_kb::NodeKind::Note,
+                    "",
+                )
+                .with_todo_state("TODO"),
+            );
+        }
+        (0..5)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                editor.open_agenda(AgendaFilter::default());
+                start.elapsed()
+            })
+            .min()
+            .unwrap()
+    }
+
+    /// The agenda is built in time linear in the number of TODO nodes. A ratio,
+    /// not a budget: going from 2,000 to 32,000 nodes (16x) costs about 16x if
+    /// linear and 256x if quadratic, whatever the machine or build profile.
+    ///
+    /// Calibrated 2026-11-18 (release, best of five, three runs each): the real
+    /// code grew 12x-34x; a behaviour-preserving quadratic lookup (each line
+    /// re-finding its node in the list) grew 113x-249x. 64x sits between them.
+    #[test]
+    fn agenda_build_grows_linearly_not_quadratically() {
+        let small = time_agenda(2_000).as_secs_f64();
+        let large = time_agenda(32_000).as_secs_f64();
+        let ratio = large / small.max(1e-6);
         assert!(
-            elapsed.as_millis() < 50,
-            "agenda with 1000 items took {}ms (> 50ms budget)",
-            elapsed.as_millis()
+            ratio < 64.0,
+            "agenda time grew {ratio:.0}x from 2,000 to 32,000 nodes ({small:.4}s -> {large:.4}s); \
+             linear would be ~16x, quadratic ~256x"
         );
     }
 
