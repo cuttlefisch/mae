@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.169] - 2026-11-18
+
+
+
+
+### Bug Fixes
+
+- *(mutate)* End hung tests, and refuse to queue from inside a Slurm job ([da62489](https://github.com/cuttlefisch/mae/commit/da6248983867ec22c4dea893bafcf484a406251c))
+
 ## [0.14.168] - 2026-11-18
 
 
@@ -14,6 +23,10 @@ All notable changes to this project will be documented in this file.
 ### Testing
 
 - *(daemon)* Null, [] and "" audiences are refused as no audience ([6a85454](https://github.com/cuttlefisch/mae/commit/6a85454657910a07dcd815fd6e436fd9b8ef25cd))
+
+### Miscellaneous
+
+- Bump version to 0.14.168 ([54ff7b0](https://github.com/cuttlefisch/mae/commit/54ff7b02eedc0d611ee2eb00bf59ec9dcddb094c))
 
 ## [0.14.167] - 2026-11-18
 
