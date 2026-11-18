@@ -1,0 +1,219 @@
+# The editor's org export (issue #942): what Org withholds is not published,
+# and the HTML and Markdown writers cannot turn exported text into markup.
+# Tests: crates/export/tests/export_leaks.rs and crates/export/src/markdown.rs.
+# Format and commands: tools/mutate/README.md.
+
+# --- selection: what the page is rendered from -------------------------------
+
+[[mutant]]
+id = "export/noexport-default-cleared"
+runner = "editor"
+targets = ["-p", "mae-export", "--test", "export_leaks"]
+filter = "test(noexport_and_comment_content_is_absent_in_both_formats)"
+ref = "#942; org-export-exclude-tags"
+[[mutant.edit]]
+file = "crates/export/src/document.rs"
+find = '''let mut options = SemanticsOptions::default();'''
+replace = '''let mut options = SemanticsOptions::default();
+    options.exclude_tags.clear();'''
+
+[[mutant]]
+id = "export/legacy-exclude-tags-ignored"
+runner = "editor"
+targets = ["-p", "mae-export", "--test", "export_leaks"]
+filter = "test(exclude_and_select_tags_are_honoured)"
+ref = "#942: #+EXPORT_EXCLUDE_TAGS hides at least what it hid before"
+[[mutant.edit]]
+file = "crates/export/src/document.rs"
+find = '''    options.exclude_tags.extend(words("EXPORT_EXCLUDE_TAGS"));'''
+replace = ''''''
+
+[[mutant]]
+id = "export/org-default-select-tags-dropped"
+runner = "editor"
+targets = ["-p", "mae-export", "--test", "export_leaks"]
+filter = "test(exclude_and_select_tags_are_honoured)"
+ref = "#942; org-export-select-tags"
+[[mutant.edit]]
+file = "crates/export/src/document.rs"
+find = '''options.select_tags = ORG_EXPORT_SELECT_TAGS'''
+replace = '''options.select_tags = ORG_EXPORT_SELECT_TAGS[..0]'''
+
+[[mutant]]
+id = "export/settings-read-from-comment-subtrees"
+runner = "editor"
+targets = ["-p", "mae-export", "--test", "export_leaks"]
+filter = "test(tag_settings_inside_a_comment_subtree_are_not_read)"
+ref = "#942: no export setting is read from a COMMENT subtree (first pass: the tag settings)"
+[[mutant.edit]]
+file = "crates/export/src/document.rs"
+find = '''.filter(|k| !in_comment_subtree(k))'''
+replace = '''.filter(|k| !in_comment_subtree(k) || true)'''
+
+# The two mae-org mechanisms the export relies on, caught by export tests.
+
+[[mutant]]
+id = "export/org-comment-subtree-rendered"
+runner = "editor"
+targets = ["-p", "mae-export", "--test", "export_leaks"]
+# The whole-document render cannot catch this: mae-org deletes COMMENT
+# subtrees from the text before it reads regions (org-export--delete-comment-trees),
+# so this branch is reached only through the source semantics
+# `export_subtree` reads to tell a hidden heading from a shown one.
+filter = "test(subtree_export_refuses_a_hidden_heading)"
+ref = "ADR-112 D3"
+[[mutant.edit]]
+file = "shared/org/src/semantics/regions.rs"
+find = '''} else if *commented {'''
+replace = '''} else if false && *commented {'''
+
+[[mutant]]
+id = "export/org-exports-none-unrecognised"
+runner = "editor"
+targets = ["-p", "mae-export", "--test", "export_leaks"]
+filter = "test(src_block_exports_none_code_results_both)"
+ref = "org-babel :exports"
+[[mutant.edit]]
+file = "shared/org/src/render/babel.rs"
+find = '''            "none" => Some(Exports::None),'''
+replace = ''''''
+
+# --- subtree export ----------------------------------------------------------
+
+[[mutant]]
+id = "export/subtree-exact-anchor-rejected"
+runner = "editor"
+targets = ["-p", "mae-export", "--test", "export_leaks"]
+filter = "test(subtree_export_shows_its_subtree_only)"
+ref = "#942: the section found by position is verified by its anchor"
+[[mutant.edit]]
+file = "crates/export/src/document.rs"
+find = '''        Some("") => true,'''
+replace = '''        Some("") => false,'''
+
+[[mutant]]
+id = "export/subtree-keeps-every-footnote"
+runner = "editor"
+targets = ["-p", "mae-export", "--test", "export_leaks"]
+filter = "test(subtree_export_shows_its_subtree_only)"
+ref = "#942: a subtree publishes only the footnotes it references"
+[[mutant.edit]]
+file = "crates/export/src/document.rs"
+find = '''d.get(Attr::Id).is_some_and(|id| refs.contains(id))'''
+replace = '''d.get(Attr::Id).is_some_and(|id| refs.contains(id) || true)'''
+
+# --- writers -----------------------------------------------------------------
+
+[[mutant]]
+id = "export/md-lt-unescaped"
+runner = "editor"
+targets = ["-p", "mae-export", "--test", "export_leaks"]
+filter = "test(markdown_text_cannot_become_markup)"
+ref = "#942: text never becomes raw HTML in Markdown"
+[[mutant.edit]]
+file = "crates/export/src/markdown.rs"
+find = '''    '\\', '`', '*', '_', '[', ']', '<', '>', '|', '~', '&', '#', '$','''
+replace = '''    '\\', '`', '*', '_', '[', ']', '>', '|', '~', '&', '#', '$','''
+
+[[mutant]]
+id = "export/md-pipe-unescaped"
+runner = "editor"
+targets = ["-p", "mae-export", "--test", "export_leaks"]
+filter = "test(markdown_text_cannot_become_markup)"
+ref = "#942: text never becomes a GFM table cell boundary"
+[[mutant.edit]]
+file = "crates/export/src/markdown.rs"
+find = '''    '\\', '`', '*', '_', '[', ']', '<', '>', '|', '~', '&', '#', '$','''
+replace = '''    '\\', '`', '*', '_', '[', ']', '<', '>', '~', '&', '#', '$','''
+
+[[mutant]]
+id = "export/md-fixed-code-fence"
+runner = "editor"
+targets = ["-p", "mae-export", "--test", "export_leaks"]
+filter = "test(ordinary_content_round_trips)"
+ref = "#942: a src block is byte-exact; its fence outgrows any backtick run in it"
+[[mutant.edit]]
+file = "crates/export/src/markdown.rs"
+find = '''let fence = "`".repeat(longest_run(&text, '`').max(2) + 1);'''
+replace = '''let fence = "```".to_string();'''
+
+[[mutant]]
+id = "export/md-ul-unmapped"
+runner = "editor"
+targets = ["-p", "mae-export", "--lib"]
+filter = "test(every_mae_org_tag_has_a_markdown_mapping)"
+ref = "#942: every mae-org tag has a deliberate Markdown mapping"
+[[mutant.edit]]
+file = "crates/export/src/markdown.rs"
+find = '''| Ul => Kind::Block,'''
+replace = '''=> Kind::Block,'''
+
+[[mutant]]
+id = "export/html-lang-unescaped"
+runner = "editor"
+targets = ["-p", "mae-export", "--test", "export_leaks"]
+filter = "test(hostile_metadata_is_escaped_in_the_shell_and_the_front_matter)"
+ref = "audit #596.3"
+[[mutant.edit]]
+file = "crates/export/src/html.rs"
+find = '''html_escape(lang)'''
+replace = '''lang'''
+
+[[mutant]]
+id = "export/metadata-from-withheld-subtree"
+runner = "editor"
+targets = ["-p", "mae-export", "--test", "export_leaks"]
+filter = "test(page_metadata_inside_a_withheld_subtree_is_not_published)"
+ref = "#942 review: page metadata is read only from keywords the export shows"
+[[mutant.edit]]
+file = "crates/export/src/document.rs"
+find = '''        .filter(|k| !in_comment_subtree(k) && !starts_in(&withheld, k.syntax()))'''
+replace = '''        .filter(|k| !in_comment_subtree(k))'''
+
+[[mutant]]
+id = "export/markdown-overwrites-org-source"
+runner = "editor"
+targets = ["-p", "mae-core", "--lib"]
+filter = "test(org_to_markdown_buffer_leaves_the_org_buffer_untouched)"
+ref = "#942 review: the conversion must never write over the Org source"
+[[mutant.edit]]
+file = "crates/core/src/editor/babel_ops.rs"
+find = '''        self.buffers[md_idx].replace_contents(&md_text);'''
+replace = '''        self.buffers[buf_idx].replace_contents(&md_text);'''
+
+[[mutant]]
+id = "export/markdown-ignores-macro-failure"
+runner = "editor"
+targets = ["-p", "mae-core", "--lib"]
+filter = "test(org_to_markdown_buffer_refuses_when_macros_fail)"
+ref = "#942 review: an empty export body must not become an empty Markdown file"
+[[mutant.edit]]
+file = "crates/core/src/editor/babel_ops.rs"
+find = '''        if exported.macro_failed() {
+            self.set_status(
+                "Org → Markdown refused'''
+replace = '''        if false {
+            self.set_status(
+                "Org → Markdown refused'''
+
+[[mutant]]
+id = "export/retired-option-is-an-error"
+runner = "editor"
+targets = ["-p", "mae-core", "--lib"]
+filter = "test(a_retired_option_can_still_be_set_but_does_nothing)"
+ref = "#942: removing org_export_allow_raw_html_blocks must not break an old init.scm"
+[[mutant.edit]]
+file = "crates/core/src/options.rs"
+find = '''        .find(|(n, aliases, _)| *n == name || aliases.contains(&name))'''
+replace = '''        .find(|(n, _, _)| *n == name)'''
+
+[[mutant]]
+id = "export/retired-option-check-removed"
+runner = "editor"
+targets = ["-p", "mae-core", "--lib"]
+filter = "test(a_retired_option_can_still_be_set_but_does_nothing)"
+ref = "#942: a retired option is reported, not an error"
+[[mutant.edit]]
+file = "crates/core/src/editor/option_ops.rs"
+find = '''        if let Some(why) = crate::options::retired_option(name) {'''
+replace = '''        if let Some(why) = None::<&str> {'''
