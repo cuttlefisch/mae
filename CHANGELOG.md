@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.175] - 2026-11-18
+
+
+
+
+### Features
+
+- *(kb)* Org_ingest, mae-kb's derivation on mae-org (#941 PR1) ([46e2b63](https://github.com/cuttlefisch/mae/commit/46e2b63890823eb76e102a7f3b4118d29aded7c4))
+
+### Testing
+
+- Replace absolute timing budgets with scaling ratios and reports (#947) ([ddda04f](https://github.com/cuttlefisch/mae/commit/ddda04f91f4284507de891bb5ab038177cdd12dd))
+- Make the load_all quadratic mutant heavy enough to cross the ratio ([4dce575](https://github.com/cuttlefisch/mae/commit/4dce575f09a86f1980d4083369d043c4818a2801))
+- Scaling ratios for lsp, stepping and kb search; kb-lifecycle runner opens its own gate (#947) ([ab32622](https://github.com/cuttlefisch/mae/commit/ab32622a6af18c1607cb53daae42307fd46f8c93))
+- Heavier slow mutants for diagnostics and stepping (#947) ([efe8c6b](https://github.com/cuttlefisch/mae/commit/efe8c6b47e57259a25ec8763bc349083d4109321))
+- Record calibration for the scaling ratios (#947) ([9c7386a](https://github.com/cuttlefisch/mae/commit/9c7386a6aafc771521838c78c32724f361215155))
+- *(kb)* Org_ingest sourceless links; retarget three mutants ([cc449dd](https://github.com/cuttlefisch/mae/commit/cc449dda95fa62d38dd91d92e614c7f8019098c1))
+
 ## [0.14.174] - 2026-11-18
 
 
@@ -32,6 +50,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - Bump version to 0.14.173 ([2f49351](https://github.com/cuttlefisch/mae/commit/2f4935143c3170fc76cb1aed4a3eb9c0174e9680))
+- Bump version to 0.14.174 ([e1b3efe](https://github.com/cuttlefisch/mae/commit/e1b3efe8f0b58bdfd5b3861f6eb7ef950f1deaf2))
 
 ## [0.14.172] - 2026-11-18
 
