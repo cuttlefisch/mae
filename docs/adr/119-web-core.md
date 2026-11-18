@@ -259,12 +259,15 @@ through `kb_access`). So:
 With publication review off for a KB, there is one version: the working copy.
 
 With it on, ADR-113 gives two views, `working` and `published`, and does not say which a reader gets.
-This ADR proposes:
+The rule *(owner, 2026-11-18: "published unless edit, if user has edit perms they should be able to
+toggle between the two")*:
 
-- a principal **without** Edit on the KB always gets the `published` view;
-- a principal **with** Edit defaults to `working`, can switch, and sees both labelled.
+- a principal **without** Edit on the KB always gets the `published` view, and cannot request
+  `working`;
+- a principal **with** Edit can toggle between the two, and each is labelled. Its default is
+  `working`.
 
-The daemon enforces this, not the client. **This is an owner decision**, listed in Open.
+The daemon enforces this, not the client.
 
 **The `published` view is derived from published revisions only** (ADR-113 V9), not filtered from the
 working one:
@@ -502,7 +505,7 @@ Until the owner tries test instances, these are targets, not gates *(owner's sta
 - full build ≤ 15 s (≤ 45 s at 5k), peak ≤ 512 MB;
 - one-page change ≤ 2 s.
 
-**Live** (proposed here, to be agreed with the client):
+**Live** *(owner, 2026-11-18: accepted)*:
 - a change visible to a reader ≤ 2 s after its commit;
 - a cached page served in ≤ 50 ms at p95 on the server;
 - re-deriving after one node's change ≤ 200 ms at today's size.
@@ -590,7 +593,7 @@ grows D6's property test.
   switch keeps gating it.
 - **ADR-074 Amendment 1:** its change index becomes a prerequisite for L1, not an optimisation.
 - **ADR-097 D1:** names this core.
-- **ADR-113:** D8's rule for which view a reader gets, once the owner decides it. Also that the
+- **ADR-113:** D8's rule for which view a reader gets. Also that the
   published view is derived from published revisions only (V9), and that publication events write
   change-index rows.
 - **ADR-074 Amendment 1, C2 and C4:** notices, cursors and ETags are scoped per view.
@@ -639,7 +642,6 @@ grows D6's property test.
 
 ## Open
 
-- **Owner decisions:** D8's reader view rule, and the live performance targets in D20.
 - **The licence opinion** and the self-built Graphviz module (D13).
 - **Spikes:**
   - C4b: search, incremental and on slow links;
