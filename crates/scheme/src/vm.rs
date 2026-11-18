@@ -3136,6 +3136,9 @@ mod tests {
 
     // --- DAP performance tests ---
 
+    /// A breakpoint yield + resume round trip. Reported, not gated (issue #947):
+    /// a fixed latency has no algorithmic meaning and a millisecond bound fails
+    /// on a busy runner. Correctness (the yield and the completion) is asserted.
     #[test]
     fn perf_breakpoint_yield_resume() {
         let mut vm = Vm::new();
@@ -3162,52 +3165,57 @@ mod tests {
             vm.last_break_line_clear();
         }
 
-        let per_op = start.elapsed() / iterations;
-        assert!(
-            per_op.as_millis() < 5,
-            "breakpoint yield/resume too slow: {:?}/op (want <5ms)",
-            per_op
+        eprintln!(
+            "breakpoint yield/resume: {:?}/op",
+            start.elapsed() / iterations
         );
     }
 
-    #[test]
-    fn perf_stepping_through_10_lines() {
+    /// Run `n` lines to completion, stepping into every line: one yield and
+    /// resume per line.
+    fn step_through(n: usize) {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
         vm.debug_mode = true;
-
-        // Build 10-line program
-        let lines: Vec<String> = (0..10).map(|i| format!("(define v{} {})", i, i)).collect();
-        let code = lines.join("\n");
-
-        let iterations = 20u32;
-        let start = std::time::Instant::now();
-
-        for _ in 0..iterations {
-            // Break on line 1
-            vm.breakpoints
-                .entry("step-perf.scm".into())
-                .or_default()
-                .insert(1);
-
-            let mut r = vm.eval_with_file_yielding(&code, "step-perf.scm").unwrap();
-
-            // Step through all remaining lines
-            let mut steps = 0;
-            while matches!(r, EvalResult::Yield(YieldRequest::Breakpoint(_))) {
-                vm.step_mode = StepMode::StepIn;
-                r = vm.resume(Value::Bool(true)).unwrap();
-                steps += 1;
-            }
-            assert!(steps >= 9, "should step through at least 9 lines");
-            vm.last_break_line_clear();
+        let code = (0..n)
+            .map(|i| format!("(define v{i} {i})"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        vm.breakpoints
+            .entry("step-perf.scm".into())
+            .or_default()
+            .insert(1);
+        let mut r = vm.eval_with_file_yielding(&code, "step-perf.scm").unwrap();
+        let mut steps = 0;
+        while matches!(r, EvalResult::Yield(YieldRequest::Breakpoint(_))) {
+            vm.step_mode = StepMode::StepIn;
+            r = vm.resume(Value::Bool(true)).unwrap();
+            steps += 1;
         }
-
-        let per_op = start.elapsed() / iterations;
         assert!(
-            per_op.as_millis() < 20,
-            "stepping through 10 lines too slow: {:?}/op (want <20ms)",
-            per_op
+            steps >= n - 1,
+            "should step through every line: {steps}/{n}"
+        );
+    }
+
+    /// Stepping through a program costs a constant per line, so total time is
+    /// linear in program length. 100 -> 1,600 lines (16x) costs ~16x if linear,
+    /// ~256x if the per-step work scans the program. A ratio, not a budget
+    /// (issue #947).
+    ///
+    /// Calibrated 2026-11-18: real code grew 14.3x-15.3x in release and
+    /// 14.5x-15.0x in debug; a mutant that copies the source map on every step
+    /// (release) grew 229x-239x. 64x sits between them.
+    #[test]
+    fn stepping_grows_linearly_not_quadratically() {
+        const STEP_MAX_RATIO: f64 = 64.0;
+        let (ratio, s, l) =
+            crate::timing::growth_ratio(5, || step_through(100), || step_through(1600));
+        eprintln!("stepping growth 100->1600 lines: {ratio:.1}x ({s:.5}s -> {l:.5}s)");
+        assert!(
+            ratio < STEP_MAX_RATIO,
+            "stepping time grew {ratio:.0}x for 16x lines ({s:.5}s -> {l:.5}s); \
+             linear ~16x, quadratic ~256x"
         );
     }
 

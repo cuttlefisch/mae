@@ -54,6 +54,7 @@ graph TD
     mae_gui --> mae_renderer
     mae_gui --> mae_shell
     mae_kb --> mae_mcp
+    mae_kb --> mae_org
     mae_kb --> mae_sync
     mae_kb --> mae_sync
     mae_lookup[mae-lookup]
@@ -61,7 +62,7 @@ graph TD
     mae_make[mae-make]
     mae_mcp --> mae_crypto
     mae_mcp --> mae_effect_sandbox
-    mae_org --> mae_kb
+    mae_org[mae-org]
     mae_org_wasm --> mae_org
     mae_renderer --> mae_core
     mae_renderer --> mae_shell
@@ -347,6 +348,7 @@ Source: `shared/kb/src/lib.rs`
 | `kb_identity` | mod |
 | `migrate` | mod |
 | `org` | mod |
+| `org_ingest` | mod |
 | `project_identity` | mod |
 | `store` | mod |
 | `system_kb` | mod |

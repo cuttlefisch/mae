@@ -1,0 +1,82 @@
+# Scaling guards that replaced absolute wall-clock budgets (issue #947) in
+# mae-scheme and mae-kb. Format: tools/mutate/README.md. Each mutant is
+# behaviour-preserving and only makes the code superlinear.
+
+[[mutant]]
+id = "timing-947/quadratic-document-symbols"
+runner = "editor"
+targets = ["-p", "mae-scheme", "--lib"]
+filter = "test(document_symbols_grow_linearly_not_quadratically)"
+ref = "issue #947: a symbol list that rescans earlier symbols per line is correct but quadratic"
+[[mutant.edit]]
+file = "crates/scheme/src/lsp.rs"
+find = '''    let mut symbols = Vec::new();
+    let lines: Vec<&str> = source.lines().collect();
+'''
+replace = '''    let mut symbols: Vec<SchemeDocumentSymbol> = Vec::new();
+    let lines: Vec<&str> = source.lines().collect();
+    let mut sink = 0usize;
+    for (i, _) in lines.iter().enumerate() {
+        sink += lines[..i].iter().filter(|l| l.len() == lines[i].len() + 1).count();
+    }
+    std::hint::black_box(sink);
+'''
+
+[[mutant]]
+id = "timing-947/quadratic-diagnostics"
+runner = "editor"
+targets = ["-p", "mae-scheme", "--lib"]
+filter = "test(diagnostics_grow_linearly_not_quadratically)"
+ref = "issue #947: a diagnostics pass that compares every form with every other is correct but quadratic"
+[[mutant.edit]]
+file = "crates/scheme/src/lsp.rs"
+find = '''    if to_compile.is_empty() {
+        return results;
+    }
+'''
+replace = '''    if to_compile.is_empty() {
+        return results;
+    }
+    let texts: Vec<String> = to_compile.iter().map(|(d, _)| format!("{d:?}")).collect();
+    let mut sink = 0usize;
+    for a in &texts {
+        sink += texts.iter().filter(|b| *b == a).count();
+    }
+    std::hint::black_box(sink);
+'''
+
+[[mutant]]
+id = "timing-947/quadratic-kb-search"
+runner = "editor"
+targets = ["-p", "mae-kb", "--lib"]
+filter = "test(search_grows_linearly_not_quadratically)"
+ref = "issue #947: a search that rechecks every entry against every entry is correct but quadratic"
+[[mutant.edit]]
+file = "shared/kb/src/lib.rs"
+find = '''        let q = query.to_lowercase();
+        let mut title_hits = Vec::new();'''
+replace = '''        let q = query.to_lowercase();
+        let mut sink = 0usize;
+        for a in self.lower.values() {
+            for b in self.lower.values() {
+                sink += usize::from(a.title.len() == b.title.len() + 1);
+            }
+        }
+        std::hint::black_box(sink);
+        let mut title_hits = Vec::new();'''
+
+[[mutant]]
+id = "timing-947/quadratic-stepping"
+runner = "editor"
+targets = ["-p", "mae-scheme", "--lib"]
+filter = "test(stepping_grows_linearly_not_quadratically)"
+ref = "issue #947: a per-step scan of the whole source map is correct but quadratic in program length"
+[[mutant.edit]]
+file = "crates/scheme/src/vm.rs"
+find = '''        // Avoid re-breaking on the same line
+        if self.last_break_line'''
+replace = '''        if let Some(c) = self.code_pool.get(frame.code_id) {
+            std::hint::black_box(c.source_map.clone());
+        }
+        // Avoid re-breaking on the same line
+        if self.last_break_line'''

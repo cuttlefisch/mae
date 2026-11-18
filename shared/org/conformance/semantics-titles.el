@@ -1,6 +1,6 @@
 ;;; semantics-titles.el --- an Emacs oracle for semantics() titles and levels  -*- lexical-binding: t -*-
 ;;
-;; The independent oracle of tests/semantics_differential.rs (ADR-112 D5):
+;; The independent oracle of shared/kb/tests/org_semantics_differential.rs (ADR-112 D5):
 ;; for every KB node of every listed file, its id, level and plain-text
 ;; title, computed by Org's own parser (org-element, Org 9.7.11) with no
 ;; mae-org code involved, so a bug in mae-org's plain-text reading cannot

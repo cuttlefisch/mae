@@ -1,7 +1,8 @@
 //! `semantics()`: KB nodes, links and transclusions from rendered regions
 //! only (ADR-112 D2). Each test pins one rule with a selective oracle; the
 //! fixtures under `tests/semantics/` are shared with the mae-kb differential
-//! (`semantics_differential.rs`), whose register names these tests.
+//! (`shared/kb/tests/org_semantics_differential.rs`), whose register names
+//! these tests.
 
 mod support;
 
@@ -528,10 +529,7 @@ fn every_semantics_fixture_is_named_by_a_test() {
     let mut sources = String::new();
     for e in std::fs::read_dir(&dir).unwrap().flatten() {
         let p = e.path();
-        let differential = p
-            .file_name()
-            .is_some_and(|f| f == "semantics_differential.rs");
-        if p.extension().is_some_and(|x| x == "rs") && !differential {
+        if p.extension().is_some_and(|x| x == "rs") {
             sources.push_str(&support::read(&p));
         }
     }

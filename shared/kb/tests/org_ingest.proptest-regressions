@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 5612b0aa835e3679ac1eb8eb86d6d1c5d29753dcf3213864ba1d6e71b8322030 # shrinks to b = "id:|[[x# f ]]"
+cc f8bcf3d4ba0fedae17b2f538b8fe2c06a674ebc31369f0b31dafde4ba118bb93 # shrinks to b = "[[[[https://e.org]]]]"
+cc 0d76c8c187444c24b3644b5a4fbcb08cb23446d709382ea1471e1c7fc8dfda5c # shrinks to b = ":PROPERTIES:\n:ID: n1\n:END:\n(r)id:[[https://e.org][a|b]][["

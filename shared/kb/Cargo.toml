@@ -1,7 +1,7 @@
 [package]
 name = "mae-kb"
 description = "Knowledge base layer (graph store, links)"
-version = "0.14.173"
+version = "0.14.175"
 edition = "2021"
 license = "GPL-3.0-or-later"
 
@@ -35,6 +35,9 @@ notify = "8"
 lru = "0.19"
 mae-sync = { path = "../sync", optional = true }
 mae-mcp = { path = "../mcp" }
+# ADR-112 O4: the one org parser. `org_ingest` derives nodes, edges,
+# transclusions and the stored body from its tree.
+mae-org = { path = "../org" }
 cozo = { version = "0.7", default-features = false, features = ["rayon"] }
 # Same crate cozo's own `storage-sqlite` uses, so the versions unify and there is
 # no second `links = "sqlite3"` native library (the conflict ADR-012 records
@@ -56,3 +59,5 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 tokio = { version = "1", features = ["rt"] }
 tempfile = "3"
 mae-sync = { path = "../sync" }
+# org_ingest's properties (idempotent store form, raw/store edges agree).
+proptest = "1"
