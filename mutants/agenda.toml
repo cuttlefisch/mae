@@ -1,0 +1,13 @@
+# The agenda's guards (crates/core/src/editor/agenda_ops.rs). Format:
+# tools/mutate/README.md.
+
+[[mutant]]
+id = "agenda/quadratic-line-build"
+runner = "editor"
+targets = ["-p", "mae-core", "--lib"]
+filter = "test(agenda_build_grows_linearly_not_quadratically)"
+ref = "an agenda line that re-finds its node in the list is correct but quadratic"
+[[mutant.edit]]
+file = "crates/core/src/editor/agenda_ops.rs"
+find = '''                let state = node.todo_state.as_deref().unwrap_or("TODO");'''
+replace = '''                let state = nodes.iter().find(|n| n.id == node.id).and_then(|n| n.todo_state.as_deref()).unwrap_or("TODO");'''

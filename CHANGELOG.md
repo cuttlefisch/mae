@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.172] - 2026-11-18
+
+
+
+
+### Testing
+
+- *(agenda)* Guard linear growth with a scaling ratio, not a wall-clock budget ([78a21d3](https://github.com/cuttlefisch/mae/commit/78a21d3076a1f5de182965ea75bbfc19e23b0598))
+
 ## [0.14.171] - 2026-11-18
 
 
@@ -10,6 +19,10 @@ All notable changes to this project will be documented in this file.
 ### Documentation
 
 - An architecture overview of MAE, derived from the code ([22fc28a](https://github.com/cuttlefisch/mae/commit/22fc28a2416d2c634968184fec7eb28136fc3164))
+
+### Miscellaneous
+
+- Bump version to 0.14.171 ([355bf18](https://github.com/cuttlefisch/mae/commit/355bf185ab5564c4f4697f9bcec5ed2ceaf37a73))
 
 ## [0.14.170] - 2026-11-18
 
