@@ -3393,7 +3393,9 @@ mod tests {
     /// if linear, ~256x if quadratic. (A search that bypasses the lowercase cache
     /// is only a constant factor slower and is not what this guards.)
     ///
-    /// Calibration: see SEARCH_MAX_RATIO.
+    /// Calibrated 2026-11-18: real code grew 14.9x-18.7x in release and
+    /// 16.1x-17.9x in debug; a quadratic mutant (every entry compared with every
+    /// entry, release) grew 217x-234x. 64x sits between them.
     #[test]
     fn search_grows_linearly_not_quadratically() {
         const SEARCH_MAX_RATIO: f64 = 64.0;

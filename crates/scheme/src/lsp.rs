@@ -843,10 +843,13 @@ mod tests {
     /// for a 3-line fib" fails on a busy runner and says nothing about growth.
     /// 500 -> 8,000 forms (16x) costs ~16x if linear, ~256x if quadratic.
     ///
-    /// Calibration: see DIAG_MAX_RATIO.
+    /// Calibrated 2026-11-18 (best of seven, three runs each): real code grew
+    /// 15.6x-19.7x in release and 16.3x-17.2x in debug; a behaviour-preserving
+    /// quadratic mutant (every form compared with every other, release) grew
+    /// 90x-94x. 48x sits between them (mutants/timing-947.toml).
     #[test]
     fn diagnostics_grow_linearly_not_quadratically() {
-        const DIAG_MAX_RATIO: f64 = 64.0;
+        const DIAG_MAX_RATIO: f64 = 48.0;
         let vm = Vm::new();
         let src = |n: usize| -> String {
             (0..n)
@@ -882,7 +885,9 @@ mod tests {
     /// (16x) costs ~16x if linear, ~256x if quadratic. A ratio, not a budget
     /// (issue #947).
     ///
-    /// Calibration: see SYMBOLS_MAX_RATIO.
+    /// Calibrated 2026-11-18: real code grew 14.8x-17.8x in release and
+    /// 15.3x-16.9x in debug; a quadratic mutant (each line rescans the earlier
+    /// ones, release) grew 217x-232x. 64x sits between them.
     #[test]
     fn document_symbols_grow_linearly_not_quadratically() {
         const SYMBOLS_MAX_RATIO: f64 = 64.0;
