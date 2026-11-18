@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.176] - 2026-11-18
+
+
+
+
+### Documentation
+
+- *(adr)* ADR-119, the MAE web core: one core for the live app and the static export ([66cb6e6](https://github.com/cuttlefisch/mae/commit/66cb6e6a11274b21cc3aa3e0a8dcddddcfddde26))
+- *(adr-119)* Record the owner's decisions on the reader view (D8) and live targets (D20) ([48601f7](https://github.com/cuttlefisch/mae/commit/48601f77c1e264cfbea21bc4472e084225e1827c))
+
+### Miscellaneous
+
+- *(adr)* Regenerate the ADR KB checksum after merging main ([0f841bc](https://github.com/cuttlefisch/mae/commit/0f841bcd40bdf02a76f071b2740e898dec77a76e))
+
 ## [0.14.175] - 2026-11-18
 
 
@@ -19,6 +33,10 @@ All notable changes to this project will be documented in this file.
 - Heavier slow mutants for diagnostics and stepping (#947) ([efe8c6b](https://github.com/cuttlefisch/mae/commit/efe8c6b47e57259a25ec8763bc349083d4109321))
 - Record calibration for the scaling ratios (#947) ([9c7386a](https://github.com/cuttlefisch/mae/commit/9c7386a6aafc771521838c78c32724f361215155))
 - *(kb)* Org_ingest sourceless links; retarget three mutants ([cc449dd](https://github.com/cuttlefisch/mae/commit/cc449dda95fa62d38dd91d92e614c7f8019098c1))
+
+### Miscellaneous
+
+- Bump version to 0.14.175 ([e7a14ad](https://github.com/cuttlefisch/mae/commit/e7a14ad07b689e9bcc40018a4b9ab7d11cc5fceb))
 
 ## [0.14.174] - 2026-11-18
 
