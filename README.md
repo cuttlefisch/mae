@@ -114,7 +114,7 @@ Editor workspace (Cargo.toml, crates/)
  ├── mae-dap           DAP client — protocol types, transport, breakpoints, stepping, watches
  ├── mae-shell         Terminal emulator (alacritty_terminal), PTY management
  ├── mae-babel         Org-babel executor — 12 languages, persistent sessions, language backends
- ├── mae-export        Org/Markdown export — HTML, Markdown, TOC, syntax highlighting
+ ├── mae-export        Org/Markdown export — HTML, Markdown, TOC; Org rendered through mae-org
  ├── mae-canvas        Visual buffer (diagrams, drawings)
  ├── mae-snippets      YASnippet-style templates — tab-stops, mirrors, transforms
  ├── mae-format        Formatter bridge — prettier, black, rustfmt (complements LSP format)
