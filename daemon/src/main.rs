@@ -1855,9 +1855,14 @@ fn run_doctor(config: &DaemonConfig, compare_with: Option<&DaemonConfig>) -> i32
         print_live_storage(config);
 
         // ADR-036 Amendment 1 F2, "log wins, made visible": a listed member the
-        // governing signed op-log does not admit has no access. Advisory only.
-        for line in anchor_cli::doctor_lines(config) {
-            println!("{line}");
+        // governing signed op-log does not admit has no access. Deriving that
+        // needs the store open as a writer, which doctor never does (above), so
+        // it points at the offline listing instead.
+        if db_path.exists() {
+            println!(
+                "  kb membership: not checked here; with the daemon stopped, `mae-daemon kb \
+                 anchor` lists member-list entries a KB's signed op-log does not admit"
+            );
         }
 
         if config.collab.auth.mode == "none" {

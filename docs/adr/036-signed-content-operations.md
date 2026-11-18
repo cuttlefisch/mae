@@ -185,8 +185,9 @@ does not admit has no access, and is never lost silently:
 
 - when the anchor is recorded (the owner's connection or `kb anchor`), the daemon warns with the
   number of such entries, and `kb anchor` prints them;
-- `mae-daemon doctor` lists them for every anchored KB, and `kb anchor --kb-id X` with no key shows
-  which source governs and lists them;
+- `mae-daemon kb anchor` with no arguments lists them for every anchored KB, and
+  `kb anchor --kb-id X` with no key shows which source governs and lists them (both offline; not
+  `doctor`, which never opens the store as a writer and points at the listing instead);
 - no writer changes membership on the member list alone where the log governs: `kb/add_member`,
   `kb/remove_member`, `kb/approve_member` and the operator's `kb member` are refused
   (`signer_unavailable`) unless this daemon signs the change into the log as the owner whose key is
@@ -267,8 +268,8 @@ every path.
   refused; an op authored by another member on a session is refused `not_author`; the same op
   relayed by a mesh peer is admitted.
 - An unsigned manifest change to a collection document is refused with the switch on.
-- A member-list entry the governing log does not admit is reported at anchoring, by `doctor` and by
-  `kb anchor`; a member-list membership write is refused where the log governs and this daemon
+- A member-list entry the governing log does not admit is reported at anchoring and by
+  `kb anchor` (the per-KB show and the no-argument listing); a member-list membership write is refused where the log governs and this daemon
   cannot sign into it, and works where the member list governs.
 - A join ticket never replaces an anchor; a dial naming a KB this hub anchored is refused.
 - A session with no identity relays a member's op, checked for signature and membership; a psk
@@ -296,5 +297,5 @@ every path.
   fresh ticket naming the rotated key is refused (F1). The owner's log carries the rotation, so
   accepting a successor the log proves is the fix; it is not built.
 - **A genesis authored after anchoring.** The warning fires when the anchor is recorded. A KB whose
-  owner authors its genesis later moves to the log then, without a warning; `doctor` and
-  `kb anchor` report it.
+  owner authors its genesis later moves to the log then, without a warning; `kb anchor` (show, or
+  the no-argument listing) reports it.

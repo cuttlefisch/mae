@@ -14,9 +14,10 @@ use mae_sync::encoding::{base64_to_update, update_to_base64};
 
 use crate::config::DaemonConfig;
 
-const USAGE: &str = "usage: mae-daemon kb anchor --kb-id <id> [--public-key <base64>]\n\
-     Without --public-key, prints the KB's anchor. With it, records the key as the anchor:\n\
-     only the key whose fingerprint the KB names as owner, and only once.\n\
+const USAGE: &str = "usage: mae-daemon kb anchor [--kb-id <id> [--public-key <base64>]]\n\
+     With no arguments, lists every anchored KB whose signed op-log leaves member-list\n\
+     entries out. With --kb-id alone, prints the KB's anchor. With --public-key too, records\n\
+     the key as the anchor: only the key whose fingerprint the KB names as owner, and only once.\n\
      The daemon must be stopped.";
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -25,8 +26,9 @@ struct Args {
     public_key: Option<[u8; 32]>,
 }
 
-/// Parse `--flag value` / `--flag=value`. Unknown flags, missing values and a
-/// key that is not the standard base64 of 32 bytes are usage errors.
+/// Parse `--flag value` / `--flag=value`. Unknown flags, missing values, a
+/// `--public-key` without `--kb-id` and a key that is not the standard base64
+/// of 32 bytes are usage errors. No arguments at all is the listing.
 fn parse(rest: &[String]) -> Result<Args, String> {
     let mut a = Args::default();
     let mut it = rest.iter();
@@ -44,8 +46,8 @@ fn parse(rest: &[String]) -> Result<Args, String> {
             other => return Err(format!("unknown argument '{other}'")),
         }
     }
-    if a.kb_id.is_empty() {
-        return Err("--kb-id is required".into());
+    if a.kb_id.is_empty() && a.public_key.is_some() {
+        return Err("--public-key needs --kb-id".into());
     }
     Ok(a)
 }
@@ -82,6 +84,9 @@ pub(crate) async fn run(config: &DaemonConfig, rest: &[String]) -> i32 {
 async fn execute(config: &DaemonConfig, a: &Args) -> Result<String, String> {
     let store = crate::seed_apply_cli::open_exclusive(config)?;
     store.doc_store.load_kb_anchors().await;
+    if a.kb_id.is_empty() {
+        return Ok(list_lines(&store.doc_store).await.join("\n"));
+    }
     let b64 = |k: &[u8; 32]| update_to_base64(k);
     let Some(key) = a.public_key else {
         let Some((k, source)) = store.doc_store.kb_anchor_record(&a.kb_id).await else {
@@ -128,51 +133,26 @@ fn roster_only_lines(roster_only: &[String]) -> Vec<String> {
     out
 }
 
-/// `mae-daemon doctor`'s membership section: every anchored KB whose signed
-/// op-log leaves member-list entries out. Advisory — the instance works.
-/// Offline only: the store lock is taken, so a running daemon is reported as
-/// skipped rather than read under it.
-pub(crate) fn doctor_lines(config: &DaemonConfig) -> Vec<String> {
-    // Doctor is synchronous and may run inside the daemon's runtime (main) or
-    // none (tests); a scoped thread with its own runtime serves both.
-    std::thread::scope(|s| {
-        s.spawn(|| {
-            let rt = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(e) => return vec![format!("  kb membership: not checked ({e})")],
-            };
-            rt.block_on(doctor_report(config))
-        })
-        .join()
-        .unwrap_or_else(|_| vec!["  kb membership: not checked (the check panicked)".into()])
-    })
-}
-
-async fn doctor_report(config: &DaemonConfig) -> Vec<String> {
-    let store = match crate::seed_apply_cli::open_exclusive(config) {
-        Ok(s) => s,
-        Err(e) => return vec![format!("  kb membership: not checked ({e})")],
-    };
-    store.doc_store.load_kb_anchors().await;
-    let report = roster_only_members_report(&store.doc_store).await;
+/// `kb anchor` with no arguments: every anchored KB whose signed op-log leaves
+/// member-list entries out (ADR-036 Amendment 1 F2, "log wins, made visible").
+/// Not part of `doctor`, which never opens the store as a writer.
+async fn list_lines(doc_store: &mae_daemon::doc_store::DocStore) -> Vec<String> {
+    let report = roster_only_members_report(doc_store).await;
     if report.is_empty() {
-        return vec!["  kb membership: OK (no anchored KB leaves a listed member out)".into()];
+        return vec!["kb membership: OK (no anchored KB leaves a listed member out)".into()];
     }
-    let mut out = vec![format!("  kb membership: {} KB(s) to review", report.len())];
+    let mut out = vec![format!("kb membership: {} KB(s) to review", report.len())];
     for (kb_id, found) in report {
         match found {
             Ok(roster_only) => {
-                out.push(format!("    KB {kb_id}:"));
+                out.push(format!("  KB {kb_id}:"));
                 out.extend(
                     roster_only_lines(&roster_only)
                         .into_iter()
-                        .map(|l| format!("      {l}")),
+                        .map(|l| format!("    {l}")),
                 );
             }
-            Err(e) => out.push(format!("    KB {kb_id}: not checked ({e})")),
+            Err(e) => out.push(format!("  KB {kb_id}: not checked ({e})")),
         }
     }
     out
@@ -188,9 +168,10 @@ mod tests {
     /// "Log wins, made visible" on the operator's surfaces: a KB shared before
     /// the amendment with Bob on its member list and an owner genesis in its
     /// log. Anchoring it with `kb anchor` names Bob, `kb anchor` (show) names
-    /// him, and `doctor` names him — and said nothing before the anchor existed.
+    /// him, and the listing (`kb anchor`, no arguments) names him — and said
+    /// nothing before the anchor existed.
     #[tokio::test]
-    async fn anchor_show_and_doctor_name_the_members_the_log_leaves_out() {
+    async fn anchor_show_and_list_name_the_members_the_log_leaves_out() {
         let tmp = tempfile::TempDir::new().unwrap();
         let config = crate::tests::isolated(tmp.path());
         let (owner, bob) = (Identity::generate("owner"), Identity::generate("bob"));
@@ -222,7 +203,9 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let before = doctor_lines(&config).join("\n");
+        let listing = Args::default();
+        let list = || execute(&config, &listing);
+        let before = list().await.unwrap();
         assert!(before.contains("kb membership: OK"), "{before}");
         assert!(!before.contains(&bob_fp), "{before}");
 
@@ -238,7 +221,7 @@ mod tests {
         let shown = execute(&config, &anchor(None)).await.unwrap();
         assert!(shown.contains("membership: signed op-log"), "{shown}");
         assert!(shown.contains(&bob_fp), "show names bob: {shown}");
-        let after = doctor_lines(&config).join("\n");
+        let after = list().await.unwrap();
         assert!(
             after.contains("KB kb-d") && after.contains(&bob_fp),
             "{after}"
@@ -258,8 +241,9 @@ mod tests {
         assert_eq!(parse(&v(&["--kb-id=k"])).unwrap().public_key, None);
         assert!(
             parse(&v(&["--public-key", &key])).is_err(),
-            "--kb-id required"
+            "--public-key needs --kb-id"
         );
+        assert_eq!(parse(&v(&[])).unwrap(), Args::default(), "the listing");
         assert!(
             parse(&v(&["--kb-id", "k", "--owner", "x"])).is_err(),
             "unknown flag"

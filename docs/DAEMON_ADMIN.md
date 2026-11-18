@@ -1032,8 +1032,9 @@ dial stops.
 access: an entry the log does not admit has none. Such entries are reported, never dropped silently:
 the daemon logs a warning with their number when it records the anchor, `kb anchor` prints them when
 it records one, `kb anchor --kb-id X` (show) prints which source governs and lists them, and
-`mae-daemon doctor` lists them for every anchored KB (advisory: it does not fail the verdict, and it
-is skipped while the daemon runs, since it reads the store under its lock). The owner admits each
+`mae-daemon kb anchor` with no arguments lists them for every anchored KB (offline, under the store
+lock, like the rest of `kb anchor`). `mae-daemon doctor` does not: it never opens the store as a
+writer, and deriving membership needs one, so it points at that command instead. The owner admits each
 one with a signed membership op. On such a KB, `kb member add|remove`, `kb/add_member`,
 `kb/remove_member`, `kb/approve_member` and a permissive join's auto-admit are refused
 (`signer_unavailable`) unless this daemon signs the change into the log as the KB's owner, with the
