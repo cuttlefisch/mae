@@ -99,6 +99,23 @@ nothing otherwise. `MUTATE_QUEUE=off` disables it (CI does); `MUTATE_PREFIX`
 replaces it, with `{class}` and `{area}` filled in, e.g.
 `MUTATE_PREFIX="systemd-run --user --scope -q -p MemoryMax=6G env CARGO_BUILD_JOBS=2"`.
 
+Do not run the tool itself inside a queued job. `trabajo` asks Slurm for a job
+step, and inside a job that step is placed in the enclosing job, whose CPUs and
+memory the tool already holds, so it waits until the job's time limit with no
+output. A `run` inside a Slurm job (`SLURM_JOB_ID` set) with the default prefix
+is refused before anything runs; run the tool outside the queue (it queues its
+own steps), or set `MUTATE_QUEUE=off` to run every step in the enclosing job.
+
+## Hung tests
+
+A mutant can make a guarding test hang rather than fail. Every runner's test
+command passes nextest's `--profile mutate`, defined in each workspace's
+`.config/nextest.toml` with `slow-timeout = { period = "60s", terminate-after =
+5 }`: nextest counts from when the test starts (time waiting in the queue does
+not count), kills the test's process group after five minutes, and reports
+`TIMEOUT [`, which the runners read as caught. A control run that times out is
+a failed control.
+
 ## Cadence
 
 - Each change that adds a guard adds its mutants to the area's list, in the

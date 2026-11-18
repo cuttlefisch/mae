@@ -1,0 +1,10 @@
+# cargo-nextest configuration for the daemon workspace.
+
+# The profile mae-mutate runs every test under (mutants/runners.toml passes
+# `--profile mutate`). A mutant can make a guarding test HANG instead of fail;
+# without a limit it held a queue slot until the job time limit. nextest
+# counts from when the test starts (queue time does not count), kills the
+# test's process group, and reports `TIMEOUT [`, which every runner reads as
+# caught. 5 x 60 s: the slowest daemon test in a full CI run took 35 s.
+[profile.mutate]
+slow-timeout = { period = "60s", terminate-after = 5 }

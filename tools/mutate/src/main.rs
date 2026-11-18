@@ -135,6 +135,9 @@ fn real_main(args: Args) -> Result<u8, Stop> {
             }
             Ok(0)
         }
-        Cmd::Run => run::run(&root, state, &lists, &selected, &args.sel.only, args.fresh),
+        Cmd::Run => {
+            exec::check_queue()?;
+            run::run(&root, state, &lists, &selected, &args.sel.only, args.fresh)
+        }
     }
 }
