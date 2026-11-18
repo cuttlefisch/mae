@@ -572,36 +572,71 @@ Deploy the latest build.
 
     // ---- Performance benchmark ----
 
+    /// The agenda's cost must grow linearly with the number of TODO items.
+    ///
+    /// This used to assert an absolute budget (1,000 items in under 50 ms). On a
+    /// shared CI runner, under the full suite's parallel load, it once took 53 ms:
+    /// a timing coin-flip, not a regression. What the test exists to catch is
+    /// super-linear growth, and a ratio between two sizes measures exactly that,
+    /// whatever the machine's speed. Linear growth gives ×8 here and n·log n
+    /// about ×10; a quadratic agenda gives ×64. Both sizes take milliseconds, so
+    /// neither run is dominated by timer or scheduling noise.
     #[test]
-    fn agenda_scales_to_1000_todos() {
-        let mut editor = Editor::new();
-        for i in 0..1000 {
-            let pri = match i % 3 {
-                0 => 'A',
-                1 => 'B',
-                _ => 'C',
-            };
-            editor.kb.primary.insert(
-                mae_kb::Node::new(
-                    format!("perf:{}", i),
-                    format!("Task {}", i),
-                    mae_kb::NodeKind::Note,
-                    "",
-                )
-                .with_todo_state("TODO")
-                .with_priority(pri),
-            );
+    fn agenda_scales_linearly_with_todos() {
+        fn editor_with(n: usize) -> Editor {
+            let mut editor = Editor::new();
+            for i in 0..n {
+                let pri = match i % 3 {
+                    0 => 'A',
+                    1 => 'B',
+                    _ => 'C',
+                };
+                editor.kb.primary.insert(
+                    mae_kb::Node::new(
+                        format!("perf:{}", i),
+                        format!("Task {}", i),
+                        mae_kb::NodeKind::Note,
+                        "",
+                    )
+                    .with_todo_state("TODO")
+                    .with_priority(pri),
+                );
+            }
+            editor
         }
-        let start = std::time::Instant::now();
-        editor.open_agenda(AgendaFilter::default());
-        let elapsed = start.elapsed();
-        let idx = editor.find_buffer_by_name("*Agenda*").unwrap();
-        let text = editor.buffers[idx].rope().to_string();
-        assert!(text.contains("1000 items"), "expected 1000 items");
+        fn time_agenda(editor: &mut Editor) -> std::time::Duration {
+            let start = std::time::Instant::now();
+            editor.open_agenda(AgendaFilter::default());
+            start.elapsed()
+        }
+        let (mut small_ed, mut large_ed) = (editor_with(1000), editor_with(8000));
+        // Alternate the two sizes, so a burst of load on the machine slows both
+        // rather than one, and keep each size's best run.
+        let (mut small, mut large) = (std::time::Duration::MAX, std::time::Duration::MAX);
+        for _ in 0..7 {
+            small = small.min(time_agenda(&mut small_ed));
+            large = large.min(time_agenda(&mut large_ed));
+        }
+        let text = |editor: &Editor| {
+            let idx = editor.find_buffer_by_name("*Agenda*").unwrap();
+            editor.buffers[idx].rope().to_string()
+        };
         assert!(
-            elapsed.as_millis() < 50,
-            "agenda with 1000 items took {}ms (> 50ms budget)",
-            elapsed.as_millis()
+            text(&small_ed).contains("1000 items"),
+            "expected 1000 items"
+        );
+        assert!(
+            text(&large_ed).contains("8000 items"),
+            "expected 8000 items"
+        );
+        // A floor on the denominator, so a very fast small run cannot inflate the
+        // ratio into a false failure. It only ever lowers the ratio.
+        let floor = std::time::Duration::from_micros(200);
+        let ratio = large.as_secs_f64() / small.max(floor).as_secs_f64();
+        assert!(
+            ratio < 24.0,
+            "agenda grew {ratio:.1}x from 1000 to 8000 items (linear is 8x, \
+             quadratic 64x): {small:?} vs {large:?}"
         );
     }
 
