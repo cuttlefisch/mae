@@ -2286,10 +2286,9 @@ mod tests {
         // kb_export_subgraph_html's whole purpose is producing a
         // shareable artifact from KB content that isn't necessarily
         // self-authored (a federated/shared KB) -- this path must NEVER
-        // trust a #+begin_export html block the way org_export's opt-in
-        // (ExportOptions::allow_raw_html_export_blocks) can, since
-        // build_export_node/render_node_body_html always uses
-        // ExportOptions::default() with no override.
+        // trust a #+begin_export html block (nothing does: the org export
+        // never emits raw HTML, and build_export_node/render_node_body_html
+        // always uses ExportOptions::default()).
         let evil_body = "Normal prose.\n#+begin_export html\n<img src=x onerror=alert(document.cookie)>\n#+end_export\n";
         let n = simple_node("meeting-notes-2026-03", "Q1 Retro", evil_body, true);
         assert!(

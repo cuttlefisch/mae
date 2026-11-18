@@ -195,3 +195,25 @@ find = '''        if exported.macro_failed() {
 replace = '''        if false {
             self.set_status(
                 "Org → Markdown refused'''
+
+[[mutant]]
+id = "export/retired-option-is-an-error"
+runner = "editor"
+targets = ["-p", "mae-core", "--lib"]
+filter = "test(a_retired_option_can_still_be_set_but_does_nothing)"
+ref = "#942: removing org_export_allow_raw_html_blocks must not break an old init.scm"
+[[mutant.edit]]
+file = "crates/core/src/options.rs"
+find = '''        .find(|(n, aliases, _)| *n == name || aliases.contains(&name))'''
+replace = '''        .find(|(n, _, _)| *n == name)'''
+
+[[mutant]]
+id = "export/retired-option-check-removed"
+runner = "editor"
+targets = ["-p", "mae-core", "--lib"]
+filter = "test(a_retired_option_can_still_be_set_but_does_nothing)"
+ref = "#942: a retired option is reported, not an error"
+[[mutant.edit]]
+file = "crates/core/src/editor/option_ops.rs"
+find = '''        if let Some(why) = crate::options::retired_option(name) {'''
+replace = '''        if let Some(why) = None::<&str> {'''

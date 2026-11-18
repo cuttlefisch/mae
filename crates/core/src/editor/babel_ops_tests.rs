@@ -565,25 +565,12 @@ SECRET-COMMENT-SUBTREE
     #[test]
     fn org_export_says_when_it_omits_raw_html() {
         let src = "#+begin_export html\n<script>alert(1)</script>\n#+end_export\nText.\n";
-        for allow in ["false", "true"] {
-            let (mut editor, dir) = editor_in_temp_dir(src, &format!("export-raw-{allow}"));
-            editor
-                .set_option("org_export_allow_raw_html_blocks", allow)
-                .unwrap();
-            let msg = editor.org_export_html();
-            let html = std::fs::read_to_string(dir.join("notes.html")).expect("html written");
-            assert!(!html.contains("<script"), "allow={allow}: {html}");
-            assert!(!html.contains("alert"), "allow={allow}: {html}");
-            assert!(
-                msg.contains("1 raw HTML block(s) omitted"),
-                "allow={allow}: {msg}"
-            );
-            assert_eq!(
-                msg.contains("no longer has an effect"),
-                allow == "true",
-                "allow={allow}: {msg}"
-            );
-            let _ = std::fs::remove_dir_all(&dir);
-        }
+        let (mut editor, dir) = editor_in_temp_dir(src, "export-raw");
+        let msg = editor.org_export_html();
+        let html = std::fs::read_to_string(dir.join("notes.html")).expect("html written");
+        assert!(!html.contains("<script"), "{html}");
+        assert!(!html.contains("alert"), "{html}");
+        assert!(msg.contains("1 raw HTML block(s) omitted"), "{msg}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

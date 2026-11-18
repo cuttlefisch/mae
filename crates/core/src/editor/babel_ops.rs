@@ -511,14 +511,10 @@ impl Editor {
             );
         }
         if exported.raw_html > 0 {
-            let mut note = format!(
+            notes.push(format!(
                 "{} raw HTML block(s) omitted: export never emits raw HTML",
                 exported.raw_html
-            );
-            if self.org_export_allow_raw_html_blocks {
-                note.push_str(" (org_export_allow_raw_html_blocks no longer has an effect)");
-            }
-            notes.push(note);
+            ));
         }
         if exported.settings.headline_cap_ignored {
             notes.push(

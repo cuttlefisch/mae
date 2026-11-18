@@ -1044,15 +1044,6 @@ impl OptionRegistry {
                      (kb_graph_wedge_corner_radius_fraction), matching the reference 'petal' design \
                      this was ported from, which deliberately uses no drawn gap or border.",
                     OptionKind::Float, "0.0", Some("kb-graph.wedge-gap-radians"), &[]),
-                // --- org export (org_export / :org-export-html) ---
-                opt!("org_export_allow_raw_html_blocks", &["org-export-allow-raw-html-blocks"],
-                    "No effect since org export renders through mae-org (ADR-112 O4, #942): \
-                     export never emits `#+begin_export html` blocks, `#+HTML:` lines or HTML \
-                     snippets, raw or escaped, whatever this is set to (mae-org renders no raw \
-                     HTML in any form, ADR-112 D3). Kept so existing configs still load; an export \
-                     of a document that has such blocks says how many it left out, and notes \
-                     when this option is on. kb_export_subgraph_html never read it.",
-                    OptionKind::Bool, "false", Some("org-export.allow_raw_html_blocks"), &[]),
                 // --- KB subgraph HTML export (kb-export-subgraph-html /
                 // kb_export_subgraph_html) -- ADR-081 ---
                 opt!("kb_export_default_depth", &["kb-export-default-depth"],
@@ -1374,6 +1365,24 @@ pub fn scheme_string_literal(value: &str) -> String {
 }
 
 /// Parse a string as an integer value.
+/// Options MAE registered once and has removed: `(name, Scheme aliases, why)`.
+/// Setting one is not an error, so a config written for an older release still
+/// loads; it reports the removal instead. Reading one is refused, like any
+/// unknown option.
+pub const RETIRED_OPTIONS: &[(&str, &[&str], &str)] = &[(
+    "org_export_allow_raw_html_blocks",
+    &["org-export-allow-raw-html-blocks"],
+    "org export renders through mae-org, which never emits raw HTML (#942)",
+)];
+
+/// Why `name` (an option name or alias) was removed, if it is retired.
+pub fn retired_option(name: &str) -> Option<&'static str> {
+    RETIRED_OPTIONS
+        .iter()
+        .find(|(n, aliases, _)| *n == name || aliases.contains(&name))
+        .map(|(_, _, why)| *why)
+}
+
 pub fn parse_option_int(s: &str) -> Result<i64, String> {
     s.parse().map_err(|_| format!("Invalid integer: '{}'", s))
 }

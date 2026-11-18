@@ -84,7 +84,8 @@ shows and nothing more:
   already in the file are shown, nothing is evaluated.
 - Raw HTML (`#+begin_export html`, `#+HTML:`, `@@html:…@@`) and Markdown
   export blocks are never emitted; the status line says when some were left
-  out. `org-export-allow-raw-html-blocks` has no effect.
+  out. The former `org-export-allow-raw-html-blocks` option was removed; setting
+  it in an old config reports that and does nothing.
 - `id:` and `file:` links are written as text.
 - Subtree export refuses a heading that is not exported, rather than
   publishing a neighbour, and keeps only the footnotes the subtree cites.

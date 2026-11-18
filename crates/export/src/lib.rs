@@ -1529,8 +1529,8 @@ mod tests {
         // `#+begin_export html ... #+end_export` straight through raw,
         // assuming a trusted single author -- but this parser feeds KB
         // node content that isn't necessarily self-authored (federated/
-        // shared KBs) into the SAME exporter. Default (no explicit opt-in
-        // via ExportOptions::allow_raw_html_export_blocks) must escape it.
+        // shared KBs) into the SAME exporter. It must always escape it (there
+        // is no opt-in any more; the org export never emits raw HTML).
         let src = "#+begin_export html\n<img src=x onerror=alert(1)>\n#+end_export\n";
         let (_, elements) = parse_org_document(src);
         let html = legacy_body(&elements);
