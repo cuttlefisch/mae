@@ -37,10 +37,10 @@ find = '''    if to_compile.is_empty() {
 replace = '''    if to_compile.is_empty() {
         return results;
     }
-    let lens: Vec<usize> = to_compile.iter().map(|(d, _)| format!("{d:?}").len()).collect();
+    let texts: Vec<String> = to_compile.iter().map(|(d, _)| format!("{d:?}")).collect();
     let mut sink = 0usize;
-    for a in &lens {
-        sink += lens.iter().filter(|b| **b == *a + 1).count();
+    for a in &texts {
+        sink += texts.iter().filter(|b| *b == a).count();
     }
     std::hint::black_box(sink);
 '''
@@ -76,7 +76,7 @@ file = "crates/scheme/src/vm.rs"
 find = '''        // Avoid re-breaking on the same line
         if self.last_break_line'''
 replace = '''        if let Some(c) = self.code_pool.get(frame.code_id) {
-            std::hint::black_box(c.source_map.iter().filter(|l| l.is_some()).count());
+            std::hint::black_box(c.source_map.clone());
         }
         // Avoid re-breaking on the same line
         if self.last_break_line'''
