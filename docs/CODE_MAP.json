@@ -778,6 +778,7 @@
       "path": "shared/kb/src/lib.rs",
       "dependencies": [
         "mae-mcp",
+        "mae-org",
         "mae-sync",
         "mae-sync"
       ],
@@ -852,6 +853,10 @@
         },
         {
           "name": "org",
+          "kind": "mod"
+        },
+        {
+          "name": "org_ingest",
           "kind": "mod"
         },
         {
@@ -1177,9 +1182,7 @@
     },
     "mae-org": {
       "path": "shared/org/src/lib.rs",
-      "dependencies": [
-        "mae-kb"
-      ],
+      "dependencies": [],
       "public_items": [
         {
           "name": "seeded",

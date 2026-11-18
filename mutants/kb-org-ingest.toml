@@ -1,0 +1,213 @@
+# org_ingest's guards (shared/kb/src/org_ingest.rs, ADR-112 O4, #941 PR1).
+# Format: tools/mutate/README.md.
+
+[[mutant]]
+id = "kb-org-ingest/weight-confidence-swapped"
+runner = "editor"
+targets = ["-p", "mae-kb", "--test", "org_ingest"]
+filter = "test(edges_are_the_semantics_kb_links)"
+ref = "ADR-030: w= and c= are different facts about an edge"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''        weight: l.weight,
+        confidence: l.confidence,'''
+replace = '''        weight: l.confidence,
+        confidence: l.weight,'''
+
+[[mutant]]
+id = "kb-org-ingest/default-rel-renamed"
+runner = "editor"
+targets = ["-p", "mae-kb", "--test", "org_ingest"]
+filter = "test(edges_are_the_semantics_kb_links)"
+ref = "an untyped link is `references`, as crate::org and the stored graph have it"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''        rel_type: l.rel.clone(),'''
+replace = '''        rel_type: if l.rel == "references" { "related_to".to_string() } else { l.rel.clone() },'''
+
+[[mutant]]
+id = "kb-org-ingest/edge-fragment-dropped"
+runner = "editor"
+targets = ["-p", "mae-kb", "--test", "org_ingest"]
+filter = "test(edges_are_the_semantics_kb_links)"
+ref = "ADR-030: #fragment is part of the edge"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''        fragment: l.fragment.clone(),
+        weight'''
+replace = '''        fragment: None,
+        weight'''
+
+[[mutant]]
+id = "kb-org-ingest/store-form-fragment-dropped"
+runner = "editor"
+targets = ["-p", "mae-kb", "--test", "org_ingest"]
+filter = "test(store_form_cases)"
+ref = "a stored body must make its source's edges"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''    if let Some(f) = &l.fragment {
+        out.push('#');
+        out.push_str(f);
+    }'''
+replace = '''    let _ = &l.fragment;'''
+
+[[mutant]]
+id = "kb-org-ingest/store-form-query-dropped"
+runner = "editor"
+targets = ["-p", "mae-kb", "--test", "org_ingest"]
+filter = "test(raw_and_stored_bodies_make_the_same_edges)"
+ref = "the old rewrite dropped ?rel=&w=&c=, so ingested typed edges became `references`"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''    if let Some(q) = query {
+        out.push('?');
+        out.push_str(q);
+    }'''
+replace = '''    let _ = query;'''
+
+[[mutant]]
+id = "kb-org-ingest/kb-filter-inverted"
+runner = "editor"
+targets = ["-p", "mae-kb", "--test", "org_ingest"]
+filter = "test(edges_are_the_semantics_kb_links)"
+ref = "a web, mail, file or local link is never a graph edge"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''    l.kind == LinkKind::Kb && !(l.target.is_empty() && l.fragment.is_none())'''
+replace = '''    l.kind != LinkKind::Kb && !(l.target.is_empty() && l.fragment.is_none())'''
+
+[[mutant]]
+id = "kb-org-ingest/store-body-not-idempotent"
+runner = "editor"
+targets = ["-p", "mae-kb", "--test", "org_ingest"]
+filter = "test(store_body_is_idempotent)"
+ref = "a body stored twice must not grow: the CRDT body would churn on every save"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''        out.push('?');
+        out.push_str(q);'''
+replace = '''        out.push('?');
+        out.push_str(q);
+        out.push('&');'''
+
+[[mutant]]
+id = "kb-org-ingest/kb-rewrite-unverified"
+runner = "editor"
+targets = ["-p", "mae-kb", "--test", "org_ingest"]
+filter = "test(store_form_cases)"
+ref = "[[id:*h]] stored as [[*h]] would turn an edge into a local heading link"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''            reads_as_edge(links, replacement.len(), l)'''
+replace = '''            !links.is_empty() || links.is_empty()'''
+
+[[mutant]]
+id = "kb-org-ingest/flatten-unverified"
+runner = "editor"
+targets = ["-p", "mae-kb", "--test", "org_ingest"]
+filter = "test(store_form_cases)"
+ref = "[[https://e.org][id:qq]] flattened to `id:qq (https://e.org)` makes a plain id link an edge"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''            reads_as_no_edge(links)'''
+replace = '''            !links.is_empty() || links.is_empty()'''
+
+[[mutant]]
+id = "kb-org-ingest/property-keys-not-lowercased"
+runner = "editor"
+targets = ["-p", "mae-kb", "--test", "org_ingest"]
+filter = "test(properties_are_stored_as_the_old_parser_stored_them)"
+ref = "#941 G2: stored property keys are lower case"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''        .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))'''
+replace = '''        .map(|(k, v)| (k.clone(), v.clone()))'''
+
+[[mutant]]
+id = "kb-org-ingest/id-kept-as-property"
+runner = "editor"
+targets = ["-p", "mae-kb", "--test", "org_ingest"]
+filter = "test(properties_are_stored_as_the_old_parser_stored_them)"
+ref = "#941 G2: the id is the node's, not a property"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''    let is_field = |k: &str| k == "ID" || (file && (k == "KIND" || k == "ALIASES"));'''
+replace = '''    let is_field = |k: &str| file && (k == "KIND" || k == "ALIASES");'''
+
+[[mutant]]
+id = "kb-org-ingest/todo-keyword-lost"
+runner = "editor"
+targets = ["-p", "mae-kb", "--test", "org_ingest"]
+filter = "test(the_old_parsers_todo_keywords_are_todo_keywords)"
+ref = "#941 G1: mae-org's default is TODO|DONE; MAE's six must stay keywords"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''pub const TODO_STATES: [&str; 3] = ["TODO", "NEXT", "WAIT"];'''
+replace = '''pub const TODO_STATES: [&str; 3] = ["TODO", "NEXT", "WAITING"];'''
+
+[[mutant]]
+id = "kb-org-ingest/todo-options-unused"
+runner = "editor"
+targets = ["-p", "mae-kb", "--test", "org_ingest"]
+filter = "test(the_old_parsers_todo_keywords_are_todo_keywords)"
+ref = "#941 G1: the options must reach the parse"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''    let doc = parse(text, &o.parse);'''
+replace = '''    let doc = parse(text, &ParseOptions::default());'''
+
+[[mutant]]
+id = "kb-org-ingest/body-not-stored"
+runner = "editor"
+targets = ["-p", "mae-kb", "--test", "org_ingest"]
+filter = "test(a_body_holds_its_own_text_only)"
+ref = "a node's body is the store form of its body_span"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''    let body = apply_edits(text, n.body_span.range(), edits);'''
+replace = '''    let body = apply_edits(text, n.body_span.range(), &edits[..0]);'''
+
+[[mutant]]
+id = "kb-org-ingest/adapter-transclusion-source"
+runner = "editor"
+targets = ["-p", "mae-kb", "--test", "org_semantics_differential"]
+filter = "test(org_ingest_differs_only_as_registered)"
+ref = "the register must cover the consumer's adapter, not only semantics()"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''        .filter_map(|t| Some((t.from.clone()?, t.member.clone(), t.role.clone())))'''
+replace = '''        .map(|t| (t.from.clone().unwrap_or_default(), t.member.clone(), t.role.clone()))'''
+
+[[mutant]]
+id = "kb-org-ingest/table-link-guard"
+runner = "editor"
+targets = ["-p", "mae-kb", "--test", "org_ingest"]
+filter = "test(store_form_cases)"
+equivalent = "mae-org's semantics do not read links in table cells yet (the differential's pending_table_cell class), so no table link reaches store_edit; the guard is for when O5 reads them, where the store form's `|` would split the cell"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''        if link.format() != LinkFormat::Bracket || in_table {'''
+replace = '''        if link.format() != LinkFormat::Bracket {'''
+
+[[mutant]]
+id = "kb-org-ingest/whole-text-check-skipped"
+runner = "editor"
+targets = ["-p", "mae-kb", "--test", "org_ingest"]
+filter = "test(a_rewrite_that_changes_its_context_is_refused)"
+ref = "a replacement checked alone can still read otherwise in its place"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''    if settled {'''
+replace = '''    if settled || !settled {'''
+
+[[mutant]]
+id = "kb-org-ingest/body-edits-from-file-start"
+runner = "editor"
+targets = ["-p", "mae-kb", "--test", "org_ingest"]
+filter = "test(a_body_holds_its_own_text_only)"
+ref = "a node's body takes only the edits inside its span: an earlier node's must not reach it"
+[[mutant.edit]]
+file = "shared/kb/src/org_ingest.rs"
+find = '''    let first = edits.partition_point(|e| e.range.start < range.start);'''
+replace = '''    let first = 0;'''
