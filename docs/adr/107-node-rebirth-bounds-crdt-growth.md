@@ -1,7 +1,17 @@
 # ADR-107: Node rebirth — bounding CRDT growth with the consensus primitive we already have
 
-**Status:** Proposed. Design only; nothing here is built. **Prerequisite for the KB cutover**
-(issue #103) rather than follow-on work — see "Why this blocks" below.
+**Status:** Proposed. **Partly built.** *Corrected 2026-11-18: this line said "nothing here is built".*
+
+On main today, with tests:
+- the node-document rebirth (`shared/sync` `kb/node.rs`, `rebirth_hash`);
+- the owner-signed `Rebirth` membership op;
+- the daemon's rebirth gate and adoption path: owner-only, bound to the signed op, refused as
+  `rebirth_unverified` otherwise.
+
+This correction does not establish what triggers a rebirth, or whether every part below is complete.
+
+It was written as a **prerequisite for the KB cutover** (issue #103) rather than follow-on work (see
+"Why this blocks" below). ADR-110's cutover has since been implemented.
 **Extends:** ADR-023 (epoch-fenced write access), ADR-026 (peer-verifiable signed, hash-chained
 membership), ADR-029 (CRDT is truth), ADR-032 (durable CRDT store / checkpoints).
 **Corrects:** ADR-032 §3's claim that a checkpoint "bounds CRDT tombstone growth".
