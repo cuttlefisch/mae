@@ -542,3 +542,38 @@ fn checkboxes_become_task_list_items() {
         "{md}"
     );
 }
+
+/// Page metadata comes only from keywords the export shows: a `#+TITLE:` or
+/// `#+AUTHOR:` inside a `:noexport:` subtree, or outside the selected tags,
+/// must not become the page title, author or front matter (independent
+/// review of #942: the body was withheld but the metadata path read every
+/// keyword outside COMMENT subtrees).
+#[test]
+fn page_metadata_inside_a_withheld_subtree_is_not_published() {
+    let src = "\
+#+TITLE: Public title
+* Notes :noexport:
+#+TITLE: SECRET-TITLE
+#+AUTHOR: SECRET-AUTHOR
+#+HTML: <b>SECRET-HTML</b>
+* Visible
+public body
+";
+    assert_absent(src, &["SECRET-TITLE", "SECRET-AUTHOR", "SECRET-HTML"]);
+    assert_present(src, &["Public title", "public body"]);
+    assert_eq!(
+        export_document(src).raw_html,
+        0,
+        "an #+HTML: line in a withheld subtree was counted as omitted output"
+    );
+
+    let selected = "\
+#+SELECT_TAGS: pub
+* Pub :pub:
+public body
+* Other
+#+TITLE: SECRET-OUTSIDE-SELECT
+other body
+";
+    assert_absent(selected, &["SECRET-OUTSIDE-SELECT", "other body"]);
+}

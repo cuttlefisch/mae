@@ -32,6 +32,10 @@ pub struct PageSettings {
     pub with_author: bool,
     /// `date:` — whether the date line is shown.
     pub with_date: bool,
+    /// `H:N` was given. Org exports headlines deeper than N as list items;
+    /// mae-org renders every level as a heading, so the cap is ignored and
+    /// the editor says so.
+    pub headline_cap_ignored: bool,
 }
 
 impl Default for PageSettings {
@@ -43,6 +47,7 @@ impl Default for PageSettings {
             toc_depth: 3,
             with_author: true,
             with_date: true,
+            headline_cap_ignored: false,
         }
     }
 }
@@ -117,8 +122,18 @@ struct Pipeline {
 
 fn run(source: &str) -> Pipeline {
     let doc = parse(source, &ParseOptions::default());
-    let settings = settings_keywords(&doc);
-    let sem = semantics_with(&doc, &semantics_options(&settings));
+    // Pass 1: the tag settings that decide what the export withholds.
+    let sem = semantics_with(&doc, &semantics_options(&settings_keywords(&doc)));
+    // Pass 2: page metadata only from keywords the export shows. A
+    // `#+TITLE:` inside a `:noexport:` subtree (or outside the selected
+    // tags) must not become the page title (stricter than Org, which reads
+    // in-buffer settings anywhere; the COMMENT filter already was).
+    let withheld = withheld_regions(&sem);
+    let settings: Vec<(String, String)> = doc
+        .keywords()
+        .filter(|k| !in_comment_subtree(k) && !starts_in(&withheld, k.syntax()))
+        .map(|k| (k.key().to_ascii_uppercase(), k.value()))
+        .collect();
     let options = RenderOptions::default();
     let resolver = Resolver::default();
     let rendered = render(&doc, &sem, &options, &resolver);
@@ -146,7 +161,7 @@ fn run(source: &str) -> Pipeline {
         settings: page_settings,
         body: rendered.body.clone(),
         diagnostics: rendered.diagnostics.clone(),
-        raw_html: raw_html_count(&doc),
+        raw_html: raw_html_count(&doc, &settings, &withheld),
     };
     Pipeline {
         doc,
@@ -186,19 +201,11 @@ pub fn export_subtree(source: &str, offset: usize) -> Result<Exported, SubtreeEr
     // The source headlines the page renders, in order: the renderer skips
     // exactly `Semantics::unrendered`, so a headline starting inside one of
     // those regions has no section.
-    let unrendered: Vec<(u32, u32)> = p
-        .sem
-        .unrendered
-        .iter()
-        .map(|u| (u.span.start, u.span.end))
-        .collect();
+    let withheld = withheld_spans(&p.sem);
     let shown: Vec<Headline> = p
         .doc
         .headlines()
-        .filter(|h| {
-            let start = u32::from(h.syntax().text_range().start());
-            !unrendered.iter().any(|&(s, e)| s <= start && start < e)
-        })
+        .filter(|h| !starts_in(&withheld, h.syntax()))
         .collect();
     let index = shown
         .iter()
@@ -297,13 +304,52 @@ fn apply_options(value: &str, settings: &mut PageSettings) {
             },
             "author" => settings.with_author = on(val),
             "date" => settings.with_date = on(val),
+            "H" => settings.headline_cap_ignored = true,
             _ => {}
         }
     }
 }
 
-/// HTML export blocks and `#+HTML:` keywords outside COMMENT subtrees.
-fn raw_html_count(doc: &Document) -> usize {
+/// Every source span the renderer skips (`Semantics::unrendered`): withheld
+/// subtrees AND single skipped elements (comments, drawers, export blocks).
+fn withheld_spans(sem: &mae_org::Semantics) -> Vec<(u32, u32)> {
+    sem.unrendered
+        .iter()
+        .map(|u| (u.span.start, u.span.end))
+        .collect()
+}
+
+/// The source regions the export withholds as a whole: COMMENT and
+/// excluded-tag subtrees, everything outside the selected trees, archived
+/// contents. Not the single elements the renderer skips (an HTML export
+/// block or keyword is one of those, and is exactly what `raw_html_count`
+/// counts), so metadata and that count filter by these only.
+fn withheld_regions(sem: &mae_org::Semantics) -> Vec<(u32, u32)> {
+    use mae_org::Region;
+    sem.unrendered
+        .iter()
+        .filter(|u| {
+            matches!(
+                u.region,
+                Region::CommentSubtree
+                    | Region::ExcludedSubtree
+                    | Region::Unselected
+                    | Region::Archived
+            )
+        })
+        .map(|u| (u.span.start, u.span.end))
+        .collect()
+}
+
+/// Whether `node` starts inside one of `spans`.
+fn starts_in(spans: &[(u32, u32)], node: &mae_org::SyntaxNode) -> bool {
+    let start = u32::from(node.text_range().start());
+    spans.iter().any(|&(s, e)| s <= start && start < e)
+}
+
+/// HTML export blocks and `#+HTML:` keywords the export would otherwise have
+/// shown: outside COMMENT subtrees and every other withheld region.
+fn raw_html_count(doc: &Document, settings: &[(String, String)], withheld: &[(u32, u32)]) -> usize {
     let blocks = doc
         .blocks()
         .filter(|b| b.kind() == SyntaxKind::EXPORT_BLOCK)
@@ -317,12 +363,10 @@ fn raw_html_count(doc: &Document) -> usize {
                 .ancestors()
                 .filter_map(Headline::cast)
                 .any(|h| h.is_commented())
+                && !starts_in(withheld, b.syntax())
         })
         .count();
-    let keywords = settings_keywords(doc)
-        .iter()
-        .filter(|(k, _)| k == "HTML")
-        .count();
+    let keywords = settings.iter().filter(|(k, _)| k == "HTML").count();
     blocks + keywords
 }
 

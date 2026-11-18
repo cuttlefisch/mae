@@ -158,3 +158,40 @@ ref = "audit #596.3"
 file = "crates/export/src/html.rs"
 find = '''html_escape(lang)'''
 replace = '''lang'''
+
+[[mutant]]
+id = "export/metadata-from-withheld-subtree"
+runner = "editor"
+targets = ["-p", "mae-export", "--test", "export_leaks"]
+filter = "test(page_metadata_inside_a_withheld_subtree_is_not_published)"
+ref = "#942 review: page metadata is read only from keywords the export shows"
+[[mutant.edit]]
+file = "crates/export/src/document.rs"
+find = '''        .filter(|k| !in_comment_subtree(k) && !starts_in(&withheld, k.syntax()))'''
+replace = '''        .filter(|k| !in_comment_subtree(k))'''
+
+[[mutant]]
+id = "export/markdown-overwrites-org-source"
+runner = "editor"
+targets = ["-p", "mae-core", "--lib"]
+filter = "test(org_to_markdown_buffer_leaves_the_org_buffer_untouched)"
+ref = "#942 review: the conversion must never write over the Org source"
+[[mutant.edit]]
+file = "crates/core/src/editor/babel_ops.rs"
+find = '''        self.buffers[md_idx].replace_contents(&md_text);'''
+replace = '''        self.buffers[buf_idx].replace_contents(&md_text);'''
+
+[[mutant]]
+id = "export/markdown-ignores-macro-failure"
+runner = "editor"
+targets = ["-p", "mae-core", "--lib"]
+filter = "test(org_to_markdown_buffer_refuses_when_macros_fail)"
+ref = "#942 review: an empty export body must not become an empty Markdown file"
+[[mutant.edit]]
+file = "crates/core/src/editor/babel_ops.rs"
+find = '''        if exported.macro_failed() {
+            self.set_status(
+                "Org → Markdown refused'''
+replace = '''        if false {
+            self.set_status(
+                "Org → Markdown refused'''

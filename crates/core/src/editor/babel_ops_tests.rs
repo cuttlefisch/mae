@@ -495,14 +495,46 @@ SECRET-COMMENT-SUBTREE
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The in-buffer Org → Markdown conversion reads the same tree.
+    /// The Org → Markdown conversion writes a NEW buffer and never touches
+    /// the Org source: the export withholds content (`:noexport:`, COMMENT,
+    /// drawers, comments) that the source must keep. Writing the result back
+    /// over the Org buffer destroyed it (independent review of #942).
     #[test]
-    fn org_to_markdown_buffer_drops_noexport_and_comment_content() {
+    fn org_to_markdown_buffer_leaves_the_org_buffer_untouched() {
         let mut editor = editor_with_block(LEAKY_DOC);
+        let before = editor.buffers[0].rope().to_string();
         editor.org_to_markdown_buffer();
-        let md = editor.buffers[0].rope().to_string();
+        assert_eq!(
+            editor.buffers[0].rope().to_string(),
+            before,
+            "the Org source was modified"
+        );
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.name.starts_with("*markdown: "))
+            .expect("a Markdown buffer");
+        let md = editor.buffers[idx].rope().to_string();
         assert!(!md.contains("SECRET"), "{md}");
         assert!(md.contains("public body"), "{md}");
+    }
+
+    /// When the document's macros cannot be expanded the export body is
+    /// empty, so the conversion refuses instead of producing an empty file.
+    #[test]
+    fn org_to_markdown_buffer_refuses_when_macros_fail() {
+        let doc = "* Title {{{no-such-macro}}}\nbody\n";
+        let mut editor = editor_with_block(doc);
+        let before = editor.buffers[0].rope().to_string();
+        let count = editor.buffers.len();
+        editor.org_to_markdown_buffer();
+        assert_eq!(editor.buffers.len(), count, "a Markdown buffer was created");
+        assert_eq!(editor.buffers[0].rope().to_string(), before);
+        assert!(
+            editor.status_msg.contains("refused"),
+            "the refusal must say so; got: {}",
+            editor.status_msg
+        );
     }
 
     /// A subtree export at a heading the whole export hides is refused, and

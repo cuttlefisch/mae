@@ -505,7 +505,8 @@ impl Editor {
         let mut notes = Vec::new();
         if exported.macro_failed() {
             notes.push(
-                "its macros could not be expanded as Org's export expands them, so the body                  is empty"
+                "its macros could not be expanded as Org's export expands them, so the body \
+                 is empty"
                     .to_string(),
             );
         }
@@ -518,6 +519,12 @@ impl Editor {
                 note.push_str(" (org_export_allow_raw_html_blocks no longer has an effect)");
             }
             notes.push(note);
+        }
+        if exported.settings.headline_cap_ignored {
+            notes.push(
+                "#+OPTIONS: H: is ignored: every headline level is exported as a heading"
+                    .to_string(),
+            );
         }
         if notes.is_empty() {
             String::new()
@@ -603,14 +610,42 @@ impl Editor {
         self.set_status("Converted Markdown → Org");
     }
 
-    /// Convert current Org buffer to Markdown (in-buffer).
+    /// Convert the current Org buffer to Markdown, into a NEW buffer named
+    /// after it. The Org buffer is never modified: the conversion goes
+    /// through the export, which withholds what Org withholds (`:noexport:`
+    /// and COMMENT subtrees, drawers, comments), so writing it back over the
+    /// source would destroy that content. Refuses when the document's macros
+    /// cannot be expanded (the export body would be empty).
     /// Uses AI-aware buffer targeting.
     pub fn org_to_markdown_buffer(&mut self) {
         let buf_idx = self.ai_active_buffer_idx();
         let source = self.buffers[buf_idx].rope().to_string();
-        let md_text = to_markdown(&export::document::export_document(&source));
-        self.buffers[buf_idx].replace_contents(&md_text);
-        self.set_status("Converted Org → Markdown");
+        let exported = export::document::export_document(&source);
+        if exported.macro_failed() {
+            self.set_status(
+                "Org → Markdown refused: the document's macros could not be expanded as Org's \
+                 export expands them, so the Markdown would be empty",
+            );
+            return;
+        }
+        let md_text = to_markdown(&exported);
+        let name = format!("*markdown: {}*", self.buffers[buf_idx].name);
+        let md_idx = match self.find_buffer_by_name(&name) {
+            Some(idx) => idx,
+            None => {
+                let mut buf = crate::Buffer::new();
+                buf.name = name.clone();
+                self.buffers.push(buf);
+                self.buffers.len() - 1
+            }
+        };
+        self.buffers[md_idx].replace_contents(&md_text);
+        self.buffers[md_idx].modified = false;
+        self.display_buffer_and_focus(md_idx);
+        let notes = self.export_notes(&exported);
+        self.set_status(format!(
+            "Converted Org → Markdown into {name} (the Org buffer is unchanged){notes}"
+        ));
     }
 
     /// List KB instances — returns structured info for AI tools.
