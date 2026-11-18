@@ -42,26 +42,28 @@
 //! or fragment; a body is compared through mae-kb's own `rewrite_links`,
 //! which mae-kb applies to the text it stores.
 
+// mae-org's test helpers (corpus discovery, `read`, `rel`), shared rather
+// than copied: the corpus this differential walks must be the one the
+// conformance tests walk.
+#[path = "../../org/tests/support/mod.rs"]
 mod support;
 
-use mae_kb::org::{parse_org_multi_result, rewrite_links, ParsedLink};
-use mae_kb::{Node, NodeKind};
+use mae_kb::org::{parse_org_multi_result, rewrite_links, OrgParseResult, ParsedLink};
+use mae_kb::{org_ingest, Node, NodeKind};
 use mae_org::seeded::HashMap;
 use mae_org::{
     classify_link, parse, semantics, Document, LinkKind, NodeOrigin, ParseOptions,
-    SemanticDiagnostic, SemanticNode, Semantics, SyntaxKind::*, TodoSequence,
+    SemanticDiagnostic, SemanticNode, Semantics, SyntaxKind::*,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use support::{bundled_corpus, read, rel};
 
-/// mae-kb hard-codes these TODO keywords; the differential declares the same
-/// set (ADR-112 D4: they are data), so only in-file `#+TODO` lines differ.
+/// mae-kb hard-codes six TODO keywords; `org_ingest` declares the same set
+/// (ADR-112 D4: they are data), so only in-file `#+TODO` lines differ. The
+/// differential reads with the consumer's own options, never a copy.
 fn options() -> ParseOptions {
-    ParseOptions::default().with_todo_sequences(vec![TodoSequence::new(
-        ["TODO", "NEXT", "WAIT"],
-        ["DONE", "CANCELLED", "DEFERRED"],
-    )])
+    org_ingest::org_options().parse.clone()
 }
 
 #[derive(Debug, Clone)]
@@ -186,8 +188,17 @@ fn multiset_diff<T: PartialEq + Clone>(a: &[T], b: &[T]) -> (Vec<T>, Vec<T>) {
 /// The Emacs oracle: (file, id, line) -> (level, title).
 type Oracle = HashMap<(String, String, usize), (usize, String)>;
 
+/// mae-org's crate directory: the register, the Emacs oracle and the
+/// synthetic fixtures are mae-org's, which owns the semantics they pin.
+fn org_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../org")
+        .canonicalize()
+        .expect("shared/org exists")
+}
+
 fn oracle_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("conformance/semantics-titles.tsv")
+    org_dir().join("conformance/semantics-titles.tsv")
 }
 
 fn load_oracle() -> Oracle {
@@ -221,6 +232,9 @@ struct Ctx<'a> {
     oracle: &'a Oracle,
     /// mae-kb's ingest nodes (`parse_org_multi`), for bodies.
     kb_bodies: Vec<Node>,
+    /// `org_ingest::parse_file`'s output, when the mae-org side is the
+    /// consumer's adapter rather than this file's (see [`Side`]).
+    ingest: Option<&'a OrgParseResult>,
     out: Vec<Diff>,
 }
 
@@ -348,10 +362,24 @@ fn single_class(places: impl Iterator<Item = &'static str>) -> Option<&'static s
     }
 }
 
+/// Which mae-org side is compared with mae-kb: `semantics()` through this
+/// file's adapter (what the register lists), or `org_ingest`, the adapter
+/// the O4 consumer uses (`org_ingest_differs_only_as_registered`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Side {
+    Semantics,
+    Ingest,
+}
+
 fn compare(file: &str, text: &str, oracle: &Oracle) -> Vec<Diff> {
+    compare_side(file, text, oracle, Side::Semantics)
+}
+
+fn compare_side(file: &str, text: &str, oracle: &Oracle, side: Side) -> Vec<Diff> {
     let kb = parse_org_multi_result(text);
     let doc = parse(text, &options());
     let sem = semantics(&doc);
+    let ingest = (side == Side::Ingest).then(|| org_ingest::parse_file(text));
     let mut cx = Ctx {
         file: file.to_string(),
         text,
@@ -359,6 +387,7 @@ fn compare(file: &str, text: &str, oracle: &Oracle) -> Vec<Diff> {
         sem: &sem,
         oracle,
         kb_bodies: mae_kb::org::parse_org_multi(text),
+        ingest: ingest.as_ref(),
         out: Vec::new(),
     };
     compare_nodes(&mut cx, &kb.nodes);
@@ -377,7 +406,11 @@ fn compare_nodes(cx: &mut Ctx, kb: &[Node]) {
     for n in &first {
         match cx.node(&n.id).cloned() {
             Some(s) => {
-                compare_row(cx, &n.id, &kb_row(n), &sem_row(cx.sem, &s));
+                let row = match cx.ingest {
+                    Some(r) => kb_row(r.nodes.iter().find(|m| m.id == n.id).expect("same nodes")),
+                    None => sem_row(cx.sem, &s),
+                };
+                compare_row(cx, &n.id, &kb_row(n), &row);
                 compare_oracle(cx, &s);
                 compare_body(cx, &n.id, &s);
             }
@@ -471,7 +504,10 @@ fn compare_row(cx: &mut Ctx, id: &str, k: &Row, s: &Row) {
 
 /// Key by key. mae-kb lower-cased keys; mae-org's must be the canonical
 /// form, which for an ASCII key is its upper case, exactly: a key left as
-/// written (`Last-Accessed`) is a difference, not a case variant.
+/// written (`Last-Accessed`) is a difference, not a case variant. On the
+/// `org_ingest` side keys are lower-cased like mae-kb's, so they are equal;
+/// a difference names a key in its canonical (upper) case on either side,
+/// so both sides report it in the same words.
 fn compare_properties(
     cx: &mut Ctx,
     id: &str,
@@ -481,12 +517,16 @@ fn compare_properties(
     let mut seen: Vec<&str> = Vec::new();
     for (key, value) in s {
         let lower = key.to_ascii_lowercase();
+        let shown = key.to_ascii_uppercase();
         match k.get_key_value(&lower) {
             Some((kk, kv)) => {
                 seen.push(kk);
                 if kv != value {
-                    let text = format!("{id}: {key}: {kv:?} vs {value:?}");
+                    let text = format!("{id}: {shown}: {kv:?} vs {value:?}");
                     cx.push("properties", "unclassified", text);
+                } else if key == kk && cx.ingest.is_some() {
+                    // Agreement: org_ingest stores keys as mae-kb did. For
+                    // semantics() a key as mae-kb wrote it is not canonical.
                 } else if *key == kk.to_ascii_uppercase() {
                     if key != kk {
                         cx.push(
@@ -504,7 +544,7 @@ fn compare_properties(
                 }
             }
             None => {
-                let text = format!("{id}: {key}: only mae-org {value:?}");
+                let text = format!("{id}: {shown}: only mae-org {value:?}");
                 cx.push("properties", "unclassified", text);
             }
         }
@@ -613,7 +653,10 @@ fn compare_body(cx: &mut Ctx, id: &str, n: &SemanticNode) {
 
 fn compare_links(cx: &mut Ctx, kb: &[(String, ParsedLink)]) {
     let kb_edges: Vec<Edge> = kb.iter().map(|(f, l)| kb_edge(f, l)).collect();
-    let sem_edges = sem_edges(cx.sem);
+    let sem_edges = match cx.ingest {
+        Some(r) => r.typed_links.iter().map(|(f, l)| kb_edge(f, l)).collect(),
+        None => sem_edges(cx.sem),
+    };
     let (mut only_kb, mut only_sem) = multiset_diff(&kb_edges, &sem_edges);
     pair_moved_edges(cx, &mut only_kb, &mut only_sem);
     pair_search_options(cx, &mut only_kb, &mut only_sem);
@@ -816,12 +859,15 @@ fn classify_sem_only_edge(cx: &Ctx, e: &Edge, kb: &[Edge], used: usize) -> &'sta
 }
 
 fn compare_transclusions(cx: &mut Ctx, kb: &[(String, String, String)]) {
-    let sem: Vec<(String, String, String)> = cx
-        .sem
-        .transclusions
-        .iter()
-        .filter_map(|t| Some((t.from.clone()?, t.member.clone(), t.role.clone())))
-        .collect();
+    let sem: Vec<(String, String, String)> = match cx.ingest {
+        Some(r) => r.transclusions.clone(),
+        None => cx
+            .sem
+            .transclusions
+            .iter()
+            .filter_map(|t| Some((t.from.clone()?, t.member.clone(), t.role.clone())))
+            .collect(),
+    };
     let (mut only_kb, mut only_sem) = multiset_diff(kb, &sem);
     // Same directive, attributed to the node around it rather than the file.
     only_kb.retain(|k| {
@@ -892,7 +938,7 @@ impl Entry {
 }
 
 fn register_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("conformance/semantics-divergences.toml")
+    org_dir().join("conformance/semantics-divergences.toml")
 }
 
 /// The register: `[[divergence]]` tables of `key = "string"` lines.
@@ -961,13 +1007,19 @@ fn entry((line, mut m): (usize, HashMap<String, String>)) -> Entry {
     e
 }
 
-/// Every name of a `#[test]` function in this crate's sources: a `fn NAME(`
-/// whose attributes (above it, past doc comments) include `#[test]`.
+/// Every name of a `#[test]` function in mae-org's and this crate's
+/// sources: a `fn NAME(` whose attributes (above it, past doc comments)
+/// include `#[test]`.
 fn test_functions() -> Vec<String> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let kb = Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf();
     let mut names = Vec::new();
-    for dir in ["src", "tests"] {
-        let mut stack = vec![root.join(dir)];
+    for dir in [
+        org_dir().join("src"),
+        org_dir().join("tests"),
+        kb.join("src"),
+        kb.join("tests"),
+    ] {
+        let mut stack = vec![dir];
         while let Some(d) = stack.pop() {
             for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
                 let p = e.path();
@@ -1051,7 +1103,7 @@ fn print_totals(label: &str, files: &[PathBuf]) {
 }
 
 fn synthetic() -> Vec<PathBuf> {
-    support::org_files(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/semantics"))
+    support::org_files(&org_dir().join("tests/semantics"))
 }
 
 #[test]
@@ -1173,6 +1225,7 @@ fn the_differential_reports_an_injected_disagreement() {
         sem: &sem,
         oracle: &oracle,
         kb_bodies: mae_kb::org::parse_org_multi(text),
+        ingest: None,
         out: Vec::new(),
     };
     compare_nodes(&mut cx, &kb.nodes);
@@ -1220,6 +1273,7 @@ fn a_plain_link_excuses_only_its_own_edge() {
             sem,
             oracle: &oracle,
             kb_bodies: Vec::new(),
+            ingest: None,
             out: Vec::new(),
         };
         compare_links(&mut cx, &kb.typed_links);
@@ -1258,4 +1312,186 @@ fn a_plain_link_excuses_only_its_own_edge() {
 fn only_real_test_functions_pin_entries() {
     let src = "/// doc\n#[test]\nfn real() {}\n\nfn helper() {}\n// fn mention() {}\n#[test]\n#[ignore]\nfn ignored_too() {}\nproptest! {\n    #[test]\n    fn prop(x in 0..1) {}\n}\n";
     assert_eq!(tests_in(src), vec!["real", "ignored_too", "prop"]);
+}
+
+/// `org_ingest`, the adapter the O4 consumer uses, differs from mae-kb
+/// exactly as `semantics()` through this file's adapter does, less the one
+/// representation it maps back (#941 G2: property keys lower-cased, so no
+/// `property_key_case` difference is left). So the register covers the
+/// consumer, not just the projection: a difference the adapter adds or
+/// hides fails here, listed.
+#[test]
+fn org_ingest_differs_only_as_registered() {
+    let oracle = load_oracle();
+    let files: Vec<PathBuf> = bundled_corpus().into_iter().chain(synthetic()).collect();
+    let key = |d: &Diff| format!("{} [{} / {}] {}", d.file, d.what, d.class, d.text);
+    let mut mismatches = Vec::new();
+    for path in &files {
+        let (file, text) = (rel(path), read(path));
+        let mut want: Vec<String> = compare_side(&file, &text, &oracle, Side::Semantics)
+            .iter()
+            .filter(|d| d.class != "property_key_case")
+            .map(key)
+            .collect();
+        let mut got: Vec<String> = compare_side(&file, &text, &oracle, Side::Ingest)
+            .iter()
+            .map(key)
+            .collect();
+        want.sort();
+        got.sort();
+        let (only_sem, only_ingest) = multiset_diff(&want, &got);
+        mismatches.extend(
+            only_sem
+                .into_iter()
+                .map(|d| format!("only semantics(): {d}")),
+        );
+        mismatches.extend(
+            only_ingest
+                .into_iter()
+                .map(|d| format!("only org_ingest: {d}")),
+        );
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// `[[T?Q|D]]` and `[[T?Q]]` as mae-kb stored them, without `?Q`.
+fn without_queries(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(open) = rest.find("[[") {
+        out.push_str(&rest[..open + 2]);
+        rest = &rest[open + 2..];
+        let Some(close) = rest.find("]]") else {
+            break;
+        };
+        let inner = &rest[..close];
+        let target_end = inner.find('|').unwrap_or(inner.len());
+        match inner[..target_end].find('?') {
+            Some(q) if !inner.contains("][") => {
+                out.push_str(&inner[..q]);
+                out.push_str(&inner[target_end..]);
+            }
+            _ => out.push_str(inner),
+        }
+        rest = &rest[close..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Stored bodies whose store form differs from mae-kb's `rewrite_links` of
+/// the same text in more than the kept ADR-030 query, each with why. A
+/// body stored differently from these, or one of these stored as before,
+/// fails: the list is the whole difference.
+const STORED_BODY_DIVERGENCES: &[(&str, &str, &str)] = &[
+    (
+        "assets/devpractices/practice-mutating-script-safety.org",
+        "practice:mutating-script-safety",
+        "verbatim `=if [[ -z \"$X\" ]]=` is text: mae-kb's scanner rewrote it to `( -z \"$X\" )`, corrupting the prose",
+    ),
+    (
+        "tests/fixtures/kb/collabtest/alpha.org",
+        "collabtest:alpha",
+        UNNAMESPACED,
+    ),
+    (
+        "tests/fixtures/kb/collabtest/beta.org",
+        "collabtest:beta",
+        UNNAMESPACED,
+    ),
+    (
+        "tests/fixtures/kb/collabtest/overview.org",
+        "collabtest:overview",
+        UNNAMESPACED,
+    ),
+    (
+        "shared/org/tests/semantics/external-links.org",
+        "sem-external-file",
+        UNNAMESPACED,
+    ),
+    (
+        "shared/org/tests/semantics/split-orders.org",
+        "sem-split-file",
+        UNNAMESPACED,
+    ),
+    (
+        "shared/org/tests/semantics/unrendered.org",
+        "sem-unr-file",
+        UNREAD,
+    ),
+    (
+        "shared/org/tests/semantics/unrendered.org",
+        "sem-unr-visible-heading",
+        UNREAD,
+    ),
+];
+
+/// A KB link outside mae-kb's `KB_NAMESPACES` (a bare id, an unknown
+/// scheme): mae-kb flattened it to `D (T)` text in the stored body, though
+/// its projector still made the edge; the store form keeps it a link.
+const UNNAMESPACED: &str = "a KB link without a known namespace stays a link";
+
+/// A link the semantics do not read (a comment line or block): mae-kb
+/// rewrote it; the store form leaves it as written, and neither makes an
+/// edge of it.
+const UNREAD: &str = "a link in an unrendered region is left as written";
+
+/// `org_ingest`'s stored bodies against mae-kb's rewrite of the same text
+/// (the extent is the differential's business: `compare_body`). The store
+/// form keeps the query (`org_ingest`'s module doc says why: mae-kb's
+/// ingest dropped every typed relation in the manual); every other
+/// difference must be listed in [`STORED_BODY_DIVERGENCES`].
+#[test]
+fn stored_bodies_differ_from_mae_kb_only_as_listed() {
+    let files: Vec<PathBuf> = bundled_corpus().into_iter().chain(synthetic()).collect();
+    let (mut query_kept, mut other) = (0, Vec::new());
+    for path in &files {
+        let (file, text) = (rel(path), read(path));
+        let sem = semantics(&parse(&text, &options()));
+        let r = org_ingest::parse_file(&text);
+        for (s, node) in sem.nodes.iter().zip(&r.nodes) {
+            let old = rewrite_links(&text[s.body_span.range()]);
+            if old == node.body {
+                continue;
+            }
+            // Both sides: a link mae-kb left as written (in a src block)
+            // keeps its query on both.
+            if without_queries(&node.body) == without_queries(&old) {
+                query_kept += 1;
+                continue;
+            }
+            let first = without_queries(&old)
+                .lines()
+                .zip(without_queries(&node.body).lines())
+                .find(|(a, b)| a != b)
+                .map(|(a, b)| format!("\n  mae-kb:  {a}\n  org_ingest: {b}"))
+                .unwrap_or_default();
+            other.push((file.clone(), node.id.clone(), first));
+        }
+    }
+    println!("{query_kept} stored bodies differ only in the query they keep");
+    let listed = |f: &str, id: &str| {
+        STORED_BODY_DIVERGENCES
+            .iter()
+            .any(|(lf, lid, _)| *lf == f && *lid == id)
+    };
+    let unlisted: Vec<String> = other
+        .iter()
+        .filter(|(f, id, _)| !listed(f, id))
+        .map(|(f, id, d)| format!("{f} {id}{d}"))
+        .collect();
+    let stale: Vec<&str> = STORED_BODY_DIVERGENCES
+        .iter()
+        .filter(|(f, id, _)| !other.iter().any(|(of, oid, _)| of == f && oid == id))
+        .map(|(_, id, _)| *id)
+        .collect();
+    assert!(
+        query_kept > 0,
+        "the corpus has typed links: the check is vacuous"
+    );
+    assert!(unlisted.is_empty(), "unlisted:\n{}", unlisted.join("\n"));
+    assert!(
+        stale.is_empty(),
+        "listed but stored as mae-kb did: {stale:?}"
+    );
 }

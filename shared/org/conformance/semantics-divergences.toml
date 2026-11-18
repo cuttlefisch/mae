@@ -3,7 +3,7 @@
 # replaces (ADR-112 D2, D5), plus mae-org's agreement with the Emacs oracle
 # for titles and levels (semantics-titles.tsv).
 #
-# tests/semantics_differential.rs gives every difference a CLASS by a
+# shared/kb/tests/org_semantics_differential.rs gives every difference a CLASS by a
 # mechanical check (see its classify_* functions and compare_body), then
 # requires an entry here for it. It fails on a difference no entry covers, on
 # an entry that covers nothing, on an entry whose pinning test is not a

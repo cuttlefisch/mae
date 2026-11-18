@@ -1,6 +1,6 @@
 #!/bin/sh
 # Regenerate semantics-titles.tsv, the Emacs oracle for the titles and
-# levels of semantics() nodes (tests/semantics_differential.rs, ADR-112 D5).
+# levels of semantics() nodes (shared/kb/tests/org_semantics_differential.rs, ADR-112 D5).
 # Checked in so CI needs no Emacs; run this when a corpus file or a
 # tests/semantics/ fixture changes, and review the diff like code.
 #
