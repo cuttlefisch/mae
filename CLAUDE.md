@@ -878,6 +878,39 @@ is Streamable HTTP with its own audience and RFC 9728 metadata, accepts agent to
 passes a token through, and offers the read surface first; grant and policy methods are never on it
 (principle #16). The third-party MCP OAuth flow is deferred.
 
+**ADR-119** (*proposed, design; phased S0, L1–L3, X1*): **the MAE web core.**
+
+**One core, two front-ends.** The core derives pages, backlinks, listings, search shards and graph data
+from a KB's nodes, and supplies the browser runtime. The front-ends are:
+- a live, authenticated app served by mae-daemon: read-only first (L1), then editing (L2), then change
+  records and review (L3);
+- a static export of approved revisions (X1).
+
+**Derivation**
+- Addresses come from node IDs only.
+- One resolver is built per KB.
+- Derivation is incremental and correct by construction. Each output's fingerprint hashes what
+  deriving it reads, including its view, and a property test holds incremental output equal to a full
+  derivation.
+
+**Access**
+- Access is per KB, and authorized on every request.
+- Derived outputs are shared only within one KB and one view.
+- The published view is derived from published revisions only.
+
+**Rendering choices**
+- Highlighting is tree-sitter, shared with the editor.
+- Diagrams use a self-built Graphviz WASM module, pending a licence opinion.
+- Search and the graph wait on spikes C4b and C5b.
+- Navigation is an in-page router.
+- Components are minijinja templates behind one sanitiser, a strict CSP and Trusted Types.
+
+**Amends** ADR-073, ADR-074 Amendment 1, ADR-097, ADR-067, ADR-111 and ADR-113.
+
+**Documents:** the parity spec is `docs/verification/kb-site-parity.md`, the evidence is
+`docs/research/119-spike-results.md`, and the prior art is
+`docs/research/119-kb-site-engine-prior-art.md`.
+
 > **This index goes stale silently and has done so before** — ADR-068 through 091 were missing
 > from it entirely until 2026-08-04, i.e. every ADR from the KB-visualization arc and the whole
 > pre-v0.15 audit set, so agents rediscovered decisions that already existed. `docs/adr/` is the

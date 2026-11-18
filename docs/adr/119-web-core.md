@@ -1,0 +1,654 @@
+# ADR-119: The MAE web core: one core for the live web app and the static export
+
+**Status:** Proposed (design). Nothing here is built. Spikes C1–C6 and C10–C12 are measured (results:
+`docs/research/119-spike-results.md`). C4b, C5b, C7, C8 and C13 are still to spike. D14 (search) and
+D15 (graph) stay open until they report. Phased (S0, L1–L3, X1, below).
+
+**Depends on:**
+- ADR-112 (mae-org: one lossless parser, its semantics and renderers, and the `Resolver` it renders
+  against);
+- ADR-030 (the KB link grammar);
+- ADR-110 (the store is the truth);
+- ADR-105 (KB identity and node-document addressing);
+- ADR-052 and ADR-111 (the daemon's HTTPS listener and how remote clients prove identity);
+- ADR-098 and its Amendment 1 (the typed principal, bindings);
+- ADR-053 (the `kb/query.*` read surface and `kb_access`);
+- ADR-074 Amendment 1 (the per-KB change index), for L1;
+- ADR-099 (WebSocket sync), ADR-100 (the browser edit surface) and ADR-036 Amendment 1 (the hub
+  verifies content ops, #727), for L2;
+- ADR-113 (publication review), ADR-116 (version history), ADR-117 (access administration) and
+  ADR-115 (attachments), for L3.
+
+**Amends:**
+- ADR-073 D2 and D3: the live page is rendered by the daemon, not assembled in the browser from
+  `kb/query.*`.
+- ADR-097 D1: names this core as the browser KB surface it scopes.
+
+**Relates to:**
+- ADR-118 (agents use `/mcp`, not this app);
+- ADR-104 (MAE's own corpora, the first public KBs the export can publish);
+- CLAUDE.md principles #7, #12 (its browser amendment), #13, #14 and #16.
+
+**Source of the requirements:**
+- The owner *(2026-11-18)*: this is "the core for how [MAE's web surface] with auth and editing with all the
+  change records etc all built out", architected to go beyond the static KB site it replaces.
+- A browser client's behavioural parity specification for that site,
+  `docs/verification/kb-site-parity.md`: 166 requirements, each with a mechanical test.
+
+Decisions the owner took are marked *(owner, 2026-11-18)*, and only those.
+
+**Prior art:** `docs/research/119-kb-site-engine-prior-art.md`.
+
+**Tracking:** issue TBD.
+
+## Context
+
+MAE's web surface today has three parts, and none of them is a product:
+
+- **A live page** at `GET /kb/{kb_id}/view` (ADR-073). It is a client-side shell that polls
+  `kb/query.*`: a node list and a content pane, with no search, history or previews.
+- **A WebSocket sync** (ADR-099), built for clients that hold their own CRDT state.
+- **A browser client's own site:** a general-purpose static-site generator, heavily adapted. It
+  renders KBs that a fail-closed gate has published.
+
+The client measured that site on its real published bundle (1,511 org files, 5.5 MB; 8,747 IDs; 16,810
+note links), in the publish job's limits (2 CPUs, 1.5 GB), median of 3, on 2026-11-18:
+
+- **Full build: 65 s, and one changed file still costs about 60 s.**
+- **39 s of the 65 come from one design mistake:** the 8,747-entry link-target map is copied into a
+  WASM renderer for every page.
+- **Diagrams: 16.6 s for 49.**
+- **Every cold page load fetched about 5.5 MB,** 90 % of it one index rebuilt on every page.
+- **A navigation took about 0.5 s to settle.**
+
+It has no authentication and no editing, and it shows no change records.
+
+The owner wants one MAE web surface that does all of it *(owner, 2026-11-18)*:
+
+- read and navigate KBs at least as well as that site;
+- sign in;
+- edit;
+- see history and review;
+
+and still produce a static site where one is required. MAE knows the KB's structure (stable node IDs,
+the typed link graph, mae-org's lossless tree), so it can derive pages incrementally instead of
+rebuilding everything.
+
+**Clean-room.** The behaviour to match is the parity specification, which describes observable
+behaviour only. No one writing this core reads the source of the generator being replaced, or of its
+plugins.
+
+Disclosure: this ADR's author once read a design note that summarised that generator's build pipeline
+and plugin interface. It covered architecture, no code.
+
+The client wrote two components itself and owns them: a chord-graph library and a palette package.
+Both come across relicensed GPL-3.0-or-later *(owner, 2026-11-18)*, minus the files the client
+identified as derived from the replaced generator.
+
+## Decision
+
+### D1. One core, two front-ends *(owner, 2026-11-18)*
+
+The **core** is a library. From a KB's nodes it derives everything a reader sees:
+
+- pages;
+- addresses;
+- backlinks;
+- tag and folder listings;
+- search shards;
+- graph data;
+- feeds.
+
+It also provides the browser runtime (router, layout, graph, search client, theming).
+
+Two front-ends use it:
+
+- **The live app, served by mae-daemon** on its HTTPS listener *(owner, 2026-11-18)*. It covers
+  signed-in reading first (L1), then editing (L2), then change records and review (L3). It reads the
+  daemon's store, which is the truth (ADR-110).
+- **The static export.** A published bundle goes in and a static offline site comes out (X1). It is
+  for sites that must be static, such as a public site or one behind a fail-closed publication gate.
+  It reads only the bundle.
+
+Both pass the same parity tests wherever a requirement applies. Requirements specific to the static
+export (P-140, the build exit codes P-141–P-149) apply to X1. Their live equivalents are in D19.
+
+### D2. Where the code lives
+
+- **The core:** a library crate, `shared/site`, used by the daemon. Like the other shared crates, it
+  is a member of the editor workspace.
+- **The browser runtime:** TypeScript in `shared/site/web/`, built in CI into versioned assets the
+  daemon serves and the export copies.
+- **The static export:** a binary, `mae-site`, built in its own small workspace, so the editor
+  doesn't link a WASM runtime or a search indexer.
+- **Heavy optional parts** (the Graphviz runtime, the search indexer) sit behind cargo features, so a
+  daemon built without the web app pays nothing for them.
+
+### D3. Inputs and who controls them
+
+**Content**
+- **Live:** the daemon's store, through the KB access check `kb_access` (ADR-053). KB authors, and any
+  agent that can write to a KB, control it.
+- **Export:** the bundle, which holds only `.org` files and declared data files.
+
+**Site configuration, templates and client behaviours** come from the operator, never from content:
+- live: the daemon's configuration;
+- export: a site directory beside the bundle.
+
+Configuration covers locale, base path, hidden namespaces, palette and component slots.
+
+Nothing a KB contains can supply configuration, a template or browser code (principle #16). An agent
+that can edit a KB therefore cannot change what the app runs.
+
+### D4. Addresses come from IDs only
+
+- **Live:** pages are `/kb/<kb-id>/<id>`.
+- **Export:** pages are `/<id>/`. Every published ID also answers `/<id>` and `/<kb-id>/<id>`
+  (P-02–P-04).
+
+A title or a folder path is never part of an address, so a retitle or a move leaves every URL valid.
+Two inputs mapping to one URL fail the derivation (P-15). References in configured hidden namespaces
+are removed (P-13).
+
+### D5. One resolver per KB, built once
+
+Every node's ID, title and anchor go into one map per KB. A heading's UUID `CUSTOM_ID` is an ID too,
+mapped to its page and the anchor `cid-<uuid>`. Each page is rendered against only the entries it
+references. mae-org's `Resolver` is plain data (ADR-112 D3), and rendering in-process removes the copy
+that cost 39 s.
+
+**Links between KBs.** ADR-030 has no KB-qualified link form. An `id:X` that is not in the page's own KB
+therefore renders as the unresolved placeholder, in both front-ends. Nothing probes other KBs for X, so
+there is no cross-tenant probe and no oracle, and every derived output stays independent of the reader
+(D7).
+
+Resolving links into another KB needs a KB-qualified link form (ADR-105 addressing: `kb_id` plus id),
+an ADR-030 amendment, and an identical answer for "missing" and "forbidden". That is future work, not
+L1.
+
+**Prerequisite (S0):** mae-org must honour Org's search option `id:X::#CUSTOM_ID`. It parses the option
+(`LinkClass::search`), but renders the link without the anchor, which breaks P-10. The rule: use the
+anchor only when that `CUSTOM_ID` is on the page X resolves to; otherwise link to X's page. It is never
+a placeholder and never a failure.
+
+The core renders with mae-org. KB ingest in the editor still uses mae-kb's older parser, because
+ADR-112's switchover (O4) is not done. Until it is, the two can disagree on edge cases. The core's
+tests pin mae-org's behaviour.
+
+### D6. Incremental derivation that is correct by construction
+
+Tools that make authors declare dependencies by hand produce stale output, and one dropped incremental
+builds for that reason (prior art §1). So derivation works like this.
+
+**Fingerprints**
+- **A context hash covers every global input:**
+  - the core version, its web assets and its grammar versions;
+  - the configuration;
+  - the templates.
+
+  When it changes, everything is re-derived.
+- **Every output's fingerprint is a hash of what deriving it reads:**
+  - for a page: its node's source, the resolver entry (or the absence of one) for every ID it
+    references, its backlink list, the **view** it is derived for (D8), and the context hash;
+  - for a listing page: its member list.
+
+  An output is re-derived only when its fingerprint changes.
+- **Site-wide chrome is not embedded in pages.** The explorer, the folder tree and other per-KB data
+  are separate, content-hashed assets that each page loads once. Anything a page does embed from
+  elsewhere joins its read set; P-163's "what's new" link, for example, depends on whether its target
+  is published.
+- **Determinism:** pass-1 summaries are cached by source hash. Every list written is sorted, so no
+  hash-map order reaches the output.
+
+**What changes come from**
+- **Live:** from the per-KB change index (ADR-074 Amendment 1, C1), which says which nodes changed
+  since a cursor. The daemon re-derives the affected outputs and publishes a thin notice (D9).
+  - The cursor a derivation used is taken **before** it reads, so a write that lands during the
+    derivation is still delivered afterwards.
+  - Publication events (approve, enter into force, derogate) are changes to the published view, so they
+    get change-index rows too (D8).
+- **Export:** from comparing the bundle with the last build. Each build writes a complete new output
+  directory, copying unchanged outputs from a cache kept **outside** the site, then swaps it in with
+  one rename (P-140). A failed build leaves the previous site untouched.
+
+**The proof is a property test.** Random edit sequences must leave the incremental output
+byte-identical to a full derivation after **every** step.
+- The spike's edit set: retitle a page, edit a body, add or remove a link, add, delete or move a page,
+  change tags.
+- It grows to cover:
+  - heading retitles and IDs;
+  - `CUSTOM_ID` changes;
+  - duplicate IDs, which must fail;
+  - configuration and template changes;
+  - folder moves;
+  - every new derived output.
+
+It proves consistency, not correctness: a bug shared by both paths cancels out. Correctness is the
+parity tests' job (P-xx) and their declared mutants'.
+
+### D7. Authorization, and what may be shared between readers
+
+Access is decided per KB. No ADR defines a per-node access rule (ADR-053, ADR-105 and ADR-115 all go
+through `kb_access`). So:
+
+- **Every request is authorized, with nothing cached.** Each page, asset, search shard, graph
+  payload and notice the live app serves passes `kb_access(kb_id, principal)` and the checks around it:
+  - the typed principal, where an unbound IdP subject reaches nothing (ADR-098 C1);
+  - a query-only policy (ADR-067);
+  - blocklists.
+- **Derived outputs are shared between readers of a KB and a view, and never mix KBs or views.** They
+  are keyed by `(kb_id, view, revision or change sequence, context hash)`. Rendering never depends on
+  the reader (D5), so one derivation serves every reader the KB admits to that view.
+- **Query-only members (ADR-067)** may read pages one at a time, as `kb/query.get` already lets them.
+  They are refused the bulk derived assets (search shards, the graph edge list, the explorer payload),
+  which would hand them the whole KB that ADR-067 withholds. They search through `kb/query.search` and
+  its caps (ADR-053).
+- **No oracle:** a KB a principal cannot read answers exactly as a KB that does not exist (ADR-118 D4,
+  ADR-117 D1).
+- **Browser caching:** assets keyed by content hash are served `Cache-Control: private, immutable`,
+  never `public`. A copy already in a browser's cache can outlive a later revocation. That is accepted
+  and stated: revocation stops new reads, not what a reader already saw.
+- **E2E KBs** (ADR-037) are refused by the live app with `e2e_unsupported`. The daemon holds no
+  plaintext to render, as ADR-113, ADR-116 and ADR-118 already say.
+
+  The core can run in WASM, so rendering an E2E KB in the browser after decryption is a later option.
+  It needs its own ADR.
+
+### D8. Which version a reader sees (ADR-113)
+
+With publication review off for a KB, there is one version: the working copy.
+
+With it on, ADR-113 gives two views, `working` and `published`, and does not say which a reader gets.
+The rule *(owner, 2026-11-18: "published unless edit, if user has edit perms they should be able to
+toggle between the two")*:
+
+- a principal **without** Edit on the KB always gets the `published` view, and cannot request
+  `working`;
+- a principal **with** Edit can toggle between the two, and each is labelled. Its default is
+  `working`.
+
+The daemon enforces this, not the client.
+
+**The `published` view is derived from published revisions only** (ADR-113 V9), not filtered from the
+working one:
+- its resolver, titles, backlinks, tag and folder listings, search shards and graph edges all come
+  from published revisions;
+- a working node that links to a published one is not its backlink;
+- a link to an unpublished node is the unresolved placeholder, never the node's working title.
+
+Notices, cursors and ETags for a view are computed from that view's own changes only, so nothing about
+draft activity reaches a published-only reader. A test seeds drafts beside published revisions and
+asserts that no published-view output, notice or header changes when only the drafts do.
+
+**Until this exists (L3), the live app serves only KBs with review off.** A review-enabled KB answers
+every reader with `review_view_unavailable`. Only members reach that answer (`kb_access` comes first),
+and they already know the KB uses review, so it is no oracle.
+
+The static export renders only approved, in-force revisions.
+
+### D9. Live updates
+
+The live app learns of changes from the thin, content-free, per-KB notices of ADR-074 Amendment 1. They
+arrive over the WebSocket (`kb/changes.subscribe`) or SSE.
+- Each notice is authorized when it is delivered, and scoped to the reader's view (D8).
+- The browser re-fetches only what a notice names. Each re-fetch is a request authorized on its own.
+- On `reset`, the browser drops its pages, explorer and search shards for that KB.
+- On `access_lost`, it drops them too, and leaves the KB.
+
+L1 needs the change index (ADR-074 Am.1 C1) built. Until it is, a reader reloads to see changes.
+
+### D10. Editing (L2)
+
+Editing uses ADR-100's surface: structured chrome bound to the node's CRDT schema, plus a live preview.
+The preview is the core's own renderer in WASM, so a draft looks exactly as it will when published. It
+travels over ADR-099's WebSocket.
+
+**Prerequisite:** the hub verifies every content op (ADR-036 Amendment 1, #727). Until then, ADR-099 E3
+limits writes to operator-minted credentials.
+
+### D11. Change records and review (L3)
+
+- **History:** ADR-116's history (`kb/history.*`, partly built) becomes per-page history and diff
+  views.
+- **Review:** ADR-113's revisions, review requests and approvals become the review views.
+- **Administration:** ADR-117's caller-scoped reads drive "my pending" and access administration.
+- **Attachments:** ADR-115's attachments resolve through the core, with placeholders for every
+  state other than resolved.
+
+These are views over daemon tables the core does not own. The core renders them and does not decide
+them.
+
+### D12. Code highlighting: tree-sitter, shared with the editor
+
+Highlighting uses `tree-sitter-highlight` with the editor's grammars, plus PowerShell, INI, SQL and
+nginx (all MIT or Apache-2.0).
+
+- Tokens are role classes, never inline styles.
+- A block whose highlighted text is not byte-identical to its source falls back to plain text.
+- An unknown language is plain and logged (P-105–P-110).
+
+The grammars add about 14.5 MB to the binary that carries them.
+
+### D13. Diagrams: a self-built Graphviz WASM module, after a licence opinion
+
+*(owner, 2026-11-18: self-built WASM, after a licence opinion.)* DOT renders to inline SVG through
+Graphviz compiled to WASI, run in a WASM runtime.
+
+- **Instances:** one compiled module per process, and a fresh instance per diagram.
+- **Determinism:** the variance found came from the guest's own C library random state. A fresh
+  instance plus a fixed `start=` seed make output byte-stable (P-119).
+- **Limits:** a time budget by fuel or epoch (P-117), and a memory cap through the runtime's resource
+  limiter. The memory cap is unmeasured.
+- **No build details in the output:** the version comment is stripped (P-139).
+- **Theme and SVG rules:** theme-role mapping and the fail-on-fallback rule are P-113–P-115, and the
+  P-120 allow-list applies to every SVG.
+
+Two conditions come first:
+
+1. **A licence opinion.** Graphviz is EPL-1.0, which the FSF lists as GPL-incompatible. The prebuilt
+   WASI module found is packaged EPL-2.0, but it is still Graphviz. Whether GPL code may load it at run
+   time, as a separate sandboxed file, is a legal question.
+2. **Our own reproducible build** of the module, with HTML-label support (expat), its sha256 and
+   recipe recorded. The only prebuilt module drops HTML-like labels silently, and its provenance is
+   unverified.
+
+Until both are done, diagrams sit behind a narrow renderer interface and show as source. Nothing else
+waits.
+
+### D14. Search: an index derived per KB and loaded in pieces (open until C4b)
+
+Each KB has its own index, re-derived from changed nodes (D6). It is chunked, fetched on demand, never
+rebuilt on navigation, and supports Spanish stemming and tag search. Two candidates were measured, and
+neither meets every target.
+
+- **Pagefind (MIT), as a library.**
+  - Biggest cold fetch 59 KB.
+  - Cold first result 326–329 ms on a 10 Mbps / 40 ms link, against a 300 ms target.
+  - Warm 4–6 ms, but 17–19 ms at 5k pages of real-density text, against 16 ms.
+  - Build RSS 1.57 GB at 5k real-density pages, measured through its command-line build.
+  - Incremental updates of a single page are not shown.
+- **MAE's own chunked index.**
+  - Shards up to 38 KB, cold 295–363 ms on the same link, build RSS under 100 MB.
+  - A shard can be rebuilt alone, which suits a live KB.
+  - Its costs: a format we own, and a browser stemmer that must match the Rust one.
+
+Some readers are on slow VPN links *(owner, 2026-11-18)*. On 1.6 Mbps / 150 ms, both candidates take
+1.15–1.9 s, because a first result needs two serial round trips.
+
+C4b measures both candidates, on real-density text, for:
+- library-path time and memory;
+- updating one page incrementally;
+- an inlined first shard or an equivalent, weighed against the 300 KB-per-download target.
+
+The slow link then gets its own bound. The daemon's existing `kb/query.search` (a scan) stays for API
+clients.
+
+### D15. The graph: a derived edge layer plus a live overlay (open until C5b)
+
+Drawing every chord as its own SVG element does not scale. At 10k dense nodes that is 122k DOM nodes,
+about 1 s to a first stable frame, and 160–550 ms per hover.
+
+What met every target on desktop Chromium and Firefox, without throttling:
+- the chord layer derived once per KB revision into one image (11–34 KB);
+- only the current, hovered and neighbouring notes drawn live, from a compact edge list (94 KB
+  compressed at 10k dense nodes).
+
+Hover touches only that note and its own links, so P-57a holds by construction.
+
+**Open, spike C5b:**
+- **Palette and accent changes** (P-55, P-68, P-93, P-95). The candidate is an edge mask tinted in CSS.
+- **Zoom** (P-61a, P-64). The candidates are tiles per zoom level, or drawing the visible chords live.
+- **The hierarchical views** (P-59). They take 100–460 ms in the browser, and their scene data is too
+  large to precompute as is.
+- **Labels, the "here" marker and the visited band:** the spike omitted them.
+- **Phones:** C5b repeats the runs at 4× and 6× CPU throttling.
+
+### D16. The browser runtime: an in-page router
+
+Navigation never reloads the page *(owner, 2026-11-18)*. The router owns, each with a parity test:
+
+- links inside inline SVG (P-26);
+- focus and a live-region announcement (P-22a);
+- scroll restoration (P-23);
+- tearing down and re-running behaviours exactly once per navigation (P-25, P-156).
+
+Spike C6: about 190 lines, 2.4 KB compressed, every listed requirement passing in Chromium and Firefox.
+
+Its limits:
+- a page's own inline scripts do not run after a swap;
+- scroll state does not survive a full reload;
+- `file://` serving is untested;
+- its timings are loopback only.
+
+The same runtime serves both front-ends. In the live app it also listens for D9's notices.
+
+**How the live app authenticates a page load.** A deep link or a reload is a plain navigation, which
+cannot carry a bearer header, and ADR-111 refuses tokens in the query string. So:
+- `GET /kb/<kb-id>/<id>` returns the app shell, which holds no KB content and needs no authentication;
+- the router then fetches the page's content, with the bearer token in the `Authorization` header;
+- the token is held as ADR-111 and ADR-118 prescribe for browser clients, never in `localStorage`.
+
+There are no cookies, so there is no CSRF.
+
+KB-authored HTML runs in the same origin as the token and the `kb/query.*` API, so an escape from the
+sanitiser could reach every KB the user can read. Three defences guard against that:
+- D19's sanitiser;
+- a strict CSP with no inline script;
+- Trusted Types (`require-trusted-types-for 'script'`), so only the router's sanitising path can write
+  HTML.
+
+The alternative is serving content from a separate origin inside an iframe. It isolates more, at the
+cost of the router's single-document model. It is recorded in Rejected, with its trade-off.
+
+### D17. Theming and contrast checked when derived
+
+The palette package's tokens set light and dark themes. The reader's choice is applied before first
+paint by a small, render-blocking, same-origin script in `<head>`, not an inline one (D19)
+(P-91–P-99). Every token pair the theme uses is checked for contrast when the theme is derived, and a
+miss is an error. The client's rendered-page audit (axe plus 3:1 non-text checks over 52 scenarios)
+runs in CI (spike C8).
+
+### D18. Components through named slots
+
+A site adds components at named slots (parity §3.18), from the operator's configuration (D3).
+
+- **Templates:** build-time components are minijinja templates (Apache-2.0), passed a node's data.
+  - A template cannot include or extend arbitrary paths.
+  - It runs under strict undefined values, a recursion limit, capped ranges and a fuel limit (enabled,
+    unmeasured).
+  - The core supplies an ISO date parser and `fail()`, and removes `debug()`.
+- **Template failures:**
+  - export: a failing template fails the export (P-157);
+  - live: the slot is left empty, and the failure is logged, rate-limited per template, and reported
+    to the operator.
+- **One sanitiser for content and components:** ammonia (MIT or Apache-2.0), keeping `class`, `role`,
+  `time[datetime]`, `hidden="until-found"` and P-120's inline-SVG allow-list.
+- **Client behaviours** register with the router: `mae.site.register({id, init(ctx) -> cleanup?})`.
+  `ctx` holds `root`, `page`, `site` and an `AbortSignal`. The router runs each behaviour exactly once
+  per navigation (P-156).
+- **MAE's embedded Scheme is not offered yet.** As shipped it can read files and the environment, its
+  `load` is not gated, and it has no step limit. It becomes an option once mae-scheme has a pure
+  profile: an allow-list standard library, no `load`/`include`/`eval`, a step budget, and a crate
+  split.
+
+### D19. Fail-closed in both front-ends
+
+**Both**
+- No network in the derivation path.
+- The final allow-list sanitiser (P-151) runs over everything from content or components. The core's
+  fixed chrome (layout, router, theme script, asset references) is added after sanitising.
+- Pages carry a Content-Security-Policy allowing scripts and styles from the serving origin only. There
+  are no inline scripts, and the live app also requires Trusted Types (D16).
+
+**Live**
+- A node that cannot be rendered faithfully is shown as a labelled placeholder, with the reason
+  logged. It is never a half-rendered page, and never an error that names unpublished data.
+- Request handling never exposes a host path or a build detail (P-139).
+
+**Export**
+- Refuse symlinks, with `O_NOFOLLOW` and a regular-file check after open.
+- Write only under the new output directory.
+- Exit 0, 1, 2 or 3 as P-141–P-152 define.
+- Withhold a node that uses `#+INCLUDE` or a local image (ADR-115's store is not part of a bundle
+  yet).
+
+Each rule gets a test that tries to break it (spike C7).
+
+**Platforms (principle #13):** Linux and macOS in CI, including paths, symlink refusal and the WASM
+runtime. Windows hosting is not a target for now.
+
+### D20. Performance targets, not gates
+
+Until the owner tries test instances, these are targets, not gates *(owner's standing decision)*.
+
+**Export**, at today's size (scaling linearly to 5k pages), within 2 CPUs:
+- full build ≤ 15 s (≤ 45 s at 5k), peak ≤ 512 MB;
+- one-page change ≤ 2 s.
+
+**Live** *(owner, 2026-11-18: accepted)*:
+- a change visible to a reader ≤ 2 s after its commit;
+- a cached page served in ≤ 50 ms at p95 on the server;
+- re-deriving after one node's change ≤ 200 ms at today's size.
+
+**Both front-ends, in the browser:**
+- no single download > 300 KB compressed;
+- search ≤ 300 ms cold on ≥ 10 Mbps / ≤ 40 ms, ≤ 16 ms warm, and a bound for 1.6 Mbps / 150 ms set by
+  C4b;
+- no long task > 200 ms on a typical page (≤ 500 ms on the largest);
+- navigation settled ≤ 150 ms, and the graph adds no long task > 100 ms per navigation;
+- expanded graph stable ≤ 300 ms;
+- Graphviz ≤ 50 ms per diagram amortised.
+
+**Where the evidence stands:**
+- **The render core is measured:** on one core, 1,536 pages take 0.38 s and 5,040 about 1.2 s.
+- **A complete derivation** (sanitising, highlighting, diagrams, search, graph, redirects) is not.
+- **The live path** (re-derivation driven by the change index, under concurrent reads) is not
+  (spike C13).
+- **Search** misses its targets as noted in D14.
+
+### D21. Resource bounds (ADR-109)
+
+The daemon derives pages for every KB it hosts, so one KB must not starve the rest.
+- **Per node:** mae-org's depth bound (`RENDER_MAX_DEPTH`) applies, and a cap on a node's source size
+  and link count withholds an oversized node with a labelled placeholder.
+- **Per block and diagram:** highlighting stops at a per-block size cap and falls back to plain text.
+  Diagrams run under D13's fuel and memory limits.
+- **A bounded worker pool:** derivation runs on a fixed pool, separate from request handling, with a
+  per-KB queue. A burst of changes in one KB waits its turn and cannot occupy every worker.
+- **A capped cache:** the derivation cache has a byte cap per KB and a global one, with least-recently
+  used eviction. An evicted output is re-derived on demand.
+- **ADR-109's budget:** these caps are set inside ADR-109's resource budget and its tenant model, and
+  C13 measures them.
+
+## Evidence
+
+Every number above comes from `docs/research/119-spike-results.md`, or from the client's measurements
+of its own site, as stated in Context. The spikes are throwaway measurement code.
+
+They ran on synthetic bundles scaled from a 48-file sample, with fresh IDs. Synthetic density is lower
+than live (3.2 IDs and 2.5 links per page, against 5.8 and 11), which can flatter every result. Most
+spikes ran single runs on one shared Linux machine. The spikes exercised the export path, and the live
+path is C13.
+
+| Claim | Result |
+|---|---|
+| C1 render core | **Holds.** 1,536 pages: 0.38 s on 1 core, 0.11 s on 4. 5,040: about 1.2 s and 0.33 s. 10,032: 2.4–3.0 s and 0.72 s. RSS ≤ 25 MB. Today's equivalent stages take about 52 s. Excludes sanitising, highlighting, search, graph and redirects. |
+| C2 one resolver | **Holds**, with F1 found and specified (D5). Built in ≤ 7 ms at 10k. On the sample, the same 121 resolved links as the reference renderer. Unresolved links become a placeholder with no `<a>`. |
+| C3 incremental | **Holds at spike scope:** pages, backlinks and tag pages, with no folders or chrome, so "move: 0" is vacuous. 300 random edits × 2 seeds: incremental equals full, byte for byte, after every step. Two deliberately broken dependency sets diverged at steps 9 and 17. |
+| C4 search | **Open (D14).** |
+| C5 graph | **Side-panel ring on desktop holds.** The rest is open (D15). |
+| C6 router | **Holds.** P-22, P-22a, P-23–P-27, P-28 (its marking half), P-37, P-130 and P-156 pass in Chromium and Firefox: 34/34, and the same on 2 re-runs. Click to settled: 15 ms in Chromium and 9 ms in Firefox, median on loopback. 18 of 19 deliberately broken routers caught; the survivor is equivalent. Weak spot: P-26's test needs strengthening for Firefox. |
+| C10 diagrams | **Decided, conditions in D13.** WASI Graphviz: 49 diagrams in 34 ms, bounded by fuel or epoch, identical to the reference on 4/5 blocks (the 5th lost its HTML labels in the prebuilt module). Separate `dot` process: 56–113 ms. Pure-Rust layout: rejected. |
+| C11 components | **Holds.** 4 components in 24 template lines; 1,536 pages × 4 rendered and sanitised in 86 ms. Embedded Scheme: unsafe as shipped (D18). |
+| C12 highlighting | **Holds.** All 10 languages; 28/28 blocks byte-exact; the check caught 7/7 corrupted outputs. 430 shell blocks in 23 ms, 430 mixed-language blocks in 112 ms. |
+| C9 parity | The client runs its checks against the live app (L1) and the export (X1). |
+
+## Phases
+
+Each phase carries its parity requirements' tests and their declared mutants (principle #14), and it
+grows D6's property test.
+
+- **S0.** mae-org: `id:X::#CUSTOM_ID` (D5), with tests and mutants.
+- **L1 (first deliverable *(owner, 2026-11-18)*): the read-only live app in the daemon.** It covers
+  plaintext KBs with review off (D8), and comes in three steps.
+  - **L1a.** The core library: resolver, derivation, cache, sanitiser, CSP, Trusted Types, per-request
+    authorization and resource bounds (D5–D7, D19, D21).
+    - Prerequisite: ADR-074 Amendment 1's change index, built for D6 and D9.
+    - Pages at their addresses, backlinks, tag and folder listings, breadcrumbs, table of contents and
+      highlighting.
+    - The browser runtime: router and page-load auth (D16), layout and panels, explorer, previews,
+      folding, tables, theming, copy controls and components (D18).
+  - **L1b.** Search, once C4b decides D14.
+  - **L1c.** The graph, once C5b decides D15.
+- **X1. The static export:** the `mae-site` binary on the same core. This retires the client's
+  generator wherever a static site is required (parity §4.6).
+- **L2. Editing:** ADR-100 over ADR-099, once #727 lands.
+- **L3. Change records and review:** ADR-116, ADR-113, ADR-117 and ADR-115 as views (D11). Also the
+  published-view derivation and its leak test (D8), which open review-enabled KBs to the live app.
+- **Diagrams** go live in whichever phase is current once D13's conditions are met.
+
+## Amendments this needs
+
+- **ADR-073 D2 and D3:** the live page is rendered by the daemon from the core. The `webview_enabled`
+  switch keeps gating it.
+- **ADR-074 Amendment 1:** its change index becomes a prerequisite for L1, not an optimisation.
+- **ADR-097 D1:** names this core.
+- **ADR-113:** D8's rule for which view a reader gets. Also that the
+  published view is derived from published revisions only (V9), and that publication events write
+  change-index rows.
+- **ADR-074 Amendment 1, C2 and C4:** notices, cursors and ETags are scoped per view.
+- **ADR-067:** query-only members are refused the bulk derived assets (D7).
+- **ADR-053:** its search caps stay the only search surface for query-only members. Full members get
+  search shards, which hold nothing they could not already read.
+- **ADR-111 and ADR-052:** how the live app authenticates page loads (D16): an unauthenticated shell,
+  then bearer-authenticated fetches.
+- **ADR-030 (later):** a KB-qualified link form, before links between KBs can resolve (D5).
+
+## Consequences
+
+- **One web surface instead of three.** The static site, the polling page and a future editor become
+  one core with two front-ends.
+- **Derivation becomes incremental:** an edit re-derives a few pages, not all of them.
+- **New dependencies:** a WASM runtime (about 21 MB and about 1 min of build), a search indexer or our
+  own, four tree-sitter grammars, minijinja, ammonia, and a TypeScript runtime with its own toolchain
+  and tests. The toolchain's licences are checked when L1 starts.
+- **The daemon becomes a web application server.** Its HTTPS listener, its resource budget (ADR-109)
+  and its tests grow accordingly.
+- **Every derived output must join D6's scheme.** The property test is the guard, and it must grow
+  with each one.
+
+## Rejected
+
+- **Three surfaces kept separate:** a static generator, a polling page and an editor would triple
+  the work and drift apart.
+- **Rendering in the browser from `kb/query.*` (ADR-073's model) for the whole app:** it repeats the
+  per-page work the client measured as the bottleneck. Kept only for E2E KBs, later (D7).
+- **Site code or configuration inside KB content:** KB authors and agents would control what the app
+  runs (D3).
+- **Rendering per reader:** it would multiply cost by readers. Access is per KB, so it isn't needed
+  (D7).
+- **syntect:** covers 5 of 10 languages, and its grammars diverge from the editor's.
+- **A pure-Rust Graphviz layout:** drops URL links, fails real diagrams, takes 13.7 s at 500 nodes.
+- **Linking Graphviz into the process:** a crash in it would take the daemon down.
+- **Whole-index client search libraries:** they pass 300 KB at about 500 real pages and re-parse on
+  every navigation.
+- **Plain page loads with View Transitions:** the owner chose the router (D16).
+- **Hand-declared dependencies per feature:** the documented cause of stale incremental output (D6).
+- **Inline scripts:** they would need a weaker CSP (D19).
+- **Serving KB content from a separate origin inside an iframe (for now):** stronger isolation, but it
+  breaks the router's single-document model (D16). It is reconsidered if an escape from the sanitiser
+  or Trusted Types is ever found.
+- **Probing other KBs to resolve an `id:` link:** a probe across tenants, and an oracle (D5).
+
+## Open
+
+- **The licence opinion** and the self-built Graphviz module (D13).
+- **Spikes:**
+  - C4b: search, incremental and on slow links;
+  - C5b: graph theming, zoom, hierarchical views and phones;
+  - C7: fail-closed rules;
+  - C8: contrast;
+  - C13: the live path, measuring change index → re-derivation → notice under concurrent readers, the
+    derivation cache's memory per KB, and D21's caps under a hostile KB.
+- **minijinja's fuel limit:** measure it.
+- **mae-scheme's pure profile:** a separate issue.
