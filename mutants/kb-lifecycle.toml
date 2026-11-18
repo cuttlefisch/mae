@@ -1,0 +1,44 @@
+# Scaling guards in crates/mae/tests/kb_lifecycle_e2e.rs (issue #947). Those
+# tests are #[ignore] and env-gated, so run this list with the gate open:
+#   MAE_KB_LIFECYCLE=1 MUTATE_QUEUE=off mae-mutate run --only kb-lifecycle/...
+# Format: tools/mutate/README.md.
+
+[[mutant]]
+id = "kb-lifecycle/quadratic-load-all"
+runner = "editor"
+targets = ["-p", "mae", "--test", "kb_lifecycle_e2e", "--run-ignored", "all"]
+filter = "test(test_load_all_grows_linearly_not_quadratically)"
+ref = "issue #947: a load_all that compares every node with every node is correct but quadratic"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/kb_store_impl.rs"
+find = '''        Ok(nodes)
+    }
+
+    fn replace_all_nodes('''
+replace = '''        let mut sink = 0usize;
+        for a in &nodes {
+            for b in &nodes {
+                if a.id == b.id && a.title == b.title {
+                    sink += 1;
+                }
+            }
+        }
+        std::hint::black_box(sink);
+        Ok(nodes)
+    }
+
+    fn replace_all_nodes('''
+
+[[mutant]]
+id = "kb-lifecycle/quadratic-fts-search"
+runner = "editor"
+targets = ["-p", "mae", "--test", "kb_lifecycle_e2e", "--run-ignored", "all"]
+filter = "test(test_fts_search_does_not_scan_the_corpus)"
+ref = "issue #947: an FTS search that rescans the corpus once per 200 nodes is correct but quadratic"
+[[mutant.edit]]
+file = "shared/kb/src/cozo_store/kb_store_impl.rs"
+find = '''        let content = self.fetch_indexed_text(candidate_rows)?;'''
+replace = '''        for _ in 0..self.load_all()?.len() / 200 {
+            std::hint::black_box(self.load_all()?);
+        }
+        let content = self.fetch_indexed_text(candidate_rows)?;'''
