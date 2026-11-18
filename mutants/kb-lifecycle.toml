@@ -8,7 +8,7 @@ id = "kb-lifecycle/quadratic-load-all"
 runner = "editor"
 targets = ["-p", "mae", "--test", "kb_lifecycle_e2e", "--run-ignored", "all"]
 filter = "test(test_load_all_grows_linearly_not_quadratically)"
-ref = "issue #947: a load_all that compares every node with every node is correct but quadratic"
+ref = "issue #947: a load_all that searches every node body for every node id is correct but quadratic"
 [[mutant.edit]]
 file = "shared/kb/src/cozo_store/kb_store_impl.rs"
 find = '''        Ok(nodes)
@@ -18,7 +18,7 @@ find = '''        Ok(nodes)
 replace = '''        let mut sink = 0usize;
         for a in &nodes {
             for b in &nodes {
-                if a.id == b.id && a.title == b.title {
+                if a.body.contains(b.id.as_str()) {
                     sink += 1;
                 }
             }
