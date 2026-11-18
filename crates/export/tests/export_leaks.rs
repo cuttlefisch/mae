@@ -579,15 +579,14 @@ other body
 }
 
 /// The tag settings that decide what is withheld are not read from a COMMENT
-/// subtree either: an `#+EXCLUDE_TAGS:` there must not change the selection
-/// (the exporter's first pass, `settings_keywords`).
+/// subtree either: an exclude-tags line there must not change the selection.
+/// The legacy `#+EXPORT_EXCLUDE_TAGS:` spelling goes through the exporter's
+/// own first pass (`settings_keywords`); Org's `#+EXCLUDE_TAGS:` is read by
+/// mae-org. Both are pinned.
 #[test]
 fn tag_settings_inside_a_comment_subtree_are_not_read() {
-    let src = "\
-* COMMENT Setup
-#+EXCLUDE_TAGS: public
-* Visible :public:
-PUBLIC-BODY
-";
-    assert_present(src, &["PUBLIC-BODY"]);
+    for key in ["EXPORT_EXCLUDE_TAGS", "EXCLUDE_TAGS"] {
+        let src = format!("* COMMENT Setup\n#+{key}: public\n* Visible :public:\nPUBLIC-BODY\n");
+        assert_present(&src, &["PUBLIC-BODY"]);
+    }
 }
