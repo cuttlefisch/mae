@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.171] - 2026-11-18
+
+
+
+
+### Documentation
+
+- An architecture overview of MAE, derived from the code ([22fc28a](https://github.com/cuttlefisch/mae/commit/22fc28a2416d2c634968184fec7eb28136fc3164))
+
 ## [0.14.170] - 2026-11-18
 
 
@@ -10,6 +19,10 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 
 - *(daemon)* A self-issued token without aud or iss is refused ([7b05d14](https://github.com/cuttlefisch/mae/commit/7b05d142899a0569c4a4c8620e78b847f8c381d7))
+
+### Miscellaneous
+
+- Bump version to 0.14.170 ([bdaa32d](https://github.com/cuttlefisch/mae/commit/bdaa32d96f8691c841f9a350edc689fadd92f96b))
 
 ## [0.14.169] - 2026-11-18
 
