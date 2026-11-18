@@ -176,3 +176,82 @@ fn a_live_lock_is_refused_and_a_dead_ones_is_taken_over() {
     assert_eq!(out.code(), Some(0), "{}", out.all());
     assert!(!fx.state("lock").exists(), "released on exit");
 }
+
+/// Inside a Slurm job the default `trabajo` prefix deadlocks: each step asks
+/// for room in the job the tool already fills, and waits out its time limit.
+/// The real binary refuses before it runs or edits anything.
+#[test]
+fn a_run_inside_a_slurm_job_is_refused_before_anything_runs() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fx::committed("nested", &caught_a());
+    let bin = fx.dir.join("fakebin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let fake = bin.join("trabajo");
+    let marker = fx.dir.join("trabajo-called");
+    std::fs::write(
+        &fake,
+        format!("#!/bin/sh\ntouch '{}'\nexit 1\n", marker.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let out = Out(fx
+        .command(&["run"])
+        .env_remove("MUTATE_QUEUE")
+        .env("SLURM_JOB_ID", "4242")
+        .env("PATH", path)
+        .output()
+        .unwrap());
+    assert_eq!(out.code(), Some(2), "{}", out.all());
+    assert!(out.stderr().contains("Slurm job 4242"), "{}", out.all());
+    assert!(!marker.exists(), "trabajo must not be called");
+    assert!(fx.calls().is_empty(), "nothing may run: {:?}", fx.calls());
+    assert_eq!(fx.read("src/lib.rs"), FIXTURE_LIB, "nothing edited");
+}
+
+/// Every runner in this repository's own list ends a hung test: its test
+/// command runs nextest's `mutate` profile, and that profile, in the runner's
+/// workspace, terminates a slow test (reported `TIMEOUT [`, read as caught).
+/// Without it, a mutant that made a guarding test hang held a queue slot for
+/// the job's whole time limit.
+#[test]
+fn every_repo_runner_ends_a_hung_test() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let read = |p: std::path::PathBuf| -> toml::Value {
+        let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+        toml::from_str(&text).unwrap()
+    };
+    let runners = read(repo.join("mutants/runners.toml"));
+    let runners = runners
+        .get("runner")
+        .and_then(|r| r.as_table())
+        .expect("[runner.*]");
+    assert!(!runners.is_empty());
+    for (name, r) in runners {
+        let test: Vec<&str> = r["test"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(
+            test.windows(2).any(|w| w == ["--profile", "mutate"]),
+            "{name}: {test:?}"
+        );
+        let ws = r["workspace"].as_str().unwrap();
+        let cfg = read(repo.join(ws).join(".config/nextest.toml"));
+        let after = cfg
+            .get("profile")
+            .and_then(|p| p.get("mutate"))
+            .and_then(|m| m.get("slow-timeout"))
+            .and_then(|s| s.get("terminate-after"))
+            .and_then(|t| t.as_integer());
+        assert!(
+            after.is_some_and(|n| n > 0),
+            "{name}: {ws}/.config/nextest.toml has no [profile.mutate] that terminates"
+        );
+    }
+}

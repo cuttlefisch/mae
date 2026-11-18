@@ -261,3 +261,31 @@ filter = "test(styling_is_stripped_so_markers_match_coloured_output)"
 file = "tools/mutate/src/exec.rs"
 find = "            Some(']') => {"
 replace = "            Some('\\u{0}') => {"
+
+[[mutant]]
+id = "tools-mutate/nested-slurm-job-ignored"
+runner = "tools-mutate"
+filter = "test(queueing_from_inside_a_slurm_job_is_refused) | test(a_run_inside_a_slurm_job_is_refused_before_anything_runs)"
+[[mutant.edit]]
+file = "tools/mutate/src/exec.rs"
+find = '''    match (queue(env, trabajo_on_path), env("SLURM_JOB_ID")) {'''
+replace = '''    match (queue(env, trabajo_on_path), None::<String>) {'''
+
+[[mutant]]
+id = "tools-mutate/run-skips-the-nesting-check"
+runner = "tools-mutate"
+filter = "test(a_run_inside_a_slurm_job_is_refused_before_anything_runs)"
+[[mutant.edit]]
+file = "tools/mutate/src/main.rs"
+find = '''            exec::check_queue()?;
+'''
+replace = ""
+
+[[mutant]]
+id = "tools-mutate/mutate-profile-never-terminates"
+runner = "tools-mutate"
+filter = "test(every_repo_runner_ends_a_hung_test)"
+[[mutant.edit]]
+file = "daemon/.config/nextest.toml"
+find = '''slow-timeout = { period = "60s", terminate-after = 5 }'''
+replace = '''slow-timeout = { period = "60s" }'''
