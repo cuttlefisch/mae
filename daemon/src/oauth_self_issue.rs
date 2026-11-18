@@ -296,6 +296,11 @@ pub fn validate_self_issued_token(
     validation.set_audience(&[audience.to_string()]);
     validation.set_issuer(&[SELF_ISSUED_ISS]);
     validation.validate_exp = true;
+    // jsonwebtoken checks `aud` and `iss` only on a token that CARRIES them:
+    // a token this key signed without either would pass both checks above.
+    // `mint_self_token` always sets both, so require both (defence in depth
+    // against anything else this key ever signs).
+    validation.set_required_spec_claims(&["exp", "aud", "iss"]);
 
     let token_data =
         decode::<serde_json::Value>(token, &decoding_key, &validation).map_err(|e| {
@@ -305,6 +310,12 @@ pub fn validate_self_issued_token(
                     TokenValidationError::WrongAudience
                 }
                 jsonwebtoken::errors::ErrorKind::InvalidIssuer => TokenValidationError::WrongIssuer,
+                jsonwebtoken::errors::ErrorKind::MissingRequiredClaim(c) if c == "aud" => {
+                    TokenValidationError::WrongAudience
+                }
+                jsonwebtoken::errors::ErrorKind::MissingRequiredClaim(c) if c == "iss" => {
+                    TokenValidationError::WrongIssuer
+                }
                 jsonwebtoken::errors::ErrorKind::InvalidSignature => {
                     TokenValidationError::InvalidSignature
                 }
@@ -476,5 +487,56 @@ mod tests {
         let pubkey = identity.public().to_bytes();
         let result = validate_self_issued_token(&token, &pubkey, AUDIENCE);
         assert_eq!(result, Err(TokenValidationError::WrongIssuer));
+    }
+    /// Adversarial: a token correctly signed by THIS daemon's key but missing
+    /// `aud` or `iss` (or carrying them as null) is refused. jsonwebtoken
+    /// checks both only when present, so without the required-claims set
+    /// these all validated. Control: the same claims with both present pass.
+    #[test]
+    fn a_self_signed_token_without_aud_or_iss_is_refused() {
+        use TokenValidationError::{WrongAudience, WrongIssuer};
+        let identity = daemon_identity();
+        let der = identity.pkcs8_der().unwrap();
+        let encoding_key = EncodingKey::from_ed_der(&der);
+        let mut header = Header::new(Algorithm::EdDSA);
+        header.kid = Some(SELF_ISSUED_KID.to_string());
+        let pubkey = identity.public().to_bytes();
+        let now = now_unix();
+        let validate = |edit: &dyn Fn(&mut serde_json::Value)| {
+            let mut claims = serde_json::json!({
+                "sub": "SHA256:member-fp",
+                "aud": AUDIENCE,
+                "iss": SELF_ISSUED_ISS,
+                "iat": now,
+                "exp": now + 3600,
+            });
+            edit(&mut claims);
+            let token = encode(&header, &claims, &encoding_key).unwrap();
+            validate_self_issued_token(&token, &pubkey, AUDIENCE)
+        };
+        let without = |k: &'static str| {
+            move |c: &mut serde_json::Value| {
+                c.as_object_mut().unwrap().remove(k);
+            }
+        };
+        let null = |k: &'static str| {
+            move |c: &mut serde_json::Value| {
+                c[k] = serde_json::Value::Null;
+            }
+        };
+        assert!(validate(&|_| {}).is_ok(), "control: both present");
+        assert_eq!(validate(&without("aud")), Err(WrongAudience), "no aud");
+        assert_eq!(validate(&null("aud")), Err(WrongAudience), "null aud");
+        assert_eq!(validate(&without("iss")), Err(WrongIssuer), "no iss");
+        assert_eq!(validate(&null("iss")), Err(WrongIssuer), "null iss");
+        let neither = validate(&|c| {
+            without("aud")(c);
+            without("iss")(c);
+        });
+        // Which missing claim is reported first follows HashSet order.
+        assert!(
+            matches!(neither, Err(WrongAudience | WrongIssuer)),
+            "neither: {neither:?}"
+        );
     }
 }
