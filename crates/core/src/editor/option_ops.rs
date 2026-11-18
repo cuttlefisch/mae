@@ -158,7 +158,6 @@ impl super::Editor {
             "display_region_debounce_ms" => self.display_region_debounce_ms.to_string(),
             "syntax_reparse_debounce_ms" => self.syntax_reparse_debounce_ms.to_string(),
             "babel_confirm" => self.babel_confirm.to_string(),
-            "org_export_allow_raw_html_blocks" => self.org_export_allow_raw_html_blocks.to_string(),
             "babel_timeout" => self.babel_timeout.to_string(),
             "babel_trust_paths" => self.babel_trust_paths.join(","),
             "babel_inherit_shell_env" => self.babel_inherit_shell_env.to_string(),
@@ -413,6 +412,9 @@ impl super::Editor {
     }
 
     pub fn set_option(&mut self, name: &str, value: &str) -> Result<String, String> {
+        if let Some(why) = crate::options::retired_option(name) {
+            return Ok(format!("{name} was removed and has no effect: {why}"));
+        }
         let def_name = self
             .option_registry
             .find(name)
@@ -879,9 +881,6 @@ impl super::Editor {
             // their editor fields (dead config); wire them here so `:set` works.
             "babel_confirm" => {
                 self.babel_confirm = parse_option_bool(value)?;
-            }
-            "org_export_allow_raw_html_blocks" => {
-                self.org_export_allow_raw_html_blocks = parse_option_bool(value)?;
             }
             "babel_timeout" => {
                 let v: u64 = value
@@ -3268,37 +3267,25 @@ mod graph_view_option_tests {
         assert!(editor.kb_graph_label_declutter_enabled);
     }
 
+    /// A retired option still loads from an old config: setting it (by name or
+    /// Scheme alias) reports the removal instead of failing, and reading it is
+    /// refused like any unknown option.
     #[test]
-    fn org_export_allow_raw_html_blocks_option_roundtrips_and_defaults_safe() {
+    fn a_retired_option_can_still_be_set_but_does_nothing() {
         let mut editor = Editor::new();
-        // Safe default: off (escaped), not the org-spec default (raw
-        // passthrough) -- this option exists specifically to make the
-        // unsafe behavior opt-in, not opt-out.
-        assert_eq!(
-            editor
-                .get_option("org_export_allow_raw_html_blocks")
-                .unwrap()
-                .0,
-            "false"
-        );
-        assert!(!editor.org_export_allow_raw_html_blocks);
-
-        editor
-            .set_option("org_export_allow_raw_html_blocks", "true")
-            .unwrap();
-        assert!(editor.org_export_allow_raw_html_blocks);
-        assert_eq!(
-            editor
-                .get_option("org_export_allow_raw_html_blocks")
-                .unwrap()
-                .0,
-            "true"
-        );
-
-        editor
-            .set_option("org_export_allow_raw_html_blocks", "false")
-            .unwrap();
-        assert!(!editor.org_export_allow_raw_html_blocks);
+        for name in [
+            "org_export_allow_raw_html_blocks",
+            "org-export-allow-raw-html-blocks",
+        ] {
+            let msg = editor
+                .set_option(name, "true")
+                .expect("a retired option must not break an old config");
+            assert!(msg.contains("was removed"), "{name}: {msg}");
+        }
+        assert!(editor
+            .get_option("org_export_allow_raw_html_blocks")
+            .is_none());
+        assert!(editor.set_option("no_such_option_anywhere", "1").is_err());
     }
 
     #[test]

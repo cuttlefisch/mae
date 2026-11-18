@@ -451,4 +451,126 @@ gamma body two
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // --- export renders through mae-org (#942, ADR-112 Fact 3) ---
+
+    const LEAKY_DOC: &str = "\
+#+title: Leaky
+Visible intro.
+#+begin_comment
+SECRET-COMMENT-BLOCK
+#+end_comment
+* Public
+public body
+* Hidden :noexport:
+SECRET-NOEXPORT-BODY
+* COMMENT Commented
+SECRET-COMMENT-SUBTREE
+";
+
+    /// The editor's own export commands, end to end: what they WRITE (the
+    /// effect) carries none of the content Org marks not-for-export, in
+    /// either format, and still carries the rest.
+    #[test]
+    fn org_export_writes_no_noexport_or_comment_content_in_either_format() {
+        let (mut editor, dir) = editor_in_temp_dir(LEAKY_DOC, "export-leak");
+        editor.org_export_html();
+        editor.org_export_markdown();
+        for ext in ["html", "md"] {
+            let out = std::fs::read_to_string(dir.join("notes").with_extension(ext))
+                .unwrap_or_else(|e| panic!("no .{ext} written: {e}"));
+            for secret in [
+                "SECRET-COMMENT-BLOCK",
+                "SECRET-NOEXPORT-BODY",
+                "Hidden",
+                "SECRET-COMMENT-SUBTREE",
+                "Commented",
+            ] {
+                assert!(!out.contains(secret), ".{ext} published {secret:?}:\n{out}");
+            }
+            for shown in ["Visible intro.", "public body", "Leaky"] {
+                assert!(out.contains(shown), ".{ext} lost {shown:?}:\n{out}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The Org → Markdown conversion writes a NEW buffer and never touches
+    /// the Org source: the export withholds content (`:noexport:`, COMMENT,
+    /// drawers, comments) that the source must keep. Writing the result back
+    /// over the Org buffer destroyed it (independent review of #942).
+    #[test]
+    fn org_to_markdown_buffer_leaves_the_org_buffer_untouched() {
+        let mut editor = editor_with_block(LEAKY_DOC);
+        let before = editor.buffers[0].rope().to_string();
+        editor.org_to_markdown_buffer();
+        assert_eq!(
+            editor.buffers[0].rope().to_string(),
+            before,
+            "the Org source was modified"
+        );
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.name.starts_with("*markdown: "))
+            .expect("a Markdown buffer");
+        let md = editor.buffers[idx].rope().to_string();
+        assert!(!md.contains("SECRET"), "{md}");
+        assert!(md.contains("public body"), "{md}");
+    }
+
+    /// When the document's macros cannot be expanded the export body is
+    /// empty, so the conversion refuses instead of producing an empty file.
+    #[test]
+    fn org_to_markdown_buffer_refuses_when_macros_fail() {
+        let doc = "* Title {{{no-such-macro}}}\nbody\n";
+        let mut editor = editor_with_block(doc);
+        let before = editor.buffers[0].rope().to_string();
+        let count = editor.buffers.len();
+        editor.org_to_markdown_buffer();
+        assert_eq!(editor.buffers.len(), count, "a Markdown buffer was created");
+        assert_eq!(editor.buffers[0].rope().to_string(), before);
+        assert!(
+            editor.status_msg.contains("refused"),
+            "the refusal must say so; got: {}",
+            editor.status_msg
+        );
+    }
+
+    /// A subtree export at a heading the whole export hides is refused, and
+    /// writes nothing.
+    #[test]
+    fn org_export_subtree_refuses_a_noexport_heading() {
+        let (mut editor, dir) = editor_in_temp_dir(LEAKY_DOC, "export-subtree-hidden");
+        let row = LEAKY_DOC
+            .lines()
+            .position(|l| l == "SECRET-NOEXPORT-BODY")
+            .expect("fixture row");
+        editor.window_mgr.focused_window_mut().cursor_row = row;
+        editor.org_export_subtree();
+        assert!(
+            !dir.join("notes.subtree.html").exists(),
+            "a hidden subtree was exported"
+        );
+        assert!(
+            editor.status_msg.contains("not exported"),
+            "the refusal must say why; got: {}",
+            editor.status_msg
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Raw HTML export blocks are never emitted; the user who wrote one is
+    /// told, rather than finding it silently missing.
+    #[test]
+    fn org_export_says_when_it_omits_raw_html() {
+        let src = "#+begin_export html\n<script>alert(1)</script>\n#+end_export\nText.\n";
+        let (mut editor, dir) = editor_in_temp_dir(src, "export-raw");
+        let msg = editor.org_export_html();
+        let html = std::fs::read_to_string(dir.join("notes.html")).expect("html written");
+        assert!(!html.contains("<script"), "{html}");
+        assert!(!html.contains("alert"), "{html}");
+        assert!(msg.contains("1 raw HTML block(s) omitted"), "{msg}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -72,6 +72,24 @@ All bindings apply in the `org` keymap (active in Org-mode buffers).
 | `SPC m e m` | `org-export-markdown` | Export buffer to Markdown |
 | `SPC m e s` | `org-export-subtree` | Export subtree |
 
+Export renders through `mae-org`, so it publishes what Org's own export
+shows and nothing more:
+
+- `COMMENT` and `:noexport:` subtrees (heading and body), comment lines and
+  blocks, and drawers are left out. `#+EXCLUDE_TAGS:` / `#+SELECT_TAGS:`
+  replace Org's defaults (`noexport`, and `export`: a file with an
+  `:export:` heading exports only the selected subtrees). The older
+  `#+EXPORT_EXCLUDE_TAGS:` / `#+EXPORT_SELECT_TAGS:` add to the defaults.
+- Src blocks follow `:exports` (`code`, `results`, `both`, `none`); results
+  already in the file are shown, nothing is evaluated.
+- Raw HTML (`#+begin_export html`, `#+HTML:`, `@@html:…@@`) and Markdown
+  export blocks are never emitted; the status line says when some were left
+  out. The former `org-export-allow-raw-html-blocks` option was removed; setting
+  it in an old config reports that and does nothing.
+- `id:` and `file:` links are written as text.
+- Subtree export refuses a heading that is not exported, rather than
+  publishing a neighbour, and keeps only the footnotes the subtree cites.
+
 ## Configuration
 
 ### Module flags

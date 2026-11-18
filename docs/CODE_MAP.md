@@ -48,6 +48,7 @@ graph TD
     mae_dap --> mae_core
     mae_effect_sandbox[mae-effect-sandbox]
     mae_export --> mae_babel
+    mae_export --> mae_org
     mae_format[mae-format]
     mae_gui --> mae_core
     mae_gui --> mae_renderer
@@ -284,6 +285,7 @@ Source: `crates/export/src/lib.rs`
 
 | Item | Kind |
 |------|------|
+| `document` | mod |
 | `html` | mod |
 | `html_graph` | mod |
 | `markdown` | mod |
@@ -294,15 +296,11 @@ Source: `crates/export/src/lib.rs`
 | `OrgElement` | enum |
 | `ListItem` | struct |
 | `Exporter` | trait |
-| `parse_org_document` | fn |
-| `parse_org_document_with_lines` | fn |
 | `InlineTarget` | enum |
 | `convert_inline_markup_str` | fn |
 | `CheckboxState` | enum |
 | `parse_checkbox_marker` | fn |
 | `html_escape` | fn |
-| `filter_by_tags` | fn |
-| `extract_subtree` | fn |
 
 ## mae-format
 

@@ -11,7 +11,7 @@ For user-facing docs, see README.md. For build instructions, see CLAUDE.md.
 | `mae-renderer` | TUI rendering via ratatui/crossterm (`Renderer` trait) |
 | `mae-gui` | GUI rendering via winit + Skia 2D |
 | `mae-scheme` | Embedded R7RS-small Scheme runtime |
-| `mae-lsp` | LSP client (tower-lsp, diagnostics, completion) |
+| `mae-lsp` | LSP client (its own JSON-RPC over the server's stdio; diagnostics, completion) |
 | `mae-dap` | DAP client (breakpoints, step, inspect) |
 | `mae-ai` | AI agent transport (Claude/OpenAI/Gemini/DeepSeek) |
 | `mae-kb` | Knowledge base (SQLite, org parser, bidirectional links) |

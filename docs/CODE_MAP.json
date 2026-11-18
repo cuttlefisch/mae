@@ -645,9 +645,14 @@
     "mae-export": {
       "path": "crates/export/src/lib.rs",
       "dependencies": [
-        "mae-babel"
+        "mae-babel",
+        "mae-org"
       ],
       "public_items": [
+        {
+          "name": "document",
+          "kind": "mod"
+        },
         {
           "name": "html",
           "kind": "mod"
@@ -689,14 +694,6 @@
           "kind": "trait"
         },
         {
-          "name": "parse_org_document",
-          "kind": "fn"
-        },
-        {
-          "name": "parse_org_document_with_lines",
-          "kind": "fn"
-        },
-        {
           "name": "InlineTarget",
           "kind": "enum"
         },
@@ -714,14 +711,6 @@
         },
         {
           "name": "html_escape",
-          "kind": "fn"
-        },
-        {
-          "name": "filter_by_tags",
-          "kind": "fn"
-        },
-        {
-          "name": "extract_subtree",
           "kind": "fn"
         }
       ]
