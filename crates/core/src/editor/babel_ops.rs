@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use super::Editor;
 use crate::babel::{self, execute::BabelExecutor, results, tangle};
-use crate::export::{self, html::HtmlExporter, markdown::MarkdownExporter, Exporter};
+use crate::export::{self, document::Exported, html::to_html_page, markdown::to_markdown};
 
 impl Editor {
     /// Build a babel executor seeded from the editor's babel options: the
@@ -453,41 +453,32 @@ impl Editor {
         self.org_export_to("markdown")
     }
 
-    /// Export subtree at cursor.
+    /// Export subtree at cursor: the innermost heading holding the cursor's
+    /// line, as the whole document's export shows it (`mae-org` decides,
+    /// ADR-112 O4). A heading the export hides (COMMENT, `:noexport:`, or one
+    /// inside such a subtree) is refused, not exported.
     /// Uses AI-aware buffer/cursor targeting.
     pub fn org_export_subtree(&mut self) {
         let buf_idx = self.ai_active_buffer_idx();
-        let source = self.buffers[buf_idx].rope().to_string();
-        let cursor_line = self.ai_cursor_row();
+        let rope = self.buffers[buf_idx].rope();
+        let source = rope.to_string();
+        // Audit #596.2: the cursor's LINE decides the heading, so the offset
+        // is that line's first byte (rows past the end clamp to the end).
+        let row = self.ai_cursor_row().min(rope.len_lines());
+        let offset = if row >= rope.len_lines() {
+            rope.len_bytes()
+        } else {
+            rope.line_to_byte(row)
+        };
 
-        let (mut meta, elements, element_lines) = export::parse_org_document_with_lines(&source);
-        meta.options.allow_raw_html_export_blocks = self.org_export_allow_raw_html_blocks;
-
-        // The last heading starting at or before the cursor's line.
-        //
-        // Audit #596.2: this read `elements.iter().enumerate().enumerate()`,
-        // which yields the SAME index twice — so `current_line` was an element
-        // ordinal, not a line. Any cursor past the element count therefore fell
-        // through the whole document and exported its last subtree instead of
-        // the one under the cursor.
-        let heading_idx = elements
-            .iter()
-            .enumerate()
-            .take_while(|(i, _)| element_lines[*i] <= cursor_line)
-            .filter(|(_, el)| matches!(el, export::OrgElement::Heading { .. }))
-            .map(|(i, _)| i)
-            .last();
-
-        let subtree = match heading_idx {
-            Some(idx) => export::extract_subtree(&elements, idx),
-            None => {
-                self.set_status("No heading at cursor for subtree export");
+        let exported = match export::document::export_subtree(&source, offset) {
+            Ok(e) => e,
+            Err(e) => {
+                self.set_status(e.to_string());
                 return;
             }
         };
-
-        let exporter = HtmlExporter;
-        let output = exporter.export(&meta, &subtree);
+        let output = to_html_page(&exported);
 
         let output_path = match self.export_output_path(buf_idx, "subtree.html") {
             Ok(p) => p,
@@ -497,13 +488,41 @@ impl Editor {
             }
         };
 
-        match std::fs::write(&output_path, &output) {
-            Ok(()) => {
-                self.set_status(format!("Exported subtree to {}", output_path.display()));
+        let msg = match std::fs::write(&output_path, &output) {
+            Ok(()) => format!(
+                "Exported subtree to {}{}",
+                output_path.display(),
+                self.export_notes(&exported)
+            ),
+            Err(e) => format!("Export failed: {}", e),
+        };
+        self.set_status(msg);
+    }
+
+    /// What the status line should add about content the export left out
+    /// that the user may have expected to see.
+    fn export_notes(&self, exported: &Exported) -> String {
+        let mut notes = Vec::new();
+        if exported.macro_failed() {
+            notes.push(
+                "its macros could not be expanded as Org's export expands them, so the body                  is empty"
+                    .to_string(),
+            );
+        }
+        if exported.raw_html > 0 {
+            let mut note = format!(
+                "{} raw HTML block(s) omitted: export never emits raw HTML",
+                exported.raw_html
+            );
+            if self.org_export_allow_raw_html_blocks {
+                note.push_str(" (org_export_allow_raw_html_blocks no longer has an effect)");
             }
-            Err(e) => {
-                self.set_status(format!("Export failed: {}", e));
-            }
+            notes.push(note);
+        }
+        if notes.is_empty() {
+            String::new()
+        } else {
+            format!(" — {}", notes.join("; "))
         }
     }
 
@@ -540,25 +559,11 @@ impl Editor {
     fn org_export_to(&mut self, format: &str) -> String {
         let buf_idx = self.ai_active_buffer_idx();
         let source = self.buffers[buf_idx].rope().to_string();
-        let (mut meta, elements) = export::parse_org_document(&source);
-        meta.options.allow_raw_html_export_blocks = self.org_export_allow_raw_html_blocks;
-
-        // Apply tag filtering
-        let filtered = if !meta.select_tags.is_empty() || !meta.exclude_tags.is_empty() {
-            export::filter_by_tags(&elements, &meta.select_tags, &meta.exclude_tags)
-        } else {
-            elements
-        };
+        let exported = export::document::export_document(&source);
 
         let (output, ext) = match format {
-            "html" => {
-                let exporter = HtmlExporter;
-                (exporter.export(&meta, &filtered), "html")
-            }
-            "markdown" | "md" => {
-                let exporter = MarkdownExporter;
-                (exporter.export(&meta, &filtered), "md")
-            }
+            "html" => (to_html_page(&exported), "html"),
+            "markdown" | "md" => (to_markdown(&exported), "md"),
             _ => {
                 let msg = format!("Unknown export format: {}", format);
                 self.set_status(msg.clone());
@@ -575,7 +580,11 @@ impl Editor {
         };
 
         let msg = match std::fs::write(&output_path, &output) {
-            Ok(()) => format!("Exported to {}", output_path.display()),
+            Ok(()) => format!(
+                "Exported to {}{}",
+                output_path.display(),
+                self.export_notes(&exported)
+            ),
             Err(e) => format!("Export failed: {}", e),
         };
         self.set_status(msg.clone());
@@ -599,9 +608,7 @@ impl Editor {
     pub fn org_to_markdown_buffer(&mut self) {
         let buf_idx = self.ai_active_buffer_idx();
         let source = self.buffers[buf_idx].rope().to_string();
-        let (meta, elements) = export::parse_org_document(&source);
-        let exporter = MarkdownExporter;
-        let md_text = export::Exporter::export(&exporter, &meta, &elements);
+        let md_text = to_markdown(&export::document::export_document(&source));
         self.buffers[buf_idx].replace_contents(&md_text);
         self.set_status("Converted Org → Markdown");
     }

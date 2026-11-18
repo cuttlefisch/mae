@@ -1046,14 +1046,12 @@ impl OptionRegistry {
                     OptionKind::Float, "0.0", Some("kb-graph.wedge-gap-radians"), &[]),
                 // --- org export (org_export / :org-export-html) ---
                 opt!("org_export_allow_raw_html_blocks", &["org-export-allow-raw-html-blocks"],
-                    "Whether org_export's HTML output emits `#+begin_export html ... #+end_export` \
-                     blocks raw (trusted, standard org semantics) or HTML-escapes them (safe \
-                     default, off). Only relevant to org_export, which exports the current buffer \
-                     you're presumably editing yourself -- kb_export_subgraph_html never reads \
-                     this option, since that tool's whole purpose is producing a shareable \
-                     artifact from KB content that may not be self-authored (a federated/shared \
-                     KB), where raw HTML passthrough would be a stored-XSS vector. Enable only if \
-                     you deliberately embed raw HTML in your own org files and trust that content.",
+                    "No effect since org export renders through mae-org (ADR-112 O4, #942): \
+                     export never emits `#+begin_export html` blocks, `#+HTML:` lines or HTML \
+                     snippets, raw or escaped, whatever this is set to (mae-org renders no raw \
+                     HTML in any form, ADR-112 D3). Kept so existing configs still load; an export \
+                     of a document that has such blocks says how many it left out, and notes \
+                     when this option is on. kb_export_subgraph_html never read it.",
                     OptionKind::Bool, "false", Some("org-export.allow_raw_html_blocks"), &[]),
                 // --- KB subgraph HTML export (kb-export-subgraph-html /
                 // kb_export_subgraph_html) -- ADR-081 ---

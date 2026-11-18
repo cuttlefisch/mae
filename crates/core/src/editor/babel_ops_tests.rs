@@ -451,4 +451,107 @@ gamma body two
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // --- export renders through mae-org (#942, ADR-112 Fact 3) ---
+
+    const LEAKY_DOC: &str = "\
+#+title: Leaky
+Visible intro.
+#+begin_comment
+SECRET-COMMENT-BLOCK
+#+end_comment
+* Public
+public body
+* Hidden :noexport:
+SECRET-NOEXPORT-BODY
+* COMMENT Commented
+SECRET-COMMENT-SUBTREE
+";
+
+    /// The editor's own export commands, end to end: what they WRITE (the
+    /// effect) carries none of the content Org marks not-for-export, in
+    /// either format, and still carries the rest.
+    #[test]
+    fn org_export_writes_no_noexport_or_comment_content_in_either_format() {
+        let (mut editor, dir) = editor_in_temp_dir(LEAKY_DOC, "export-leak");
+        editor.org_export_html();
+        editor.org_export_markdown();
+        for ext in ["html", "md"] {
+            let out = std::fs::read_to_string(dir.join("notes").with_extension(ext))
+                .unwrap_or_else(|e| panic!("no .{ext} written: {e}"));
+            for secret in [
+                "SECRET-COMMENT-BLOCK",
+                "SECRET-NOEXPORT-BODY",
+                "Hidden",
+                "SECRET-COMMENT-SUBTREE",
+                "Commented",
+            ] {
+                assert!(!out.contains(secret), ".{ext} published {secret:?}:\n{out}");
+            }
+            for shown in ["Visible intro.", "public body", "Leaky"] {
+                assert!(out.contains(shown), ".{ext} lost {shown:?}:\n{out}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The in-buffer Org → Markdown conversion reads the same tree.
+    #[test]
+    fn org_to_markdown_buffer_drops_noexport_and_comment_content() {
+        let mut editor = editor_with_block(LEAKY_DOC);
+        editor.org_to_markdown_buffer();
+        let md = editor.buffers[0].rope().to_string();
+        assert!(!md.contains("SECRET"), "{md}");
+        assert!(md.contains("public body"), "{md}");
+    }
+
+    /// A subtree export at a heading the whole export hides is refused, and
+    /// writes nothing.
+    #[test]
+    fn org_export_subtree_refuses_a_noexport_heading() {
+        let (mut editor, dir) = editor_in_temp_dir(LEAKY_DOC, "export-subtree-hidden");
+        let row = LEAKY_DOC
+            .lines()
+            .position(|l| l == "SECRET-NOEXPORT-BODY")
+            .expect("fixture row");
+        editor.window_mgr.focused_window_mut().cursor_row = row;
+        editor.org_export_subtree();
+        assert!(
+            !dir.join("notes.subtree.html").exists(),
+            "a hidden subtree was exported"
+        );
+        assert!(
+            editor.status_msg.contains("not exported"),
+            "the refusal must say why; got: {}",
+            editor.status_msg
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Raw HTML export blocks are never emitted; the user who wrote one is
+    /// told, rather than finding it silently missing.
+    #[test]
+    fn org_export_says_when_it_omits_raw_html() {
+        let src = "#+begin_export html\n<script>alert(1)</script>\n#+end_export\nText.\n";
+        for allow in ["false", "true"] {
+            let (mut editor, dir) = editor_in_temp_dir(src, &format!("export-raw-{allow}"));
+            editor
+                .set_option("org_export_allow_raw_html_blocks", allow)
+                .unwrap();
+            let msg = editor.org_export_html();
+            let html = std::fs::read_to_string(dir.join("notes.html")).expect("html written");
+            assert!(!html.contains("<script"), "allow={allow}: {html}");
+            assert!(!html.contains("alert"), "allow={allow}: {html}");
+            assert!(
+                msg.contains("1 raw HTML block(s) omitted"),
+                "allow={allow}: {msg}"
+            );
+            assert_eq!(
+                msg.contains("no longer has an effect"),
+                allow == "true",
+                "allow={allow}: {msg}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
 }

@@ -1,266 +1,118 @@
-//! HTML export backend for org documents.
+//! HTML page export: `mae-org`'s rendered tree ([`crate::document`]) inside
+//! MAE's page shell (title, author, date, table of contents, stylesheet).
+//!
+//! The body is [`mae_org::to_html`] of the rendered tree, so every tag and
+//! attribute in it is one `mae-org` allows ([`mae_org::TAGS`],
+//! [`mae_org::ATTRIBUTES`]) and no raw HTML from the document passes. The
+//! shell's own values (title, author, date, language) are escaped here.
 
-use super::{
-    convert_inline_markup_str, html_escape, parse_checkbox_marker, CheckboxState, ExportOptions,
-    Exporter, InlineTarget, OrgElement, OrgMeta,
-};
+use mae_org::{text_of, to_html, Attr, Element, Node, Tag};
 
-pub struct HtmlExporter;
+use crate::document::{has_class, is_headline_section, section_heading, section_level, Exported};
+use crate::html_escape;
 
-impl Exporter for HtmlExporter {
-    fn export(&self, meta: &OrgMeta, elements: &[OrgElement]) -> String {
-        let mut html = String::with_capacity(4096);
+/// The whole HTML page for `doc`.
+pub fn to_html_page(doc: &Exported) -> String {
+    let mut html = String::with_capacity(4096);
 
-        html.push_str("<!DOCTYPE html>\n<html");
-        if let Some(lang) = &meta.language {
-            // `#+LANGUAGE:` is document content, not a trusted constant — a
-            // `"` closes the attribute (audit #596.3).
-            html.push_str(&format!(" lang=\"{}\"", html_escape(lang)));
-        }
-        html.push_str(">\n<head>\n<meta charset=\"utf-8\">\n");
-
-        if let Some(title) = &meta.title {
-            html.push_str(&format!("<title>{}</title>\n", html_escape(title)));
-        }
-
-        html.push_str(CSS);
-        html.push_str("</head>\n<body>\n");
-
-        // Title block
-        if let Some(title) = &meta.title {
-            html.push_str(&format!(
-                "<h1 class=\"title\">{}</h1>\n",
-                html_escape(title)
-            ));
-        }
-        if meta.options.author_p {
-            if let Some(author) = &meta.author {
-                html.push_str(&format!(
-                    "<p class=\"author\">Author: {}</p>\n",
-                    html_escape(author)
-                ));
-            }
-        }
-        if meta.options.date_p {
-            if let Some(date) = &meta.date {
-                html.push_str(&format!(
-                    "<p class=\"date\">Date: {}</p>\n",
-                    html_escape(date)
-                ));
-            }
-        }
-
-        // Table of contents
-        if meta.options.toc {
-            html.push_str(&generate_toc(elements, &meta.options));
-        }
-
-        // Content
-        for element in elements {
-            render_element(&mut html, element, &meta.options);
-        }
-
-        html.push_str("</body>\n</html>\n");
-        html
+    html.push_str("<!DOCTYPE html>\n<html");
+    if let Some(lang) = &doc.language {
+        // `#+LANGUAGE:` is document content, not a trusted constant — a
+        // `"` closes the attribute (audit #596.3).
+        html.push_str(&format!(" lang=\"{}\"", html_escape(lang)));
     }
-}
+    html.push_str(">\n<head>\n<meta charset=\"utf-8\">\n");
 
-/// Render a single parsed org element as HTML, appending to `html`.
-///
-/// `pub(crate)`: also used by `html_graph.rs`'s node-body-to-HTML rendering
-/// (`render_node_body_html`, which imports this as `render_org_element`),
-/// not just this module's own `HtmlExporter`.
-pub(crate) fn render_element(html: &mut String, element: &OrgElement, opts: &ExportOptions) {
-    match element {
-        OrgElement::Heading {
-            level, title, tags, ..
-        } => {
-            let h_level = (*level).min(opts.headline_levels).max(1);
-            let id = slugify(title);
-            html.push_str(&format!(
-                "<h{} id=\"{}\">{}</h{}>\n",
-                h_level,
-                id,
-                convert_inline_markup_str(title, InlineTarget::Html),
-                h_level
-            ));
-            if !tags.is_empty() {
-                html.push_str("<span class=\"tag\">");
-                for tag in tags {
-                    let tag = html_escape(tag);
-                    html.push_str(&format!("<span class=\"tag-{tag}\">{tag}</span>"));
-                }
-                html.push_str("</span>\n");
-            }
-        }
-        OrgElement::Paragraph(text) => {
-            html.push_str("<p>");
-            html.push_str(&convert_inline_markup_str(text, InlineTarget::Html));
-            html.push_str("</p>\n");
-        }
-        OrgElement::SrcBlock {
-            language,
-            body,
-            exports,
-        } => {
-            use mae_babel::ExportsType;
-            match exports {
-                ExportsType::None | ExportsType::Results => {}
-                ExportsType::Code | ExportsType::Both => {
-                    html.push_str(&format!(
-                        "<pre><code class=\"language-{}\">{}</code></pre>\n",
-                        // The `#+begin_src <lang>` token is arbitrary document
-                        // text; unescaped it breaks out of the class attribute
-                        // and injects markup (audit #596.3).
-                        html_escape(language),
-                        html_escape(body)
-                    ));
-                }
-            }
-        }
-        OrgElement::ResultsBlock(content) => {
-            html.push_str("<pre class=\"results\">");
-            html.push_str(&html_escape(content));
-            html.push_str("</pre>\n");
-        }
-        OrgElement::List { ordered, items } => {
-            render_list_items(html, items, *ordered);
-        }
-        OrgElement::Table { rows, has_header } => {
-            // Cell content goes through the same inline-markup converter as
-            // every other block (List, Quote, ...) below -- it previously
-            // went through html_escape() alone, so =code=, *bold*, and
-            // [[id:...][links]] inside a table cell rendered as literal,
-            // unconverted org markup instead of real HTML. Every table in
-            // the KB was affected, not just one note's.
-            html.push_str("<table>\n");
-            for (i, row) in rows.iter().enumerate() {
-                if i == 0 && *has_header {
-                    html.push_str("<thead>\n<tr>");
-                    for cell in row {
-                        html.push_str("<th>");
-                        html.push_str(&convert_inline_markup_str(cell, InlineTarget::Html));
-                        html.push_str("</th>");
-                    }
-                    html.push_str("</tr>\n</thead>\n<tbody>\n");
-                } else {
-                    html.push_str("<tr>");
-                    for cell in row {
-                        html.push_str("<td>");
-                        html.push_str(&convert_inline_markup_str(cell, InlineTarget::Html));
-                        html.push_str("</td>");
-                    }
-                    html.push_str("</tr>\n");
-                }
-            }
-            if *has_header {
-                html.push_str("</tbody>\n");
-            }
-            html.push_str("</table>\n");
-        }
-        OrgElement::Quote(text) => {
-            html.push_str("<blockquote>\n<p>");
-            html.push_str(&convert_inline_markup_str(text, InlineTarget::Html));
-            html.push_str("</p>\n</blockquote>\n");
-        }
-        OrgElement::Example(content) => {
-            // Like SrcBlock: only escaped, never run through inline-markup
-            // conversion -- example blocks are meant to show literal text
-            // verbatim (including any `*`/`/`/`~` that would otherwise be
-            // read as emphasis markers).
-            html.push_str("<pre class=\"example\">");
-            html.push_str(&html_escape(content));
-            html.push_str("</pre>\n");
-        }
-        OrgElement::HorizontalRule => {
-            html.push_str("<hr>\n");
-        }
-        OrgElement::Comment(_) => {}
-        OrgElement::ExportBlock { format, content } => {
-            if format == "html" {
-                if opts.allow_raw_html_export_blocks {
-                    html.push_str(content);
-                } else {
-                    // Safe default: `#+begin_export html` is standard org
-                    // syntax for embedding raw HTML, but this org content
-                    // isn't necessarily self-authored/trusted (see
-                    // `ExportOptions::allow_raw_html_export_blocks`'s doc
-                    // comment) -- escape rather than inject it verbatim.
-                    html.push_str(&html_escape(content));
-                }
-                html.push('\n');
-            }
-        }
+    let title_text = text_of(&doc.title);
+    if !title_text.is_empty() {
+        html.push_str(&format!("<title>{}</title>\n", html_escape(&title_text)));
     }
-}
+    html.push_str(CSS);
+    html.push_str("</head>\n<body>\n");
 
-/// Render a list item's content, first checking for a leading checkbox
-/// marker (`- [ ] text` / `- [X] text` / `- [-] text`) and rendering it as
-/// a disabled `<input type="checkbox">` (disabled since this is a static
-/// export, not the live editor) ahead of the item's own inline-markup-
-/// converted text.
-/// Renders a (possibly nested, see `ListItem::children`) list as real
-/// `<ul>`/`<ol>` markup -- a nested sub-list becomes a nested `<ul>`/`<ol>`
-/// inside its parent's `<li>`, standard HTML list-nesting shape. Recursive
-/// so any depth of real nesting renders correctly, not just one level.
-fn render_list_items(html: &mut String, items: &[crate::ListItem], ordered: bool) {
-    let tag = if ordered { "ol" } else { "ul" };
-    html.push_str(&format!("<{}>\n", tag));
-    for item in items {
-        html.push_str("<li>");
-        push_list_item_content(html, &item.content);
-        if !item.children.is_empty() {
-            render_list_items(html, &item.children, ordered);
-        }
-        html.push_str("</li>\n");
-    }
-    html.push_str(&format!("</{}>\n", tag));
-}
-
-fn push_list_item_content(html: &mut String, content: &str) {
-    if let Some((state, rest)) = parse_checkbox_marker(content) {
-        let (checked_attr, aria) = match state {
-            CheckboxState::Checked => (" checked", "true"),
-            CheckboxState::Partial => ("", "mixed"),
-            CheckboxState::Unchecked => ("", "false"),
-        };
+    if !doc.title.is_empty() {
         html.push_str(&format!(
-            "<input type=\"checkbox\" disabled{checked_attr} aria-checked=\"{aria}\"> "
+            "<h1 class=\"title\">{}</h1>\n",
+            to_html(&doc.title)
         ));
-        html.push_str(&convert_inline_markup_str(rest, InlineTarget::Html));
-    } else {
-        html.push_str(&convert_inline_markup_str(content, InlineTarget::Html));
     }
+    if doc.settings.with_author && !doc.author.is_empty() {
+        html.push_str(&format!(
+            "<p class=\"author\">Author: {}</p>\n",
+            to_html(&doc.author)
+        ));
+    }
+    if doc.settings.with_date && !doc.date.is_empty() {
+        html.push_str(&format!(
+            "<p class=\"date\">Date: {}</p>\n",
+            to_html(&doc.date)
+        ));
+    }
+    if doc.settings.toc {
+        html.push_str(&table_of_contents(&doc.body, doc.settings.toc_depth));
+    }
+
+    html.push_str(&to_html(&doc.body));
+    html.push_str("\n</body>\n</html>\n");
+    html
 }
 
-fn generate_toc(elements: &[OrgElement], opts: &ExportOptions) -> String {
-    let mut toc =
-        String::from("<nav id=\"table-of-contents\">\n<h2>Table of Contents</h2>\n<ul>\n");
-    for el in elements {
-        if let OrgElement::Heading { level, title, .. } = el {
-            if *level <= opts.toc_depth {
-                let indent = "  ".repeat(*level as usize);
-                let id = slugify(title);
-                toc.push_str(&format!(
-                    "{}<li><a href=\"#{}\">{}</a></li>\n",
-                    indent,
-                    id,
-                    html_escape(title)
-                ));
-            }
+/// A `<nav>` listing every rendered headline down to `depth` stars, nested
+/// as the sections nest, each linking to its heading's anchor. Built from the
+/// rendered tree, so a headline the export hides is never listed.
+fn table_of_contents(body: &[Node], depth: usize) -> String {
+    let mut items = String::new();
+    toc_items(body, depth, &mut items);
+    if items.is_empty() {
+        return String::new();
+    }
+    format!(
+        "<nav id=\"table-of-contents\">\n<h2>Table of Contents</h2>\n<ul>\n{items}</ul>\n</nav>\n"
+    )
+}
+
+fn toc_items(nodes: &[Node], depth: usize, out: &mut String) {
+    for n in nodes {
+        let Node::Element(e) = n else { continue };
+        if !is_headline_section(e) {
+            toc_items(&e.children, depth, out);
+            continue;
         }
+        if section_level(e).is_some_and(|l| l > depth) {
+            continue;
+        }
+        let Some(heading) = section_heading(e) else {
+            continue;
+        };
+        let mut children = String::new();
+        toc_items(&e.children, depth, &mut children);
+        out.push_str("<li>");
+        match heading.get(Attr::Id) {
+            Some(id) => out.push_str(&format!(
+                "<a href=\"#{}\">{}</a>",
+                html_escape(id),
+                html_escape(&heading_text(heading))
+            )),
+            None => out.push_str(&html_escape(&heading_text(heading))),
+        }
+        if !children.is_empty() {
+            out.push_str(&format!("\n<ul>\n{children}</ul>\n"));
+        }
+        out.push_str("</li>\n");
     }
-    toc.push_str("</ul>\n</nav>\n");
-    toc
 }
 
-fn slugify(text: &str) -> String {
-    text.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string()
+/// A heading's text without its tags.
+fn heading_text(heading: &Element) -> String {
+    let shown: Vec<Node> = heading
+        .children
+        .iter()
+        .filter(
+            |c| !matches!(c, Node::Element(s) if s.tag == Tag::Span && has_class(s, "org-tags")),
+        )
+        .cloned()
+        .collect();
+    text_of(&shown).trim().to_string()
 }
 
 const CSS: &str = r#"<style>
@@ -272,224 +124,17 @@ blockquote { border-left: 4px solid #ddd; margin-left: 0; padding-left: 1rem; co
 table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
 th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: left; }
 th { background: #f6f8fa; }
-.tag { float: right; font-size: 0.8em; }
-.tag span { background: #e1f5fe; padding: 0.1em 0.4em; border-radius: 3px; margin-left: 0.3em; }
+.org-tags { float: right; font-size: 0.8em; }
+.org-tag { background: #e1f5fe; padding: 0.1em 0.4em; border-radius: 3px; margin-left: 0.3em; }
+.org-todo { color: #c62828; font-weight: bold; }
+.org-todo.org-done { color: #2e7d32; }
+.org-verse { white-space: normal; font-style: italic; }
+.org-center { text-align: center; }
+.org-underline { text-decoration: underline; }
 nav#table-of-contents { background: #f9f9f9; padding: 1rem; border-radius: 4px; margin-bottom: 2rem; }
 nav ul { list-style: none; padding-left: 1rem; }
 .author, .date { color: #666; font-style: italic; }
-pre.results { background: #fffde7; border-left: 3px solid #ffc107; }
+pre.org-fixed-width { background: #fffde7; border-left: 3px solid #ffc107; }
+.org-footnotes { border-top: 1px solid #eee; margin-top: 2rem; font-size: 0.9em; }
 </style>
 "#;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn export_basic_document() {
-        let meta = OrgMeta {
-            title: Some("Test".to_string()),
-            author: Some("Author".to_string()),
-            ..Default::default()
-        };
-        let elements = vec![
-            OrgElement::Heading {
-                level: 1,
-                title: "Section 1".to_string(),
-                tags: vec![],
-                todo: None,
-                children: vec![],
-            },
-            OrgElement::Paragraph("Hello *world*".to_string()),
-        ];
-        let exporter = HtmlExporter;
-        let html = exporter.export(&meta, &elements);
-        assert!(html.contains("<title>Test</title>"));
-        assert!(html.contains("<h1 class=\"title\">Test</h1>"));
-        assert!(html.contains("Author: Author"));
-        assert!(html.contains("<h1 id=\"section-1\">Section 1</h1>"));
-        assert!(html.contains("<b>world</b>"));
-    }
-
-    #[test]
-    fn export_code_block() {
-        let meta = OrgMeta::default();
-        let elements = vec![OrgElement::SrcBlock {
-            language: "python".to_string(),
-            body: "print(1)".to_string(),
-            exports: mae_babel::ExportsType::Code,
-        }];
-        let exporter = HtmlExporter;
-        let html = exporter.export(&meta, &elements);
-        assert!(html.contains("<pre><code class=\"language-python\">print(1)</code></pre>"));
-    }
-
-    /// Audit #596.3 — the attacker's test. An org file is *content*, not a
-    /// trusted template: it can arrive from a shared KB, a git checkout, or a
-    /// downloaded doc, and `#+LANGUAGE:`, `:tags:` and the `#+begin_src <lang>`
-    /// token were all interpolated raw into attribute position. Exporting such
-    /// a file produced a page that executes the author's script in whoever
-    /// opens it. Each payload closes the attribute it lands in.
-    #[test]
-    fn hostile_org_metadata_cannot_inject_markup_into_the_exported_page() {
-        let payload = r#""><script>alert(1)</script><span x=""#;
-
-        let meta = OrgMeta {
-            title: Some(payload.to_string()),
-            language: Some(payload.to_string()),
-            ..Default::default()
-        };
-        let elements = vec![
-            OrgElement::Heading {
-                level: 1,
-                title: "H".to_string(),
-                tags: vec![payload.to_string()],
-                todo: None,
-                children: vec![],
-            },
-            OrgElement::SrcBlock {
-                language: payload.to_string(),
-                body: "print(1)".to_string(),
-                exports: mae_babel::ExportsType::Code,
-            },
-        ];
-        let html = HtmlExporter.export(&meta, &elements);
-
-        // Selective oracle: the *executable* form must not survive anywhere in
-        // the output — asserting only "the escaped form is present" would pass
-        // on a page that contained both.
-        assert!(
-            !html.contains("<script>"),
-            "a raw <script> tag reached the exported page:\n{html}"
-        );
-        assert!(
-            !html.contains("</script>"),
-            "a raw </script> tag reached the exported page:\n{html}"
-        );
-        // And every injection point specifically carries the escaped text, so
-        // this fails if a future refactor drops the content instead of escaping
-        // it (which would also pass the negative assertions above).
-        assert!(html.contains("&lt;script&gt;"), "{html}");
-        assert!(
-            html.contains(r#"lang="&quot;&gt;"#),
-            "the lang attribute must be quote-escaped:\n{html}"
-        );
-        assert!(
-            html.contains(r#"class="language-&quot;&gt;"#),
-            "the src-block language class must be quote-escaped:\n{html}"
-        );
-        assert!(
-            html.contains(r#"class="tag-&quot;&gt;"#),
-            "the tag class must be quote-escaped:\n{html}"
-        );
-    }
-
-    #[test]
-    fn export_table() {
-        let meta = OrgMeta::default();
-        let elements = vec![OrgElement::Table {
-            rows: vec![
-                vec!["Name".to_string(), "Age".to_string()],
-                vec!["Alice".to_string(), "30".to_string()],
-            ],
-            has_header: true,
-        }];
-        let exporter = HtmlExporter;
-        let html = exporter.export(&meta, &elements);
-        assert!(html.contains("<th>Name</th>"));
-        assert!(html.contains("<td>Alice</td>"));
-    }
-
-    #[test]
-    fn export_table_cell_markup_is_converted_not_left_as_raw_org_syntax() {
-        // Regression: table cells went through html_escape() alone, never
-        // convert_inline_markup_str() -- every other block (List, Quote,
-        // Paragraph) already routes cell-equivalent content through it.
-        // A real cheatsheet table with function names like `=length(x)=`
-        // rendered the literal "=length(x)=" text instead of a <code> span,
-        // and an id: link in a cell rendered as literal bracket syntax
-        // instead of a real <a>.
-        let meta = OrgMeta::default();
-        let elements = vec![OrgElement::Table {
-            rows: vec![
-                vec!["Function".to_string(), "Does".to_string()],
-                vec![
-                    "=length(x)=".to_string(),
-                    "See [[id:abc123][the docs]]".to_string(),
-                ],
-            ],
-            has_header: true,
-        }];
-        let exporter = HtmlExporter;
-        let html = exporter.export(&meta, &elements);
-        assert!(
-            html.contains("<code>length(x)</code>"),
-            "expected =verbatim= markup in a cell to render as <code>, got: {html}"
-        );
-        assert!(
-            html.contains("<a href=\"#abc123\">the docs</a>"),
-            "expected an id: link in a cell to render as a real <a>, got: {html}"
-        );
-        assert!(
-            !html.contains("=length(x)="),
-            "raw org verbatim syntax should not survive unconverted in a cell"
-        );
-    }
-
-    #[test]
-    fn export_no_toc() {
-        let meta = OrgMeta {
-            options: ExportOptions {
-                toc: false,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let elements = vec![OrgElement::Heading {
-            level: 1,
-            title: "H1".to_string(),
-            tags: vec![],
-            todo: None,
-            children: vec![],
-        }];
-        let exporter = HtmlExporter;
-        let html = exporter.export(&meta, &elements);
-        assert!(!html.contains("Table of Contents"));
-    }
-
-    #[test]
-    fn export_html_escaping() {
-        let meta = OrgMeta::default();
-        let elements = vec![OrgElement::Paragraph(
-            "<script>alert(1)</script>".to_string(),
-        )];
-        let exporter = HtmlExporter;
-        let html = exporter.export(&meta, &elements);
-        assert!(html.contains("&lt;script&gt;"));
-        assert!(!html.contains("<script>"));
-    }
-
-    #[test]
-    fn toc_generation() {
-        let elements = vec![
-            OrgElement::Heading {
-                level: 1,
-                title: "A".to_string(),
-                tags: vec![],
-                todo: None,
-                children: vec![],
-            },
-            OrgElement::Heading {
-                level: 2,
-                title: "B".to_string(),
-                tags: vec![],
-                todo: None,
-                children: vec![],
-            },
-        ];
-        let opts = ExportOptions::default();
-        let toc = generate_toc(&elements, &opts);
-        assert!(toc.contains("<a href=\"#a\">A</a>"));
-        assert!(toc.contains("<a href=\"#b\">B</a>"));
-    }
-}

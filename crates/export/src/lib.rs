@@ -3,8 +3,10 @@
 //! @stability: experimental
 //! @since: 0.9.0
 
+pub mod document;
 pub mod html;
 pub mod html_graph;
+mod legacy_html;
 pub mod markdown;
 pub mod markdown_parser;
 pub mod org_writer;
@@ -35,21 +37,6 @@ pub struct ExportOptions {
     pub num: bool,
     pub author_p: bool,
     pub date_p: bool,
-    /// Whether `#+begin_export html ... #+end_export` blocks are emitted
-    /// raw (trusted, standard org semantics) or HTML-escaped (safe
-    /// default). Deliberately NOT parsed from the document's own
-    /// `#+OPTIONS:` line (see `parse_options_line`) -- unlike every other
-    /// field here, this one is security-relevant: a KB node whose content
-    /// isn't necessarily self-authored (a federated/shared KB, or content
-    /// ingested from elsewhere) could otherwise just add its own
-    /// `#+OPTIONS:` line to re-enable raw HTML passthrough for itself.
-    /// Only a caller that already trusts the source (e.g. `org_export`
-    /// exporting the human's own local buffer, gated behind the
-    /// `org_export_allow_raw_html_blocks` editor option, default off)
-    /// should ever set this to `true`. `kb_export_subgraph_html` never
-    /// sets it -- that path is explicitly a shareable, potentially
-    /// multi-author artifact, so it stays hardcoded-safe.
-    pub allow_raw_html_export_blocks: bool,
 }
 
 impl Default for ExportOptions {
@@ -61,7 +48,6 @@ impl Default for ExportOptions {
             num: true,
             author_p: true,
             date_p: true,
-            allow_raw_html_export_blocks: false,
         }
     }
 }
@@ -278,40 +264,19 @@ fn skip_drawer(lines: &[&str], mut i: usize) -> usize {
 }
 
 /// Parse an org-mode document into metadata and a flat list of elements.
-pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
-    let (meta, elements, _lines) = parse_org_document_with_lines(source);
-    (meta, elements)
-}
-
-/// [`parse_org_document`], plus the 0-based source line each element starts on.
 ///
-/// The third tuple element is parallel to the second (same length, same order).
-/// Callers that need to map a *cursor position* to an element — `org-export-subtree`
-/// being the one that exists — must use this rather than treating the element
-/// index as a line number, which is what audit #596.2 found
-/// (`elements.iter().enumerate().enumerate()` produced two copies of the same
-/// index, so a cursor anywhere past the element count selected the document's
-/// LAST heading regardless of where it actually was).
-///
-/// Deliberately the same single parse, not a second implementation
-/// (principle #8): `parse_org_document` delegates here and drops the lines.
-pub fn parse_org_document_with_lines(source: &str) -> (OrgMeta, Vec<OrgElement>, Vec<usize>) {
+/// @ai-caution: [architecture-debt] MAE's last org parser outside `mae-org`
+/// that renders output, kept only for `html_graph`'s KB node bodies (see
+/// `legacy_html.rs` for why it cannot move yet: issue #941). The editor's
+/// HTML/Markdown export no longer uses it (issue #942); `pub(crate)` so no
+/// new caller can appear outside this crate. Do not add callers.
+pub(crate) fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
     let mut meta = OrgMeta::default();
     let mut elements: Vec<OrgElement> = Vec::new();
-    // Parallel to `elements`; backfilled at the top of the next iteration
-    // (every arm of the loop body ends in `continue`, so there is no single
-    // tail hook — and threading a line through all 11 `elements.push` sites
-    // would be 11 chances to forget one).
-    let mut element_lines: Vec<usize> = Vec::new();
-    let mut iter_start = 0usize;
     let lines: Vec<&str> = source.lines().collect();
     let mut i = 0;
 
     while i < lines.len() {
-        while element_lines.len() < elements.len() {
-            element_lines.push(iter_start);
-        }
-        iter_start = i;
         let line = lines[i];
         let trimmed = line.trim();
 
@@ -617,16 +582,7 @@ pub fn parse_org_document_with_lines(source: &str) -> (OrgMeta, Vec<OrgElement>,
         }
         elements.push(OrgElement::Paragraph(para_lines.join("\n")));
     }
-    while element_lines.len() < elements.len() {
-        element_lines.push(iter_start);
-    }
-
-    debug_assert_eq!(
-        element_lines.len(),
-        elements.len(),
-        "element_lines must stay parallel to elements"
-    );
-    (meta, elements, element_lines)
+    (meta, elements)
 }
 
 /// A heading requires a space directly after the leading `*` run (or
@@ -718,7 +674,6 @@ fn parse_heading_todo(title: &str) -> (Option<String>, String) {
 #[derive(Debug, Clone, Copy)]
 pub enum InlineTarget {
     Html,
-    Markdown,
     /// Bare text, no markup at all — emphasis markers vanish (not `<b>`/
     /// `**`, just the inner text) and links resolve to their label alone
     /// (or the bare target, `id:`-stripped, if unlabeled) with no
@@ -744,25 +699,17 @@ pub fn convert_inline_markup_str(text: &str, target: InlineTarget) -> String {
                         ('*', InlineTarget::Html) => {
                             format!("<b>{}</b>", convert_inline_markup_str(content, target))
                         }
-                        ('*', InlineTarget::Markdown) => {
-                            format!("**{}**", convert_inline_markup_str(content, target))
-                        }
                         ('*' | '/', InlineTarget::PlainText) => {
                             convert_inline_markup_str(content, target)
                         }
                         ('/', InlineTarget::Html) => {
                             format!("<i>{}</i>", convert_inline_markup_str(content, target))
                         }
-                        ('/', InlineTarget::Markdown) => {
-                            format!("*{}*", convert_inline_markup_str(content, target))
-                        }
                         ('~' | '=', InlineTarget::Html) => {
                             format!("<code>{}</code>", html_escape(content))
                         }
-                        ('~' | '=', InlineTarget::Markdown) => format!("`{}`", content),
                         ('~' | '=' | '+', InlineTarget::PlainText) => content.to_string(),
                         ('+', InlineTarget::Html) => format!("<del>{}</del>", html_escape(content)),
-                        ('+', InlineTarget::Markdown) => format!("~~{}~~", content),
                         _ => content.to_string(),
                     };
                     result.push_str(&converted);
@@ -780,9 +727,6 @@ pub fn convert_inline_markup_str(text: &str, target: InlineTarget) -> String {
                             html_escape(url),
                             html_escape(url)
                         ));
-                    }
-                    InlineTarget::Markdown => {
-                        result.push_str(&format!("<{}>", url));
                     }
                     // No brackets, no href -- just the bare URL text, same
                     // "no markup at all" contract as the org-link PlainText
@@ -831,13 +775,6 @@ pub fn convert_inline_markup_str(text: &str, target: InlineTarget) -> String {
                                 html_escape(&href),
                                 display_html
                             ));
-                        }
-                        InlineTarget::Markdown => {
-                            let display = match &label {
-                                Some(l) => convert_inline_markup_str(l, target),
-                                None => stripped_target.to_string(),
-                            };
-                            result.push_str(&format!("[{display}]({href})"));
                         }
                         InlineTarget::PlainText => {
                             // No brackets, no href -- just the label (or
@@ -958,10 +895,9 @@ fn parse_org_link_str(text: &str, start: usize) -> Option<(usize, &str, Option<&
     // separated), which is NOT standard org-file syntax but IS the literal
     // storage form `mae_kb`'s own org parser canonicalizes every internal
     // `[[id:UUID][label]]` link into (see `shared/kb/src/org.rs`'s link
-    // normalization, "the internal pipe-display convention"). Both this
-    // module's exporters (`html.rs`'s `HtmlExporter`, `html_graph.rs`'s
-    // graph export) render `mae_kb::Node::body` -- i.e. the ALREADY-
-    // normalized pipe form, not raw org-file text -- so without this,
+    // normalization, "the internal pipe-display convention"). The graph
+    // export (`html_graph.rs`) renders `mae_kb::Node::body` -- i.e. the
+    // ALREADY-normalized pipe form, not raw org-file text -- so without this,
     // every internal link renders as a garbled, unsplit "UUID|label"
     // string used as both href and visible text. Recognizing `|` here is
     // safe/non-regressive for genuine raw-org-file callers: standard
@@ -1025,57 +961,19 @@ pub fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// Filter elements by export tags.
-pub fn filter_by_tags(
-    elements: &[OrgElement],
-    select_tags: &[String],
-    exclude_tags: &[String],
-) -> Vec<OrgElement> {
-    elements
-        .iter()
-        .filter(|el| {
-            if let OrgElement::Heading { tags, .. } = el {
-                // If exclude tags match, skip
-                if exclude_tags.iter().any(|t| tags.contains(t)) {
-                    return false;
-                }
-                // If select tags are specified, only include matching headings
-                if !select_tags.is_empty() && !select_tags.iter().any(|t| tags.contains(t)) {
-                    return false;
-                }
-            }
-            true
-        })
-        .cloned()
-        .collect()
-}
-
-/// Extract a subtree starting at a given heading level and line index.
-pub fn extract_subtree(elements: &[OrgElement], heading_idx: usize) -> Vec<OrgElement> {
-    if heading_idx >= elements.len() {
-        return Vec::new();
-    }
-
-    let start_level = match &elements[heading_idx] {
-        OrgElement::Heading { level, .. } => *level,
-        _ => return vec![elements[heading_idx].clone()],
-    };
-
-    let mut result = vec![elements[heading_idx].clone()];
-    for el in &elements[heading_idx + 1..] {
-        if let OrgElement::Heading { level, .. } = el {
-            if *level <= start_level {
-                break;
-            }
-        }
-        result.push(el.clone());
-    }
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The legacy renderer `html_graph` draws node bodies with, over
+    /// `elements` (what these parser tests used the page exporter for).
+    fn legacy_body(elements: &[OrgElement]) -> String {
+        let mut html = String::new();
+        for e in elements {
+            legacy_html::render_element(&mut html, e, &ExportOptions::default());
+        }
+        html
+    }
 
     #[test]
     fn parse_meta_title() {
@@ -1462,12 +1360,6 @@ mod tests {
     }
 
     #[test]
-    fn inline_markup_bold_markdown() {
-        let result = convert_inline_markup_str("hello *world*", InlineTarget::Markdown);
-        assert_eq!(result, "hello **world**");
-    }
-
-    #[test]
     fn inline_link_html() {
         let result =
             convert_inline_markup_str("see [[https://mae.invalid][Example]]", InlineTarget::Html);
@@ -1475,74 +1367,10 @@ mod tests {
     }
 
     #[test]
-    fn inline_link_markdown() {
-        let result = convert_inline_markup_str(
-            "see [[https://mae.invalid][Example]]",
-            InlineTarget::Markdown,
-        );
-        assert!(result.contains("[Example](https://mae.invalid)"));
-    }
-
-    #[test]
-    fn filter_exclude_tags() {
-        let elements = vec![
-            OrgElement::Heading {
-                level: 1,
-                title: "Keep".to_string(),
-                tags: vec![],
-                todo: None,
-                children: vec![],
-            },
-            OrgElement::Heading {
-                level: 1,
-                title: "Remove".to_string(),
-                tags: vec!["noexport".to_string()],
-                todo: None,
-                children: vec![],
-            },
-        ];
-        let filtered = filter_by_tags(&elements, &[], &["noexport".to_string()]);
-        assert_eq!(filtered.len(), 1);
-    }
-
-    #[test]
-    fn extract_subtree_works() {
-        let elements = vec![
-            OrgElement::Heading {
-                level: 1,
-                title: "H1".to_string(),
-                tags: vec![],
-                todo: None,
-                children: vec![],
-            },
-            OrgElement::Paragraph("p1".to_string()),
-            OrgElement::Heading {
-                level: 2,
-                title: "H2".to_string(),
-                tags: vec![],
-                todo: None,
-                children: vec![],
-            },
-            OrgElement::Paragraph("p2".to_string()),
-            OrgElement::Heading {
-                level: 1,
-                title: "H1b".to_string(),
-                tags: vec![],
-                todo: None,
-                children: vec![],
-            },
-        ];
-        let sub = extract_subtree(&elements, 0);
-        assert_eq!(sub.len(), 4); // H1, p1, H2, p2
-    }
-
-    #[test]
     fn roundtrip_org_to_md_to_org() {
         let org_src =
             "#+title: Test\n\n* Heading\n\nSome paragraph text.\n\n- item one\n- item two\n";
-        let (meta, elements) = parse_org_document(org_src);
-        let md_exporter = markdown::MarkdownExporter;
-        let md = md_exporter.export(&meta, &elements);
+        let md = markdown::to_markdown(&document::export_document(org_src));
         let (meta2, elements2) = markdown_parser::parse_markdown_document(&md);
         assert_eq!(meta2.title.as_deref(), Some("Test"));
         // Should have heading + paragraph + list
@@ -1679,7 +1507,7 @@ mod tests {
         assert_eq!(elements.len(), 1, "got {elements:?}");
         assert!(matches!(&elements[0], OrgElement::Example(c) if c == "literal *not bold* text"));
 
-        let html = html::HtmlExporter.export(&OrgMeta::default(), &elements);
+        let html = legacy_body(&elements);
         assert!(
             html.contains("<pre class=\"example\">literal *not bold* text</pre>"),
             "example content must be escaped-only, not markup-converted: {html}"
@@ -1690,7 +1518,7 @@ mod tests {
     fn begin_example_block_html_escapes_its_content() {
         let src = "#+begin_example\n<script>alert(1)</script>\n#+end_example\n";
         let (_, elements) = parse_org_document(src);
-        let html = html::HtmlExporter.export(&OrgMeta::default(), &elements);
+        let html = legacy_body(&elements);
         assert!(!html.contains("<script>"), "must be escaped: {html}");
         assert!(html.contains("&lt;script&gt;"), "got: {html}");
     }
@@ -1705,28 +1533,11 @@ mod tests {
         // via ExportOptions::allow_raw_html_export_blocks) must escape it.
         let src = "#+begin_export html\n<img src=x onerror=alert(1)>\n#+end_export\n";
         let (_, elements) = parse_org_document(src);
-        let html = html::HtmlExporter.export(&OrgMeta::default(), &elements);
+        let html = legacy_body(&elements);
         assert!(!html.contains("<img"), "must be escaped by default: {html}");
         assert!(
             html.contains("&lt;img src=x onerror=alert(1)&gt;"),
             "got: {html}"
-        );
-    }
-
-    #[test]
-    fn begin_export_html_passes_through_raw_when_explicitly_trusted() {
-        // The opt-in escape hatch: a caller that already trusts its own
-        // source content (e.g. org_export on the human's own local
-        // buffer, gated behind the org_export_allow_raw_html_blocks
-        // editor option) can still get standard org semantics.
-        let src = "#+begin_export html\n<div class=\"custom-badge\">Hi</div>\n#+end_export\n";
-        let (_, elements) = parse_org_document(src);
-        let mut meta = OrgMeta::default();
-        meta.options.allow_raw_html_export_blocks = true;
-        let html = html::HtmlExporter.export(&meta, &elements);
-        assert!(
-            html.contains("<div class=\"custom-badge\">Hi</div>"),
-            "explicit opt-in must pass raw HTML through unescaped: {html}"
         );
     }
 
@@ -1738,7 +1549,7 @@ mod tests {
         // silently vanish from the rendered output.
         let src = "- Top item\n  - Nested A\n  - Nested B\n- Second top item\n";
         let (_, elements) = parse_org_document(src);
-        let html = html::HtmlExporter.export(&OrgMeta::default(), &elements);
+        let html = legacy_body(&elements);
         assert!(
             html.contains("<li>Top item<ul>\n<li>Nested A</li>"),
             "{html}"
@@ -1821,7 +1632,7 @@ mod tests {
     fn checkbox_list_items_render_as_disabled_html_checkboxes() {
         let src = "- [ ] Unchecked task\n- [X] Checked task\n- [-] Partial task\n- Plain item, no checkbox\n";
         let (_, elements) = parse_org_document(src);
-        let html = html::HtmlExporter.export(&OrgMeta::default(), &elements);
+        let html = legacy_body(&elements);
         assert!(
             html.contains(
                 "<input type=\"checkbox\" disabled aria-checked=\"false\"> Unchecked task"

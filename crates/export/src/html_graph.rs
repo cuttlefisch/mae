@@ -20,11 +20,12 @@
 //! One Rust entry point (`HtmlGraphExporter::export`) returns one complete
 //! HTML `String` — inline `<style>`, inline `<script>`, an embedded JSON
 //! data payload, no external network requests, no bundler, no npm
-//! dependency shipped in the output. This mirrors `crate::html::HtmlExporter`
-//! (`html.rs`)'s "one function, one dependency-free HTML string" shape; it
-//! is a separate type rather than an `Exporter` impl because its input
-//! shape (a positioned node/edge graph, not `OrgMeta` + `Vec<OrgElement>`)
-//! doesn't fit that trait's signature.
+//! dependency shipped in the output. This mirrors `crate::html::to_html_page`
+//! (`html.rs`)'s "one function, one dependency-free HTML string" shape.
+//!
+//! Node bodies are drawn with the legacy org parser (`crate::legacy_html`),
+//! not `mae-org` as the editor's export is: see that module's
+//! `@ai-caution` for why, and for what it still shows that Org would not.
 //!
 //! `mae-export` stays a leaf crate here too (no `mae-kb`/`mae-canvas`
 //! dependency) — mirrors `mae_canvas::kb_graph`'s own "leaf crate, caller
@@ -76,7 +77,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
-use crate::html::render_element as render_org_element;
+use crate::legacy_html::render_element as render_org_element;
 use crate::{
     convert_inline_markup_str, html_escape, parse_org_document, parse_org_link_str, InlineTarget,
     ListItem, OrgElement,
@@ -495,8 +496,8 @@ fn render_node_body_html(body: &str, palette: &GruvboxPalette) -> String {
 ///
 /// Each element's raw text is run through `convert_inline_markup_str(...,
 /// InlineTarget::PlainText)` — the same parser `render_node_body_html`
-/// (HTML) and `html.rs`'s `HtmlExporter` (Markdown) already use, just a
-/// third output mode — rather than a separate hand-rolled stripper. The
+/// (HTML) already uses, just another output mode — rather than a separate
+/// hand-rolled stripper. The
 /// previous version only filtered out `* / = ~` characters, which drops
 /// emphasis markers but has no concept of a `[[target|label]]` link at
 /// all: a body containing one showed the raw brackets/pipe/target text
@@ -917,9 +918,8 @@ fn render_transition_var_css(cfg: &ChordDiagramConfig) -> String {
 }
 
 /// Exports a positioned KB subgraph to one self-contained HTML page.
-/// Mirrors `crate::html::HtmlExporter`'s "one function, one dependency-free
-/// HTML string" shape (see module docs for why this isn't the same
-/// `Exporter` trait).
+/// Mirrors `crate::html::to_html_page`'s "one function, one dependency-free
+/// HTML string" shape (see module docs).
 pub struct HtmlGraphExporter;
 
 impl HtmlGraphExporter {
@@ -1745,10 +1745,9 @@ mod tests {
 
     #[test]
     fn raw_org_file_two_bracket_links_still_render_correctly() {
-        // Non-regression: the OTHER exporter (`html.rs`'s `HtmlExporter`)
-        // feeds this same shared parser genuine raw org-FILE text, where
-        // `id:` prefixes are still present and `][` (not `|`) is the
-        // label separator -- confirm that form is unaffected.
+        // Non-regression: a node body can also hold genuine raw org-FILE
+        // text, where `id:` prefixes are still present and `][` (not `|`)
+        // is the label separator -- confirm that form is unaffected.
         let n = build_export_node(
             "a",
             "note",
