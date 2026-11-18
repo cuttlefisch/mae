@@ -124,7 +124,7 @@ async fn quorum_requires_two_distinct_owners_to_revoke() {
     )
     .await;
     assert!(g.error.is_none(), "set_governance: {:?}", g.error);
-    store_a.set_kb_anchor("kbq", owner1_pk).await;
+    store_a.set_kb_anchor("kbq", owner1_pk).await.unwrap();
     let r1 = dispatch_as(
         &store_a,
         &bc,
@@ -157,7 +157,7 @@ async fn quorum_requires_two_distinct_owners_to_revoke() {
         .apply_update("kbc:kbq", &state, None, TEST_BY)
         .await
         .expect("apply A's collection state onto B");
-    store_b.set_kb_anchor("kbq", owner1_pk).await;
+    store_b.set_kb_anchor("kbq", owner1_pk).await.unwrap();
 
     // B derives the same anchored membership: owner2 is an Owner, and bob still has
     // access there too (still one revoke).
@@ -229,7 +229,7 @@ async fn non_owner_cannot_revoke_or_set_governance() {
         &mut docs,
     )
     .await;
-    store.set_kb_anchor("kbn", owner_pk).await;
+    store.set_kb_anchor("kbn", owner_pk).await.unwrap();
 
     // An editor principal may not revoke (Manage denied at the derived gate) ...
     let r = dispatch_as(

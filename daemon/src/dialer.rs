@@ -26,6 +26,7 @@ use tracing::{info, warn};
 use crate::handler::DaemonState;
 use crate::p2p::MAE_ALPN;
 use crate::ticket::JoinTicket;
+use mae_daemon::collab_handler::OpSender;
 use mae_daemon::doc_editors::Attribution;
 use mae_daemon::doc_store::DocStore;
 use mae_mcp::broadcast::{EditorEvent, SharedBroadcaster};
@@ -253,7 +254,7 @@ async fn peer_session(
                         // Mesh require-signed: the owner is an untrusted relay, so an
                         // unsigned/forged/mis-attributed op is rejected (shared check).
                         match mae_daemon::collab_handler::verify_relayed_content_op(
-                            doc_store, &ticket.kb_id, &doc, &update, header.as_ref(), true,
+                            doc_store, &ticket.kb_id, &doc, &update, header.as_ref(), OpSender::mesh_relay(),
                         ).await {
                             Ok(verified) => {
                                 // #157 N1: the ADR-023 epoch fence runs on the mesh relay
@@ -356,7 +357,7 @@ async fn connect_verify_anchor(
     local: &Endpoint,
     ticket: &JoinTicket,
     doc_store: &Arc<DocStore>,
-) -> Result<iroh::endpoint::Connection, String> {
+) -> Result<iroh::endpoint::Connection, SessionEnd> {
     let expected = ticket.node_id();
     let conn = tokio::time::timeout(
         DIAL_TIMEOUT,
@@ -374,13 +375,24 @@ async fn connect_verify_anchor(
         conn.close(1u32.into(), b"identity mismatch");
         return Err(format!(
             "remote identity {remote} != ticket node-id {expected} (spoofed address?)"
-        ));
+        )
+        .into());
     }
     // The owner's node-id is the external trust anchor the op-log genesis must be
     // signed by (ADR-026). This flips `kb_access` to the derived, peer-verifiable path.
-    doc_store
+    // A KB this hub hosts, or one joined under another key, keeps its anchor and the
+    // dial is refused (ADR-036 Amendment 1 F1) — terminal: redialing cannot change it.
+    if let Err(refused) = doc_store
         .set_kb_anchor(&ticket.kb_id, *remote.as_bytes())
-        .await;
+        .await
+    {
+        warn!(kb_id = %ticket.kb_id, reason = %refused, "mesh join refused: KB anchor kept");
+        conn.close(1u32.into(), b"anchor refused");
+        return Err(SessionEnd::Terminal(format!(
+            "KB '{}' not joined: {refused}",
+            ticket.kb_id
+        )));
+    }
     Ok(conn)
 }
 
@@ -400,7 +412,11 @@ pub async fn dial_and_join(
     ticket: &JoinTicket,
     doc_store: &Arc<DocStore>,
 ) -> Result<JoinOutcome, String> {
-    let conn = connect_verify_anchor(local, ticket, doc_store).await?;
+    let conn = connect_verify_anchor(local, ticket, doc_store)
+        .await
+        .map_err(|e| match e {
+            SessionEnd::Transient(m) | SessionEnd::Terminal(m) => m,
+        })?;
     let (mut send, recv) = conn.open_bi().await.map_err(|e| format!("open_bi: {e}"))?;
     let mut reader = BufReader::new(recv);
     let outcome = pull_kb(&mut send, &mut reader, doc_store, None, 0, ticket).await?;
@@ -1249,5 +1265,35 @@ mod tests {
             stopped.is_ok(),
             "run_peer must STOP on a terminal reject, not retry forever"
         );
+    }
+
+    /// ADR-036 Amendment 1 F1: a ticket whose `kb_id` names a KB this hub
+    /// hosts never re-anchors it. The dial is refused, terminally (run_peer
+    /// stops), nothing is pulled, and the hub's anchor keeps its key and source.
+    #[tokio::test]
+    async fn a_dial_never_replaces_a_hub_recorded_anchor() {
+        let a_id = Arc::new(Identity::generate("owner-A"));
+        let b_id = Identity::generate("joiner-B");
+        let (addr, _a_store, _a_bc) = serve_owner_kb(&a_id, "kbh", Some(&b_id.fingerprint())).await;
+        let b_endpoint = bind_endpoint(&b_id, RelayMode::Disabled).await.unwrap();
+        let b_store = mem_store();
+        let hosted = Identity::generate("hosted-owner").public().to_bytes();
+        let recorded = b_store.record_kb_anchor_if_absent("kbh", hosted).await;
+        assert_eq!(recorded.ok(), Some(true));
+        let ticket = JoinTicket::new(addr, "kbh");
+
+        let r = dial_and_join(&b_endpoint, &ticket, &b_store).await;
+        assert!(
+            matches!(&r, Err(m) if m.contains("not joined")),
+            "refused: {r:?}"
+        );
+        let kept = Some((hosted, crate::storage::AnchorSource::HubRecorded));
+        assert_eq!(b_store.kb_anchor_record("kbh").await, kept);
+        assert!(!b_store.has_doc("kbc:kbh").await, "nothing pulled");
+
+        let peer = tokio::spawn(run_peer(b_endpoint, ticket, Arc::clone(&b_store), bc()));
+        let stopped = tokio::time::timeout(Duration::from_secs(8), peer).await;
+        assert!(stopped.is_ok(), "a refused anchor is terminal, not retried");
+        assert_eq!(b_store.kb_anchor_record("kbh").await, kept);
     }
 }

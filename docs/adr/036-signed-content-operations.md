@@ -149,6 +149,11 @@ one internal sync path unverified (#727). Browser clients now write over the hub
   KB is first shared, durably, in the same record a joined KB's anchor uses. A KB shared before this
   is anchored when its owner next connects with the key whose fingerprint the collection names as
   owner, or by the operator's local CLI.
+- **Nothing replaces an anchor.** Not the owner's next connection, not the operator, and not a mesh
+  join: a join ticket whose `kb_id` names a KB this hub recorded an anchor for, or a joined KB under
+  another key, is refused and the dial ends (a redial with the same key is a no-op). A ticket is not
+  the owner; letting one swap the key would re-root the KB's membership and flip a hosted KB to
+  fail-closed `Joined`.
 
 ### F2. One membership source for access and for verification
 
@@ -156,6 +161,38 @@ Verification admits an op when its author is a member at the op's epoch. It read
 the **same** source `kb_access` reads (`member_role`): the signed op-log on a KB that has one, the
 locally authoritative member list on one that does not. An anchored KB without a signed op-log
 yet therefore keeps working; it does not lose every member to an empty derivation.
+
+The anchor is stored with its **provenance**, and the rule depends on it:
+
+- **An anchor this hub recorded itself** (the owner's session at first share, the owner's next
+  share or write, or the operator's `kb anchor`): the hub is the authority for the KB's member
+  list. Its log is the source only when rooted at a genesis that anchor signed — a
+  cryptographically valid owner self-admit, with no predecessor, authored by the anchor key. Any
+  other log (one that starts with a member's self-`Rebind` or the owner's key rotation, one whose
+  genesis another key signed) derives no members, so membership comes from the member list, as on
+  an un-anchored KB (verified genesis or fallback). No member op can therefore make such a KB lose
+  its members.
+- **An anchor registered from a mesh join** fails closed (ADR-026): the member list came from a
+  relay, so the log is always the source, and without a genesis the anchor signed it yields no
+  members. A relay can never substitute its own member list.
+
+One decision makes this choice for access, the epoch fence, op admission and the member set alike.
+The owner authoring a genesis later, to move a hub-recorded KB onto signed membership, is a separate
+step, not part of this amendment.
+
+**Log wins, made visible** (the owner's ruling). Where the log governs, a member-list entry the log
+does not admit has no access, and is never lost silently:
+
+- when the anchor is recorded (the owner's connection or `kb anchor`), the daemon warns with the
+  number of such entries, and `kb anchor` prints them;
+- `mae-daemon kb anchor` with no arguments lists them for every anchored KB, and
+  `kb anchor --kb-id X` with no key shows which source governs and lists them (both offline; not
+  `doctor`, which never opens the store as a writer and points at the listing instead);
+- no writer changes membership on the member list alone where the log governs: `kb/add_member`,
+  `kb/remove_member`, `kb/approve_member` and the operator's `kb member` are refused
+  (`signer_unavailable`) unless this daemon signs the change into the log as the owner whose key is
+  the anchor, and a permissive `kb/join`'s auto-admit, which never signs, is refused there. The
+  owner admits or removes the member with a signed membership op.
 
 ### F3. Every write path verifies
 
@@ -172,12 +209,37 @@ yet therefore keeps working; it does not lose every member to an empty derivatio
   amendment before the switch is turned on for the mesh's join path. It is tracked here so the
   switch does not go on with it open.
 
+Open, not covered by the switch yet (as built; each needs its own decision):
+
+- **Collection manifest signing.** No signed-manifest op format exists, and
+  `kb/collection_node_add`/`kb/collection_node_remove` build their collection update on the
+  daemon, so there are no client bytes to sign. A raw `kbc:` write stays owner-only
+  (`deny_collection_smuggling`); the dialer applies the owner's pushed collection unverified.
+- **The mesh join snapshot**, as above.
+- **`kb/share`'s node states.** A share carries merged node state, not individual ops, like the
+  join snapshot; it is the owner's own session (re-share of another owner's id is refused), and is
+  not verified as content ops.
+- **The control socket's mesh share** (`p2p/share_kb`, `handler.rs`): on a fresh share it writes
+  the collection and each node's state as this daemon (`CONTROL_SOCKET`), not as verified content
+  ops. Low risk: only the local control socket reaches it (filesystem permissions, the daemon's own
+  user), it creates a KB this daemon owns and signs the genesis for, and the node states come from
+  this daemon's own KB store.
+- `__mcp_sync_update` needed nothing: the daemon already refuses it on that path.
+
 ### F4. An op a session originates is its own
 
 On an editor session (mTLS, a self-issued token, a bound IdP login on `/ws`), the op's `author`
 must equal the session's principal (`not_author`). A session cannot author for another member.
 Ops a mesh peer relays (`Transport::P2p`) are checked for signature and membership only: their
 author is legitimately not the connection.
+
+Only a session with no identity at all has no principal, and skips this check: `auth.mode = none`.
+It is already trusted for every KB, so the check would bound nothing; signature and membership
+still apply. Every identified session has a principal: a key or mTLS peer its fingerprint, a `/ws`
+bearer its token subject, psk the shared `psk:<keyid>` (so a psk session's signed ops are always
+`not_author`; psk clients do not sign). A key peer whose public key is the all-zero encoding (a
+valid point an operator could authorize) used to have none, and so was trusted for every KB; it now
+has its fingerprint.
 
 ### F5. Every writer signs
 
@@ -206,5 +268,34 @@ every path.
   refused; an op authored by another member on a session is refused `not_author`; the same op
   relayed by a mesh peer is admitted.
 - An unsigned manifest change to a collection document is refused with the switch on.
+- A member-list entry the governing log does not admit is reported at anchoring and by
+  `kb anchor` (the per-KB show and the no-argument listing); a member-list membership write is refused where the log governs and this daemon
+  cannot sign into it, and works where the member list governs.
+- A join ticket never replaces an anchor; a dial naming a KB this hub anchored is refused.
+- A session with no identity relays a member's op, checked for signature and membership; a psk
+  session cannot.
+- On the anchored path, re-admission moves the epoch and an op under the old one is fenced; an
+  owner's key rotation keeps the anchor and the new key writes.
 - A browser-signed op (mae-crypto) and an editor-signed op for the same bytes are both accepted,
   and their canonical bytes are identical.
+
+### Open items (as built)
+
+- **A squatted `kb_id` keeps its anchor.** The first session to share an id owns it, as before
+  (ADR-105 D5), and its key is now that KB's durable anchor. There is no command to clear an anchor,
+  deliberately. Recovery today: the legitimate owner shares under a fresh id (an editor does this on
+  `kb_id_owned_by_another`), and the operator revokes the squatter's access (`mae-daemon revoke` for
+  a key). The id itself is not reclaimed. See `docs/DAEMON_ADMIN.md`.
+- **The upgrade window for joined KBs.** Joined anchors were memory-only before this amendment, so
+  on the first start after the upgrade a mesh-joined KB has no anchor until its dialer next dials,
+  and until then reads the relay-supplied member list. The daemon cannot tell such a KB from one it
+  hosts at load: join tickets are not persisted, the collection is a copy of the owner's, and the
+  document editor record (ADR-113 D3) began after many joins and records mesh-peer writes on hosted
+  KBs too. Closing it needs a persisted record of joined KBs; until then, an operator upgrading a
+  daemon with mesh-joined KBs re-submits their tickets before serving clients.
+- **A mesh owner that rotates its daemon key.** A joined KB keeps the key it was joined under, so a
+  fresh ticket naming the rotated key is refused (F1). The owner's log carries the rotation, so
+  accepting a successor the log proves is the fix; it is not built.
+- **A genesis authored after anchoring.** The warning fires when the anchor is recorded. A KB whose
+  owner authors its genesis later moves to the log then, without a warning; `kb anchor` (show, or
+  the no-argument listing) reports it.

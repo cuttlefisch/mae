@@ -13,6 +13,7 @@
 //! CozoDB. The daemon is an upgrade that provides persistent SQLite KB,
 //! collaboration, and services that outlive the editor session.
 
+mod anchor_cli;
 mod backup;
 mod binding_cli;
 mod checkpoint_cli;
@@ -465,7 +466,7 @@ async fn main() {
     // see it. A run that ends at zero is evidence the hub can move to
     // `require_signed_content_ops = true`; a non-zero count names work still to
     // do. See `content_op_policy`.
-    let unsigned = mae_daemon::content_op_policy::unsigned_accepted();
+    let unsigned = unsigned_content_ops(doc_store_for_query.as_deref());
     if unsigned == 0 {
         tracing::info!(
             "collab: 0 unsigned content ops accepted this run — safe to set \
@@ -751,6 +752,11 @@ fn exit_store_locked(locked: &StoreLocked) -> ! {
 static STORE_LOCK: std::sync::OnceLock<mae_daemon::store_lock::StoreLock> =
     std::sync::OnceLock::new();
 
+/// How many unsigned content ops the collab store accepted this run (0 without one).
+fn unsigned_content_ops(doc_store: Option<&doc_store::DocStore>) -> u64 {
+    doc_store.map_or(0, |d| d.content_op_policy().unsigned_accepted())
+}
+
 async fn init_doc_store(
     config: &DaemonConfig,
 ) -> Result<
@@ -787,11 +793,12 @@ async fn init_doc_store(
             .with_max_wal_entries(collab.storage.max_wal_entries)
             .with_max_document_size(collab.sync.max_document_size_bytes)
             .with_max_message_bytes(collab.sync.max_message_bytes)
-            .with_max_update_size(collab.sync.max_update_size_bytes),
+            .with_max_update_size(collab.sync.max_update_size_bytes)
+            .with_require_signed_content_ops(collab.auth.require_signed_content_ops),
     );
-    // ADR-039 A2 (#162): hydrate the local self-protection blocklist from durable storage
-    // so a block set in a prior session is enforced from the first op this session derives.
-    doc_store.load_blocklists().await;
+    // Hydrate the local per-KB state before anything serves: the blocklist (ADR-039 A2)
+    // and the content anchors (ADR-036 Amendment 1 F1) membership is derived under.
+    doc_store.load_local_state().await;
     let broadcaster: SharedBroadcaster = Arc::new(std::sync::Mutex::new(EventBroadcaster::new()));
     // Shared by the TCP listener and the P2P mesh so both report the same uptime.
     let server_start_time = std::time::Instant::now();
@@ -917,10 +924,9 @@ async fn spawn_collab_server(
     //   "psk": trust a SET of symmetric keys (keystore + legacy psk/psk_command).
     //   "key": asymmetric Ed25519 — own identity + authorized_keys (ADR-017).
     //   else:  no auth (trusted loopback).
-    // Daemon-wide, fixed at startup: whether the HUB also demands an ADR-036
-    // signature on content ops (the mesh always does). See `content_op_policy`
-    // for why the migration accommodation needed both a lever and a counter.
-    mae_daemon::content_op_policy::set_require_signed(collab.auth.require_signed_content_ops);
+    // Daemon-wide, fixed at startup (`init_doc_store` hands it to the store): whether
+    // the HUB also demands an ADR-036 signature on content ops (the mesh always does).
+    // See `content_op_policy` for why the accommodation needed a lever and a counter.
     if collab.auth.require_signed_content_ops {
         tracing::info!("collab: unsigned content ops will be REJECTED on the hub transport too");
     }
@@ -1847,6 +1853,17 @@ fn run_doctor(config: &DaemonConfig, compare_with: Option<&DaemonConfig>) -> i32
             }
         }
         print_live_storage(config);
+
+        // ADR-036 Amendment 1 F2, "log wins, made visible": a listed member the
+        // governing signed op-log does not admit has no access. Deriving that
+        // needs the store open as a writer, which doctor never does (above), so
+        // it points at the offline listing instead.
+        if db_path.exists() {
+            println!(
+                "  kb membership: not checked here; with the daemon stopped, `mae-daemon kb \
+                 anchor` lists member-list entries a KB's signed op-log does not admit"
+            );
+        }
 
         if config.collab.auth.mode == "none" {
             println!("  collab auth: none — the port is UNAUTHENTICATED");

@@ -136,7 +136,7 @@ pub(super) async fn anchored() -> (Fixture, Arc<Identity>, Identity) {
     assert!(shared.error.is_none(), "{:?}", shared.error);
     let add = kb_member_msg("kb/add_member", KB, &editor.fingerprint(), Some("editor"));
     assert!(f.call_as(Some(&owner_fp), add).await.error.is_none());
-    f.store.set_kb_anchor(KB, owner_pk).await;
+    f.store.set_kb_anchor(KB, owner_pk).await.unwrap();
     (f, owner, editor)
 }
 
@@ -199,10 +199,12 @@ async fn signed_write_refusals_carry_their_kinds() {
         "forged signature",
     );
 
-    // A member relaying an op whose signed AUTHOR is not a member.
+    // A member's session sending an op signed by someone else (ADR-036
+    // Amendment 1 F4) — refused before that author's standing is read. The
+    // mesh-relay case, where it IS read, is in the hub-verify tests.
     let outsider = Identity::generate("outsider");
     let relayed = f.call_as(Some(&me), signed_by(&outsider, 0)).await;
-    expect_kind(&relayed, "not_member", "op authored by a non-member");
+    expect_kind(&relayed, "not_author", "op authored by someone else");
 }
 
 #[tokio::test]

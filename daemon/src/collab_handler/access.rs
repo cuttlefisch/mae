@@ -8,6 +8,7 @@
 //! MAE's cross-tenant bugs came from assuming one of them covered both.
 
 use super::*;
+use crate::storage::AnchorSource;
 
 /// here. Resolves the caller's role from its cryptographic **principal** (key
 /// fingerprint — never a label), then decides by hierarchical RBAC role × the
@@ -37,8 +38,8 @@ pub(crate) async fn member_role(
     coll: &KbCollectionDoc,
     principal: &str,
 ) -> (Option<SyncRole>, ReplicationPolicy) {
-    match doc_store.kb_anchor(kb_id).await {
-        Some(anchor) if coll.oplog_head().is_some() => {
+    match signed_membership_anchor(doc_store, kb_id, coll).await {
+        Some(anchor) => {
             // ADR-026 §A4: read the owner-declared governance from the op-log, then
             // derive membership under it — so a `Quorum{m}` KB enforces m-of-n
             // co-signed removals (and an Owner removed by quorum loses access here)
@@ -56,8 +57,164 @@ pub(crate) async fn member_role(
                 None => (None, ReplicationPolicy::Full),
             }
         }
-        _ => (coll.role_of(principal), ReplicationPolicy::Full),
+        None => (coll.role_of(principal), ReplicationPolicy::Full),
     }
+}
+
+/// Where a KB's membership is read from — the ONE decision every membership
+/// reader shares (`kb_access`, the epoch fence, content-op admission, the
+/// member set), so access and verification can never read different sources
+/// (ADR-036 Amendment 1 F2). `Some(anchor)`: the signed op-log, derived under
+/// that anchor — always for a JOINED KB (empty without a genesis: fail closed),
+/// and for a hub-recorded anchor only when the log is rooted at a genesis that
+/// anchor signed. `None`: the locally authoritative roster (`member_roles`), on
+/// a KB without an anchor, or a hub-recorded one whose log has no such root.
+///
+/// @ai-caution: [security] "Verified genesis or fallback", for HUB-RECORDED
+/// anchors only (the owner's ruling on the F1+F2 lockout; this hub is the
+/// authority for those member lists): a log with no anchor-signed root derives NO members,
+/// so selecting it would lock every member out — and a member can create such
+/// a log on its own (a self-`Rebind` appended to a KB with no genesis). No
+/// member op may move a KB off its roster; only the owner's genesis does, and
+/// authoring one later is a separate step.
+pub(crate) async fn signed_membership_anchor(
+    doc_store: &DocStore,
+    kb_id: &str,
+    coll: &KbCollectionDoc,
+) -> Option<[u8; 32]> {
+    let (anchor, source) = doc_store.kb_anchor_record(kb_id).await?;
+    if source == AnchorSource::Joined {
+        // ADR-026: fail closed. The member list came from a relay; without
+        // a genesis the anchor signed the log derives no members, and that is
+        // the answer — a relay never substitutes its own list.
+        return Some(anchor);
+    }
+    coll.oplog_head()?;
+    let derived = doc_store
+        .derived_membership(kb_id, coll, &anchor, now_unix())
+        .await;
+    derived.genesis_verified.then_some(anchor)
+}
+
+/// Where a KB's membership is read from, and who that leaves out — the owner's
+/// ruling on F2's two sources: "log wins, made visible".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MembershipSource {
+    /// The signed op-log governs ([`signed_membership_anchor`] chose it);
+    /// otherwise the member list (`member_roles`) does.
+    pub log_governed: bool,
+    /// On a log-governed KB, the member-list entries the log does not admit,
+    /// sorted. They have no access here. Always empty when the list governs.
+    pub roster_only: Vec<String>,
+}
+
+/// [`MembershipSource`] for `kb_id` from its collection `coll`.
+pub(crate) async fn membership_source(
+    doc_store: &DocStore,
+    kb_id: &str,
+    coll: &KbCollectionDoc,
+) -> MembershipSource {
+    let Some(anchor) = signed_membership_anchor(doc_store, kb_id, coll).await else {
+        return MembershipSource::default();
+    };
+    let derived = doc_store
+        .derived_membership(kb_id, coll, &anchor, now_unix())
+        .await;
+    let mut roster_only: Vec<String> = coll
+        .member_roles()
+        .into_iter()
+        .map(|m| m.fingerprint)
+        .filter(|fp| !derived.members.contains_key(fp))
+        .collect();
+    roster_only.sort();
+    roster_only.dedup();
+    MembershipSource {
+        log_governed: true,
+        roster_only,
+    }
+}
+
+/// [`MembershipSource`] for a stored KB — `mae-daemon kb anchor` and
+/// `mae-daemon doctor` (operator-only, offline).
+pub async fn kb_membership_source(
+    doc_store: &DocStore,
+    kb_id: &str,
+) -> Result<MembershipSource, String> {
+    let coll = load_collection(doc_store, kb_id)
+        .await
+        .map_err(|e| format!("KB '{kb_id}': {}", McpError::from(e).message))?;
+    Ok(membership_source(doc_store, kb_id, &coll).await)
+}
+
+/// Every anchored KB whose signed log leaves member-list entries out, with
+/// those entries (`mae-daemon doctor`). A KB whose collection cannot be read
+/// is reported with the reason instead.
+pub async fn roster_only_members_report(
+    doc_store: &DocStore,
+) -> Vec<(String, Result<Vec<String>, String>)> {
+    let mut out = Vec::new();
+    for kb_id in doc_store.anchored_kb_ids().await {
+        match kb_membership_source(doc_store, &kb_id).await {
+            Ok(src) if src.roster_only.is_empty() => {}
+            Ok(src) => out.push((kb_id, Ok(src.roster_only))),
+            Err(e) => out.push((kb_id, Err(e))),
+        }
+    }
+    out
+}
+
+/// Log, at warn level, that anchoring `kb_id` left `roster_only` members out —
+/// the count only; the fingerprints at debug (the operator CLI prints them).
+pub(crate) fn warn_roster_only(kb_id: &str, roster_only: &[String]) {
+    if roster_only.is_empty() {
+        return;
+    }
+    warn!(
+        kb_id,
+        count = roster_only.len(),
+        "KB anchored: its signed op-log governs membership, and member-list entries it does \
+         not admit have no access; the owner must admit them with a signed op (`mae-daemon kb \
+         anchor --kb-id` lists them)"
+    );
+    debug!(kb_id, members = ?roster_only, "member-list entries the signed op-log does not admit");
+}
+
+/// Refuse a membership change that would land on the member list only (the
+/// owner's "log wins, made visible": no member is added or removed silently).
+/// On a log-governed KB a change takes effect only as a signed op in the log;
+/// `apply_membership_change` appends one only when this daemon signs as the
+/// owner, so it must also be the key the log is rooted at. `can_sign`: the
+/// caller appends a signed op when it can (false for a write that never does).
+///
+/// @ai-caution: [security] Every member-list writer of membership calls this —
+/// `kb/add_member`, `kb/remove_member`, `kb/approve_member`, a permissive
+/// `kb/join`'s auto-admit, and the operator's `kb member`. A writer that skips
+/// it reports success for a member the log never admits (or keeps admitting).
+/// One writer is exempt by design: the ADR-040 rebind mirror in `kb_content`
+/// copies a successor key into the roster AFTER the signed `Rebind` op is in
+/// the log. On a log-governed KB the log already aliases the successor, so the
+/// roster write only keeps the roster view in step and admits no one new.
+pub(crate) async fn refuse_roster_only_change(
+    doc_store: &DocStore,
+    kb_id: &str,
+    coll: &KbCollectionDoc,
+    can_sign: bool,
+) -> Result<(), McpError> {
+    let Some(anchor) = signed_membership_anchor(doc_store, kb_id, coll).await else {
+        return Ok(());
+    };
+    let signs_for_log = can_sign
+        && doc_store
+            .signer()
+            .is_some_and(|s| s.fingerprint() == coll.owner() && s.public().to_bytes() == anchor);
+    if signs_for_log {
+        return Ok(());
+    }
+    Err(McpError::signer_unavailable(format!(
+        "KB '{kb_id}''s membership is governed by its signed op-log, and this daemon cannot sign \
+         that change into it: the owner must add or remove the member with a signed membership \
+         op (ADR-036 Amendment 1 F2)"
+    )))
 }
 
 /// As [`kb_access`], but accepts a pre-loaded collection snapshot so a handler
@@ -189,15 +346,15 @@ pub(crate) async fn current_member_set(
     kb_id: &str,
     coll: &KbCollectionDoc,
 ) -> std::collections::BTreeSet<String> {
-    match doc_store.kb_anchor(kb_id).await {
-        Some(anchor) if coll.oplog_head().is_some() => doc_store
+    match signed_membership_anchor(doc_store, kb_id, coll).await {
+        Some(anchor) => doc_store
             .derived_membership(kb_id, coll, &anchor, now_unix())
             .await
             .members
             .keys()
             .cloned()
             .collect(),
-        _ => coll
+        None => coll
             .member_roles()
             .into_iter()
             .map(|m| m.fingerprint)

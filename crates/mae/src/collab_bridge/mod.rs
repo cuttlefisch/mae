@@ -27,6 +27,7 @@ mod events_connection;
 mod events_doc;
 mod events_kb;
 mod events_kb_share_conflict;
+mod rotation;
 
 use std::collections::HashSet;
 use std::sync::Mutex;
@@ -1191,11 +1192,21 @@ fn resolve_client_transport(
                             ),
                             policy: editor.collab.host_key_policy_live.clone(),
                         });
+                    // ADR-040 §4: a rotation an earlier run left pending for this key.
+                    let rotation = rotation::Slot::load(dir.clone(), &id);
                     let identity = std::sync::Arc::new(id);
                     return if editor.collab.tls {
-                        ClientTransport::KeyTls { identity, verifier }
+                        ClientTransport::KeyTls {
+                            identity,
+                            verifier,
+                            rotation,
+                        }
                     } else {
-                        ClientTransport::KeyJson { identity, verifier }
+                        ClientTransport::KeyJson {
+                            identity,
+                            verifier,
+                            rotation,
+                        }
                     };
                 }
                 Err(e) => {
@@ -1340,6 +1351,11 @@ pub(crate) enum PendingResponseKind {
         principal: String,
         block: bool,
     },
+    /// ADR-040 §4: an op only the rotated key may send (the owner's self re-wrap), sent on
+    /// the new key's session after the reconnect (`rotation::flush_outbox`).
+    RotationSuccessorOp {
+        kb_id: String,
+    },
 }
 
 /// Spawn a dedicated reader task that feeds complete messages into an mpsc channel.
@@ -1470,15 +1486,85 @@ enum ClientTransport {
     KeyJson {
         identity: std::sync::Arc<mae_mcp::identity::Identity>,
         verifier: std::sync::Arc<dyn mae_mcp::identity::HostKeyVerifier>,
+        /// An ADR-040 rotation of `identity` in flight (`rotation::Slot`).
+        rotation: rotation::Slot,
     },
     /// Native mTLS (key mode, default) — identity + pinning are the TLS layer.
     KeyTls {
         identity: std::sync::Arc<mae_mcp::identity::Identity>,
         verifier: std::sync::Arc<dyn mae_mcp::identity::HostKeyVerifier>,
+        /// An ADR-040 rotation of `identity` in flight (`rotation::Slot`).
+        rotation: rotation::Slot,
     },
 }
 
 impl ClientTransport {
+    /// The session's identity, in key mode: the key the transport authenticates with AND
+    /// the key content ops are signed with (ADR-036 D2). One value, held here only, so the
+    /// two can never disagree — a session signing with one key while authenticated as
+    /// another is exactly what a hub that verifies ops refuses (ADR-040 §4). `None` in
+    /// psk/none mode, whose ops stay unsigned.
+    fn identity(&self) -> Option<&std::sync::Arc<mae_mcp::identity::Identity>> {
+        match self {
+            ClientTransport::KeyTls { identity, .. }
+            | ClientTransport::KeyJson { identity, .. } => Some(identity),
+            ClientTransport::Plain { .. } => None,
+        }
+    }
+
+    /// Replace the session's identity (an accepted ADR-040 rotation). Takes effect at the
+    /// next connect: the caller tears the live connection down, since it is still
+    /// authenticated as the key just retired. `false` (and no change) in psk/none mode.
+    fn rekey(&mut self, new: std::sync::Arc<mae_mcp::identity::Identity>) -> bool {
+        match self {
+            ClientTransport::KeyTls { identity, .. }
+            | ClientTransport::KeyJson { identity, .. } => {
+                *identity = new;
+                true
+            }
+            ClientTransport::Plain { .. } => false,
+        }
+    }
+
+    /// The rotation of this session's identity, in key mode.
+    fn rotation(&self) -> Option<&rotation::Slot> {
+        match self {
+            ClientTransport::KeyTls { rotation, .. }
+            | ClientTransport::KeyJson { rotation, .. } => Some(rotation),
+            ClientTransport::Plain { .. } => None,
+        }
+    }
+
+    fn rotation_mut(&mut self) -> Option<&mut rotation::Slot> {
+        match self {
+            ClientTransport::KeyTls { rotation, .. }
+            | ClientTransport::KeyJson { rotation, .. } => Some(rotation),
+            ClientTransport::Plain { .. } => None,
+        }
+    }
+
+    /// The same transport authenticated as `id`, for a pending rotation's one-off membership
+    /// question (`rotation::probe`). Carries no rotation of its own.
+    fn probe_transport(
+        &self,
+        id: &std::sync::Arc<mae_mcp::identity::Identity>,
+    ) -> Option<ClientTransport> {
+        let rotation = rotation::Slot::new(None);
+        match self {
+            ClientTransport::KeyTls { verifier, .. } => Some(ClientTransport::KeyTls {
+                identity: id.clone(),
+                verifier: verifier.clone(),
+                rotation,
+            }),
+            ClientTransport::KeyJson { verifier, .. } => Some(ClientTransport::KeyJson {
+                identity: id.clone(),
+                verifier: verifier.clone(),
+                rotation,
+            }),
+            ClientTransport::Plain { .. } => None,
+        }
+    }
+
     /// The PSK (or `cmd:` sentinel) for a Plain transport — test inspection.
     #[cfg(test)]
     fn plain_psk(&self) -> Option<&str> {
@@ -1603,7 +1689,9 @@ async fn establish_connection(
     use tokio::io::BufReader;
     use tokio::net::TcpStream;
     match transport {
-        ClientTransport::KeyTls { identity, verifier } => {
+        ClientTransport::KeyTls {
+            identity, verifier, ..
+        } => {
             let cfg = mae_mcp::tls::client_config(identity, addr.to_string(), verifier.clone())?;
             let stream = TcpStream::connect(addr).await.map_err(|e| e.to_string())?;
             mae_mcp::tune_request_stream(&stream);
@@ -1620,7 +1708,9 @@ async fn establish_connection(
                 instrument_writer(addr, Box::new(w) as BoxWriter),
             ))
         }
-        ClientTransport::KeyJson { identity, verifier } => {
+        ClientTransport::KeyJson {
+            identity, verifier, ..
+        } => {
             use mae_mcp::auth::{AuthProvider, KeyAuth};
             let stream = TcpStream::connect(addr).await.map_err(|e| e.to_string())?;
             mae_mcp::tune_request_stream(&stream);
@@ -1993,16 +2083,15 @@ async fn run_collab_task(
         }
         other => other,
     };
-    // ADR-036 D2: the signing identity for content ops — present only in key mode
-    // (the editor holds its Ed25519 key for mTLS/JSON-key auth). psk/none mode has
-    // no per-identity key, so its ops stay unsigned (the legacy/hub path).
-    // `mut`: ADR-040 PR2b swaps this to the successor key on `(rotate-identity)`.
-    let mut signing_identity: Option<std::sync::Arc<mae_mcp::identity::Identity>> =
-        match &transport {
-            ClientTransport::KeyTls { identity, .. }
-            | ClientTransport::KeyJson { identity, .. } => Some(identity.clone()),
-            ClientTransport::Plain { .. } => None,
-        };
+    // ADR-036 D2: content ops are signed by the session's identity, which only the
+    // transport holds (`ClientTransport::identity`) — so an ADR-040 rotation swaps the
+    // signing key and the authenticating key together (`rotation::finish`).
+    let mut transport = transport;
+    // ADR-040 §4: a rotation in flight lives in the transport (`rotation::Slot`). It needs
+    // to know when a connection is new: a `Rebind` whose answer was lost is re-sent once
+    // per connection.
+    let mut conn_gen: u64 = 0;
+    let mut was_connected = false;
     match &transport {
         ClientTransport::KeyTls { .. } => {
             info!(
@@ -2099,6 +2188,56 @@ async fn run_collab_task(
     }
 
     loop {
+        // ADR-040 §4: move a pending rotation on — resolve what a lost connection left
+        // unknown, and once every KB is settled, switch the session to the new key.
+        let connected_now = msg_rx.is_some();
+        if connected_now && !was_connected {
+            conn_gen += 1;
+        }
+        was_connected = connected_now;
+        let net = rotation::Net {
+            connected: connected_now,
+            conn_gen,
+            writer: writer.as_mut(),
+            addr: target_address.as_deref(),
+            next_id: &mut next_request_id,
+            timeout: write_timeout,
+            retry: std::time::Duration::from_secs(reconnect_secs.max(1)),
+        };
+        if rotation::drive(&mut transport, net, &mut kb_collections, &evt_tx).await {
+            // The live connection is still authenticated as the key just retired, which
+            // the daemon refuses everything: drop it and reconnect under the new key via
+            // the ordinary reconnect path — the same one a dropped connection takes, so
+            // `handle_connected_event` re-subscribes every shared doc and KB.
+            tear_down(&mut msg_rx, &mut writer);
+            shared_docs.clear();
+            pending_responses.clear();
+            seq_tracker.clear();
+            ping_pending = false;
+            reconnect_attempt = 0;
+            reconnect_enabled = target_address.is_some();
+            try_send_evt(
+                &evt_tx,
+                CollabEvent::Disconnected {
+                    reason: "identity rotated — reconnecting under the new key".to_string(),
+                },
+            );
+            continue;
+        }
+        // What only the rotated key's session may send (the owner's self re-wrap) goes out
+        // on the first connection that has it — however that connection was made.
+        if let (Some(w), Some(slot)) = (writer.as_mut(), transport.rotation_mut()) {
+            rotation::flush_outbox(
+                slot,
+                w,
+                &mut next_request_id,
+                &mut pending_responses,
+                write_timeout,
+            )
+            .await;
+        }
+        // When to wake and ask the new key again, if a rotation is waiting on that.
+        let rotation_wake = transport.rotation().and_then(|s| s.wake_at());
         let connected = msg_rx.is_some();
 
         if connected {
@@ -2120,116 +2259,55 @@ async fn run_collab_task(
                             continue;
                         }
                         CollabCommand::RotateIdentity => {
-                            // ADR-040 PR2b: owner identity rotation. Generate a successor keypair,
-                            // author a Rebind (+ E2e re-wrap) into every KB this peer OWNS, ship
-                            // them over the CURRENT connection (the old owner key still passes the
-                            // daemon's owner-Manage gate at this instant), persist + swap to the new
-                            // key. The transport stays authenticated as the now-retired old key, so
-                            // the user must authorize the new key on the daemon and reconnect
-                            // (out-of-band, ADR-040 §4). Owner-only in v1 — non-owned KBs are left
-                            // for the PR2c member path (#213).
+                            // ADR-040 PR2b/PR2c: rotate this peer's identity. Generate a successor
+                            // keypair and author a `Rebind` into every KB I own or belong to, signed
+                            // by the OLD key. A hub that verifies ops refuses every write from a
+                            // session whose key the log has retired (§4), so:
+                            //  1. HERE: record the rotation durably (`rotation::begin` — the new
+                            //     key and every `Rebind`, BEFORE anything is sent), then ship only
+                            //     the `Rebind`s on the old key's session.
+                            //  2. `rotation::drive`, at the top of the loop: once the daemon's
+                            //     verdict on every KB is known — answered, or found out after a
+                            //     lost connection — adopt the KBs that accepted it, commit the new
+                            //     key, swap the session's identity and reconnect under it. Ops only
+                            //     the new key may send (the owner's self re-wrap) ride that session.
+                            if transport.rotation().is_some_and(|s| s.is_pending()) {
+                                try_send_evt(&evt_tx, CollabEvent::Error {
+                                    message: "rotate-identity: a rotation is already pending — MAE is still finding out what the daemon did with it".to_string(),
+                                });
+                                continue;
+                            }
                             let now = std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .map(|d| d.as_secs())
                                 .unwrap_or(0);
-                            match (signing_identity.clone(), writer.as_mut()) {
+                            match (transport.identity().cloned(), writer.as_mut()) {
                                 (Some(old_id), Some(w)) => {
                                     let new_id = std::sync::Arc::new(
                                         mae_mcp::identity::Identity::generate(old_id.label()),
                                     );
-                                    // Owner-owned KBs (Rebind + self re-wrap) AND non-owned KBs
-                                    // where I am a member (Rebind only — the owner re-wraps the
-                                    // content key reactively, ADR-040 PR2c).
-                                    let owner_plans = plan_owner_rotation(
+                                    // Owner-owned KBs (Rebind, then the self re-wrap on the new
+                                    // session) AND non-owned KBs where I am a member (Rebind only —
+                                    // the owner re-wraps the content key reactively, ADR-040 PR2c).
+                                    let plans: Vec<RotationPlan> = plan_owner_rotation(
                                         &kb_collections, &content_keys, &old_id, &new_id, now,
-                                    );
-                                    let member_plans =
-                                        plan_member_rotation(&kb_collections, &old_id, &new_id, now);
-                                    let owned_count = owner_plans.len();
-                                    let member_count = member_plans.len();
-                                    let plans: Vec<RotationPlan> =
-                                        owner_plans.into_iter().chain(member_plans).collect();
-                                    let total_plans = plans.len();
-                                    let mut rotated = 0usize;
-                                    // #round-4: a wire-write failure used to be silently discarded
-                                    // (`let _ = write_framed(...)`) while local state advanced
-                                    // unconditionally — a dropped delta left the daemon's roster on
-                                    // the OLD key while `signing_identity` swapped to the new one
-                                    // below, so the very next signed op would be rejected by the
-                                    // daemon: a self-inflicted lockout reported as "rotation
-                                    // shipped". Only advance local state for a KB whose delta(s)
-                                    // actually reached the daemon; track the rest to report honestly.
-                                    let mut failed_kb_ids: Vec<String> = Vec::new();
-                                    for plan in &plans {
-                                        let mut plan_shipped = true;
-                                        for delta in &plan.deltas {
-                                            let req_id = next_request_id;
-                                            next_request_id += 1;
-                                            let req = mae_sync::wire::kb_collection_op_request(
-                                                req_id,
-                                                &plan.kb_id,
-                                                &mae_sync::encoding::update_to_base64(delta),
-                                            );
-                                            let sent = match serde_json::to_vec(&req) {
-                                                Ok(body) => {
-                                                    write_framed(w, &body, write_timeout).await.is_ok()
-                                                }
-                                                Err(_) => false,
-                                            };
-                                            if !sent {
-                                                plan_shipped = false;
-                                                break;
-                                            }
+                                    )
+                                    .into_iter()
+                                    .chain(plan_member_rotation(&kb_collections, &old_id, &new_id, now))
+                                    .collect();
+                                    let Some(slot) = transport.rotation_mut() else {
+                                        continue;
+                                    };
+                                    match rotation::begin(slot, &old_id.fingerprint(), new_id, plans, conn_gen) {
+                                        Ok(()) => {
+                                            rotation::ship(slot, w, &mut next_request_id, write_timeout, &evt_tx).await;
                                         }
-                                        if plan_shipped {
-                                            // Advance the local replica so later ops chain on the
-                                            // rotated state (and the new key derives its own content key).
-                                            kb_collections
-                                                .insert(plan.kb_id.clone(), plan.new_replica.clone());
-                                            // B2: persist so the rotated/recovered op-log survives a restart.
-                                            persist_collection(&plan.kb_id, &plan.new_replica);
-                                            rotated += 1;
-                                        } else {
-                                            failed_kb_ids.push(plan.kb_id.clone());
+                                        Err(why) => {
+                                            warn!(reason = %why, "rotate-identity: not started");
+                                            try_send_evt(&evt_tx, CollabEvent::Error {
+                                                message: format!("Identity rotation not started — {why}. Your identity was NOT changed."),
+                                            });
                                         }
-                                    }
-                                    if rotated == 0 && total_plans > 0 {
-                                        warn!(owned_count, member_count, "rotate-identity: failed to ship ANY rotation delta — identity NOT rotated");
-                                        try_send_evt(&evt_tx, CollabEvent::Error {
-                                            message: format!(
-                                                "Identity rotation failed — could not reach the daemon for any of {total_plans} KB(s). Your identity was NOT changed; try again once reconnected."
-                                            ),
-                                        });
-                                    } else {
-                                        // Persist the successor key (the old key already signed the
-                                        // Rebinds, so it is safe to replace on disk now).
-                                        if let Some(dir) = mae_mcp::identity::default_collab_dir() {
-                                            if let Err(e) = new_id.save(&dir) {
-                                                warn!(error = %e, "rotate-identity: failed to persist the new key");
-                                            }
-                                        }
-                                        let new_fp = new_id.fingerprint();
-                                        // Swap the live signing identity — future content ops sign with
-                                        // the new key (which the rotated membership recognises as owner).
-                                        signing_identity = Some(new_id);
-                                        info!(rotated, owned_count, member_count, failed = failed_kb_ids.len(), new_fp = %new_fp, "rotate-identity: rotation shipped");
-                                        let mut lines = vec![
-                                            format!("Identity rotated across {rotated} KB(s) ({owned_count} owned, {member_count} as member)."),
-                                            format!("New fingerprint: {new_fp}"),
-                                            "Next: authorize the new key on the daemon (`mae-daemon authorize`), then reconnect — this connection still uses the old key.".to_string(),
-                                            // The new key has a new ADR-023 client-id, so the FIRST edit to an
-                                            // existing node after rotation trips the epoch fence once and must
-                                            // rebase; `collab-fence-resolution = auto` re-authors it silently.
-                                            "Your first edit to an existing node may rebase once (the rotated key has a new write lineage) — set `collab-fence-resolution` to `auto` to handle it silently.".to_string(),
-                                        ];
-                                        if !failed_kb_ids.is_empty() {
-                                            lines.push(format!(
-                                                "WARNING: rotation FAILED to ship for {} KB(s) — still on the OLD key there, re-run rotate-identity once reconnected: {}",
-                                                failed_kb_ids.len(),
-                                                failed_kb_ids.join(", ")
-                                            ));
-                                        }
-                                        try_send_evt(&evt_tx, CollabEvent::StatusReport { lines });
                                     }
                                 }
                                 (None, _) => {
@@ -2255,7 +2333,7 @@ async fn run_collab_task(
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .map(|d| d.as_secs())
                                 .unwrap_or(0);
-                            match (signing_identity.clone(), writer.as_mut()) {
+                            match (transport.identity().cloned(), writer.as_mut()) {
                                 (Some(id), Some(w)) => {
                                     let recovery = mae_mcp::identity::Identity::generate("recovery");
                                     let recovery_pubkey = recovery.public().to_bytes();
@@ -2373,7 +2451,7 @@ async fn run_collab_task(
                                     kb_collections.entry(kb_id).or_insert(bytes);
                                 }
                             }
-                            match (signing_identity.clone(), writer.as_mut(), recovery) {
+                            match (transport.identity().cloned(), writer.as_mut(), recovery) {
                                 (Some(new_id), Some(w), Some(recovery)) => {
                                     let plans = plan_recovery_rotation(
                                         &kb_collections, &old_fp, &new_id, &recovery, now,
@@ -2775,7 +2853,7 @@ async fn run_collab_task(
                                 // ADR-022 Amendment 1 E2: paged; the daemon answers in pages
                                 // and each page's `next_after` queues the next (`JoinFollowUp`).
                                 let mut req = mae_sync::wire::kb_join_page_request(req_id, &kb_id, &svs_b64, None);
-                                with_wrap_pubkey(&mut req, signing_identity.as_ref());
+                                with_wrap_pubkey(&mut req, transport.identity());
                                 join_svs.insert(kb_id.clone(), svs_b64);
                                 let body = match serde_json::to_vec(&req) {
                                     Ok(b) => b,
@@ -2888,7 +2966,7 @@ async fn run_collab_task(
                                     &node_id,
                                     &update,
                                     epoch,
-                                    signing_identity.as_ref(),
+                                    transport.identity(),
                                     content_keys.get(&kb_id),
                                     e2e,
                                     &op_set_state,
@@ -2958,7 +3036,7 @@ async fn run_collab_task(
                             let mut e2e_write_failed = false;
                             if !add {
                                 if let (Some(_old_key), Some(id)) =
-                                    (content_keys.get(&kb_id).cloned(), signing_identity.as_ref())
+                                    (content_keys.get(&kb_id).cloned(), transport.identity())
                                 {
                                     // Fail-CLOSED on the network task's OWN replica
                                     // (`kb_collections` — the daemon's lineage, CRDT-merged from
@@ -3184,7 +3262,7 @@ async fn run_collab_task(
                             // downgrade to that instead of being reported.
                             let mut e2e_write_failed = false;
                             if let (Some(key), Some(id)) =
-                                (content_keys.get(&kb_id).cloned(), signing_identity.as_ref())
+                                (content_keys.get(&kb_id).cloned(), transport.identity())
                             {
                                 // Fail-CLOSED: author ONLY against the network task's OWN replica
                                 // (`kb_collections` — the daemon's lineage, kept CRDT-merged from
@@ -3395,7 +3473,7 @@ async fn run_collab_task(
                                         ),
                                     },
                                 );
-                            } else if let Some(id) = signing_identity.as_ref() {
+                            } else if let Some(id) = transport.identity() {
                                 let owner_fp = id.fingerprint();
                                 let owner_pubkey = id.public().to_bytes();
                                 let owner_secret = id.secret_bytes();
@@ -3630,6 +3708,11 @@ async fn run_collab_task(
                     match msg {
                         Some(Ok(text)) => {
                             messages_received += 1;
+                            // The daemon's answer to a pending rotation's `Rebind`.
+                            if transport.rotation_mut().is_some_and(|r| r.ack(&text)) {
+                                ping_pending = false;
+                                continue;
+                            }
                             // ADR-087 / audit #594: JSON-RPC message content can
                             // carry arbitrary UTF-8 (e.g. synced document text);
                             // a fixed byte cut can land mid-character and panic.
@@ -3649,7 +3732,7 @@ async fn run_collab_task(
                                     node_to_kb: &mut node_to_kb,
                                     seen_ops: &mut seen_ops,
                                     kb_collections: &mut kb_collections,
-                                    signing_identity: signing_identity.as_ref(),
+                                    signing_identity: transport.identity(),
                                     pending_collection_ops: &mut pending_collection_ops,
                                     pending_join_pages: &mut pending_join_pages,
                                 },
@@ -3686,7 +3769,7 @@ async fn run_collab_task(
                             } else {
                                 pending_collection_ops.clear();
                             }
-                            send_join_pages(&mut writer, &mut pending_join_pages, &join_svs, signing_identity.as_ref(), &mut next_request_id, &mut pending_responses, write_timeout).await;
+                            send_join_pages(&mut writer, &mut pending_join_pages, &join_svs, transport.identity(), &mut next_request_id, &mut pending_responses, write_timeout).await;
                             // Any valid message resets the ping_pending flag.
                             ping_pending = false;
                         }
@@ -3720,6 +3803,11 @@ async fn run_collab_task(
                         }
                     }
                 }
+                // ADR-040 §4: time to ask the new key again about a pending rotation;
+                // `rotation::drive` does it at the top of the loop.
+                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
+                    rotation_wake.unwrap_or_else(std::time::Instant::now),
+                )), if rotation_wake.is_some() => {}
                 // WU2: Periodic heartbeat.
                 _ = heartbeat_interval.tick() => {
                     if heartbeat_secs == 0 {
@@ -4118,9 +4206,14 @@ fn fold_join_page(
 /// identity rotation, plus the advanced collection replica to store back.
 pub(crate) struct RotationPlan {
     pub kb_id: String,
-    /// Signed deltas to ship via the owner-gated `kb/collection_op`, in order: the `Rebind`
-    /// first, then — for an E2e KB — the owner re-wrap of the content key to the new key.
+    /// Signed deltas the OLD key's session ships via `kb/collection_op`: the `Rebind`, which
+    /// the old key signs while it is still the member it retires.
     pub deltas: Vec<Vec<u8>>,
+    /// Signed deltas only the NEW key's session may ship, after the `Rebind` is accepted: for
+    /// an owned E2e KB, the owner's self re-wrap of the content key. The retired key's session
+    /// is refused everything once its `Rebind` lands (ADR-040 §4), so these wait for the
+    /// reconnect under the new key (`rotation::PendingRotation`).
+    pub on_successor: Vec<Vec<u8>>,
     /// The advanced collection replica to store back into `kb_collections`.
     pub new_replica: Vec<u8>,
 }
@@ -4159,9 +4252,9 @@ pub(crate) fn plan_owner_rotation(
         if coll.owner() != old_fp {
             continue;
         }
-        let mut deltas = Vec::new();
+        let mut on_successor = Vec::new();
         // 1. Rebind: the OLD owner key cross-signs the new key (still valid at this point).
-        deltas.push(coll.author_rebind(
+        let deltas = vec![coll.author_rebind(
             kb_id,
             &old_fp,
             &new_fp,
@@ -4170,13 +4263,14 @@ pub(crate) fn plan_owner_rotation(
             &old_sec,
             &old_pk,
             now,
-        ));
+        )];
         // 2. E2e: re-wrap the content key to the owner's NEW wrap key. Signed by the NEW key
-        //    (the old is retired the instant its Rebind lands), anchored on the OLD genesis.
+        //    (the old is retired the instant its Rebind lands), anchored on the OLD genesis —
+        //    so it rides the new key's session, never the old one's.
         if coll.encryption() == Encryption::E2e {
             if let Some(key) = content_keys.get(kb_id) {
                 if let Ok(wrapped) = mae_sync::content_crypto::wrap_to_member(key, &new_wrap_pk) {
-                    deltas.push(coll.author_rebind_rewrap(
+                    on_successor.push(coll.author_rebind_rewrap(
                         kb_id, &new_fp, &new_pk, wrapped, &old_pk, &new_fp, &new_sec, &new_pk, now,
                     ));
                 }
@@ -4185,6 +4279,7 @@ pub(crate) fn plan_owner_rotation(
         plans.push(RotationPlan {
             kb_id: kb_id.clone(),
             deltas,
+            on_successor,
             new_replica: coll.encode_state(),
         });
     }
@@ -4234,6 +4329,7 @@ pub(crate) fn plan_member_rotation(
         plans.push(RotationPlan {
             kb_id: kb_id.clone(),
             deltas: vec![delta],
+            on_successor: Vec::new(),
             new_replica: coll.encode_state(),
         });
     }
@@ -4269,6 +4365,7 @@ pub(crate) fn plan_register_recovery_key(
         plans.push(RotationPlan {
             kb_id: kb_id.clone(),
             deltas: vec![delta],
+            on_successor: Vec::new(),
             new_replica: coll.encode_state(),
         });
     }
@@ -4318,6 +4415,7 @@ pub(crate) fn plan_recovery_rotation(
         plans.push(RotationPlan {
             kb_id: kb_id.clone(),
             deltas: vec![delta],
+            on_successor: Vec::new(),
             new_replica: coll.encode_state(),
         });
     }
@@ -5493,6 +5591,25 @@ fn handle_response(
                         )],
                     },
                 );
+            }
+        }
+        PendingResponseKind::RotationSuccessorOp { kb_id } => {
+            if let Some(err) = val.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("refused");
+                warn!(kb = %kb_id, error = %msg, "rotate-identity: the new key's re-wrap was refused");
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::Error {
+                        message: format!(
+                            "KB '{kb_id}': the rotated key's content-key re-wrap was refused: {msg}"
+                        ),
+                    },
+                );
+            } else {
+                info!(kb = %kb_id, "rotate-identity: the new key's re-wrap accepted on its own session");
             }
         }
     }

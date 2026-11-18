@@ -20,7 +20,9 @@ use tracing::{debug, info, warn};
 use crate::doc_editors::{
     Authors, EditClock, EditStamp, EditorKind, EditorsSince, PendingChange, Writer,
 };
-use crate::storage::{Checkpoint, SeedNodeRow, SeedRecord, StorageBackend, StorageError};
+use crate::storage::{
+    AnchorSource, Checkpoint, SeedNodeRow, SeedRecord, StorageBackend, StorageError,
+};
 
 /// Built-in default for the per-update size gate (bytes), used when the operator
 /// has not set `[collab.sync] max_update_size_bytes` in `daemon.toml`. A fixed
@@ -98,12 +100,20 @@ pub struct DocStore {
     /// daemon signs membership ops for KBs it owns (`signer.fingerprint() == owner`)
     /// into the op-log; absent (psk/none) ⇒ legacy unsigned membership only.
     signer: std::sync::OnceLock<Arc<mae_mcp::identity::Identity>>,
-    /// Per-KB external trust anchor (ADR-026): the owner pubkey a peer verifies the
-    /// op-log genesis against, set for a KB JOINED from a relay we don't trust (the
-    /// join-ticket node-id, registered by the dialer). When present, `kb_access`
-    /// derives membership from the signed op-log instead of the relay-supplied
-    /// `member_roles`. Owned KBs need no anchor (the daemon is itself the authority).
-    kb_anchors: RwLock<HashMap<String, [u8; 32]>>,
+    /// Per-KB content trust anchor (ADR-026): the owner pubkey a peer verifies the
+    /// op-log genesis against. Registered for a KB JOINED from a relay we don't
+    /// trust (the join-ticket node-id, by the dialer), and — ADR-036 Amendment 1
+    /// F1 — for a KB an editor shares here (the sharing session's key, at first
+    /// share, or at its owner's next share or write for a KB shared before).
+    /// When present and the KB's op-log is rooted at a genesis this key signed,
+    /// `kb_access` and content-op verification derive membership from that log
+    /// (`signed_membership_anchor`); otherwise from the member list.
+    /// An in-memory cache written through to the durable `kb_anchors` table and
+    /// hydrated at startup ([`DocStore::load_local_state`]).
+    kb_anchors: RwLock<HashMap<String, ([u8; 32], AnchorSource)>>,
+    /// ADR-036 Amendment 1 F6: whether unsigned content ops are refused, and how
+    /// many were accepted while they were not.
+    content_ops: crate::content_op_policy::ContentOpPolicy,
     /// Change-feed sender (ADR-029 B2): every mutation to a durable KB doc (`kbc:`/`kb:`)
     /// emits its doc name here, so the projector re-derives the cozo projection. One
     /// seam for hub (`collab_handler`) and p2p (`dialer`) — both land at `apply_update`.
@@ -188,6 +198,34 @@ pub(crate) struct Pause {
 pub struct DerivedMembership {
     pub governance: Governance,
     pub members: BTreeMap<String, ValidMember>,
+    /// Whether the log is rooted at a genesis the anchor signed
+    /// (`membership::has_anchored_genesis`). Without one, `members` is empty
+    /// by construction and the KB's membership is read from its member list
+    /// instead (ADR-036 Amendment 1 F2, `signed_membership_anchor`).
+    pub genesis_verified: bool,
+}
+
+/// Why [`DocStore::set_kb_anchor`] refused a join's anchor: a KB's anchor is
+/// stored once (ADR-036 Amendment 1 F1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorRefused {
+    /// This hub records the KB's anchor itself: it hosts the KB, so no join
+    /// ticket may anchor it, with any key.
+    HubRecorded,
+    /// The KB is already joined under another owner key.
+    OtherKey,
+}
+
+impl std::fmt::Display for AnchorRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::HubRecorded => {
+                "this daemon hosts the KB and recorded its anchor itself; a join ticket cannot \
+                 anchor it"
+            }
+            Self::OtherKey => "the KB is already anchored to another owner key",
+        })
+    }
 }
 
 /// One [`DocStore::derive_cache`] entry. A hit requires the collection SV **and** anchor to still
@@ -274,6 +312,7 @@ impl DocStore {
             kb_metas: RwLock::new(HashMap::new()),
             signer: std::sync::OnceLock::new(),
             kb_anchors: RwLock::new(HashMap::new()),
+            content_ops: crate::content_op_policy::ContentOpPolicy::default(),
             change_tx: std::sync::OnceLock::new(),
             kb_blocklists: RwLock::new(HashMap::new()),
             derive_cache: RwLock::new(HashMap::new()),
@@ -684,6 +723,7 @@ impl DocStore {
         let result = Arc::new(DerivedMembership {
             governance,
             members,
+            genesis_verified: mae_sync::membership::has_anchored_genesis(&ops, anchor),
         });
         self.derive_cache.write().await.insert(
             kb_id.to_string(),
@@ -741,19 +781,105 @@ impl DocStore {
         self.authorized_keys_path.get()
     }
 
-    /// Register the external trust anchor (owner pubkey) for a KB joined from a
-    /// relay (ADR-026) — the join-ticket node-id. `kb_access` then derives that KB's
-    /// membership from the signed op-log instead of trusting the relay's copy.
-    pub async fn set_kb_anchor(&self, kb_id: &str, owner_pubkey: [u8; 32]) {
-        self.kb_anchors
-            .write()
+    /// Register the trust anchor (owner pubkey) for a KB joined from a relay
+    /// (ADR-026) — the join-ticket node-id — as [`AnchorSource::Joined`]:
+    /// `kb_access` then derives that KB's membership from the signed op-log
+    /// and never from the relay's member list, even when the log has no
+    /// genesis (fail closed).
+    ///
+    /// Always installed in memory (a joined KB without its anchor would fall back
+    /// to the relay-supplied roster); persisted best-effort, since the dialer
+    /// registers it again on every dial.
+    ///
+    /// @ai-caution: [security] Never replaces an anchor (ADR-036 Amendment 1
+    /// F1: a KB's anchor is stored once). A join ticket is not the owner: one
+    /// whose `kb_id` names a KB this hub hosts, or names a joined KB with a
+    /// different key, would otherwise swap the key its membership is verified
+    /// against, and flip a hosted KB to fail-closed `Joined`. The same key from
+    /// the same source is a no-op; anything else is refused and the dial ends.
+    pub async fn set_kb_anchor(
+        &self,
+        kb_id: &str,
+        owner_pubkey: [u8; 32],
+    ) -> Result<(), AnchorRefused> {
+        let source = AnchorSource::Joined;
+        let mut anchors = self.kb_anchors.write().await;
+        match anchors.get(kb_id) {
+            Some(&(key, AnchorSource::Joined)) if key == owner_pubkey => return Ok(()),
+            Some(&(_, AnchorSource::HubRecorded)) => return Err(AnchorRefused::HubRecorded),
+            Some(_) => return Err(AnchorRefused::OtherKey),
+            None => {}
+        }
+        if let Err(e) = self
+            .storage
+            .put_kb_anchor(kb_id, &owner_pubkey, source)
             .await
-            .insert(kb_id.to_string(), owner_pubkey);
+        {
+            warn!(kb_id, error = %e, "KB content anchor not persisted");
+        }
+        anchors.insert(kb_id.to_string(), (owner_pubkey, source));
+        Ok(())
     }
 
-    /// The external trust anchor for `kb_id`, if one is registered (joined KBs).
+    /// Every KB with a content anchor, sorted (`mae-daemon doctor`).
+    pub async fn anchored_kb_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.kb_anchors.read().await.keys().cloned().collect();
+        ids.sort();
+        ids
+    }
+
+    /// Record `owner_pubkey` as `kb_id`'s anchor, [`AnchorSource::HubRecorded`],
+    /// unless it already has one (ADR-036 Amendment 1 F1: a KB's anchor is
+    /// stored once, and a joined KB's never becomes hub-recorded). Durable first: a
+    /// failed write records nothing, so memory never claims an anchor the next
+    /// start would not have — the owner's next share or write retries it.
+    /// Returns whether this call recorded it.
+    pub async fn record_kb_anchor_if_absent(
+        &self,
+        kb_id: &str,
+        owner_pubkey: [u8; 32],
+    ) -> Result<bool, StorageError> {
+        let mut anchors = self.kb_anchors.write().await;
+        if anchors.contains_key(kb_id) {
+            return Ok(false);
+        }
+        let source = AnchorSource::HubRecorded;
+        self.storage
+            .put_kb_anchor(kb_id, &owner_pubkey, source)
+            .await?;
+        anchors.insert(kb_id.to_string(), (owner_pubkey, source));
+        Ok(true)
+    }
+
+    /// The trust anchor for `kb_id`, if one is registered.
     pub async fn kb_anchor(&self, kb_id: &str) -> Option<[u8; 32]> {
+        self.kb_anchor_record(kb_id).await.map(|(key, _)| key)
+    }
+
+    /// The trust anchor for `kb_id` and where it came from (ADR-036 Amendment 1
+    /// F2: only a hub-recorded anchor falls back to the member list).
+    pub async fn kb_anchor_record(&self, kb_id: &str) -> Option<([u8; 32], AnchorSource)> {
         self.kb_anchors.read().await.get(kb_id).copied()
+    }
+
+    /// Hydrate the durable per-KB local state — the blocklist and the content
+    /// anchors — before anything serves. Called once at startup.
+    pub async fn load_local_state(&self) {
+        self.load_blocklists().await;
+        self.load_kb_anchors().await;
+    }
+
+    /// Hydrate the anchor cache from durable storage (ADR-036 Amendment 1 F1).
+    pub async fn load_kb_anchors(&self) {
+        match self.storage.load_kb_anchors().await {
+            Ok(rows) => {
+                let n = rows.len();
+                let rows = rows.into_iter().map(|(kb, key, src)| (kb, (key, src)));
+                self.kb_anchors.write().await.extend(rows);
+                info!(anchors = n, "loaded KB content anchors");
+            }
+            Err(e) => warn!(error = %e, "failed to load KB content anchors; starting empty"),
+        }
     }
 
     /// Hydrate the in-memory blocklist cache from durable storage (ADR-039 A2, #162).
@@ -877,6 +1003,17 @@ impl DocStore {
     pub fn message_bound(&self) -> usize {
         self.max_message_bytes
             .unwrap_or_else(|| crate::message_limits::message_bound(self.max_document_size_bytes))
+    }
+
+    /// `[collab.auth] require_signed_content_ops` (ADR-036 Amendment 1 F6).
+    pub fn with_require_signed_content_ops(mut self, require: bool) -> Self {
+        self.content_ops = crate::content_op_policy::ContentOpPolicy::new(require);
+        self
+    }
+
+    /// The content-op signing policy every write path consults.
+    pub fn content_op_policy(&self) -> &crate::content_op_policy::ContentOpPolicy {
+        &self.content_ops
     }
 
     /// Set the maximum single sync-update payload size (bytes). 0 = use the

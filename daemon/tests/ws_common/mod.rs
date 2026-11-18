@@ -42,6 +42,8 @@ pub struct Opts {
     pub ticket_ttl_secs: Option<u64>,
     /// An external token issuer, and the `/ws` pilot switch (ADR-099 Amendment 2).
     pub idp: Option<IdpOpts>,
+    /// `[collab.auth] require_signed_content_ops` (ADR-036 Amendment 1 F6).
+    pub require_signed: bool,
 }
 
 /// `[oauth]` settings for an external issuer (ADR-098) and `ws_accept_bound_idp`.
@@ -90,6 +92,7 @@ impl Default for Opts {
             ping_secs: None,
             ticket_ttl_secs: None,
             idp: None,
+            require_signed: false,
         }
     }
 }
@@ -140,6 +143,7 @@ fn config_toml(dir: &Path, ports: crate::daemon_harness::Ports, opts: &Opts) -> 
     format!(
         "[collab]\nenabled = true\nbind = \"127.0.0.1:{collab}\"\n\
          [collab.auth]\nmode = \"key\"\nidentity_dir = \"{id}\"\nauthorized_keys = \"{id}/authorized_keys\"\n\
+         require_signed_content_ops = {signed}\n\
          [oauth]\nenabled = true\nbind = \"127.0.0.1:{oauth}\"\ncanonical_resource_uri = \"{AUDIENCE}\"\n\
          cert_path = \"{d}/oauth.crt\"\nkey_path = \"{d}/oauth.key\"\nkb_query_enabled = true\n\
          self_issued_tokens_enabled = true\nmax_connections = 0\n\
@@ -152,6 +156,7 @@ fn config_toml(dir: &Path, ports: crate::daemon_harness::Ports, opts: &Opts) -> 
         ws = opts.ws_enabled,
         lead = opts.renew_lead_secs,
         docs = opts.max_open_docs,
+        signed = opts.require_signed,
     )
 }
 

@@ -75,7 +75,7 @@ async fn setup_four_principal_kb(
 
     // Anchor so kb_access derives from the signed op-log (ReplicationPolicy has no
     // meaning on the legacy member_roles path at all).
-    store.set_kb_anchor(kb_id, owner_pubkey).await;
+    store.set_kb_anchor(kb_id, owner_pubkey).await.unwrap();
 
     (
         owner_fp,
@@ -271,7 +271,7 @@ async fn mid_session_restriction_does_not_tear_down_an_already_live_session_but_
         &mut docs,
     )
     .await;
-    store.set_kb_anchor("kbmid", owner_pubkey).await;
+    store.set_kb_anchor("kbmid", owner_pubkey).await.unwrap();
 
     // Dana joins while still Full-policy -- a real, live, subscribed session.
     let session_id = 42u64;

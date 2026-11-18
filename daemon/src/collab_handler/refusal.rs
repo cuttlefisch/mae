@@ -39,6 +39,8 @@ pub enum RefusalKind {
     },
     SignatureInvalid,
     SignatureRequired,
+    /// ADR-036 Amendment 1 F4: a session sent an op signed by someone else.
+    NotAuthor,
     RebirthUnverified,
     /// A KB document named on a raw path that cannot authorize one.
     DocUnavailable,
@@ -130,6 +132,7 @@ impl From<Refusal> for McpError {
             } => McpError::epoch_fenced(m, current_epoch, caller_epoch),
             RefusalKind::SignatureInvalid => McpError::signature_invalid(m),
             RefusalKind::SignatureRequired => McpError::signature_required(m),
+            RefusalKind::NotAuthor => McpError::not_author(m),
             RefusalKind::RebirthUnverified => McpError::rebirth_unverified(m),
             RefusalKind::DocUnavailable => McpError::doc_unavailable(m),
             RefusalKind::DocKbMismatch => McpError::doc_kb_mismatch(m),

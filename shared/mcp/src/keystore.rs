@@ -245,6 +245,120 @@ pub fn write_secure(path: &Path, content: &str) -> std::io::Result<()> {
     set_secure_file_perms(path)
 }
 
+/// [`write_secure`], but all-or-nothing: the content goes to a fresh temporary beside
+/// `path` ([`write_secure_new`]), is flushed to disk, and is renamed over `path`. A crash at
+/// any point leaves either the old file or the new one, never a truncated one. For a key file
+/// that is the only copy of a key — a half-written one is a lost key.
+///
+/// @ai-caution: [security] The temporary's name is unique per write and it is opened
+/// `create_new` (`O_EXCL`) + `O_NOFOLLOW`. It used to be a fixed `<name>.tmp` opened
+/// create+truncate: a symlink planted there received the secret, and two concurrent writers
+/// interleaved in one file. Never go back to a predictable, reusable temporary.
+pub fn write_secure_atomic(path: &Path, content: &str) -> std::io::Result<()> {
+    let tmp = unique_tmp_path(path)?;
+    write_secure_new(&tmp, content)?;
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    sync_parent(path);
+    Ok(())
+}
+
+/// Create `path` holding `content`, 0600 from creation, and fail with `AlreadyExists` if
+/// anything is already there — a file, or a symlink, dangling or not. All-or-nothing like
+/// [`write_secure_atomic`], but never replaces: of two processes creating the same file, at
+/// most one succeeds, and an existing file is left byte-for-byte as it was. (The content is
+/// written to a fresh temporary, then hard-linked into place: `link(2)` does not replace.)
+pub fn create_secure_atomic(path: &Path, content: &str) -> std::io::Result<()> {
+    let tmp = unique_tmp_path(path)?;
+    write_secure_new(&tmp, content)?;
+    let linked = std::fs::hard_link(&tmp, path);
+    let _ = std::fs::remove_file(&tmp);
+    linked?;
+    sync_parent(path);
+    Ok(())
+}
+
+/// A temporary name beside `path` that no other write uses: the process id, a per-process
+/// counter and a random suffix (the random part keeps a stale temporary left by a crashed
+/// process from blocking a later process that reuses its pid).
+fn unique_tmp_path(path: &Path) -> std::io::Result<PathBuf> {
+    use rand::Rng;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no file name")
+    })?;
+    let mut tmp_name = std::ffi::OsString::from(".");
+    tmp_name.push(name);
+    tmp_name.push(format!(
+        ".{}.{}.{:016x}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed),
+        rand::rng().next_u64()
+    ));
+    Ok(path.with_file_name(tmp_name))
+}
+
+/// Create a NEW file at `path` holding `content`, owner-only from creation and flushed to
+/// disk. Refuses anything already at `path`: `create_new` is `O_CREAT|O_EXCL`, which fails
+/// on an existing name — a symlink included, and does not follow it — and on unix
+/// `O_NOFOLLOW` refuses a symlink as the last component as well (belt and braces). On any
+/// failure after the file was created it is removed: no partial secret is left behind.
+fn write_secure_new(path: &Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    // Nothing was created if the open fails, so there is nothing to remove.
+    let mut f = opts.open(path)?;
+    let written = f
+        .write_all(content.as_bytes())
+        .and_then(|()| f.sync_all())
+        .and_then(|()| secure_open_file(&f, path));
+    drop(f);
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(path);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// [`set_secure_file_perms`] on the open handle (`fchmod`), not the name: the name could
+/// have been swapped since the open, the handle cannot. The mode is already 0600 from
+/// creation; this pins it against a umask that would only have narrowed it further.
+fn secure_open_file(f: &std::fs::File, path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = path;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = f;
+        warn_unenforced_perms(path);
+        Ok(())
+    }
+}
+
+/// A rename or link is durable only once its directory is flushed (unix).
+fn sync_parent(path: &Path) {
+    #[cfg(unix)]
+    if let Some(dir) = path.parent() {
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
 /// Restrict a freshly-written secret file to the owner. On unix: `chmod 0600` (a failure
 /// propagates — we never leave a secret world-readable silently). On non-unix (#158 I4,
 /// principle #13): MAE cannot portably set an owner-only ACL without a platform crate, so
@@ -387,6 +501,128 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "new-secret");
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// The atomic write replaces a pre-existing, permissive file with an owner-only one
+    /// holding the new content, and leaves no temporary behind.
+    #[cfg(unix)]
+    #[test]
+    fn an_atomic_write_replaces_whole_and_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("id_ed25519");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_secure_atomic(&path, "new-secret").expect("write_secure_atomic");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new-secret");
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            dir_names(tmp.path()),
+            vec!["id_ed25519"],
+            "no temporary left behind"
+        );
+    }
+
+    fn dir_names(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// The attacker's test: a local user plants a symlink where the secret's temporary
+    /// would go, pointing at a file they can read. The secret must never be written through
+    /// it. Planted at the old fixed temporary name, a write must succeed without touching
+    /// it; handed a symlink as the temporary itself, the create must refuse.
+    #[cfg(unix)]
+    #[test]
+    fn a_planted_symlink_never_receives_the_secret() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bait = tmp.path().join("attacker-readable");
+        std::fs::write(&bait, "bait").unwrap();
+        let path = tmp.path().join("id_ed25519");
+        let legacy = tmp.path().join("id_ed25519.tmp");
+        std::os::unix::fs::symlink(&bait, &legacy).unwrap();
+
+        write_secure_atomic(&path, "s3cret").expect("the write succeeds");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "s3cret");
+        assert_eq!(
+            std::fs::read_to_string(&bait).unwrap(),
+            "bait",
+            "written through"
+        );
+        assert_eq!(
+            std::fs::read_link(&legacy).unwrap(),
+            bait,
+            "the plant is untouched"
+        );
+
+        // The temporary itself is a symlink — to a file, and dangling.
+        let link = tmp.path().join("planted");
+        std::os::unix::fs::symlink(&bait, &link).unwrap();
+        assert!(write_secure_new(&link, "s3cret").is_err());
+        assert_eq!(
+            std::fs::read_to_string(&bait).unwrap(),
+            "bait",
+            "written through"
+        );
+        let gone = tmp.path().join("not-yet");
+        let dangling = tmp.path().join("dangling");
+        std::os::unix::fs::symlink(&gone, &dangling).unwrap();
+        assert!(write_secure_new(&dangling, "s3cret").is_err());
+        assert!(!gone.exists(), "created through a dangling symlink");
+    }
+
+    /// Two writers of one secret file never share a temporary: each write uses its own.
+    #[test]
+    fn concurrent_atomic_writes_each_land_whole() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("rotation_pending");
+        let bodies: Vec<String> = (0..8).map(|i| format!("{i}-").repeat(50_000)).collect();
+        std::thread::scope(|s| {
+            for b in &bodies {
+                let path = &path;
+                s.spawn(move || write_secure_atomic(path, b).expect("write"));
+            }
+        });
+        let got = std::fs::read_to_string(&path).unwrap();
+        assert!(bodies.contains(&got), "an interleaved file");
+        assert_eq!(dir_names(tmp.path()), vec!["rotation_pending"]);
+    }
+
+    /// A no-replace create: the first wins, a second finds the file there and fails,
+    /// and the first is left byte for byte — also when the name is a dangling symlink.
+    #[test]
+    fn a_create_never_replaces_what_is_there() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("rotation_pending");
+        create_secure_atomic(&path, "first").expect("the first create");
+        let e = create_secure_atomic(&path, "second").expect_err("a second create");
+        assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first");
+        assert_eq!(
+            dir_names(tmp.path()),
+            vec!["rotation_pending"],
+            "no temporary left"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            let link = tmp.path().join("other");
+            let gone = tmp.path().join("gone");
+            std::os::unix::fs::symlink(&gone, &link).unwrap();
+            assert!(create_secure_atomic(&link, "x").is_err());
+            assert!(!gone.exists());
+        }
     }
 
     #[test]

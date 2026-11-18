@@ -424,7 +424,8 @@ keyed on codes sees no change, but the code does not distinguish refusals; `kind
 | `node_not_in_kb` | The caller may read the KB, and its manifest does not list the node. | `kb/node_fetch`, `kb/query.get`, `kb/query.links`, `kb/query.neighborhood` | — |
 | `epoch_fenced` | The write carries an op from a stale authorization epoch (ADR-023). Adopt the authoritative state (`kb/node_fetch`) and re-author under `current_epoch`. | `kb/node_update`, `sync/update` | `current_epoch`; `caller_epoch` for a signed op |
 | `signature_invalid` | A signed content op or its header does not verify. | `kb/node_update`, `sync/update` | — |
-| `signature_required` | An unsigned content op where signatures are required (the P2P mesh). | `sync/update` | — |
+| `signature_required` | An unsigned content op where signatures are required: always on the P2P mesh, and on the hub once `[collab.auth] require_signed_content_ops` is on. | `kb/node_update`, `sync/update` | — |
+| `not_author` | A signed content op whose author is not the session that sent it (ADR-036 Amendment 1 F4). A session may send only ops it authored; ops a mesh peer relays are exempt. Checked after the signature and before membership. | `kb/node_update`, `sync/update` | — |
 | `rebirth_unverified` | A rebirth not bound to an owner-signed `Rebirth` op (ADR-107). | `kb/node_update` | — |
 | `doc_unavailable` | A KB document named on a raw method that cannot serve it (any node document; a collection on `sync/share` and `docs/*`). Use the `kb/*` methods. | `sync/*`, `docs/*` | — |
 | `doc_kb_mismatch` | A KB node document whose address names a different KB from the request's `kb_id`. Every check runs against `kb_id`, so the write is refused. Send the KB the document belongs to. | `sync/update` | — |
@@ -455,9 +456,11 @@ only. A KB document on a raw `sync/*` path is `doc_unavailable` whether or not i
 daemon's local blocklist is reported as `not_member`, not as a kind of its own.
 
 On a **signed** content op (ADR-036), `not_member`, `role_forbidden` and `epoch_fenced` describe the
-op's signed *author* — the caller, unless the op is being relayed for someone else. The author is
-examined only after the caller itself is cleared to write the KB: a caller that is not gets its own
-refusal whatever header it sends, so replaying someone's captured op tells it nothing about them.
+op's signed *author* — the caller, since a session may send only ops it authored (`not_author`);
+only a mesh peer relays others' ops. The author is examined only after the caller itself is cleared
+to write the KB: a caller that is not gets its own refusal whatever header it sends, and a cleared
+caller sending someone else's captured op gets `not_author` before that author's standing is read,
+so replaying it tells the caller nothing about them.
 
 `kb/join` also returns the caller's identity and fence input in its result: `principal` (the
 authenticated principal the daemon authorizes with; `null` with `auth.mode = none`) and `epoch` (the
@@ -1000,6 +1003,51 @@ identity owns (its owner manages it), a role other than `viewer`/`editor` (owner
 transferred here), the owner as the member, and a member that is not a key fingerprint. Like
 `token mint`, it acts as the KB's owner: it is a command for the operator only, never exposed as an
 MCP tool or an RPC.
+
+### A KB's content anchor: `mae-daemon kb anchor`
+
+```bash
+systemctl --user stop mae-daemon
+mae-daemon kb anchor --kb-id notes                          # show it
+mae-daemon kb anchor --kb-id notes --public-key <base64>    # record it
+systemctl --user start mae-daemon
+```
+
+A KB's anchor is the owner public key its signed membership op-log is verified against (ADR-036
+Amendment 1 F1). Once a KB has an anchor and a signed op-log rooted at a genesis that key signed,
+its membership — for access and for admitting signed content ops alike — is read from that log.
+Otherwise it depends on where the anchor came from. For an anchor this daemon recorded (below), it
+is read from the KB's member list, so a log without that root, such as one a member's key rotation
+started, never empties a KB's membership. A KB joined over the mesh fails closed: its member list
+came from a relay, so without that genesis it has no members.
+The daemon records it by itself, durably: the sharing session's key when a KB is first shared, and,
+for a KB shared before this, the key of its owner's next share or write. `kb anchor` without
+`--public-key` prints the key and its source (`hub_recorded` or `joined`). Use the command only for a
+KB whose owner will not reconnect. It records the key whose fingerprint the KB names as owner and
+no other, once: a different key than the recorded one is refused. Operator-only, like `kb member`.
+Nothing replaces an anchor: a mesh join ticket naming a KB this daemon anchored is refused, and the
+dial stops.
+
+**Members the signed log leaves out.** Where the log governs, a KB's member list no longer grants
+access: an entry the log does not admit has none. Such entries are reported, never dropped silently:
+the daemon logs a warning with their number when it records the anchor, `kb anchor` prints them when
+it records one, `kb anchor --kb-id X` (show) prints which source governs and lists them, and
+`mae-daemon kb anchor` with no arguments lists them for every anchored KB (offline, under the store
+lock, like the rest of `kb anchor`). `mae-daemon doctor` does not: it never opens the store as a
+writer, and deriving membership needs one, so it points at that command instead. The owner admits each
+one with a signed membership op. On such a KB, `kb member add|remove`, `kb/add_member`,
+`kb/remove_member`, `kb/approve_member` and a permissive join's auto-admit are refused
+(`signer_unavailable`) unless this daemon signs the change into the log as the KB's owner, with the
+key the KB is anchored to. One consequence: a log-governed KB with a `permissive` policy admits no
+one by itself any more. A permissive join never signs, so it is refused, and the owner admits
+joiners with signed membership ops. This fails closed; it trades the automatic admission for not
+granting access the log never recorded.
+
+**A squatted KB id.** The first session to share an id owns it, and its key becomes that KB's
+anchor, durably. No command clears an anchor. To recover: the legitimate owner shares under a fresh
+id (MAE does this by itself when it is told `kb_id_owned_by_another`), and you revoke the squatter's
+access (`mae-daemon revoke <fingerprint>` for a key; its tokens or binding for a bearer identity).
+The squatted id stays taken.
 
 ### Exporting it back: `mae-daemon kb export`
 

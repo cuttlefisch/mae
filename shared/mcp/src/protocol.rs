@@ -302,9 +302,16 @@ impl McpError {
         Self::kinded(-32603, message, "signature_invalid", serde_json::json!({}))
     }
 
-    /// An unsigned content op on a path that requires signatures (the mesh).
+    /// An unsigned content op on a path that requires signatures (the mesh,
+    /// and the hub once `require_signed_content_ops` is on).
     pub fn signature_required(message: String) -> Self {
         Self::kinded(-32603, message, "signature_required", serde_json::json!({}))
+    }
+
+    /// A session sent a content op signed by another principal (ADR-036
+    /// Amendment 1 F4): a session may send only ops it authored.
+    pub fn not_author(message: String) -> Self {
+        Self::kinded(-32603, message, "not_author", serde_json::json!({}))
     }
 
     /// A rebirth (ADR-107) that is not bound to an owner-signed `Rebirth` op.
@@ -610,6 +617,7 @@ pub const ERROR_KINDS: &[&str] = &[
     "epoch_fenced",
     "signature_invalid",
     "signature_required",
+    "not_author",
     "rebirth_unverified",
     "doc_unavailable",
     "doc_kb_mismatch",
@@ -800,6 +808,7 @@ mod tests {
             McpError::epoch_fenced(m(), 9, Some(3)),
             McpError::signature_invalid(m()),
             McpError::signature_required(m()),
+            McpError::not_author(m()),
             McpError::rebirth_unverified(m()),
             McpError::doc_unavailable(m()),
             McpError::doc_kb_mismatch(m()),

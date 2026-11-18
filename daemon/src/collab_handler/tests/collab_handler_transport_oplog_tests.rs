@@ -364,7 +364,7 @@ async fn kb_access_derives_from_oplog_when_anchored() {
 
     // Register the external anchor (what the dialer does for a JOINED KB), so
     // kb_access derives membership from the signed op-log, not member_roles.
-    store.set_kb_anchor("kbanc", owner_pubkey).await;
+    store.set_kb_anchor("kbanc", owner_pubkey).await.unwrap();
 
     let access = |p: String, op: KbOp| {
         let store = Arc::clone(&store);

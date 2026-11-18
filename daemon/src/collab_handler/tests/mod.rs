@@ -45,6 +45,10 @@ mod collab_handler_governor_tests;
 mod collab_handler_history_page_tests;
 mod collab_handler_history_read_tests;
 mod collab_handler_history_tests;
+mod collab_handler_hub_verify_anchor_tests;
+mod collab_handler_hub_verify_genesis_tests;
+mod collab_handler_hub_verify_roster_tests;
+mod collab_handler_hub_verify_tests;
 mod collab_handler_kb_lifecycle_tests;
 mod collab_handler_kb_list_isolation_tests;
 mod collab_handler_kb_query_mtls_tests;
@@ -81,6 +85,42 @@ pub(crate) fn test_broadcaster() -> SharedBroadcaster {
 pub(crate) fn test_doc_store() -> Arc<DocStore> {
     let backend = Arc::new(SqliteBackend::open_memory().unwrap());
     Arc::new(DocStore::new(backend, 500))
+}
+
+/// A hub sender with no principal: for checks that do not exercise authorship.
+pub(crate) fn hub() -> OpSender<'static> {
+    OpSender::session(None, Transport::Hub)
+}
+
+/// A session as the dispatcher sees it: principal, the session's key (an
+/// mTLS/key session has one; a `/ws` bearer session does not), transport.
+pub(crate) type Session<'a> = (Option<&'a str>, Option<&'a [u8; 32]>, Transport);
+
+/// Dispatch `msg` on `session`.
+pub(crate) async fn dispatch_session(
+    store: &Arc<DocStore>,
+    bc: &SharedBroadcaster,
+    (principal, pubkey, transport): Session<'_>,
+    msg: serde_json::Value,
+    docs: &mut HashSet<String>,
+) -> JsonRpcResponse {
+    handle_doc_request_inner(
+        &msg.to_string(),
+        store,
+        &crate::quota::NoQuota,
+        bc,
+        std::time::Instant::now(),
+        0,
+        None,
+        principal,
+        pubkey,
+        docs,
+        transport,
+        &crate::artifact_store::NoArtifactStore,
+        crate::kb_query::KbQueryLimits::default(),
+        None,
+    )
+    .await
 }
 
 pub(crate) fn make_test_node(id: &str, title: &str, body: &str, tags: &[&str]) -> Vec<u8> {

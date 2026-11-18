@@ -21,6 +21,7 @@
 //! "Architecture Debt" section.
 
 mod access;
+mod content_verify;
 mod docs_methods;
 pub mod governor;
 mod kb_artifacts;
@@ -37,6 +38,9 @@ mod refusal;
 mod sync_methods;
 
 pub(crate) use access::*;
+pub use access::{kb_membership_source, roster_only_members_report, MembershipSource};
+pub(crate) use content_verify::{adopt_owner_anchor, author_membership};
+pub use content_verify::{operator_anchor_kb, verify_node_op, OpSender, OperatorAnchor};
 pub(crate) use refusal::{require_allow, storage_error};
 pub use refusal::{Refusal, RefusalKind};
 
@@ -996,23 +1000,18 @@ pub async fn load_collection(
     Ok(coll)
 }
 
-/// ADR-036 §D3: verify a signed content op against this peer's **derived, anchored**
-/// membership — the content author (from the signed header, not the connection) must
-/// be a current Editor+ member at the op's epoch. Shared by the editor→daemon
-/// `kb/node_update` path and the daemon→daemon dialer relay path so there is ONE
-/// authorship check, not two that could drift (principle #8). `anchor` is the KB's
-/// registered trust root; the caller has already established the KB is anchored and
-/// decided its policy for *unsigned* ops (the hub accepts them as legacy; the mesh
-/// rejects them — ADR-036 migration). Returns `Err` with a human reason on any
-/// failure, for the caller to surface (ADR-024). `pub` so the `dialer` (bin crate)
-/// shares this exact check on the relay path.
+/// ADR-036 §D3: admit a signed content op — its author must be a current
+/// Editor+ member at the op's epoch — against the membership `kb_access`
+/// decides on (Amendment 1 F2, [`author_membership`]). Only membership: the
+/// signature, authorship and unsigned policy are [`verify_node_op`]'s, which
+/// every write path calls. Returns `Err` with a human reason on any failure,
+/// for the caller to surface (ADR-024).
 pub async fn verify_content_op(
     doc_store: &DocStore,
     kb_id: &str,
-    anchor: &[u8; 32],
     signed: &SignedContentOp,
 ) -> Result<(), Refusal> {
-    verify_content_op_with_coll(doc_store, kb_id, anchor, signed, None).await
+    verify_content_op_with_coll(doc_store, kb_id, signed, None).await
 }
 
 /// As [`verify_content_op`], but accepts a pre-loaded collection snapshot so a
@@ -1021,7 +1020,6 @@ pub async fn verify_content_op(
 pub async fn verify_content_op_with_coll(
     doc_store: &DocStore,
     kb_id: &str,
-    anchor: &[u8; 32],
     signed: &SignedContentOp,
     coll: Option<&KbCollectionDoc>,
 ) -> Result<(), Refusal> {
@@ -1033,10 +1031,8 @@ pub async fn verify_content_op_with_coll(
             &loaded
         }
     };
-    let dm = doc_store
-        .derived_membership(kb_id, coll, anchor, now_unix())
-        .await;
-    signed.admit(&dm.members).map_err(|e| {
+    let members = author_membership(doc_store, kb_id, coll, &signed.op.author).await;
+    signed.admit(&members).map_err(|e| {
         Refusal::new(
             admission_kind(&e),
             format!("signed content op rejected: {e:?}"),
@@ -1168,77 +1164,46 @@ pub async fn resolve_content_anchor_with_coll(
     }
 }
 
-/// ADR-036 §D3 relay-receive verification — the single check shared by the dialer
-/// (a joiner receiving the owner's pushes) and the `sync/update` handler (the owner
-/// receiving a joiner's relayed edit). `header` is the wire `content_header` (if
-/// any). For a `kb:{node}` doc on a KB with a resolvable anchor it reconstructs the
-/// signed op (re-binding `kb_id`/`node_id` from trusted local context, so a header
-/// signed for a different node fails) and verifies the author is a current Editor+
-/// member at the op's epoch. On success returns the header to carry onward; an
-/// unsigned op errors when `require_signed` (the mesh policy) and is otherwise
-/// accepted as legacy (`Ok(None)`). Non-KB / un-anchored docs pass through (`Ok(None)`).
+/// ADR-036 §D3 relay-receive verification for a document named on the wire —
+/// shared by the dialer (a joiner receiving the owner's pushes) and the
+/// `sync/update` handler. For a `kb:{node}` doc of `kb_id` it runs
+/// [`verify_node_op`] (Amendment 1: on every KB, anchored or not) and returns
+/// the verified header to carry onward, or `None` for an unsigned op the
+/// policy accepted. A collection or non-KB doc is not a content op and passes
+/// through (`Ok(None)`) — see the F3 caution below.
 pub async fn verify_relayed_content_op(
     doc_store: &DocStore,
     kb_id: &str,
     doc: &str,
     update: &[u8],
     header: Option<&serde_json::Value>,
-    require_signed: bool,
+    sender: OpSender<'_>,
 ) -> Result<Option<serde_json::Value>, Refusal> {
     // @ai-caution: [kb-scoping] (ADR-105 D1) Address TYPE, not string prefix — a node
     // doc that stops matching here returns `Ok(None)` ("not a content op"), which
     // SKIPS ADR-036 signature verification entirely.
+    // @ai-caution: [security] (ADR-036 Amendment 1 F3, open) A `kbc:` collection
+    // document is not verified here: a signed manifest op does not exist yet. The
+    // hub gates raw `kbc:` writes as owner-only (`deny_collection_smuggling`); the
+    // dialer applies the owner's pushed collection unverified.
     let Some(mae_sync::DocAddress::KbNode {
         kb_id: doc_kb,
         node_id,
     }) = mae_sync::DocAddress::parse(doc)
     else {
-        return Ok(None); // collection/non-KB doc — not a content op
+        return Ok(None);
     };
-    // @ai-caution: [kb-scoping] Every check below (anchor, signature, and the
-    // callers' membership and epoch fence) runs against `kb_id`. A node doc of
-    // a DIFFERENT KB must therefore never get here, or a caller cleared for
-    // one KB writes another KB's node.
+    // @ai-caution: [kb-scoping] Every check below (signature, membership, and the
+    // callers' epoch fence) runs against `kb_id`. A node doc of a DIFFERENT KB must
+    // therefore never get here, or a caller cleared for one KB writes another's node.
     if doc_kb != kb_id {
         return Err(Refusal::new(
             RefusalKind::DocKbMismatch,
             format!("document '{doc}' belongs to KB '{doc_kb}', not KB '{kb_id}'"),
         ));
     }
-    let node_id = &node_id;
-    let Some(anchor) = resolve_content_anchor(doc_store, kb_id).await else {
-        return Ok(None); // un-anchored + not ours — legacy gate applies
-    };
-    let header = match header {
-        Some(h) if h.get("sig").is_some() => h,
-        _ => {
-            return if require_signed {
-                Err(Refusal::new(
-                    RefusalKind::SignatureRequired,
-                    format!(
-                        "unsigned content op for KB '{kb_id}' node '{node_id}' rejected on the mesh (ADR-036 require-signed)"
-                    ),
-                ))
-            } else {
-                // Counted, not merely permitted. This is the number that decides
-                // when `require_signed_content_ops` can be flipped on -- see
-                // `content_op_policy`.
-                crate::content_op_policy::note_unsigned_accepted();
-                Ok(None) // hub migration: accept legacy unsigned
-            };
-        }
-    };
-    let mut params = header.clone();
-    params["kb_id"] = serde_json::json!(kb_id);
-    params["node_id"] = serde_json::json!(node_id);
-    let signed = SignedContentOp::from_params(&params, update.to_vec()).ok_or_else(|| {
-        Refusal::new(
-            RefusalKind::SignatureInvalid,
-            "malformed signed content op header",
-        )
-    })?;
-    verify_content_op(doc_store, kb_id, &anchor, &signed).await?;
-    Ok(Some(signed.header_params()))
+    let signed = verify_node_op(doc_store, (kb_id, &node_id), update, header, sender, None).await?;
+    Ok(signed.map(|s| s.header_params()))
 }
 
 /// Persist a collection update + broadcast it to other subscribers. Returns wal_seq.
@@ -1487,15 +1452,15 @@ async fn kb_member_epoch(
     coll: &KbCollectionDoc,
     principal: &str,
 ) -> u64 {
-    match doc_store.kb_anchor(kb_id).await {
-        Some(anchor) if coll.oplog_head().is_some() => doc_store
+    match signed_membership_anchor(doc_store, kb_id, coll).await {
+        Some(anchor) => doc_store
             .derived_membership(kb_id, coll, &anchor, now_unix())
             .await
             .members
             .get(principal)
             .map(|m| m.epoch)
             .unwrap_or(0),
-        _ => coll.epoch_of(principal),
+        None => coll.epoch_of(principal),
     }
 }
 
@@ -1907,7 +1872,7 @@ async fn handle_doc_request_inner(
                 doc_store,
                 broadcaster,
                 session_id,
-                auth_principal,
+                (auth_principal, auth_pubkey),
                 session_docs,
                 transport,
                 id,
@@ -2021,7 +1986,7 @@ async fn handle_doc_request_inner(
             kb_content::handle_kb_share(
                 doc_store,
                 broadcaster,
-                (session_id, auth_principal, transport),
+                (session_id, auth_principal, auth_pubkey, transport),
                 auth_label,
                 session_docs,
                 id,
@@ -2073,7 +2038,7 @@ async fn handle_doc_request_inner(
                 doc_store,
                 broadcaster,
                 session_id,
-                auth_principal,
+                (auth_principal, auth_pubkey),
                 session_docs,
                 transport,
                 id,

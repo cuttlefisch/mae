@@ -140,8 +140,12 @@ impl PeerIdentity {
     /// @ai-caution: [authz] `None` here means "loopback-trusted, every KB
     /// allowed" downstream (`kb_access`). A bearer identity must therefore
     /// ALWAYS yield `Some`, never fall through to `None` for lack of a key.
+    /// So must any identity that names one: a key peer whose public key is the
+    /// all-zero encoding (a valid, small-order point an operator could
+    /// authorize) fails `is_authenticated`, and read as `None` it was every KB.
+    /// Only [`PeerIdentity::synthetic`] (`none` mode) has an empty fingerprint.
     pub fn principal(&self) -> Option<&str> {
-        if self.is_authenticated() || self.bearer || self.fingerprint.starts_with("psk:") {
+        if self.is_authenticated() || self.bearer || !self.fingerprint.is_empty() {
             Some(&self.fingerprint)
         } else {
             None
@@ -345,7 +349,8 @@ impl Identity {
     }
 
     /// Persist this identity to `dir`: private key `id_ed25519` (0600, hex) +
-    /// public-key line `id_ed25519.pub`. Overwrites any existing identity.
+    /// public-key line `id_ed25519.pub`. Overwrites any existing identity, atomically: an
+    /// ADR-040 rotation commits by this write, and a torn one would lose both keys.
     pub fn save(&self, dir: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
         secure_dir(dir);
@@ -355,7 +360,7 @@ impl Identity {
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
-        crate::keystore::write_secure(&dir.join("id_ed25519"), &format!("{hex}\n"))?;
+        crate::keystore::write_secure_atomic(&dir.join("id_ed25519"), &format!("{hex}\n"))?;
         std::fs::write(
             dir.join("id_ed25519.pub"),
             format!("{}\n", self.public().to_line()),
@@ -1299,6 +1304,16 @@ mod tests {
             Some("psk:team")
         );
         assert_eq!(PeerIdentity::synthetic("anon").principal(), None);
+        // The all-zero key decodes (a small-order point), so an operator can
+        // authorize it; its session is identified and must have a principal.
+        let zero = PublicKey::from_bytes(&[0u8; 32], None).expect("decodes");
+        let zero_peer = PeerIdentity {
+            label: "zero".into(),
+            fingerprint: zero.fingerprint(),
+            pubkey: [0u8; 32],
+            bearer: false,
+        };
+        assert_eq!(zero_peer.principal(), Some(zero.fingerprint().as_str()));
     }
 
     #[test]
