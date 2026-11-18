@@ -256,7 +256,10 @@ mod tests {
     /// token was ACCEPTED for whatever resource it was presented to -- the
     /// mixed array even reached the principal carrying this resource's URI.
     /// The same key and claims with a string `aud` are accepted first, so a
-    /// refusal can only come from the claim's type.
+    /// refusal can only come from the claim's type. Since `aud` is a required
+    /// claim, jsonwebtoken may report an unparseable one as missing, which the
+    /// validator maps to `WrongAudience`; either refusal closes the hole, so the
+    /// oracle is "refused as malformed or as not this resource", never accepted.
     #[test]
     fn a_non_string_audience_is_refused() {
         let (pem, jwk) = generate_test_key();
@@ -272,10 +275,13 @@ mod tests {
             let mut claims = valid_claims(now_unix());
             claims["aud"] = aud.clone();
             let token = sign_token(&pem, &claims);
-            assert_eq!(
-                validate_bearer_token(&token, std::slice::from_ref(&jwk), &config),
-                Err(TokenValidationError::Malformed),
-                "aud = {aud}"
+            let got = validate_bearer_token(&token, std::slice::from_ref(&jwk), &config);
+            assert!(
+                matches!(
+                    got,
+                    Err(TokenValidationError::Malformed | TokenValidationError::WrongAudience)
+                ),
+                "aud = {aud}: {got:?}"
             );
         }
     }
@@ -303,6 +309,44 @@ mod tests {
                 validate_bearer_token(&token, std::slice::from_ref(&jwk), &config),
                 Err(TokenValidationError::Malformed),
                 "crit = {crit:?}"
+            );
+        }
+    }
+
+    /// Adversarial (ADR-052, RFC 8707 confused deputy): a correctly signed token
+    /// with NO `aud` claim is refused as the wrong audience. jsonwebtoken checks
+    /// the audience only when the claim is present, so before `aud` was required a
+    /// token the IdP minted for another client was accepted here. Controls: the
+    /// same claims with this resource as `aud` (string, and an array that also
+    /// names a client id, as real IdPs issue) are accepted.
+    #[test]
+    fn a_token_without_an_audience_is_refused() {
+        let (pem, jwk) = generate_test_key();
+        let config = base_config();
+        let keys = std::slice::from_ref(&jwk);
+        let with = |aud: Option<serde_json::Value>| {
+            let mut claims = valid_claims(now_unix());
+            match aud {
+                Some(a) => claims["aud"] = a,
+                None => {
+                    claims.as_object_mut().unwrap().remove("aud");
+                }
+            }
+            validate_bearer_token(&sign_token(&pem, &claims), keys, &config)
+        };
+        assert!(with(Some(serde_json::json!(TEST_RESOURCE))).is_ok());
+        assert!(with(Some(serde_json::json!(["some-client-id", TEST_RESOURCE]))).is_ok());
+        assert_eq!(with(None), Err(TokenValidationError::WrongAudience));
+        // The empty forms an IdP or an attacker might send are no audience either.
+        for empty in [
+            serde_json::json!(null),
+            serde_json::json!([]),
+            serde_json::json!(""),
+        ] {
+            assert_eq!(
+                with(Some(empty.clone())),
+                Err(TokenValidationError::WrongAudience),
+                "aud = {empty}"
             );
         }
     }

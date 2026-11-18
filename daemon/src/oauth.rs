@@ -125,6 +125,12 @@ pub fn validate_bearer_token(
 
     let mut validation = Validation::new(Algorithm::RS256);
     validation.set_audience(std::slice::from_ref(&config.canonical_resource_uri));
+    // `aud` must be PRESENT, not just right when present: jsonwebtoken checks the
+    // audience only of a token that carries one, so without this a token the IdP
+    // minted for any other client (no `aud`) was accepted here — the confused
+    // deputy RFC 8707 / ADR-052 exist to stop. An array `aud` still passes when it
+    // CONTAINS this resource (RFC 7519 §4.1.3).
+    validation.set_required_spec_claims(&["exp", "aud"]);
     if let Some(ref issuer) = config.issuer {
         validation.set_issuer(std::slice::from_ref(issuer));
     }
@@ -137,6 +143,10 @@ pub fn validate_bearer_token(
             match e.kind() {
                 jsonwebtoken::errors::ErrorKind::ExpiredSignature => TokenValidationError::Expired,
                 jsonwebtoken::errors::ErrorKind::InvalidAudience => {
+                    TokenValidationError::WrongAudience
+                }
+                // No audience at all is not this resource's audience.
+                jsonwebtoken::errors::ErrorKind::MissingRequiredClaim(c) if c == "aud" => {
                     TokenValidationError::WrongAudience
                 }
                 jsonwebtoken::errors::ErrorKind::InvalidIssuer => TokenValidationError::WrongIssuer,
