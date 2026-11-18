@@ -60,3 +60,27 @@ ref = "ADR-052: audience validated per RFC 8707; a token with no aud is not for 
 file = "daemon/src/oauth.rs"
 find = '''    validation.set_required_spec_claims(&["exp", "aud"]);'''
 replace = '''    validation.set_required_spec_claims(&["exp"]);'''
+
+[[mutant]]
+id = "jsonwebtoken/self-issued-aud-not-required"
+runner = "daemon"
+# oauth_self_issue is in the library (daemon/src/lib.rs), not the binary.
+targets = ["--lib"]
+filter = "test(a_self_signed_token_without_aud_or_iss_is_refused)"
+ref = "ADR-052: a self-issued token names this resource; one without aud is not for it"
+[[mutant.edit]]
+file = "daemon/src/oauth_self_issue.rs"
+find = '''    validation.set_required_spec_claims(&["exp", "aud", "iss"]);'''
+replace = '''    validation.set_required_spec_claims(&["exp", "iss"]);'''
+
+[[mutant]]
+id = "jsonwebtoken/self-issued-iss-not-required"
+runner = "daemon"
+# oauth_self_issue is in the library (daemon/src/lib.rs), not the binary.
+targets = ["--lib"]
+filter = "test(a_self_signed_token_without_aud_or_iss_is_refused)"
+ref = "ADR-052: a self-issued token names this daemon as issuer; one without iss is not its own"
+[[mutant.edit]]
+file = "daemon/src/oauth_self_issue.rs"
+find = '''    validation.set_required_spec_claims(&["exp", "aud", "iss"]);'''
+replace = '''    validation.set_required_spec_claims(&["exp", "aud"]);'''
