@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.170] - 2026-11-18
+
+
+
+
+### Bug Fixes
+
+- *(daemon)* A self-issued token without aud or iss is refused ([7b05d14](https://github.com/cuttlefisch/mae/commit/7b05d142899a0569c4a4c8620e78b847f8c381d7))
+
 ## [0.14.169] - 2026-11-18
 
 
@@ -10,6 +19,10 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 
 - *(mutate)* End hung tests, and refuse to queue from inside a Slurm job ([da62489](https://github.com/cuttlefisch/mae/commit/da6248983867ec22c4dea893bafcf484a406251c))
+
+### Miscellaneous
+
+- Bump version to 0.14.169 ([48fb8c7](https://github.com/cuttlefisch/mae/commit/48fb8c76ae6954ad8f157ae335d63b79165931cb))
 
 ## [0.14.168] - 2026-11-18
 
