@@ -29,16 +29,62 @@ pub fn expand(template: &[String], targets: &[String], filter: &str) -> Vec<Stri
 ///   PATH, so builds share the machine's job queue; else none.
 pub fn prefix(class: &str, area: &str) -> Vec<String> {
     let fill = |s: &str| s.replace("{class}", class).replace("{area}", area);
-    if let Ok(p) = std::env::var("MUTATE_PREFIX") {
-        return p.split_whitespace().map(fill).collect();
+    match queue(&env, on_path("trabajo")) {
+        Queue::Explicit(p) => p.split_whitespace().map(fill).collect(),
+        Queue::None => Vec::new(),
+        Queue::Trabajo => ["trabajo", "{class}", "mae:mutants:{area}", "--"]
+            .iter()
+            .map(|s| fill(s))
+            .collect(),
     }
-    if std::env::var("MUTATE_QUEUE").as_deref() == Ok("off") || !on_path("trabajo") {
-        return Vec::new();
+}
+
+/// Which prefix applies, from the environment (`env`) and whether `trabajo`
+/// is on PATH.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Queue {
+    Explicit(String),
+    None,
+    Trabajo,
+}
+
+pub fn queue(env: &dyn Fn(&str) -> Option<String>, trabajo_on_path: bool) -> Queue {
+    if let Some(p) = env("MUTATE_PREFIX") {
+        return Queue::Explicit(p);
     }
-    ["trabajo", "{class}", "mae:mutants:{area}", "--"]
-        .iter()
-        .map(|s| fill(s))
-        .collect()
+    if env("MUTATE_QUEUE").as_deref() == Some("off") || !trabajo_on_path {
+        return Queue::None;
+    }
+    Queue::Trabajo
+}
+
+fn env(name: &str) -> Option<String> {
+    std::env::var(name).ok()
+}
+
+/// Refuse to queue from inside a Slurm job. `trabajo` asks Slurm for a job
+/// step, and inside a job (`SLURM_JOB_ID` set) that step is placed in the
+/// enclosing job, whose CPUs and memory the tool itself already holds: it
+/// waits there until the job's time limit kills everything, with no output.
+/// Only the default prefix is refused; an explicit `MUTATE_PREFIX` is the
+/// caller's choice.
+pub fn check_not_nested(
+    env: &dyn Fn(&str) -> Option<String>,
+    trabajo_on_path: bool,
+) -> Result<(), String> {
+    match (queue(env, trabajo_on_path), env("SLURM_JOB_ID")) {
+        (Queue::Trabajo, Some(job)) => Err(format!(
+            "running inside Slurm job {job}, so each queued step would wait for room in this \
+             same job until its time limit. Run mae-mutate outside the queue (it queues its own \
+             steps), or set MUTATE_QUEUE=off to run every step in this job."
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// [`check_not_nested`] against this process's environment.
+pub fn check_queue() -> Result<(), String> {
+    check_not_nested(&env, on_path("trabajo"))
 }
 
 fn on_path(name: &str) -> bool {
@@ -188,6 +234,51 @@ pub fn tail(output: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn env_of<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |k| {
+            vars.iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| v.to_string())
+        }
+    }
+
+    /// The deadlock this guards against cost two runs of the full time limit
+    /// each: inside a Slurm job, the default `trabajo` prefix is refused.
+    #[test]
+    fn queueing_from_inside_a_slurm_job_is_refused() {
+        let nested = env_of(&[("SLURM_JOB_ID", "7414")]);
+        let err = check_not_nested(&nested, true).unwrap_err();
+        assert!(
+            err.contains("Slurm job 7414") && err.contains("MUTATE_QUEUE=off"),
+            "{err}"
+        );
+        // Not nested, the queue is used as before.
+        assert_eq!(check_not_nested(&env_of(&[]), true), Ok(()));
+        // Inside a job but not queueing: nothing to wait for.
+        let off = env_of(&[("SLURM_JOB_ID", "7414"), ("MUTATE_QUEUE", "off")]);
+        assert_eq!(check_not_nested(&off, true), Ok(()));
+        assert_eq!(
+            check_not_nested(&nested, false),
+            Ok(()),
+            "no trabajo on PATH"
+        );
+        // An explicit prefix is the caller's choice.
+        let explicit = env_of(&[("SLURM_JOB_ID", "7414"), ("MUTATE_PREFIX", "env X=1")]);
+        assert_eq!(check_not_nested(&explicit, true), Ok(()));
+    }
+
+    #[test]
+    fn the_prefix_follows_the_environment() {
+        let q = |v: &[(&str, &str)], on| queue(&env_of(v), on);
+        assert_eq!(q(&[], true), Queue::Trabajo);
+        assert_eq!(q(&[], false), Queue::None);
+        assert_eq!(q(&[("MUTATE_QUEUE", "off")], true), Queue::None);
+        assert_eq!(
+            q(&[("MUTATE_PREFIX", "a b"), ("MUTATE_QUEUE", "off")], true),
+            Queue::Explicit("a b".into())
+        );
+    }
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()

@@ -10,7 +10,7 @@
 # From inside daemon/: its .cargo/config.toml applies only there.
 workspace = "daemon"
 build = ["cargo", "nextest", "run", "--no-run", "{targets}", "-E", "{filter}"]
-test = ["cargo", "nextest", "run", "{targets}", "-E", "{filter}"]
+test = ["cargo", "nextest", "run", "--profile", "mutate", "{targets}", "-E", "{filter}"]
 caught = ["FAIL [", "TIMEOUT ["]
 count = ["{n} tests run", "{n} test run"]
 queue_class = "rust-enlace"
@@ -18,7 +18,7 @@ queue_class = "rust-enlace"
 [runner.editor]
 workspace = "."
 build = ["cargo", "nextest", "run", "--no-run", "{targets}", "-E", "{filter}"]
-test = ["cargo", "nextest", "run", "{targets}", "-E", "{filter}"]
+test = ["cargo", "nextest", "run", "--profile", "mutate", "{targets}", "-E", "{filter}"]
 caught = ["FAIL [", "TIMEOUT ["]
 count = ["{n} tests run", "{n} test run"]
 queue_class = "rust-enlace"
@@ -26,7 +26,7 @@ queue_class = "rust-enlace"
 [runner.tools-mutate]
 workspace = "tools/mutate"
 build = ["cargo", "nextest", "run", "--no-run", "{targets}", "-E", "{filter}"]
-test = ["cargo", "nextest", "run", "{targets}", "-E", "{filter}"]
+test = ["cargo", "nextest", "run", "--profile", "mutate", "{targets}", "-E", "{filter}"]
 caught = ["FAIL [", "TIMEOUT ["]
 count = ["{n} tests run", "{n} test run"]
 queue_class = "rust"
