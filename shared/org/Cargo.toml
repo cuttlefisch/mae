@@ -30,9 +30,7 @@ serde_json = "1"
 # re-parser would share the renderer's assumptions. Dev-only.
 html5ever = "0.40"
 markup5ever_rcdom = "0.40"
-# The semantics differential (tests/semantics_differential.rs) compares
-# `semantics()` with mae-kb's org parser, the projection it replaces. A
-# dev-dependency only: mae-org itself stays rowan-only (ADR-112 D1). Once
-# mae-kb depends on mae-org (O4) this edge would be a cycle, so the
-# differential moves into mae-kb then.
-mae-kb = { path = "../kb" }
+# No dev-dependency on mae-kb: mae-kb depends on mae-org (ADR-112 O4), so the
+# semantics differential against mae-kb's old org parser lives in mae-kb
+# (shared/kb/tests/org_semantics_differential.rs), reading this crate's
+# register and oracle from conformance/.

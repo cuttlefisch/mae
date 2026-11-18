@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.174] - 2026-11-18
+
+
+
+
+### Bug Fixes
+
+- *(export)* Render through mae-org, so content Org withholds is not published ([0516c6c](https://github.com/cuttlefisch/mae/commit/0516c6ca440b89651af505c25b2c1648d3787bd9))
+- *(export)* Withheld subtrees can't supply page metadata; Markdown never overwrites the source (#942) ([ae55a6c](https://github.com/cuttlefisch/mae/commit/ae55a6c6e8eb961241b67c153a2b3675f88514cd))
+- *(export)* Remove org_export_allow_raw_html_blocks; old configs still load (#942) ([d697b0e](https://github.com/cuttlefisch/mae/commit/d697b0e2e2a01fe4cd3c09fafa0f4bd38dfc338f))
+
+### Refactor
+
+- *(export)* Flatten the Markdown writer's deepest nesting, and track the legacy renderer as debt (#942) ([c585637](https://github.com/cuttlefisch/mae/commit/c585637c925509225fb0909fa9dc84667b93126e))
+
+### Documentation
+
+- Correct claims the code contradicts (LSP/DAP libraries, crates, ADR-107/108/112) ([aa6af5a](https://github.com/cuttlefisch/mae/commit/aa6af5ada89169c7603b8ba034506437bee89965))
+- *(export)* Say what org export publishes now that it renders through mae-org (#942) ([c88cc32](https://github.com/cuttlefisch/mae/commit/c88cc3236987a6beb308565c7983072724ecf457))
+
+### Testing
+
+- *(export)* Declare the mutants for the export guards (#942) ([c4cd911](https://github.com/cuttlefisch/mae/commit/c4cd911fd76af6f95b5507a4b8823f56563f1604))
+- *(export)* Pin last-word-wins :exports, and catch the COMMENT region where export reads it (#942) ([665ff84](https://github.com/cuttlefisch/mae/commit/665ff849878d2f94c3bffddd874697bc1a65729c))
+- *(export)* Pin that tag settings inside a COMMENT subtree are not read (#942) ([e021f38](https://github.com/cuttlefisch/mae/commit/e021f38c5ec46b864b63dc78e6f869a1f99a96e9))
+- *(export)* Pin the legacy EXPORT_EXCLUDE_TAGS spelling inside a COMMENT subtree (#942) ([57bf555](https://github.com/cuttlefisch/mae/commit/57bf555580588e64684611f3840cf5e6ebec5930))
+
+### Miscellaneous
+
+- Bump version to 0.14.173 ([2f49351](https://github.com/cuttlefisch/mae/commit/2f4935143c3170fc76cb1aed4a3eb9c0174e9680))
+
 ## [0.14.172] - 2026-11-18
 
 
@@ -10,6 +41,10 @@ All notable changes to this project will be documented in this file.
 ### Testing
 
 - *(agenda)* Guard linear growth with a scaling ratio, not a wall-clock budget ([78a21d3](https://github.com/cuttlefisch/mae/commit/78a21d3076a1f5de182965ea75bbfc19e23b0598))
+
+### Miscellaneous
+
+- Bump version to 0.14.172 ([4f568a6](https://github.com/cuttlefisch/mae/commit/4f568a6e2f71cb6acfa442fd2df6fb9eec052336))
 
 ## [0.14.171] - 2026-11-18
 

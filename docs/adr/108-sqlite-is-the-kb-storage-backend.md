@@ -25,7 +25,9 @@ issues #753 / #687.
 MAE is about to publish into a real multi-user environment. The storage story cannot go into that
 release contradicting itself, and today it does — in seven places at once.
 
-**What each part of the tree currently believes:**
+**What each part of the tree believed when this ADR was written** (historical: the table below is the
+state this ADR set out to change; `mae-kb`'s default is now `storage-sqlite`, and sled is compiled
+only for the one-time migration of old stores):
 
 | Declaration | Backend |
 |---|---|

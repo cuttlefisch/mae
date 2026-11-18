@@ -48,11 +48,13 @@ graph TD
     mae_dap --> mae_core
     mae_effect_sandbox[mae-effect-sandbox]
     mae_export --> mae_babel
+    mae_export --> mae_org
     mae_format[mae-format]
     mae_gui --> mae_core
     mae_gui --> mae_renderer
     mae_gui --> mae_shell
     mae_kb --> mae_mcp
+    mae_kb --> mae_org
     mae_kb --> mae_sync
     mae_kb --> mae_sync
     mae_lookup[mae-lookup]
@@ -60,7 +62,7 @@ graph TD
     mae_make[mae-make]
     mae_mcp --> mae_crypto
     mae_mcp --> mae_effect_sandbox
-    mae_org --> mae_kb
+    mae_org[mae-org]
     mae_org_wasm --> mae_org
     mae_renderer --> mae_core
     mae_renderer --> mae_shell
@@ -283,6 +285,7 @@ Source: `crates/export/src/lib.rs`
 
 | Item | Kind |
 |------|------|
+| `document` | mod |
 | `html` | mod |
 | `html_graph` | mod |
 | `markdown` | mod |
@@ -293,15 +296,11 @@ Source: `crates/export/src/lib.rs`
 | `OrgElement` | enum |
 | `ListItem` | struct |
 | `Exporter` | trait |
-| `parse_org_document` | fn |
-| `parse_org_document_with_lines` | fn |
 | `InlineTarget` | enum |
 | `convert_inline_markup_str` | fn |
 | `CheckboxState` | enum |
 | `parse_checkbox_marker` | fn |
 | `html_escape` | fn |
-| `filter_by_tags` | fn |
-| `extract_subtree` | fn |
 
 ## mae-format
 
@@ -349,6 +348,7 @@ Source: `shared/kb/src/lib.rs`
 | `kb_identity` | mod |
 | `migrate` | mod |
 | `org` | mod |
+| `org_ingest` | mod |
 | `project_identity` | mod |
 | `store` | mod |
 | `system_kb` | mod |

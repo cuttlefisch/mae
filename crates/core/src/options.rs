@@ -1044,17 +1044,6 @@ impl OptionRegistry {
                      (kb_graph_wedge_corner_radius_fraction), matching the reference 'petal' design \
                      this was ported from, which deliberately uses no drawn gap or border.",
                     OptionKind::Float, "0.0", Some("kb-graph.wedge-gap-radians"), &[]),
-                // --- org export (org_export / :org-export-html) ---
-                opt!("org_export_allow_raw_html_blocks", &["org-export-allow-raw-html-blocks"],
-                    "Whether org_export's HTML output emits `#+begin_export html ... #+end_export` \
-                     blocks raw (trusted, standard org semantics) or HTML-escapes them (safe \
-                     default, off). Only relevant to org_export, which exports the current buffer \
-                     you're presumably editing yourself -- kb_export_subgraph_html never reads \
-                     this option, since that tool's whole purpose is producing a shareable \
-                     artifact from KB content that may not be self-authored (a federated/shared \
-                     KB), where raw HTML passthrough would be a stored-XSS vector. Enable only if \
-                     you deliberately embed raw HTML in your own org files and trust that content.",
-                    OptionKind::Bool, "false", Some("org-export.allow_raw_html_blocks"), &[]),
                 // --- KB subgraph HTML export (kb-export-subgraph-html /
                 // kb_export_subgraph_html) -- ADR-081 ---
                 opt!("kb_export_default_depth", &["kb-export-default-depth"],
@@ -1376,6 +1365,24 @@ pub fn scheme_string_literal(value: &str) -> String {
 }
 
 /// Parse a string as an integer value.
+/// Options MAE registered once and has removed: `(name, Scheme aliases, why)`.
+/// Setting one is not an error, so a config written for an older release still
+/// loads; it reports the removal instead. Reading one is refused, like any
+/// unknown option.
+pub const RETIRED_OPTIONS: &[(&str, &[&str], &str)] = &[(
+    "org_export_allow_raw_html_blocks",
+    &["org-export-allow-raw-html-blocks"],
+    "org export renders through mae-org, which never emits raw HTML (#942)",
+)];
+
+/// Why `name` (an option name or alias) was removed, if it is retired.
+pub fn retired_option(name: &str) -> Option<&'static str> {
+    RETIRED_OPTIONS
+        .iter()
+        .find(|(n, aliases, _)| *n == name || aliases.contains(&name))
+        .map(|(_, _, why)| *why)
+}
+
 pub fn parse_option_int(s: &str) -> Result<i64, String> {
     s.parse().map_err(|_| format!("Invalid integer: '{}'", s))
 }
