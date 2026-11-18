@@ -838,44 +838,78 @@ mod tests {
         );
     }
 
+    /// Diagnostics (read + compile, no execution) cost grows linearly with the
+    /// number of top-level forms. A ratio, not a budget (issue #947): "under 5 ms
+    /// for a 3-line fib" fails on a busy runner and says nothing about growth.
+    /// 500 -> 8,000 forms (16x) costs ~16x if linear, ~256x if quadratic.
+    ///
+    /// Calibration: see DIAG_MAX_RATIO.
     #[test]
-    fn perf_diagnostics_under_5ms() {
+    fn diagnostics_grow_linearly_not_quadratically() {
+        const DIAG_MAX_RATIO: f64 = 64.0;
         let vm = Vm::new();
-        let code = "(define (fibonacci n)\n  (if (< n 2) n\n    (+ (fibonacci (- n 1)) (fibonacci (- n 2)))))";
+        let src = |n: usize| -> String {
+            (0..n)
+                .map(|i| format!("(define (f{i} x) (+ x {i}))"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let (small, large) = (src(500), src(8000));
+        assert!(diagnostics(&vm, &small, "p.scm").is_empty());
+        assert!(diagnostics(&vm, &large, "p.scm").is_empty());
+        // A broken form is still reported, at its own line (correctness, kept).
+        let bad = format!("{small}\n(define (");
+        assert!(!diagnostics(&vm, &bad, "p.scm").is_empty());
 
-        let iterations = 100;
-        let start = std::time::Instant::now();
-        for _ in 0..iterations {
-            let _ = diagnostics(&vm, code, "perf.scm");
-        }
-        let per_op = start.elapsed() / iterations;
-
+        let (ratio, s, l) = crate::timing::growth_ratio(
+            7,
+            || {
+                std::hint::black_box(diagnostics(&vm, &small, "p.scm"));
+            },
+            || {
+                std::hint::black_box(diagnostics(&vm, &large, "p.scm"));
+            },
+        );
+        eprintln!("diagnostics growth 500->8000: {ratio:.1}x ({s:.5}s -> {l:.5}s)");
         assert!(
-            per_op.as_millis() < 5,
-            "diagnostics too slow: {:?}/op (want <5ms)",
-            per_op
+            ratio < DIAG_MAX_RATIO,
+            "diagnostics time grew {ratio:.0}x for 16x forms ({s:.5}s -> {l:.5}s); \
+             linear ~16x, quadratic ~256x"
         );
     }
 
+    /// `document_symbols` is a single pass over the lines. 2,000 -> 32,000 lines
+    /// (16x) costs ~16x if linear, ~256x if quadratic. A ratio, not a budget
+    /// (issue #947).
+    ///
+    /// Calibration: see SYMBOLS_MAX_RATIO.
     #[test]
-    fn perf_document_symbols_under_1ms() {
-        let mut lines = Vec::new();
-        for i in 0..100 {
-            lines.push(format!("(define fn-{} (lambda (x) x))", i));
-        }
-        let code = lines.join("\n");
+    fn document_symbols_grow_linearly_not_quadratically() {
+        const SYMBOLS_MAX_RATIO: f64 = 64.0;
+        let src = |n: usize| -> String {
+            (0..n)
+                .map(|i| format!("(define fn-{i} (lambda (x) x))"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let (small, large) = (src(2000), src(32000));
+        assert_eq!(document_symbols(&small, "p.scm").len(), 2000);
+        assert_eq!(document_symbols(&large, "p.scm").len(), 32000);
 
-        let iterations = 100;
-        let start = std::time::Instant::now();
-        for _ in 0..iterations {
-            let _ = document_symbols(&code, "perf.scm");
-        }
-        let per_op = start.elapsed() / iterations;
-
+        let (ratio, s, l) = crate::timing::growth_ratio(
+            7,
+            || {
+                std::hint::black_box(document_symbols(&small, "p.scm"));
+            },
+            || {
+                std::hint::black_box(document_symbols(&large, "p.scm"));
+            },
+        );
+        eprintln!("document_symbols growth 2000->32000: {ratio:.1}x ({s:.5}s -> {l:.5}s)");
         assert!(
-            per_op.as_millis() < 5,
-            "document_symbols too slow: {:?}/op (want <5ms)",
-            per_op
+            ratio < SYMBOLS_MAX_RATIO,
+            "document_symbols time grew {ratio:.0}x for 16x lines ({s:.5}s -> {l:.5}s); \
+             linear ~16x, quadratic ~256x"
         );
     }
 

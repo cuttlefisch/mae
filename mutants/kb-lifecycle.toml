@@ -1,11 +1,11 @@
 # Scaling guards in crates/mae/tests/kb_lifecycle_e2e.rs (issue #947). Those
-# tests are #[ignore] and env-gated, so run this list with the gate open:
-#   MAE_KB_LIFECYCLE=1 MUTATE_QUEUE=off mae-mutate run --only kb-lifecycle/...
+# tests are #[ignore] and env-gated; the `editor-kb-lifecycle` runner
+# (mutants/runners.toml) opens the gate itself.
 # Format: tools/mutate/README.md.
 
 [[mutant]]
 id = "kb-lifecycle/quadratic-load-all"
-runner = "editor"
+runner = "editor-kb-lifecycle"
 targets = ["-p", "mae", "--test", "kb_lifecycle_e2e", "--run-ignored", "all"]
 filter = "test(test_load_all_grows_linearly_not_quadratically)"
 ref = "issue #947: a load_all that searches every node body for every node id is correct but quadratic"
@@ -31,7 +31,7 @@ replace = '''        let mut sink = 0usize;
 
 [[mutant]]
 id = "kb-lifecycle/quadratic-fts-search"
-runner = "editor"
+runner = "editor-kb-lifecycle"
 targets = ["-p", "mae", "--test", "kb_lifecycle_e2e", "--run-ignored", "all"]
 filter = "test(test_fts_search_does_not_scan_the_corpus)"
 ref = "issue #947: an FTS search that rescans the corpus once per 200 nodes is correct but quadratic"
