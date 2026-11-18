@@ -42,14 +42,17 @@ Two workspaces + shared crates (ADR-014):
 mae/                              (repo root)
 ├── Cargo.toml                    (editor workspace — cozo with BOTH sled + sqlite)
 ├── Cargo.lock                    (editor lock)
-├── crates/                       (editor-only crates — 18 crates)
+├── crates/                       (editor-only crates)
 ├── daemon/                       (daemon workspace — cozo+sqlite, no rusqlite)
 │   ├── Cargo.toml                (daemon workspace + own Cargo.lock)
 │   └── src/                      (mae-daemon binary)
 └── shared/                       (shared crates — members of editor workspace)
-    ├── kb/                       (mae-kb: CozoDB store, org parser, federation)
+    ├── kb/                       (mae-kb: CozoDB store, its own org parser, federation)
     ├── sync/                     (mae-sync: yrs CRDT, ropey bridge)
-    └── mcp/                      (mae-mcp: JSON-RPC protocol, shim)
+    ├── mcp/                      (mae-mcp: JSON-RPC protocol, shim)
+    ├── org/, org-wasm/           (mae-org: the ADR-112 parser, and its WASM facade)
+    ├── crypto/, crypto-wasm/     (mae-crypto: content and identity crypto, and its WASM facade)
+    └── effect-sandbox/           (mae-effect-sandbox: test-time guard on real external effects)
 ```
 
 ## Crate Layout
@@ -66,8 +69,8 @@ direction **backwards** for five leaf crates.
 | `mae-renderer` | Display/rendering — `Renderer` trait + terminal backend | `ratatui`, `crossterm` |
 | `mae-gui` | GUI rendering backend — winit window + Skia 2D (CPU raster) + SVG via resvg | `winit`, `skia-safe` (default features only — see `crates/gui/src/svg.rs` for why not `svg`), `resvg` |
 | `mae-scheme` | Embedded Scheme runtime for configuration and packages | purpose-built R7RS-small |
-| `mae-lsp` | LSP client — types, references, diagnostics exposed to Scheme + AI | `tower-lsp` or `lsp-types` |
-| `mae-dap` | DAP client — breakpoints, call stacks, variables exposed to Scheme + AI | `dap-types` |
+| `mae-lsp` | LSP client — types, references, diagnostics exposed to Scheme + AI | none: its own JSON-RPC over the server's stdio (`serde_json`, `tokio`) |
+| `mae-dap` | DAP client — breakpoints, call stacks, variables exposed to Scheme + AI | none: its own protocol layer over the adapter's stdio (`serde_json`, `tokio`) |
 | `mae-ai` | AI agent integration — tool-calling transport (Claude/OpenAI/Gemini/DeepSeek/Ollama) | `reqwest`, `serde_json` |
 | `mae-agent-cli` | Terminal AI-agent harness (ADR-046) — the default `SPC a a`/`SPC a p` surface, binary `mae-agent` | `mae-ai`, `mae-mcp`, `ratatui` |
 | `mae-shell` | Embedded terminal emulator (alacritty_terminal) | `alacritty_terminal` |
@@ -89,6 +92,11 @@ direction **backwards** for five leaf crates.
 | `mae-kb` | Knowledge base — CozoDB graph store, typed relationships, org parser, federation | `cozo`, `ndarray`, `notify`; intra-repo `mae-sync`, `mae-mcp` |
 | `mae-sync` | Collaborative state — yrs CRDT, ropey bridge, encoding helpers | `yrs`, `serde`, `base64` |
 | `mae-mcp` | MCP server — Unix/TCP, JSON-RPC, multi-client, stdio shim, transport-generic I/O | `tokio`, `serde_json` |
+| `mae-org` | Org parser — lossless tree, semantics, renderers (ADR-112); its own version line | `rowan` |
+| `mae-org-wasm` | WASM facade over `mae-org` for browser clients | `mae-org` |
+| `mae-crypto` | Content-key and identity crypto shared by the editor, daemon and WASM | `chacha20poly1305`, `x25519-dalek`, `ed25519-dalek`, `argon2` |
+| `mae-crypto-wasm` | WASM facade over `mae-crypto` | `mae-crypto` |
+| `mae-effect-sandbox` | Test-time guard: whether the current thread may perform real external effects | *(none)* |
 
 ### Daemon Workspace (`daemon/Cargo.toml` — separate Cargo.lock)
 
