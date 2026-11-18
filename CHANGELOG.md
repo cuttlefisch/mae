@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.14.173] - 2026-11-18
+## [0.14.174] - 2026-11-18
 
 
 
@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file.
 
 ### Documentation
 
+- Correct claims the code contradicts (LSP/DAP libraries, crates, ADR-107/108/112) ([aa6af5a](https://github.com/cuttlefisch/mae/commit/aa6af5ada89169c7603b8ba034506437bee89965))
 - *(export)* Say what org export publishes now that it renders through mae-org (#942) ([c88cc32](https://github.com/cuttlefisch/mae/commit/c88cc3236987a6beb308565c7983072724ecf457))
 
 ### Testing
@@ -27,6 +28,10 @@ All notable changes to this project will be documented in this file.
 - *(export)* Pin last-word-wins :exports, and catch the COMMENT region where export reads it (#942) ([665ff84](https://github.com/cuttlefisch/mae/commit/665ff849878d2f94c3bffddd874697bc1a65729c))
 - *(export)* Pin that tag settings inside a COMMENT subtree are not read (#942) ([e021f38](https://github.com/cuttlefisch/mae/commit/e021f38c5ec46b864b63dc78e6f869a1f99a96e9))
 - *(export)* Pin the legacy EXPORT_EXCLUDE_TAGS spelling inside a COMMENT subtree (#942) ([57bf555](https://github.com/cuttlefisch/mae/commit/57bf555580588e64684611f3840cf5e6ebec5930))
+
+### Miscellaneous
+
+- Bump version to 0.14.173 ([2f49351](https://github.com/cuttlefisch/mae/commit/2f4935143c3170fc76cb1aed4a3eb9c0174e9680))
 
 ## [0.14.172] - 2026-11-18
 
