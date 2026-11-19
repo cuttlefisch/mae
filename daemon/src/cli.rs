@@ -42,7 +42,40 @@ pub struct Cli {
     pub version: bool,
     /// `--check-config`.
     pub check_config: bool,
+    /// `--help` / `-h`: print [`USAGE`] and exit without loading a config or
+    /// opening anything (#955).
+    pub help: bool,
 }
+
+/// What `mae-daemon --help` prints, and what a usage error prints after its
+/// message.
+pub const USAGE: &str = "\
+usage: mae-daemon [GLOBAL FLAGS]              serve (the default; `start` is the same)
+       mae-daemon [GLOBAL FLAGS] <SUBCOMMAND> [ARGS]
+
+global flags (accepted before or after the subcommand):
+  --config <path>        the instance's config file
+  --data-dir <path>      override data_dir
+  --socket <path>        override the KB Unix socket path
+  --bind <addr>          override collab.bind
+  --oauth-bind <addr>    override oauth.bind
+  --check-config         validate the config and exit
+  --version, -V          print the version and exit
+  --help, -h             print this and exit
+
+subcommands:
+  doctor [--compare-with <config>]   diagnostics (with --compare-with: shared resources)
+  ping                               liveness probe against the running instance
+  keygen [name] | keys               symmetric keystore (psk mode)
+  identity | authorized              asymmetric key mode: this daemon's key, the authorized keys
+  authorize <pubkey-line>            authorize a peer key
+  revoke <label|SHA256:fp>           revoke a peer key
+  token mint --sub <principal> [--ttl <duration>]
+  binding list|bind|unbind|set-kind ...
+  checkpoint <kb_id> <out-file> | restore <artifact-file>
+  backup create <out.tar> | restore <archive.tar> <empty-dir> | verify <restored-dir>
+  kb seed|export|member|anchor|history ...
+";
 
 impl Cli {
     /// Parse `args` (INCLUDING argv[0], which is skipped).
@@ -105,6 +138,11 @@ impl Cli {
                     i += 1;
                     true
                 }
+                "--help" | "-h" => {
+                    cli.help = true;
+                    i += 1;
+                    true
+                }
                 _ => false,
             };
             if consumed {
@@ -120,6 +158,33 @@ impl Cli {
             i += 1;
         }
         cli
+    }
+
+    /// Whether this invocation asks to SERVE, checked where `main` falls through
+    /// past every subcommand it knows (#955).
+    ///
+    /// Serving is the default, so before this check `--help`, a mistyped
+    /// subcommand (`dcotor`) or a stray flag all started a full daemon: opening
+    /// the KB store and every federated instance, and running any open-time
+    /// migration, from a command the operator meant as harmless. Only the bare
+    /// invocation and `start` (what the editor's `collab-start` spawns) serve.
+    ///
+    /// Deciding it at the fall-through, rather than against a list of known
+    /// subcommands here, means a new subcommand cannot be refused by a list
+    /// someone forgot to update: every known one has already returned.
+    pub fn serve_check(&self) -> Result<(), String> {
+        // A misspelt flag first: in `--bnid 0.0.0.0:9473` the value would
+        // otherwise be reported as the "subcommand".
+        if let Some(flag) = self.rest.iter().find(|a| a.starts_with('-')) {
+            return Err(format!("unknown flag `{flag}`"));
+        }
+        match self.subcommand.as_deref() {
+            None | Some("start") => match self.rest.first() {
+                None => Ok(()),
+                Some(arg) => Err(format!("unexpected argument `{arg}`")),
+            },
+            Some(other) => Err(format!("unknown subcommand `{other}`")),
+        }
     }
 
     /// Load the config this invocation names, then apply the CLI overrides.
@@ -310,5 +375,53 @@ mod tests {
         assert_eq!(resolved.data_dir, Some(PathBuf::from("/srv/mae/prod")));
         assert_eq!(resolved.collab.bind.to_string(), "10.0.0.1:9474");
         assert_eq!(resolved.oauth.bind.to_string(), "10.0.0.1:8443");
+    }
+
+    // #955: what may serve. The e2e tests in daemon/tests/cli_usage_e2e.rs run
+    // the binary; these pin the decision itself, case by case.
+
+    #[test]
+    fn only_a_bare_invocation_or_start_serves() {
+        for ok in [
+            &[][..],
+            &["start"],
+            &["--config", "/x.toml"],
+            &["start", "--data-dir", "/d"],
+        ] {
+            assert_eq!(cli(ok).serve_check(), Ok(()), "{ok:?} must serve");
+        }
+    }
+
+    #[test]
+    fn anything_else_that_reaches_serving_is_refused_with_the_offending_token() {
+        let cases: &[(&[&str], &str)] = &[
+            (&["dcotor"], "unknown subcommand `dcotor`"),
+            (&["--bogus"], "unknown flag `--bogus`"),
+            (&["--bnid", "0.0.0.0:9473"], "unknown flag `--bnid`"),
+            (&["start", "now"], "unexpected argument `now`"),
+            // A dangling global flag is left in `rest` (see `parse`); before #955
+            // it silently served with the DEFAULT config instead of the one meant.
+            (&["--config"], "unknown flag `--config`"),
+        ];
+        for (args, want) in cases {
+            assert_eq!(cli(args).serve_check(), Err(want.to_string()), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn help_is_a_global_flag_wherever_it_appears() {
+        for args in [
+            &["--help"][..],
+            &["-h"],
+            &["doctor", "--help"],
+            &["--config", "/x", "-h"],
+        ] {
+            let c = cli(args);
+            assert!(c.help, "{args:?}");
+            assert!(
+                !c.rest.iter().any(|a| a == "--help" || a == "-h"),
+                "{args:?} leaked into rest"
+            );
+        }
     }
 }
