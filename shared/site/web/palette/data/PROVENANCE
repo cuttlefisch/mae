@@ -1,0 +1,115 @@
+Provenance of the colour values in this package
+================================================
+
+Only colour values are taken from the sources below: no code, no theme files.
+
+1. Doom Emacs themes
+--------------------
+
+data/doom.json holds colours of the Doom Emacs themes, from
+https://github.com/doomemacs/themes on its main branch, commit
+a59202912ad55014e53a685eee6cd94130bdd4fd (2026-08-26). For each chosen theme it
+holds the GUI value of bg, bg-alt, base0 to base8, fg, fg-alt, the named colours
+(red, orange, green, teal, yellow, blue, dark-blue, magenta, violet, cyan,
+dark-cyan) and the syntax classes (comments, strings, keywords, numbers,
+constants, variables, functions, type, operators). scripts/extract-doom.mjs read
+them as text from themes/doom-<theme>-theme.el:
+
+  node scripts/extract-doom.mjs <clone>/themes <commit>
+
+The themes are those of two lists in data/doom.json: «paletas», the Doom
+palettes, and «soloEnfasis», the hand-written palettes that take only their
+emphasis swatches from Doom (since 2026-11-16: gruvbox, from doom-gruvbox and
+doom-gruvbox-light; monokai, from doom-monokai-classic). They were extracted from
+the same commit.
+
+On 2026-11-16 the reader learnt one more form, for doom-gruvbox's and
+doom-gruvbox-light's bg and bg-alt: (cond ((equal option "value") x) … (t y)),
+resolved, like if, with the default value of the option's defcustom (nil, t or a
+string); any other form of cond is an error. With their defcustoms at nil, the
+final t applies: the default variant, neither hard nor soft, which is our
+gruvbox's (bg #282828 and #fbf1c7).
+
+The data are not edited by hand: for another commit or theme, change the
+«paletas» (or «soloEnfasis») list in data/doom.json, extract again with the new
+commit (and update this file) and regenerate the palettes with `npm run doom`.
+
+The city-lights palette was not imported: its upstream states CC-BY-NC-ND-4.0
+(see the table below), so its theme was removed from data/doom.json.
+
+The Doom Emacs themes are published under this licence:
+
+  The MIT License (MIT)
+
+  Copyright (c) 2016-2026 Henrik Lissner.
+
+  Permission is hereby granted, free of charge, to any person obtaining
+  a copy of this software and associated documentation files (the
+  "Software"), to deal in the Software without restriction, including
+  without limitation the rights to use, copy, modify, merge, publish,
+  distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to
+  the following conditions:
+
+  The above copyright notice and this permission notice shall be
+  included in all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+  CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+  TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+  SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+2. The upstream schemes the Doom themes port
+---------------------------------------------
+
+Each Doom theme ports an upstream colour scheme, or is original to Doom. The
+licence is the one the upstream itself states; "unconfirmed" means it could not
+be confirmed from the upstream (checked 2026-11-19).
+
+  palette          upstream                                              licence
+  acario           Doom original                                         (Doom, MIT)
+  ayu              https://github.com/dempfi/ayu                         MIT
+  bluloco          https://github.com/uloco/theme-bluloco-dark (-light)  LGPL-3.0
+  challenger-deep  https://github.com/challenger-deep-theme/vim          MIT
+  dark-plus        VS Code's Dark+ (Doom names no source URL)            unconfirmed
+  dracula          https://github.com/dracula/dracula-theme              MIT
+  earl-grey        Doom original                                         (Doom, MIT)
+  flatwhite        https://github.com/biletskyy/flatwhite-syntax         MIT
+  henna            https://github.com/httpsterio/vscode-henna            unconfirmed
+  horizon          https://github.com/jolaleye/horizon-theme-vscode      MIT
+  material         https://github.com/material-theme/vsc-material-theme  unconfirmed
+  nord             https://github.com/nordtheme/nord                     MIT
+  nova             https://github.com/trevordmiller/nova-colors          unconfirmed
+                   (npm metadata says MIT; no licence file seen)
+  oceanic-next     https://github.com/voronianski/oceanic-next-color-scheme  MIT
+  one              https://github.com/atom/one-dark-ui (and one-light-ui)    MIT
+  peacock          https://github.com/daylerees/colour-schemes           MIT
+  rouge            https://github.com/josefaidt/rouge-theme              MIT
+  solarized        https://github.com/altercation/solarized              MIT
+  sourcerer        https://github.com/xero/sourcerer                     unconfirmed
+                   (states "free", no SPDX licence)
+  spacegrey        https://github.com/SublimeText/Spacegray              MIT
+  tokyo-night      https://github.com/tokyo-night/tokyo-night-vscode-theme  MIT
+  tomorrow         https://github.com/chriskempson/tomorrow-theme        MIT
+  vibrant          Doom original (a variant of doom-one; see one)        (Doom, MIT)
+  xcode            Apple's Xcode default theme (no upstream repository)  unconfirmed
+  zenburn          https://github.com/bbatsov/zenburn-emacs (Emacs port) GPL-3.0
+  city-lights      https://github.com/Yummygum/city-lights-syntax-vsc    CC-BY-NC-ND-4.0
+                   (NOT imported)
+
+3. The hand-written palettes
+----------------------------
+
+  gruvbox  https://github.com/morhetz/gruvbox, MIT (stated in its README and
+           package.json). Its values are also the chord graph's "gruvbox" theme
+           (graph src/themes.ts).
+  monokai  The base16 Monokai scheme (author stated as Wimer Hazenberg),
+           https://github.com/tinted-theming/schemes (base16/monokai.yaml), MIT.
+  neutra   The owner's own values. Its code colours (#116329, #0550ae; #7ee787,
+           #79c0ff, #ff7b72, #d2a8ff, #ffa657) are GitHub Primer palette values
+           (https://github.com/primer/primitives, MIT); the remaining code hues'
+           origin is unconfirmed. Its graph roles are derived from its own roles
+           by scripts/doom.mjs's graph rules.

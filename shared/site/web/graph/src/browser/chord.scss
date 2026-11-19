@@ -1,0 +1,787 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Colour is assigned by ROLE (src/themes.ts): one ink for every note, one accent
+// for the current note and its chords, a second hue for its neighbours. State is
+// shown by fill and by geometry (a lifted wedge), never by an outline: on a
+// thin wedge an outline drowns the fill. The only outline left is the
+// keyboard focus ring, which accessibility requires.
+//
+// The component writes the theme as --chord-<role>-light/-dark on the
+// container; the mode follows the page's own toggle (data-mode="dark" on :root,
+// as the palette package writes it). The page colours are the palette's --ui-* roles.
+.chord-graph {
+  --chord-ink: var(--chord-ink-light);
+  --chord-accent: var(--chord-accent-light);
+  --chord-neighbour: var(--chord-neighbour-light);
+  --chord-visited: var(--chord-visited-light);
+  --chord-edge: var(--chord-edge-light);
+  & > h3 {
+    font-size: 1rem;
+    margin: 0;
+  }
+
+  .chord-graph-frame {
+    position: relative;
+    border: 1px solid var(--ui-panel);
+    border-radius: 5px;
+    aspect-ratio: 1;
+  }
+
+  .chord-graph-svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  // Finding a note (expanded view only): over the frame's top-left corner, its
+  // suggestions under it. The box and the list at 3:1 or more from the page
+  // (WCAG 1.4.11), the text at 4.5:1; the chosen suggestion marked by more than
+  // colour (a bar on its left).
+  .chord-graph-find {
+    position: absolute;
+    top: 0.25rem;
+    left: 0.25rem;
+    z-index: 2;
+    width: min(26rem, 75%);
+  }
+  .chord-graph-find-input {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 32px;
+    padding: 0.3rem 0.6rem;
+    font: inherit;
+    font-size: 0.9rem;
+    color: var(--ui-foreground);
+    background: var(--ui-background);
+    border: 1px solid var(--ui-foreground);
+    border-radius: 6px;
+
+    &::placeholder {
+      color: var(--ui-foreground);
+      opacity: 1;
+    }
+    &:focus-visible {
+      outline: 2px solid var(--chord-accent);
+      outline-offset: 1px;
+    }
+  }
+  .chord-graph-find-list {
+    margin: 0.25rem 0 0;
+    padding: 0.2rem 0;
+    list-style: none;
+    max-height: 24rem;
+    overflow-y: auto;
+    // At the end, the wheel stays in the list (it passes neither to the dialog nor to the page).
+    overscroll-behavior: contain;
+    background: var(--ui-background);
+    border: 1px solid var(--ui-foreground);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--ui-foreground) 25%, transparent);
+
+    &[hidden] {
+      display: none;
+    }
+
+    // Each suggestion, an item of its own (owner, 2026-11-12: where one ended and
+    // the next began was hard to see): room around it, a line between two, the
+    // title on its own line in the weight of a heading, then the path and, for a
+    // match in the text, the words around it.
+    li {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      padding: 0.55rem 0.7rem;
+      border-left: 3px solid transparent;
+      cursor: pointer;
+
+      & + li {
+        border-top: 1px solid var(--ui-panel);
+      }
+
+      &[aria-selected="true"],
+      &:hover {
+        background: var(--ui-panel);
+        border-left-color: var(--ui-foreground);
+      }
+    }
+  }
+  .chord-graph-find-title {
+    color: var(--ui-foreground);
+    font-size: 0.9rem;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  .chord-graph-find-path {
+    color: var(--ui-foreground);
+    font-size: 0.75rem;
+    overflow-wrap: anywhere;
+  }
+  .chord-graph-find-snippet {
+    color: var(--ui-foreground);
+    font-size: 0.8rem;
+    line-height: 1.35;
+  }
+
+  .chord-graph-expand,
+  .chord-graph-close {
+    position: absolute;
+    top: 0.25rem;
+    right: 0.25rem;
+    border: none;
+    background: transparent;
+    color: var(--ui-foreground);
+    font-size: 1.1rem;
+    cursor: pointer;
+    padding: 0.2rem 0.35rem;
+    border-radius: 4px;
+
+    &:hover,
+    &:focus-visible {
+      background: color-mix(in srgb, var(--ui-link) 8%, transparent);
+    }
+  }
+
+  .chord-graph-caption {
+    min-height: 1.5em;
+    margin: 0.3rem 0 0;
+    font-size: 0.85rem;
+    color: var(--ui-foreground);
+    overflow-wrap: anywhere;
+  }
+
+  .chord-graph-sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  // ---- edges ----
+  // Widths in screen pixels whatever the drawn size (sidebar or dialog).
+  .chord-graph-edge {
+    fill: none;
+    stroke: var(--chord-edge);
+    stroke-width: 0.75px;
+    stroke-opacity: 0.35;
+    vector-effect: non-scaling-stroke;
+    pointer-events: none;
+    transition:
+      stroke-opacity 130ms ease,
+      stroke 130ms ease;
+
+    // The hovered note's chords: ink, a little thinner.
+    &.hover {
+      stroke: var(--chord-ink);
+      stroke-width: 1.25px;
+      stroke-opacity: 0.85;
+    }
+
+    // The links of the note found in the search box: ink, as a hovered note's,
+    // a little heavier and fully drawn, while it stays found (owner, 2026-11-17:
+    // its links in another colour than the rest).
+    &.found {
+      stroke: var(--chord-ink);
+      stroke-width: 1.75px;
+      stroke-opacity: 1;
+    }
+
+    // The current note's chords: the accent, always. Declared after .hover so
+    // a chord between the current note and a hovered neighbour keeps it.
+    &.current {
+      stroke: var(--chord-accent);
+      stroke-width: 1.5px;
+      stroke-opacity: 0.9;
+    }
+
+    // The current note's link to the note a link of the page body leads to, while
+    // the pointer is on that link: the accent, twice as heavy, fully drawn.
+    &.peek {
+      stroke: var(--chord-accent);
+      stroke-width: 3px;
+      stroke-opacity: 1;
+    }
+  }
+
+  // A hovered, focused or found note changes its own links and nothing else: no
+  // rule here restyles the other links while it lasts (owner, 2026-11-18: every
+  // link changed colour on hover and again on leaving, «odd and distracting»;
+  // it was a class on the view that faded all the others to 0.08).
+
+  // Large rings: chords not touching the current, hovered or found note fade
+  // almost out at rest, so that note's own links stand out from thousands of
+  // others. (Without :not(.found), the found note's links faded with the rest on
+  // any site of 150 notes or more: owner, 2026-11-18, «no highlighting».)
+  .chord-graph-view.dense .chord-graph-edge:not(.current):not(.hover):not(.found) {
+    stroke-opacity: 0.06;
+  }
+
+  // ---- folder arcs and labels (dialog only) ----
+  .chord-graph-group-arc {
+    fill: var(--ui-muted);
+    fill-opacity: 0.6;
+  }
+
+  .chord-graph-group-label {
+    fill: var(--ui-foreground);
+    font-size: 3.4px;
+    font-family: var(--bodyFont, system-ui);
+  }
+
+  // ---- wedges ----
+  // Every note is opaque ink: no opacity by degree (an earlier graph export tried it
+  // and reverted it; it washed low-degree notes out below 3:1).
+  .chord-graph-wedge {
+    cursor: pointer;
+
+    .chord-graph-shape {
+      fill: var(--chord-ink);
+      transition:
+        d 130ms ease,
+        fill 130ms ease,
+        filter 130ms ease;
+    }
+
+    &.current .chord-graph-shape {
+      fill: var(--chord-accent);
+    }
+
+    &.neighbour .chord-graph-shape {
+      fill: var(--chord-neighbour);
+    }
+
+    // Hover and keyboard focus lift (the wedge grows outward, set in the
+    // script) and cast a shadow; they never recolour, so neither can be
+    // mistaken for the current note. The note found in the search box looks
+    // exactly as a hovered one, here and in the hierarchical views (owner,
+    // 2026-11-18, «Like a hovered note»): every rule for .hover on a note
+    // names .found too (a folder is never found: only pages are), and the
+    // focus rules leave it out (the search gives it the focus, and the focus
+    // ring made it look like neither).
+    &.hover .chord-graph-shape,
+    &.found .chord-graph-shape,
+    &.peek .chord-graph-shape,
+    &:focus-visible .chord-graph-shape {
+      filter: drop-shadow(0 0.6px 1.2px rgb(0 0 0 / 0.45));
+    }
+
+    .chord-graph-visited {
+      fill: var(--chord-visited);
+      pointer-events: none;
+    }
+
+    &:focus {
+      outline: none;
+    }
+    // Focus: the lift and shadow are the indicator, on every fill (kept while
+    // the pointer is elsewhere, in the script). The ring adds an edge against
+    // the page; on the wedge's own fill it may not contrast.
+    &:focus-visible:not(.found) .chord-graph-shape {
+      stroke: var(--chord-accent);
+      stroke-width: 2px;
+      vector-effect: non-scaling-stroke;
+    }
+    &.current:focus-visible:not(.found) .chord-graph-shape {
+      stroke: var(--chord-ink);
+    }
+  }
+
+  // ---- hierarchical views (sunburst, balloon): a fixed drawing under a camera ----
+  // Zoom controls, bottom right of the frame.
+  .chord-graph-zoom {
+    position: absolute;
+    right: 0.25rem;
+    bottom: 0.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    &[hidden] {
+      display: none;
+    }
+
+    button {
+      border: 1px solid var(--ui-panel);
+      background: var(--ui-background);
+      color: var(--ui-foreground);
+      font-size: 0.95rem;
+      line-height: 1;
+      width: 1.6rem;
+      height: 1.6rem;
+      border-radius: 4px;
+      cursor: pointer;
+
+      &:hover,
+      &:focus-visible {
+        background: color-mix(in srgb, var(--ui-link) 8%, transparent);
+      }
+
+      &[hidden] {
+        display: none;
+      }
+    }
+
+    // The sunburst's flip: a toggle, set apart from the zoom buttons.
+    .chord-graph-flip {
+      margin-top: 4px;
+
+      &[aria-pressed="true"] {
+        color: var(--ui-foreground);
+        border-color: var(--ui-foreground);
+        background: color-mix(in srgb, var(--ui-link) 8%, transparent);
+      }
+    }
+  }
+
+  // The switch between views, under the frame: a segmented control, so it reads
+  // as buttons and not as tags (owner, 2026-11-12: thin outlined words looked
+  // like badges). One outlined group, each choice a button at least 28 px high
+  // (WCAG 2.2, 2.5.8: 24), the chosen one filled. The outline and the fill are
+  // --darkgray on --light, 3:1 and more (WCAG 1.4.11); the text, 4.5:1 and more.
+  // In the dialog, the views and which pages are named, side by side.
+  .chord-graph-controls {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0 1rem;
+  }
+
+  // display: flex would override the browser's [hidden]: «Names» is hidden in the chord view.
+  .chord-graph-names[hidden] {
+    display: none;
+  }
+
+  .chord-graph-layouts,
+  .chord-graph-names {
+    display: flex;
+    width: fit-content;
+    margin: 0.5rem auto 0;
+    border: 1px solid var(--ui-foreground);
+    border-radius: 6px;
+    overflow: hidden;
+
+    button {
+      font: inherit;
+      font-size: 0.8rem;
+      font-weight: 600;
+      line-height: 1;
+      min-height: 28px;
+      padding: 0.35rem 0.75rem;
+      color: var(--ui-foreground);
+      background: var(--ui-background);
+      border: none;
+      cursor: pointer;
+
+      & + button {
+        border-left: 1px solid var(--ui-foreground);
+      }
+
+      &:hover {
+        color: var(--ui-foreground);
+        background: var(--ui-panel);
+      }
+
+      &[aria-pressed="true"] {
+        color: var(--ui-background);
+        background: var(--ui-foreground);
+        cursor: default;
+      }
+
+      &:focus-visible {
+        outline: 2px solid var(--chord-accent);
+        outline-offset: -3px;
+      }
+    }
+  }
+
+  // «You are here»: a switch (WAI-ARIA APG «Switch»), not one of a set of choices
+  // (owner, 2026-11-17: as a pressed button it did not read as a toggle). Its
+  // label, a track with a thumb, and the word for its state: on, the thumb at the
+  // right of a filled track and «On»; off, at the left of an empty one and «Off».
+  // The thumb's place and the word say it, not only colour (WCAG 1.4.1). Track
+  // and thumb are --darkgray against --light, 3:1 and more (1.4.11); the text,
+  // 4.5:1 and more. The focus ring goes round the whole switch.
+  .chord-graph-here {
+    display: flex;
+    margin: 0.5rem auto 0;
+  }
+  .chord-graph-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-height: 28px;
+    padding: 0.2rem 0.5rem;
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    line-height: 1;
+    color: var(--ui-foreground);
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+
+    &:hover {
+      background: var(--ui-panel);
+    }
+    &:focus-visible {
+      outline: 2px solid var(--chord-accent);
+      outline-offset: 2px;
+    }
+  }
+  .chord-graph-switch-track {
+    position: relative;
+    box-sizing: border-box;
+    width: 2.2rem;
+    height: 1.2rem;
+    border: 2px solid var(--ui-foreground);
+    border-radius: 999px;
+    background: var(--ui-background);
+    transition: background 130ms ease;
+  }
+  .chord-graph-switch-thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: calc(1.2rem - 8px);
+    height: calc(1.2rem - 8px);
+    border-radius: 50%;
+    background: var(--ui-foreground);
+    transition:
+      transform 130ms ease,
+      background 130ms ease;
+  }
+  .chord-graph-switch-on,
+  .chord-graph-switch-off {
+    min-width: 1.6em;
+    color: var(--ui-foreground);
+  }
+  .chord-graph-switch[aria-checked="true"] {
+    .chord-graph-switch-track {
+      background: var(--ui-foreground);
+    }
+    // Across the track: its inside (2.2rem less the 2px borders) less the thumb
+    // and its 2px either side.
+    .chord-graph-switch-thumb {
+      background: var(--ui-background);
+      transform: translateX(1rem);
+    }
+    .chord-graph-switch-off {
+      display: none;
+    }
+  }
+  .chord-graph-switch[aria-checked="false"] .chord-graph-switch-on {
+    display: none;
+  }
+
+  .chord-graph-view.hier {
+    .chord-graph-svg {
+      // In the sidebar a finger still scrolls the page up and down (the script
+      // pans sideways); the dialog overrides this below.
+      touch-action: pan-y;
+      cursor: grab;
+    }
+
+    // Widths in screen pixels at every zoom: the drawing scales, strokes do not.
+    // --k (screen px per drawing unit) is set by the script on every frame.
+    .chord-graph-shape,
+    .chord-graph-edge,
+    .chord-graph-tree,
+    .chord-graph-leader {
+      vector-effect: non-scaling-stroke;
+    }
+
+    .chord-graph-shape {
+      stroke: var(--ui-background);
+      stroke-width: 0.5px;
+      transition: fill 130ms ease;
+    }
+
+    // Folders (sunburst arcs, balloon ports): light, outlined in ink, so their
+    // edges keep 3:1 against the page whatever the fill.
+    .chord-graph-wedge.folder .chord-graph-shape {
+      fill: var(--ui-panel);
+      stroke: var(--chord-ink);
+      stroke-width: 1px;
+    }
+    .chord-graph-wedge.folder.hover .chord-graph-shape {
+      fill: color-mix(in srgb, var(--ui-link) 8%, transparent);
+    }
+
+    // A balloon ring's middle: its folder's page, or a target to frame it.
+    .chord-graph-wedge.centre .chord-graph-shape {
+      fill: transparent;
+      stroke: none;
+    }
+    // A ring's middle is its folder's page: when that is the current page or a
+    // neighbour, a ring in the role's colour says so (graphics, 3:1 is enough).
+    .chord-graph-wedge.centre.current .chord-graph-shape {
+      stroke: var(--chord-accent);
+      stroke-width: 3px;
+    }
+    .chord-graph-wedge.centre.neighbour .chord-graph-shape {
+      stroke: var(--chord-neighbour);
+      stroke-width: 3px;
+    }
+    .chord-graph-wedge.centre.hover .chord-graph-shape,
+    .chord-graph-wedge.centre.found .chord-graph-shape,
+    .chord-graph-wedge.centre:focus-visible .chord-graph-shape {
+      fill: color-mix(in srgb, var(--ui-link) 8%, transparent);
+    }
+
+    // No lift here (the drawing never changes shape): an outline, plus the
+    // ring's shadow for focus. On a note (filled ink, accent or neighbour) the
+    // outline is the page's colour: over 10:1 against ink and at least 3.4:1
+    // against accent and neighbour, in both themes. On a folder (pale fill, ink
+    // edge) it is ink. (An accent outline was 1.0 to 2.3:1 against the fills.)
+    .chord-graph-wedge.hover .chord-graph-shape,
+    .chord-graph-wedge.found .chord-graph-shape,
+    .chord-graph-wedge.peek .chord-graph-shape {
+      filter: none;
+      stroke: var(--ui-background);
+      stroke-width: 1.5px;
+    }
+    .chord-graph-wedge:focus-visible:not(.found) .chord-graph-shape,
+    .chord-graph-wedge.current:focus-visible:not(.found) .chord-graph-shape {
+      filter: drop-shadow(0 0.6px 1.2px rgb(0 0 0 / 0.45));
+      stroke: var(--ui-background);
+      stroke-width: 2px;
+    }
+    .chord-graph-wedge.folder.hover .chord-graph-shape,
+    .chord-graph-wedge.folder:focus-visible .chord-graph-shape,
+    .chord-graph-wedge.centre:not(.current):not(.neighbour).hover .chord-graph-shape,
+    .chord-graph-wedge.centre:not(.current):not(.neighbour).found .chord-graph-shape,
+    .chord-graph-wedge.centre:not(.current):not(.neighbour):focus-visible:not(.found)
+      .chord-graph-shape {
+      stroke: var(--chord-ink);
+      stroke-width: 3px;
+    }
+    // A marked middle keeps its role's ring under hover and focus (it is the
+    // first tab stop when it is the current page); focus adds the shadow.
+    .chord-graph-wedge.centre.current:focus-visible:not(.found) .chord-graph-shape,
+    .chord-graph-wedge.centre.neighbour:focus-visible:not(.found) .chord-graph-shape {
+      filter: drop-shadow(0 0.6px 1.2px rgb(0 0 0 / 0.45));
+    }
+
+    .chord-graph-tree {
+      fill: none;
+      // darkgray, not gray: a common default light gray is 1.98:1 on its page.
+      stroke: var(--ui-foreground);
+      stroke-width: 1px;
+      stroke-dasharray: 3 3;
+    }
+
+    .chord-graph-label,
+    .chord-graph-callout {
+      font-family: var(--bodyFont, system-ui);
+      font-size: calc(11px / var(--k, 1));
+      fill: var(--ui-foreground);
+      // A halo in the page colour, so text stays legible over chords.
+      paint-order: stroke;
+      stroke: var(--ui-background);
+      stroke-width: calc(3px / var(--k, 1));
+      stroke-linejoin: round;
+      pointer-events: none;
+    }
+
+    // Callout text is always ink: accent and neighbour clear 3:1 (graphics) but
+    // not 4.5:1 as text (light gruvbox: accent 3.41, neighbour 4.14 on the
+    // page). The role shows in the leader and its dot, which only need 3:1.
+    // A label drawn on its own shape (a sunburst note, filled with ink): text in
+    // the page colour (over 10:1 in both themes), with no halo. Only ever on
+    // ink: the current page and its neighbours (accent and neighbour fills,
+    // where this text falls below 4.5:1) never get one; the script hides it,
+    // and they get a callout instead.
+    .chord-graph-label.on-shape {
+      fill: var(--ui-background);
+      stroke: none;
+    }
+
+    .chord-graph-callout {
+      font-size: calc(12px / var(--k, 1));
+      font-weight: 600;
+      fill: var(--chord-ink);
+    }
+
+    .chord-graph-dot {
+      fill: var(--chord-ink);
+
+      &.current {
+        fill: var(--chord-accent);
+      }
+      &.neighbour {
+        fill: var(--chord-neighbour);
+      }
+    }
+
+    .chord-graph-leader {
+      fill: none;
+      stroke: var(--chord-ink);
+      stroke-width: 1px;
+
+      &.current {
+        stroke: var(--chord-accent);
+      }
+      &.neighbour {
+        stroke: var(--chord-neighbour);
+      }
+    }
+  }
+
+  // ---- the expanded view: the whole page (owner, 2026-11-17) ----
+  // Still a modal <dialog> (the browser's top layer, the page behind inert,
+  // Escape, the focus back on the button that opened it), not the browser's
+  // Fullscreen API: it covers the whole viewport on an opaque background, and
+  // nothing of the page shows round it or through it. The frame takes all the
+  // room the controls and the caption under it leave, whatever its shape (every
+  // view frames itself to the box it is given).
+  .chord-graph-dialog {
+    position: fixed;
+    inset: 0;
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    background: var(--ui-background);
+    color: var(--ui-foreground);
+    padding: 0.75rem;
+    // Nothing that scrolls inside passes to the page behind (which is also
+    // locked while it is open: chord.ts, lockScroll).
+    overscroll-behavior: contain;
+
+    // Only when open: display would otherwise show a closed dialog.
+    &[open] {
+      display: flex;
+      flex-direction: column;
+    }
+
+    &::backdrop {
+      background: var(--ui-background);
+    }
+
+    > .chord-graph-view {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .chord-graph-frame {
+      border: none;
+      flex: 1;
+      min-height: 0;
+      aspect-ratio: auto;
+    }
+
+    // The page does not scroll under a modal dialog: there the script owns
+    // every gesture, vertical pans included (the sidebar leaves those to the page).
+    .chord-graph-view.hier .chord-graph-svg {
+      touch-action: none;
+    }
+
+    // One line, always the same height, empty or not: the frame takes what is left,
+    // and a caption that came and went moved the graph (a line of text is taller
+    // than an empty min-height) and changed the region the reader's zoom keeps.
+    .chord-graph-caption {
+      font-size: 1rem;
+      text-align: center;
+      line-height: 1.5;
+      height: 1.5em;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+  }
+}
+
+// Dark mode, following the page's own toggle.
+:root[data-mode="dark"] .chord-graph {
+  --chord-ink: var(--chord-ink-dark);
+  --chord-accent: var(--chord-accent-dark);
+  --chord-neighbour: var(--chord-neighbour-dark);
+  --chord-visited: var(--chord-visited-dark);
+  --chord-edge: var(--chord-edge-dark);
+}
+
+// As specific as the rules that set the transitions, and later, so it wins.
+@media (prefers-reduced-motion: reduce) {
+  .chord-graph .chord-graph-edge,
+  .chord-graph .chord-graph-wedge .chord-graph-shape {
+    transition: none;
+  }
+  // The hierarchical views' own fill transition is more specific than the line above.
+  .chord-graph .chord-graph-view.hier .chord-graph-shape {
+    transition: none;
+  }
+  .chord-graph .chord-graph-switch-track,
+  .chord-graph .chord-graph-switch-thumb {
+    transition: none;
+  }
+}
+
+// ---- «You are here» (here.ts): over the drawing, in screen px ----
+// The marker on the note and its label, in the accent (graphics: 3:1), with a
+// casing in the page colour so it reads over any fill and over the links; the
+// label's text in ink and the page's dark (4.5:1). Never only colour: the ring,
+// the pin and the words «You are here» say it too.
+.chord-graph .chord-graph-marker {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+
+  .chord-graph-marker-ring-backdrop,
+  .chord-graph-marker-leader-backdrop {
+    fill: none;
+    stroke: var(--ui-background);
+    stroke-width: 6px;
+    stroke-linecap: round;
+  }
+  .chord-graph-marker-ring {
+    fill: none;
+    stroke: var(--chord-accent);
+    stroke-width: 3px;
+  }
+  .chord-graph-marker-leader {
+    fill: none;
+    stroke: var(--chord-accent);
+    stroke-width: 2px;
+    stroke-linecap: round;
+  }
+  .chord-graph-marker-pin {
+    fill: var(--chord-accent);
+    stroke: var(--ui-background);
+    stroke-width: 1.5px;
+  }
+  .chord-graph-marker-pin-eye {
+    fill: var(--ui-background);
+  }
+  .chord-graph-marker-box {
+    fill: var(--ui-background);
+    stroke: var(--chord-accent);
+    stroke-width: 2px;
+  }
+  .chord-graph-marker-glyph {
+    fill: var(--chord-accent);
+  }
+  .chord-graph-marker-text,
+  .chord-graph-marker-title {
+    font-family: var(--bodyFont, system-ui);
+  }
+  .chord-graph-marker-text {
+    fill: var(--chord-ink);
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .chord-graph-marker-title {
+    fill: var(--ui-foreground);
+    font-size: 12px;
+    font-weight: 600;
+  }
+}
