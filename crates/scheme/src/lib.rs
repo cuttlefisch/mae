@@ -46,21 +46,30 @@ pub(crate) mod timing {
     use std::time::Instant;
 
     /// Best-of-`rounds` time of `small` and of `large`, interleaved so a load
-    /// burst slows both sides rather than one. Returns (ratio, small_s, large_s).
+    /// burst slows both sides rather than one. Returns (ratio, small_s per run,
+    /// large_s). Timed in equal windows (#947): the small case runs `small_reps` times (the size
+    /// ratio) inside one timed window, so both windows last about as long and are
+    /// equally exposed to preemption. Timing one short small run against one long
+    /// large run let a busy runner inflate only the large side: 93x for 16x on
+    /// macOS CI (91 us -> 8.5 ms) where the code grows ~16x.
     pub fn growth_ratio(
         rounds: usize,
+        small_reps: usize,
         mut small: impl FnMut(),
         mut large: impl FnMut(),
     ) -> (f64, f64, f64) {
+        let reps = small_reps.max(1);
         let (mut bs, mut bl) = (f64::MAX, f64::MAX);
         for _ in 0..rounds {
             let t = Instant::now();
-            small();
-            bs = bs.min(t.elapsed().as_secs_f64());
+            for _ in 0..reps {
+                small();
+            }
+            bs = bs.min(t.elapsed().as_secs_f64() / reps as f64);
             let t = Instant::now();
             large();
             bl = bl.min(t.elapsed().as_secs_f64());
         }
-        (bl / bs.max(1e-6), bs, bl)
+        (bl / bs.max(1e-9), bs, bl)
     }
 }
