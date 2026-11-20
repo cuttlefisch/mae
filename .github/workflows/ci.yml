@@ -1402,6 +1402,13 @@ jobs:
     # proven stable across a few real runs, not a permanent leniency.
     # Issues #345/#389.
     continue-on-error: true
+    # PRs build and test in DEBUG: it compiles far faster and catches the same
+    # defects. The release builds (13.8 + 9.7 min) only fed install and collab
+    # e2e steps that take seconds; main still builds, tests and installs the
+    # release artifact.
+    env:
+      PROFILE_FLAG: ${{ github.event_name == 'pull_request' && '' || '--release' }}
+      PROFILE_DIR: ${{ github.event_name == 'pull_request' && 'debug' || 'release' }}
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
@@ -1410,9 +1417,10 @@ jobs:
             .
             daemon -> daemon/target
           nextest: "true"
-          # Issue #491: sccache-action itself is cross-platform and every
-          # build step below is --release, so no `incremental` override is
-          # needed here. `mold` is deliberately NOT set -- it's Linux-only
+          # Issue #491: sccache cannot cache incremental artifacts, and PR runs
+          # build in debug (incremental by default), so it is turned off.
+          incremental: "false"
+          # (sccache-action itself is cross-platform.) `mold` is deliberately NOT set -- it's Linux-only
           # (no free macOS build exists).
           sccache: "true"
 
@@ -1421,22 +1429,22 @@ jobs:
       # -- confirmed against release.yml's existing build-macos-arm job,
       # which builds the same feature set with no `brew install` at all
       # (skia-safe uses native CoreText/CoreGraphics here instead).
-      - name: Build editor workspace (release, GUI)
-        run: cargo build --release --workspace --features gui
+      - name: Build editor workspace (GUI; release on main, debug on PRs)
+        run: cargo build ${PROFILE_FLAG:+"$PROFILE_FLAG"} --workspace --features gui
 
-      - name: Build daemon workspace (release)
-        run: cd daemon && cargo build --release
+      - name: Build daemon workspace (release on main, debug on PRs)
+        run: cd daemon && cargo build ${PROFILE_FLAG:+"$PROFILE_FLAG"}
 
       - name: Build mae-mcp-shim
         run: |
-          cargo build --release --package mae-mcp
+          cargo build ${PROFILE_FLAG:+"$PROFILE_FLAG"} --package mae-mcp
 
       # Bounded, fast-signal subset -- mirrors the MSRV job's own established
       # "lib + bins only" pattern, not the full stable/test-equivalent suite.
       # Both issues #345/#389 explicitly say this doesn't need to be the
       # full matrix on day one; macOS runner-minutes cost more than Linux.
       - name: cargo nextest run (lib + bins, fast signal)
-        run: cargo nextest run --workspace --lib --bins --release --features gui
+        run: cargo nextest run --workspace --lib --bins ${PROFILE_FLAG:+"$PROFILE_FLAG"} --features gui
 
       # Issue #389: assets/install.sh already has a full Darwin/launchd
       # branch, never exercised in CI. Reuses the exact package-assembly
@@ -1445,9 +1453,9 @@ jobs:
       - name: Assemble install package
         run: |
           mkdir -p /tmp/mae-pkg
-          cp target/release/mae /tmp/mae-pkg/mae
-          cp target/release/mae-mcp-shim /tmp/mae-pkg/mae-mcp-shim
-          cp daemon/target/release/mae-daemon /tmp/mae-pkg/mae-daemon
+          cp "target/$PROFILE_DIR/mae" /tmp/mae-pkg/mae
+          cp "target/$PROFILE_DIR/mae-mcp-shim" /tmp/mae-pkg/mae-mcp-shim
+          cp "daemon/target/$PROFILE_DIR/mae-daemon" /tmp/mae-pkg/mae-daemon
           chmod +x /tmp/mae-pkg/mae /tmp/mae-pkg/mae-mcp-shim /tmp/mae-pkg/mae-daemon
           cp -r modules /tmp/mae-pkg/modules
           cp assets/sample-config.toml /tmp/mae-pkg/sample-config.toml
@@ -1489,8 +1497,8 @@ jobs:
       # the release binaries built above; no second, redundant compile.
       - name: Collab mTLS e2e (macOS-native binaries)
         env:
-          MAE_BIN: ${{ github.workspace }}/target/release/mae
-          MAE_DAEMON_BIN: ${{ github.workspace }}/daemon/target/release/mae-daemon
+          MAE_BIN: ${{ github.workspace }}/target/${{ env.PROFILE_DIR }}/mae
+          MAE_DAEMON_BIN: ${{ github.workspace }}/daemon/target/${{ env.PROFILE_DIR }}/mae-daemon
         run: scripts/collab-mtls-e2e.sh
 
   code-map:
