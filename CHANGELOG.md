@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.177] - 2026-11-20
+
+
+
+
+### Bug Fixes
+
+- *(daemon)* --help and a mistyped subcommand no longer start a daemon (#955) ([bcda4ce](https://github.com/cuttlefisch/mae/commit/bcda4ce551a203ff02638af7f41b107be43111a7))
+
+### Testing
+
+- *(perf)* Time growth ratios in equal windows (#947) ([9abacf5](https://github.com/cuttlefisch/mae/commit/9abacf58ae4020029a608d3397a273e2e33a9604))
+
 ## [0.14.176] - 2026-11-18
 
 
@@ -15,6 +28,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - *(adr)* Regenerate the ADR KB checksum after merging main ([0f841bc](https://github.com/cuttlefisch/mae/commit/0f841bcd40bdf02a76f071b2740e898dec77a76e))
+- Bump version to 0.14.176 ([bb513f4](https://github.com/cuttlefisch/mae/commit/bb513f4bc9a08564bb12eb1828286f2562cb8ea8))
 
 ## [0.14.175] - 2026-11-18
 
