@@ -374,7 +374,10 @@ to the engine.
 - Each check exits 1 when it fails, 2 when it could not check (no browser, no site, nothing
   selected); never 0 with no checks run.
 - Each check has declared mutants (a change to the candidate that must make it fail),
-  committed with it and run by the repository's mutation runner.
+  committed with it and run by the repository's mutation runner. The behaviours the previous
+  engine's ~700 mutants guarded, deduplicated into 130 intents and mapped to these P-xx
+  requirements, are in [kb-site-mutant-intents.md](kb-site-mutant-intents.md): a checklist for
+  writing the checks and their mutants, with 29 candidates for new requirements.
 - No fixed sleeps: wait until no request is in flight and nothing visible has changed for
   several frames. A check that fails only intermittently is a defect, fixed at its cause.
 

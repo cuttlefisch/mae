@@ -1,0 +1,124 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Palette neutral, the default: white and grey surfaces, near-black text and a
+# single blue for links, unbranded. The owner's values, except the graph roles
+# (below).
+#
+# A value is a lowercase "#rrggbb" or "#rrggbbaa", or a reference to another
+# role: "{group.role}" in the same mode, "{light.group.role}" in the other. The
+# roles and what each requires are in the README.
+isDefault: true
+
+light:
+  ui:
+    background: "#ffffff"
+    panel: "#f3f3f3"
+    muted: "#5c5c5c"
+    foreground: "#242424"
+    link: "#0b5cad"
+    accent: "#7a3fbf"
+    mark: "#ffe08a99"
+  gallery:
+    title: "{ui.background}"
+  # The colours of the documentation site's Graphviz maps: the org renderer swaps
+  # each of these values for its --diagram-<role> variable, so they must be
+  # distinct from each other (the tests check it). They are the colours the maps
+  # used, retouched: outline, #999999 darkened to 3:1 on the darkest zone;
+  # node-soft (#fafafa), node-control (#fff3e0), zone-green (#eef6ea) and
+  # zone-violet (#f6ecf7), moved just enough for a node to be distinguishable from
+  # each zone and each zone from the others.
+  diagram:
+    ink: "{ui.foreground}"
+    background: "{ui.background}"
+    border: "{ui.foreground}"
+    node: "#ffffff"
+    node-soft: "#fefefe"
+    node-control: "#feeccc"
+    line: "#555555"
+    outline: "#878787"
+    highlight: "#e65100"
+    blocked: "#c62828"
+    zone-blue: "#e8f0fb"
+    zone-green: "#e8f7e5"
+    zone-amber: "#fff8e1"
+    zone-orange: "#fdf3e4"
+    zone-violet: "#f7ecf7"
+    zone-grey: "#f3f3f3"
+    zone-brown: "#efebe9"
+  # The graph roles are derived from this palette's own roles by scripts/doom.mjs's
+  # graph rules (neighbour, withoutEmphasis, graph): neighbour from the link blue, accent
+  # from the highlight orange brought into the band (owner ruling, 2026-11-19: the
+  # earlier values were not imported).
+  graph:
+    ink: "{ui.foreground}"
+    accent: "#e65100"
+    neighbour: "#0b5cad"
+    visited: "#e1e1e1"
+    edge: "#8a8a8a"
+  # The code blocks: the block's text and background, the page's; each role, 4.5:1
+  # on the background (it is the default). Seven distinguishable hues: grey, green,
+  # red, blue, purple, amber and teal (the values match GitHub Primer's syntax
+  # colours; data/PROVENANCE).
+  code:
+    text: "{ui.foreground}"
+    background: "{ui.background}"
+    comment: "{ui.muted}"
+    string: "#116329"
+    number: "#0550ae"
+    constant: "{code.number}"
+    keyword: "#b3261e"
+    operator: "{code.keyword}"
+    function: "#6639ba"
+    type: "#8a5a00"
+    variable: "#00718f"
+
+dark:
+  ui:
+    background: "#1e1e1e"
+    panel: "#2b2b2b"
+    muted: "#a8a8a8"
+    foreground: "#e6e6e6"
+    link: "#6cb4ff"
+    accent: "#c9a2ff"
+    mark: "#8a6d0099"
+  gallery:
+    title: "{light.gallery.title}"
+  # Nodes a little lighter than the page; each zone, a light hue at 16 % over it,
+  # and the control node, highlight at 22 %. node-soft, zone-grey and zone-brown,
+  # retouched so that a node is not lost inside a zone (see the distance tests).
+  diagram:
+    ink: "{ui.foreground}"
+    background: "{ui.background}"
+    border: "{ui.foreground}"
+    node: "#282828"
+    node-soft: "#2a2a2a"
+    node-control: "#503626"
+    line: "#b0b0b0"
+    outline: "#8a8a8a"
+    highlight: "#ff8c42"
+    blocked: "#ff8a80"
+    zone-blue: "#2a3642"
+    zone-green: "#2b3a2f"
+    zone-amber: "#403826"
+    zone-orange: "#423226"
+    zone-violet: "#393342"
+    zone-grey: "#383838"
+    zone-brown: "#372f2b"
+  graph:
+    ink: "{ui.foreground}"
+    accent: "#d7680f"
+    neighbour: "#4890d8"
+    visited: "{ui.panel}"
+    edge: "#7b7b7b"
+  # The same hues, light.
+  code:
+    text: "{ui.foreground}"
+    background: "{ui.background}"
+    comment: "{ui.muted}"
+    string: "#7ee787"
+    number: "#79c0ff"
+    constant: "{code.number}"
+    keyword: "#ff7b72"
+    operator: "{code.keyword}"
+    function: "#d2a8ff"
+    type: "#ffa657"
+    variable: "#4ec9b0"

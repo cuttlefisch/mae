@@ -1,0 +1,587 @@
+{
+  "schema": 1,
+  "timeout": 300,
+  "note": "Each entry: in `file`, `search` (exactly once) becomes `replace`, and the tests of `test.file` matching `test.filter` (vitest -t) must fail. MAE's tools/mutate does not yet run Vitest targets (follow-up).",
+  "mutants": [
+    {
+      "name": "neutral: a string colour too light",
+      "file": "palettes/neutral.yaml",
+      "search": "string: \"#116329\"",
+      "replace": "string: \"#7ee787\"",
+      "test": {
+        "file": "test/contrast.test.ts",
+        "filter": "^palette neutral mode light code: the text and every role reach 4.5:1 on the block's background$"
+      }
+    },
+    {
+      "name": "monokai: an illegible variable",
+      "file": "palettes/monokai.yaml",
+      "search": "variable: \"#fd971f\"",
+      "replace": "variable: \"#3a3a30\"",
+      "test": {
+        "file": "test/contrast.test.ts",
+        "filter": "^palette monokai mode dark code: the text and every role reach 3:1 on the block's background"
+      }
+    },
+    {
+      "name": "variables: another name",
+      "file": "src/tokens.ts",
+      "search": "return `--code-${role}`",
+      "replace": "return `--cod-${role}`",
+      "test": {
+        "file": "test/generate.test.ts",
+        "filter": "the variables are there, with these names"
+      }
+    },
+    {
+      "name": "doom: not moved away from the background",
+      "file": "scripts/doom.mjs",
+      "search": "if (contrast(opaque(x), background) >= LEGIBLE) return x",
+      "replace": "return x",
+      "test": {
+        "file": "test/doom.test.ts",
+        "filter": "each is what the generator produces"
+      }
+    },
+    {
+      "name": "doom: composed syntax without its equivalent",
+      "file": "scripts/doom.mjs",
+      "search": "if (equal) T[v] = T[equal]",
+      "replace": "if (false) T[v] = T[equal]",
+      "test": {
+        "file": "test/doom.test.ts",
+        "filter": "each is what the generator produces"
+      }
+    },
+    {
+      "name": "extract: without comments",
+      "file": "scripts/extract-doom.mjs",
+      "search": "\"comments\", \"strings\"",
+      "replace": "\"strings\"",
+      "test": {
+        "file": "test/doom.test.ts",
+        "filter": "all its variables"
+      }
+    },
+    {
+      "name": "emphasis: text at 4:1",
+      "file": "scripts/doom.mjs",
+      "search": "export const TEXT_AA = 4.5",
+      "replace": "export const TEXT_AA = 4",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "reaches its contrast on background and panel"
+      }
+    },
+    {
+      "name": "emphasis: graphic below 3:1",
+      "file": "scripts/doom.mjs",
+      "search": "export const GRAPHIC = 3",
+      "replace": "export const GRAPHIC = 2.5",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "reaches its contrast on background and panel"
+      }
+    },
+    {
+      "name": "emphasis: stuck to the red and the links",
+      "file": "scripts/doom.mjs",
+      "search": "export const SEP_WARNING = 12",
+      "replace": "export const SEP_WARNING = 0",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "at ΔE00 >= 12 from the danger red and the links"
+      }
+    },
+    {
+      "name": "emphasis: stuck to the graph's ink and neighbour",
+      "file": "scripts/doom.mjs",
+      "search": "export const SEP_GRAPH00 = 16",
+      "replace": "export const SEP_GRAPH00 = 0",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "at ΔE00 >= 12 from the danger red and the links"
+      }
+    },
+    {
+      "name": "emphasis: repeated swatches",
+      "file": "scripts/doom.mjs",
+      "search": "export const SEP_SWATCHES = 12",
+      "replace": "export const SEP_SWATCHES = 0",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "the swatches are distinguishable"
+      }
+    },
+    {
+      "name": "emphasis: swatches only 10 apart",
+      "file": "scripts/doom.mjs",
+      "search": "export const SEP_SWATCHES = 12",
+      "replace": "export const SEP_SWATCHES = 10",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "the swatches are distinguishable"
+      }
+    },
+    {
+      "name": "emphasis: swatches separated by the graphic tone only",
+      "file": "scripts/doom.mjs",
+      "search": "export const SEPARATED_HUES = [\"graphic\", \"text\"]",
+      "replace": "export const SEPARATED_HUES = [\"graphic\"]",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "the swatches are distinguishable"
+      }
+    },
+    {
+      "name": "emphasis: separate removes the default",
+      "file": "scripts/doom.mjs",
+      "search": "const outside = a.id === pred ? b : b.id === pred ? a : toRest",
+      "replace": "const outside = toRest",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "the default is never removed"
+      }
+    },
+    {
+      "name": "emphasis: separate without requiring the default",
+      "file": "scripts/doom.mjs",
+      "search": "if (ms.length > 0 && !ms.some((m) => m.id === pred)) throw",
+      "replace": "if (false) throw",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "separate fails without the default"
+      }
+    },
+    {
+      "name": "emphasis: separate removes the most different",
+      "file": "scripts/doom.mjs",
+      "search": "toRest(a, b) < toRest(b, a) ? a : b",
+      "replace": "toRest(a, b) < toRest(b, a) ? b : a",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "of a near-identical pair, the one closer"
+      }
+    },
+    {
+      "name": "emphasis: separate counts the other of the pair",
+      "file": "scripts/doom.mjs",
+      "search": ".filter((y) => y !== x && y !== other)",
+      "replace": ".filter((y) => y !== x)",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "of a near-identical pair, the one closer"
+      }
+    },
+    {
+      "name": "emphasis: separate starts with the furthest pair",
+      "file": "scripts/doom.mjs",
+      "search": "dist(a, b) < par.d)) par",
+      "replace": "dist(a, b) > par.d)) par",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "the closest pair first"
+      }
+    },
+    {
+      "name": "emphasis: separate depends on the input order",
+      "file": "scripts/doom.mjs",
+      "search": "let remain = [...ms].sort((x, y) => place(x) - place(y))",
+      "replace": "let remain = [...ms]",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "at equal closeness to the rest, the later one"
+      }
+    },
+    {
+      "name": "emphasis: separate with the threshold included",
+      "file": "scripts/doom.mjs",
+      "search": "if (dist(a, b) < sep &&",
+      "replace": "if (dist(a, b) <= sep &&",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "at 12 or more nothing goes"
+      }
+    },
+    {
+      "name": "emphasis: the distance without dark mode",
+      "file": "scripts/doom.mjs",
+      "search": "Math.min(...MODES.flatMap((mode) => SEPARATED_HUES",
+      "replace": "Math.min(...[\"light\"].flatMap((mode) => SEPARATED_HUES",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "the distance is the smallest over both tones in both modes"
+      }
+    },
+    {
+      "name": "emphasis: the graph tone without its conditions",
+      "file": "scripts/doom.mjs",
+      "search": "(x) => band(x) && deltaE(x, neighbour) >= SEP_GRAPH && on(GRAPHIC, background, panel)(x),",
+      "replace": "(x) => true,",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "(reaches its contrast|fits chord-graph's band)"
+      }
+    },
+    {
+      "name": "emphasis: the tone changes hue",
+      "file": "scripts/doom.mjs",
+      "search": "      const x = fromLch(l2, c, hh)\n      if (ok(x)) return x",
+      "replace": "      const x = fromLch(l2, c, hh + 0.1)\n      if (ok(x)) return x",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "moved only in OKLCH lightness"
+      }
+    },
+    {
+      "name": "emphasis: moved even when it already reaches it",
+      "file": "scripts/doom.mjs",
+      "search": "for (let k = 0; k * STEP_L <= 1; k++)",
+      "replace": "for (let k = 4; k * STEP_L <= 1; k++)",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "already reaches its contrast is used as is"
+      }
+    },
+    {
+      "name": "emphasis: the default does not avoid the links",
+      "file": "scripts/doom.mjs",
+      "search": "const far = ms.filter((m) => !asLink(m, modes))",
+      "replace": "const far = ms",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "a blue with more chroma does not beat"
+      }
+    },
+    {
+      "name": "emphasis: narrower blues",
+      "file": "scripts/doom.mjs",
+      "search": "export const BLUE = [200, 275]",
+      "replace": "export const BLUE = [240, 275]",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "if all are blue, the most chromatic wins"
+      }
+    },
+    {
+      "name": "emphasis: the least chromatic default",
+      "file": "scripts/doom.mjs",
+      "search": "midChroma(b) - midChroma(a)",
+      "replace": "midChroma(a) - midChroma(b)",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "the default is the rule's"
+      }
+    },
+    {
+      "name": "emphasis: tie-break reversed",
+      "file": "scripts/doom.mjs",
+      "search": "order.indexOf(a.id) - order.indexOf(b.id)",
+      "replace": "order.indexOf(b.id) - order.indexOf(a.id)",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "at equal chroma, the first"
+      }
+    },
+    {
+      "name": "emphasis: without each swatch's dark block",
+      "file": "src/generate.ts",
+      "search": "      parts.push(block(`${selM}${DARK}`, [...emphasisVariables(m, \"dark\", false), ...dark]))",
+      "replace": "      void selM",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "changes ui.accent, highlight and the graph's accent, and nothing else"
+      }
+    },
+    {
+      "name": "emphasis: the default without checking its roles",
+      "file": "src/tokens.ts",
+      "search": "        if (v !== pred[mode][hue])",
+      "replace": "        if (false)",
+      "test": {
+        "file": "test/tokens.test.ts",
+        "filter": "the default's tones are ui.accent"
+      }
+    },
+    {
+      "name": "removed: moonlight comes back",
+      "file": "data/doom.json",
+      "search": "    \"tokyo-night\": {",
+      "replace": "    \"moonlight\": {\n      \"dark\": \"doom-tokyo-night\"\n    },\n    \"tokyo-night\": {",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "moonlight is absent"
+      }
+    },
+    {
+      "name": "colour: CIEDE2000 without the chroma weight",
+      "file": "src/color.ts",
+      "search": "const SC = 1 + 0.045 * Cpm",
+      "replace": "const SC = 1 + 0.0045 * Cpm",
+      "test": {
+        "file": "test/contrast.test.ts",
+        "filter": "CIEDE2000"
+      }
+    },
+    {
+      "name": "extract: cond always the final t",
+      "file": "scripts/extract-doom.mjs",
+      "search": "k === last || (string !== undefined && s === string)",
+      "replace": "k === last",
+      "test": {
+        "file": "test/doom.test.ts",
+        "filter": "cond: the defcustom string's clause"
+      }
+    },
+    {
+      "name": "extract: cond without requiring the final t",
+      "file": "scripts/extract-doom.mjs",
+      "search": "if (p !== \"t\") fails(\"cond ends with a (t value) clause\")",
+      "replace": "if (false) fails(\"cond ends with a (t value) clause\")",
+      "test": {
+        "file": "test/doom.test.ts",
+        "filter": "cond: without the final t"
+      }
+    },
+    {
+      "name": "extract: cond with any condition",
+      "file": "scripts/extract-doom.mjs",
+      "search": "p[0] !== \"equal\" || ",
+      "replace": "",
+      "test": {
+        "file": "test/doom.test.ts",
+        "filter": "cond: a condition other than equal"
+      }
+    },
+    {
+      "name": "extract: cond without asking for the option",
+      "file": "scripts/extract-doom.mjs",
+      "search": "typeof p[1] !== \"string\" || ",
+      "replace": "",
+      "test": {
+        "file": "test/doom.test.ts",
+        "filter": "cond: equal between two strings"
+      }
+    },
+    {
+      "name": "extract: cond without asking for the string",
+      "file": "scripts/extract-doom.mjs",
+      "search": " || typeof p[2]?.string !== \"string\"",
+      "replace": "",
+      "test": {
+        "file": "test/doom.test.ts",
+        "filter": "cond: equal with a symbol"
+      }
+    },
+    {
+      "name": "extract: cond with a three-way equal",
+      "file": "scripts/extract-doom.mjs",
+      "search": "p.length !== 3 || ",
+      "replace": "",
+      "test": {
+        "file": "test/doom.test.ts",
+        "filter": "cond: equal with three arguments"
+      }
+    },
+    {
+      "name": "extract: cond with two-value clauses",
+      "file": "scripts/extract-doom.mjs",
+      "search": "c.length !== 2",
+      "replace": "c.length < 2",
+      "test": {
+        "file": "test/doom.test.ts",
+        "filter": "cond: a clause with two values"
+      }
+    },
+    {
+      "name": "extract: cond with two options",
+      "file": "scripts/extract-doom.mjs",
+      "search": "if (options.size !== 1)",
+      "replace": "if (false)",
+      "test": {
+        "file": "test/doom.test.ts",
+        "filter": "cond: two options"
+      }
+    },
+    {
+      "name": "extract: cond without looking at the defcustom",
+      "file": "scripts/extract-doom.mjs",
+      "search": "if (v !== \"nil\" && v !== \"t\" && string === undefined)",
+      "replace": "if (v === undefined)",
+      "test": {
+        "file": "test/doom.test.ts",
+        "filter": "cond: an option without a defcustom"
+      }
+    },
+    {
+      "name": "extract: cond with only the t",
+      "file": "scripts/extract-doom.mjs",
+      "search": "if (args.length < 2)",
+      "replace": "if (args.length < 1)",
+      "test": {
+        "file": "test/doom.test.ts",
+        "filter": "cond: only the t"
+      }
+    },
+    {
+      "name": "hand-written: the default comes from the rule",
+      "file": "scripts/doom.mjs",
+      "search": "  return { pred, candidates: swatches(against, [pred]) }",
+      "replace": "  const ms = swatches(against)\n  return { pred: defaultId(ms, against), candidates: ms }",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "the default is the usual one"
+      }
+    },
+    {
+      "name": "hand-written: references as colours in the palette",
+      "file": "src/generate.ts",
+      "search": "out.push([variable(group, role, mode), (references && asVar(p, mode, group, role)) || v])",
+      "replace": "out.push([variable(group, role, mode), (references && !p.emphasis && asVar(p, mode, group, role)) || v])",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "without data-emphasis, the output is the same as without its swatches"
+      }
+    },
+    {
+      "name": "emphasis: not pinning what follows ui.accent",
+      "file": "src/generate.ts",
+      "search": "            out.push([variable(group, role, md), valueFor(p, md, group, role)])",
+      "replace": "            out.push()",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "each swatch changes ui.accent"
+      }
+    },
+    {
+      "name": "emphasis: the dark block does not return the light one's",
+      "file": "src/generate.ts",
+      "search": "  return [...own, ...ofLight]",
+      "replace": "  return own",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "each swatch changes ui.accent"
+      }
+    },
+    {
+      "name": "hand-written: gruvbox light composed",
+      "file": "data/doom.json",
+      "search": "    \"gruvbox\": {\n      \"light\": \"doom-gruvbox-light\",\n",
+      "replace": "    \"gruvbox\": {\n",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "gruvbox offers its yellow"
+      }
+    },
+    {
+      "name": "hand-written: measured against Doom's red",
+      "file": "scripts/doom.mjs",
+      "search": "danger: v.diagram.blocked",
+      "replace": "danger: S[m].red",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "monokai: its swatches"
+      }
+    },
+    {
+      "name": "hand-written: gruvbox with its hard variant",
+      "file": "data/doom.json",
+      "search": "\"bg\": \"#282828\"",
+      "replace": "\"bg\": \"#1d2021\"",
+      "test": {
+        "file": "test/emphasis.test.ts",
+        "filter": "the Doom themes' background is our gruvbox's"
+      }
+    },
+    {
+      "name": "hand-written: the block without removing the earlier one",
+      "file": "scripts/doom.mjs",
+      "search": "  return i < 0 ? text : text.slice(0, i)",
+      "replace": "  return text",
+      "test": {
+        "file": "test/doom.test.ts",
+        "filter": "their hand-written part, as is"
+      }
+    },
+    {
+      "name": "workers: SLURM_CPUS_PER_TASK does not count",
+      "file": "test/workers.ts",
+      "search": "Number(env.SLURM_CPUS_PER_TASK)",
+      "replace": "Number(undefined)",
+      "test": {
+        "file": "test/workers.test.ts",
+        "filter": "win over those seen"
+      }
+    },
+    {
+      "name": "workers: the minimum is all of them (clashes with a lower --maxWorkers)",
+      "file": "test/workers.ts",
+      "search": "minWorkers: 1 }",
+      "replace": "minWorkers: seen }",
+      "test": {
+        "file": "test/workers.test.ts",
+        "filter": "the minimum does not exceed the maximum"
+      }
+    },
+    {
+      "name": "workers: vitest.config.ts does not use them",
+      "file": "vitest.config.ts",
+      "search": ", ...workers()",
+      "replace": "",
+      "test": {
+        "file": "test/workers.test.ts",
+        "filter": "vitest.config.ts uses them"
+      }
+    },
+    {
+      "name": "links: monokai light with the earlier one",
+      "file": "palettes/monokai.yaml",
+      "search": "link: \"#00748a\"",
+      "replace": "link: \"#0b7a91\"",
+      "test": {
+        "file": "test/contrast.test.ts",
+        "filter": "^palette monokai mode light the links reach 4.5:1 on background and panel, in every palette$"
+      }
+    },
+    {
+      "name": "links: solarized light with Doom's blue",
+      "file": "palettes/solarized.yaml",
+      "search": "link: \"#006dad\"",
+      "replace": "link: \"#268bd2\"",
+      "test": {
+        "file": "test/contrast.test.ts",
+        "filter": "^palette solarized mode light the links reach 4.5:1 on background and panel, in every palette$"
+      }
+    },
+    {
+      "name": "links: solarized light grey (another hue)",
+      "file": "palettes/solarized.yaml",
+      "search": "link: \"#006dad\"",
+      "replace": "link: \"#4d4d4d\"",
+      "test": {
+        "file": "test/doom.test.ts",
+        "filter": "the links, its blue, with its hue"
+      }
+    },
+    {
+      "name": "links: doom without moving the blue",
+      "file": "scripts/doom.mjs",
+      "search": "link: link(S.blue, S.bg, panel, mode)",
+      "replace": "link: S.blue",
+      "test": {
+        "file": "test/doom.test.ts",
+        "filter": "each is what the generator produces"
+      }
+    },
+    {
+      "name": "links: doom on the page only",
+      "file": "scripts/doom.mjs",
+      "search": "moveL(blue, background, on(TEXT_AA, background, panel))",
+      "replace": "moveL(blue, background, on(TEXT_AA, background))",
+      "test": {
+        "file": "test/doom.test.ts",
+        "filter": "each is what the generator produces"
+      }
+    }
+  ]
+}
