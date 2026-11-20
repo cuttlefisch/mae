@@ -628,6 +628,7 @@ Deploy the latest build.
     /// code grew 12x-34x; a behaviour-preserving quadratic lookup (each line
     /// re-finding its node in the list) grew 113x-249x. 64x sits between them.
     #[test]
+    #[ignore = "timing: non-gating, run by the perf workflow (.github/workflows/perf.yml)"]
     fn agenda_build_grows_linearly_not_quadratically() {
         // Interleaved best of five, in equal windows (#947): the small agenda
         // is timed over 16 builds (the size ratio), so both windows last about
