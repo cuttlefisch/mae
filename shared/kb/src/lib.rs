@@ -3405,11 +3405,17 @@ mod tests {
         assert_eq!(small.search("needle").len(), 6, "needle-0,97,..,485");
         assert_eq!(large.search("needle").len(), 83);
 
+        // Equal windows: the small search is timed over 16 runs (the size
+        // ratio), so both windows last about as long and are equally exposed to
+        // preemption. One 91 us run against one 8.5 ms run measured 93x on
+        // macOS CI for code that grows ~16x.
         let (mut bs, mut bl) = (f64::MAX, f64::MAX);
         for _ in 0..7 {
             let t = std::time::Instant::now();
-            std::hint::black_box(small.search("needle"));
-            bs = bs.min(t.elapsed().as_secs_f64());
+            for _ in 0..16 {
+                std::hint::black_box(small.search("needle"));
+            }
+            bs = bs.min(t.elapsed().as_secs_f64() / 16.0);
             let t = std::time::Instant::now();
             std::hint::black_box(large.search("needle"));
             bl = bl.min(t.elapsed().as_secs_f64());

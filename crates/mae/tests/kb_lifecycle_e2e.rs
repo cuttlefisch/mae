@@ -388,13 +388,20 @@ fn growth_ratio(
     op: impl Fn(&CozoKbStore) -> usize,
 ) -> (f64, f64, f64) {
     const ROUNDS: usize = 7;
+    // Equal windows (#947): the small store is timed over `reps` runs (the size
+    // ratio), so both windows last about as long and are equally exposed to
+    // preemption; one short run against one long run lets a busy runner inflate
+    // only the large side.
+    let reps = (large_n / small_n).max(1);
     let (_t1, small) = populated_store(small_n);
     let (_t2, large) = populated_store(large_n);
     let (mut best_small, mut best_large) = (f64::MAX, f64::MAX);
     for _ in 0..ROUNDS {
         let t = Instant::now();
-        std::hint::black_box(op(&small));
-        best_small = best_small.min(t.elapsed().as_secs_f64());
+        for _ in 0..reps {
+            std::hint::black_box(op(&small));
+        }
+        best_small = best_small.min(t.elapsed().as_secs_f64() / reps as f64);
         let t = Instant::now();
         std::hint::black_box(op(&large));
         best_large = best_large.min(t.elapsed().as_secs_f64());

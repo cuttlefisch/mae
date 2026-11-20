@@ -866,6 +866,7 @@ mod tests {
 
         let (ratio, s, l) = crate::timing::growth_ratio(
             7,
+            16,
             || {
                 std::hint::black_box(diagnostics(&vm, &small, "p.scm"));
             },
@@ -903,6 +904,7 @@ mod tests {
 
         let (ratio, s, l) = crate::timing::growth_ratio(
             7,
+            16,
             || {
                 std::hint::black_box(document_symbols(&small, "p.scm"));
             },
