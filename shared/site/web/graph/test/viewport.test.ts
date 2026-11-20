@@ -8,6 +8,7 @@ import {
   fitClear,
   fitWith,
   freeAreas,
+  onFrame,
   overlaps,
   panBy,
   smoothZoom,
@@ -523,6 +524,60 @@ describe("zoomAnchor: what + and − zoom about", () => {
           expect(v1.cy).toBeCloseTo(v0.cy, 6);
         }
       }),
+      params,
+    );
+  });
+});
+
+describe("onFrame: where a point of the drawing lands, from the viewBox written (no layout read)", () => {
+  // What the browser does with a viewBox and preserveAspectRatio's default
+  // (xMidYMid meet), written out from the SVG spec: the scale that fits both
+  // sides, the box centred along the other.
+  const browser = (vb: string, sw: number, sh: number, [x, y]: [number, number]) => {
+    const [bx, by, bw, bh] = vb.split(" ").map(Number) as [number, number, number, number];
+    const sx = sw / bw;
+    const sy = sh / bh;
+    const s = Math.min(sx, sy);
+    const tx = (sw - bw * s) / 2 - bx * s;
+    const ty = (sh - bh * s) / 2 - by * s;
+    return [x * s + tx, y * s + ty] as const;
+  };
+
+  it("a viewBox narrower than the frame: centred across, with the scale of its height", () => {
+    // 100 x 100 units in 400 x 200 px: 2 px a unit, 100 px of margin either side.
+    expect(onFrame("0 0 100 100", 400, 200, [0, 0])).toEqual([100, 0]);
+    expect(onFrame("0 0 100 100", 400, 200, [100, 100])).toEqual([300, 200]);
+  });
+
+  it("a viewBox wider than the frame: centred down, with the scale of its width", () => {
+    expect(onFrame("-50 -10 100 20", 200, 200, [-50, -10])).toEqual([0, 80]);
+    expect(onFrame("-50 -10 100 20", 200, 200, [50, 10])).toEqual([200, 120]);
+  });
+
+  it("property: under the viewBox the camera writes, the camera's own projection (to a thousandth of a unit) and the browser's", () => {
+    fc.assert(
+      fc.property(
+        viewArb,
+        finite(50, 2000),
+        finite(50, 2000),
+        finite(-1, 1),
+        finite(-1, 1),
+        (v, sw, sh, fx, fy) => {
+          // A point on screen or near it.
+          const x = v.cx + (fx * sw) / v.k;
+          const y = v.cy + (fy * sh) / v.k;
+          const vb = viewBox(v, sw, sh);
+          const [px, py] = onFrame(vb, sw, sh, [x, y]);
+          const [bx, by] = browser(vb, sw, sh, [x, y]);
+          expect(Math.abs(px - bx)).toBeLessThan(1e-6 * Math.max(1, Math.abs(bx)));
+          expect(Math.abs(py - by)).toBeLessThan(1e-6 * Math.max(1, Math.abs(by)));
+          // The viewBox is rounded to a thousandth of a unit.
+          const [cx, cy] = toScreen(v, x, y, sw, sh);
+          const tol = 0.002 * v.k * (1 + Math.abs(fx) + Math.abs(fy)) * 4 + 1e-6;
+          expect(Math.abs(px - cx!)).toBeLessThan(tol);
+          expect(Math.abs(py - cy!)).toBeLessThan(tol);
+        },
+      ),
       params,
     );
   });

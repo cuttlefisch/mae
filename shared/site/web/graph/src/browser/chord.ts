@@ -276,9 +276,9 @@ async function drawView(view: HTMLElement, container: HTMLElement, current: stri
     });
     return;
   }
-  // Back to the ring: what the hierarchical views set on the shared SVG goes.
+  // Back to the ring: what the hierarchical views set on the shared view goes (their
+  // scale, --k, is on their own layers, which go with them).
   view.classList.remove("hier");
-  svg.style.removeProperty("--k");
   // The ring: every note of the site, one ring, all its links (the subgraph
   // folding of 0.2.3 is gone, owner 2026-11-06: the ring shows linkage; the
   // hierarchical views are for moving around).

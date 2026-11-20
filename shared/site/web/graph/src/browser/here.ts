@@ -63,7 +63,11 @@ function occupancy(svg: SVGSVGElement, w: number, h: number, discs: Disc[]) {
   const canvas = document.createElement("canvas");
   canvas.width = cols;
   canvas.height = rows;
-  const ctx = canvas.getContext("2d");
+  // A canvas that is read back (getImageData), drawn on the CPU: on the GPU, reading
+  // it waited for everything to be drawn there and copied back (2026-11-19, headless
+  // Chromium, 2,600 notes and 10,000 links: 35 ms on the rings, 676 ms on the
+  // balloons, every time a zoom stopped).
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return makeGrid(w, h, CELL, new Uint8Array(cols * rows));
   const s = svg.getBoundingClientRect();
   const put = (m: DOMMatrix | null) => {
@@ -125,8 +129,13 @@ export interface Here {
    * that is not a stroke.
    */
   update(anchor: [number, number], discs: Disc[], ring?: number): void;
-  /** While the camera moves: the marker follows the note, without measuring again. */
-  follow(anchor: [number, number]): void;
+  /**
+   * While the camera moves: the marker follows the note, without measuring again.
+   * `anchor` is in px of the `w` x `h` frame (whoever moves the camera knows where
+   * it lands: viewport.ts, onFrame), read from nothing in the document, which has
+   * just changed.
+   */
+  follow(anchor: [number, number], w: number, h: number): void;
   /** No current note drawn: nothing. */
   clear(): void;
   /**
@@ -304,10 +313,9 @@ export function mountHere(a: HereArgs): Here {
       last = { p, anchor, halo, off };
       draw(p, anchor, halo, off);
     },
-    follow(anchorU) {
+    follow(at, w, h) {
       if (!last) return;
-      const s = svg.getBoundingClientRect();
-      const [anchor, off] = clamp(project(anchorU), s.width, s.height);
+      const [anchor, off] = clamp(at, w, h);
       const dx = anchor[0] - last.anchor[0];
       const dy = anchor[1] - last.anchor[1];
       const p = last.p;

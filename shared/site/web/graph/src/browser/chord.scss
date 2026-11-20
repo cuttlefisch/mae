@@ -483,7 +483,9 @@
     }
 
     // Widths in screen pixels at every zoom: the drawing scales, strokes do not.
-    // --k (screen px per drawing unit) is set by the script on every frame.
+    // --k (screen px per drawing unit) is set by the script on every frame, on the
+    // label and callout layers only (hier.ts, apply): set on the svg, every wedge
+    // and link inherited it and was restyled on every step of a zoom.
     .chord-graph-shape,
     .chord-graph-edge,
     .chord-graph-tree,

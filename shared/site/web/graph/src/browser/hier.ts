@@ -31,6 +31,7 @@ import { hereFloor, reserve } from "../here";
 import {
   fit,
   fitWith,
+  onFrame,
   panBy,
   smoothZoom,
   union,
@@ -451,24 +452,58 @@ export function drawHierarchical(a: HierArgs): void {
   const kept = (key: string | undefined) =>
     key !== undefined &&
     (key === tabStop || key === hovered || elOf.get(key) === document.activeElement);
-  const cull = () => {
+  // With `keep` (the camera moving: a gesture, an animation), only what comes near
+  // the view is added; what moves away is removed when it stops (rest, below).
+  // Removing and re-adding thousands of elements on every frame of one gesture
+  // (wheeling in and out) was wasted work, and what is drawn is never more than with
+  // the whole graph in view.
+  const cull = (keep = false) => {
     const [w, hh] = size();
     const area = visibleArea(cam, w, hh);
-    sync(wedgesDrawn, nodeLayer, (d) => kept(d.key) || meets(d.box, area));
+    sync(wedgesDrawn, nodeLayer, (d) => (keep && d.on) || kept(d.key) || meets(d.box, area));
     // A link by the boxes of its pieces: its whole box can reach far around the view.
     // Put back in list order: the ones that go on top go there again.
-    if (sync(edgesDrawn, edgeLayer, (d) => linkMeets(d, area))) restack();
+    if (sync(edgesDrawn, edgeLayer, (d) => (keep && d.on) || linkMeets(d, area))) restack();
   };
+  // The only things that change while the camera moves: the svg's viewBox and the
+  // labels' scale (--k: their font and halo, in screen px), on their two layers. Set
+  // on the svg, every wedge and link of the site inherited --k and had its style
+  // recomputed on every zoom step (2026-11-19, 2,600 notes and 10,000 links: 30,874
+  // elements per step, about 60 ms, inside the wheel handler).
+  let frameReq = 0;
+  let kNow = "";
+  // The camera moving (a gesture, an animation): from moveTo or goTo until rest.
+  let moving = false;
   const apply = (v: View) => {
+    cancelAnimationFrame(frameReq);
+    frameReq = 0;
+    // The size, read before anything is written (rect: once a frame).
     const [w, hh] = size();
     cam = v;
-    svg.setAttribute("viewBox", viewBox(v, w, hh));
-    svg.style.setProperty("--k", String(v.k));
+    const vb = viewBox(v, w, hh);
+    svg.setAttribute("viewBox", vb);
+    // (Dragging does not change the scale: the labels are left alone.)
+    const k = String(v.k);
+    if (k !== kNow) {
+      kNow = k;
+      labelLayer.style.setProperty("--k", k);
+      calloutLayer.style.setProperty("--k", k);
+    }
     cameras.set(view, { layout: thisScene, page: a.current, view: v });
-    cull();
+    cull(true);
     // The marker moves with its note while the camera does; placed anew on settling.
+    // Where it lands, from the arithmetic and not from the just-changed document
+    // (viewport.ts, onFrame).
     const at = hereAt();
-    if (at) mark.follow(at.anchor);
+    if (at) mark.follow(onFrame(vb, w, hh, at.anchor), w, hh);
+  };
+  // A gesture (the wheel, a pinch, a drag): each event moves the camera, and it is
+  // drawn once a frame, with the latest (owner, 2026-11-19: the zoom "chugs"; two or
+  // three wheel events per frame, and each one drew).
+  const moveTo = (v: View) => {
+    moving = true;
+    cam = v;
+    if (!frameReq) frameReq = requestAnimationFrame(() => apply(cam));
   };
   // What the reader is looking at, kept for the other box and for redraws.
   const remember = (v: View) => {
@@ -488,6 +523,7 @@ export function drawHierarchical(a: HierArgs): void {
       return;
     }
     aim = target;
+    moving = true;
     const [w] = size();
     const z = smoothZoom(cam, target, w);
     const ms = Math.min(900, Math.max(180, z.S * 400));
@@ -603,10 +639,16 @@ export function drawHierarchical(a: HierArgs): void {
   };
 
   // ---- labels that depend on the scale: resting ones culled, callouts placed ----
+  // The camera stopped: away with what was left far off (cull), and the labels.
   let settleTimer = 0;
+  const rest = () => {
+    moving = false;
+    cull();
+    labels();
+  };
   const settle = () => {
     window.clearTimeout(settleTimer);
-    settleTimer = window.setTimeout(labels, 60);
+    settleTimer = window.setTimeout(rest, 60);
   };
   // The screen boxes of a text's letters.
   const glyphs = (t: SVGTextElement): DOMRect[] => {
@@ -842,7 +884,11 @@ export function drawHierarchical(a: HierArgs): void {
         for (const p of edgesOf.get(pageOf(key) ?? "") ?? []) p.classList.add("hover");
     }
     restack();
-    labels();
+    // While the camera moves, notes pass under a still pointer: its label waits until
+    // it stops (placing the labels and the marker measures the whole drawing: 50 to
+    // 200 ms on a large site, mid-gesture).
+    if (moving) settle();
+    else labels();
   };
   // The links' order (order.ts): the found note's over the rest, the current page's
   // over those, a hovered note's on top while it is hovered.
@@ -905,7 +951,7 @@ export function drawHierarchical(a: HierArgs): void {
     const [px, py] = inside(local(ev));
     const dy = ev.deltaMode === 1 ? ev.deltaY * 16 : ev.deltaY;
     const [kMin, kMax] = limits();
-    apply(zoomAt(cam, Math.exp(-dy * 0.0015), px, py, w, hh, kMin, kMax));
+    moveTo(zoomAt(cam, Math.exp(-dy * 0.0015), px, py, w, hh, kMin, kMax));
     remember(cam);
     settle();
   };
@@ -942,7 +988,7 @@ export function drawHierarchical(a: HierArgs): void {
         const [w, hh] = size();
         const [px, py] = gestureAt(g);
         const [kMin, kMax] = limits();
-        apply(zoomAt(gesture, g.scale, px, py, w, hh, kMin, kMax));
+        moveTo(zoomAt(gesture, g.scale, px, py, w, hh, kMin, kMax));
         remember(cam);
         settle();
       },
@@ -990,13 +1036,16 @@ export function drawHierarchical(a: HierArgs): void {
       pointers.set(ev.pointerId, now);
       const [w, hh] = size();
       const [kMin, kMax] = limits();
+      // Two fingers zoom, one pans; either way the camera moves once a frame (moveTo).
+      let next: View;
       if (pinch && pointers.size === 2) {
         const [p, q] = [...pointers.values()] as [[number, number], [number, number]];
         const d = Math.hypot(p[0] - q[0], p[1] - q[1]);
-        apply(zoomAt(pinch.v, d / pinch.d, pinch.mx, pinch.my, w, hh, kMin, kMax));
+        next = zoomAt(pinch.v, d / pinch.d, pinch.mx, pinch.my, w, hh, kMin, kMax);
       } else {
-        apply(panBy(cam, now[0] - prev[0], now[1] - prev[1]));
+        next = panBy(cam, now[0] - prev[0], now[1] - prev[1]);
       }
+      moveTo(next);
       remember(cam);
       settle();
     },
@@ -1270,6 +1319,7 @@ export function drawHierarchical(a: HierArgs): void {
   const stop = () => {
     resize.disconnect();
     cancelAnimationFrame(anim);
+    cancelAnimationFrame(frameReq);
     window.clearTimeout(settleTimer);
   };
   signal.addEventListener("abort", stop);

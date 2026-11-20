@@ -253,6 +253,25 @@ export function viewBox(v: View, sw: number, sh: number): string {
   return `${f(v.cx - w / 2)} ${f(v.cy - h / 2)} ${f(w)} ${f(h)}`;
 }
 
+/**
+ * Where a drawing point lands, in px of an sw x sh frame, given the viewBox attribute
+ * `vb` (as viewBox, above, writes it) and the default preserveAspectRatio (xMidYMid
+ * meet): the browser's own arithmetic, without asking it. Asking (getScreenCTM,
+ * getBoundingClientRect) right after changing the viewBox made it restyle and lay
+ * out the whole drawing inside the wheel handler, on every event (2026-11-19: the
+ * "You are here" marker following its note).
+ */
+export function onFrame(
+  vb: string,
+  sw: number,
+  sh: number,
+  [x, y]: readonly [number, number],
+): [number, number] {
+  const [bx, by, bw, bh] = vb.split(" ").map(Number) as [number, number, number, number];
+  const s = Math.min(sw / bw, sh / bh);
+  return [(x - bx) * s + (sw - bw * s) / 2, (y - by) * s + (sh - bh * s) / 2];
+}
+
 /** Zoom by `factor` keeping the drawing point under screen point (px, py) fixed. */
 export function zoomAt(
   v: View,

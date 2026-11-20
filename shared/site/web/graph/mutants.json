@@ -5,8 +5,15 @@
   "targets": {
     "unit": {
       "type": "vitest",
-      "command": ["npx", "--no-install", "vitest", "run"],
-      "files": ["test/**/*.test.ts"],
+      "command": [
+        "npx",
+        "--no-install",
+        "vitest",
+        "run"
+      ],
+      "files": [
+        "test/**/*.test.ts"
+      ],
       "env": {
         "FC_NO_SHRINK": "1"
       }
@@ -1306,6 +1313,24 @@
       "test": {
         "file": "test/mount.test.ts",
         "filter": "not vacuous"
+      }
+    },
+    {
+      "name": "viewport: onFrame does not centre the viewBox in the frame",
+      "file": "src/viewport.ts",
+      "find": "return [(x - bx) * s + (sw - bw * s) / 2, (y - by) * s + (sh - bh * s) / 2];",
+      "replace": "return [(x - bx) * s, (y - by) * s];",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "viewport: onFrame takes the scale of the side that overflows",
+      "file": "src/viewport.ts",
+      "find": "const s = Math.min(sw / bw, sh / bh);",
+      "replace": "const s = Math.max(sw / bw, sh / bh);",
+      "test": {
+        "file": "test/viewport.test.ts"
       }
     }
   ]
