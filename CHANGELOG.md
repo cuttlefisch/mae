@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.178] - 2026-11-20
+
+
+
+
+### Features
+
+- *(site)* The graph and palette packages, ADR-119's browser runtime ([ea00f74](https://github.com/cuttlefisch/mae/commit/ea00f7447a7968aa42dfb20ef9212c820c61ef48))
+
+### Performance
+
+- *(site)* Zooming the graph no longer redraws it ([def3635](https://github.com/cuttlefisch/mae/commit/def363533c9cbfb3383148e0a7b536ae4e8afd60))
+
+### Testing
+
+- Timing tests no longer gate a merge; they run daily in perf.yml ([72e9bac](https://github.com/cuttlefisch/mae/commit/72e9baccc8474268856e886b020667f211b69ae3))
+
 ## [0.14.177] - 2026-11-20
 
 
@@ -14,6 +31,10 @@ All notable changes to this project will be documented in this file.
 ### Testing
 
 - *(perf)* Time growth ratios in equal windows (#947) ([9abacf5](https://github.com/cuttlefisch/mae/commit/9abacf58ae4020029a608d3397a273e2e33a9604))
+
+### Miscellaneous
+
+- Bump version to 0.14.177 ([00e2238](https://github.com/cuttlefisch/mae/commit/00e22386b9d0c93a6331f026833e520dfd6be4ee))
 
 ## [0.14.176] - 2026-11-18
 
