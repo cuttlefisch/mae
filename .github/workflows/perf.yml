@@ -1,0 +1,45 @@
+name: Perf (growth ratios, non-gating)
+
+# The tests that measure time: each checks that a cost grows linearly, not
+# quadratically, by comparing a small and a 16x larger input in equal-length
+# timing windows (issue #947). They catch real regressions, but on shared
+# runners a timing assertion is the commonest source of flaky red CI, so they no
+# longer gate a merge (testing rule, 2026-11-20). They are `#[ignore]`d in the
+# normal suites and run here daily and on demand. A failure here is a
+# regression to investigate (GitHub notifies the owner of a failed scheduled
+# run); it blocks nothing.
+
+on:
+  schedule:
+    - cron: "30 5 * * *" # daily, 05:30 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  growth-ratios:
+    name: perf / growth ratios
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-rust
+        with:
+          nextest: "true"
+          # Debug profile below, so incremental is off to keep sccache useful.
+          sccache: "true"
+          incremental: "false"
+          mold: "true"
+      - name: Unit-level growth ratios (kb search, agenda, scheme stepping, LSP)
+        run: >-
+          cargo nextest run -p mae-kb -p mae-core -p mae-scheme --no-capture
+          --run-ignored only
+          -E 'test(/grows?_linearly_not_quadratically/)'
+      - name: KB store growth ratios (load_all, FTS)
+        run: >-
+          cargo test --package mae --test kb_lifecycle_e2e --
+          --ignored --test-threads=1 --nocapture
+          grows_linearly scan_the_corpus
+        env:
+          MAE_KB_LIFECYCLE: "1"

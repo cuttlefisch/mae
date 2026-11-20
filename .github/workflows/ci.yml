@@ -1021,7 +1021,10 @@ jobs:
         run: MAE_DAEMON_BIN="$(pwd)/daemon/target/debug/mae-daemon" cargo test -p mae --bin mae daemon_lifecycle_e2e -- --test-threads=1 --nocapture
         timeout-minutes: 5
       - name: KB lifecycle E2E (CozoDB)
-        run: cargo test --package mae --test kb_lifecycle_e2e -- --ignored --test-threads=1 --nocapture
+        # The two growth-ratio (timing) tests run in perf.yml, non-gating.
+        run: >-
+          cargo test --package mae --test kb_lifecycle_e2e -- --ignored --test-threads=1 --nocapture
+          --skip grows_linearly --skip scan_the_corpus
         timeout-minutes: 5
         env:
           MAE_KB_LIFECYCLE: "1"

@@ -848,6 +848,7 @@ mod tests {
     /// quadratic mutant (every form compared with every other, release) grew
     /// 90x-94x. 48x sits between them (mutants/timing-947.toml).
     #[test]
+    #[ignore = "timing: non-gating, run by the perf workflow (.github/workflows/perf.yml)"]
     fn diagnostics_grow_linearly_not_quadratically() {
         const DIAG_MAX_RATIO: f64 = 48.0;
         let vm = Vm::new();
@@ -890,6 +891,7 @@ mod tests {
     /// 15.3x-16.9x in debug; a quadratic mutant (each line rescans the earlier
     /// ones, release) grew 217x-232x. 64x sits between them.
     #[test]
+    #[ignore = "timing: non-gating, run by the perf workflow (.github/workflows/perf.yml)"]
     fn document_symbols_grow_linearly_not_quadratically() {
         const SYMBOLS_MAX_RATIO: f64 = 64.0;
         let src = |n: usize| -> String {
