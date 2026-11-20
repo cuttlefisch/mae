@@ -1,0 +1,29 @@
+{
+  "name": "mae-site-palette",
+  "version": "0.0.0",
+  "private": true,
+  "description": "MAE site palettes: CSS variables and JSON tokens, checked for contrast when derived",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "vite-node src/build.ts",
+    "doom": "vite-node scripts/from-doom.mjs",
+    "pretest": "npm run build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext .ts,.mjs --max-warnings=0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.0",
+    "typescript": "^5.9.3",
+    "vite-node": "^2.1.9",
+    "vitest": "^2.1.9",
+    "yaml": "^2.8.2"
+  }
+}

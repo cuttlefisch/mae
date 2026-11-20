@@ -1,0 +1,1337 @@
+{
+  "schema": 1,
+  "readme": "Mutation list for the unit suite (Vitest). Each entry names the file, the exact text (which must occur exactly once in it), its replacement, and the test file (and, when given, the test-name filter) that must fail with the mutant applied. MAE's tools/mutate does not run Vitest targets yet, so nothing executes this list in CI; that is a follow-up.",
+  "timeout": 300,
+  "targets": {
+    "unit": {
+      "type": "vitest",
+      "command": [
+        "npx",
+        "--no-install",
+        "vitest",
+        "run"
+      ],
+      "files": [
+        "test/**/*.test.ts"
+      ],
+      "env": {
+        "FC_NO_SHRINK": "1"
+      }
+    }
+  },
+  "mutants": [
+    {
+      "name": "constellation: no angular margin for a child's rings",
+      "file": "src/constellation.ts",
+      "find": "const half = Math.asin(Math.min(1, (p.r + spacing / 2) / len));",
+      "replace": "const half = 0;",
+      "test": {
+        "file": "test/constellation.test.ts"
+      }
+    },
+    {
+      "name": "constellation: never push subtrees out when they do not fit",
+      "file": "src/constellation.ts",
+      "find": "if (total(0) > A) {",
+      "replace": "if (false) {",
+      "test": {
+        "file": "test/constellation.test.ts"
+      }
+    },
+    {
+      "name": "constellation: chord in a ring ends on the outer edge",
+      "file": "src/constellation.ts",
+      "find": "const p = at(wedgeOf.get(A.id)!, \"inner\");",
+      "replace": "const p = at(wedgeOf.get(A.id)!, \"outer\");",
+      "test": {
+        "file": "test/constellation.test.ts"
+      }
+    },
+    {
+      "name": "constellation: a ring keeps one empty slot (n items in n + 1 parts)",
+      "file": "src/constellation.ts",
+      "find": "const slots = Math.max(1, items.length);",
+      "replace": "const slots = Math.max(1, items.length + 1);",
+      "test": {
+        "file": "test/constellation.test.ts",
+        "filter": "fills a ring with its"
+      }
+    },
+    {
+      "name": "constellation: wedges narrower than their slot (gaps between them)",
+      "file": "src/constellation.ts",
+      "find": "a1: (i + 1) * step,",
+      "replace": "a1: (i + 0.9) * step,",
+      "test": {
+        "file": "test/constellation.test.ts",
+        "filter": "fills a ring with its"
+      }
+    },
+    {
+      "name": "constellation: a ring sized for one slot more than its wedges",
+      "file": "src/constellation.ts",
+      "find": "const r1 = Math.max(minR, (slots * wedgeLen) / TAU);",
+      "replace": "const r1 = Math.max(minR, ((slots + 1) * wedgeLen) / TAU);",
+      "test": {
+        "file": "test/constellation.test.ts",
+        "filter": "sizes a ring by its wedges"
+      }
+    },
+    {
+      "name": "sunburst: allocate overshoots each share",
+      "file": "src/sunburst.ts",
+      "find": "const b = i === n - 1 ? a1 : a + out[i]!;",
+      "replace": "const b = i === n - 1 ? a1 : a + out[i]! * 1.01;",
+      "test": {
+        "file": "test/sunburst.test.ts"
+      }
+    },
+    {
+      "name": "sunburst: leaves-inside folders one ring too far in",
+      "file": "src/sunburst.ts",
+      "find": ": maxFolder - node.depth + 1;",
+      "replace": ": maxFolder - node.depth;",
+      "test": {
+        "file": "test/sunburst.test.ts"
+      }
+    },
+    {
+      "name": "sunburst: minimum angle ignored",
+      "file": "src/sunburst.ts",
+      "find": "const min = node.depth === 0 ? min0 : node.depth === 1 ? min1 : 0;",
+      "replace": "const min = 0;",
+      "test": {
+        "file": "test/sunburst.test.ts"
+      }
+    },
+    {
+      "name": "sunburst: a one-page site drops its page",
+      "file": "src/sunburst.ts",
+      "find": "if (node.children.length === 0 && !(node.depth === 0 && node.own)) return;",
+      "replace": "if (node.children.length === 0) return;",
+      "test": {
+        "file": "test/scene.test.ts"
+      }
+    },
+    {
+      "name": "hierarchy: structural only for the direct parent",
+      "file": "src/hierarchy.ts",
+      "find": "for (let p = b.parent; p; p = p.parent) if (p === a) return true;\n    return false;",
+      "replace": "return b.parent === a;",
+      "test": {
+        "file": "test/hierarchy.test.ts"
+      }
+    },
+    {
+      "name": "hierarchy: size forgets the own page",
+      "file": "src/hierarchy.ts",
+      "find": "f.size = (f.own ? 1 : 0) + f.children",
+      "replace": "f.size = 0 + f.children",
+      "test": {
+        "file": "test/hierarchy.test.ts"
+      }
+    },
+    {
+      "name": "hierarchy: notes before folders",
+      "file": "src/hierarchy.ts",
+      "find": "Number(a.kind === \"note\") - Number(b.kind === \"note\")",
+      "replace": "Number(b.kind === \"note\") - Number(a.kind === \"note\")",
+      "test": {
+        "file": "test/hierarchy.test.ts"
+      }
+    },
+    {
+      "name": "labels: merge offset sign flipped",
+      "file": "src/labels.ts",
+      "find": "sum: a.sum + b.sum - a.count * b.count * gap,",
+      "replace": "sum: a.sum + b.sum + a.count * b.count * gap,",
+      "test": {
+        "file": "test/labels.test.ts"
+      }
+    },
+    {
+      "name": "labels: no cut at the widest gap",
+      "file": "src/labels.ts",
+      "find": "if (g > widest) {",
+      "replace": "if (false) {",
+      "test": {
+        "file": "test/labels.test.ts"
+      }
+    },
+    {
+      "name": "viewport: zoomAt ignores the pointer",
+      "file": "src/viewport.ts",
+      "find": "return { cx: ux - (px - sw / 2) / k, cy: uy - (py - sh / 2) / k, k };",
+      "replace": "return { cx: v.cx, cy: v.cy, k };",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "viewport: fit ignores padding",
+      "file": "src/viewport.ts",
+      "find": "const all: Box = { x: p, y: p, w: W - 2 * p, h: H - 2 * p };",
+      "replace": "const all: Box = { x: 0, y: 0, w: W, h: H };",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "viewport: fit without the padding clamp",
+      "file": "src/viewport.ts",
+      "find": "const p = Math.min(pad, Math.min(W, H) / 4);",
+      "replace": "const p = pad;",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "viewport: smooth zoom with the cancelling log form",
+      "file": "src/viewport.ts",
+      "find": "const r0 = -Math.asinh(b0);",
+      "replace": "const r0 = Math.log(Math.sqrt(b0 * b0 + 1) - b0);",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "scene: own pages left out of the keyboard tree",
+      "file": "src/scene.ts",
+      "find": "    if (o) out.push(o);",
+      "replace": "    if (o && false) out.push(o);",
+      "test": {
+        "file": "test/scene.test.ts"
+      }
+    },
+    {
+      "name": "scene: sectorBox forgets the axes it crosses",
+      "file": "src/scene.ts",
+      "find": "for (let q = Math.ceil(a0 / (Math.PI / 2)); q * (Math.PI / 2) <= a1; q++)",
+      "replace": "for (let q = 0; q < 0; q++)",
+      "test": {
+        "file": "test/scene.test.ts"
+      }
+    },
+    {
+      "name": "scene: focus box without neighbours",
+      "file": "src/scene.ts",
+      "find": "    if (k) boxes.push(byKey.get(k)!.box);",
+      "replace": "    if (k && false) boxes.push(byKey.get(k)!.box);",
+      "test": {
+        "file": "test/scene.test.ts"
+      }
+    },
+    {
+      "name": "layouts: switch on by default again",
+      "file": "src/layouts.ts",
+      "find": "opts.layouts.filter(isLayout) : [];",
+      "replace": "opts.layouts.filter(isLayout) : [...LAYOUTS];",
+      "test": {
+        "file": "test/layouts.test.ts"
+      }
+    },
+    {
+      "name": "types: the merged default offers chord again",
+      "file": "src/types.ts",
+      "find": "  layouts: [],",
+      "replace": "  layouts: [\"chord\"],",
+      "test": {
+        "file": "test/layouts.test.ts"
+      }
+    },
+    {
+      "name": "layouts: the flip offered without the sunburst",
+      "file": "src/layouts.ts",
+      "find": "const orientations = offered.includes(\"sunburst\")",
+      "replace": "const orientations = true",
+      "test": {
+        "file": "test/layouts.test.ts"
+      }
+    },
+    {
+      "name": "layouts: the default orientation not always among the flip's",
+      "file": "src/layouts.ts",
+      "find": "new Set<unknown>([...askedO, orientation])",
+      "replace": "new Set<unknown>([...askedO])",
+      "test": {
+        "file": "test/layouts.test.ts"
+      }
+    },
+    {
+      "name": "layouts: a stored flip honoured after the site withdraws it",
+      "file": "src/layouts.ts",
+      "find": "r.orientations.find((x) => x === stored)",
+      "replace": "ORIENTATIONS.find((x) => x === stored)",
+      "test": {
+        "file": "test/layouts.test.ts"
+      }
+    },
+    {
+      "name": "scene: label arcs down to a half circle again",
+      "file": "src/scene.ts",
+      "find": "export const LABEL_ARC_MIN = Math.PI / 2 + 0.3;",
+      "replace": "export const LABEL_ARC_MIN = Math.PI / 2;",
+      "test": {
+        "file": "test/scene.test.ts"
+      }
+    },
+    {
+      "name": "scene: label arcs up to nearly a whole circle",
+      "file": "src/scene.ts",
+      "find": "export const LABEL_ARC_MAX = Math.PI - 0.3;",
+      "replace": "export const LABEL_ARC_MAX = Math.PI - 0.05;",
+      "test": {
+        "file": "test/scene.test.ts"
+      }
+    },
+    {
+      "name": "scene: bottom-half labels upside down",
+      "file": "src/scene.ts",
+      "find": "const flip = deg > 90 && deg < 270; // bottom half",
+      "replace": "const flip = false; // bottom half",
+      "test": {
+        "file": "test/scene.test.ts"
+      }
+    },
+    {
+      "name": "scene: label arcs no longer than their segment",
+      "file": "src/scene.ts",
+      "find": "Math.max(LABEL_ARC_MIN, span / 2 + 0.2)",
+      "replace": "Math.max(LABEL_ARC_MIN, span / 2 - 0.2)",
+      "test": {
+        "file": "test/scene.test.ts"
+      }
+    },
+    {
+      "name": "scene: label room not capped at its arc",
+      "file": "src/scene.ts",
+      "find": "room: rm * Math.min(s.a1 - s.a0, 2 * LABEL_ARC_MAX),",
+      "replace": "room: rm * (s.a1 - s.a0),",
+      "test": {
+        "file": "test/scene.test.ts"
+      }
+    },
+    {
+      "name": "scene: label arcs rounded to 0.01 again",
+      "file": "src/scene.ts",
+      "find": "const f = (v: number) => (Math.round(v * 1000) / 1000).toString();\n  const half = Math.min(LABEL_ARC_MAX",
+      "replace": "const f = (v: number) => (Math.round(v * 100) / 100).toString();\n  const half = Math.min(LABEL_ARC_MAX",
+      "test": {
+        "file": "test/scene.test.ts"
+      }
+    },
+    {
+      "name": "cull: no margin across",
+      "file": "src/cull.ts",
+      "find": "const w = (sw / v.k) * (1 + 2 * margin);",
+      "replace": "const w = sw / v.k;",
+      "test": {
+        "file": "test/cull.test.ts"
+      }
+    },
+    {
+      "name": "cull: no margin down",
+      "file": "src/cull.ts",
+      "find": "const h = (sh / v.k) * (1 + 2 * margin);",
+      "replace": "const h = sh / v.k;",
+      "test": {
+        "file": "test/cull.test.ts"
+      }
+    },
+    {
+      "name": "cull: the area off centre",
+      "file": "src/cull.ts",
+      "find": "return { x: v.cx - w / 2, y: v.cy - h / 2, w, h };",
+      "replace": "return { x: v.cx - w, y: v.cy - h / 2, w, h };",
+      "test": {
+        "file": "test/cull.test.ts"
+      }
+    },
+    {
+      "name": "cull: touching does not count",
+      "file": "src/cull.ts",
+      "find": "a.x <= b.x + b.w && b.x <= a.x + a.w",
+      "replace": "a.x < b.x + b.w && b.x < a.x + a.w",
+      "test": {
+        "file": "test/cull.test.ts"
+      }
+    },
+    {
+      "name": "cull: only the x axis",
+      "file": "src/cull.ts",
+      "find": " && a.y <= b.y + b.h && b.y <= a.y + a.h;",
+      "replace": ";",
+      "test": {
+        "file": "test/cull.test.ts"
+      }
+    },
+    {
+      "name": "cull: a label's reach without its height",
+      "file": "src/cull.ts",
+      "find": "const r = l.room + l.height;",
+      "replace": "const r = l.room;",
+      "test": {
+        "file": "test/cull.test.ts"
+      }
+    },
+    {
+      "name": "cull: a label's reach; half of it",
+      "file": "src/cull.ts",
+      "find": "return { x: l.x - r, y: l.y - r, w: 2 * r, h: 2 * r };",
+      "replace": "return { x: l.x - r / 2, y: l.y - r / 2, w: r, h: r };",
+      "test": {
+        "file": "test/cull.test.ts"
+      }
+    },
+    {
+      "name": "cull: less margin",
+      "file": "src/cull.ts",
+      "find": "export const MARGIN = 0.5;",
+      "replace": "export const MARGIN = 0.25;",
+      "test": {
+        "file": "test/cull.test.ts"
+      }
+    },
+    {
+      "name": "cull: splitBezier loses the last piece",
+      "file": "src/cull.ts",
+      "find": "  out.push(rest);\n  return out;",
+      "replace": "  return out;",
+      "test": {
+        "file": "test/cull.test.ts"
+      }
+    },
+    {
+      "name": "cull: splitBezier cuts unequal pieces",
+      "file": "src/cull.ts",
+      "find": "const t = 1 / k;",
+      "replace": "const t = 1 / n;",
+      "test": {
+        "file": "test/cull.test.ts"
+      }
+    },
+    {
+      "name": "cull: a link drawn by its whole box only",
+      "file": "src/cull.ts",
+      "find": "return meets(link.box, area) && link.boxes.some((b) => meets(b, area));",
+      "replace": "return meets(link.box, area);",
+      "test": {
+        "file": "test/cull.test.ts"
+      }
+    },
+    {
+      "name": "cull: links cut in 2",
+      "file": "src/cull.ts",
+      "find": "export const PIECES = 4;",
+      "replace": "export const PIECES = 2;",
+      "test": {
+        "file": "test/cull.test.ts"
+      }
+    },
+    {
+      "name": "cull: links cut in 8",
+      "file": "src/cull.ts",
+      "find": "export const PIECES = 4;",
+      "replace": "export const PIECES = 8;",
+      "test": {
+        "file": "test/cull.test.ts"
+      }
+    },
+    {
+      "name": "sunburst: a link carries its whole box as its only piece",
+      "file": "src/sunburst.ts",
+      "find": "boxes: pieceBoxes(bz) }",
+      "replace": "boxes: [boxOf(pts)] }",
+      "test": {
+        "file": "test/cull.test.ts"
+      }
+    },
+    {
+      "name": "sunburst: a link's pieces from its control points; not its Béziers",
+      "file": "src/sunburst.ts",
+      "find": "boxes: pieceBoxes(bz) }",
+      "replace": "boxes: pieceBoxes([pts]) }",
+      "test": {
+        "file": "test/cull.test.ts"
+      }
+    },
+    {
+      "name": "search: accents count",
+      "file": "src/search.ts",
+      "find": "    .normalize(\"NFD\")\n    .replace(/\\p{M}+/gu, \"\")\n    .toLocaleLowerCase",
+      "replace": "    .normalize(\"NFD\")\n    .toLocaleLowerCase",
+      "test": {
+        "file": "test/search.test.ts"
+      }
+    },
+    {
+      "name": "search: case counts",
+      "file": "src/search.ts",
+      "find": "    .toLocaleLowerCase(\"und\")\n",
+      "replace": "",
+      "test": {
+        "file": "test/search.test.ts"
+      }
+    },
+    {
+      "name": "search: the middle of a word matches",
+      "file": "src/search.ts",
+      "find": "ws.some((w) => w.startsWith(q))",
+      "replace": "ws.some((w) => w.includes(q))",
+      "test": {
+        "file": "test/search.test.ts"
+      }
+    },
+    {
+      "name": "search: any word is enough in the title",
+      "file": "src/search.ts",
+      "find": "if (qs.every((w) => startsAWord(p.titleWords, w))) {",
+      "replace": "if (qs.some((w) => startsAWord(p.titleWords, w))) {",
+      "test": {
+        "file": "test/search.test.ts"
+      }
+    },
+    {
+      "name": "search: the text is not searched",
+      "file": "src/search.ts",
+      "find": "} else if (qs.every((w) => startsAWord(p.textWords, w))) {",
+      "replace": "} else if (false) {",
+      "test": {
+        "file": "test/search.test.ts"
+      }
+    },
+    {
+      "name": "search: the path does not count",
+      "file": "src/search.ts",
+      "find": "qs.every((w) => startsAWord(p.pathWords, w) || startsAWord(p.titleWords, w))",
+      "replace": "qs.every((w) => startsAWord(p.titleWords, w))",
+      "test": {
+        "file": "test/search.test.ts"
+      }
+    },
+    {
+      "name": "search: no rank for a title that starts with it",
+      "file": "src/search.ts",
+      "find": "rank = startsWithIt.test(p.title) ? 0 : ",
+      "replace": "rank = ",
+      "test": {
+        "file": "test/search.test.ts"
+      }
+    },
+    {
+      "name": "search: no rank for the phrase in the title",
+      "file": "src/search.ts",
+      "find": "phraseAt(p.title, phrase) >= 0 ? 1 : 2;",
+      "replace": "2;",
+      "test": {
+        "file": "test/search.test.ts"
+      }
+    },
+    {
+      "name": "search: no rank for the phrase in the text",
+      "file": "src/search.ts",
+      "find": "rank = at >= 0 ? 3 : 4;",
+      "replace": "rank = 4;",
+      "test": {
+        "file": "test/search.test.ts"
+      }
+    },
+    {
+      "name": "search: a phrase only with spaces between its words («0.1.0 Page» level with «0.0.1 Page»)",
+      "file": "src/search.ts",
+      "find": "ws.map(escape).join(\"[^\\\\p{L}\\\\p{N}]+\")",
+      "replace": "ws.map(escape).join(\" \")",
+      "test": {
+        "file": "test/search.test.ts"
+      }
+    },
+    {
+      "name": "search: mentions do not count",
+      "file": "src/search.ts",
+      "find": "      b.mentions - a.mentions ||\n",
+      "replace": "",
+      "test": {
+        "file": "test/search.test.ts"
+      }
+    },
+    {
+      "name": "search: longer titles first",
+      "file": "src/search.ts",
+      "find": "a.title.length - b.title.length",
+      "replace": "b.title.length - a.title.length",
+      "test": {
+        "file": "test/search.test.ts"
+      }
+    },
+    {
+      "name": "search: no snippet",
+      "file": "src/search.ts",
+      "find": "    if (at >= 0) f.snippet = snippetAt(p.note.text ?? \"\", at);\n",
+      "replace": "",
+      "test": {
+        "file": "test/search.test.ts"
+      }
+    },
+    {
+      "name": "search: no limit",
+      "file": "src/search.ts",
+      "find": "return found.slice(0, limit).map((x) => x.f);",
+      "replace": "return found.map((x) => x.f);",
+      "test": {
+        "file": "test/search.test.ts"
+      }
+    },
+    {
+      "name": "search: an empty query lists everything",
+      "file": "src/search.ts",
+      "find": "if (qs.length === 0 || limit <= 0) return [];",
+      "replace": "if (limit <= 0) return [];",
+      "test": {
+        "file": "test/search.test.ts"
+      }
+    },
+    {
+      "name": "fitWith: no floor",
+      "file": "src/viewport.ts",
+      "find": "  return v.k >= base.k * floor ? v : base;",
+      "replace": "  return v;",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "fitWith: a lower floor",
+      "file": "src/viewport.ts",
+      "find": "export const FIT_FLOOR = 0.75;",
+      "replace": "export const FIT_FLOOR = 0.1;",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "names: an unknown stored choice is taken as is",
+      "file": "src/browser/names.ts",
+      "find": "(NAMES_MODES as readonly string[]).includes(stored ?? \"\")",
+      "replace": "stored !== null",
+      "test": {
+        "file": "test/names.test.ts"
+      }
+    },
+    {
+      "name": "names: the default is every label",
+      "file": "src/browser/names.ts",
+      "find": ": \"current\";",
+      "replace": ": \"all\";",
+      "test": {
+        "file": "test/names.test.ts"
+      }
+    },
+    {
+      "name": "freeAreas: the controls take no room",
+      "file": "src/viewport.ts",
+      "find": "const obs = controls.map((c) => grow(c, gap)).filter((c) => overlaps(c, all));",
+      "replace": "const obs: Box[] = [];",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "freeAreas: no gap around a control",
+      "file": "src/viewport.ts",
+      "find": "const obs = controls.map((c) => grow(c, gap)).filter((c) => overlaps(c, all));",
+      "replace": "const obs = controls.map((c) => grow(c, 0)).filter((c) => overlaps(c, all));",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "freeAreas: rooms inside larger rooms kept",
+      "file": "src/viewport.ts",
+      "find": ".filter((c) => !free.some((d) => d !== c && inside(c, d)))",
+      "replace": ".filter(() => true)",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "freeAreas: no room left gives nothing",
+      "file": "src/viewport.ts",
+      "find": "return maximal.length > 0 ? maximal : [all];",
+      "replace": "return maximal;",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "fit: the first room; not the one that leaves the drawing largest",
+      "file": "src/viewport.ts",
+      "find": "if (k > best) {",
+      "replace": "if (best === -Infinity) {",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "fit: centred on the screen; not in its room",
+      "file": "src/viewport.ts",
+      "find": "const ox = (area!.x + area!.w / 2 - Math.max(1, sw) / 2) / k;",
+      "replace": "const ox = 0;",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "fitClear: what is under a control is never looked at",
+      "file": "src/viewport.ts",
+      "find": "if (hit.length === 0) return v;",
+      "replace": "return v;",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "fitClear: every control takes room; over the drawing or not",
+      "file": "src/viewport.ts",
+      "find": "const kept: Box[] = [];",
+      "replace": "const kept: Box[] = [...controls];",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "fitClear: without parts; the controls are ignored",
+      "file": "src/viewport.ts",
+      "find": "if (parts === null) return fit(box, sw, sh, pad, kMin, kMax, controls);",
+      "replace": "if (parts === null) return fit(box, sw, sh, pad, kMin, kMax, []);",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "fitWith: the controls are not passed on",
+      "file": "src/viewport.ts",
+      "find": "const controls = room.controls ?? [];",
+      "replace": "const controls: Box[] = [];",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "fitWith: the names may go under a control",
+      "file": "src/viewport.ts",
+      "find": "parts && [...parts, ...e]",
+      "replace": "parts",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "fitWith: two passes; not until the scale settles",
+      "file": "src/viewport.ts",
+      "find": "for (let pass = 0; pass < 8; pass++) {",
+      "replace": "for (let pass = 0; pass < 2; pass++) {",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "here: occupancy misses a box's last partial cell",
+      "file": "src/here.ts",
+      "find": "const c1 = Math.min(g.cols, Math.ceil((b.x + b.w) / g.cell));",
+      "replace": "const c1 = Math.min(g.cols, Math.floor((b.x + b.w) / g.cell));",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: no margin around the label",
+      "file": "src/here.ts",
+      "find": "const n = busy(g, grow(b, GAP));",
+      "replace": "const n = busy(g, b);",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: the label may sit on the marker's ring",
+      "file": "src/here.ts",
+      "find": "if (n === 0 && distTo(b, a.anchor) >= a.halo + GAP) {",
+      "replace": "if (n === 0) {",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: pin never puts its label above",
+      "file": "src/here.ts",
+      "find": "if (pinned(above)) return",
+      "replace": "if (false) return",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: pin never puts its label below",
+      "file": "src/here.ts",
+      "find": "if (pinned(below)) return",
+      "replace": "if (false) return",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: pin's label over whatever is drawn",
+      "file": "src/here.ts",
+      "find": "const pinned = (b: Box) => inFrame(a.grid, b) && busy(a.grid, grow(b, GAP)) === 0;",
+      "replace": "const pinned = (b: Box) => inFrame(a.grid, b);",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: the fallback is not the nearest free place",
+      "file": "src/here.ts",
+      "find": "        if (d < bestD) {",
+      "replace": "        if (best === null || d > bestD) {",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: the last resort may sit under a control",
+      "file": "src/here.ts",
+      "find": "        !(a.controls ?? []).some((c) => overlapsBox(c, b))",
+      "replace": "        true",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: a cut title longer than its room",
+      "file": "src/here.ts",
+      "find": "if (measure(t.slice(0, mid).trimEnd() + \"…\") <= max) lo = mid;",
+      "replace": "if (measure(t.slice(0, mid).trimEnd()) <= max) lo = mid;",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: a cut title loses most of itself at an early space",
+      "file": "src/here.ts",
+      "find": "if (space > (cut.length * 2) / 3) cut = cut.slice(0, space);",
+      "replace": "if (space > 0) cut = cut.slice(0, space);",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: framing leaves no margin around the label",
+      "file": "src/here.ts",
+      "find": "const m = (2 * GAP) / k;",
+      "replace": "const m = 0;",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: framing leaves the pin's room on the wrong side",
+      "file": "src/here.ts",
+      "find": "(dy <= 0 ? ay - tall : ay)",
+      "replace": "(dy > 0 ? ay - tall : ay)",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: a narrow frame's graph gives up as much as a wide one's",
+      "file": "src/here.ts",
+      "find": "(width >= HERE_NARROW ? HERE_FLOOR : FIT_FLOOR)",
+      "replace": "HERE_FLOOR",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: hereMarker callout or radial taken for an unknown value (no word of the removal)",
+      "file": "src/here.ts",
+      "find": "if (m === \"callout\" || m === \"radial\")",
+      "replace": "if (false)",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: an unknown hereMarker falls back in silence",
+      "file": "src/here.ts",
+      "find": "if (m !== \"pin\" && m !== \"none\")",
+      "replace": "if (false)",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: hereMarkers ignored instead of refused",
+      "file": "src/here.ts",
+      "find": "if (opts.hereMarkers !== undefined)",
+      "replace": "if (false)",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: hereToggle not checked to be a boolean",
+      "file": "src/here.ts",
+      "find": "if (typeof t !== \"boolean\")",
+      "replace": "if (false)",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: hereMarker none with hereToggle accepted",
+      "file": "src/here.ts",
+      "find": "if (m === \"none\" && t)",
+      "replace": "if (false)",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: hereMarker none still draws the pin",
+      "file": "src/here.ts",
+      "find": "return { shown: m === \"pin\", toggle: t };",
+      "replace": "return { shown: true, toggle: t };",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: the switch on unasked (resolveHere)",
+      "file": "src/here.ts",
+      "find": "const t = opts.hereToggle ?? false;",
+      "replace": "const t = opts.hereToggle ?? true;",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: the switch on unasked (defaultOptions)",
+      "file": "src/types.ts",
+      "find": "  hereToggle: false,",
+      "replace": "  hereToggle: true,",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: no pin unasked (defaultOptions)",
+      "file": "src/types.ts",
+      "find": "  hereMarker: \"pin\",",
+      "replace": "  hereMarker: \"none\",",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: the reader's hidden choice ignored",
+      "file": "src/here.ts",
+      "find": "  return stored !== \"hidden\";",
+      "replace": "  return true;",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: the sidebar follows the reader's choice (unlike «Names»)",
+      "file": "src/here.ts",
+      "find": "if (!inDialog || r?.toggle !== true) return true;",
+      "replace": "if (r?.toggle !== true) return true;",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: a hidden choice kept once the site drops the switch",
+      "file": "src/here.ts",
+      "find": "if (!inDialog || r?.toggle !== true) return true;",
+      "replace": "if (!inDialog) return true;",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "here: hereMarker none ignored by the page",
+      "file": "src/here.ts",
+      "find": "  if (r?.shown === false) return false;\n",
+      "replace": "",
+      "test": {
+        "file": "test/here.test.ts"
+      }
+    },
+    {
+      "name": "zoom: + and − always about the centre (zoomAnchor ignores the note)",
+      "file": "src/viewport.ts",
+      "find": "    if (x >= 0 && y >= 0 && x <= sw && y <= sh) return [x, y];",
+      "replace": "    if (false) return [x, y];",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "zoom: a note out of view serves as the fixed point",
+      "file": "src/viewport.ts",
+      "find": "    if (x >= 0 && y >= 0 && x <= sw && y <= sh) return [x, y];",
+      "replace": "    return [x, y];",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "zoom: a note on the frame's edge does not count as in view",
+      "file": "src/viewport.ts",
+      "find": "    if (x >= 0 && y >= 0 && x <= sw && y <= sh) return [x, y];",
+      "replace": "    if (x > 0 && y > 0 && x < sw && y < sh) return [x, y];",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "limits: the top with no margin over the legible (1.5 → 1.2)",
+      "file": "src/scene.ts",
+      "find": "export const LEGIBLE_MARGIN = 1.5;",
+      "replace": "export const LEGIBLE_MARGIN = 1.2;",
+      "test": {
+        "file": "test/limits.test.ts"
+      }
+    },
+    {
+      "name": "limits: zooming out to half the fitted scale (0.8 → 0.5)",
+      "file": "src/scene.ts",
+      "find": "export const FIT_MARGIN = 0.8;",
+      "replace": "export const FIT_MARGIN = 0.5;",
+      "test": {
+        "file": "test/limits.test.ts"
+      }
+    },
+    {
+      "name": "limits: a tiny graph does not zoom in at all (2 → 1)",
+      "file": "src/scene.ts",
+      "find": "export const MIN_ZOOM_IN = 2;",
+      "replace": "export const MIN_ZOOM_IN = 1;",
+      "test": {
+        "file": "test/limits.test.ts"
+      }
+    },
+    {
+      "name": "limits: the smallest leaf is the first one; not the one with the least room",
+      "file": "src/scene.ts",
+      "find": "    if (extent < least) {",
+      "replace": "    if (least === Infinity) {",
+      "test": {
+        "file": "test/limits.test.ts"
+      }
+    },
+    {
+      "name": "limits: the smallest leaf, measured only along its length",
+      "file": "src/scene.ts",
+      "find": "    const extent = Math.min(i.label.room, i.label.height);",
+      "replace": "    const extent = i.label.room;",
+      "test": {
+        "file": "test/limits.test.ts"
+      }
+    },
+    {
+      "name": "limits: folders count as leaves",
+      "file": "src/scene.ts",
+      "find": "    if (i.shape !== \"note\" || i.page === undefined || !i.label) continue;",
+      "replace": "    if (!i.label) continue;",
+      "test": {
+        "file": "test/limits.test.ts"
+      }
+    },
+    {
+      "name": "workers: SLURM_CPUS_PER_TASK does not count",
+      "file": "test/workers.ts",
+      "find": "Number(env.SLURM_CPUS_PER_TASK)",
+      "replace": "Number(undefined)",
+      "test": {
+        "file": "test/workers.test.ts",
+        "filter": "win over the ones seen"
+      }
+    },
+    {
+      "name": "workers: the minimum is all of them (clashes with a lower --maxWorkers)",
+      "file": "test/workers.ts",
+      "find": "minWorkers: 1 }",
+      "replace": "minWorkers: vistos }",
+      "test": {
+        "file": "test/workers.test.ts",
+        "filter": "the minimum never exceeds the maximum"
+      }
+    },
+    {
+      "name": "workers: vitest.config.ts does not use them",
+      "file": "vitest.config.ts",
+      "find": "    // As many workers as the job has cores, not one fewer (test/workers.ts).\n    ...workers(),\n",
+      "replace": "",
+      "test": {
+        "file": "test/workers.test.ts",
+        "filter": "vitest.config.ts uses them"
+      }
+    },
+    {
+      "name": "slugOfHref: a link to another origin taken for a note",
+      "file": "src/link.ts",
+      "find": "  if (url.origin !== new URL(page).origin) return null;\n",
+      "replace": "",
+      "test": {
+        "file": "test/link.test.ts"
+      }
+    },
+    {
+      "name": "slugOfHref: the base path left on",
+      "file": "src/link.ts",
+      "find": "    path = path.slice(root.length);",
+      "replace": "    void path;",
+      "test": {
+        "file": "test/link.test.ts"
+      }
+    },
+    {
+      "name": "slugOfHref: the path not decoded",
+      "file": "src/link.ts",
+      "find": "    path = decodeURIComponent(path);",
+      "replace": "    void path;",
+      "test": {
+        "file": "test/link.test.ts"
+      }
+    },
+    {
+      "name": "slugOfHref: a link outside the base path taken for a note",
+      "file": "src/link.ts",
+      "find": "    if (path !== root && !path.startsWith(`${root}/`)) return null;\n",
+      "replace": "",
+      "test": {
+        "file": "test/link.test.ts"
+      }
+    },
+    {
+      "name": "mount: the hint for the hierarchical views not built",
+      "file": "src/mount.ts",
+      "find": "\"chord-graph-sr chord-graph-hint-hier\"",
+      "replace": "\"chord-graph-sr\"",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "every selector queried on the mount's elements exists"
+      }
+    },
+    {
+      "name": "mount: the search status not built",
+      "file": "src/mount.ts",
+      "find": "\"chord-graph-sr chord-graph-find-status\"",
+      "replace": "\"chord-graph-sr\"",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "every selector queried on the mount's elements exists"
+      }
+    },
+    {
+      "name": "mount: the view switch never built",
+      "file": "src/mount.ts",
+      "find": "offered.length > 1",
+      "replace": "offered.length > 99",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "every selector queried on the mount's elements exists"
+      }
+    },
+    {
+      "name": "mount: the flip built unasked",
+      "file": "src/mount.ts",
+      "find": "orientations.length > 1",
+      "replace": "orientations.length > 0",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "the optional controls only when asked for"
+      }
+    },
+    {
+      "name": "mount: the «You are here» settings not checked",
+      "file": "src/mount.ts",
+      "find": "const here = resolveHere(opts);",
+      "replace": "const here = { shown: true, toggle: false };",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "a removed «You are here» setting throws"
+      }
+    },
+    {
+      "name": "chord: a title written as markup",
+      "file": "src/browser/chord.ts",
+      "find": "caption.textContent = n?.title ?? \"\";",
+      "replace": "caption.innerHTML = n?.title ?? \"\";",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "a title with markup is text"
+      }
+    },
+    {
+      "name": "chord: a click intercepted without navigate",
+      "file": "src/browser/chord.ts",
+      "find": "if (!raw || !go) return;",
+      "replace": "if (!raw) return;",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "navigate absent"
+      }
+    },
+    {
+      "name": "chord: navigate never called",
+      "file": "src/browser/chord.ts",
+      "find": "      go(url);\n",
+      "replace": "",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "navigate given"
+      }
+    },
+    {
+      "name": "mount: dispose forgets the cleanups",
+      "file": "src/mount.ts",
+      "find": "disposed = true;\n      runCleanups(root);",
+      "replace": "disposed = true;",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "dispose runs the registered cleanups"
+      }
+    },
+    {
+      "name": "mount: dispose leaves its elements",
+      "file": "src/mount.ts",
+      "find": "      root.remove();\n",
+      "replace": "",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "dispose runs the registered cleanups"
+      }
+    },
+    {
+      "name": "mount: the wiring goes on after dispose",
+      "file": "src/browser/chord.ts",
+      "find": "if (contexts.get(container) !== ctx) return;",
+      "replace": "",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "disposed while the data is on its way"
+      }
+    },
+    {
+      "name": "mount: update forgets the cleanups",
+      "file": "src/mount.ts",
+      "find": "      if (disposed) return;\n      runCleanups(root);\n",
+      "replace": "      if (disposed) return;\n",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "update runs the pending cleanups"
+      }
+    },
+    {
+      "name": "mount: update does not mark the page visited",
+      "file": "src/mount.ts",
+      "find": "    if (opts.markVisited) markVisited(slug);\n",
+      "replace": "",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "update runs the pending cleanups"
+      }
+    },
+    {
+      "name": "mount: markVisited false ignored",
+      "file": "src/mount.ts",
+      "find": "if (opts.markVisited) markVisited(slug);",
+      "replace": "markVisited(slug);",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "markVisited false"
+      }
+    },
+    {
+      "name": "mount: body-link listeners without bodyLinks",
+      "file": "src/mount.ts",
+      "find": "if (bodyLinks !== undefined) watchBodyLinks(root, bodyLinks, basePath);",
+      "replace": "watchBodyLinks(root, bodyLinks ?? \"a\", basePath);",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "absent: no listener on the document"
+      }
+    },
+    {
+      "name": "chord: body-link listeners once per mount, not per document",
+      "file": "src/browser/chord.ts",
+      "find": "  if (!w) {\n",
+      "replace": "  if (w || !w) {\n",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "one pair of listeners per document"
+      }
+    },
+    {
+      "name": "chord: body-link listeners left behind by the last mount",
+      "file": "src/browser/chord.ts",
+      "find": "  doc.removeEventListener(\"pointerover\", w.over);\n",
+      "replace": "",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "removed with the last"
+      }
+    },
+    {
+      "name": "chord: a body link read without the base path",
+      "file": "src/browser/chord.ts",
+      "find": "window.location.href, found.basePath)",
+      "replace": "window.location.href, \"\")",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "inside the base path peeks"
+      }
+    },
+    {
+      "name": "find: a query on a receiver the contract does not know",
+      "file": "src/browser/find.ts",
+      "find": "const input = box.querySelector<HTMLInputElement>(\".chord-graph-find-input\");",
+      "replace": "const findBox = box;\n  const input = findBox.querySelector<HTMLInputElement>(\".chord-graph-find-input\");",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "every receiver is known"
+      }
+    },
+    {
+      "name": "mount contract: the source scan finds nothing (the contract passes vacuously)",
+      "file": "test/mount.test.ts",
+      "find": "querySelector(?:All)?\\s*(?:<",
+      "replace": "querySelectorNone(?:All)?\\s*(?:<",
+      "test": {
+        "file": "test/mount.test.ts",
+        "filter": "not vacuous"
+      }
+    },
+    {
+      "name": "viewport: onFrame does not centre the viewBox in the frame",
+      "file": "src/viewport.ts",
+      "find": "return [(x - bx) * s + (sw - bw * s) / 2, (y - by) * s + (sh - bh * s) / 2];",
+      "replace": "return [(x - bx) * s, (y - by) * s];",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    },
+    {
+      "name": "viewport: onFrame takes the scale of the side that overflows",
+      "file": "src/viewport.ts",
+      "find": "const s = Math.min(sw / bw, sh / bh);",
+      "replace": "const s = Math.max(sw / bw, sh / bh);",
+      "test": {
+        "file": "test/viewport.test.ts"
+      }
+    }
+  ]
+}

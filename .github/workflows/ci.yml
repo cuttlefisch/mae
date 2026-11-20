@@ -99,6 +99,7 @@ jobs:
       export-js: ${{ steps.filter.outputs.export-js }}
       org-wasm: ${{ steps.filter.outputs.org-wasm }}
       crypto-wasm: ${{ steps.filter.outputs.crypto-wasm }}
+      site-web: ${{ steps.filter.outputs.site-web }}
       version-bump-only: ${{ steps.version-bump-only.outputs.result }}
     steps:
       - uses: actions/checkout@v7
@@ -155,6 +156,9 @@ jobs:
               - 'Cargo.lock'
               - '.github/workflows/ci.yml'
               - '.github/actions/**'
+            site-web:
+              - 'shared/site/web/**'
+              - '.github/workflows/ci.yml'
       # Untrusted commit-message content is passed via `env:`, never
       # interpolated directly into the script body -- avoids the classic
       # GitHub Actions script-injection footgun (a `${{ }}` expression
@@ -860,6 +864,33 @@ jobs:
           echo "$line" >> "$GITHUB_STEP_SUMMARY"
       - name: Size budget, ABI, native-vs-WASM differential, interop, entropy, residue
         run: make crypto-wasm-test
+
+  # ADR-119 D2's browser runtime: the TypeScript packages under shared/site/web
+  # (the chord graph and the palettes), one npm workspace with one lock. Node
+  # only, so Linux only. Their browser-level tests are not run here (they need
+  # a built site and a headless browser); the unit tests, typecheck and lint are.
+  site-web:
+    name: site web runtime (typecheck, lint, vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: changes
+    if: needs.changes.outputs.site-web == 'true'
+    defaults:
+      run:
+        working-directory: shared/site/web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Install (from the lock)
+        run: npm ci --no-audit --no-fund
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Tests (vitest run; the palette package builds dist/ first)
+        run: npm test
 
   lint-nonrust:
     name: shell + yaml + ansible lint
