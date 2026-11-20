@@ -3207,6 +3207,7 @@ mod tests {
     /// 14.5x-15.0x in debug; a mutant that copies the source map on every step
     /// (release) grew 229x-239x. 64x sits between them.
     #[test]
+    #[ignore = "timing: non-gating, run by the perf workflow (.github/workflows/perf.yml)"]
     fn stepping_grows_linearly_not_quadratically() {
         const STEP_MAX_RATIO: f64 = 64.0;
         let (ratio, s, l) =

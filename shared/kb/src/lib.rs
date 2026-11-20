@@ -3398,6 +3398,7 @@ mod tests {
     /// 16.1x-17.9x in debug; a quadratic mutant (every entry compared with every
     /// entry, release) grew 217x-234x. 64x sits between them.
     #[test]
+    #[ignore = "timing: non-gating, run by the perf workflow (.github/workflows/perf.yml)"]
     fn search_grows_linearly_not_quadratically() {
         const SEARCH_MAX_RATIO: f64 = 64.0;
         let small = kb_with_nodes(500);
