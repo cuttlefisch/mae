@@ -1,6 +1,18 @@
 name: Auto-update PR branches
 
-# Keep open PR branches merged up to date with main, automatically.
+# MANUAL ONLY since 2026-11-20 (run it from the Actions tab to update every PR).
+#
+# On every push to main this used to merge main into EVERY open PR, and every
+# merge pushes main twice (the merge, then the version bump), so each merge
+# re-ran ~35 min of CI on every other open PR: 32% of the last 60 CI runs were
+# cancelled as superseded. A PR now gets main merged just in time, when it is
+# the one about to merge: GitHub's "Update branch" button, or `gh pr
+# update-branch` (what the merge script does when a PR is BEHIND). That is one
+# CI run per merge, and `strict` still guarantees each PR is tested against the
+# main it lands on. (GitHub's merge queue is organization-only.)
+#
+# Original rationale, kept below: keep open PR branches merged up to date with
+# main, automatically.
 #
 # WHY THIS EXISTS
 #
@@ -32,8 +44,6 @@ name: Auto-update PR branches
 #     summary reports them all.
 
 on:
-  push:
-    branches: [main]
   # Manual trigger for the case where main did not move but branches are stale
   # anyway — e.g. after protection settings change, or to recover from a run
   # that was cancelled by the concurrency group below.
