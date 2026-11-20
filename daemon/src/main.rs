@@ -109,6 +109,10 @@ async fn main() {
         println!("mae-daemon {VERSION} ({BUILD_SHA})");
         return;
     }
+    if cli.help {
+        print!("{}", cli::USAGE);
+        return;
+    }
 
     let config = match cli.resolve_config() {
         Ok(c) => c,
@@ -168,6 +172,14 @@ async fn main() {
         // Native-KB seed (plan / apply) and export: `seed_cli`, `seed_apply_cli`.
         Some("kb") => std::process::exit(seed_cli::run_kb(&config, &cli.rest).await),
         _ => {}
+    }
+
+    // @ai-caution: [cli] Every known subcommand has returned above, so what
+    // reaches here is a request to serve or a usage error. Serving opens every
+    // store and runs open-time migrations: a typo must never get that far (#955).
+    if let Err(e) = cli.serve_check() {
+        eprintln!("mae-daemon: {e}\n\n{}", cli::USAGE);
+        std::process::exit(2);
     }
 
     // Initialize tracing

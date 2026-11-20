@@ -1,0 +1,64 @@
+# What may make `mae-daemon` serve (#955), and the tests that pin it:
+# daemon/src/cli.rs (`serve_check`, `--help`) and daemon/tests/cli_usage_e2e.rs.
+# Serving is the default, so each mutant re-opens a path where a typo or
+# `--help` starts a full daemon.
+
+[[mutant]]
+id = "daemon-cli/help-flag-ignored-in-main"
+runner = "daemon"
+targets = ["--test", "cli_usage_e2e"]
+filter = "test(help_prints_usage_and_opens_nothing)"
+[[mutant.edit]]
+file = "daemon/src/main.rs"
+find = '''    if cli.help {'''
+replace = '''    if false && cli.help {'''
+
+[[mutant]]
+id = "daemon-cli/serve-check-skipped"
+runner = "daemon"
+targets = ["--test", "cli_usage_e2e"]
+filter = "test(a_mistyped_subcommand_is_a_usage_error_not_a_daemon)"
+[[mutant.edit]]
+file = "daemon/src/main.rs"
+find = '''    if let Err(e) = cli.serve_check() {'''
+replace = '''    if let Err(e) = Ok::<(), String>(()) {'''
+
+[[mutant]]
+id = "daemon-cli/start-no-longer-serves"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(only_a_bare_invocation_or_start_serves)"
+[[mutant.edit]]
+file = "daemon/src/cli.rs"
+find = '''            None | Some("start") => match self.rest.first() {'''
+replace = '''            None => match self.rest.first() {'''
+
+[[mutant]]
+id = "daemon-cli/unknown-flag-not-reported-first"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(anything_else_that_reaches_serving_is_refused_with_the_offending_token)"
+[[mutant.edit]]
+file = "daemon/src/cli.rs"
+find = '''        if let Some(flag) = self.rest.iter().find(|a| a.starts_with('-')) {'''
+replace = '''        if let Some(flag) = self.rest.iter().find(|_| false) {'''
+
+[[mutant]]
+id = "daemon-cli/stray-argument-to-serve-accepted"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(anything_else_that_reaches_serving_is_refused_with_the_offending_token)"
+[[mutant.edit]]
+file = "daemon/src/cli.rs"
+find = '''                Some(arg) => Err(format!("unexpected argument `{arg}`")),'''
+replace = '''                Some(_) => Ok(()),'''
+
+[[mutant]]
+id = "daemon-cli/help-not-parsed"
+runner = "daemon"
+targets = ["--bin", "mae-daemon"]
+filter = "test(help_is_a_global_flag_wherever_it_appears)"
+[[mutant.edit]]
+file = "daemon/src/cli.rs"
+find = '''                "--help" | "-h" => {'''
+replace = '''                "--help-unused" => {'''
