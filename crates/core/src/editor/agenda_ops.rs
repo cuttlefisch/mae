@@ -603,8 +603,8 @@ Deploy the latest build.
         // took 2.8 ms. `agenda_build_grows_linearly_not_quadratically` guards that.
     }
 
-    /// Best of five `open_agenda` timings over `n` TODO nodes.
-    fn time_agenda(n: usize) -> std::time::Duration {
+    /// An editor whose KB holds `n` TODO nodes.
+    fn agenda_editor(n: usize) -> Editor {
         let mut editor = Editor::new();
         for i in 0..n {
             editor.kb.primary.insert(
@@ -617,14 +617,7 @@ Deploy the latest build.
                 .with_todo_state("TODO"),
             );
         }
-        (0..5)
-            .map(|_| {
-                let start = std::time::Instant::now();
-                editor.open_agenda(AgendaFilter::default());
-                start.elapsed()
-            })
-            .min()
-            .unwrap()
+        editor
     }
 
     /// The agenda is built in time linear in the number of TODO nodes. A ratio,
@@ -636,9 +629,22 @@ Deploy the latest build.
     /// re-finding its node in the list) grew 113x-249x. 64x sits between them.
     #[test]
     fn agenda_build_grows_linearly_not_quadratically() {
-        let small = time_agenda(2_000).as_secs_f64();
-        let large = time_agenda(32_000).as_secs_f64();
-        let ratio = large / small.max(1e-6);
+        // Interleaved best of five, in equal windows (#947): the small agenda
+        // is timed over 16 builds (the size ratio), so both windows last about
+        // as long and are equally exposed to preemption.
+        let (mut s_ed, mut l_ed) = (agenda_editor(2_000), agenda_editor(32_000));
+        let (mut small, mut large) = (f64::MAX, f64::MAX);
+        for _ in 0..5 {
+            let t = std::time::Instant::now();
+            for _ in 0..16 {
+                s_ed.open_agenda(AgendaFilter::default());
+            }
+            small = small.min(t.elapsed().as_secs_f64() / 16.0);
+            let t = std::time::Instant::now();
+            l_ed.open_agenda(AgendaFilter::default());
+            large = large.min(t.elapsed().as_secs_f64());
+        }
+        let ratio = large / small.max(1e-9);
         assert!(
             ratio < 64.0,
             "agenda time grew {ratio:.0}x from 2,000 to 32,000 nodes ({small:.4}s -> {large:.4}s); \

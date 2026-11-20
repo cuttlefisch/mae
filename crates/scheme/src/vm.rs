@@ -3210,7 +3210,7 @@ mod tests {
     fn stepping_grows_linearly_not_quadratically() {
         const STEP_MAX_RATIO: f64 = 64.0;
         let (ratio, s, l) =
-            crate::timing::growth_ratio(5, || step_through(100), || step_through(1600));
+            crate::timing::growth_ratio(5, 16, || step_through(100), || step_through(1600));
         eprintln!("stepping growth 100->1600 lines: {ratio:.1}x ({s:.5}s -> {l:.5}s)");
         assert!(
             ratio < STEP_MAX_RATIO,
