@@ -7,7 +7,7 @@ description = "mae-crypto's WASM facade for the browser: JSON in, JSON out, over
 # lists, so a MAE release changes neither this number nor the artifact's
 # bytes. Bump it by hand when the contract changes; it moves with
 # mae-crypto (tests/api.rs).
-version = "0.1.0"
+version = "0.2.0"
 publish = false
 edition.workspace = true
 license.workspace = true
@@ -28,3 +28,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.23"
 zeroize = "1"
+
+[dev-dependencies]
+# tests/sign_op.rs checks sign_op against the verifier the daemon runs.
+mae-sync = { path = "../sync" }

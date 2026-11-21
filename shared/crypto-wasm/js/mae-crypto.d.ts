@@ -122,6 +122,15 @@ export class MaeCrypto {
   signChallenge(request: ChallengeRequest): SignedChallenge;
 
   /**
+   * Signs a KB content op (ADR-036 F5) with a held key. The module builds the signed message itself
+   * ('maecontent/v1'); the header's author is the key's own fingerprint. Send the result as the top-level
+   * params of `kb/node_update` (beside kb_id, node_id, update), or as `params.content_header` of
+   * `sync/update`. Refusals: 'empty-field', 'nul-in-field', 'bad-request' (incl. a non-canonical epoch),
+   * 'no-key'.
+   */
+  signOp(request: SignOpRequest): ContentOpHeader;
+
+  /**
    * The key's seed, sealed under the passphrase: envelope v1 text. The module NFC-normalises the
    * passphrase; it must then have at least 12 characters ('passphrase-weak').
    */
@@ -149,3 +158,28 @@ export class MaeCrypto {
   /** Zeroes the instance's memory (every held key) and refuses later calls. A failed call does the same. */
   dispose(): void;
 }
+
+export interface SignOpRequest {
+  key: KeyHandle;
+  kb_id: string;
+  node_id: string;
+  /** The author's yrs state vector at authoring time. */
+  base_sv: B64;
+  /** The author's epoch in the KB, as canonical decimal text: a random u64, so never a JS number. */
+  epoch: string;
+  /** The yrs update bytes the op carries. */
+  update: B64;
+  /** Unix seconds; defaults to this host's clock. */
+  issued_at?: number;
+}
+
+/** The signed ADR-036 header, exactly as the daemon reads it. */
+export interface ContentOpHeader {
+  author: string;
+  epoch: string;
+  issued_at: number;
+  base_sv: B64;
+  sig: B64;
+  author_pubkey: B64;
+}
+

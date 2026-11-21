@@ -14,11 +14,14 @@
 //!   envelope version 1.
 //! - [`content_crypto`]: ADR-037's content AEAD and member key wrap,
 //!   re-exported by mae-sync as `mae_sync::content_crypto`.
+//! - [`content_op`]: ADR-036's signed content-op header and its one canonical
+//!   encoding, re-exported by mae-sync (`mae_sync::content_ops::ContentOp`).
 //! - [`rng`]: the one randomness source (the host's, in the WASM module).
 
 #[cfg(feature = "backup")]
 pub mod backup;
 pub mod content_crypto;
+pub mod content_op;
 pub mod identity_challenge;
 pub mod member;
 pub mod rng;
