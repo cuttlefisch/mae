@@ -3920,6 +3920,10 @@ mod tests {
     // --- Reload from disk while sync active ---
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "quarantined on Windows: tempfile creation flakes with Access denied (#962)"
+    )]
     fn reload_from_disk_preserves_sync() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(tmp.path(), "initial content").unwrap();

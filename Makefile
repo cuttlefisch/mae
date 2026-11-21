@@ -506,9 +506,20 @@ clippy-daemon:
 ## the hook, the Makefile and CI had drifted into three disagreeing definitions
 ## of "what must pass", and the daemon workspace fell through the gap between
 ## them. Anything added here is picked up by the hook automatically.
-pre-commit: fmt-check clippy clippy-daemon code-map-check heavy-e2e-check tool-args-check
-	@$(MAKE) --no-print-directory verify-adr-kb-sync
+pre-commit: fmt-check tool-args-check heavy-e2e-check code-map-check clippy-changed adr-kb-sync-if-staged
 	@echo "✅ pre-commit gate passed"
+
+## clippy-changed: lint only the crates the staged change touches (the pre-commit
+## budget; whole-workspace `make clippy` still runs in CI)
+clippy-changed:
+	@./scripts/clippy-changed.sh
+
+## adr-kb-sync-if-staged: verify the ADR KB checksum only when an ADR or the checksum
+## is staged (the verifier is a release build: ~90 s even when nothing changed)
+adr-kb-sync-if-staged:
+	@if git diff --cached --name-only | grep -q -E '^(docs/adr/|assets/mae-adr\.cozo\.sha256)'; then \
+		$(MAKE) --no-print-directory verify-adr-kb-sync; \
+	else echo "verify-adr-kb-sync: no ADR change staged"; fi
 
 ## ci: run the full CI pipeline locally (fmt + clippy + check + test + scheme tests)
 ci: fmt-check
