@@ -794,6 +794,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "quarantined: a login bash in a PTY stayed blank for 30 s in CI (#965)"]
     fn spawn_command_with_login_wrap_sources_bashrc() {
         // Regression test for the reported bug: `open-ai-agent`'s spawn path
         // (spawn_command) used to exec the target program directly with no
