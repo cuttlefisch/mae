@@ -128,7 +128,7 @@ pub use keymap::{
 };
 pub use lsp_intent::{language_id_from_path, path_to_uri, LspIntent};
 pub use mae_kb::{
-    parse_links, BrokenLink, BrokenLinkKind, KnowledgeBase, Node as KbNode, NodeKind as KbNodeKind,
+    BrokenLink, BrokenLinkKind, KnowledgeBase, Node as KbNode, NodeKind as KbNodeKind,
 };
 pub use messages::{LogEntry, MessageLevel, MessageLog, MessageLogHandle};
 pub use options::{OptionDef, OptionKind, OptionRegistry};

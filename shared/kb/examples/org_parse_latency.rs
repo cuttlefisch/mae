@@ -68,35 +68,8 @@ fn main() {
         corpus.iter().map(|(_, t)| t.len()).max().unwrap_or(0)
     );
 
-    // Each measured operation is one a live-preview decorator would actually
-    // need, rather than a synthetic microbenchmark.
-    #[allow(clippy::type_complexity)]
-    let ops: Vec<(&str, Box<dyn Fn(&str)>)> = vec![
-        (
-            "parse_org_multi_result (full structure)",
-            Box::new(|t: &str| {
-                let _ = mae_kb::org::parse_org_multi_result(t);
-            }),
-        ),
-        (
-            "rewrite_links_with_types (link scan)",
-            Box::new(|t: &str| {
-                let _ = mae_kb::org::rewrite_links_with_types(t);
-            }),
-        ),
-        (
-            "compute_code_block_ranges",
-            Box::new(|t: &str| {
-                let _ = mae_kb::compute_code_block_ranges(t);
-            }),
-        ),
-        (
-            "parse_typed_links",
-            Box::new(|t: &str| {
-                let _ = mae_kb::org::parse_typed_links(t, "spike:node");
-            }),
-        ),
-    ];
+    let hot_nodes = HotNodes::default();
+    let ops = ops(&hot_nodes);
 
     for (name, op) in &ops {
         let mut per_file_us: Vec<f64> = Vec::with_capacity(corpus.len());
@@ -129,4 +102,74 @@ fn main() {
             worst.1, worst.2, worst.0
         );
     }
+}
+
+/// One node per file, reused across reps (see the hot-loop op).
+type HotNodes = std::cell::RefCell<std::collections::HashMap<usize, mae_kb::Node>>;
+
+/// A measured operation: its name and what it does to one file's text.
+type Op<'a> = (&'static str, Box<dyn Fn(&str) + 'a>);
+
+/// Each measured operation is one a live-preview decorator, or the KB's own
+/// graph code (#941 G3), actually needs, rather than a synthetic
+/// microbenchmark.
+fn ops(hot_nodes: &HotNodes) -> Vec<Op<'_>> {
+    vec![
+        (
+            "parse_org_multi_result (full structure)",
+            Box::new(|t: &str| {
+                let _ = mae_kb::org::parse_org_multi_result(t);
+            }),
+        ),
+        (
+            "org_ingest::parse_file (mae-org ingest, full structure)",
+            Box::new(|t: &str| {
+                let _ = mae_kb::org_ingest::parse_file(t);
+            }),
+        ),
+        (
+            "rewrite_links_with_types (link scan)",
+            Box::new(|t: &str| {
+                let _ = mae_kb::org::rewrite_links_with_types(t);
+            }),
+        ),
+        (
+            "compute_code_block_ranges",
+            Box::new(|t: &str| {
+                let _ = mae_kb::compute_code_block_ranges(t);
+            }),
+        ),
+        (
+            "parse_typed_links",
+            Box::new(|t: &str| {
+                let _ = mae_kb::org::parse_typed_links(t, "spike:node");
+            }),
+        ),
+        (
+            "org_ingest::edges_of_body (mae-org)",
+            Box::new(|t: &str| {
+                let _ = mae_kb::org_ingest::edges_of_body(t);
+            }),
+        ),
+        (
+            "Node::links, fresh node per call (cold)",
+            Box::new(|t: &str| {
+                let n = mae_kb::Node::new("spike:node", "", mae_kb::NodeKind::Note, t);
+                let _ = n.links();
+            }),
+        ),
+        (
+            "Node::links, same node every call (hot loop)",
+            Box::new(move |t: &str| {
+                // One node per file, reused across reps: what a graph scan over
+                // an in-memory KB does (#941 G3).
+                let mut nodes = hot_nodes.borrow_mut();
+                let n = nodes.entry(t.as_ptr() as usize).or_insert_with(|| {
+                    mae_kb::Node::new("spike:node", "", mae_kb::NodeKind::Note, t)
+                });
+                let _ = n.links();
+                let _ = n.links_typed();
+            }),
+        ),
+    ]
 }

@@ -201,7 +201,7 @@ pub fn infer_category(name: &str) -> &'static str {
 /// Mark all existing nodes as `Seed` source with version 1.
 /// Called after all built-in nodes are inserted but before user help nodes.
 fn stamp_seed_provenance(kb: &mut KnowledgeBase) {
-    kb.stamp_source(mae_kb::NodeSource::Seed, 1);
+    kb.stamp_source(mae_kb::NodeSource::Seed, mae_kb::SEED_SOURCE_VERSION);
 }
 
 /// Install the hand-authored index + concept + key nodes.

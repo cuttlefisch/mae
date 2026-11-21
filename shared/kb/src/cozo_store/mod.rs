@@ -27,6 +27,9 @@ use cozo::{DataValue, DbInstance, NamedRows, ScriptMutability, Vector};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+pub use rederive::{RederiveReport, DERIVATION_VERSION};
+pub use typed_repair::{TypedRepairReport, TYPED_REPAIR_SUMMARY};
+
 mod agenda;
 mod blocks;
 mod db;
@@ -34,9 +37,11 @@ mod graph;
 mod health;
 mod kb_store_impl;
 mod links;
+mod rederive;
 mod schema;
 mod source_files;
 mod suggestions;
+mod typed_repair;
 mod util;
 mod vector;
 mod versioning;

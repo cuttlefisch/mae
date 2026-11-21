@@ -461,7 +461,7 @@ Deploy the latest build.
 ";
 
     fn ingest_org_fixture(editor: &mut Editor, content: &str) {
-        for node in mae_kb::org::parse_org_multi(content) {
+        for node in mae_kb::org_ingest::parse_nodes(content) {
             editor.kb.primary.insert(node);
         }
     }

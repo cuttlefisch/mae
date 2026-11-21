@@ -40,6 +40,7 @@ pub mod adr_parse;
 pub mod backup;
 pub mod capabilities;
 pub mod data_dir;
+pub mod edge_cache;
 pub mod embedding_client;
 pub mod enrichment;
 pub mod export;
@@ -80,7 +81,13 @@ pub mod remote_hub;
 pub use mae_mcp::file_lock;
 
 pub use cache::{CachedQueryLayer, NodeCache};
-pub use cozo_store::CozoKbStore;
+pub use cozo_store::{CozoKbStore, TypedRepairReport};
+
+/// The `source_version` MAE stamps on the nodes it seeds (`NodeSource::Seed`).
+/// Bump when what a seeded node holds is derived differently, so a consumer
+/// comparing versions (the daemon projector, seed export) sees the change.
+/// - `2`: bodies from `mae-org` ingest, the ADR-030 query kept (#941 PR3).
+pub const SEED_SOURCE_VERSION: u32 = 2;
 pub use federation::{
     import_org_dir_to_store, ImportHealth, ImportReport as FederationImportReport, IngestMode,
     KbScope,
@@ -401,6 +408,10 @@ pub struct Node {
     /// falls back to "now" on first insert, as it always did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<i64>,
+    /// The edges of `body`, cached against the body itself (#941 G3). Never
+    /// serialized; see [`edge_cache`].
+    #[serde(skip)]
+    edge_cache: edge_cache::EdgeCache,
 }
 
 impl Node {
@@ -425,6 +436,7 @@ impl Node {
             source_file: None,
             crdt_doc: None,
             created_at: None,
+            edge_cache: Default::default(),
         }
     }
 
@@ -580,89 +592,39 @@ impl Node {
         node
     }
 
-    /// Extract all `[[link]]`, `[[link|display]]`, and ADR-030 typed-link
-    /// (`[[link?rel=X&w=Y][display]]`) targets from the body. Returns the target ids
-    /// in document order, deduplicated. Uses `parse_typed_links` (not the older
-    /// untyped `parse_links`) so a typed link's `?query` is stripped from the
-    /// target id -- previously this returned the raw, query-string-attached target
-    /// verbatim (e.g. `"concept:buffer?rel=teaches&w=0.8"`), which never matches any
-    /// real node id, so graph traversal (`kb_graph` BFS, the "Tab cycles through
-    /// reachable nodes" terminal-help UX, `neighbors()`) silently failed to
-    /// recognize a typed link as a real edge at all.
+    /// The graph edges this node's body declares, in document order
+    /// ([`edge_cache::edges_of`]: its KB links that name a node, derived by
+    /// `mae-org`, ADR-112 O4). Cached against the body, so a hot loop pays
+    /// one parse per node, and an edited body is never answered from the
+    /// cache.
+    pub fn edges(&self) -> std::sync::Arc<[ParsedLink]> {
+        self.edge_cache.edges(&self.body)
+    }
+
+    /// The targets of [`Self::edges`], in document order, each once (first
+    /// occurrence). A typed link's `?query` and `#fragment` are not part of
+    /// its target, so it matches the node id it names.
     pub fn links(&self) -> Vec<String> {
-        let mut out = Vec::new();
         let mut seen = HashSet::new();
-        for link in crate::org::parse_typed_links(&self.body, &self.id) {
-            if seen.insert(link.target.clone()) {
-                out.push(link.target);
-            }
-        }
-        out
+        self.edges()
+            .iter()
+            .filter(|l| seen.insert(l.target.as_str()))
+            .map(|l| l.target.clone())
+            .collect()
     }
 
-    /// Like `links()`, but keeps each link's ADR-030 relationship type and
-    /// authored/default weight (0.0-1.0, `1.0` when not explicitly
-    /// authored) instead of discarding them down to a bare target id —
-    /// used by `extract_subgraph` so the native KB graph view's
-    /// force-directed layout can weight edges by how strongly related the
-    /// user actually said two nodes are, rather than treating every edge
-    /// identically. Same dedup-by-target-first-seen behavior as `links()`
-    /// (first occurrence wins if a body somehow links the same target
-    /// twice with different rel/weight).
+    /// Like [`Self::links`], keeping each link's ADR-030 relationship type and
+    /// weight (`1.0` unless authored) -- used by `extract_subgraph` so the
+    /// graph view's force layout weights edges as the author did. Same
+    /// first-occurrence dedup by target as `links()`.
     pub fn links_typed(&self) -> Vec<(String, String, f64)> {
-        let mut out = Vec::new();
         let mut seen = HashSet::new();
-        for link in crate::org::parse_typed_links(&self.body, &self.id) {
-            if seen.insert(link.target.clone()) {
-                out.push((link.target, link.rel_type, link.weight));
-            }
-        }
-        out
+        self.edges()
+            .iter()
+            .filter(|l| seen.insert(l.target.as_str()))
+            .map(|l| (l.target.clone(), l.rel_type.clone(), l.weight))
+            .collect()
     }
-}
-
-/// A parsed link from a body: `(target_id, display_text)`.
-/// Display text defaults to the target id if no `|display` override exists.
-pub fn parse_links(body: &str) -> Vec<(String, String)> {
-    // Pre-compute code block ranges to skip (same logic as rewrite_links).
-    let code_ranges = compute_code_block_ranges(body);
-
-    let mut out = Vec::new();
-    let bytes = body.as_bytes();
-    let mut i = 0;
-    while i + 1 < bytes.len() {
-        if bytes[i] == b'[' && bytes[i + 1] == b'['
-            // Skip links inside org verbatim =...= or code ~...~ spans
-            && !(i > 0 && (bytes[i - 1] == b'=' || bytes[i - 1] == b'~'))
-        {
-            // Skip links inside verbatim blocks (src, example, export).
-            if code_ranges.iter().any(|&(s, e)| i >= s && i < e) {
-                i += 1;
-                continue;
-            }
-            if let Some(end_rel) = body[i + 2..].find("]]") {
-                let inner = &body[i + 2..i + 2 + end_rel];
-                // Split on '|' for display-text override.
-                // The internal format uses | as separator (from rewrite_links),
-                // while org source uses ][. Both are handled here.
-                let (target, display) = if let Some(sep) = inner.find("][") {
-                    (&inner[..sep], &inner[sep + 2..])
-                } else if let Some(bar) = inner.find('|') {
-                    (&inner[..bar], &inner[bar + 1..])
-                } else {
-                    (inner, inner)
-                };
-                let target = target.trim();
-                if !target.is_empty() {
-                    out.push((target.to_string(), display.trim().to_string()));
-                }
-                i += 2 + end_rel + 2;
-                continue;
-            }
-        }
-        i += 1;
-    }
-    out
 }
 
 /// Compute byte ranges of verbatim blocks where org markup should NOT be parsed.
@@ -1687,6 +1649,7 @@ impl KnowledgeBase {
                         source_file: None,
                         crdt_doc: None,
                         created_at: None,
+                        edge_cache: Default::default(),
                     });
                 }
                 for (target, rel_type, weight) in typed_links {
@@ -2539,14 +2502,18 @@ impl KnowledgeBase {
             },
             |mut acc, (id, node)| {
                 // Links: count + broken detection with classification.
-                let link_pairs = parse_links(&node.body);
+                // The node's graph edges (ADR-112 O4): a web link, a `help:`
+                // link or a link in a comment or src block is not an edge, so
+                // it can be neither counted nor broken.
+                let link_pairs = node.edges();
                 acc.total_links += link_pairs.len();
-                for (target, display) in &link_pairs {
+                for l in link_pairs.iter() {
+                    let target = &l.target;
                     if !all_ids.contains(target.as_str()) && !external_contains(target) {
                         acc.broken_links.push(BrokenLink {
                             source: node.id.clone(),
                             target: target.clone(),
-                            display: display.clone(),
+                            display: l.display.clone(),
                             kind: BrokenLink::classify(target),
                         });
                     }
@@ -2648,6 +2615,10 @@ impl KnowledgeBase {
     /// it. Intentionally lazy — call on-demand (health report, `:kb-reimport`
     /// verification), not on every drain tick (a re-parse per distinct file
     /// is not free).
+    ///
+    /// @ai-caution: [kb-links] The re-parse MUST be the parser ingest uses, or
+    /// a node ingest indexed is reported as a ghost (a cleanup candidate an
+    /// agent may act on): `org_ingest`, as ingest (#941 PR3).
     pub fn detect_ghost_ids(&self) -> Vec<GhostNode> {
         let mut by_file: HashMap<std::path::PathBuf, Vec<&Node>> = HashMap::new();
         for n in self.nodes.values() {
@@ -2661,7 +2632,7 @@ impl KnowledgeBase {
             let Ok(content) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            let current_ids: HashSet<String> = crate::org::parse_org_multi(&content)
+            let current_ids: HashSet<String> = crate::org_ingest::parse_nodes(&content)
                 .into_iter()
                 .map(|n| n.id)
                 .collect();
@@ -2691,14 +2662,13 @@ impl KnowledgeBase {
 
     /// Validate links in a node's body, returning IDs of missing targets.
     pub fn validate_links(&self, node_id: &str) -> Vec<String> {
-        let body = match self.nodes.get(node_id) {
-            Some(n) => &n.body,
-            None => return Vec::new(),
+        let Some(node) = self.nodes.get(node_id) else {
+            return Vec::new();
         };
-        parse_links(body)
-            .into_iter()
-            .filter(|(target, _)| !self.nodes.contains_key(target))
-            .map(|(target, _)| target)
+        node.edges()
+            .iter()
+            .filter(|l| !self.nodes.contains_key(&l.target))
+            .map(|l| l.target.clone())
             .collect()
     }
 
@@ -2902,39 +2872,37 @@ mod tests {
         assert!(kb.get("a").is_none());
     }
 
+    /// `(target, display)` of each edge of `body`.
+    fn edge_pairs(body: &str) -> Vec<(String, String)> {
+        edge_cache::edges_of(body)
+            .iter()
+            .map(|l| (l.target.clone(), l.display.clone()))
+            .collect()
+    }
+
     #[test]
-    fn parse_links_basic() {
-        let links = parse_links("see [[foo]] and [[bar|Bar!]]");
+    fn edges_basic() {
         assert_eq!(
-            links,
+            edge_pairs("see [[foo]] and [[bar|Bar!]] and [[baz][Baz]]"),
             vec![
                 ("foo".to_string(), "foo".to_string()),
-                ("bar".to_string(), "Bar!".to_string())
+                ("bar".to_string(), "Bar!".to_string()),
+                ("baz".to_string(), "Baz".to_string()),
             ]
         );
     }
 
     #[test]
-    fn parse_links_empty_target_ignored() {
-        assert!(parse_links("[[]] and [[   ]]").is_empty());
+    fn edges_empty_target_and_unclosed_ignored() {
+        assert!(edge_pairs("[[]] and [[   ]]").is_empty());
+        assert!(edge_pairs("[[foo").is_empty());
     }
 
     #[test]
-    fn parse_links_unclosed_bracket() {
-        assert!(parse_links("[[foo").is_empty());
-    }
-
-    #[test]
-    fn parse_links_skips_code_blocks() {
+    fn edges_skip_code_blocks() {
         let body = "[[real]] text\n#+begin_src elisp\n[[fake]]\n#+end_src\n[[also-real]]";
-        let links = parse_links(body);
-        let targets: Vec<&str> = links.iter().map(|(t, _)| t.as_str()).collect();
-        assert!(targets.contains(&"real"));
-        assert!(targets.contains(&"also-real"));
-        assert!(
-            !targets.contains(&"fake"),
-            "code block link should be skipped"
-        );
+        let targets: Vec<String> = edge_pairs(body).into_iter().map(|(t, _)| t).collect();
+        assert_eq!(targets, vec!["real".to_string(), "also-real".to_string()]);
     }
 
     #[test]
