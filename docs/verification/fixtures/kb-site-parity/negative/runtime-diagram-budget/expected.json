@@ -1,0 +1,5 @@
+{
+ "requirement": "P-117",
+ "exit": 1,
+ "runtime": "the runner forces the diagram time budget to near zero"
+}

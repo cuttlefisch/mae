@@ -1,0 +1,5 @@
+{
+ "requirement": "P-145",
+ "exit": 1,
+ "runtime": "the runner removes or breaks one extension module"
+}

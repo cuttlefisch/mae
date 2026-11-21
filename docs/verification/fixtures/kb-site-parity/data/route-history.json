@@ -1,0 +1,8 @@
+{
+ "format": "route-history/1",
+ "routes": {
+  "old/getting-started.org": "1a000000-0000-4000-8000-000000000010",
+  "guides/getting-started.org": "1a000000-0000-4000-8000-000000000011",
+  "../escape.org": "1a000000-0000-4000-8000-000000000001"
+ }
+}

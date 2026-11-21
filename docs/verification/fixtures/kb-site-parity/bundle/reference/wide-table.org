@@ -1,0 +1,18 @@
+:PROPERTIES:
+:ID: 1a000000-0000-4000-8000-000000000022
+:END:
+#+title: A wide table
+#+filetags: :reference:
+
+A seven-column table, wider than a phone.
+
+| Name | Kind | Owner | Status | Since | Notes | Link |
+|---+---+---+---+---+---+---|
+| item-1 | widget | team 1 | active | 2026-01-01 | a note that is long enough to need wrapping in a narrow column | [[id:1a000000-0000-4000-8000-000000000001][home]] |
+| item-2 | widget | team 2 | active | 2026-02-01 | a note that is long enough to need wrapping in a narrow column | [[id:1a000000-0000-4000-8000-000000000001][home]] |
+| item-3 | widget | team 3 | active | 2026-03-01 | a note that is long enough to need wrapping in a narrow column | [[id:1a000000-0000-4000-8000-000000000001][home]] |
+| item-4 | widget | team 4 | active | 2026-04-01 | a note that is long enough to need wrapping in a narrow column | [[id:1a000000-0000-4000-8000-000000000001][home]] |
+| item-5 | widget | team 5 | active | 2026-05-01 | a note that is long enough to need wrapping in a narrow column | [[id:1a000000-0000-4000-8000-000000000001][home]] |
+| item-6 | widget | team 6 | active | 2026-06-01 | a note that is long enough to need wrapping in a narrow column | [[id:1a000000-0000-4000-8000-000000000001][home]] |
+| item-7 | widget | team 7 | active | 2026-07-01 | a note that is long enough to need wrapping in a narrow column | [[id:1a000000-0000-4000-8000-000000000001][home]] |
+| item-8 | widget | team 8 | active | 2026-08-01 | a note that is long enough to need wrapping in a narrow column | [[id:1a000000-0000-4000-8000-000000000001][home]] |

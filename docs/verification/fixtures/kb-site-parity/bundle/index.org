@@ -1,0 +1,25 @@
+:PROPERTIES:
+:ID: 1a000000-0000-4000-8000-000000000001
+:END:
+#+title: Fixture home
+#+filetags: :fixture:home:
+
+This bundle exists to exercise the parity specification. Nothing in it is real.
+
+* Where to go
+- [[id:1a000000-0000-4000-8000-000000000010][Getting started]], in the guides folder.
+- [[id:1a000000-0000-4000-8000-000000000020][The long reference page]], which opens outline-first.
+- [[id:1a000000-0000-4000-8000-000000000030][Code blocks]] and [[id:1a000000-0000-4000-8000-000000000040][diagrams]].
+- [[id:1a000000-0000-4000-8000-000000000002][What's new]].
+- A section of another page: [[id:1a000000-0000-4000-8000-000000000021][the folded target section]].
+
+* Links that must not become links
+- To a node that is not in the bundle: [[id:1a000000-0000-4000-8000-999999999999][a missing note]].
+- A local scheme: [[file:/etc/hosts][a local file]].
+- A reference in a hidden namespace, internal:runbook-12, and one in a shown namespace,
+  public:glossary-7.
+
+* Links that must stay links
+- The web: [[https://example.org/standards][an example standards page]].
+- Mail: [[mailto:nobody@example.org][write to nobody]].
+- A remote image, which must become a link: [[https://example.org/diagram.png]]

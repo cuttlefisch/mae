@@ -1,0 +1,9 @@
+{
+ "requirement": "P-142",
+ "exit": 2,
+ "runtime": "the runner writes a canary file OUTSIDE the bundle containing a random marker for this run, adds a symbolic link to it inside the bundle, and builds",
+ "assert": [
+  "exit code 2",
+  "the marker appears in no output file"
+ ]
+}

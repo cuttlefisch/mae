@@ -1,0 +1,16 @@
+{
+ "requirement": "P-151",
+ "exit": 0,
+ "content_checks": [
+  "inside the page's article (the content region): no <script> element, no attribute whose name starts with on, no href or src whose scheme is javascript:"
+ ],
+ "page_checks": [
+  "every <script src> is on the serving origin",
+  "no attribute whose name starts with on, on any element"
+ ],
+ "marker": "alert(1) may appear only inside text nodes (escaped text), never in an attribute or a script",
+ "why": "engines load their own same-origin scripts; what must not survive is the content's markup. An engine may show the raw HTML escaped as visible text, so only the parsed DOM decides",
+ "candidate_only_new": [
+  "no inline <script> (every <script> has a src): ADR-119 D19; the reference emits one inline script per page, so this is not compared"
+ ]
+}

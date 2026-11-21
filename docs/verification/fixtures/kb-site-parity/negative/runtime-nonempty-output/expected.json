@@ -1,0 +1,5 @@
+{
+ "requirement": "P-143",
+ "exit": 2,
+ "runtime": "the runner builds twice into the same output directory"
+}

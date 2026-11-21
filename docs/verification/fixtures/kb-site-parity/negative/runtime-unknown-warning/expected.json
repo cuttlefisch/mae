@@ -1,0 +1,5 @@
+{
+ "requirement": "P-146",
+ "exit": 1,
+ "runtime": "the runner injects a log line outside the allow-list; it must be echoed to stderr"
+}

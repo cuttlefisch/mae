@@ -1,0 +1,8 @@
+:PROPERTIES:
+:ID: 1a000000-0000-4000-8000-000000000061
+:UPDATED: the third of March
+:END:
+#+title: A page with a malformed date
+#+filetags: :status:
+
+Its last-updated property is not a date, so no last-updated line appears and the build goes on.

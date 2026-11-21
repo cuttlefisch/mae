@@ -1,0 +1,45 @@
+{
+ "schema": 1,
+ "versions": [
+  {
+   "version": "v2.0.0",
+   "date": "2026-03-15",
+   "sections": [
+    {
+     "type": "feat",
+     "entries": [
+      {
+       "text": "two pages added",
+       "scope": "pages",
+       "commit": "0a1b2c3d",
+       "breaking": false
+      },
+      {
+       "text": "one page renamed",
+       "scope": "pages",
+       "commit": "1b2c3d4e",
+       "breaking": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "version": "v1.0.0",
+   "date": "2026-01-15",
+   "sections": [
+    {
+     "type": "feat",
+     "entries": [
+      {
+       "text": "first version",
+       "scope": "site",
+       "commit": "2c3d4e5f",
+       "breaking": false
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

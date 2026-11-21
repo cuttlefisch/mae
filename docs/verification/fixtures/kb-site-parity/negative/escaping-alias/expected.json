@@ -1,0 +1,6 @@
+{
+ "requirement": "P-144",
+ "exit": 1,
+ "why": "an alias with .. must not write outside the output",
+ "also": "nothing written beside the site directory"
+}

@@ -1,0 +1,11 @@
+:PROPERTIES:
+:ID: 1a000000-0000-4000-8000-000000000910
+:END:
+#+title: Hostile
+
+#+HTML: <script>alert(1)</script>
+#+begin_export html
+<img src=x onerror=alert(1)>
+#+end_export
+@@html:<b onclick=alert(1)>x</b>@@
+[[javascript:alert(1)][a javascript link]]
